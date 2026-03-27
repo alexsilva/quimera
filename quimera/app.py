@@ -94,27 +94,23 @@ class QuimeraApp:
         prompt = self.prompt_builder.build(agent, self.history, is_first_speaker, handoff)
         return self.agent_client.call(agent, prompt)
 
-    def parse_mode(self, response):
-        """Retorna (response_limpa, extend). Remove EXTEND_MARKER se presente."""
-        response, _, _ = self.parse_route(response)
+    def parse_response(self, response):
+        """Extrai marcadores de controle e retorna (clean, route_target, handoff, extend)."""
+        route_target, handoff = None, None
+
+        if response and ROUTE_PREFIX in response:
+            match = self.ROUTE_PATTERN.search(response)
+            if match:
+                route_target = match.group(1)
+                handoff = match.group(2).strip()
+                response = self.ROUTE_PATTERN.sub("", response, count=1).strip()
+
+        extend = False
         if response and response.rstrip().endswith(EXTEND_MARKER):
-            clean = response.rstrip()[: -len(EXTEND_MARKER)].rstrip()
-            return clean, True
-        return response, False
+            response = response.rstrip()[: -len(EXTEND_MARKER)].rstrip()
+            extend = True
 
-    def parse_route(self, response):
-        """Extrai [ROUTE:agent] do texto e retorna (response_limpa, target, message)."""
-        if not response or ROUTE_PREFIX not in response:
-            return response, None, None
-
-        match = self.ROUTE_PATTERN.search(response)
-        if not match:
-            return response, None, None
-
-        target = match.group(1)
-        message = match.group(2).strip()
-        clean = self.ROUTE_PATTERN.sub("", response, count=1).strip()
-        return clean, target, message
+        return response, route_target, handoff, extend
 
     def print_response(self, agent, response):
         if response is not None:
@@ -169,8 +165,7 @@ class QuimeraApp:
 
                 # Primeira fala: detecta se o agente quer debate estendido
                 response = self.call_agent(first_agent, is_first_speaker=True)
-                response, route_target, handoff = self.parse_route(response)
-                response, extend = self.parse_mode(response)
+                response, route_target, handoff, extend = self.parse_response(response)
                 self.print_response(first_agent, response)
                 if response is not None:
                     self.persist_message(first_agent, response)
@@ -184,7 +179,7 @@ class QuimeraApp:
                 for index, agent in enumerate(remaining):
                     response = self.call_agent(agent, handoff=next_handoff)
                     next_handoff = None
-                    response, route_target, handoff = self.parse_route(response)
+                    response, route_target, handoff, _ = self.parse_response(response)
                     self.print_response(agent, response)
                     if response is not None:
                         self.persist_message(agent, response)

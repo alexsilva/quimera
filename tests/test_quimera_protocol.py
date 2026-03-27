@@ -33,33 +33,38 @@ class DummyStorage:
 
 
 class ProtocolTests(unittest.TestCase):
-    def test_parse_mode_detects_extend_marker_at_end(self):
+    def test_parse_response_detects_extend_marker_at_end(self):
         app = QuimeraApp.__new__(QuimeraApp)
+        app.ROUTE_PATTERN = QuimeraApp.ROUTE_PATTERN
 
-        response, extend = app.parse_mode(f"Resposta objetiva {EXTEND_MARKER}")
+        response, _, _, extend = app.parse_response(f"Resposta objetiva {EXTEND_MARKER}")
 
         self.assertEqual(response, "Resposta objetiva")
         self.assertTrue(extend)
 
-    def test_parse_mode_keeps_plain_response(self):
-        app = QuimeraApp.__new__(QuimeraApp)
-
-        response, extend = app.parse_mode("Resposta objetiva")
-
-        self.assertEqual(response, "Resposta objetiva")
-        self.assertFalse(extend)
-
-    def test_parse_route_extracts_internal_handoff(self):
+    def test_parse_response_keeps_plain_response(self):
         app = QuimeraApp.__new__(QuimeraApp)
         app.ROUTE_PATTERN = QuimeraApp.ROUTE_PATTERN
 
-        response, target, message = app.parse_route(
+        response, target, handoff, extend = app.parse_response("Resposta objetiva")
+
+        self.assertEqual(response, "Resposta objetiva")
+        self.assertIsNone(target)
+        self.assertIsNone(handoff)
+        self.assertFalse(extend)
+
+    def test_parse_response_extracts_internal_handoff(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.ROUTE_PATTERN = QuimeraApp.ROUTE_PATTERN
+
+        response, target, message, extend = app.parse_response(
             "Resposta visivel\n[ROUTE:codex] Revise este argumento."
         )
 
         self.assertEqual(response, "Resposta visivel")
         self.assertEqual(target, AGENT_CODEX)
         self.assertEqual(message, "Revise este argumento.")
+        self.assertFalse(extend)
 
     def test_parse_routing_rejects_double_prefix(self):
         app = QuimeraApp.__new__(QuimeraApp)
@@ -168,7 +173,7 @@ class ProtocolTests(unittest.TestCase):
 
         app.handle_command = lambda user: False
         app.parse_routing = lambda user: (AGENT_CLAUDE, "oi")
-        app.parse_mode = QuimeraApp.parse_mode.__get__(app, QuimeraApp)
+        app.parse_response = QuimeraApp.parse_response.__get__(app, QuimeraApp)
         app.print_response = lambda agent, response: printed.append((agent, response))
         app.persist_message = lambda role, content: persisted.append((role, content))
         app.shutdown = lambda: None
@@ -204,7 +209,7 @@ class ProtocolTests(unittest.TestCase):
 
         app.handle_command = lambda user: False
         app.parse_routing = lambda user: (AGENT_CLAUDE, "oi")
-        app.parse_mode = QuimeraApp.parse_mode.__get__(app, QuimeraApp)
+        app.parse_response = QuimeraApp.parse_response.__get__(app, QuimeraApp)
         app.print_response = lambda agent, response: printed.append((agent, response))
         app.persist_message = lambda role, content: persisted.append((role, content))
         app.shutdown = lambda: None
@@ -255,8 +260,7 @@ class ProtocolTests(unittest.TestCase):
 
         app.handle_command = lambda user: False
         app.parse_routing = lambda user: (AGENT_CLAUDE, "oi")
-        app.parse_mode = QuimeraApp.parse_mode.__get__(app, QuimeraApp)
-        app.parse_route = QuimeraApp.parse_route.__get__(app, QuimeraApp)
+        app.parse_response = QuimeraApp.parse_response.__get__(app, QuimeraApp)
         app.print_response = lambda agent, response: printed.append((agent, response))
         app.persist_message = lambda role, content: persisted.append((role, content))
         app.shutdown = lambda: None
