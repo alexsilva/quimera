@@ -34,12 +34,17 @@ class Workspace:
         return self._root / "data" / "logs" / "sessions"
 
     @property
+    def metrics_dir(self) -> Path:
+        return self._root / "data" / "logs" / "metrics"
+
+    @property
     def state_dir(self) -> Path:
         return self._root / "state"
 
     def _ensure_dirs(self):
         (self._root / "data" / "context").mkdir(parents=True, exist_ok=True)
         (self._root / "data" / "logs" / "sessions").mkdir(parents=True, exist_ok=True)
+        (self._root / "data" / "logs" / "metrics").mkdir(parents=True, exist_ok=True)
         (self._root / "state").mkdir(parents=True, exist_ok=True)
         (QUIMERA_BASE / "index").mkdir(parents=True, exist_ok=True)
 

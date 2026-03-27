@@ -44,18 +44,22 @@ class QuimeraApp:
             self.renderer,
         )
         self.storage = SessionStorage(workspace.logs_dir, self.renderer)
-        self.agent_client = AgentClient(self.renderer)
+        session_id = self.storage.get_history_file().stem
+        metrics_file = workspace.metrics_dir / f"{session_id}.jsonl" if debug else None
+        self.agent_client = AgentClient(self.renderer, metrics_file=metrics_file)
         self.history = self.storage.load_last_history()
         session_context = self.context_manager.load_session()
         history_restored = bool(self.history)
         summary_loaded = self.context_manager.SUMMARY_MARKER in session_context
         self.session_state = {
-            "session_id": self.storage.get_history_file().stem,
+            "session_id": session_id,
             "history_count": len(self.history),
             "history_restored": history_restored,
             "summary_loaded": summary_loaded,
         }
         self.debug_prompt_metrics = debug
+        self.round_index = 0
+        self.session_call_index = 0
         is_new_session = not history_restored and not summary_loaded
         session_state = {
             "session_id": self.session_state["session_id"],
@@ -105,7 +109,8 @@ class QuimeraApp:
 
         return DEFAULT_FIRST_AGENT, user_input
 
-    def call_agent(self, agent, is_first_speaker=False, handoff=None):
+    def call_agent(self, agent, is_first_speaker=False, handoff=None, primary=True, protocol_mode="standard"):
+        self.session_call_index += 1
         if self.debug_prompt_metrics:
             prompt, metrics = self.prompt_builder.build(
                 agent,
@@ -113,10 +118,18 @@ class QuimeraApp:
                 is_first_speaker,
                 handoff,
                 debug=True,
+                primary=primary,
             )
-            self.agent_client.log_prompt_metrics(agent, metrics)
+            self.agent_client.log_prompt_metrics(
+                agent, metrics,
+                session_id=self.session_state["session_id"],
+                round_index=self.round_index,
+                session_call_index=self.session_call_index,
+                history_window=self.prompt_builder.history_window,
+                protocol_mode=protocol_mode,
+            )
         else:
-            prompt = self.prompt_builder.build(agent, self.history, is_first_speaker, handoff)
+            prompt = self.prompt_builder.build(agent, self.history, is_first_speaker, handoff, primary=primary)
         return self.agent_client.call(agent, prompt)
 
     def parse_response(self, response):
@@ -193,23 +206,25 @@ class QuimeraApp:
 
                 second_agent = AGENT_CODEX if first_agent == AGENT_CLAUDE else AGENT_CLAUDE
 
+                self.round_index += 1
                 self.persist_message(USER_ROLE, message)
 
                 # Primeira fala: detecta se o agente quer debate estendido
-                response = self.call_agent(first_agent, is_first_speaker=True)
+                response = self.call_agent(first_agent, is_first_speaker=True, protocol_mode="standard")
                 response, route_target, handoff, extend = self.parse_response(response)
                 self.print_response(first_agent, response)
                 if response is not None:
                     self.persist_message(first_agent, response)
 
                 # Fluxo padrão: 2 falas. Estendido (EXTEND_MARKER): 4 falas alternadas.
+                protocol_mode = "extended" if extend else "standard"
                 remaining = [second_agent, first_agent, second_agent] if extend else [second_agent]
                 if route_target and remaining:
                     remaining[0] = route_target
 
                 next_handoff = handoff
                 for index, agent in enumerate(remaining):
-                    response = self.call_agent(agent, handoff=next_handoff)
+                    response = self.call_agent(agent, handoff=next_handoff, primary=False, protocol_mode=protocol_mode)
                     next_handoff = None
                     response, route_target, handoff, _ = self.parse_response(response)
                     self.print_response(agent, response)

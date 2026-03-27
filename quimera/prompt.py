@@ -22,8 +22,12 @@ class PromptBuilder:
         self.session_state = session_state or {}
         self.user_name = user_name or "Você"
 
-    def build(self, agent, history, is_first_speaker=False, handoff=None, debug=False):
-        """Gera o prompt final enviado ao agente da vez."""
+    def build(self, agent, history, is_first_speaker=False, handoff=None, debug=False, primary=True):
+        """Gera o prompt final enviado ao agente da vez.
+
+        primary=False omite session_state — adequado para agentes secundários que já
+        têm o contexto da conversa e não precisam do estado de bootstrap da sessão.
+        """
         context = self.context_manager.load()
 
         rules = PROMPT_BASE_RULES
@@ -33,7 +37,7 @@ class PromptBuilder:
 
         participants = f"- {self.user_name.upper()}\n- CLAUDE\n- CODEX\n"
         header_block = PROMPT_HEADER.format(agent=agent.upper(), participants=participants)
-        session_block = PROMPT_SESSION_STATE.format(**self.session_state) if self.session_state else ""
+        session_block = PROMPT_SESSION_STATE.format(**self.session_state) if (self.session_state and primary) else ""
         context_block = PROMPT_CONTEXT.format(context=context) if context else ""
         handoff_block = PROMPT_HANDOFF.format(handoff=handoff) if handoff else ""
 
@@ -60,6 +64,7 @@ class PromptBuilder:
                 "handoff_chars": len(handoff_block),
                 "total_chars": len(full_prompt),
                 "history_messages": len(history[-self.history_window:]),
+                "primary": primary,
             }
             return full_prompt, metrics
 
