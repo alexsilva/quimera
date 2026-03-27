@@ -8,13 +8,18 @@ class AgentClient:
         self.renderer = renderer
 
     AGENT_CMDS = {
-        "claude": lambda prompt: ["claude", "-p", prompt],
-        "codex": lambda prompt: ["codex", "exec", "--skip-git-repo-check", prompt],
+        "claude": ["claude", "-p"],
+        "codex": ["codex", "exec", "--skip-git-repo-check"],
     }
 
-    def run(self, cmd):
+    def run(self, cmd, input_text=None):
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = subprocess.run(
+                cmd,
+                input=input_text,
+                capture_output=True,
+                text=True,
+            )
         except FileNotFoundError as exc:
             self.renderer.show_error(f"[erro] comando não encontrado: {cmd[0]} ({exc})")
             return None
@@ -38,11 +43,11 @@ class AgentClient:
 
     def call(self, agent, prompt):
         """Resolve o comando do agente e delega a execução."""
-        build_cmd = self.AGENT_CMDS.get(agent)
-        if build_cmd is None:
+        cmd = self.AGENT_CMDS.get(agent)
+        if cmd is None:
             self.renderer.show_error(f"[erro] agente desconhecido: {agent}")
             return None
-        return self.run(build_cmd(prompt))
+        return self.run(cmd, input_text=prompt)
 
     def summarize_session(self, history):
         """Pede ao Claude um resumo curto para atualizar o contexto persistente."""
@@ -65,4 +70,4 @@ CONVERSA:
 {conversation}
 
 RESUMO:"""
-        return self.run(["claude", "-p", prompt])
+        return self.run(["claude", "-p"], input_text=prompt)
