@@ -1,5 +1,7 @@
 import json
 import subprocess
+import threading
+import time
 from datetime import datetime, timezone
 
 
@@ -17,21 +19,48 @@ class AgentClient:
 
     def run(self, cmd, input_text=None):
         try:
-            result = subprocess.run(
+            proc = subprocess.Popen(
                 cmd,
-                input=input_text,
-                capture_output=True,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
             )
-        except FileNotFoundError as exc:
-            self.renderer.show_error(f"[erro] comando não encontrado: {cmd[0]} ({exc})")
+        except OSError as exc:
+            self.renderer.show_error(f"[erro] não foi possível iniciar {cmd[0]}: {exc}")
             return None
 
-        output = result.stdout.strip()
-        error = result.stderr.strip()
+        result_holder = {}
 
-        if result.returncode != 0:
-            self.renderer.show_error(f"[erro] {' '.join(cmd)} retornou código {result.returncode}")
+        def _communicate():
+            try:
+                result_holder["stdout"], result_holder["stderr"] = proc.communicate(input=input_text)
+            except Exception as exc:
+                result_holder["error"] = exc
+
+        thread = threading.Thread(target=_communicate, daemon=True)
+        thread.start()
+
+        elapsed = 0
+        with self.renderer.running_status("") as status:
+            while thread.is_alive():
+                if status is not None:
+                    status.update(f"[dim]{cmd[0]}... {elapsed}s[/dim]")
+                time.sleep(1)
+                elapsed += 1
+
+        thread.join()
+        proc.wait()
+
+        if "error" in result_holder:
+            self.renderer.show_error(f"[erro] falha ao comunicar com {cmd[0]}: {result_holder['error']}")
+            return None
+
+        output = result_holder.get("stdout", "").strip()
+        error = result_holder.get("stderr", "").strip()
+
+        if proc.returncode != 0:
+            self.renderer.show_error(f"[erro] {' '.join(cmd)} retornou código {proc.returncode}")
             if error:
                 self.renderer.show_error(error)
             return None

@@ -68,3 +68,10 @@ class TerminalRenderer:
             self._console.print(f"[yellow]{message}[/yellow]")
         else:
             print(message)
+
+    def running_status(self, initial=""):
+        """Retorna um context manager com spinner animado. Chame .update(text) dentro do bloco."""
+        if self._console:
+            return self._console.status(initial)
+        from contextlib import nullcontext
+        return nullcontext(None)
