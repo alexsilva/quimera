@@ -15,6 +15,7 @@ from .constants import (
     PROMPT_SHARED_STATE,
     PROMPT_STATE_UPDATE_RULE,
     PROMPT_REVIEWER_RULE,
+    PROMPT_HANDOFF_RULE,
 )
 from .config import DEFAULT_HISTORY_WINDOW
 
@@ -28,7 +29,17 @@ class PromptBuilder:
         self.session_state = session_state or {}
         self.user_name = user_name or "Você"
 
-    def build(self, agent, history, is_first_speaker=False, handoff=None, debug=False, primary=True, shared_state=None):
+    def build(
+        self,
+        agent,
+        history,
+        is_first_speaker=False,
+        handoff=None,
+        debug=False,
+        primary=True,
+        shared_state=None,
+        handoff_only=False,
+    ):
         """Gera o prompt final enviado ao agente da vez.
 
         primary=False omite session_state — adequado para agentes secundários que já
@@ -37,18 +48,21 @@ class PromptBuilder:
         context = self.context_manager.load()
 
         rules = PROMPT_BASE_RULES
-        rules += PROMPT_ROUTE_RULE
-        rules += PROMPT_STATE_UPDATE_RULE
-        if is_first_speaker:
-            rules += PROMPT_DEBATE_RULE.format(marker=EXTEND_MARKER)
+        if handoff_only:
+            rules += PROMPT_HANDOFF_RULE
         else:
-            rules += PROMPT_REVIEWER_RULE
+            rules += PROMPT_ROUTE_RULE
+            rules += PROMPT_STATE_UPDATE_RULE
+            if is_first_speaker:
+                rules += PROMPT_DEBATE_RULE.format(marker=EXTEND_MARKER)
+            else:
+                rules += PROMPT_REVIEWER_RULE
 
         participants = f"- {self.user_name.upper()}\n- CLAUDE\n- CODEX\n"
         header_block = PROMPT_HEADER.format(agent=agent.upper(), participants=participants)
         session_block = PROMPT_SESSION_STATE.format(**self.session_state) if (self.session_state and primary) else ""
         context_block = PROMPT_CONTEXT.format(context=context) if context else ""
-        handoff_block = PROMPT_HANDOFF.format(handoff=handoff) if handoff else ""
+        handoff_block = PROMPT_HANDOFF.format(handoff=self._format_handoff(handoff)) if handoff else ""
         shared_state_block = ""
         if shared_state:
             state_lines = json.dumps(shared_state, ensure_ascii=False, indent=2)
@@ -83,6 +97,18 @@ class PromptBuilder:
             return full_prompt, metrics
 
         return full_prompt
+
+    def _format_handoff(self, handoff):
+        if isinstance(handoff, dict):
+            task = handoff.get("task", "").strip()
+            context = handoff.get("context", "").strip()
+            expected = handoff.get("expected", "").strip()
+            return (
+                f"TASK:\n{task}\n\n"
+                f"CONTEXT:\n{context}\n\n"
+                f"EXPECTED:\n{expected}"
+            ).strip()
+        return str(handoff).strip()
 
     def _display_role(self, role):
         if role == "human":

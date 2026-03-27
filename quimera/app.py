@@ -23,12 +23,17 @@ from .constants import (
     MSG_CHAT_STARTED, MSG_SESSION_LOG, MSG_SESSION_STATUS, MSG_HELP, MSG_MIGRATION,
     MSG_MEMORY_SAVING, MSG_MEMORY_FAILED, MSG_SHUTDOWN,
     MSG_DOUBLE_PREFIX, MSG_EMPTY_INPUT,
+    HANDOFF_SYNTHESIS_MSG,
 )
 
 
 class QuimeraApp:
     """Orquestra comandos locais, roteamento entre agentes e ciclo da sessão."""
     ROUTE_PATTERN = re.compile(r"(?m)^\[ROUTE:(claude|codex)\]\s*(.+?)\s*$")
+    HANDOFF_PAYLOAD_PATTERN = re.compile(
+        r"^\s*task:\s*(.*?)\s*\|\s*context:\s*(.*?)\s*\|\s*expected:\s*(.*?)\s*$",
+        re.IGNORECASE | re.DOTALL,
+    )
     STATE_UPDATE_PATTERN = re.compile(
         r"\[STATE_UPDATE\](.*?)\[/STATE_UPDATE\]", re.DOTALL
     )
@@ -195,17 +200,19 @@ class QuimeraApp:
                 self.shared_state[normalized_key] = merged
         return True
 
-    def call_agent(self, agent, is_first_speaker=False, handoff=None, primary=True, protocol_mode="standard"):
+    def call_agent(self, agent, is_first_speaker=False, handoff=None, primary=True, protocol_mode="standard", handoff_only=False):
         self.session_call_index += 1
+        history = [] if handoff_only else self.history
         if self.debug_prompt_metrics:
             prompt, metrics = self.prompt_builder.build(
                 agent,
-                self.history,
+                history,
                 is_first_speaker,
                 handoff,
                 debug=True,
                 primary=primary,
                 shared_state=self.shared_state,
+                handoff_only=handoff_only,
             )
             self.agent_client.log_prompt_metrics(
                 agent, metrics,
@@ -217,10 +224,28 @@ class QuimeraApp:
             )
         else:
             prompt = self.prompt_builder.build(
-                agent, self.history, is_first_speaker, handoff,
+                agent, history, is_first_speaker, handoff,
                 primary=primary, shared_state=self.shared_state,
+                handoff_only=handoff_only,
             )
         return self.agent_client.call(agent, prompt)
+
+    def parse_handoff_payload(self, payload):
+        if not payload:
+            return None
+        match = self.HANDOFF_PAYLOAD_PATTERN.match(payload.strip())
+        if not match:
+            return None
+
+        task, context, expected = (group.strip() for group in match.groups())
+        if not task or not context or not expected:
+            return None
+
+        return {
+            "task": task,
+            "context": context,
+            "expected": expected,
+        }
 
     def parse_response(self, response):
         """Extrai marcadores de controle e retorna (clean, route_target, handoff, extend)."""
@@ -237,8 +262,10 @@ class QuimeraApp:
         if ROUTE_PREFIX in response:
             match = self.ROUTE_PATTERN.search(response)
             if match:
-                route_target = match.group(1)
-                handoff = match.group(2).strip()
+                parsed_handoff = self.parse_handoff_payload(match.group(2).strip())
+                if parsed_handoff:
+                    route_target = match.group(1)
+                    handoff = parsed_handoff
                 response = self.ROUTE_PATTERN.sub("", response, count=1).strip()
 
         extend = response.rstrip().endswith(EXTEND_MARKER)
@@ -352,31 +379,66 @@ class QuimeraApp:
                 self.round_index += 1
                 self.persist_message(USER_ROLE, message)
 
-                # Primeira fala: detecta se o agente quer debate estendido
+                # Primeira fala: detecta roteamento ou debate estendido
                 response = self.call_agent(first_agent, is_first_speaker=True, protocol_mode="standard")
                 response, route_target, handoff, extend = self.parse_response(response)
                 self.print_response(first_agent, response)
                 if response is not None:
                     self.persist_message(first_agent, response)
 
-                # Fluxo padrão: 2 falas. Estendido (EXTEND_MARKER): 4 falas alternadas.
-                protocol_mode = "extended" if extend else "standard"
-                remaining = [second_agent, first_agent, second_agent] if extend else [second_agent]
-                if route_target and remaining:
-                    remaining[0] = route_target
+                if route_target:
+                    self.renderer.show_handoff(
+                        first_agent,
+                        route_target,
+                        task=handoff["task"],
+                    )
+                    # Handoff v1: agente secundário recebe apenas o payload delegado
+                    secondary_response = self.call_agent(
+                        route_target,
+                        handoff=handoff,
+                        handoff_only=True,
+                        primary=False,
+                        protocol_mode="handoff",
+                    )
+                    secondary_response, _, _, _ = self.parse_response(secondary_response)
+                    self.print_response(route_target, secondary_response)
+                    if secondary_response is not None:
+                        self.persist_message(route_target, secondary_response)
 
-                next_handoff = handoff
-                for index, agent in enumerate(remaining):
-                    response = self.call_agent(agent, handoff=next_handoff, primary=False, protocol_mode=protocol_mode)
+                    # Integrador: agente primário sintetiza com a resposta do secundário
+                    if secondary_response:
+                        synthesis_handoff = HANDOFF_SYNTHESIS_MSG.format(
+                            agent=route_target.upper(),
+                            task=handoff["task"],
+                            response=secondary_response,
+                        )
+                        final_response = self.call_agent(
+                            first_agent,
+                            handoff=synthesis_handoff,
+                            primary=False,
+                            protocol_mode="handoff",
+                        )
+                        final_response, _, _, _ = self.parse_response(final_response)
+                        self.print_response(first_agent, final_response)
+                        if final_response is not None:
+                            self.persist_message(first_agent, final_response)
+                else:
+                    # Fluxo padrão: 2 falas. Estendido (EXTEND_MARKER): 4 falas alternadas.
+                    protocol_mode = "extended" if extend else "standard"
+                    remaining = [second_agent, first_agent, second_agent] if extend else [second_agent]
+
                     next_handoff = None
-                    response, route_target, handoff, _ = self.parse_response(response)
-                    self.print_response(agent, response)
-                    if response is not None:
-                        self.persist_message(agent, response)
-                    if route_target and index + 1 < len(remaining):
-                        remaining[index + 1] = route_target
-                    if route_target:
-                        next_handoff = handoff
+                    for index, agent in enumerate(remaining):
+                        response = self.call_agent(agent, handoff=next_handoff, primary=False, protocol_mode=protocol_mode)
+                        next_handoff = None
+                        response, route_target, handoff, _ = self.parse_response(response)
+                        self.print_response(agent, response)
+                        if response is not None:
+                            self.persist_message(agent, response)
+                        if route_target and index + 1 < len(remaining):
+                            remaining[index + 1] = route_target
+                        if route_target:
+                            next_handoff = handoff
 
                 self._maybe_auto_summarize()
         except KeyboardInterrupt:

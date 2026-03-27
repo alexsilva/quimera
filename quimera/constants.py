@@ -46,9 +46,15 @@ PROMPT_DEBATE_RULE = (
     "Caso contrário, não inclua nada.\n"
 )
 PROMPT_ROUTE_RULE = (
-    "- Se quiser pedir algo diretamente ao outro agente, inclua em uma nova linha "
-    "[ROUTE:claude] <mensagem> ou [ROUTE:codex] <mensagem>. "
-    "Esse comando é interno e não será exibido ao humano.\n"
+    "- Se quiser delegar uma subtarefa ao outro agente, inclua em uma nova linha:\n"
+    "  [ROUTE:claude] task: <o que fazer> | context: <contexto mínimo necessário> | expected: <formato da resposta>\n"
+    "  ou [ROUTE:codex] task: <o que fazer> | context: <contexto mínimo necessário> | expected: <formato da resposta>\n"
+    "- Use [ROUTE:...] somente quando a subtarefa exigir habilidade diferente da sua ou "
+    "quando dividir o trabalho resultar em resposta melhor ao humano. "
+    "Não delegue por hábito — delegue quando fizer sentido.\n"
+    "- O agente que recebe o handoff não tem acesso ao histórico completo, "
+    "apenas ao payload do [ROUTE:...]. Inclua tudo que ele precisa no campo context.\n"
+    "- Só um [ROUTE:...] por rodada. Esse comando é interno e não será exibido ao humano.\n"
 )
 PROMPT_PARTICIPANTS = "- HUMANO\n- CLAUDE\n- CODEX\n"
 PROMPT_SESSION_STATE = (
@@ -59,6 +65,11 @@ PROMPT_SESSION_STATE = (
     "- RESUMO CARREGADO: {summary_loaded}\n"
 )
 PROMPT_HANDOFF = "MENSAGEM DIRETA DO OUTRO AGENTE:\n{handoff}"
+HANDOFF_SYNTHESIS_MSG = (
+    "Você delegou a seguinte subtarefa ao {agent}:\n\n{task}\n\n"
+    "Resposta do {agent} à sua delegação:\n\n{response}\n\n"
+    "Com base na resposta acima, sintetize e conclua sua resposta ao humano."
+)
 PROMPT_SHARED_STATE = "ESTADO COMPARTILHADO:\n{state}"
 PROMPT_STATE_UPDATE_RULE = (
     "- Se houver decisão nova, discordância ou mudança de objetivo, inclua ao final da resposta um único bloco JSON válido:\n"
@@ -73,6 +84,11 @@ PROMPT_REVIEWER_RULE = (
     "- Você é o segundo agente nesta rodada. "
     "Revise a resposta anterior: concorde, discorde ou complemente. "
     "Não recomece a discussão do zero. Responda ao humano diretamente.\n"
+)
+PROMPT_HANDOFF_RULE = (
+    "- Você recebeu uma subtarefa delegada por outro agente. "
+    "Responda apenas à tarefa descrita abaixo, no formato indicado em 'expected'. "
+    "Não delegue ao outro agente. Seja direto e objetivo.\n"
 )
 
 MSG_CHAT_STARTED = "Chat multi-agente iniciado (/exit para sair)\n"

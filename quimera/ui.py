@@ -69,6 +69,14 @@ class TerminalRenderer:
         else:
             print(message)
 
+    def show_handoff(self, from_agent, to_agent, task=None):
+        _, from_label = self._AGENT_STYLES.get(from_agent.lower(), ("white", from_agent.capitalize()))
+        _, to_label = self._AGENT_STYLES.get(to_agent.lower(), ("white", to_agent.capitalize()))
+        message = f"[handoff] {from_label} -> {to_label}"
+        if task:
+            message += f" | task: {task}"
+        self.show_system(message)
+
     def running_status(self, initial=""):
         """Retorna um context manager com spinner animado. Chame .update(text) dentro do bloco."""
         if self._console:
