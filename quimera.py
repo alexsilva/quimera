@@ -6,7 +6,9 @@ from pathlib import Path
 
 
 class ContextManager:
-    SUMMARY_MARKER = "## Resumo da ultima sessao"
+    """Gerencia o contexto persistente carregado no início de cada rodada."""
+
+    SUMMARY_MARKER = "## Resumo da última sessão"
 
     def __init__(self, context_file):
         self.context_file = context_file
@@ -26,17 +28,18 @@ class ContextManager:
     def edit(self):
         editor = os.environ.get("EDITOR")
         if not editor:
-            print("\nDefina a variavel EDITOR para usar /context edit.\n")
+            print("\nDefina a variável EDITOR para usar /context edit.\n")
             return
 
         try:
             subprocess.run([editor, str(self.context_file)], check=True)
         except FileNotFoundError:
-            print(f"\nEditor nao encontrado: {editor}\n")
+            print(f"\nEditor não encontrado: {editor}\n")
         except subprocess.CalledProcessError as exc:
-            print(f"\nFalha ao abrir o contexto no editor (codigo {exc.returncode}).\n")
+            print(f"\nFalha ao abrir o contexto no editor (código {exc.returncode}).\n")
 
     def update_with_summary(self, summary):
+        """Substitui ou cria a seção de resumo curado da última sessão."""
         context = self.load()
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
         new_section = f"{self.SUMMARY_MARKER}\n\n_Gerado em {timestamp}_\n\n{summary}"
@@ -48,10 +51,12 @@ class ContextManager:
             updated = f"{context}\n\n{new_section}"
 
         self.context_file.write_text(updated.strip() + "\n", encoding="utf-8")
-        print(f"[memoria] resumo salvo em {self.context_file.name}\n")
+        print(f"[memória] resumo salvo em {self.context_file.name}\n")
 
 
 class SessionStorage:
+    """Centraliza logs textuais e snapshots JSON de uma sessão."""
+
     def __init__(self, base_dir):
         self.logs_dir = base_dir / "logs"
         self.logs_dir.mkdir(exist_ok=True)
@@ -80,6 +85,7 @@ class SessionStorage:
             json.dump(payload, file, ensure_ascii=False, indent=2)
 
     def load_last_history(self):
+        """Restaura o histórico mais recente salvo em JSON, se existir."""
         json_files = sorted(self.logs_dir.glob("sessao-*.json"), reverse=True)
         if not json_files:
             return []
@@ -99,11 +105,13 @@ class SessionStorage:
             messages = []
 
         if messages:
-            print(f"[memoria] historico restaurado de {latest.name} ({len(messages)} mensagens)\n")
+            print(f"[memória] histórico restaurado de {latest.name} ({len(messages)} mensagens)\n")
         return messages
 
 
 class AgentClient:
+    """Executa os agentes externos e encapsula chamadas de resumo."""
+
     AGENT_CMDS = {
         "claude": lambda prompt: ["claude", "-p", prompt],
         "codex": lambda prompt: ["codex", "exec", "--skip-git-repo-check", prompt],
@@ -113,27 +121,28 @@ class AgentClient:
         try:
             result = subprocess.run(cmd, capture_output=True, text=True)
         except FileNotFoundError as exc:
-            print(f"[erro] comando nao encontrado: {cmd[0]} ({exc})")
+            print(f"[erro] comando não encontrado: {cmd[0]} ({exc})")
             return None
 
         output = result.stdout.strip()
         error = result.stderr.strip()
 
         if result.returncode != 0:
-            print(f"[erro] {' '.join(cmd)} retornou codigo {result.returncode}")
+            print(f"[erro] {' '.join(cmd)} retornou código {result.returncode}")
             if error:
                 print(error)
             return None
 
         if not output:
             if error:
-                print(f"[erro] {' '.join(cmd)} nao retornou saida valida")
+                print(f"[erro] {' '.join(cmd)} não retornou saída válida")
                 print(error)
             return None
 
         return output
 
     def call(self, agent, prompt):
+        """Resolve o comando do agente e delega a execução."""
         build_cmd = self.AGENT_CMDS.get(agent)
         if build_cmd is None:
             print(f"[erro] agente desconhecido: {agent}")
@@ -141,20 +150,21 @@ class AgentClient:
         return self.run(build_cmd(prompt))
 
     def summarize_session(self, history):
+        """Pede ao Claude um resumo curto para atualizar o contexto persistente."""
         if not history:
             return None
 
         conversation = "\n".join(
             f"[{message['role'].upper()}]: {message['content']}" for message in history
         )
-        prompt = f"""Voce e um assistente de memoria. Analise a conversa abaixo e gere um resumo estruturado em markdown.
+        prompt = f"""Você é um assistente de memória. Analise a conversa abaixo e gere um resumo estruturado em markdown.
 
 O resumo deve conter:
-- O que foi discutido (topicos principais)
-- Decisoes tomadas (se houver)
-- Pendencias ou proximos passos (se houver)
+- O que foi discutido (tópicos principais)
+- Decisões tomadas (se houver)
+- Pendências ou próximos passos (se houver)
 
-Seja conciso. Maximo 20 linhas. Nao use emojis. Escreva em portugues.
+Seja conciso. Máximo 20 linhas. Não use emojis. Escreva em português.
 
 CONVERSA:
 {conversation}
@@ -164,13 +174,16 @@ RESUMO:"""
 
 
 class PromptBuilder:
+    """Monta o prompt com contexto persistente e janela recente da conversa."""
+
     def __init__(self, context_manager, history_window=20):
         self.context_manager = context_manager
         self.history_window = history_window
 
     def build(self, agent, history):
+        """Gera o prompt final enviado ao agente da vez."""
         context = self.context_manager.load()
-        base = f"""Voce e {agent.upper()} em uma conversa com:
+        base = f"""Você é {agent.upper()} em uma conversa com:
 - HUMANO
 - CLAUDE
 - CODEX
@@ -194,6 +207,8 @@ REGRAS:
 
 
 class QuimeraApp:
+    """Orquestra comandos locais, roteamento entre agentes e ciclo da sessão."""
+
     def __init__(self, base_dir):
         self.base_dir = base_dir
         self.context_manager = ContextManager(base_dir / "quimera_context.md")
@@ -216,6 +231,7 @@ class QuimeraApp:
         return False
 
     def parse_routing(self, user_input):
+        """Extrai o agente inicial e rejeita prefixos duplicados na mesma entrada."""
         stripped = user_input.lstrip()
         lowered = stripped.lower()
 
@@ -242,32 +258,35 @@ class QuimeraApp:
         if response is not None:
             print(f"\n{label}: {response}\n")
         else:
-            print(f"\n{label}: [sem resposta valida]\n")
+            print(f"\n{label}: [sem resposta válida]\n")
 
     def persist_message(self, role, content):
+        """Persiste uma mensagem no histórico em memória, log e snapshot JSON."""
         self.history.append({"role": role, "content": content})
         self.storage.append_log(role, content)
         self.storage.save_history(self.history)
 
     def shutdown(self):
+        """Finaliza a sessão tentando resumir o histórico no contexto persistente."""
         if not self.history:
             return
 
-        print("\n[memoria] historico salvo. Gerando resumo da sessao...\n")
+        print("\n[memória] histórico salvo. Gerando resumo da sessão...\n")
 
         summary = self.agent_client.summarize_session(self.history)
         if summary:
             self.context_manager.update_with_summary(summary)
         else:
-            print("[memoria] nao foi possivel gerar o resumo.\n")
+            print("[memória] não foi possível gerar o resumo.\n")
 
     def run(self):
+        """Executa o loop interativo do chat multiagente."""
         print("Chat multi-agente iniciado (/exit para sair)\n")
-        print(f"Log da sessao: {self.storage.get_log_file()}\n")
+        print(f"Log da sessão: {self.storage.get_log_file()}\n")
 
         try:
             while True:
-                user = input("Voce: ")
+                user = input("Você: ")
 
                 if user == "/exit":
                     break
@@ -298,6 +317,7 @@ class QuimeraApp:
 
 
 def main():
+    """Inicializa e executa a aplicação a partir do diretório do script."""
     app = QuimeraApp(Path(__file__).parent)
     app.run()
 
