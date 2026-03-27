@@ -1,7 +1,7 @@
 class PromptBuilder:
     """Monta o prompt com contexto persistente e janela recente da conversa."""
 
-    def __init__(self, context_manager, history_window=20):
+    def __init__(self, context_manager, history_window=12):
         self.context_manager = context_manager
         self.history_window = history_window
 
