@@ -136,6 +136,34 @@ CONVERSA:
     return base
 
 
+def parse_routing(user_input):
+    """Retorna (first_agent, message) com base no prefixo /codex ou /claude."""
+    stripped_input = user_input.lstrip()
+    lowered_input = stripped_input.lower()
+
+    for prefix, agent in [("/codex", "codex"), ("/claude", "claude")]:
+        if lowered_input == prefix:
+            return agent, ""
+        if lowered_input.startswith(f"{prefix} "):
+            return agent, stripped_input[len(prefix):].lstrip()
+
+    return "claude", user_input
+
+
+def call_agent(agent, history):
+    if agent == "claude":
+        return call_claude(history)
+    return call_codex(history)
+
+
+def print_response(agent, response):
+    label = agent.capitalize()
+    if response is not None:
+        print(f"\n{label}: {response}\n")
+    else:
+        print(f"\n{label}: [sem resposta válida]\n")
+
+
 def main():
     print("💬 Chat multi-agente iniciado (/exit para sair)\n")
     print(f"Log da sessao: {get_log_file()}\n")
@@ -151,26 +179,24 @@ def main():
             if handle_command(user):
                 continue
 
-            history.append({"role": "human", "content": user})
-            append_log("human", user)
+            first_agent, message = parse_routing(user)
 
-            # 🤖 CLAUDE responde
-            claude = call_claude(history)
-            if claude is not None:
-                print(f"\nClaude: {claude}\n")
-                history.append({"role": "claude", "content": claude})
-                append_log("claude", claude)
-            else:
-                print("\nClaude: [sem resposta válida]\n")
+            if not message:
+                print(f"\nUse /{first_agent} <mensagem>\n")
+                continue
 
-            # 🤖 CODEX responde
-            codex = call_codex(history)
-            if codex is not None:
-                print(f"Codex: {codex}\n")
-                history.append({"role": "codex", "content": codex})
-                append_log("codex", codex)
-            else:
-                print("Codex: [sem resposta válida]\n")
+            second_agent = "codex" if first_agent == "claude" else "claude"
+
+            history.append({"role": "human", "content": message})
+            append_log("human", message)
+
+            for agent in (first_agent, second_agent):
+                response = call_agent(agent, history)
+                print_response(agent, response)
+                if response is not None:
+                    history.append({"role": agent, "content": response})
+                    append_log(agent, response)
+
     except KeyboardInterrupt:
         print("\nEncerrando chat.")
 
