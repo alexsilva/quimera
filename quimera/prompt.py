@@ -1,3 +1,17 @@
+from .constants import (
+    EXTEND_MARKER,
+    PROMPT_HEADER,
+    PROMPT_CONTEXT,
+    PROMPT_CONVERSATION,
+    PROMPT_SPEAKER,
+    PROMPT_BASE_RULES,
+    PROMPT_DEBATE_RULE,
+    PROMPT_ROUTE_RULE,
+    PROMPT_PARTICIPANTS,
+    PROMPT_HANDOFF,
+)
+
+
 class PromptBuilder:
     """Monta o prompt com contexto persistente e janela recente da conversa."""
 
@@ -5,27 +19,31 @@ class PromptBuilder:
         self.context_manager = context_manager
         self.history_window = history_window
 
-    def build(self, agent, history):
+    def build(self, agent, history, is_first_speaker=False, handoff=None):
         """Gera o prompt final enviado ao agente da vez."""
         context = self.context_manager.load()
-        base = f"""Você é {agent.upper()} em uma conversa com:
-- HUMANO
-- CLAUDE
-- CODEX
 
-REGRAS:
-- Responda como em um chat
-- Pode discordar
-- Pode comentar respostas anteriores
-- Seja direto
-"""
+        rules = PROMPT_BASE_RULES
+        rules += PROMPT_ROUTE_RULE
+        if is_first_speaker:
+            rules += PROMPT_DEBATE_RULE.format(marker=EXTEND_MARKER)
+
+        parts = [
+            PROMPT_HEADER.format(agent=agent.upper(), participants=PROMPT_PARTICIPANTS),
+            rules,
+        ]
 
         if context:
-            base += f"\n\nCONTEXTO PERSISTENTE:\n{context}"
+            parts.append(PROMPT_CONTEXT.format(context=context))
 
-        base += "\n\nCONVERSA:"
-        for message in history[-self.history_window:]:
-            base += f"\n[{message['role'].upper()}]: {message['content']}"
+        if handoff:
+            parts.append(PROMPT_HANDOFF.format(handoff=handoff))
 
-        base += f"\n[{agent.upper()}]:"
-        return base
+        conversation = "\n".join(
+            f"[{m['role'].upper()}]: {m['content']}"
+            for m in history[-self.history_window:]
+        )
+        parts.append(PROMPT_CONVERSATION.format(conversation=conversation))
+        parts.append(PROMPT_SPEAKER.format(agent=agent.upper()))
+
+        return "\n\n".join(parts)

@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 from .ui import TerminalRenderer
@@ -6,10 +7,22 @@ from .storage import SessionStorage
 from .agents import AgentClient
 from .prompt import PromptBuilder
 from .workspace import Workspace
+from .constants import (
+    EXTEND_MARKER,
+    ROUTE_PREFIX,
+    CMD_EXIT, CMD_CONTEXT, CMD_CONTEXT_EDIT,
+    PREFIX_CLAUDE, PREFIX_CODEX,
+    AGENT_CLAUDE, AGENT_CODEX, DEFAULT_FIRST_AGENT, AGENT_SEQUENCE,
+    USER_ROLE, INPUT_PROMPT,
+    MSG_CHAT_STARTED, MSG_SESSION_LOG, MSG_MIGRATION,
+    MSG_MEMORY_SAVING, MSG_MEMORY_FAILED, MSG_SHUTDOWN,
+    MSG_DOUBLE_PREFIX, MSG_EMPTY_INPUT,
+)
 
 
 class QuimeraApp:
     """Orquestra comandos locais, roteamento entre agentes e ciclo da sessão."""
+    ROUTE_PATTERN = re.compile(r"(?m)^\[ROUTE:(claude|codex)\]\s*(.+?)\s*$")
 
     def __init__(self, cwd: Path):
         self.renderer = TerminalRenderer()
@@ -17,7 +30,7 @@ class QuimeraApp:
 
         migrated = workspace.migrate_from_legacy(cwd)
         for item in migrated:
-            self.renderer.show_system(f"[migração] {item}\n")
+            self.renderer.show_system(MSG_MIGRATION.format(item))
 
         self.context_manager = ContextManager(
             workspace.context_persistent,
@@ -32,11 +45,11 @@ class QuimeraApp:
     def handle_command(self, user_input):
         command = user_input.strip()
 
-        if command == "/context":
+        if command == CMD_CONTEXT:
             self.context_manager.show()
             return True
 
-        if command == "/context edit":
+        if command == CMD_CONTEXT_EDIT:
             self.context_manager.edit()
             return True
 
@@ -47,23 +60,45 @@ class QuimeraApp:
         stripped = user_input.lstrip()
         lowered = stripped.lower()
 
-        prefixes = ("/codex", "/claude")
-        matched = [p for p in prefixes if lowered == p or lowered.startswith(f"{p} ")]
-        if len(matched) > 1:
-            self.renderer.show_warning("\nUse apenas um prefixo por vez: /claude ou /codex\n")
-            return None, None
-
-        for prefix, agent in [("/codex", "codex"), ("/claude", "claude")]:
+        for prefix, agent in AGENT_SEQUENCE:
             if lowered == prefix:
                 return agent, ""
             if lowered.startswith(f"{prefix} "):
-                return agent, stripped[len(prefix):].lstrip()
+                message = stripped[len(prefix):].lstrip()
+                other_prefix = PREFIX_CLAUDE if prefix == PREFIX_CODEX else PREFIX_CODEX
+                lowered_message = message.lower()
+                if lowered_message == other_prefix or lowered_message.startswith(f"{other_prefix} "):
+                    self.renderer.show_warning(MSG_DOUBLE_PREFIX)
+                    return None, None
+                return agent, message
 
-        return "claude", user_input
+        return DEFAULT_FIRST_AGENT, user_input
 
-    def call_agent(self, agent):
-        prompt = self.prompt_builder.build(agent, self.history)
+    def call_agent(self, agent, is_first_speaker=False, handoff=None):
+        prompt = self.prompt_builder.build(agent, self.history, is_first_speaker, handoff)
         return self.agent_client.call(agent, prompt)
+
+    def parse_mode(self, response):
+        """Retorna (response_limpa, extend). Remove EXTEND_MARKER se presente."""
+        response, _, _ = self.parse_route(response)
+        if response and response.rstrip().endswith(EXTEND_MARKER):
+            clean = response.rstrip()[: -len(EXTEND_MARKER)].rstrip()
+            return clean, True
+        return response, False
+
+    def parse_route(self, response):
+        """Extrai [ROUTE:agent] do texto e retorna (response_limpa, target, message)."""
+        if not response or ROUTE_PREFIX not in response:
+            return response, None, None
+
+        match = self.ROUTE_PATTERN.search(response)
+        if not match:
+            return response, None, None
+
+        target = match.group(1)
+        message = match.group(2).strip()
+        clean = self.ROUTE_PATTERN.sub("", response, count=1).strip()
+        return clean, target, message
 
     def print_response(self, agent, response):
         if response is not None:
@@ -82,24 +117,24 @@ class QuimeraApp:
         if not self.history:
             return
 
-        self.renderer.show_system("\n[memória] histórico salvo. Gerando resumo da sessão...\n")
+        self.renderer.show_system(MSG_MEMORY_SAVING)
 
         summary = self.agent_client.summarize_session(self.history)
         if summary:
             self.context_manager.update_with_summary(summary)
         else:
-            self.renderer.show_system("[memória] não foi possível gerar o resumo.\n")
+            self.renderer.show_system(MSG_MEMORY_FAILED)
 
     def run(self):
         """Executa o loop interativo do chat multiagente."""
-        self.renderer.show_system("Chat multi-agente iniciado (/exit para sair)\n")
-        self.renderer.show_system(f"Log da sessão: {self.storage.get_log_file()}\n")
+        self.renderer.show_system(MSG_CHAT_STARTED)
+        self.renderer.show_system(MSG_SESSION_LOG.format(self.storage.get_log_file()))
 
         try:
             while True:
-                user = input("Você: ")
+                user = input(INPUT_PROMPT)
 
-                if user == "/exit":
+                if user == CMD_EXIT:
                     break
 
                 if self.handle_command(user):
@@ -109,19 +144,39 @@ class QuimeraApp:
                 if first_agent is None:
                     continue
                 if not message.strip():
-                    self.renderer.show_warning(f"\nUse /{first_agent} <mensagem>\n")
+                    self.renderer.show_warning(MSG_EMPTY_INPUT.format(first_agent))
                     continue
 
-                second_agent = "codex" if first_agent == "claude" else "claude"
+                second_agent = AGENT_CODEX if first_agent == AGENT_CLAUDE else AGENT_CLAUDE
 
-                self.persist_message("human", message)
+                self.persist_message(USER_ROLE, message)
 
-                for agent in (first_agent, second_agent):
-                    response = self.call_agent(agent)
+                # Primeira fala: detecta se o agente quer debate estendido
+                response = self.call_agent(first_agent, is_first_speaker=True)
+                response, route_target, handoff = self.parse_route(response)
+                response, extend = self.parse_mode(response)
+                self.print_response(first_agent, response)
+                if response is not None:
+                    self.persist_message(first_agent, response)
+
+                # Fluxo padrão: 2 falas. Estendido (EXTEND_MARKER): 4 falas alternadas.
+                remaining = [second_agent, first_agent, second_agent] if extend else [second_agent]
+                if route_target and remaining:
+                    remaining[0] = route_target
+
+                next_handoff = handoff
+                for index, agent in enumerate(remaining):
+                    response = self.call_agent(agent, handoff=next_handoff)
+                    next_handoff = None
+                    response, route_target, handoff = self.parse_route(response)
                     self.print_response(agent, response)
                     if response is not None:
                         self.persist_message(agent, response)
+                    if route_target and index + 1 < len(remaining):
+                        remaining[index + 1] = route_target
+                    if route_target:
+                        next_handoff = handoff
         except KeyboardInterrupt:
-            self.renderer.show_system("\nEncerrando chat.")
+            self.renderer.show_system(MSG_SHUTDOWN)
         finally:
             self.shutdown()
