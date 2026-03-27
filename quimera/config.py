@@ -6,6 +6,7 @@ from .workspace import QUIMERA_BASE
 _CONFIG_FILE = QUIMERA_BASE / "config.json"
 DEFAULT_USER_NAME = "Você"
 DEFAULT_HISTORY_WINDOW = 8
+DEFAULT_AUTO_SUMMARIZE_THRESHOLD = 30
 
 
 class ConfigManager:
@@ -36,6 +37,13 @@ class ConfigManager:
         if isinstance(value, int) and value > 0:
             return value
         return DEFAULT_HISTORY_WINDOW
+
+    @property
+    def auto_summarize_threshold(self) -> int:
+        value = self._load().get("auto_summarize_threshold")
+        if isinstance(value, int) and value > 0:
+            return value
+        return DEFAULT_AUTO_SUMMARIZE_THRESHOLD
 
     def set_user_name(self, name: str):
         data = self._load()

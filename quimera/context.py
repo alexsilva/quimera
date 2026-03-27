@@ -7,6 +7,7 @@ class ContextManager:
     """Gerencia o contexto persistente carregado no início de cada rodada."""
 
     SUMMARY_MARKER = "## Resumo da última sessão"
+    GENERATED_AT_PREFIX = "_Gerado em "
 
     def __init__(self, base_context_file, session_context_file, renderer):
         self.base_context_file = base_context_file
@@ -23,6 +24,23 @@ class ContextManager:
 
     def load_session(self):
         return self._read(self.session_context_file)
+
+    def load_session_summary(self):
+        """Extrai apenas o corpo do resumo curado salvo em session.md."""
+        session_context = self.load_session()
+        if not session_context.startswith(self.SUMMARY_MARKER):
+            return ""
+
+        lines = session_context.splitlines()
+        if lines and lines[0].strip() == self.SUMMARY_MARKER:
+            lines = lines[1:]
+        while lines and not lines[0].strip():
+            lines = lines[1:]
+        if lines and lines[0].startswith(self.GENERATED_AT_PREFIX):
+            lines = lines[1:]
+        while lines and not lines[0].strip():
+            lines = lines[1:]
+        return "\n".join(lines).strip()
 
     def load(self):
         base_context = self.load_base()

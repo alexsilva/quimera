@@ -81,6 +81,7 @@ class QuimeraApp:
             session_state=session_state,
             user_name=self.user_name,
         )
+        self.auto_summarize_threshold = self.config.auto_summarize_threshold
 
     def handle_command(self, user_input):
         command = user_input.strip()
@@ -217,6 +218,36 @@ class QuimeraApp:
         self.storage.append_log(role, content)
         self.storage.save_history(self.history, shared_state=self.shared_state)
 
+    def _maybe_auto_summarize(self):
+        """Sumariza e trunca o histórico quando excede o threshold configurado."""
+        threshold = getattr(self, "auto_summarize_threshold", None)
+        if not isinstance(threshold, int) or threshold <= 0:
+            return
+        if len(self.history) < threshold:
+            return
+
+        keep = self.prompt_builder.history_window
+        to_summarize = self.history[:-keep]
+        recent = self.history[-keep:]
+        existing_summary = self.context_manager.load_session_summary()
+
+        self.renderer.show_system(
+            f"[memória] histórico com {len(self.history)} mensagens — gerando resumo automático..."
+        )
+        summary = self.agent_client.summarize_session(
+            to_summarize,
+            existing_summary=existing_summary,
+        )
+        if summary:
+            self.context_manager.update_with_summary(summary)
+            self.history = recent
+            self.storage.save_history(self.history, shared_state=self.shared_state)
+            self.renderer.show_system(
+                f"[memória] histórico truncado para {len(self.history)} mensagens recentes"
+            )
+        else:
+            self.renderer.show_system("[memória] resumo automático falhou — histórico mantido")
+
     def shutdown(self):
         """Finaliza a sessão tentando resumir o histórico no contexto persistente."""
         if not self.history:
@@ -224,7 +255,10 @@ class QuimeraApp:
 
         self.renderer.show_system(MSG_MEMORY_SAVING)
 
-        summary = self.agent_client.summarize_session(self.history)
+        summary = self.agent_client.summarize_session(
+            self.history,
+            existing_summary=self.context_manager.load_session_summary(),
+        )
         if summary:
             self.context_manager.update_with_summary(summary)
         else:
@@ -289,6 +323,8 @@ class QuimeraApp:
                         remaining[index + 1] = route_target
                     if route_target:
                         next_handoff = handoff
+
+                self._maybe_auto_summarize()
         except KeyboardInterrupt:
             self.renderer.show_system(MSG_SHUTDOWN)
         finally:

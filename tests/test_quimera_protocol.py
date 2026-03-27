@@ -31,6 +31,7 @@ class DummyConfigManager:
     def __init__(self):
         self.user_name = "Você"
         self.history_window = DEFAULT_HISTORY_WINDOW
+        self.auto_summarize_threshold = 30
 
 
 class DummyStorage:
@@ -599,6 +600,102 @@ class ProtocolTests(unittest.TestCase):
         app.persist_message("human", "oi")
 
         self.assertEqual(app.storage.saved_shared_state, {"goal": "corrigir protocolo"})
+
+    def test_auto_summarize_merges_with_existing_session_summary(self):
+        class FakeContextManager:
+            def __init__(self):
+                self.saved_summary = None
+
+            def load_session_summary(self):
+                return "## Resumo da Conversa\n\n- Contexto anterior"
+
+            def update_with_summary(self, summary):
+                self.saved_summary = summary
+
+        class FakeAgentClient:
+            def __init__(self):
+                self.calls = []
+
+            def summarize_session(self, history, existing_summary=None):
+                self.calls.append((history, existing_summary))
+                return "## Resumo da Conversa\n\n- Consolidado"
+
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.history = [
+            {"role": "human", "content": "m1"},
+            {"role": "claude", "content": "m2"},
+            {"role": "codex", "content": "m3"},
+            {"role": "human", "content": "m4"},
+        ]
+        app.auto_summarize_threshold = 4
+        app.prompt_builder = type("PromptBuilderStub", (), {"history_window": 2})()
+        app.context_manager = FakeContextManager()
+        app.agent_client = FakeAgentClient()
+        app.renderer = DummyRenderer()
+        app.storage = DummyStorage()
+        app.shared_state = {"goal": "manter memória"}
+
+        app._maybe_auto_summarize()
+
+        self.assertEqual(
+            app.agent_client.calls,
+            [
+                (
+                    [
+                        {"role": "human", "content": "m1"},
+                        {"role": "claude", "content": "m2"},
+                    ],
+                    "## Resumo da Conversa\n\n- Contexto anterior",
+                )
+            ],
+        )
+        self.assertEqual(app.context_manager.saved_summary, "## Resumo da Conversa\n\n- Consolidado")
+        self.assertEqual(
+            app.history,
+            [
+                {"role": "codex", "content": "m3"},
+                {"role": "human", "content": "m4"},
+            ],
+        )
+        self.assertEqual(app.storage.saved_shared_state, {"goal": "manter memória"})
+
+    def test_shutdown_merges_existing_session_summary(self):
+        class FakeContextManager:
+            def __init__(self):
+                self.saved_summary = None
+
+            def load_session_summary(self):
+                return "## Resumo da Conversa\n\n- Memória acumulada"
+
+            def update_with_summary(self, summary):
+                self.saved_summary = summary
+
+        class FakeAgentClient:
+            def __init__(self):
+                self.calls = []
+
+            def summarize_session(self, history, existing_summary=None):
+                self.calls.append((history, existing_summary))
+                return "## Resumo da Conversa\n\n- Memória consolidada"
+
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.history = [{"role": "human", "content": "mensagem final"}]
+        app.context_manager = FakeContextManager()
+        app.agent_client = FakeAgentClient()
+        app.renderer = DummyRenderer()
+
+        app.shutdown()
+
+        self.assertEqual(
+            app.agent_client.calls,
+            [
+                (
+                    [{"role": "human", "content": "mensagem final"}],
+                    "## Resumo da Conversa\n\n- Memória acumulada",
+                )
+            ],
+        )
+        self.assertEqual(app.context_manager.saved_summary, "## Resumo da Conversa\n\n- Memória consolidada")
 
 
 if __name__ == "__main__":
