@@ -1,3 +1,5 @@
+import json
+
 from .constants import (
     EXTEND_MARKER,
     PROMPT_HEADER,
@@ -10,6 +12,9 @@ from .constants import (
     PROMPT_PARTICIPANTS,
     PROMPT_SESSION_STATE,
     PROMPT_HANDOFF,
+    PROMPT_SHARED_STATE,
+    PROMPT_STATE_UPDATE_RULE,
+    PROMPT_REVIEWER_RULE,
 )
 from .config import DEFAULT_HISTORY_WINDOW
 
@@ -23,7 +28,7 @@ class PromptBuilder:
         self.session_state = session_state or {}
         self.user_name = user_name or "Você"
 
-    def build(self, agent, history, is_first_speaker=False, handoff=None, debug=False, primary=True):
+    def build(self, agent, history, is_first_speaker=False, handoff=None, debug=False, primary=True, shared_state=None):
         """Gera o prompt final enviado ao agente da vez.
 
         primary=False omite session_state — adequado para agentes secundários que já
@@ -33,14 +38,21 @@ class PromptBuilder:
 
         rules = PROMPT_BASE_RULES
         rules += PROMPT_ROUTE_RULE
+        rules += PROMPT_STATE_UPDATE_RULE
         if is_first_speaker:
             rules += PROMPT_DEBATE_RULE.format(marker=EXTEND_MARKER)
+        else:
+            rules += PROMPT_REVIEWER_RULE
 
         participants = f"- {self.user_name.upper()}\n- CLAUDE\n- CODEX\n"
         header_block = PROMPT_HEADER.format(agent=agent.upper(), participants=participants)
         session_block = PROMPT_SESSION_STATE.format(**self.session_state) if (self.session_state and primary) else ""
         context_block = PROMPT_CONTEXT.format(context=context) if context else ""
         handoff_block = PROMPT_HANDOFF.format(handoff=handoff) if handoff else ""
+        shared_state_block = ""
+        if shared_state:
+            state_lines = json.dumps(shared_state, ensure_ascii=False, indent=2)
+            shared_state_block = PROMPT_SHARED_STATE.format(state=state_lines)
 
         conversation = "\n".join(
             f"[{self._display_role(m['role'])}]: {m['content']}"
@@ -51,7 +63,7 @@ class PromptBuilder:
 
         parts = [p for p in [
             header_block, rules, session_block, context_block,
-            handoff_block, conversation_block, speaker_block,
+            shared_state_block, handoff_block, conversation_block, speaker_block,
         ] if p]
 
         full_prompt = "\n\n".join(parts)
@@ -61,6 +73,7 @@ class PromptBuilder:
                 "rules_chars": len(rules),
                 "session_state_chars": len(session_block),
                 "persistent_chars": len(context_block),
+                "shared_state_chars": len(shared_state_block),
                 "history_chars": len(conversation_block),
                 "handoff_chars": len(handoff_block),
                 "total_chars": len(full_prompt),

@@ -1,5 +1,15 @@
 EXTEND_MARKER = "[DEBATE]"
 ROUTE_PREFIX = "[ROUTE:"
+STATE_UPDATE_START = "[STATE_UPDATE]"
+STATE_UPDATE_END = "[/STATE_UPDATE]"
+STATE_UPDATE_EXAMPLE = (
+    '{\n'
+    '  "goal": "objetivo atual da conversa",\n'
+    '  "decisions": ["o que foi aceito"],\n'
+    '  "open_disagreements": ["pontos em aberto"],\n'
+    '  "next_step": "ação esperada"\n'
+    '}'
+)
 
 CMD_EXIT = "/exit"
 CMD_HELP = "/help"
@@ -47,6 +57,21 @@ PROMPT_SESSION_STATE = (
     "- RESUMO CARREGADO: {summary_loaded}\n"
 )
 PROMPT_HANDOFF = "MENSAGEM DIRETA DO OUTRO AGENTE:\n{handoff}"
+PROMPT_SHARED_STATE = "ESTADO COMPARTILHADO:\n{state}"
+PROMPT_STATE_UPDATE_RULE = (
+    "- Se houver decisão nova, discordância ou mudança de objetivo, inclua ao final da resposta um único bloco JSON válido:\n"
+    "[STATE_UPDATE]\n"
+    f"{STATE_UPDATE_EXAMPLE}\n"
+    "[/STATE_UPDATE]\n"
+    "- Se também precisar pedir algo ao outro agente, coloque qualquer linha [ROUTE:...] fora desse bloco.\n"
+    f"- Se também precisar sinalizar debate estendido, coloque {EXTEND_MARKER} depois de [/STATE_UPDATE].\n"
+    "Esse bloco é interno e não será exibido ao humano.\n"
+)
+PROMPT_REVIEWER_RULE = (
+    "- Você é o segundo agente nesta rodada. "
+    "Revise a resposta anterior: concorde, discorde ou complemente. "
+    "Não recomece a discussão do zero. Responda ao humano diretamente.\n"
+)
 
 MSG_CHAT_STARTED = "Chat multi-agente iniciado (/exit para sair)\n"
 MSG_SESSION_LOG = "Log da sessão: {}\n"

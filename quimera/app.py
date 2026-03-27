@@ -1,3 +1,4 @@
+import json
 import re
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from .config import ConfigManager
 from .constants import (
     EXTEND_MARKER,
     ROUTE_PREFIX,
+    STATE_UPDATE_START, STATE_UPDATE_END,
     CMD_EXIT, CMD_HELP, CMD_CONTEXT, CMD_CONTEXT_EDIT,
     PREFIX_CLAUDE, PREFIX_CODEX,
     AGENT_CLAUDE, AGENT_CODEX, DEFAULT_FIRST_AGENT, AGENT_SEQUENCE,
@@ -24,6 +26,9 @@ from .constants import (
 class QuimeraApp:
     """Orquestra comandos locais, roteamento entre agentes e ciclo da sessão."""
     ROUTE_PATTERN = re.compile(r"(?m)^\[ROUTE:(claude|codex)\]\s*(.+?)\s*$")
+    STATE_UPDATE_PATTERN = re.compile(
+        r"\[STATE_UPDATE\](.*?)\[/STATE_UPDATE\]", re.DOTALL
+    )
 
     @staticmethod
     def _format_yes_no(value):
@@ -48,7 +53,8 @@ class QuimeraApp:
         session_id = self.storage.get_history_file().stem
         metrics_file = workspace.metrics_dir / f"{session_id}.jsonl" if debug else None
         self.agent_client = AgentClient(self.renderer, metrics_file=metrics_file)
-        self.history = self.storage.load_last_history()
+        last_session = self.storage.load_last_session()
+        self.history = last_session["messages"]
         session_context = self.context_manager.load_session()
         history_restored = bool(self.history)
         summary_loaded = self.context_manager.SUMMARY_MARKER in session_context
@@ -61,6 +67,7 @@ class QuimeraApp:
         self.debug_prompt_metrics = debug
         self.round_index = 0
         self.session_call_index = 0
+        self.shared_state = last_session["shared_state"]
         is_new_session = not history_restored and not summary_loaded
         session_state = {
             "session_id": self.session_state["session_id"],
@@ -111,6 +118,41 @@ class QuimeraApp:
 
         return DEFAULT_FIRST_AGENT, user_input
 
+    @staticmethod
+    def _merge_state_value(current, incoming):
+        if incoming is None:
+            return current
+        if incoming == "":
+            return None
+        if isinstance(current, list) and isinstance(incoming, list):
+            merged = current.copy()
+            for item in incoming:
+                if item not in merged:
+                    merged.append(item)
+            return merged
+        return incoming
+
+    def _apply_state_update(self, block_content):
+        try:
+            payload = json.loads(block_content.strip())
+        except json.JSONDecodeError:
+            return False
+
+        if not isinstance(payload, dict):
+            return False
+
+        for key, value in payload.items():
+            normalized_key = str(key).strip().lower().replace(" ", "_")
+            if not normalized_key:
+                continue
+            current = self.shared_state.get(normalized_key)
+            merged = self._merge_state_value(current, value)
+            if merged is None:
+                self.shared_state.pop(normalized_key, None)
+            else:
+                self.shared_state[normalized_key] = merged
+        return True
+
     def call_agent(self, agent, is_first_speaker=False, handoff=None, primary=True, protocol_mode="standard"):
         self.session_call_index += 1
         if self.debug_prompt_metrics:
@@ -121,6 +163,7 @@ class QuimeraApp:
                 handoff,
                 debug=True,
                 primary=primary,
+                shared_state=self.shared_state,
             )
             self.agent_client.log_prompt_metrics(
                 agent, metrics,
@@ -131,24 +174,34 @@ class QuimeraApp:
                 protocol_mode=protocol_mode,
             )
         else:
-            prompt = self.prompt_builder.build(agent, self.history, is_first_speaker, handoff, primary=primary)
+            prompt = self.prompt_builder.build(
+                agent, self.history, is_first_speaker, handoff,
+                primary=primary, shared_state=self.shared_state,
+            )
         return self.agent_client.call(agent, prompt)
 
     def parse_response(self, response):
         """Extrai marcadores de controle e retorna (clean, route_target, handoff, extend)."""
+        if response is None:
+            return None, None, None, False
+
         route_target, handoff = None, None
 
-        if response and ROUTE_PREFIX in response:
+        if STATE_UPDATE_START in response:
+            for state_match in self.STATE_UPDATE_PATTERN.finditer(response):
+                self._apply_state_update(state_match.group(1))
+            response = self.STATE_UPDATE_PATTERN.sub("", response).strip()
+
+        if ROUTE_PREFIX in response:
             match = self.ROUTE_PATTERN.search(response)
             if match:
                 route_target = match.group(1)
                 handoff = match.group(2).strip()
                 response = self.ROUTE_PATTERN.sub("", response, count=1).strip()
 
-        extend = False
-        if response and response.rstrip().endswith(EXTEND_MARKER):
+        extend = response.rstrip().endswith(EXTEND_MARKER)
+        if extend:
             response = response.rstrip()[: -len(EXTEND_MARKER)].rstrip()
-            extend = True
 
         return response, route_target, handoff, extend
 
@@ -162,7 +215,7 @@ class QuimeraApp:
         """Persiste uma mensagem no histórico em memória, log e snapshot JSON."""
         self.history.append({"role": role, "content": content})
         self.storage.append_log(role, content)
-        self.storage.save_history(self.history)
+        self.storage.save_history(self.history, shared_state=self.shared_state)
 
     def shutdown(self):
         """Finaliza a sessão tentando resumir o histórico no contexto persistente."""
