@@ -1,5 +1,8 @@
 import json
+import os
 import re
+import subprocess
+import tempfile
 from pathlib import Path
 
 from .ui import TerminalRenderer
@@ -13,7 +16,7 @@ from .constants import (
     EXTEND_MARKER,
     ROUTE_PREFIX,
     STATE_UPDATE_START, STATE_UPDATE_END,
-    CMD_EXIT, CMD_HELP, CMD_CONTEXT, CMD_CONTEXT_EDIT,
+    CMD_EXIT, CMD_HELP, CMD_CONTEXT, CMD_CONTEXT_EDIT, CMD_EDIT, CMD_FILE_PREFIX,
     PREFIX_CLAUDE, PREFIX_CODEX,
     AGENT_CLAUDE, AGENT_CODEX, DEFAULT_FIRST_AGENT, AGENT_SEQUENCE,
     USER_ROLE, INPUT_PROMPT,
@@ -99,6 +102,44 @@ class QuimeraApp:
             return True
 
         return False
+
+    def read_from_editor(self):
+        """Abre $EDITOR num arquivo temporário e retorna o conteúdo digitado."""
+        import shlex, shutil
+        editor_env = os.environ.get("EDITOR", "")
+        if editor_env:
+            editor_parts = shlex.split(editor_env)
+        else:
+            fallbacks = ["nano", "vim", "vi"]
+            editor_parts = next(
+                ([e] for e in fallbacks if shutil.which(e)), None
+            )
+            if not editor_parts:
+                self.renderer.show_error("\nNenhum editor encontrado. Defina $EDITOR ou instale nano/vim.\n")
+                return None
+        with tempfile.NamedTemporaryFile(suffix=".md", delete=False) as tmp:
+            tmp_path = tmp.name
+        try:
+            subprocess.run([*editor_parts, tmp_path], check=True)
+            content = Path(tmp_path).read_text(encoding="utf-8").strip()
+        except FileNotFoundError:
+            self.renderer.show_error(f"\nEditor não encontrado: {editor_parts[0]}\n")
+            return None
+        except subprocess.CalledProcessError as exc:
+            self.renderer.show_error(f"\nEditor encerrou com erro (código {exc.returncode}).\n")
+            return None
+        finally:
+            Path(tmp_path).unlink(missing_ok=True)
+        return content or None
+
+    def read_from_file(self, path_str):
+        """Lê o conteúdo de um arquivo e retorna como string."""
+        path = Path(path_str).expanduser()
+        if not path.exists():
+            self.renderer.show_error(f"\nArquivo não encontrado: {path}\n")
+            return None
+        content = path.read_text(encoding="utf-8").strip()
+        return content or None
 
     def parse_routing(self, user_input):
         """Extrai o agente inicial e rejeita prefixos duplicados na mesma entrada."""
@@ -282,6 +323,19 @@ class QuimeraApp:
 
                 if user == CMD_EXIT:
                     break
+
+                if user.strip() == CMD_EDIT:
+                    content = self.read_from_editor()
+                    if not content:
+                        continue
+                    user = content
+
+                elif user.strip().startswith(CMD_FILE_PREFIX):
+                    path_str = user.strip()[len(CMD_FILE_PREFIX):]
+                    content = self.read_from_file(path_str)
+                    if not content:
+                        continue
+                    user = content
 
                 if self.handle_command(user):
                     continue

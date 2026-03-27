@@ -1,4 +1,6 @@
 import os
+import shlex
+import shutil
 import subprocess
 from datetime import datetime
 
@@ -62,15 +64,23 @@ class ContextManager:
         self.renderer.show_plain(f"\n{context}\n")
 
     def edit(self):
-        editor = os.environ.get("EDITOR")
-        if not editor:
-            self.renderer.show_warning("\nDefina a variável EDITOR para usar /context edit.\n")
-            return
+        editor_env = os.environ.get("EDITOR")
+        if editor_env:
+            editor_parts = shlex.split(editor_env)
+        else:
+            fallback = next(
+                (e for e in ("nano", "vim", "vi") if shutil.which(e)),
+                None,
+            )
+            if not fallback:
+                self.renderer.show_error("\nNenhum editor disponível. Instale nano, vim ou vi.\n")
+                return
+            editor_parts = [fallback]
 
         try:
-            subprocess.run([editor, str(self.base_context_file)], check=True)
+            subprocess.run(editor_parts + [str(self.base_context_file)], check=True)
         except FileNotFoundError:
-            self.renderer.show_error(f"\nEditor não encontrado: {editor}\n")
+            self.renderer.show_error(f"\nEditor não encontrado: {editor_parts[0]}\n")
         except subprocess.CalledProcessError as exc:
             self.renderer.show_error(
                 f"\nFalha ao abrir o contexto no editor (código {exc.returncode}).\n"

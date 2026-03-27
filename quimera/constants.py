@@ -15,6 +15,8 @@ CMD_EXIT = "/exit"
 CMD_HELP = "/help"
 CMD_CONTEXT = "/context"
 CMD_CONTEXT_EDIT = "/context edit"
+CMD_EDIT = "/edit"
+CMD_FILE_PREFIX = "/file "
 
 PREFIX_CLAUDE = "/claude"
 PREFIX_CODEX = "/codex"
@@ -85,6 +87,8 @@ MSG_HELP = (
     "- /codex <mensagem>: Codex responde primeiro\n"
     "- /context: mostra o contexto atual\n"
     "- /context edit: abre o contexto persistente no editor\n"
+    "- /edit: abre $EDITOR para compor uma mensagem longa\n"
+    "- /file <caminho>: usa o conteúdo de um arquivo como mensagem\n"
     "- /help: mostra esta ajuda\n"
     "- /exit: encerra a sessão\n"
 )
