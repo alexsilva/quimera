@@ -29,7 +29,7 @@ class QuimeraApp:
     def _format_yes_no(value):
         return "sim" if value else "não"
 
-    def __init__(self, cwd: Path):
+    def __init__(self, cwd: Path, debug: bool = False):
         self.renderer = TerminalRenderer()
         self.user_name = ConfigManager().user_name
         workspace = Workspace(cwd)
@@ -55,6 +55,7 @@ class QuimeraApp:
             "history_restored": history_restored,
             "summary_loaded": summary_loaded,
         }
+        self.debug_prompt_metrics = debug
         is_new_session = not history_restored and not summary_loaded
         session_state = {
             "session_id": self.session_state["session_id"],
@@ -105,7 +106,17 @@ class QuimeraApp:
         return DEFAULT_FIRST_AGENT, user_input
 
     def call_agent(self, agent, is_first_speaker=False, handoff=None):
-        prompt = self.prompt_builder.build(agent, self.history, is_first_speaker, handoff)
+        if self.debug_prompt_metrics:
+            prompt, metrics = self.prompt_builder.build(
+                agent,
+                self.history,
+                is_first_speaker,
+                handoff,
+                debug=True,
+            )
+            self.agent_client.log_prompt_metrics(agent, metrics)
+        else:
+            prompt = self.prompt_builder.build(agent, self.history, is_first_speaker, handoff)
         return self.agent_client.call(agent, prompt)
 
     def parse_response(self, response):

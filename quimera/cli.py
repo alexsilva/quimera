@@ -1,4 +1,5 @@
 import argparse
+import os
 from pathlib import Path
 
 from .app import QuimeraApp
@@ -6,9 +7,10 @@ from .config import ConfigManager
 
 
 def main():
-    parser = argparse.ArgumentParser(prog="quimera", add_help=False)
+    parser = argparse.ArgumentParser(prog="quimera")
     parser.add_argument("--name", metavar="NOME", nargs="+", default=None)
     parser.add_argument("--whoami", action="store_true")
+    parser.add_argument("--debug", action="store_true")
     args, _ = parser.parse_known_args()
 
     config = ConfigManager()
@@ -22,5 +24,6 @@ def main():
         print(config.user_name)
         return
 
-    app = QuimeraApp(Path.cwd())
+    debug = args.debug or os.getenv("QUIMERA_DEBUG", "").strip().lower() in {"1", "true", "yes", "on"}
+    app = QuimeraApp(Path.cwd(), debug=debug)
     app.run()

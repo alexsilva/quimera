@@ -49,6 +49,30 @@ class AgentClient:
             return None
         return self.run(cmd, input_text=prompt)
 
+    def log_prompt_metrics(self, agent, metrics):
+        """Exibe métricas do prompt de forma compacta quando o modo debug estiver ativo."""
+        largest_block = max(
+            (
+                ("rules", metrics.get("rules_chars", 0)),
+                ("session_state", metrics.get("session_state_chars", 0)),
+                ("persistent", metrics.get("persistent_chars", 0)),
+                ("history", metrics.get("history_chars", 0)),
+                ("handoff", metrics.get("handoff_chars", 0)),
+            ),
+            key=lambda item: item[1],
+        )
+        self.renderer.show_system(
+            "[debug] prompt "
+            f"{agent}: total={metrics.get('total_chars', 0)} chars | "
+            f"history_msgs={metrics.get('history_messages', 0)} | "
+            f"rules={metrics.get('rules_chars', 0)} | "
+            f"session={metrics.get('session_state_chars', 0)} | "
+            f"persistent={metrics.get('persistent_chars', 0)} | "
+            f"history={metrics.get('history_chars', 0)} | "
+            f"handoff={metrics.get('handoff_chars', 0)} | "
+            f"largest_block={largest_block[0]}"
+        )
+
     def summarize_session(self, history):
         """Pede ao Claude um resumo curto para atualizar o contexto persistente."""
         if not history:

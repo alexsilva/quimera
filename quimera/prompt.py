@@ -22,7 +22,7 @@ class PromptBuilder:
         self.session_state = session_state or {}
         self.user_name = user_name or "Você"
 
-    def build(self, agent, history, is_first_speaker=False, handoff=None):
+    def build(self, agent, history, is_first_speaker=False, handoff=None, debug=False):
         """Gera o prompt final enviado ao agente da vez."""
         context = self.context_manager.load()
 
@@ -32,28 +32,38 @@ class PromptBuilder:
             rules += PROMPT_DEBATE_RULE.format(marker=EXTEND_MARKER)
 
         participants = f"- {self.user_name.upper()}\n- CLAUDE\n- CODEX\n"
-        parts = [
-            PROMPT_HEADER.format(agent=agent.upper(), participants=participants),
-            rules,
-        ]
-
-        if self.session_state:
-            parts.append(PROMPT_SESSION_STATE.format(**self.session_state))
-
-        if context:
-            parts.append(PROMPT_CONTEXT.format(context=context))
-
-        if handoff:
-            parts.append(PROMPT_HANDOFF.format(handoff=handoff))
+        header_block = PROMPT_HEADER.format(agent=agent.upper(), participants=participants)
+        session_block = PROMPT_SESSION_STATE.format(**self.session_state) if self.session_state else ""
+        context_block = PROMPT_CONTEXT.format(context=context) if context else ""
+        handoff_block = PROMPT_HANDOFF.format(handoff=handoff) if handoff else ""
 
         conversation = "\n".join(
             f"[{self._display_role(m['role'])}]: {m['content']}"
             for m in history[-self.history_window:]
         )
-        parts.append(PROMPT_CONVERSATION.format(conversation=conversation))
-        parts.append(PROMPT_SPEAKER.format(agent=agent.upper()))
+        conversation_block = PROMPT_CONVERSATION.format(conversation=conversation)
+        speaker_block = PROMPT_SPEAKER.format(agent=agent.upper())
 
-        return "\n\n".join(parts)
+        parts = [p for p in [
+            header_block, rules, session_block, context_block,
+            handoff_block, conversation_block, speaker_block,
+        ] if p]
+
+        full_prompt = "\n\n".join(parts)
+
+        if debug:
+            metrics = {
+                "rules_chars": len(rules),
+                "session_state_chars": len(session_block),
+                "persistent_chars": len(context_block),
+                "history_chars": len(conversation_block),
+                "handoff_chars": len(handoff_block),
+                "total_chars": len(full_prompt),
+                "history_messages": len(history[-self.history_window:]),
+            }
+            return full_prompt, metrics
+
+        return full_prompt
 
     def _display_role(self, role):
         if role == "human":
