@@ -4,3 +4,5 @@ backups/
 __pycache__/
 *.pyc
 quimera_conversa_inicial.txt
+.claude/
+.idea/
