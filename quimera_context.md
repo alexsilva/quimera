@@ -18,8 +18,33 @@ Ele existe para preservar decisoes estaveis sem reinjetar historico bruto no pro
 - O objetivo do contexto persistente e evitar reexplicacao, sem aumentar custo, latencia e ruido.
 - Claude e Codex podem usar este arquivo como base para continuar decisoes anteriores.
 
+## O que e o Quimera
+
+- Chat multiagente local em terminal.
+- Um HUMANO conversa com CLAUDE e CODEX na mesma rodada.
+- O segundo agente comenta a resposta do primeiro.
+- Objetivo: comparar respostas e colaborar entre agentes no mesmo fluxo.
+
+## Comportamento atual
+
+- Sem prefixo: Claude responde primeiro, depois Codex comenta.
+- `/claude <mensagem>`: Claude responde primeiro.
+- `/codex <mensagem>`: Codex responde primeiro.
+- `/claude` ou `/codex` sem texto: exibe aviso e nao executa a rodada.
+- Transcricao textual continua em `logs/sessao-AAAA-MM-DD.txt`.
+- Historico estruturado tambem e salvo em `logs/sessao-AAAA-MM-DD-HHMMSS.json`.
+- Ao reiniciar, o JSON mais recente e restaurado para `history`.
+- No encerramento, um resumo curado da ultima sessao pode substituir a secao dedicada neste arquivo.
+- Logs antigos ficam para consulta humana e auditoria, nao como prompt recorrente.
+
+## Pendencias conhecidas
+
+- A restauracao usa o JSON mais recente; ainda nao existe selecao explicita de sessao.
+- O prompt enviado aos agentes continua limitado a uma janela recente da conversa, nao ao historico bruto inteiro.
+- A sumarizacao depende do comando `claude` estar disponivel no ambiente.
+
 ## Arquivos relacionados
 
 - `quimera.py`: script principal do chat multiagente.
 - `quimera_conversa_inicial.txt`: historico salvo da conversa inicial, apenas referencia.
-- `logs/`: diretorio recomendado para transcricoes de sessoes futuras, quando existir.
+- `logs/`: transcricoes de sessoes.
