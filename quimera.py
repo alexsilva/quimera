@@ -4,14 +4,86 @@ import subprocess
 from datetime import datetime
 from pathlib import Path
 
+try:
+    from rich.console import Console
+    from rich.markdown import Markdown
+    from rich.panel import Panel
+
+    _RICH_AVAILABLE = True
+except ImportError:
+    _RICH_AVAILABLE = False
+
+
+class TerminalRenderer:
+    """Camada exclusiva de apresentação no terminal. Nunca toca em persistência."""
+
+    _AGENT_STYLES = {
+        "claude": ("blue", "Claude"),
+        "codex": ("green", "Codex"),
+    }
+    _MAX_WIDTH = 96
+
+    def __init__(self):
+        if _RICH_AVAILABLE:
+            self._console = Console(width=self._MAX_WIDTH)
+        else:
+            self._console = None
+
+    def show_message(self, agent, content):
+        style, label = self._AGENT_STYLES.get(agent.lower(), ("white", agent.capitalize()))
+        if self._console:
+            self._console.print()
+            self._console.print(
+                Panel(
+                    Markdown(content),
+                    title=f"[bold {style}]{label}[/bold {style}]",
+                    border_style=style,
+                    padding=(0, 1),
+                )
+            )
+        else:
+            print(f"\n{label}: {content}\n")
+
+    def show_no_response(self, agent):
+        _, label = self._AGENT_STYLES.get(agent.lower(), ("white", agent.capitalize()))
+        if self._console:
+            self._console.print(f"\n[dim]{label}: [sem resposta válida][/dim]\n")
+        else:
+            print(f"\n{label}: [sem resposta válida]\n")
+
+    def show_system(self, message):
+        if self._console:
+            self._console.print(f"[dim]{message}[/dim]")
+        else:
+            print(message)
+
+    def show_plain(self, message):
+        if self._console:
+            self._console.print(message)
+        else:
+            print(message)
+
+    def show_error(self, message):
+        if self._console:
+            self._console.print(f"[bold red]{message}[/bold red]")
+        else:
+            print(message)
+
+    def show_warning(self, message):
+        if self._console:
+            self._console.print(f"[yellow]{message}[/yellow]")
+        else:
+            print(message)
+
 
 class ContextManager:
     """Gerencia o contexto persistente carregado no início de cada rodada."""
 
     SUMMARY_MARKER = "## Resumo da última sessão"
 
-    def __init__(self, context_file):
+    def __init__(self, context_file, renderer):
         self.context_file = context_file
+        self.renderer = renderer
 
     def load(self):
         if not self.context_file.exists():
@@ -21,22 +93,24 @@ class ContextManager:
     def show(self):
         context = self.load()
         if not context:
-            print("\n[contexto vazio]\n")
+            self.renderer.show_system("\n[contexto vazio]\n")
             return
-        print(f"\n{context}\n")
+        self.renderer.show_plain(f"\n{context}\n")
 
     def edit(self):
         editor = os.environ.get("EDITOR")
         if not editor:
-            print("\nDefina a variável EDITOR para usar /context edit.\n")
+            self.renderer.show_warning("\nDefina a variável EDITOR para usar /context edit.\n")
             return
 
         try:
             subprocess.run([editor, str(self.context_file)], check=True)
         except FileNotFoundError:
-            print(f"\nEditor não encontrado: {editor}\n")
+            self.renderer.show_error(f"\nEditor não encontrado: {editor}\n")
         except subprocess.CalledProcessError as exc:
-            print(f"\nFalha ao abrir o contexto no editor (código {exc.returncode}).\n")
+            self.renderer.show_error(
+                f"\nFalha ao abrir o contexto no editor (código {exc.returncode}).\n"
+            )
 
     def update_with_summary(self, summary):
         """Substitui ou cria a seção de resumo curado da última sessão."""
@@ -51,13 +125,14 @@ class ContextManager:
             updated = f"{context}\n\n{new_section}"
 
         self.context_file.write_text(updated.strip() + "\n", encoding="utf-8")
-        print(f"[memória] resumo salvo em {self.context_file.name}\n")
+        self.renderer.show_system(f"[memória] resumo salvo em {self.context_file.name}\n")
 
 
 class SessionStorage:
     """Centraliza logs textuais e snapshots JSON de uma sessão."""
 
-    def __init__(self, base_dir):
+    def __init__(self, base_dir, renderer):
+        self.renderer = renderer
         self.logs_dir = base_dir / "logs"
         self.logs_dir.mkdir(exist_ok=True)
         now = datetime.now()
@@ -105,12 +180,17 @@ class SessionStorage:
             messages = []
 
         if messages:
-            print(f"[memória] histórico restaurado de {latest.name} ({len(messages)} mensagens)\n")
+            self.renderer.show_system(
+                f"[memória] histórico restaurado de {latest.name} ({len(messages)} mensagens)\n"
+            )
         return messages
 
 
 class AgentClient:
     """Executa os agentes externos e encapsula chamadas de resumo."""
+
+    def __init__(self, renderer):
+        self.renderer = renderer
 
     AGENT_CMDS = {
         "claude": lambda prompt: ["claude", "-p", prompt],
@@ -121,22 +201,22 @@ class AgentClient:
         try:
             result = subprocess.run(cmd, capture_output=True, text=True)
         except FileNotFoundError as exc:
-            print(f"[erro] comando não encontrado: {cmd[0]} ({exc})")
+            self.renderer.show_error(f"[erro] comando não encontrado: {cmd[0]} ({exc})")
             return None
 
         output = result.stdout.strip()
         error = result.stderr.strip()
 
         if result.returncode != 0:
-            print(f"[erro] {' '.join(cmd)} retornou código {result.returncode}")
+            self.renderer.show_error(f"[erro] {' '.join(cmd)} retornou código {result.returncode}")
             if error:
-                print(error)
+                self.renderer.show_error(error)
             return None
 
         if not output:
             if error:
-                print(f"[erro] {' '.join(cmd)} não retornou saída válida")
-                print(error)
+                self.renderer.show_error(f"[erro] {' '.join(cmd)} não retornou saída válida")
+                self.renderer.show_error(error)
             return None
 
         return output
@@ -145,7 +225,7 @@ class AgentClient:
         """Resolve o comando do agente e delega a execução."""
         build_cmd = self.AGENT_CMDS.get(agent)
         if build_cmd is None:
-            print(f"[erro] agente desconhecido: {agent}")
+            self.renderer.show_error(f"[erro] agente desconhecido: {agent}")
             return None
         return self.run(build_cmd(prompt))
 
@@ -211,9 +291,10 @@ class QuimeraApp:
 
     def __init__(self, base_dir):
         self.base_dir = base_dir
-        self.context_manager = ContextManager(base_dir / "quimera_context.md")
-        self.storage = SessionStorage(base_dir)
-        self.agent_client = AgentClient()
+        self.renderer = TerminalRenderer()
+        self.context_manager = ContextManager(base_dir / "quimera_context.md", self.renderer)
+        self.storage = SessionStorage(base_dir, self.renderer)
+        self.agent_client = AgentClient(self.renderer)
         self.prompt_builder = PromptBuilder(self.context_manager)
         self.history = self.storage.load_last_history()
 
@@ -238,7 +319,7 @@ class QuimeraApp:
         prefixes = ("/codex", "/claude")
         matched = [p for p in prefixes if lowered == p or lowered.startswith(f"{p} ")]
         if len(matched) > 1:
-            print(f"\nUse apenas um prefixo por vez: /claude ou /codex\n")
+            self.renderer.show_warning("\nUse apenas um prefixo por vez: /claude ou /codex\n")
             return None, None
 
         for prefix, agent in [("/codex", "codex"), ("/claude", "claude")]:
@@ -254,11 +335,10 @@ class QuimeraApp:
         return self.agent_client.call(agent, prompt)
 
     def print_response(self, agent, response):
-        label = agent.capitalize()
         if response is not None:
-            print(f"\n{label}: {response}\n")
+            self.renderer.show_message(agent, response)
         else:
-            print(f"\n{label}: [sem resposta válida]\n")
+            self.renderer.show_no_response(agent)
 
     def persist_message(self, role, content):
         """Persiste uma mensagem no histórico em memória, log e snapshot JSON."""
@@ -271,18 +351,18 @@ class QuimeraApp:
         if not self.history:
             return
 
-        print("\n[memória] histórico salvo. Gerando resumo da sessão...\n")
+        self.renderer.show_system("\n[memória] histórico salvo. Gerando resumo da sessão...\n")
 
         summary = self.agent_client.summarize_session(self.history)
         if summary:
             self.context_manager.update_with_summary(summary)
         else:
-            print("[memória] não foi possível gerar o resumo.\n")
+            self.renderer.show_system("[memória] não foi possível gerar o resumo.\n")
 
     def run(self):
         """Executa o loop interativo do chat multiagente."""
-        print("Chat multi-agente iniciado (/exit para sair)\n")
-        print(f"Log da sessão: {self.storage.get_log_file()}\n")
+        self.renderer.show_system("Chat multi-agente iniciado (/exit para sair)\n")
+        self.renderer.show_system(f"Log da sessão: {self.storage.get_log_file()}\n")
 
         try:
             while True:
@@ -298,7 +378,7 @@ class QuimeraApp:
                 if first_agent is None:
                     continue
                 if not message.strip():
-                    print(f"\nUse /{first_agent} <mensagem>\n")
+                    self.renderer.show_warning(f"\nUse /{first_agent} <mensagem>\n")
                     continue
 
                 second_agent = "codex" if first_agent == "claude" else "claude"
@@ -311,7 +391,7 @@ class QuimeraApp:
                     if response is not None:
                         self.persist_message(agent, response)
         except KeyboardInterrupt:
-            print("\nEncerrando chat.")
+            self.renderer.show_system("\nEncerrando chat.")
         finally:
             self.shutdown()
 
