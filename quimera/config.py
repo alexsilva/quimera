@@ -5,6 +5,7 @@ from .workspace import QUIMERA_BASE
 
 _CONFIG_FILE = QUIMERA_BASE / "config.json"
 DEFAULT_USER_NAME = "Você"
+DEFAULT_HISTORY_WINDOW = 8
 
 
 class ConfigManager:
@@ -29,10 +30,25 @@ class ConfigManager:
     def user_name(self) -> str:
         return self._load().get("user_name") or DEFAULT_USER_NAME
 
+    @property
+    def history_window(self) -> int:
+        value = self._load().get("history_window")
+        if isinstance(value, int) and value > 0:
+            return value
+        return DEFAULT_HISTORY_WINDOW
+
     def set_user_name(self, name: str):
         data = self._load()
         if name:
             data["user_name"] = name
         else:
             data.pop("user_name", None)
+        self._save(data)
+
+    def set_history_window(self, value: int | None):
+        data = self._load()
+        if isinstance(value, int) and value > 0:
+            data["history_window"] = value
+        else:
+            data.pop("history_window", None)
         self._save(data)

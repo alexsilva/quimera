@@ -29,9 +29,10 @@ class QuimeraApp:
     def _format_yes_no(value):
         return "sim" if value else "não"
 
-    def __init__(self, cwd: Path, debug: bool = False):
+    def __init__(self, cwd: Path, debug: bool = False, history_window: int | None = None):
         self.renderer = TerminalRenderer()
-        self.user_name = ConfigManager().user_name
+        self.config = ConfigManager()
+        self.user_name = self.config.user_name
         workspace = Workspace(cwd)
 
         migrated = workspace.migrate_from_legacy(cwd)
@@ -69,6 +70,7 @@ class QuimeraApp:
         }
         self.prompt_builder = PromptBuilder(
             self.context_manager,
+            history_window=history_window or self.config.history_window,
             session_state=session_state,
             user_name=self.user_name,
         )

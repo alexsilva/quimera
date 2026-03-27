@@ -3,6 +3,7 @@ from unittest.mock import patch
 from pathlib import Path
 
 from quimera.app import QuimeraApp
+from quimera.config import DEFAULT_HISTORY_WINDOW
 from quimera.constants import AGENT_CLAUDE, AGENT_CODEX, CMD_HELP, EXTEND_MARKER, MSG_HELP
 from quimera.prompt import PromptBuilder
 
@@ -22,6 +23,12 @@ class DummyRenderer:
 class DummyContextManager:
     def load(self):
         return ""
+
+
+class DummyConfigManager:
+    def __init__(self):
+        self.user_name = "Você"
+        self.history_window = DEFAULT_HISTORY_WINDOW
 
 
 class DummyStorage:
@@ -154,7 +161,7 @@ class ProtocolTests(unittest.TestCase):
             def get_history_file(self):
                 return Path("/tmp/sessao-2026-03-27-123456.json")
 
-        with patch("quimera.app.Workspace", FakeWorkspace), patch(
+        with patch("quimera.app.ConfigManager", DummyConfigManager), patch("quimera.app.Workspace", FakeWorkspace), patch(
             "quimera.app.ContextManager", FakeContextManager
         ), patch("quimera.app.SessionStorage", FakeSessionStorage):
             app = QuimeraApp(Path("/tmp/projeto"))
@@ -169,9 +176,85 @@ class ProtocolTests(unittest.TestCase):
             },
         )
 
+    def test_app_uses_default_history_window_from_config(self):
+        class FakeWorkspace:
+            def __init__(self, cwd):
+                self.context_persistent = Path("/tmp/quimera_context.md")
+                self.context_session = Path("/tmp/quimera_session_context.md")
+                self.logs_dir = Path("/tmp/quimera_logs")
+
+            def migrate_from_legacy(self, cwd):
+                return []
+
+        class FakeContextManager:
+            SUMMARY_MARKER = "## Resumo da última sessão"
+
+            def __init__(self, *_args):
+                pass
+
+            def load_session(self):
+                return ""
+
+        class FakeSessionStorage:
+            def __init__(self, *_args):
+                pass
+
+            def load_last_history(self):
+                return []
+
+            def get_history_file(self):
+                return Path("/tmp/sessao-2026-03-27-123456.json")
+
+        with patch("quimera.app.ConfigManager", DummyConfigManager), patch("quimera.app.Workspace", FakeWorkspace), patch(
+            "quimera.app.ContextManager", FakeContextManager
+        ), patch("quimera.app.SessionStorage", FakeSessionStorage):
+            app = QuimeraApp(Path("/tmp/projeto"))
+
+        self.assertEqual(app.prompt_builder.history_window, DEFAULT_HISTORY_WINDOW)
+
+    def test_app_allows_history_window_override(self):
+        class FakeWorkspace:
+            def __init__(self, cwd):
+                self.context_persistent = Path("/tmp/quimera_context.md")
+                self.context_session = Path("/tmp/quimera_session_context.md")
+                self.logs_dir = Path("/tmp/quimera_logs")
+
+            def migrate_from_legacy(self, cwd):
+                return []
+
+        class FakeContextManager:
+            SUMMARY_MARKER = "## Resumo da última sessão"
+
+            def __init__(self, *_args):
+                pass
+
+            def load_session(self):
+                return ""
+
+        class FakeSessionStorage:
+            def __init__(self, *_args):
+                pass
+
+            def load_last_history(self):
+                return []
+
+            def get_history_file(self):
+                return Path("/tmp/sessao-2026-03-27-123456.json")
+
+        with patch("quimera.app.ConfigManager", DummyConfigManager), patch("quimera.app.Workspace", FakeWorkspace), patch(
+            "quimera.app.ContextManager", FakeContextManager
+        ), patch("quimera.app.SessionStorage", FakeSessionStorage):
+            app = QuimeraApp(Path("/tmp/projeto"), history_window=5)
+
+        self.assertEqual(app.prompt_builder.history_window, 5)
+
     def test_run_uses_two_turns_by_default(self):
         app = QuimeraApp.__new__(QuimeraApp)
         app.history = []
+        app.user_name = "Você"
+        app.round_index = 0
+        app.session_call_index = 0
+        app.debug_prompt_metrics = False
         app.renderer = DummyRenderer()
         app.storage = DummyStorage()
         app.context_manager = None
@@ -192,7 +275,7 @@ class ProtocolTests(unittest.TestCase):
         app.persist_message = lambda role, content: persisted.append((role, content))
         app.shutdown = lambda: None
         responses = iter(["claude responde", "codex comenta"])
-        app.call_agent = lambda agent, is_first_speaker=False, handoff=None: next(responses)
+        app.call_agent = lambda agent, is_first_speaker=False, handoff=None, primary=True, protocol_mode="standard": next(responses)
 
         with patch("builtins.input", side_effect=["mensagem", "/exit"]):
             app.run()
@@ -213,6 +296,10 @@ class ProtocolTests(unittest.TestCase):
     def test_run_uses_four_turns_when_extended(self):
         app = QuimeraApp.__new__(QuimeraApp)
         app.history = []
+        app.user_name = "Você"
+        app.round_index = 0
+        app.session_call_index = 0
+        app.debug_prompt_metrics = False
         app.renderer = DummyRenderer()
         app.storage = DummyStorage()
         app.context_manager = None
@@ -240,7 +327,7 @@ class ProtocolTests(unittest.TestCase):
                 "codex fecha",
             ]
         )
-        app.call_agent = lambda agent, is_first_speaker=False, handoff=None: next(responses)
+        app.call_agent = lambda agent, is_first_speaker=False, handoff=None, primary=True, protocol_mode="standard": next(responses)
 
         with patch("builtins.input", side_effect=["mensagem", "/exit"]):
             app.run()
@@ -268,6 +355,10 @@ class ProtocolTests(unittest.TestCase):
     def test_run_passes_handoff_to_target_agent(self):
         app = QuimeraApp.__new__(QuimeraApp)
         app.history = []
+        app.user_name = "Você"
+        app.round_index = 0
+        app.session_call_index = 0
+        app.debug_prompt_metrics = False
         app.renderer = DummyRenderer()
         app.storage = DummyStorage()
         app.context_manager = None
@@ -295,7 +386,7 @@ class ProtocolTests(unittest.TestCase):
             ]
         )
 
-        def fake_call(agent, is_first_speaker=False, handoff=None):
+        def fake_call(agent, is_first_speaker=False, handoff=None, primary=True, protocol_mode="standard"):
             calls.append((agent, is_first_speaker, handoff))
             return next(responses)
 

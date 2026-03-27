@@ -11,12 +11,13 @@ from .constants import (
     PROMPT_SESSION_STATE,
     PROMPT_HANDOFF,
 )
+from .config import DEFAULT_HISTORY_WINDOW
 
 
 class PromptBuilder:
     """Monta o prompt com contexto persistente e janela recente da conversa."""
 
-    def __init__(self, context_manager, history_window=12, session_state=None, user_name=None):
+    def __init__(self, context_manager, history_window=DEFAULT_HISTORY_WINDOW, session_state=None, user_name=None):
         self.context_manager = context_manager
         self.history_window = history_window
         self.session_state = session_state or {}
