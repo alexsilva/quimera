@@ -51,34 +51,27 @@ Ele existe para preservar decisoes estaveis sem reinjetar historico bruto no pro
 
 ## Resumo da última sessão
 
-_Gerado em 2026-03-27 03:22_
+_Gerado em 2026-03-27 03:29_
 
 ## Resumo da Sessão
 
 ### Tópicos Discutidos
 
-1. **Revisão da sessão anterior** — restauração de contexto via `quimera_context.md`, histórico e commits realizados.
-
-2. **Refatoração em classes** — `quimera.py` foi reestruturado com `ContextManager`, `SessionStorage`, `AgentClient`, `PromptBuilder` e `QuimeraApp`. Commits: `0be999d` e `1c71aed`.
-
-3. **Docstrings e correção de acentuação** — adicionadas docstrings mínimas; erros de português corrigidos em todo o arquivo.
-
-4. **Melhorias visuais no terminal** — discussão sobre uso de `rich` para renderizar Markdown, painéis coloridos por agente e separação total entre renderização e persistência. Classe `TerminalRenderer` implementada com fallback para `print` puro.
-
-5. **`requirements.txt`** — criado com `rich` declarado. Versão definida como `>=10.0.0`, mas política de versão não foi totalmente decidida.
-
-6. **Validação do `rich` no ambiente** — ao testar a renderização, constatou-se que `rich` não estava instalado; o fallback estava ativo e o Markdown saía sem formatação.
+- **Melhoria visual do terminal**: discussão sobre como melhorar a leitura das respostas no shell, comparando com o ChatGPT
+- **Implementação do `TerminalRenderer`**: nova classe isolando toda a renderização, usando a lib `rich` com fallback para `print` puro
+- **Visual definido**: painéis com borda colorida (Claude = azul, Codex = verde), Markdown renderizado, mensagens de sistema em cinza discreto, largura máxima de 96 colunas
+- **Dependência `rich`**: decisão de declarar no `requirements.txt` mesmo sendo opcional no código
+- **Versão fixada**: `rich==14.3.3` após instalação e confirmação no ambiente
+- **Bug de contraste**: nome do agente sumia porque texto e borda tinham a mesma cor; corrigido com badge `white on {style}`
 
 ### Decisões Tomadas
 
-- `rich` é opcional no código, mas declarado em `requirements.txt`
-- Persistência (log, JSON, `history`) continua em texto puro; só a exibição usa `rich`
-- Versão mínima: `rich>=10.0.0` (provisório)
+- `rich` declarado em `requirements.txt` com versão exata (`rich==14.3.3`)
+- Commit `48f0704` consolidou `requirements.txt` e atualização do `quimera_context.md`
+- Renderização e persistência permanecem separadas — histórico, logs e JSON continuam em texto puro
 
-### Pendências
+### Pendências / Próximos Passos
 
-- `rich` não instalado no ambiente; nenhum agente executou `pip install rich`
-- Política de versão do `rich` não finalizada (`>=10.0.0` vs faixa controlada vs pin exato)
-- README não documentado com informações sobre a dependência opcional
-- Validação visual real do `TerminalRenderer` ainda não feita
-- Restauração de sessão ainda usa o JSON mais recente sem seleção explícita
+- Correção do contraste do nome do agente ainda não foi commitada
+- `quimera_context.md` pode estar parcialmente desatualizado
+- README ainda não documenta a dependência `rich` nem instruções de instalação

@@ -36,7 +36,7 @@ class TerminalRenderer:
             self._console.print(
                 Panel(
                     Markdown(content),
-                    title=f"[bold {style}]{label}[/bold {style}]",
+                    title=f"[bold white on {style}] {label} [/bold white on {style}]",
                     border_style=style,
                     padding=(0, 1),
                 )
