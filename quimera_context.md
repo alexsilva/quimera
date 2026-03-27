@@ -48,3 +48,37 @@ Ele existe para preservar decisoes estaveis sem reinjetar historico bruto no pro
 - `quimera.py`: script principal do chat multiagente.
 - `quimera_conversa_inicial.txt`: historico salvo da conversa inicial, apenas referencia.
 - `logs/`: transcricoes de sessoes.
+
+## Resumo da última sessão
+
+_Gerado em 2026-03-27 03:22_
+
+## Resumo da Sessão
+
+### Tópicos Discutidos
+
+1. **Revisão da sessão anterior** — restauração de contexto via `quimera_context.md`, histórico e commits realizados.
+
+2. **Refatoração em classes** — `quimera.py` foi reestruturado com `ContextManager`, `SessionStorage`, `AgentClient`, `PromptBuilder` e `QuimeraApp`. Commits: `0be999d` e `1c71aed`.
+
+3. **Docstrings e correção de acentuação** — adicionadas docstrings mínimas; erros de português corrigidos em todo o arquivo.
+
+4. **Melhorias visuais no terminal** — discussão sobre uso de `rich` para renderizar Markdown, painéis coloridos por agente e separação total entre renderização e persistência. Classe `TerminalRenderer` implementada com fallback para `print` puro.
+
+5. **`requirements.txt`** — criado com `rich` declarado. Versão definida como `>=10.0.0`, mas política de versão não foi totalmente decidida.
+
+6. **Validação do `rich` no ambiente** — ao testar a renderização, constatou-se que `rich` não estava instalado; o fallback estava ativo e o Markdown saía sem formatação.
+
+### Decisões Tomadas
+
+- `rich` é opcional no código, mas declarado em `requirements.txt`
+- Persistência (log, JSON, `history`) continua em texto puro; só a exibição usa `rich`
+- Versão mínima: `rich>=10.0.0` (provisório)
+
+### Pendências
+
+- `rich` não instalado no ambiente; nenhum agente executou `pip install rich`
+- Política de versão do `rich` não finalizada (`>=10.0.0` vs faixa controlada vs pin exato)
+- README não documentado com informações sobre a dependência opcional
+- Validação visual real do `TerminalRenderer` ainda não feita
+- Restauração de sessão ainda usa o JSON mais recente sem seleção explícita

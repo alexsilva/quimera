@@ -1,1 +1,1 @@
-rich>=10.0.0  # opcional: renderização markdown no terminal (fallback para print puro sem a lib)
+rich==14.3.3  # opcional: renderização markdown no terminal (fallback para print puro sem a lib)
