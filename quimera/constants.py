@@ -38,6 +38,13 @@ PROMPT_ROUTE_RULE = (
     "Esse comando é interno e não será exibido ao humano.\n"
 )
 PROMPT_PARTICIPANTS = "- HUMANO\n- CLAUDE\n- CODEX\n"
+PROMPT_SESSION_STATE = (
+    "ESTADO DA SESSÃO:\n"
+    "- SESSÃO ATUAL: {session_id}\n"
+    "- NOVA SESSÃO: {is_new_session}\n"
+    "- HISTÓRICO RESTAURADO: {history_restored}\n"
+    "- RESUMO CARREGADO: {summary_loaded}\n"
+)
 PROMPT_HANDOFF = "MENSAGEM DIRETA DO OUTRO AGENTE:\n{handoff}"
 
 MSG_CHAT_STARTED = "Chat multi-agente iniciado (/exit para sair)\n"

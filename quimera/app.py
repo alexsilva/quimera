@@ -24,6 +24,10 @@ class QuimeraApp:
     """Orquestra comandos locais, roteamento entre agentes e ciclo da sessão."""
     ROUTE_PATTERN = re.compile(r"(?m)^\[ROUTE:(claude|codex)\]\s*(.+?)\s*$")
 
+    @staticmethod
+    def _format_yes_no(value):
+        return "sim" if value else "não"
+
     def __init__(self, cwd: Path):
         self.renderer = TerminalRenderer()
         workspace = Workspace(cwd)
@@ -39,8 +43,20 @@ class QuimeraApp:
         )
         self.storage = SessionStorage(workspace.logs_dir, self.renderer)
         self.agent_client = AgentClient(self.renderer)
-        self.prompt_builder = PromptBuilder(self.context_manager)
         self.history = self.storage.load_last_history()
+        session_context = self.context_manager.load_session()
+        session_state = {
+            "session_id": self.storage.get_history_file().stem,
+            "is_new_session": self._format_yes_no(True),
+            "history_restored": self._format_yes_no(bool(self.history)),
+            "summary_loaded": self._format_yes_no(
+                self.context_manager.SUMMARY_MARKER in session_context
+            ),
+        }
+        self.prompt_builder = PromptBuilder(
+            self.context_manager,
+            session_state=session_state,
+        )
 
     def handle_command(self, user_input):
         command = user_input.strip()

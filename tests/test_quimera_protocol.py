@@ -1,5 +1,6 @@
 import unittest
 from unittest.mock import patch
+from pathlib import Path
 
 from quimera.app import QuimeraApp
 from quimera.constants import AGENT_CLAUDE, AGENT_CODEX, EXTEND_MARKER
@@ -26,6 +27,9 @@ class DummyContextManager:
 class DummyStorage:
     def get_log_file(self):
         return "/tmp/quimera.log"
+
+    def get_history_file(self):
+        return Path("/tmp/sessao-2026-03-27-123456.json")
 
 
 class ProtocolTests(unittest.TestCase):
@@ -85,6 +89,71 @@ class ProtocolTests(unittest.TestCase):
 
         self.assertIn("MENSAGEM DIRETA DO OUTRO AGENTE", prompt)
         self.assertIn("Revise este ponto.", prompt)
+
+    def test_prompt_includes_session_state_when_present(self):
+        builder = PromptBuilder(
+            DummyContextManager(),
+            history_window=3,
+            session_state={
+                "session_id": "sessao-2026-03-27-123456",
+                "is_new_session": "sim",
+                "history_restored": "sim",
+                "summary_loaded": "não",
+            },
+        )
+        history = [{"role": "human", "content": "Pergunta"}]
+
+        prompt = builder.build(AGENT_CLAUDE, history)
+
+        self.assertIn("ESTADO DA SESSÃO", prompt)
+        self.assertIn("SESSÃO ATUAL: sessao-2026-03-27-123456", prompt)
+        self.assertIn("NOVA SESSÃO: sim", prompt)
+        self.assertIn("HISTÓRICO RESTAURADO: sim", prompt)
+        self.assertIn("RESUMO CARREGADO: não", prompt)
+
+    def test_app_builds_explicit_session_state_for_prompt(self):
+        class FakeWorkspace:
+            def __init__(self, cwd):
+                self.context_persistent = Path("/tmp/quimera_context.md")
+                self.context_session = Path("/tmp/quimera_session_context.md")
+                self.logs_dir = Path("/tmp/quimera_logs")
+
+            def migrate_from_legacy(self, cwd):
+                return []
+
+        class FakeContextManager:
+            SUMMARY_MARKER = "## Resumo da última sessão"
+
+            def __init__(self, *_args):
+                pass
+
+            def load_session(self):
+                return "## Resumo da última sessão\n\nResumo anterior"
+
+        class FakeSessionStorage:
+            def __init__(self, *_args):
+                pass
+
+            def load_last_history(self):
+                return [{"role": "human", "content": "oi"}]
+
+            def get_history_file(self):
+                return Path("/tmp/sessao-2026-03-27-123456.json")
+
+        with patch("quimera.app.Workspace", FakeWorkspace), patch(
+            "quimera.app.ContextManager", FakeContextManager
+        ), patch("quimera.app.SessionStorage", FakeSessionStorage):
+            app = QuimeraApp(Path("/tmp/projeto"))
+
+        self.assertEqual(
+            app.prompt_builder.session_state,
+            {
+                "session_id": "sessao-2026-03-27-123456",
+                "is_new_session": "sim",
+                "history_restored": "sim",
+                "summary_loaded": "sim",
+            },
+        )
 
     def test_run_uses_two_turns_by_default(self):
         app = QuimeraApp.__new__(QuimeraApp)
