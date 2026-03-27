@@ -2,6 +2,7 @@ EXTEND_MARKER = "[DEBATE]"
 ROUTE_PREFIX = "[ROUTE:"
 
 CMD_EXIT = "/exit"
+CMD_HELP = "/help"
 CMD_CONTEXT = "/context"
 CMD_CONTEXT_EDIT = "/context edit"
 
@@ -49,6 +50,19 @@ PROMPT_HANDOFF = "MENSAGEM DIRETA DO OUTRO AGENTE:\n{handoff}"
 
 MSG_CHAT_STARTED = "Chat multi-agente iniciado (/exit para sair)\n"
 MSG_SESSION_LOG = "Log da sessão: {}\n"
+MSG_SESSION_STATUS = (
+    "Sessão {session_id} | histórico restaurado: {history_count} mensagem(ns) | "
+    "resumo carregado: {summary_loaded}\n"
+)
+MSG_HELP = (
+    "\nComandos:\n"
+    "- /claude <mensagem>: Claude responde primeiro\n"
+    "- /codex <mensagem>: Codex responde primeiro\n"
+    "- /context: mostra o contexto atual\n"
+    "- /context edit: abre o contexto persistente no editor\n"
+    "- /help: mostra esta ajuda\n"
+    "- /exit: encerra a sessão\n"
+)
 MSG_MIGRATION = "[migração] {}\n"
 MSG_MEMORY_SAVING = "\n[memória] histórico salvo. Gerando resumo da sessão...\n"
 MSG_MEMORY_FAILED = "[memória] não foi possível gerar o resumo.\n"

@@ -3,7 +3,7 @@ from unittest.mock import patch
 from pathlib import Path
 
 from quimera.app import QuimeraApp
-from quimera.constants import AGENT_CLAUDE, AGENT_CODEX, EXTEND_MARKER
+from quimera.constants import AGENT_CLAUDE, AGENT_CODEX, CMD_HELP, EXTEND_MARKER, MSG_HELP
 from quimera.prompt import PromptBuilder
 
 
@@ -76,6 +76,15 @@ class ProtocolTests(unittest.TestCase):
         self.assertIsNone(message)
         self.assertTrue(app.renderer.warnings)
 
+    def test_handle_command_shows_help(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.renderer = DummyRenderer()
+
+        handled = app.handle_command(CMD_HELP)
+
+        self.assertTrue(handled)
+        self.assertEqual(app.renderer.system_messages, [MSG_HELP])
+
     def test_prompt_marks_only_first_speaker(self):
         builder = PromptBuilder(DummyContextManager(), history_window=3)
         history = [{"role": "human", "content": "Pergunta"}]
@@ -101,7 +110,7 @@ class ProtocolTests(unittest.TestCase):
             history_window=3,
             session_state={
                 "session_id": "sessao-2026-03-27-123456",
-                "is_new_session": "sim",
+                "is_new_session": "não",
                 "history_restored": "sim",
                 "summary_loaded": "não",
             },
@@ -112,7 +121,7 @@ class ProtocolTests(unittest.TestCase):
 
         self.assertIn("ESTADO DA SESSÃO", prompt)
         self.assertIn("SESSÃO ATUAL: sessao-2026-03-27-123456", prompt)
-        self.assertIn("NOVA SESSÃO: sim", prompt)
+        self.assertIn("NOVA SESSÃO: não", prompt)
         self.assertIn("HISTÓRICO RESTAURADO: sim", prompt)
         self.assertIn("RESUMO CARREGADO: não", prompt)
 
@@ -154,7 +163,7 @@ class ProtocolTests(unittest.TestCase):
             app.prompt_builder.session_state,
             {
                 "session_id": "sessao-2026-03-27-123456",
-                "is_new_session": "sim",
+                "is_new_session": "não",
                 "history_restored": "sim",
                 "summary_loaded": "sim",
             },
@@ -168,6 +177,11 @@ class ProtocolTests(unittest.TestCase):
         app.context_manager = None
         app.agent_client = None
         app.prompt_builder = None
+        app.session_state = {
+            "session_id": "sessao-2026-03-27-123456",
+            "history_count": 0,
+            "summary_loaded": False,
+        }
         persisted = []
         printed = []
 
@@ -204,6 +218,11 @@ class ProtocolTests(unittest.TestCase):
         app.context_manager = None
         app.agent_client = None
         app.prompt_builder = None
+        app.session_state = {
+            "session_id": "sessao-2026-03-27-123456",
+            "history_count": 0,
+            "summary_loaded": False,
+        }
         persisted = []
         printed = []
 
@@ -254,6 +273,11 @@ class ProtocolTests(unittest.TestCase):
         app.context_manager = None
         app.agent_client = None
         app.prompt_builder = None
+        app.session_state = {
+            "session_id": "sessao-2026-03-27-123456",
+            "history_count": 0,
+            "summary_loaded": False,
+        }
         persisted = []
         printed = []
         calls = []

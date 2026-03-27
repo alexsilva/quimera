@@ -10,11 +10,11 @@ from .workspace import Workspace
 from .constants import (
     EXTEND_MARKER,
     ROUTE_PREFIX,
-    CMD_EXIT, CMD_CONTEXT, CMD_CONTEXT_EDIT,
+    CMD_EXIT, CMD_HELP, CMD_CONTEXT, CMD_CONTEXT_EDIT,
     PREFIX_CLAUDE, PREFIX_CODEX,
     AGENT_CLAUDE, AGENT_CODEX, DEFAULT_FIRST_AGENT, AGENT_SEQUENCE,
     USER_ROLE, INPUT_PROMPT,
-    MSG_CHAT_STARTED, MSG_SESSION_LOG, MSG_MIGRATION,
+    MSG_CHAT_STARTED, MSG_SESSION_LOG, MSG_SESSION_STATUS, MSG_HELP, MSG_MIGRATION,
     MSG_MEMORY_SAVING, MSG_MEMORY_FAILED, MSG_SHUTDOWN,
     MSG_DOUBLE_PREFIX, MSG_EMPTY_INPUT,
 )
@@ -45,13 +45,20 @@ class QuimeraApp:
         self.agent_client = AgentClient(self.renderer)
         self.history = self.storage.load_last_history()
         session_context = self.context_manager.load_session()
-        session_state = {
+        history_restored = bool(self.history)
+        summary_loaded = self.context_manager.SUMMARY_MARKER in session_context
+        self.session_state = {
             "session_id": self.storage.get_history_file().stem,
-            "is_new_session": self._format_yes_no(True),
-            "history_restored": self._format_yes_no(bool(self.history)),
-            "summary_loaded": self._format_yes_no(
-                self.context_manager.SUMMARY_MARKER in session_context
-            ),
+            "history_count": len(self.history),
+            "history_restored": history_restored,
+            "summary_loaded": summary_loaded,
+        }
+        is_new_session = not history_restored and not summary_loaded
+        session_state = {
+            "session_id": self.session_state["session_id"],
+            "is_new_session": self._format_yes_no(is_new_session),
+            "history_restored": self._format_yes_no(history_restored),
+            "summary_loaded": self._format_yes_no(summary_loaded),
         }
         self.prompt_builder = PromptBuilder(
             self.context_manager,
@@ -60,6 +67,10 @@ class QuimeraApp:
 
     def handle_command(self, user_input):
         command = user_input.strip()
+
+        if command == CMD_HELP:
+            self.renderer.show_system(MSG_HELP)
+            return True
 
         if command == CMD_CONTEXT:
             self.context_manager.show()
@@ -140,6 +151,13 @@ class QuimeraApp:
     def run(self):
         """Executa o loop interativo do chat multiagente."""
         self.renderer.show_system(MSG_CHAT_STARTED)
+        self.renderer.show_system(
+            MSG_SESSION_STATUS.format(
+                session_id=self.session_state["session_id"],
+                history_count=self.session_state["history_count"],
+                summary_loaded=self._format_yes_no(self.session_state["summary_loaded"]),
+            )
+        )
         self.renderer.show_system(MSG_SESSION_LOG.format(self.storage.get_log_file()))
 
         try:
