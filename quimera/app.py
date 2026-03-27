@@ -7,6 +7,7 @@ from .storage import SessionStorage
 from .agents import AgentClient
 from .prompt import PromptBuilder
 from .workspace import Workspace
+from .config import ConfigManager
 from .constants import (
     EXTEND_MARKER,
     ROUTE_PREFIX,
@@ -30,6 +31,7 @@ class QuimeraApp:
 
     def __init__(self, cwd: Path):
         self.renderer = TerminalRenderer()
+        self.user_name = ConfigManager().user_name
         workspace = Workspace(cwd)
 
         migrated = workspace.migrate_from_legacy(cwd)
@@ -63,6 +65,7 @@ class QuimeraApp:
         self.prompt_builder = PromptBuilder(
             self.context_manager,
             session_state=session_state,
+            user_name=self.user_name,
         )
 
     def handle_command(self, user_input):
@@ -162,7 +165,7 @@ class QuimeraApp:
 
         try:
             while True:
-                user = input(INPUT_PROMPT)
+                user = input(f"{self.user_name}: ")
 
                 if user == CMD_EXIT:
                     break
