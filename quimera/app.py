@@ -1,7 +1,9 @@
 import json
+import locale
 import os
 import re
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -41,6 +43,23 @@ class QuimeraApp:
     @staticmethod
     def _format_yes_no(value):
         return "sim" if value else "não"
+
+    @staticmethod
+    def _unique_encodings(*encodings):
+        seen = set()
+        result = []
+        for encoding in encodings:
+            if not encoding:
+                continue
+            normalized = str(encoding).strip()
+            if not normalized:
+                continue
+            key = normalized.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(normalized)
+        return result
 
     def __init__(self, cwd: Path, debug: bool = False, history_window: int | None = None):
         self.renderer = TerminalRenderer()
@@ -90,6 +109,54 @@ class QuimeraApp:
             user_name=self.user_name,
         )
         self.auto_summarize_threshold = self.config.auto_summarize_threshold
+
+    def _input_encoding_candidates(self):
+        stdin_encoding = getattr(sys.stdin, "encoding", None)
+        device_encoding = None
+        try:
+            if hasattr(sys.stdin, "fileno"):
+                device_encoding = os.device_encoding(sys.stdin.fileno())
+        except (OSError, ValueError):
+            device_encoding = None
+
+        return self._unique_encodings(
+            stdin_encoding,
+            device_encoding,
+            locale.getpreferredencoding(False),
+            "utf-8",
+            "cp1252",
+            "latin-1",
+        )
+
+    def _decode_stdin_bytes(self, raw_line):
+        payload = raw_line.rstrip(b"\r\n")
+        for encoding in self._input_encoding_candidates():
+            try:
+                return payload.decode(encoding)
+            except UnicodeDecodeError:
+                continue
+
+        fallback = self._input_encoding_candidates()[0] if self._input_encoding_candidates() else "utf-8"
+        return payload.decode(fallback, errors="replace")
+
+    def read_user_input(self):
+        prompt = f"{self.user_name}: "
+        stdout = getattr(sys, "stdout", None)
+        if stdout is not None:
+            stdout.write(prompt)
+            stdout.flush()
+
+        stdin_buffer = getattr(sys.stdin, "buffer", None)
+        if stdin_buffer is not None:
+            raw_line = stdin_buffer.readline()
+            if raw_line == b"":
+                raise EOFError
+            return self._decode_stdin_bytes(raw_line)
+
+        line = sys.stdin.readline()
+        if line == "":
+            raise EOFError
+        return line.rstrip("\r\n")
 
     def handle_command(self, user_input):
         command = user_input.strip()
@@ -346,7 +413,7 @@ class QuimeraApp:
 
         try:
             while True:
-                user = input(f"{self.user_name}: ")
+                user = self.read_user_input()
 
                 if user == CMD_EXIT:
                     break

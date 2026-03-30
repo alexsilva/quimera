@@ -1,5 +1,7 @@
 import argparse
+import locale
 import os
+import sys
 from pathlib import Path
 
 from .app import QuimeraApp
@@ -7,6 +9,16 @@ from .config import ConfigManager
 
 
 def main():
+    if hasattr(sys.stdin, "reconfigure"):
+        try:
+            stdin_encoding = None
+            if hasattr(sys.stdin, "fileno"):
+                stdin_encoding = os.device_encoding(sys.stdin.fileno())
+            stdin_encoding = stdin_encoding or sys.stdin.encoding or locale.getpreferredencoding(False) or "utf-8"
+            sys.stdin.reconfigure(encoding=stdin_encoding, errors="replace")
+        except (AttributeError, OSError, ValueError):
+            pass
+
     parser = argparse.ArgumentParser(prog="quimera")
     parser.add_argument("--name", metavar="NOME", nargs="+", default=None)
     parser.add_argument("--whoami", action="store_true")

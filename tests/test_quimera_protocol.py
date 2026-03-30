@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import Mock
 from unittest.mock import patch
 from pathlib import Path
 
@@ -14,12 +15,16 @@ class DummyRenderer:
     def __init__(self):
         self.warnings = []
         self.system_messages = []
+        self.handoffs = []
 
     def show_warning(self, message):
         self.warnings.append(message)
 
     def show_system(self, message):
         self.system_messages.append(message)
+
+    def show_handoff(self, from_agent, to_agent, task=None):
+        self.handoffs.append((from_agent, to_agent, task))
 
 
 class DummyContextManager:
@@ -149,6 +154,32 @@ class ProtocolTests(unittest.TestCase):
     def test_parse_response_extracts_internal_handoff(self):
         app = QuimeraApp.__new__(QuimeraApp)
         app.ROUTE_PATTERN = QuimeraApp.ROUTE_PATTERN
+        app.HANDOFF_PAYLOAD_PATTERN = QuimeraApp.HANDOFF_PAYLOAD_PATTERN
+        app.STATE_UPDATE_PATTERN = QuimeraApp.STATE_UPDATE_PATTERN
+        app.shared_state = {}
+
+        response, target, message, extend = app.parse_response(
+            "Resposta visivel\n"
+            "[ROUTE:codex] task: Revise este argumento. | context: "
+            "Analisar risco no parser atual. | expected: 2 bullets objetivos"
+        )
+
+        self.assertEqual(response, "Resposta visivel")
+        self.assertEqual(target, AGENT_CODEX)
+        self.assertEqual(
+            message,
+            {
+                "task": "Revise este argumento.",
+                "context": "Analisar risco no parser atual.",
+                "expected": "2 bullets objetivos",
+            },
+        )
+        self.assertFalse(extend)
+
+    def test_parse_response_ignores_invalid_handoff_payload(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.ROUTE_PATTERN = QuimeraApp.ROUTE_PATTERN
+        app.HANDOFF_PAYLOAD_PATTERN = QuimeraApp.HANDOFF_PAYLOAD_PATTERN
         app.STATE_UPDATE_PATTERN = QuimeraApp.STATE_UPDATE_PATTERN
         app.shared_state = {}
 
@@ -157,8 +188,8 @@ class ProtocolTests(unittest.TestCase):
         )
 
         self.assertEqual(response, "Resposta visivel")
-        self.assertEqual(target, AGENT_CODEX)
-        self.assertEqual(message, "Revise este argumento.")
+        self.assertIsNone(target)
+        self.assertIsNone(message)
         self.assertFalse(extend)
 
     def test_parse_response_extracts_state_update_before_debate(self):
@@ -256,6 +287,27 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn(EXTEND_MARKER, first_prompt)
         self.assertIn("segundo agente nesta rodada", second_prompt)
         self.assertNotIn("inclua [DEBATE] ao final da sua resposta", second_prompt)
+
+    def test_prompt_uses_handoff_rule_in_handoff_only_mode(self):
+        builder = PromptBuilder(DummyContextManager(), history_window=3)
+        history = [{"role": "human", "content": "Pergunta"}]
+
+        prompt = builder.build(
+            AGENT_CODEX,
+            history,
+            handoff={
+                "task": "Revisar parser",
+                "context": "Há dúvida sobre validação",
+                "expected": "1 parágrafo curto",
+            },
+            handoff_only=True,
+        )
+
+        self.assertIn("Você recebeu uma subtarefa delegada", prompt)
+        self.assertIn("TASK:\nRevisar parser", prompt)
+        self.assertIn("EXPECTED:\n1 parágrafo curto", prompt)
+        self.assertNotIn("segundo agente nesta rodada", prompt)
+        self.assertNotIn("[ROUTE:claude]", prompt)
 
     def test_prompt_includes_handoff_when_present(self):
         builder = PromptBuilder(DummyContextManager(), history_window=3)
@@ -448,11 +500,11 @@ class ProtocolTests(unittest.TestCase):
         app.print_response = lambda agent, response: printed.append((agent, response))
         app.persist_message = lambda role, content: persisted.append((role, content))
         app.shutdown = lambda: None
+        app.read_user_input = Mock(side_effect=["mensagem", "/exit"])
         responses = iter(["claude responde", "codex comenta"])
         app.call_agent = lambda agent, is_first_speaker=False, handoff=None, primary=True, protocol_mode="standard": next(responses)
 
-        with patch("builtins.input", side_effect=["mensagem", "/exit"]):
-            app.run()
+        app.run()
 
         self.assertEqual(
             printed,
@@ -466,6 +518,34 @@ class ProtocolTests(unittest.TestCase):
                 (AGENT_CODEX, "codex comenta"),
             ],
         )
+
+    def test_decode_stdin_bytes_falls_back_from_invalid_utf8(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app._input_encoding_candidates = lambda: ["utf-8", "cp1252", "latin-1"]
+
+        decoded = app._decode_stdin_bytes(b"ol\xe1\r\n")
+
+        self.assertEqual(decoded, "olá")
+
+    def test_read_user_input_uses_stdin_buffer_and_decodes_bytes(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.user_name = "Alex"
+        app._decode_stdin_bytes = QuimeraApp._decode_stdin_bytes.__get__(app, QuimeraApp)
+        app._input_encoding_candidates = lambda: ["utf-8", "cp1252", "latin-1"]
+
+        fake_stdin = type(
+            "FakeStdin",
+            (),
+            {"buffer": Mock(readline=Mock(return_value=b"ma\xe7\xe3\r\n"))},
+        )()
+        fake_stdout = Mock(write=Mock(), flush=Mock())
+
+        with patch("sys.stdin", fake_stdin), patch("sys.stdout", fake_stdout):
+            user = app.read_user_input()
+
+        self.assertEqual(user, "maçã")
+        fake_stdout.write.assert_called_once_with("Alex: ")
+        fake_stdout.flush.assert_called_once()
 
     def test_run_uses_four_turns_when_extended(self):
         app = QuimeraApp.__new__(QuimeraApp)
@@ -494,6 +574,7 @@ class ProtocolTests(unittest.TestCase):
         app.print_response = lambda agent, response: printed.append((agent, response))
         app.persist_message = lambda role, content: persisted.append((role, content))
         app.shutdown = lambda: None
+        app.read_user_input = Mock(side_effect=["mensagem", "/exit"])
         responses = iter(
             [
                 "claude abre [DEBATE]",
@@ -504,8 +585,7 @@ class ProtocolTests(unittest.TestCase):
         )
         app.call_agent = lambda agent, is_first_speaker=False, handoff=None, primary=True, protocol_mode="standard": next(responses)
 
-        with patch("builtins.input", side_effect=["mensagem", "/exit"]):
-            app.run()
+        app.run()
 
         self.assertEqual(
             printed,
@@ -555,32 +635,63 @@ class ProtocolTests(unittest.TestCase):
         app.print_response = lambda agent, response: printed.append((agent, response))
         app.persist_message = lambda role, content: persisted.append((role, content))
         app.shutdown = lambda: None
+        app.read_user_input = Mock(side_effect=["mensagem", "/exit"])
         responses = iter(
             [
-                "claude responde\n[ROUTE:codex] Revise este argumento.",
+                "claude responde\n"
+                "[ROUTE:codex] task: Revise este argumento. | context: "
+                "Analisar risco no parser atual. | expected: 2 bullets objetivos",
                 "codex comenta",
+                "claude sintetiza",
             ]
         )
 
-        def fake_call(agent, is_first_speaker=False, handoff=None, primary=True, protocol_mode="standard"):
-            calls.append((agent, is_first_speaker, handoff))
+        def fake_call(
+            agent,
+            is_first_speaker=False,
+            handoff=None,
+            primary=True,
+            protocol_mode="standard",
+            handoff_only=False,
+        ):
+            calls.append((agent, is_first_speaker, handoff, handoff_only))
             return next(responses)
 
         app.call_agent = fake_call
 
-        with patch("builtins.input", side_effect=["mensagem", "/exit"]):
-            app.run()
+        app.run()
 
         self.assertEqual(
             calls,
             [
-                (AGENT_CLAUDE, True, None),
-                (AGENT_CODEX, False, "Revise este argumento."),
+                (AGENT_CLAUDE, True, None, False),
+                (
+                    AGENT_CODEX,
+                    False,
+                    {
+                        "task": "Revise este argumento.",
+                        "context": "Analisar risco no parser atual.",
+                        "expected": "2 bullets objetivos",
+                    },
+                    True,
+                ),
+                (
+                    AGENT_CLAUDE,
+                    False,
+                    "Você delegou a seguinte subtarefa ao CODEX:\n\nRevise este argumento.\n\n"
+                    "Resposta do CODEX à sua delegação:\n\ncodex comenta\n\n"
+                    "Com base na resposta acima, sintetize e conclua sua resposta ao humano.",
+                    False,
+                ),
             ],
         )
         self.assertEqual(
             printed,
-            [(AGENT_CLAUDE, "claude responde"), (AGENT_CODEX, "codex comenta")],
+            [
+                (AGENT_CLAUDE, "claude responde"),
+                (AGENT_CODEX, "codex comenta"),
+                (AGENT_CLAUDE, "claude sintetiza"),
+            ],
         )
         self.assertEqual(
             persisted,
@@ -588,7 +699,12 @@ class ProtocolTests(unittest.TestCase):
                 ("human", "oi"),
                 (AGENT_CLAUDE, "claude responde"),
                 (AGENT_CODEX, "codex comenta"),
+                (AGENT_CLAUDE, "claude sintetiza"),
             ],
+        )
+        self.assertEqual(
+            app.renderer.handoffs,
+            [(AGENT_CLAUDE, AGENT_CODEX, "Revise este argumento.")],
         )
 
     def test_persist_message_saves_shared_state(self):
