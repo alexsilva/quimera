@@ -39,6 +39,7 @@ PROMPT_BASE_RULES = (
     "- Pode discordar\n"
     "- Pode comentar respostas anteriores\n"
     "- Seja direto\n"
+    "- Ao referenciar arquivos, use o formato `/caminho/absoluto/arquivo:linha` em uma linha própria\n"
 )
 PROMPT_DEBATE_RULE = (
     "- Se o tópico exigir debate mais aprofundado entre os agentes, "
