@@ -11,6 +11,7 @@ from .ui import TerminalRenderer
 from .context import ContextManager
 from .storage import SessionStorage
 from .agents import AgentClient
+from .session_summary import SessionSummarizer, build_chain_summarizer
 from .prompt import PromptBuilder
 from .workspace import Workspace
 from .config import ConfigManager
@@ -80,6 +81,11 @@ class QuimeraApp:
         session_id = self.storage.get_history_file().stem
         metrics_file = workspace.metrics_dir / f"{session_id}.jsonl" if debug else None
         self.agent_client = AgentClient(self.renderer, metrics_file=metrics_file)
+        self.session_summarizer = SessionSummarizer(
+            self.renderer,
+            summarizer_call=build_chain_summarizer(self.agent_client, [AGENT_CLAUDE, AGENT_CODEX]),
+        )
+        self.summary_agent_preference = DEFAULT_FIRST_AGENT
         last_session = self.storage.load_last_session()
         self.history = last_session["messages"]
         session_context = self.context_manager.load_session()
@@ -357,7 +363,7 @@ class QuimeraApp:
         self.storage.append_log(role, content)
         self.storage.save_history(self.history, shared_state=self.shared_state)
 
-    def _maybe_auto_summarize(self):
+    def _maybe_auto_summarize(self, preferred_agent=None):
         """Sumariza e trunca o histórico quando excede o threshold configurado."""
         threshold = getattr(self, "auto_summarize_threshold", None)
         if not isinstance(threshold, int) or threshold <= 0:
@@ -373,9 +379,15 @@ class QuimeraApp:
         self.renderer.show_system(
             f"[memória] histórico com {len(self.history)} mensagens — gerando resumo automático..."
         )
-        summary = self.agent_client.summarize_session(
+        summary_agent_preference = preferred_agent or getattr(
+            self,
+            "summary_agent_preference",
+            DEFAULT_FIRST_AGENT,
+        )
+        summary = self.session_summarizer.summarize(
             to_summarize,
             existing_summary=existing_summary,
+            preferred_agent=summary_agent_preference,
         )
         if summary:
             self.context_manager.update_with_summary(summary)
@@ -394,9 +406,10 @@ class QuimeraApp:
 
         self.renderer.show_system(MSG_MEMORY_SAVING)
 
-        summary = self.agent_client.summarize_session(
+        summary = self.session_summarizer.summarize(
             self.history,
             existing_summary=self.context_manager.load_session_summary(),
+            preferred_agent=getattr(self, "summary_agent_preference", DEFAULT_FIRST_AGENT),
         )
         if summary:
             self.context_manager.update_with_summary(summary)
@@ -448,6 +461,7 @@ class QuimeraApp:
                 second_agent = AGENT_CODEX if first_agent == AGENT_CLAUDE else AGENT_CLAUDE
 
                 self.round_index += 1
+                self.summary_agent_preference = first_agent
                 self.persist_message(USER_ROLE, message)
 
                 # Primeira fala: detecta roteamento ou debate estendido
@@ -521,7 +535,7 @@ class QuimeraApp:
                         if route_target:
                             next_handoff = handoff
 
-                self._maybe_auto_summarize()
+                self._maybe_auto_summarize(preferred_agent=first_agent)
         except KeyboardInterrupt:
             self.renderer.show_system(MSG_SHUTDOWN)
         finally:

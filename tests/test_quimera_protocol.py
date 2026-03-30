@@ -5,6 +5,7 @@ from pathlib import Path
 
 import quimera.cli as cli_module
 from quimera.app import QuimeraApp
+from quimera.session_summary import SessionSummarizer
 from quimera.cli import main as cli_main
 from quimera.config import DEFAULT_HISTORY_WINDOW
 from quimera.constants import AGENT_CLAUDE, AGENT_CODEX, CMD_HELP, EXTEND_MARKER, MSG_HELP
@@ -828,12 +829,12 @@ class ProtocolTests(unittest.TestCase):
             def update_with_summary(self, summary):
                 self.saved_summary = summary
 
-        class FakeAgentClient:
+        class FakeSessionSummarizer:
             def __init__(self):
                 self.calls = []
 
-            def summarize_session(self, history, existing_summary=None):
-                self.calls.append((history, existing_summary))
+            def summarize(self, history, existing_summary=None, preferred_agent=None):
+                self.calls.append((history, existing_summary, preferred_agent))
                 return "## Resumo da Conversa\n\n- Consolidado"
 
         app = QuimeraApp.__new__(QuimeraApp)
@@ -846,7 +847,7 @@ class ProtocolTests(unittest.TestCase):
         app.auto_summarize_threshold = 4
         app.prompt_builder = type("PromptBuilderStub", (), {"history_window": 2})()
         app.context_manager = FakeContextManager()
-        app.agent_client = FakeAgentClient()
+        app.session_summarizer = FakeSessionSummarizer()
         app.renderer = DummyRenderer()
         app.storage = DummyStorage()
         app.shared_state = {"goal": "manter memória"}
@@ -854,7 +855,7 @@ class ProtocolTests(unittest.TestCase):
         app._maybe_auto_summarize()
 
         self.assertEqual(
-            app.agent_client.calls,
+            app.session_summarizer.calls,
             [
                 (
                     [
@@ -862,6 +863,7 @@ class ProtocolTests(unittest.TestCase):
                         {"role": "claude", "content": "m2"},
                     ],
                     "## Resumo da Conversa\n\n- Contexto anterior",
+                    "claude",
                 )
             ],
         )
@@ -886,32 +888,83 @@ class ProtocolTests(unittest.TestCase):
             def update_with_summary(self, summary):
                 self.saved_summary = summary
 
-        class FakeAgentClient:
+        class FakeSessionSummarizer:
             def __init__(self):
                 self.calls = []
 
-            def summarize_session(self, history, existing_summary=None):
-                self.calls.append((history, existing_summary))
+            def summarize(self, history, existing_summary=None, preferred_agent=None):
+                self.calls.append((history, existing_summary, preferred_agent))
                 return "## Resumo da Conversa\n\n- Memória consolidada"
 
         app = QuimeraApp.__new__(QuimeraApp)
         app.history = [{"role": "human", "content": "mensagem final"}]
         app.context_manager = FakeContextManager()
-        app.agent_client = FakeAgentClient()
+        app.session_summarizer = FakeSessionSummarizer()
         app.renderer = DummyRenderer()
+        app.summary_agent_preference = "codex"
 
         app.shutdown()
 
         self.assertEqual(
-            app.agent_client.calls,
+            app.session_summarizer.calls,
             [
                 (
                     [{"role": "human", "content": "mensagem final"}],
                     "## Resumo da Conversa\n\n- Memória acumulada",
+                    "codex",
                 )
             ],
         )
         self.assertEqual(app.context_manager.saved_summary, "## Resumo da Conversa\n\n- Memória consolidada")
+
+    def test_summarize_session_returns_none_when_all_backends_unavailable(self):
+        class DummyRendererWithSystem(DummyRenderer):
+            def __init__(self):
+                super().__init__()
+                self.system_messages = []
+
+            def show_system(self, message):
+                self.system_messages.append(message)
+
+            def show_error(self, message):
+                self.system_messages.append(message)
+
+        renderer = DummyRendererWithSystem()
+        summarizer = SessionSummarizer(renderer, summarizer_call=Mock(return_value=None))
+
+        summary = summarizer.summarize(
+            [{"role": "human", "content": "Precisamos validar o formato /caminho/absoluto/arquivo:linha."}],
+            existing_summary="## Resumo anterior",
+        )
+
+        self.assertIsNone(summary)
+        self.assertIn("[memória] resumidores indisponíveis", renderer.system_messages)
+
+    def test_summarize_session_returns_none_when_backend_raises(self):
+        class DummyRendererWithSystem(DummyRenderer):
+            def __init__(self):
+                super().__init__()
+                self.system_messages = []
+
+            def show_system(self, message):
+                self.system_messages.append(message)
+
+            def show_error(self, message):
+                self.system_messages.append(message)
+
+        def broken_summarizer(_prompt, preferred_agent=None):
+            raise TypeError("backend bug")
+
+        renderer = DummyRendererWithSystem()
+        summarizer = SessionSummarizer(renderer, summarizer_call=broken_summarizer)
+
+        summary = summarizer.summarize(
+            [{"role": "human", "content": "Vamos fechar o contrato do resumidor."}],
+            preferred_agent="codex",
+        )
+
+        self.assertIsNone(summary)
+        self.assertEqual(renderer.system_messages, ["[memória] resumidores indisponíveis"])
 
 
 if __name__ == "__main__":

@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 
 class AgentClient:
-    """Executa os agentes externos e encapsula chamadas de resumo."""
+    """Executa os agentes externos."""
 
     def __init__(self, renderer, metrics_file=None):
         self.renderer = renderer
@@ -124,37 +124,3 @@ class AgentClient:
             }
             with open(self.metrics_file, "a", encoding="utf-8") as f:
                 f.write(json.dumps(record, ensure_ascii=False) + "\n")
-
-    def summarize_session(self, history, existing_summary=None):
-        """Pede ao Claude um resumo curto, opcionalmente consolidando memória anterior."""
-        if not history and not existing_summary:
-            return None
-
-        sections = []
-        if existing_summary:
-            sections.append(f"RESUMO ANTERIOR:\n{existing_summary}")
-        if history:
-            conversation = "\n".join(
-                f"[{message['role'].upper()}]: {message['content']}" for message in history
-            )
-            sections.append(f"NOVO TRECHO DA CONVERSA:\n{conversation}")
-
-        prompt = f"""Você é um assistente de memória. Consolide o material abaixo em um resumo estruturado em markdown.
-
-O resumo deve conter:
-- O que foi discutido (tópicos principais)
-- Decisões tomadas (se houver)
-- Pendências ou próximos passos (se houver)
-
-Regras:
-- Preserve informações relevantes do resumo anterior, se houver
-- Incorpore apenas novidades importantes do novo trecho
-- Entregue um resumo acumulado único, pronto para substituir o anterior
-
-Seja conciso. Máximo 20 linhas. Não use emojis. Escreva em português.
-
-MATERIAL:
-{'\n\n'.join(sections)}
-
-RESUMO:"""
-        return self.run(["claude", "-p"], input_text=prompt)
