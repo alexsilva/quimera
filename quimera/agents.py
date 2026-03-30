@@ -4,6 +4,8 @@ import threading
 import time
 from datetime import datetime, timezone
 
+import quimera.plugins as plugins
+
 
 class AgentClient:
     """Executa os agentes externos."""
@@ -11,11 +13,6 @@ class AgentClient:
     def __init__(self, renderer, metrics_file=None):
         self.renderer = renderer
         self.metrics_file = metrics_file
-
-    AGENT_CMDS = {
-        "claude": ["claude", "-p"],
-        "codex": ["codex", "exec", "--skip-git-repo-check"],
-    }
 
     def run(self, cmd, input_text=None):
         try:
@@ -77,11 +74,11 @@ class AgentClient:
 
     def call(self, agent, prompt):
         """Resolve o comando do agente e delega a execução."""
-        cmd = self.AGENT_CMDS.get(agent)
-        if cmd is None:
+        plugin = plugins.get(agent)
+        if plugin is None:
             self.renderer.show_error(f"[erro] agente desconhecido: {agent}")
             return None
-        return self.run(cmd, input_text=prompt)
+        return self.run(plugin.cmd, input_text=prompt)
 
     def log_prompt_metrics(
         self, agent, metrics, session_id=None,

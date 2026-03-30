@@ -8,14 +8,20 @@ try:
 except ImportError:
     _RICH_AVAILABLE = False
 
+import quimera.plugins as plugins
+
+
+def _agent_style(agent: str):
+    """Retorna (color, label) para o agente; fallback para white/capitalize."""
+    plugin = plugins.get(agent.lower())
+    if plugin:
+        return plugin.style
+    return ("white", agent.capitalize())
+
 
 class TerminalRenderer:
     """Camada exclusiva de apresentação no terminal. Nunca toca em persistência."""
 
-    _AGENT_STYLES = {
-        "claude": ("blue", "Claude"),
-        "codex": ("green", "Codex"),
-    }
     _MAX_WIDTH = 96
 
     def __init__(self):
@@ -25,7 +31,7 @@ class TerminalRenderer:
             self._console = None
 
     def show_message(self, agent, content):
-        style, label = self._AGENT_STYLES.get(agent.lower(), ("white", agent.capitalize()))
+        style, label = _agent_style(agent)
         if self._console:
             self._console.print()
             self._console.print(
@@ -40,7 +46,7 @@ class TerminalRenderer:
             print(f"\n{label}: {content}\n")
 
     def show_no_response(self, agent):
-        _, label = self._AGENT_STYLES.get(agent.lower(), ("white", agent.capitalize()))
+        _, label = _agent_style(agent)
         if self._console:
             self._console.print(f"\n[dim]{label}: [sem resposta válida][/dim]\n")
         else:
@@ -71,8 +77,8 @@ class TerminalRenderer:
             print(message)
 
     def show_handoff(self, from_agent, to_agent, task=None):
-        _, from_label = self._AGENT_STYLES.get(from_agent.lower(), ("white", from_agent.capitalize()))
-        _, to_label = self._AGENT_STYLES.get(to_agent.lower(), ("white", to_agent.capitalize()))
+        _, from_label = _agent_style(from_agent)
+        _, to_label = _agent_style(to_agent)
         message = f"[handoff] {from_label} -> {to_label}"
         if task:
             message += f" | task: {task}"

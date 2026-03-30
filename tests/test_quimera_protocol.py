@@ -1,15 +1,18 @@
 import unittest
-from unittest.mock import Mock
-from unittest.mock import patch
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 import quimera.cli as cli_module
+import quimera.plugins as plugins
+from quimera.agents import AgentClient
 from quimera.app import QuimeraApp
-from quimera.session_summary import SessionSummarizer
 from quimera.cli import main as cli_main
 from quimera.config import DEFAULT_HISTORY_WINDOW
 from quimera.constants import AGENT_CLAUDE, AGENT_CODEX, CMD_HELP, EXTEND_MARKER, MSG_HELP
+from quimera.plugins import AgentPlugin
 from quimera.prompt import PromptBuilder
+from quimera.session_summary import SessionSummarizer
+from quimera.ui import _agent_style
 
 
 class DummyRenderer:
@@ -965,6 +968,82 @@ class ProtocolTests(unittest.TestCase):
 
         self.assertIsNone(summary)
         self.assertEqual(renderer.system_messages, ["[memória] resumidores indisponíveis"])
+
+
+class PluginTests(unittest.TestCase):
+    def test_agent_plugin_fields(self):
+        p = AgentPlugin(name="test", prefix="/test", cmd=["test", "-p"], style=("red", "Test"))
+
+        self.assertEqual(p.name, "test")
+        self.assertEqual(p.prefix, "/test")
+        self.assertEqual(p.cmd, ["test", "-p"])
+        self.assertEqual(p.style, ("red", "Test"))
+
+    def test_register_and_get(self):
+        p = AgentPlugin(name="dummy", prefix="/dummy", cmd=["dummy"], style=("yellow", "Dummy"))
+
+        with patch.dict(plugins._registry, {}, clear=False):
+            plugins.register(p)
+            self.assertIs(plugins.get("dummy"), p)
+
+    def test_get_returns_none_for_unknown(self):
+        with patch.dict(plugins._registry, {}, clear=True):
+            self.assertIsNone(plugins.get("naoexiste"))
+
+    def test_default_plugins_loaded(self):
+        self.assertIn("claude", plugins.all_names())
+        self.assertIn("codex", plugins.all_names())
+
+    def test_all_plugins_returns_agent_plugin_instances(self):
+        for p in plugins.all_plugins():
+            self.assertIsInstance(p, AgentPlugin)
+
+    def test_all_names_matches_all_plugins(self):
+        names = plugins.all_names()
+        self.assertEqual(len(names), len(plugins.all_plugins()))
+        for p in plugins.all_plugins():
+            self.assertIn(p.name, names)
+
+    def test_agent_style_returns_plugin_style(self):
+        stub = AgentPlugin(name="stub", prefix="/stub", cmd=["stub"], style=("magenta", "Stub"))
+        with patch.dict(plugins._registry, {"stub": stub}):
+            self.assertEqual(_agent_style("stub"), ("magenta", "Stub"))
+
+    def test_agent_style_fallback_for_unknown(self):
+        with patch.dict(plugins._registry, {}, clear=True):
+            color, label = _agent_style("unknown")
+            self.assertEqual(color, "white")
+            self.assertEqual(label, "Unknown")
+
+    def test_agent_client_call_uses_plugin_cmd(self):
+        stub = AgentPlugin(name="stub", prefix="/stub", cmd=["stub", "-x"], style=("white", "Stub"))
+        renderer = Mock()
+
+        with patch.dict(plugins._registry, {"stub": stub}):
+            client = AgentClient(renderer)
+            with patch.object(client, "run", return_value="ok") as mock_run:
+                result = client.call("stub", "hello")
+
+        mock_run.assert_called_once_with(["stub", "-x"], input_text="hello")
+        self.assertEqual(result, "ok")
+
+    def test_agent_client_call_error_on_unknown_agent(self):
+        renderer = Mock()
+        with patch.dict(plugins._registry, {}, clear=True):
+            client = AgentClient(renderer)
+            result = client.call("fantasma", "msg")
+
+        self.assertIsNone(result)
+        renderer.show_error.assert_called_once()
+        self.assertIn("fantasma", renderer.show_error.call_args[0][0])
+
+    def test_new_plugin_registration_visible_via_all_names(self):
+        novo = AgentPlugin(name="novo", prefix="/novo", cmd=["novo"], style=("cyan", "Novo"))
+
+        with patch.dict(plugins._registry, {}, clear=True):
+            plugins.register(novo)
+            self.assertEqual(plugins.all_names(), ["novo"])
+            self.assertEqual(plugins.all_plugins(), [novo])
 
 
 if __name__ == "__main__":
