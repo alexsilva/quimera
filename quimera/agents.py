@@ -62,13 +62,15 @@ class AgentClient:
         if proc.returncode != 0:
             self.renderer.show_error(f"[erro] {' '.join(cmd)} retornou código {proc.returncode}")
             if error:
-                self.renderer.show_error(error)
+                tail = "\n".join(error.splitlines()[-5:])
+                self.renderer.show_error(tail)
             return None
 
         if not output:
             if error:
                 self.renderer.show_error(f"[erro] {' '.join(cmd)} não retornou saída válida")
-                self.renderer.show_error(error)
+                tail = "\n".join(error.splitlines()[-5:])
+                self.renderer.show_error(tail)
             return None
 
         return output

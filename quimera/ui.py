@@ -1,6 +1,7 @@
 try:
     from rich.console import Console
     from rich.markdown import Markdown
+    from rich.markup import escape as markup_escape
     from rich.panel import Panel
 
     _RICH_AVAILABLE = True
@@ -59,13 +60,13 @@ class TerminalRenderer:
 
     def show_error(self, message):
         if self._console:
-            self._console.print(f"[bold red]{message}[/bold red]")
+            self._console.print(f"[bold red]{markup_escape(str(message))}[/bold red]")
         else:
             print(message)
 
     def show_warning(self, message):
         if self._console:
-            self._console.print(f"[yellow]{message}[/yellow]")
+            self._console.print(f"[yellow]{markup_escape(str(message))}[/yellow]")
         else:
             print(message)
 
