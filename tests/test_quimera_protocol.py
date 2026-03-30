@@ -262,7 +262,7 @@ class ProtocolTests(unittest.TestCase):
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
 
-        agent, message = app.parse_routing("/claude /codex revisar isso")
+        agent, message, explicit = app.parse_routing("/claude /codex revisar isso")
 
         self.assertIsNone(agent)
         self.assertIsNone(message)
@@ -494,7 +494,7 @@ class ProtocolTests(unittest.TestCase):
         printed = []
 
         app.handle_command = lambda user: False
-        app.parse_routing = lambda user: (AGENT_CLAUDE, "oi")
+        app.parse_routing = lambda user: (AGENT_CLAUDE, "oi", False)
         app.parse_response = QuimeraApp.parse_response.__get__(app, QuimeraApp)
         app.shared_state = {}
         app.print_response = lambda agent, response: printed.append((agent, response))
@@ -568,7 +568,7 @@ class ProtocolTests(unittest.TestCase):
         printed = []
 
         app.handle_command = lambda user: False
-        app.parse_routing = lambda user: (AGENT_CLAUDE, "oi")
+        app.parse_routing = lambda user: (AGENT_CLAUDE, "oi", False)
         app.parse_response = QuimeraApp.parse_response.__get__(app, QuimeraApp)
         app.shared_state = {}
         app.print_response = lambda agent, response: printed.append((agent, response))
@@ -629,13 +629,113 @@ class ProtocolTests(unittest.TestCase):
         calls = []
 
         app.handle_command = lambda user: False
-        app.parse_routing = lambda user: (AGENT_CLAUDE, "oi")
+        app.parse_routing = lambda user: (AGENT_CLAUDE, "oi", False)
         app.parse_response = QuimeraApp.parse_response.__get__(app, QuimeraApp)
         app.shared_state = {}
         app.print_response = lambda agent, response: printed.append((agent, response))
         app.persist_message = lambda role, content: persisted.append((role, content))
         app.shutdown = lambda: None
         app.read_user_input = Mock(side_effect=["mensagem", "/exit"])
+        responses = iter(
+            [
+                "claude responde\n"
+                "[ROUTE:codex] task: Revise este argumento. | context: "
+                "Analisar risco no parser atual. | expected: 2 bullets objetivos",
+                "codex comenta",
+                "claude sintetiza",
+            ]
+        )
+
+        def fake_call(
+            agent,
+            is_first_speaker=False,
+            handoff=None,
+            primary=True,
+            protocol_mode="standard",
+            handoff_only=False,
+        ):
+            calls.append((agent, is_first_speaker, handoff, handoff_only))
+            return next(responses)
+
+        app.call_agent = fake_call
+
+        app.run()
+
+        self.assertEqual(
+            calls,
+            [
+                (AGENT_CLAUDE, True, None, False),
+                (
+                    AGENT_CODEX,
+                    False,
+                    {
+                        "task": "Revise este argumento.",
+                        "context": "Analisar risco no parser atual.",
+                        "expected": "2 bullets objetivos",
+                    },
+                    True,
+                ),
+                (
+                    AGENT_CLAUDE,
+                    False,
+                    "Você delegou a seguinte subtarefa ao CODEX:\n\nRevise este argumento.\n\n"
+                    "Resposta do CODEX à sua delegação:\n\ncodex comenta\n\n"
+                    "Com base na resposta acima, sintetize e conclua sua resposta ao humano.",
+                    False,
+                ),
+            ],
+        )
+        self.assertEqual(
+            printed,
+            [
+                (AGENT_CLAUDE, "claude responde"),
+                (AGENT_CODEX, "codex comenta"),
+                (AGENT_CLAUDE, "claude sintetiza"),
+            ],
+        )
+        self.assertEqual(
+            persisted,
+            [
+                ("human", "oi"),
+                (AGENT_CLAUDE, "claude responde"),
+                (AGENT_CODEX, "codex comenta"),
+                (AGENT_CLAUDE, "claude sintetiza"),
+            ],
+        )
+        self.assertEqual(
+            app.renderer.handoffs,
+            [(AGENT_CLAUDE, AGENT_CODEX, "Revise este argumento.")],
+        )
+
+    def test_run_passes_handoff_even_with_explicit_prefix(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.history = []
+        app.user_name = "Você"
+        app.round_index = 0
+        app.session_call_index = 0
+        app.debug_prompt_metrics = False
+        app.renderer = DummyRenderer()
+        app.storage = DummyStorage()
+        app.context_manager = None
+        app.agent_client = None
+        app.prompt_builder = None
+        app.session_state = {
+            "session_id": "sessao-2026-03-27-123456",
+            "history_count": 0,
+            "summary_loaded": False,
+        }
+        persisted = []
+        printed = []
+        calls = []
+
+        app.handle_command = lambda user: False
+        app.parse_routing = lambda user: (AGENT_CLAUDE, "oi", True)
+        app.parse_response = QuimeraApp.parse_response.__get__(app, QuimeraApp)
+        app.shared_state = {}
+        app.print_response = lambda agent, response: printed.append((agent, response))
+        app.persist_message = lambda role, content: persisted.append((role, content))
+        app.shutdown = lambda: None
+        app.read_user_input = Mock(side_effect=["/claude mensagem", "/exit"])
         responses = iter(
             [
                 "claude responde\n"

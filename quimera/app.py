@@ -214,23 +214,27 @@ class QuimeraApp:
         return content or None
 
     def parse_routing(self, user_input):
-        """Extrai o agente inicial e rejeita prefixos duplicados na mesma entrada."""
+        """Extrai o agente inicial e rejeita prefixos duplicados na mesma entrada.
+
+        Retorna (agent, message, explicit) onde explicit=True indica que o usuário
+        usou /claude ou /codex explicitamente.
+        """
         stripped = user_input.lstrip()
         lowered = stripped.lower()
 
         for prefix, agent in AGENT_SEQUENCE:
             if lowered == prefix:
-                return agent, ""
+                return agent, "", True
             if lowered.startswith(f"{prefix} "):
                 message = stripped[len(prefix):].lstrip()
                 other_prefix = PREFIX_CLAUDE if prefix == PREFIX_CODEX else PREFIX_CODEX
                 lowered_message = message.lower()
                 if lowered_message == other_prefix or lowered_message.startswith(f"{other_prefix} "):
                     self.renderer.show_warning(MSG_DOUBLE_PREFIX)
-                    return None, None
-                return agent, message
+                    return None, None, False
+                return agent, message, True
 
-        return DEFAULT_FIRST_AGENT, user_input
+        return DEFAULT_FIRST_AGENT, user_input, False
 
     @staticmethod
     def _merge_state_value(current, incoming):
@@ -434,7 +438,7 @@ class QuimeraApp:
                 if self.handle_command(user):
                     continue
 
-                first_agent, message = self.parse_routing(user)
+                first_agent, message, explicit = self.parse_routing(user)
                 if first_agent is None:
                     continue
                 if not message.strip():
@@ -453,6 +457,8 @@ class QuimeraApp:
                 if response is not None:
                     self.persist_message(first_agent, response)
 
+                # Um handoff emitido pela primeira resposta sempre tem prioridade,
+                # inclusive quando a rodada começou com /claude ou /codex.
                 if route_target:
                     self.renderer.show_handoff(
                         first_agent,
@@ -491,8 +497,16 @@ class QuimeraApp:
                             self.persist_message(first_agent, final_response)
                 else:
                     # Fluxo padrão: 2 falas. Estendido (EXTEND_MARKER): 4 falas alternadas.
+                    # Em rodadas com /claude ou /codex, o handoff do primeiro agente
+                    # já foi tratado no bloco acima. Aqui só decidimos se existe
+                    # continuação automática do fluxo normal.
                     protocol_mode = "extended" if extend else "standard"
-                    remaining = [second_agent, first_agent, second_agent] if extend else [second_agent]
+                    if explicit:
+                        remaining = []
+                    elif extend:
+                        remaining = [second_agent, first_agent, second_agent]
+                    else:
+                        remaining = [second_agent]
 
                     next_handoff = None
                     for index, agent in enumerate(remaining):
