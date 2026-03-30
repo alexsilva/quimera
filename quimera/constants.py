@@ -18,13 +18,7 @@ CMD_CONTEXT_EDIT = "/context edit"
 CMD_EDIT = "/edit"
 CMD_FILE_PREFIX = "/file "
 
-PREFIX_CLAUDE = "/claude"
-PREFIX_CODEX = "/codex"
-
-AGENT_CLAUDE = "claude"
-AGENT_CODEX = "codex"
-DEFAULT_FIRST_AGENT = AGENT_CLAUDE
-AGENT_SEQUENCE = ((PREFIX_CODEX, AGENT_CODEX), (PREFIX_CLAUDE, AGENT_CLAUDE))
+DEFAULT_FIRST_AGENT = "claude"
 
 USER_ROLE = "human"
 INPUT_PROMPT = "Você: "
@@ -57,7 +51,6 @@ PROMPT_ROUTE_RULE = (
     "apenas ao payload do [ROUTE:...]. Inclua tudo que ele precisa no campo context.\n"
     "- Só um [ROUTE:...] por rodada. Esse comando é interno e não será exibido ao humano.\n"
 )
-PROMPT_PARTICIPANTS = "- HUMANO\n- CLAUDE\n- CODEX\n"
 PROMPT_SESSION_STATE = (
     "ESTADO DA SESSÃO:\n"
     "- SESSÃO ATUAL: {session_id}\n"

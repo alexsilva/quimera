@@ -15,13 +15,13 @@ from .session_summary import SessionSummarizer, build_chain_summarizer
 from .prompt import PromptBuilder
 from .workspace import Workspace
 from .config import ConfigManager
+from . import plugins
 from .constants import (
     EXTEND_MARKER,
     ROUTE_PREFIX,
     STATE_UPDATE_START, STATE_UPDATE_END,
     CMD_EXIT, CMD_HELP, CMD_CONTEXT, CMD_CONTEXT_EDIT, CMD_EDIT, CMD_FILE_PREFIX,
-    PREFIX_CLAUDE, PREFIX_CODEX,
-    AGENT_CLAUDE, AGENT_CODEX, DEFAULT_FIRST_AGENT, AGENT_SEQUENCE,
+    DEFAULT_FIRST_AGENT,
     USER_ROLE, INPUT_PROMPT,
     MSG_CHAT_STARTED, MSG_SESSION_LOG, MSG_SESSION_STATUS, MSG_HELP, MSG_MIGRATION,
     MSG_MEMORY_SAVING, MSG_MEMORY_FAILED, MSG_SHUTDOWN,
@@ -83,7 +83,7 @@ class QuimeraApp:
         self.agent_client = AgentClient(self.renderer, metrics_file=metrics_file)
         self.session_summarizer = SessionSummarizer(
             self.renderer,
-            summarizer_call=build_chain_summarizer(self.agent_client, [AGENT_CLAUDE, AGENT_CODEX]),
+            summarizer_call=build_chain_summarizer(self.agent_client, plugins.all_names()),
         )
         self.summary_agent_preference = DEFAULT_FIRST_AGENT
         last_session = self.storage.load_last_session()
@@ -228,14 +228,15 @@ class QuimeraApp:
         stripped = user_input.lstrip()
         lowered = stripped.lower()
 
-        for prefix, agent in AGENT_SEQUENCE:
+        for p in plugins.all_plugins():
+            prefix, agent = p.prefix, p.name
             if lowered == prefix:
                 return agent, "", True
             if lowered.startswith(f"{prefix} "):
                 message = stripped[len(prefix):].lstrip()
-                other_prefix = PREFIX_CLAUDE if prefix == PREFIX_CODEX else PREFIX_CODEX
                 lowered_message = message.lower()
-                if lowered_message == other_prefix or lowered_message.startswith(f"{other_prefix} "):
+                other_prefixes = [op.prefix for op in plugins.all_plugins() if op.prefix != prefix]
+                if any(lowered_message == op or lowered_message.startswith(f"{op} ") for op in other_prefixes):
                     self.renderer.show_warning(MSG_DOUBLE_PREFIX)
                     return None, None, False
                 return agent, message, True
@@ -458,7 +459,7 @@ class QuimeraApp:
                     self.renderer.show_warning(MSG_EMPTY_INPUT.format(first_agent))
                     continue
 
-                second_agent = AGENT_CODEX if first_agent == AGENT_CLAUDE else AGENT_CLAUDE
+                second_agent = next(n for n in plugins.all_names() if n != first_agent)
 
                 self.round_index += 1
                 self.summary_agent_preference = first_agent

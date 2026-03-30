@@ -60,7 +60,7 @@ class TerminalRenderer:
 
     def show_plain(self, message):
         if self._console:
-            self._console.print(message)
+            self._console.print(markup_escape(str(message)))
         else:
             print(message)
 

@@ -8,7 +8,10 @@ from quimera.agents import AgentClient
 from quimera.app import QuimeraApp
 from quimera.cli import main as cli_main
 from quimera.config import DEFAULT_HISTORY_WINDOW
-from quimera.constants import AGENT_CLAUDE, AGENT_CODEX, CMD_HELP, EXTEND_MARKER, MSG_HELP
+from quimera.constants import CMD_HELP, EXTEND_MARKER, MSG_HELP
+
+AGENT_CLAUDE = "claude"
+AGENT_CODEX = "codex"
 from quimera.plugins import AgentPlugin
 from quimera.prompt import PromptBuilder
 from quimera.session_summary import SessionSummarizer
