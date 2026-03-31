@@ -1057,5 +1057,51 @@ class PluginTests(unittest.TestCase):
             self.assertEqual(plugins.all_plugins(), [novo])
 
 
+class TestExpandPatterns(unittest.TestCase):
+    def test_expand_pattern_wildcard_expands_to_matching_agents(self):
+        from quimera.cli import _expand_patterns
+
+        available = ["claude", "codex", "gpt", "gemini", "opencode-pickle", "opencode-gpt", "qwen"]
+        result = _expand_patterns(["opencode-*"], available)
+        self.assertIn("opencode-pickle", result)
+        self.assertIn("opencode-gpt", result)
+        self.assertNotIn("claude", result)
+
+    def test_expand_pattern_preserves_order_of_first_appearance(self):
+        from quimera.cli import _expand_patterns
+
+        available = ["z-agent", "a-agent", "m-agent", "b-agent"]
+        result = _expand_patterns(["*"], available)
+        self.assertEqual(result, ["z-agent", "a-agent", "m-agent", "b-agent"])
+
+    def test_expand_pattern_removes_duplicates(self):
+        from quimera.cli import _expand_patterns
+
+        available = ["claude", "codex", "gpt"]
+        result = _expand_patterns(["claude", "claude", "codex", "claude"], available)
+        self.assertEqual(result, ["claude", "codex"])
+
+    def test_expand_pattern_wildcard_with_duplicates(self):
+        from quimera.cli import _expand_patterns
+
+        available = ["opencode-pickle", "opencode-gpt", "opencode-mimo"]
+        result = _expand_patterns(["opencode-*", "opencode-pickle", "opencode-*"], available)
+        self.assertEqual(result, ["opencode-pickle", "opencode-gpt", "opencode-mimo"])
+
+    def test_expand_pattern_no_wildcard_returns_exact_match(self):
+        from quimera.cli import _expand_patterns
+
+        available = ["claude", "codex", "gemini"]
+        result = _expand_patterns(["codex"], available)
+        self.assertEqual(result, ["codex"])
+
+    def test_expand_pattern_case_insensitive(self):
+        from quimera.cli import _expand_patterns
+
+        available = ["Claude", "Codex", "GPT"]
+        result = _expand_patterns(["claude", "CODEX"], available)
+        self.assertEqual(result, ["claude", "codex"])
+
+
 if __name__ == "__main__":
     unittest.main()
