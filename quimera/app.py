@@ -120,7 +120,7 @@ class QuimeraApp:
         self.auto_summarize_threshold = self.config.auto_summarize_threshold
 
         self.tool_executor = ToolExecutor(
-            config=ToolRuntimeConfig(workspace_root=workspace.root),
+            config=ToolRuntimeConfig(workspace_root=workspace.cwd),
             approval_handler=ConsoleApprovalHandler(),
         )
 
