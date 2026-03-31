@@ -35,6 +35,9 @@ PROMPT_BASE_RULES = (
     "- Seja direto\n"
     "- A convenção deste projeto para referenciar arquivos é `/caminho/absoluto/arquivo:linha` "
     "em uma linha própria — use esse formato ao mencionar qualquer arquivo do projeto\n"
+    "- Não execute nada além do que foi explicitamente acordado com o humano\n"
+    "- Aguarde pergunta explícita para executar código, comandos ou criar arquivos\n"
+    "- Pode propor alterações, mas não as implemente sem aprovação\n"
 )
 PROMPT_DEBATE_RULE = (
     "- Se o tópico exigir debate mais aprofundado entre os agentes, "
