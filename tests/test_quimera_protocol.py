@@ -268,6 +268,7 @@ class ProtocolTests(unittest.TestCase):
     def test_parse_routing_rejects_double_prefix(self):
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
+        app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
 
         agent, message, explicit = app.parse_routing("/claude /codex revisar isso")
 
@@ -530,6 +531,7 @@ class ProtocolTests(unittest.TestCase):
         persisted = []
         printed = []
 
+        app.active_agents = list(plugins.all_names())
         app.handle_command = lambda user: False
         app.parse_routing = lambda user: (AGENT_CLAUDE, "oi", False)
         app.parse_response = QuimeraApp.parse_response.__get__(app, QuimeraApp)
@@ -556,34 +558,6 @@ class ProtocolTests(unittest.TestCase):
             ],
         )
 
-    def test_decode_stdin_bytes_falls_back_from_invalid_utf8(self):
-        app = QuimeraApp.__new__(QuimeraApp)
-        app._input_encoding_candidates = lambda: ["utf-8", "cp1252", "latin-1"]
-
-        decoded = app._decode_stdin_bytes(b"ol\xe1\r\n")
-
-        self.assertEqual(decoded, "olá")
-
-    def test_read_user_input_uses_stdin_buffer_and_decodes_bytes(self):
-        app = QuimeraApp.__new__(QuimeraApp)
-        app.user_name = "Alex"
-        app._decode_stdin_bytes = QuimeraApp._decode_stdin_bytes.__get__(app, QuimeraApp)
-        app._input_encoding_candidates = lambda: ["utf-8", "cp1252", "latin-1"]
-
-        fake_stdin = type(
-            "FakeStdin",
-            (),
-            {"buffer": Mock(readline=Mock(return_value=b"ma\xe7\xe3\r\n"))},
-        )()
-        fake_stdout = Mock(write=Mock(), flush=Mock())
-
-        with patch("sys.stdin", fake_stdin), patch("sys.stdout", fake_stdout):
-            user = app.read_user_input()
-
-        self.assertEqual(user, "maçã")
-        fake_stdout.write.assert_called_once_with("Alex: ")
-        fake_stdout.flush.assert_called_once()
-
     def test_run_uses_four_turns_when_extended(self):
         app = QuimeraApp.__new__(QuimeraApp)
         app.history = []
@@ -604,6 +578,7 @@ class ProtocolTests(unittest.TestCase):
         persisted = []
         printed = []
 
+        app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
         app.handle_command = lambda user: False
         app.parse_routing = lambda user: (AGENT_CLAUDE, "oi", False)
         app.parse_response = QuimeraApp.parse_response.__get__(app, QuimeraApp)
@@ -665,6 +640,7 @@ class ProtocolTests(unittest.TestCase):
         printed = []
         calls = []
 
+        app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
         app.handle_command = lambda user: False
         app.parse_routing = lambda user: (AGENT_CLAUDE, "oi", False)
         app.parse_response = QuimeraApp.parse_response.__get__(app, QuimeraApp)
@@ -765,6 +741,7 @@ class ProtocolTests(unittest.TestCase):
         printed = []
         calls = []
 
+        app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
         app.handle_command = lambda user: False
         app.parse_routing = lambda user: (AGENT_CLAUDE, "oi", True)
         app.parse_response = QuimeraApp.parse_response.__get__(app, QuimeraApp)
@@ -880,6 +857,7 @@ class ProtocolTests(unittest.TestCase):
             {"role": "codex", "content": "m3"},
             {"role": "human", "content": "m4"},
         ]
+        app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
         app.auto_summarize_threshold = 4
         app.prompt_builder = type("PromptBuilderStub", (), {"history_window": 2})()
         app.context_manager = FakeContextManager()

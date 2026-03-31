@@ -47,7 +47,7 @@ class QuimeraApp:
     STATE_UPDATE_PATTERN = re.compile(
         r"\[STATE_UPDATE\](.*?)\[/STATE_UPDATE\]", re.DOTALL
     )
-    ROUTE_PATTERN = re.compile(r"(?m)^\[ROUTE:(claude)\]\s*(.+?)\s*$")
+    ROUTE_PATTERN = re.compile(r"(?m)^\[ROUTE:(\w+)\]\s*(.+?)\s*$", re.DOTALL)
 
     @staticmethod
     def _format_yes_no(value):
