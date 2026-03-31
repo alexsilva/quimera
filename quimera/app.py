@@ -129,6 +129,7 @@ class QuimeraApp:
     def resolve_agent_response(self, agent: str, response: str | None) -> str | None:
         current_response = response
         max_tool_hops = 8
+        tool_history = []
 
         for _ in range(max_tool_hops):
             if not current_response:
@@ -139,19 +140,20 @@ class QuimeraApp:
             if tool_result is None:
                 return current_response
 
+            tool_history.append(
+                f"Sua resposta anterior:\n{current_response.strip()}\n\n"
+                f"Resultado da ferramenta:\n{tool_result.to_model_payload()}"
+            )
+
             visible_text = strip_tool_block(raw_response or "")
             if visible_text:
                 self.print_response(agent, visible_text)
                 self.persist_message(agent, visible_text)
 
-            tool_payload = tool_result.to_model_payload()
-
             followup_handoff = (
-                "Você solicitou uma ferramenta. "
-                "Aqui está o resultado em JSON.\n\n"
-                f"{tool_payload}\n\n"
-                "Use esse `MENSAGEM DIRETA DO OUTRO AGENTE[content]` para continuar. "
-                "Se precisar de outra ferramenta, emita novo bloco ```tool```."
+                "Histórico de ferramentas desta rodada:\n\n"
+                + "\n\n---\n\n".join(tool_history)
+                + "\n\nContinue a partir daqui. Se precisar de outra ferramenta, emita novo bloco ```tool```."
             )
 
             current_response = self._call_agent(
