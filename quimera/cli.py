@@ -3,10 +3,32 @@ import locale
 import os
 import sys
 from pathlib import Path
+from typing import List
 
 from .app import QuimeraApp
 from .config import ConfigManager
 from . import plugins as _plugins
+
+
+def _expand_patterns(agents: List[str], available: List[str]) -> List[str]:
+    # Expand patterns like "opencode-*" to all available agents that start with the prefix.
+    # Also ensure unique results while preserving the order of first appearance.
+    result = []
+    seen = set()
+    for a in agents:
+        a = a.strip().lower()
+        if "*" in a:
+            prefix = a.replace("*", "")
+            matches = [n for n in available if n.startswith(prefix)]
+            for n in matches:
+                if n not in seen:
+                    seen.add(n)
+                    result.append(n)
+        else:
+            if a not in seen:
+                seen.add(a)
+                result.append(a)
+    return result
 
 
 def main():
@@ -48,10 +70,8 @@ def main():
     if args.history_window is not None and args.history_window <= 0:
         parser.error("--history-window deve ser maior que zero")
 
-    requested = [a.strip().lower() for a in args.agents if a.strip()]
-    if not requested:
-        parser.error("--agents requer ao menos um agente")
     available = _plugins.all_names()
+    requested = _expand_patterns(args.agents, available)
     unknown = [a for a in requested if a not in available]
     if unknown:
         parser.error(f"Agente(s) desconhecido(s): {', '.join(unknown)}. Disponíveis: {', '.join(available)}")
