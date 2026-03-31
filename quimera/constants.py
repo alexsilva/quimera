@@ -130,8 +130,10 @@ def build_tools_prompt() -> str:
     lines = [
         "Ferramentas disponíveis:",
         """"
-        - Retorne o bloco abaixo conforme descrição:
-        ```tool {"name": "<tool_name>", "arguments": {...}}```
+        - Retorne o bloco abaixo conforme descrição em JSON válido:
+        ```tool 
+        {"name": "<tool_name>", "arguments": {...}}
+        ```
          """
     ]
     for tool in TOOL_SCHEMA.values():
