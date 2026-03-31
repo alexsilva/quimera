@@ -74,6 +74,14 @@ class ParserTests(unittest.TestCase):
         self.assertIn("Texto antes.", stripped)
         self.assertIn("Texto depois.", stripped)
 
+    def test_extract_nested_arguments(self):
+        """JSON com objetos aninhados nos arguments não deve falhar no parser."""
+        response = '```tool\n{"name": "write_file", "arguments": {"path": "a.txt", "options": {"encoding": "utf-8"}}}\n```'
+        call = extract_tool_call(response)
+        self.assertIsNotNone(call)
+        self.assertEqual(call.name, "write_file")
+        self.assertEqual(call.arguments["options"], {"encoding": "utf-8"})
+
     def test_strip_noop_on_no_block(self):
         response = "sem bloco"
         self.assertEqual(strip_tool_block(response), "sem bloco")
