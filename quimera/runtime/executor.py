@@ -3,7 +3,7 @@ from __future__ import annotations
 from .approval import ApprovalHandler
 from .config import ToolRuntimeConfig
 from .models import ToolCall, ToolResult
-from .parser import extract_tool_call
+from .parser import ToolCallParseError, extract_tool_call
 from .policy import ToolPolicy, ToolPolicyError
 from .registry import ToolRegistry
 from .tools.files import FileTools
@@ -53,7 +53,10 @@ class ToolExecutor:
             return ToolResult(ok=False, tool_name=call.name, error=f"Falha inesperada: {exc}")
 
     def maybe_execute_from_response(self, response: str | None) -> tuple[str | None, ToolResult | None]:
-        call = extract_tool_call(response)
+        try:
+            call = extract_tool_call(response)
+        except ToolCallParseError as exc:
+            return response, ToolResult(ok=False, tool_name="parse", error=str(exc))
         if call is None:
             return response, None
         result = self.execute(call)
