@@ -55,6 +55,17 @@ def build_route_rule(agent_names):
         "- O agente que recebe o handoff não tem acesso ao histórico completo, "
         "apenas ao payload do [ROUTE:...]. Inclua tudo que ele precisa no campo context.\n"
         "- Só um [ROUTE:...] por rodada. Esse comando é interno e não será exibido ao humano.\n"
+        "- Quando precisar usar uma ferramenta, responda apenas com um bloco:\n"
+        "  ```tool\n"
+        '  {"name": "<tool_name>", "arguments": {...}}\n'
+        "  ```\n"
+        "  Ferramentas disponíveis:\n"
+        "  list_files: path[str]\n"
+        "  read_file: path[str]\n"
+        "  write_file: path[str]\n"
+        "  grep_search: path[str]\n"
+        "  run_shell: command[str]\n"
+        "  Não descreva a execução em texto. Emita o bloco tool.\n"
     )
 PROMPT_SESSION_STATE = (
     "ESTADO DA SESSÃO:\n"

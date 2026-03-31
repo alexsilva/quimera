@@ -363,6 +363,7 @@ class ProtocolTests(unittest.TestCase):
     def test_app_builds_explicit_session_state_for_prompt(self):
         class FakeWorkspace:
             def __init__(self, cwd):
+                self.root = Path("/tmp/projeto")
                 self.context_persistent = Path("/tmp/quimera_context.md")
                 self.context_session = Path("/tmp/quimera_session_context.md")
                 self.logs_dir = Path("/tmp/quimera_logs")
@@ -411,6 +412,7 @@ class ProtocolTests(unittest.TestCase):
     def test_app_uses_default_history_window_from_config(self):
         class FakeWorkspace:
             def __init__(self, cwd):
+                self.root = Path("/tmp/projeto")
                 self.context_persistent = Path("/tmp/quimera_context.md")
                 self.context_session = Path("/tmp/quimera_session_context.md")
                 self.logs_dir = Path("/tmp/quimera_logs")
@@ -447,6 +449,7 @@ class ProtocolTests(unittest.TestCase):
     def test_app_allows_history_window_override(self):
         class FakeWorkspace:
             def __init__(self, cwd):
+                self.root = Path("/tmp/projeto")
                 self.context_persistent = Path("/tmp/quimera_context.md")
                 self.context_session = Path("/tmp/quimera_session_context.md")
                 self.logs_dir = Path("/tmp/quimera_logs")
@@ -508,21 +511,21 @@ class ProtocolTests(unittest.TestCase):
         app.persist_message = lambda role, content: persisted.append((role, content))
         app.shutdown = lambda: None
         app.read_user_input = Mock(side_effect=["mensagem", "/exit"])
-        responses = iter(["claude responde", "codex comenta"])
+        other_agents = [n for n in plugins.all_names() if n != AGENT_CLAUDE]
+        all_responses = ["claude responde"] + [f"{a} comenta" for a in other_agents]
+        responses = iter(all_responses)
         app.call_agent = lambda agent, is_first_speaker=False, handoff=None, primary=True, protocol_mode="standard": next(responses)
 
         app.run()
 
-        self.assertEqual(
-            printed,
-            [(AGENT_CLAUDE, "claude responde"), (AGENT_CODEX, "codex comenta")],
-        )
+        expected_printed = [(AGENT_CLAUDE, "claude responde")] + [
+            (a, f"{a} comenta") for a in other_agents
+        ]
+        self.assertEqual(printed, expected_printed)
         self.assertEqual(
             persisted,
-            [
-                ("human", "oi"),
-                (AGENT_CLAUDE, "claude responde"),
-                (AGENT_CODEX, "codex comenta"),
+            [("human", "oi")] + [(AGENT_CLAUDE, "claude responde")] + [
+                (a, f"{a} comenta") for a in other_agents
             ],
         )
 

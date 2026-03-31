@@ -6,7 +6,10 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-
+from .runtime.executor import ToolExecutor
+from .runtime.parser import strip_tool_block
+from .runtime import ToolRuntimeConfig
+from .runtime import ConsoleApprovalHandler
 from .ui import TerminalRenderer
 from .context import ContextManager
 from .storage import SessionStorage
@@ -115,6 +118,48 @@ class QuimeraApp:
             user_name=self.user_name,
         )
         self.auto_summarize_threshold = self.config.auto_summarize_threshold
+
+        self.tool_executor = ToolExecutor(
+            config=ToolRuntimeConfig(workspace_root=workspace.root),
+            approval_handler=ConsoleApprovalHandler(),
+        )
+
+    def resolve_agent_response(self, agent: str, response: str | None) -> str | None:
+        current_response = response
+        max_tool_hops = 8
+
+        for _ in range(max_tool_hops):
+            if not current_response:
+                return current_response
+
+            raw_response, tool_result = self.tool_executor.maybe_execute_from_response(current_response)
+
+            if tool_result is None:
+                return current_response
+
+            visible_text = strip_tool_block(raw_response or "")
+            if visible_text:
+                self.print_response(agent, visible_text)
+                self.persist_message(agent, visible_text)
+
+            tool_payload = tool_result.to_model_payload()
+
+            followup_handoff = (
+                "Você solicitou uma ferramenta. "
+                "Aqui está o resultado em JSON.\n\n"
+                f"{tool_payload}\n\n"
+                "Use esse resultado para continuar. "
+                "Se precisar de outra ferramenta, emita novo bloco ```tool```."
+            )
+
+            current_response = self._call_agent(
+                agent,
+                handoff=followup_handoff,
+                primary=False,
+                protocol_mode="tool_loop",
+            )
+
+        return "Falha: limite de execuções de ferramenta atingido."
 
     def _input_encoding_candidates(self):
         stdin_encoding = getattr(sys.stdin, "encoding", None)
@@ -278,7 +323,11 @@ class QuimeraApp:
                 self.shared_state[normalized_key] = merged
         return True
 
-    def call_agent(self, agent, is_first_speaker=False, handoff=None, primary=True, protocol_mode="standard", handoff_only=False):
+    def call_agent(self, agent, **options):
+        response = self._call_agent(agent, **options)
+        return self.resolve_agent_response(agent, response)
+
+    def _call_agent(self, agent, is_first_speaker=False, handoff=None, primary=True, protocol_mode="standard", handoff_only=False):
         self.session_call_index += 1
         history = [] if handoff_only else self.history
         if self.debug_prompt_metrics:
