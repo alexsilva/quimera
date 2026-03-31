@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+import threading
 
 try:
     import readline
