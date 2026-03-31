@@ -127,7 +127,13 @@ def build_tools_prompt() -> str:
 
     Formato simples e previsível para que agentes consigam interpretar as tools dinamicamente.
     """
-    lines = ["Ferramentas disponíveis:"]
+    lines = [
+        "Ferramentas disponíveis:",
+        """"
+        - Retorne o bloco abaixo conforme descrição:
+        ```tool {"name": "<tool_name>", "arguments": {...}}```
+         """
+    ]
     for tool in TOOL_SCHEMA.values():
         params = ", ".join(f"{k}: {v['type']}" for k, v in tool["parameters"].items())
         lines.append(f"- {tool['name']}: {params}")
