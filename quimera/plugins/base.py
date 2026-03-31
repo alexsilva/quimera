@@ -8,6 +8,7 @@ class AgentPlugin:
     prefix: str
     cmd: List[str]
     style: Tuple[str, str]  # (color, label) para UI
+    prompt_as_arg: bool = False  # se True, prompt é passado como argumento CLI em vez de stdin
 
 
 _registry: dict[str, AgentPlugin] = {}

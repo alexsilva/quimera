@@ -78,6 +78,8 @@ class AgentClient:
         if plugin is None:
             self.renderer.show_error(f"[erro] agente desconhecido: {agent}")
             return None
+        if plugin.prompt_as_arg:
+            return self.run([*plugin.cmd, prompt], input_text=None)
         return self.run(plugin.cmd, input_text=prompt)
 
     def log_prompt_metrics(

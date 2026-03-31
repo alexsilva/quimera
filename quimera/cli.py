@@ -27,9 +27,10 @@ def main():
     parser.add_argument("--history-window", type=int, default=None)
     parser.add_argument(
         "--agents",
-        metavar="AGENTES",
-        default="claude",
-        help="Lista de agentes separada por vírgula (ex: claude,codex). O primeiro é o agente padrão.",
+        metavar="AGENTE",
+        nargs="+",
+        default=["claude"],
+        help="Lista de agentes (ex: --agents claude gemini). O primeiro é o agente padrão.",
     )
     args, _ = parser.parse_known_args()
 
@@ -47,7 +48,7 @@ def main():
     if args.history_window is not None and args.history_window <= 0:
         parser.error("--history-window deve ser maior que zero")
 
-    requested = [a.strip().lower() for a in args.agents.split(",") if a.strip()]
+    requested = [a.strip().lower() for a in args.agents if a.strip()]
     if not requested:
         parser.error("--agents requer ao menos um agente")
     available = _plugins.all_names()
