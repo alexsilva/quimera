@@ -6,6 +6,12 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+
+try:
+    import readline
+except ImportError:
+    readline = None
+
 from .runtime.executor import ToolExecutor
 from .runtime.parser import strip_tool_block
 from .runtime import ToolRuntimeConfig
@@ -16,7 +22,7 @@ from .storage import SessionStorage
 from .agents import AgentClient
 from .session_summary import SessionSummarizer, build_chain_summarizer
 from .prompt import PromptBuilder
-from .workspace import Workspace
+from .workspace import Workspace, QUIMERA_BASE
 from .config import ConfigManager
 from . import plugins
 from .constants import (
@@ -41,6 +47,7 @@ class QuimeraApp:
     STATE_UPDATE_PATTERN = re.compile(
         r"\[STATE_UPDATE\](.*?)\[/STATE_UPDATE\]", re.DOTALL
     )
+    ROUTE_PATTERN = re.compile(r"(?m)^\[ROUTE:(claude)\]\s*(.+?)\s*$")
 
     @staticmethod
     def _format_yes_no(value):
@@ -71,20 +78,30 @@ class QuimeraApp:
         self.renderer = TerminalRenderer()
         self.config = ConfigManager()
         self.user_name = self.config.user_name
-        workspace = Workspace(cwd)
+        self.workspace = Workspace(cwd)
 
-        migrated = workspace.migrate_from_legacy(cwd)
+        # Configuração do histórico persistente (readline)
+        self.history_file = self.workspace.history_file
+        if readline:
+            if self.history_file.exists():
+                try:
+                    readline.read_history_file(str(self.history_file))
+                except Exception:
+                    pass
+            readline.set_history_length(1000)
+
+        migrated = self.workspace.migrate_from_legacy(cwd)
         for item in migrated:
             self.renderer.show_system(MSG_MIGRATION.format(item))
 
         self.context_manager = ContextManager(
-            workspace.context_persistent,
-            workspace.context_session,
+            self.workspace.context_persistent,
+            self.workspace.context_session,
             self.renderer,
         )
-        self.storage = SessionStorage(workspace.logs_dir, self.renderer)
+        self.storage = SessionStorage(self.workspace.logs_dir, self.renderer)
         session_id = self.storage.get_history_file().stem
-        metrics_file = workspace.metrics_dir / f"{session_id}.jsonl" if debug else None
+        metrics_file = self.workspace.metrics_dir / f"{session_id}.jsonl" if debug else None
         self.agent_client = AgentClient(self.renderer, metrics_file=metrics_file)
         self.session_summarizer = SessionSummarizer(
             self.renderer,
@@ -122,7 +139,7 @@ class QuimeraApp:
         self.auto_summarize_threshold = self.config.auto_summarize_threshold
 
         self.tool_executor = ToolExecutor(
-            config=ToolRuntimeConfig(workspace_root=workspace.cwd),
+            config=ToolRuntimeConfig(workspace_root=self.workspace.cwd),
             approval_handler=ConsoleApprovalHandler(),
         )
 
@@ -165,53 +182,16 @@ class QuimeraApp:
 
         return "Falha: limite de execuções de ferramenta atingido."
 
-    def _input_encoding_candidates(self):
-        stdin_encoding = getattr(sys.stdin, "encoding", None)
-        device_encoding = None
-        try:
-            if hasattr(sys.stdin, "fileno"):
-                device_encoding = os.device_encoding(sys.stdin.fileno())
-        except (OSError, ValueError):
-            device_encoding = None
-
-        return self._unique_encodings(
-            stdin_encoding,
-            device_encoding,
-            locale.getpreferredencoding(False),
-            "utf-8",
-            "cp1252",
-            "latin-1",
-        )
-
-    def _decode_stdin_bytes(self, raw_line):
-        payload = raw_line.rstrip(b"\r\n")
-        for encoding in self._input_encoding_candidates():
-            try:
-                return payload.decode(encoding)
-            except UnicodeDecodeError:
-                continue
-
-        fallback = self._input_encoding_candidates()[0] if self._input_encoding_candidates() else "utf-8"
-        return payload.decode(fallback, errors="replace")
-
     def read_user_input(self):
         prompt = f"{self.user_name}: "
-        stdout = getattr(sys, "stdout", None)
-        if stdout is not None:
-            stdout.write(prompt)
-            stdout.flush()
-
-        stdin_buffer = getattr(sys.stdin, "buffer", None)
-        if stdin_buffer is not None:
-            raw_line = stdin_buffer.readline()
-            if raw_line == b"":
-                raise EOFError
-            return self._decode_stdin_bytes(raw_line)
-
-        line = sys.stdin.readline()
-        if line == "":
+        try:
+            return input(prompt)
+        except EOFError:
             raise EOFError
-        return line.rstrip("\r\n")
+        except KeyboardInterrupt:
+            # Garante que o prompt seja limpo após Ctrl+C
+            print()
+            raise KeyboardInterrupt
 
     def handle_command(self, user_input):
         command = user_input.strip()
@@ -456,6 +436,12 @@ class QuimeraApp:
 
     def shutdown(self):
         """Finaliza a sessão tentando resumir o histórico no contexto persistente."""
+        if readline:
+            try:
+                readline.write_history_file(str(self.history_file))
+            except Exception:
+                pass
+
         if not self.history:
             return
 
@@ -464,7 +450,7 @@ class QuimeraApp:
         summary = self.session_summarizer.summarize(
             self.history,
             existing_summary=self.context_manager.load_session_summary(),
-            preferred_agent=getattr(self, "summary_agent_preference", self.active_agents[0]),
+            preferred_agent=getattr(self, "summary_agent_preference", None),
         )
         if summary:
             self.context_manager.update_with_summary(summary)

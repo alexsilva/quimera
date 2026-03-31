@@ -41,6 +41,10 @@ class Workspace:
     def state_dir(self) -> Path:
         return self._root / "state"
 
+    @property
+    def history_file(self) -> Path:
+        return self._root / "history"
+
     def _ensure_dirs(self):
         (self._root / "data" / "context").mkdir(parents=True, exist_ok=True)
         (self._root / "data" / "logs" / "sessions").mkdir(parents=True, exist_ok=True)
