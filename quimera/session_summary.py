@@ -65,6 +65,6 @@ Regras:
 Seja conciso. Máximo 20 linhas. Não use emojis. Escreva em português.
 
 MATERIAL:
-{'\n\n'.join(sections)}
+{chr(10).join(sections)}
 
 RESUMO:"""
