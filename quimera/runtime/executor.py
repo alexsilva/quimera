@@ -8,6 +8,7 @@ from .policy import ToolPolicy, ToolPolicyError
 from .registry import ToolRegistry
 from .tools.files import FileTools
 from .tools.shell import ShellTool
+from .tools.tasks import TaskTools
 
 
 class ToolExecutor:
@@ -29,11 +30,19 @@ class ToolExecutor:
     def _register_builtin_tools(self) -> None:
         file_tools = FileTools(self.config)
         shell_tool = ShellTool(self.config)
+        task_tools = TaskTools(self.config)
         self.registry.register("list_files", file_tools.list_files)
         self.registry.register("read_file", file_tools.read_file)
         self.registry.register("write_file", file_tools.write_file)
         self.registry.register("grep_search", file_tools.grep_search)
         self.registry.register("run_shell", shell_tool.run_shell)
+        # Task-related tools
+        self.registry.register("propose_task", task_tools.propose_task)
+        self.registry.register("list_tasks", task_tools.list_tasks)
+        self.registry.register("list_jobs", task_tools.list_jobs)
+        self.registry.register("get_job", task_tools.get_job)
+        self.registry.register("complete_task", task_tools.complete_task)
+        self.registry.register("fail_task", task_tools.fail_task)
 
     def execute(self, call: ToolCall) -> ToolResult:
         try:

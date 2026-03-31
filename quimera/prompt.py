@@ -10,6 +10,7 @@ from .constants import (
     PROMPT_BASE_RULES,
     PROMPT_DEBATE_RULE,
     build_route_rule,
+    build_tools_prompt,
     PROMPT_SESSION_STATE,
     PROMPT_HANDOFF,
     PROMPT_SHARED_STATE,
@@ -58,6 +59,8 @@ class PromptBuilder:
             else:
                 rules += PROMPT_REVIEWER_RULE
 
+        tools_prompt = build_tools_prompt()
+
         participants = f"- {self.user_name.upper()}\n" + "".join(f"- {n.upper()}\n" for n in plugins.all_names())
         header_block = PROMPT_HEADER.format(agent=agent.upper(), participants=participants)
         session_block = PROMPT_SESSION_STATE.format(**self.session_state) if (self.session_state and primary) else ""
@@ -77,7 +80,7 @@ class PromptBuilder:
 
         parts = [p for p in [
             header_block, rules, session_block, context_block,
-            shared_state_block, handoff_block, conversation_block, speaker_block,
+            shared_state_block, handoff_block, tools_prompt, conversation_block, speaker_block,
         ] if p]
 
         full_prompt = "\n\n".join(parts)

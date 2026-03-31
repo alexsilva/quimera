@@ -13,8 +13,9 @@ class AgentClient:
     def __init__(self, renderer, metrics_file=None):
         self.renderer = renderer
         self.metrics_file = metrics_file
+        self._metrics_lock = threading.Lock()
 
-    def run(self, cmd, input_text=None):
+    def run(self, cmd, input_text=None, silent=False):
         try:
             proc = subprocess.Popen(
                 cmd,
@@ -38,15 +39,18 @@ class AgentClient:
         thread = threading.Thread(target=_communicate, daemon=True)
         thread.start()
 
-        elapsed = 0
-        with self.renderer.running_status("") as status:
-            while thread.is_alive():
-                if status is not None:
-                    status.update(f"[dim]{cmd[0]}... {elapsed}s[/dim]")
-                time.sleep(1)
-                elapsed += 1
-
-        thread.join()
+        if silent:
+            thread.join()
+        else:
+            elapsed = 0
+            with self.renderer.running_status("") as status:
+                while thread.is_alive():
+                    if status is not None:
+                        status.update(f"[dim]{cmd[0]}... {elapsed}s[/dim]")
+                    time.sleep(1)
+                    elapsed += 1
+            thread.join()
+        
         proc.wait()
 
         if "error" in result_holder:
@@ -72,15 +76,15 @@ class AgentClient:
 
         return output
 
-    def call(self, agent, prompt):
+    def call(self, agent, prompt, silent=False):
         """Resolve o comando do agente e delega a execução."""
         plugin = plugins.get(agent)
         if plugin is None:
             self.renderer.show_error(f"[erro] agente desconhecido: {agent}")
             return None
         if plugin.prompt_as_arg:
-            return self.run([*plugin.cmd, prompt], input_text=None)
-        return self.run(plugin.cmd, input_text=prompt)
+            return self.run([*plugin.cmd, prompt], input_text=None, silent=silent)
+        return self.run(plugin.cmd, input_text=prompt, silent=silent)
 
     def log_prompt_metrics(
         self, agent, metrics, session_id=None,
@@ -123,5 +127,6 @@ class AgentClient:
                 "largest_block": largest_block[0],
                 **metrics,
             }
-            with open(self.metrics_file, "a", encoding="utf-8") as f:
-                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+            with self._metrics_lock:
+                with open(self.metrics_file, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(record, ensure_ascii=False) + "\n")

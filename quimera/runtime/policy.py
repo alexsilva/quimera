@@ -23,7 +23,7 @@ class ToolPolicy:
         validator(call)
 
     def requires_approval(self, call: ToolCall) -> bool:
-        if call.name in {"write_file", "run_shell"}:
+        if call.name in {"write_file", "run_shell", "propose_task", "complete_task", "fail_task"}:
             return self.config.require_approval_for_mutations
         return False
 
@@ -51,6 +51,30 @@ class ToolPolicy:
         pattern = str(call.arguments.get("pattern", "")).strip()
         if not pattern:
             raise ToolPolicyError("grep_search requer um padrão não vazio")
+
+    def _validate_propose_task(self, call: ToolCall) -> None:
+        if "description" not in call.arguments:
+            raise ToolPolicyError("propose_task requer 'description'")
+        if "body" not in call.arguments:
+            raise ToolPolicyError("propose_task requer 'body'")
+
+    def _validate_list_tasks(self, call: ToolCall) -> None:
+        pass
+
+    def _validate_list_jobs(self, call: ToolCall) -> None:
+        pass
+
+    def _validate_get_job(self, call: ToolCall) -> None:
+        if "job_id" not in call.arguments:
+            raise ToolPolicyError("get_job requer 'job_id'")
+
+    def _validate_complete_task(self, call: ToolCall) -> None:
+        if "task_id" not in call.arguments:
+            raise ToolPolicyError("complete_task requer 'task_id'")
+
+    def _validate_fail_task(self, call: ToolCall) -> None:
+        if "task_id" not in call.arguments:
+            raise ToolPolicyError("fail_task requer 'task_id'")
 
     _SHELL_CHAIN_OPERATORS = (";", "&&", "||", "`", "$(")
 

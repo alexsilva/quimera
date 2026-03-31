@@ -15,8 +15,7 @@ except ImportError:
 
 from .runtime.executor import ToolExecutor
 from .runtime.parser import strip_tool_block
-from .runtime import ToolRuntimeConfig
-from .runtime import ConsoleApprovalHandler
+from .runtime import ToolRuntimeConfig, ConsoleApprovalHandler, TaskExecutor, create_executor
 from .ui import TerminalRenderer
 from .context import ContextManager
 from .storage import SessionStorage
@@ -27,10 +26,11 @@ from .workspace import Workspace
 from .config import ConfigManager
 from . import plugins
 from .constants import (
+    build_help,
     EXTEND_MARKER,
     ROUTE_PREFIX,
     STATE_UPDATE_START, CMD_EXIT, CMD_HELP, CMD_CONTEXT, CMD_CONTEXT_EDIT, CMD_EDIT, CMD_FILE_PREFIX,
-    USER_ROLE, MSG_CHAT_STARTED, MSG_SESSION_LOG, MSG_SESSION_STATUS, MSG_HELP, MSG_MIGRATION,
+    USER_ROLE, MSG_CHAT_STARTED, MSG_SESSION_LOG, MSG_SESSION_STATUS, MSG_MIGRATION,
     MSG_MEMORY_SAVING, MSG_MEMORY_FAILED, MSG_SHUTDOWN,
     MSG_DOUBLE_PREFIX, MSG_EMPTY_INPUT,
     HANDOFF_SYNTHESIS_MSG,
@@ -130,6 +130,7 @@ class QuimeraApp:
         self.round_index = 0
         self.session_call_index = 0
         self.shared_state = last_session["shared_state"]
+        self._lock = threading.Lock()
         is_new_session = not history_restored and not summary_loaded
         session_state = {
             "session_id": self.session_state["session_id"],
@@ -146,11 +147,55 @@ class QuimeraApp:
         self.auto_summarize_threshold = self.config.auto_summarize_threshold
 
         self.tool_executor = ToolExecutor(
-            config=ToolRuntimeConfig(workspace_root=self.workspace.cwd),
-            approval_handler=ConsoleApprovalHandler(),
+            config=ToolRuntimeConfig(
+                workspace_root=self.workspace.cwd,
+                require_approval_for_mutations=False,
+            ),
+            approval_handler=None,
         )
+        # Set up task executors for autonomous task execution
+        self._setup_task_executors()
 
-    def resolve_agent_response(self, agent: str, response: str | None) -> str | None:
+    def _setup_task_executors(self):
+        """Set up task executors for autonomous task execution."""
+        from .runtime.tasks import approve_task, complete_task, fail_task
+
+        def make_task_handler(agent_name):
+            def task_handler(task_dict):
+                """Handle task execution - delegate to agent via chat."""
+                try:
+                    task_id = task_dict["id"]
+                    body = task_dict.get("body", "")
+                    description = task_dict.get("description", "")
+                    
+                    if not body:
+                        fail_task(task_id, reason="empty body")
+                        return False
+                    
+                    prompt = f"Execute a seguinte tarefa:\n\n{body}"
+                    
+                    response = self.call_agent(
+                        agent_name,
+                        handoff=prompt,
+                        handoff_only=True,
+                        primary=False,
+                        protocol_mode="task_execution",
+                    )
+                    
+                    complete_task(task_id, result=response)
+                    return True
+                except Exception as e:
+                    fail_task(task_dict["id"], reason=str(e))
+                    return False
+            return task_handler
+        
+        self.task_executors = []
+        for agent in self.active_agents:
+            executor = create_executor(agent, make_task_handler(agent))
+            executor.start()
+            self.task_executors.append(executor)
+
+    def resolve_agent_response(self, agent: str, response: str | None, silent: bool = False) -> str | None:
         current_response = response
         max_tool_hops = 8
         tool_history = []
@@ -185,6 +230,7 @@ class QuimeraApp:
                 handoff=followup_handoff,
                 primary=False,
                 protocol_mode="tool_loop",
+                silent=silent,
             )
 
         return "Falha: limite de execuções de ferramenta atingido."
@@ -204,7 +250,7 @@ class QuimeraApp:
         command = user_input.strip()
 
         if command == CMD_HELP:
-            self.renderer.show_system(MSG_HELP)
+            self.renderer.show_system(build_help(self.active_agents))
             return True
 
         if command == CMD_CONTEXT:
@@ -265,7 +311,11 @@ class QuimeraApp:
         stripped = user_input.lstrip()
         lowered = stripped.lower()
 
-        active_plugins = [plugins.get(n) for n in self.active_agents if plugins.get(n)]
+        active_plugins = []
+        for n in self.active_agents:
+            plugin = plugins.get(n)
+            if plugin is not None:
+                active_plugins.append(plugin)
         for p in active_plugins:
             prefix, agent = p.prefix, p.name
             if lowered == prefix:
@@ -304,23 +354,25 @@ class QuimeraApp:
         if not isinstance(payload, dict):
             return False
 
-        for key, value in payload.items():
-            normalized_key = str(key).strip().lower().replace(" ", "_")
-            if not normalized_key:
-                continue
-            current = self.shared_state.get(normalized_key)
-            merged = self._merge_state_value(current, value)
-            if merged is None:
-                self.shared_state.pop(normalized_key, None)
-            else:
-                self.shared_state[normalized_key] = merged
+        with self._lock:
+            for key, value in payload.items():
+                normalized_key = str(key).strip().lower().replace(" ", "_")
+                if not normalized_key:
+                    continue
+                current = self.shared_state.get(normalized_key)
+                merged = self._merge_state_value(current, value)
+                if merged is None:
+                    self.shared_state.pop(normalized_key, None)
+                else:
+                    self.shared_state[normalized_key] = merged
         return True
 
     def call_agent(self, agent, **options):
-        response = self._call_agent(agent, **options)
-        return self.resolve_agent_response(agent, response)
+        silent = options.get("protocol_mode") == "task_execution"
+        response = self._call_agent(agent, silent=silent, **options)
+        return self.resolve_agent_response(agent, response, silent=silent)
 
-    def _call_agent(self, agent, is_first_speaker=False, handoff=None, primary=True, protocol_mode="standard", handoff_only=False):
+    def _call_agent(self, agent, is_first_speaker=False, handoff=None, primary=True, protocol_mode="standard", handoff_only=False, silent=False):
         self.session_call_index += 1
         history = [] if handoff_only else self.history
         if self.debug_prompt_metrics:
@@ -348,7 +400,7 @@ class QuimeraApp:
                 primary=primary, shared_state=self.shared_state,
                 handoff_only=handoff_only,
             )
-        return self.agent_client.call(agent, prompt)
+        return self.agent_client.call(agent, prompt, silent=silent)
 
     def parse_handoff_payload(self, payload):
         if not payload:
@@ -432,16 +484,18 @@ class QuimeraApp:
         _logger.info("merge completed: %d files to %s", total_merged, self.workspace.cwd)
 
     def print_response(self, agent, response):
-        if response is not None:
-            self.renderer.show_message(agent, response)
-        else:
-            self.renderer.show_no_response(agent)
+        with self._lock:
+            if response is not None:
+                self.renderer.show_message(agent, response)
+            else:
+                self.renderer.show_no_response(agent)
 
     def persist_message(self, role, content):
         """Persiste uma mensagem no histórico em memória, log e snapshot JSON."""
-        self.history.append({"role": role, "content": content})
-        self.storage.append_log(role, content)
-        self.storage.save_history(self.history, shared_state=self.shared_state)
+        with self._lock:
+            self.history.append({"role": role, "content": content})
+            self.storage.append_log(role, content)
+            self.storage.save_history(self.history, shared_state=self.shared_state)
 
     def _maybe_auto_summarize(self, preferred_agent=None):
         """Sumariza e trunca o histórico quando excede o threshold configurado."""
@@ -540,7 +594,7 @@ class QuimeraApp:
                 first_agent, message, explicit = self.parse_routing(user)
                 if first_agent is None:
                     continue
-                if not message.strip():
+                if not message or not message.strip():
                     self.renderer.show_warning(MSG_EMPTY_INPUT.format(first_agent))
                     continue
 
@@ -559,7 +613,7 @@ class QuimeraApp:
 
                 # Um handoff emitido pela primeira resposta sempre tem prioridade,
                 # inclusive quando a rodada começou com /claude ou /codex.
-                if route_target:
+                if route_target and handoff:
                     self.renderer.show_handoff(
                         first_agent,
                         route_target,
