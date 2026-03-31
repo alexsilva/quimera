@@ -360,10 +360,32 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn('"goal": "corrigir"', prompt)
         self.assertIn('"decisions": [', prompt)
 
+    def test_prompt_truncates_shared_state_to_last_five_decisions(self):
+        builder = PromptBuilder(DummyContextManager(), history_window=3)
+        history = [{"role": "human", "content": "Pergunta"}]
+        big_state = {
+            "goal": "objetivo",
+            "next_step": "próximo passo",
+            "decisions": [f"d{i}" for i in range(10)],
+            "open_disagreements": ["x" * 200],
+        }
+
+        prompt = builder.build(AGENT_CLAUDE, history, shared_state=big_state)
+
+        # Extrai apenas o bloco ESTADO COMPARTILHADO para verificar o conteúdo truncado
+        state_start = prompt.index("ESTADO COMPARTILHADO:")
+        state_block = prompt[state_start:]
+        self.assertIn('"goal": "objetivo"', state_block)
+        self.assertIn('"next_step": "próximo passo"', state_block)
+        self.assertIn('"d9"', state_block)
+        self.assertNotIn('"d0"', state_block)
+        self.assertNotIn('"open_disagreements"', state_block)
+
     def test_app_builds_explicit_session_state_for_prompt(self):
         class FakeWorkspace:
             def __init__(self, cwd):
                 self.root = Path("/tmp/projeto")
+                self.cwd = cwd
                 self.context_persistent = Path("/tmp/quimera_context.md")
                 self.context_session = Path("/tmp/quimera_session_context.md")
                 self.logs_dir = Path("/tmp/quimera_logs")
@@ -413,6 +435,7 @@ class ProtocolTests(unittest.TestCase):
         class FakeWorkspace:
             def __init__(self, cwd):
                 self.root = Path("/tmp/projeto")
+                self.cwd = cwd
                 self.context_persistent = Path("/tmp/quimera_context.md")
                 self.context_session = Path("/tmp/quimera_session_context.md")
                 self.logs_dir = Path("/tmp/quimera_logs")
@@ -450,6 +473,7 @@ class ProtocolTests(unittest.TestCase):
         class FakeWorkspace:
             def __init__(self, cwd):
                 self.root = Path("/tmp/projeto")
+                self.cwd = cwd
                 self.context_persistent = Path("/tmp/quimera_context.md")
                 self.context_session = Path("/tmp/quimera_session_context.md")
                 self.logs_dir = Path("/tmp/quimera_logs")

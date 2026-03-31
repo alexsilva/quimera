@@ -148,7 +148,7 @@ class QuimeraApp:
                 "Você solicitou uma ferramenta. "
                 "Aqui está o resultado em JSON.\n\n"
                 f"{tool_payload}\n\n"
-                "Use esse resultado para continuar. "
+                "Use esse `MENSAGEM DIRETA DO OUTRO AGENTE[content]` para continuar. "
                 "Se precisar de outra ferramenta, emita novo bloco ```tool```."
             )
 

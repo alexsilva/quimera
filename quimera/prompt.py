@@ -65,7 +65,7 @@ class PromptBuilder:
         handoff_block = PROMPT_HANDOFF.format(handoff=self._format_handoff(handoff)) if handoff else ""
         shared_state_block = ""
         if shared_state:
-            state_lines = json.dumps(shared_state, ensure_ascii=False, indent=2)
+            state_lines = json.dumps(self._trim_shared_state(shared_state), ensure_ascii=False, indent=2)
             shared_state_block = PROMPT_SHARED_STATE.format(state=state_lines)
 
         conversation = "\n".join(
@@ -97,6 +97,16 @@ class PromptBuilder:
             return full_prompt, metrics
 
         return full_prompt
+
+    @staticmethod
+    def _trim_shared_state(state, decisions_tail=5):
+        trimmed = {}
+        for key in ("goal", "next_step"):
+            if key in state:
+                trimmed[key] = state[key]
+        if "decisions" in state:
+            trimmed["decisions"] = state["decisions"][-decisions_tail:]
+        return trimmed
 
     def _format_handoff(self, handoff):
         if isinstance(handoff, dict):

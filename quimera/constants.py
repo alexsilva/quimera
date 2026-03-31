@@ -42,20 +42,16 @@ PROMPT_DEBATE_RULE = (
     "Caso contrário, não inclua nada.\n"
 )
 def build_route_rule(agent_names):
-    examples = "\n".join(
-        f"  [ROUTE:{n}] task: <o que fazer> | context: <contexto mínimo necessário> | expected: <formato da resposta>"
-        for n in agent_names
-    )
     return (
         "- Se quiser delegar uma subtarefa ao outro agente, inclua em uma nova linha:\n"
-        f"{examples}\n"
+        "  [ROUTE:agente] task: <o que fazer> | context: <contexto mínimo necessário> | expected: <formato da resposta>\n"
         "- Use [ROUTE:...] somente quando a subtarefa exigir habilidade diferente da sua ou "
         "quando dividir o trabalho resultar em resposta melhor ao humano. "
         "Não delegue por hábito — delegue quando fizer sentido.\n"
         "- O agente que recebe o handoff não tem acesso ao histórico completo, "
         "apenas ao payload do [ROUTE:...]. Inclua tudo que ele precisa no campo context.\n"
         "- Só um [ROUTE:...] por rodada. Esse comando é interno e não será exibido ao humano.\n"
-        "- Quando precisar usar uma ferramenta, responda apenas com um bloco:\n"
+        "- 'tool' permite executar processos do sistema, como a seguir:\n"
         "  ```tool\n"
         '  {"name": "<tool_name>", "arguments": {...}}\n'
         "  ```\n"
@@ -82,12 +78,12 @@ HANDOFF_SYNTHESIS_MSG = (
 )
 PROMPT_SHARED_STATE = "ESTADO COMPARTILHADO:\n{state}"
 PROMPT_STATE_UPDATE_RULE = (
-    "- Se houver decisão nova, discordância ou mudança de objetivo, inclua ao final da resposta um único bloco JSON válido:\n"
+    "- Se houver decisão nova, discordância ou mudança de objetivo, inclua ao final da resposta:\n"
     "[STATE_UPDATE]\n"
-    f"{STATE_UPDATE_EXAMPLE}\n"
+    '{"goal": "...", "decisions": [...], "open_disagreements": [...], "next_step": "..."}\n'
     "[/STATE_UPDATE]\n"
-    "- Se também precisar pedir algo ao outro agente, coloque qualquer linha [ROUTE:...] fora desse bloco.\n"
-    f"- Se também precisar sinalizar debate estendido, coloque {EXTEND_MARKER} depois de [/STATE_UPDATE].\n"
+    "- Coloque qualquer [ROUTE:...] fora desse bloco. "
+    f"Coloque {EXTEND_MARKER} depois de [/STATE_UPDATE] se aplicável. "
     "Esse bloco é interno e não será exibido ao humano.\n"
 )
 PROMPT_REVIEWER_RULE = (
