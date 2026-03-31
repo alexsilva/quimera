@@ -6,6 +6,7 @@ from pathlib import Path
 
 from .app import QuimeraApp
 from .config import ConfigManager
+from . import plugins as _plugins
 
 
 def main():
@@ -24,6 +25,12 @@ def main():
     parser.add_argument("--whoami", action="store_true")
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--history-window", type=int, default=None)
+    parser.add_argument(
+        "--agents",
+        metavar="AGENTES",
+        default="claude",
+        help="Lista de agentes separada por vírgula (ex: claude,codex). O primeiro é o agente padrão.",
+    )
     args, _ = parser.parse_known_args()
 
     config = ConfigManager()
@@ -40,6 +47,14 @@ def main():
     if args.history_window is not None and args.history_window <= 0:
         parser.error("--history-window deve ser maior que zero")
 
+    requested = [a.strip().lower() for a in args.agents.split(",") if a.strip()]
+    if not requested:
+        parser.error("--agents requer ao menos um agente")
+    available = _plugins.all_names()
+    unknown = [a for a in requested if a not in available]
+    if unknown:
+        parser.error(f"Agente(s) desconhecido(s): {', '.join(unknown)}. Disponíveis: {', '.join(available)}")
+
     debug = args.debug or os.getenv("QUIMERA_DEBUG", "").strip().lower() in {"1", "true", "yes", "on"}
-    app = QuimeraApp(Path.cwd(), debug=debug, history_window=args.history_window)
+    app = QuimeraApp(Path.cwd(), debug=debug, history_window=args.history_window, agents=requested)
     app.run()

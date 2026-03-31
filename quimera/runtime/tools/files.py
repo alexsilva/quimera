@@ -11,7 +11,8 @@ class FileTools:
         self.config = config
 
     def _resolve(self, raw_path: str) -> Path:
-        path = (self.config.workspace_root / raw_path).resolve()
+        normalized = raw_path.lstrip("/") or "."
+        path = (self.config.workspace_root / normalized).resolve()
         if not str(path).startswith(str(self.config.workspace_root)):
             raise ValueError(f"Path fora da workspace: {raw_path}")
         return path

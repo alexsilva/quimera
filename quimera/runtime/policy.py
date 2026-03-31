@@ -73,7 +73,8 @@ class ToolPolicy:
             raise ToolPolicyError(f"Comando fora da allowlist: {first_token}")
 
     def _resolve_workspace_path(self, raw_path: str) -> Path:
-        path = (self.config.workspace_root / raw_path).resolve()
+        normalized = raw_path.lstrip("/") or "."
+        path = (self.config.workspace_root / normalized).resolve()
         if not str(path).startswith(str(self.config.workspace_root)):
             raise ToolPolicyError(f"Path fora da workspace: {raw_path}")
         return path

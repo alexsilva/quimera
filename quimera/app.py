@@ -24,7 +24,6 @@ from .constants import (
     ROUTE_PREFIX,
     STATE_UPDATE_START, STATE_UPDATE_END,
     CMD_EXIT, CMD_HELP, CMD_CONTEXT, CMD_CONTEXT_EDIT, CMD_EDIT, CMD_FILE_PREFIX,
-    DEFAULT_FIRST_AGENT,
     USER_ROLE, INPUT_PROMPT,
     MSG_CHAT_STARTED, MSG_SESSION_LOG, MSG_SESSION_STATUS, MSG_HELP, MSG_MIGRATION,
     MSG_MEMORY_SAVING, MSG_MEMORY_FAILED, MSG_SHUTDOWN,
@@ -35,7 +34,6 @@ from .constants import (
 
 class QuimeraApp:
     """Orquestra comandos locais, roteamento entre agentes e ciclo da sessão."""
-    ROUTE_PATTERN = re.compile(rf"(?m)^\[ROUTE:({'|'.join(plugins.all_names())})\]\s*(.+?)\s*$")
     HANDOFF_PAYLOAD_PATTERN = re.compile(
         r"^\s*task:\s*(.*?)\s*\|\s*context:\s*(.*?)\s*\|\s*expected:\s*(.*?)\s*$",
         re.IGNORECASE | re.DOTALL,
@@ -65,7 +63,11 @@ class QuimeraApp:
             result.append(normalized)
         return result
 
-    def __init__(self, cwd: Path, debug: bool = False, history_window: int | None = None):
+    def __init__(self, cwd: Path, debug: bool = False, history_window: int | None = None, agents: list | None = None):
+        self.active_agents = agents or ["claude"]
+        self.ROUTE_PATTERN = re.compile(
+            rf"(?m)^\[ROUTE:({'|'.join(self.active_agents)})\]\s*(.+?)\s*$"
+        )
         self.renderer = TerminalRenderer()
         self.config = ConfigManager()
         self.user_name = self.config.user_name
@@ -86,9 +88,9 @@ class QuimeraApp:
         self.agent_client = AgentClient(self.renderer, metrics_file=metrics_file)
         self.session_summarizer = SessionSummarizer(
             self.renderer,
-            summarizer_call=build_chain_summarizer(self.agent_client, plugins.all_names()),
+            summarizer_call=build_chain_summarizer(self.agent_client, self.active_agents),
         )
-        self.summary_agent_preference = DEFAULT_FIRST_AGENT
+        self.summary_agent_preference = self.active_agents[0]
         last_session = self.storage.load_last_session()
         self.history = last_session["messages"]
         session_context = self.context_manager.load_session()
@@ -273,20 +275,21 @@ class QuimeraApp:
         stripped = user_input.lstrip()
         lowered = stripped.lower()
 
-        for p in plugins.all_plugins():
+        active_plugins = [plugins.get(n) for n in self.active_agents if plugins.get(n)]
+        for p in active_plugins:
             prefix, agent = p.prefix, p.name
             if lowered == prefix:
                 return agent, "", True
             if lowered.startswith(f"{prefix} "):
                 message = stripped[len(prefix):].lstrip()
                 lowered_message = message.lower()
-                other_prefixes = [op.prefix for op in plugins.all_plugins() if op.prefix != prefix]
+                other_prefixes = [op.prefix for op in active_plugins if op.prefix != prefix]
                 if any(lowered_message == op or lowered_message.startswith(f"{op} ") for op in other_prefixes):
                     self.renderer.show_warning(MSG_DOUBLE_PREFIX)
                     return None, None, False
                 return agent, message, True
 
-        return DEFAULT_FIRST_AGENT, user_input, False
+        return self.active_agents[0], user_input, False
 
     @staticmethod
     def _merge_state_value(current, incoming):
@@ -432,7 +435,7 @@ class QuimeraApp:
         summary_agent_preference = preferred_agent or getattr(
             self,
             "summary_agent_preference",
-            DEFAULT_FIRST_AGENT,
+            self.active_agents[0],
         )
         summary = self.session_summarizer.summarize(
             to_summarize,
@@ -459,7 +462,7 @@ class QuimeraApp:
         summary = self.session_summarizer.summarize(
             self.history,
             existing_summary=self.context_manager.load_session_summary(),
-            preferred_agent=getattr(self, "summary_agent_preference", DEFAULT_FIRST_AGENT),
+            preferred_agent=getattr(self, "summary_agent_preference", self.active_agents[0]),
         )
         if summary:
             self.context_manager.update_with_summary(summary)
@@ -508,7 +511,7 @@ class QuimeraApp:
                     self.renderer.show_warning(MSG_EMPTY_INPUT.format(first_agent))
                     continue
 
-                other_agents = [n for n in plugins.all_names() if n != first_agent]
+                other_agents = [n for n in self.active_agents if n != first_agent]
 
                 self.round_index += 1
                 self.summary_agent_preference = first_agent
