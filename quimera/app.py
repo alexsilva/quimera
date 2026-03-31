@@ -1,10 +1,11 @@
 import json
-import locale
+import logging
 import os
 import re
+import shutil
 import subprocess
-import sys
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 try:
@@ -22,20 +23,25 @@ from .storage import SessionStorage
 from .agents import AgentClient
 from .session_summary import SessionSummarizer, build_chain_summarizer
 from .prompt import PromptBuilder
-from .workspace import Workspace, QUIMERA_BASE
+from .workspace import Workspace
 from .config import ConfigManager
 from . import plugins
 from .constants import (
     EXTEND_MARKER,
     ROUTE_PREFIX,
-    STATE_UPDATE_START, STATE_UPDATE_END,
-    CMD_EXIT, CMD_HELP, CMD_CONTEXT, CMD_CONTEXT_EDIT, CMD_EDIT, CMD_FILE_PREFIX,
-    USER_ROLE, INPUT_PROMPT,
-    MSG_CHAT_STARTED, MSG_SESSION_LOG, MSG_SESSION_STATUS, MSG_HELP, MSG_MIGRATION,
+    STATE_UPDATE_START, CMD_EXIT, CMD_HELP, CMD_CONTEXT, CMD_CONTEXT_EDIT, CMD_EDIT, CMD_FILE_PREFIX,
+    USER_ROLE, MSG_CHAT_STARTED, MSG_SESSION_LOG, MSG_SESSION_STATUS, MSG_HELP, MSG_MIGRATION,
     MSG_MEMORY_SAVING, MSG_MEMORY_FAILED, MSG_SHUTDOWN,
     MSG_DOUBLE_PREFIX, MSG_EMPTY_INPUT,
     HANDOFF_SYNTHESIS_MSG,
 )
+
+_logger = logging.getLogger("quimera.staging")
+if not _logger.handlers and not logging.getLogger().handlers:
+    _logger.setLevel(logging.DEBUG)
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+    _logger.addHandler(handler)
 
 
 class QuimeraApp:
@@ -70,8 +76,9 @@ class QuimeraApp:
             result.append(normalized)
         return result
 
-    def __init__(self, cwd: Path, debug: bool = False, history_window: int | None = None, agents: list | None = None):
+    def __init__(self, cwd: Path, debug: bool = False, history_window: int | None = None, agents: list | None = None, threads: int = 1):
         self.active_agents = agents or ["claude"]
+        self.threads = int(threads) if threads is not None else 1
         self.ROUTE_PATTERN = re.compile(
             rf"(?m)^\[ROUTE:({'|'.join(self.active_agents)})\]\s*(.+?)\s*$"
         )
@@ -212,7 +219,8 @@ class QuimeraApp:
 
     def read_from_editor(self):
         """Abre $EDITOR num arquivo temporário e retorna o conteúdo digitado."""
-        import shlex, shutil
+        import shlex
+        import shutil
         editor_env = os.environ.get("EDITOR", "")
         if editor_env:
             editor_parts = shlex.split(editor_env)
@@ -385,6 +393,43 @@ class QuimeraApp:
             response = response.rstrip()[: -len(EXTEND_MARKER)].rstrip()
 
         return response, route_target, handoff, extend
+
+    def _call_agent_for_parallel(self, agent, handoff, protocol_mode, staging_root, index):
+        """Executa call_agent e retorna tupla (agent, response, route_target, handoff, extend)."""
+        from .runtime.tools.files import set_staging_root
+        
+        set_staging_root(staging_root / str(index))
+        try:
+            raw = self.call_agent(agent, handoff=handoff, primary=False, protocol_mode=protocol_mode)
+            response, route_target, handoff, extend = self.parse_response(raw)
+            return agent, response, route_target, handoff, extend
+        finally:
+            set_staging_root(None)
+
+    def _merge_staging_to_workspace(self, staging_root: Path):
+        """Mescla arquivos do staging para o workspace em ordem de índice."""
+        
+        if not staging_root.exists():
+            _logger.debug("merge: staging_root does not exist, skipping")
+            return
+        
+        index_dirs = sorted(staging_root.iterdir(), key=lambda p: int(p.name) if p.name.isdigit() else 999)
+        total_merged = 0
+        
+        for index_dir in index_dirs:
+            if not index_dir.is_dir():
+                continue
+            for src in index_dir.rglob("*"):
+                if not src.is_file():
+                    continue
+                rel_path = src.relative_to(index_dir)
+                dest = self.workspace.cwd / rel_path
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dest)
+                total_merged += 1
+                _logger.debug("merged: %s -> %s", src, dest)
+        
+        _logger.info("merge completed: %d files to %s", total_merged, self.workspace.cwd)
 
     def print_response(self, agent, response):
         if response is not None:
@@ -564,17 +609,47 @@ class QuimeraApp:
                         remaining = other_agents
 
                     next_handoff = None
-                    for index, agent in enumerate(remaining):
-                        response = self.call_agent(agent, handoff=next_handoff, primary=False, protocol_mode=protocol_mode)
-                        next_handoff = None
-                        response, route_target, handoff, _ = self.parse_response(response)
-                        self.print_response(agent, response)
-                        if response is not None:
-                            self.persist_message(agent, response)
-                        if route_target and index + 1 < len(remaining):
-                            remaining[index + 1] = route_target
-                        if route_target:
-                            next_handoff = handoff
+                    if self.threads > 1 and len(remaining) > 1:
+                        # Modo paralelo: executar agentes em paralelo
+                        staging_root = Path(tempfile.gettempdir()) / "quimera-staging" / f"{self.session_state['session_id']}-round{self.round_index}"
+                        staging_root.mkdir(parents=True, exist_ok=True)
+                        _logger.info("parallel mode: %d threads, staging=%s", self.threads, staging_root)
+                        try:
+                            with ThreadPoolExecutor(max_workers=self.threads) as executor:
+                                # Criar lista de (agent, handoff, staging_dir, index)
+                                agent_handoff_pairs = [(agent, None, staging_root, i) for i, agent in enumerate(remaining)]
+                                # Executar em paralelo
+                                futures = [executor.submit(self._call_agent_for_parallel, agent, handoff, protocol_mode, staging_dir, idx) 
+                                           for agent, handoff, staging_dir, idx in agent_handoff_pairs]
+                                results = [f.result() for f in futures]
+                            # Merge ordenado para o workspace
+                            self._merge_staging_to_workspace(staging_root)
+                            # Processar resultados na ordem original
+                            for agent, response, route_target, handoff, extend in results:
+                                self.print_response(agent, response)
+                                if response is not None:
+                                    self.persist_message(agent, response)
+                            # Nota: route_target e handoff podem ser ignorados no modo paralelo
+                        except Exception as exc:
+                            _logger.exception("parallel stage failed: %s", exc)
+                            raise
+                        finally:
+                            if staging_root.exists():
+                                shutil.rmtree(staging_root)
+                                _logger.info("staging cleanup: %s removed", staging_root)
+                    else:
+                        # Modo sequencial (original)
+                        for index, agent in enumerate(remaining):
+                            response = self.call_agent(agent, handoff=next_handoff, primary=False, protocol_mode=protocol_mode)
+                            next_handoff = None
+                            response, route_target, handoff, _ = self.parse_response(response)
+                            self.print_response(agent, response)
+                            if response is not None:
+                                self.persist_message(agent, response)
+                            if route_target and index + 1 < len(remaining):
+                                remaining[index + 1] = route_target
+                            if route_target:
+                                next_handoff = handoff
 
                 self._maybe_auto_summarize(preferred_agent=first_agent)
         except KeyboardInterrupt:

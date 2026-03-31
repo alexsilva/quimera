@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 import time
+import warnings
 
 from ..config import ToolRuntimeConfig
 from ..models import ToolCall, ToolResult
@@ -13,6 +14,17 @@ class ShellTool:
         self.config = config
 
     def run_shell(self, call: ToolCall) -> ToolResult:
+        from .files import get_staging_root
+        
+        staging = get_staging_root()
+        if staging:
+            warnings.warn(
+                f"run_shell called in parallel mode with staging - cwd={self.config.workspace_root}, "
+                f"staging={staging}. Shell writes bypass staging isolation.",
+                UserWarning,
+                stacklevel=2,
+            )
+        
         command = str(call.arguments["command"])
         started = time.perf_counter()
         proc = subprocess.run(

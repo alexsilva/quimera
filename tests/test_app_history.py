@@ -34,7 +34,7 @@ class TestAppHistory(unittest.TestCase):
             
             with patch.object(Path, 'exists', return_value=True):
                 from quimera.app import QuimeraApp
-                app = QuimeraApp(self.tmp_cwd)
+                QuimeraApp(self.tmp_cwd)
                 
                 mock_readline.read_history_file.assert_called_with(str(self.history_file))
                 mock_readline.set_history_length.assert_called_with(1000)

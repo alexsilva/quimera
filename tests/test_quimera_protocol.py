@@ -9,13 +9,13 @@ from quimera.app import QuimeraApp
 from quimera.cli import main as cli_main
 from quimera.config import DEFAULT_HISTORY_WINDOW
 from quimera.constants import CMD_HELP, EXTEND_MARKER, MSG_HELP
-
-AGENT_CLAUDE = "claude"
-AGENT_CODEX = "codex"
 from quimera.plugins import AgentPlugin
 from quimera.prompt import PromptBuilder
 from quimera.session_summary import SessionSummarizer
 from quimera.ui import _agent_style
+
+AGENT_CLAUDE = "claude"
+AGENT_CODEX = "codex"
 
 
 class DummyRenderer:
@@ -35,7 +35,12 @@ class DummyRenderer:
 
 
 class DummyContextManager:
+    SUMMARY_MARKER = "<SUMMARY>"
+    def __init__(self, *args, **kwargs):
+        pass
     def load(self):
+        return ""
+    def load_session(self):
         return ""
 
 
@@ -47,6 +52,8 @@ class DummyConfigManager:
 
 
 class DummyStorage:
+    def __init__(self, *args, **kwargs):
+        pass
     def append_log(self, role, content):
         self.last_log = (role, content)
 
@@ -59,6 +66,9 @@ class DummyStorage:
     def save_history(self, history, shared_state=None):
         self.saved_history = history
         self.saved_shared_state = shared_state
+
+    def load_last_session(self):
+        return {"messages": [], "shared_state": {}}
 
 
 class ProtocolTests(unittest.TestCase):
@@ -532,6 +542,7 @@ class ProtocolTests(unittest.TestCase):
         printed = []
 
         app.active_agents = list(plugins.all_names())
+        app.threads = 1
         app.handle_command = lambda user: False
         app.parse_routing = lambda user: (AGENT_CLAUDE, "oi", False)
         app.parse_response = QuimeraApp.parse_response.__get__(app, QuimeraApp)
@@ -579,6 +590,7 @@ class ProtocolTests(unittest.TestCase):
         printed = []
 
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
+        app.threads = 1
         app.handle_command = lambda user: False
         app.parse_routing = lambda user: (AGENT_CLAUDE, "oi", False)
         app.parse_response = QuimeraApp.parse_response.__get__(app, QuimeraApp)
@@ -641,6 +653,7 @@ class ProtocolTests(unittest.TestCase):
         calls = []
 
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
+        app.threads = 1
         app.handle_command = lambda user: False
         app.parse_routing = lambda user: (AGENT_CLAUDE, "oi", False)
         app.parse_response = QuimeraApp.parse_response.__get__(app, QuimeraApp)
@@ -742,6 +755,7 @@ class ProtocolTests(unittest.TestCase):
         calls = []
 
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
+        app.threads = 1
         app.handle_command = lambda user: False
         app.parse_routing = lambda user: (AGENT_CLAUDE, "oi", True)
         app.parse_response = QuimeraApp.parse_response.__get__(app, QuimeraApp)
@@ -1055,6 +1069,49 @@ class PluginTests(unittest.TestCase):
             plugins.register(novo)
             self.assertEqual(plugins.all_names(), ["novo"])
             self.assertEqual(plugins.all_plugins(), [novo])
+
+    def test_parallel_threads_initializes_correctly(self):
+        app = QuimeraApp(Path("/tmp"), debug=False, history_window=10, agents=["agent1", "agent2"], threads=3)
+        self.assertEqual(app.threads, 3)
+        self.assertIn("agent1", app.active_agents)
+        self.assertIn("agent2", app.active_agents)
+        self.assertTrue(hasattr(app, "_call_agent_for_parallel"))
+
+    def test_parallel_threads_calls_agents_concurrently(self):
+        # Testa que o método _call_agent_for_parallel retorna tupla correta
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.threads = 2
+        app.active_agents = ["agent1", "agent2"]
+        app.debug_prompt_metrics = False
+        app.session_call_index = 0
+        app.prompt_builder = Mock()
+        app.prompt_builder.build.return_value = "dummy prompt"
+        app.agent_client = Mock()
+        app.agent_client.call.return_value = "Resposta mock"
+        app.tool_executor = Mock()
+        app.tool_executor.maybe_execute_from_response.return_value = ("Resposta mock", None)
+        app.history = []
+        app.shared_state = {}
+        app.renderer = Mock()
+        app.storage = Mock()
+        app.context_manager = Mock()
+        app.session_state = {"session_id": "test"}
+        app.round_index = 0
+        app.summary_agent_preference = None
+        app.parse_response = QuimeraApp.parse_response.__get__(app, QuimeraApp)
+        app._maybe_auto_summarize = lambda preferred_agent=None: None
+
+        from pathlib import Path
+        import tempfile
+        staging_root = Path(tempfile.gettempdir()) / "quimera-test-staging"
+        staging_root.mkdir(parents=True, exist_ok=True)
+        
+        agent, response, route_target, handoff, extend = app._call_agent_for_parallel("agent1", None, "standard", staging_root, 0)
+        self.assertEqual(agent, "agent1")
+        self.assertEqual(response, "Resposta mock")
+        self.assertIsNone(route_target)
+        self.assertIsNone(handoff)
+        self.assertFalse(extend)
 
 
 if __name__ == "__main__":

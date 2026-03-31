@@ -2,12 +2,12 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from quimera.runtime.approval import ApprovalHandler
 from quimera.runtime.config import ToolRuntimeConfig
 from quimera.runtime.executor import ToolExecutor
-from quimera.runtime.models import ToolCall, ToolResult
+from quimera.runtime.models import ToolCall
 from quimera.runtime.parser import ToolCallParseError, extract_tool_call, strip_tool_block
 from quimera.runtime.policy import ToolPolicy, ToolPolicyError
 
