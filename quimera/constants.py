@@ -33,24 +33,29 @@ PROMPT_BASE_RULES = (
     "- Pode discordar\n"
     "- Pode comentar respostas anteriores\n"
     "- Seja direto\n"
-    "- Ao referenciar arquivos, use o formato `/caminho/absoluto/arquivo:linha` em uma linha própria\n"
+    "- A convenção deste projeto para referenciar arquivos é `/caminho/absoluto/arquivo:linha` "
+    "em uma linha própria — use esse formato ao mencionar qualquer arquivo do projeto\n"
 )
 PROMPT_DEBATE_RULE = (
     "- Se o tópico exigir debate mais aprofundado entre os agentes, "
     "inclua {marker} ao final da sua resposta (sem explicação). "
     "Caso contrário, não inclua nada.\n"
 )
-PROMPT_ROUTE_RULE = (
-    "- Se quiser delegar uma subtarefa ao outro agente, inclua em uma nova linha:\n"
-    "  [ROUTE:claude] task: <o que fazer> | context: <contexto mínimo necessário> | expected: <formato da resposta>\n"
-    "  ou [ROUTE:codex] task: <o que fazer> | context: <contexto mínimo necessário> | expected: <formato da resposta>\n"
-    "- Use [ROUTE:...] somente quando a subtarefa exigir habilidade diferente da sua ou "
-    "quando dividir o trabalho resultar em resposta melhor ao humano. "
-    "Não delegue por hábito — delegue quando fizer sentido.\n"
-    "- O agente que recebe o handoff não tem acesso ao histórico completo, "
-    "apenas ao payload do [ROUTE:...]. Inclua tudo que ele precisa no campo context.\n"
-    "- Só um [ROUTE:...] por rodada. Esse comando é interno e não será exibido ao humano.\n"
-)
+def build_route_rule(agent_names):
+    examples = "\n".join(
+        f"  [ROUTE:{n}] task: <o que fazer> | context: <contexto mínimo necessário> | expected: <formato da resposta>"
+        for n in agent_names
+    )
+    return (
+        "- Se quiser delegar uma subtarefa ao outro agente, inclua em uma nova linha:\n"
+        f"{examples}\n"
+        "- Use [ROUTE:...] somente quando a subtarefa exigir habilidade diferente da sua ou "
+        "quando dividir o trabalho resultar em resposta melhor ao humano. "
+        "Não delegue por hábito — delegue quando fizer sentido.\n"
+        "- O agente que recebe o handoff não tem acesso ao histórico completo, "
+        "apenas ao payload do [ROUTE:...]. Inclua tudo que ele precisa no campo context.\n"
+        "- Só um [ROUTE:...] por rodada. Esse comando é interno e não será exibido ao humano.\n"
+    )
 PROMPT_SESSION_STATE = (
     "ESTADO DA SESSÃO:\n"
     "- SESSÃO ATUAL: {session_id}\n"

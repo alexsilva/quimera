@@ -1,5 +1,6 @@
 import json
 
+from . import plugins
 from .constants import (
     EXTEND_MARKER,
     PROMPT_HEADER,
@@ -8,7 +9,7 @@ from .constants import (
     PROMPT_SPEAKER,
     PROMPT_BASE_RULES,
     PROMPT_DEBATE_RULE,
-    PROMPT_ROUTE_RULE,
+    build_route_rule,
     PROMPT_SESSION_STATE,
     PROMPT_HANDOFF,
     PROMPT_SHARED_STATE,
@@ -50,14 +51,14 @@ class PromptBuilder:
         if handoff_only:
             rules += PROMPT_HANDOFF_RULE
         else:
-            rules += PROMPT_ROUTE_RULE
+            rules += build_route_rule(plugins.all_names())
             rules += PROMPT_STATE_UPDATE_RULE
             if is_first_speaker:
                 rules += PROMPT_DEBATE_RULE.format(marker=EXTEND_MARKER)
             else:
                 rules += PROMPT_REVIEWER_RULE
 
-        participants = f"- {self.user_name.upper()}\n- CLAUDE\n- CODEX\n"
+        participants = f"- {self.user_name.upper()}\n" + "".join(f"- {n.upper()}\n" for n in plugins.all_names())
         header_block = PROMPT_HEADER.format(agent=agent.upper(), participants=participants)
         session_block = PROMPT_SESSION_STATE.format(**self.session_state) if (self.session_state and primary) else ""
         context_block = PROMPT_CONTEXT.format(context=context) if context else ""

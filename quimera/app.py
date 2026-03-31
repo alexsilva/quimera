@@ -32,7 +32,7 @@ from .constants import (
 
 class QuimeraApp:
     """Orquestra comandos locais, roteamento entre agentes e ciclo da sessão."""
-    ROUTE_PATTERN = re.compile(r"(?m)^\[ROUTE:(claude|codex)\]\s*(.+?)\s*$")
+    ROUTE_PATTERN = re.compile(rf"(?m)^\[ROUTE:({'|'.join(plugins.all_names())})\]\s*(.+?)\s*$")
     HANDOFF_PAYLOAD_PATTERN = re.compile(
         r"^\s*task:\s*(.*?)\s*\|\s*context:\s*(.*?)\s*\|\s*expected:\s*(.*?)\s*$",
         re.IGNORECASE | re.DOTALL,
@@ -459,7 +459,7 @@ class QuimeraApp:
                     self.renderer.show_warning(MSG_EMPTY_INPUT.format(first_agent))
                     continue
 
-                second_agent = next(n for n in plugins.all_names() if n != first_agent)
+                other_agents = [n for n in plugins.all_names() if n != first_agent]
 
                 self.round_index += 1
                 self.summary_agent_preference = first_agent
@@ -519,9 +519,9 @@ class QuimeraApp:
                     if explicit:
                         remaining = []
                     elif extend:
-                        remaining = [second_agent, first_agent, second_agent]
+                        remaining = [other_agents[0], first_agent, other_agents[0]] if other_agents else []
                     else:
-                        remaining = [second_agent]
+                        remaining = other_agents
 
                     next_handoff = None
                     for index, agent in enumerate(remaining):
