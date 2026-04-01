@@ -355,6 +355,10 @@ class QuimeraApp:
                     return None, None, False
                 return agent, message, True
 
+        if not self.active_agents:
+            _logger.warning("no active agents, resetting to default")
+            self.active_agents = ["claude"]
+            self._rebuild_route_pattern()
         return self.active_agents[0], user_input, False
 
     @staticmethod
