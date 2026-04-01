@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import queue
+import re
 import subprocess
 import threading
 import time
@@ -11,6 +12,13 @@ import quimera.plugins as plugins
 from quimera.constants import MAX_STDERR_LINES
 
 _logger = logging.getLogger(__name__)
+
+_BRALLE_RANGE = re.compile(r'[\u2800-\u28FF]')
+
+
+def _strip_spinner(text: str) -> str:
+    """Remove caracteres Braille de spinner do texto."""
+    return _BRALLE_RANGE.sub('', text)
 
 
 class AgentClient:
@@ -104,15 +112,18 @@ class AgentClient:
                             if status is not None:
                                 status.update(f"[dim]executing {cmd[0]}... {elapsed}s[/dim]")
                             # Limita o número de linhas de stderr exibidas
+                            cleaned = _strip_spinner(line.rstrip("\n"))
+                            if not cleaned.strip():
+                                continue
                             if stream_type == "stderr":
                                 if stderr_lines_shown < MAX_STDERR_LINES:
-                                    self.renderer.show_plain(line.rstrip("\n"), agent=agent)
+                                    self.renderer.show_plain(cleaned, agent=agent)
                                     stderr_lines_shown += 1
                                 elif stderr_lines_shown == MAX_STDERR_LINES:
                                     self.renderer.show_plain(f"... (stderr truncado, máximo {MAX_STDERR_LINES} linhas)", agent=agent)
                                     stderr_lines_shown += 1
                             else:
-                                self.renderer.show_plain(line.rstrip("\n"), agent=agent)
+                                self.renderer.show_plain(cleaned, agent=agent)
                         except queue.Empty:
                             break
                     if status is not None:
@@ -132,16 +143,19 @@ class AgentClient:
             while not log_queue.empty():
                 try:
                     stream_type, line = log_queue.get_nowait()
+                    cleaned = _strip_spinner(line.rstrip("\n"))
+                    if not cleaned.strip():
+                        continue
                     # Limita o número de linhas de stderr exibidas
                     if stream_type == "stderr":
                         if stderr_lines_shown < MAX_STDERR_LINES:
-                            self.renderer.show_plain(line.rstrip("\n"), agent=agent)
+                            self.renderer.show_plain(cleaned, agent=agent)
                             stderr_lines_shown += 1
                         elif stderr_lines_shown == MAX_STDERR_LINES:
                             self.renderer.show_plain(f"... (stderr truncado, máximo {MAX_STDERR_LINES} linhas)")
                             stderr_lines_shown += 1
                     else:
-                        self.renderer.show_plain(line.rstrip("\n"), agent=agent)
+                        self.renderer.show_plain(cleaned, agent=agent)
                 except queue.Empty:
                     break
 
@@ -155,7 +169,7 @@ class AgentClient:
         error = "".join(result_holder["stderr"]).strip()
 
         if proc.returncode != 0:
-            self.renderer.show_error(f"[erro] {' '.join(cmd)} retornou código {proc.returncode}")
+            self.renderer.show_error(f"[erro] agente {cmd[0]} retornou código {proc.returncode}")
             # Só mostra o tail se já não excedemos o limite durante o streaming
             if error and stderr_lines_shown <= MAX_STDERR_LINES:
                 tail_lines = error.splitlines()[-5:]  # Últimas 5 linhas
@@ -165,7 +179,7 @@ class AgentClient:
 
         if not output:
             if error:
-                self.renderer.show_error(f"[erro] {' '.join(cmd)} não retornou saída válida")
+                self.renderer.show_error(f"[erro] agente {cmd[0]} não retornou saída válida")
                 # Só mostra o tail se já não excedemos o limite durante o streaming
                 if stderr_lines_shown <= MAX_STDERR_LINES:
                     tail_lines = error.splitlines()[-5:]  # Últimas 5 linhas
