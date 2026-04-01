@@ -24,54 +24,79 @@ class AgentClient:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                bufsize=1,
             )
         except OSError as exc:
             self.renderer.show_error(f"[erro] não foi possível iniciar {cmd[0]}: {exc}")
             return None
 
-        result_holder = {}
+        result_holder = {"stdout": [], "stderr": [], "error": None}
+        last_activity_time = time.time()
 
-        def _communicate():
+        def _read_stdout():
             try:
-                result_holder["stdout"], result_holder["stderr"] = proc.communicate(input=input_text)
+                if proc.stdout:
+                    for line in proc.stdout:
+                        result_holder["stdout"].append(line)
+                        nonlocal last_activity_time
+                        last_activity_time = time.time()
             except Exception as exc:
                 result_holder["error"] = exc
 
-        thread = threading.Thread(target=_communicate, daemon=True)
-        thread.start()
+        def _read_stderr():
+            try:
+                if proc.stderr:
+                    for line in proc.stderr:
+                        result_holder["stderr"].append(line)
+                        nonlocal last_activity_time
+                        last_activity_time = time.time()
+            except Exception as exc:
+                result_holder["error"] = exc
 
-        # Enforce configurable timeout if provided
-        if self.timeout is not None:
-            thread.join(self.timeout)
-            if thread.is_alive():
-                try:
-                    proc.terminate()
-                    thread.join(2)
-                except Exception:
-                    pass
-                self.renderer.show_error(f"[erro] timeout after {self.timeout}s executing {cmd[0]}")
-                return None
+        stdout_thread = threading.Thread(target=_read_stdout, daemon=True)
+        stderr_thread = threading.Thread(target=_read_stderr, daemon=True)
+        stdout_thread.start()
+        stderr_thread.start()
+
+        try:
+            if input_text and proc.stdin:
+                proc.stdin.write(input_text)
+            if proc.stdin:
+                proc.stdin.close()
+        except Exception as exc:
+            self.renderer.show_error(f"[erro] falha ao enviar input para {cmd[0]}: {exc}")
+            proc.kill()
+            return None
 
         if silent:
-            thread.join()
+            stdout_thread.join()
+            stderr_thread.join()
         else:
             elapsed = 0
             with self.renderer.running_status("") as status:
-                while thread.is_alive():
+                while stdout_thread.is_alive() or stderr_thread.is_alive():
                     if status is not None:
                         status.update(f"[dim]{cmd[0]}... {elapsed}s[/dim]")
                     time.sleep(1)
                     elapsed += 1
-            thread.join()
-        
+                    if self.timeout is not None and self.timeout > 0:
+                        if time.time() - last_activity_time > self.timeout:
+                            proc.terminate()
+                            stdout_thread.join(2)
+                            stderr_thread.join(2)
+                            self.renderer.show_error(f"[erro] timeout after {self.timeout}s without output from {cmd[0]}")
+                            return None
+            stdout_thread.join()
+            stderr_thread.join()
+
         proc.wait()
 
-        if "error" in result_holder:
+        if result_holder["error"]:
             self.renderer.show_error(f"[erro] falha ao comunicar com {cmd[0]}: {result_holder['error']}")
             return None
 
-        output = result_holder.get("stdout", "").strip()
-        error = result_holder.get("stderr", "").strip()
+        output = "".join(result_holder["stdout"]).strip()
+        error = "".join(result_holder["stderr"]).strip()
 
         if proc.returncode != 0:
             self.renderer.show_error(f"[erro] {' '.join(cmd)} retornou código {proc.returncode}")
