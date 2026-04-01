@@ -31,6 +31,7 @@ from . import plugins
 from .constants import (
     build_help,
     EXTEND_MARKER,
+    NEEDS_INPUT_MARKER,
     ROUTE_PREFIX,
     STATE_UPDATE_START, CMD_EXIT, CMD_HELP, CMD_CONTEXT, CMD_CONTEXT_EDIT, CMD_EDIT, CMD_FILE_PREFIX,
     USER_ROLE, MSG_CHAT_STARTED, MSG_SESSION_LOG, MSG_SESSION_STATUS, MSG_MIGRATION,
@@ -455,9 +456,9 @@ class QuimeraApp:
         }
 
     def parse_response(self, response):
-        """Extrai marcadores de controle e retorna (clean, route_target, handoff, extend)."""
+        """Extrai marcadores de controle e retorna (clean, route_target, handoff, extend, needs_human_input)."""
         if response is None:
-            return None, None, None, False
+            return None, None, None, False, False
 
         route_target, handoff = None, None
 
@@ -479,17 +480,22 @@ class QuimeraApp:
         if extend:
             response = response.rstrip()[: -len(EXTEND_MARKER)].rstrip()
 
-        return response, route_target, handoff, extend
+        needs_human_input = NEEDS_INPUT_MARKER in response
+        if needs_human_input:
+            response = response.replace(NEEDS_INPUT_MARKER, "").strip()
+
+        return response, route_target, handoff, extend, needs_human_input
 
     def _call_agent_for_parallel(self, agent, handoff, protocol_mode, staging_root, index):
-        """Executa call_agent e retorna tupla (agent, response, route_target, handoff, extend)."""
+        """Executa call_agent e retorna tupla (agent, response, route_target, handoff, extend, needs_input)."""
         from .runtime.tools.files import set_staging_root
         
         set_staging_root(staging_root / str(index))
         try:
             raw = self.call_agent(agent, handoff=handoff, primary=False, protocol_mode=protocol_mode)
-            response, route_target, handoff, extend = self.parse_response(raw)
-            return agent, response, route_target, handoff, extend
+            response, route_target, handoff, extend, needs_input = self.parse_response(raw)
+            # Propaga o flag de necessidade de input humano (6º elemento)
+            return agent, response, route_target, handoff, extend, needs_input
         finally:
             set_staging_root(None)
 
@@ -641,7 +647,21 @@ class QuimeraApp:
 
                 # Primeira fala: detecta roteamento ou debate estendido
                 response = self.call_agent(first_agent, is_first_speaker=True, protocol_mode="standard")
-                response, route_target, handoff, extend = self.parse_response(response)
+                response, route_target, handoff, extend, needs_human_input = self.parse_response(response)
+
+                if needs_human_input:
+                    self.renderer.show_system("\n[input] O agente precisa de input humano...")
+                    user_input = input("Sua resposta: ").strip()
+                    if user_input:
+                        handoff = handoff or {}
+                        handoff["human_input"] = user_input
+                        response = self.call_agent(
+                            first_agent,
+                            handoff=handoff,
+                            primary=False,
+                            protocol_mode="handoff",
+                        )
+                        response, route_target, handoff, extend, _ = self.parse_response(response)
                 self.print_response(first_agent, response)
                 if response is not None:
                     self.persist_message(first_agent, response)
@@ -662,7 +682,7 @@ class QuimeraApp:
                         primary=False,
                         protocol_mode="handoff",
                     )
-                    secondary_response, _, _, _ = self.parse_response(secondary_response)
+                    secondary_response, _, _, _, _ = self.parse_response(secondary_response)
                     self.print_response(route_target, secondary_response)
                     if secondary_response is not None:
                         self.persist_message(route_target, secondary_response)
@@ -680,7 +700,7 @@ class QuimeraApp:
                             primary=False,
                             protocol_mode="handoff",
                         )
-                        final_response, _, _, _ = self.parse_response(final_response)
+                        final_response, _, _, _, _ = self.parse_response(final_response)
                         self.print_response(first_agent, final_response)
                         if final_response is not None:
                             self.persist_message(first_agent, final_response)
@@ -708,17 +728,54 @@ class QuimeraApp:
                                 # Criar lista de (agent, handoff, staging_dir, index)
                                 agent_handoff_pairs = [(agent, None, staging_root, i) for i, agent in enumerate(remaining)]
                                 # Executar em paralelo
-                                futures = [executor.submit(self._call_agent_for_parallel, agent, handoff, protocol_mode, staging_dir, idx) 
-                                           for agent, handoff, staging_dir, idx in agent_handoff_pairs]
+                                futures = [
+                                    executor.submit(
+                                        self._call_agent_for_parallel,
+                                        agent,
+                                        handoff,
+                                        protocol_mode,
+                                        staging_dir,
+                                        idx,
+                                    )
+                                    for agent, handoff, staging_dir, idx in agent_handoff_pairs
+                                ]
                                 results = [f.result() for f in futures]
                             # Merge ordenado para o workspace
                             self._merge_staging_to_workspace(staging_root)
                             # Processar resultados na ordem original
-                            for agent, response, route_target, handoff, extend in results:
+                            needs_input_any = False
+                            # Expecting 6-tuple now: (agent, response, route_target, handoff, extend, needs_input)
+                            for item in results:
+                                agent, response, route_target, handoff, extend, needs_input = item
                                 self.print_response(agent, response)
                                 if response is not None:
                                     self.persist_message(agent, response)
+                                needs_input_any = needs_input or needs_input_any
                             # Nota: route_target e handoff podem ser ignorados no modo paralelo
+                            if needs_input_any:
+                                # Levar fluxo de input humano para o primeiro agente que requer
+                                needing = next((a for a in results if a[-1]), None)
+                                if needing:
+                                    _, _, needing_route_target, needing_handoff, _, _ = needing
+                                    # Pergunta ao humano
+                                    user_input = input("Sua resposta: ").strip()
+                                    if user_input:
+                                        current_agent = needing[0]
+                                        handoff_payload = needing_handoff or {}
+                                        if isinstance(handoff_payload, dict):
+                                            handoff_payload["human_input"] = user_input
+                                        else:
+                                            handoff_payload = {"human_input": user_input}
+                                        final_response = self.call_agent(
+                                            current_agent,
+                                            handoff=handoff_payload,
+                                            primary=False,
+                                            protocol_mode="handoff",
+                                        )
+                                        final_response, _, _, _, _ = self.parse_response(final_response)
+                                        self.print_response(current_agent, final_response)
+                                        if final_response is not None:
+                                            self.persist_message(current_agent, final_response)
                         except Exception as exc:
                             _logger.exception("parallel stage failed: %s", exc)
                             raise
@@ -731,7 +788,7 @@ class QuimeraApp:
                         for index, agent in enumerate(remaining):
                             response = self.call_agent(agent, handoff=next_handoff, primary=False, protocol_mode=protocol_mode)
                             next_handoff = None
-                            response, route_target, handoff, _ = self.parse_response(response)
+                            response, route_target, handoff, _, _ = self.parse_response(response)
                             self.print_response(agent, response)
                             if response is not None:
                                 self.persist_message(agent, response)

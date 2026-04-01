@@ -150,7 +150,7 @@ class ProtocolTests(unittest.TestCase):
         app.STATE_UPDATE_PATTERN = QuimeraApp.STATE_UPDATE_PATTERN
         app.shared_state = {}
 
-        response, _, _, extend = app.parse_response(f"Resposta objetiva {EXTEND_MARKER}")
+        response, _, _, extend, _ = app.parse_response(f"Resposta objetiva {EXTEND_MARKER}")
 
         self.assertEqual(response, "Resposta objetiva")
         self.assertTrue(extend)
@@ -161,7 +161,7 @@ class ProtocolTests(unittest.TestCase):
         app.STATE_UPDATE_PATTERN = QuimeraApp.STATE_UPDATE_PATTERN
         app.shared_state = {}
 
-        response, target, handoff, extend = app.parse_response("Resposta objetiva")
+        response, target, handoff, extend, _ = app.parse_response("Resposta objetiva")
 
         self.assertEqual(response, "Resposta objetiva")
         self.assertIsNone(target)
@@ -175,7 +175,7 @@ class ProtocolTests(unittest.TestCase):
         app.STATE_UPDATE_PATTERN = QuimeraApp.STATE_UPDATE_PATTERN
         app.shared_state = {}
 
-        response, target, message, extend = app.parse_response(
+        response, target, message, extend, _ = app.parse_response(
             "Resposta visivel\n"
             "[ROUTE:codex] task: Revise este argumento. | context: "
             "Analisar risco no parser atual. | expected: 2 bullets objetivos"
@@ -200,7 +200,7 @@ class ProtocolTests(unittest.TestCase):
         app.STATE_UPDATE_PATTERN = QuimeraApp.STATE_UPDATE_PATTERN
         app.shared_state = {}
 
-        response, target, message, extend = app.parse_response(
+        response, target, message, extend, _ = app.parse_response(
             "Resposta visivel\n[ROUTE:codex] Revise este argumento."
         )
 
@@ -215,7 +215,7 @@ class ProtocolTests(unittest.TestCase):
         app.STATE_UPDATE_PATTERN = QuimeraApp.STATE_UPDATE_PATTERN
         app.shared_state = {}
 
-        response, _, _, extend = app.parse_response(
+        response, _, _, extend, _ = app.parse_response(
             "Resposta visivel\n"
             "[STATE_UPDATE]\n"
             '{"goal":"corrigir parser","decisions":["usar json"]}\n'
@@ -236,7 +236,7 @@ class ProtocolTests(unittest.TestCase):
         app.STATE_UPDATE_PATTERN = QuimeraApp.STATE_UPDATE_PATTERN
         app.shared_state = {}
 
-        response, _, _, extend = app.parse_response(
+        response, _, _, extend, _ = app.parse_response(
             "Resposta visivel\n"
             f"{EXTEND_MARKER}\n"
             "[STATE_UPDATE]\n"
@@ -254,7 +254,7 @@ class ProtocolTests(unittest.TestCase):
         app.STATE_UPDATE_PATTERN = QuimeraApp.STATE_UPDATE_PATTERN
         app.shared_state = {"decisions": ["A"]}
 
-        response, _, _, extend = app.parse_response(
+        response, _, _, extend, _ = app.parse_response(
             "Resposta\n"
             "[STATE_UPDATE]\n"
             '{"decisions":["B"],"goal":"alinhar protocolo"}\n'
