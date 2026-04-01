@@ -172,7 +172,7 @@ class QuimeraApp:
             user_name=self.user_name,
         )
         self.auto_summarize_threshold = self.config.auto_summarize_threshold
-        self.idle_timeout_seconds = idle_timeout_seconds
+        self.idle_timeout_seconds = idle_timeout_seconds if idle_timeout_seconds is not None else self.config.idle_timeout_seconds
 
         self.tool_executor = ToolExecutor(
             config=ToolRuntimeConfig(
@@ -225,6 +225,38 @@ class QuimeraApp:
             executor.start()
             self.task_executors.append(executor)
 
+    def _truncate_tool_result(self, content: str, max_lines: int = 10) -> str:
+        """Truncate tool result content to max_lines lines."""
+        if not content:
+            return content
+        lines = content.split('\n')
+        if len(lines) <= max_lines:
+            return content
+        truncated = lines[:max_lines]
+        truncated.append(f"... ({len(lines) - max_lines} linhas truncadas)")
+        return '\n'.join(truncated)
+    
+    def _truncate_payload(self, payload: dict, max_lines: int = 10) -> dict:
+        """Truncate all string fields in a tool payload to reduce verbosity."""
+        if not payload:
+            return payload
+        
+        truncated = payload.copy()
+        # Truncate content field
+        if isinstance(truncated.get('content'), str):
+            truncated['content'] = self._truncate_tool_result(truncated['content'], max_lines)
+        # Truncate error field
+        if isinstance(truncated.get('error'), str):
+            truncated['error'] = self._truncate_tool_result(truncated['error'], max_lines)
+        # Truncate string values in data field
+        if isinstance(truncated.get('data'), dict):
+            data = truncated['data'].copy()
+            for key, value in data.items():
+                if isinstance(value, str):
+                    data[key] = self._truncate_tool_result(value, max_lines)
+            truncated['data'] = data
+        return truncated
+
     def resolve_agent_response(self, agent: str, response: str | None, silent: bool = False) -> str | None:
         current_response = response
         max_tool_hops = 8
@@ -239,9 +271,12 @@ class QuimeraApp:
             if tool_result is None:
                 return current_response
 
+            # Truncate tool result to reduce verbosity
+            tool_payload = self._truncate_payload(tool_result.to_model_payload())
+            
             tool_history.append(
                 f"Sua resposta anterior:\n{current_response.strip()}\n\n"
-                f"Resultado da ferramenta:\n{tool_result.to_model_payload()}"
+                f"Resultado da ferramenta:\n{tool_payload}"
             )
 
             visible_text = strip_tool_block(raw_response or "")

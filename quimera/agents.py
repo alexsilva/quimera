@@ -8,6 +8,7 @@ import time
 from datetime import datetime, timezone
 
 import quimera.plugins as plugins
+from quimera.constants import MAX_STDERR_LINES
 
 _logger = logging.getLogger(__name__)
 
@@ -40,6 +41,7 @@ class AgentClient:
         result_holder = {"stdout": [], "stderr": [], "error": None}
         last_activity_time = time.time()
         log_queue = queue.Queue() if not silent else None
+        stderr_lines_shown = 0  # Contador de linhas de stderr exibidas
 
         def _read_stdout():
             try:
@@ -101,7 +103,16 @@ class AgentClient:
                             stream_type, line = log_queue.get_nowait()
                             if status is not None:
                                 status.update(f"[dim]executing {cmd[0]}... {elapsed}s[/dim]")
-                            self.renderer.show_plain(line.rstrip("\n"), agent=agent)
+                            # Limita o número de linhas de stderr exibidas
+                            if stream_type == "stderr":
+                                if stderr_lines_shown < MAX_STDERR_LINES:
+                                    self.renderer.show_plain(line.rstrip("\n"), agent=agent)
+                                    stderr_lines_shown += 1
+                                elif stderr_lines_shown == MAX_STDERR_LINES:
+                                    self.renderer.show_plain(f"... (stderr truncado, máximo {MAX_STDERR_LINES} linhas)", agent=agent)
+                                    stderr_lines_shown += 1
+                            else:
+                                self.renderer.show_plain(line.rstrip("\n"), agent=agent)
                         except queue.Empty:
                             break
                     if status is not None:
@@ -121,7 +132,16 @@ class AgentClient:
             while not log_queue.empty():
                 try:
                     stream_type, line = log_queue.get_nowait()
-                    self.renderer.show_plain(line.rstrip("\n"), agent=agent)
+                    # Limita o número de linhas de stderr exibidas
+                    if stream_type == "stderr":
+                        if stderr_lines_shown < MAX_STDERR_LINES:
+                            self.renderer.show_plain(line.rstrip("\n"), agent=agent)
+                            stderr_lines_shown += 1
+                        elif stderr_lines_shown == MAX_STDERR_LINES:
+                            self.renderer.show_plain(f"... (stderr truncado, máximo {MAX_STDERR_LINES} linhas)")
+                            stderr_lines_shown += 1
+                    else:
+                        self.renderer.show_plain(line.rstrip("\n"), agent=agent)
                 except queue.Empty:
                     break
 
@@ -136,16 +156,21 @@ class AgentClient:
 
         if proc.returncode != 0:
             self.renderer.show_error(f"[erro] {' '.join(cmd)} retornou código {proc.returncode}")
-            if error:
-                tail = "\n".join(error.splitlines()[-5:])
+            # Só mostra o tail se já não excedemos o limite durante o streaming
+            if error and stderr_lines_shown <= MAX_STDERR_LINES:
+                tail_lines = error.splitlines()[-5:]  # Últimas 5 linhas
+                tail = "\n".join(tail_lines)
                 self.renderer.show_error(tail)
             return None
 
         if not output:
             if error:
                 self.renderer.show_error(f"[erro] {' '.join(cmd)} não retornou saída válida")
-                tail = "\n".join(error.splitlines()[-5:])
-                self.renderer.show_error(tail)
+                # Só mostra o tail se já não excedemos o limite durante o streaming
+                if stderr_lines_shown <= MAX_STDERR_LINES:
+                    tail_lines = error.splitlines()[-5:]  # Últimas 5 linhas
+                    tail = "\n".join(tail_lines)
+                    self.renderer.show_error(tail)
             return None
 
         return output

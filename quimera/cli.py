@@ -56,7 +56,7 @@ def main():
     )
     parser.add_argument("--threads", type=int, default=1, help="Máximo de agentes processados em paralelo por rodada")
     parser.add_argument("--timeout", type=int, default=150, help="Timeout em segundos para execução de agentes")
-    parser.add_argument("--idle-timeout", dest="idle_timeout", type=int, default=60,
+    parser.add_argument("--idle-timeout", dest="idle_timeout", type=int, default=120,
                         help="Idle timeout em segundos.")
     
     args, _ = parser.parse_known_args()
