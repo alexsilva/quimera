@@ -99,7 +99,7 @@ class QuimeraApp:
         return result
 
     def __init__(self, cwd: Path, debug: bool = False, history_window: int | None = None, agents: list | None = None, threads: int = 1, timeout: int | None = None):
-        self.active_agents = agents or ["claude"]
+        self.active_agents = agents or ["*"]
         self.threads = int(threads) if threads is not None else 1
         self.ROUTE_PATTERN = re.compile(
             rf"(?m)^\[ROUTE:({'|'.join(self.active_agents)})\]\s*(.+?)\s*$"
@@ -357,7 +357,7 @@ class QuimeraApp:
 
         if not self.active_agents:
             _logger.warning("no active agents, resetting to default")
-            self.active_agents = ["claude"]
+            self.active_agents = ["*"]
             self._rebuild_route_pattern()
         return self.active_agents[0], user_input, False
 
