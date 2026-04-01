@@ -17,6 +17,7 @@ except ImportError:
 from .runtime.executor import ToolExecutor
 from .runtime.parser import strip_tool_block
 from .runtime import ToolRuntimeConfig, ConsoleApprovalHandler, TaskExecutor, create_executor
+from .runtime.tasks import init_db
 from .ui import TerminalRenderer
 from .context import ContextManager
 from .storage import SessionStorage
@@ -166,8 +167,8 @@ class QuimeraApp:
                 """Handle task execution - delegate to agent via chat."""
                 try:
                     task_id = task_dict["id"]
-                    body = task_dict.get("body", "")
                     description = task_dict.get("description", "")
+                    body = task_dict.get("body", "") or description
                     
                     if not body:
                         fail_task(task_id, reason="empty body")
@@ -191,8 +192,10 @@ class QuimeraApp:
             return task_handler
         
         self.task_executors = []
+        db_path = str(self.workspace.root / "data" / "task.db")
+        init_db(db_path)
         for agent in self.active_agents:
-            executor = create_executor(agent, make_task_handler(agent))
+            executor = create_executor(agent, make_task_handler(agent), db_path=db_path)
             executor.start()
             self.task_executors.append(executor)
 
