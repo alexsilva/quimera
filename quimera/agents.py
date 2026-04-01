@@ -1,10 +1,14 @@
 import json
+import logging
+import queue
 import subprocess
 import threading
 import time
 from datetime import datetime, timezone
 
 import quimera.plugins as plugins
+
+_logger = logging.getLogger(__name__)
 
 
 class AgentClient:
@@ -16,7 +20,7 @@ class AgentClient:
         self._metrics_lock = threading.Lock()
         self.timeout = timeout
 
-    def run(self, cmd, input_text=None, silent=False):
+    def run(self, cmd, input_text=None, silent=False, agent=None, show_status=True):
         try:
             proc = subprocess.Popen(
                 cmd,
@@ -32,6 +36,7 @@ class AgentClient:
 
         result_holder = {"stdout": [], "stderr": [], "error": None}
         last_activity_time = time.time()
+        log_queue = queue.Queue() if not silent else None
 
         def _read_stdout():
             try:
@@ -48,6 +53,8 @@ class AgentClient:
                 if proc.stderr:
                     for line in proc.stderr:
                         result_holder["stderr"].append(line)
+                        if log_queue is not None:
+                            log_queue.put(("stderr", line))
                         nonlocal last_activity_time
                         last_activity_time = time.time()
             except Exception as exc:
@@ -71,14 +78,33 @@ class AgentClient:
         if silent:
             stdout_thread.join()
             stderr_thread.join()
+            if result_holder["stdout"]:
+                _logger.debug("".join(result_holder["stdout"]))
+            if result_holder["stderr"]:
+                _logger.warning("".join(result_holder["stderr"]))
         else:
+            start_time = time.time()
             elapsed = 0
-            with self.renderer.running_status("") as status:
-                while stdout_thread.is_alive() or stderr_thread.is_alive():
+            assert log_queue is not None
+            
+            from contextlib import nullcontext
+            status_cm = self.renderer.running_status("", agent=agent) if show_status else nullcontext(None)
+            
+            with status_cm as status:
+                while stdout_thread.is_alive() or stderr_thread.is_alive() or not log_queue.empty():
+                    # Consume log queue in main thread (thread-safe)
+                    while not log_queue.empty():
+                        try:
+                            stream_type, line = log_queue.get_nowait()
+                            if status is not None:
+                                status.update(f"[dim]executing {cmd[0]}... {elapsed}s[/dim]")
+                            self.renderer.show_plain(line.rstrip("\n"), agent=agent)
+                        except queue.Empty:
+                            break
                     if status is not None:
-                        status.update(f"[dim]{cmd[0]}... {elapsed}s[/dim]")
-                    time.sleep(1)
-                    elapsed += 1
+                        status.update(f"[dim]executing {cmd[0]}... {elapsed}s[/dim]")
+                    time.sleep(0.2)
+                    elapsed = int(time.time() - start_time)
                     if self.timeout is not None and self.timeout > 0:
                         if time.time() - last_activity_time > self.timeout:
                             proc.terminate()
@@ -88,6 +114,13 @@ class AgentClient:
                             return None
             stdout_thread.join()
             stderr_thread.join()
+            # Drain remaining queue
+            while not log_queue.empty():
+                try:
+                    stream_type, line = log_queue.get_nowait()
+                    self.renderer.show_plain(line.rstrip("\n"), agent=agent)
+                except queue.Empty:
+                    break
 
         proc.wait()
 
@@ -114,15 +147,15 @@ class AgentClient:
 
         return output
 
-    def call(self, agent, prompt, silent=False):
+    def call(self, agent, prompt, silent=False, show_status=True):
         """Resolve o comando do agente e delega a execução."""
         plugin = plugins.get(agent)
         if plugin is None:
             self.renderer.show_error(f"[erro] agente desconhecido: {agent}")
             return None
         if plugin.prompt_as_arg:
-            return self.run([*plugin.cmd, prompt], input_text=None, silent=silent)
-        return self.run(plugin.cmd, input_text=prompt, silent=silent)
+            return self.run([*plugin.cmd, prompt], input_text=None, silent=silent, agent=agent, show_status=show_status)
+        return self.run(plugin.cmd, input_text=prompt, silent=silent, agent=agent, show_status=show_status)
 
     def log_prompt_metrics(
         self, agent, metrics, session_id=None,

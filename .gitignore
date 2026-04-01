@@ -8,3 +8,4 @@ quimera_conversa_inicial.txt
 .idea/
 quimera_session_context.md
 quimera_context.md
+quimera/plugins/mock.py

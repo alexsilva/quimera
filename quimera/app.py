@@ -264,7 +264,7 @@ class QuimeraApp:
 
         return "Falha: limite de execuções de ferramenta atingido."
 
-    def read_user_input(self, prompt, timeout: int):
+    def read_user_input(self, prompt, timeout: int) -> str | None:
         """Read user input with optional idle timeout.
 
         If idle timeout is enabled and expires, emit a '*idle* (Xd s sem activity)'
@@ -280,6 +280,9 @@ class QuimeraApp:
         try:
             return input(prompt)
         except EOFError:
+            # When timeout=0, treat EOF as no input available
+            if timeout == 0:
+                return None
             raise
         except KeyboardInterrupt:
             print()
@@ -649,6 +652,10 @@ class QuimeraApp:
         try:
             while True:
                 user = self.read_user_input(f"{self.user_name}: ", timeout=0)
+                
+                # Handle case where no input is available (timeout=0 and EOF)
+                if user is None:
+                    continue
 
                 if user == CMD_EXIT:
                     break
