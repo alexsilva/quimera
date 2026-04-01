@@ -1108,7 +1108,7 @@ class PluginTests(unittest.TestCase):
         staging_root = Path(tempfile.gettempdir()) / "quimera-test-staging"
         staging_root.mkdir(parents=True, exist_ok=True)
         
-        agent, response, route_target, handoff, extend = app._call_agent_for_parallel("agent1", None, "standard", staging_root, 0)
+        agent, response, route_target, handoff, extend, needs_input = app._call_agent_for_parallel("agent1", None, "standard", staging_root, 0)
         self.assertEqual(agent, "agent1")
         self.assertEqual(response, "Resposta mock")
         self.assertIsNone(route_target)
