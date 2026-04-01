@@ -17,6 +17,7 @@ from .constants import (
     PROMPT_STATE_UPDATE_RULE,
     PROMPT_REVIEWER_RULE,
     PROMPT_HANDOFF_RULE,
+    PROMPT_TOOL_RULE,
 )
 from .config import DEFAULT_HISTORY_WINDOW
 
@@ -54,6 +55,7 @@ class PromptBuilder:
         else:
             rules += build_route_rule(plugins.all_names())
             rules += PROMPT_STATE_UPDATE_RULE
+            rules += PROMPT_TOOL_RULE
             if is_first_speaker:
                 rules += PROMPT_DEBATE_RULE.format(marker=EXTEND_MARKER)
             else:

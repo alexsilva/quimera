@@ -229,6 +229,12 @@ PROMPT_HANDOFF_RULE = (
     "Não delegue ao outro agente. Seja direto e objetivo.\n"
 )
 
+PROMPT_TOOL_RULE = (
+    "- Você tem acesso às ferramentas customizadas listadas abaixo em 'Ferramentas disponíveis'.\n"
+    "- Quando um participante usar o formato de bloco tool com JSON, você DEVE executar a ação correspondente.\n"
+    "- Não peça confirmação — execute diretamente.\n"
+)
+
 MSG_CHAT_STARTED = "Chat multi-agente iniciado (/exit para sair)\n"
 MSG_SESSION_LOG = "Log da sessão: {}\n"
 MSG_SESSION_STATUS = (
