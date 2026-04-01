@@ -15,7 +15,7 @@ STATE_UPDATE_EXAMPLE = (
 CMD_EXIT = "/exit"
 
 # Limite de linhas de stderr exibidas em caso de falha de agente
-MAX_STDERR_LINES = 20
+MAX_STDERR_LINES = 5
 CMD_HELP = "/help"
 CMD_CONTEXT = "/context"
 CMD_CONTEXT_EDIT = "/context edit"
