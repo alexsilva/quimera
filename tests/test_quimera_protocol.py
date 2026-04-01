@@ -8,7 +8,7 @@ from quimera.agents import AgentClient
 from quimera.app import QuimeraApp
 from quimera.cli import main as cli_main
 from quimera.config import DEFAULT_HISTORY_WINDOW
-from quimera.constants import CMD_HELP, EXTEND_MARKER, MSG_HELP
+from quimera.constants import CMD_HELP, EXTEND_MARKER, build_help
 from quimera.plugins import AgentPlugin
 from quimera.prompt import PromptBuilder
 from quimera.session_summary import SessionSummarizer
@@ -289,11 +289,13 @@ class ProtocolTests(unittest.TestCase):
     def test_handle_command_shows_help(self):
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
+        app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
 
         handled = app.handle_command(CMD_HELP)
 
         self.assertTrue(handled)
-        self.assertEqual(app.renderer.system_messages, [MSG_HELP])
+        expected_help = build_help([AGENT_CLAUDE, AGENT_CODEX])
+        self.assertEqual(app.renderer.system_messages, [expected_help])
 
     def test_prompt_marks_only_first_speaker(self):
         builder = PromptBuilder(DummyContextManager(), history_window=3)

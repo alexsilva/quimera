@@ -185,7 +185,7 @@ def build_route_rule(agent_names):
 def build_help(agent_names):
     help_text = (
         "\nComandos:\n" +
-        "\n".join([f"- /{s} <mensagem>: {s.captalize()} responde" for s in agent_names]) + "\n"
+        "\n".join([f"- /{s} <mensagem>: {s.capitalize()} responde" for s in agent_names]) + "\n"
         "- /context: mostra o contexto atual\n"
         "- /context edit: abre o contexto persistente no editor ($EDITOR, ou nano/vim/vi como fallback)\n"
         "- /edit: abre o editor ($EDITOR, ou nano/vim/vi como fallback) para compor uma mensagem longa\n"

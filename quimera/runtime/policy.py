@@ -55,8 +55,6 @@ class ToolPolicy:
     def _validate_propose_task(self, call: ToolCall) -> None:
         if "description" not in call.arguments:
             raise ToolPolicyError("propose_task requer 'description'")
-        if "body" not in call.arguments:
-            raise ToolPolicyError("propose_task requer 'body'")
 
     def _validate_list_tasks(self, call: ToolCall) -> None:
         pass

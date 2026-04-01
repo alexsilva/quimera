@@ -7,6 +7,7 @@ from pathlib import Path
 @dataclass(slots=True)
 class ToolRuntimeConfig:
     workspace_root: Path
+    db_path: Path | None = None
     command_timeout_seconds: int = 20
     max_output_chars: int = 12_000
     max_file_read_chars: int = 20_000

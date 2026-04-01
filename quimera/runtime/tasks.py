@@ -40,7 +40,7 @@ def init_db(db_path=None):
     cur = conn.cursor()
     cur.execute("""
         CREATE TABLE IF NOT EXISTS jobs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id INTEGER PRIMARY KEY,
             description TEXT NOT NULL,
             status TEXT NOT NULL,
             created_by TEXT,
@@ -73,13 +73,21 @@ def init_db(db_path=None):
 def _now():
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
-def add_job(description, created_by=None, db_path=None):
+def add_job(description, created_by=None, db_path=None, job_id=None):
     conn = get_conn(db_path)
     cur = conn.cursor()
     now = _now()
-    cur.execute("INSERT INTO jobs(description, status, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-                (description, "planning", created_by, now, now))
-    job_id = cur.lastrowid
+    if job_id is not None:
+        cur.execute("SELECT id FROM jobs WHERE id = ?", (job_id,))
+        if cur.fetchone():
+            conn.close()
+            return job_id
+        cur.execute("INSERT INTO jobs(id, description, status, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    (job_id, description, "planning", created_by, now, now))
+    else:
+        cur.execute("INSERT INTO jobs(description, status, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                    (description, "planning", created_by, now, now))
+        job_id = cur.lastrowid
     conn.commit()
     conn.close()
     return job_id
@@ -274,6 +282,7 @@ if __name__ == "__main__":
     p_task = sub.add_parser("propose", help="Propose a new task for a job")
     p_task.add_argument("--job-id", dest="job_id", type=int)
     p_task.add_argument("--desc", dest="description")
+    p_task.add_argument("--body", dest="body", default=None)
     p_task.add_argument("--priority", default="medium")
     p_task.add_argument("--by", dest="by", default=None)
 
@@ -317,7 +326,7 @@ if __name__ == "__main__":
             print(j)
         exit(0)
     elif ns.cmd == "propose":
-        tid = propose_task(ns.job_id, ns.description, priority=ns.priority, created_by=ns.by, db_path=ns.db if hasattr(ns, "db") else None)
+        tid = propose_task(ns.job_id, ns.description, priority=ns.priority, created_by=ns.by, body=ns.body, db_path=ns.db if hasattr(ns, "db") else None)
         print(f"task:{tid}")
         exit(0)
     elif ns.cmd == "approve":
