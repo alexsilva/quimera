@@ -1,4 +1,6 @@
+import os
 import re
+import sys
 import threading
 from contextlib import contextmanager, nullcontext
 
@@ -15,6 +17,10 @@ def strip_ansi(text: str) -> str:
     text = ansi_orphaned.sub('', text)
     
     return text
+
+def _is_interactive_terminal() -> bool:
+    """Check if we're running in an interactive terminal (not piped/captured)."""
+    return sys.stdout.isatty() and os.environ.get('TERM') != 'dumb'
 
 try:
     from rich.console import Console, Group
@@ -45,7 +51,11 @@ class TerminalRenderer:
 
     def __init__(self):
         if _RICH_AVAILABLE:
-            self._console = Console(width=self._MAX_WIDTH, force_terminal=True, no_color=False)
+            self._console = Console(
+                width=self._MAX_WIDTH,
+                force_terminal=_is_interactive_terminal(),
+                no_color=False
+            )
         else:
             self._console = None
         self._live = None

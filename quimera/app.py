@@ -4,6 +4,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
@@ -655,6 +656,9 @@ class QuimeraApp:
                 
                 # Handle case where no input is available (timeout=0 and EOF)
                 if user is None:
+                    # EOF reached in non-interactive mode, exit cleanly
+                    if not sys.stdin.isatty():
+                        break
                     continue
 
                 if user == CMD_EXIT:
