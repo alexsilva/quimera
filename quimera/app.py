@@ -139,9 +139,9 @@ class QuimeraApp:
         self.agent_client = AgentClient(self.renderer, metrics_file=metrics_file, timeout=timeout)
         self.session_summarizer = SessionSummarizer(
             self.renderer,
-            summarizer_call=build_chain_summarizer(self.agent_client, self.active_agents),
+            summarizer_call=build_chain_summarizer(self.agent_client, list(dict.fromkeys(["qwen"] + self.active_agents))),
         )
-        self.summary_agent_preference = self.active_agents[0]
+        self.summary_agent_preference = "qwen"
         last_session = self.storage.load_last_session()
         self.history = last_session["messages"]
         session_context = self.context_manager.load_session()

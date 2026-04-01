@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import queue
 import subprocess
 import threading
@@ -22,6 +23,7 @@ class AgentClient:
 
     def run(self, cmd, input_text=None, silent=False, agent=None, show_status=True):
         try:
+            env = {**os.environ, "NO_COLOR": "1", "TERM": "dumb", "COLORTERM": ""}
             proc = subprocess.Popen(
                 cmd,
                 stdin=subprocess.PIPE,
@@ -29,6 +31,7 @@ class AgentClient:
                 stderr=subprocess.PIPE,
                 text=True,
                 bufsize=1,
+                env=env,
             )
         except OSError as exc:
             self.renderer.show_error(f"[erro] não foi possível iniciar {cmd[0]}: {exc}")
