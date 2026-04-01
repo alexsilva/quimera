@@ -130,12 +130,12 @@ def build_tools_prompt() -> str:
     """
     lines = [
         "Ferramentas disponíveis:",
-        """"
-        - Retorne o bloco abaixo conforme descrição em JSON válido:
-        ```tool 
-        {"name": "<tool_name>", "arguments": {...}}
-        ```
-         """
+    """
+    - Retorne o bloco abaixo conforme descrição em JSON válido:
+    ```tool 
+    {"name": "<tool_name>", "arguments": {...}}
+    ```
+ """
     ]
     for tool in TOOL_SCHEMA.values():
         params = ", ".join(f"{k}: {v['type']}" for k, v in tool["parameters"].items())
@@ -181,6 +181,7 @@ def build_route_rule(agent_names):
         "- O agente que recebe o handoff não tem acesso ao histórico completo, "
         "apenas ao payload do [ROUTE:...]. Inclua tudo que ele precisa no campo context.\n"
         "- Só um [ROUTE:...] por rodada. Esse comando é interno e não será exibido ao humano.\n"
+        "- [NEEDS_INPUT] use quando quiser direcionar uma pergunta ao humano."
     )
 
 def build_help(agent_names):

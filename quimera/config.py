@@ -6,6 +6,7 @@ _CONFIG_FILE = QUIMERA_BASE / "config.json"
 DEFAULT_USER_NAME = "Você"
 DEFAULT_HISTORY_WINDOW = 8
 DEFAULT_AUTO_SUMMARIZE_THRESHOLD = 30
+DEFAULT_IDLE_TIMEOUT_SECONDS = 60
 
 
 class ConfigManager:
@@ -43,6 +44,21 @@ class ConfigManager:
         if isinstance(value, int) and value > 0:
             return value
         return DEFAULT_AUTO_SUMMARIZE_THRESHOLD
+
+    @property
+    def idle_timeout_seconds(self) -> int:
+        value = self._load().get("idle_timeout_seconds")
+        if isinstance(value, int) and value > 0:
+            return value
+        return DEFAULT_IDLE_TIMEOUT_SECONDS
+
+    def set_idle_timeout_seconds(self, value: int | None):
+        data = self._load()
+        if isinstance(value, int) and value > 0:
+            data["idle_timeout_seconds"] = value
+        else:
+            data.pop("idle_timeout_seconds", None)
+        self._save(data)
 
     def set_user_name(self, name: str):
         data = self._load()
