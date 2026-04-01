@@ -55,6 +55,7 @@ def main():
         help="Lista de agentes (ex: --agents claude gemini). O primeiro é o agente padrão.",
     )
     parser.add_argument("--threads", type=int, default=1, help="Máximo de agentes processados em paralelo por rodada")
+    parser.add_argument("--timeout", type=int, default=150, help="Timeout em segundos para execução de agentes")
     args, _ = parser.parse_known_args()
 
     config = ConfigManager()
@@ -77,6 +78,9 @@ def main():
     if unknown:
         parser.error(f"Agente(s) desconhecido(s): {', '.join(unknown)}. Disponíveis: {', '.join(available)}")
 
-    debug = args.debug or os.getenv("QUIMERA_DEBUG", "").strip().lower() in {"1", "true", "yes", "on"}
-    app = QuimeraApp(Path.cwd(), debug=debug, history_window=args.history_window, agents=requested, threads=args.threads)
+    app = QuimeraApp(Path.cwd(),
+                     debug=args.debug,
+                     history_window=args.history_window,
+                     agents=requested, threads=args.threads,
+                     timeout=args.timeout)
     app.run()

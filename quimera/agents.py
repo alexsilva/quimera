@@ -10,10 +10,11 @@ import quimera.plugins as plugins
 class AgentClient:
     """Executa os agentes externos."""
 
-    def __init__(self, renderer, metrics_file=None):
+    def __init__(self, renderer, metrics_file=None, timeout=None):
         self.renderer = renderer
         self.metrics_file = metrics_file
         self._metrics_lock = threading.Lock()
+        self.timeout = timeout
 
     def run(self, cmd, input_text=None, silent=False):
         try:
@@ -38,6 +39,18 @@ class AgentClient:
 
         thread = threading.Thread(target=_communicate, daemon=True)
         thread.start()
+
+        # Enforce configurable timeout if provided
+        if self.timeout is not None:
+            thread.join(self.timeout)
+            if thread.is_alive():
+                try:
+                    proc.terminate()
+                    thread.join(2)
+                except Exception:
+                    pass
+                self.renderer.show_error(f"[erro] timeout after {self.timeout}s executing {cmd[0]}")
+                return None
 
         if silent:
             thread.join()

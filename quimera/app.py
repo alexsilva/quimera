@@ -5,6 +5,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import threading
@@ -61,6 +62,24 @@ class QuimeraApp:
     def _format_yes_no(value):
         return "sim" if value else "não"
 
+    def _rebuild_route_pattern(self):
+        if not self.active_agents:
+            self.ROUTE_PATTERN = re.compile(r"(?m)^\[ROUTE:(\w+)\]\s*(.+?)\s*$", re.DOTALL)
+        else:
+            self.ROUTE_PATTERN = re.compile(
+                rf"(?m)^\[ROUTE:({'|'.join(self.active_agents)})\]\s*(.+?)\s*$"
+            )
+
+    def _record_failure(self, agent):
+        with self._agent_failures_lock:
+            self.agent_failures[agent] += 1
+            failures = self.agent_failures[agent]
+        if failures >= 2:
+            if agent in self.active_agents:
+                self.active_agents.remove(agent)
+                self._rebuild_route_pattern()
+                _logger.warning("agent %s removed after %d failures", agent, failures)
+
     @staticmethod
     def _unique_encodings(*encodings):
         seen = set()
@@ -78,12 +97,14 @@ class QuimeraApp:
             result.append(normalized)
         return result
 
-    def __init__(self, cwd: Path, debug: bool = False, history_window: int | None = None, agents: list | None = None, threads: int = 1):
+    def __init__(self, cwd: Path, debug: bool = False, history_window: int | None = None, agents: list | None = None, threads: int = 1, timeout: int | None = None):
         self.active_agents = agents or ["claude"]
         self.threads = int(threads) if threads is not None else 1
         self.ROUTE_PATTERN = re.compile(
             rf"(?m)^\[ROUTE:({'|'.join(self.active_agents)})\]\s*(.+?)\s*$"
         )
+        self.agent_failures = defaultdict(int)
+        self._agent_failures_lock = threading.Lock()
         self.renderer = TerminalRenderer()
         self.config = ConfigManager()
         self.user_name = self.config.user_name
@@ -111,7 +132,7 @@ class QuimeraApp:
         self.storage = SessionStorage(self.workspace.logs_dir, self.renderer)
         session_id = self.storage.get_history_file().stem
         metrics_file = self.workspace.metrics_dir / f"{session_id}.jsonl" if debug else None
-        self.agent_client = AgentClient(self.renderer, metrics_file=metrics_file)
+        self.agent_client = AgentClient(self.renderer, metrics_file=metrics_file, timeout=timeout)
         self.session_summarizer = SessionSummarizer(
             self.renderer,
             summarizer_call=build_chain_summarizer(self.agent_client, self.active_agents),
@@ -153,7 +174,7 @@ class QuimeraApp:
                 workspace_root=self.workspace.cwd,
                 require_approval_for_mutations=False,
             ),
-            approval_handler=None,
+            approval_handler=None,  # type: ignore[assignment]
         )
         # Set up task executors for autonomous task execution
         self._setup_task_executors()
@@ -373,8 +394,18 @@ class QuimeraApp:
 
     def call_agent(self, agent, **options):
         silent = options.get("protocol_mode") == "task_execution"
-        response = self._call_agent(agent, silent=silent, **options)
-        return self.resolve_agent_response(agent, response, silent=silent)
+        try:
+            response = self._call_agent(agent, silent=silent, **options)
+            if response is None:
+                self._record_failure(agent)
+                return None
+            result = self.resolve_agent_response(agent, response, silent=silent)
+            if result is None:
+                self._record_failure(agent)
+            return result
+        except Exception:
+            self._record_failure(agent)
+            raise
 
     def _call_agent(self, agent, is_first_speaker=False, handoff=None, primary=True, protocol_mode="standard", handoff_only=False, silent=False):
         self.session_call_index += 1
