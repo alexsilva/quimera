@@ -98,11 +98,13 @@ class QuimeraApp:
             result.append(normalized)
         return result
 
-    def __init__(self, cwd: Path, debug: bool = False, history_window: int | None = None, agents: list | None = None, threads: int = 1, timeout: int | None = None):
+    def __init__(self, cwd: Path, debug: bool = False, history_window: int | None = None, agents: list | None = None, threads: int = 1, timeout: int | None = None, idle_timeout_seconds: int | None = None):
         self.active_agents = agents or ["*"]
         self.threads = int(threads) if threads is not None else 1
+        # Escape special regex characters in agent names
+        escaped_agents = [re.escape(agent) for agent in self.active_agents]
         self.ROUTE_PATTERN = re.compile(
-            rf"(?m)^\[ROUTE:({'|'.join(self.active_agents)})\]\s*(.+?)\s*$"
+            rf"(?m)^\[ROUTE:({'|'.join(escaped_agents)})\]\s*(.+?)\s*$"
         )
         self.agent_failures = defaultdict(int)
         self._agent_failures_lock = threading.Lock()
@@ -169,6 +171,7 @@ class QuimeraApp:
             user_name=self.user_name,
         )
         self.auto_summarize_threshold = self.config.auto_summarize_threshold
+        self.idle_timeout_seconds = idle_timeout_seconds
 
         self.tool_executor = ToolExecutor(
             config=ToolRuntimeConfig(
@@ -261,16 +264,46 @@ class QuimeraApp:
 
         return "Falha: limite de execuções de ferramenta atingido."
 
-    def read_user_input(self):
-        prompt = f"{self.user_name}: "
+    def read_user_input(self, prompt, timeout: int):
+        """Read user input with optional idle timeout.
+
+        If idle timeout is enabled and expires, emit a '*idle* (Xd s sem activity)'
+        line and return None to signal that no input was received.
+        """
+        if timeout and timeout > 0:
+            value = self._read_user_input_with_timeout(prompt, timeout)
+            if value is None:
+                self.renderer.show_system(f"*idle* ({timeout}s sem activity)")
+                return None
+            return value
+        # Fallback: blocking read
         try:
             return input(prompt)
         except EOFError:
-            raise EOFError
+            raise
         except KeyboardInterrupt:
-            # Garante que o prompt seja limpo após Ctrl+C
             print()
-            raise KeyboardInterrupt
+            raise
+
+    @staticmethod
+    def _read_user_input_with_timeout(prompt: str, timeout: int):
+        # Uses a thread to call input() so we can timeout in the main thread.
+        import queue
+        q = queue.Queue()
+
+        def _reader():
+            try:
+                val = input(prompt)
+                q.put(val)
+            except Exception:
+                q.put(None)
+
+        t = threading.Thread(target=_reader, daemon=True)
+        t.start()
+        try:
+            return q.get(timeout=timeout)
+        except queue.Empty:
+            return None
 
     def handle_command(self, user_input):
         command = user_input.strip()
@@ -615,7 +648,7 @@ class QuimeraApp:
 
         try:
             while True:
-                user = self.read_user_input()
+                user = self.read_user_input(f"{self.user_name}: ", timeout=0)
 
                 if user == CMD_EXIT:
                     break
@@ -654,8 +687,9 @@ class QuimeraApp:
                 response, route_target, handoff, extend, needs_human_input = self.parse_response(response)
 
                 if needs_human_input:
-                    self.renderer.show_system("\n[input] O agente precisa de input humano...")
-                    user_input = input("Sua resposta: ").strip()
+                    self.renderer.show_message(first_agent, response)
+                    self.renderer.show_system("\nO agente precisa de input humano...\n")
+                    user_input = self.read_user_input("Sua resposta: ", self.idle_timeout_seconds)
                     if user_input:
                         handoff = handoff or {}
                         handoff["human_input"] = user_input
