@@ -52,13 +52,13 @@ if not _logger.handlers and not logging.getLogger().handlers:
 class QuimeraApp:
     """Orquestra comandos locais, roteamento entre agentes e ciclo da sessão."""
     HANDOFF_PAYLOAD_PATTERN = re.compile(
-        r"^\s*task:\s*(.*?)\s*\|\s*context:\s*(.*?)\s*\|\s*expected:\s*(.*?)\s*$",
+        r"^\s*task:\s*(.*?)\s*(?:\|\s*)?context:\s*(.*?)\s*(?:\|\s*)?expected:\s*(.*?)\s*$",
         re.IGNORECASE | re.DOTALL,
     )
     STATE_UPDATE_PATTERN = re.compile(
         r"\[STATE_UPDATE\](.*?)\[/STATE_UPDATE\]", re.DOTALL
     )
-    ROUTE_PATTERN = re.compile(r"(?m)^\[ROUTE:(\w+)\]\s*(.+?)\s*$", re.DOTALL)
+    ROUTE_PATTERN = re.compile(r"^\[ROUTE:(\w+)\]\s*([\s\S]+)\s*\Z", re.MULTILINE)
 
     @staticmethod
     def _format_yes_no(value):
@@ -66,10 +66,11 @@ class QuimeraApp:
 
     def _rebuild_route_pattern(self):
         if not self.active_agents:
-            self.ROUTE_PATTERN = re.compile(r"(?m)^\[ROUTE:(\w+)\]\s*(.+?)\s*$", re.DOTALL)
+            self.ROUTE_PATTERN = re.compile(r"^\[ROUTE:(\w+)\]\s*([\s\S]+)\s*\Z", re.MULTILINE)
         else:
             self.ROUTE_PATTERN = re.compile(
-                rf"(?m)^\[ROUTE:({'|'.join(self.active_agents)})\]\s*(.+?)\s*$"
+                rf"^\[ROUTE:({'|'.join(self.active_agents)})\]\s*([\s\S]+)\s*\Z",
+                re.MULTILINE
             )
 
     def _record_failure(self, agent):
@@ -99,13 +100,23 @@ class QuimeraApp:
             result.append(normalized)
         return result
 
-    def __init__(self, cwd: Path, debug: bool = False, history_window: int | None = None, agents: list | None = None, threads: int = 1, timeout: int | None = None, idle_timeout_seconds: int | None = None):
+    def __init__(self,
+             cwd: Path,
+             debug: bool = False,
+             history_window: int | None = None,
+             agents: list | None = None,
+             threads: int = 1,
+             timeout: int | None = None,
+             idle_timeout_seconds: int | None = None,
+             spy: bool = False
+        ):
         self.active_agents = agents or ["*"]
         self.threads = int(threads) if threads is not None else 1
         # Escape special regex characters in agent names
         escaped_agents = [re.escape(agent) for agent in self.active_agents]
         self.ROUTE_PATTERN = re.compile(
-            rf"(?m)^\[ROUTE:({'|'.join(escaped_agents)})\]\s*(.+?)\s*$"
+            rf"^\[ROUTE:({'|'.join(escaped_agents)})\]\s*([\s\S]+)\s*\Z",
+            re.MULTILINE
         )
         self.agent_failures = defaultdict(int)
         self._agent_failures_lock = threading.Lock()
@@ -113,6 +124,7 @@ class QuimeraApp:
         self.config = ConfigManager()
         self.user_name = self.config.user_name
         self.workspace = Workspace(cwd)
+        self.spy = spy
 
         # Configuração do histórico persistente (readline)
         self.history_file = self.workspace.history_file
@@ -136,7 +148,7 @@ class QuimeraApp:
         self.storage = SessionStorage(self.workspace.logs_dir, self.renderer)
         session_id = self.storage.get_history_file().stem
         metrics_file = self.workspace.metrics_dir / f"{session_id}.jsonl" if debug else None
-        self.agent_client = AgentClient(self.renderer, metrics_file=metrics_file, timeout=timeout)
+        self.agent_client = AgentClient(self.renderer, metrics_file=metrics_file, timeout=timeout, spy=self.spy)
         self.session_summarizer = SessionSummarizer(
             self.renderer,
             summarizer_call=build_chain_summarizer(self.agent_client, list(dict.fromkeys(["qwen"] + self.active_agents))),

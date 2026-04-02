@@ -193,6 +193,33 @@ class ProtocolTests(unittest.TestCase):
         )
         self.assertFalse(extend)
 
+    def test_parse_response_extracts_multiline_handoff(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.ROUTE_PATTERN = QuimeraApp.ROUTE_PATTERN
+        app.HANDOFF_PAYLOAD_PATTERN = QuimeraApp.HANDOFF_PAYLOAD_PATTERN
+        app.STATE_UPDATE_PATTERN = QuimeraApp.STATE_UPDATE_PATTERN
+        app.shared_state = {}
+
+        response, target, message, extend, _ = app.parse_response(
+            "Resposta visivel\n"
+            "[ROUTE:codex]\n"
+            "task: Revise este argumento.\n"
+            "context: Analisar risco no parser atual.\n"
+            "expected: 2 bullets objetivos"
+        )
+
+        self.assertEqual(response, "Resposta visivel")
+        self.assertEqual(target, AGENT_CODEX)
+        self.assertEqual(
+            message,
+            {
+                "task": "Revise este argumento.",
+                "context": "Analisar risco no parser atual.",
+                "expected": "2 bullets objetivos",
+            },
+        )
+        self.assertFalse(extend)
+
     def test_parse_response_ignores_invalid_handoff_payload(self):
         app = QuimeraApp.__new__(QuimeraApp)
         app.ROUTE_PATTERN = QuimeraApp.ROUTE_PATTERN

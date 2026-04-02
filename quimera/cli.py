@@ -47,6 +47,9 @@ def main():
     parser.add_argument("--whoami", action="store_true")
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--history-window", type=int, default=None)
+    parser.add_argument("--spy", action="store_true",
+                        help="Permite ao agente humano inspecionar alterações do agent de IA",
+                        default=False)
     parser.add_argument(
         "--agents",
         metavar="AGENTE",
@@ -87,5 +90,6 @@ def main():
                       history_window=args.history_window,
                       agents=requested, threads=args.threads,
                       timeout=args.timeout,
-                      idle_timeout_seconds=args.idle_timeout)
+                      idle_timeout_seconds=args.idle_timeout,
+                      spy=args.spy)
     app.run()

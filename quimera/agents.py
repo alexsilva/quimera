@@ -24,11 +24,12 @@ def _strip_spinner(text: str) -> str:
 class AgentClient:
     """Executa os agentes externos."""
 
-    def __init__(self, renderer, metrics_file=None, timeout=None):
+    def __init__(self, renderer, metrics_file=None, timeout=None, spy=False):
         self.renderer = renderer
         self.metrics_file = metrics_file
         self._metrics_lock = threading.Lock()
         self.timeout = timeout
+        self.spy = spy
 
     def run(self, cmd, input_text=None, silent=False, agent=None, show_status=True):
         try:
@@ -115,7 +116,7 @@ class AgentClient:
                             cleaned = _strip_spinner(line.rstrip("\n"))
                             if not cleaned.strip():
                                 continue
-                            if stream_type == "stderr":
+                            if stream_type == "stderr" and not self.spy:
                                 if stderr_lines_shown < MAX_STDERR_LINES:
                                     self.renderer.show_plain(cleaned, agent=agent)
                                     stderr_lines_shown += 1
