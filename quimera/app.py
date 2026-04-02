@@ -52,7 +52,7 @@ if not _logger.handlers and not logging.getLogger().handlers:
 class QuimeraApp:
     """Orquestra comandos locais, roteamento entre agentes e ciclo da sessão."""
     HANDOFF_PAYLOAD_PATTERN = re.compile(
-        r"^\s*task:\s*(.*?)\s*(?:\|\s*)?context:\s*(.*?)\s*(?:\|\s*)?expected:\s*(.*?)\s*$",
+        r"^\s*task:\s*(.+?)\s*(?:(?:\n|\|\s*)context:\s*(.+?))?\s*(?:(?:\n|\|\s*)expected:\s*(.+?))?\s*$",
         re.IGNORECASE | re.DOTALL,
     )
     STATE_UPDATE_PATTERN = re.compile(
@@ -112,8 +112,11 @@ class QuimeraApp:
         ):
         self.active_agents = agents or ["*"]
         self.threads = int(threads) if threads is not None else 1
-        # Escape special regex characters in agent names
-        escaped_agents = [re.escape(agent) for agent in self.active_agents]
+        # Treat "*" as wildcard, escape other special regex characters
+        escaped_agents = [
+            r'[A-Za-z0-9_-]+' if agent == '*' else re.escape(agent)
+            for agent in self.active_agents
+        ]
         self.ROUTE_PATTERN = re.compile(
             rf"^\[ROUTE:({'|'.join(escaped_agents)})\]\s*([\s\S]+)\s*\Z",
             re.MULTILINE
@@ -531,10 +534,12 @@ class QuimeraApp:
             return None
         match = self.HANDOFF_PAYLOAD_PATTERN.match(payload.strip())
         if not match:
+            _logger.warning(f"[HANDOFF] Payload did not match regex: {payload!r}")
             return None
 
-        task, context, expected = (group.strip() for group in match.groups())
-        if not task or not context or not expected:
+        task, context, expected = (group.strip() if group else None for group in match.groups())
+        if not task:
+            _logger.warning(f"[HANDOFF] Missing required field 'task' - got task={task!r}, context={context!r}, expected={expected!r}")
             return None
 
         return {

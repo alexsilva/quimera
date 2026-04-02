@@ -1,3 +1,4 @@
+import re
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -234,6 +235,44 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(response, "Resposta visivel")
         self.assertIsNone(target)
         self.assertIsNone(message)
+        self.assertFalse(extend)
+
+    def test_parse_handoff_payload_task_only(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.HANDOFF_PAYLOAD_PATTERN = QuimeraApp.HANDOFF_PAYLOAD_PATTERN
+        result = app.parse_handoff_payload("task: Revise este código")
+        self.assertEqual(result, {"task": "Revise este código", "context": None, "expected": None})
+
+    def test_parse_handoff_payload_task_and_context(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.HANDOFF_PAYLOAD_PATTERN = QuimeraApp.HANDOFF_PAYLOAD_PATTERN
+        result = app.parse_handoff_payload("task: Revise este código | context: Verificar performance")
+        self.assertEqual(result, {"task": "Revise este código", "context": "Verificar performance", "expected": None})
+
+    def test_parse_response_wildcard_route_captures_any_agent(self):
+        """ROUTE com active_agents=['*'] deve capturar qualquer agente."""
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.active_agents = ["*"]
+        escaped_agents = [
+            r'[A-Za-z0-9_-]+' if agent == '*' else re.escape(agent)
+            for agent in app.active_agents
+        ]
+        app.ROUTE_PATTERN = re.compile(
+            rf"^\[ROUTE:({'|'.join(escaped_agents)})\]\s*([\s\S]+)\s*\Z",
+            re.MULTILINE
+        )
+        app.HANDOFF_PAYLOAD_PATTERN = QuimeraApp.HANDOFF_PAYLOAD_PATTERN
+        app.STATE_UPDATE_PATTERN = QuimeraApp.STATE_UPDATE_PATTERN
+        app.shared_state = {}
+
+        response, target, message, extend, _ = app.parse_response(
+            "Resposta visivel\n"
+            "[ROUTE:OPENCODE-GPT] task: Revise este código"
+        )
+
+        self.assertEqual(response, "Resposta visivel")
+        self.assertEqual(target, "OPENCODE-GPT")
+        self.assertEqual(message, {"task": "Revise este código", "context": None, "expected": None})
         self.assertFalse(extend)
 
     def test_parse_response_extracts_state_update_before_debate(self):
