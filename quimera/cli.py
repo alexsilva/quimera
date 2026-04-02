@@ -9,10 +9,15 @@ from .app import QuimeraApp
 from .config import ConfigManager
 from . import plugins as _plugins
 
+try:
+    from .ui import TerminalRenderer
+    from .agents import AgentClient
+except ImportError:
+    TerminalRenderer = None
+    AgentClient = None
+
 
 def _expand_patterns(agents: List[str], available: List[str]) -> List[str]:
-    # Expand patterns like "opencode-*" to all available agents that start with the prefix.
-    # Also ensure unique results while preserving the order of first appearance.
     result = []
     seen = set()
     for a in agents:
@@ -61,6 +66,12 @@ def main():
     parser.add_argument("--timeout", type=int, default=150, help="Timeout em segundos para execução de agentes")
     parser.add_argument("--idle-timeout", dest="idle_timeout", type=int, default=120,
                         help="Idle timeout em segundos.")
+    parser.add_argument("--interactive-test", action="store_true",
+                        help="Modo de teste interativo para testes automatizados")
+    parser.add_argument("test_agent", nargs="?", default=None,
+                        help="Agente para modo de teste (usado com --interactive-test)")
+    parser.add_argument("--test-prompt", dest="test_prompt", nargs=argparse.REMAINDER, default=None,
+                        help="Prompt para modo de teste")
     
     args, _ = parser.parse_known_args()
 
@@ -92,4 +103,31 @@ def main():
                       timeout=args.timeout,
                       idle_timeout_seconds=args.idle_timeout,
                       spy=args.spy)
+
+    if args.interactive_test:
+        if TerminalRenderer is None or AgentClient is None:
+            raise RuntimeError("Modo interativo não disponível nesta versão")
+        
+        default_agent = requested[0] if requested else "claude"
+        default_prompt = "Use uma ferramenta de shell para executar o comando `pwd` e me diga o diretório atual. Se a ferramenta pedir aprovação, mostre o prompt normalmente."
+        
+        if args.test_agent:
+            agent_name = args.test_agent
+        else:
+            agent_name = default_agent
+        
+        if args.test_prompt:
+            prompt = " ".join(args.test_prompt)
+        else:
+            prompt = default_prompt
+        
+        renderer = TerminalRenderer()
+        client = AgentClient(renderer)
+        result = client.call(agent_name, prompt)
+        
+        renderer.show_system(default_prompt)
+        renderer.show_plain("\n--- RESULTADO LIMPO ---\n")
+        renderer.show_plain(result)
+        return
+    
     app.run()

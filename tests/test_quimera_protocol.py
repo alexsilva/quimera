@@ -50,6 +50,7 @@ class DummyConfigManager:
         self.user_name = "Você"
         self.history_window = DEFAULT_HISTORY_WINDOW
         self.auto_summarize_threshold = 30
+        self.idle_timeout_seconds = 300
 
 
 class DummyStorage:
@@ -102,11 +103,9 @@ class ProtocolTests(unittest.TestCase):
                 calls.append((agent, prompt))
                 return "saida limpa"
 
-        with patch("quimera.cli.ConfigManager", DummyConfigManager), patch(
-            "quimera.cli.TerminalRenderer", FakeRenderer
-        ), patch("quimera.cli.AgentClient", FakeAgentClient), patch(
-            "sys.argv", ["quimera", "--interactive-test"]
-        ):
+        with patch("quimera.cli.TerminalRenderer", FakeRenderer), patch(
+            "quimera.cli.AgentClient", FakeAgentClient
+        ), patch("sys.argv", ["quimera", "--interactive-test"]):
             cli_main()
 
         self.assertEqual(len(FakeRenderer.instances), 1)
@@ -297,10 +296,12 @@ class ProtocolTests(unittest.TestCase):
         self.assertFalse(extend)
 
     def test_parse_response_extracts_state_update_before_debate(self):
+        import threading
         app = QuimeraApp.__new__(QuimeraApp)
         app.ROUTE_PATTERN = QuimeraApp.ROUTE_PATTERN
         app.STATE_UPDATE_PATTERN = QuimeraApp.STATE_UPDATE_PATTERN
         app.shared_state = {}
+        app._lock = threading.Lock()
 
         response, _, _, extend, _ = app.parse_response(
             "Resposta visivel\n"
@@ -318,10 +319,12 @@ class ProtocolTests(unittest.TestCase):
         )
 
     def test_parse_response_extracts_state_update_after_debate_marker(self):
+        import threading
         app = QuimeraApp.__new__(QuimeraApp)
         app.ROUTE_PATTERN = QuimeraApp.ROUTE_PATTERN
         app.STATE_UPDATE_PATTERN = QuimeraApp.STATE_UPDATE_PATTERN
         app.shared_state = {}
+        app._lock = threading.Lock()
 
         response, _, _, extend, _ = app.parse_response(
             "Resposta visivel\n"
@@ -336,10 +339,12 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(app.shared_state, {"next_step": "escrever testes"})
 
     def test_parse_response_merges_multiple_state_updates(self):
+        import threading
         app = QuimeraApp.__new__(QuimeraApp)
         app.ROUTE_PATTERN = QuimeraApp.ROUTE_PATTERN
         app.STATE_UPDATE_PATTERN = QuimeraApp.STATE_UPDATE_PATTERN
         app.shared_state = {"decisions": ["A"]}
+        app._lock = threading.Lock()
 
         response, _, _, extend, _ = app.parse_response(
             "Resposta\n"
@@ -925,10 +930,12 @@ class ProtocolTests(unittest.TestCase):
         )
 
     def test_persist_message_saves_shared_state(self):
+        import threading
         app = QuimeraApp.__new__(QuimeraApp)
         app.history = []
         app.shared_state = {"goal": "corrigir protocolo"}
         app.storage = DummyStorage()
+        app._lock = threading.Lock()
 
         app.persist_message("human", "oi")
 
@@ -1138,7 +1145,10 @@ class PluginTests(unittest.TestCase):
             with patch.object(client, "run", return_value="ok") as mock_run:
                 result = client.call("stub", "hello")
 
-        mock_run.assert_called_once_with(["stub", "-x"], input_text="hello")
+        mock_run.assert_called_once()
+        call_args = mock_run.call_args
+        self.assertEqual(call_args[0][0], ["stub", "-x"])
+        self.assertEqual(call_args[1]["input_text"], "hello")
         self.assertEqual(result, "ok")
 
     def test_agent_client_call_error_on_unknown_agent(self):

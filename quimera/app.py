@@ -58,7 +58,7 @@ class QuimeraApp:
     STATE_UPDATE_PATTERN = re.compile(
         r"\[STATE_UPDATE\](.*?)\[/STATE_UPDATE\]", re.DOTALL
     )
-    ROUTE_PATTERN = re.compile(r"\[ROUTE:(\w+)\]\s*([\s\S]+)", re.M | re.I)
+    ROUTE_PATTERN = re.compile(r"\[ROUTE:([A-Za-z0-9_-]+)\]\s*([\s\S]+)", re.M | re.I)
 
     @staticmethod
     def _format_yes_no(value):
@@ -564,9 +564,9 @@ class QuimeraApp:
             if match:
                 raw_payload = self._strip_payload_residual(match.group(2))
                 parsed_handoff = self.parse_handoff_payload(raw_payload)
-                _logger.info("[ROUTE] match=%s, target=%s", match.group(0)[:100], match.group(1).lower() if match.group(1) else None)
+                _logger.info("[ROUTE] match=%s, target=%s", match.group(0)[:100], match.group(1) if match.group(1) else None)
                 if parsed_handoff:
-                    route_target = match.group(1).lower()
+                    route_target = match.group(1)
                     handoff = parsed_handoff
                 else:
                     _logger.warning("[ROUTE] handoff parse failed for target=%s, payload: %r", match.group(1), raw_payload)
