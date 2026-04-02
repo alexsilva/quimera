@@ -18,6 +18,7 @@ class TestAppHistory(unittest.TestCase):
         mock_context.load_session.return_value = ""
 
     @patch('quimera.runtime.tasks.init_db')
+    @patch('quimera.runtime.tasks.add_job')
     @patch('quimera.app.TerminalRenderer')
     @patch('quimera.app.ConfigManager')
     @patch('quimera.app.ContextManager')
@@ -25,7 +26,8 @@ class TestAppHistory(unittest.TestCase):
     @patch('quimera.app.AgentClient')
     @patch('quimera.app.SessionSummarizer')
     @patch('quimera.app.readline')
-    def test_history_loading_on_init(self, mock_readline, mock_session_sum, mock_agent, mock_storage, mock_context, mock_config, mock_term, mock_init_db):
+    def test_history_loading_on_init(self, mock_readline, mock_session_sum, mock_agent, mock_storage, mock_context, mock_config, mock_term, mock_add_job, mock_init_db):
+        mock_add_job.return_value = 1
         self._setup_common_mocks(mock_storage, mock_context)
         
         with patch('quimera.app.Workspace') as mock_ws:
@@ -43,6 +45,7 @@ class TestAppHistory(unittest.TestCase):
                     mock_readline.set_history_length.assert_called_with(1000)
 
     @patch('quimera.runtime.tasks.init_db')
+    @patch('quimera.runtime.tasks.add_job')
     @patch('quimera.app.TerminalRenderer')
     @patch('quimera.app.ConfigManager')
     @patch('quimera.app.ContextManager')
@@ -50,7 +53,8 @@ class TestAppHistory(unittest.TestCase):
     @patch('quimera.app.AgentClient')
     @patch('quimera.app.SessionSummarizer')
     @patch('quimera.app.readline')
-    def test_history_saving_on_shutdown(self, mock_readline, mock_session_sum, mock_agent, mock_storage, mock_context, mock_config, mock_term, mock_init_db):
+    def test_history_saving_on_shutdown(self, mock_readline, mock_session_sum, mock_agent, mock_storage, mock_context, mock_config, mock_term, mock_add_job, mock_init_db):
+        mock_add_job.return_value = 1
         self._setup_common_mocks(mock_storage, mock_context)
         
         with patch('quimera.app.Workspace') as mock_ws:
@@ -68,6 +72,7 @@ class TestAppHistory(unittest.TestCase):
                 mock_readline.write_history_file.assert_called_with(str(self.history_file))
 
     @patch('quimera.runtime.tasks.init_db')
+    @patch('quimera.runtime.tasks.add_job')
     @patch('quimera.app.TerminalRenderer')
     @patch('quimera.app.ConfigManager')
     @patch('quimera.app.ContextManager')
@@ -76,7 +81,8 @@ class TestAppHistory(unittest.TestCase):
     @patch('quimera.app.SessionSummarizer')
     @patch('quimera.app.readline')
     @patch('quimera.app.input', return_value="test input")
-    def test_read_user_input_uses_input_function(self, mock_input, mock_readline, mock_session_sum, mock_agent, mock_storage, mock_context, mock_config, mock_term, mock_init_db):
+    def test_read_user_input_uses_input_function(self, mock_input, mock_readline, mock_session_sum, mock_agent, mock_storage, mock_context, mock_config, mock_term, mock_add_job, mock_init_db):
+        mock_add_job.return_value = 1
         self._setup_common_mocks(mock_storage, mock_context)
         
         with patch('quimera.app.Workspace') as mock_ws:

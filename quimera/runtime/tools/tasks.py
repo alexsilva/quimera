@@ -9,6 +9,7 @@ from ..tasks import (
     list_tasks as _list_tasks,
     list_jobs as _list_jobs,
     get_job as _get_job,
+    approve_task as _approve_task,
     complete_task as _complete_task,
     fail_task as _fail_task, add_job,
 )
@@ -19,7 +20,19 @@ class TaskTools:
         self.config = config
 
     def propose_task(self, call: ToolCall) -> ToolResult:
-        job_id = call.arguments["job_id"]
+        job_id = call.arguments.get("job_id")
+        # If not provided, try to derive from environment (current session job)
+        if job_id is None:
+            import os
+            env_val = os.environ.get("QUIMERA_CURRENT_JOB_ID")
+            if env_val is not None:
+                try:
+                    job_id = int(env_val)
+                except ValueError:
+                    job_id = None
+        if job_id is None:
+            # Early failure to provide clear error to the caller
+            return ToolResult(ok=False, tool_name=call.name, error="job_id is required (or QUIMERA_CURRENT_JOB_ID not set)")
         description = call.arguments["description"]
         priority = call.arguments.get("priority", "medium")
         created_by = call.arguments.get("created_by")
@@ -50,10 +63,29 @@ class TaskTools:
             return ToolResult(ok=False, tool_name=call.name, error=str(exc))
 
     def get_job(self, call: ToolCall) -> ToolResult:
-        job_id = call.arguments["job_id"]
+        job_id = call.arguments.get("job_id")
+        if job_id is None:
+            import os
+            env_val = os.environ.get("QUIMERA_CURRENT_JOB_ID")
+            if env_val is not None:
+                try:
+                    job_id = int(env_val)
+                except ValueError:
+                    job_id = None
+        if job_id is None:
+            return ToolResult(ok=False, tool_name=call.name, error="job_id is required (or QUIMERA_CURRENT_JOB_ID not set)")
         try:
             job = _get_job(job_id, db_path=self.config.db_path)
             return ToolResult(ok=True, tool_name=call.name, content=json.dumps(job) if job is not None else "null", data={"job": job})
+        except Exception as exc:  # noqa: BLE001
+            return ToolResult(ok=False, tool_name=call.name, error=str(exc))
+
+    def approve_task(self, call: ToolCall) -> ToolResult:
+        task_id = call.arguments["task_id"]
+        approved_by = call.arguments.get("approved_by", "agent")
+        try:
+            ok = _approve_task(task_id, approved_by, db_path=self.config.db_path)
+            return ToolResult(ok=bool(ok), tool_name=call.name, content="approved" if ok else "failed to approve")
         except Exception as exc:  # noqa: BLE001
             return ToolResult(ok=False, tool_name=call.name, error=str(exc))
 

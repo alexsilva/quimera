@@ -176,11 +176,20 @@ class QuimeraApp:
         self.shared_state = last_session["shared_state"]
         self._lock = threading.Lock()
         is_new_session = not history_restored and not summary_loaded
+
+        # Unify tasks database path
+        self.tasks_db_path = str(self.workspace.root / "data" / "tasks.db")
+        from .runtime.tasks import init_db, add_job
+        init_db(self.tasks_db_path)
+        self.current_job_id = add_job(f"Session {session_id}", db_path=self.tasks_db_path)
+        self.session_state["current_job_id"] = self.current_job_id
+
         session_state = {
             "session_id": self.session_state["session_id"],
             "is_new_session": self._format_yes_no(is_new_session),
             "history_restored": self._format_yes_no(history_restored),
             "summary_loaded": self._format_yes_no(summary_loaded),
+            "current_job_id": self.current_job_id,
         }
         self.prompt_builder = PromptBuilder(
             self.context_manager,
@@ -194,6 +203,7 @@ class QuimeraApp:
         self.tool_executor = ToolExecutor(
             config=ToolRuntimeConfig(
                 workspace_root=self.workspace.cwd,
+                db_path=self.tasks_db_path,
                 require_approval_for_mutations=False,
             ),
             approval_handler=None,  # type: ignore[assignment]
@@ -214,7 +224,7 @@ class QuimeraApp:
                     body = task_dict.get("body", "") or description
                     
                     if not body:
-                        fail_task(task_id, reason="empty body")
+                        fail_task(task_id, reason="empty body", db_path=self.tasks_db_path)
                         return False
                     
                     prompt = f"Execute a seguinte tarefa:\n\n{body}"
@@ -227,18 +237,16 @@ class QuimeraApp:
                         protocol_mode="task_execution",
                     )
                     
-                    complete_task(task_id, result=response)
+                    complete_task(task_id, result=response, db_path=self.tasks_db_path)
                     return True
                 except Exception as e:
-                    fail_task(task_dict["id"], reason=str(e))
+                    fail_task(task_dict["id"], reason=str(e), db_path=self.tasks_db_path)
                     return False
             return task_handler
         
         self.task_executors = []
-        db_path = str(self.workspace.root / "data" / "task.db")
-        init_db(db_path)
         for agent in self.active_agents:
-            executor = create_executor(agent, make_task_handler(agent), db_path=db_path)
+            executor = create_executor(agent, make_task_handler(agent), db_path=self.tasks_db_path)
             executor.start()
             self.task_executors.append(executor)
 

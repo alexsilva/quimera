@@ -73,15 +73,24 @@ TOOL_SCHEMA = {
     # Task-related tooling
     "propose_task": {
         "name": "propose_task",
-        "description": "Propõe uma nova tarefa para execução autônoma. Use quando identificar uma subtarefa na conversa.",
+        "description": "Propõe uma nova tarefa para execução autônoma. Use quando identificar uma subtarefa na conversa. O job_id pode ser omitido se a variável de ambiente QUIMERA_CURRENT_JOB_ID estiver definida.",
         "parameters": {
-            "job_id": {"type": "int", "description": "ID do job pai", "required": True},
+            "job_id": {"type": "int", "description": "ID do job pai (opcional se QUIMERA_CURRENT_JOB_ID definida)", "required": False},
             "description": {"type": "str", "description": "O que fazer", "required": True},
             "body": {"type": "str", "description": "Código Python a executar (opicional)", "required": False},
             "priority": {"type": "str", "description": "high|medium|low", "required": False},
             "source_context": {"type": "str", "description": "Trecho da conversa que originou", "required": False},
         },
-        "example": 'propose_task(job_id=1, description="Validar schema do módulo X", body="print(1+1)", priority="medium")'
+        "example": 'propose_task(description="Validar schema do módulo X", body="print(1+1)", priority="medium")'
+    },
+    "approve_task": {
+        "name": "approve_task",
+        "description": "Aprova uma tarefa proposta para que seja executada.",
+        "parameters": {
+            "task_id": {"type": "int", "description": "ID da tarefa", "required": True},
+            "approved_by": {"type": "str", "description": "Nome do agente que aprova", "required": False},
+        },
+        "example": 'approve_task(task_id=5, approved_by="claude")'
     },
     "list_tasks": {
         "name": "list_tasks",
@@ -100,11 +109,11 @@ TOOL_SCHEMA = {
     },
     "get_job": {
         "name": "get_job",
-        "description": "Consulta detalhes de um job específico",
+        "description": "Consulta detalhes de um job específico. O job_id pode ser omitido se a variável de ambiente QUIMERA_CURRENT_JOB_ID estiver definida.",
         "parameters": {
-            "job_id": {"type": "int", "description": "ID do job", "required": True}
+            "job_id": {"type": "int", "description": "ID do job (opcional se QUIMERA_CURRENT_JOB_ID definida)", "required": False}
         },
-        "example": 'get_job(job_id=1)'
+        "example": 'get_job()'
     },
     "complete_task": {
         "name": "complete_task",
@@ -179,6 +188,8 @@ PROMPT_BASE_RULES = (
     "- Se identificar que algo está faltando ou que há risco, diga explicitamente e proponha como resolver.\n"
     "- Se a conversa estiver confusa, redundante ou sem dono claro, resuma o estado atual e indique o próximo passo.\n"
     "- Quando houver risco de erro ou decisão importante, peça revisão específica ao outro agente em vez de prosseguir sozinho.\n"
+    "- Para tarefas complexas, demoradas ou que podem ser executadas de forma assíncrona, prefira o sistema de tarefas (propose_task + approve_task) em vez de [ROUTE:...].\n"
+    "- O current_job_id necessário para propor tarefas está no ESTADO DA SESSÃO.\n"
     "\n"
     "PROATIVIDADE:\n"
     "- Quando encontrar um erro durante a execução, reporte-o mesmo que não seja o foco da tarefa.\n"
@@ -246,6 +257,7 @@ def build_help(agent_names):
 PROMPT_SESSION_STATE = (
     "ESTADO DA SESSÃO:\n"
     "- SESSÃO ATUAL: {session_id}\n"
+    "- JOB_ID ATUAL: {current_job_id}\n"
     "- NOVA SESSÃO: {is_new_session}\n"
     "- HISTÓRICO RESTAURADO: {history_restored}\n"
     "- RESUMO CARREGADO: {summary_loaded}\n"

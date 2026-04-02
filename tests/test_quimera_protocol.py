@@ -442,6 +442,7 @@ class ProtocolTests(unittest.TestCase):
             history_window=3,
             session_state={
                 "session_id": "sessao-2026-03-27-123456",
+                "current_job_id": 1,
                 "is_new_session": "não",
                 "history_restored": "sim",
                 "summary_loaded": "não",
@@ -533,15 +534,13 @@ class ProtocolTests(unittest.TestCase):
         ), patch("quimera.app.SessionStorage", FakeSessionStorage):
             app = QuimeraApp(Path("/tmp/projeto"))
 
-        self.assertEqual(
-            app.prompt_builder.session_state,
-            {
-                "session_id": "sessao-2026-03-27-123456",
-                "is_new_session": "não",
-                "history_restored": "sim",
-                "summary_loaded": "sim",
-            },
-        )
+        session_state = app.prompt_builder.session_state
+        self.assertEqual(session_state.get("session_id"), "sessao-2026-03-27-123456")
+        self.assertEqual(session_state.get("is_new_session"), "não")
+        self.assertEqual(session_state.get("history_restored"), "sim")
+        self.assertEqual(session_state.get("summary_loaded"), "sim")
+        self.assertIn("current_job_id", session_state)
+        self.assertIsInstance(session_state["current_job_id"], int)
         self.assertEqual(app.shared_state, {"goal": "continuar"})
 
     def test_app_uses_default_history_window_from_config(self):

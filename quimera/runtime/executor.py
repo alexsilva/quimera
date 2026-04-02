@@ -38,6 +38,7 @@ class ToolExecutor:
         self.registry.register("run_shell", shell_tool.run_shell)
         # Task-related tools
         self.registry.register("propose_task", task_tools.propose_task)
+        self.registry.register("approve_task", task_tools.approve_task)
         self.registry.register("list_tasks", task_tools.list_tasks)
         self.registry.register("list_jobs", task_tools.list_jobs)
         self.registry.register("get_job", task_tools.get_job)
