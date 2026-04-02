@@ -115,9 +115,9 @@ class PromptBuilder:
 
     def _format_handoff(self, handoff):
         if isinstance(handoff, dict):
-            task = handoff.get("task", "").strip()
-            context = handoff.get("context", "").strip()
-            expected = handoff.get("expected", "").strip()
+            task = (handoff.get("task") or "").strip()
+            context = (handoff.get("context") or "").strip()
+            expected = (handoff.get("expected") or "").strip()
             return (
                 f"TASK:\n{task}\n\n"
                 f"CONTEXT:\n{context}\n\n"

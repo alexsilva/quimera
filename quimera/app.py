@@ -58,20 +58,11 @@ class QuimeraApp:
     STATE_UPDATE_PATTERN = re.compile(
         r"\[STATE_UPDATE\](.*?)\[/STATE_UPDATE\]", re.DOTALL
     )
-    ROUTE_PATTERN = re.compile(r"^\[ROUTE:(\w+)\]\s*([\s\S]+)", re.MULTILINE)
+    ROUTE_PATTERN = re.compile(r"\[ROUTE:(\w+)\]\s*([\s\S]+)", re.M | re.I)
 
     @staticmethod
     def _format_yes_no(value):
         return "sim" if value else "não"
-
-    def _rebuild_route_pattern(self):
-        if not self.active_agents:
-            self.ROUTE_PATTERN = re.compile(r"^\[ROUTE:(\w+)\]\s*([\s\S]+)", re.MULTILINE)
-        else:
-            self.ROUTE_PATTERN = re.compile(
-                rf"^\[ROUTE:({'|'.join(self.active_agents)})\]\s*([\s\S]+)",
-                re.MULTILINE
-            )
 
     def _record_failure(self, agent):
         with self._agent_failures_lock:
@@ -80,7 +71,6 @@ class QuimeraApp:
         if failures >= 2:
             if agent in self.active_agents:
                 self.active_agents.remove(agent)
-                self._rebuild_route_pattern()
                 _logger.warning("agent %s removed after %d failures", agent, failures)
 
     @staticmethod
@@ -112,15 +102,6 @@ class QuimeraApp:
         ):
         self.active_agents = agents or ["*"]
         self.threads = int(threads) if threads is not None else 1
-        # Treat "*" as wildcard, escape other special regex characters
-        escaped_agents = [
-            r'[A-Za-z0-9_-]+' if agent == '*' else re.escape(agent)
-            for agent in self.active_agents
-        ]
-        self.ROUTE_PATTERN = re.compile(
-            rf"^\[ROUTE:({'|'.join(escaped_agents)})\]\s*([\s\S]+)",
-            re.MULTILINE
-        )
         self.agent_failures = defaultdict(int)
         self._agent_failures_lock = threading.Lock()
         self.renderer = TerminalRenderer()
@@ -445,7 +426,6 @@ class QuimeraApp:
         if not self.active_agents:
             _logger.warning("no active agents, resetting to default")
             self.active_agents = ["*"]
-            self._rebuild_route_pattern()
         return self.active_agents[0], user_input, False
 
     @staticmethod
@@ -486,6 +466,7 @@ class QuimeraApp:
 
     def call_agent(self, agent, **options):
         silent = options.get("protocol_mode") == "task_execution"
+        _logger.info("[DISPATCH] sending to agent=%s, handoff_only=%s", agent, options.get("handoff_only", False))
         try:
             response = self._call_agent(agent, silent=silent, **options)
             if response is None:
@@ -536,13 +517,16 @@ class QuimeraApp:
         """Remove trailing non-payload lines from captured ROUTE group."""
         if not text:
             return ""
+        _logger.debug("[ROUTE] raw_payload before strip: %r", text)
         kept = []
         for line in text.splitlines():
             if QuimeraApp._PAYLOAD_FIELD_RE.match(line) or (kept and not line.strip()):
                 kept.append(line)
             else:
                 break
-        return "\n".join(kept).strip()
+        result = "\n".join(kept).strip()
+        _logger.debug("[ROUTE] raw_payload after strip: %r", result)
+        return result
 
     def parse_handoff_payload(self, payload):
         if not payload:
@@ -580,10 +564,13 @@ class QuimeraApp:
             if match:
                 raw_payload = self._strip_payload_residual(match.group(2))
                 parsed_handoff = self.parse_handoff_payload(raw_payload)
+                _logger.info("[ROUTE] match=%s, target=%s", match.group(0)[:100], match.group(1).lower() if match.group(1) else None)
                 if parsed_handoff:
-                    route_target = match.group(1)
+                    route_target = match.group(1).lower()
                     handoff = parsed_handoff
-                response = self.ROUTE_PATTERN.sub("", response, count=1).strip()
+                else:
+                    _logger.warning("[ROUTE] handoff parse failed for target=%s, payload: %r", match.group(1), raw_payload)
+                response = self.ROUTE_PATTERN.sub("", response, count=1).strip() or "..."
 
         extend = response.rstrip().endswith(EXTEND_MARKER)
         if extend:
