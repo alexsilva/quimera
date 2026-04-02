@@ -249,6 +249,27 @@ class ProtocolTests(unittest.TestCase):
         result = app.parse_handoff_payload("task: Revise este código | context: Verificar performance")
         self.assertEqual(result, {"task": "Revise este código", "context": "Verificar performance", "expected": None})
 
+    def test_parse_response_route_with_residual_text(self):
+        """ROUTE block should be recognized even when followed by residual text."""
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.ROUTE_PATTERN = QuimeraApp.ROUTE_PATTERN
+        app.HANDOFF_PAYLOAD_PATTERN = QuimeraApp.HANDOFF_PAYLOAD_PATTERN
+        app.STATE_UPDATE_PATTERN = QuimeraApp.STATE_UPDATE_PATTERN
+        app.shared_state = {}
+
+        # Test with residual text after the ROUTE block
+        response, target, message, extend, _ = app.parse_response(
+            "Resposta visível\n[ROUTE:codex] task: Revise este código\nTexto residual após o bloco ROUTE."
+        )
+
+        self.assertEqual(response, "Resposta visível")
+        # With the fix, the ROUTE should still be recognized even with residual text
+        # The payload should be parsed correctly without the residual text
+        self.assertEqual(target, AGENT_CODEX)
+        self.assertIsNotNone(message)
+        self.assertEqual(message["task"], "Revise este código")
+        self.assertFalse(extend)
+
     def test_parse_response_wildcard_route_captures_any_agent(self):
         """ROUTE com active_agents=['*'] deve capturar qualquer agente."""
         app = QuimeraApp.__new__(QuimeraApp)

@@ -52,13 +52,13 @@ if not _logger.handlers and not logging.getLogger().handlers:
 class QuimeraApp:
     """Orquestra comandos locais, roteamento entre agentes e ciclo da sessão."""
     HANDOFF_PAYLOAD_PATTERN = re.compile(
-        r"^\s*task:\s*(.+?)\s*(?:(?:\n|\|\s*)context:\s*(.+?))?\s*(?:(?:\n|\|\s*)expected:\s*(.+?))?\s*$",
-        re.IGNORECASE | re.DOTALL,
+        r"^\s*task:\s*([^\n]+?)\s*(?:(?:\n|\|\s*)context:\s*([^\n]+?))?\s*(?:(?:\n|\|\s*)expected:\s*([^\n]+?))?\s*$",
+        re.IGNORECASE,
     )
     STATE_UPDATE_PATTERN = re.compile(
         r"\[STATE_UPDATE\](.*?)\[/STATE_UPDATE\]", re.DOTALL
     )
-    ROUTE_PATTERN = re.compile(r"^\[ROUTE:(\w+)\]\s*([\s\S]+)\s*\Z", re.MULTILINE)
+    ROUTE_PATTERN = re.compile(r"^\[ROUTE:(\w+)\]\s*([\s\S]+)", re.MULTILINE)
 
     @staticmethod
     def _format_yes_no(value):
@@ -66,10 +66,10 @@ class QuimeraApp:
 
     def _rebuild_route_pattern(self):
         if not self.active_agents:
-            self.ROUTE_PATTERN = re.compile(r"^\[ROUTE:(\w+)\]\s*([\s\S]+)\s*\Z", re.MULTILINE)
+            self.ROUTE_PATTERN = re.compile(r"^\[ROUTE:(\w+)\]\s*([\s\S]+)", re.MULTILINE)
         else:
             self.ROUTE_PATTERN = re.compile(
-                rf"^\[ROUTE:({'|'.join(self.active_agents)})\]\s*([\s\S]+)\s*\Z",
+                rf"^\[ROUTE:({'|'.join(self.active_agents)})\]\s*([\s\S]+)",
                 re.MULTILINE
             )
 
@@ -118,7 +118,7 @@ class QuimeraApp:
             for agent in self.active_agents
         ]
         self.ROUTE_PATTERN = re.compile(
-            rf"^\[ROUTE:({'|'.join(escaped_agents)})\]\s*([\s\S]+)\s*\Z",
+            rf"^\[ROUTE:({'|'.join(escaped_agents)})\]\s*([\s\S]+)",
             re.MULTILINE
         )
         self.agent_failures = defaultdict(int)
@@ -529,6 +529,21 @@ class QuimeraApp:
             )
         return self.agent_client.call(agent, prompt, silent=silent)
 
+    _PAYLOAD_FIELD_RE = re.compile(r"^\s*(task|context|expected)\s*:", re.IGNORECASE)
+
+    @staticmethod
+    def _strip_payload_residual(text):
+        """Remove trailing non-payload lines from captured ROUTE group."""
+        if not text:
+            return ""
+        kept = []
+        for line in text.splitlines():
+            if QuimeraApp._PAYLOAD_FIELD_RE.match(line) or (kept and not line.strip()):
+                kept.append(line)
+            else:
+                break
+        return "\n".join(kept).strip()
+
     def parse_handoff_payload(self, payload):
         if not payload:
             return None
@@ -563,7 +578,8 @@ class QuimeraApp:
         if ROUTE_PREFIX in response:
             match = self.ROUTE_PATTERN.search(response)
             if match:
-                parsed_handoff = self.parse_handoff_payload(match.group(2).strip())
+                raw_payload = self._strip_payload_residual(match.group(2))
+                parsed_handoff = self.parse_handoff_payload(raw_payload)
                 if parsed_handoff:
                     route_target = match.group(1)
                     handoff = parsed_handoff
