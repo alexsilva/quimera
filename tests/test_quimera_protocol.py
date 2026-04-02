@@ -1344,6 +1344,144 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(metrics["codex"]["failed"], 1)
         self.assertEqual(metrics["codex"]["succeeded"], 0)
 
+    def test_prompt_includes_proactivity_rules(self):
+        """Prompt deve incluir seção PROATIVIDADE."""
+        builder = PromptBuilder(DummyContextManager(), history_window=3)
+        history = [{"role": "human", "content": "Pergunta"}]
+
+        prompt = builder.build(AGENT_CLAUDE, history, is_first_speaker=True)
+
+        self.assertIn("PROATIVIDADE", prompt)
+        self.assertIn("reporte-o mesmo que não seja o foco", prompt)
+        self.assertIn("[NEEDS_INPUT]", prompt)
+
+    def test_route_rule_includes_format_specification(self):
+        """build_route_rule deve incluir instrução de formato do payload."""
+        from quimera.constants import build_route_rule
+
+        rule = build_route_rule(["claude", "codex"])
+
+        self.assertIn("Formato aceito", rule)
+        self.assertIn("'task' é OBRIGATÓRIO", rule)
+        self.assertIn("[ROUTE:agente] task:", rule)
+        self.assertIn("Inline:", rule)
+        self.assertIn("Linhas:", rule)
+
+
+class FallbackChainTests(unittest.TestCase):
+    """Testes para fallback chain quando agente secundário falha."""
+
+    def test_fallback_tries_next_agent_when_secondary_fails(self):
+        """Quando o agente secundário não responde, o sistema deve tentar o próximo disponível."""
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.history = []
+        app.user_name = "Você"
+        app.round_index = 0
+        app.session_call_index = 0
+        app.debug_prompt_metrics = False
+        app.renderer = DummyRenderer()
+        app.storage = DummyStorage()
+        app.context_manager = None
+        app.agent_client = None
+        app.prompt_builder = None
+        app.session_state = {
+            "session_id": "test-fallback",
+            "history_count": 0,
+            "summary_loaded": False,
+        }
+        persisted = []
+        printed = []
+        calls = []
+
+        app.active_agents = [AGENT_CLAUDE, AGENT_CODEX, "qwen"]
+        app.threads = 1
+        app.handle_command = lambda user: False
+        app.parse_routing = lambda user: (AGENT_CLAUDE, "oi", False)
+        app.parse_response = QuimeraApp.parse_response.__get__(app, QuimeraApp)
+        app.shared_state = {}
+        app.print_response = lambda agent, response: printed.append((agent, response))
+        app.persist_message = lambda role, content: persisted.append((role, content))
+        app.shutdown = lambda: None
+        app.read_user_input = Mock(side_effect=["mensagem", "/exit"])
+        responses = iter([
+            # Claude responde e delega para codex
+            "claude responde\n[ROUTE:codex] task: Revise este código",
+            # Codex NÃO responde (None)
+            None,
+            # Fallback: qwen responde
+            "qwen faz o fallback",
+            # Claude sintetiza com a resposta do qwen
+            "claude sintetiza com qwen",
+        ])
+
+        def fake_call(
+            agent,
+            is_first_speaker=False,
+            handoff=None,
+            primary=True,
+            protocol_mode="standard",
+            handoff_only=False,
+            from_agent=None,
+        ):
+            calls.append((agent, is_first_speaker, handoff, handoff_only, from_agent))
+            return next(responses)
+
+        app.call_agent = fake_call
+        app.run()
+
+        # Deve ter 4 chamadas: claude inicial, codex (falha), qwen (fallback), claude (síntese)
+        self.assertEqual(len(calls), 4)
+        # Segunda chamada é para codex (handoff)
+        self.assertEqual(calls[1][0], AGENT_CODEX)
+        self.assertTrue(calls[1][3])  # handoff_only
+        # Terceira chamada é para qwen (fallback)
+        self.assertEqual(calls[2][0], "qwen")
+        self.assertTrue(calls[2][3])  # handoff_only
+        # Quarta chamada é claude sintetizando
+        self.assertEqual(calls[3][0], AGENT_CLAUDE)
+        # Verifica que qwen imprimiu e persistiu
+        self.assertIn(("qwen", "qwen faz o fallback"), printed)
+
+    def test_fallback_skips_original_agent_and_chain(self):
+        """Fallback não deve tentar o agente original nem os já na cadeia."""
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.HANDOFF_PAYLOAD_PATTERN = QuimeraApp.HANDOFF_PAYLOAD_PATTERN
+        app.ROUTE_PATTERN = QuimeraApp.ROUTE_PATTERN
+        app.STATE_UPDATE_PATTERN = QuimeraApp.STATE_UPDATE_PATTERN
+        app.shared_state = {}
+
+        # Simula handoff com chain
+        result = app.parse_handoff_payload("task: Test", target="codex")
+        result["chain"] = ["claude"]
+
+        # Fallback candidates devem excluir claude (chain) e codex (target original)
+        app.active_agents = ["claude", "codex", "qwen"]
+        chain = result["chain"]
+        route_target = "codex"
+        first_agent = "claude"
+
+        fallback_candidates = [
+            a for a in app.active_agents
+            if a != first_agent and a != route_target and a not in chain
+        ]
+
+        self.assertEqual(fallback_candidates, ["qwen"])
+
+    def test_no_fallback_when_no_candidates(self):
+        """Se não há candidatos de fallback, o sistema não deve tentar."""
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.active_agents = ["claude", "codex"]
+        chain = ["claude"]
+        route_target = "codex"
+        first_agent = "claude"
+
+        fallback_candidates = [
+            a for a in app.active_agents
+            if a != first_agent and a != route_target and a not in chain
+        ]
+
+        self.assertEqual(fallback_candidates, [])
+
 
 if __name__ == "__main__":
     unittest.main()

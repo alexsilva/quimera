@@ -923,6 +923,38 @@ class QuimeraApp:
                     if secondary_response is not None:
                         self.persist_message(route_target, secondary_response)
 
+                    # Fallback chain: se o agente secundário não respondeu, tenta próximo disponível
+                    if not secondary_response:
+                        fallback_candidates = [
+                            a for a in self.active_agents
+                            if a != first_agent and a != route_target and a not in chain
+                        ]
+                        for fallback_agent in fallback_candidates:
+                            _logger.info(
+                                "[HANDOFF] id=%s fallback: trying %s after %s failed",
+                                handoff_id, fallback_agent, route_target,
+                            )
+                            self.renderer.show_system(
+                                f"[handoff] tentando fallback: {fallback_agent} (após {route_target} falhar)"
+                            )
+                            fallback_handoff = dict(handoff) if isinstance(handoff, dict) else handoff
+                            if isinstance(fallback_handoff, dict):
+                                fallback_handoff["chain"] = handoff.get("chain", []) + [route_target]
+                            secondary_response = self.call_agent(
+                                fallback_agent,
+                                handoff=fallback_handoff,
+                                handoff_only=True,
+                                primary=False,
+                                protocol_mode="handoff",
+                                from_agent=first_agent,
+                            )
+                            secondary_response, _, _, _, _, ack_id = self.parse_response(secondary_response)
+                            if secondary_response:
+                                route_target = fallback_agent
+                                self.print_response(fallback_agent, secondary_response)
+                                self.persist_message(fallback_agent, secondary_response)
+                                break
+
                     # Integrador: agente primário sintetiza com a resposta do secundário
                     if secondary_response:
                         synthesis_handoff = HANDOFF_SYNTHESIS_MSG.format(
