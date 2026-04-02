@@ -167,7 +167,9 @@ class QuimeraApp:
             "responses_with_clear_next_step": 0,
             "total_responses": 0,
         }
-        self.behavior_metrics = BehaviorMetricsTracker()
+        # Persist metrics state to workspace so agents can resume with previous metrics
+        metrics_state_path = self.workspace.state_dir / "metrics_state.json"
+        self.behavior_metrics = BehaviorMetricsTracker(storage_path=metrics_state_path)
         self.debug_prompt_metrics = debug
         self.round_index = 0
         self.session_call_index = 0
@@ -572,11 +574,6 @@ class QuimeraApp:
             except KeyError:
                 pass  # Old session state without metrics
             self._record_agent_metric(agent, "succeeded" if result else "failed", elapsed)
-            # Registra latência no BehaviorMetricsTracker
-            if hasattr(self, 'behavior_metrics') and self.behavior_metrics:
-                m = self.behavior_metrics.get_agent(agent)
-                m.total_latency_seconds += elapsed
-                m.response_count += 1
         _logger.info("[DISPATCH] agent=%s latency=%.2fs result=%s", agent, elapsed, "ok" if result else "none")
         return result
 
@@ -660,10 +657,35 @@ class QuimeraApp:
         return False
 
     def generate_metrics_feedback(self, agent):
-        """Gera bloco de feedback operacional usando BehaviorMetricsTracker."""
-        if hasattr(self, 'behavior_metrics') and self.behavior_metrics:
-            return self.behavior_metrics.generate_feedback(agent)
-        return ""
+        """Gera bloco de feedback operacional usando BehaviorMetricsTracker.
+
+        Sempre inclui o position summary (histórico acumulado) quando há dados,
+        e adiciona feedback reativo quando thresholds são excedidos.
+        """
+        if not (hasattr(self, 'behavior_metrics') and self.behavior_metrics):
+            return ""
+
+        parts = []
+        position = self.behavior_metrics.get_position_summary(agent)
+        if position:
+            parts.append(position)
+
+        feedback = self.behavior_metrics.generate_feedback(agent)
+        if feedback:
+            # generate_feedback já inclui o status operacional; evitar duplicar
+            # se position summary já cobriu o básico
+            if position:
+                # Extrair apenas as dicas (linhas que começam com "- " seguido de maiúscula)
+                feedback_lines = feedback.split("\n")
+                tips = [l for l in feedback_lines if l.startswith("- ") and any(
+                    kw in l for kw in ("ALTA", "RESPOSTAS VAZIAS", "FALTA", "REDUNDANT", "SÍNTESES", "LATÊNCIA", "DELEGAÇÕES", "BAIXA")
+                )]
+                if tips:
+                    parts.append("  Dicas baseadas no seu histórico:\n" + "\n".join(tips))
+            else:
+                parts.append(feedback)
+
+        return "\n".join(parts) if parts else ""
 
     @staticmethod
     def _generate_handoff_id(task, target, timestamp=None):

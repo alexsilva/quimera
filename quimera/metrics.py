@@ -9,8 +9,10 @@ Rastreia métricas de eficiência colaborativa:
 - Taxa de síntese que requer correção
 """
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 import time
+import json
+from pathlib import Path
 
 
 @dataclass
@@ -95,15 +97,55 @@ class AgentBehaviorMetrics:
         if needed_correction:
             self.synthesis_corrections += 1
 
+    def to_dict(self) -> dict:
+        """Converte para dicionário para serialização JSON."""
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> 'AgentBehaviorMetrics':
+        """Cria instância a partir de um dicionário."""
+        return cls(**data)
+
 
 class BehaviorMetricsTracker:
     """Rastreia métricas de comportamento de todos os agentes."""
     
-    def __init__(self):
-        self._metrics: dict[str, AgentBehaviorMetrics] = defaultdict(
-            lambda: AgentBehaviorMetrics(agent_name="unknown")
-        )
+    def __init__(self, storage_path: Path | str | None = None):
+        self._metrics: dict[str, AgentBehaviorMetrics] = {}
+        self._storage_path = Path(storage_path) if storage_path else None
+        if self._storage_path:
+            self.load()
     
+    def load(self):
+        """Carrega métricas do armazenamento persistente."""
+        if not self._storage_path or not self._storage_path.exists():
+            return 0
+            
+        try:
+            data = json.loads(self._storage_path.read_text(encoding="utf-8"))
+            for agent_name, metrics_data in data.items():
+                self._metrics[agent_name] = AgentBehaviorMetrics.from_dict(metrics_data)
+            return len(data)
+        except (json.JSONDecodeError, OSError, TypeError, KeyError):
+            # Se falhar ao carregar, ignora e começa do zero
+            return 0
+
+    def save(self):
+        """Grava métricas no armazenamento persistente."""
+        if not self._storage_path:
+            return
+            
+        try:
+            self._storage_path.parent.mkdir(parents=True, exist_ok=True)
+            data = {name: metrics.to_dict() for name, metrics in self._metrics.items()}
+            self._storage_path.write_text(
+                json.dumps(data, indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8"
+            )
+        except Exception as e:
+            import sys
+            print(f"[metrics] Falha ao salvar métricas: {e}", file=sys.stderr)
+
     def get_agent(self, agent_name: str) -> AgentBehaviorMetrics:
         """Obtém ou cria métricas para um agente."""
         if agent_name not in self._metrics:
@@ -116,21 +158,25 @@ class BehaviorMetricsTracker:
         """Registra uma resposta."""
         metrics = self.get_agent(agent_name)
         metrics.record_response(latency_seconds, has_next_step, is_empty, is_redundant)
+        self.save()
     
     def record_handoff_sent(self, agent_name: str, is_invalid: bool = False):
         """Registra um handoff enviado."""
         metrics = self.get_agent(agent_name)
         metrics.record_handoff_sent(is_invalid)
+        self.save()
     
     def record_handoff_received(self, agent_name: str, is_circular: bool = False):
         """Registra um handoff recebido."""
         metrics = self.get_agent(agent_name)
         metrics.record_handoff_received(is_circular)
+        self.save()
     
     def record_synthesis(self, agent_name: str, needed_correction: bool = False):
         """Registra uma operação de síntese."""
         metrics = self.get_agent(agent_name)
         metrics.record_synthesis(needed_correction)
+        self.save()
     
     def get_agent_summary(self, agent_name: str) -> dict:
         """Retorna resumo das métricas de um agente."""
@@ -156,7 +202,41 @@ class BehaviorMetricsTracker:
             self.get_agent_summary(name)
             for name in sorted(self._metrics.keys())
         ]
-    
+
+    def get_position_summary(self, agent_name: str) -> str:
+        """Retorna resumo da posição do agente baseado no histórico persistido.
+
+        Diferente de generate_feedback (que só ativa com thresholds), este método
+        SEMPRE mostra o estado atual quando há métricas acumuladas.
+        """
+        metrics = self.get_agent(agent_name)
+        if metrics.responses_total == 0:
+            return ""
+
+        parts = [
+            f"- SEU HISTÓRICO ({metrics.responses_total} respostas em sessões anteriores):",
+            f"  Latência média: {metrics.avg_latency_seconds:.1f}s | "
+            f"Handoffs: {metrics.handoffs_sent} enviados, {metrics.handoffs_received} recebidos | "
+            f"Próximos passos claros: {metrics.next_step_clarity_rate:.0%}",
+        ]
+
+        warnings = []
+        if metrics.invalid_handoff_rate > 0.3:
+            warnings.append(f"handoffs inválidos {metrics.invalid_handoff_rate:.0%}")
+        if metrics.empty_response_rate > 0.2:
+            warnings.append(f"respostas vazias {metrics.empty_response_rate:.0%}")
+        if metrics.handoffs_circular_detected > 0:
+            warnings.append(f"{metrics.handoffs_circular_detected} delegações circulares")
+        if metrics.synthesis_requests >= 3 and metrics.synthesis_corrections / metrics.synthesis_requests > 0.5:
+            warnings.append(f"sínteses com correção {metrics.synthesis_corrections}/{metrics.synthesis_requests}")
+        if metrics.avg_latency_seconds > 30 and metrics.response_count >= 5:
+            warnings.append(f"latência alta ({metrics.avg_latency_seconds:.1f}s)")
+
+        if warnings:
+            parts.append(f"  Atenção: {', '.join(warnings)}")
+
+        return "\n".join(parts)
+
     def generate_feedback(self, agent_name: str) -> str:
         """Gera feedback acionável baseado nas métricas do agente."""
         metrics = self.get_agent(agent_name)
@@ -231,8 +311,14 @@ class BehaviorMetricsTracker:
                     "  Revise o formato do payload ou resolva sem delegar."
                 )
         
-        if not feedback_parts:
-            return ""
+        summary = (
+            f"- STATUS OPERACIONAL: {metrics.responses_total} turnos registrados.\n"
+            f"  Latência média: {metrics.avg_latency_seconds:.1f}s | "
+            f"Próximo passo claro: {metrics.next_step_clarity_rate:.0%}"
+        )
         
-        header = "\n".join(feedback_parts)
+        if not feedback_parts:
+            return summary
+        
+        header = summary + "\n" + "\n".join(feedback_parts)
         return header

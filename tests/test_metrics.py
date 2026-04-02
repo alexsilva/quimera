@@ -138,6 +138,42 @@ class TestBehaviorMetricsTracker(unittest.TestCase):
         
         self.assertIn("circulares", feedback.lower())
 
+    def test_persistence(self):
+        """Verifica se o ciclo save -> reload -> load funciona corretamente."""
+        import tempfile
+        import os
+        from pathlib import Path
+        
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
+            tmp_path = Path(tmp.name)
+            
+        try:
+            # 1. Cria tracker, grava dados e salva
+            tracker1 = BehaviorMetricsTracker(storage_path=tmp_path)
+            tracker1.record_response("claude", 2.0, has_next_step=True)
+            tracker1.record_handoff_sent("claude", is_invalid=False)
+            tracker1.record_synthesis("claude", needed_correction=True)
+            
+            # 2. Cria novo tracker com o mesmo path e verifica se carregou
+            tracker2 = BehaviorMetricsTracker(storage_path=tmp_path)
+            summary = tracker2.get_agent_summary("claude")
+            
+            self.assertEqual(summary["responses_total"], 1)
+            self.assertEqual(summary["handoffs_sent"], 1)
+            self.assertEqual(summary["synthesis_corrections"], 1)
+            self.assertEqual(summary["agent"], "claude")
+            
+            # 3. Adiciona mais dados e salva de novo
+            tracker2.record_response("codex", 1.5)
+            
+            tracker3 = BehaviorMetricsTracker(storage_path=tmp_path)
+            self.assertEqual(tracker3.get_agent_summary("codex")["responses_total"], 1)
+            self.assertEqual(tracker3.get_agent_summary("claude")["responses_total"], 1)
+            
+        finally:
+            if tmp_path.exists():
+                os.unlink(tmp_path)
+
 
 class TestPromptMetricsFeedback(unittest.TestCase):
     """Testes para integração de métricas no prompt."""

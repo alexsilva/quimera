@@ -501,6 +501,7 @@ class ProtocolTests(unittest.TestCase):
                 self.context_session = Path("/tmp/quimera_session_context.md")
                 self.logs_dir = Path("/tmp/quimera_logs")
                 self.history_file = Path("/tmp/quimera_history")
+                self.state_dir = Path("/tmp/quimera_state")
 
             def migrate_from_legacy(self, cwd):
                 return []
@@ -552,6 +553,7 @@ class ProtocolTests(unittest.TestCase):
                 self.context_session = Path("/tmp/quimera_session_context.md")
                 self.logs_dir = Path("/tmp/quimera_logs")
                 self.history_file = Path("/tmp/quimera_history")
+                self.state_dir = Path("/tmp/quimera_state")
 
             def migrate_from_legacy(self, cwd):
                 return []
@@ -591,6 +593,7 @@ class ProtocolTests(unittest.TestCase):
                 self.context_session = Path("/tmp/quimera_session_context.md")
                 self.logs_dir = Path("/tmp/quimera_logs")
                 self.history_file = Path("/tmp/quimera_history")
+                self.state_dir = Path("/tmp/quimera_state")
 
             def migrate_from_legacy(self, cwd):
                 return []
