@@ -30,6 +30,7 @@ from .session_summary import SessionSummarizer, build_chain_summarizer
 from .prompt import PromptBuilder
 from .workspace import Workspace
 from .config import ConfigManager
+from .metrics import BehaviorMetricsTracker
 from . import plugins
 from .constants import (
     build_help,
@@ -159,8 +160,14 @@ class QuimeraApp:
             "handoffs_succeeded": 0,
             "handoffs_failed": 0,
             "total_latency": 0.0,
-            "agent_metrics": {},  # Per-agent: {agent: {sent, received, succeeded, failed, latency}}
+            "agent_metrics": {},
+            "rounds_without_progress": 0,
+            "consecutive_redundant_responses": 0,
+            "handoff_invalid_count": 0,
+            "responses_with_clear_next_step": 0,
+            "total_responses": 0,
         }
+        self.behavior_metrics = BehaviorMetricsTracker()
         self.debug_prompt_metrics = debug
         self.round_index = 0
         self.session_call_index = 0
@@ -523,6 +530,7 @@ class QuimeraApp:
         start = time.time()
         history = [] if handoff_only else self.history
         if self.debug_prompt_metrics:
+            metrics_feedback = self.generate_metrics_feedback(agent)
             prompt, metrics = self.prompt_builder.build(
                 agent,
                 history,
@@ -533,6 +541,7 @@ class QuimeraApp:
                 shared_state=self.shared_state,
                 handoff_only=handoff_only,
                 from_agent=from_agent,
+                metrics_feedback=metrics_feedback,
             )
             self.agent_client.log_prompt_metrics(
                 agent, metrics,
@@ -543,10 +552,12 @@ class QuimeraApp:
                 protocol_mode=protocol_mode,
             )
         else:
+            metrics_feedback = self.generate_metrics_feedback(agent)
             prompt = self.prompt_builder.build(
                 agent, history, is_first_speaker, handoff,
                 primary=primary, shared_state=self.shared_state,
                 handoff_only=handoff_only, from_agent=from_agent,
+                metrics_feedback=metrics_feedback,
             )
         result = self.agent_client.call(agent, prompt, silent=silent)
         elapsed = time.time() - start
@@ -561,6 +572,11 @@ class QuimeraApp:
             except KeyError:
                 pass  # Old session state without metrics
             self._record_agent_metric(agent, "succeeded" if result else "failed", elapsed)
+            # Registra latência no BehaviorMetricsTracker
+            if hasattr(self, 'behavior_metrics') and self.behavior_metrics:
+                m = self.behavior_metrics.get_agent(agent)
+                m.total_latency_seconds += elapsed
+                m.response_count += 1
         _logger.info("[DISPATCH] agent=%s latency=%.2fs result=%s", agent, elapsed, "ok" if result else "none")
         return result
 
@@ -598,6 +614,56 @@ class QuimeraApp:
         if latency:
             metrics[agent]["latency"] += latency
         self.session_state["agent_metrics"] = metrics
+
+        if hasattr(self, 'behavior_metrics') and self.behavior_metrics:
+            if metric_name in ("succeeded", "failed"):
+                self.behavior_metrics.record_response(
+                    agent, latency,
+                    has_next_step=metric_name == "succeeded",
+                    is_empty=metric_name == "failed",
+                )
+
+    def _has_clear_next_step(self, response):
+        """Detecta se a resposta indica próximo passo claro."""
+        if not response:
+            return False
+        response_lower = response.lower()
+        indicators = [
+            "próximo passo",
+            "próxima etapa",
+            "avançar",
+            "continuar com",
+            "a seguir",
+            "para continuar",
+            "próxima ação",
+            "tarefa completa",
+            "finalizado",
+            "concluído",
+            "done",
+            "next step",
+            "continuando",
+        ]
+        return any(ind in response_lower for ind in indicators)
+
+    def _is_response_redundant(self, response, history):
+        """Detecta se a resposta é redundante comparada ao histórico recente."""
+        if not response or len(history) < 2:
+            return False
+        response_clean = response.lower().strip()
+        recent_responses = [m["content"].lower().strip() for m in history[-3:] if m.get("role") != "human"]
+        for past in recent_responses:
+            if past and len(past) > 50 and len(response_clean) > 50:
+                from difflib import SequenceMatcher
+                similarity = SequenceMatcher(None, past, response_clean).ratio()
+                if similarity > 0.7:
+                    return True
+        return False
+
+    def generate_metrics_feedback(self, agent):
+        """Gera bloco de feedback operacional usando BehaviorMetricsTracker."""
+        if hasattr(self, 'behavior_metrics') and self.behavior_metrics:
+            return self.behavior_metrics.generate_feedback(agent)
+        return ""
 
     @staticmethod
     def _generate_handoff_id(task, target, timestamp=None):
@@ -671,6 +737,13 @@ class QuimeraApp:
                             pass  # Old session state without metrics
                 else:
                     _logger.warning("[ROUTE] handoff parse failed for target=%s, payload: %r", route_target, raw_payload)
+                    if hasattr(self, 'session_state') and self.session_state:
+                        try:
+                            self.session_state["handoff_invalid_count"] = self.session_state.get("handoff_invalid_count", 0) + 1
+                        except KeyError:
+                            pass
+                    if hasattr(self, 'behavior_metrics') and self.behavior_metrics:
+                        self.behavior_metrics.record_handoff_sent(route_target, is_invalid=True)
                     route_target = None  # Reset target if handoff parse fails
                 response = self.ROUTE_PATTERN.sub("", response, count=1).strip() or "..."
 
@@ -735,6 +808,28 @@ class QuimeraApp:
             self.history.append({"role": role, "content": content})
             self.storage.append_log(role, content)
             self.storage.save_history(self.history, shared_state=self.shared_state)
+            if hasattr(self, 'session_state') and self.session_state and role != "human":
+                try:
+                    self.session_state["total_responses"] = self.session_state.get("total_responses", 0) + 1
+                    has_next = self._has_clear_next_step(content)
+                    is_redundant = self._is_response_redundant(content, self.history)
+                    is_empty = not content or not content.strip()
+                    if has_next:
+                        self.session_state["responses_with_clear_next_step"] = self.session_state.get("responses_with_clear_next_step", 0) + 1
+                    if is_redundant:
+                        self.session_state["consecutive_redundant_responses"] = self.session_state.get("consecutive_redundant_responses", 0) + 1
+                    else:
+                        self.session_state["consecutive_redundant_responses"] = 0
+                    # Integra com BehaviorMetricsTracker
+                    if hasattr(self, 'behavior_metrics') and self.behavior_metrics:
+                        self.behavior_metrics.record_response(
+                            role, 0.0,
+                            has_next_step=has_next,
+                            is_empty=is_empty,
+                            is_redundant=is_redundant,
+                        )
+                except KeyError:
+                    pass
 
     def _maybe_auto_summarize(self, preferred_agent=None):
         """Sumariza e trunca o histórico quando excede o threshold configurado."""
@@ -885,6 +980,8 @@ class QuimeraApp:
                             "[HANDOFF] Circular delegation detected: %s -> %s (chain: %s)",
                             first_agent, route_target, chain,
                         )
+                        if hasattr(self, 'behavior_metrics') and self.behavior_metrics:
+                            self.behavior_metrics.record_handoff_received(route_target, is_circular=True)
                         self.renderer.show_warning(
                             f"Delegação circular detectada: {first_agent} -> {route_target}. "
                             f"Cadeia: {' -> '.join(chain + [route_target])}"
@@ -903,6 +1000,10 @@ class QuimeraApp:
                     # Propaga a cadeia de handoffs
                     if isinstance(handoff, dict):
                         handoff["chain"] = chain + [first_agent]
+                    # Registra métricas de handoff
+                    if hasattr(self, 'behavior_metrics') and self.behavior_metrics:
+                        self.behavior_metrics.record_handoff_sent(first_agent)
+                        self.behavior_metrics.record_handoff_received(route_target)
                     # Handoff v1: agente secundário recebe apenas o payload delegado
                     secondary_response = self.call_agent(
                         route_target,
@@ -962,6 +1063,9 @@ class QuimeraApp:
                             task=handoff["task"],
                             response=secondary_response,
                         )
+                        # Registra síntese no BehaviorMetricsTracker
+                        if hasattr(self, 'behavior_metrics') and self.behavior_metrics:
+                            self.behavior_metrics.record_synthesis(first_agent)
                         final_response = self.call_agent(
                             first_agent,
                             handoff=synthesis_handoff,

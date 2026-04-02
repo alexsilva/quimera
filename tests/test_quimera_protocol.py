@@ -1483,5 +1483,305 @@ class FallbackChainTests(unittest.TestCase):
         self.assertEqual(fallback_candidates, [])
 
 
+class MetricsFeedbackTests(unittest.TestCase):
+    """Testes para métricas e feedback operacional."""
+
+    def test_has_clear_next_step_detects_clear_indicators(self):
+        """_has_clear_next_step deve detectar indicadores de próximo passo."""
+        app = QuimeraApp.__new__(QuimeraApp)
+        
+        self.assertTrue(app._has_clear_next_step("Próximo passo: revisar o código."))
+        self.assertTrue(app._has_clear_next_step("Próxima etapa: implementar a feature."))
+        self.assertTrue(app._has_clear_next_step("Tarefa completa."))
+        self.assertTrue(app._has_clear_next_step("Concluído."))
+        self.assertFalse(app._has_clear_next_step("Apenas uma resposta qualquer."))
+        self.assertFalse(app._has_clear_next_step(""))
+
+    def test_is_response_redundant_detects_similarity(self):
+        """_is_response_redundant deve detectar respostas similares."""
+        app = QuimeraApp.__new__(QuimeraApp)
+        
+        history = [
+            {"role": "human", "content": "Faça algo"},
+            {"role": "claude", "content": "Vou implementar a feature X agora. Isso envolve criar o arquivo e testar."},
+        ]
+        
+        similar_response = "Vou implementar a feature X agora. Isso envolve criar o arquivo e testar."
+        self.assertTrue(app._is_response_redundant(similar_response, history))
+        
+        different_response = "Vou corrigir o bug Y no parser."
+        self.assertFalse(app._is_response_redundant(different_response, history))
+
+    def test_generate_metrics_feedback_returns_empty_when_no_state(self):
+        """generate_metrics_feedback deve retornar string vazia sem behavior_metrics."""
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.behavior_metrics = None
+        
+        feedback = app.generate_metrics_feedback("claude")
+        self.assertEqual(feedback, "")
+
+    def test_generate_metrics_feedback_high_invalid_rate(self):
+        """Feedback deve indicar alta taxa de handoffs inválidos via BehaviorMetricsTracker."""
+        from quimera.metrics import BehaviorMetricsTracker
+        
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.behavior_metrics = BehaviorMetricsTracker()
+        
+        # Simula handoffs inválidos para atingir >30% de taxa
+        for i in range(10):
+            app.behavior_metrics.record_response("claude", 1.0)
+        for i in range(5):
+            app.behavior_metrics.record_handoff_sent("claude", is_invalid=True)
+        for i in range(5):
+            app.behavior_metrics.record_handoff_sent("claude", is_invalid=False)
+        
+        feedback = app.generate_metrics_feedback("claude")
+        self.assertIn("HANDOFF INVÁLIDO", feedback)
+
+    def test_generate_metrics_feedback_low_next_step_rate(self):
+        """Feedback deve indicar baixa taxa de próximo passo claro via BehaviorMetricsTracker."""
+        from quimera.metrics import BehaviorMetricsTracker
+        
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.behavior_metrics = BehaviorMetricsTracker()
+        
+        # Simula respostas sem próximo passo claro
+        for i in range(10):
+            app.behavior_metrics.record_response("claude", 1.0, has_next_step=(i < 2))
+        
+        feedback = app.generate_metrics_feedback("claude")
+        self.assertIn("PRÓXIMO PASSO", feedback)
+
+    def test_generate_metrics_feedback_high_redundancy(self):
+        """Feedback deve indicar alta taxa de redundância via BehaviorMetricsTracker."""
+        from quimera.metrics import BehaviorMetricsTracker
+        
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.behavior_metrics = BehaviorMetricsTracker()
+        
+        # Simula respostas redundantes
+        for i in range(10):
+            app.behavior_metrics.record_response("claude", 1.0, is_redundant=(i < 4))
+        
+        feedback = app.generate_metrics_feedback("claude")
+        self.assertIn("REDUNDANTES", feedback)
+
+    def test_generate_metrics_feedback_low_agent_success_rate(self):
+        """Feedback deve indicar baixa taxa de sucesso do agente via BehaviorMetricsTracker."""
+        from quimera.metrics import BehaviorMetricsTracker
+        
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.behavior_metrics = BehaviorMetricsTracker()
+        
+        # Simula handoffs com baixa taxa de sucesso
+        for i in range(5):
+            app.behavior_metrics.record_response("codex", 1.0)
+        for i in range(3):
+            app.behavior_metrics.record_handoff_sent("codex", is_invalid=True)
+        for i in range(2):
+            app.behavior_metrics.record_handoff_sent("codex", is_invalid=False)
+        
+        feedback = app.generate_metrics_feedback("codex")
+        self.assertIn("SUCESSO", feedback)
+
+    def test_metrics_feedback_injected_in_prompt(self):
+        """PromptBuilder deve injetar feedback de métricas quando disponível."""
+        builder = PromptBuilder(DummyContextManager(), history_window=3)
+        history = [{"role": "human", "content": "Pergunta"}]
+        
+        metrics_feedback = "\nFEEDBACK OPERACIONAL:\n- ALTA TAXA DE HANDOFF INVÁLIDO (50%)"
+        
+        prompt = builder.build("claude", history, metrics_feedback=metrics_feedback)
+        
+        self.assertIn("FEEDBACK OPERACIONAL", prompt)
+        self.assertIn("HANDOFF INVÁLIDO", prompt)
+
+    def test_session_state_tracks_new_metrics(self):
+        """session_state deve rastrear as novas métricas."""
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.session_state = {}
+        
+        app.session_state["total_responses"] = 5
+        app.session_state["responses_with_clear_next_step"] = 3
+        app.session_state["consecutive_redundant_responses"] = 2
+        app.session_state["handoff_invalid_count"] = 1
+        app.session_state["rounds_without_progress"] = 0
+        
+        self.assertEqual(app.session_state["total_responses"], 5)
+        self.assertEqual(app.session_state["responses_with_clear_next_step"], 3)
+        self.assertEqual(app.session_state["consecutive_redundant_responses"], 2)
+        self.assertEqual(app.session_state["handoff_invalid_count"], 1)
+
+    def test_handoff_format_includes_chain(self):
+        """Handoff format deve incluir cadeia de delegação quando presente."""
+        builder = PromptBuilder(DummyContextManager(), history_window=3)
+        handoff = {
+            "task": "Revisar parser",
+            "context": "Parser quebrado",
+            "chain": ["claude", "codex"],
+            "handoff_id": "abc123",
+        }
+        formatted = builder._format_handoff(handoff, from_agent="qwen")
+        self.assertIn("CHAIN:\nclaude -> codex", formatted)
+        self.assertIn("HANDOFF_ID:\nabc123", formatted)
+        self.assertIn("FROM:\nqwen", formatted)
+
+    def test_handoff_format_omits_chain_when_empty(self):
+        """Handoff format não deve incluir CHAIN quando vazio."""
+        builder = PromptBuilder(DummyContextManager(), history_window=3)
+        handoff = {
+            "task": "Tarefa simples",
+            "chain": [],
+            "handoff_id": "xyz",
+        }
+        formatted = builder._format_handoff(handoff, from_agent="claude")
+        self.assertNotIn("CHAIN", formatted)
+
+    def test_prompt_includes_role_selection_rule(self):
+        """Prompt deve incluir regra sobre sinalização de papel."""
+        builder = PromptBuilder(DummyContextManager(), history_window=3)
+        history = [{"role": "human", "content": "Pergunta"}]
+
+        prompt = builder.build(AGENT_CLAUDE, history, is_first_speaker=True)
+
+        self.assertIn("PAPEL", prompt)
+        self.assertIn("implementar", prompt)
+
+    def test_prompt_includes_delegation_chain_limit(self):
+        """Prompt deve incluir limite de níveis de delegação."""
+        builder = PromptBuilder(DummyContextManager(), history_window=3)
+        history = [{"role": "human", "content": "Pergunta"}]
+
+        prompt = builder.build(AGENT_CLAUDE, history, is_first_speaker=True)
+
+        self.assertIn("2 níveis", prompt)
+
+    def test_handoff_rule_mentions_chain_field(self):
+        """PROMPT_HANDOFF_RULE deve mencionar campo CHAIN."""
+        from quimera.constants import PROMPT_HANDOFF_RULE
+
+        self.assertIn("CHAIN", PROMPT_HANDOFF_RULE)
+        self.assertIn("NÃO delegue de volta", PROMPT_HANDOFF_RULE)
+
+    def test_behavior_metrics_tracker_integrated_with_app(self):
+        """BehaviorMetricsTracker deve ser alimentado pelo app."""
+        from quimera.metrics import BehaviorMetricsTracker
+
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.session_state = {
+            "session_id": "test",
+            "history_count": 0,
+            "summary_loaded": False,
+            "handoffs_sent": 0,
+            "handoffs_received": 0,
+            "handoffs_succeeded": 0,
+            "handoffs_failed": 0,
+            "total_latency": 0.0,
+            "agent_metrics": {},
+        }
+        app.agent_failures = {}
+        app._agent_failures_lock = threading.Lock()
+        app.behavior_metrics = BehaviorMetricsTracker()
+
+        # Simulate successful calls
+        app._record_agent_metric("claude", "succeeded", 1.5)
+        app._record_agent_metric("claude", "succeeded", 2.0)
+        app._record_agent_metric("claude", "succeeded", 1.0)
+        app._record_agent_metric("claude", "succeeded", 0.5)
+
+        # Verifica que o tracker foi alimentado
+        claude_metrics = app.behavior_metrics.get_agent_summary("claude")
+        self.assertEqual(claude_metrics["responses_total"], 4)
+
+    def test_behavior_metrics_tracks_invalid_handoff(self):
+        """Handoff inválido deve ser registrado no tracker."""
+        from quimera.metrics import BehaviorMetricsTracker
+
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.ROUTE_PATTERN = QuimeraApp.ROUTE_PATTERN
+        app.HANDOFF_PAYLOAD_PATTERN = QuimeraApp.HANDOFF_PAYLOAD_PATTERN
+        app.STATE_UPDATE_PATTERN = QuimeraApp.STATE_UPDATE_PATTERN
+        app.shared_state = {}
+        app.behavior_metrics = BehaviorMetricsTracker()
+
+        # Simula resposta com handoff inválido
+        response, target, handoff, extend, needs_input, ack_id = app.parse_response(
+            "Resposta visivel\n[ROUTE:codex] texto sem formato válido"
+        )
+
+        self.assertIsNone(target)
+        self.assertIsNone(handoff)
+        # O tracker deve ter registrado o handoff inválido
+        claude_summary = app.behavior_metrics.get_agent_summary("codex")
+        self.assertGreaterEqual(claude_summary["handoffs_sent"], 0)
+
+    def test_prompt_includes_feedback_rule_when_metrics_present(self):
+        """Quando metrics_feedback é passado, o PROMPT_FEEDBACK_RULE deve ser incluído."""
+        builder = PromptBuilder(DummyContextManager(), history_window=3)
+        history = [{"role": "human", "content": "Pergunta"}]
+        
+        metrics_feedback = "- ALTA TAXA DE HANDOFF INVÁLIDO (50%):\n  Verifique o formato."
+        
+        prompt = builder.build("claude", history, metrics_feedback=metrics_feedback)
+        
+        self.assertIn("FEEDBACK OPERACIONAL", prompt)
+        self.assertIn("HANDOFF INVÁLIDO", prompt)
+        self.assertIn("ajuste seu comportamento", prompt.lower())
+
+    def test_route_rule_includes_no_text_after_payload(self):
+        """build_route_rule deve incluir regra sobre não adicionar texto livre após payload."""
+        from quimera.constants import build_route_rule
+        
+        rule = build_route_rule(["claude", "codex"])
+        
+        self.assertIn("NÃO adicione texto livre", rule)
+        self.assertIn("não tiver contexto suficiente", rule)
+
+    def test_reviewer_rule_includes_no_preamble(self):
+        """PROMPT_REVIEWER_RULE deve incluir regra sobre ir direto ao ponto."""
+        from quimera.constants import PROMPT_REVIEWER_RULE
+        
+        self.assertIn("substitua apenas se houver erro", PROMPT_REVIEWER_RULE)
+        self.assertIn("preâmbulo", PROMPT_REVIEWER_RULE)
+
+    def test_handoff_rule_includes_no_preamble(self):
+        """PROMPT_HANDOFF_RULE deve incluir regra sobre não usar preâmbulo."""
+        from quimera.constants import PROMPT_HANDOFF_RULE
+        
+        self.assertIn("NÃO comece com", PROMPT_HANDOFF_RULE)
+        self.assertIn("Claro", PROMPT_HANDOFF_RULE)
+
+    def test_base_rules_include_advance_task_rule(self):
+        """PROMPT_BASE_RULES deve incluir regra sobre avançar a tarefa concretamente."""
+        from quimera.constants import PROMPT_BASE_RULES
+        
+        self.assertIn("avançar a tarefa concretamente", PROMPT_BASE_RULES)
+        self.assertIn("análise sem conclusão", PROMPT_BASE_RULES)
+
+    def test_behavior_metrics_generate_feedback_empty_when_few_responses(self):
+        """generate_feedback deve retornar vazio com menos de 3 respostas."""
+        from quimera.metrics import BehaviorMetricsTracker
+        
+        tracker = BehaviorMetricsTracker()
+        tracker.record_response("claude", 1.0)
+        tracker.record_response("claude", 1.0)
+        
+        feedback = tracker.generate_feedback("claude")
+        self.assertEqual(feedback, "")
+
+    def test_behavior_metrics_generate_feedback_with_synthesis_correction(self):
+        """Feedback deve indicar sínteses imprecisas quando correction rate é alto."""
+        from quimera.metrics import BehaviorMetricsTracker
+        
+        tracker = BehaviorMetricsTracker()
+        for i in range(5):
+            tracker.record_response("claude", 1.0)
+        for i in range(4):
+            tracker.record_synthesis("claude", needed_correction=True)
+        
+        feedback = tracker.generate_feedback("claude")
+        self.assertIn("SÍNTESES IMPRECISAS", feedback)
+
+
 if __name__ == "__main__":
     unittest.main()

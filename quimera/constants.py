@@ -166,11 +166,30 @@ PROMPT_BASE_RULES = (
     "- Ao finalizar sua parte, indique explicitamente o próximo passo para quem vai continuar.\n"
     "- Siga rigorosamente o formato de saída esperado (ROUTE, STATE_UPDATE, ACK) para que o sistema consiga parsear sua resposta.\n"
     "- NÃO delegue decisões de UX ou interface ao humano — isso é responsabilidade do desenvolvedor.\n"
+    "- NÃO use ROUTE para tarefas simples que podem ser resolvidas em uma única resposta.\n"
+    "- NÃO delegue decisões de arquitetura ou design ao humano — proponha alternativas concretas.\n"
+    "- Verifique se o agente alvo já participou da conversa antes de delegar para evitar loops.\n"
+    "- Se você já está na cadeia de handoffs, NÃO delegue para agentes que já participaram.\n"
+    "- Máximo de 2 níveis de delegação em cadeia (A→B→C é o limite). Se precisar de mais, resolva você mesmo.\n"
+    "- Escolha papel apropriado quando útil: planejar, implementar, revisar, integrar, depurar, coordenar.\n"
+    "- Ao escolher um papel, sinalize no início da resposta (ex: '[PAPEL: implementar]'). Isso ajuda outros agentes a entenderem sua contribuição.\n"
+    "- Deixe explícito o que foi feito, o que falta, riscos e próximo passo.\n"
+    "- Corrija a colaboração quando detectar confusão, loop, redundância ou falta de dono.\n"
+    "- Cada resposta deve avançar a tarefa concretamente. Não responda apenas com análise sem conclusão ou ação proposta.\n"
+    "- Se identificar que algo está faltando ou que há risco, diga explicitamente e proponha como resolver.\n"
+    "- Se a conversa estiver confusa, redundante ou sem dono claro, resuma o estado atual e indique o próximo passo.\n"
+    "- Quando houver risco de erro ou decisão importante, peça revisão específica ao outro agente em vez de prosseguir sozinho.\n"
     "\n"
     "PROATIVIDADE:\n"
     "- Quando encontrar um erro durante a execução, reporte-o mesmo que não seja o foco da tarefa.\n"
     "- Se detectar que a tarefa foi mal especificada, peça esclarecimento via [NEEDS_INPUT] em vez de adivinhar.\n"
     "- Prefira ações pequenas e verificáveis a grandes refatorações de uma vez.\n"
+    "\n"
+    "FORMATO DE SAÍDA:\n"
+    "- ROUTE, STATE_UPDATE, ACK são parseados automaticamente. Não improvise sintaxe.\n"
+    "- Payload do handoff deve seguir exatamente o formato esperado: campos key:value separados por '|' ou quebra de linha.\n"
+    "- NÃO misture prosa livre com payload estruturado de roteamento.\n"
+    "- Resposta do agente deve ser claramente separável do bloco de comando [ROUTE:...].\n"
     "\n"
     "REGRAS DE COMUNICAÇÃO:\n"
     "- Responda como em um chat\n"
@@ -206,6 +225,9 @@ def build_route_rule(agent_names):
         "- [NEEDS_INPUT] use quando precisar perguntar algo ao humano.\n"
         "- Se a delegação falhar, tente resolver você mesmo antes de pedir ajuda.\n"
         "- NÃO delegue decisões de UX ou interface ao humano — isso é responsabilidade do desenvolvedor.\n"
+        "- O bloco [ROUTE:...] deve ser seguido APENAS pelo payload (task/context/expected/priority). "
+        "NÃO adicione texto livre, explicações ou comentários após o payload — o parser ignora isso.\n"
+        "- Se não tiver contexto suficiente para um handoff válido, NÃO emita ROUTE. Resolva você mesmo ou peça input humano.\n"
     )
 
 def build_help(agent_names):
@@ -248,6 +270,12 @@ PROMPT_STATE_UPDATE_RULE = (
     f"Coloque {EXTEND_MARKER} depois de [/STATE_UPDATE] se aplicável. "
     "Esse bloco é interno e não será exibido ao humano.\n"
 )
+PROMPT_FEEDBACK_RULE = (
+    "- FEEDBACK OPERACIONAL (baseado em métricas recentes da sessão):\n"
+    "  Leia atentamente e ajuste seu comportamento conforme indicado.\n"
+    "  Este bloco é atualizado dinamicamente para promover colaboração efetiva.\n"
+)
+
 PROMPT_REVIEWER_RULE = (
     "- Você é o segundo agente nesta rodada. "
     "Revise a resposta anterior: concorde, discorde ou complemente. "
@@ -258,6 +286,8 @@ PROMPT_REVIEWER_RULE = (
     "- Indique o próximo passo lógico ao final da sua revisão.\n"
     "- Não compita com o humano — seu papel é auxiliar, não substituir decisões de arquitetura ou interface.\n"
     "- Se a resposta anterior tiver mais de 3 parágrafos, resuma os pontos-chave em bullets antes de comentar.\n"
+    "- Incorpore a resposta anterior quando possível — substitua apenas se houver erro factual.\n"
+    "- Não faça preâmbulo sobre o que vai revisar. Vá direto ao ponto.\n"
 )
 PROMPT_HANDOFF_RULE = (
     "- Você recebeu uma subtarefa delegada por outro agente. "
@@ -266,6 +296,7 @@ PROMPT_HANDOFF_RULE = (
     "- NÃO expanda o escopo — seja direto e objetivo.\n"
     "- Se houver uma cadeia de delegação (ex: A→B→C), você pode ver o campo 'chain' "
     "indicando os agentes anteriores. Use essa informação para evitar delegações circulares.\n"
+    "- Se o campo CHAIN estiver presente, NÃO delegue de volta para nenhum agente listado.\n"
     "- Inicie sua resposta com [ACK:<HANDOFF_ID>] para confirmar recebimento, "
     "substituindo <HANDOFF_ID> pelo valor informado no campo HANDOFF_ID.\n"
     "- Ao final, indique o próximo passo claro para o agente que vai sintetizar sua resposta.\n"
@@ -275,6 +306,7 @@ PROMPT_HANDOFF_RULE = (
     "- Se o handoff não contiver 'task' válido, responda com erro claro indicando o problema.\n"
     "- Sua resposta será integrada pelo agente que delegou. Não repita a pergunta — vá direto à resposta.\n"
     "- Se a tarefa for complexa, estruture em tópicos curtos para facilitar a síntese.\n"
+    "- NÃO comece com 'Claro', 'Vou', 'Analisando' ou qualquer preâmbulo. Vá direto ao conteúdo.\n"
 )
 
 PROMPT_TOOL_RULE = (

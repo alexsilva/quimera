@@ -17,6 +17,7 @@ from .constants import (
     PROMPT_STATE_UPDATE_RULE,
     PROMPT_REVIEWER_RULE,
     PROMPT_HANDOFF_RULE,
+    PROMPT_FEEDBACK_RULE,
     PROMPT_TOOL_RULE,
 )
 from .config import DEFAULT_HISTORY_WINDOW
@@ -42,6 +43,7 @@ class PromptBuilder:
         shared_state=None,
         handoff_only=False,
         from_agent=None,
+        metrics_feedback=None,
     ):
         """Gera o prompt final enviado ao agente da vez.
 
@@ -51,10 +53,16 @@ class PromptBuilder:
         context = self.context_manager.load()
 
         rules = PROMPT_BASE_RULES
+        if metrics_feedback:
+            rules += PROMPT_FEEDBACK_RULE
+            rules += metrics_feedback
         if handoff_only:
             rules += PROMPT_HANDOFF_RULE
         else:
             rules += build_route_rule(plugins.all_names())
+            # Feedback operacional: incluído quando há métricas ou em modo debug
+            if not metrics_feedback and debug:
+                rules += PROMPT_FEEDBACK_RULE
             rules += PROMPT_STATE_UPDATE_RULE
             rules += PROMPT_TOOL_RULE
             if is_first_speaker:
@@ -121,6 +129,7 @@ class PromptBuilder:
             expected = (handoff.get("expected") or "").strip()
             handoff_id = handoff.get("handoff_id")
             priority = handoff.get("priority", "normal")
+            chain = handoff.get("chain", [])
             
             parts = []
             if handoff_id:
@@ -134,6 +143,8 @@ class PromptBuilder:
                 parts.append(f"EXPECTED:\n{expected}")
             if priority and priority != "normal":
                 parts.append(f"PRIORITY:\n{priority.upper()}")
+            if chain:
+                parts.append(f"CHAIN:\n{' -> '.join(chain)}")
             
             return "\n\n".join(parts).strip()
         return str(handoff).strip()
