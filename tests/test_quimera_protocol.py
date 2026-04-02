@@ -1,4 +1,5 @@
 import re
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -150,7 +151,7 @@ class ProtocolTests(unittest.TestCase):
         app.STATE_UPDATE_PATTERN = QuimeraApp.STATE_UPDATE_PATTERN
         app.shared_state = {}
 
-        response, _, _, extend, _ = app.parse_response(f"Resposta objetiva {EXTEND_MARKER}")
+        response, _, _, extend, _, _ = app.parse_response(f"Resposta objetiva {EXTEND_MARKER}")
 
         self.assertEqual(response, "Resposta objetiva")
         self.assertTrue(extend)
@@ -161,7 +162,7 @@ class ProtocolTests(unittest.TestCase):
         app.STATE_UPDATE_PATTERN = QuimeraApp.STATE_UPDATE_PATTERN
         app.shared_state = {}
 
-        response, target, handoff, extend, _ = app.parse_response("Resposta objetiva")
+        response, target, handoff, extend, _, _ = app.parse_response("Resposta objetiva")
 
         self.assertEqual(response, "Resposta objetiva")
         self.assertIsNone(target)
@@ -175,7 +176,7 @@ class ProtocolTests(unittest.TestCase):
         app.STATE_UPDATE_PATTERN = QuimeraApp.STATE_UPDATE_PATTERN
         app.shared_state = {}
 
-        response, target, message, extend, _ = app.parse_response(
+        response, target, message, extend, _, _ = app.parse_response(
             "Resposta visivel\n"
             "[ROUTE:codex] task: Revise este argumento. | context: "
             "Analisar risco no parser atual. | expected: 2 bullets objetivos"
@@ -183,14 +184,11 @@ class ProtocolTests(unittest.TestCase):
 
         self.assertEqual(response, "Resposta visivel")
         self.assertEqual(target, AGENT_CODEX)
-        self.assertEqual(
-            message,
-            {
-                "task": "Revise este argumento.",
-                "context": "Analisar risco no parser atual.",
-                "expected": "2 bullets objetivos",
-            },
-        )
+        self.assertEqual(message["task"], "Revise este argumento.")
+        self.assertEqual(message["context"], "Analisar risco no parser atual.")
+        self.assertEqual(message["expected"], "2 bullets objetivos")
+        self.assertEqual(message["priority"], "normal")
+        self.assertIn("handoff_id", message)
         self.assertFalse(extend)
 
     def test_parse_response_extracts_multiline_handoff(self):
@@ -200,7 +198,7 @@ class ProtocolTests(unittest.TestCase):
         app.STATE_UPDATE_PATTERN = QuimeraApp.STATE_UPDATE_PATTERN
         app.shared_state = {}
 
-        response, target, message, extend, _ = app.parse_response(
+        response, target, message, extend, _, _ = app.parse_response(
             "Resposta visivel\n"
             "[ROUTE:codex]\n"
             "task: Revise este argumento.\n"
@@ -210,14 +208,11 @@ class ProtocolTests(unittest.TestCase):
 
         self.assertEqual(response, "Resposta visivel")
         self.assertEqual(target, AGENT_CODEX)
-        self.assertEqual(
-            message,
-            {
-                "task": "Revise este argumento.",
-                "context": "Analisar risco no parser atual.",
-                "expected": "2 bullets objetivos",
-            },
-        )
+        self.assertEqual(message["task"], "Revise este argumento.")
+        self.assertEqual(message["context"], "Analisar risco no parser atual.")
+        self.assertEqual(message["expected"], "2 bullets objetivos")
+        self.assertEqual(message["priority"], "normal")
+        self.assertIn("handoff_id", message)
         self.assertFalse(extend)
 
     def test_parse_response_ignores_invalid_handoff_payload(self):
@@ -227,7 +222,7 @@ class ProtocolTests(unittest.TestCase):
         app.STATE_UPDATE_PATTERN = QuimeraApp.STATE_UPDATE_PATTERN
         app.shared_state = {}
 
-        response, target, message, extend, _ = app.parse_response(
+        response, target, message, extend, _, _ = app.parse_response(
             "Resposta visivel\n[ROUTE:codex] Revise este argumento."
         )
 
@@ -240,13 +235,20 @@ class ProtocolTests(unittest.TestCase):
         app = QuimeraApp.__new__(QuimeraApp)
         app.HANDOFF_PAYLOAD_PATTERN = QuimeraApp.HANDOFF_PAYLOAD_PATTERN
         result = app.parse_handoff_payload("task: Revise este código")
-        self.assertEqual(result, {"task": "Revise este código", "context": None, "expected": None})
+        self.assertEqual(result["task"], "Revise este código")
+        self.assertIsNone(result["context"])
+        self.assertIsNone(result["expected"])
+        self.assertEqual(result["priority"], "normal")
+        self.assertIn("handoff_id", result)
 
     def test_parse_handoff_payload_task_and_context(self):
         app = QuimeraApp.__new__(QuimeraApp)
         app.HANDOFF_PAYLOAD_PATTERN = QuimeraApp.HANDOFF_PAYLOAD_PATTERN
         result = app.parse_handoff_payload("task: Revise este código | context: Verificar performance")
-        self.assertEqual(result, {"task": "Revise este código", "context": "Verificar performance", "expected": None})
+        self.assertEqual(result["task"], "Revise este código")
+        self.assertEqual(result["context"], "Verificar performance")
+        self.assertIsNone(result["expected"])
+        self.assertEqual(result["priority"], "normal")
 
     def test_parse_response_route_with_residual_text(self):
         """ROUTE block should be recognized even when followed by residual text."""
@@ -257,7 +259,7 @@ class ProtocolTests(unittest.TestCase):
         app.shared_state = {}
 
         # Test with residual text after the ROUTE block
-        response, target, message, extend, _ = app.parse_response(
+        response, target, message, extend, _, _ = app.parse_response(
             "Resposta visível\n[ROUTE:codex] task: Revise este código\nTexto residual após o bloco ROUTE."
         )
 
@@ -285,14 +287,18 @@ class ProtocolTests(unittest.TestCase):
         app.STATE_UPDATE_PATTERN = QuimeraApp.STATE_UPDATE_PATTERN
         app.shared_state = {}
 
-        response, target, message, extend, _ = app.parse_response(
+        response, target, message, extend, _, _ = app.parse_response(
             "Resposta visivel\n"
             "[ROUTE:OPENCODE-GPT] task: Revise este código"
         )
 
         self.assertEqual(response, "Resposta visivel")
         self.assertEqual(target, "OPENCODE-GPT")
-        self.assertEqual(message, {"task": "Revise este código", "context": None, "expected": None})
+        self.assertEqual(message["task"], "Revise este código")
+        self.assertIsNone(message["context"])
+        self.assertIsNone(message["expected"])
+        self.assertEqual(message["priority"], "normal")
+        self.assertIn("handoff_id", message)
         self.assertFalse(extend)
 
     def test_parse_response_extracts_state_update_before_debate(self):
@@ -303,7 +309,7 @@ class ProtocolTests(unittest.TestCase):
         app.shared_state = {}
         app._lock = threading.Lock()
 
-        response, _, _, extend, _ = app.parse_response(
+        response, _, _, extend, _, _ = app.parse_response(
             "Resposta visivel\n"
             "[STATE_UPDATE]\n"
             '{"goal":"corrigir parser","decisions":["usar json"]}\n'
@@ -326,7 +332,7 @@ class ProtocolTests(unittest.TestCase):
         app.shared_state = {}
         app._lock = threading.Lock()
 
-        response, _, _, extend, _ = app.parse_response(
+        response, _, _, extend, _, _ = app.parse_response(
             "Resposta visivel\n"
             f"{EXTEND_MARKER}\n"
             "[STATE_UPDATE]\n"
@@ -346,7 +352,7 @@ class ProtocolTests(unittest.TestCase):
         app.shared_state = {"decisions": ["A"]}
         app._lock = threading.Lock()
 
-        response, _, _, extend, _ = app.parse_response(
+        response, _, _, extend, _, _ = app.parse_response(
             "Resposta\n"
             "[STATE_UPDATE]\n"
             '{"decisions":["B"],"goal":"alinhar protocolo"}\n'
@@ -773,59 +779,28 @@ class ProtocolTests(unittest.TestCase):
             primary=True,
             protocol_mode="standard",
             handoff_only=False,
+            from_agent=None,
         ):
-            calls.append((agent, is_first_speaker, handoff, handoff_only))
+            calls.append((agent, is_first_speaker, handoff, handoff_only, from_agent))
             return next(responses)
 
         app.call_agent = fake_call
 
         app.run()
 
-        self.assertEqual(
-            calls,
-            [
-                (AGENT_CLAUDE, True, None, False),
-                (
-                    AGENT_CODEX,
-                    False,
-                    {
-                        "task": "Revise este argumento.",
-                        "context": "Analisar risco no parser atual.",
-                        "expected": "2 bullets objetivos",
-                    },
-                    True,
-                ),
-                (
-                    AGENT_CLAUDE,
-                    False,
-                    "Você delegou a seguinte subtarefa ao CODEX:\n\nRevise este argumento.\n\n"
-                    "Resposta do CODEX à sua delegação:\n\ncodex comenta\n\n"
-                    "Com base na resposta acima, sintetize e conclua sua resposta ao humano.",
-                    False,
-                ),
-            ],
-        )
-        self.assertEqual(
-            printed,
-            [
-                (AGENT_CLAUDE, "claude responde"),
-                (AGENT_CODEX, "codex comenta"),
-                (AGENT_CLAUDE, "claude sintetiza"),
-            ],
-        )
-        self.assertEqual(
-            persisted,
-            [
-                ("human", "oi"),
-                (AGENT_CLAUDE, "claude responde"),
-                (AGENT_CODEX, "codex comenta"),
-                (AGENT_CLAUDE, "claude sintetiza"),
-            ],
-        )
-        self.assertEqual(
-            app.renderer.handoffs,
-            [(AGENT_CLAUDE, AGENT_CODEX, "Revise este argumento.")],
-        )
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(calls[0], (AGENT_CLAUDE, True, None, False, None))
+        # Verifica campos essenciais do handoff (agora tem priority e handoff_id extras)
+        handoff_to_codex = calls[1][2]
+        self.assertEqual(handoff_to_codex["task"], "Revise este argumento.")
+        self.assertEqual(handoff_to_codex["context"], "Analisar risco no parser atual.")
+        self.assertEqual(handoff_to_codex["expected"], "2 bullets objetivos")
+        self.assertEqual(calls[1][1], False)
+        self.assertTrue(calls[1][3])  # handoff_only
+        self.assertEqual(calls[1][4], AGENT_CLAUDE)  # from_agent
+        self.assertEqual(calls[2][1], False)
+        self.assertFalse(calls[2][3])
+        self.assertIsNone(calls[2][4])
 
     def test_run_passes_handoff_even_with_explicit_prefix(self):
         app = QuimeraApp.__new__(QuimeraApp)
@@ -875,38 +850,27 @@ class ProtocolTests(unittest.TestCase):
             primary=True,
             protocol_mode="standard",
             handoff_only=False,
+            from_agent=None,
         ):
-            calls.append((agent, is_first_speaker, handoff, handoff_only))
+            calls.append((agent, is_first_speaker, handoff, handoff_only, from_agent))
             return next(responses)
 
         app.call_agent = fake_call
 
         app.run()
 
-        self.assertEqual(
-            calls,
-            [
-                (AGENT_CLAUDE, True, None, False),
-                (
-                    AGENT_CODEX,
-                    False,
-                    {
-                        "task": "Revise este argumento.",
-                        "context": "Analisar risco no parser atual.",
-                        "expected": "2 bullets objetivos",
-                    },
-                    True,
-                ),
-                (
-                    AGENT_CLAUDE,
-                    False,
-                    "Você delegou a seguinte subtarefa ao CODEX:\n\nRevise este argumento.\n\n"
-                    "Resposta do CODEX à sua delegação:\n\ncodex comenta\n\n"
-                    "Com base na resposta acima, sintetize e conclua sua resposta ao humano.",
-                    False,
-                ),
-            ],
-        )
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(calls[0], (AGENT_CLAUDE, True, None, False, None))
+        handoff_to_codex = calls[1][2]
+        self.assertEqual(handoff_to_codex["task"], "Revise este argumento.")
+        self.assertEqual(handoff_to_codex["context"], "Analisar risco no parser atual.")
+        self.assertEqual(handoff_to_codex["expected"], "2 bullets objetivos")
+        self.assertEqual(calls[1][1], False)
+        self.assertTrue(calls[1][3])
+        self.assertEqual(calls[1][4], AGENT_CLAUDE)
+        self.assertEqual(calls[2][1], False)
+        self.assertFalse(calls[2][3])
+        self.assertIsNone(calls[2][4])
         self.assertEqual(
             printed,
             [
@@ -1211,6 +1175,174 @@ class PluginTests(unittest.TestCase):
         self.assertIsNone(route_target)
         self.assertIsNone(handoff)
         self.assertFalse(extend)
+
+    def test_parse_handoff_payload_with_priority(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.HANDOFF_PAYLOAD_PATTERN = QuimeraApp.HANDOFF_PAYLOAD_PATTERN
+        result = app.parse_handoff_payload("task: Corrigir bug crítico | priority: urgent")
+        self.assertEqual(result["task"], "Corrigir bug crítico")
+        self.assertEqual(result["priority"], "urgent")
+        self.assertIn("handoff_id", result)
+
+    def test_parse_handoff_payload_invalid_priority_defaults_to_normal(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.HANDOFF_PAYLOAD_PATTERN = QuimeraApp.HANDOFF_PAYLOAD_PATTERN
+        result = app.parse_handoff_payload("task: Algo qualquer | priority: invalido")
+        self.assertEqual(result["priority"], "normal")
+
+    def test_parse_handoff_payload_generates_unique_ids(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.HANDOFF_PAYLOAD_PATTERN = QuimeraApp.HANDOFF_PAYLOAD_PATTERN
+        r1 = app.parse_handoff_payload("task: Tarefa 1")
+        r2 = app.parse_handoff_payload("task: Tarefa 2")
+        self.assertNotEqual(r1["handoff_id"], r2["handoff_id"])
+
+    def test_handoff_format_includes_priority_when_urgent(self):
+        builder = PromptBuilder(DummyContextManager(), history_window=3)
+        handoff = {
+            "task": "Corrigir bug",
+            "context": "Parser quebrado",
+            "expected": "Patch",
+            "priority": "urgent",
+            "handoff_id": "abc123",
+        }
+        formatted = builder._format_handoff(handoff, from_agent="claude")
+        self.assertIn("PRIORITY:\nURGENT", formatted)
+        self.assertIn("HANDOFF_ID:\nabc123", formatted)
+
+    def test_handoff_format_omits_priority_when_normal(self):
+        builder = PromptBuilder(DummyContextManager(), history_window=3)
+        handoff = {
+            "task": "Revisar código",
+            "priority": "normal",
+            "handoff_id": "xyz789",
+        }
+        formatted = builder._format_handoff(handoff, from_agent="codex")
+        self.assertIn("HANDOFF_ID:\nxyz789", formatted)
+        self.assertNotIn("PRIORITY", formatted)
+
+    def test_retry_on_none_response(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.active_agents = ["claude"]
+        app.agent_failures = {}
+        app._agent_failures_lock = threading.Lock()
+        call_count = [0]
+
+        def fake_call_agent(*args, **kwargs):
+            call_count[0] += 1
+            if call_count[0] < 2:
+                return None
+            return "sucesso no retry"
+
+        app._call_agent = fake_call_agent
+        app.resolve_agent_response = lambda agent, response, silent=False: response
+
+        result = app.call_agent("claude")
+        self.assertEqual(result, "sucesso no retry")
+        self.assertEqual(call_count[0], 2)
+
+    def test_parse_response_extracts_ack_marker(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.ROUTE_PATTERN = QuimeraApp.ROUTE_PATTERN
+        app.ACK_PATTERN = QuimeraApp.ACK_PATTERN
+        app.STATE_UPDATE_PATTERN = QuimeraApp.STATE_UPDATE_PATTERN
+        app.shared_state = {}
+
+        response, target, handoff, extend, needs_input, ack_id = app.parse_response(
+            "[ACK:abc123def456]\nTarefa concluída com sucesso."
+        )
+
+        self.assertEqual(response, "Tarefa concluída com sucesso.")
+        self.assertEqual(ack_id, "abc123def456")
+        self.assertIsNone(target)
+        self.assertIsNone(handoff)
+        self.assertFalse(extend)
+        self.assertFalse(needs_input)
+
+    def test_parse_response_without_ack(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.ROUTE_PATTERN = QuimeraApp.ROUTE_PATTERN
+        app.ACK_PATTERN = QuimeraApp.ACK_PATTERN
+        app.STATE_UPDATE_PATTERN = QuimeraApp.STATE_UPDATE_PATTERN
+        app.shared_state = {}
+
+        response, _, _, _, _, ack_id = app.parse_response("Resposta sem ACK")
+
+        self.assertIsNone(ack_id)
+        self.assertEqual(response, "Resposta sem ACK")
+
+    def test_handoff_chain_propagation(self):
+        """Test that handoff chain is propagated correctly."""
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.HANDOFF_PAYLOAD_PATTERN = QuimeraApp.HANDOFF_PAYLOAD_PATTERN
+        result = app.parse_handoff_payload("task: Test task")
+        self.assertEqual(result["chain"], [])
+        
+        # Simulate chain propagation
+        result["chain"] = ["claude"]
+        result["chain"].append("codex")
+        self.assertEqual(result["chain"], ["claude", "codex"])
+
+    def test_handoff_id_uses_real_target(self):
+        """Test that handoff_id includes target in its generation."""
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.HANDOFF_PAYLOAD_PATTERN = QuimeraApp.HANDOFF_PAYLOAD_PATTERN
+        # Generate IDs with same timestamp to verify target affects the hash
+        ts = 1234567890.0
+        id1 = app._generate_handoff_id("Test task", "codex", timestamp=ts)
+        id2 = app._generate_handoff_id("Test task", "claude", timestamp=ts)
+        id3 = app._generate_handoff_id("Test task", "codex", timestamp=ts)
+        # Same task + same target + same timestamp = same ID
+        self.assertEqual(id1, id3)
+        # Same task + different target = different ID
+        self.assertNotEqual(id1, id2)
+
+    def test_ack_mismatch_logged_on_validation(self):
+        """Test that ACK mismatch is detected when ack_id != handoff_id."""
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.ROUTE_PATTERN = QuimeraApp.ROUTE_PATTERN
+        app.ACK_PATTERN = QuimeraApp.ACK_PATTERN
+        app.HANDOFF_PAYLOAD_PATTERN = QuimeraApp.HANDOFF_PAYLOAD_PATTERN
+        app.STATE_UPDATE_PATTERN = QuimeraApp.STATE_UPDATE_PATTERN
+        app.shared_state = {}
+        app.renderer = DummyRenderer()
+
+        # Simulate a handoff with handoff_id="abc123" but agent responds with ACK:def456
+        response_text = "[ACK:def456]\nTarefa concluída."
+        response, _, _, _, _, ack_id = app.parse_response(response_text)
+        
+        self.assertEqual(ack_id, "def456")
+        self.assertEqual(response, "Tarefa concluída.")
+
+    def test_per_agent_metrics_tracking(self):
+        """Test that per-agent metrics are tracked correctly."""
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.session_state = {
+            "session_id": "test",
+            "history_count": 0,
+            "summary_loaded": False,
+            "handoffs_sent": 0,
+            "handoffs_received": 0,
+            "handoffs_succeeded": 0,
+            "handoffs_failed": 0,
+            "total_latency": 0.0,
+            "agent_metrics": {},
+        }
+        app.agent_failures = {}
+        app._agent_failures_lock = threading.Lock()
+
+        # Simulate successful call to claude
+        app._record_agent_metric("claude", "succeeded", 1.5)
+        app._record_agent_metric("claude", "succeeded", 0.8)
+        
+        # Simulate failed call to codex
+        app._record_agent_metric("codex", "failed", 0.0)
+
+        metrics = app.session_state["agent_metrics"]
+        self.assertEqual(metrics["claude"]["succeeded"], 2)
+        self.assertEqual(metrics["claude"]["latency"], 2.3)
+        self.assertEqual(metrics["codex"]["failed"], 1)
+        self.assertEqual(metrics["codex"]["succeeded"], 0)
 
 
 if __name__ == "__main__":

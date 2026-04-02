@@ -41,6 +41,7 @@ class PromptBuilder:
         primary=True,
         shared_state=None,
         handoff_only=False,
+        from_agent=None,
     ):
         """Gera o prompt final enviado ao agente da vez.
 
@@ -67,7 +68,7 @@ class PromptBuilder:
         header_block = PROMPT_HEADER.format(agent=agent.upper(), participants=participants)
         session_block = PROMPT_SESSION_STATE.format(**self.session_state) if (self.session_state and primary) else ""
         context_block = PROMPT_CONTEXT.format(context=context) if context else ""
-        handoff_block = PROMPT_HANDOFF.format(handoff=self._format_handoff(handoff)) if handoff else ""
+        handoff_block = PROMPT_HANDOFF.format(handoff=self._format_handoff(handoff, from_agent)) if handoff else ""
         shared_state_block = ""
         if shared_state:
             state_lines = json.dumps(self._trim_shared_state(shared_state), ensure_ascii=False, indent=2)
@@ -113,16 +114,28 @@ class PromptBuilder:
             trimmed["decisions"] = state["decisions"][-decisions_tail:]
         return trimmed
 
-    def _format_handoff(self, handoff):
+    def _format_handoff(self, handoff, from_agent=None):
         if isinstance(handoff, dict):
             task = (handoff.get("task") or "").strip()
             context = (handoff.get("context") or "").strip()
             expected = (handoff.get("expected") or "").strip()
-            return (
-                f"TASK:\n{task}\n\n"
-                f"CONTEXT:\n{context}\n\n"
-                f"EXPECTED:\n{expected}"
-            ).strip()
+            handoff_id = handoff.get("handoff_id")
+            priority = handoff.get("priority", "normal")
+            
+            parts = []
+            if handoff_id:
+                parts.append(f"HANDOFF_ID:\n{handoff_id}")
+            parts.append(f"TASK:\n{task}")
+            if from_agent:
+                parts.append(f"FROM:\n{from_agent}")
+            if context:
+                parts.append(f"CONTEXT:\n{context}")
+            if expected:
+                parts.append(f"EXPECTED:\n{expected}")
+            if priority and priority != "normal":
+                parts.append(f"PRIORITY:\n{priority.upper()}")
+            
+            return "\n\n".join(parts).strip()
         return str(handoff).strip()
 
     def _display_role(self, role):

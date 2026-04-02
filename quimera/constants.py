@@ -175,7 +175,7 @@ PROMPT_DEBATE_RULE = (
 def build_route_rule(agent_names):
     return (
         "- Se quiser delegar uma subtarefa ao outro agente, inclua em uma nova linha:\n"
-        "  [ROUTE:agente] task: <o que fazer> | context: <contexto mínimo necessário> | expected: <formato da resposta>\n"
+        "  [ROUTE:agente] task: <o que fazer> | context: <contexto mínimo necessário> | expected: <formato da resposta> | priority: <normal|urgent|low>\n"
         "- Use [ROUTE:...] somente quando a subtarefa exigir habilidade diferente da sua ou "
         "quando dividir o trabalho resultar em resposta melhor ao humano. "
         "Não delegue por hábito — delegue quando fizer sentido.\n"
@@ -230,6 +230,10 @@ PROMPT_HANDOFF_RULE = (
     "- Você recebeu uma subtarefa delegada por outro agente. "
     "Responda apenas à tarefa descrita abaixo, no formato indicado em 'expected'. "
     "Não delegue ao outro agente. Seja direto e objetivo.\n"
+    "- Se houver uma cadeia de delegação (ex: A→B→C), você pode ver o campo 'chain' "
+    "indicando os agentes anteriores. Use essa informação para evitar delegações circulares.\n"
+    "- Inicie sua resposta com [ACK:<HANDOFF_ID>] para confirmar recebimento, "
+    "substituindo <HANDOFF_ID> pelo valor informado no campo HANDOFF_ID.\n"
 )
 
 PROMPT_TOOL_RULE = (
