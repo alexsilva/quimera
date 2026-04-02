@@ -81,8 +81,8 @@ class PromptBuilder:
         speaker_block = PROMPT_SPEAKER.format(agent=agent.upper())
 
         parts = [p for p in [
-            header_block, rules, session_block, context_block,
-            shared_state_block, handoff_block, tools_prompt, conversation_block, speaker_block,
+            header_block, rules, tools_prompt, session_block, context_block,
+            shared_state_block, handoff_block, conversation_block, speaker_block,
         ] if p]
 
         full_prompt = "\n\n".join(parts)
