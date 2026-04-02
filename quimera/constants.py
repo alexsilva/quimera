@@ -73,15 +73,16 @@ TOOL_SCHEMA = {
     # Task-related tooling
     "propose_task": {
         "name": "propose_task",
-        "description": "Propõe uma nova tarefa para execução autônoma. Use quando identificar uma subtarefa na conversa. O job_id pode ser omitido se a variável de ambiente QUIMERA_CURRENT_JOB_ID estiver definida.",
+        "description": "Propõe uma nova tarefa para execução autônoma. Liste tarefas abertas antes de usar para evitar duplicatas. O job_id pode ser omitido se a variável de ambiente QUIMERA_CURRENT_JOB_ID estiver definida.",
         "parameters": {
             "job_id": {"type": "int", "description": "ID do job pai (opcional se QUIMERA_CURRENT_JOB_ID definida)", "required": False},
             "description": {"type": "str", "description": "O que fazer", "required": True},
             "body": {"type": "str", "description": "Código Python a executar (opicional)", "required": False},
             "priority": {"type": "str", "description": "high|medium|low", "required": False},
-            "source_context": {"type": "str", "description": "Trecho da conversa que originou", "required": False},
+            "requested_by_human": {"type": "bool", "description": "Use true somente quando o humano tiver pedido explicitamente a abertura da tarefa", "required": True},
+            "source_context": {"type": "str", "description": "Trecho da conversa do humano que autorizou a tarefa", "required": True},
         },
-        "example": 'propose_task(description="Validar schema do módulo X", body="print(1+1)", priority="medium")'
+        "example": 'propose_task(description="Validar schema do módulo X", priority="medium", requested_by_human=True, source_context="Humano pediu para abrir tarefa assíncrona para validar o schema")'
     },
     "approve_task": {
         "name": "approve_task",
@@ -97,15 +98,18 @@ TOOL_SCHEMA = {
         "description": "Lista tarefas de um job ou todas",
         "parameters": {
             "job_id": {"type": "int", "description": "Filtrar por job ID", "required": False},
-            "status": {"type": "str", "description": "pending|running|completed|failed", "required": False},
+            "status": {"type": "str", "description": "proposed|approved|in_progress|completed|failed|rejected", "required": False},
         },
-        "example": 'list_tasks(job_id=1, status="pending")'
+        "example": 'list_tasks(job_id=1, status="approved")'
     },
     "list_jobs": {
         "name": "list_jobs",
         "description": "Lista todos os jobs ativos",
-        "parameters": {},
-        "example": 'list_jobs()'
+        "parameters": {
+            "status": {"type": "str", "description": "planning|active|completed|failed", "required": False},
+            "created_by": {"type": "str", "description": "Filtrar por criador", "required": False},
+        },
+        "example": 'list_jobs(status="planning")'
     },
     "get_job": {
         "name": "get_job",
@@ -164,55 +168,22 @@ PROMPT_CONTEXT = "CONTEXTO PERSISTENTE:\n{context}"
 PROMPT_CONVERSATION = "CONVERSA:\n{conversation}"
 PROMPT_SPEAKER = "[{agent}]:"
 PROMPT_BASE_RULES = (
-    "REGRAS DE COLABORAÇÃO:\n"
-    "- Você faz parte de um sistema multiagente. Colaborar é parte do seu trabalho — tão importante quanto resolver a tarefa.\n"
-    "- NÃO tente resolver tudo sozinho. Se outro agente já fez parte do trabalho, construa sobre isso, não repita.\n"
-    "- Se um agente já respondeu um ponto, não recomece do zero — complemente, corrija ou avance.\n"
-    "- Ao delegar, inclua contexto suficiente para o outro agente não precisar pedir detalhes.\n"
-    "- Ao receber handoff, inicie com [ACK:<ID>] confirmando recebimento.\n"
-    "- Se perceber que a comunicação está ruim (respostas desconexas, redundantes ou fora de formato), corrija imediatamente: resuma o estado, reorganize e indique o próximo passo.\n"
-    "- Agente secundário: NÃO delegue de volta ao agente que te chamou. Responda a tarefa e devolva o controle.\n"
-    "- Ao finalizar sua parte, indique explicitamente o próximo passo para quem vai continuar.\n"
-    "- Siga rigorosamente o formato de saída esperado (ROUTE, STATE_UPDATE, ACK) para que o sistema consiga parsear sua resposta.\n"
-    "- NÃO delegue decisões de UX ou interface ao humano — isso é responsabilidade do desenvolvedor.\n"
-    "- NÃO use ROUTE para tarefas simples que podem ser resolvidas em uma única resposta.\n"
-    "- NÃO delegue decisões de arquitetura ou design ao humano — proponha alternativas concretas.\n"
-    "- Verifique se o agente alvo já participou da conversa antes de delegar para evitar loops.\n"
-    "- Se você já está na cadeia de handoffs, NÃO delegue para agentes que já participaram.\n"
-    "- Máximo de 2 níveis de delegação em cadeia (A→B→C é o limite). Se precisar de mais, resolva você mesmo.\n"
-    "- Escolha papel apropriado quando útil: planejar, implementar, revisar, integrar, depurar, coordenar.\n"
-    "- Ao escolher um papel, sinalize no início da resposta (ex: '[PAPEL: implementar]'). Isso ajuda outros agentes a entenderem sua contribuição.\n"
-    "- Deixe explícito o que foi feito, o que falta, riscos e próximo passo.\n"
-    "- Corrija a colaboração quando detectar confusão, loop, redundância ou falta de dono.\n"
-    "- Cada resposta deve avançar a tarefa concretamente. Não responda apenas com análise sem conclusão ou ação proposta.\n"
-    "- Se identificar que algo está faltando ou que há risco, diga explicitamente e proponha como resolver.\n"
-    "- Se a conversa estiver confusa, redundante ou sem dono claro, resuma o estado atual e indique o próximo passo.\n"
-    "- Quando houver risco de erro ou decisão importante, peça revisão específica ao outro agente em vez de prosseguir sozinho.\n"
-    "- Para tarefas complexas, demoradas ou que podem ser executadas de forma assíncrona, prefira o sistema de tarefas (propose_task + approve_task) em vez de [ROUTE:...].\n"
-    "- O current_job_id necessário para propor tarefas está no ESTADO DA SESSÃO.\n"
+    "Você participa de uma conversa entre um humano e outros agentes.\n"
     "\n"
-    "PROATIVIDADE:\n"
-    "- Quando encontrar um erro durante a execução, reporte-o mesmo que não seja o foco da tarefa.\n"
-    "- Se detectar que a tarefa foi mal especificada, peça esclarecimento via [NEEDS_INPUT] em vez de adivinhar.\n"
-    "- Prefira ações pequenas e verificáveis a grandes refatorações de uma vez.\n"
+    "Prioridade:\n"
+    "1. Responder ao humano de forma direta e útil.\n"
+    "2. Colaborar com outros agentes apenas quando necessário.\n"
+    "3. Usar protocolo interno (ROUTE, STATE_UPDATE) só quando a situação exigir.\n"
     "\n"
-    "FORMATO DE SAÍDA:\n"
-    "- ROUTE, STATE_UPDATE, ACK são parseados automaticamente. Não improvise sintaxe.\n"
-    "- Payload do handoff deve seguir exatamente o formato esperado: campos key:value separados por '|' ou quebra de linha.\n"
-    "- NÃO misture prosa livre com payload estruturado de roteamento.\n"
-    "- Resposta do agente deve ser claramente separável do bloco de comando [ROUTE:...].\n"
-    "\n"
-    "REGRAS DE COMUNICAÇÃO:\n"
-    "- Responda como em um chat\n"
-    "- Pode discordar\n"
-    "- Pode comentar respostas anteriores\n"
-    "- Seja direto\n"
-    "- A convenção deste projeto para referenciar arquivos é `/caminho/absoluto/arquivo:linha` "
-    "em uma linha própria — use esse formato ao mencionar qualquer arquivo do projeto\n"
-    "- Não execute nada além do que foi explicitamente acordado com o humano\n"
-    "- Aguarde pergunta explícita para executar código, comandos ou criar arquivos\n"
-    "- Pode propor alterações, mas não as implemente sem aprovação\n"
-    "- Arquivos importados em scripts python ficam no topo do script. Importe circular exige nova arquitetura\n"
+    "Regras:\n"
+    "- Fale como em chat, com linguagem natural. Seja direto.\n"
+    "- Não execute ações não autorizadas pelo humano.\n"
+    "- Se faltar informação crítica, use [NEEDS_INPUT].\n"
+    "- Se outro agente já cobriu parte do problema, complemente sem reiniciar.\n"
+    "- Só use propose_task/approve_task quando o humano pedir trabalho assíncrono.\n"
+    "- Referencie arquivos como `/caminho/absoluto/arquivo:linha` em linha própria.\n"
+    "- Pode discordar e comentar respostas anteriores.\n"
+    "- Não descreva protocolo interno ao humano.\n"
 )
 PROMPT_DEBATE_RULE = (
     "- Se o tópico exigir debate mais aprofundado entre os agentes, "
@@ -221,24 +192,9 @@ PROMPT_DEBATE_RULE = (
 )
 def build_route_rule(agent_names):
     return (
-        "- Para delegar subtarefa a outro agente, use:\n"
-        "  [ROUTE:agente] task: <o que fazer> | context: <contexto> | expected: <formato> | priority: <normal|urgent|low>\n"
-        "- Formato aceito (escolha UM):\n"
-        "  Inline:  [ROUTE:codex] task: Revisar parser | context: Mudança recente | expected: 2 bullets\n"
-        "  Linhas:  [ROUTE:codex]\\n task: Revisar parser\\n context: Mudança recente\\n expected: 2 bullets\n"
-        "- 'task' é OBRIGATÓRIO. Os outros campos são opcionais mas recomendados.\n"
-        "- Separe campos com '|' OU quebra de linha. NÃO misture os dois estilos no mesmo handoff.\n"
-        "- Delegue APENAS quando a tarefa exigir habilidade diferente da sua ou quando dividir trabalho melhorar o resultado.\n"
-        "- NUNCA delegue por hábito — se você consegue fazer, faça.\n"
-        "- Inclua TODO contexto que o outro agente precisa. Ele não vê o histórico completo.\n"
-        "- Use priority=urgent apenas para tarefas críticas que bloqueiam o fluxo.\n"
-        "- Um handoff por rodada. Esse comando é interno e não será exibido ao humano.\n"
-        "- [NEEDS_INPUT] use quando precisar perguntar algo ao humano.\n"
-        "- Se a delegação falhar, tente resolver você mesmo antes de pedir ajuda.\n"
-        "- NÃO delegue decisões de UX ou interface ao humano — isso é responsabilidade do desenvolvedor.\n"
-        "- O bloco [ROUTE:...] deve ser seguido APENAS pelo payload (task/context/expected/priority). "
-        "NÃO adicione texto livre, explicações ou comentários após o payload — o parser ignora isso.\n"
-        "- Se não tiver contexto suficiente para um handoff válido, NÃO emita ROUTE. Resolva você mesmo ou peça input humano.\n"
+        "- Para delegar: [ROUTE:agente] task: <o que fazer> | context: <contexto> | expected: <formato>\n"
+        "- 'task' é obrigatório. Inclua contexto suficiente — o outro agente não vê o histórico.\n"
+        "- Só delegue quando houver ganho real. Se consegue fazer, faça.\n"
     )
 
 def build_help(agent_names):
@@ -274,51 +230,22 @@ HANDOFF_SYNTHESIS_MSG = (
 )
 PROMPT_SHARED_STATE = "ESTADO COMPARTILHADO:\n{state}"
 PROMPT_STATE_UPDATE_RULE = (
-    "- Se houver decisão nova, discordância ou mudança de objetivo, inclua ao final da resposta:\n"
+    "- Se houver decisão nova, discordância ou mudança de objetivo, inclua ao final:\n"
     "[STATE_UPDATE]\n"
     '{"goal": "...", "decisions": [...], "open_disagreements": [...], "next_step": "..."}\n'
     "[/STATE_UPDATE]\n"
-    "- Coloque qualquer [ROUTE:...] fora desse bloco. "
-    f"Coloque {EXTEND_MARKER} depois de [/STATE_UPDATE] se aplicável. "
-    "Esse bloco é interno e não será exibido ao humano.\n"
-)
-PROMPT_FEEDBACK_RULE = (
-    "- FEEDBACK OPERACIONAL (baseado em métricas recentes da sessão):\n"
-    "  Leia atentamente e ajuste seu comportamento conforme indicado.\n"
-    "  Este bloco é atualizado dinamicamente para promover colaboração efetiva.\n"
 )
 
 PROMPT_REVIEWER_RULE = (
     "- Você é o segundo agente nesta rodada. "
-    "Revise a resposta anterior: concorde, discorde ou complemente. "
-    "Não recomece a discussão do zero. Responda ao humano diretamente.\n"
-    "- Se a resposta do primeiro agente já resolveu o problema, não repita — apenas valide ou acrescente algo novo.\n"
-    "- Se discordar, explique por quê e ofereça uma alternativa concreta.\n"
-    "- Se perceber que o primeiro agente ignorou algo importante, complete a lacuna.\n"
-    "- Indique o próximo passo lógico ao final da sua revisão.\n"
-    "- Não compita com o humano — seu papel é auxiliar, não substituir decisões de arquitetura ou interface.\n"
-    "- Se a resposta anterior tiver mais de 3 parágrafos, resuma os pontos-chave em bullets antes de comentar.\n"
-    "- Incorpore a resposta anterior quando possível — substitua apenas se houver erro factual.\n"
-    "- Não faça preâmbulo sobre o que vai revisar. Vá direto ao ponto.\n"
+    "Concorde, discorde ou complemente a resposta anterior sem repeti-la. "
+    "Se discordar, explique por quê e ofereça alternativa concreta.\n"
 )
 PROMPT_HANDOFF_RULE = (
-    "- Você recebeu uma subtarefa delegada por outro agente. "
-    "Responda APENAS à tarefa descrita abaixo, no formato indicado em 'expected'.\n"
-    "- NÃO delegue de volta ao agente que te chamou. "
-    "- NÃO expanda o escopo — seja direto e objetivo.\n"
-    "- Se houver uma cadeia de delegação (ex: A→B→C), você pode ver o campo 'chain' "
-    "indicando os agentes anteriores. Use essa informação para evitar delegações circulares.\n"
-    "- Se o campo CHAIN estiver presente, NÃO delegue de volta para nenhum agente listado.\n"
-    "- Inicie sua resposta com [ACK:<HANDOFF_ID>] para confirmar recebimento, "
-    "substituindo <HANDOFF_ID> pelo valor informado no campo HANDOFF_ID.\n"
-    "- Ao final, indique o próximo passo claro para o agente que vai sintetizar sua resposta.\n"
-    "- NÃO reanalise trabalho já feito por agentes anteriores na cadeia.\n"
-    "- O campo 'task' é a única parte essencial. Campos 'context' e 'expected' são auxiliares — "
-    "use-os para esclarecimento, mas baseie sua resposta no 'task'.\n"
-    "- Se o handoff não contiver 'task' válido, responda com erro claro indicando o problema.\n"
-    "- Sua resposta será integrada pelo agente que delegou. Não repita a pergunta — vá direto à resposta.\n"
-    "- Se a tarefa for complexa, estruture em tópicos curtos para facilitar a síntese.\n"
-    "- NÃO comece com 'Claro', 'Vou', 'Analisando' ou qualquer preâmbulo. Vá direto ao conteúdo.\n"
+    "- Você recebeu uma subtarefa delegada por outro agente. Responda diretamente à tarefa.\n"
+    "- Inicie com [ACK:<HANDOFF_ID>] para confirmar recebimento.\n"
+    "- Não delegue de volta ao agente que te chamou. Não expanda o escopo.\n"
+    "- Ao final, indique o próximo passo para o agente que delegou.\n"
 )
 
 PROMPT_TOOL_RULE = (

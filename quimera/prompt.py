@@ -17,7 +17,6 @@ from .constants import (
     PROMPT_STATE_UPDATE_RULE,
     PROMPT_REVIEWER_RULE,
     PROMPT_HANDOFF_RULE,
-    PROMPT_FEEDBACK_RULE,
     PROMPT_TOOL_RULE,
 )
 from .config import DEFAULT_HISTORY_WINDOW
@@ -43,7 +42,6 @@ class PromptBuilder:
         shared_state=None,
         handoff_only=False,
         from_agent=None,
-        metrics_feedback=None,
     ):
         """Gera o prompt final enviado ao agente da vez.
 
@@ -53,16 +51,10 @@ class PromptBuilder:
         context = self.context_manager.load()
 
         rules = PROMPT_BASE_RULES
-        if metrics_feedback:
-            rules += PROMPT_FEEDBACK_RULE
-            rules += metrics_feedback
         if handoff_only:
             rules += PROMPT_HANDOFF_RULE
         else:
             rules += build_route_rule(plugins.all_names())
-            # Feedback operacional: incluído quando há métricas ou em modo debug
-            if not metrics_feedback and debug:
-                rules += PROMPT_FEEDBACK_RULE
             rules += PROMPT_STATE_UPDATE_RULE
             rules += PROMPT_TOOL_RULE
             if is_first_speaker:
@@ -94,6 +86,7 @@ class PromptBuilder:
             shared_state_block, handoff_block, conversation_block, speaker_block,
         ] if p]
 
+        # Keep explicit section boundaries so prompt blocks do not collapse together.
         full_prompt = "\n\n".join(parts)
 
         if debug:
@@ -115,7 +108,7 @@ class PromptBuilder:
     @staticmethod
     def _trim_shared_state(state, decisions_tail=5):
         trimmed = {}
-        for key in ("goal", "next_step"):
+        for key in ("goal", "next_step", "task_overview"):
             if key in state:
                 trimmed[key] = state[key]
         if "decisions" in state:

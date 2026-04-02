@@ -21,7 +21,7 @@ except ImportError:
 from .runtime.executor import ToolExecutor
 from .runtime.parser import strip_tool_block
 from .runtime import ToolRuntimeConfig, ConsoleApprovalHandler, TaskExecutor, create_executor
-from .runtime.tasks import init_db
+from .runtime.tasks import get_job, init_db, list_tasks
 from .ui import TerminalRenderer
 from .context import ContextManager
 from .storage import SessionStorage
@@ -183,6 +183,7 @@ class QuimeraApp:
         init_db(self.tasks_db_path)
         self.current_job_id = add_job(f"Session {session_id}", db_path=self.tasks_db_path)
         self.session_state["current_job_id"] = self.current_job_id
+        os.environ["QUIMERA_CURRENT_JOB_ID"] = str(self.current_job_id)
 
         session_state = {
             "session_id": self.session_state["session_id"],
@@ -206,7 +207,7 @@ class QuimeraApp:
                 db_path=self.tasks_db_path,
                 require_approval_for_mutations=False,
             ),
-            approval_handler=None,  # type: ignore[assignment]
+            approval_handler=ConsoleApprovalHandler(),
         )
         # Set up task executors for autonomous task execution
         self._setup_task_executors()
@@ -281,6 +282,56 @@ class QuimeraApp:
                     data[key] = self._truncate_tool_result(value, max_lines)
             truncated['data'] = data
         return truncated
+
+    def _build_task_overview(self) -> dict:
+        try:
+            job = get_job(self.current_job_id, db_path=self.tasks_db_path)
+            open_tasks = []
+            for status in ("proposed", "approved", "in_progress"):
+                open_tasks.extend(list_tasks({"job_id": self.current_job_id, "status": status}, db_path=self.tasks_db_path))
+
+            open_tasks.sort(key=lambda task: task["id"])
+            counts = {
+                "proposed": sum(1 for task in open_tasks if task["status"] == "proposed"),
+                "approved": sum(1 for task in open_tasks if task["status"] == "approved"),
+                "in_progress": sum(1 for task in open_tasks if task["status"] == "in_progress"),
+            }
+            preview = [
+                {
+                    "id": task["id"],
+                    "status": task["status"],
+                    "priority": task.get("priority"),
+                    "description": task["description"],
+                }
+                for task in open_tasks[:6]
+            ]
+            if counts["approved"] > 0:
+                recommended = "Execute ou aproveite reutilização de tarefas approved antes de propor novas."
+            elif counts["proposed"] > 0:
+                recommended = "Revise tarefas proposed antes de criar novas para evitar duplicatas."
+            elif counts["in_progress"] > 0:
+                recommended = "Há trabalho em andamento; acompanhe antes de abrir tarefas paralelas."
+            else:
+                recommended = "Sem tarefas abertas; só proponha nova tarefa se o humano pedir trabalho assíncrono/autônomo."
+            return {
+                "job_id": self.current_job_id,
+                "job_description": job["description"] if job else None,
+                "open_task_counts": counts,
+                "open_tasks_preview": preview,
+                "recommended_action": recommended,
+            }
+        except Exception as exc:
+            return {
+                "job_id": self.current_job_id,
+                "error": str(exc),
+            }
+
+    def _refresh_task_shared_state(self) -> None:
+        if not hasattr(self, "shared_state") or not isinstance(self.shared_state, dict):
+            return
+        if not hasattr(self, "current_job_id") or not hasattr(self, "tasks_db_path"):
+            return
+        self.shared_state["task_overview"] = self._build_task_overview()
 
     def resolve_agent_response(self, agent: str, response: str | None, silent: bool = False) -> str | None:
         current_response = response
@@ -455,7 +506,7 @@ class QuimeraApp:
         if not self.active_agents:
             _logger.warning("no active agents, resetting to default")
             self.active_agents = ["*"]
-        return self.active_agents[0], user_input, False
+        return self.active_agents[self.round_index % len(self.active_agents)], user_input, False
 
     @staticmethod
     def _merge_state_value(current, incoming):
@@ -539,8 +590,8 @@ class QuimeraApp:
         self.session_call_index += 1
         start = time.time()
         history = [] if handoff_only else self.history
+        self._refresh_task_shared_state()
         if self.debug_prompt_metrics:
-            metrics_feedback = self.generate_metrics_feedback(agent)
             prompt, metrics = self.prompt_builder.build(
                 agent,
                 history,
@@ -551,7 +602,6 @@ class QuimeraApp:
                 shared_state=self.shared_state,
                 handoff_only=handoff_only,
                 from_agent=from_agent,
-                metrics_feedback=metrics_feedback,
             )
             self.agent_client.log_prompt_metrics(
                 agent, metrics,
@@ -562,12 +612,10 @@ class QuimeraApp:
                 protocol_mode=protocol_mode,
             )
         else:
-            metrics_feedback = self.generate_metrics_feedback(agent)
             prompt = self.prompt_builder.build(
                 agent, history, is_first_speaker, handoff,
                 primary=primary, shared_state=self.shared_state,
                 handoff_only=handoff_only, from_agent=from_agent,
-                metrics_feedback=metrics_feedback,
             )
         result = self.agent_client.call(agent, prompt, silent=silent)
         elapsed = time.time() - start
@@ -663,37 +711,6 @@ class QuimeraApp:
                 if similarity > 0.7:
                     return True
         return False
-
-    def generate_metrics_feedback(self, agent):
-        """Gera bloco de feedback operacional usando BehaviorMetricsTracker.
-
-        Sempre inclui o position summary (histórico acumulado) quando há dados,
-        e adiciona feedback reativo quando thresholds são excedidos.
-        """
-        if not (hasattr(self, 'behavior_metrics') and self.behavior_metrics):
-            return ""
-
-        parts = []
-        position = self.behavior_metrics.get_position_summary(agent)
-        if position:
-            parts.append(position)
-
-        feedback = self.behavior_metrics.generate_feedback(agent)
-        if feedback:
-            # generate_feedback já inclui o status operacional; evitar duplicar
-            # se position summary já cobriu o básico
-            if position:
-                # Extrair apenas as dicas (linhas que começam com "- " seguido de maiúscula)
-                feedback_lines = feedback.split("\n")
-                tips = [l for l in feedback_lines if l.startswith("- ") and any(
-                    kw in l for kw in ("ALTA", "RESPOSTAS VAZIAS", "FALTA", "REDUNDANT", "SÍNTESES", "LATÊNCIA", "DELEGAÇÕES", "BAIXA")
-                )]
-                if tips:
-                    parts.append("  Dicas baseadas no seu histórico:\n" + "\n".join(tips))
-            else:
-                parts.append(feedback)
-
-        return "\n".join(parts) if parts else ""
 
     @staticmethod
     def _generate_handoff_id(task, target, timestamp=None):

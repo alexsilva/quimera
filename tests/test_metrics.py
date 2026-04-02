@@ -176,27 +176,14 @@ class TestBehaviorMetricsTracker(unittest.TestCase):
 
 
 class TestPromptMetricsFeedback(unittest.TestCase):
-    """Testes para integração de métricas no prompt."""
+    """Testes para integração de métricas no prompt — removidos após enxugamento do prompt."""
     
-    def test_prompt_includes_metrics_feedback_when_present(self):
-        """Verifica que feedback é incluído quando fornecido."""
-        from quimera.prompt import PromptBuilder
+    def test_prompt_base_rules_are_concise(self):
+        """Verifica que as regras base são concisas."""
+        from quimera.constants import PROMPT_BASE_RULES
         
-        class DummyContextManager:
-            SUMMARY_MARKER = "<SUMMARY>"
-            def load(self):
-                return ""
-            def load_session(self):
-                return ""
-        
-        builder = PromptBuilder(DummyContextManager())
-        history = [{"role": "human", "content": "Pergunta"}]
-        
-        metrics_feedback = "\nFEEDBACK OPERACIONAL:\n- Teste de feedback\n"
-        prompt = builder.build("claude", history, metrics_feedback=metrics_feedback)
-        
-        self.assertIn("FEEDBACK OPERACIONAL", prompt)
-        self.assertIn("Teste de feedback", prompt)
+        self.assertLess(len(PROMPT_BASE_RULES), 800)
+        self.assertIn("humano", PROMPT_BASE_RULES.lower())
     
     def test_prompt_without_metrics_feedback(self):
         """Verifica que prompt funciona sem feedback."""
@@ -212,10 +199,10 @@ class TestPromptMetricsFeedback(unittest.TestCase):
         builder = PromptBuilder(DummyContextManager())
         history = [{"role": "human", "content": "Pergunta"}]
         
-        prompt = builder.build("claude", history, metrics_feedback=None)
+        prompt = builder.build("claude", history)
         
         self.assertNotIn("FEEDBACK OPERACIONAL", prompt)
-        self.assertIn("REGRAS DE COLABORAÇÃO", prompt)
+        self.assertIn("humano", prompt.lower())
 
 
 if __name__ == "__main__":

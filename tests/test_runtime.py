@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,6 +11,7 @@ from quimera.runtime.executor import ToolExecutor
 from quimera.runtime.models import ToolCall
 from quimera.runtime.parser import ToolCallParseError, extract_tool_call, strip_tool_block
 from quimera.runtime.policy import ToolPolicy, ToolPolicyError
+from quimera.runtime.tasks import add_job, init_db, propose_task
 
 
 # ---------------------------------------------------------------------------
@@ -160,6 +162,45 @@ class PolicyTests(unittest.TestCase):
     def test_no_approval_for_read(self):
         self.assertFalse(self.policy.requires_approval(self._call("read_file", {"path": "x"})))
 
+    def test_get_job_without_job_id_is_allowed(self):
+        self.policy.validate(self._call("get_job", {}))
+
+    def test_propose_task_requires_explicit_human_request(self):
+        with self.assertRaises(ToolPolicyError):
+            self.policy.validate(self._call("propose_task", {"description": "abrir tarefa"}))
+
+    def test_propose_task_accepts_explicit_human_request(self):
+        self.policy.validate(
+            self._call(
+                "propose_task",
+                {
+                    "description": "abrir tarefa",
+                    "requested_by_human": True,
+                    "source_context": "Humano pediu explicitamente para abrir tarefa assíncrona.",
+                },
+            )
+        )
+
+    def test_propose_task_requires_approval_even_when_other_mutations_do_not(self):
+        config = ToolRuntimeConfig(
+            workspace_root=self.tmp,
+            require_approval_for_mutations=False,
+            require_approval_for_task_creation=True,
+        )
+        policy = ToolPolicy(config)
+        self.assertTrue(
+            policy.requires_approval(
+                self._call(
+                    "propose_task",
+                    {
+                        "description": "abrir tarefa",
+                        "requested_by_human": True,
+                        "source_context": "Humano pediu explicitamente para abrir tarefa assíncrona.",
+                    },
+                )
+            )
+        )
+
 
 # ---------------------------------------------------------------------------
 # ToolExecutor
@@ -168,7 +209,13 @@ class PolicyTests(unittest.TestCase):
 class ExecutorTests(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
-        self.config = _make_config(self.tmp)
+        self.db_path = self.tmp / "tasks.db"
+        init_db(str(self.db_path))
+        self.config = ToolRuntimeConfig(
+            workspace_root=self.tmp,
+            db_path=str(self.db_path),
+            require_approval_for_mutations=True,
+        )
 
     def _executor(self, approve=True):
         handler = _auto_approve() if approve else _deny_all()
@@ -242,6 +289,114 @@ class ExecutorTests(unittest.TestCase):
         response = '```json\n{"name": "read_file", "arguments": {"path": "f.txt"}}\n```'
         raw, tool_result = ex.maybe_execute_from_response(response)
         self.assertIsNone(tool_result)
+
+    def test_list_tasks_accepts_top_level_filters(self):
+        job_id = add_job("Job test", db_path=str(self.db_path))
+        task_id = propose_task(job_id, "Task A", db_path=str(self.db_path))
+        ex = self._executor()
+
+        result = ex.execute(ToolCall(name="list_tasks", arguments={"job_id": job_id, "status": "proposed"}))
+
+        self.assertTrue(result.ok)
+        payload = json.loads(result.content)
+        self.assertEqual([task["id"] for task in payload], [task_id])
+
+    def test_propose_task_reuses_same_open_description(self):
+        job_id = add_job("Job test", db_path=str(self.db_path))
+        ex = self._executor()
+        first = ex.execute(
+            ToolCall(
+                name="propose_task",
+                arguments={
+                    "job_id": job_id,
+                    "description": "Validar schema",
+                    "requested_by_human": True,
+                    "source_context": "Humano pediu explicitamente para abrir tarefa assíncrona.",
+                },
+            )
+        )
+        second = ex.execute(
+            ToolCall(
+                name="propose_task",
+                arguments={
+                    "job_id": job_id,
+                    "description": "  validar   schema  ",
+                    "requested_by_human": True,
+                    "source_context": "Humano pediu explicitamente para abrir tarefa assíncrona.",
+                },
+            )
+        )
+
+        self.assertTrue(first.ok)
+        self.assertTrue(second.ok)
+        self.assertEqual(first.data["task_id"], second.data["task_id"])
+        self.assertEqual(second.data["duplicate_of"], first.data["task_id"])
+
+    def test_propose_task_fails_for_unknown_job_id(self):
+        ex = self._executor()
+
+        result = ex.execute(
+            ToolCall(
+                name="propose_task",
+                arguments={
+                    "job_id": 999,
+                    "description": "Task órfã",
+                    "requested_by_human": True,
+                    "source_context": "Humano pediu explicitamente para abrir tarefa assíncrona.",
+                },
+            )
+        )
+
+        self.assertFalse(result.ok)
+        self.assertIn("does not exist", result.error)
+
+    def test_propose_task_denied_without_approval(self):
+        job_id = add_job("Job test", db_path=str(self.db_path))
+        ex = self._executor(approve=False)
+
+        result = ex.execute(
+            ToolCall(
+                name="propose_task",
+                arguments={
+                    "job_id": job_id,
+                    "description": "Abrir tarefa aprovada pelo humano",
+                    "requested_by_human": True,
+                    "source_context": "Humano pediu explicitamente para abrir tarefa assíncrona.",
+                },
+            )
+        )
+
+        self.assertFalse(result.ok)
+        self.assertIn("negada", result.error)
+
+    def test_get_job_uses_current_job_env_fallback(self):
+        job_id = add_job("Job env", db_path=str(self.db_path))
+        ex = self._executor()
+        old_env = os.environ.get("QUIMERA_CURRENT_JOB_ID")
+        os.environ["QUIMERA_CURRENT_JOB_ID"] = str(job_id)
+        try:
+            result = ex.execute(ToolCall(name="get_job", arguments={}))
+        finally:
+            if old_env is None:
+                os.environ.pop("QUIMERA_CURRENT_JOB_ID", None)
+            else:
+                os.environ["QUIMERA_CURRENT_JOB_ID"] = old_env
+
+        self.assertTrue(result.ok)
+        payload = json.loads(result.content)
+        self.assertEqual(payload["id"], job_id)
+
+    def test_list_jobs_accepts_top_level_filters(self):
+        add_job("Planejamento", created_by="alex", db_path=str(self.db_path))
+        add_job("Execução", created_by="bia", db_path=str(self.db_path))
+        ex = self._executor()
+
+        result = ex.execute(ToolCall(name="list_jobs", arguments={"created_by": "alex"}))
+
+        self.assertTrue(result.ok)
+        payload = json.loads(result.content)
+        self.assertEqual(len(payload), 1)
+        self.assertEqual(payload[0]["description"], "Planejamento")
 
 
 if __name__ == "__main__":

@@ -1,9 +1,33 @@
 import hashlib
 import json
+import os
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-QUIMERA_BASE = Path.home() / ".local" / "share" / "quimera"
+
+def _resolve_quimera_base() -> Path:
+    env_base = os.environ.get("QUIMERA_BASE")
+    candidates = []
+    if env_base:
+        candidates.append(Path(env_base).expanduser())
+    candidates.append(Path.home() / ".local" / "share" / "quimera")
+    candidates.append(Path(tempfile.gettempdir()) / "quimera")
+
+    for candidate in candidates:
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+            probe = candidate / ".write_probe"
+            probe.write_text("", encoding="utf-8")
+            probe.unlink(missing_ok=True)
+            return candidate
+        except OSError:
+            continue
+
+    raise OSError("Não foi possível resolver um diretório gravável para o workspace do Quimera")
+
+
+QUIMERA_BASE = _resolve_quimera_base()
 
 
 class Workspace:

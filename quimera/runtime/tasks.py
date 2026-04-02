@@ -3,6 +3,8 @@ from pathlib import Path
 import sqlite3
 from datetime import datetime, timezone
 
+from ..workspace import QUIMERA_BASE
+
 """
 DB path resolution for Stage 5 tasks.
 Priority:
@@ -12,7 +14,7 @@ Priority:
 """
 
 def _default_tasks_db_path() -> Path:
-    return Path.home() / ".local" / "share" / "quimera" / "tasks.db"
+    return QUIMERA_BASE / "tasks.db"
 
 def _resolve_tasks_db_path() -> Path:
     env_db = os.environ.get("QUIMERA_TASKS_DB")
@@ -107,6 +109,7 @@ def list_jobs(filt=None, db_path=None):
         params.append(filt["created_by"])
     if clauses:
         sql += " WHERE " + " AND ".join(clauses)
+    sql += " ORDER BY updated_at ASC, id ASC"
     cur.execute(sql, tuple(params))
     rows = cur.fetchall()
     conn.close()
@@ -200,6 +203,7 @@ def list_tasks(filt=None, db_path=None):
         params.append(filt["id"])
     if clauses:
         sql += " WHERE " + " AND ".join(clauses)
+    sql += " ORDER BY id ASC"
     cur.execute(sql, tuple(params))
     rows = cur.fetchall()
     conn.close()

@@ -493,6 +493,27 @@ class ProtocolTests(unittest.TestCase):
         self.assertNotIn('"d0"', state_block)
         self.assertNotIn('"open_disagreements"', state_block)
 
+    def test_prompt_includes_task_overview_in_shared_state(self):
+        builder = PromptBuilder(DummyContextManager(), history_window=3)
+        history = [{"role": "human", "content": "Pergunta"}]
+
+        prompt = builder.build(
+            AGENT_CLAUDE,
+            history,
+            shared_state={
+                "goal": "coordenar tarefas",
+                "task_overview": {
+                    "job_id": 23,
+                    "open_task_counts": {"approved": 1, "proposed": 0, "in_progress": 0},
+                    "recommended_action": "Execute approved antes de criar novas.",
+                },
+            },
+        )
+
+        self.assertIn('"task_overview": {', prompt)
+        self.assertIn('"job_id": 23', prompt)
+        self.assertIn('Execute approved antes de criar novas.', prompt)
+
     def test_app_builds_explicit_session_state_for_prompt(self):
         class FakeWorkspace:
             def __init__(self, cwd):
@@ -1347,15 +1368,14 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(metrics["codex"]["succeeded"], 0)
 
     def test_prompt_includes_proactivity_rules(self):
-        """Prompt deve incluir seção PROATIVIDADE."""
+        """Prompt deve incluir NEEDS_INPUT e instruções de colaboração."""
         builder = PromptBuilder(DummyContextManager(), history_window=3)
         history = [{"role": "human", "content": "Pergunta"}]
 
         prompt = builder.build(AGENT_CLAUDE, history, is_first_speaker=True)
 
-        self.assertIn("PROATIVIDADE", prompt)
-        self.assertIn("reporte-o mesmo que não seja o foco", prompt)
         self.assertIn("[NEEDS_INPUT]", prompt)
+        self.assertIn("humano", prompt.lower())
 
     def test_route_rule_includes_format_specification(self):
         """build_route_rule deve incluir instrução de formato do payload."""
@@ -1363,11 +1383,9 @@ class PluginTests(unittest.TestCase):
 
         rule = build_route_rule(["claude", "codex"])
 
-        self.assertIn("Formato aceito", rule)
-        self.assertIn("'task' é OBRIGATÓRIO", rule)
-        self.assertIn("[ROUTE:agente] task:", rule)
-        self.assertIn("Inline:", rule)
-        self.assertIn("Linhas:", rule)
+        self.assertIn("[ROUTE:agente]", rule)
+        self.assertIn("task", rule)
+        self.assertIn("obrigatório", rule)
 
 
 class FallbackChainTests(unittest.TestCase):
@@ -1514,90 +1532,6 @@ class MetricsFeedbackTests(unittest.TestCase):
         different_response = "Vou corrigir o bug Y no parser."
         self.assertFalse(app._is_response_redundant(different_response, history))
 
-    def test_generate_metrics_feedback_returns_empty_when_no_state(self):
-        """generate_metrics_feedback deve retornar string vazia sem behavior_metrics."""
-        app = QuimeraApp.__new__(QuimeraApp)
-        app.behavior_metrics = None
-        
-        feedback = app.generate_metrics_feedback("claude")
-        self.assertEqual(feedback, "")
-
-    def test_generate_metrics_feedback_high_invalid_rate(self):
-        """Feedback deve indicar alta taxa de handoffs inválidos via BehaviorMetricsTracker."""
-        from quimera.metrics import BehaviorMetricsTracker
-        
-        app = QuimeraApp.__new__(QuimeraApp)
-        app.behavior_metrics = BehaviorMetricsTracker()
-        
-        # Simula handoffs inválidos para atingir >30% de taxa
-        for i in range(10):
-            app.behavior_metrics.record_response("claude", 1.0)
-        for i in range(5):
-            app.behavior_metrics.record_handoff_sent("claude", is_invalid=True)
-        for i in range(5):
-            app.behavior_metrics.record_handoff_sent("claude", is_invalid=False)
-        
-        feedback = app.generate_metrics_feedback("claude")
-        self.assertIn("HANDOFF INVÁLIDO", feedback)
-
-    def test_generate_metrics_feedback_low_next_step_rate(self):
-        """Feedback deve indicar baixa taxa de próximo passo claro via BehaviorMetricsTracker."""
-        from quimera.metrics import BehaviorMetricsTracker
-        
-        app = QuimeraApp.__new__(QuimeraApp)
-        app.behavior_metrics = BehaviorMetricsTracker()
-        
-        # Simula respostas sem próximo passo claro
-        for i in range(10):
-            app.behavior_metrics.record_response("claude", 1.0, has_next_step=(i < 2))
-        
-        feedback = app.generate_metrics_feedback("claude")
-        self.assertIn("PRÓXIMO PASSO", feedback)
-
-    def test_generate_metrics_feedback_high_redundancy(self):
-        """Feedback deve indicar alta taxa de redundância via BehaviorMetricsTracker."""
-        from quimera.metrics import BehaviorMetricsTracker
-        
-        app = QuimeraApp.__new__(QuimeraApp)
-        app.behavior_metrics = BehaviorMetricsTracker()
-        
-        # Simula respostas redundantes
-        for i in range(10):
-            app.behavior_metrics.record_response("claude", 1.0, is_redundant=(i < 4))
-        
-        feedback = app.generate_metrics_feedback("claude")
-        self.assertIn("REDUNDANTES", feedback)
-
-    def test_generate_metrics_feedback_low_agent_success_rate(self):
-        """Feedback deve indicar baixa taxa de sucesso do agente via BehaviorMetricsTracker."""
-        from quimera.metrics import BehaviorMetricsTracker
-        
-        app = QuimeraApp.__new__(QuimeraApp)
-        app.behavior_metrics = BehaviorMetricsTracker()
-        
-        # Simula handoffs com baixa taxa de sucesso
-        for i in range(5):
-            app.behavior_metrics.record_response("codex", 1.0)
-        for i in range(3):
-            app.behavior_metrics.record_handoff_sent("codex", is_invalid=True)
-        for i in range(2):
-            app.behavior_metrics.record_handoff_sent("codex", is_invalid=False)
-        
-        feedback = app.generate_metrics_feedback("codex")
-        self.assertIn("SUCESSO", feedback)
-
-    def test_metrics_feedback_injected_in_prompt(self):
-        """PromptBuilder deve injetar feedback de métricas quando disponível."""
-        builder = PromptBuilder(DummyContextManager(), history_window=3)
-        history = [{"role": "human", "content": "Pergunta"}]
-        
-        metrics_feedback = "\nFEEDBACK OPERACIONAL:\n- ALTA TAXA DE HANDOFF INVÁLIDO (50%)"
-        
-        prompt = builder.build("claude", history, metrics_feedback=metrics_feedback)
-        
-        self.assertIn("FEEDBACK OPERACIONAL", prompt)
-        self.assertIn("HANDOFF INVÁLIDO", prompt)
-
     def test_session_state_tracks_new_metrics(self):
         """session_state deve rastrear as novas métricas."""
         app = QuimeraApp.__new__(QuimeraApp)
@@ -1639,31 +1573,31 @@ class MetricsFeedbackTests(unittest.TestCase):
         formatted = builder._format_handoff(handoff, from_agent="claude")
         self.assertNotIn("CHAIN", formatted)
 
-    def test_prompt_includes_role_selection_rule(self):
-        """Prompt deve incluir regra sobre sinalização de papel."""
+    def test_prompt_includes_collaboration_rules(self):
+        """Prompt deve incluir regras de colaboração."""
         builder = PromptBuilder(DummyContextManager(), history_window=3)
         history = [{"role": "human", "content": "Pergunta"}]
 
         prompt = builder.build(AGENT_CLAUDE, history, is_first_speaker=True)
 
-        self.assertIn("PAPEL", prompt)
-        self.assertIn("implementar", prompt)
+        self.assertIn("colaborar", prompt.lower())
+        self.assertIn("complemente", prompt.lower())
 
-    def test_prompt_includes_delegation_chain_limit(self):
-        """Prompt deve incluir limite de níveis de delegação."""
+    def test_prompt_is_concise(self):
+        """Prompt deve ser conciso após enxugamento."""
         builder = PromptBuilder(DummyContextManager(), history_window=3)
         history = [{"role": "human", "content": "Pergunta"}]
 
         prompt = builder.build(AGENT_CLAUDE, history, is_first_speaker=True)
 
-        self.assertIn("2 níveis", prompt)
+        self.assertLess(len(prompt), 5000)
 
-    def test_handoff_rule_mentions_chain_field(self):
-        """PROMPT_HANDOFF_RULE deve mencionar campo CHAIN."""
+    def test_handoff_rule_mentions_ack(self):
+        """PROMPT_HANDOFF_RULE deve mencionar ACK."""
         from quimera.constants import PROMPT_HANDOFF_RULE
 
-        self.assertIn("CHAIN", PROMPT_HANDOFF_RULE)
-        self.assertIn("NÃO delegue de volta", PROMPT_HANDOFF_RULE)
+        self.assertIn("ACK", PROMPT_HANDOFF_RULE)
+        self.assertIn("delegue de volta", PROMPT_HANDOFF_RULE)
 
     def test_behavior_metrics_tracker_integrated_with_app(self):
         """BehaviorMetricsTracker deve ser alimentado pelo app."""
@@ -1717,48 +1651,37 @@ class MetricsFeedbackTests(unittest.TestCase):
         claude_summary = app.behavior_metrics.get_agent_summary("codex")
         self.assertGreaterEqual(claude_summary["handoffs_sent"], 0)
 
-    def test_prompt_includes_feedback_rule_when_metrics_present(self):
-        """Quando metrics_feedback é passado, o PROMPT_FEEDBACK_RULE deve ser incluído."""
-        builder = PromptBuilder(DummyContextManager(), history_window=3)
-        history = [{"role": "human", "content": "Pergunta"}]
-        
-        metrics_feedback = "- ALTA TAXA DE HANDOFF INVÁLIDO (50%):\n  Verifique o formato."
-        
-        prompt = builder.build("claude", history, metrics_feedback=metrics_feedback)
-        
-        self.assertIn("FEEDBACK OPERACIONAL", prompt)
-        self.assertIn("HANDOFF INVÁLIDO", prompt)
-        self.assertIn("ajuste seu comportamento", prompt.lower())
-
-    def test_route_rule_includes_no_text_after_payload(self):
-        """build_route_rule deve incluir regra sobre não adicionar texto livre após payload."""
+    def test_route_rule_is_concise(self):
+        """build_route_rule deve ser conciso e incluir task como obrigatório."""
         from quimera.constants import build_route_rule
         
         rule = build_route_rule(["claude", "codex"])
         
-        self.assertIn("NÃO adicione texto livre", rule)
-        self.assertIn("não tiver contexto suficiente", rule)
+        self.assertIn("task", rule)
+        self.assertIn("obrigatório", rule)
+        self.assertLess(len(rule), 300)
 
-    def test_reviewer_rule_includes_no_preamble(self):
-        """PROMPT_REVIEWER_RULE deve incluir regra sobre ir direto ao ponto."""
+    def test_reviewer_rule_is_concise(self):
+        """PROMPT_REVIEWER_RULE deve ser conciso."""
         from quimera.constants import PROMPT_REVIEWER_RULE
         
-        self.assertIn("substitua apenas se houver erro", PROMPT_REVIEWER_RULE)
-        self.assertIn("preâmbulo", PROMPT_REVIEWER_RULE)
+        self.assertIn("concorde", PROMPT_REVIEWER_RULE.lower())
+        self.assertLess(len(PROMPT_REVIEWER_RULE), 300)
 
-    def test_handoff_rule_includes_no_preamble(self):
-        """PROMPT_HANDOFF_RULE deve incluir regra sobre não usar preâmbulo."""
+    def test_handoff_rule_is_concise(self):
+        """PROMPT_HANDOFF_RULE deve ser conciso."""
         from quimera.constants import PROMPT_HANDOFF_RULE
         
-        self.assertIn("NÃO comece com", PROMPT_HANDOFF_RULE)
-        self.assertIn("Claro", PROMPT_HANDOFF_RULE)
+        self.assertIn("ACK", PROMPT_HANDOFF_RULE)
+        self.assertLess(len(PROMPT_HANDOFF_RULE), 400)
 
-    def test_base_rules_include_advance_task_rule(self):
-        """PROMPT_BASE_RULES deve incluir regra sobre avançar a tarefa concretamente."""
+    def test_base_rules_are_concise(self):
+        """PROMPT_BASE_RULES deve ser conciso e cobrir prioridades."""
         from quimera.constants import PROMPT_BASE_RULES
         
-        self.assertIn("avançar a tarefa concretamente", PROMPT_BASE_RULES)
-        self.assertIn("análise sem conclusão", PROMPT_BASE_RULES)
+        self.assertIn("humano", PROMPT_BASE_RULES.lower())
+        self.assertIn("colaborar", PROMPT_BASE_RULES.lower())
+        self.assertLess(len(PROMPT_BASE_RULES), 800)
 
     def test_behavior_metrics_generate_feedback_empty_when_few_responses(self):
         """generate_feedback deve retornar vazio com menos de 3 respostas."""

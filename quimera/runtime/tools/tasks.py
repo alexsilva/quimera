@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import re
 
 from ..config import ToolRuntimeConfig
 from ..models import ToolCall, ToolResult
@@ -11,7 +13,7 @@ from ..tasks import (
     get_job as _get_job,
     approve_task as _approve_task,
     complete_task as _complete_task,
-    fail_task as _fail_task, add_job,
+    fail_task as _fail_task,
 )
 
 
@@ -19,20 +21,54 @@ class TaskTools:
     def __init__(self, config: ToolRuntimeConfig) -> None:
         self.config = config
 
-    def propose_task(self, call: ToolCall) -> ToolResult:
-        job_id = call.arguments.get("job_id")
-        # If not provided, try to derive from environment (current session job)
+    def _resolve_job_id(self, raw_job_id, *, allow_recent_fallback: bool = False) -> int | None:
+        job_id = raw_job_id
         if job_id is None:
-            import os
             env_val = os.environ.get("QUIMERA_CURRENT_JOB_ID")
             if env_val is not None:
                 try:
                     job_id = int(env_val)
                 except ValueError:
                     job_id = None
+        if job_id is None and allow_recent_fallback:
+            try:
+                recent_jobs = _list_jobs({"status": "planning"}, db_path=self.config.db_path)
+                if not recent_jobs:
+                    recent_jobs = _list_jobs({"status": "active"}, db_path=self.config.db_path)
+                if recent_jobs:
+                    job_id = recent_jobs[-1]["id"]
+            except Exception:
+                return None
+        return job_id
+
+    @staticmethod
+    def _normalize_text(value: str) -> str:
+        return re.sub(r"\s+", " ", value.strip().lower())
+
+    def _build_filters(self, arguments: dict) -> dict:
+        filt = dict(arguments.get("filters", {}) or {})
+        for key in ("job_id", "status", "assigned_to", "id"):
+            value = arguments.get(key)
+            if value is not None:
+                filt[key] = value
+        return filt
+
+    def _find_duplicate_task(self, job_id: int, description: str) -> dict | None:
+        normalized_description = self._normalize_text(description)
+        if not normalized_description:
+            return None
+        open_statuses = ("proposed", "approved", "in_progress")
+        for status in open_statuses:
+            tasks = _list_tasks({"job_id": job_id, "status": status}, db_path=self.config.db_path)
+            for task in tasks:
+                if self._normalize_text(task["description"]) == normalized_description:
+                    return task
+        return None
+
+    def propose_task(self, call: ToolCall) -> ToolResult:
+        job_id = self._resolve_job_id(call.arguments.get("job_id"))
         if job_id is None:
-            # Early failure to provide clear error to the caller
-            return ToolResult(ok=False, tool_name=call.name, error="job_id is required (or QUIMERA_CURRENT_JOB_ID not set)")
+            return ToolResult(ok=False, tool_name=call.name, error="job_id is required (set QUIMERA_CURRENT_JOB_ID or create a job first)")
         description = call.arguments["description"]
         priority = call.arguments.get("priority", "medium")
         created_by = call.arguments.get("created_by")
@@ -40,14 +76,28 @@ class TaskTools:
         source_context = call.arguments.get("source_context")
         body = call.arguments.get("body")
         try:
-            job_id = add_job(f"Job{job_id}", created_by, db_path=self.config.db_path, job_id=job_id)
+            job = _get_job(job_id, db_path=self.config.db_path)
+            if job is None:
+                return ToolResult(ok=False, tool_name=call.name, error=f"job_id {job_id} does not exist")
+            duplicate = self._find_duplicate_task(job_id, description)
+            if duplicate is not None:
+                return ToolResult(
+                    ok=True,
+                    tool_name=call.name,
+                    content=str(duplicate["id"]),
+                    data={
+                        "task_id": duplicate["id"],
+                        "duplicate_of": duplicate["id"],
+                        "message": "similar open task already exists",
+                    },
+                )
             tid = _propose_task(job_id, description, priority=priority, created_by=created_by, notes=notes, source_context=source_context, body=body, db_path=self.config.db_path)
             return ToolResult(ok=True, tool_name=call.name, content=str(tid), data={"task_id": tid})
         except Exception as exc:  # noqa: BLE001
             return ToolResult(ok=False, tool_name=call.name, error=str(exc))
 
     def list_tasks(self, call: ToolCall) -> ToolResult:
-        filt = call.arguments.get("filters", {})
+        filt = self._build_filters(call.arguments)
         try:
             tasks = _list_tasks(filt, db_path=self.config.db_path)
             return ToolResult(ok=True, tool_name=call.name, content=json.dumps(tasks))
@@ -55,7 +105,11 @@ class TaskTools:
             return ToolResult(ok=False, tool_name=call.name, error=str(exc))
 
     def list_jobs(self, call: ToolCall) -> ToolResult:
-        filt = call.arguments.get("filters", {})
+        filt = dict(call.arguments.get("filters", {}) or {})
+        for key in ("status", "created_by"):
+            value = call.arguments.get(key)
+            if value is not None:
+                filt[key] = value
         try:
             jobs = _list_jobs(filt, db_path=self.config.db_path)
             return ToolResult(ok=True, tool_name=call.name, content=json.dumps(jobs))
@@ -63,17 +117,9 @@ class TaskTools:
             return ToolResult(ok=False, tool_name=call.name, error=str(exc))
 
     def get_job(self, call: ToolCall) -> ToolResult:
-        job_id = call.arguments.get("job_id")
+        job_id = self._resolve_job_id(call.arguments.get("job_id"), allow_recent_fallback=True)
         if job_id is None:
-            import os
-            env_val = os.environ.get("QUIMERA_CURRENT_JOB_ID")
-            if env_val is not None:
-                try:
-                    job_id = int(env_val)
-                except ValueError:
-                    job_id = None
-        if job_id is None:
-            return ToolResult(ok=False, tool_name=call.name, error="job_id is required (or QUIMERA_CURRENT_JOB_ID not set)")
+            return ToolResult(ok=False, tool_name=call.name, error="job_id is required (set QUIMERA_CURRENT_JOB_ID or create a job first)")
         try:
             job = _get_job(job_id, db_path=self.config.db_path)
             return ToolResult(ok=True, tool_name=call.name, content=json.dumps(job) if job is not None else "null", data={"job": job})

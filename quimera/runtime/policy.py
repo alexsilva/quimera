@@ -23,7 +23,9 @@ class ToolPolicy:
         validator(call)
 
     def requires_approval(self, call: ToolCall) -> bool:
-        if call.name in {"write_file", "run_shell", "propose_task", "complete_task", "fail_task"}:
+        if call.name == "propose_task":
+            return self.config.require_approval_for_task_creation
+        if call.name in {"write_file", "run_shell", "complete_task", "fail_task"}:
             return self.config.require_approval_for_mutations
         return False
 
@@ -55,6 +57,11 @@ class ToolPolicy:
     def _validate_propose_task(self, call: ToolCall) -> None:
         if "description" not in call.arguments:
             raise ToolPolicyError("propose_task requer 'description'")
+        if call.arguments.get("requested_by_human") is not True:
+            raise ToolPolicyError("propose_task requer requested_by_human=True")
+        source_context = str(call.arguments.get("source_context", "")).strip()
+        if not source_context:
+            raise ToolPolicyError("propose_task requer 'source_context'")
 
     def _validate_list_tasks(self, call: ToolCall) -> None:
         pass
@@ -63,8 +70,7 @@ class ToolPolicy:
         pass
 
     def _validate_get_job(self, call: ToolCall) -> None:
-        if "job_id" not in call.arguments:
-            raise ToolPolicyError("get_job requer 'job_id'")
+        return
 
     def _validate_complete_task(self, call: ToolCall) -> None:
         if "task_id" not in call.arguments:
