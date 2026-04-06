@@ -21,7 +21,7 @@ except ImportError:
 from .runtime.executor import ToolExecutor
 from .runtime.parser import strip_tool_block
 from .runtime import ToolRuntimeConfig, ConsoleApprovalHandler, TaskExecutor, create_executor
-from .runtime.task_planning import choose_best_agent, classify_task_type, normalize_task_description
+from .runtime.task_planning import choose_best_agent, classify_task_type, normalize_task_description, score_plugin_for_task
 from .runtime.tasks import create_task, get_job, init_db, list_tasks
 from .ui import TerminalRenderer
 from .context import ContextManager
@@ -239,8 +239,13 @@ class QuimeraApp:
                         primary=False,
                         protocol_mode="task_execution",
                     )
-                    
-                    complete_task(task_id, result=response, db_path=self.tasks_db_path)
+
+                    ok, task_result = self._classify_task_execution_result(response)
+                    if not ok:
+                        fail_task(task_id, reason=task_result, db_path=self.tasks_db_path)
+                        return False
+
+                    complete_task(task_id, result=task_result, db_path=self.tasks_db_path)
                     return True
                 except Exception as e:
                     fail_task(task_dict["id"], reason=str(e), db_path=self.tasks_db_path)
@@ -473,6 +478,60 @@ class QuimeraApp:
             candidate_plugins = plugins.all_plugins()
         return candidate_plugins
 
+    @staticmethod
+    def _classify_task_execution_result(response: str | None) -> tuple[bool, str]:
+        """Return whether the task execution can be considered completed."""
+        if response is None:
+            return False, "sem resposta do agente"
+
+        text = strip_tool_block(response).strip()
+        if not text:
+            return False, "resposta vazia do agente"
+        if NEEDS_INPUT_MARKER in text:
+            return False, "agente solicitou input humano"
+
+        lowered = text.lower()
+        blocked_markers = (
+            "não consigo",
+            "nao consigo",
+            "não posso",
+            "nao posso",
+            "não tenho como",
+            "nao tenho como",
+            "unable to",
+            "cannot",
+            "can't",
+            "impossível",
+            "impossivel",
+        )
+        if any(marker in lowered for marker in blocked_markers):
+            return False, text
+        return True, text
+
+    def _count_agent_open_tasks(self, agent_name: str) -> int:
+        return sum(
+            len(list_tasks({"assigned_to": agent_name, "status": status}, db_path=self.tasks_db_path))
+            for status in ("pending", "in_progress")
+        )
+
+    def _choose_agent_with_load_balance(self, task_type: str) -> str | None:
+        """Choose best agent for task_type, applying open-task penalty to avoid monopolies."""
+        candidate_plugins = self._get_task_routing_plugins()
+        if not candidate_plugins:
+            return None
+        scored = []
+        for plugin in candidate_plugins:
+            base_score = score_plugin_for_task(plugin, task_type)
+            load = self._count_agent_open_tasks(plugin.name)
+            effective_score = base_score - load
+            scored.append((plugin, base_score, load, effective_score))
+        max_score = max(s for _, _, _, s in scored)
+        if max_score <= -5:
+            return choose_best_agent(task_type, candidate_plugins)
+        top = [item for item in scored if item[3] == max_score]
+        top.sort(key=lambda item: (item[2], -item[1], item[0].name))
+        return top[0][0].name
+
     def _handle_task_command(self, command: str) -> None:
         description = self._parse_task_command(command)
         if not description:
@@ -480,7 +539,7 @@ class QuimeraApp:
             return
 
         task_type = classify_task_type(description)
-        selected_agent = choose_best_agent(task_type, self._get_task_routing_plugins())
+        selected_agent = self._choose_agent_with_load_balance(task_type)
         task_id = create_task(
             self.current_job_id,
             description,

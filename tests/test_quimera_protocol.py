@@ -427,6 +427,49 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn("task criada com id", app.renderer.system_messages[-1])
         self.assertIn("atribuída para codex", app.renderer.system_messages[-1])
 
+    def test_classify_task_execution_result_rejects_needs_input(self):
+        ok, reason = QuimeraApp._classify_task_execution_result(
+            "Preciso de mais contexto. [NEEDS_INPUT]"
+        )
+
+        self.assertFalse(ok)
+        self.assertEqual(reason, "agente solicitou input humano")
+
+    def test_classify_task_execution_result_rejects_inability_text(self):
+        ok, reason = QuimeraApp._classify_task_execution_result(
+            "Não consigo executar isso sem acesso ao ambiente."
+        )
+
+        self.assertFalse(ok)
+        self.assertIn("Não consigo", reason)
+
+    def test_choose_agent_with_load_balance_penalizes_busy_higher_tier_agent(self):
+        from quimera.runtime.tasks import create_task
+
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
+        tmp_dir = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        db_path = tmp_dir / "tasks.db"
+        init_db(str(db_path))
+        add_job("Session", db_path=str(db_path), job_id=1)
+        app.tasks_db_path = str(db_path)
+        app._get_task_routing_plugins = QuimeraApp._get_task_routing_plugins.__get__(app, QuimeraApp)
+        app._count_agent_open_tasks = QuimeraApp._count_agent_open_tasks.__get__(app, QuimeraApp)
+
+        for idx in range(3):
+            create_task(
+                1,
+                f"Tarefa {idx}",
+                task_type="general",
+                assigned_to=AGENT_CLAUDE,
+                status="pending",
+                db_path=str(db_path),
+            )
+
+        selected = QuimeraApp._choose_agent_with_load_balance(app, "general")
+
+        self.assertEqual(selected, AGENT_CODEX)
+
     def test_handle_task_command_rejects_empty_description(self):
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
