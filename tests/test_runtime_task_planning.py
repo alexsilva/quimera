@@ -14,7 +14,7 @@ class MockPlugin(AgentPlugin):
     def name(self) -> str: return self._name
     @property
     def cmd(self) -> list[str]: return ["mock"]
-    def __init__(self, name, tier=1, preferred=None, avoid=None, code=False, long=False, tools=False):
+    def __init__(self, name, tier=1, preferred=None, avoid=None, code=False, long=False, tools=False, caps=None):
         self._name = name
         self.base_tier = tier
         self.preferred_task_types = preferred or []
@@ -22,6 +22,7 @@ class MockPlugin(AgentPlugin):
         self.supports_code_editing = code
         self.supports_long_context = long
         self.supports_tools = tools
+        self.capabilities = caps or []
 
 def test_classify_task_type():
     assert classify_task_type("") == TASK_TYPE_GENERAL # Line 43

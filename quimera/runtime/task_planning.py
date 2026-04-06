@@ -47,9 +47,19 @@ def classify_task_type(description: str) -> str:
     return TASK_TYPE_GENERAL
 
 
+CAPABILITY_BOOST = {
+    "code_editing": {"code_edit": 4, "bug_investigation": 1},
+    "bug_investigation": {"bug_investigation": 4, "code_edit": 1},
+    "documentation": {"documentation": 4},
+    "code_review": {"code_review": 4, "architecture": 1},
+    "architecture": {"architecture": 4, "code_review": 1},
+    "general_coding": {"code_edit": 3, "bug_investigation": 1},
+    "planning": {"architecture": 2, "code_review": 1},
+}
+
+
 def score_plugin_for_task(plugin: AgentPlugin, task_type: str) -> int:
     score = 0
-    # Base capability boost
     score += (plugin.base_tier - 1) * 2
 
     if task_type in plugin.preferred_task_types:
@@ -62,6 +72,11 @@ def score_plugin_for_task(plugin: AgentPlugin, task_type: str) -> int:
         score += 2
     if plugin.supports_tools and task_type in {TASK_TYPE_TEST_EXECUTION, TASK_TYPE_BUG_INVESTIGATION}:
         score += 1
+
+    for cap in plugin.capabilities:
+        cap_boost = CAPABILITY_BOOST.get(cap, {})
+        score += cap_boost.get(task_type, 0)
+
     return score
 
 
