@@ -223,7 +223,7 @@ class QuimeraApp:
 
     def _setup_task_executors(self):
         """Set up task executors for explicit human-created task execution."""
-        from .runtime.tasks import complete_task, fail_task, submit_for_review
+        from .runtime.tasks import complete_task, fail_task, requeue_task, submit_for_review
 
         def make_task_handler(agent_name):
             def task_handler(task_dict):
@@ -238,6 +238,8 @@ class QuimeraApp:
                         return False
 
                     prompt = f"Execute a seguinte tarefa:\n\n{body}"
+                    resolved = self._resolved_active_agents()
+                    other_agents = [a for a in resolved if a != agent_name]
 
                     response = self.call_agent(
                         agent_name,
@@ -248,7 +250,10 @@ class QuimeraApp:
 
                     if response is None:
                         self._record_failure(agent_name)
-                        fail_task(task_id, reason="communication failed", db_path=self.tasks_db_path)
+                        if other_agents:
+                            requeue_task(task_id, agent_name, reason="communication failed", db_path=self.tasks_db_path)
+                        else:
+                            fail_task(task_id, reason="communication failed", db_path=self.tasks_db_path)
                         return False
 
                     self.print_response(agent_name, response)
@@ -256,12 +261,13 @@ class QuimeraApp:
 
                     ok, task_result = self._classify_task_execution_result(response)
                     if not ok:
-                        fail_task(task_id, reason=task_result, db_path=self.tasks_db_path)
+                        if other_agents:
+                            requeue_task(task_id, agent_name, reason=task_result, db_path=self.tasks_db_path)
+                        else:
+                            fail_task(task_id, reason=task_result, db_path=self.tasks_db_path)
                         return False
 
                     # Require confirmation from a different agent when possible
-                    resolved = self._resolved_active_agents()
-                    other_agents = [a for a in resolved if a != agent_name]
                     if other_agents:
                         submit_for_review(task_id, result=task_result, db_path=self.tasks_db_path)
                     else:
@@ -269,7 +275,12 @@ class QuimeraApp:
                         complete_task(task_id, result=task_result, db_path=self.tasks_db_path)
                     return True
                 except Exception as e:
-                    fail_task(task_dict["id"], reason=str(e), db_path=self.tasks_db_path)
+                    resolved = self._resolved_active_agents()
+                    other_agents = [a for a in resolved if a != agent_name]
+                    if other_agents:
+                        requeue_task(task_dict["id"], agent_name, reason=str(e), db_path=self.tasks_db_path)
+                    else:
+                        fail_task(task_dict["id"], reason=str(e), db_path=self.tasks_db_path)
                     return False
             return task_handler
 

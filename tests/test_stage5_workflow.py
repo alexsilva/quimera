@@ -6,7 +6,7 @@ import unittest
 from quimera.runtime.tasks import (
     init_db, add_job, create_task, propose_task, approve_task, reject_task,
     list_tasks, list_jobs, claim_task, update_task, complete_task,
-    fail_task, drop_db, get_conn,
+    fail_task, requeue_task, drop_db, get_conn,
 )
 
 
@@ -94,6 +94,21 @@ class TestStage5Workflow(unittest.TestCase):
         tasks = list_tasks({"status": "failed"}, db_path=self.tmp)
         self.assertEqual(len(tasks), 1)
         self.assertEqual(tasks[0]["result"], "Dependency missing")
+
+    def test_requeue_task_allows_failover_claim(self):
+        job_id = add_job("Test job", db_path=self.tmp)
+        tid = create_task(job_id, "Some task", assigned_to="agent-1", origin="human_command", db_path=self.tmp)
+
+        self.assertEqual(claim_task("agent-1", db_path=self.tmp), tid)
+        self.assertTrue(requeue_task(tid, "agent-1", reason="temporary failure", db_path=self.tmp))
+
+        tasks = list_tasks({"id": tid}, db_path=self.tmp)
+        self.assertEqual(tasks[0]["status"], "pending")
+        self.assertIsNone(tasks[0]["assigned_to"])
+        self.assertEqual(tasks[0]["result"], "temporary failure")
+
+        self.assertIsNone(claim_task("agent-1", db_path=self.tmp))
+        self.assertEqual(claim_task("agent-2", db_path=self.tmp), tid)
 
     def test_list_jobs_filter(self):
         add_job("Job A", created_by="alex", db_path=self.tmp)

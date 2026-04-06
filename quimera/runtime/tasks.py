@@ -54,6 +54,8 @@ def init_db(db_path=None):
         "origin": "TEXT NOT NULL DEFAULT 'legacy'",
         "requested_by": "TEXT",
         "reviewed_by": "TEXT",
+        "attempt_count": "INTEGER NOT NULL DEFAULT 0",
+        "failed_agents": "TEXT",
     }
     for column_name, column_spec in column_specs.items():
         if column_name not in existing_columns:
@@ -261,6 +263,37 @@ def release_agent_tasks(agent_name, db_path=None):
     conn.close()
 
 
+def _failed_agents_token(agent_name: str) -> str:
+    return f"|{agent_name}|"
+
+
+def requeue_task(task_id, failed_agent, reason=None, db_path=None):
+    """Release a task after an execution failure so another agent can claim it."""
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    now = _now()
+    cur.execute("SELECT failed_agents, attempt_count FROM tasks WHERE id = ?", (task_id,))
+    row = cur.fetchone()
+    if not row:
+        conn.close()
+        return False
+
+    failed_agents = row[0] or ""
+    token = _failed_agents_token(failed_agent)
+    if token not in failed_agents:
+        failed_agents += token
+    attempt_count = int(row[1] or 0) + 1
+
+    cur.execute(
+        "UPDATE tasks SET status = ?, assigned_to = NULL, result = ?, notes = ?, "
+        "failed_agents = ?, attempt_count = ?, updated_at = ? WHERE id = ?",
+        ("pending", reason, reason, failed_agents, attempt_count, now, task_id),
+    )
+    conn.commit()
+    conn.close()
+    return True
+
+
 def claim_task(agent_name, db_path=None):
     conn = get_conn(db_path)
     cur = conn.cursor()
@@ -271,9 +304,10 @@ def claim_task(agent_name, db_path=None):
             SELECT id FROM tasks
             WHERE status IN ('pending', 'approved')
               AND (assigned_to = ? OR assigned_to IS NULL)
+              AND COALESCE(failed_agents, '') NOT LIKE ?
             ORDER BY id ASC
             LIMIT 1
-        """, (agent_name,))
+        """, (agent_name, f"%{_failed_agents_token(agent_name)}%"))
         row = cur.fetchone()
         if not row:
             conn.rollback()

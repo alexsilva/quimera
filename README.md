@@ -64,7 +64,7 @@ As tarefas são monitoradas por um sistema de sinalização rigoroso:
 - **Resposta Obrigatória**: `None`, texto vazio ou resposta sem conteúdo útil após remover blocos de ferramenta são tratados como falha.
 - **Blocked Markers**: Identifica incapacidade explícita do agente, com marcadores como "não consigo", "não posso", "unable to", "cannot" e similares.
 - **Needs Input**: Detecta quando a intervenção humana é necessária via `[NEEDS_INPUT]`; nesse caso a task não é marcada como concluída.
-- **Fail Fast**: Se a execução não entrega uma resposta válida, a task é classificada como `failed` em vez de `completed`.
+- **Failover Antes do Fail**: Se a execução falha, a task volta para `pending` e outro agente pode assumi-la; ela só deve parar em `failed` quando não houver rota alternativa viável.
 
 ### Observabilidade
 

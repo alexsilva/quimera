@@ -1536,6 +1536,44 @@ class PluginTests(unittest.TestCase):
         )
         fail_task.assert_not_called()
 
+    def test_task_handler_requeues_failed_execution_for_other_agent(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
+        app.tasks_db_path = "/tmp/quimera-tasks-test.db"
+        handlers = {}
+
+        class FakeExecutor:
+            def __init__(self, handler):
+                self.handler = handler
+
+            def set_review_handler(self, handler):
+                pass
+
+            def start(self):
+                return None
+
+        def fake_create_executor(agent, handler, db_path=None):
+            handlers[agent] = handler
+            return FakeExecutor(handler)
+
+        app.call_agent = lambda *args, **kwargs: None
+        app.print_response = lambda agent, response: None
+        app.persist_message = lambda role, content: None
+        app._classify_task_execution_result = lambda response: (True, response)
+        app._record_failure = lambda agent: None
+
+        with patch("quimera.app.create_executor", side_effect=fake_create_executor), patch(
+            "quimera.runtime.tasks.requeue_task"
+        ) as requeue_task, patch("quimera.runtime.tasks.fail_task") as fail_task:
+            app._setup_task_executors()
+            ok = handlers[AGENT_CLAUDE]({"id": 1, "description": "rode a task"})
+
+        self.assertFalse(ok)
+        requeue_task.assert_called_once_with(
+            1, AGENT_CLAUDE, reason="communication failed", db_path=app.tasks_db_path
+        )
+        fail_task.assert_not_called()
+
     def test_parse_response_extracts_ack_marker(self):
         app = QuimeraApp.__new__(QuimeraApp)
         app.ROUTE_PATTERN = QuimeraApp.ROUTE_PATTERN
