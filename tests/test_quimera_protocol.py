@@ -1488,6 +1488,44 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(result, "sucesso no retry")
         self.assertEqual(call_count[0], 2)
 
+    def test_task_handler_prints_and_persists_agent_response(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.active_agents = [AGENT_CLAUDE]
+        app.tasks_db_path = "/tmp/quimera-tasks-test.db"
+        printed = []
+        persisted = []
+        handlers = {}
+
+        class FakeExecutor:
+            def __init__(self, handler):
+                self.handler = handler
+
+            def start(self):
+                return None
+
+        def fake_create_executor(agent, handler, db_path=None):
+            handlers[agent] = handler
+            return FakeExecutor(handler)
+
+        app.call_agent = lambda *args, **kwargs: "resposta visivel da task"
+        app.print_response = lambda agent, response: printed.append((agent, response))
+        app.persist_message = lambda role, content: persisted.append((role, content))
+        app._classify_task_execution_result = lambda response: (True, response)
+
+        with patch("quimera.app.create_executor", side_effect=fake_create_executor), patch(
+            "quimera.runtime.tasks.complete_task"
+        ) as complete_task, patch("quimera.runtime.tasks.fail_task") as fail_task:
+            app._setup_task_executors()
+            ok = handlers[AGENT_CLAUDE]({"id": 1, "description": "rode a task"})
+
+        self.assertTrue(ok)
+        self.assertEqual(printed, [(AGENT_CLAUDE, "resposta visivel da task")])
+        self.assertEqual(persisted, [(AGENT_CLAUDE, "resposta visivel da task")])
+        complete_task.assert_called_once_with(
+            1, result="resposta visivel da task", db_path=app.tasks_db_path
+        )
+        fail_task.assert_not_called()
+
     def test_parse_response_extracts_ack_marker(self):
         app = QuimeraApp.__new__(QuimeraApp)
         app.ROUTE_PATTERN = QuimeraApp.ROUTE_PATTERN

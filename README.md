@@ -1,149 +1,86 @@
 # Quimera
 
-Chat multi-agente no terminal que orquestra **Claude** e **Codex** respondendo juntos às suas perguntas. Os dois agentes conversam entre si, podem delegar subtarefas um ao outro e mantêm estado compartilhado ao longo da sessão.
+Chat multi-agente no terminal que orquestra uma equipe de agentes de IA (**Claude**, **Codex**, **Gemini**, **Qwen** e a família **OpenCode**) para resolver tarefas complexas de engenharia de software. Os agentes colaboram, delegam subtarefas e mantêm um estado compartilhado.
 
 ## Como funciona
 
-Por padrão, cada mensagem do usuário aciona dois agentes em sequência:
-
-```
-HUMANO → CLAUDE → CODEX
-```
-
-Claude responde primeiro. No fluxo normal, o Codex responde em seguida. Se o primeiro agente emitir um handoff via `[ROUTE:...]`, o agente de destino responde à subtarefa e o agente inicial faz uma síntese final.
-
-Os agentes também podem sinalizar que o tópico merece debate mais aprofundado (`[DEBATE]`), ativando um fluxo estendido com mais rodadas de troca. Já os comandos `/claude` e `/codex` desativam a segunda resposta automática, salvo quando houver handoff explícito.
+O Quimera utiliza um protocolo de comunicação entre agentes que permite:
+- **Roteamento Inteligente**: As mensagens são direcionadas aos agentes com base em suas especialidades e capacidades.
+- **Sistema de Tarefas**: Decomposição de objetivos em tarefas menores via `/task`, que são executadas autonomamente.
+- **Estado Compartilhado**: Todos os agentes têm acesso ao contexto do workspace, decisões tomadas e progresso das tarefas.
+- **Balanceamento de Carga**: Distribuição automática de tarefas baseada no `effective_score` (especialidade - carga atual).
 
 ## Pré-requisitos
 
-- Python 3.10+
-- CLI do [Claude](https://docs.anthropic.com/en/docs/claude-code) instalada e autenticada (`claude`)
-- CLI do [Codex](https://github.com/openai/codex) instalada e autenticada (`codex`)
-
-Ambas as ferramentas precisam estar disponíveis no `PATH`.
+Os agentes dependem de suas respectivas CLIs instaladas e autenticadas:
+- `claude` (Anthropic)
+- `codex` (OpenAI/Codex)
+- `gemini` (Google)
+- `opencode` (OpenCode family)
 
 ## Instalação
 
 ```bash
 git clone git@github.com:alexsilva/quimera.git
 cd quimera
-pip install .
-```
-
-Ou em modo editável (desenvolvimento):
-
-```bash
 pip install -e .
 ```
 
 ## Uso
 
-Navegue até o diretório do seu projeto e inicie o chat:
+Inicie o chat no diretório do seu projeto:
 
 ```bash
-cd /caminho/do/seu/projeto
 quimera
 ```
 
-A sessão fica vinculada ao diretório atual. O contexto e o histórico são salvos automaticamente em `~/.local/share/quimera/workspaces/`.
-
-### Comandos disponíveis
+### Comandos principais
 
 | Comando | Descrição |
 |---|---|
-| `/claude <mensagem>` | Claude responde primeiro (Codex não entra automaticamente) |
-| `/codex <mensagem>` | Codex responde primeiro (Claude não entra automaticamente) |
-| `/context` | Exibe o contexto persistente do workspace atual |
-| `/context edit` | Abre o contexto persistente no editor (`$EDITOR`, ou nano/vim como fallback) |
-| `/edit` | Abre o editor para compor uma mensagem longa |
-| `/file <caminho>` | Usa o conteúdo de um arquivo como mensagem |
-| `/help` | Lista os comandos disponíveis |
-| `/exit` | Encerra a sessão e gera o resumo de memória |
+| `/task <descrição>` | Cria uma nova tarefa. O Quimera escolherá o melhor agente disponível para executá-la. A execução é exibida em tempo real no terminal. |
+| `/claude`, `/codex`, `/gemini`... | Direciona a mensagem especificamente para um agente. |
+| `/context` | Exibe ou edita (`/context edit`) o contexto persistente do projeto. |
+| `/history` | Exibe o histórico recente da sessão. |
+| `/exit` | Encerra a sessão e gera um resumo automático para a próxima execução. |
 
-### Exemplo de sessão
+### Orquestração e Balanceamento
 
-```
-$ quimera
-Chat multi-agente iniciado (/exit para sair)
+O Quimera avalia cada tarefa e agente usando critérios de:
+- **Especialidade**: Algum agente é preferencial para `architecture`, `code_edit`, `documentation`, etc?
+- **Capacidade**: O agente suporta edição de arquivos (`supports_code_editing`) ou ferramentas externas?
+- **Disponibilidade**: O `effective_score` garante que nenhum agente fique sobrecarregado enquanto outros estão ociosos.
+- **Transparência**: O progresso das tarefas é reportado ao vivo para que o usuário acompanhe a "conversa" interna e as ações tomadas.
 
-Você: como posso otimizar esta função Python?
+### Validação de Conclusão
 
-[CLAUDE]: ...
-[CODEX]: ...
+As tarefas são monitoradas por um sistema de sinalização rigoroso:
+- **Blocked Markers**: Identifica se o agente reportou incapacidade de realizar a tarefa (ex: "não consigo", "cannot").
+- **Needs Input**: Detecta quando a intervenção humana é necessária via `[NEEDS_INPUT]`.
+- **Análise de Resposta**: Respostas vazias ou que não resultam em ações concretas quando esperado são classificadas automaticamente como `failed`.
 
-Você: /codex revisa o diff abaixo e aponta problemas
+## Agentes Disponíveis
 
-[CODEX]: ...
+| Agente | Especialidade Principal | Tier |
+|---|---|---|
+| **Gemini** | Arquitetura, Refatoração Complexa, Design de Sistemas | 3 |
+| **Claude / Codex** | Codificação Geral, Review, Testes | 2 |
+| **OpenCode Family** | Tarefas específicas (Pickle para edição, Omni para review, etc) | 1 |
 
-Você: /exit
-```
+Veja [AGENTS.md](./AGENTS.md) para detalhes completos de cada plugin.
 
-## Configuração
-
-### Nome do usuário
-
-```bash
-quimera --name "SeuNome"
-quimera --whoami          # exibe o nome atual
-```
-
-### Janela de histórico
-
-Número de mensagens recentes enviadas ao contexto dos agentes na execução atual (padrão: 8):
-
-```bash
-quimera --history-window 12
-```
-
-### Modo debug
-
-Exibe métricas de prompt (tokens por bloco, modo do protocolo, etc.):
-
-```bash
-quimera --debug
-# ou
-QUIMERA_DEBUG=1 quimera
-```
-
-As métricas são salvas em `~/.local/share/quimera/workspaces/<hash>/data/logs/metrics/`.
-
-## Contexto persistente
-
-Cada workspace tem um arquivo de contexto em markdown que é injetado no prompt de cada agente. Use-o para descrever o projeto, convenções de código ou qualquer informação relevante:
-
-```bash
-quimera
-> /context edit
-```
-
-O arquivo fica em `~/.local/share/quimera/workspaces/<hash>/data/context/persistent.md`.
-
-## Memória de sessão
-
-Ao encerrar com `/exit` (ou Ctrl+C), o Quimera pede ao Claude que resuma a conversa e salva o resumo no contexto de sessão. Na próxima execução, o resumo é carregado automaticamente, mantendo continuidade sem reenviar o histórico completo.
-
-Quando o histórico cresce além de 30 mensagens, o resumo automático é acionado sem interromper a sessão.
-
-## Estrutura do projeto
+## Estrutura do Projeto
 
 ```
 quimera/
-  app.py        — loop principal, roteamento e protocolo multi-agente
-  agents.py     — cliente que executa os processos claude e codex
-  prompt.py     — montagem dos prompts enviados a cada agente
-  context.py    — leitura/escrita do contexto persistente e de sessão
-  storage.py    — log de sessões e snapshot do histórico JSON
-  workspace.py  — gerenciamento do diretório de dados por projeto
-  config.py     — configurações globais do usuário
-  ui.py         — renderização no terminal (via rich)
-  constants.py  — constantes e templates de prompt
-  cli.py        — entry point (argparse)
+  runtime/
+    task_planning.py  — lógica de classificação e roteamento
+    task_executor.py  — motor de execução autônoma
+    tasks.py          — persistência e estado das tarefas
+  plugins/            — implementações dos agentes (Claude, Gemini, etc)
+  app.py              — orquestrador central e interface
 ```
-
-## Dependências
-
-- [`rich`](https://github.com/Textualize/rich) — renderização markdown e status no terminal
 
 ## Licença
 
-Sem licença definida. Uso pessoal e experimental.
+Uso pessoal e experimental.

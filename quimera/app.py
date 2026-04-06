@@ -237,8 +237,11 @@ class QuimeraApp:
                         handoff=prompt,
                         handoff_only=True,
                         primary=False,
-                        protocol_mode="task_execution",
                     )
+
+                    if response:
+                        self.print_response(agent_name, response)
+                        self.persist_message(agent_name, response)
 
                     ok, task_result = self._classify_task_execution_result(response)
                     if not ok:
@@ -670,7 +673,7 @@ class QuimeraApp:
     RETRY_BACKOFF_SECONDS = 1
 
     def call_agent(self, agent, **options):
-        silent = options.get("protocol_mode") == "task_execution"
+        silent = options.get("silent", False)
         handoff = options.get("handoff")
         handoff_id = handoff.get("handoff_id") if isinstance(handoff, dict) else None
         _logger.info(
