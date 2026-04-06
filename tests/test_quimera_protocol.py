@@ -1,4 +1,5 @@
 import re
+import tempfile
 import threading
 import unittest
 from pathlib import Path
@@ -11,6 +12,10 @@ from quimera.app import QuimeraApp
 from quimera.cli import main as cli_main
 from quimera.config import DEFAULT_HISTORY_WINDOW
 from quimera.constants import CMD_HELP, EXTEND_MARKER, build_help
+from quimera.runtime.approval import ApprovalHandler
+from quimera.runtime.config import ToolRuntimeConfig
+from quimera.runtime.executor import ToolExecutor
+from quimera.runtime.tasks import add_job, init_db, list_tasks, propose_task
 from quimera.plugins import AgentPlugin
 from quimera.prompt import PromptBuilder
 from quimera.session_summary import SessionSummarizer
@@ -914,6 +919,125 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(
             app.renderer.handoffs,
             [(AGENT_CLAUDE, AGENT_CODEX, "Revise este argumento.")],
+        )
+
+    def test_run_approves_task_via_tool_and_then_routes_via_chat(self):
+        class AutoApprove(ApprovalHandler):
+            def approve(self, tool_name, summary):
+                return True
+
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.history = []
+        app.user_name = "Você"
+        app.round_index = 0
+        app.session_call_index = 0
+        app.debug_prompt_metrics = False
+        app.renderer = DummyRenderer()
+        app.storage = DummyStorage()
+        app.context_manager = None
+        app.agent_client = None
+        app.prompt_builder = None
+        app.shared_state = {}
+        app._lock = threading.Lock()
+        app.session_state = {
+            "session_id": "sessao-2026-04-02-183323",
+            "history_count": 0,
+            "summary_loaded": True,
+            "handoffs_sent": 0,
+            "handoffs_received": 0,
+            "handoffs_succeeded": 0,
+            "handoffs_failed": 0,
+            "total_latency": 0.0,
+            "agent_metrics": {},
+        }
+
+        tmp_dir = Path(tempfile.mkdtemp())
+        db_path = tmp_dir / "tasks.db"
+        init_db(str(db_path))
+        job_id = add_job("Session sessao-2026-04-02-183323", db_path=str(db_path))
+        task_id = propose_task(job_id, "Executar teste ponta a ponta", db_path=str(db_path))
+        app.current_job_id = job_id
+        app.tasks_db_path = str(db_path)
+        app.tool_executor = ToolExecutor(
+            config=ToolRuntimeConfig(
+                workspace_root=tmp_dir,
+                db_path=str(db_path),
+                require_approval_for_mutations=False,
+            ),
+            approval_handler=AutoApprove(),
+        )
+
+        persisted = []
+        printed = []
+        calls = []
+
+        app.active_agents = [AGENT_CLAUDE, "opencode-qwen"]
+        app.threads = 1
+        app.handle_command = lambda user: False
+        app.parse_routing = lambda user: (AGENT_CLAUDE, "faça o teste pelo chat", False)
+        app.parse_response = QuimeraApp.parse_response.__get__(app, QuimeraApp)
+        app.resolve_agent_response = QuimeraApp.resolve_agent_response.__get__(app, QuimeraApp)
+        app.call_agent = QuimeraApp.call_agent.__get__(app, QuimeraApp)
+        app._refresh_task_shared_state = lambda: None
+        app.print_response = lambda agent, response: printed.append((agent, response))
+        app.persist_message = lambda role, content: persisted.append((role, content))
+        app.shutdown = lambda: None
+        app.read_user_input = Mock(side_effect=["mensagem", "/exit"])
+
+        responses = iter(
+            [
+                "aprovando a task\n"
+                "```tool\n"
+                f'{{"name":"approve_task","arguments":{{"task_id":{task_id},"approved_by":"codex"}}}}\n'
+                "```",
+                "vou delegar agora\n"
+                "[ROUTE:opencode-qwen] task: rode a tarefa aprovada | context: validar o fluxo via chat | expected: resultado em 1 linha",
+                "resultado do worker",
+                "síntese final",
+            ]
+        )
+
+        def fake_call_agent(
+            agent,
+            is_first_speaker=False,
+            handoff=None,
+            primary=True,
+            protocol_mode="standard",
+            handoff_only=False,
+            silent=False,
+            from_agent=None,
+        ):
+            calls.append((agent, protocol_mode, handoff_only, from_agent, handoff))
+            return next(responses)
+
+        app._call_agent = fake_call_agent
+
+        app.run()
+
+        tasks = list_tasks({"id": task_id}, db_path=str(db_path))
+        self.assertEqual(tasks[0]["status"], "approved")
+        self.assertEqual(
+            printed,
+            [
+                (AGENT_CLAUDE, "aprovando a task"),
+                (AGENT_CLAUDE, "vou delegar agora"),
+                ("opencode-qwen", "resultado do worker"),
+                (AGENT_CLAUDE, "síntese final"),
+            ],
+        )
+        self.assertEqual(
+            persisted,
+            [
+                ("human", "faça o teste pelo chat"),
+                (AGENT_CLAUDE, "aprovando a task"),
+                (AGENT_CLAUDE, "vou delegar agora"),
+                ("opencode-qwen", "resultado do worker"),
+                (AGENT_CLAUDE, "síntese final"),
+            ],
+        )
+        self.assertEqual(
+            app.renderer.handoffs,
+            [(AGENT_CLAUDE, "opencode-qwen", "rode a tarefa aprovada")],
         )
 
     def test_persist_message_saves_shared_state(self):

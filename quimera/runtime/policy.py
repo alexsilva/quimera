@@ -72,6 +72,10 @@ class ToolPolicy:
     def _validate_get_job(self, call: ToolCall) -> None:
         return
 
+    def _validate_approve_task(self, call: ToolCall) -> None:
+        if "task_id" not in call.arguments:
+            raise ToolPolicyError("approve_task requer 'task_id'")
+
     def _validate_complete_task(self, call: ToolCall) -> None:
         if "task_id" not in call.arguments:
             raise ToolPolicyError("complete_task requer 'task_id'")

@@ -11,7 +11,7 @@ from quimera.runtime.executor import ToolExecutor
 from quimera.runtime.models import ToolCall
 from quimera.runtime.parser import ToolCallParseError, extract_tool_call, strip_tool_block
 from quimera.runtime.policy import ToolPolicy, ToolPolicyError
-from quimera.runtime.tasks import add_job, init_db, propose_task
+from quimera.runtime.tasks import add_job, init_db, list_tasks, propose_task
 
 
 # ---------------------------------------------------------------------------
@@ -368,6 +368,18 @@ class ExecutorTests(unittest.TestCase):
 
         self.assertFalse(result.ok)
         self.assertIn("negada", result.error)
+
+    def test_approve_task_via_executor(self):
+        job_id = add_job("Job test", db_path=str(self.db_path))
+        task_id = propose_task(job_id, "Task A", db_path=str(self.db_path))
+        ex = self._executor()
+
+        result = ex.execute(ToolCall(name="approve_task", arguments={"task_id": task_id, "approved_by": "alex"}))
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.content, "approved")
+        tasks = list_tasks({"id": task_id}, db_path=str(self.db_path))
+        self.assertEqual(tasks[0]["status"], "approved")
 
     def test_get_job_uses_current_job_env_fallback(self):
         job_id = add_job("Job env", db_path=str(self.db_path))
