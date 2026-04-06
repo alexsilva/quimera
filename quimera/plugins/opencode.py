@@ -10,7 +10,7 @@ plugin = AgentPlugin(
     avoid_task_types=[],
     supports_tools=True,
     supports_code_editing=True,
-    supports_long_context=False, base_tier=1,
+    supports_long_context=False, base_tier=2,
 )
 register(plugin)
 
@@ -24,7 +24,7 @@ plugin = AgentPlugin(
     avoid_task_types=[],
     supports_tools=True,
     supports_code_editing=False,
-    supports_long_context=False, base_tier=1,
+    supports_long_context=False, base_tier=2,
 )
 register(plugin)
 
@@ -38,7 +38,7 @@ plugin = AgentPlugin(
     avoid_task_types=[],
     supports_tools=True,
     supports_code_editing=False,
-    supports_long_context=False, base_tier=1,
+    supports_long_context=False, base_tier=2,
 )
 register(plugin)
 
@@ -52,7 +52,7 @@ plugin = AgentPlugin(
     avoid_task_types=[],
     supports_tools=True,
     supports_code_editing=False,
-    supports_long_context=True, base_tier=1,
+    supports_long_context=True, base_tier=2,
 )
 register(plugin)
 
@@ -66,7 +66,7 @@ plugin = AgentPlugin(
     avoid_task_types=[],
     supports_tools=True,
     supports_code_editing=False,
-    supports_long_context=False, base_tier=1,
+    supports_long_context=False, base_tier=2,
 )
 register(plugin)
 
@@ -80,7 +80,7 @@ plugin = AgentPlugin(
     avoid_task_types=[],
     supports_tools=True,
     supports_code_editing=False,
-    supports_long_context=False, base_tier=1,
+    supports_long_context=False, base_tier=2,
 )
 register(plugin)
 
@@ -94,6 +94,6 @@ plugin = AgentPlugin(
     avoid_task_types=[],
     supports_tools=True,
     supports_code_editing=True,
-    supports_long_context=False, base_tier=1,
+    supports_long_context=False, base_tier=2,
 )
 register(plugin)
