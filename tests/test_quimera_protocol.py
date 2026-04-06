@@ -6,7 +6,7 @@ import time
 import unittest
 from collections import defaultdict
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 import quimera.cli as cli_module
 import quimera.plugins as plugins
@@ -33,6 +33,7 @@ class DummyRenderer:
         self.warnings = []
         self.system_messages = []
         self.handoffs = []
+        self._output_lock = threading.Lock()
 
     def show_warning(self, message):
         self.warnings.append(message)
@@ -406,6 +407,7 @@ class ProtocolTests(unittest.TestCase):
     def test_handle_task_command_creates_task_and_assigns_best_agent(self):
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
+        app._output_lock = threading.Lock()
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
         app.user_name = "Alex"
         app.shared_state = {}
@@ -722,7 +724,10 @@ class ProtocolTests(unittest.TestCase):
         ), patch("quimera.app.SessionStorage", FakeSessionStorage):
             app = QuimeraApp(Path("/tmp/projeto"))
 
-        self.assertEqual(app.prompt_builder.history_window, DEFAULT_HISTORY_WINDOW)
+        try:
+            self.assertEqual(app.prompt_builder.history_window, DEFAULT_HISTORY_WINDOW)
+        finally:
+            app._stop_task_executors()
 
     def test_app_allows_history_window_override(self):
         temp_root = Path(self.enterContext(tempfile.TemporaryDirectory()))
@@ -1532,15 +1537,37 @@ class PluginTests(unittest.TestCase):
         app.renderer = DummyRenderer()
         app._output_lock = threading.Lock()
         app._nonblocking_input_status = "reading"
+        app._nonblocking_prompt_text = "Alex: "
 
         stdin = io.StringIO("")
         stdin.isatty = lambda: True
 
-        with patch("sys.stdin", stdin), patch("quimera.app.readline.redisplay") as mock_redisplay:
+        with patch("sys.stdin", stdin), patch("quimera.app.readline.get_line_buffer", return_value=""), patch(
+            "quimera.app.readline.redisplay"
+        ) as mock_redisplay:
             app._show_task_status(7, AGENT_CLAUDE, "iniciando")
 
         self.assertEqual(app.renderer.system_messages, ["[task 7] claude: iniciando"])
         mock_redisplay.assert_called_once_with()
+
+    def test_show_task_status_redraws_human_prompt_with_user_name(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.renderer = DummyRenderer()
+        app._output_lock = threading.Lock()
+        app._nonblocking_input_status = "reading"
+        app._nonblocking_prompt_text = "Alex: "
+
+        stdin = io.StringIO("")
+        stdin.isatty = lambda: True
+
+        with patch("sys.stdin", stdin), patch("quimera.app.readline.get_line_buffer", return_value=""), patch(
+            "quimera.app.readline.redisplay"
+        ), patch("sys.stdout.write") as mock_write, patch("sys.stdout.flush") as mock_flush:
+            app._show_task_status(7, AGENT_CLAUDE, "concluída")
+
+        self.assertIn(call("\r\x1b[2K"), mock_write.call_args_list)
+        self.assertIn(call("Alex: "), mock_write.call_args_list)
+        mock_flush.assert_called_once_with()
 
     def test_parse_routing_selects_random_initial_agent(self):
         app = QuimeraApp.__new__(QuimeraApp)

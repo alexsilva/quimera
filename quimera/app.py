@@ -53,7 +53,7 @@ _log_level = os.environ.get("QUIMERA_LOG_LEVEL", "INFO").upper()
 _numeric_level = getattr(logging, _log_level, logging.INFO)
 if not _logger.handlers and not logging.getLogger().handlers:
     _logger.setLevel(_numeric_level)
-    handler = logging.StreamHandler()
+    handler = logging.StreamHandler(sys.stderr)
     handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
     _logger.addHandler(handler)
 
@@ -193,6 +193,7 @@ class QuimeraApp:
         self._output_lock = threading.Lock()
         self._counter_lock = threading.Lock()
         self._nonblocking_prompt_visible = False
+        self._nonblocking_prompt_text = ""
         self._nonblocking_input_thread: threading.Thread | None = None
         self._nonblocking_input_queue: "queue.Queue | None" = None
         self._nonblocking_input_status = "idle"
@@ -419,15 +420,31 @@ class QuimeraApp:
         self.shared_state["task_overview"] = self._build_task_overview()
 
     def _redisplay_user_prompt_if_needed(self) -> None:
-        if readline is None:
-            return
         stdin = sys.stdin
         if stdin is None or not stdin.isatty():
+            return
+        if self._nonblocking_input_status != "reading":
             return
         try:
             import time
             time.sleep(0.01)
-            readline.redisplay()
+            prompt = getattr(self, "_nonblocking_prompt_text", "")
+            line_buffer = ""
+            if readline is not None:
+                try:
+                    line_buffer = readline.get_line_buffer()
+                except Exception:
+                    line_buffer = ""
+            full_line = f"{prompt}{line_buffer}"
+            if len(full_line) > 0:
+                sys.stdout.write("\r\x1b[2K")
+                sys.stdout.write(full_line)
+                sys.stdout.flush()
+                if readline is not None:
+                    try:
+                        readline.redisplay()
+                    except Exception:
+                        pass
         except Exception:
             pass
 
@@ -551,6 +568,7 @@ class QuimeraApp:
 
         self._nonblocking_input_status = "idle"
         self._nonblocking_input_thread = None
+        self._nonblocking_prompt_text = ""
         if status == "line":
             return value
         return None
@@ -560,6 +578,7 @@ class QuimeraApp:
             self._nonblocking_input_queue = queue.Queue()
 
         self._nonblocking_input_status = "reading"
+        self._nonblocking_prompt_text = prompt
 
         def _reader() -> None:
             try:

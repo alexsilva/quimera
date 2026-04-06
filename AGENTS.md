@@ -58,7 +58,11 @@ O Quimera classifica automaticamente as solicitações enviadas via `/task` nos 
 - Agentes com `supports_tools=False` podem gerar patches, analisar código e revisar, mas não devem ser tratados como executores de shell/testes.
 - No caso do Qwen, isso significa: elegível para `code_edit` e `code_review`, mas não para `test_execution`.
 
-- Penalidade para bug_investigation sem ferramentas: para tarefas de bug_investigation, agentes que não possuem ferramentas disponíveis (sem `tools`) recebem um penalidade no score de planejamento de -3. Isso reduz a probabilidade de serem escolhidos para investigações, incentivando o uso de agentes com ferramentas quando a tarefa exigir execução/validação prática.
+- Penalidade de Bug Investigation para agentes sem tooling
+- Agentes sem tooling (sem `tools`) recebem uma penalidade fixa de -3 no score efetivo ao receber tarefas de `bug_investigation`.
+- Agentes com tooling geralmente não recebem essa penalidade para `bug_investigation`; penalidades adicionais podem existir apenas se políticas futuras forem ativadas.
+- A penalidade aplica-se apenas a tarefas de `bug_investigation`; `code_edit` e `code_review` não são impactadas por essa regra.
+- Exemplo: se um agente A tem base_score 8 e não possui tools, seu score efetivo para `bug_investigation` fica 5 (8 - 3). Já um agente B com tooling tem base_score 7, score efetivo = 7 (sem penalidade). Assim, o agente com tooling pode ser priorizado conforme o cenário.
 
 ## Lógica de Roteamento (`Effective Score`)
 
