@@ -198,6 +198,7 @@ class QuimeraApp:
             history_window=history_window or self.config.history_window,
             session_state=session_state,
             user_name=self.user_name,
+            active_agents=self._resolved_active_agents(),
         )
         self.auto_summarize_threshold = self.config.auto_summarize_threshold
         self.idle_timeout_seconds = idle_timeout_seconds if idle_timeout_seconds is not None else self.config.idle_timeout_seconds
@@ -448,15 +449,29 @@ class QuimeraApp:
             raw = raw[1:-1].strip()
         return normalize_task_description(raw)
 
+    def _resolved_active_agents(self) -> list[str]:
+        if not self.active_agents or "*" in self.active_agents:
+            return plugins.all_names()
+        return list(self.active_agents)
+
     def _get_task_routing_plugins(self):
-        active_plugins = []
-        for agent_name in self.active_agents:
-            plugin = plugins.get(agent_name)
-            if plugin is not None:
-                active_plugins.append(plugin)
-        if not active_plugins:
-            active_plugins = plugins.all_plugins()
-        return active_plugins
+        # Build candidate plugins from explicitly active agents
+        active = self._resolved_active_agents()
+        candidate_plugins = []
+        # If user requested a wildcard, expand to all registered plugins explicitly
+        if isinstance(self.active_agents, list) and "*" in self.active_agents:
+            for name in plugins.all_names():
+                p = plugins.get(name)
+                if p is not None:
+                    candidate_plugins.append(p)
+        else:
+            for agent_name in active:
+                p = plugins.get(agent_name)
+                if p is not None:
+                    candidate_plugins.append(p)
+        if not candidate_plugins:
+            candidate_plugins = plugins.all_plugins()
+        return candidate_plugins
 
     def _handle_task_command(self, command: str) -> None:
         description = self._parse_task_command(command)
@@ -483,7 +498,7 @@ class QuimeraApp:
         if selected_agent:
             lines.append(f"atribuída para {selected_agent}")
         lines.append(f"tipo inferido: {task_type}")
-        self.renderer.show_system("\n".join(lines))
+        self.renderer.show_system(" | ".join(lines))
 
     def read_from_editor(self):
         """Abre $EDITOR num arquivo temporário e retorna o conteúdo digitado."""

@@ -487,6 +487,20 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn("MENSAGEM DIRETA DO OUTRO AGENTE", prompt)
         self.assertIn("Revise este ponto.", prompt)
 
+    def test_prompt_lists_only_active_agents(self):
+        builder = PromptBuilder(
+            DummyContextManager(),
+            history_window=3,
+            active_agents=[AGENT_CLAUDE, AGENT_CODEX],
+        )
+        history = [{"role": "human", "content": "Pergunta"}]
+
+        prompt = builder.build(AGENT_CODEX, history)
+
+        self.assertIn("- CLAUDE", prompt)
+        self.assertIn("- CODEX", prompt)
+        self.assertNotIn("- QWEN", prompt)
+
     def test_prompt_includes_session_state_when_present(self):
         builder = PromptBuilder(
             DummyContextManager(),
@@ -1758,6 +1772,22 @@ class MetricsFeedbackTests(unittest.TestCase):
         prompt = builder.build(AGENT_CLAUDE, history, is_first_speaker=True)
 
         self.assertLess(len(prompt), 5000)
+
+    def test_get_task_routing_plugins_respects_explicit_active_agents(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
+
+        selected = [plugin.name for plugin in app._get_task_routing_plugins()]
+
+        self.assertEqual(selected, [AGENT_CLAUDE, AGENT_CODEX])
+
+    def test_get_task_routing_plugins_expands_wildcard_to_all_plugins(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.active_agents = ["*"]
+
+        selected = [plugin.name for plugin in app._get_task_routing_plugins()]
+
+        self.assertEqual(selected, plugins.all_names())
 
     def test_handoff_rule_mentions_ack(self):
         """PROMPT_HANDOFF_RULE deve mencionar ACK."""

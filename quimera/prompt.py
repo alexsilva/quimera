@@ -25,11 +25,19 @@ from .config import DEFAULT_HISTORY_WINDOW
 class PromptBuilder:
     """Monta o prompt com contexto persistente e janela recente da conversa."""
 
-    def __init__(self, context_manager, history_window=DEFAULT_HISTORY_WINDOW, session_state=None, user_name=None):
+    def __init__(
+        self,
+        context_manager,
+        history_window=DEFAULT_HISTORY_WINDOW,
+        session_state=None,
+        user_name=None,
+        active_agents=None,
+    ):
         self.context_manager = context_manager
         self.history_window = history_window
         self.session_state = session_state or {}
         self.user_name = user_name or "Você"
+        self.active_agents = list(active_agents) if active_agents is not None else plugins.all_names()
 
     def build(
         self,
@@ -54,7 +62,7 @@ class PromptBuilder:
         if handoff_only:
             rules += PROMPT_HANDOFF_RULE
         else:
-            rules += build_route_rule(plugins.all_names())
+            rules += build_route_rule(self.active_agents)
             rules += PROMPT_STATE_UPDATE_RULE
             rules += PROMPT_TOOL_RULE
             if is_first_speaker:
@@ -64,7 +72,7 @@ class PromptBuilder:
 
         tools_prompt = build_tools_prompt()
 
-        participants = f"- {self.user_name.upper()}\n" + "".join(f"- {n.upper()}\n" for n in plugins.all_names())
+        participants = f"- {self.user_name.upper()}\n" + "".join(f"- {n.upper()}\n" for n in self.active_agents)
         header_block = PROMPT_HEADER.format(agent=agent.upper(), participants=participants)
         session_block = PROMPT_SESSION_STATE.format(**self.session_state) if (self.session_state and primary) else ""
         context_block = PROMPT_CONTEXT.format(context=context) if context else ""
