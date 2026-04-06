@@ -6,11 +6,11 @@ plugin = AgentPlugin(
     cmd=["opencode", "--model=opencode/big-pickle", "run"],
     style=("blue", "OpenCodePickle"),
     capabilities=["general_coding", "code_editing"],
-    preferred_task_types=["code_edit", "general"],
-    avoid_task_types=[],
+    preferred_task_types=["code_edit"],
+    avoid_task_types=["architecture", "test_execution", "general"],
     supports_tools=False,
     supports_code_editing=True,
-    supports_long_context=False,
+    supports_long_context=False, base_tier=1,
 )
 register(plugin)
 
@@ -20,11 +20,11 @@ plugin = AgentPlugin(
     cmd=["opencode", "--model=opencode/gpt-5-nano", "run"],
     style=("blue", "OpenCodeGPT"),
     capabilities=["general_reasoning", "documentation"],
-    preferred_task_types=["documentation", "general"],
-    avoid_task_types=[],
+    preferred_task_types=["documentation"],
+    avoid_task_types=["code_edit", "test_execution", "general"],
     supports_tools=False,
     supports_code_editing=False,
-    supports_long_context=False,
+    supports_long_context=False, base_tier=1,
 )
 register(plugin)
 
@@ -34,11 +34,11 @@ plugin = AgentPlugin(
     cmd=["opencode", "--model=opencode/mimo-v2-omni-free", "run"],
     style=("blue", "OpenCodeMimoOmni"),
     capabilities=["general_reasoning", "code_review"],
-    preferred_task_types=["code_review", "general"],
-    avoid_task_types=[],
+    preferred_task_types=["code_review"],
+    avoid_task_types=["code_edit", "test_execution", "general"],
     supports_tools=False,
     supports_code_editing=False,
-    supports_long_context=False,
+    supports_long_context=False, base_tier=1,
 )
 register(plugin)
 
@@ -48,11 +48,11 @@ plugin = AgentPlugin(
     cmd=["opencode", "--model=opencode/mimo-v2-pro-free", "run"],
     style=("blue", "OpenCodeOmniPro"),
     capabilities=["architecture", "code_review", "planning"],
-    preferred_task_types=["architecture", "code_review", "general"],
-    avoid_task_types=["test_execution"],
+    preferred_task_types=["architecture", "code_review"],
+    avoid_task_types=["code_edit", "test_execution", "general"],
     supports_tools=False,
     supports_code_editing=False,
-    supports_long_context=True,
+    supports_long_context=True, base_tier=1,
 )
 register(plugin)
 
@@ -62,11 +62,11 @@ plugin = AgentPlugin(
     cmd=["opencode", "--model=opencode/minimax-m2.5-free", "run"],
     style=("blue", "OpenCodeMiniMax"),
     capabilities=["documentation", "general_reasoning"],
-    preferred_task_types=["documentation", "general"],
-    avoid_task_types=[],
+    preferred_task_types=["documentation"],
+    avoid_task_types=["code_edit", "test_execution", "general"],
     supports_tools=False,
     supports_code_editing=False,
-    supports_long_context=False,
+    supports_long_context=False, base_tier=1,
 )
 register(plugin)
 
@@ -76,11 +76,11 @@ plugin = AgentPlugin(
     cmd=["opencode", "--model=opencode/nemotron-3-super-free", "run"],
     style=("blue", "OpenCodeNemotron"),
     capabilities=["bug_investigation", "general_reasoning"],
-    preferred_task_types=["bug_investigation", "general"],
-    avoid_task_types=[],
+    preferred_task_types=["bug_investigation"],
+    avoid_task_types=["code_edit", "test_execution", "general"],
     supports_tools=False,
     supports_code_editing=False,
-    supports_long_context=False,
+    supports_long_context=False, base_tier=1,
 )
 register(plugin)
 
@@ -90,10 +90,10 @@ plugin = AgentPlugin(
     cmd=["opencode", "--model=opencode/qwen3.6-plus-free", "run"],
     style=("blue", "OpenCodeQwen"),
     capabilities=["code_editing", "bug_investigation", "general_coding"],
-    preferred_task_types=["code_edit", "bug_investigation", "general"],
-    avoid_task_types=["architecture"],
+    preferred_task_types=["code_edit", "bug_investigation"],
+    avoid_task_types=["architecture", "test_execution"],
     supports_tools=False,
     supports_code_editing=True,
-    supports_long_context=False,
+    supports_long_context=False, base_tier=1,
 )
 register(plugin)

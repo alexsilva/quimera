@@ -190,6 +190,25 @@ class PolicyTests(unittest.TestCase):
         selected = choose_best_agent("test_execution", [plugins.get("claude"), plugins.get("codex"), plugins.get("qwen")])
         self.assertEqual(selected, "codex")
 
+    def test_choose_best_agent_prefers_tooling_for_test_execution(self):
+        selected = choose_best_agent("test_execution", [plugins.get("claude"), plugins.get("qwen"), plugins.get("opencode-qwen")])
+        self.assertEqual(selected, "claude")
+
+    def test_choose_best_agent_does_not_route_general_to_qwen_on_tie_order(self):
+        selected = choose_best_agent("general", [plugins.get("qwen"), plugins.get("claude"), plugins.get("codex")])
+        self.assertEqual(selected, "claude")
+
+    def test_choose_best_agent_does_not_route_general_to_opencode_qwen_on_tie_order(self):
+        selected = choose_best_agent("general", [plugins.get("opencode-qwen"), plugins.get("claude"), plugins.get("codex")])
+        self.assertEqual(selected, "claude")
+
+    def test_choose_best_agent_prefers_higher_tier_for_general_tasks(self):
+        # opencode-omni-pro has general preferred (5) + tier 1 (0 boost) = 5
+        # codex has general preferred (5) + tier 2 (2 boost) = 7
+        # claude has general preferred (5) + tier 3 (4 boost) = 9
+        selected = choose_best_agent("general", [plugins.get("opencode-omni-pro"), plugins.get("claude"), plugins.get("codex")])
+        self.assertEqual(selected, "claude")
+
 
 # ---------------------------------------------------------------------------
 # ToolExecutor

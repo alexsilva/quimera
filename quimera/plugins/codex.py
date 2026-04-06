@@ -6,10 +6,10 @@ plugin = AgentPlugin(
     cmd=["codex", "--ask-for-approval=never", "exec", "--skip-git-repo-check"],
     style=("green", "Codex"),
     capabilities=["code_editing", "test_execution", "bug_investigation", "tool_use"],
-    preferred_task_types=["code_edit", "test_execution", "bug_investigation"],
+    preferred_task_types=["code_edit", "test_execution", "bug_investigation", "general"],
     avoid_task_types=[],
     supports_tools=True,
     supports_code_editing=True,
-    supports_long_context=True,
+    supports_long_context=True, base_tier=2,
 )
 register(plugin)
