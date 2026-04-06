@@ -184,7 +184,7 @@ class QuimeraApp:
         self.storage = SessionStorage(self.workspace.logs_dir, self.renderer)
         session_id = self.storage.get_history_file().stem
         metrics_file = self.workspace.metrics_dir / f"{session_id}.jsonl" if debug else None
-        self.agent_client = AgentClient(self.renderer, metrics_file=metrics_file, timeout=timeout, spy=self.spy)
+        self.agent_client = AgentClient(self.renderer, metrics_file=metrics_file, timeout=timeout, spy=self.spy, working_dir=str(self.workspace.cwd))
         self.session_summarizer = SessionSummarizer(
             self.renderer,
             summarizer_call=build_chain_summarizer(self.agent_client, list(dict.fromkeys(["qwen"] + self.active_agents))),
@@ -287,7 +287,8 @@ class QuimeraApp:
                     prompt = f"Execute a seguinte tarefa:\n\n{body}"
                     resolved = self._resolved_active_agents()
                     other_agents = [a for a in resolved if a != agent_name]
-                    self._show_task_status(task_id, agent_name, "iniciando")
+                    desc_preview = (description[:60] + "…") if len(description) > 60 else description
+                    self._show_task_status(task_id, agent_name, f"iniciando — {desc_preview}")
 
                     response = self.call_agent(
                         agent_name,
@@ -308,6 +309,7 @@ class QuimeraApp:
                             fail_task(task_id, reason="communication failed", db_path=self.tasks_db_path)
                         return False
 
+                    self._show_task_response(task_id, agent_name, response)
                     ok, task_result = self._classify_task_execution_result(response)
                     if not ok:
                         self._show_task_status(task_id, agent_name, "bloqueada")
@@ -445,6 +447,48 @@ class QuimeraApp:
                 "error": str(exc),
             }
 
+    def _task_context_history_window(self) -> int:
+        prompt_builder = getattr(self, "prompt_builder", None)
+        window = getattr(prompt_builder, "history_window", None)
+        if isinstance(window, int) and window > 0:
+            return window
+        return 12
+
+    def _format_task_chat_context(self) -> str:
+        history = getattr(self, "history", None) or []
+        if not history:
+            return "[sem contexto recente do chat]"
+
+        lines = []
+        for message in history[-self._task_context_history_window():]:
+            role = message.get("role", "")
+            speaker = self.user_name.upper() if role == USER_ROLE else str(role).upper()
+            content = (message.get("content") or "").strip()
+            if not content:
+                continue
+            lines.append(f"[{speaker}]: {content}")
+        return "\n".join(lines) if lines else "[sem contexto recente do chat]"
+
+    def _build_task_body(self, description: str) -> str:
+        parts = [f"TAREFA:\n{description}"]
+
+        chat_context = self._format_task_chat_context()
+        parts.append(f"CONTEXTO RECENTE DO CHAT:\n{chat_context}")
+
+        trimmed_state = PromptBuilder._trim_shared_state(getattr(self, "shared_state", {}) or {})
+        if trimmed_state:
+            parts.append(
+                "ESTADO COMPARTILHADO:\n"
+                f"{json.dumps(trimmed_state, ensure_ascii=False, indent=2)}"
+            )
+
+        parts.append(
+            "INSTRUÇÃO:\n"
+            "Execute a tarefa usando o contexto acima como referência. "
+            "Priorize o contexto da conversa; não trate isso como pedido para operar fora do escopo da task."
+        )
+        return "\n\n".join(parts)
+
     def _refresh_task_shared_state(self) -> None:
         if not hasattr(self, "shared_state") or not isinstance(self.shared_state, dict):
             return
@@ -500,6 +544,12 @@ class QuimeraApp:
 
     def _show_task_status(self, task_id: int, agent: str, status: str) -> None:
         self._show_system_message(f"[task {task_id}] {agent}: {status}")
+
+    def _show_task_response(self, task_id: int, agent: str, response: str) -> None:
+        """Display the actual agent response for a task execution as a system message."""
+        text = strip_tool_block(response).strip()
+        if text:
+            self._show_system_message(f"[task {task_id}] {agent}:\n{text}")
 
     def resolve_agent_response(
         self,
@@ -817,6 +867,7 @@ class QuimeraApp:
             status="pending",
             created_by=self.user_name,
             requested_by=self.user_name,
+            body=self._build_task_body(description),
             source_context=command,
             db_path=self.tasks_db_path,
         )

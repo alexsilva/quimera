@@ -22,14 +22,16 @@ def _strip_spinner(text: str) -> str:
 
 
 class AgentClient:
-    """Executa os agentes externos."""
+    """Executa os agentes externos no diretório de trabalho do projeto."""
 
-    def __init__(self, renderer, metrics_file=None, timeout=None, spy=False):
+    def __init__(self, renderer, metrics_file=None, timeout=None, spy=False, working_dir=None, workspace_root=None):
         self.renderer = renderer
         self.metrics_file = metrics_file
         self._metrics_lock = threading.Lock()
         self.timeout = timeout
         self.spy = spy
+        # `workspace_root` é mantido como alias compatível.
+        self.working_dir = working_dir if working_dir is not None else workspace_root
 
     def run(self, cmd, input_text=None, silent=False, agent=None, show_status=True):
         try:
@@ -42,6 +44,7 @@ class AgentClient:
                 text=True,
                 bufsize=1,
                 env=env,
+                cwd=self.working_dir,
             )
         except OSError as exc:
             self.renderer.show_error(f"[erro] não foi possível iniciar {cmd[0]}: {exc}")

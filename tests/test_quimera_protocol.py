@@ -411,8 +411,13 @@ class ProtocolTests(unittest.TestCase):
         app._output_lock = threading.Lock()
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
         app.user_name = "Alex"
-        app.shared_state = {}
+        app.shared_state = {"goal": "corrigir task runner"}
         app.current_job_id = 1
+        app.history = [
+            {"role": "human", "content": "o teste de task perdeu contexto"},
+            {"role": "claude", "content": "precisamos serializar o chat recente"},
+        ]
+        app.prompt_builder = type("PromptBuilderStub", (), {"history_window": 4})()
         tmp_dir = Path(self.enterContext(tempfile.TemporaryDirectory()))
         db_path = tmp_dir / "tasks.db"
         init_db(str(db_path))
@@ -430,6 +435,10 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(tasks[0]["task_type"], "test_execution")
         self.assertEqual(tasks[0]["origin"], "human_command")
         self.assertEqual(tasks[0]["assigned_to"], AGENT_CODEX)
+        self.assertIn("TAREFA:\nexecute os testes", tasks[0]["body"])
+        self.assertIn("[ALEX]: o teste de task perdeu contexto", tasks[0]["body"])
+        self.assertIn("[CLAUDE]: precisamos serializar o chat recente", tasks[0]["body"])
+        self.assertIn('"goal": "corrigir task runner"', tasks[0]["body"])
         self.assertIn("task criada com id", app.renderer.system_messages[-1])
         self.assertIn("atribuída para codex", app.renderer.system_messages[-1])
 
@@ -1738,6 +1747,64 @@ class PluginTests(unittest.TestCase):
             1, result="resposta visivel da task", db_path=app.tasks_db_path
         )
         fail_task.assert_not_called()
+
+    def test_task_handler_executes_with_serialized_chat_context_in_body(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.active_agents = [AGENT_CLAUDE]
+        app.tasks_db_path = "/tmp/quimera-tasks-test.db"
+        handlers = {}
+        captured = {}
+
+        class FakeExecutor:
+            def __init__(self, handler):
+                self.handler = handler
+
+            def set_review_handler(self, handler):
+                pass
+
+            def start(self):
+                return None
+
+        def fake_create_executor(agent, handler, db_path=None, job_id=None):
+            handlers[agent] = handler
+            return FakeExecutor(handler)
+
+        def fake_call_agent(agent, **kwargs):
+            captured["agent"] = agent
+            captured["kwargs"] = kwargs
+            return "resposta visivel da task"
+
+        app.call_agent = fake_call_agent
+        app._show_task_status = lambda task_id, agent, status: None
+        app._classify_task_execution_result = lambda response: (True, response)
+
+        task_body = (
+            "TAREFA:\nvalidar regressão\n\n"
+            "CONTEXTO RECENTE DO CHAT:\n"
+            "[ALEX]: a execução da tarefa precisa receber o contexto do chat\n"
+            "[CLAUDE]: alguém passou contexto errado\n\n"
+            "INSTRUÇÃO:\n"
+            "Execute a tarefa usando o contexto acima como referência."
+        )
+
+        with patch("quimera.app.create_executor", side_effect=fake_create_executor), patch(
+            "quimera.runtime.tasks.complete_task"
+        ) as complete_task:
+            app._setup_task_executors()
+            ok = handlers[AGENT_CLAUDE](
+                {"id": 1, "description": "validar regressão", "body": task_body}
+            )
+
+        self.assertTrue(ok)
+        self.assertEqual(captured["agent"], AGENT_CLAUDE)
+        self.assertTrue(captured["kwargs"]["handoff_only"])
+        self.assertFalse(captured["kwargs"]["primary"])
+        self.assertIn("Execute a seguinte tarefa:\n\nTAREFA:\nvalidar regressão", captured["kwargs"]["handoff"])
+        self.assertIn("[ALEX]: a execução da tarefa precisa receber o contexto do chat", captured["kwargs"]["handoff"])
+        self.assertIn("[CLAUDE]: alguém passou contexto errado", captured["kwargs"]["handoff"])
+        complete_task.assert_called_once_with(
+            1, result="resposta visivel da task", db_path=app.tasks_db_path
+        )
 
     def test_task_handler_requeues_failed_execution_for_other_agent(self):
         app = QuimeraApp.__new__(QuimeraApp)

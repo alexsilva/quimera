@@ -238,6 +238,50 @@ def test_agent_client_run_post_drain(renderer):
             # Let's use a real thread for a moment or mock the queue behavior in the loop
             pass
 
+def test_agent_client_run_uses_working_dir(renderer, tmp_path):
+    workspace = str(tmp_path)
+    client = AgentClient(renderer, working_dir=workspace)
+    with patch("subprocess.Popen") as mock_popen:
+        mock_proc = MagicMock()
+        mock_proc.stdout = ["ok\n"]
+        mock_proc.stderr = []
+        mock_proc.returncode = 0
+        mock_popen.return_value = mock_proc
+
+        client.run(["echo", "hi"], silent=True)
+        call_kwargs = mock_popen.call_args[1]
+        assert call_kwargs.get("cwd") == workspace
+
+
+def test_agent_client_run_legacy_workspace_root_alias(renderer, tmp_path):
+    workspace = str(tmp_path)
+    client = AgentClient(renderer, workspace_root=workspace)
+    with patch("subprocess.Popen") as mock_popen:
+        mock_proc = MagicMock()
+        mock_proc.stdout = ["ok\n"]
+        mock_proc.stderr = []
+        mock_proc.returncode = 0
+        mock_popen.return_value = mock_proc
+
+        client.run(["echo", "hi"], silent=True)
+        call_kwargs = mock_popen.call_args[1]
+        assert call_kwargs.get("cwd") == workspace
+
+
+def test_agent_client_run_without_working_dir_passes_none(renderer):
+    client = AgentClient(renderer)
+    with patch("subprocess.Popen") as mock_popen:
+        mock_proc = MagicMock()
+        mock_proc.stdout = ["ok\n"]
+        mock_proc.stderr = []
+        mock_proc.returncode = 0
+        mock_popen.return_value = mock_proc
+
+        client.run(["echo", "hi"], silent=True)
+        call_kwargs = mock_popen.call_args[1]
+        assert call_kwargs.get("cwd") is None
+
+
 def test_agent_client_thread_exceptions(renderer):
     # Line 62-63, 74-75
     client = AgentClient(renderer)
