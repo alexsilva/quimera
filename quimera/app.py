@@ -421,12 +421,12 @@ class QuimeraApp:
     def _redisplay_user_prompt_if_needed(self) -> None:
         if readline is None:
             return
-        if self._nonblocking_input_status != "reading":
-            return
         stdin = sys.stdin
         if stdin is None or not stdin.isatty():
             return
         try:
+            import time
+            time.sleep(0.01)
             readline.redisplay()
         except Exception:
             pass

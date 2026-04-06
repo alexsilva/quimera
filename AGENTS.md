@@ -32,7 +32,7 @@ A família OpenCode oferece modelos especializados para tarefas menores, otimiza
 | **Omni Pro** | `/opencode-omni-pro` | Arquitetura | `architecture` |
 | **MiniMax** | `/opencode-minimax` | Documentação | `documentation` |
 | **Nemotron** | `/opencode-nemotron`| Bugs | `bug_investigation` |
-| **Qwen 3.6** | `/opencode-qwen` | Codificação | `code_edit`, `bug_investigation` |
+| **Qwen 3.6** | `/opencode-qwen` | Codificação | `code_edit`, `code_review` |
 
 ---
 
@@ -46,6 +46,19 @@ O Quimera classifica automaticamente as solicitações enviadas via `/task` nos 
 4. **`bug_investigation`**: Busca pela causa raiz de falhas.
 5. **`test_execution`**: Execução e reparo de testes.
 6. **`documentation`**: Criação ou atualização de README, MDs e DOCs.
+
+## Regra de Review
+
+- Todo agente com capacidade de **editar código** também é elegível para **`code_review`**.
+- Agentes especializados em review continuam tendo prioridade natural quando o score base for maior.
+
+## Regra de Execução
+
+- Capacidade de **editar código** não implica capacidade de **executar código**.
+- Agentes com `supports_tools=False` podem gerar patches, analisar código e revisar, mas não devem ser tratados como executores de shell/testes.
+- No caso do Qwen, isso significa: elegível para `code_edit` e `code_review`, mas não para `test_execution`.
+
+- Penalidade para bug_investigation sem ferramentas: para tarefas de bug_investigation, agentes que não possuem ferramentas disponíveis (sem `tools`) recebem um penalidade no score de planejamento de -3. Isso reduz a probabilidade de serem escolhidos para investigações, incentivando o uso de agentes com ferramentas quando a tarefa exigir execução/validação prática.
 
 ## Lógica de Roteamento (`Effective Score`)
 

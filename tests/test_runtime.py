@@ -209,6 +209,11 @@ class PolicyTests(unittest.TestCase):
         selected = choose_best_agent("general", [plugins.get("opencode-omni-pro"), plugins.get("claude"), plugins.get("codex")])
         self.assertEqual(selected, "claude")
 
+    def test_all_code_editing_agents_are_review_eligible(self):
+        for plugin in plugins.all_plugins():
+            if plugin.supports_code_editing:
+                self.assertIn("code_review", plugin.preferred_task_types, plugin.name)
+
 
 # ---------------------------------------------------------------------------
 # ToolExecutor

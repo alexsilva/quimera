@@ -66,12 +66,16 @@ def score_plugin_for_task(plugin: AgentPlugin, task_type: str) -> int:
         score += 5
     if task_type in plugin.avoid_task_types:
         score -= 5
-    if task_type in {TASK_TYPE_CODE_EDIT, TASK_TYPE_BUG_INVESTIGATION} and plugin.supports_code_editing:
+    if task_type in {TASK_TYPE_CODE_EDIT, TASK_TYPE_BUG_INVESTIGATION, TASK_TYPE_CODE_REVIEW} and plugin.supports_code_editing:
         score += 2
     if task_type in {TASK_TYPE_ARCHITECTURE, TASK_TYPE_CODE_REVIEW, TASK_TYPE_DOCUMENTATION} and plugin.supports_long_context:
         score += 2
     if plugin.supports_tools and task_type in {TASK_TYPE_TEST_EXECUTION, TASK_TYPE_BUG_INVESTIGATION}:
         score += 1
+
+    # Penalty: for bug investigation tasks, penalize plugins without tooling
+    if task_type == TASK_TYPE_BUG_INVESTIGATION and not plugin.supports_tools:
+        score -= 3
 
     for cap in plugin.capabilities:
         cap_boost = CAPABILITY_BOOST.get(cap, {})
