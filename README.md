@@ -66,6 +66,13 @@ As tarefas são monitoradas por um sistema de sinalização rigoroso:
 - **Needs Input**: Detecta quando a intervenção humana é necessária via `[NEEDS_INPUT]`; nesse caso a task não é marcada como concluída.
 - **Failover Antes do Fail**: Se a execução falha, a task volta para `pending` e outro agente pode assumi-la; ela só deve parar em `failed` quando não houver rota alternativa viável.
 
+### Isolamento de Execução
+
+Tasks criadas via `/task` são executadas em background sem interferir com o fluxo do chat:
+- A resposta do agente **não é adicionada ao histórico principal** da sessão.
+- **Sem streaming concorrente** no terminal durante o chat — a saída da task aparece como status dedicado.
+- O agente executor recebe apenas o contexto da task, sem o histórico completo da conversa.
+
 ### Observabilidade
 
 Além da saída em tempo real no terminal, o runtime mantém métricas básicas por sessão e por agente:
@@ -81,7 +88,8 @@ Essa observabilidade hoje é usada principalmente para depuração, análise de 
 | Agente | Especialidade Principal | Tier |
 |---|---|---|
 | **Gemini** | Arquitetura, Refatoração Complexa, Design de Sistemas | 3 |
-| **Claude / Codex** | Codificação Geral, Review, Testes | 2 |
+| **Claude** | Arquitetura, Revisão, Documentação, Codificação Geral | 3 |
+| **Codex** | Geração de Código, Testes, Bug Investigation | 2 |
 | **OpenCode Family** | Tarefas específicas (Pickle para edição, Omni para review, etc) | 1 |
 
 Veja [AGENTS.md](./AGENTS.md) para detalhes completos de cada plugin.

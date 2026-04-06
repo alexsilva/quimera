@@ -8,7 +8,7 @@ plugin = AgentPlugin(
     capabilities=["general_coding", "code_editing"],
     preferred_task_types=["code_edit"],
     avoid_task_types=[],
-    supports_tools=False,
+    supports_tools=True,
     supports_code_editing=True,
     supports_long_context=False, base_tier=1,
 )
@@ -22,7 +22,7 @@ plugin = AgentPlugin(
     capabilities=["general_reasoning", "documentation"],
     preferred_task_types=["documentation"],
     avoid_task_types=[],
-    supports_tools=False,
+    supports_tools=True,
     supports_code_editing=False,
     supports_long_context=False, base_tier=1,
 )
@@ -36,7 +36,7 @@ plugin = AgentPlugin(
     capabilities=["general_reasoning", "code_review"],
     preferred_task_types=["code_review"],
     avoid_task_types=[],
-    supports_tools=False,
+    supports_tools=True,
     supports_code_editing=False,
     supports_long_context=False, base_tier=1,
 )
@@ -50,7 +50,7 @@ plugin = AgentPlugin(
     capabilities=["architecture", "code_review", "planning"],
     preferred_task_types=["architecture", "code_review"],
     avoid_task_types=[],
-    supports_tools=False,
+    supports_tools=True,
     supports_code_editing=False,
     supports_long_context=True, base_tier=1,
 )
@@ -64,7 +64,7 @@ plugin = AgentPlugin(
     capabilities=["documentation", "general_reasoning"],
     preferred_task_types=["documentation"],
     avoid_task_types=[],
-    supports_tools=False,
+    supports_tools=True,
     supports_code_editing=False,
     supports_long_context=False, base_tier=1,
 )
@@ -78,7 +78,7 @@ plugin = AgentPlugin(
     capabilities=["bug_investigation", "general_reasoning"],
     preferred_task_types=["bug_investigation"],
     avoid_task_types=[],
-    supports_tools=False,
+    supports_tools=True,
     supports_code_editing=False,
     supports_long_context=False, base_tier=1,
 )
@@ -92,7 +92,7 @@ plugin = AgentPlugin(
     capabilities=["code_editing", "bug_investigation", "general_coding"],
     preferred_task_types=["code_edit", "bug_investigation"],
     avoid_task_types=[],
-    supports_tools=False,
+    supports_tools=True,
     supports_code_editing=True,
     supports_long_context=False, base_tier=1,
 )

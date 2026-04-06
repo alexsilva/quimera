@@ -467,7 +467,9 @@ class TaskExecutorCoverageTests(unittest.TestCase):
 
             def fake_sleep(_seconds):
                 sleep_calls.append(_seconds)
-                executor._running = False
+                # Stop only after both task and review have been processed (2 sleeps)
+                if len(sleep_calls) >= 2:
+                    executor._running = False
 
             executor._running = True
             with patch("quimera.runtime.task_executor.claim_task", side_effect=claim_task_side_effect), patch(

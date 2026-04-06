@@ -223,7 +223,7 @@ class QuimeraApp:
 
     def _setup_task_executors(self):
         """Set up task executors for explicit human-created task execution."""
-        from .runtime.tasks import complete_task, fail_task, requeue_task, submit_for_review
+        from .runtime.tasks import complete_task, fail_task, requeue_task, submit_for_review, update_task
 
         def make_task_handler(agent_name):
             def task_handler(task_dict):
@@ -240,15 +240,20 @@ class QuimeraApp:
                     prompt = f"Execute a seguinte tarefa:\n\n{body}"
                     resolved = self._resolved_active_agents()
                     other_agents = [a for a in resolved if a != agent_name]
+                    self._show_task_status(task_id, agent_name, "iniciando")
 
                     response = self.call_agent(
                         agent_name,
                         handoff=prompt,
                         handoff_only=True,
                         primary=False,
+                        silent=True,
+                        persist_history=False,
+                        show_output=False,
                     )
 
                     if response is None:
+                        self._show_task_status(task_id, agent_name, "sem resposta")
                         self._record_failure(agent_name)
                         if other_agents:
                             requeue_task(task_id, agent_name, reason="communication failed", db_path=self.tasks_db_path)
@@ -256,11 +261,9 @@ class QuimeraApp:
                             fail_task(task_id, reason="communication failed", db_path=self.tasks_db_path)
                         return False
 
-                    self.print_response(agent_name, response)
-                    self.persist_message(agent_name, response)
-
                     ok, task_result = self._classify_task_execution_result(response)
                     if not ok:
+                        self._show_task_status(task_id, agent_name, "bloqueada")
                         if other_agents:
                             requeue_task(task_id, agent_name, reason=task_result, db_path=self.tasks_db_path)
                         else:
@@ -270,13 +273,16 @@ class QuimeraApp:
                     # Require confirmation from a different agent when possible
                     if other_agents:
                         submit_for_review(task_id, result=task_result, db_path=self.tasks_db_path)
+                        self._show_task_status(task_id, agent_name, "aguardando review")
                     else:
                         # Fallback: single-agent setup, complete directly
                         complete_task(task_id, result=task_result, db_path=self.tasks_db_path)
+                        self._show_task_status(task_id, agent_name, "concluída")
                     return True
                 except Exception as e:
                     resolved = self._resolved_active_agents()
                     other_agents = [a for a in resolved if a != agent_name]
+                    self._show_task_status(task_dict["id"], agent_name, f"erro: {e}")
                     if other_agents:
                         requeue_task(task_dict["id"], agent_name, reason=str(e), db_path=self.tasks_db_path)
                     else:
@@ -289,6 +295,12 @@ class QuimeraApp:
                 """Confirm completion of a task executed by another agent."""
                 try:
                     task_id = task_dict["id"]
+                    executor = task_dict.get("assigned_to")
+                    if executor == agent_name:
+                        # O executor não pode revisar o próprio trabalho; devolve ao estado pending_review
+                        update_task(task_id, "pending_review", db_path=self.tasks_db_path)
+                        _logger.warning("agent %s tentou revisar a própria task %s — devolvida para revisão", agent_name, task_id)
+                        return False
                     task_result = task_dict.get("result", "")
                     complete_task(task_id, result=task_result, reviewed_by=agent_name, db_path=self.tasks_db_path)
                     return True
@@ -297,9 +309,10 @@ class QuimeraApp:
                     return False
             return review_handler
 
+        job_id = getattr(self, "current_job_id", None)
         self.task_executors = []
         for agent in self._resolved_active_agents():
-            executor = create_executor(agent, make_task_handler(agent), db_path=self.tasks_db_path)
+            executor = create_executor(agent, make_task_handler(agent), db_path=self.tasks_db_path, job_id=job_id)
             executor.set_review_handler(make_review_handler(agent))
             executor.start()
             self.task_executors.append(executor)
@@ -385,7 +398,20 @@ class QuimeraApp:
             return
         self.shared_state["task_overview"] = self._build_task_overview()
 
-    def resolve_agent_response(self, agent: str, response: str | None, silent: bool = False) -> str | None:
+    def _show_task_status(self, task_id: int, agent: str, status: str) -> None:
+        renderer = getattr(self, "renderer", None)
+        if renderer is None:
+            return
+        renderer.show_system(f"[task {task_id}] {agent}: {status}")
+
+    def resolve_agent_response(
+        self,
+        agent: str,
+        response: str | None,
+        silent: bool = False,
+        persist_history: bool = True,
+        show_output: bool = True,
+    ) -> str | None:
         current_response = response
         max_tool_hops = 8
         tool_history = []
@@ -409,8 +435,10 @@ class QuimeraApp:
 
             visible_text = strip_tool_block(raw_response or "")
             if visible_text:
-                self.print_response(agent, visible_text)
-                self.persist_message(agent, visible_text)
+                if show_output:
+                    self.print_response(agent, visible_text)
+                if persist_history:
+                    self.persist_message(agent, visible_text)
 
             followup_handoff = (
                 "Histórico de ferramentas desta rodada:\n\n"
@@ -752,17 +780,20 @@ class QuimeraApp:
     RETRY_BACKOFF_SECONDS = 1
 
     def call_agent(self, agent, **options):
-        silent = options.get("silent", False)
-        handoff = options.get("handoff")
+        dispatch_options = dict(options)
+        silent = dispatch_options.pop("silent", False)
+        persist_history = dispatch_options.pop("persist_history", True)
+        show_output = dispatch_options.pop("show_output", True)
+        handoff = dispatch_options.get("handoff")
         handoff_id = handoff.get("handoff_id") if isinstance(handoff, dict) else None
         _logger.info(
             "[DISPATCH] sending to agent=%s, handoff_only=%s, handoff_id=%s",
-            agent, options.get("handoff_only", False), handoff_id,
+            agent, dispatch_options.get("handoff_only", False), handoff_id,
         )
         last_error = None
         for attempt in range(1, self.MAX_RETRIES + 1):
             try:
-                response = self._call_agent(agent, silent=silent, **options)
+                response = self._call_agent(agent, silent=silent, **dispatch_options)
                 if response is None:
                     if attempt < self.MAX_RETRIES:
                         _logger.warning("[DISPATCH] retry %d/%d for agent=%s", attempt, self.MAX_RETRIES, agent)
@@ -770,7 +801,13 @@ class QuimeraApp:
                         continue
                     self._record_failure(agent)
                     return None
-                result = self.resolve_agent_response(agent, response, silent=silent)
+                result = self.resolve_agent_response(
+                    agent,
+                    response,
+                    silent=silent,
+                    persist_history=persist_history,
+                    show_output=show_output,
+                )
                 if result is None:
                     if attempt < self.MAX_RETRIES:
                         _logger.warning("[DISPATCH] retry %d/%d for agent=%s (resolve failed)", attempt, self.MAX_RETRIES, agent)

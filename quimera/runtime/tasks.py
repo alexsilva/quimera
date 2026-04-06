@@ -294,20 +294,25 @@ def requeue_task(task_id, failed_agent, reason=None, db_path=None):
     return True
 
 
-def claim_task(agent_name, db_path=None):
+def claim_task(agent_name, job_id=None, db_path=None):
     conn = get_conn(db_path)
     cur = conn.cursor()
     try:
         # Use a simple transaction to avoid race conditions
         cur.execute("BEGIN IMMEDIATE")
-        cur.execute("""
+        job_filter = "AND job_id = ?" if job_id is not None else ""
+        params = [agent_name, f"%{_failed_agents_token(agent_name)}%"]
+        if job_id is not None:
+            params.insert(1, job_id)
+        cur.execute(f"""
             SELECT id FROM tasks
             WHERE status IN ('pending', 'approved')
               AND (assigned_to = ? OR assigned_to IS NULL)
+              {job_filter}
               AND COALESCE(failed_agents, '') NOT LIKE ?
             ORDER BY id ASC
             LIMIT 1
-        """, (agent_name, f"%{_failed_agents_token(agent_name)}%"))
+        """, params)
         row = cur.fetchone()
         if not row:
             conn.rollback()
@@ -359,19 +364,24 @@ def submit_for_review(task_id, result=None, db_path=None):
     """Mark a completed task as pending review by another agent."""
     return update_task(task_id, "pending_review", result=result, notes=None, db_path=db_path)
 
-def claim_review_task(agent_name, db_path=None):
+def claim_review_task(agent_name, job_id=None, db_path=None):
     """Atomically claim a pending_review task executed by a different agent."""
     conn = get_conn(db_path)
     cur = conn.cursor()
     try:
         cur.execute("BEGIN IMMEDIATE")
-        cur.execute("""
+        job_filter = "AND job_id = ?" if job_id is not None else ""
+        params = [agent_name]
+        if job_id is not None:
+            params.append(job_id)
+        cur.execute(f"""
             SELECT id FROM tasks
             WHERE status = 'pending_review'
               AND (assigned_to IS NULL OR assigned_to != ?)
+              {job_filter}
             ORDER BY id ASC
             LIMIT 1
-        """, (agent_name,))
+        """, params)
         row = cur.fetchone()
         if not row:
             conn.rollback()

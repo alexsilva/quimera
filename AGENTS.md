@@ -9,14 +9,16 @@ O Quimera organiza os agentes por **Tiers** e **Especialidades**.
 - **Diferenciais**: Longo contexto, suporte a ferramentas de shell e manipulação de arquivos robusta.
 - **Uso Recomendado**: "Redesenhe este sistema de logs para suportar persistência SQLite", "Implemente este novo protocolo entre agentes".
 
+### Claude (`/claude`)
+- **Foco**: Arquitetura, revisão de código, documentação e desenvolvimento geral.
+- **Diferenciais**: Longo contexto, raciocínio detalhado e alta precisão em tarefas de engenharia.
+- **Uso Recomendado**: "Revise este módulo e proponha melhorias", "Documente o protocolo de tasks".
+
 ## Tier 2: Engenheiros de Software
 
-### Claude (`/claude`)
-- **Foco**: Desenvolvimento geral, revisão de código e testes.
-- **Diferenciais**: Rápido e preciso em tarefas de codificação direta.
-
 ### Codex (`/codex`)
-- **Foco**: Geração de código e correções rápidas.
+- **Foco**: Geração de código, testes e bug investigation.
+- **Diferenciais**: Forte em `code_edit`, `test_execution` e `bug_investigation`.
 
 ## Tier 1: Especialistas OpenCode
 

@@ -1489,7 +1489,7 @@ class PluginTests(unittest.TestCase):
             return "sucesso no retry"
 
         app._call_agent = fake_call_agent
-        app.resolve_agent_response = lambda agent, response, silent=False: response
+        app.resolve_agent_response = lambda agent, response, silent=False, persist_history=True, show_output=True: response
 
         result = app.call_agent("claude")
         self.assertEqual(result, "sucesso no retry")
@@ -1499,8 +1499,7 @@ class PluginTests(unittest.TestCase):
         app = QuimeraApp.__new__(QuimeraApp)
         app.active_agents = [AGENT_CLAUDE]
         app.tasks_db_path = "/tmp/quimera-tasks-test.db"
-        printed = []
-        persisted = []
+        status_updates = []
         handlers = {}
 
         class FakeExecutor:
@@ -1513,13 +1512,12 @@ class PluginTests(unittest.TestCase):
             def start(self):
                 return None
 
-        def fake_create_executor(agent, handler, db_path=None):
+        def fake_create_executor(agent, handler, db_path=None, job_id=None):
             handlers[agent] = handler
             return FakeExecutor(handler)
 
         app.call_agent = lambda *args, **kwargs: "resposta visivel da task"
-        app.print_response = lambda agent, response: printed.append((agent, response))
-        app.persist_message = lambda role, content: persisted.append((role, content))
+        app._show_task_status = lambda task_id, agent, status: status_updates.append((task_id, agent, status))
         app._classify_task_execution_result = lambda response: (True, response)
 
         with patch("quimera.app.create_executor", side_effect=fake_create_executor), patch(
@@ -1529,8 +1527,10 @@ class PluginTests(unittest.TestCase):
             ok = handlers[AGENT_CLAUDE]({"id": 1, "description": "rode a task"})
 
         self.assertTrue(ok)
-        self.assertEqual(printed, [(AGENT_CLAUDE, "resposta visivel da task")])
-        self.assertEqual(persisted, [(AGENT_CLAUDE, "resposta visivel da task")])
+        self.assertEqual(
+            status_updates,
+            [(1, AGENT_CLAUDE, "iniciando"), (1, AGENT_CLAUDE, "concluída")],
+        )
         complete_task.assert_called_once_with(
             1, result="resposta visivel da task", db_path=app.tasks_db_path
         )
@@ -1552,13 +1552,12 @@ class PluginTests(unittest.TestCase):
             def start(self):
                 return None
 
-        def fake_create_executor(agent, handler, db_path=None):
+        def fake_create_executor(agent, handler, db_path=None, job_id=None):
             handlers[agent] = handler
             return FakeExecutor(handler)
 
         app.call_agent = lambda *args, **kwargs: None
-        app.print_response = lambda agent, response: None
-        app.persist_message = lambda role, content: None
+        app._show_task_status = lambda task_id, agent, status: None
         app._classify_task_execution_result = lambda response: (True, response)
         app._record_failure = lambda agent: None
 
