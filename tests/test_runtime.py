@@ -5,13 +5,16 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import quimera.plugins as plugins
 from quimera.runtime.approval import ApprovalHandler
 from quimera.runtime.config import ToolRuntimeConfig
 from quimera.runtime.executor import ToolExecutor
 from quimera.runtime.models import ToolCall
 from quimera.runtime.parser import ToolCallParseError, extract_tool_call, strip_tool_block
 from quimera.runtime.policy import ToolPolicy, ToolPolicyError
-from quimera.runtime.tasks import add_job, init_db, list_tasks, propose_task
+from quimera.runtime.task_executor import TaskExecutor
+from quimera.runtime.task_planning import choose_best_agent, classify_task_type
+from quimera.runtime.tasks import add_job, get_conn, init_db, list_tasks, propose_task
 
 
 # ---------------------------------------------------------------------------
@@ -165,41 +168,27 @@ class PolicyTests(unittest.TestCase):
     def test_get_job_without_job_id_is_allowed(self):
         self.policy.validate(self._call("get_job", {}))
 
-    def test_propose_task_requires_explicit_human_request(self):
+    def test_propose_task_is_blocked_in_chat(self):
         with self.assertRaises(ToolPolicyError):
             self.policy.validate(self._call("propose_task", {"description": "abrir tarefa"}))
 
-    def test_propose_task_accepts_explicit_human_request(self):
-        self.policy.validate(
-            self._call(
-                "propose_task",
-                {
-                    "description": "abrir tarefa",
-                    "requested_by_human": True,
-                    "source_context": "Humano pediu explicitamente para abrir tarefa assíncrona.",
-                },
-            )
-        )
+    def test_approve_task_is_blocked_in_chat(self):
+        with self.assertRaises(ToolPolicyError):
+            self.policy.validate(self._call("approve_task", {"task_id": 1}))
 
-    def test_propose_task_requires_approval_even_when_other_mutations_do_not(self):
-        config = ToolRuntimeConfig(
-            workspace_root=self.tmp,
-            require_approval_for_mutations=False,
-            require_approval_for_task_creation=True,
-        )
-        policy = ToolPolicy(config)
-        self.assertTrue(
-            policy.requires_approval(
-                self._call(
-                    "propose_task",
-                    {
-                        "description": "abrir tarefa",
-                        "requested_by_human": True,
-                        "source_context": "Humano pediu explicitamente para abrir tarefa assíncrona.",
-                    },
-                )
-            )
-        )
+    def test_complete_task_is_blocked_in_chat(self):
+        with self.assertRaises(ToolPolicyError):
+            self.policy.validate(self._call("complete_task", {"task_id": 1}))
+
+    def test_classify_task_type_examples(self):
+        self.assertEqual(classify_task_type("execute os testes"), "test_execution")
+        self.assertEqual(classify_task_type("revise o arquivo quimera/app.py"), "code_review")
+        self.assertEqual(classify_task_type("corrija o parser"), "code_edit")
+        self.assertEqual(classify_task_type("investigue por que o handoff falha"), "bug_investigation")
+
+    def test_choose_best_agent_uses_plugin_preferences(self):
+        selected = choose_best_agent("test_execution", [plugins.get("claude"), plugins.get("codex"), plugins.get("qwen")])
+        self.assertEqual(selected, "codex")
 
 
 # ---------------------------------------------------------------------------
@@ -301,36 +290,18 @@ class ExecutorTests(unittest.TestCase):
         payload = json.loads(result.content)
         self.assertEqual([task["id"] for task in payload], [task_id])
 
-    def test_propose_task_reuses_same_open_description(self):
+    def test_propose_task_via_executor_is_blocked(self):
         job_id = add_job("Job test", db_path=str(self.db_path))
         ex = self._executor()
-        first = ex.execute(
+        result = ex.execute(
             ToolCall(
                 name="propose_task",
-                arguments={
-                    "job_id": job_id,
-                    "description": "Validar schema",
-                    "requested_by_human": True,
-                    "source_context": "Humano pediu explicitamente para abrir tarefa assíncrona.",
-                },
-            )
-        )
-        second = ex.execute(
-            ToolCall(
-                name="propose_task",
-                arguments={
-                    "job_id": job_id,
-                    "description": "  validar   schema  ",
-                    "requested_by_human": True,
-                    "source_context": "Humano pediu explicitamente para abrir tarefa assíncrona.",
-                },
+                arguments={"job_id": job_id, "description": "Validar schema"},
             )
         )
 
-        self.assertTrue(first.ok)
-        self.assertTrue(second.ok)
-        self.assertEqual(first.data["task_id"], second.data["task_id"])
-        self.assertEqual(second.data["duplicate_of"], first.data["task_id"])
+        self.assertFalse(result.ok)
+        self.assertIn("desativada", result.error)
 
     def test_propose_task_fails_for_unknown_job_id(self):
         ex = self._executor()
@@ -338,17 +309,12 @@ class ExecutorTests(unittest.TestCase):
         result = ex.execute(
             ToolCall(
                 name="propose_task",
-                arguments={
-                    "job_id": 999,
-                    "description": "Task órfã",
-                    "requested_by_human": True,
-                    "source_context": "Humano pediu explicitamente para abrir tarefa assíncrona.",
-                },
+                arguments={"job_id": 999, "description": "Task órfã"},
             )
         )
 
         self.assertFalse(result.ok)
-        self.assertIn("does not exist", result.error)
+        self.assertIn("desativada", result.error)
 
     def test_propose_task_denied_without_approval(self):
         job_id = add_job("Job test", db_path=str(self.db_path))
@@ -357,29 +323,24 @@ class ExecutorTests(unittest.TestCase):
         result = ex.execute(
             ToolCall(
                 name="propose_task",
-                arguments={
-                    "job_id": job_id,
-                    "description": "Abrir tarefa aprovada pelo humano",
-                    "requested_by_human": True,
-                    "source_context": "Humano pediu explicitamente para abrir tarefa assíncrona.",
-                },
+                arguments={"job_id": job_id, "description": "Abrir tarefa aprovada pelo humano"},
             )
         )
 
         self.assertFalse(result.ok)
-        self.assertIn("negada", result.error)
+        self.assertIn("desativada", result.error)
 
-    def test_approve_task_via_executor(self):
+    def test_approve_task_via_executor_is_blocked(self):
         job_id = add_job("Job test", db_path=str(self.db_path))
         task_id = propose_task(job_id, "Task A", db_path=str(self.db_path))
         ex = self._executor()
 
         result = ex.execute(ToolCall(name="approve_task", arguments={"task_id": task_id, "approved_by": "alex"}))
 
-        self.assertTrue(result.ok)
-        self.assertEqual(result.content, "approved")
+        self.assertFalse(result.ok)
+        self.assertIn("desativada", result.error)
         tasks = list_tasks({"id": task_id}, db_path=str(self.db_path))
-        self.assertEqual(tasks[0]["status"], "approved")
+        self.assertEqual(tasks[0]["status"], "proposed")
 
     def test_get_job_uses_current_job_env_fallback(self):
         job_id = add_job("Job env", db_path=str(self.db_path))
@@ -409,6 +370,16 @@ class ExecutorTests(unittest.TestCase):
         payload = json.loads(result.content)
         self.assertEqual(len(payload), 1)
         self.assertEqual(payload[0]["description"], "Planejamento")
+
+
+class TasksDbPathGuardTests(unittest.TestCase):
+    def test_get_conn_raises_without_db_path(self):
+        with self.assertRaises(ValueError):
+            get_conn(None)
+
+    def test_task_executor_raises_without_db_path(self):
+        with self.assertRaises(ValueError):
+            TaskExecutor(agent_name="codex", db_path=None)
 
 
 if __name__ == "__main__":

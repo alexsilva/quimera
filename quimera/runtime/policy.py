@@ -23,9 +23,7 @@ class ToolPolicy:
         validator(call)
 
     def requires_approval(self, call: ToolCall) -> bool:
-        if call.name == "propose_task":
-            return self.config.require_approval_for_task_creation
-        if call.name in {"write_file", "run_shell", "complete_task", "fail_task"}:
+        if call.name in {"write_file", "run_shell"}:
             return self.config.require_approval_for_mutations
         return False
 
@@ -55,13 +53,7 @@ class ToolPolicy:
             raise ToolPolicyError("grep_search requer um padrão não vazio")
 
     def _validate_propose_task(self, call: ToolCall) -> None:
-        if "description" not in call.arguments:
-            raise ToolPolicyError("propose_task requer 'description'")
-        if call.arguments.get("requested_by_human") is not True:
-            raise ToolPolicyError("propose_task requer requested_by_human=True")
-        source_context = str(call.arguments.get("source_context", "")).strip()
-        if not source_context:
-            raise ToolPolicyError("propose_task requer 'source_context'")
+        raise ToolPolicyError("propose_task foi desativada; crie tasks apenas com o comando /task do humano")
 
     def _validate_list_tasks(self, call: ToolCall) -> None:
         pass
@@ -73,16 +65,13 @@ class ToolPolicy:
         return
 
     def _validate_approve_task(self, call: ToolCall) -> None:
-        if "task_id" not in call.arguments:
-            raise ToolPolicyError("approve_task requer 'task_id'")
+        raise ToolPolicyError("approve_task foi desativada no chat; tasks humanas já nascem roteadas")
 
     def _validate_complete_task(self, call: ToolCall) -> None:
-        if "task_id" not in call.arguments:
-            raise ToolPolicyError("complete_task requer 'task_id'")
+        raise ToolPolicyError("complete_task não é exposta no chat; o executor interno encerra a task")
 
     def _validate_fail_task(self, call: ToolCall) -> None:
-        if "task_id" not in call.arguments:
-            raise ToolPolicyError("fail_task requer 'task_id'")
+        raise ToolPolicyError("fail_task não é exposta no chat; o executor interno encerra a task")
 
     _SHELL_CHAIN_OPERATORS = (";", "&&", "||", "`", "$(")
 

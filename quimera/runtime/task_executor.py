@@ -7,13 +7,15 @@ import queue
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Optional
 
-from .tasks import list_tasks, claim_task, complete_task, fail_task, get_conn, DB_PATH
+from .tasks import list_tasks, claim_task, complete_task, fail_task, get_conn
 
 
 class TaskExecutor:
-    def __init__(self, agent_name: str, db_path=None, max_workers: int = 2, poll_interval: float = 5.0):
+    def __init__(self, agent_name: str, db_path, max_workers: int = 2, poll_interval: float = 5.0):
+        if not db_path:
+            raise ValueError("db_path is required — use workspace.tasks_db")
         self.agent_name = agent_name
-        self.db_path = db_path or DB_PATH
+        self.db_path = db_path
         self.max_workers = max_workers
         self.poll_interval = poll_interval
         self._running = False
@@ -66,7 +68,7 @@ class TaskExecutor:
         return task_id
 
 
-def create_executor(agent_name: str, handler: Callable[[dict], bool], db_path=None) -> TaskExecutor:
+def create_executor(agent_name: str, handler: Callable[[dict], bool], db_path) -> TaskExecutor:
     """Factory function to create and configure a task executor."""
     executor = TaskExecutor(agent_name, db_path=db_path)
     executor.set_handler(handler)

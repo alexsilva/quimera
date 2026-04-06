@@ -6,14 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-def _resolve_quimera_base() -> Path:
-    env_base = os.environ.get("QUIMERA_BASE")
-    candidates = []
-    if env_base:
-        candidates.append(Path(env_base).expanduser())
-    candidates.append(Path.home() / ".local" / "share" / "quimera")
-    candidates.append(Path(tempfile.gettempdir()) / "quimera")
-
+def _find_writable(candidates: list) -> Path:
     for candidate in candidates:
         try:
             candidate.mkdir(parents=True, exist_ok=True)
@@ -23,11 +16,16 @@ def _resolve_quimera_base() -> Path:
             return candidate
         except OSError:
             continue
-
     raise OSError("Não foi possível resolver um diretório gravável para o workspace do Quimera")
 
 
-QUIMERA_BASE = _resolve_quimera_base()
+_base_candidates = []
+if os.environ.get("QUIMERA_BASE"):
+    _base_candidates.append(Path(os.environ["QUIMERA_BASE"]).expanduser())
+_base_candidates.append(Path.home() / ".local" / "share" / "quimera")
+_base_candidates.append(Path(tempfile.gettempdir()) / "quimera")
+
+QUIMERA_BASE = _find_writable(_base_candidates)
 
 
 class Workspace:
@@ -56,6 +54,10 @@ class Workspace:
     @property
     def logs_dir(self) -> Path:
         return self._root / "data" / "logs" / "sessions"
+
+    @property
+    def tasks_db(self) -> Path:
+        return self._root / "data" / "tasks.db"
 
     @property
     def metrics_dir(self) -> Path:

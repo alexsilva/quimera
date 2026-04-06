@@ -1,39 +1,15 @@
 import os
-from pathlib import Path
 import sqlite3
 from datetime import datetime, timezone
 
-from ..workspace import QUIMERA_BASE
+from .task_planning import TASK_TYPE_GENERAL
 
-"""
-DB path resolution for Stage 5 tasks.
-Priority:
-- QUIMERA_TASKS_DB env var
-- QUIMERA_WORKFLOW_ROOT env var (expects storage/tasks.db under this root)
-- Default: ~/.local/share/quimera/tasks.db
-"""
 
-def _default_tasks_db_path() -> Path:
-    return QUIMERA_BASE / "tasks.db"
-
-def _resolve_tasks_db_path() -> Path:
-    env_db = os.environ.get("QUIMERA_TASKS_DB")
-    if env_db:
-        return Path(env_db).expanduser().resolve()
-    wf_root = os.environ.get("QUIMERA_WORKFLOW_ROOT")
-    if wf_root:
-        return Path(wf_root) / "storage" / "tasks.db"
-    return _default_tasks_db_path()
-
-# Resolve path at import time
-DB_PATH = _resolve_tasks_db_path()
-DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-
-def get_conn(db_path=None):
-    path = db_path or DB_PATH
-    # ensure directory exists
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    conn = sqlite3.connect(path, check_same_thread=False)
+def get_conn(db_path):
+    if not db_path:
+        raise ValueError("db_path is required — use workspace.tasks_db")
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.execute("PRAGMA foreign_keys = ON;")
     return conn
 
@@ -57,6 +33,8 @@ def init_db(db_path=None):
             description TEXT NOT NULL,
             body TEXT,
             status TEXT NOT NULL,
+            task_type TEXT NOT NULL DEFAULT 'general',
+            origin TEXT NOT NULL DEFAULT 'legacy',
             assigned_to TEXT,
             result TEXT,
             notes TEXT,
@@ -69,6 +47,16 @@ def init_db(db_path=None):
             FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE
         );
     """)
+    cur.execute("PRAGMA table_info(tasks)")
+    existing_columns = {row[1] for row in cur.fetchall()}
+    column_specs = {
+        "task_type": "TEXT NOT NULL DEFAULT 'general'",
+        "origin": "TEXT NOT NULL DEFAULT 'legacy'",
+        "requested_by": "TEXT",
+    }
+    for column_name, column_spec in column_specs.items():
+        if column_name not in existing_columns:
+            cur.execute(f"ALTER TABLE tasks ADD COLUMN {column_name} {column_spec}")
     conn.commit()
     conn.close()
 
@@ -139,19 +127,55 @@ def get_job(job_id, db_path=None):
         "updated_at": row[5],
     }
 
-def propose_task(job_id, description, priority="medium", created_by=None, notes=None, source_context=None, db_path=None, auto_approve=False, body=None):
+def create_task(
+    job_id,
+    description,
+    *,
+    task_type=TASK_TYPE_GENERAL,
+    assigned_to=None,
+    origin="human_command",
+    status="pending",
+    priority="medium",
+    created_by=None,
+    requested_by=None,
+    notes=None,
+    body=None,
+    source_context=None,
+    db_path=None,
+):
     conn = get_conn(db_path)
     cur = conn.cursor()
     now = _now()
-    status = "approved" if auto_approve else "proposed"
     cur.execute("""
-        INSERT INTO tasks(job_id, description, body, status, priority, created_at, updated_at, created_by, notes, source_context)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (job_id, description, body, status, priority, now, now, created_by, notes, source_context))
+        INSERT INTO tasks(
+            job_id, description, body, status, task_type, origin, assigned_to,
+            priority, created_at, updated_at, created_by, requested_by, notes, source_context
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        job_id, description, body, status, task_type, origin, assigned_to,
+        priority, now, now, created_by, requested_by, notes, source_context,
+    ))
     task_id = cur.lastrowid
     conn.commit()
     conn.close()
     return task_id
+
+def propose_task(job_id, description, priority="medium", created_by=None, notes=None, source_context=None, db_path=None, auto_approve=False, body=None):
+    status = "approved" if auto_approve else "proposed"
+    return create_task(
+        job_id,
+        description,
+        task_type=TASK_TYPE_GENERAL,
+        origin="legacy_tool",
+        status=status,
+        priority=priority,
+        created_by=created_by,
+        notes=notes,
+        body=body,
+        source_context=source_context,
+        db_path=db_path,
+    )
 
 def approve_task(task_id, approved_by, db_path=None):
     conn = get_conn(db_path)
@@ -186,7 +210,11 @@ def list_tasks(filt=None, db_path=None):
     filt = filt or {}
     conn = get_conn(db_path)
     cur = conn.cursor()
-    sql = "SELECT id, job_id, description, body, status, assigned_to, result, notes, priority, created_at, updated_at FROM tasks"
+    sql = (
+        "SELECT id, job_id, description, body, status, task_type, origin, assigned_to, "
+        "result, notes, priority, created_at, updated_at, created_by, requested_by "
+        "FROM tasks"
+    )
     clauses = []
     params = []
     if "job_id" in filt:
@@ -198,6 +226,12 @@ def list_tasks(filt=None, db_path=None):
     if "assigned_to" in filt:
         clauses.append("assigned_to = ?")
         params.append(filt["assigned_to"])
+    if "task_type" in filt:
+        clauses.append("task_type = ?")
+        params.append(filt["task_type"])
+    if "origin" in filt:
+        clauses.append("origin = ?")
+        params.append(filt["origin"])
     if "id" in filt:
         clauses.append("id = ?")
         params.append(filt["id"])
@@ -209,8 +243,8 @@ def list_tasks(filt=None, db_path=None):
     conn.close()
     return [{
         "id": r[0], "job_id": r[1], "description": r[2], "body": r[3], "status": r[4],
-        "assigned_to": r[5], "result": r[6], "notes": r[7], "priority": r[8],
-        "created_at": r[9], "updated_at": r[10]
+        "task_type": r[5], "origin": r[6], "assigned_to": r[7], "result": r[8], "notes": r[9], "priority": r[10],
+        "created_at": r[11], "updated_at": r[12], "created_by": r[13], "requested_by": r[14],
     } for r in rows]
 
 def claim_task(agent_name, db_path=None):
@@ -221,10 +255,11 @@ def claim_task(agent_name, db_path=None):
         cur.execute("BEGIN IMMEDIATE")
         cur.execute("""
             SELECT id FROM tasks
-            WHERE status = 'approved' AND assigned_to IS NULL
+            WHERE status IN ('pending', 'approved')
+              AND (assigned_to = ? OR (status = 'approved' AND assigned_to IS NULL))
             ORDER BY id ASC
             LIMIT 1
-        """)
+        """, (agent_name,))
         row = cur.fetchone()
         if not row:
             conn.rollback()
@@ -257,20 +292,20 @@ def complete_task(task_id, result=None, db_path=None):
 def fail_task(task_id, reason=None, db_path=None):
     return update_task(task_id, "failed", result=reason, notes=reason, db_path=db_path)
 
-def drop_db(db_path=None):
-    p = db_path or DB_PATH
-    if os.path.exists(p):
-        os.remove(p)
+def drop_db(db_path):
+    if os.path.exists(db_path):
+        os.remove(db_path)
 
 __all__ = [
     "init_db", "add_job", "list_jobs",
-    "propose_task", "approve_task", "reject_task", "list_tasks",
+    "create_task", "propose_task", "approve_task", "reject_task", "list_tasks",
     "claim_task", "update_task", "complete_task", "fail_task", "get_job",
 ]
 
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(prog="quimera-tasks", description="Stage 5: planning tasks (jobs + tasks).")
+    parser.add_argument("--db", dest="db", required=True, help="Path to tasks DB")
     sub = parser.add_subparsers(dest="cmd")
 
     p_init = sub.add_parser("init", help="Initialize the DB")
@@ -317,7 +352,7 @@ if __name__ == "__main__":
     p_task_complete.add_argument("--result", dest="result", default=None)
 
     ns = parser.parse_args()
-    init_db(DB_PATH)
+    init_db(ns.db)
     if ns.cmd == "init":
         print("DB initialized.")
         exit(0)

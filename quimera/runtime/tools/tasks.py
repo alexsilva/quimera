@@ -7,13 +7,9 @@ import re
 from ..config import ToolRuntimeConfig
 from ..models import ToolCall, ToolResult
 from ..tasks import (
-    propose_task as _propose_task,
     list_tasks as _list_tasks,
     list_jobs as _list_jobs,
     get_job as _get_job,
-    approve_task as _approve_task,
-    complete_task as _complete_task,
-    fail_task as _fail_task,
 )
 
 
@@ -65,37 +61,6 @@ class TaskTools:
                     return task
         return None
 
-    def propose_task(self, call: ToolCall) -> ToolResult:
-        job_id = self._resolve_job_id(call.arguments.get("job_id"))
-        if job_id is None:
-            return ToolResult(ok=False, tool_name=call.name, error="job_id is required (set QUIMERA_CURRENT_JOB_ID or create a job first)")
-        description = call.arguments["description"]
-        priority = call.arguments.get("priority", "medium")
-        created_by = call.arguments.get("created_by")
-        notes = call.arguments.get("notes")
-        source_context = call.arguments.get("source_context")
-        body = call.arguments.get("body")
-        try:
-            job = _get_job(job_id, db_path=self.config.db_path)
-            if job is None:
-                return ToolResult(ok=False, tool_name=call.name, error=f"job_id {job_id} does not exist")
-            duplicate = self._find_duplicate_task(job_id, description)
-            if duplicate is not None:
-                return ToolResult(
-                    ok=True,
-                    tool_name=call.name,
-                    content=str(duplicate["id"]),
-                    data={
-                        "task_id": duplicate["id"],
-                        "duplicate_of": duplicate["id"],
-                        "message": "similar open task already exists",
-                    },
-                )
-            tid = _propose_task(job_id, description, priority=priority, created_by=created_by, notes=notes, source_context=source_context, body=body, db_path=self.config.db_path)
-            return ToolResult(ok=True, tool_name=call.name, content=str(tid), data={"task_id": tid})
-        except Exception as exc:  # noqa: BLE001
-            return ToolResult(ok=False, tool_name=call.name, error=str(exc))
-
     def list_tasks(self, call: ToolCall) -> ToolResult:
         filt = self._build_filters(call.arguments)
         try:
@@ -123,32 +88,5 @@ class TaskTools:
         try:
             job = _get_job(job_id, db_path=self.config.db_path)
             return ToolResult(ok=True, tool_name=call.name, content=json.dumps(job) if job is not None else "null", data={"job": job})
-        except Exception as exc:  # noqa: BLE001
-            return ToolResult(ok=False, tool_name=call.name, error=str(exc))
-
-    def approve_task(self, call: ToolCall) -> ToolResult:
-        task_id = call.arguments["task_id"]
-        approved_by = call.arguments.get("approved_by", "agent")
-        try:
-            ok = _approve_task(task_id, approved_by, db_path=self.config.db_path)
-            return ToolResult(ok=bool(ok), tool_name=call.name, content="approved" if ok else "failed to approve")
-        except Exception as exc:  # noqa: BLE001
-            return ToolResult(ok=False, tool_name=call.name, error=str(exc))
-
-    def complete_task(self, call: ToolCall) -> ToolResult:
-        task_id = call.arguments["task_id"]
-        result = call.arguments.get("result")
-        try:
-            ok = _complete_task(task_id, result=result, db_path=self.config.db_path)
-            return ToolResult(ok=bool(ok), tool_name=call.name, content="completed" if ok else "failed to complete")
-        except Exception as exc:  # noqa: BLE001
-            return ToolResult(ok=False, tool_name=call.name, error=str(exc))
-
-    def fail_task(self, call: ToolCall) -> ToolResult:
-        task_id = call.arguments["task_id"]
-        reason = call.arguments.get("reason")
-        try:
-            ok = _fail_task(task_id, reason=reason, db_path=self.config.db_path)
-            return ToolResult(ok=bool(ok), tool_name=call.name, content="failed" if ok else "could not fail task")
         except Exception as exc:  # noqa: BLE001
             return ToolResult(ok=False, tool_name=call.name, error=str(exc))

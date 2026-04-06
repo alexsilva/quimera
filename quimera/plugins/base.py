@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
 
@@ -9,6 +9,12 @@ class AgentPlugin:
     cmd: List[str]
     style: Tuple[str, str]  # (color, label) para UI
     prompt_as_arg: bool = False  # se True, prompt é passado como argumento CLI em vez de stdin
+    capabilities: List[str] = field(default_factory=list)
+    preferred_task_types: List[str] = field(default_factory=list)
+    avoid_task_types: List[str] = field(default_factory=list)
+    supports_tools: bool = True
+    supports_code_editing: bool = False
+    supports_long_context: bool = False
 
 
 _registry: dict[str, AgentPlugin] = {}

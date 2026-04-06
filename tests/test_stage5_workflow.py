@@ -4,14 +4,14 @@ import threading
 import unittest
 
 from quimera.runtime.tasks import (
-    init_db, add_job, propose_task, approve_task, reject_task,
+    init_db, add_job, create_task, propose_task, approve_task, reject_task,
     list_tasks, list_jobs, claim_task, update_task, complete_task,
     fail_task, drop_db, get_conn,
 )
 
 
 class TestStage5Workflow(unittest.TestCase):
-    """Ciclo completo: job → propose → approve → claim → complete."""
+    """Ciclo completo: job → create → claim → complete."""
 
     def setUp(self):
         self.tmp = tempfile.mktemp(suffix=".db")
@@ -25,11 +25,8 @@ class TestStage5Workflow(unittest.TestCase):
         job_id = add_job("Refactor auth module", created_by="alex", db_path=self.tmp)
         self.assertIsInstance(job_id, int)
 
-        t1 = propose_task(job_id, "Add JWT validation", created_by="agent-1", db_path=self.tmp)
-        t2 = propose_task(job_id, "Update login endpoint", created_by="agent-1", db_path=self.tmp)
-
-        self.assertTrue(approve_task(t1, approved_by="alex", db_path=self.tmp))
-        self.assertTrue(approve_task(t2, approved_by="alex", db_path=self.tmp))
+        t1 = create_task(job_id, "Add JWT validation", task_type="code_edit", assigned_to="agent-2", origin="human_command", db_path=self.tmp)
+        t2 = create_task(job_id, "Update login endpoint", task_type="code_edit", assigned_to="agent-2", origin="human_command", db_path=self.tmp)
 
         claimed = claim_task("agent-2", db_path=self.tmp)
         self.assertEqual(claimed, t1)
@@ -64,15 +61,33 @@ class TestStage5Workflow(unittest.TestCase):
         reject_task(tid, rejected_by="alex", db_path=self.tmp)
         self.assertFalse(approve_task(tid, approved_by="alex", db_path=self.tmp))
 
-    def test_claim_returns_none_when_no_approved_tasks(self):
+    def test_claim_returns_none_when_no_pending_tasks(self):
         job_id = add_job("Test job", db_path=self.tmp)
         propose_task(job_id, "Task not approved", db_path=self.tmp)
         self.assertIsNone(claim_task("agent-1", db_path=self.tmp))
 
+    def test_human_task_persists_metadata(self):
+        job_id = add_job("Test job", db_path=self.tmp)
+        tid = create_task(
+            job_id,
+            "Execute os testes",
+            task_type="test_execution",
+            assigned_to="codex",
+            origin="human_command",
+            created_by="alex",
+            requested_by="alex",
+            db_path=self.tmp,
+        )
+
+        tasks = list_tasks({"id": tid}, db_path=self.tmp)
+        self.assertEqual(tasks[0]["task_type"], "test_execution")
+        self.assertEqual(tasks[0]["origin"], "human_command")
+        self.assertEqual(tasks[0]["assigned_to"], "codex")
+        self.assertEqual(tasks[0]["requested_by"], "alex")
+
     def test_fail_task(self):
         job_id = add_job("Test job", db_path=self.tmp)
-        tid = propose_task(job_id, "Some task", db_path=self.tmp)
-        approve_task(tid, approved_by="alex", db_path=self.tmp)
+        tid = create_task(job_id, "Some task", assigned_to="agent-1", origin="human_command", db_path=self.tmp)
         claim_task("agent-1", db_path=self.tmp)
 
         fail_task(tid, reason="Dependency missing", db_path=self.tmp)
@@ -125,8 +140,7 @@ class TestStage5Concurrency(unittest.TestCase):
     def test_claim_atomic_no_double_claim(self):
         """Dois agentes não podem claim a mesma task."""
         job_id = add_job("Concurrency test", db_path=self.tmp)
-        tid = propose_task(job_id, "Atomic task", db_path=self.tmp)
-        approve_task(tid, approved_by="alex", db_path=self.tmp)
+        tid = create_task(job_id, "Atomic task", assigned_to="agent-3", origin="human_command", db_path=self.tmp)
 
         claimed_by = []
         lock = threading.Lock()

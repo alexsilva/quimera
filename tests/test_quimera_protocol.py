@@ -15,7 +15,7 @@ from quimera.constants import CMD_HELP, EXTEND_MARKER, build_help
 from quimera.runtime.approval import ApprovalHandler
 from quimera.runtime.config import ToolRuntimeConfig
 from quimera.runtime.executor import ToolExecutor
-from quimera.runtime.tasks import add_job, init_db, list_tasks, propose_task
+from quimera.runtime.tasks import add_job, init_db, list_tasks
 from quimera.plugins import AgentPlugin
 from quimera.prompt import PromptBuilder
 from quimera.session_summary import SessionSummarizer
@@ -400,6 +400,52 @@ class ProtocolTests(unittest.TestCase):
         expected_help = build_help([AGENT_CLAUDE, AGENT_CODEX])
         self.assertEqual(app.renderer.system_messages, [expected_help])
 
+    def test_handle_task_command_creates_task_and_assigns_best_agent(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.renderer = DummyRenderer()
+        app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
+        app.user_name = "Alex"
+        app.shared_state = {}
+        app.current_job_id = 1
+        tmp_dir = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        db_path = tmp_dir / "tasks.db"
+        init_db(str(db_path))
+        add_job("Session", db_path=str(db_path), job_id=1)
+        app.tasks_db_path = str(db_path)
+        app._refresh_task_shared_state = QuimeraApp._refresh_task_shared_state.__get__(app, QuimeraApp)
+        app._build_task_overview = QuimeraApp._build_task_overview.__get__(app, QuimeraApp)
+
+        handled = app.handle_command('/task "execute os testes"')
+
+        self.assertTrue(handled)
+        tasks = list_tasks({"job_id": 1}, db_path=str(db_path))
+        self.assertEqual(len(tasks), 1)
+        self.assertEqual(tasks[0]["status"], "pending")
+        self.assertEqual(tasks[0]["task_type"], "test_execution")
+        self.assertEqual(tasks[0]["origin"], "human_command")
+        self.assertEqual(tasks[0]["assigned_to"], AGENT_CODEX)
+        self.assertIn("task criada com id", app.renderer.system_messages[-1])
+        self.assertIn("atribuída para codex", app.renderer.system_messages[-1])
+
+    def test_handle_task_command_rejects_empty_description(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.renderer = DummyRenderer()
+        app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
+        app.user_name = "Alex"
+        app.shared_state = {}
+        app.current_job_id = 1
+        tmp_dir = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        db_path = tmp_dir / "tasks.db"
+        init_db(str(db_path))
+        add_job("Session", db_path=str(db_path), job_id=1)
+        app.tasks_db_path = str(db_path)
+
+        handled = app.handle_command('/task ""')
+
+        self.assertTrue(handled)
+        self.assertEqual(app.renderer.warnings, ["Uso: /task <descrição>"])
+        self.assertEqual(list_tasks({"job_id": 1}, db_path=str(db_path)), [])
+
     def test_prompt_marks_only_first_speaker(self):
         builder = PromptBuilder(DummyContextManager(), history_window=3)
         history = [{"role": "human", "content": "Pergunta"}]
@@ -520,15 +566,18 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn('Execute approved antes de criar novas.', prompt)
 
     def test_app_builds_explicit_session_state_for_prompt(self):
+        temp_root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+
         class FakeWorkspace:
             def __init__(self, cwd):
-                self.root = Path("/tmp/projeto")
+                self.root = temp_root
                 self.cwd = cwd
-                self.context_persistent = Path("/tmp/quimera_context.md")
-                self.context_session = Path("/tmp/quimera_session_context.md")
-                self.logs_dir = Path("/tmp/quimera_logs")
-                self.history_file = Path("/tmp/quimera_history")
-                self.state_dir = Path("/tmp/quimera_state")
+                self.context_persistent = temp_root / "quimera_context.md"
+                self.context_session = temp_root / "quimera_session_context.md"
+                self.logs_dir = temp_root / "quimera_logs"
+                self.history_file = temp_root / "quimera_history"
+                self.state_dir = temp_root / "quimera_state"
+                self.tasks_db = temp_root / "quimera_tasks.db"
 
             def migrate_from_legacy(self, cwd):
                 return []
@@ -570,15 +619,18 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(app.shared_state, {"goal": "continuar"})
 
     def test_app_uses_default_history_window_from_config(self):
+        temp_root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+
         class FakeWorkspace:
             def __init__(self, cwd):
-                self.root = Path("/tmp/projeto")
+                self.root = temp_root
                 self.cwd = cwd
-                self.context_persistent = Path("/tmp/quimera_context.md")
-                self.context_session = Path("/tmp/quimera_session_context.md")
-                self.logs_dir = Path("/tmp/quimera_logs")
-                self.history_file = Path("/tmp/quimera_history")
-                self.state_dir = Path("/tmp/quimera_state")
+                self.context_persistent = temp_root / "quimera_context.md"
+                self.context_session = temp_root / "quimera_session_context.md"
+                self.logs_dir = temp_root / "quimera_logs"
+                self.history_file = temp_root / "quimera_history"
+                self.state_dir = temp_root / "quimera_state"
+                self.tasks_db = temp_root / "quimera_tasks.db"
 
             def migrate_from_legacy(self, cwd):
                 return []
@@ -610,15 +662,18 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(app.prompt_builder.history_window, DEFAULT_HISTORY_WINDOW)
 
     def test_app_allows_history_window_override(self):
+        temp_root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+
         class FakeWorkspace:
             def __init__(self, cwd):
-                self.root = Path("/tmp/projeto")
+                self.root = temp_root
                 self.cwd = cwd
-                self.context_persistent = Path("/tmp/quimera_context.md")
-                self.context_session = Path("/tmp/quimera_session_context.md")
-                self.logs_dir = Path("/tmp/quimera_logs")
-                self.history_file = Path("/tmp/quimera_history")
-                self.state_dir = Path("/tmp/quimera_state")
+                self.context_persistent = temp_root / "quimera_context.md"
+                self.context_session = temp_root / "quimera_session_context.md"
+                self.logs_dir = temp_root / "quimera_logs"
+                self.history_file = temp_root / "quimera_history"
+                self.state_dir = temp_root / "quimera_state"
+                self.tasks_db = temp_root / "quimera_tasks.db"
 
             def migrate_from_legacy(self, cwd):
                 return []
@@ -921,7 +976,7 @@ class ProtocolTests(unittest.TestCase):
             [(AGENT_CLAUDE, AGENT_CODEX, "Revise este argumento.")],
         )
 
-    def test_run_approves_task_via_tool_and_then_routes_via_chat(self):
+    def test_run_blocks_agent_task_creation_via_tool_in_normal_flow(self):
         class AutoApprove(ApprovalHandler):
             def approve(self, tool_name, summary):
                 return True
@@ -951,11 +1006,10 @@ class ProtocolTests(unittest.TestCase):
             "agent_metrics": {},
         }
 
-        tmp_dir = Path(tempfile.mkdtemp())
+        tmp_dir = Path(self.enterContext(tempfile.TemporaryDirectory()))
         db_path = tmp_dir / "tasks.db"
         init_db(str(db_path))
         job_id = add_job("Session sessao-2026-04-02-183323", db_path=str(db_path))
-        task_id = propose_task(job_id, "Executar teste ponta a ponta", db_path=str(db_path))
         app.current_job_id = job_id
         app.tasks_db_path = str(db_path)
         app.tool_executor = ToolExecutor(
@@ -974,7 +1028,7 @@ class ProtocolTests(unittest.TestCase):
         app.active_agents = [AGENT_CLAUDE, "opencode-qwen"]
         app.threads = 1
         app.handle_command = lambda user: False
-        app.parse_routing = lambda user: (AGENT_CLAUDE, "faça o teste pelo chat", False)
+        app.parse_routing = lambda user: (AGENT_CLAUDE, "faça o teste pelo chat", True)
         app.parse_response = QuimeraApp.parse_response.__get__(app, QuimeraApp)
         app.resolve_agent_response = QuimeraApp.resolve_agent_response.__get__(app, QuimeraApp)
         app.call_agent = QuimeraApp.call_agent.__get__(app, QuimeraApp)
@@ -986,14 +1040,11 @@ class ProtocolTests(unittest.TestCase):
 
         responses = iter(
             [
-                "aprovando a task\n"
+                "vou tentar abrir task sozinho\n"
                 "```tool\n"
-                f'{{"name":"approve_task","arguments":{{"task_id":{task_id},"approved_by":"codex"}}}}\n'
+                '{"name":"propose_task","arguments":{"description":"rode os testes"}}\n'
                 "```",
-                "vou delegar agora\n"
-                "[ROUTE:opencode-qwen] task: rode a tarefa aprovada | context: validar o fluxo via chat | expected: resultado em 1 linha",
-                "resultado do worker",
-                "síntese final",
+                "sem task criada",
             ]
         )
 
@@ -1014,31 +1065,24 @@ class ProtocolTests(unittest.TestCase):
 
         app.run()
 
-        tasks = list_tasks({"id": task_id}, db_path=str(db_path))
-        self.assertEqual(tasks[0]["status"], "approved")
+        tasks = list_tasks({"job_id": job_id}, db_path=str(db_path))
+        self.assertEqual(tasks, [])
         self.assertEqual(
             printed,
             [
-                (AGENT_CLAUDE, "aprovando a task"),
-                (AGENT_CLAUDE, "vou delegar agora"),
-                ("opencode-qwen", "resultado do worker"),
-                (AGENT_CLAUDE, "síntese final"),
+                (AGENT_CLAUDE, "vou tentar abrir task sozinho"),
+                (AGENT_CLAUDE, "sem task criada"),
             ],
         )
         self.assertEqual(
             persisted,
             [
                 ("human", "faça o teste pelo chat"),
-                (AGENT_CLAUDE, "aprovando a task"),
-                (AGENT_CLAUDE, "vou delegar agora"),
-                ("opencode-qwen", "resultado do worker"),
-                (AGENT_CLAUDE, "síntese final"),
+                (AGENT_CLAUDE, "vou tentar abrir task sozinho"),
+                (AGENT_CLAUDE, "sem task criada"),
             ],
         )
-        self.assertEqual(
-            app.renderer.handoffs,
-            [(AGENT_CLAUDE, "opencode-qwen", "rode a tarefa aprovada")],
-        )
+        self.assertEqual(app.renderer.handoffs, [])
 
     def test_persist_message_saves_shared_state(self):
         import threading
@@ -1313,9 +1357,8 @@ class PluginTests(unittest.TestCase):
 
         from pathlib import Path
         import tempfile
-        staging_root = Path(tempfile.gettempdir()) / "quimera-test-staging"
-        staging_root.mkdir(parents=True, exist_ok=True)
-        
+        staging_root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+
         agent, response, route_target, handoff, extend, needs_input = app._call_agent_for_parallel("agent1", None, "standard", staging_root, 0)
         self.assertEqual(agent, "agent1")
         self.assertEqual(response, "Resposta mock")

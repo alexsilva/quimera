@@ -21,6 +21,7 @@ CMD_CONTEXT = "/context"
 CMD_CONTEXT_EDIT = "/context edit"
 CMD_EDIT = "/edit"
 CMD_FILE_PREFIX = "/file "
+CMD_TASK = "/task"
 
 DEFAULT_FIRST_AGENT = "claude"
 
@@ -70,35 +71,12 @@ TOOL_SCHEMA = {
         },
         "example": 'run_shell("git status")'
     },
-    # Task-related tooling
-    "propose_task": {
-        "name": "propose_task",
-        "description": "Propõe uma nova tarefa para execução autônoma. Liste tarefas abertas antes de usar para evitar duplicatas. O job_id pode ser omitido se a variável de ambiente QUIMERA_CURRENT_JOB_ID estiver definida.",
-        "parameters": {
-            "job_id": {"type": "int", "description": "ID do job pai (opcional se QUIMERA_CURRENT_JOB_ID definida)", "required": False},
-            "description": {"type": "str", "description": "O que fazer", "required": True},
-            "body": {"type": "str", "description": "Código Python a executar (opicional)", "required": False},
-            "priority": {"type": "str", "description": "high|medium|low", "required": False},
-            "requested_by_human": {"type": "bool", "description": "Use true somente quando o humano tiver pedido explicitamente a abertura da tarefa", "required": True},
-            "source_context": {"type": "str", "description": "Trecho da conversa do humano que autorizou a tarefa", "required": True},
-        },
-        "example": 'propose_task(description="Validar schema do módulo X", priority="medium", requested_by_human=True, source_context="Humano pediu para abrir tarefa assíncrona para validar o schema")'
-    },
-    "approve_task": {
-        "name": "approve_task",
-        "description": "Aprova uma tarefa proposta para que seja executada.",
-        "parameters": {
-            "task_id": {"type": "int", "description": "ID da tarefa", "required": True},
-            "approved_by": {"type": "str", "description": "Nome do agente que aprova", "required": False},
-        },
-        "example": 'approve_task(task_id=5, approved_by="claude")'
-    },
     "list_tasks": {
         "name": "list_tasks",
         "description": "Lista tarefas de um job ou todas",
         "parameters": {
             "job_id": {"type": "int", "description": "Filtrar por job ID", "required": False},
-            "status": {"type": "str", "description": "proposed|approved|in_progress|completed|failed|rejected", "required": False},
+            "status": {"type": "str", "description": "pending|in_progress|completed|failed|proposed|approved|rejected", "required": False},
         },
         "example": 'list_tasks(job_id=1, status="approved")'
     },
@@ -118,24 +96,6 @@ TOOL_SCHEMA = {
             "job_id": {"type": "int", "description": "ID do job (opcional se QUIMERA_CURRENT_JOB_ID definida)", "required": False}
         },
         "example": 'get_job()'
-    },
-    "complete_task": {
-        "name": "complete_task",
-        "description": "Marca uma tarefa como concluída",
-        "parameters": {
-            "task_id": {"type": "int", "description": "ID da tarefa", "required": True},
-            "result": {"type": "str", "description": "Resultado da execução", "required": False},
-        },
-        "example": 'complete_task(task_id=5, result="Arquivo criado com sucesso")'
-    },
-    "fail_task": {
-        "name": "fail_task",
-        "description": "Marca uma tarefa como falhada",
-        "parameters": {
-            "task_id": {"type": "int", "description": "ID da tarefa", "required": True},
-            "reason": {"type": "str", "description": "Motivo da falha", "required": True},
-        },
-        "example": 'fail_task(task_id=5, reason="Arquivo não encontrado")'
     },
 }
 
@@ -180,7 +140,7 @@ PROMPT_BASE_RULES = (
     "- Não execute ações não autorizadas pelo humano.\n"
     "- Se faltar informação crítica, use [NEEDS_INPUT].\n"
     "- Se outro agente já cobriu parte do problema, complemente sem reiniciar.\n"
-    "- Só use propose_task/approve_task quando o humano pedir trabalho assíncrono.\n"
+    "- Tasks novas só podem nascer quando o humano usar o comando /task.\n"
     "- Referencie arquivos como `/caminho/absoluto/arquivo:linha` em linha própria.\n"
     "- Pode discordar e comentar respostas anteriores.\n"
     "- Não descreva protocolo interno ao humano.\n"
@@ -201,6 +161,7 @@ def build_help(agent_names):
     help_text = (
         "\nComandos:\n" +
         "\n".join([f"- /{s} <mensagem>: {s.capitalize()} responde" for s in agent_names]) + "\n"
+        "- /task <descrição>: cria uma task explícita do humano e roteia para o melhor agente\n"
         "- /context: mostra o contexto atual\n"
         "- /context edit: abre o contexto persistente no editor ($EDITOR, ou nano/vim/vi como fallback)\n"
         "- /edit: abre o editor ($EDITOR, ou nano/vim/vi como fallback) para compor uma mensagem longa\n"

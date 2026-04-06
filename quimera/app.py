@@ -21,7 +21,8 @@ except ImportError:
 from .runtime.executor import ToolExecutor
 from .runtime.parser import strip_tool_block
 from .runtime import ToolRuntimeConfig, ConsoleApprovalHandler, TaskExecutor, create_executor
-from .runtime.tasks import get_job, init_db, list_tasks
+from .runtime.task_planning import choose_best_agent, classify_task_type, normalize_task_description
+from .runtime.tasks import create_task, get_job, init_db, list_tasks
 from .ui import TerminalRenderer
 from .context import ContextManager
 from .storage import SessionStorage
@@ -37,7 +38,7 @@ from .constants import (
     EXTEND_MARKER,
     NEEDS_INPUT_MARKER,
     ROUTE_PREFIX,
-    STATE_UPDATE_START, CMD_EXIT, CMD_HELP, CMD_CONTEXT, CMD_CONTEXT_EDIT, CMD_EDIT, CMD_FILE_PREFIX,
+    STATE_UPDATE_START, CMD_EXIT, CMD_HELP, CMD_CONTEXT, CMD_CONTEXT_EDIT, CMD_EDIT, CMD_FILE_PREFIX, CMD_TASK,
     USER_ROLE, MSG_CHAT_STARTED, MSG_SESSION_LOG, MSG_SESSION_STATUS, MSG_MIGRATION,
     MSG_MEMORY_SAVING, MSG_MEMORY_FAILED, MSG_SHUTDOWN,
     MSG_DOUBLE_PREFIX, MSG_EMPTY_INPUT,
@@ -178,7 +179,7 @@ class QuimeraApp:
         is_new_session = not history_restored and not summary_loaded
 
         # Unify tasks database path
-        self.tasks_db_path = str(self.workspace.root / "data" / "tasks.db")
+        self.tasks_db_path = str(self.workspace.tasks_db)
         from .runtime.tasks import init_db, add_job
         init_db(self.tasks_db_path)
         self.current_job_id = add_job(f"Session {session_id}", db_path=self.tasks_db_path)
@@ -213,8 +214,8 @@ class QuimeraApp:
         self._setup_task_executors()
 
     def _setup_task_executors(self):
-        """Set up task executors for autonomous task execution."""
-        from .runtime.tasks import approve_task, complete_task, fail_task
+        """Set up task executors for explicit human-created task execution."""
+        from .runtime.tasks import complete_task, fail_task
 
         def make_task_handler(agent_name):
             def task_handler(task_dict):
@@ -287,13 +288,12 @@ class QuimeraApp:
         try:
             job = get_job(self.current_job_id, db_path=self.tasks_db_path)
             open_tasks = []
-            for status in ("proposed", "approved", "in_progress"):
+            for status in ("pending", "in_progress"):
                 open_tasks.extend(list_tasks({"job_id": self.current_job_id, "status": status}, db_path=self.tasks_db_path))
 
             open_tasks.sort(key=lambda task: task["id"])
             counts = {
-                "proposed": sum(1 for task in open_tasks if task["status"] == "proposed"),
-                "approved": sum(1 for task in open_tasks if task["status"] == "approved"),
+                "pending": sum(1 for task in open_tasks if task["status"] == "pending"),
                 "in_progress": sum(1 for task in open_tasks if task["status"] == "in_progress"),
             }
             preview = [
@@ -301,18 +301,18 @@ class QuimeraApp:
                     "id": task["id"],
                     "status": task["status"],
                     "priority": task.get("priority"),
+                    "task_type": task.get("task_type"),
+                    "assigned_to": task.get("assigned_to"),
                     "description": task["description"],
                 }
                 for task in open_tasks[:6]
             ]
-            if counts["approved"] > 0:
-                recommended = "Execute ou aproveite reutilização de tarefas approved antes de propor novas."
-            elif counts["proposed"] > 0:
-                recommended = "Revise tarefas proposed antes de criar novas para evitar duplicatas."
+            if counts["pending"] > 0:
+                recommended = "Há tasks pendentes criadas pelo humano aguardando execução."
             elif counts["in_progress"] > 0:
                 recommended = "Há trabalho em andamento; acompanhe antes de abrir tarefas paralelas."
             else:
-                recommended = "Sem tarefas abertas; só proponha nova tarefa se o humano pedir trabalho assíncrono/autônomo."
+                recommended = "Sem tarefas abertas; novas tasks só podem ser criadas pelo humano com /task."
             return {
                 "job_id": self.current_job_id,
                 "job_description": job["description"] if job else None,
@@ -427,6 +427,10 @@ class QuimeraApp:
             self.renderer.show_system(build_help(self.active_agents))
             return True
 
+        if command.startswith(CMD_TASK):
+            self._handle_task_command(command)
+            return True
+
         if command == CMD_CONTEXT:
             self.context_manager.show()
             return True
@@ -436,6 +440,50 @@ class QuimeraApp:
             return True
 
         return False
+
+    @staticmethod
+    def _parse_task_command(command: str) -> str:
+        raw = command[len(CMD_TASK):].strip()
+        if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in {"'", '"'}:
+            raw = raw[1:-1].strip()
+        return normalize_task_description(raw)
+
+    def _get_task_routing_plugins(self):
+        active_plugins = []
+        for agent_name in self.active_agents:
+            plugin = plugins.get(agent_name)
+            if plugin is not None:
+                active_plugins.append(plugin)
+        if not active_plugins:
+            active_plugins = plugins.all_plugins()
+        return active_plugins
+
+    def _handle_task_command(self, command: str) -> None:
+        description = self._parse_task_command(command)
+        if not description:
+            self.renderer.show_warning("Uso: /task <descrição>")
+            return
+
+        task_type = classify_task_type(description)
+        selected_agent = choose_best_agent(task_type, self._get_task_routing_plugins())
+        task_id = create_task(
+            self.current_job_id,
+            description,
+            task_type=task_type,
+            assigned_to=selected_agent,
+            origin="human_command",
+            status="pending",
+            created_by=self.user_name,
+            requested_by=self.user_name,
+            source_context=command,
+            db_path=self.tasks_db_path,
+        )
+        self._refresh_task_shared_state()
+        lines = [f"task criada com id {task_id}"]
+        if selected_agent:
+            lines.append(f"atribuída para {selected_agent}")
+        lines.append(f"tipo inferido: {task_type}")
+        self.renderer.show_system("\n".join(lines))
 
     def read_from_editor(self):
         """Abre $EDITOR num arquivo temporário e retorna o conteúdo digitado."""

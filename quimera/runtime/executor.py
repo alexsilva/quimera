@@ -36,14 +36,10 @@ class ToolExecutor:
         self.registry.register("write_file", file_tools.write_file)
         self.registry.register("grep_search", file_tools.grep_search)
         self.registry.register("run_shell", shell_tool.run_shell)
-        # Task-related tools
-        self.registry.register("propose_task", task_tools.propose_task)
-        self.registry.register("approve_task", task_tools.approve_task)
+        # Task-related read-only tools
         self.registry.register("list_tasks", task_tools.list_tasks)
         self.registry.register("list_jobs", task_tools.list_jobs)
         self.registry.register("get_job", task_tools.get_job)
-        self.registry.register("complete_task", task_tools.complete_task)
-        self.registry.register("fail_task", task_tools.fail_task)
 
     def execute(self, call: ToolCall) -> ToolResult:
         try:
