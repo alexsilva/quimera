@@ -18,6 +18,7 @@ from .constants import (
     PROMPT_REVIEWER_RULE,
     PROMPT_HANDOFF_RULE,
     PROMPT_TOOL_RULE,
+    PROMPT_AGENT_METRICS,
 )
 from .config import DEFAULT_HISTORY_WINDOW
 
@@ -32,12 +33,14 @@ class PromptBuilder:
         session_state=None,
         user_name=None,
         active_agents=None,
+        metrics_tracker=None,
     ):
         self.context_manager = context_manager
         self.history_window = history_window
         self.session_state = session_state or {}
         self.user_name = user_name or "Você"
         self.active_agents = list(active_agents) if active_agents is not None else plugins.all_names()
+        self.metrics_tracker = metrics_tracker
 
     def build(
         self,
@@ -82,6 +85,12 @@ class PromptBuilder:
             state_lines = json.dumps(self._trim_shared_state(shared_state), ensure_ascii=False, indent=2)
             shared_state_block = PROMPT_SHARED_STATE.format(state=state_lines)
 
+        metrics_block = ""
+        if self.metrics_tracker:
+            feedback = self.metrics_tracker.generate_feedback(agent)
+            if feedback:
+                metrics_block = PROMPT_AGENT_METRICS.format(metrics=feedback)
+
         conversation = "\n".join(
             f"[{self._display_role(m['role'])}]: {m['content']}"
             for m in history[-self.history_window:]
@@ -91,7 +100,7 @@ class PromptBuilder:
 
         parts = [p for p in [
             header_block, rules, tools_prompt, session_block, context_block,
-            shared_state_block, handoff_block, conversation_block, speaker_block,
+            shared_state_block, metrics_block, handoff_block, conversation_block, speaker_block,
         ] if p]
 
         # Keep explicit section boundaries so prompt blocks do not collapse together.

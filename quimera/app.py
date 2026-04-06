@@ -253,6 +253,7 @@ class QuimeraApp:
             session_state=session_state,
             user_name=self.user_name,
             active_agents=self._resolved_active_agents(),
+            metrics_tracker=self.behavior_metrics,
         )
         self.auto_summarize_threshold = self.config.auto_summarize_threshold
         self.idle_timeout_seconds = idle_timeout_seconds if idle_timeout_seconds is not None else self.config.idle_timeout_seconds

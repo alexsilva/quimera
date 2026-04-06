@@ -190,6 +190,7 @@ HANDOFF_SYNTHESIS_MSG = (
     "Se a tarefa estiver completa, diga isso explicitamente em vez de deixar em aberto.\n"
 )
 PROMPT_SHARED_STATE = "ESTADO COMPARTILHADO:\n{state}"
+PROMPT_AGENT_METRICS = "MÉTRICAS DO AGENTE:\n{metrics}"
 PROMPT_STATE_UPDATE_RULE = (
     "- Se houver decisão nova, discordância ou mudança de objetivo, inclua ao final:\n"
     "[STATE_UPDATE]\n"
