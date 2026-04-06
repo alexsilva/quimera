@@ -2,6 +2,7 @@ import re
 import tempfile
 import threading
 import unittest
+from collections import defaultdict
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -1395,6 +1396,11 @@ class PluginTests(unittest.TestCase):
         app.active_agents = ["agent1", "agent2"]
         app.debug_prompt_metrics = False
         app.session_call_index = 0
+        app._lock = threading.Lock()
+        app._output_lock = threading.Lock()
+        app._counter_lock = threading.Lock()
+        app.agent_failures = defaultdict(int)
+        app._agent_failures_lock = threading.Lock()
         app.prompt_builder = Mock()
         app.prompt_builder.build.return_value = "dummy prompt"
         app.agent_client = Mock()
@@ -1411,6 +1417,7 @@ class PluginTests(unittest.TestCase):
         app.summary_agent_preference = None
         app.parse_response = QuimeraApp.parse_response.__get__(app, QuimeraApp)
         app._maybe_auto_summarize = lambda preferred_agent=None: None
+        app._record_agent_metric = Mock()
 
         from pathlib import Path
         import tempfile
@@ -1499,6 +1506,9 @@ class PluginTests(unittest.TestCase):
         class FakeExecutor:
             def __init__(self, handler):
                 self.handler = handler
+
+            def set_review_handler(self, handler):
+                pass
 
             def start(self):
                 return None

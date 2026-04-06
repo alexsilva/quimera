@@ -22,7 +22,7 @@ from .runtime.executor import ToolExecutor
 from .runtime.parser import strip_tool_block
 from .runtime import ToolRuntimeConfig, ConsoleApprovalHandler, TaskExecutor, create_executor
 from .runtime.task_planning import choose_best_agent, classify_task_type, normalize_task_description, score_plugin_for_task
-from .runtime.tasks import create_task, get_job, init_db, list_tasks
+from .runtime.tasks import create_task, get_job, init_db, list_tasks, release_agent_tasks
 from .ui import TerminalRenderer
 from .context import ContextManager
 from .storage import SessionStorage
@@ -79,6 +79,11 @@ class QuimeraApp:
             if agent in self.active_agents:
                 self.active_agents.remove(agent)
                 _logger.warning("agent %s removed after %d failures", agent, failures)
+                if hasattr(self, "tasks_db_path") and self.tasks_db_path:
+                    try:
+                        release_agent_tasks(agent, db_path=self.tasks_db_path)
+                    except Exception:
+                        pass
         self._record_agent_metric(agent, "failed", 0)
 
     @staticmethod
@@ -176,6 +181,8 @@ class QuimeraApp:
         self.session_call_index = 0
         self.shared_state = last_session["shared_state"]
         self._lock = threading.Lock()
+        self._output_lock = threading.Lock()
+        self._counter_lock = threading.Lock()
         is_new_session = not history_restored and not summary_loaded
 
         # Unify tasks database path
@@ -216,7 +223,7 @@ class QuimeraApp:
 
     def _setup_task_executors(self):
         """Set up task executors for explicit human-created task execution."""
-        from .runtime.tasks import complete_task, fail_task
+        from .runtime.tasks import complete_task, fail_task, submit_for_review
 
         def make_task_handler(agent_name):
             def task_handler(task_dict):
@@ -225,13 +232,13 @@ class QuimeraApp:
                     task_id = task_dict["id"]
                     description = task_dict.get("description", "")
                     body = task_dict.get("body", "") or description
-                    
+
                     if not body:
                         fail_task(task_id, reason="empty body", db_path=self.tasks_db_path)
                         return False
-                    
+
                     prompt = f"Execute a seguinte tarefa:\n\n{body}"
-                    
+
                     response = self.call_agent(
                         agent_name,
                         handoff=prompt,
@@ -239,25 +246,50 @@ class QuimeraApp:
                         primary=False,
                     )
 
-                    if response:
-                        self.print_response(agent_name, response)
-                        self.persist_message(agent_name, response)
+                    if response is None:
+                        self._record_failure(agent_name)
+                        fail_task(task_id, reason="communication failed", db_path=self.tasks_db_path)
+                        return False
+
+                    self.print_response(agent_name, response)
+                    self.persist_message(agent_name, response)
 
                     ok, task_result = self._classify_task_execution_result(response)
                     if not ok:
                         fail_task(task_id, reason=task_result, db_path=self.tasks_db_path)
                         return False
 
-                    complete_task(task_id, result=task_result, db_path=self.tasks_db_path)
+                    # Require confirmation from a different agent when possible
+                    resolved = self._resolved_active_agents()
+                    other_agents = [a for a in resolved if a != agent_name]
+                    if other_agents:
+                        submit_for_review(task_id, result=task_result, db_path=self.tasks_db_path)
+                    else:
+                        # Fallback: single-agent setup, complete directly
+                        complete_task(task_id, result=task_result, db_path=self.tasks_db_path)
                     return True
                 except Exception as e:
                     fail_task(task_dict["id"], reason=str(e), db_path=self.tasks_db_path)
                     return False
             return task_handler
-        
+
+        def make_review_handler(agent_name):
+            def review_handler(task_dict):
+                """Confirm completion of a task executed by another agent."""
+                try:
+                    task_id = task_dict["id"]
+                    task_result = task_dict.get("result", "")
+                    complete_task(task_id, result=task_result, reviewed_by=agent_name, db_path=self.tasks_db_path)
+                    return True
+                except Exception as e:
+                    fail_task(task_dict["id"], reason=str(e), db_path=self.tasks_db_path)
+                    return False
+            return review_handler
+
         self.task_executors = []
-        for agent in self.active_agents:
+        for agent in self._resolved_active_agents():
             executor = create_executor(agent, make_task_handler(agent), db_path=self.tasks_db_path)
+            executor.set_review_handler(make_review_handler(agent))
             executor.start()
             self.task_executors.append(executor)
 
@@ -501,11 +533,47 @@ class QuimeraApp:
             "nao posso",
             "não tenho como",
             "nao tenho como",
+            "não tenho capacidade",
+            "nao tenho capacidade",
+            "não é possível realizar",
+            "nao e possivel realizar",
+            "fora do meu escopo",
+            "não está no meu escopo",
+            "nao esta no meu escopo",
             "unable to",
+            "unable to complete",
             "cannot",
             "can't",
+            "i'm not able to",
+            "i am not able to",
+            "i'm unable to",
+            "i am unable to",
+            "beyond my capabilities",
+            "outside my scope",
+            "outside the scope",
             "impossível",
             "impossivel",
+            # evasão por falta de acesso/ferramentas
+            "requer ferramentas",
+            "requires tools",
+            "não tenho acesso",
+            "nao tenho acesso",
+            "sem acesso a",
+            "without access to",
+            "não tenho permissão",
+            "nao tenho permissao",
+            # evasão por falta de informação
+            "preciso de mais informações",
+            "preciso de mais detalhes",
+            "need more information",
+            "need more details",
+            "more information is needed",
+            # evasão por escopo/responsabilidade
+            "não é minha responsabilidade",
+            "nao e minha responsabilidade",
+            "fora das minhas capacidades",
+            "not within my capabilities",
+            "not my responsibility",
         )
         if any(marker in lowered for marker in blocked_markers):
             return False, text
@@ -712,7 +780,9 @@ class QuimeraApp:
         return None
 
     def _call_agent(self, agent, is_first_speaker=False, handoff=None, primary=True, protocol_mode="standard", handoff_only=False, silent=False, from_agent=None):
-        self.session_call_index += 1
+        with self._counter_lock:
+            self.session_call_index += 1
+            call_index_snapshot = self.session_call_index
         start = time.time()
         history = [] if handoff_only else self.history
         self._refresh_task_shared_state()
@@ -732,7 +802,7 @@ class QuimeraApp:
                 agent, metrics,
                 session_id=self.session_state["session_id"],
                 round_index=self.round_index,
-                session_call_index=self.session_call_index,
+                session_call_index=call_index_snapshot,
                 history_window=self.prompt_builder.history_window,
                 protocol_mode=protocol_mode,
             )
@@ -745,15 +815,16 @@ class QuimeraApp:
         result = self.agent_client.call(agent, prompt, silent=silent)
         elapsed = time.time() - start
         if hasattr(self, 'session_state') and self.session_state:
-            try:
-                self.session_state["handoffs_sent"] += 1
-                self.session_state["total_latency"] += elapsed
-                if result:
-                    self.session_state["handoffs_succeeded"] += 1
-                else:
-                    self.session_state["handoffs_failed"] += 1
-            except KeyError:
-                pass  # Old session state without metrics
+            with self._counter_lock:
+                try:
+                    self.session_state["handoffs_sent"] += 1
+                    self.session_state["total_latency"] += elapsed
+                    if result:
+                        self.session_state["handoffs_succeeded"] += 1
+                    else:
+                        self.session_state["handoffs_failed"] += 1
+                except KeyError:
+                    pass  # Old session state without metrics
             self._record_agent_metric(agent, "succeeded" if result else "failed", elapsed)
         _logger.info("[DISPATCH] agent=%s latency=%.2fs result=%s", agent, elapsed, "ok" if result else "none")
         return result
@@ -968,7 +1039,7 @@ class QuimeraApp:
         _logger.info("merge completed: %d files to %s", total_merged, self.workspace.cwd)
 
     def print_response(self, agent, response):
-        with self._lock:
+        with self._output_lock:
             if response is not None:
                 self.renderer.show_message(agent, response)
             else:

@@ -53,6 +53,7 @@ def init_db(db_path=None):
         "task_type": "TEXT NOT NULL DEFAULT 'general'",
         "origin": "TEXT NOT NULL DEFAULT 'legacy'",
         "requested_by": "TEXT",
+        "reviewed_by": "TEXT",
     }
     for column_name, column_spec in column_specs.items():
         if column_name not in existing_columns:
@@ -247,6 +248,19 @@ def list_tasks(filt=None, db_path=None):
         "created_at": r[11], "updated_at": r[12], "created_by": r[13], "requested_by": r[14],
     } for r in rows]
 
+def release_agent_tasks(agent_name, db_path=None):
+    """Release pending/in_progress tasks from a failed agent so others can pick them up."""
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE tasks SET assigned_to = NULL, updated_at = ? "
+        "WHERE assigned_to = ? AND status IN ('pending', 'in_progress')",
+        (_now(), agent_name),
+    )
+    conn.commit()
+    conn.close()
+
+
 def claim_task(agent_name, db_path=None):
     conn = get_conn(db_path)
     cur = conn.cursor()
@@ -256,7 +270,7 @@ def claim_task(agent_name, db_path=None):
         cur.execute("""
             SELECT id FROM tasks
             WHERE status IN ('pending', 'approved')
-              AND (assigned_to = ? OR (status = 'approved' AND assigned_to IS NULL))
+              AND (assigned_to = ? OR assigned_to IS NULL)
             ORDER BY id ASC
             LIMIT 1
         """, (agent_name,))
@@ -286,11 +300,61 @@ def update_task(task_id, status, result=None, notes=None, db_path=None):
     conn.close()
     return True
 
-def complete_task(task_id, result=None, db_path=None):
-    return update_task(task_id, "completed", result=result, notes=None, db_path=db_path)
+def complete_task(task_id, result=None, reviewed_by=None, db_path=None):
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    now = _now()
+    if reviewed_by:
+        cur.execute(
+            "UPDATE tasks SET status = ?, result = ?, reviewed_by = ?, notes = ?, updated_at = ? WHERE id = ?",
+            ("completed", result, reviewed_by, None, now, task_id),
+        )
+    else:
+        cur.execute(
+            "UPDATE tasks SET status = ?, result = ?, notes = ?, updated_at = ? WHERE id = ?",
+            ("completed", result, None, now, task_id),
+        )
+    conn.commit()
+    conn.close()
+    return True
 
 def fail_task(task_id, reason=None, db_path=None):
     return update_task(task_id, "failed", result=reason, notes=reason, db_path=db_path)
+
+def submit_for_review(task_id, result=None, db_path=None):
+    """Mark a completed task as pending review by another agent."""
+    return update_task(task_id, "pending_review", result=result, notes=None, db_path=db_path)
+
+def claim_review_task(agent_name, db_path=None):
+    """Atomically claim a pending_review task executed by a different agent."""
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    try:
+        cur.execute("BEGIN IMMEDIATE")
+        cur.execute("""
+            SELECT id FROM tasks
+            WHERE status = 'pending_review'
+              AND (assigned_to IS NULL OR assigned_to != ?)
+            ORDER BY id ASC
+            LIMIT 1
+        """, (agent_name,))
+        row = cur.fetchone()
+        if not row:
+            conn.rollback()
+            conn.close()
+            return None
+        task_id = row[0]
+        cur.execute(
+            "UPDATE tasks SET status = ?, reviewed_by = ?, updated_at = ? WHERE id = ?",
+            ("reviewing", agent_name, _now(), task_id),
+        )
+        conn.commit()
+        conn.close()
+        return task_id
+    except Exception:
+        conn.rollback()
+        conn.close()
+        raise
 
 def drop_db(db_path):
     if os.path.exists(db_path):
@@ -299,7 +363,8 @@ def drop_db(db_path):
 __all__ = [
     "init_db", "add_job", "list_jobs",
     "create_task", "propose_task", "approve_task", "reject_task", "list_tasks",
-    "claim_task", "update_task", "complete_task", "fail_task", "get_job",
+    "claim_task", "release_agent_tasks", "update_task", "complete_task", "fail_task", "get_job",
+    "submit_for_review", "claim_review_task",
 ]
 
 if __name__ == "__main__":

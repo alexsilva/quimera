@@ -70,13 +70,21 @@ class FileTools:
     def read_file(self, call: ToolCall) -> ToolResult:
         staging = get_staging_root()
         raw_path = call.arguments["path"]
-        
-        staging_path = (staging / raw_path.lstrip("/")) if staging else None
-        if staging_path and staging_path.exists():
-            path = staging_path
+
+        if staging:
+            staging_path = (staging / raw_path.lstrip("/")).resolve()
+            if str(staging_path).startswith(str(staging)) and staging_path.exists():
+                path = staging_path
+            else:
+                # Fall back to the real workspace when staging is active but does
+                # not contain the requested file.
+                workspace_path = (self.config.workspace_root / (raw_path.lstrip("/") or ".")).resolve()
+                if not str(workspace_path).startswith(str(self.config.workspace_root)):
+                    raise ValueError(f"Path fora da workspace: {raw_path}")
+                path = workspace_path
         else:
             path = self._resolve(raw_path)
-        
+
         text = path.read_text(encoding="utf-8")
         truncated = len(text) > self.config.max_file_read_chars
         text = text[: self.config.max_file_read_chars]
@@ -105,16 +113,22 @@ class FileTools:
     def grep_search(self, call: ToolCall) -> ToolResult:
         staging = get_staging_root()
         workspace = self.config.workspace_root
-        base = self._resolve(call.arguments.get("path", "."))
+        raw_path = call.arguments.get("path", ".")
+        base = self._resolve(raw_path)
         pattern = str(call.arguments["pattern"])
         results: list[str] = []
         
+        # We always want to search the resolved path (which might be in staging)
         search_paths = [base]
-        if staging:
-            staging_base = staging / base.name if base.name != "." else staging
-            if staging_base.exists():
-                search_paths.append(staging_base)
         
+        # If we are in staging, we ALSO want to search the corresponding path in the real workspace
+        if staging and base.is_relative_to(staging):
+            rel = base.relative_to(staging)
+            workspace_base = (workspace / rel).resolve()
+            if workspace_base.exists() and workspace_base != base:
+                search_paths.append(workspace_base)
+        
+        seen_results = set()
         for search_path in search_paths:
             if not search_path.exists():
                 continue
@@ -125,9 +139,24 @@ class FileTools:
                     text = file_path.read_text(encoding="utf-8")
                 except Exception:  # noqa: BLE001
                     continue
+                
+                # Determine display path
+                try:
+                    display_path = file_path.relative_to(workspace)
+                except ValueError:
+                    if staging and file_path.is_relative_to(staging):
+                        display_path = file_path.relative_to(staging)
+                    else:
+                        display_path = file_path
+
                 for line_no, line in enumerate(text.splitlines(), start=1):
                     if pattern in line:
-                        results.append(f"{file_path.relative_to(workspace)}:{line_no}:{line}")
+                        res_key = (str(display_path), line_no, line)
+                        if res_key in seen_results:
+                            continue
+                        seen_results.add(res_key)
+                        
+                        results.append(f"{display_path}:{line_no}:{line}")
                         if len(results) >= self.config.max_search_results:
                             return ToolResult(
                                 ok=True,

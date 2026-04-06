@@ -10,3 +10,4 @@ quimera_session_context.md
 quimera_context.md
 quimera/plugins/mock.py
 quimera.db
+.coverage

@@ -1,13 +1,16 @@
 """
 Task executor for Stage 5 - autonomous task consumption and execution.
 """
+import logging
 import threading
 import time
 import queue
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Optional
 
-from .tasks import list_tasks, claim_task, complete_task, fail_task, get_conn
+from .tasks import list_tasks, claim_task, complete_task, fail_task, get_conn, claim_review_task
+
+_logger = logging.getLogger("quimera.task_executor")
 
 
 class TaskExecutor:
@@ -23,10 +26,15 @@ class TaskExecutor:
         self._executor: Optional[ThreadPoolExecutor] = None
         self._task_queue: queue.Queue = queue.Queue()
         self._handler: Optional[Callable] = None
-    
+        self._review_handler: Optional[Callable] = None
+
     def set_handler(self, handler: Callable[[dict], bool]):
         """Set the task execution handler. Handler receives task dict and returns True on success."""
         self._handler = handler
+
+    def set_review_handler(self, handler: Callable[[dict], bool]):
+        """Set the review handler. Called with tasks in 'pending_review' state from other agents."""
+        self._review_handler = handler
     
     def start(self):
         if self._running:
@@ -42,17 +50,36 @@ class TaskExecutor:
     
     def _poll_loop(self):
         while self._running:
+            task_id = None
             try:
                 task_id = claim_task(self.agent_name, db_path=self.db_path)
                 if task_id:
                     tasks = list_tasks({"id": task_id}, db_path=self.db_path)
                     if tasks and self._handler:
-                        task = tasks[0]
-                        success = self._handler(task)
-                        # Note: handler already calls complete_task/fail_task with result
+                        self._handler(tasks[0])
+                    else:
+                        fail_task(task_id, reason="handler unavailable or task not found", db_path=self.db_path)
+                        _logger.warning("task %s claimed by %s but could not be dispatched", task_id, self.agent_name)
+                    task_id = None
+                    continue
+                # No regular task — check for review tasks from other agents
+                review_id = claim_review_task(self.agent_name, db_path=self.db_path)
+                if review_id:
+                    tasks = list_tasks({"id": review_id}, db_path=self.db_path)
+                    if tasks and self._review_handler:
+                        self._review_handler(tasks[0])
+                    else:
+                        fail_task(review_id, reason="review handler unavailable or task not found", db_path=self.db_path)
+                        _logger.warning("review task %s claimed by %s but could not be dispatched", review_id, self.agent_name)
                 else:
                     time.sleep(self.poll_interval)
-            except Exception:
+            except Exception as exc:
+                _logger.exception("poll loop error agent=%s task_id=%s: %s", self.agent_name, task_id, exc)
+                if task_id:
+                    try:
+                        fail_task(task_id, reason=str(exc), db_path=self.db_path)
+                    except Exception:
+                        pass
                 time.sleep(self.poll_interval)
     
     def process_pending(self):

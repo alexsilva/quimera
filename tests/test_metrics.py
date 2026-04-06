@@ -15,18 +15,20 @@ class TestAgentBehaviorMetrics(unittest.TestCase):
         self.assertEqual(metrics.avg_latency_seconds, 0.0)
         self.assertEqual(metrics.invalid_handoff_rate, 0.0)
         self.assertEqual(metrics.next_step_clarity_rate, 0.0)
+        self.assertEqual(metrics.empty_response_rate, 0.0)
     
     def test_record_response(self):
         """Verifica registro de respostas."""
         metrics = AgentBehaviorMetrics(agent_name="test")
         
-        metrics.record_response(1.5, has_next_step=True, is_empty=False)
+        metrics.record_response(1.5, has_next_step=True, is_empty=False, is_redundant=True)
         metrics.record_response(2.0, has_next_step=False, is_empty=True)
         metrics.record_response(1.0, has_next_step=True, is_empty=False)
         
         self.assertEqual(metrics.responses_total, 3)
         self.assertEqual(metrics.next_steps_claros, 2)
         self.assertEqual(metrics.responses_empty, 1)
+        self.assertEqual(metrics.redundancias_detectadas, 1)
         self.assertAlmostEqual(metrics.avg_latency_seconds, 1.5, places=2)
         self.assertAlmostEqual(metrics.next_step_clarity_rate, 2/3, places=2)
         self.assertAlmostEqual(metrics.empty_response_rate, 1/3, places=2)
@@ -57,6 +59,17 @@ class TestAgentBehaviorMetrics(unittest.TestCase):
         
         self.assertEqual(metrics.synthesis_requests, 3)
         self.assertEqual(metrics.synthesis_corrections, 2)
+
+    def test_to_from_dict(self):
+        """Verifica serialização e desserialização."""
+        metrics = AgentBehaviorMetrics(agent_name="test", responses_total=10)
+        data = metrics.to_dict()
+        self.assertEqual(data["agent_name"], "test")
+        self.assertEqual(data["responses_total"], 10)
+        
+        metrics2 = AgentBehaviorMetrics.from_dict(data)
+        self.assertEqual(metrics2.agent_name, "test")
+        self.assertEqual(metrics2.responses_total, 10)
 
 
 class TestBehaviorMetricsTracker(unittest.TestCase):
@@ -173,6 +186,97 @@ class TestBehaviorMetricsTracker(unittest.TestCase):
         finally:
             if tmp_path.exists():
                 os.unlink(tmp_path)
+
+    def test_load_corrupt_json(self):
+        """Verifica que o carregamento ignora JSON corrompido."""
+        import tempfile
+        import os
+        from pathlib import Path
+        
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
+            tmp_path = Path(tmp.name)
+            tmp_path.write_text("invalid json", encoding="utf-8")
+            
+        try:
+            tracker = BehaviorMetricsTracker(storage_path=tmp_path)
+            self.assertEqual(len(tracker._metrics), 0)
+        finally:
+            if tmp_path.exists():
+                os.unlink(tmp_path)
+
+    def test_save_exception(self):
+        """Verifica tratamento de exceção ao salvar."""
+        from pathlib import Path
+        # Path que não pode ser criado (root as file?)
+        tracker = BehaviorMetricsTracker(storage_path="/dev/null/metrics.json")
+        tracker.get_agent("test")
+        # should not raise, just print to stderr
+        tracker.save()
+
+    def test_get_all_summaries(self):
+        """Verifica listagem de todos os resumos."""
+        tracker = BehaviorMetricsTracker()
+        tracker.get_agent("b")
+        tracker.get_agent("a")
+        summaries = tracker.get_all_summaries()
+        self.assertEqual(len(summaries), 2)
+        self.assertEqual(summaries[0]["agent"], "a")
+        self.assertEqual(summaries[1]["agent"], "b")
+
+    def test_get_position_summary(self):
+        """Verifica geração de resumo de posição com vários alertas."""
+        tracker = BehaviorMetricsTracker()
+        metrics = tracker.get_agent("test")
+        
+        # Sem dados
+        self.assertEqual(tracker.get_position_summary("test"), "")
+        
+        # Com dados e alertas
+        for _ in range(10):
+            metrics.record_response(40.0, is_empty=True) # latency > 30, empty > 0.2
+        metrics.record_handoff_sent(is_invalid=True)
+        metrics.record_handoff_sent(is_invalid=True) # rate > 0.3
+        metrics.record_handoff_received(is_circular=True)
+        for _ in range(4):
+            metrics.record_synthesis(needed_correction=True) # count >= 3, corrections > 0.5
+            
+        summary = tracker.get_position_summary("test")
+        self.assertIn("HISTÓRICO", summary)
+        self.assertIn("Atenção:", summary)
+        self.assertIn("latência alta", summary)
+        self.assertIn("handoffs inválidos", summary)
+        self.assertIn("respostas vazias", summary) # line 227
+        self.assertIn("delegações circulares", summary)
+        self.assertIn("sínteses com correção", summary) # line 231
+
+    def test_generate_feedback_all_branches(self):
+        """Verifica todos os ramos de feedback."""
+        tracker = BehaviorMetricsTracker()
+        metrics = tracker.get_agent("test")
+        
+        # 1. Respostas vazias
+        for _ in range(5):
+            metrics.record_response(1.0, is_empty=True)
+        
+        # 2. Redundâncias
+        for _ in range(3):
+            metrics.record_response(1.0, is_redundant=True)
+            
+        # 3. Síntese requer correção (line 293)
+        for _ in range(4):
+            metrics.record_synthesis(needed_correction=True)
+            
+        # 4. Baixa taxa de sucesso em handoffs (line 321)
+        # handoffs_sent > 3
+        for _ in range(5):
+            metrics.record_handoff_sent(is_invalid=True)
+        # success = 0/5 = 0.0 < 0.7
+        
+        feedback = tracker.generate_feedback("test")
+        self.assertIn("RESPOSTAS VAZIAS", feedback)
+        self.assertIn("RESPOSTAS REDUNDANTES", feedback)
+        self.assertIn("SÍNTESES IMPRECISAS", feedback)
+        self.assertIn("BAIXA TAXA DE SUCESSO", feedback)
 
 
 class TestPromptMetricsFeedback(unittest.TestCase):

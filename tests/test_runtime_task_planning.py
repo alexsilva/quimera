@@ -1,0 +1,68 @@
+import pytest
+from quimera.runtime.task_planning import (
+    classify_task_type,
+    score_plugin_for_task,
+    choose_best_agent,
+    TASK_TYPE_GENERAL,
+    TASK_TYPE_CODE_EDIT,
+    TASK_TYPE_TEST_EXECUTION,
+)
+from quimera.plugins.base import AgentPlugin
+
+class MockPlugin(AgentPlugin):
+    @property
+    def name(self) -> str: return self._name
+    @property
+    def cmd(self) -> list[str]: return ["mock"]
+    def __init__(self, name, tier=1, preferred=None, avoid=None, code=False, long=False, tools=False):
+        self._name = name
+        self.base_tier = tier
+        self.preferred_task_types = preferred or []
+        self.avoid_task_types = avoid or []
+        self.supports_code_editing = code
+        self.supports_long_context = long
+        self.supports_tools = tools
+
+def test_classify_task_type():
+    assert classify_task_type("") == TASK_TYPE_GENERAL # Line 43
+    assert classify_task_type("something random") == TASK_TYPE_GENERAL # Line 47
+    assert classify_task_type("corrija o bug") == "code_edit"
+    assert classify_task_type("execute os testes") == "test_execution"
+
+def test_score_plugin_for_task():
+    p = MockPlugin("p1", tier=3, preferred=[TASK_TYPE_CODE_EDIT], code=True, long=True, tools=True)
+    # Tier 3 -> (3-1)*2 = 4
+    # Preferred CODE_EDIT -> +5
+    # Supports code editing -> +2
+    # Total = 11
+    assert score_plugin_for_task(p, TASK_TYPE_CODE_EDIT) == 11
+    
+    # Avoid
+    p2 = MockPlugin("p2", avoid=[TASK_TYPE_TEST_EXECUTION])
+    # Tier 1 -> 0
+    # Avoid -> -5
+    assert score_plugin_for_task(p2, TASK_TYPE_TEST_EXECUTION) == -5
+
+def test_choose_best_agent():
+    assert choose_best_agent("any", []) is None # Line 71
+    
+    p1 = MockPlugin("p1", tier=1)
+    p2 = MockPlugin("p2", tier=3)
+    assert choose_best_agent("any", [p1, p2]) == "p2"
+
+def test_choose_best_agent_fallback():
+    # Line 84-87 coverage
+    # p1 avoids the task
+    p1 = MockPlugin("p1", avoid=[TASK_TYPE_CODE_EDIT])
+    # score will be -5
+    assert choose_best_agent(TASK_TYPE_CODE_EDIT, [p1]) == "p1"
+    
+    p2 = MockPlugin("p2", avoid=[TASK_TYPE_CODE_EDIT])
+    p3 = MockPlugin("p3", preferred=[TASK_TYPE_GENERAL])
+    # p2 score -5, p3 score 5
+    assert choose_best_agent(TASK_TYPE_CODE_EDIT, [p2, p3]) == "p3"
+    
+    # Test compatible fallback
+    p4 = MockPlugin("p4", avoid=[TASK_TYPE_CODE_EDIT]) # score -5
+    p5 = MockPlugin("p5") # score 0
+    assert choose_best_agent(TASK_TYPE_CODE_EDIT, [p4, p5]) == "p5"
