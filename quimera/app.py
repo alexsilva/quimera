@@ -24,7 +24,7 @@ except ImportError:
 from .runtime.executor import ToolExecutor
 from .runtime.parser import strip_tool_block
 from .runtime import ToolRuntimeConfig, ConsoleApprovalHandler, TaskExecutor, create_executor
-from .runtime.task_planning import choose_best_agent, classify_task_type, normalize_task_description, score_plugin_for_task
+from .runtime.task_planning import can_execute_task, choose_best_agent, classify_task_type, normalize_task_description, score_plugin_for_task
 from .runtime.tasks import create_task, get_job, init_db, list_tasks, release_agent_tasks
 from .ui import TerminalRenderer
 from .context import ContextManager
@@ -51,11 +51,41 @@ from .constants import (
 _logger = logging.getLogger("quimera.staging")
 _log_level = os.environ.get("QUIMERA_LOG_LEVEL", "INFO").upper()
 _numeric_level = getattr(logging, _log_level, logging.INFO)
-if not _logger.handlers and not logging.getLogger().handlers:
-    _logger.setLevel(_numeric_level)
-    handler = logging.StreamHandler(sys.stderr)
+
+
+class _PromptAwareStderrHandler(logging.StreamHandler):
+    """Clear and redraw the interactive prompt around staging logs."""
+
+    def __init__(self, stream=None):
+        super().__init__(stream or sys.stderr)
+        self._app = None
+
+    def bind_app(self, app) -> None:
+        self._app = app
+
+    def emit(self, record):
+        app = self._app
+        if app is None:
+            super().emit(record)
+            return
+
+        stdin_is_tty = sys.stdin is not None and sys.stdin.isatty()
+        if stdin_is_tty and self.stream is sys.stderr:
+            self.stream = sys.stdout
+
+        with app._output_lock:
+            app._clear_user_prompt_line_if_needed()
+            super().emit(record)
+            self.flush()
+            app._redisplay_user_prompt_if_needed()
+
+
+_logger.setLevel(_numeric_level)
+if not any(isinstance(handler, _PromptAwareStderrHandler) for handler in _logger.handlers):
+    handler = _PromptAwareStderrHandler(sys.stderr)
     handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
     _logger.addHandler(handler)
+    _logger.propagate = False
 
 
 class QuimeraApp:
@@ -197,6 +227,9 @@ class QuimeraApp:
         self._nonblocking_input_thread: threading.Thread | None = None
         self._nonblocking_input_queue: "queue.Queue | None" = None
         self._nonblocking_input_status = "idle"
+        for handler in _logger.handlers:
+            if isinstance(handler, _PromptAwareStderrHandler):
+                handler.bind_app(self)
         is_new_session = not history_restored and not summary_loaded
 
         # Unify tasks database path
@@ -437,7 +470,7 @@ class QuimeraApp:
                     line_buffer = ""
             full_line = f"{prompt}{line_buffer}"
             if len(full_line) > 0:
-                sys.stdout.write("\r\x1b[2K")
+                self._clear_user_prompt_line_if_needed()
                 sys.stdout.write(full_line)
                 sys.stdout.flush()
                 if readline is not None:
@@ -447,6 +480,15 @@ class QuimeraApp:
                         pass
         except Exception:
             pass
+
+    def _clear_user_prompt_line_if_needed(self) -> None:
+        stdin = sys.stdin
+        if stdin is None or not stdin.isatty():
+            return
+        if self._nonblocking_input_status != "reading":
+            return
+        sys.stdout.write("\r\x1b[2K")
+        sys.stdout.flush()
 
     def _show_system_message(self, message: str) -> None:
         renderer = getattr(self, "renderer", None)
@@ -652,19 +694,20 @@ class QuimeraApp:
         # Build candidate plugins from explicitly active agents
         active = self._resolved_active_agents()
         candidate_plugins = []
+        explicit_selection = bool(self.active_agents) and "*" not in self.active_agents
         # If user requested a wildcard, expand to all registered plugins explicitly
         if isinstance(self.active_agents, list) and "*" in self.active_agents:
             for name in plugins.all_names():
                 p = plugins.get(name)
-                if p is not None:
+                if p is not None and can_execute_task(p):
                     candidate_plugins.append(p)
         else:
             for agent_name in active:
                 p = plugins.get(agent_name)
-                if p is not None:
+                if p is not None and can_execute_task(p):
                     candidate_plugins.append(p)
-        if not candidate_plugins:
-            candidate_plugins = plugins.all_plugins()
+        if not candidate_plugins and not explicit_selection:
+            candidate_plugins = [plugin for plugin in plugins.all_plugins() if can_execute_task(plugin)]
         return candidate_plugins
 
     @staticmethod

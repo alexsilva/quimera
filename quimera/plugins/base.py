@@ -15,6 +15,7 @@ class AgentPlugin:
     supports_tools: bool = True
     supports_code_editing: bool = False
     supports_long_context: bool = False
+    supports_task_execution: bool = True
     base_tier: int = 2  # 1: weak, 2: standard, 3: premium
 
 

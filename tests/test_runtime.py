@@ -194,6 +194,14 @@ class PolicyTests(unittest.TestCase):
         selected = choose_best_agent("test_execution", [plugins.get("claude"), plugins.get("qwen"), plugins.get("opencode-qwen")])
         self.assertEqual(selected, "claude")
 
+    def test_choose_best_agent_does_not_route_tasks_to_qwen_without_explicit_execution_support(self):
+        selected = choose_best_agent("code_review", [plugins.get("qwen"), plugins.get("claude")])
+        self.assertEqual(selected, "claude")
+
+    def test_choose_best_agent_returns_none_when_only_qwen_is_available_for_task_execution(self):
+        selected = choose_best_agent("code_review", [plugins.get("qwen")])
+        self.assertIsNone(selected)
+
     def test_choose_best_agent_does_not_route_general_to_qwen_on_tie_order(self):
         selected = choose_best_agent("general", [plugins.get("qwen"), plugins.get("claude"), plugins.get("codex")])
         self.assertEqual(selected, "claude")

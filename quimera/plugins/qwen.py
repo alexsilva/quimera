@@ -11,6 +11,7 @@ plugin = AgentPlugin(
     supports_tools=False,
     supports_code_editing=False,
     supports_long_context=False,
+    supports_task_execution=False,
     base_tier=1,
 )
 register(plugin)

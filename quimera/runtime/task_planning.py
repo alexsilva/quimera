@@ -58,6 +58,10 @@ CAPABILITY_BOOST = {
 }
 
 
+def can_execute_task(plugin: AgentPlugin) -> bool:
+    return getattr(plugin, "supports_task_execution", True)
+
+
 def score_plugin_for_task(plugin: AgentPlugin, task_type: str) -> int:
     score = 0
     score += (plugin.base_tier - 1) * 2
@@ -85,7 +89,7 @@ def score_plugin_for_task(plugin: AgentPlugin, task_type: str) -> int:
 
 
 def choose_best_agent(task_type: str, active_plugins: Iterable[AgentPlugin]) -> str | None:
-    plugins = list(active_plugins)
+    plugins = [plugin for plugin in active_plugins if can_execute_task(plugin)]
     if not plugins:
         return None
 

@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import Mock, call, patch
 
 import quimera.cli as cli_module
+import quimera.app as app_module
 import quimera.plugins as plugins
 from quimera.agents import AgentClient
 from quimera.app import QuimeraApp
@@ -431,6 +432,30 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(tasks[0]["assigned_to"], AGENT_CODEX)
         self.assertIn("task criada com id", app.renderer.system_messages[-1])
         self.assertIn("atribuída para codex", app.renderer.system_messages[-1])
+
+    def test_handle_task_command_does_not_assign_qwen_without_explicit_task_execution_support(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.renderer = DummyRenderer()
+        app._output_lock = threading.Lock()
+        app.active_agents = ["qwen"]
+        app.user_name = "Alex"
+        app.shared_state = {}
+        app.current_job_id = 1
+        tmp_dir = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        db_path = tmp_dir / "tasks.db"
+        init_db(str(db_path))
+        add_job("Session", db_path=str(db_path), job_id=1)
+        app.tasks_db_path = str(db_path)
+        app._refresh_task_shared_state = QuimeraApp._refresh_task_shared_state.__get__(app, QuimeraApp)
+        app._build_task_overview = QuimeraApp._build_task_overview.__get__(app, QuimeraApp)
+
+        handled = app.handle_command('/task "revise o arquivo quimera/app.py"')
+
+        self.assertTrue(handled)
+        tasks = list_tasks({"job_id": 1}, db_path=str(db_path))
+        self.assertEqual(len(tasks), 1)
+        self.assertIsNone(tasks[0]["assigned_to"])
+        self.assertNotIn("atribuída para", app.renderer.system_messages[-1])
 
     def test_classify_task_execution_result_rejects_needs_input(self):
         ok, reason = QuimeraApp._classify_task_execution_result(
@@ -1569,6 +1594,31 @@ class PluginTests(unittest.TestCase):
         self.assertIn(call("Alex: "), mock_write.call_args_list)
         mock_flush.assert_called_once_with()
 
+    def test_staging_logger_clears_and_redisplays_prompt_while_tty_reader_is_active(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app._output_lock = threading.Lock()
+        app._nonblocking_input_status = "reading"
+        app._nonblocking_prompt_text = "Alex: "
+
+        stdin = io.StringIO("")
+        stdin.isatty = lambda: True
+
+        prompt_handler = next(handler for handler in app_module._logger.handlers if isinstance(handler, app_module._PromptAwareStderrHandler))
+        previous_app = prompt_handler._app
+        prompt_handler.bind_app(app)
+        try:
+            with patch("sys.stdin", stdin), patch("quimera.app.readline.get_line_buffer", return_value=""), patch(
+                "quimera.app.readline.redisplay"
+            ) as mock_redisplay, patch("sys.stdout.write") as mock_write, patch("sys.stdout.flush") as mock_flush:
+                app_module._logger.info("[DISPATCH] sending to agent=%s", AGENT_CODEX)
+
+            self.assertIn(call("\r\x1b[2K"), mock_write.call_args_list)
+            self.assertIn(call("Alex: "), mock_write.call_args_list)
+            self.assertGreaterEqual(mock_flush.call_count, 2)
+            mock_redisplay.assert_called_once_with()
+        finally:
+            prompt_handler.bind_app(previous_app)
+
     def test_parse_routing_selects_random_initial_agent(self):
         app = QuimeraApp.__new__(QuimeraApp)
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
@@ -2068,7 +2118,10 @@ class MetricsFeedbackTests(unittest.TestCase):
 
         selected = [plugin.name for plugin in app._get_task_routing_plugins()]
 
-        self.assertEqual(selected, plugins.all_names())
+        self.assertEqual(
+            selected,
+            [plugin.name for plugin in plugins.all_plugins() if getattr(plugin, "supports_task_execution", True)],
+        )
 
     def test_handoff_rule_mentions_ack(self):
         """PROMPT_HANDOFF_RULE deve mencionar ACK."""
