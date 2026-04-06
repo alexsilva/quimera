@@ -2,6 +2,8 @@ import hashlib
 import json
 import logging
 import os
+import queue
+import random
 import re
 import shutil
 import subprocess
@@ -12,6 +14,7 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import threading
+import select
 
 try:
     import readline
@@ -70,6 +73,12 @@ class QuimeraApp:
     @staticmethod
     def _format_yes_no(value):
         return "sim" if value else "não"
+
+    def __del__(self):
+        try:
+            self._stop_task_executors()
+        except Exception:
+            pass
 
     def _record_failure(self, agent):
         with self._agent_failures_lock:
@@ -183,6 +192,10 @@ class QuimeraApp:
         self._lock = threading.Lock()
         self._output_lock = threading.Lock()
         self._counter_lock = threading.Lock()
+        self._nonblocking_prompt_visible = False
+        self._nonblocking_input_thread: threading.Thread | None = None
+        self._nonblocking_input_queue: "queue.Queue | None" = None
+        self._nonblocking_input_status = "idle"
         is_new_session = not history_restored and not summary_loaded
 
         # Unify tasks database path
@@ -213,7 +226,7 @@ class QuimeraApp:
         self.tool_executor = ToolExecutor(
             config=ToolRuntimeConfig(
                 workspace_root=self.workspace.cwd,
-                db_path=self.tasks_db_path,
+                db_path=Path(self.tasks_db_path) if self.tasks_db_path else None,
                 require_approval_for_mutations=False,
             ),
             approval_handler=ConsoleApprovalHandler(),
@@ -317,6 +330,13 @@ class QuimeraApp:
             executor.start()
             self.task_executors.append(executor)
 
+    def _stop_task_executors(self):
+        for executor in getattr(self, "task_executors", []):
+            try:
+                executor.stop()
+            except Exception:
+                pass
+
     def _truncate_tool_result(self, content: str, max_lines: int = 10) -> str:
         """Truncate tool result content to max_lines lines."""
         if not content:
@@ -398,11 +418,29 @@ class QuimeraApp:
             return
         self.shared_state["task_overview"] = self._build_task_overview()
 
-    def _show_task_status(self, task_id: int, agent: str, status: str) -> None:
+    def _redisplay_user_prompt_if_needed(self) -> None:
+        if readline is None:
+            return
+        if self._nonblocking_input_status != "reading":
+            return
+        stdin = sys.stdin
+        if stdin is None or not stdin.isatty():
+            return
+        try:
+            readline.redisplay()
+        except Exception:
+            pass
+
+    def _show_system_message(self, message: str) -> None:
         renderer = getattr(self, "renderer", None)
         if renderer is None:
             return
-        renderer.show_system(f"[task {task_id}] {agent}: {status}")
+        with self._output_lock:
+            renderer.show_system(message)
+            self._redisplay_user_prompt_if_needed()
+
+    def _show_task_status(self, task_id: int, agent: str, status: str) -> None:
+        self._show_system_message(f"[task {task_id}] {agent}: {status}")
 
     def resolve_agent_response(
         self,
@@ -468,17 +506,75 @@ class QuimeraApp:
                 self.renderer.show_system(f"*idle* ({timeout}s sem activity)")
                 return None
             return value
-        # Fallback: blocking read
+        # Non-blocking read when timeout is 0. Use select() to probe stdin without blocking.
+        if timeout == 0:
+            try:
+                stdin = sys.stdin
+                if stdin is None:
+                    return None
+                if stdin.isatty():
+                    return self._read_user_input_nonblocking_tty(prompt)
+                # Only print the prompt once while polling non-blocking input.
+                if select.select([stdin], [], [], 0)[0]:
+                    line = stdin.readline()
+                    if line == "":
+                        return None  # EOF: don't reset flag to avoid reprint loop
+                    return line.rstrip("\r\n")
+                time.sleep(0.01)
+                return None
+            except Exception:
+                # Fallback: if non-blocking read fails, return None to avoid blocking the session.
+                return None
         try:
+            self._nonblocking_prompt_visible = False
             return input(prompt)
         except EOFError:
-            # When timeout=0, treat EOF as no input available
             if timeout == 0:
                 return None
             raise
         except KeyboardInterrupt:
+            self._nonblocking_prompt_visible = False
             print()
             raise
+
+    def _read_user_input_nonblocking_tty(self, prompt: str) -> str | None:
+        if self._nonblocking_input_queue is None:
+            self._nonblocking_input_queue = queue.Queue()
+
+        try:
+            status, value = self._nonblocking_input_queue.get_nowait()
+        except queue.Empty:
+            thread = self._nonblocking_input_thread
+            if thread is None or not thread.is_alive():
+                self._start_nonblocking_input_reader(prompt)
+            return None
+
+        self._nonblocking_input_status = "idle"
+        self._nonblocking_input_thread = None
+        if status == "line":
+            return value
+        return None
+
+    def _start_nonblocking_input_reader(self, prompt: str) -> None:
+        if self._nonblocking_input_queue is None:
+            self._nonblocking_input_queue = queue.Queue()
+
+        self._nonblocking_input_status = "reading"
+
+        def _reader() -> None:
+            try:
+                value = input(prompt)
+            except EOFError:
+                self._nonblocking_input_queue.put(("eof", None))
+            except KeyboardInterrupt:
+                self._nonblocking_input_queue.put(("interrupt", None))
+            except Exception:
+                self._nonblocking_input_queue.put(("error", None))
+            else:
+                self._nonblocking_input_queue.put(("line", value))
+
+        self._nonblocking_input_thread = threading.Thread(target=_reader, daemon=True)
+        self._nonblocking_input_thread.start()
 
     @staticmethod
     def _read_user_input_with_timeout(prompt: str, timeout: int):
@@ -667,7 +763,7 @@ class QuimeraApp:
         if selected_agent:
             lines.append(f"atribuída para {selected_agent}")
         lines.append(f"tipo inferido: {task_type}")
-        self.renderer.show_system(" | ".join(lines))
+        self._show_system_message(" | ".join(lines))
 
     def read_from_editor(self):
         """Abre $EDITOR num arquivo temporário e retorna o conteúdo digitado."""
@@ -738,7 +834,7 @@ class QuimeraApp:
         if not self.active_agents:
             _logger.warning("no active agents, resetting to default")
             self.active_agents = ["*"]
-        return self.active_agents[self.round_index % len(self.active_agents)], user_input, False
+        return random.choice(self.active_agents), user_input, False
 
     @staticmethod
     def _merge_state_value(current, incoming):
@@ -1160,6 +1256,7 @@ class QuimeraApp:
 
     def shutdown(self):
         """Finaliza a sessão tentando resumir o histórico no contexto persistente."""
+        self._stop_task_executors()
         if readline:
             try:
                 readline.write_history_file(str(self.history_file))
@@ -1181,6 +1278,247 @@ class QuimeraApp:
         else:
             self.renderer.show_system(MSG_MEMORY_FAILED)
 
+    def _process_chat_message(self, user):
+        first_agent, message, explicit = self.parse_routing(user)
+        if first_agent is None:
+            return
+        if not message or not message.strip():
+            self.renderer.show_warning(MSG_EMPTY_INPUT.format(first_agent))
+            return
+
+        other_agents = [n for n in self.active_agents if n != first_agent]
+
+        self.round_index += 1
+        self.summary_agent_preference = first_agent
+        self.persist_message(USER_ROLE, message)
+
+        # Primeira fala: detecta roteamento ou debate estendido
+        response = self.call_agent(first_agent, is_first_speaker=True, protocol_mode="standard")
+        response, route_target, handoff, extend, needs_human_input, _ = self.parse_response(response)
+
+        if needs_human_input:
+            self.renderer.show_message(first_agent, response)
+            self.renderer.show_system(
+                "\nO agente precisa de input humano. "
+                "Envie a continuação em uma nova mensagem para manter o chat destravado.\n"
+            )
+            return
+        self.print_response(first_agent, response)
+        if response is not None:
+            self.persist_message(first_agent, response)
+
+        # Um handoff emitido pela primeira resposta sempre tem prioridade,
+        # inclusive quando a rodada começou com /claude ou /codex.
+        if route_target and handoff:
+            handoff_id = handoff.get("handoff_id", "?")
+            priority = handoff.get("priority", "normal")
+
+            # Verifica delegação circular
+            chain = handoff.get("chain", []) if isinstance(handoff, dict) else []
+            if route_target in chain:
+                _logger.warning(
+                    "[HANDOFF] Circular delegation detected: %s -> %s (chain: %s)",
+                    first_agent, route_target, chain,
+                )
+                if hasattr(self, 'behavior_metrics') and self.behavior_metrics:
+                    self.behavior_metrics.record_handoff_received(route_target, is_circular=True)
+                self.renderer.show_warning(
+                    f"Delegação circular detectada: {first_agent} -> {route_target}. "
+                    f"Cadeia: {' -> '.join(chain + [route_target])}"
+                )
+                return
+
+            self.renderer.show_handoff(
+                first_agent,
+                route_target,
+                task=handoff["task"],
+            )
+            _logger.info(
+                "[HANDOFF] id=%s from=%s to=%s priority=%s chain=%s",
+                handoff_id, first_agent, route_target, priority, chain,
+            )
+            # Propaga a cadeia de handoffs
+            if isinstance(handoff, dict):
+                handoff["chain"] = chain + [first_agent]
+            # Registra métricas de handoff
+            if hasattr(self, 'behavior_metrics') and self.behavior_metrics:
+                self.behavior_metrics.record_handoff_sent(first_agent)
+                self.behavior_metrics.record_handoff_received(route_target)
+            # Handoff v1: agente secundário recebe apenas o payload delegado
+            secondary_response = self.call_agent(
+                route_target,
+                handoff=handoff,
+                handoff_only=True,
+                primary=False,
+                protocol_mode="handoff",
+                from_agent=first_agent,
+            )
+            expected_ack = handoff.get("handoff_id")
+            secondary_response, _, _, _, _, ack_id = self.parse_response(secondary_response)
+            if expected_ack and ack_id and ack_id != expected_ack:
+                _logger.warning(
+                    "[ACK] mismatch: expected=%s, received=%s from agent=%s",
+                    expected_ack, ack_id, route_target,
+                )
+            self.print_response(route_target, secondary_response)
+            if secondary_response is not None:
+                self.persist_message(route_target, secondary_response)
+
+            # Fallback chain: se o agente secundário não respondeu, tenta próximo disponível
+            if not secondary_response:
+                fallback_candidates = [
+                    a for a in self.active_agents
+                    if a != first_agent and a != route_target and a not in chain
+                ]
+                for fallback_agent in fallback_candidates:
+                    _logger.info(
+                        "[HANDOFF] id=%s fallback: trying %s after %s failed",
+                        handoff_id, fallback_agent, route_target,
+                    )
+                    self.renderer.show_system(
+                        f"[handoff] tentando fallback: {fallback_agent} (após {route_target} falhar)"
+                    )
+                    fallback_handoff = dict(handoff) if isinstance(handoff, dict) else handoff
+                    if isinstance(fallback_handoff, dict):
+                        fallback_handoff["chain"] = handoff.get("chain", []) + [route_target]
+                    secondary_response = self.call_agent(
+                        fallback_agent,
+                        handoff=fallback_handoff,
+                        handoff_only=True,
+                        primary=False,
+                        protocol_mode="handoff",
+                        from_agent=first_agent,
+                    )
+                    secondary_response, _, _, _, _, ack_id = self.parse_response(secondary_response)
+                    if secondary_response:
+                        route_target = fallback_agent
+                        self.print_response(fallback_agent, secondary_response)
+                        self.persist_message(fallback_agent, secondary_response)
+                        break
+
+            # Integrador: agente primário sintetiza com a resposta do secundário
+            if secondary_response:
+                synthesis_handoff = HANDOFF_SYNTHESIS_MSG.format(
+                    agent=route_target.upper(),
+                    task=handoff["task"],
+                    response=secondary_response,
+                )
+                # Registra síntese no BehaviorMetricsTracker
+                if hasattr(self, 'behavior_metrics') and self.behavior_metrics:
+                    self.behavior_metrics.record_synthesis(first_agent)
+                final_response = self.call_agent(
+                    first_agent,
+                    handoff=synthesis_handoff,
+                    primary=False,
+                    protocol_mode="handoff",
+                )
+                final_response, _, _, _, _, _ = self.parse_response(final_response)
+                self.print_response(first_agent, final_response)
+                if final_response is not None:
+                    self.persist_message(first_agent, final_response)
+            else:
+                _logger.warning(
+                    "[HANDOFF] id=%s failed: secondary agent %s returned no response",
+                    handoff_id, route_target,
+                )
+                self.renderer.show_system(
+                    f"[handoff] {route_target} não respondeu — delegação falhou"
+                )
+        else:
+            # Fluxo padrão: 2 falas. Estendido (EXTEND_MARKER): 4 falas alternadas.
+            # Em rodadas com /claude ou /codex, o handoff do primeiro agente
+            # já foi tratado no bloco acima. Aqui só decidimos se existe
+            # continuação automática do fluxo normal.
+            protocol_mode = "extended" if extend else "standard"
+            if explicit:
+                remaining = []
+            elif extend:
+                remaining = [other_agents[0], first_agent, other_agents[0]] if other_agents else []
+            else:
+                remaining = other_agents
+
+            next_handoff = None
+            if self.threads > 1 and len(remaining) > 1:
+                # Modo paralelo: executar agentes em paralelo
+                staging_root = Path(tempfile.gettempdir()) / "quimera-staging" / f"{self.session_state['session_id']}-round{self.round_index}"
+                staging_root.mkdir(parents=True, exist_ok=True)
+                _logger.info("parallel mode: %d threads, staging=%s", self.threads, staging_root)
+                try:
+                    with ThreadPoolExecutor(max_workers=self.threads) as executor:
+                        # Criar lista de (agent, handoff, staging_dir, index)
+                        agent_handoff_pairs = [(agent, None, staging_root, i) for i, agent in enumerate(remaining)]
+                        # Executar em paralelo
+                        futures = [
+                            executor.submit(
+                                self._call_agent_for_parallel,
+                                agent,
+                                handoff,
+                                protocol_mode,
+                                staging_dir,
+                                idx,
+                            )
+                            for agent, handoff, staging_dir, idx in agent_handoff_pairs
+                        ]
+                        results = [f.result() for f in futures]
+                    # Merge ordenado para o workspace
+                    self._merge_staging_to_workspace(staging_root)
+                    # Processar resultados na ordem original
+                    needs_input_any = False
+                    # Expecting 6-tuple now: (agent, response, route_target, handoff, extend, needs_input)
+                    for item in results:
+                        agent, response, route_target, handoff, extend, needs_input = item
+                        self.print_response(agent, response)
+                        if response is not None:
+                            self.persist_message(agent, response)
+                        needs_input_any = needs_input or needs_input_any
+                    # Nota: route_target e handoff podem ser ignorados no modo paralelo
+                    if needs_input_any:
+                        needing = next((a for a in results if a[-1]), None)
+                        if needing:
+                            current_agent = needing[0]
+                            self.renderer.show_system(
+                                f"{current_agent} precisa de input humano. "
+                                "Envie a continuação em uma nova mensagem."
+                            )
+                except Exception as exc:
+                    _logger.exception("parallel stage failed: %s", exc)
+                    raise
+                finally:
+                    if staging_root.exists():
+                        shutil.rmtree(staging_root)
+                        _logger.info("staging cleanup: %s removed", staging_root)
+            else:
+                # Modo sequencial (original)
+                for index, agent in enumerate(remaining):
+                    response = self.call_agent(agent, handoff=next_handoff, primary=False, protocol_mode=protocol_mode)
+                    next_handoff = None
+                    response, route_target, handoff, _, needs_human_input, _ = self.parse_response(response)
+                    self.print_response(agent, response)
+                    if response is not None:
+                        self.persist_message(agent, response)
+                    if needs_human_input:
+                        self.renderer.show_system(
+                            f"{agent} precisa de input humano. "
+                            "Envie a continuação em uma nova mensagem."
+                        )
+                        break
+                    if route_target and index + 1 < len(remaining):
+                        remaining[index + 1] = route_target
+                    if route_target:
+                        next_handoff = handoff
+
+        self._maybe_auto_summarize(preferred_agent=first_agent)
+
+    def _process_chat_queue(self, chat_queue: queue.Queue):
+        while True:
+            user = chat_queue.get()
+            try:
+                if user is None:
+                    return
+                self._process_chat_message(user)
+            finally:
+                chat_queue.task_done()
+
     def run(self):
         """Executa o loop interativo do chat multiagente."""
         self.renderer.show_system(MSG_CHAT_STARTED)
@@ -1193,13 +1531,22 @@ class QuimeraApp:
         )
         self.renderer.show_system(MSG_SESSION_LOG.format(self.storage.get_log_file()))
 
+        threaded_chat = self.threads > 1
+        chat_queue = None
+        chat_worker = None
+        if threaded_chat:
+            chat_queue = queue.Queue()
+            chat_worker = threading.Thread(
+                target=self._process_chat_queue,
+                args=(chat_queue,),
+                daemon=True,
+            )
+            chat_worker.start()
+
         try:
             while True:
                 user = self.read_user_input(f"{self.user_name}: ", timeout=0)
-                
-                # Handle case where no input is available (timeout=0 and EOF)
                 if user is None:
-                    # EOF reached in non-interactive mode, exit cleanly
                     if not sys.stdin.isatty():
                         break
                     continue
@@ -1223,253 +1570,16 @@ class QuimeraApp:
                 if self.handle_command(user):
                     continue
 
-                first_agent, message, explicit = self.parse_routing(user)
-                if first_agent is None:
-                    continue
-                if not message or not message.strip():
-                    self.renderer.show_warning(MSG_EMPTY_INPUT.format(first_agent))
-                    continue
-
-                other_agents = [n for n in self.active_agents if n != first_agent]
-
-                self.round_index += 1
-                self.summary_agent_preference = first_agent
-                self.persist_message(USER_ROLE, message)
-
-                # Primeira fala: detecta roteamento ou debate estendido
-                response = self.call_agent(first_agent, is_first_speaker=True, protocol_mode="standard")
-                response, route_target, handoff, extend, needs_human_input, _ = self.parse_response(response)
-
-                if needs_human_input:
-                    self.renderer.show_message(first_agent, response)
-                    self.renderer.show_system("\nO agente precisa de input humano...\n")
-                    user_input = self.read_user_input("Sua resposta: ", self.idle_timeout_seconds)
-                    if user_input:
-                        handoff = handoff or {}
-                        handoff["human_input"] = user_input
-                        response = self.call_agent(
-                            first_agent,
-                            handoff=handoff,
-                            primary=False,
-                            protocol_mode="handoff",
-                        )
-                        response, route_target, handoff, extend, _, _ = self.parse_response(response)
-                self.print_response(first_agent, response)
-                if response is not None:
-                    self.persist_message(first_agent, response)
-
-                # Um handoff emitido pela primeira resposta sempre tem prioridade,
-                # inclusive quando a rodada começou com /claude ou /codex.
-                if route_target and handoff:
-                    handoff_id = handoff.get("handoff_id", "?")
-                    priority = handoff.get("priority", "normal")
-                    
-                    # Verifica delegação circular
-                    chain = handoff.get("chain", []) if isinstance(handoff, dict) else []
-                    if route_target in chain:
-                        _logger.warning(
-                            "[HANDOFF] Circular delegation detected: %s -> %s (chain: %s)",
-                            first_agent, route_target, chain,
-                        )
-                        if hasattr(self, 'behavior_metrics') and self.behavior_metrics:
-                            self.behavior_metrics.record_handoff_received(route_target, is_circular=True)
-                        self.renderer.show_warning(
-                            f"Delegação circular detectada: {first_agent} -> {route_target}. "
-                            f"Cadeia: {' -> '.join(chain + [route_target])}"
-                        )
-                        continue
-                    
-                    self.renderer.show_handoff(
-                        first_agent,
-                        route_target,
-                        task=handoff["task"],
-                    )
-                    _logger.info(
-                        "[HANDOFF] id=%s from=%s to=%s priority=%s chain=%s",
-                        handoff_id, first_agent, route_target, priority, chain,
-                    )
-                    # Propaga a cadeia de handoffs
-                    if isinstance(handoff, dict):
-                        handoff["chain"] = chain + [first_agent]
-                    # Registra métricas de handoff
-                    if hasattr(self, 'behavior_metrics') and self.behavior_metrics:
-                        self.behavior_metrics.record_handoff_sent(first_agent)
-                        self.behavior_metrics.record_handoff_received(route_target)
-                    # Handoff v1: agente secundário recebe apenas o payload delegado
-                    secondary_response = self.call_agent(
-                        route_target,
-                        handoff=handoff,
-                        handoff_only=True,
-                        primary=False,
-                        protocol_mode="handoff",
-                        from_agent=first_agent,
-                    )
-                    expected_ack = handoff.get("handoff_id")
-                    secondary_response, _, _, _, _, ack_id = self.parse_response(secondary_response)
-                    if expected_ack and ack_id and ack_id != expected_ack:
-                        _logger.warning(
-                            "[ACK] mismatch: expected=%s, received=%s from agent=%s",
-                            expected_ack, ack_id, route_target,
-                        )
-                    self.print_response(route_target, secondary_response)
-                    if secondary_response is not None:
-                        self.persist_message(route_target, secondary_response)
-
-                    # Fallback chain: se o agente secundário não respondeu, tenta próximo disponível
-                    if not secondary_response:
-                        fallback_candidates = [
-                            a for a in self.active_agents
-                            if a != first_agent and a != route_target and a not in chain
-                        ]
-                        for fallback_agent in fallback_candidates:
-                            _logger.info(
-                                "[HANDOFF] id=%s fallback: trying %s after %s failed",
-                                handoff_id, fallback_agent, route_target,
-                            )
-                            self.renderer.show_system(
-                                f"[handoff] tentando fallback: {fallback_agent} (após {route_target} falhar)"
-                            )
-                            fallback_handoff = dict(handoff) if isinstance(handoff, dict) else handoff
-                            if isinstance(fallback_handoff, dict):
-                                fallback_handoff["chain"] = handoff.get("chain", []) + [route_target]
-                            secondary_response = self.call_agent(
-                                fallback_agent,
-                                handoff=fallback_handoff,
-                                handoff_only=True,
-                                primary=False,
-                                protocol_mode="handoff",
-                                from_agent=first_agent,
-                            )
-                            secondary_response, _, _, _, _, ack_id = self.parse_response(secondary_response)
-                            if secondary_response:
-                                route_target = fallback_agent
-                                self.print_response(fallback_agent, secondary_response)
-                                self.persist_message(fallback_agent, secondary_response)
-                                break
-
-                    # Integrador: agente primário sintetiza com a resposta do secundário
-                    if secondary_response:
-                        synthesis_handoff = HANDOFF_SYNTHESIS_MSG.format(
-                            agent=route_target.upper(),
-                            task=handoff["task"],
-                            response=secondary_response,
-                        )
-                        # Registra síntese no BehaviorMetricsTracker
-                        if hasattr(self, 'behavior_metrics') and self.behavior_metrics:
-                            self.behavior_metrics.record_synthesis(first_agent)
-                        final_response = self.call_agent(
-                            first_agent,
-                            handoff=synthesis_handoff,
-                            primary=False,
-                            protocol_mode="handoff",
-                        )
-                        final_response, _, _, _, _, _ = self.parse_response(final_response)
-                        self.print_response(first_agent, final_response)
-                        if final_response is not None:
-                            self.persist_message(first_agent, final_response)
-                    else:
-                        _logger.warning(
-                            "[HANDOFF] id=%s failed: secondary agent %s returned no response",
-                            handoff_id, route_target,
-                        )
-                        self.renderer.show_system(
-                            f"[handoff] {route_target} não respondeu — delegação falhou"
-                        )
+                if chat_queue is not None:
+                    chat_queue.put(user)
                 else:
-                    # Fluxo padrão: 2 falas. Estendido (EXTEND_MARKER): 4 falas alternadas.
-                    # Em rodadas com /claude ou /codex, o handoff do primeiro agente
-                    # já foi tratado no bloco acima. Aqui só decidimos se existe
-                    # continuação automática do fluxo normal.
-                    protocol_mode = "extended" if extend else "standard"
-                    if explicit:
-                        remaining = []
-                    elif extend:
-                        remaining = [other_agents[0], first_agent, other_agents[0]] if other_agents else []
-                    else:
-                        remaining = other_agents
-
-                    next_handoff = None
-                    if self.threads > 1 and len(remaining) > 1:
-                        # Modo paralelo: executar agentes em paralelo
-                        staging_root = Path(tempfile.gettempdir()) / "quimera-staging" / f"{self.session_state['session_id']}-round{self.round_index}"
-                        staging_root.mkdir(parents=True, exist_ok=True)
-                        _logger.info("parallel mode: %d threads, staging=%s", self.threads, staging_root)
-                        try:
-                            with ThreadPoolExecutor(max_workers=self.threads) as executor:
-                                # Criar lista de (agent, handoff, staging_dir, index)
-                                agent_handoff_pairs = [(agent, None, staging_root, i) for i, agent in enumerate(remaining)]
-                                # Executar em paralelo
-                                futures = [
-                                    executor.submit(
-                                        self._call_agent_for_parallel,
-                                        agent,
-                                        handoff,
-                                        protocol_mode,
-                                        staging_dir,
-                                        idx,
-                                    )
-                                    for agent, handoff, staging_dir, idx in agent_handoff_pairs
-                                ]
-                                results = [f.result() for f in futures]
-                            # Merge ordenado para o workspace
-                            self._merge_staging_to_workspace(staging_root)
-                            # Processar resultados na ordem original
-                            needs_input_any = False
-                            # Expecting 6-tuple now: (agent, response, route_target, handoff, extend, needs_input)
-                            for item in results:
-                                agent, response, route_target, handoff, extend, needs_input = item
-                                self.print_response(agent, response)
-                                if response is not None:
-                                    self.persist_message(agent, response)
-                                needs_input_any = needs_input or needs_input_any
-                            # Nota: route_target e handoff podem ser ignorados no modo paralelo
-                            if needs_input_any:
-                                # Levar fluxo de input humano para o primeiro agente que requer
-                                needing = next((a for a in results if a[-1]), None)
-                                if needing:
-                                    _, _, needing_route_target, needing_handoff, _, _ = needing
-                                    # Pergunta ao humano
-                                    user_input = input("Sua resposta: ").strip()
-                                    if user_input:
-                                        current_agent = needing[0]
-                                        handoff_payload = needing_handoff or {}
-                                        if isinstance(handoff_payload, dict):
-                                            handoff_payload["human_input"] = user_input
-                                        else:
-                                            handoff_payload = {"human_input": user_input}
-                                        final_response = self.call_agent(
-                                            current_agent,
-                                            handoff=handoff_payload,
-                                            primary=False,
-                                            protocol_mode="handoff",
-                                        )
-                                        final_response, _, _, _, _, _ = self.parse_response(final_response)
-                                        self.print_response(current_agent, final_response)
-                                        if final_response is not None:
-                                            self.persist_message(current_agent, final_response)
-                        except Exception as exc:
-                            _logger.exception("parallel stage failed: %s", exc)
-                            raise
-                        finally:
-                            if staging_root.exists():
-                                shutil.rmtree(staging_root)
-                                _logger.info("staging cleanup: %s removed", staging_root)
-                    else:
-                        # Modo sequencial (original)
-                        for index, agent in enumerate(remaining):
-                            response = self.call_agent(agent, handoff=next_handoff, primary=False, protocol_mode=protocol_mode)
-                            next_handoff = None
-                            response, route_target, handoff, _, _, _ = self.parse_response(response)
-                            self.print_response(agent, response)
-                            if response is not None:
-                                self.persist_message(agent, response)
-                            if route_target and index + 1 < len(remaining):
-                                remaining[index + 1] = route_target
-                            if route_target:
-                                next_handoff = handoff
-
-                self._maybe_auto_summarize(preferred_agent=first_agent)
+                    self._process_chat_message(user)
         except KeyboardInterrupt:
             self.renderer.show_system(MSG_SHUTDOWN)
         finally:
+            if threaded_chat and chat_queue is not None:
+                chat_queue.put(None)
+                chat_queue.join()
+            if chat_worker is not None:
+                chat_worker.join(timeout=5)
             self.shutdown()

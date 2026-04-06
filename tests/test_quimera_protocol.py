@@ -1,6 +1,8 @@
 import re
+import io
 import tempfile
 import threading
+import time
 import unittest
 from collections import defaultdict
 from pathlib import Path
@@ -667,12 +669,15 @@ class ProtocolTests(unittest.TestCase):
         ), patch("quimera.app.SessionStorage", FakeSessionStorage):
             app = QuimeraApp(Path("/tmp/projeto"))
 
-        session_state = app.prompt_builder.session_state
-        self.assertEqual(session_state.get("session_id"), "sessao-2026-03-27-123456")
-        self.assertEqual(session_state.get("is_new_session"), "não")
-        self.assertEqual(session_state.get("history_restored"), "sim")
-        self.assertEqual(session_state.get("summary_loaded"), "sim")
-        self.assertIn("current_job_id", session_state)
+        try:
+            session_state = app.prompt_builder.session_state
+            self.assertEqual(session_state.get("session_id"), "sessao-2026-03-27-123456")
+            self.assertEqual(session_state.get("is_new_session"), "não")
+            self.assertEqual(session_state.get("history_restored"), "sim")
+            self.assertEqual(session_state.get("summary_loaded"), "sim")
+            self.assertIn("current_job_id", session_state)
+        finally:
+            app._stop_task_executors()
         self.assertIsInstance(session_state["current_job_id"], int)
         self.assertEqual(app.shared_state, {"goal": "continuar"})
 
@@ -1429,6 +1434,127 @@ class PluginTests(unittest.TestCase):
         self.assertIsNone(route_target)
         self.assertIsNone(handoff)
         self.assertFalse(extend)
+
+    def test_run_thread_mode_accepts_new_human_input_while_agent_is_running(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.history = []
+        app.user_name = "Você"
+        app.round_index = 0
+        app.session_call_index = 0
+        app.debug_prompt_metrics = False
+        app.renderer = DummyRenderer()
+        app.storage = DummyStorage()
+        app.context_manager = None
+        app.agent_client = None
+        app.prompt_builder = None
+        app.session_state = {
+            "session_id": "sessao-2026-03-27-123456",
+            "history_count": 0,
+            "summary_loaded": False,
+        }
+        app.shared_state = {}
+        app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
+        app.threads = 2
+        app.handle_command = lambda user: False
+        app.parse_routing = lambda user: (AGENT_CLAUDE, "oi", False)
+        app.parse_response = QuimeraApp.parse_response.__get__(app, QuimeraApp)
+        app._maybe_auto_summarize = lambda preferred_agent=None: None
+        app.shutdown = lambda: None
+
+        persisted = []
+        printed = []
+        app.persist_message = lambda role, content: persisted.append((role, content))
+        app.print_response = lambda agent, response: printed.append((agent, response))
+
+        call_started = threading.Event()
+        second_prompt_seen = threading.Event()
+        allow_finish = threading.Event()
+
+        def fake_read_user_input(prompt, timeout=0):
+            if not call_started.is_set():
+                return "mensagem"
+            second_prompt_seen.set()
+            return "/exit"
+
+        def fake_call_agent(agent, **kwargs):
+            call_started.set()
+            allow_finish.wait(timeout=2)
+            return "claude responde"
+
+        app.read_user_input = Mock(side_effect=fake_read_user_input)
+        app.call_agent = fake_call_agent
+
+        run_thread = threading.Thread(target=app.run)
+        run_thread.start()
+
+        self.assertTrue(second_prompt_seen.wait(timeout=1), "run() não voltou ao prompt enquanto o agente ainda executava")
+        allow_finish.set()
+        run_thread.join(timeout=2)
+
+        self.assertFalse(run_thread.is_alive(), "run() deveria encerrar após drenar a fila")
+        self.assertEqual(persisted[0], ("human", "oi"))
+        self.assertIn((AGENT_CLAUDE, "claude responde"), printed)
+
+    def test_read_user_input_nonblocking_tty_preserves_input_path(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.renderer = DummyRenderer()
+        app._nonblocking_prompt_visible = False
+        app._nonblocking_input_queue = None
+        app._nonblocking_input_thread = None
+        app._nonblocking_input_status = "idle"
+
+        stdin = io.StringIO("")
+        stdin.isatty = lambda: True
+        started = threading.Event()
+
+        def fake_input(prompt):
+            started.set()
+            time.sleep(0.05)
+            return "mensagem"
+
+        with patch("sys.stdin", stdin), patch("quimera.app.input", side_effect=fake_input) as mock_input:
+            first = app.read_user_input("Você: ", timeout=0)
+            self.assertIsNone(first)
+            self.assertTrue(started.wait(timeout=1), "reader assíncrono não iniciou")
+
+            deadline = time.time() + 1
+            second = None
+            while time.time() < deadline and second is None:
+                second = app.read_user_input("Você: ", timeout=0)
+                if second is None:
+                    time.sleep(0.01)
+
+        self.assertEqual(second, "mensagem")
+        mock_input.assert_called_once_with("Você: ")
+
+    def test_show_task_status_redisplays_prompt_while_tty_reader_is_active(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.renderer = DummyRenderer()
+        app._output_lock = threading.Lock()
+        app._nonblocking_input_status = "reading"
+
+        stdin = io.StringIO("")
+        stdin.isatty = lambda: True
+
+        with patch("sys.stdin", stdin), patch("quimera.app.readline.redisplay") as mock_redisplay:
+            app._show_task_status(7, AGENT_CLAUDE, "iniciando")
+
+        self.assertEqual(app.renderer.system_messages, ["[task 7] claude: iniciando"])
+        mock_redisplay.assert_called_once_with()
+
+    def test_parse_routing_selects_random_initial_agent(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
+        app.round_index = 0
+        app.renderer = DummyRenderer()
+
+        with patch("quimera.app.random.choice", return_value=AGENT_CODEX) as mock_choice:
+            agent, message, explicit = app.parse_routing("oi")
+
+        self.assertEqual(agent, AGENT_CODEX)
+        self.assertEqual(message, "oi")
+        self.assertFalse(explicit)
+        mock_choice.assert_called_once_with(app.active_agents)
 
     def test_parse_handoff_payload_with_priority(self):
         app = QuimeraApp.__new__(QuimeraApp)
