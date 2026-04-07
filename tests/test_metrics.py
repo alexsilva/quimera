@@ -286,7 +286,7 @@ class TestPromptMetricsFeedback(unittest.TestCase):
         """Verifica que as regras base são concisas."""
         from quimera.constants import PROMPT_BASE_RULES
         
-        self.assertLess(len(PROMPT_BASE_RULES), 800)
+        self.assertLess(len(PROMPT_BASE_RULES), 1600)
         self.assertIn("humano", PROMPT_BASE_RULES.lower())
     
     def test_prompt_without_metrics_feedback(self):

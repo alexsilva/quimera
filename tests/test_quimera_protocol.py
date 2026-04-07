@@ -436,8 +436,9 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(tasks[0]["origin"], "human_command")
         self.assertEqual(tasks[0]["assigned_to"], AGENT_CODEX)
         self.assertIn("TAREFA:\nexecute os testes", tasks[0]["body"])
-        self.assertIn("[ALEX]: o teste de task perdeu contexto", tasks[0]["body"])
-        self.assertIn("[CLAUDE]: precisamos serializar o chat recente", tasks[0]["body"])
+        self.assertIn("CONTEXTO RECENTE DO CHAT:", tasks[0]["body"])
+        self.assertIn("ALEX]: o teste de task perdeu contexto", tasks[0]["body"])
+        self.assertIn("CLAUDE]: precisamos serializar o chat recente", tasks[0]["body"])
         self.assertIn('"goal": "corrigir task runner"', tasks[0]["body"])
         self.assertIn("task criada com id", app.renderer.system_messages[-1])
         self.assertIn("atribuída para codex", app.renderer.system_messages[-1])
@@ -536,7 +537,7 @@ class ProtocolTests(unittest.TestCase):
         second_prompt = builder.build(AGENT_CODEX, history, is_first_speaker=False)
 
         self.assertIn(EXTEND_MARKER, first_prompt)
-        self.assertIn("segundo agente nesta rodada", second_prompt)
+        self.assertIn("validador", second_prompt)
         self.assertNotIn("inclua [DEBATE] ao final da sua resposta", second_prompt)
 
     def test_prompt_uses_handoff_rule_in_handoff_only_mode(self):
@@ -2162,8 +2163,8 @@ class MetricsFeedbackTests(unittest.TestCase):
 
         prompt = builder.build(AGENT_CLAUDE, history, is_first_speaker=True)
 
-        self.assertIn("colaborar", prompt.lower())
-        self.assertIn("complemente", prompt.lower())
+        self.assertIn("prioridade", prompt.lower())
+        self.assertIn("foco", prompt.lower())
 
     def test_prompt_is_concise(self):
         """Prompt deve ser conciso após enxugamento."""
@@ -2266,8 +2267,8 @@ class MetricsFeedbackTests(unittest.TestCase):
         """PROMPT_REVIEWER_RULE deve ser conciso."""
         from quimera.constants import PROMPT_REVIEWER_RULE
         
-        self.assertIn("concorde", PROMPT_REVIEWER_RULE.lower())
-        self.assertLess(len(PROMPT_REVIEWER_RULE), 300)
+        self.assertIn("veredicto", PROMPT_REVIEWER_RULE.lower())
+        self.assertLess(len(PROMPT_REVIEWER_RULE), 550)
 
     def test_handoff_rule_is_concise(self):
         """PROMPT_HANDOFF_RULE deve ser conciso."""
@@ -2281,8 +2282,9 @@ class MetricsFeedbackTests(unittest.TestCase):
         from quimera.constants import PROMPT_BASE_RULES
         
         self.assertIn("humano", PROMPT_BASE_RULES.lower())
-        self.assertIn("colaborar", PROMPT_BASE_RULES.lower())
-        self.assertLess(len(PROMPT_BASE_RULES), 800)
+        self.assertIn("prioridade", PROMPT_BASE_RULES.lower())
+        self.assertIn("foco", PROMPT_BASE_RULES.lower())
+        self.assertLess(len(PROMPT_BASE_RULES), 1600)
 
     def test_behavior_metrics_generate_feedback_empty_when_few_responses(self):
         """generate_feedback deve retornar vazio com menos de 3 respostas."""

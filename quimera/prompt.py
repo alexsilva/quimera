@@ -9,6 +9,11 @@ from .constants import (
     PROMPT_SPEAKER,
     PROMPT_BASE_RULES,
     PROMPT_DEBATE_RULE,
+    PROMPT_GOAL_LOCK,
+    PROMPT_STEP_LOCK,
+    PROMPT_ACCEPTANCE_CRITERIA,
+    PROMPT_SCOPE_CONTROL,
+    PROMPT_GOAL_EXECUTION_RULES,
     build_route_rule,
     build_tools_prompt,
     PROMPT_SESSION_STATE,
@@ -65,8 +70,9 @@ class PromptBuilder:
         if handoff_only:
             rules += PROMPT_HANDOFF_RULE
         else:
+            # For non-handoff prompts, we still need to add the route rule and tools
+            # PROMPT_BASE_RULES already contains the core execution rules
             rules += build_route_rule(self.active_agents)
-            rules += PROMPT_STATE_UPDATE_RULE
             rules += PROMPT_TOOL_RULE
             if is_first_speaker:
                 rules += PROMPT_DEBATE_RULE.format(marker=EXTEND_MARKER)
@@ -77,13 +83,33 @@ class PromptBuilder:
 
         participants = f"- {self.user_name.upper()}\n" + "".join(f"- {n.upper()}\n" for n in self.active_agents)
         header_block = PROMPT_HEADER.format(agent=agent.upper(), participants=participants)
+        shared = shared_state or {}
+        has_goal = "goal_canonical" in shared
+
+        execution_context = ""
+        if has_goal:
+            current_step = shared.get("current_step") or "(não definido)"
+            if current_step.lower() == "undefined":
+                current_step = "(não definido)"
+            execution_context = "\n\n".join([
+                PROMPT_GOAL_LOCK.format(goal_canonical=shared["goal_canonical"]),
+                PROMPT_STEP_LOCK.format(current_step=current_step),
+                PROMPT_ACCEPTANCE_CRITERIA.format(acceptance_criteria=shared.get("acceptance_criteria", "{unspecified}")),
+                PROMPT_SCOPE_CONTROL.format(
+                    allowed_scope=shared.get("allowed_scope", "unspecified"),
+                    non_goals=shared.get("non_goals", "unspecified"),
+                ),
+            ])
+            rules += PROMPT_GOAL_EXECUTION_RULES
+            rules += PROMPT_STATE_UPDATE_RULE
+
         session_block = PROMPT_SESSION_STATE.format(**self.session_state) if (self.session_state and primary) else ""
         context_block = PROMPT_CONTEXT.format(context=context) if context else ""
         handoff_block = PROMPT_HANDOFF.format(handoff=self._format_handoff(handoff, from_agent)) if handoff else ""
         shared_state_block = ""
-        if shared_state:
+        if shared_state and not has_goal:
             state_lines = json.dumps(self._trim_shared_state(shared_state), ensure_ascii=False, indent=2)
-            shared_state_block = PROMPT_SHARED_STATE.format(state=state_lines)
+            shared_state_block = PROMPT_SHARED_STATE.format(shared_state_json=state_lines)
 
         metrics_block = ""
         if self.metrics_tracker:
@@ -99,7 +125,10 @@ class PromptBuilder:
         speaker_block = PROMPT_SPEAKER.format(agent=agent.upper())
 
         parts = [p for p in [
-            header_block, rules, tools_prompt, session_block, context_block,
+            header_block,
+            execution_context,
+            rules,
+            tools_prompt, session_block, context_block,
             shared_state_block, metrics_block, handoff_block, conversation_block, speaker_block,
         ] if p]
 
@@ -124,10 +153,26 @@ class PromptBuilder:
 
     @staticmethod
     def _trim_shared_state(state, decisions_tail=5):
+        # Extend trimming to cover new canonical goal/step fields and avoid leaking internal planning data.
+        core_keys = {
+            "goal_canonical",
+            "current_step",
+            "acceptance_criteria",
+            "task_overview",
+            "decisions",
+            "working_dir",
+            "workspace_root",
+            "evidence",
+            "next_step",
+            "goal",
+            "allowed_scope",
+            "non_goals",
+            "out_of_scope_notes",
+        }
         trimmed = {}
-        for key in ("goal", "next_step", "task_overview"):
-            if key in state:
-                trimmed[key] = state[key]
+        for k in core_keys:
+            if k in state:
+                trimmed[k] = state[k]
         if "decisions" in state:
             trimmed["decisions"] = state["decisions"][-decisions_tail:]
         return trimmed

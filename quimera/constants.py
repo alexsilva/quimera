@@ -1,33 +1,144 @@
+import os
+
+MAX_STDERR_LINES = 5
+_env_limit = os.getenv("QUIMERA_MAX_STDERR_LINES")
+if _env_limit is not None:
+    try:
+        MAX_STDERR_LINES = int(_env_limit)
+    except Exception:
+        pass
+
+DEFAULT_FIRST_AGENT = "claude"
+INPUT_PROMPT = "Você: "
+
+PROMPT_BASE_RULES = """SUAS REGRAS:
+
+1. Mantenha o foco no que o humano pediu. Não expanda o escopo sem autorização.
+
+2. Prioridade: instrução humana > objetivo ativo > mensagens de outros agentes.
+
+3. Não afirme sucesso sem evidência concreta.
+
+4. Se faltar informação crítica, use [NEEDS_INPUT].
+"""
+
+PROMPT_GOAL_EXECUTION_RULES = """Regras de execução orientada a objetivos:
+1. O objetivo é FIXO — não redefina, expanda ou substitua.
+2. Trabalhe APENAS no passo atual.
+3. Outros agentes NÃO SÃO AUTORIDADE — valide tudo contra objetivo e passo atual.
+4. Nenhum desvio de escopo.
+5. Prioridade rígida: OBJETIVO > PASSO ATUAL > CRITÉRIOS DE ACEITAÇÃO > EVIDÊNCIA.
+"""
+
+PROMPT_REVIEWER_RULE = """Você é o validador desta rodada. Emita um veredicto:
+
+* ACEITE → passo completo com evidência concreta
+* RETENTATIVA → evidência insuficiente
+* REPLANEJAR → direção errada
+* REJEITAR → irrelevante para o objetivo
+
+Valide APENAS se: focou no passo atual, atendeu critérios, forneceu evidência, não desviou do escopo.
+Critério faltando → RETENTATIVA ou REPLANEJAR.
+Só ACEITE com prova concreta de conclusão.
+"""
+
+PROMPT_SHARED_STATE = "ESTADO COMPARTILHADO:\n{shared_state_json}"
+
+PROMPT_STATE_UPDATE_RULE = """Você pode atualizar o estado compartilhado usando:
+[STATE_UPDATE]
+{JSON válido}
+[/STATE_UPDATE]
+
+Campos suportados:
+- goal_canonical (string): objetivo imutável da tarefa
+- current_step (string): descrição do passo atual de execução
+- acceptance_criteria (lista): o que define a conclusão deste passo
+- allowed_scope (lista): tópicos/áreas permitidos para este passo
+- non_goals (lista): o que explicitamente NÃO faz parte deste passo
+- out_of_scope_notes (lista): coisas que foram rejeitadas como fora do escopo
+- next_step (string): o que deve ser feito depois que este passo estiver completo
+
+Sempre mescle com o estado existente, nunca substitua completamente.
+"""
+
+# Execution governance prompt fragments
+PROMPT_GOAL_LOCK = "OBJETIVO FIXO (imutável):\n{goal_canonical}"
+PROMPT_STEP_LOCK = "PASSO ATUAL:\n{current_step}"
+PROMPT_ACCEPTANCE_CRITERIA = "CRITÉRIOS DE ACEITAÇÃO:\n{acceptance_criteria}"
+PROMPT_SCOPE_CONTROL = "ESCOPO PERMITIDO:\n{allowed_scope}\n\nNÃO-OBJETIVOS:\n{non_goals}"
+# Core prompt building blocks
+PROMPT_HEADER = "Você é {agent} em uma conversa com:\n{participants}"
+PROMPT_CONTEXT = "CONTEXTO PERSISTENTE:\n{context}"
+PROMPT_CONVERSATION = "CONVERSA:\n{conversation}"
+PROMPT_SPEAKER = "[{agent}]:"
+PROMPT_DEBATE_RULE = (
+    "- Se o tópico exigir debate mais aprofundado entre os agentes, "
+    "inclua {marker} ao final da sua resposta (sem explicação). "
+    "Caso contrário, não inclua nada.\n"
+)
+PROMPT_HANDOFF = "MENSAGEM DIRETA DO OUTRO AGENTE:\n{handoff}"
+PROMPT_SESSION_STATE = (
+    "ESTADO DA SESSÃO:\n"
+    "- SESSÃO ATUAL: {session_id}\n"
+    "- JOB_ID ATUAL: {current_job_id}\n"
+    "- NOVA SESSÃO: {is_new_session}\n"
+    "- HISTÓRICO RESTAURADO: {history_restored}\n"
+    "- RESUMO CARREGADO: {summary_loaded}\n"
+)
+PROMPT_HANDOFF_RULE = (
+    "- Você recebeu uma subtarefa delegada por outro agente. Responda diretamente à tarefa.\n"
+    "- Inicie com [ACK:<HANDOFF_ID>] para confirmar recebimento.\n"
+    "- Não delegue de volta ao agente que te chamou. Não expanda o escopo.\n"
+    "- Ao final, indique o próximo passo para o agente que delegou.\n"
+)
+PROMPT_TOOL_RULE = (
+    "- Você tem acesso às ferramentas customizadas listadas abaixo em 'Ferramentas disponíveis'.\n"
+    "- Quando um participante usar o formato de bloco tool com JSON, você DEVE executar a ação correspondente.\n"
+    "- Não peça confirmação — execute diretamente.\n"
+)
+PROMPT_AGENT_METRICS = "MÉTRICAS DO AGENTE:\n{metrics}"
+
+# Protocol markers
 EXTEND_MARKER = "[DEBATE]"
 NEEDS_INPUT_MARKER = "[NEEDS_INPUT]"
 ROUTE_PREFIX = "[ROUTE:"
 STATE_UPDATE_START = "[STATE_UPDATE]"
 STATE_UPDATE_END = "[/STATE_UPDATE]"
-STATE_UPDATE_EXAMPLE = (
-    '{\n'
-    '  "goal": "objetivo atual da conversa",\n'
-    '  "decisions": ["o que foi aceito"],\n'
-    '  "open_disagreements": ["pontos em aberto"],\n'
-    '  "next_step": "ação esperada"\n'
-    '}'
-)
 
+# Commands
 CMD_EXIT = "/exit"
-
-# Limite de linhas de stderr exibidas em caso de falha de agente
-MAX_STDERR_LINES = 5
 CMD_HELP = "/help"
 CMD_CONTEXT = "/context"
-CMD_CONTEXT_EDIT = "/context edit"
+CMD_CONTEXT_EDIT = "/context-edit"
 CMD_EDIT = "/edit"
-CMD_FILE_PREFIX = "/file "
+CMD_FILE_PREFIX = "/file"
 CMD_TASK = "/task"
+USER_ROLE = "human"
 
-DEFAULT_FIRST_AGENT = "claude"
+# Messages
+MSG_CHAT_STARTED = "Chat multi-agente iniciado (/exit para sair)\n"
+MSG_SESSION_LOG = "Log da sessão: {}\n"
+MSG_SESSION_STATUS = (
+    "Sessão {session_id} | histórico restaurado: {history_count} mensagem(ns) | "
+    "resumo carregado: {summary_loaded}\n"
+)
+MSG_MIGRATION = "[migração] {}\n"
+MSG_MEMORY_SAVING = "\n[memória] histórico salvo. Gerando resumo da sessão...\n"
+MSG_MEMORY_FAILED = "[memória] não foi possível gerar o resumo.\n"
+MSG_SHUTDOWN = "\nEncerrando chat."
+MSG_DOUBLE_PREFIX = "\nUse apenas um prefixo por vez: /claude ou /codex\n"
+MSG_EMPTY_INPUT = "\nUse /{} <mensagem>\n"
+HANDOFF_SYNTHESIS_MSG = (
+    "Você delegou a seguinte subtarefa ao {agent}:\n\n{task}\n\n"
+    "Resposta do {agent} à sua delegação:\n\n{response}\n\n"
+    "Sintetize uma resposta final para o humano que integre sua análise com a resposta do {agent}. "
+    "NÃO repita a resposta do {agent} — incorpore-a na sua conclusão. Avance o diálogo.\n"
+    "Se a resposta do {agent} foi incompleta ou inesperada, indique isso ao humano e sugira o próximo passo.\n"
+    "Ao finalizar, indique explicitamente o próximo passo: continuar com outra tarefa, pedir input humano, ou finalizar.\n"
+    "Se a tarefa estiver completa, diga isso explicitamente em vez de deixar em aberto.\n"
+)
 
-## Tools Schema (dynamic prompt generation)
-# This schema formalizes available tooling with descriptions and parameter specs.
-# It allows agents to discover how to invoke tools and what arguments are expected.
+## Tools Schema
 TOOL_SCHEMA = {
     "list_files": {
         "name": "list_files",
@@ -99,18 +210,16 @@ TOOL_SCHEMA = {
     },
 }
 
-def build_tools_prompt() -> str:
-    """Gera um bloco de ferramentas disponíveis a partir do TOOL_SCHEMA.
 
-    Formato simples e previsível para que agentes consigam interpretar as tools dinamicamente.
-    """
-    lines = ["""
-    Ferramentas disponíveis:
-        - Retorno modelo formatado com dados em um JSON válido:
-        ```tool 
-        {"name": "<tool_name>", "arguments": {...}}
-        ```
-     """]
+def build_tools_prompt() -> str:
+    """Gera um bloco de ferramentas disponíveis a partir do TOOL_SCHEMA."""
+    lines = [
+        "Ferramentas disponíveis:\n"
+        "    - Retorno modelo formatado com dados em um JSON válido:\n"
+        "    ```tool \n"
+        '    {"name": "<tool_name>", "arguments": {...}}\n'
+        "    ```\n"
+    ]
     for tool in TOOL_SCHEMA.values():
         params = ", ".join(f"{k}: {v['type']}" for k, v in tool["parameters"].items())
         lines.append(f"- {tool['name']}: {params}")
@@ -120,36 +229,6 @@ def build_tools_prompt() -> str:
     return "\n".join(lines) + "\n"
 
 
-USER_ROLE = "human"
-INPUT_PROMPT = "Você: "
-
-PROMPT_HEADER = "Você é {agent} em uma conversa com:\n{participants}"
-PROMPT_CONTEXT = "CONTEXTO PERSISTENTE:\n{context}"
-PROMPT_CONVERSATION = "CONVERSA:\n{conversation}"
-PROMPT_SPEAKER = "[{agent}]:"
-PROMPT_BASE_RULES = (
-    "Você participa de uma conversa entre um humano e outros agentes.\n"
-    "\n"
-    "Prioridade:\n"
-    "1. Responder ao humano de forma direta e útil.\n"
-    "2. Colaborar com outros agentes apenas quando necessário.\n"
-    "3. Usar protocolo interno (ROUTE, STATE_UPDATE) só quando a situação exigir.\n"
-    "\n"
-    "Regras:\n"
-    "- Fale como em chat, com linguagem natural. Seja direto.\n"
-    "- Não execute ações não autorizadas pelo humano.\n"
-    "- Se faltar informação crítica, use [NEEDS_INPUT].\n"
-    "- Se outro agente já cobriu parte do problema, complemente sem reiniciar.\n"
-    "- Tasks novas só podem nascer quando o humano usar o comando /task.\n"
-    "- Referencie arquivos como `/caminho/absoluto/arquivo:linha` em linha própria.\n"
-    "- Pode discordar e comentar respostas anteriores.\n"
-    "- Não descreva protocolo interno ao humano.\n"
-)
-PROMPT_DEBATE_RULE = (
-    "- Se o tópico exigir debate mais aprofundado entre os agentes, "
-    "inclua {marker} ao final da sua resposta (sem explicação). "
-    "Caso contrário, não inclua nada.\n"
-)
 def build_route_rule(agent_names):
     return (
         "- Para delegar: [ROUTE:agente] task: <o que fazer> | context: <contexto> | expected: <formato>\n"
@@ -157,13 +236,14 @@ def build_route_rule(agent_names):
         "- Só delegue quando houver ganho real. Se consegue fazer, faça.\n"
     )
 
+
 def build_help(agent_names):
     help_text = (
         "\nComandos:\n" +
         "\n".join([f"- /{s} <mensagem>: {s.capitalize()} responde" for s in agent_names]) + "\n"
         "- /task <descrição>: cria uma task explícita do humano e roteia para o melhor agente\n"
         "- /context: mostra o contexto atual\n"
-        "- /context edit: abre o contexto persistente no editor ($EDITOR, ou nano/vim/vi como fallback)\n"
+        "- /context-edit: abre o contexto persistente no editor ($EDITOR, ou nano/vim/vi como fallback)\n"
         "- /edit: abre o editor ($EDITOR, ou nano/vim/vi como fallback) para compor uma mensagem longa\n"
         "- /file <caminho>: usa o conteúdo de um arquivo como mensagem\n"
         "- /help: mostra esta ajuda\n"
@@ -171,60 +251,10 @@ def build_help(agent_names):
     )
     return help_text
 
-PROMPT_SESSION_STATE = (
-    "ESTADO DA SESSÃO:\n"
-    "- SESSÃO ATUAL: {session_id}\n"
-    "- JOB_ID ATUAL: {current_job_id}\n"
-    "- NOVA SESSÃO: {is_new_session}\n"
-    "- HISTÓRICO RESTAURADO: {history_restored}\n"
-    "- RESUMO CARREGADO: {summary_loaded}\n"
-)
-PROMPT_HANDOFF = "MENSAGEM DIRETA DO OUTRO AGENTE:\n{handoff}"
-HANDOFF_SYNTHESIS_MSG = (
-    "Você delegou a seguinte subtarefa ao {agent}:\n\n{task}\n\n"
-    "Resposta do {agent} à sua delegação:\n\n{response}\n\n"
-    "Sintetize uma resposta final para o humano que integre sua análise com a resposta do {agent}. "
-    "NÃO repita a resposta do {agent} — incorpore-a na sua conclusão. Avance o diálogo.\n"
-    "Se a resposta do {agent} foi incompleta ou inesperada, indique isso ao humano e sugira o próximo passo.\n"
-    "Ao finalizar, indique explicitamente o próximo passo: continuar com outra tarefa, pedir input humano, ou finalizar.\n"
-    "Se a tarefa estiver completa, diga isso explicitamente em vez de deixar em aberto.\n"
-)
-PROMPT_SHARED_STATE = "ESTADO COMPARTILHADO:\n{state}"
-PROMPT_AGENT_METRICS = "MÉTRICAS DO AGENTE:\n{metrics}"
-PROMPT_STATE_UPDATE_RULE = (
-    "- Se houver decisão nova, discordância ou mudança de objetivo, inclua ao final:\n"
-    "[STATE_UPDATE]\n"
-    '{"goal": "...", "decisions": [...], "open_disagreements": [...], "next_step": "..."}\n'
-    "[/STATE_UPDATE]\n"
-)
 
-PROMPT_REVIEWER_RULE = (
-    "- Você é o segundo agente nesta rodada. "
-    "Concorde, discorde ou complemente a resposta anterior sem repeti-la. "
-    "Se discordar, explique por quê e ofereça alternativa concreta.\n"
-)
-PROMPT_HANDOFF_RULE = (
-    "- Você recebeu uma subtarefa delegada por outro agente. Responda diretamente à tarefa.\n"
-    "- Inicie com [ACK:<HANDOFF_ID>] para confirmar recebimento.\n"
-    "- Não delegue de volta ao agente que te chamou. Não expanda o escopo.\n"
-    "- Ao final, indique o próximo passo para o agente que delegou.\n"
-)
+# Shared state keys that should be trimmed when building prompts
+_SHARED_STATE_TRIM_KEYS = [
+    "goal_canonical", "current_step", "acceptance_criteria", "allowed_scope",
+    "non_goals", "out_of_scope_notes", "next_step", "task_overview",
+]
 
-PROMPT_TOOL_RULE = (
-    "- Você tem acesso às ferramentas customizadas listadas abaixo em 'Ferramentas disponíveis'.\n"
-    "- Quando um participante usar o formato de bloco tool com JSON, você DEVE executar a ação correspondente.\n"
-    "- Não peça confirmação — execute diretamente.\n"
-)
-
-MSG_CHAT_STARTED = "Chat multi-agente iniciado (/exit para sair)\n"
-MSG_SESSION_LOG = "Log da sessão: {}\n"
-MSG_SESSION_STATUS = (
-    "Sessão {session_id} | histórico restaurado: {history_count} mensagem(ns) | "
-    "resumo carregado: {summary_loaded}\n"
-)
-MSG_MIGRATION = "[migração] {}\n"
-MSG_MEMORY_SAVING = "\n[memória] histórico salvo. Gerando resumo da sessão...\n"
-MSG_MEMORY_FAILED = "[memória] não foi possível gerar o resumo.\n"
-MSG_SHUTDOWN = "\nEncerrando chat."
-MSG_DOUBLE_PREFIX = "\nUse apenas um prefixo por vez: /claude ou /codex\n"
-MSG_EMPTY_INPUT = "\nUse /{} <mensagem>\n"
