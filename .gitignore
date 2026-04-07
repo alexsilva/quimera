@@ -11,3 +11,6 @@ quimera_context.md
 quimera/plugins/mock.py
 quimera.db
 .coverage
+coverage.json
+mock.py
+.pytest_cache/
