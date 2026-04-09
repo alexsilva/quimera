@@ -71,7 +71,7 @@ def test_all_schemas_have_required_fields():
 
 
 def test_schema_names_match_registered_tools():
-    expected = {"list_files", "read_file", "write_file", "grep_search", "run_shell",
+    expected = {"list_files", "read_file", "write_file", "apply_patch", "grep_search", "run_shell",
                 "list_tasks", "list_jobs", "get_job"}
     actual = {s["function"]["name"] for s in TOOL_SCHEMAS}
     assert actual == expected
@@ -81,12 +81,12 @@ def test_resolve_tool_schemas_hides_task_tools_without_db():
     mock_executor = MagicMock()
     mock_executor.config = SimpleNamespace(db_path=None)
     mock_executor.registry.names.return_value = [
-        "list_files", "read_file", "write_file", "grep_search", "run_shell",
+        "list_files", "read_file", "write_file", "apply_patch", "grep_search", "run_shell",
         "list_tasks", "list_jobs", "get_job",
     ]
 
     actual = {s["function"]["name"] for s in resolve_tool_schemas(mock_executor)}
-    assert actual == {"list_files", "read_file", "write_file", "grep_search", "run_shell"}
+    assert actual == {"list_files", "read_file", "write_file", "apply_patch", "grep_search", "run_shell"}
 
 
 def test_required_args_are_lists():
@@ -314,10 +314,10 @@ def test_run_tools_system_prompt_guides_tool_usage():
     messages = mock_client.chat.completions.create.call_args[1]["messages"]
     system_message = messages[0]
     assert system_message["role"] == "system"
-    assert "prefira a ferramenta mais específica e barata" in system_message["content"]
+    assert "não repita a mesma chamada" in system_message["content"]
     assert "Workspace raiz: /tmp/workspace." in system_message["content"]
     tool_names = {tool["function"]["name"] for tool in mock_client.chat.completions.create.call_args[1]["tools"]}
-    assert tool_names == {"list_files", "read_file", "write_file", "grep_search", "run_shell"}
+    assert tool_names == {"list_files", "read_file", "write_file", "apply_patch", "grep_search", "run_shell"}
 
 
 def test_run_returns_none_on_empty_response():
@@ -510,7 +510,7 @@ def test_agent_plugin_cli_defaults():
 def test_existing_cli_plugins_still_register():
     import quimera.plugins.claude  # noqa: F401
     import quimera.plugins.mock  # noqa: F401
-    import quimera.plugins.qwen  # noqa: F401
+    import quimera.plugins.ollama  # noqa: F401
     import quimera.plugins as plugins
 
     claude = plugins.get("claude")
@@ -522,7 +522,7 @@ def test_existing_cli_plugins_still_register():
     assert mock is not None
     assert mock.driver == "cli"
 
-    qwen = plugins.get("qwen")
+    qwen = plugins.get("ollama-qwen")
     assert qwen is not None
     assert qwen.driver == "openai_compat"
     assert qwen.model == "qwen3-coder:30b"

@@ -20,6 +20,14 @@ PROMPT_BASE_RULES = """SUAS REGRAS:
 3. Não afirme sucesso sem evidência concreta.
 
 4. Se faltar informação crítica, use [NEEDS_INPUT].
+
+5. Ao editar projeto, prefira mudanças mínimas e locais. Não reescreva arquivo inteiro se uma alteração parcial resolver.
+
+6. Para arquivo existente: leia antes de editar, preserve o que não foi pedido e valide o resultado antes de concluir.
+
+7. Se houver ferramentas de edição disponíveis, prefira patch/edição parcial antes de sobrescrita completa.
+
+8. Responda de forma objetiva e curta. Não narre raciocínio, não faça relato passo a passo e não descreva ferramentas usadas, a menos que o humano peça isso.
 """
 
 PROMPT_GOAL_EXECUTION_RULES = """Regras de execução orientada a objetivos:
@@ -95,6 +103,8 @@ PROMPT_TOOL_RULE = (
     "- Você tem acesso às ferramentas customizadas listadas abaixo em 'Ferramentas disponíveis'.\n"
     "- Quando um participante usar o formato de bloco tool com JSON, você DEVE executar a ação correspondente.\n"
     "- Não peça confirmação — execute diretamente.\n"
+    "- Para editar arquivo existente, prefira apply_patch. Use write_file para criar arquivo novo ou reescrever por completo só quando isso for explicitamente necessário.\n"
+    "- Use run_shell como último recurso quando as ferramentas específicas não resolverem.\n"
 )
 PROMPT_AGENT_METRICS = "MÉTRICAS DO AGENTE:\n{metrics}"
 
@@ -158,12 +168,21 @@ TOOL_SCHEMA = {
     },
     "write_file": {
         "name": "write_file",
-        "description": "Cria ou sobrescreve um arquivo com o conteúdo especificado",
+        "description": "Cria um arquivo novo ou reescreve um arquivo inteiro quando isso for realmente necessário",
         "parameters": {
             "path": {"type": "str", "description": "Caminho absoluto do arquivo", "required": True},
             "content": {"type": "str", "description": "Conteúdo a escrever", "required": True},
+            "replace_existing": {"type": "bool", "description": "Use true apenas para sobrescrever arquivo existente por completo", "required": False},
         },
         "example": 'write_file(path="/src/new.py", content="print(\"hello\")")'
+    },
+    "apply_patch": {
+        "name": "apply_patch",
+        "description": "Aplica um patch textual estruturado. Ferramenta preferida para alterações parciais em arquivos existentes",
+        "parameters": {
+            "patch": {"type": "str", "description": "Patch no formato *** Begin Patch ... *** End Patch", "required": True}
+        },
+        "example": 'apply_patch(patch="*** Begin Patch\\n*** Update File: /src/app.py\\n@@\\n-old\\n+new\\n*** End Patch")'
     },
     "grep_search": {
         "name": "grep_search",
@@ -260,4 +279,3 @@ _SHARED_STATE_TRIM_KEYS = [
     "goal_canonical", "current_step", "acceptance_criteria", "allowed_scope",
     "non_goals", "out_of_scope_notes", "next_step", "task_overview",
 ]
-

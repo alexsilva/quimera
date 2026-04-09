@@ -149,24 +149,9 @@ class OpenAICompatDriver:
                 "content": (
                     f"Você tem acesso às seguintes ferramentas: {tool_names}. "
                     f"{workspace_hint}"
-                    "Protocolo de ferramentas: prefira a ferramenta mais específica e barata antes de usar shell; "
-                    "não repita a mesma chamada se a anterior já respondeu; "
-                    "para editar trechos de arquivos existentes, prefira apply_patch; "
-                    "use write_file para criar arquivo novo; "
-                    "para reescrever arquivo inteiro já existente, use write_file apenas com replace_existing=true; "
-                    "use run_shell apenas quando list_files/read_file/grep_search não resolverem; "
+                    "Protocolo de ferramentas: não repita a mesma chamada se a anterior já respondeu; "
                     "não peça ao usuário para executar comandos manualmente se você pode fazer isso diretamente; "
                     "nunca exponha tags de tool calling como <function>, </function> ou </tool_call> na resposta final."
-                ),
-            })
-            messages.append({
-                "role": "system",
-                "content": (
-                    "Estilo de resposta final: responda em português-BR, de forma objetiva e curta. "
-                    "Entregue só o que o pedido exige. "
-                    "Não descreva passo a passo, não narre seu raciocínio, "
-                    "não explique quais ferramentas usou, a menos que o usuário peça isso explicitamente. "
-                    "Se o usuário pedir itens específicos, devolva apenas esses itens."
                 ),
             })
         messages.append({"role": "user", "content": prompt})
