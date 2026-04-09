@@ -1281,7 +1281,7 @@ class QuimeraApp:
                     if hasattr(self, 'behavior_metrics') and self.behavior_metrics:
                         self.behavior_metrics.record_handoff_sent(route_target, is_invalid=True)
                     route_target = None  # Reset target if handoff parse fails
-                response = self.ROUTE_PATTERN.sub("", response, count=1).strip() or "..."
+                response = self.ROUTE_PATTERN.sub("", response, count=1).strip() or None
 
         extend = response.rstrip().endswith(EXTEND_MARKER)
         if extend:
