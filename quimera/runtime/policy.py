@@ -12,6 +12,8 @@ class ToolPolicyError(Exception):
 
 
 class ToolPolicy:
+    _SHELL_CHAIN_OPERATORS = (";", "&&", "||", "`", "$(")
+
     def __init__(self, config: ToolRuntimeConfig) -> None:
         self.config = config
 
@@ -72,8 +74,6 @@ class ToolPolicy:
 
     def _validate_fail_task(self, call: ToolCall) -> None:
         raise ToolPolicyError("fail_task não é exposta no chat; o executor interno encerra a task")
-
-    _SHELL_CHAIN_OPERATORS = (";", "&&", "||", "`", "$(")
 
     def _validate_run_shell(self, call: ToolCall) -> None:
         command = str(call.arguments.get("command", "")).strip()
