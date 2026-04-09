@@ -214,7 +214,8 @@ class AgentClient:
         """Executa agentes com driver de API (ex: openai_compat para Ollama)."""
         from .runtime.drivers.openai_compat import OpenAICompatDriver
 
-        if agent not in self._api_drivers:
+        is_first_call = agent not in self._api_drivers
+        if is_first_call:
             import os
             api_key_env = getattr(plugin, "api_key_env", None)
             api_key = os.environ.get(api_key_env, "ollama") if api_key_env else "ollama"
@@ -229,10 +230,11 @@ class AgentClient:
 
         from contextlib import nullcontext
         status_cm = self.renderer.running_status("", agent=agent) if (show_status and not silent) else nullcontext(None)
+        status_label = f"[dim]{'conectando' if is_first_call else 'aguardando'} {plugin.model}...[/dim]"
 
         with status_cm as status:
             if status is not None:
-                status.update(f"[dim]conectando {plugin.model}...[/dim]")
+                status.update(status_label)
             result = driver_instance.run(
                 prompt=prompt,
                 tool_executor=self.tool_executor,
