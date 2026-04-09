@@ -581,9 +581,9 @@ class ProtocolTests(unittest.TestCase):
 
         prompt = builder.build(AGENT_CODEX, history)
 
-        self.assertIn("- CLAUDE", prompt)
-        self.assertIn("- CODEX", prompt)
-        self.assertNotIn("- QWEN", prompt)
+        self.assertIn("CLAUDE", prompt)
+        # CODEX é o agente falante — não aparece na lista de outros agentes
+        self.assertNotIn("QWEN", prompt)
 
     def test_prompt_includes_session_state_when_present(self):
         builder = PromptBuilder(
@@ -2262,7 +2262,10 @@ class MetricsFeedbackTests(unittest.TestCase):
         
         self.assertIn("task", rule)
         self.assertIn("obrigatório", rule)
-        self.assertLess(len(rule), 300)
+        self.assertIn("claude", rule)
+        self.assertIn("codex", rule)
+        self.assertIn("NEEDS_INPUT", rule)
+        self.assertLess(len(rule), 500)
 
     def test_reviewer_rule_is_concise(self):
         """PROMPT_REVIEWER_RULE deve ser conciso."""

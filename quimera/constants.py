@@ -67,7 +67,7 @@ PROMPT_STEP_LOCK = "PASSO ATUAL:\n{current_step}"
 PROMPT_ACCEPTANCE_CRITERIA = "CRITÉRIOS DE ACEITAÇÃO:\n{acceptance_criteria}"
 PROMPT_SCOPE_CONTROL = "ESCOPO PERMITIDO:\n{allowed_scope}\n\nNÃO-OBJETIVOS:\n{non_goals}"
 # Core prompt building blocks
-PROMPT_HEADER = "Você é {agent} em uma conversa com:\n{participants}"
+PROMPT_HEADER = "Você é {agent}.\nUsuário humano: {user_name}\nAgentes de IA nesta conversa: {agents}"
 PROMPT_CONTEXT = "CONTEXTO PERSISTENTE:\n{context}"
 PROMPT_CONVERSATION = "CONVERSA:\n{conversation}"
 PROMPT_SPEAKER = "[{agent}]:"
@@ -230,10 +230,13 @@ def build_tools_prompt() -> str:
 
 
 def build_route_rule(agent_names):
+    agents_list = ", ".join(agent_names) if agent_names else "nenhum"
     return (
+        f"- Agentes disponíveis para delegação: {agents_list}\n"
         "- Para delegar: [ROUTE:agente] task: <o que fazer> | context: <contexto> | expected: <formato>\n"
         "- 'task' é obrigatório. Inclua contexto suficiente — o outro agente não vê o histórico.\n"
         "- Só delegue quando houver ganho real. Se consegue fazer, faça.\n"
+        "- Nunca roteie para o usuário humano — use [NEEDS_INPUT] se precisar de input humano.\n"
     )
 
 

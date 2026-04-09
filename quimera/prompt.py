@@ -85,8 +85,13 @@ class PromptBuilder:
 
         tools_prompt = build_tools_prompt() if not skip_tool_prompt else ""
 
-        participants = f"- {self.user_name.upper()}\n" + "".join(f"- {n.upper()}\n" for n in self.active_agents)
-        header_block = PROMPT_HEADER.format(agent=agent.upper(), participants=participants)
+        other_agents = [n for n in self.active_agents if n.lower() != agent.lower()]
+        agents_list = ", ".join(n.upper() for n in other_agents) if other_agents else "nenhum"
+        header_block = PROMPT_HEADER.format(
+            agent=agent.upper(),
+            user_name=self.user_name.upper(),
+            agents=agents_list,
+        )
         shared = shared_state or {}
         has_goal = "goal_canonical" in shared
 
