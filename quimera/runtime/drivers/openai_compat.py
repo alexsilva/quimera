@@ -120,8 +120,19 @@ class OpenAICompatDriver:
         Returns:
             Texto final da resposta do modelo, ou None em caso de falha.
         """
-        messages: list[dict] = [{"role": "user", "content": prompt}]
         tools = TOOL_SCHEMAS if tool_executor is not None else []
+        messages: list[dict] = []
+        if tools:
+            tool_names = ", ".join(t["function"]["name"] for t in tools)
+            messages.append({
+                "role": "system",
+                "content": (
+                    f"Você tem acesso às seguintes ferramentas: {tool_names}. "
+                    "Use-as sempre que precisar de informações do sistema ou do projeto. "
+                    "Não peça ao usuário para executar comandos manualmente se você pode fazer isso diretamente."
+                ),
+            })
+        messages.append({"role": "user", "content": prompt})
 
         for hop in range(MAX_TOOL_HOPS + 1):
             try:

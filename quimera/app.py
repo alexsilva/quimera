@@ -190,6 +190,7 @@ class QuimeraApp:
             summarizer_call=build_chain_summarizer(self.agent_client, list(dict.fromkeys(["qwen"] + self.active_agents))),
         )
         self.summary_agent_preference = "qwen"
+        self._pending_input_for: str | None = None
         last_session = self.storage.load_last_session()
         self.history = last_session["messages"]
         session_context = self.context_manager.load_session()
@@ -1435,6 +1436,12 @@ class QuimeraApp:
             self.renderer.show_warning(MSG_EMPTY_INPUT.format(first_agent))
             return
 
+        # Se há um agente aguardando resposta humana e o usuário não especificou
+        # explicitamente outro agente, redireciona para ele
+        if self._pending_input_for and not explicit:
+            first_agent = self._pending_input_for
+        self._pending_input_for = None
+
         other_agents = [n for n in self.active_agents if n != first_agent]
 
         self.round_index += 1
@@ -1448,10 +1455,8 @@ class QuimeraApp:
         if needs_human_input:
             if response:
                 self.renderer.show_message(first_agent, response)
-            self.renderer.show_system(
-                "\nO agente precisa de input humano. "
-                "Envie a continuação em uma nova mensagem para manter o chat destravado.\n"
-            )
+            self._pending_input_for = first_agent
+            self.renderer.show_system(f"\nResponda para {first_agent.upper()}:\n")
             return
         self.print_response(first_agent, response)
         if response is not None:
@@ -1626,10 +1631,8 @@ class QuimeraApp:
                         needing = next((a for a in results if a[-1]), None)
                         if needing:
                             current_agent = needing[0]
-                            self.renderer.show_system(
-                                f"{current_agent} precisa de input humano. "
-                                "Envie a continuação em uma nova mensagem."
-                            )
+                            self._pending_input_for = current_agent
+                            self.renderer.show_system(f"\nResponda para {current_agent.upper()}:\n")
                 except Exception as exc:
                     _logger.exception("parallel stage failed: %s", exc)
                     raise
@@ -1647,10 +1650,8 @@ class QuimeraApp:
                     if response is not None:
                         self.persist_message(agent, response)
                     if needs_human_input:
-                        self.renderer.show_system(
-                            f"{agent} precisa de input humano. "
-                            "Envie a continuação em uma nova mensagem."
-                        )
+                        self._pending_input_for = agent
+                        self.renderer.show_system(f"\nResponda para {agent.upper()}:\n")
                         break
                     if route_target and index + 1 < len(remaining):
                         remaining[index + 1] = route_target
