@@ -58,11 +58,16 @@ class PromptBuilder:
         shared_state=None,
         handoff_only=False,
         from_agent=None,
+        skip_tool_prompt=False,
     ):
         """Gera o prompt final enviado ao agente da vez.
 
         primary=False omite session_state — adequado para agentes secundários que já
         têm o contexto da conversa e não precisam do estado de bootstrap da sessão.
+
+        skip_tool_prompt=True omite PROMPT_TOOL_RULE e build_tools_prompt() — usado
+        por agentes com driver de API onde as ferramentas são declaradas via schema
+        OpenAI e as instruções text-based conflitariam com o protocolo da API.
         """
         context = self.context_manager.load()
 
@@ -70,16 +75,15 @@ class PromptBuilder:
         if handoff_only:
             rules += PROMPT_HANDOFF_RULE
         else:
-            # For non-handoff prompts, we still need to add the route rule and tools
-            # PROMPT_BASE_RULES already contains the core execution rules
             rules += build_route_rule(self.active_agents)
-            rules += PROMPT_TOOL_RULE
+            if not skip_tool_prompt:
+                rules += PROMPT_TOOL_RULE
             if is_first_speaker:
                 rules += PROMPT_DEBATE_RULE.format(marker=EXTEND_MARKER)
             else:
                 rules += PROMPT_REVIEWER_RULE
 
-        tools_prompt = build_tools_prompt()
+        tools_prompt = build_tools_prompt() if not skip_tool_prompt else ""
 
         participants = f"- {self.user_name.upper()}\n" + "".join(f"- {n.upper()}\n" for n in self.active_agents)
         header_block = PROMPT_HEADER.format(agent=agent.upper(), participants=participants)

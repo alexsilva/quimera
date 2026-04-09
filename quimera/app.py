@@ -1072,6 +1072,11 @@ class QuimeraApp:
         start = time.time()
         history = [] if handoff_only else self.history
         self._refresh_task_shared_state()
+        # Agentes com driver de API recebem tools via schema OpenAI — as instruções
+        # text-based conflitariam com o protocolo da API e devem ser omitidas.
+        plugin = plugins.get(agent)
+        _driver = getattr(plugin, "driver", "cli") if plugin else "cli"
+        skip_tool_prompt = isinstance(_driver, str) and _driver != "cli"
         if self.debug_prompt_metrics:
             prompt, metrics = self.prompt_builder.build(
                 agent,
@@ -1083,6 +1088,7 @@ class QuimeraApp:
                 shared_state=self.shared_state,
                 handoff_only=handoff_only,
                 from_agent=from_agent,
+                skip_tool_prompt=skip_tool_prompt,
             )
             self.agent_client.log_prompt_metrics(
                 agent, metrics,
@@ -1097,6 +1103,7 @@ class QuimeraApp:
                 agent, history, is_first_speaker, handoff,
                 primary=primary, shared_state=self.shared_state,
                 handoff_only=handoff_only, from_agent=from_agent,
+                skip_tool_prompt=skip_tool_prompt,
             )
         result = self.agent_client.call(agent, prompt, silent=silent)
         elapsed = time.time() - start
