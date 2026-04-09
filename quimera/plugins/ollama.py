@@ -5,7 +5,7 @@ plugin = AgentPlugin(
     prefix="/ollama-qwen",
     style=("green", "OllamaQwen"),
     driver="openai_compat",
-    model="qwen3:14b",
+    model="qwen3-coder:30b",
     base_url="http://localhost:11434/v1",
     # api_key_env não necessário para Ollama local
     capabilities=["code_review", "code_editing"],
@@ -39,19 +39,20 @@ plugin = AgentPlugin(
 register(plugin)
 
 plugin = AgentPlugin(
-    name="ollama-deepcoder",
-    prefix="/ollama-deepcoder",
-    style=("cyan", "OllamaDeepcoder"),
+    name="ollama-gemma4",
+    prefix="/ollama-gemma4",
+    style=("green", "OllamaGemma4"),
     driver="openai_compat",
-    model="deepcoder:14b",
+    model="gemma4",
     base_url="http://localhost:11434/v1",
+    # api_key_env não necessário para Ollama local
     capabilities=["code_review", "code_editing"],
     preferred_task_types=["code_review", "code_edit"],
     avoid_task_types=[],
-    supports_tools=False,      # modelo sem tool calling (apenas completion)
+    supports_tools=True,
     supports_code_editing=True,
     supports_long_context=False,
-    supports_task_execution=False,
+    supports_task_execution=True,
     base_tier=1,
 )
 register(plugin)
