@@ -1446,7 +1446,8 @@ class QuimeraApp:
         response, route_target, handoff, extend, needs_human_input, _ = self.parse_response(response)
 
         if needs_human_input:
-            self.renderer.show_message(first_agent, response)
+            if response:
+                self.renderer.show_message(first_agent, response)
             self.renderer.show_system(
                 "\nO agente precisa de input humano. "
                 "Envie a continuação em uma nova mensagem para manter o chat destravado.\n"
