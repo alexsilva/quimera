@@ -198,9 +198,10 @@ class PolicyTests(unittest.TestCase):
         selected = choose_best_agent("code_review", [plugins.get("qwen"), plugins.get("claude")])
         self.assertEqual(selected, "claude")
 
-    def test_choose_best_agent_returns_none_when_only_qwen_is_available_for_task_execution(self):
+    def test_choose_best_agent_assigns_qwen_when_it_is_the_only_available_agent(self):
+        # qwen agora suporta task execution via driver openai_compat
         selected = choose_best_agent("code_review", [plugins.get("qwen")])
-        self.assertIsNone(selected)
+        self.assertEqual(selected, "qwen")
 
     def test_choose_best_agent_does_not_route_general_to_qwen_on_tie_order(self):
         selected = choose_best_agent("general", [plugins.get("qwen"), plugins.get("claude"), plugins.get("codex")])

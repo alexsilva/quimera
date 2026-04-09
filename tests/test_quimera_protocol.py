@@ -443,7 +443,8 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn("task criada com id", app.renderer.system_messages[-1])
         self.assertIn("atribuída para codex", app.renderer.system_messages[-1])
 
-    def test_handle_task_command_does_not_assign_qwen_without_explicit_task_execution_support(self):
+    def test_handle_task_command_assigns_qwen_when_it_supports_task_execution(self):
+        # qwen agora suporta task execution via driver openai_compat
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
         app._output_lock = threading.Lock()
@@ -464,8 +465,8 @@ class ProtocolTests(unittest.TestCase):
         self.assertTrue(handled)
         tasks = list_tasks({"job_id": 1}, db_path=str(db_path))
         self.assertEqual(len(tasks), 1)
-        self.assertIsNone(tasks[0]["assigned_to"])
-        self.assertNotIn("atribuída para", app.renderer.system_messages[-1])
+        self.assertEqual(tasks[0]["assigned_to"], "qwen")
+        self.assertIn("atribuída para qwen", app.renderer.system_messages[-1])
 
     def test_classify_task_execution_result_rejects_needs_input(self):
         ok, reason = QuimeraApp._classify_task_execution_result(

@@ -10,5 +10,9 @@ dependencies = [
     "rich>=14.0",
 ]
 
+[project.optional-dependencies]
+ollama = ["openai>=1.0"]
+api = ["openai>=1.0"]
+
 [project.scripts]
 quimera = "quimera.cli:main"

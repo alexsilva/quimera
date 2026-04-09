@@ -24,7 +24,7 @@ def _strip_spinner(text: str) -> str:
 class AgentClient:
     """Executa os agentes externos no diretório de trabalho do projeto."""
 
-    def __init__(self, renderer, metrics_file=None, timeout=None, spy=False, working_dir=None, workspace_root=None):
+    def __init__(self, renderer, metrics_file=None, timeout=None, spy=False, working_dir=None, workspace_root=None, tool_executor=None):
         self.renderer = renderer
         self.metrics_file = metrics_file
         self._metrics_lock = threading.Lock()
@@ -32,6 +32,10 @@ class AgentClient:
         self.spy = spy
         # `workspace_root` é mantido como alias compatível.
         self.working_dir = working_dir if working_dir is not None else workspace_root
+        # Injetado de app.py após criação do ToolExecutor; usado pelos drivers de API.
+        self.tool_executor = tool_executor
+        # Cache de instâncias de driver por nome de agente.
+        self._api_drivers: dict = {}
 
     def run(self, cmd, input_text=None, silent=False, agent=None, show_status=True):
         try:
@@ -199,9 +203,42 @@ class AgentClient:
         if plugin is None:
             self.renderer.show_error(f"[erro] agente desconhecido: {agent}")
             return None
+        driver = getattr(plugin, "driver", "cli")
+        if isinstance(driver, str) and driver != "cli":
+            return self._call_api(agent, plugin, prompt, silent=silent, show_status=show_status)
         if plugin.prompt_as_arg:
             return self.run([*plugin.cmd, prompt], input_text=None, silent=silent, agent=agent, show_status=show_status)
         return self.run(plugin.cmd, input_text=prompt, silent=silent, agent=agent, show_status=show_status)
+
+    def _call_api(self, agent, plugin, prompt, silent=False, show_status=True):
+        """Executa agentes com driver de API (ex: openai_compat para Ollama)."""
+        from .runtime.drivers.openai_compat import OpenAICompatDriver
+
+        if agent not in self._api_drivers:
+            import os
+            api_key_env = getattr(plugin, "api_key_env", None)
+            api_key = os.environ.get(api_key_env, "ollama") if api_key_env else "ollama"
+            self._api_drivers[agent] = OpenAICompatDriver(
+                model=plugin.model,
+                base_url=plugin.base_url,
+                api_key=api_key,
+                timeout=self.timeout,
+            )
+
+        driver_instance = self._api_drivers[agent]
+
+        from contextlib import nullcontext
+        status_cm = self.renderer.running_status("", agent=agent) if (show_status and not silent) else nullcontext(None)
+
+        with status_cm as status:
+            if status is not None:
+                status.update(f"[dim]conectando {plugin.model}...[/dim]")
+            result = driver_instance.run(
+                prompt=prompt,
+                tool_executor=self.tool_executor,
+            )
+
+        return result
 
     def log_prompt_metrics(
         self, agent, metrics, session_id=None,

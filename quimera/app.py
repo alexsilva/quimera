@@ -266,6 +266,8 @@ class QuimeraApp:
             ),
             approval_handler=ConsoleApprovalHandler(),
         )
+        # Injeta o executor nos drivers de API do agent_client.
+        self.agent_client.tool_executor = self.tool_executor
         # Set up task executors for autonomous task execution
         self._setup_task_executors()
 
