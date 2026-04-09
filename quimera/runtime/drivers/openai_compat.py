@@ -12,7 +12,7 @@ import re
 from typing import Optional
 
 from ..models import ToolCall, ToolResult
-from .tool_schemas import TOOL_SCHEMAS
+from .tool_schemas import resolve_tool_schemas
 
 try:
     from openai import OpenAI
@@ -25,6 +25,7 @@ MAX_TOOL_HOPS = 8
 
 # Remove blocos <think>...</think> ou <thinking>...</thinking> que modelos Qwen3 emitem.
 _THINK_RE = re.compile(r"<think(?:ing)?>.*?</think(?:ing)?>", re.DOTALL)
+_FUNCTION_RESIDUE_RE = re.compile(r"</?(?:function|tool_call)\b[^>]*>")
 
 # Formato XML de text-tool-calls que alguns modelos emitem quando a API não suporta tool_calls:
 # <function=NAME><parameter=KEY>VALUE</tool_call>
@@ -34,6 +35,13 @@ _TEXT_PARAM_RE = re.compile(r"<parameter=(\w+)>")
 
 def _strip_thinking(text: str) -> str:
     return _THINK_RE.sub("", text).strip()
+
+
+def _sanitize_assistant_text(text: str) -> str:
+    """Remove resíduos textuais de tool calling que alguns modelos deixam no content."""
+    text = _strip_thinking(text)
+    text = _FUNCTION_RESIDUE_RE.sub("", text)
+    return text.strip()
 
 
 def _parse_text_tool_calls(text: str) -> list[dict]:
@@ -108,6 +116,8 @@ class OpenAICompatDriver:
         self,
         prompt: str,
         tool_executor=None,
+        on_tool_call=None,
+        on_tool_result=None,
     ) -> Optional[str]:
         """
         Executa o agente com o prompt dado tratando o loop de tool calling internamente.
@@ -116,20 +126,47 @@ class OpenAICompatDriver:
             prompt: Prompt completo construído pelo PromptBuilder.
             tool_executor: Instância de ToolExecutor para executar tool calls.
                            Se None, o agente responde sem ferramentas.
+            on_tool_call: Callback opcional chamado antes de cada tool call.
+                          Assinatura: on_tool_call(name: str, args: dict) -> None
+            on_tool_result: Callback opcional chamado após cada tool result.
+                            Assinatura: on_tool_result(result: ToolResult) -> None
 
         Returns:
             Texto final da resposta do modelo, ou None em caso de falha.
         """
-        tools = TOOL_SCHEMAS if tool_executor is not None else []
+        tools = resolve_tool_schemas(tool_executor) if tool_executor is not None else []
         messages: list[dict] = []
         if tools:
             tool_names = ", ".join(t["function"]["name"] for t in tools)
+            workspace_root = getattr(getattr(tool_executor, "config", None), "workspace_root", None)
+            workspace_hint = (
+                f"Workspace raiz: {workspace_root}. "
+                if workspace_root is not None else
+                ""
+            )
             messages.append({
                 "role": "system",
                 "content": (
                     f"Você tem acesso às seguintes ferramentas: {tool_names}. "
-                    "Use-as sempre que precisar de informações do sistema ou do projeto. "
-                    "Não peça ao usuário para executar comandos manualmente se você pode fazer isso diretamente."
+                    f"{workspace_hint}"
+                    "Protocolo de ferramentas: prefira a ferramenta mais específica e barata antes de usar shell; "
+                    "não repita a mesma chamada se a anterior já respondeu; "
+                    "para editar trechos de arquivos existentes, prefira apply_patch; "
+                    "use write_file para criar arquivo novo; "
+                    "para reescrever arquivo inteiro já existente, use write_file apenas com replace_existing=true; "
+                    "use run_shell apenas quando list_files/read_file/grep_search não resolverem; "
+                    "não peça ao usuário para executar comandos manualmente se você pode fazer isso diretamente; "
+                    "nunca exponha tags de tool calling como <function>, </function> ou </tool_call> na resposta final."
+                ),
+            })
+            messages.append({
+                "role": "system",
+                "content": (
+                    "Estilo de resposta final: responda em português-BR, de forma objetiva e curta. "
+                    "Entregue só o que o pedido exige. "
+                    "Não descreva passo a passo, não narre seu raciocínio, "
+                    "não explique quais ferramentas usou, a menos que o usuário peça isso explicitamente. "
+                    "Se o usuário pedir itens específicos, devolva apenas esses itens."
                 ),
             })
         messages.append({"role": "user", "content": prompt})
@@ -142,11 +179,11 @@ class OpenAICompatDriver:
                 return None
 
             if not tool_calls:
-                return _strip_thinking(response_text) if response_text else None
+                return _sanitize_assistant_text(response_text) if response_text else None
 
             if hop == MAX_TOOL_HOPS:
                 _logger.warning("OpenAICompatDriver: max tool hops (%d) reached", MAX_TOOL_HOPS)
-                return _strip_thinking(response_text) if response_text else "Limite de chamadas de ferramenta atingido."
+                return _sanitize_assistant_text(response_text) if response_text else "Limite de chamadas de ferramenta atingido."
 
             # Adiciona turno do assistente com os tool calls
             assistant_msg: dict = {
@@ -168,11 +205,15 @@ class OpenAICompatDriver:
 
             # Executa cada ferramenta e adiciona os resultados
             for tc in tool_calls:
+                if on_tool_call is not None:
+                    on_tool_call(tc["name"], tc["arguments"])
                 result = self._execute_tool(tc, tool_executor)
                 _logger.info(
                     "OpenAICompatDriver: tool=%s ok=%s hop=%d",
                     tc["name"], result.ok, hop,
                 )
+                if on_tool_result is not None:
+                    on_tool_result(result)
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc["id"],
@@ -224,10 +265,10 @@ class OpenAICompatDriver:
                     "OpenAICompatDriver: %d text-format tool call(s) detectados em content (fallback)",
                     len(parsed),
                 )
-                clean_text = _TEXT_FUNC_CALL_RE.sub("", text).strip()
+                clean_text = _sanitize_assistant_text(_TEXT_FUNC_CALL_RE.sub("", text).strip())
                 return clean_text, parsed
 
-        return text, tool_calls
+        return _sanitize_assistant_text(text), tool_calls
 
     def _chat_streaming(self, messages: list[dict]) -> tuple[str, list[dict]]:
         """

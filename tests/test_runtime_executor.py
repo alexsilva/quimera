@@ -22,6 +22,14 @@ def test_executor_denied(config, approval_handler):
     assert result.ok is False
     assert "Execução negada" in result.error
 
+def test_executor_apply_patch_requires_approval(config, approval_handler):
+    executor = ToolExecutor(config, approval_handler)
+    call = ToolCall(name="apply_patch", arguments={"patch": "*** Begin Patch\n*** End Patch"})
+    approval_handler.approve.return_value = False
+    result = executor.execute(call)
+    assert result.ok is False
+    assert "Execução negada" in result.error
+
 def test_executor_unexpected_exception(config, approval_handler):
     # Line 64-65 coverage
     executor = ToolExecutor(config, approval_handler)

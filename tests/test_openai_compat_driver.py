@@ -10,8 +10,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from quimera.runtime.drivers.openai_compat import OpenAICompatDriver, _strip_thinking
-from quimera.runtime.drivers.tool_schemas import TOOL_SCHEMAS
+from quimera.runtime.drivers.openai_compat import (
+    OpenAICompatDriver,
+    _sanitize_assistant_text,
+    _strip_thinking,
+)
+from quimera.runtime.drivers.tool_schemas import TOOL_SCHEMAS, resolve_tool_schemas
 from quimera.runtime.models import ToolCall, ToolResult
 
 
@@ -73,6 +77,18 @@ def test_schema_names_match_registered_tools():
     assert actual == expected
 
 
+def test_resolve_tool_schemas_hides_task_tools_without_db():
+    mock_executor = MagicMock()
+    mock_executor.config = SimpleNamespace(db_path=None)
+    mock_executor.registry.names.return_value = [
+        "list_files", "read_file", "write_file", "grep_search", "run_shell",
+        "list_tasks", "list_jobs", "get_job",
+    ]
+
+    actual = {s["function"]["name"] for s in resolve_tool_schemas(mock_executor)}
+    assert actual == {"list_files", "read_file", "write_file", "grep_search", "run_shell"}
+
+
 def test_required_args_are_lists():
     for schema in TOOL_SCHEMAS:
         params = schema["function"]["parameters"]
@@ -103,6 +119,11 @@ def test_strip_thinking_no_block():
 def test_strip_thinking_multiple_blocks():
     text = "<think>a</think>Texto<think>b</think>Final"
     assert _strip_thinking(text) == "TextoFinal"
+
+
+def test_sanitize_assistant_text_removes_function_residue():
+    text = "<think>x</think></function>\nResposta final\n</tool_call>"
+    assert _sanitize_assistant_text(text) == "Resposta final"
 
 
 # ---------------------------------------------------------------------------
@@ -171,8 +192,11 @@ def test_chat_with_tools_uses_non_streaming():
     mock_client.chat.completions.create.return_value = _make_non_streaming_response(
         content="ok", tool_calls=None
     )
+    mock_executor = MagicMock()
+    mock_executor.config = SimpleNamespace(db_path="/tmp/tasks.db")
+    mock_executor.registry.names.return_value = [s["function"]["name"] for s in TOOL_SCHEMAS]
 
-    driver._chat([{"role": "user", "content": "x"}], tools=TOOL_SCHEMAS)
+    driver._chat([{"role": "user", "content": "x"}], tools=resolve_tool_schemas(mock_executor))
 
     call_kwargs = mock_client.chat.completions.create.call_args[1]
     assert call_kwargs.get("stream") is False
@@ -208,7 +232,7 @@ def test_chat_with_tools_invalid_json_returns_empty_dict():
 def test_chat_with_tools_no_tool_calls_in_response():
     driver, mock_client = _make_driver()
     mock_client.chat.completions.create.return_value = _make_non_streaming_response(
-        content="Só texto, sem ferramentas.", tool_calls=None
+        content="</function>\nSó texto, sem ferramentas.", tool_calls=None
     )
 
     text, tool_calls = driver._chat([], tools=TOOL_SCHEMAS)
@@ -268,6 +292,34 @@ def test_run_strips_thinking_block():
     assert result == "Resposta"
 
 
+def test_run_strips_tool_residue_from_final_response():
+    driver, mock_client = _make_driver()
+    _setup_stream(mock_client, [_make_chunk(content="</function>Resposta final</tool_call>")])
+
+    result = driver.run("prompt", tool_executor=None)
+    assert result == "Resposta final"
+
+
+def test_run_tools_system_prompt_guides_tool_usage():
+    driver, mock_client = _make_driver()
+    mock_client.chat.completions.create.return_value = _make_non_streaming_response(
+        content="ok", tool_calls=None
+    )
+    mock_executor = MagicMock()
+    mock_executor.config = SimpleNamespace(workspace_root="/tmp/workspace", db_path=None)
+    mock_executor.registry.names.return_value = [s["function"]["name"] for s in TOOL_SCHEMAS]
+
+    driver.run("prompt", tool_executor=mock_executor)
+
+    messages = mock_client.chat.completions.create.call_args[1]["messages"]
+    system_message = messages[0]
+    assert system_message["role"] == "system"
+    assert "prefira a ferramenta mais específica e barata" in system_message["content"]
+    assert "Workspace raiz: /tmp/workspace." in system_message["content"]
+    tool_names = {tool["function"]["name"] for tool in mock_client.chat.completions.create.call_args[1]["tools"]}
+    assert tool_names == {"list_files", "read_file", "write_file", "grep_search", "run_shell"}
+
+
 def test_run_returns_none_on_empty_response():
     driver, mock_client = _make_driver()
     _setup_stream(mock_client, [_make_chunk(content=None)])
@@ -289,6 +341,8 @@ def test_run_tool_loop_one_hop():
     mock_client.chat.completions.create.side_effect = [resp_1, resp_2]
 
     mock_executor = MagicMock()
+    mock_executor.config = SimpleNamespace(db_path="/tmp/tasks.db", workspace_root="/tmp/workspace")
+    mock_executor.registry.names.return_value = [s["function"]["name"] for s in TOOL_SCHEMAS]
     mock_executor.execute.return_value = ToolResult(
         ok=True, tool_name="read_file", content="conteúdo do arquivo"
     )
@@ -310,6 +364,8 @@ def test_run_tool_loop_sends_tool_result_message():
     mock_client.chat.completions.create.side_effect = [resp_1, resp_2]
 
     mock_executor = MagicMock()
+    mock_executor.config = SimpleNamespace(db_path="/tmp/tasks.db", workspace_root="/tmp/workspace")
+    mock_executor.registry.names.return_value = [s["function"]["name"] for s in TOOL_SCHEMAS]
     mock_executor.execute.return_value = ToolResult(ok=True, tool_name="run_shell", content="file.py")
 
     driver.run("liste arquivos", tool_executor=mock_executor)
@@ -343,6 +399,8 @@ def test_run_max_hops_returns_last_text():
     mock_client.chat.completions.create.side_effect = always_tool_response
 
     mock_executor = MagicMock()
+    mock_executor.config = SimpleNamespace(db_path="/tmp/tasks.db", workspace_root="/tmp/workspace")
+    mock_executor.registry.names.return_value = [s["function"]["name"] for s in TOOL_SCHEMAS]
     mock_executor.execute.return_value = ToolResult(ok=True, tool_name="run_shell", content="ok")
 
     result = driver.run("prompt", tool_executor=mock_executor)

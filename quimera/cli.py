@@ -8,6 +8,7 @@ from typing import List
 from .app import QuimeraApp
 from .config import ConfigManager
 from . import plugins as _plugins
+from .runtime.drivers.repl import DriverRepl
 
 try:
     from .ui import TerminalRenderer
@@ -72,6 +73,13 @@ def main():
                         help="Agente para modo de teste (usado com --interactive-test)")
     parser.add_argument("--test-prompt", dest="test_prompt", nargs=argparse.REMAINDER, default=None,
                         help="Prompt para modo de teste")
+    parser.add_argument("--driver-repl", dest="driver_repl", metavar="PLUGIN",
+                        default=None,
+                        help="Inicia REPL interativo para testar um plugin openai_compat (ex: ollama-qwen)")
+    parser.add_argument("--working-dir", dest="working_dir", metavar="DIR", default=None,
+                        help="Diretório de trabalho para o REPL (padrão: cwd)")
+    parser.add_argument("--prompt", dest="repl_prompt", metavar="TEXTO", default=None,
+                        help="Prompt one-shot para --driver-repl (não-interativo, útil para scripts)")
     
     args, _ = parser.parse_known_args()
 
@@ -89,6 +97,12 @@ def main():
 
     if args.history_window is not None and args.history_window <= 0:
         parser.error("--history-window deve ser maior que zero")
+
+    if args.driver_repl:
+        working_dir = Path(args.working_dir).resolve() if args.working_dir else None
+        repl = DriverRepl(args.driver_repl, working_dir=working_dir)
+        repl.run(one_shot_prompt=args.repl_prompt)
+        return
 
     available = _plugins.all_names()
     requested = _expand_patterns(args.agents, available)

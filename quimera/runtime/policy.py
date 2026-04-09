@@ -25,7 +25,7 @@ class ToolPolicy:
         validator(call)
 
     def requires_approval(self, call: ToolCall) -> bool:
-        if call.name in {"write_file", "run_shell"}:
+        if call.name in {"write_file", "apply_patch", "run_shell"}:
             return self.config.require_approval_for_mutations
         return False
 
@@ -44,9 +44,21 @@ class ToolPolicy:
         raw = call.arguments.get("path")
         if not raw:
             raise ToolPolicyError("write_file requer 'path'")
-        self._resolve_workspace_path(raw)
+        path = self._resolve_workspace_path(raw)
         if "content" not in call.arguments:
             raise ToolPolicyError("write_file requer 'content'")
+        mode = str(call.arguments.get("mode", "overwrite"))
+        replace_existing = bool(call.arguments.get("replace_existing", False))
+        if mode == "overwrite" and path.exists() and not replace_existing:
+            raise ToolPolicyError(
+                "write_file não pode sobrescrever arquivo existente sem replace_existing=true; "
+                "para edições parciais use apply_patch"
+            )
+
+    def _validate_apply_patch(self, call: ToolCall) -> None:
+        patch = str(call.arguments.get("patch", "")).strip()
+        if not patch:
+            raise ToolPolicyError("apply_patch requer 'patch'")
 
     def _validate_grep_search(self, call: ToolCall) -> None:
         self._resolve_workspace_path(call.arguments.get("path", "."))

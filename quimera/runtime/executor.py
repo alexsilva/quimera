@@ -7,6 +7,7 @@ from .parser import ToolCallParseError, extract_tool_call
 from .policy import ToolPolicy, ToolPolicyError
 from .registry import ToolRegistry
 from .tools.files import FileTools
+from .tools.patch import PatchTool
 from .tools.shell import ShellTool
 from .tools.tasks import TaskTools
 
@@ -29,11 +30,13 @@ class ToolExecutor:
 
     def _register_builtin_tools(self) -> None:
         file_tools = FileTools(self.config)
+        patch_tool = PatchTool(self.config)
         shell_tool = ShellTool(self.config)
         task_tools = TaskTools(self.config)
         self.registry.register("list_files", file_tools.list_files)
         self.registry.register("read_file", file_tools.read_file)
         self.registry.register("write_file", file_tools.write_file)
+        self.registry.register("apply_patch", patch_tool.apply_patch)
         self.registry.register("grep_search", file_tools.grep_search)
         self.registry.register("run_shell", shell_tool.run_shell)
         # Task-related read-only tools

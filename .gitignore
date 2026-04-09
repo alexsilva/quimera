@@ -14,3 +14,4 @@ quimera.db
 coverage.json
 mock.py
 .pytest_cache/
+.codex

@@ -83,6 +83,16 @@ Além da saída em tempo real no terminal, o runtime mantém métricas básicas 
 
 Essa observabilidade hoje é usada principalmente para depuração, análise de comportamento e continuidade do contexto operacional.
 
+### Ferramentas de Runtime
+
+Quando um agente usa o driver `openai_compat`, o Quimera pode expor ferramentas nativas do runtime para operar direto no workspace:
+- `list_files`, `read_file`, `grep_search` para inspeção
+- `apply_patch` para alterações parciais e seguras em arquivos existentes
+- `write_file` para criação de arquivos e reescrita completa apenas quando isso for explícito
+- `run_shell` para comandos permitidos e aprovados
+
+Na prática, `apply_patch` é a primitive preferida para edição, porque evita sobrescrever arquivos inteiros quando só alguns trechos precisam mudar. `write_file` não deve sobrescrever arquivo existente por padrão; para isso, o agente precisa usar `replace_existing=true`.
+
 ## Agentes Disponíveis
 
 | Agente | Especialidade Principal | Tier |

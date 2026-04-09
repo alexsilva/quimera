@@ -3,6 +3,8 @@ Definições de ferramentas no formato OpenAI tool calling schema.
 Espelham as ferramentas registradas em ToolExecutor._register_builtin_tools().
 """
 
+from collections.abc import Iterable
+
 TOOL_SCHEMAS = [
     {
         "type": "function",
@@ -59,8 +61,39 @@ TOOL_SCHEMAS = [
                         "enum": ["overwrite", "append", "create"],
                         "description": "Modo de escrita: overwrite (padrão), append, create (falha se já existe).",
                     },
+                    "replace_existing": {
+                        "type": "boolean",
+                        "description": (
+                            "Obrigatório para sobrescrever um arquivo já existente por completo. "
+                            "Para mudanças parciais, use apply_patch."
+                        ),
+                    },
                 },
                 "required": ["path", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "apply_patch",
+            "description": (
+                "Aplica um patch textual estruturado no workspace. "
+                "Prefira esta ferramenta para alterações parciais em arquivos existentes."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "patch": {
+                        "type": "string",
+                        "description": (
+                            "Patch no formato:"
+                            " *** Begin Patch ... *** End Patch. "
+                            "Suporta Add File, Delete File e Update File."
+                        ),
+                    }
+                },
+                "required": ["patch"],
             },
         },
     },
@@ -153,3 +186,28 @@ TOOL_SCHEMAS = [
         },
     },
 ]
+
+_TASK_TOOL_NAMES = {"list_tasks", "list_jobs", "get_job"}
+
+
+def resolve_tool_schemas(tool_executor=None) -> list[dict]:
+    """Retorna apenas schemas coerentes com o executor/configuração atual."""
+    schemas = list(TOOL_SCHEMAS)
+    if tool_executor is None:
+        return schemas
+
+    registry = getattr(tool_executor, "registry", None)
+    if registry is not None and hasattr(registry, "names"):
+        registry_names = registry.names()
+        if isinstance(registry_names, Iterable) and not isinstance(registry_names, (str, bytes, dict)):
+            enabled_names = set(registry_names)
+            schemas = [schema for schema in schemas if schema["function"]["name"] in enabled_names]
+
+    config = getattr(tool_executor, "config", None)
+    if config is not None and getattr(config, "db_path", None) is None:
+        schemas = [
+            schema for schema in schemas
+            if schema["function"]["name"] not in _TASK_TOOL_NAMES
+        ]
+
+    return schemas

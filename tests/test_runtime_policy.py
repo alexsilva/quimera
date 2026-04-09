@@ -27,6 +27,29 @@ def test_policy_write_file_no_content(policy):
     with pytest.raises(ToolPolicyError, match="requer 'content'"):
         policy.validate(call)
 
+def test_policy_write_file_existing_requires_replace_flag(tmp_path):
+    config = ToolRuntimeConfig(workspace_root=tmp_path)
+    policy = ToolPolicy(config)
+    (tmp_path / "test.txt").write_text("old", encoding="utf-8")
+    call = ToolCall(name="write_file", arguments={"path": "test.txt", "content": "new"})
+    with pytest.raises(ToolPolicyError, match="replace_existing=true"):
+        policy.validate(call)
+
+def test_policy_write_file_existing_allowed_with_replace_flag(tmp_path):
+    config = ToolRuntimeConfig(workspace_root=tmp_path)
+    policy = ToolPolicy(config)
+    (tmp_path / "test.txt").write_text("old", encoding="utf-8")
+    call = ToolCall(
+        name="write_file",
+        arguments={"path": "test.txt", "content": "new", "replace_existing": True},
+    )
+    policy.validate(call)
+
+def test_policy_apply_patch_requires_patch(policy):
+    call = ToolCall(name="apply_patch", arguments={})
+    with pytest.raises(ToolPolicyError, match="apply_patch requer 'patch'"):
+        policy.validate(call)
+
 def test_policy_grep_search_no_pattern(policy):
     # Line 47 coverage
     call = ToolCall(name="grep_search", arguments={"pattern": ""})
@@ -74,6 +97,7 @@ def test_policy_path_outside_workspace(policy):
 
 def test_policy_requires_approval(policy):
     assert policy.requires_approval(ToolCall(name="write_file", arguments={})) is True
+    assert policy.requires_approval(ToolCall(name="apply_patch", arguments={})) is True
     assert policy.requires_approval(ToolCall(name="read_file", arguments={})) is False
 
 def test_policy_other_validations(policy):
