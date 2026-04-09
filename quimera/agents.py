@@ -235,9 +235,10 @@ class AgentClient:
         with status_cm as status:
             if status is not None:
                 status.update(status_label)
+            effective_tool_executor = self.tool_executor if getattr(plugin, "supports_tools", True) else None
             result = driver_instance.run(
                 prompt=prompt,
-                tool_executor=self.tool_executor,
+                tool_executor=effective_tool_executor,
             )
 
         return result

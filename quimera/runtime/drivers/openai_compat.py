@@ -23,12 +23,48 @@ _logger = logging.getLogger(__name__)
 
 MAX_TOOL_HOPS = 8
 
-# Remove blocos <think>...</think> que modelos Qwen3 emitem antes da resposta.
-_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+# Remove blocos <think>...</think> ou <thinking>...</thinking> que modelos Qwen3 emitem.
+_THINK_RE = re.compile(r"<think(?:ing)?>.*?</think(?:ing)?>", re.DOTALL)
+
+# Formato XML de text-tool-calls que alguns modelos emitem quando a API não suporta tool_calls:
+# <function=NAME><parameter=KEY>VALUE</tool_call>
+_TEXT_FUNC_CALL_RE = re.compile(r"<function=(\w+)>(.*?)</tool_call>", re.DOTALL)
+_TEXT_PARAM_RE = re.compile(r"<parameter=(\w+)>")
 
 
 def _strip_thinking(text: str) -> str:
     return _THINK_RE.sub("", text).strip()
+
+
+def _parse_text_tool_calls(text: str) -> list[dict]:
+    """
+    Parseia tool calls em formato XML de texto emitidas diretamente no conteúdo.
+
+    Formato detectado (ex: qwen3-coder via Ollama sem suporte nativo a tool_calls):
+        <function=NAME><parameter=KEY1>VALUE1<parameter=KEY2>VALUE2</tool_call>
+    """
+    calls = []
+    for match in _TEXT_FUNC_CALL_RE.finditer(text):
+        name = match.group(1)
+        body = match.group(2)
+        parts = _TEXT_PARAM_RE.split(body)
+        arguments: dict = {}
+        # parts: ["pré", KEY1, "VALUE1", KEY2, "VALUE2", ...]
+        it = iter(parts[1:])
+        for key in it:
+            try:
+                raw_value = next(it)
+                # remover </parameter> se presente
+                value = re.sub(r"</parameter>", "", raw_value).strip()
+                arguments[key] = value
+            except StopIteration:
+                break
+        calls.append({
+            "id": f"text-tc-{len(calls):04d}",
+            "name": name,
+            "arguments": arguments,
+        })
+    return calls
 
 
 class OpenAICompatDriver:
@@ -169,6 +205,17 @@ class OpenAICompatDriver:
                     )
                     arguments = {}
                 tool_calls.append({"id": tc.id, "name": tc.function.name, "arguments": arguments})
+        # Fallback: modelo emitiu tool calls em formato XML de texto em vez de usar a API
+        if not tool_calls and _TEXT_FUNC_CALL_RE.search(text):
+            parsed = _parse_text_tool_calls(text)
+            if parsed:
+                _logger.debug(
+                    "OpenAICompatDriver: %d text-format tool call(s) detectados em content (fallback)",
+                    len(parsed),
+                )
+                clean_text = _TEXT_FUNC_CALL_RE.sub("", text).strip()
+                return clean_text, parsed
+
         return text, tool_calls
 
     def _chat_streaming(self, messages: list[dict]) -> tuple[str, list[dict]]:
