@@ -135,62 +135,60 @@ class OpenAICompatDriver:
         return None
 
     def _chat(self, messages: list[dict], tools: list[dict]) -> tuple[str, list[dict]]:
-        """
-        Faz uma chamada à API com streaming e retorna (texto_acumulado, tool_calls).
-        O streaming evita timeout em respostas longas mas não exibe tokens progressivamente
-        — a exibição final segue o pipeline normal do Quimera.
-        """
-        kwargs: dict = {
-            "model": self.model,
-            "messages": messages,
-            "stream": True,
-        }
+        """Despacha para o modo correto conforme presença de ferramentas."""
         if tools:
-            kwargs["tools"] = tools
-            kwargs["tool_choice"] = "auto"
+            return self._chat_with_tools(messages, tools)
+        return self._chat_streaming(messages)
 
-        stream = self._client.chat.completions.create(**kwargs)
+    def _chat_with_tools(self, messages: list[dict], tools: list[dict]) -> tuple[str, list[dict]]:
+        """
+        Chamada não-streaming quando há ferramentas.
 
+        Ollama em modo streaming não popula delta.tool_calls em vários modelos —
+        o modelo emite o call como texto. O modo não-streaming retorna
+        message.tool_calls estruturado de forma confiável.
+        """
+        response = self._client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            tools=tools,
+            tool_choice="auto",
+            stream=False,
+        )
+        choice = response.choices[0]
+        text = (choice.message.content or "").strip()
+        tool_calls: list[dict] = []
+        if choice.message.tool_calls:
+            for tc in choice.message.tool_calls:
+                try:
+                    arguments = json.loads(tc.function.arguments) if tc.function.arguments else {}
+                except json.JSONDecodeError:
+                    _logger.warning(
+                        "OpenAICompatDriver: falha ao parsear argumentos da tool '%s': %r",
+                        tc.function.name, tc.function.arguments,
+                    )
+                    arguments = {}
+                tool_calls.append({"id": tc.id, "name": tc.function.name, "arguments": arguments})
+        return text, tool_calls
+
+    def _chat_streaming(self, messages: list[dict]) -> tuple[str, list[dict]]:
+        """
+        Chamada streaming para respostas de texto puro (sem ferramentas).
+        Evita timeout em respostas longas sem bloquear a coleta.
+        """
+        stream = self._client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            stream=True,
+        )
         text_parts: list[str] = []
-        tool_calls_acc: dict[int, dict] = {}
-
         for chunk in stream:
             if not chunk.choices:
                 continue
-            delta = chunk.choices[0].delta
-
-            if delta.content:
-                text_parts.append(delta.content)
-
-            if delta.tool_calls:
-                for tc_delta in delta.tool_calls:
-                    idx = tc_delta.index
-                    if idx not in tool_calls_acc:
-                        tool_calls_acc[idx] = {"id": "", "name": "", "arguments": ""}
-                    if tc_delta.id:
-                        tool_calls_acc[idx]["id"] = tc_delta.id
-                    if tc_delta.function:
-                        if tc_delta.function.name:
-                            tool_calls_acc[idx]["name"] += tc_delta.function.name
-                        if tc_delta.function.arguments:
-                            tool_calls_acc[idx]["arguments"] += tc_delta.function.arguments
-
-        text = "".join(text_parts).strip()
-
-        tool_calls: list[dict] = []
-        for idx in sorted(tool_calls_acc):
-            tc = tool_calls_acc[idx]
-            try:
-                arguments = json.loads(tc["arguments"]) if tc["arguments"] else {}
-            except json.JSONDecodeError:
-                _logger.warning(
-                    "OpenAICompatDriver: falha ao parsear argumentos da tool '%s': %r",
-                    tc["name"], tc["arguments"],
-                )
-                arguments = {}
-            tool_calls.append({"id": tc["id"], "name": tc["name"], "arguments": arguments})
-
-        return text, tool_calls
+            content = chunk.choices[0].delta.content
+            if content:
+                text_parts.append(content)
+        return "".join(text_parts).strip(), []
 
     def _execute_tool(self, tc: dict, tool_executor) -> ToolResult:
         """Executa um tool call via ToolExecutor do Quimera."""
