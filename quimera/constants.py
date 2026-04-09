@@ -77,6 +77,8 @@ PROMPT_SCOPE_CONTROL = "ESCOPO PERMITIDO:\n{allowed_scope}\n\nNÃO-OBJETIVOS:\n{
 # Core prompt building blocks
 PROMPT_HEADER = "Você é {agent}.\nUsuário humano: {user_name}\nAgentes de IA nesta conversa: {agents}"
 PROMPT_CONTEXT = "CONTEXTO PERSISTENTE:\n{context}"
+PROMPT_REQUEST = "PEDIDO ATUAL DO HUMANO:\n{request}"
+PROMPT_FACTS = "FATOS OBSERVADOS RECENTES:\n{facts}"
 PROMPT_CONVERSATION = "CONVERSA:\n{conversation}"
 PROMPT_SPEAKER = "[{agent}]:"
 PROMPT_DEBATE_RULE = (

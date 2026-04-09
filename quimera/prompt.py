@@ -5,6 +5,8 @@ from .constants import (
     EXTEND_MARKER,
     PROMPT_HEADER,
     PROMPT_CONTEXT,
+    PROMPT_REQUEST,
+    PROMPT_FACTS,
     PROMPT_CONVERSATION,
     PROMPT_SPEAKER,
     PROMPT_BASE_RULES,
@@ -115,6 +117,8 @@ class PromptBuilder:
         session_block = PROMPT_SESSION_STATE.format(**self.session_state) if (self.session_state and primary) else ""
         context_block = PROMPT_CONTEXT.format(context=context) if context else ""
         handoff_block = PROMPT_HANDOFF.format(handoff=self._format_handoff(handoff, from_agent)) if handoff else ""
+        request_block = self._build_request_block(history)
+        facts_block = self._build_facts_block(history)
         shared_state_block = ""
         if shared_state and not has_goal:
             state_lines = json.dumps(self._trim_shared_state(shared_state), ensure_ascii=False, indent=2)
@@ -137,7 +141,7 @@ class PromptBuilder:
             header_block,
             execution_context,
             rules,
-            tools_prompt, session_block, context_block,
+            tools_prompt, session_block, context_block, request_block, facts_block,
             shared_state_block, metrics_block, handoff_block, conversation_block, speaker_block,
         ] if p]
 
@@ -185,6 +189,31 @@ class PromptBuilder:
         if "decisions" in state:
             trimmed["decisions"] = state["decisions"][-decisions_tail:]
         return trimmed
+
+    def _build_request_block(self, history):
+        for message in reversed(history[-self.history_window:]):
+            if message.get("role") == "human":
+                content = (message.get("content") or "").strip()
+                if content:
+                    return PROMPT_REQUEST.format(request=content)
+        return ""
+
+    def _build_facts_block(self, history, max_items=4):
+        facts = []
+        for message in reversed(history[-self.history_window:]):
+            role = message.get("role")
+            if role == "human":
+                continue
+            content = (message.get("content") or "").strip()
+            if not content:
+                continue
+            facts.append(f"[{self._display_role(role)}] {content}")
+            if len(facts) >= max_items:
+                break
+        if not facts:
+            return ""
+        facts.reverse()
+        return PROMPT_FACTS.format(facts="\n".join(facts))
 
     def _format_handoff(self, handoff, from_agent=None):
         if isinstance(handoff, dict):

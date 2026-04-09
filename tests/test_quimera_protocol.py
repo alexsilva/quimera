@@ -448,7 +448,7 @@ class ProtocolTests(unittest.TestCase):
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
         app._output_lock = threading.Lock()
-        app.active_agents = ["qwen"]
+        app.active_agents = ["ollama-qwen"]
         app.user_name = "Alex"
         app.shared_state = {}
         app.current_job_id = 1
@@ -465,8 +465,8 @@ class ProtocolTests(unittest.TestCase):
         self.assertTrue(handled)
         tasks = list_tasks({"job_id": 1}, db_path=str(db_path))
         self.assertEqual(len(tasks), 1)
-        self.assertEqual(tasks[0]["assigned_to"], "qwen")
-        self.assertIn("atribuída para qwen", app.renderer.system_messages[-1])
+        self.assertEqual(tasks[0]["assigned_to"], "ollama-qwen")
+        self.assertIn("atribuída para ollama-qwen", app.renderer.system_messages[-1])
 
     def test_classify_task_execution_result_rejects_needs_input(self):
         ok, reason = QuimeraApp._classify_task_execution_result(
@@ -570,6 +570,33 @@ class ProtocolTests(unittest.TestCase):
 
         self.assertIn("MENSAGEM DIRETA DO OUTRO AGENTE", prompt)
         self.assertIn("Revise este ponto.", prompt)
+
+    def test_prompt_includes_current_human_request_block(self):
+        builder = PromptBuilder(DummyContextManager(), history_window=4)
+        history = [
+            {"role": "human", "content": "Primeiro pedido"},
+            {"role": "claude", "content": "Resposta anterior"},
+            {"role": "human", "content": "Pedido atual"},
+        ]
+
+        prompt = builder.build(AGENT_CODEX, history)
+
+        self.assertIn("PEDIDO ATUAL DO HUMANO", prompt)
+        self.assertIn("Pedido atual", prompt)
+
+    def test_prompt_includes_recent_facts_block(self):
+        builder = PromptBuilder(DummyContextManager(), history_window=5)
+        history = [
+            {"role": "human", "content": "Investigue"},
+            {"role": "claude", "content": "Arquivo alterado: app.py"},
+            {"role": "codex", "content": "Teste falhou em test_x"},
+        ]
+
+        prompt = builder.build(AGENT_CLAUDE, history)
+
+        self.assertIn("FATOS OBSERVADOS RECENTES", prompt)
+        self.assertIn("[CLAUDE] Arquivo alterado: app.py", prompt)
+        self.assertIn("[CODEX] Teste falhou em test_x", prompt)
 
     def test_prompt_lists_only_active_agents(self):
         builder = PromptBuilder(
@@ -1997,7 +2024,7 @@ class FallbackChainTests(unittest.TestCase):
         printed = []
         calls = []
 
-        app.active_agents = [AGENT_CLAUDE, AGENT_CODEX, "qwen"]
+        app.active_agents = [AGENT_CLAUDE, AGENT_CODEX, "ollama-qwen"]
         app.threads = 1
         app.handle_command = lambda user: False
         app.parse_routing = lambda user: (AGENT_CLAUDE, "oi", False)
@@ -2038,13 +2065,13 @@ class FallbackChainTests(unittest.TestCase):
         # Segunda chamada é para codex (handoff)
         self.assertEqual(calls[1][0], AGENT_CODEX)
         self.assertTrue(calls[1][3])  # handoff_only
-        # Terceira chamada é para qwen (fallback)
-        self.assertEqual(calls[2][0], "qwen")
+        # Terceira chamada é para ollama-qwen (fallback)
+        self.assertEqual(calls[2][0], "ollama-qwen")
         self.assertTrue(calls[2][3])  # handoff_only
         # Quarta chamada é claude sintetizando
         self.assertEqual(calls[3][0], AGENT_CLAUDE)
-        # Verifica que qwen imprimiu e persistiu
-        self.assertIn(("qwen", "qwen faz o fallback"), printed)
+        # Verifica que ollama-qwen imprimiu e persistiu
+        self.assertIn(("ollama-qwen", "qwen faz o fallback"), printed)
 
     def test_fallback_skips_original_agent_and_chain(self):
         """Fallback não deve tentar o agente original nem os já na cadeia."""
@@ -2059,7 +2086,7 @@ class FallbackChainTests(unittest.TestCase):
         result["chain"] = ["claude"]
 
         # Fallback candidates devem excluir claude (chain) e codex (target original)
-        app.active_agents = ["claude", "codex", "qwen"]
+        app.active_agents = ["claude", "codex", "ollama-qwen"]
         chain = result["chain"]
         route_target = "codex"
         first_agent = "claude"
@@ -2069,7 +2096,7 @@ class FallbackChainTests(unittest.TestCase):
             if a != first_agent and a != route_target and a not in chain
         ]
 
-        self.assertEqual(fallback_candidates, ["qwen"])
+        self.assertEqual(fallback_candidates, ["ollama-qwen"])
 
     def test_no_fallback_when_no_candidates(self):
         """Se não há candidatos de fallback, o sistema não deve tentar."""

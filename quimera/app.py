@@ -1438,8 +1438,9 @@ class QuimeraApp:
 
         # Se há um agente aguardando resposta humana e o usuário não especificou
         # explicitamente outro agente, redireciona para ele
-        if self._pending_input_for and not explicit:
-            first_agent = self._pending_input_for
+        pending_input_for = getattr(self, "_pending_input_for", None)
+        if pending_input_for and not explicit:
+            first_agent = pending_input_for
         self._pending_input_for = None
 
         other_agents = [n for n in self.active_agents if n != first_agent]
