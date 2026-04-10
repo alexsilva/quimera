@@ -4,23 +4,26 @@ import sys
 import threading
 from contextlib import contextmanager, nullcontext
 
+
 def strip_ansi(text: str) -> str:
     """Remove ANSI escape sequences from text."""
     # Remove real ANSI escape sequences (starting with \x1b[)
     ansi_real = re.compile(r'\x1b\[[0-9;?]*[a-zA-Z]')
     text = ansi_real.sub('', text)
-    
+
     # Remove orphaned ANSI-like sequences that lost their \x1b prefix
     # These look like [1m, [?25h, [1G, [2K, etc.
     # Require at least one digit/?/; to avoid matching Rich markup like [bold]
     ansi_orphaned = re.compile(r'\[[0-9;?]+[A-Za-z]')
     text = ansi_orphaned.sub('', text)
-    
+
     return text
+
 
 def _is_interactive_terminal() -> bool:
     """Check if we're running in an interactive terminal (not piped/captured)."""
     return sys.stdout.isatty() and os.environ.get('TERM') != 'dumb'
+
 
 try:
     from rich.console import Console, Group
@@ -29,6 +32,7 @@ try:
     from rich.panel import Panel
     from rich.live import Live
     from rich.table import Table
+
     _RICH_AVAILABLE = True
 except ImportError:
     _RICH_AVAILABLE = False
@@ -90,7 +94,7 @@ class TerminalRenderer:
     def show_system(self, message):
         clean_message = strip_ansi(str(message))
         if self._console:
-            self._console.print(f"[dim]{clean_message}[/dim]")
+            self._console.print(f"[dim]{markup_escape(clean_message)}[/dim]")
         else:
             print(clean_message)
 
@@ -149,13 +153,13 @@ class TerminalRenderer:
             for agent in sorted_agents:
                 status = self._statuses[agent]
                 style, label = _agent_style(agent)
-                
+
                 # Indicador de status para agentes ativos
                 is_active = "concluído" not in status.lower() and "erro" not in status.lower()
                 icon = f"[{style}]●[/{style}]" if is_active else "[green]✓[/]"
-                
-                table.add_row(icon, f"[{style}]{label}[/]: {status}")
-        
+
+                table.add_row(icon, f"[{style}]{label}[/]: {markup_escape(status)}")
+
         return Panel(
             table,
             title="[bold blue]Agentes em Execução[/]",
@@ -196,15 +200,19 @@ class TerminalRenderer:
                     def __init__(self, renderer, agent):
                         self.renderer = renderer
                         self.agent = agent
+
                     def update(self, text):
                         self.renderer.update_status(self.agent, text)
+
                     def __enter__(self):
                         return self
+
                     def __exit__(self, *args):
                         self.renderer.update_status(self.agent, "concluído")
+
                 return StatusProxy(self, agent)
-            
+
             # Caso contrário, usa o spinner padrão do Rich (sequencial)
             return self._console.status(initial)
-        
+
         return nullcontext(None)
