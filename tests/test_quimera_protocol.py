@@ -2228,6 +2228,7 @@ class MetricsFeedbackTests(unittest.TestCase):
 
         self.assertIn("ACK", PROMPT_HANDOFF_RULE)
         self.assertIn("delegue de volta", PROMPT_HANDOFF_RULE)
+        self.assertIn("arquivos", PROMPT_HANDOFF_RULE)
 
     def test_behavior_metrics_tracker_integrated_with_app(self):
         """BehaviorMetricsTracker deve ser alimentado pelo app."""
@@ -2292,6 +2293,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         self.assertIn("claude", rule)
         self.assertIn("codex", rule)
         self.assertIn("NEEDS_INPUT", rule)
+        self.assertIn("paths", rule)
         self.assertLess(len(rule), 500)
 
     def test_reviewer_rule_is_concise(self):
@@ -2315,7 +2317,31 @@ class MetricsFeedbackTests(unittest.TestCase):
         self.assertIn("humano", PROMPT_BASE_RULES.lower())
         self.assertIn("prioridade", PROMPT_BASE_RULES.lower())
         self.assertIn("foco", PROMPT_BASE_RULES.lower())
+        self.assertIn("editar arquivos", PROMPT_BASE_RULES.lower())
         self.assertLess(len(PROMPT_BASE_RULES), 1600)
+
+    def test_tool_rule_guides_discovery_before_edits(self):
+        from quimera.constants import PROMPT_TOOL_RULE
+
+        self.assertIn("list_files", PROMPT_TOOL_RULE)
+        self.assertIn("grep_search", PROMPT_TOOL_RULE)
+        self.assertIn("read_file", PROMPT_TOOL_RULE)
+        self.assertIn("apply_patch", PROMPT_TOOL_RULE)
+        self.assertIn("run_shell", PROMPT_TOOL_RULE)
+
+    def test_build_task_body_includes_operational_protocol(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.user_name = "Alex"
+        app.history = [{"role": "human", "content": "Corrija o parser atual"}]
+        app.shared_state = {}
+
+        body = app._build_task_body("corrigir parser")
+
+        self.assertIn("PROTOCOLO OPERACIONAL:", body)
+        self.assertIn("Descubra o alvo antes de mudar", body)
+        self.assertIn("apply_patch", body)
+        self.assertIn("run_shell", body)
+        self.assertIn("arquivos alterados", body)
 
     def test_behavior_metrics_generate_feedback_empty_when_few_responses(self):
         """generate_feedback deve retornar vazio com menos de 3 respostas."""

@@ -14,6 +14,8 @@ import os
 import sys
 from pathlib import Path
 from typing import Optional
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 
 from ...plugins import base as _plugin_registry
 from ..approval import AutoApprovalHandler, ConsoleApprovalHandler
@@ -97,11 +99,38 @@ class DriverRepl:
         self.tool_executor = ToolExecutor(rt_config, ConsoleApprovalHandler())
         self._auto_tool_executor = ToolExecutor(rt_config, AutoApprovalHandler(approve_all=True))
 
+    def _probe_url(self) -> str:
+        return self.plugin.base_url.rstrip("/") + "/models"
+
+    def ensure_backend_available(self, timeout: float = 2.0) -> None:
+        probe_url = self._probe_url()
+        request = urllib_request.Request(probe_url, method="GET")
+        try:
+            with urllib_request.urlopen(request, timeout=timeout) as response:
+                status = getattr(response, "status", 200)
+                if 200 <= status < 500:
+                    return
+                raise RuntimeError(
+                    f"Backend do plugin '{self.plugin.name}' respondeu com status HTTP {status} em {probe_url}."
+                )
+        except urllib_error.HTTPError as exc:
+            if 200 <= exc.code < 500:
+                return
+            raise RuntimeError(
+                f"Backend do plugin '{self.plugin.name}' respondeu com status HTTP {exc.code} em {probe_url}."
+            ) from exc
+        except (urllib_error.URLError, OSError) as exc:
+            raise RuntimeError(
+                f"Backend do plugin '{self.plugin.name}' indisponível em {probe_url}. "
+                "Verifique se o serviço está em execução e acessível."
+            ) from exc
+
     def probe(self, prompt: str, use_tools: bool = True) -> str | None:
         """
         Executa um único prompt e retorna a resposta.
         Útil para uso programático (ex: Claude Code analisando o output).
         """
+        self.ensure_backend_available()
         executor = self.tool_executor if use_tools else None
         return self.driver.run(
             prompt,
@@ -111,6 +140,7 @@ class DriverRepl:
         )
 
     def run(self, one_shot_prompt: str | None = None) -> None:
+        self.ensure_backend_available()
         print(f"\n{'='*60}")
         print(f"  Driver REPL  •  {self.plugin.name}")
         print(f"  Modelo : {self.plugin.model}")

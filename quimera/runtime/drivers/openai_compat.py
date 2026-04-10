@@ -149,8 +149,21 @@ class OpenAICompatDriver:
                 "content": (
                     f"Você tem acesso às seguintes ferramentas: {tool_names}. "
                     f"{workspace_hint}"
-                    "Protocolo de ferramentas: não repita a mesma chamada se a anterior já respondeu; "
+                    "Quando decidir usar uma ferramenta, use o mecanismo de tool calling da API compatível ou o fallback textual já suportado; "
+                    "não invente envelopes JSON intermediários como "
+                    "{\"action\":\"execute\",\"tool_name\":\"...\",\"params\":{...}}. "
+                    "Não escreva chamadas de ferramenta como texto visível ao usuário; "
+                    "Protocolo de ferramentas: descubra o alvo antes de editar usando list_files, grep_search e read_file; "
+                    "prefira apply_patch para mudanças parciais em arquivos existentes; "
+                    "write_file só deve sobrescrever arquivo existente com replace_existing=true e quando a reescrita total for realmente necessária; "
+                    "o patch de apply_patch deve usar o formato nativo do Quimera e começar exatamente com '*** Begin Patch' e terminar exatamente com '*** End Patch'; "
+                    "não use cabeçalhos de diff como '---', '+++' ou 'diff --git' dentro do patch; "
+                    "use exatamente os nomes de argumentos definidos nos schemas das ferramentas; "
+                    "por exemplo, read_file usa 'path', não 'file_path'; "
+                    "se uma ferramenta retornar erro, ajuste a próxima chamada com base no erro e não repita o mesmo payload inválido; "
+                    "use run_shell para inspeção ou validação objetiva, não como substituto das ferramentas específicas; "
                     "não peça ao usuário para executar comandos manualmente se você pode fazer isso diretamente; "
+                    "na resposta final, resuma arquivos alterados, evidência de validação e próximo passo; "
                     "nunca exponha tags de tool calling como <function>, </function> ou </tool_call> na resposta final."
                 ),
             })

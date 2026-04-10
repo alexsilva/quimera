@@ -44,7 +44,11 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "write_file",
-            "description": "Escreve conteúdo em um arquivo dentro do workspace.",
+            "description": (
+                "Escreve conteúdo em um arquivo dentro do workspace. "
+                "Para sobrescrever arquivo existente por completo, envie replace_existing=true. "
+                "Para mudanças parciais em arquivo existente, prefira apply_patch."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -79,7 +83,11 @@ TOOL_SCHEMAS = [
             "name": "apply_patch",
             "description": (
                 "Aplica um patch textual estruturado no workspace. "
-                "Prefira esta ferramenta para alterações parciais em arquivos existentes."
+                "Prefira esta ferramenta para alterações parciais em arquivos existentes. "
+                "Use o formato nativo do Quimera com linhas como "
+                "'*** Begin Patch', '*** Update File: caminho', '@@', "
+                "linhas iniciadas por espaço/+/-, e '*** End Patch'. "
+                "Não use cabeçalhos de diff git/unified como '---', '+++' ou 'diff --git'."
             ),
             "parameters": {
                 "type": "object",
@@ -122,7 +130,10 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "run_shell",
-            "description": "Executa um comando shell no diretório do workspace.",
+            "description": (
+                "Executa um comando shell no diretório do workspace. "
+                "Use para inspeção ou validação objetiva, não para substituir ferramentas específicas."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {

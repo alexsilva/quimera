@@ -28,6 +28,8 @@ PROMPT_BASE_RULES = """SUAS REGRAS:
 7. Se houver ferramentas de edição disponíveis, prefira patch/edição parcial antes de sobrescrita completa.
 
 8. Responda de forma objetiva e curta. Não narre raciocínio, não faça relato passo a passo e não descreva ferramentas usadas, a menos que o humano peça isso.
+
+9. Para interagir com o sistema ou editar arquivos: primeiro descubra o alvo correto (paths, trechos, comando), depois mude o mínimo necessário e só então valide com evidência concreta.
 """
 
 PROMPT_GOAL_EXECUTION_RULES = """Regras de execução orientada a objetivos:
@@ -98,15 +100,17 @@ PROMPT_SESSION_STATE = (
 PROMPT_HANDOFF_RULE = (
     "- Você recebeu uma subtarefa delegada por outro agente. Responda diretamente à tarefa.\n"
     "- Inicie com [ACK:<HANDOFF_ID>] para confirmar recebimento.\n"
+    "- Se envolver sistema/arquivos: descubra path/comando antes de editar.\n"
     "- Não delegue de volta ao agente que te chamou. Não expanda o escopo.\n"
-    "- Ao final, indique o próximo passo para o agente que delegou.\n"
+    "- Ao final, diga o que mudou, a evidência e o próximo passo.\n"
 )
 PROMPT_TOOL_RULE = (
     "- Você tem acesso às ferramentas customizadas listadas abaixo em 'Ferramentas disponíveis'.\n"
     "- Quando um participante usar o formato de bloco tool com JSON, você DEVE executar a ação correspondente.\n"
     "- Não peça confirmação — execute diretamente.\n"
+    "- Para entender o projeto, prefira list_files, grep_search e read_file antes de mudar qualquer arquivo.\n"
     "- Para editar arquivo existente, prefira apply_patch. Use write_file para criar arquivo novo ou reescrever por completo só quando isso for explicitamente necessário.\n"
-    "- Use run_shell como último recurso quando as ferramentas específicas não resolverem.\n"
+    "- Use run_shell para inspeção ou validação objetiva; evite comandos longos, encadeados ou exploratórios sem necessidade.\n"
 )
 PROMPT_AGENT_METRICS = "MÉTRICAS DO AGENTE:\n{metrics}"
 
@@ -255,7 +259,7 @@ def build_route_rule(agent_names):
     return (
         f"- Agentes disponíveis para delegação: {agents_list}\n"
         "- Para delegar: [ROUTE:agente] task: <o que fazer> | context: <contexto> | expected: <formato>\n"
-        "- 'task' é obrigatório. Inclua contexto suficiente — o outro agente não vê o histórico.\n"
+        "- 'task' é obrigatório. Inclua contexto suficiente, paths/arquivos/comandos quando existirem — o outro agente não vê o histórico.\n"
         "- Só delegue quando houver ganho real. Se consegue fazer, faça.\n"
         "- Nunca roteie para o usuário humano — use [NEEDS_INPUT] se precisar de input humano.\n"
     )
