@@ -20,6 +20,7 @@ except ImportError:
 
 from . import inputs as app_input
 from . import task as app_tasks
+from .system_layer import AppSystemLayer
 from .. import plugins
 from ..runtime.executor import ToolExecutor
 from ..runtime.parser import strip_tool_block
@@ -35,7 +36,6 @@ from ..workspace import Workspace
 from ..config import ConfigManager
 from ..metrics import BehaviorMetricsTracker
 from ..constants import (
-    build_help,
     EXTEND_MARKER,
     NEEDS_INPUT_MARKER,
     ROUTE_PREFIX,
@@ -102,6 +102,13 @@ class QuimeraApp:
     def _format_yes_no(value):
         return "sim" if value else "não"
 
+    def _get_system_layer(self) -> AppSystemLayer:
+        layer = getattr(self, "system_layer", None)
+        if layer is None:
+            layer = AppSystemLayer(self)
+            self.system_layer = layer
+        return layer
+
     def __del__(self):
         try:
             self._stop_task_executors()
@@ -159,6 +166,7 @@ class QuimeraApp:
         self.user_name = self.config.user_name
         self.workspace = Workspace(cwd)
         self.spy = spy
+        self.system_layer = AppSystemLayer(self)
 
         # Configuração do histórico persistente (readline)
         self.history_file = self.workspace.history_file
@@ -331,18 +339,11 @@ class QuimeraApp:
         sys.stdout.flush()
 
     def show_system_message(self, message: str) -> None:
-        renderer = getattr(self, "renderer", None)
-        if renderer is None:
-            return
-        with self._output_lock:
-            renderer.show_system(message)
-            self._redisplay_user_prompt_if_needed()
+        self._get_system_layer().show_system_message(message)
 
     def _show_task_response(self, task_id: int, agent: str, response: str) -> None:
         """Display the actual agent response for a task execution as a system message."""
-        text = strip_tool_block(response).strip()
-        if text:
-            self.show_system_message(f"[task {task_id}] {agent}:\n{text}")
+        self._get_system_layer().show_task_response(task_id, agent, response)
 
     def resolve_agent_response(
         self,
@@ -397,25 +398,7 @@ class QuimeraApp:
         return "Falha: limite de execuções de ferramenta atingido."
 
     def handle_command(self, user_input):
-        command = user_input.strip()
-
-        if command == CMD_HELP:
-            self.renderer.show_system(build_help(self.active_agents))
-            return True
-
-        if command.startswith(CMD_TASK):
-            self._handle_task_command(command)
-            return True
-
-        if command == CMD_CONTEXT:
-            self.context_manager.show()
-            return True
-
-        if command == CMD_CONTEXT_EDIT:
-            self.context_manager.edit()
-            return True
-
-        return False
+        return self._get_system_layer().handle_command(user_input)
 
     @staticmethod
     def _parse_task_command(command: str) -> str:
