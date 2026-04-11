@@ -4,7 +4,7 @@ from .approval import ApprovalHandler
 from .config import ToolRuntimeConfig
 from .models import ToolCall, ToolResult
 from .parser import ToolCallParseError, extract_tool_call
-from .policy import ToolPolicy, ToolPolicyError
+from .policy import ToolPolicy, ToolPolicyError, PathPermissionError
 from .registry import ToolRegistry
 from .tools.files import FileTools
 from .tools.patch import PatchTool
@@ -47,6 +47,16 @@ class ToolExecutor:
     def execute(self, call: ToolCall) -> ToolResult:
         try:
             self.policy.validate(call)
+            
+            permission_error = self.policy.check_path_permission(call)
+            if permission_error:
+                approved = self.approval_handler.approve(
+                    tool_name=call.name,
+                    summary=f"Permissão necessária para acessar: {permission_error.resolved_path}",
+                )
+                if not approved:
+                    return ToolResult(ok=False, tool_name=call.name, error="Acesso negado pelo usuário")
+            
             if self.policy.requires_approval(call):
                 approved = self.approval_handler.approve(
                     tool_name=call.name,

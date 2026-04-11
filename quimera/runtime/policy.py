@@ -11,6 +11,14 @@ class ToolPolicyError(Exception):
     pass
 
 
+class PathPermissionError(ToolPolicyError):
+    """Raised when a tool needs user permission to access a path outside the default workspace."""
+    def __init__(self, raw_path: str, resolved_path: Path) -> None:
+        self.raw_path = raw_path
+        self.resolved_path = resolved_path
+        super().__init__(f"Permissão necessária para acessar: {resolved_path}")
+
+
 class ToolPolicy:
     _SHELL_CHAIN_OPERATORS = (";", "&&", "||", "`", "$(")
 
@@ -28,6 +36,21 @@ class ToolPolicy:
         if call.name in {"write_file", "apply_patch", "run_shell"}:
             return self.config.require_approval_for_mutations
         return False
+
+    def check_path_permission(self, call: ToolCall) -> PathPermissionError | None:
+        """Check if the tool needs user permission to access a path outside allowed roots."""
+        if call.name not in {"read_file", "list_files", "grep_search"}:
+            return None
+        
+        raw = call.arguments.get("path", ".")
+        normalized = raw.lstrip("/") or "."
+        path = (self.config.workspace_root / normalized).resolve()
+        
+        for allowed_root in self.config.allowed_read_roots:
+            if str(path).startswith(str(allowed_root)):
+                return None
+        
+        return PathPermissionError(raw, path)
 
     def _validate_list_files(self, call: ToolCall) -> None:
         self._resolve_workspace_path(call.arguments.get("path", "."))

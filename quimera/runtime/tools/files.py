@@ -32,9 +32,14 @@ class FileTools:
         staging = get_staging_root()
         base = staging if staging else self.config.workspace_root
         path = (base / normalized).resolve()
-        if not str(path).startswith(str(base)):
-            raise ValueError(f"Path fora da workspace: {raw_path}")
-        return path
+        
+        for allowed in self.config.allowed_read_roots:
+            if staging and path.is_relative_to(staging):
+                return path
+            if str(path).startswith(str(allowed)):
+                return path
+        
+        raise ValueError(f"Path fora da workspace: {raw_path}")
 
     def list_files(self, call: ToolCall) -> ToolResult:
         staging = get_staging_root()
