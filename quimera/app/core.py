@@ -7,11 +7,11 @@ import random
 import re
 import shutil
 import sys
+import threading
 import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-import threading
 
 try:
     import readline
@@ -19,6 +19,7 @@ except ImportError:
     readline = None
 
 from . import inputs as app_input
+from .handlers import PromptAwareStderrHandler
 from . import task as app_tasks
 from .system_layer import AppSystemLayer
 from .. import plugins
@@ -39,51 +40,13 @@ from ..constants import (
     EXTEND_MARKER,
     NEEDS_INPUT_MARKER,
     ROUTE_PREFIX,
-    STATE_UPDATE_START, CMD_EXIT, CMD_HELP, CMD_CONTEXT, CMD_CONTEXT_EDIT, CMD_EDIT, CMD_FILE_PREFIX, CMD_TASK,
+    STATE_UPDATE_START, CMD_EXIT, CMD_EDIT, CMD_FILE_PREFIX, CMD_TASK,
     USER_ROLE, MSG_CHAT_STARTED, MSG_SESSION_LOG, MSG_SESSION_STATUS, MSG_MIGRATION,
     MSG_MEMORY_SAVING, MSG_MEMORY_FAILED, MSG_SHUTDOWN,
     MSG_DOUBLE_PREFIX, MSG_EMPTY_INPUT,
     HANDOFF_SYNTHESIS_MSG,
 )
-
-_logger = logging.getLogger("quimera.staging")
-_log_level = os.environ.get("QUIMERA_LOG_LEVEL", "INFO").upper()
-_numeric_level = getattr(logging, _log_level, logging.INFO)
-
-
-class _PromptAwareStderrHandler(logging.StreamHandler):
-    """Clear and redraw the interactive prompt around staging logs."""
-
-    def __init__(self, stream=None):
-        super().__init__(stream or sys.stderr)
-        self._app = None
-
-    def bind_app(self, app) -> None:
-        self._app = app
-
-    def emit(self, record):
-        app = self._app
-        if app is None:
-            super().emit(record)
-            return
-
-        stdin_is_tty = sys.stdin is not None and sys.stdin.isatty()
-        if stdin_is_tty and self.stream is sys.stderr:
-            self.stream = sys.stdout
-
-        with app._output_lock:
-            app._clear_user_prompt_line_if_needed()
-            super().emit(record)
-            self.flush()
-            app._redisplay_user_prompt_if_needed()
-
-
-_logger.setLevel(_numeric_level)
-if not any(isinstance(handler, _PromptAwareStderrHandler) for handler in _logger.handlers):
-    handler = _PromptAwareStderrHandler(sys.stderr)
-    handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
-    _logger.addHandler(handler)
-    _logger.propagate = False
+from .config import logger
 
 
 class QuimeraApp:
@@ -99,15 +62,15 @@ class QuimeraApp:
     ACK_PATTERN = re.compile(r"^\s*\[ACK:([A-Za-z0-9]+)\]\s*", re.M)
 
     def __init__(self,
-             cwd: Path,
-             debug: bool = False,
-             history_window: int | None = None,
-             agents: list | None = None,
-             threads: int = 1,
-             timeout: int | None = None,
-             idle_timeout_seconds: int | None = None,
-             spy: bool = False
-        ):
+                 cwd: Path,
+                 debug: bool = False,
+                 history_window: int | None = None,
+                 agents: list | None = None,
+                 threads: int = 1,
+                 timeout: int | None = None,
+                 idle_timeout_seconds: int | None = None,
+                 spy: bool = False
+                 ):
         selected_agents = list(agents) if agents else []
         self.active_agents = self._agents = selected_agents
         self.threads = int(threads) if threads is not None else 1
@@ -142,11 +105,13 @@ class QuimeraApp:
         self.storage = SessionStorage(self.workspace.logs_dir, self.renderer)
         session_id = self.storage.get_history_file().stem
         metrics_file = self.workspace.metrics_dir / f"{session_id}.jsonl" if debug else None
-        self.agent_client = AgentClient(self.renderer, metrics_file=metrics_file, timeout=timeout, spy=self.spy, working_dir=str(self.workspace.cwd))
+        self.agent_client = AgentClient(self.renderer, metrics_file=metrics_file, timeout=timeout, spy=self.spy,
+                                        working_dir=str(self.workspace.cwd))
         self._create_task_executor = create_executor
         self.session_summarizer = SessionSummarizer(
             self.renderer,
-            summarizer_call=build_chain_summarizer(self.agent_client, list(dict.fromkeys(["qwen"] + (self.active_agents or [])))),
+            summarizer_call=build_chain_summarizer(self.agent_client,
+                                                   list(dict.fromkeys(["qwen"] + (self.active_agents or [])))),
         )
         self.summary_agent_preference = "qwen"
         self._pending_input_for: str | None = None
@@ -187,8 +152,8 @@ class QuimeraApp:
         self._nonblocking_input_thread: threading.Thread | None = None
         self._nonblocking_input_queue: "queue.Queue | None" = None
         self._nonblocking_input_status = "idle"
-        for handler in _logger.handlers:
-            if isinstance(handler, _PromptAwareStderrHandler):
+        for handler in logger.handlers:
+            if isinstance(handler, PromptAwareStderrHandler):
                 handler.bind_app(self)
         is_new_session = not history_restored and not summary_loaded
 
@@ -254,7 +219,7 @@ class QuimeraApp:
         if failures >= 2:
             if agent in self.active_agents:
                 self.active_agents.remove(agent)
-                _logger.warning("agent %s removed after %d failures", agent, failures)
+                logger.warning("agent %s removed after %d failures", agent, failures)
                 try:
                     runtime_tasks.release_agent_tasks(agent, db_path=self.tasks_db_path)
                 except Exception:
@@ -346,12 +311,12 @@ class QuimeraApp:
         self._get_system_layer().show_task_response(task_id, agent, response)
 
     def resolve_agent_response(
-        self,
-        agent: str,
-        response: str | None,
-        silent: bool = False,
-        persist_history: bool = True,
-        show_output: bool = True,
+            self,
+            agent: str,
+            response: str | None,
+            silent: bool = False,
+            persist_history: bool = True,
+            show_output: bool = True,
     ) -> str | None:
         current_response = response
         max_tool_hops = 8
@@ -368,7 +333,7 @@ class QuimeraApp:
 
             # Truncate tool result to reduce verbosity
             tool_payload = app_tasks.truncate_payload(tool_result.to_model_payload())
-            
+
             tool_history.append(
                 f"Sua resposta anterior:\n{current_response.strip()}\n\n"
                 f"Resultado da ferramenta:\n{tool_payload}"
@@ -382,9 +347,9 @@ class QuimeraApp:
                     self.persist_message(agent, visible_text)
 
             followup_handoff = (
-                "Histórico de ferramentas desta rodada:\n\n"
-                + "\n\n---\n\n".join(tool_history)
-                + "\n\nContinue a partir daqui. Se precisar de outra ferramenta, emita nova tag <tool ... />."
+                    "Histórico de ferramentas desta rodada:\n\n"
+                    + "\n\n---\n\n".join(tool_history)
+                    + "\n\nContinue a partir daqui. Se precisar de outra ferramenta, emita nova tag <tool ... />."
             )
 
             current_response = self._call_agent(
@@ -459,7 +424,7 @@ class QuimeraApp:
                 return agent, message, True
 
         if not self.active_agents:
-            _logger.warning("no active agents, resetting to default")
+            logger.warning("no active agents, resetting to default")
             self.active_agents = self._agents
         return random.choice(self.active_agents), user_input, False
 
@@ -509,7 +474,7 @@ class QuimeraApp:
         show_output = dispatch_options.pop("show_output", True)
         handoff = dispatch_options.get("handoff")
         handoff_id = handoff.get("handoff_id") if isinstance(handoff, dict) else None
-        _logger.info(
+        logger.info(
             "[DISPATCH] sending to agent=%s, handoff_only=%s, handoff_id=%s",
             agent, dispatch_options.get("handoff_only", False), handoff_id,
         )
@@ -519,7 +484,7 @@ class QuimeraApp:
                 response = self._call_agent(agent, silent=silent, **dispatch_options)
                 if response is None:
                     if attempt < self.MAX_RETRIES:
-                        _logger.warning("[DISPATCH] retry %d/%d for agent=%s", attempt, self.MAX_RETRIES, agent)
+                        logger.warning("[DISPATCH] retry %d/%d for agent=%s", attempt, self.MAX_RETRIES, agent)
                         time.sleep(self.RETRY_BACKOFF_SECONDS * attempt)
                         continue
                     self._record_failure(agent)
@@ -533,7 +498,8 @@ class QuimeraApp:
                 )
                 if result is None:
                     if attempt < self.MAX_RETRIES:
-                        _logger.warning("[DISPATCH] retry %d/%d for agent=%s (resolve failed)", attempt, self.MAX_RETRIES, agent)
+                        logger.warning("[DISPATCH] retry %d/%d for agent=%s (resolve failed)", attempt,
+                                       self.MAX_RETRIES, agent)
                         time.sleep(self.RETRY_BACKOFF_SECONDS * attempt)
                         continue
                     self._record_failure(agent)
@@ -541,16 +507,18 @@ class QuimeraApp:
             except Exception as exc:
                 last_error = exc
                 if attempt < self.MAX_RETRIES:
-                    _logger.warning("[DISPATCH] retry %d/%d for agent=%s after exception: %s", attempt, self.MAX_RETRIES, agent, exc)
+                    logger.warning("[DISPATCH] retry %d/%d for agent=%s after exception: %s", attempt, self.MAX_RETRIES,
+                                   agent, exc)
                     time.sleep(self.RETRY_BACKOFF_SECONDS * attempt)
                     continue
                 self._record_failure(agent)
                 raise
         if last_error:
-            _logger.error("[DISPATCH] all retries exhausted for agent=%s", agent)
+            logger.error("[DISPATCH] all retries exhausted for agent=%s", agent)
         return None
 
-    def _call_agent(self, agent, is_first_speaker=False, handoff=None, primary=True, protocol_mode="standard", handoff_only=False, silent=False, from_agent=None):
+    def _call_agent(self, agent, is_first_speaker=False, handoff=None, primary=True, protocol_mode="standard",
+                    handoff_only=False, silent=False, from_agent=None):
         with self._counter_lock:
             self.session_call_index += 1
             call_index_snapshot = self.session_call_index
@@ -604,7 +572,7 @@ class QuimeraApp:
                 except KeyError:
                     pass  # Old session state without metrics
             self._record_agent_metric(agent, "succeeded" if result else "failed", elapsed)
-        _logger.info("[DISPATCH] agent=%s latency=%.2fs result=%s", agent, elapsed, "ok" if result else "none")
+        logger.info("[DISPATCH] agent=%s latency=%.2fs result=%s", agent, elapsed, "ok" if result else "none")
         return result
 
     _PAYLOAD_FIELD_RE = re.compile(r"^\s*(task|context|expected)\s*:", re.IGNORECASE)
@@ -614,7 +582,7 @@ class QuimeraApp:
         """Remove trailing non-payload lines from captured ROUTE group."""
         if not text:
             return ""
-        _logger.debug("[ROUTE] raw_payload before strip: %r", text)
+        logger.debug("[ROUTE] raw_payload before strip: %r", text)
         kept = []
         for line in text.splitlines():
             if QuimeraApp._PAYLOAD_FIELD_RE.match(line) or (kept and not line.strip()):
@@ -622,7 +590,7 @@ class QuimeraApp:
             else:
                 break
         result = "\n".join(kept).strip()
-        _logger.debug("[ROUTE] raw_payload after strip: %r", result)
+        logger.debug("[ROUTE] raw_payload after strip: %r", result)
         return result
 
     def _record_agent_metric(self, agent, metric_name, latency):
@@ -698,7 +666,7 @@ class QuimeraApp:
             return None
         match = self.HANDOFF_PAYLOAD_PATTERN.match(payload.strip())
         if not match:
-            _logger.warning(f"[HANDOFF] Payload did not match regex: {payload!r}")
+            logger.warning(f"[HANDOFF] Payload did not match regex: {payload!r}")
             return None
 
         groups = match.groups()
@@ -709,7 +677,8 @@ class QuimeraApp:
             priority = "normal"
 
         if not task:
-            _logger.warning(f"[HANDOFF] Missing required field 'task' - got task={task!r}, context={context!r}, expected={expected!r}")
+            logger.warning(
+                f"[HANDOFF] Missing required field 'task' - got task={task!r}, context={context!r}, expected={expected!r}")
             return None
 
         handoff_id = self._generate_handoff_id(task, target or "unknown")
@@ -740,7 +709,7 @@ class QuimeraApp:
         if ack_match:
             ack_id = ack_match.group(1)
             response = self.ACK_PATTERN.sub("", response, count=1).strip()
-            _logger.info("[ACK] received ack_id=%s", ack_id)
+            logger.info("[ACK] received ack_id=%s", ack_id)
 
         if ROUTE_PREFIX in response:
             match = self.ROUTE_PATTERN.search(response)
@@ -748,7 +717,7 @@ class QuimeraApp:
                 raw_payload = self._strip_payload_residual(match.group(2))
                 route_target = match.group(1)
                 parsed_handoff = self.parse_handoff_payload(raw_payload, target=route_target)
-                _logger.info("[ROUTE] match=%s, target=%s", match.group(0)[:100], route_target)
+                logger.info("[ROUTE] match=%s, target=%s", match.group(0)[:100], route_target)
                 if parsed_handoff:
                     handoff = parsed_handoff
                     if hasattr(self, 'session_state') and self.session_state:
@@ -757,10 +726,11 @@ class QuimeraApp:
                         except KeyError:
                             pass  # Old session state without metrics
                 else:
-                    _logger.warning("[ROUTE] handoff parse failed for target=%s, payload: %r", route_target, raw_payload)
+                    logger.warning("[ROUTE] handoff parse failed for target=%s, payload: %r", route_target, raw_payload)
                     if hasattr(self, 'session_state') and self.session_state:
                         try:
-                            self.session_state["handoff_invalid_count"] = self.session_state.get("handoff_invalid_count", 0) + 1
+                            self.session_state["handoff_invalid_count"] = self.session_state.get(
+                                "handoff_invalid_count", 0) + 1
                         except KeyError:
                             pass
                     if hasattr(self, 'behavior_metrics') and self.behavior_metrics:
@@ -781,7 +751,7 @@ class QuimeraApp:
     def _call_agent_for_parallel(self, agent, handoff, protocol_mode, staging_root, index):
         """Executa call_agent e retorna tupla (agent, response, route_target, handoff, extend, needs_input)."""
         from ..runtime.tools.files import set_staging_root
-        
+
         set_staging_root(staging_root / str(index))
         try:
             raw = self.call_agent(agent, handoff=handoff, primary=False, protocol_mode=protocol_mode)
@@ -793,14 +763,14 @@ class QuimeraApp:
 
     def _merge_staging_to_workspace(self, staging_root: Path):
         """Mescla arquivos do staging para o workspace em ordem de índice."""
-        
+
         if not staging_root.exists():
-            _logger.debug("merge: staging_root does not exist, skipping")
+            logger.debug("merge: staging_root does not exist, skipping")
             return
-        
+
         index_dirs = sorted(staging_root.iterdir(), key=lambda p: int(p.name) if p.name.isdigit() else 999)
         total_merged = 0
-        
+
         for index_dir in index_dirs:
             if not index_dir.is_dir():
                 continue
@@ -812,9 +782,9 @@ class QuimeraApp:
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(src, dest)
                 total_merged += 1
-                _logger.debug("merged: %s -> %s", src, dest)
-        
-        _logger.info("merge completed: %d files to %s", total_merged, self.workspace.cwd)
+                logger.debug("merged: %s -> %s", src, dest)
+
+        logger.info("merge completed: %d files to %s", total_merged, self.workspace.cwd)
 
     def print_response(self, agent, response):
         with self._output_lock:
@@ -836,9 +806,11 @@ class QuimeraApp:
                     is_redundant = self._is_response_redundant(content, self.history)
                     is_empty = not content or not content.strip()
                     if has_next:
-                        self.session_state["responses_with_clear_next_step"] = self.session_state.get("responses_with_clear_next_step", 0) + 1
+                        self.session_state["responses_with_clear_next_step"] = self.session_state.get(
+                            "responses_with_clear_next_step", 0) + 1
                     if is_redundant:
-                        self.session_state["consecutive_redundant_responses"] = self.session_state.get("consecutive_redundant_responses", 0) + 1
+                        self.session_state["consecutive_redundant_responses"] = self.session_state.get(
+                            "consecutive_redundant_responses", 0) + 1
                     else:
                         self.session_state["consecutive_redundant_responses"] = 0
                     # Integra com BehaviorMetricsTracker
@@ -956,7 +928,7 @@ class QuimeraApp:
             # Verifica delegação circular
             chain = handoff.get("chain", []) if isinstance(handoff, dict) else []
             if route_target in chain:
-                _logger.warning(
+                logger.warning(
                     "[HANDOFF] Circular delegation detected: %s -> %s (chain: %s)",
                     first_agent, route_target, chain,
                 )
@@ -973,7 +945,7 @@ class QuimeraApp:
                 route_target,
                 task=handoff["task"],
             )
-            _logger.info(
+            logger.info(
                 "[HANDOFF] id=%s from=%s to=%s priority=%s chain=%s",
                 handoff_id, first_agent, route_target, priority, chain,
             )
@@ -996,7 +968,7 @@ class QuimeraApp:
             expected_ack = handoff.get("handoff_id")
             secondary_response, _, _, _, _, ack_id = self.parse_response(secondary_response)
             if expected_ack and ack_id and ack_id != expected_ack:
-                _logger.warning(
+                logger.warning(
                     "[ACK] mismatch: expected=%s, received=%s from agent=%s",
                     expected_ack, ack_id, route_target,
                 )
@@ -1011,7 +983,7 @@ class QuimeraApp:
                     if a != first_agent and a != route_target and a not in chain
                 ]
                 for fallback_agent in fallback_candidates:
-                    _logger.info(
+                    logger.info(
                         "[HANDOFF] id=%s fallback: trying %s after %s failed",
                         handoff_id, fallback_agent, route_target,
                     )
@@ -1057,7 +1029,7 @@ class QuimeraApp:
                 if final_response is not None:
                     self.persist_message(first_agent, final_response)
             else:
-                _logger.warning(
+                logger.warning(
                     "[HANDOFF] id=%s failed: secondary agent %s returned no response",
                     handoff_id, route_target,
                 )
@@ -1080,9 +1052,10 @@ class QuimeraApp:
             next_handoff = None
             if self.threads > 1 and len(remaining) > 1:
                 # Modo paralelo: executar agentes em paralelo
-                staging_root = Path(tempfile.gettempdir()) / "quimera-staging" / f"{self.session_state['session_id']}-round{self.round_index}"
+                staging_root = Path(
+                    tempfile.gettempdir()) / "quimera-staging" / f"{self.session_state['session_id']}-round{self.round_index}"
                 staging_root.mkdir(parents=True, exist_ok=True)
-                _logger.info("parallel mode: %d threads, staging=%s", self.threads, staging_root)
+                logger.info("parallel mode: %d threads, staging=%s", self.threads, staging_root)
                 try:
                     with ThreadPoolExecutor(max_workers=self.threads) as executor:
                         # Criar lista de (agent, handoff, staging_dir, index)
@@ -1119,12 +1092,12 @@ class QuimeraApp:
                             self._pending_input_for = current_agent
                             self.renderer.show_system(f"\nResponda para {current_agent.upper()}:\n")
                 except Exception as exc:
-                    _logger.exception("parallel stage failed: %s", exc)
+                    logger.exception("parallel stage failed: %s", exc)
                     raise
                 finally:
                     if staging_root.exists():
                         shutil.rmtree(staging_root)
-                        _logger.info("staging cleanup: %s removed", staging_root)
+                        logger.info("staging cleanup: %s removed", staging_root)
             else:
                 # Modo sequencial (original)
                 for index, agent in enumerate(remaining):

@@ -1,5 +1,5 @@
-import re
 import io
+import re
 import tempfile
 import threading
 import time
@@ -8,20 +8,20 @@ from collections import defaultdict
 from pathlib import Path
 from unittest.mock import Mock, call, patch
 
-import quimera.cli as cli_module
 import quimera.app as app_module
+import quimera.cli as cli_module
 import quimera.plugins as plugins
 from quimera.agents import AgentClient
 from quimera.app import QuimeraApp
 from quimera.cli import main as cli_main
 from quimera.config import DEFAULT_HISTORY_WINDOW
 from quimera.constants import CMD_HELP, EXTEND_MARKER, build_help
+from quimera.plugins import AgentPlugin
+from quimera.prompt import PromptBuilder
 from quimera.runtime.approval import ApprovalHandler
 from quimera.runtime.config import ToolRuntimeConfig
 from quimera.runtime.executor import ToolExecutor
 from quimera.runtime.tasks import add_job, init_db, list_tasks
-from quimera.plugins import AgentPlugin
-from quimera.prompt import PromptBuilder
 from quimera.session_summary import SessionSummarizer
 from quimera.ui import _agent_style
 
@@ -1642,14 +1642,15 @@ class PluginTests(unittest.TestCase):
         stdin = io.StringIO("")
         stdin.isatty = lambda: True
 
-        prompt_handler = next(handler for handler in app_module._logger.handlers if isinstance(handler, app_module._PromptAwareStderrHandler))
+        prompt_handler = next(handler for handler in app_module.logger.handlers if
+                              isinstance(handler, app_module.PromptAwareStderrHandler))
         previous_app = prompt_handler._app
         prompt_handler.bind_app(app)
         try:
             with patch("sys.stdin", stdin), patch("quimera.app.readline.get_line_buffer", return_value=""), patch(
                 "quimera.app.readline.redisplay"
             ) as mock_redisplay, patch("sys.stdout.write") as mock_write, patch("sys.stdout.flush") as mock_flush:
-                app_module._logger.info("[DISPATCH] sending to agent=%s", AGENT_CODEX)
+                app_module.logger.info("[DISPATCH] sending to agent=%s", AGENT_CODEX)
 
             self.assertIn(call("\r\x1b[2K"), mock_write.call_args_list)
             self.assertIn(call("Alex: "), mock_write.call_args_list)
