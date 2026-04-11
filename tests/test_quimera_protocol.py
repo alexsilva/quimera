@@ -1596,7 +1596,7 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(second, "mensagem")
         mock_input.assert_called_once_with("Você: ")
 
-    def test_show_task_status_redisplays_prompt_while_tty_reader_is_active(self):
+    def test_show_system_message_redisplays_prompt_for_task_status_text_while_tty_reader_is_active(self):
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
         app._output_lock = threading.Lock()
@@ -1609,12 +1609,12 @@ class PluginTests(unittest.TestCase):
         with patch("sys.stdin", stdin), patch("quimera.app.readline.get_line_buffer", return_value=""), patch(
             "quimera.app.readline.redisplay"
         ) as mock_redisplay:
-            app._show_task_status(7, AGENT_CLAUDE, "iniciando")
+            app.show_system_message("[task 7] claude: iniciando")
 
         self.assertEqual(app.renderer.system_messages, ["[task 7] claude: iniciando"])
         mock_redisplay.assert_called_once_with()
 
-    def test_show_task_status_redraws_human_prompt_with_user_name(self):
+    def test_show_system_message_redraws_human_prompt_with_user_name_for_task_status_text(self):
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
         app._output_lock = threading.Lock()
@@ -1627,7 +1627,7 @@ class PluginTests(unittest.TestCase):
         with patch("sys.stdin", stdin), patch("quimera.app.readline.get_line_buffer", return_value=""), patch(
             "quimera.app.readline.redisplay"
         ), patch("sys.stdout.write") as mock_write, patch("sys.stdout.flush") as mock_flush:
-            app._show_task_status(7, AGENT_CLAUDE, "concluída")
+            app.show_system_message("[task 7] claude: concluída")
 
         self.assertIn(call("\r\x1b[2K"), mock_write.call_args_list)
         self.assertIn(call("Alex: "), mock_write.call_args_list)
@@ -1759,7 +1759,7 @@ class PluginTests(unittest.TestCase):
             return FakeExecutor(handler)
 
         app.call_agent = lambda *args, **kwargs: "resposta visivel da task"
-        app._show_task_status = lambda task_id, agent, status: status_updates.append((task_id, agent, status))
+        app.show_system_message = lambda message: status_updates.append(message)
         app._classify_task_execution_result = lambda response: (True, response)
 
         with patch("quimera.app.create_executor", side_effect=fake_create_executor), patch(
@@ -1771,7 +1771,11 @@ class PluginTests(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(
             status_updates,
-            [(1, AGENT_CLAUDE, "iniciando — rode a task"), (1, AGENT_CLAUDE, "concluída")],
+            [
+                "[task 1] claude: iniciando — rode a task",
+                "[task 1] claude:\nresposta visivel da task",
+                "[task 1] claude: concluída",
+            ],
         )
         complete_task.assert_called_once_with(
             1, result="resposta visivel da task", db_path=app.tasks_db_path
@@ -1805,7 +1809,7 @@ class PluginTests(unittest.TestCase):
             return "resposta visivel da task"
 
         app.call_agent = fake_call_agent
-        app._show_task_status = lambda task_id, agent, status: None
+        app.show_system_message = lambda message: None
         app._classify_task_execution_result = lambda response: (True, response)
 
         task_body = (
@@ -1857,7 +1861,7 @@ class PluginTests(unittest.TestCase):
             return FakeExecutor(handler)
 
         app.call_agent = lambda *args, **kwargs: None
-        app._show_task_status = lambda task_id, agent, status: None
+        app.show_system_message = lambda message: None
         app._classify_task_execution_result = lambda response: (True, response)
         app._record_failure = lambda agent: None
 

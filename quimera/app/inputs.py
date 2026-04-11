@@ -12,7 +12,7 @@ from pathlib import Path
 
 def read_user_input(app, prompt, timeout: int, input_fn=input) -> str | None:
     if timeout and timeout > 0:
-        value = app._read_user_input_with_timeout(prompt, timeout)
+        value = read_user_input_with_timeout(prompt, timeout, input_fn=input_fn)
         if value is None:
             app.renderer.show_system(f"*idle* ({timeout}s sem activity)")
             return None
@@ -20,11 +20,11 @@ def read_user_input(app, prompt, timeout: int, input_fn=input) -> str | None:
 
     if timeout == 0:
         try:
-            stdin = app._stdin()
+            stdin = _stdin()
             if stdin is None:
                 return None
             if stdin.isatty():
-                return app._read_user_input_nonblocking_tty(prompt)
+                return read_user_input_nonblocking_tty(app, prompt, input_fn=input_fn)
             if select.select([stdin], [], [], 0)[0]:
                 line = stdin.readline()
                 if line == "":
@@ -48,7 +48,7 @@ def read_user_input(app, prompt, timeout: int, input_fn=input) -> str | None:
         raise
 
 
-def read_user_input_nonblocking_tty(app, prompt: str) -> str | None:
+def read_user_input_nonblocking_tty(app, prompt: str, input_fn=input) -> str | None:
     if app._nonblocking_input_queue is None:
         app._nonblocking_input_queue = queue.Queue()
 
@@ -57,7 +57,7 @@ def read_user_input_nonblocking_tty(app, prompt: str) -> str | None:
     except queue.Empty:
         thread = app._nonblocking_input_thread
         if thread is None or not thread.is_alive():
-            app._start_nonblocking_input_reader(prompt)
+            start_nonblocking_input_reader(app, prompt, input_fn=input_fn)
         return None
 
     app._nonblocking_input_status = "idle"
@@ -92,18 +92,18 @@ def start_nonblocking_input_reader(app, prompt: str, input_fn=input) -> None:
 
 
 def read_user_input_with_timeout(prompt: str, timeout: int, input_fn=input):
-    q = queue.Queue()
+    result_queue = queue.Queue()
 
     def _reader():
         try:
-            q.put(input_fn(prompt))
+            result_queue.put(input_fn(prompt))
         except Exception:
-            q.put(None)
+            result_queue.put(None)
 
     thread = threading.Thread(target=_reader, daemon=True)
     thread.start()
     try:
-        return q.get(timeout=timeout)
+        return result_queue.get(timeout=timeout)
     except queue.Empty:
         return None
 
@@ -143,3 +143,9 @@ def read_from_file(app, path_str):
         return None
     content = path.read_text(encoding="utf-8").strip()
     return content or None
+
+
+def _stdin():
+    import sys
+
+    return sys.stdin

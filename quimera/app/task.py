@@ -32,7 +32,7 @@ def setup_task_executors(app):
                 prompt = f"Execute a seguinte tarefa:\n\n{body}"
                 other_agents = [a for a in app.active_agents if a != agent_name]
                 desc_preview = (description[:60] + "…") if len(description) > 60 else description
-                app._show_task_status(task_id, agent_name, f"iniciando — {desc_preview}")
+                app.show_system_message(f"[task {task_id}] {agent_name}: iniciando — {desc_preview}")
 
                 response = app.call_agent(
                     agent_name,
@@ -45,7 +45,7 @@ def setup_task_executors(app):
                 )
 
                 if response is None:
-                    app._show_task_status(task_id, agent_name, "sem resposta")
+                    app.show_system_message(f"[task {task_id}] {agent_name}: sem resposta")
                     app._record_failure(agent_name)
                     if other_agents:
                         requeue_task(task_id, agent_name, reason="communication failed", db_path=app.tasks_db_path)
@@ -56,7 +56,7 @@ def setup_task_executors(app):
                 app._show_task_response(task_id, agent_name, response)
                 ok, task_result = app._classify_task_execution_result(response)
                 if not ok:
-                    app._show_task_status(task_id, agent_name, "bloqueada")
+                    app.show_system_message(f"[task {task_id}] {agent_name}: bloqueada")
                     if other_agents:
                         requeue_task(task_id, agent_name, reason=task_result, db_path=app.tasks_db_path)
                     else:
@@ -65,14 +65,14 @@ def setup_task_executors(app):
 
                 if other_agents:
                     submit_for_review(task_id, result=task_result, db_path=app.tasks_db_path)
-                    app._show_task_status(task_id, agent_name, "aguardando review")
+                    app.show_system_message(f"[task {task_id}] {agent_name}: aguardando review")
                 else:
                     complete_task(task_id, result=task_result, db_path=app.tasks_db_path)
-                    app._show_task_status(task_id, agent_name, "concluída")
+                    app.show_system_message(f"[task {task_id}] {agent_name}: concluída")
                 return True
             except Exception as exc:
                 other_agents = [a for a in app.active_agents if a != agent_name]
-                app._show_task_status(task_dict["id"], agent_name, f"erro: {exc}")
+                app.show_system_message(f"[task {task_dict['id']}] {agent_name}: erro: {exc}")
                 if other_agents:
                     requeue_task(task_dict["id"], agent_name, reason=str(exc), db_path=app.tasks_db_path)
                 else:
@@ -130,20 +130,20 @@ def truncate_tool_result(content: str, max_lines: int = 10) -> str:
     return "\n".join(truncated)
 
 
-def truncate_payload(app, payload: dict, max_lines: int = 10) -> dict:
+def truncate_payload(payload: dict, max_lines: int = 10) -> dict:
     if not payload:
         return payload
 
     truncated = payload.copy()
     if isinstance(truncated.get("content"), str):
-        truncated["content"] = app._truncate_tool_result(truncated["content"], max_lines)
+        truncated["content"] = truncate_tool_result(truncated["content"], max_lines)
     if isinstance(truncated.get("error"), str):
-        truncated["error"] = app._truncate_tool_result(truncated["error"], max_lines)
+        truncated["error"] = truncate_tool_result(truncated["error"], max_lines)
     if isinstance(truncated.get("data"), dict):
         data = truncated["data"].copy()
         for key, value in data.items():
             if isinstance(value, str):
-                data[key] = app._truncate_tool_result(value, max_lines)
+                data[key] = truncate_tool_result(value, max_lines)
         truncated["data"] = data
     return truncated
 
@@ -216,9 +216,10 @@ def format_task_chat_context(app) -> str:
 
 
 def build_task_body(app, description: str) -> str:
-    parts = [f"TAREFA:\n{description}"]
-    parts.append(f"CONTEXTO RECENTE DO CHAT:\n{format_task_chat_context(app)}")
-
+    parts = [
+        f"TAREFA:\n{description}",
+        f"CONTEXTO RECENTE DO CHAT:\n{format_task_chat_context(app)}"
+    ]
     shared_state = getattr(app, "shared_state", {}) or {}
     goal_canonical = shared_state.get("goal_canonical", "Execute the task as described.")
     current_step = shared_state.get("current_step", description)
@@ -422,4 +423,4 @@ def handle_task_command(app, command: str, task_prefix: str) -> None:
     if selected_agent:
         lines.append(f"atribuída para {selected_agent}")
     lines.append(f"tipo inferido: {task_type}")
-    app._show_system_message(" | ".join(lines))
+    app.show_system_message(" | ".join(lines))

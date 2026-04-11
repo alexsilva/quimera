@@ -6,9 +6,7 @@ import queue
 import random
 import re
 import shutil
-import subprocess
 import sys
-import tempfile
 import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
@@ -279,14 +277,6 @@ class QuimeraApp:
     def _stop_task_executors(self):
         app_tasks.stop_task_executors(self)
 
-    def _truncate_tool_result(self, content: str, max_lines: int = 10) -> str:
-        """Truncate tool result content to max_lines lines."""
-        return app_tasks.truncate_tool_result(content, max_lines)
-    
-    def _truncate_payload(self, payload: dict, max_lines: int = 10) -> dict:
-        """Truncate all string fields in a tool payload to reduce verbosity."""
-        return app_tasks.truncate_payload(self, payload, max_lines)
-
     def _build_task_overview(self) -> dict:
         return app_tasks.build_task_overview(self)
 
@@ -301,10 +291,6 @@ class QuimeraApp:
 
     def _refresh_task_shared_state(self) -> None:
         app_tasks.refresh_task_shared_state(self)
-
-    @staticmethod
-    def _stdin():
-        return sys.stdin
 
     def _redisplay_user_prompt_if_needed(self) -> None:
         stdin = sys.stdin
@@ -344,7 +330,7 @@ class QuimeraApp:
         sys.stdout.write("\r\x1b[2K")
         sys.stdout.flush()
 
-    def _show_system_message(self, message: str) -> None:
+    def show_system_message(self, message: str) -> None:
         renderer = getattr(self, "renderer", None)
         if renderer is None:
             return
@@ -352,14 +338,11 @@ class QuimeraApp:
             renderer.show_system(message)
             self._redisplay_user_prompt_if_needed()
 
-    def _show_task_status(self, task_id: int, agent: str, status: str) -> None:
-        self._show_system_message(f"[task {task_id}] {agent}: {status}")
-
     def _show_task_response(self, task_id: int, agent: str, response: str) -> None:
         """Display the actual agent response for a task execution as a system message."""
         text = strip_tool_block(response).strip()
         if text:
-            self._show_system_message(f"[task {task_id}] {agent}:\n{text}")
+            self.show_system_message(f"[task {task_id}] {agent}:\n{text}")
 
     def resolve_agent_response(
         self,
@@ -383,7 +366,7 @@ class QuimeraApp:
                 return current_response
 
             # Truncate tool result to reduce verbosity
-            tool_payload = self._truncate_payload(tool_result.to_model_payload())
+            tool_payload = app_tasks.truncate_payload(tool_result.to_model_payload())
             
             tool_history.append(
                 f"Sua resposta anterior:\n{current_response.strip()}\n\n"
@@ -412,20 +395,6 @@ class QuimeraApp:
             )
 
         return "Falha: limite de execuções de ferramenta atingido."
-
-    def read_user_input(self, prompt, timeout: int) -> str | None:
-        """Read user input with optional idle timeout."""
-        return app_input.read_user_input(self, prompt, timeout, input_fn=input)
-
-    def _read_user_input_nonblocking_tty(self, prompt: str) -> str | None:
-        return app_input.read_user_input_nonblocking_tty(self, prompt)
-
-    def _start_nonblocking_input_reader(self, prompt: str) -> None:
-        app_input.start_nonblocking_input_reader(self, prompt, input_fn=input)
-
-    @staticmethod
-    def _read_user_input_with_timeout(prompt: str, timeout: int):
-        return app_input.read_user_input_with_timeout(prompt, timeout, input_fn=input)
 
     def handle_command(self, user_input):
         command = user_input.strip()
@@ -470,12 +439,13 @@ class QuimeraApp:
     def _handle_task_command(self, command: str) -> None:
         app_tasks.handle_task_command(self, command, CMD_TASK)
 
+    def read_user_input(self, prompt, timeout: int) -> str | None:
+        return app_input.read_user_input(self, prompt, timeout, input_fn=input)
+
     def read_from_editor(self):
-        """Abre $EDITOR num arquivo temporário e retorna o conteúdo digitado."""
         return app_input.read_from_editor(self)
 
     def read_from_file(self, path_str):
-        """Lê o conteúdo de um arquivo e retorna como string."""
         return app_input.read_from_file(self, path_str)
 
     def parse_routing(self, user_input):
