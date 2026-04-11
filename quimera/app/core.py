@@ -98,54 +98,6 @@ class QuimeraApp:
     ROUTE_PATTERN = re.compile(r"\[ROUTE:([A-Za-z0-9_-]+)\]\s*([\s\S]+)", re.M | re.I)
     ACK_PATTERN = re.compile(r"^\s*\[ACK:([A-Za-z0-9]+)\]\s*", re.M)
 
-    @staticmethod
-    def _format_yes_no(value):
-        return "sim" if value else "não"
-
-    def _get_system_layer(self) -> AppSystemLayer:
-        layer = getattr(self, "system_layer", None)
-        if layer is None:
-            layer = AppSystemLayer(self)
-            self.system_layer = layer
-        return layer
-
-    def __del__(self):
-        try:
-            self._stop_task_executors()
-        except Exception:
-            pass
-
-    def _record_failure(self, agent):
-        with self._agent_failures_lock:
-            self.agent_failures[agent] += 1
-            failures = self.agent_failures[agent]
-        if failures >= 2:
-            if agent in self.active_agents:
-                self.active_agents.remove(agent)
-                _logger.warning("agent %s removed after %d failures", agent, failures)
-                try:
-                    runtime_tasks.release_agent_tasks(agent, db_path=self.tasks_db_path)
-                except Exception:
-                    pass
-        self._record_agent_metric(agent, "failed", 0)
-
-    @staticmethod
-    def _unique_encodings(*encodings):
-        seen = set()
-        result = []
-        for encoding in encodings:
-            if not encoding:
-                continue
-            normalized = str(encoding).strip()
-            if not normalized:
-                continue
-            key = normalized.lower()
-            if key in seen:
-                continue
-            seen.add(key)
-            result.append(normalized)
-        return result
-
     def __init__(self,
              cwd: Path,
              debug: bool = False,
@@ -277,6 +229,54 @@ class QuimeraApp:
         self.agent_client.tool_executor = self.tool_executor
         # Set up task executors for autonomous task execution
         self._setup_task_executors()
+
+    @staticmethod
+    def _format_yes_no(value):
+        return "sim" if value else "não"
+
+    def _get_system_layer(self) -> AppSystemLayer:
+        layer = getattr(self, "system_layer", None)
+        if layer is None:
+            layer = AppSystemLayer(self)
+            self.system_layer = layer
+        return layer
+
+    def __del__(self):
+        try:
+            self._stop_task_executors()
+        except Exception:
+            pass
+
+    def _record_failure(self, agent):
+        with self._agent_failures_lock:
+            self.agent_failures[agent] += 1
+            failures = self.agent_failures[agent]
+        if failures >= 2:
+            if agent in self.active_agents:
+                self.active_agents.remove(agent)
+                _logger.warning("agent %s removed after %d failures", agent, failures)
+                try:
+                    runtime_tasks.release_agent_tasks(agent, db_path=self.tasks_db_path)
+                except Exception:
+                    pass
+        self._record_agent_metric(agent, "failed", 0)
+
+    @staticmethod
+    def _unique_encodings(*encodings):
+        seen = set()
+        result = []
+        for encoding in encodings:
+            if not encoding:
+                continue
+            normalized = str(encoding).strip()
+            if not normalized:
+                continue
+            key = normalized.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(normalized)
+        return result
 
     def _setup_task_executors(self):
         """Set up task executors for explicit human-created task execution."""
