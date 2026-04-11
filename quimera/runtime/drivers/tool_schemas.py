@@ -150,17 +150,25 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "list_tasks",
-            "description": "Lista tarefas do job atual com filtros opcionais.",
+            "description": "Lista tarefas com filtros opcionais do job atual ou de qualquer job.",
             "parameters": {
                 "type": "object",
                 "properties": {
+                    "job_id": {
+                        "type": "integer",
+                        "description": "Filtrar por job ID.",
+                    },
                     "status": {
                         "type": "string",
-                        "description": "Filtrar por status: pending, in_progress, completed, failed.",
+                        "description": "Filtrar por status, como proposed, approved, in_progress, completed, failed ou rejected.",
                     },
                     "assigned_to": {
                         "type": "string",
                         "description": "Filtrar por agente atribuído.",
+                    },
+                    "id": {
+                        "type": "integer",
+                        "description": "Filtrar por ID da task.",
                     },
                 },
                 "required": [],
@@ -174,7 +182,16 @@ TOOL_SCHEMAS = [
             "description": "Lista jobs de sessão disponíveis.",
             "parameters": {
                 "type": "object",
-                "properties": {},
+                "properties": {
+                    "status": {
+                        "type": "string",
+                        "description": "Filtrar por status, como planning, active, completed ou failed.",
+                    },
+                    "created_by": {
+                        "type": "string",
+                        "description": "Filtrar por criador do job.",
+                    },
+                },
                 "required": [],
             },
         },
@@ -189,10 +206,10 @@ TOOL_SCHEMAS = [
                 "properties": {
                     "job_id": {
                         "type": "integer",
-                        "description": "ID do job a consultar.",
+                        "description": "ID do job a consultar. Pode ser omitido se QUIMERA_CURRENT_JOB_ID estiver definido.",
                     }
                 },
-                "required": ["job_id"],
+                "required": [],
             },
         },
     },

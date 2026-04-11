@@ -81,6 +81,20 @@ def test_file_tools_write_file_modes(tools, config):
     tools.write_file(ToolCall(name="write_file", arguments={"path": "test.txt", "content": " world", "mode": "append"}))
     assert path.read_text() == "hello world"
 
+def test_file_tools_write_file_overwrite_requires_replace_existing(tools, config):
+    workspace = config.workspace_root
+    path = workspace / "test.txt"
+    path.write_text("hello")
+
+    blocked = tools.write_file(ToolCall(name="write_file", arguments={"path": "test.txt", "content": "changed"}))
+    assert blocked.ok is False
+    assert "replace_existing=true" in blocked.error
+    assert path.read_text() == "hello"
+
+    allowed = tools.write_file(ToolCall(name="write_file", arguments={"path": "test.txt", "content": "changed", "replace_existing": True}))
+    assert allowed.ok is True
+    assert path.read_text() == "changed"
+
 def test_file_tools_grep_search_staging(tools, config):
     # Line 114-116 coverage
     workspace = config.workspace_root

@@ -106,8 +106,18 @@ class FileTools:
         path.parent.mkdir(parents=True, exist_ok=True)
         mode = str(call.arguments.get("mode", "overwrite"))
         content = str(call.arguments["content"])
+        replace_existing = bool(call.arguments.get("replace_existing", False))
         if mode == "create" and path.exists():
             return ToolResult(ok=False, tool_name=call.name, error=f"Arquivo já existe: {path}")
+        if mode == "overwrite" and path.exists() and not replace_existing:
+            return ToolResult(
+                ok=False,
+                tool_name=call.name,
+                error=(
+                    "write_file não pode sobrescrever arquivo existente sem replace_existing=true; "
+                    "para edições parciais use apply_patch"
+                ),
+            )
         if mode == "append":
             with path.open("a", encoding="utf-8") as fh:
                 fh.write(content)

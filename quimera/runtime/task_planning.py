@@ -89,7 +89,7 @@ def score_plugin_for_task(plugin: AgentPlugin, task_type: str) -> int:
 
 
 def choose_best_agent(task_type: str, active_plugins: Iterable[AgentPlugin]) -> str | None:
-    plugins = [plugin for plugin in active_plugins if can_execute_task(plugin)]
+    plugins = [plugin for plugin in active_plugins if plugin is not None and can_execute_task(plugin)]
     if not plugins:
         return None
 
