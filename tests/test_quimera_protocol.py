@@ -1175,9 +1175,7 @@ class ProtocolTests(unittest.TestCase):
         responses = iter(
             [
                 "vou tentar abrir task sozinho\n"
-                "```tool\n"
-                '{"name":"propose_task","arguments":{"description":"rode os testes"}}\n'
-                "```",
+                '<tool function="propose_task" description="rode os testes" />',
                 "sem task criada",
             ]
         )

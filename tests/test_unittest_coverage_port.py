@@ -272,25 +272,24 @@ class RuntimeConfigAndModelsCoverageTests(unittest.TestCase):
 
 class ParserCoverageTests(unittest.TestCase):
     def test_extract_and_strip_tool_blocks(self):
-        response = 'abc ```tool {"name":"test","arguments":{"x":1},"metadata":{"m":2}} ``` def'
+        response = 'abc <tool function="test">{"x":1}</tool> def'
         call = extract_tool_call(response)
         self.assertEqual(call.name, "test")
         self.assertEqual(call.arguments, {"x": 1})
-        self.assertEqual(call.metadata, {"m": 2})
         self.assertEqual(strip_tool_block(response), "abc  def")
 
     def test_parser_error_paths(self):
         self.assertIsNone(extract_tool_call(None))
         self.assertIsNone(extract_tool_call("plain text"))
         with self.assertRaises(ToolCallParseError):
-            extract_tool_call("```tool {invalid json} ```")
+            extract_tool_call('<tool function="read_file" arguments="{invalid json}" />')
         with self.assertRaises(ToolCallParseError):
             _parse_json_object("no braces")
         with patch("json.JSONDecoder.raw_decode", return_value=(["bad"], 0)):
             with self.assertRaises(ToolCallParseError):
-                extract_tool_call('```tool {"name":"x"} ```')
+                extract_tool_call('<tool function="x">{}</tool>')
         with self.assertRaises(ToolCallParseError):
-            extract_tool_call('```tool {"name":123,"arguments":"bad"} ```')
+            extract_tool_call('<tool path="missing-function" />')
 
 
 class RegistryAndExecutorCoverageTests(unittest.TestCase):
@@ -321,7 +320,7 @@ class RegistryAndExecutorCoverageTests(unittest.TestCase):
             result = executor.execute(ToolCall(name="list_files", arguments={"path": "."}))
         self.assertFalse(result.ok)
         self.assertIn("Falha inesperada: boom", result.error)
-        _, parse_result = executor.maybe_execute_from_response("```tool {invalid} ```")
+        _, parse_result = executor.maybe_execute_from_response('<tool function="read_file" arguments="{invalid}" />')
         self.assertEqual(parse_result.tool_name, "parse")
         _, no_result = executor.maybe_execute_from_response("no tool")
         self.assertIsNone(no_result)

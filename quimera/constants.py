@@ -106,8 +106,6 @@ PROMPT_HANDOFF_RULE = (
 )
 PROMPT_TOOL_RULE = (
     "- Você tem acesso às ferramentas customizadas listadas abaixo em 'Ferramentas disponíveis'.\n"
-    "- Quando um participante usar o formato de bloco tool com JSON, você DEVE executar a ação correspondente.\n"
-    "- Não peça confirmação — execute diretamente.\n"
     "- Para entender o projeto, prefira list_files, grep_search e read_file antes de mudar qualquer arquivo.\n"
     "- Para editar arquivo existente, prefira apply_patch. Use write_file para criar arquivo novo ou reescrever por completo só quando isso for explicitamente necessário.\n"
     "- Use run_shell para inspeção ou validação objetiva; evite comandos longos, encadeados ou exploratórios sem necessidade.\n"
@@ -240,10 +238,10 @@ def build_tools_prompt() -> str:
     """Gera um bloco de ferramentas disponíveis a partir do TOOL_SCHEMA."""
     lines = [
         "Ferramentas disponíveis:\n"
-        "    - Retorno modelo formatado com dados em um JSON válido:\n"
-        "    ```tool \n"
-        '    {"name": "<tool_name>", "arguments": {...}}\n'
-        "    ```\n"
+        "    - Formato único para chamadas simples:\n"
+        '    <tool function="run_shell" command="git status" />\n'
+        "    - Para payloads longos, use corpo JSON dentro da tag:\n"
+        '    <tool function="apply_patch">{\"patch\": \"*** Begin Patch\\n...\\n*** End Patch\"}</tool>\n'
     ]
     for tool in TOOL_SCHEMA.values():
         params = ", ".join(f"{k}: {v['type']}" for k, v in tool["parameters"].items())

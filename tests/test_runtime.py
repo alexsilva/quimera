@@ -42,16 +42,15 @@ def _deny_all() -> ApprovalHandler:
 # ---------------------------------------------------------------------------
 
 class ParserTests(unittest.TestCase):
-    def test_extract_valid_tool_block(self):
-        response = '```tool\n{"name": "list_files", "arguments": {"path": "."}}\n```'
+    def test_extract_valid_tool_tag_with_body_json(self):
+        response = '<tool function="list_files">\n{"path": "."}\n</tool>'
         call = extract_tool_call(response)
         self.assertIsNotNone(call)
         self.assertEqual(call.name, "list_files")
         self.assertEqual(call.arguments, {"path": "."})
 
-    def test_extract_ignores_json_block(self):
-        """Qwen emite ```json em vez de ```tool — não deve ser interpretado."""
-        response = '```json\n{"name": "read_file", "arguments": {"path": "foo.txt"}}\n```'
+    def test_extract_ignores_old_fence_format(self):
+        response = '```tool\n{"name": "read_file", "arguments": {"path": "foo.txt"}}\n```'
         call = extract_tool_call(response)
         self.assertIsNone(call)
 
@@ -62,26 +61,33 @@ class ParserTests(unittest.TestCase):
         self.assertIsNone(extract_tool_call(None))
         self.assertIsNone(extract_tool_call(""))
 
+    def test_extract_valid_tool_tag(self):
+        response = '<tool function="run_shell" command="pwd" />'
+        call = extract_tool_call(response)
+        self.assertIsNotNone(call)
+        self.assertEqual(call.name, "run_shell")
+        self.assertEqual(call.arguments, {"command": "pwd"})
+
     def test_extract_raises_on_invalid_json(self):
-        response = "```tool\n{not valid json}\n```"
+        response = '<tool function="read_file" arguments="{not valid json}" />'
         with self.assertRaises(ToolCallParseError):
             extract_tool_call(response)
 
-    def test_extract_raises_on_missing_name(self):
-        response = '```tool\n{"arguments": {}}\n```'
+    def test_extract_raises_on_missing_function(self):
+        response = '<tool path="foo.txt" />'
         with self.assertRaises(ToolCallParseError):
             extract_tool_call(response)
 
-    def test_strip_tool_block(self):
-        response = 'Texto antes.\n```tool\n{"name": "x", "arguments": {}}\n```\nTexto depois.'
+    def test_strip_tool_tag(self):
+        response = 'Texto antes.\n<tool function="read_file" path="foo.txt" />\nTexto depois.'
         stripped = strip_tool_block(response)
-        self.assertNotIn("```tool", stripped)
+        self.assertNotIn("<tool", stripped)
         self.assertIn("Texto antes.", stripped)
         self.assertIn("Texto depois.", stripped)
 
     def test_extract_nested_arguments(self):
-        """JSON com objetos aninhados nos arguments não deve falhar no parser."""
-        response = '```tool\n{"name": "write_file", "arguments": {"path": "a.txt", "options": {"encoding": "utf-8"}}}\n```'
+        """JSON com objetos aninhados no corpo não deve falhar no parser."""
+        response = '<tool function="write_file">\n{"path": "a.txt", "options": {"encoding": "utf-8"}}\n</tool>'
         call = extract_tool_call(response)
         self.assertIsNotNone(call)
         self.assertEqual(call.name, "write_file")
@@ -299,7 +305,7 @@ class ExecutorTests(unittest.TestCase):
     def test_maybe_execute_with_tool(self):
         (self.tmp / "f.txt").write_text("abc")
         ex = self._executor()
-        response = '```tool\n{"name": "read_file", "arguments": {"path": "f.txt"}}\n```'
+        response = '<tool function="read_file" path="f.txt" />'
         raw, tool_result = ex.maybe_execute_from_response(response)
         self.assertIsNotNone(tool_result)
         self.assertTrue(tool_result.ok)

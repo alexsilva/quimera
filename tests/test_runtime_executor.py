@@ -43,7 +43,7 @@ def test_executor_unexpected_exception(config, approval_handler):
 
 def test_maybe_execute_from_response_parse_error(config, approval_handler):
     executor = ToolExecutor(config, approval_handler)
-    response = "```tool {invalid} ```"
+    response = '<tool function="read_file" arguments="{invalid}" />'
     text, result = executor.maybe_execute_from_response(response)
     assert result.ok is False
     assert result.tool_name == "parse"

@@ -400,7 +400,7 @@ class QuimeraApp:
             followup_handoff = (
                 "Histórico de ferramentas desta rodada:\n\n"
                 + "\n\n---\n\n".join(tool_history)
-                + "\n\nContinue a partir daqui. Se precisar de outra ferramenta, emita novo bloco ```tool```."
+                + "\n\nContinue a partir daqui. Se precisar de outra ferramenta, emita nova tag <tool ... />."
             )
 
             current_response = self._call_agent(
