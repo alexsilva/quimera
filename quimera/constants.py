@@ -237,11 +237,10 @@ TOOL_SCHEMA = {
 def build_tools_prompt() -> str:
     """Gera um bloco de ferramentas disponíveis a partir do TOOL_SCHEMA."""
     lines = [
-        "Ferramentas disponíveis:\n"
-        "    - Formato único para chamadas simples:\n"
-        '    <tool function="run_shell" command="git status" />\n'
-        "    - Para payloads longos, use corpo JSON dentro da tag:\n"
-        '    <tool function="apply_patch">{\"patch\": \"*** Begin Patch\\n...\\n*** End Patch\"}</tool>\n'
+        "USE A TAG PARA EXECUTAR COMANDOS NO SISTEMA!\n"
+        ' <tool function="run_shell" command="git status" />\n'
+        " - Para payloads longos, use corpo JSON dentro da tag:\n"
+        ' <tool function="apply_patch">{\"patch\": \"*** Begin Patch\\n...\\n*** End Patch\"}</tool>\n'
     ]
     for tool in TOOL_SCHEMA.values():
         params = ", ".join(f"{k}: {v['type']}" for k, v in tool["parameters"].items())
