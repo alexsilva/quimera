@@ -108,16 +108,16 @@ def main():
             raise SystemExit(2)
         return
 
-    available = _plugins.all_names()
-    requested = _expand_patterns(args.agents, available)
-    unknown = [a for a in requested if a not in available]
-    if unknown:
-        parser.error(f"Agente(s) desconhecido(s): {', '.join(unknown)}. Disponíveis: {', '.join(available)}")
+    agents_available = _plugins.all_names()
+    agents = _expand_patterns(args.agents, agents_available)
+    agents_unknown = [a for a in agents if a not in agents_available]
+    if agents_unknown:
+        parser.error(f"Agente(s) desconhecido(s): {', '.join(agents_unknown)}. Disponíveis: {', '.join(agents_available)}")
 
     app = QuimeraApp(Path.cwd(),
                       debug=args.debug,
                       history_window=args.history_window,
-                      agents=requested, threads=args.threads,
+                      agents=agents, threads=args.threads,
                       timeout=args.timeout,
                       idle_timeout_seconds=args.idle_timeout,
                       spy=args.spy)
@@ -126,7 +126,7 @@ def main():
         if TerminalRenderer is None or AgentClient is None:
             raise RuntimeError("Modo interativo não disponível nesta versão")
         
-        default_agent = requested[0] if requested else "claude"
+        default_agent = agents[0] if agents else "claude"
         default_prompt = "Use uma ferramenta de shell para executar o comando `pwd` e me diga o diretório atual. Se a ferramenta pedir aprovação, mostre o prompt normalmente."
         
         if args.test_agent:

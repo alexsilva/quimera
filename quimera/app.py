@@ -118,11 +118,10 @@ class QuimeraApp:
             if agent in self.active_agents:
                 self.active_agents.remove(agent)
                 _logger.warning("agent %s removed after %d failures", agent, failures)
-                if hasattr(self, "tasks_db_path") and self.tasks_db_path:
-                    try:
-                        release_agent_tasks(agent, db_path=self.tasks_db_path)
-                    except Exception:
-                        pass
+                try:
+                    release_agent_tasks(agent, db_path=self.tasks_db_path)
+                except Exception:
+                    pass
         self._record_agent_metric(agent, "failed", 0)
 
     @staticmethod
@@ -152,7 +151,7 @@ class QuimeraApp:
              idle_timeout_seconds: int | None = None,
              spy: bool = False
         ):
-        self.active_agents = agents or ["*"]
+        self.active_agents = self._agents = agents
         self.threads = int(threads) if threads is not None else 1
         self.agent_failures = defaultdict(int)
         self._agent_failures_lock = threading.Lock()
@@ -253,7 +252,7 @@ class QuimeraApp:
             history_window=history_window or self.config.history_window,
             session_state=session_state,
             user_name=self.user_name,
-            active_agents=self._resolved_active_agents(),
+            active_agents=self.active_agents,
             metrics_tracker=self.behavior_metrics,
         )
         self.auto_summarize_threshold = self.config.auto_summarize_threshold
@@ -289,8 +288,7 @@ class QuimeraApp:
                         return False
 
                     prompt = f"Execute a seguinte tarefa:\n\n{body}"
-                    resolved = self._resolved_active_agents()
-                    other_agents = [a for a in resolved if a != agent_name]
+                    other_agents = [a for a in self.active_agents if a != agent_name]
                     desc_preview = (description[:60] + "…") if len(description) > 60 else description
                     self._show_task_status(task_id, agent_name, f"iniciando — {desc_preview}")
 
@@ -333,8 +331,7 @@ class QuimeraApp:
                         self._show_task_status(task_id, agent_name, "concluída")
                     return True
                 except Exception as e:
-                    resolved = self._resolved_active_agents()
-                    other_agents = [a for a in resolved if a != agent_name]
+                    other_agents = [a for a in self.active_agents if a != agent_name]
                     self._show_task_status(task_dict["id"], agent_name, f"erro: {e}")
                     if other_agents:
                         requeue_task(task_dict["id"], agent_name, reason=str(e), db_path=self.tasks_db_path)
@@ -364,7 +361,7 @@ class QuimeraApp:
 
         job_id = getattr(self, "current_job_id", None)
         self.task_executors = []
-        for agent in self._resolved_active_agents():
+        for agent in self.active_agents:
             executor = create_executor(agent, make_task_handler(agent), db_path=self.tasks_db_path, job_id=job_id)
             executor.set_review_handler(make_review_handler(agent))
             executor.start()
@@ -774,28 +771,14 @@ class QuimeraApp:
             raw = raw[1:-1].strip()
         return normalize_task_description(raw)
 
-    def _resolved_active_agents(self) -> list[str]:
-        if not self.active_agents or "*" in self.active_agents:
-            return plugins.all_names()
-        return list(self.active_agents)
-
     def _get_task_routing_plugins(self):
         # Build candidate plugins from explicitly active agents
-        active = self._resolved_active_agents()
         candidate_plugins = []
-        explicit_selection = bool(self.active_agents) and "*" not in self.active_agents
-        # If user requested a wildcard, expand to all registered plugins explicitly
-        if isinstance(self.active_agents, list) and "*" in self.active_agents:
-            for name in plugins.all_names():
-                p = plugins.get(name)
-                if p is not None and can_execute_task(p):
-                    candidate_plugins.append(p)
-        else:
-            for agent_name in active:
-                p = plugins.get(agent_name)
-                if p is not None and can_execute_task(p):
-                    candidate_plugins.append(p)
-        if not candidate_plugins and not explicit_selection:
+        for agent_name in self.active_agents:
+            plugin = plugins.get(agent_name)
+            if plugin is not None and can_execute_task(plugin):
+                candidate_plugins.append(plugin)
+        if not candidate_plugins and not self.active_agents:
             candidate_plugins = [plugin for plugin in plugins.all_plugins() if can_execute_task(plugin)]
         return candidate_plugins
 
@@ -985,7 +968,7 @@ class QuimeraApp:
 
         if not self.active_agents:
             _logger.warning("no active agents, resetting to default")
-            self.active_agents = ["*"]
+            self.active_agents = self._agents
         return random.choice(self.active_agents), user_input, False
 
     @staticmethod
