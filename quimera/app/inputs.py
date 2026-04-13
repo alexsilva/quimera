@@ -11,6 +11,27 @@ import time
 from pathlib import Path
 
 
+class AppInputServices:
+    """Agrupa operações de entrada e edição usadas pela aplicação."""
+
+    def __init__(self, app, input_resolver):
+        """Inicializa uma instância de AppInputServices."""
+        self.app = app
+        self.input_resolver = input_resolver
+
+    def read_user_input(self, prompt, timeout: int) -> str | None:
+        """Lê entrada do usuário com a política de timeout configurada."""
+        return read_user_input(self.app, prompt, timeout, input_fn=self.input_resolver())
+
+    def read_from_editor(self):
+        """Abre o editor configurado e retorna o conteúdo digitado."""
+        return read_from_editor(self.app)
+
+    def read_from_file(self, path_str):
+        """Lê conteúdo de um arquivo fornecido pelo usuário."""
+        return read_from_file(self.app, path_str)
+
+
 def read_user_input(app, prompt, timeout: int, input_fn=input) -> str | None:
     """Lê user input."""
     if timeout and timeout > 0:

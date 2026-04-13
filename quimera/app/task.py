@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 
 from .. import plugins
+from ..constants import CMD_TASK
 from ..constants import NEEDS_INPUT_MARKER, USER_ROLE
 from ..prompt import PromptBuilder
 from ..runtime.parser import strip_tool_block
@@ -14,6 +15,58 @@ from ..runtime.task_planning import (
     score_plugin_for_task,
 )
 from ..runtime.tasks import create_task, get_job, list_tasks
+
+
+class AppTaskServices:
+    """Agrupa operações de task e roteamento usadas pela aplicação."""
+
+    def __init__(self, app):
+        """Inicializa uma instância de AppTaskServices."""
+        self.app = app
+
+    def setup_task_executors(self):
+        """Inicializa executores assíncronos para tasks humanas."""
+        return setup_task_executors(self.app)
+
+    def stop_task_executors(self):
+        """Interrompe executores de tasks em segundo plano."""
+        return stop_task_executors(self.app)
+
+    def build_task_overview(self) -> dict:
+        """Retorna um resumo do estado atual das tasks abertas."""
+        return build_task_overview(self.app)
+
+    def task_context_history_window(self) -> int:
+        """Retorna a janela de histórico usada no contexto de tasks."""
+        return task_context_history_window(self.app)
+
+    def format_task_chat_context(self) -> str:
+        """Serializa o histórico recente para uso em prompts de task."""
+        return format_task_chat_context(self.app)
+
+    def build_task_body(self, description: str) -> str:
+        """Monta o payload completo de execução de uma task."""
+        return build_task_body(self.app, description)
+
+    def refresh_task_shared_state(self) -> None:
+        """Sincroniza o estado compartilhado de tasks no app."""
+        refresh_task_shared_state(self.app)
+
+    def get_task_routing_plugins(self):
+        """Retorna os plugins elegíveis para roteamento de tasks."""
+        return get_task_routing_plugins(self.app)
+
+    def count_agent_open_tasks(self, agent_name: str) -> int:
+        """Conta quantas tasks abertas estão associadas ao agente."""
+        return count_agent_open_tasks(self.app, agent_name)
+
+    def choose_agent_with_load_balance(self, task_type: str) -> str | None:
+        """Seleciona o melhor agente para uma task considerando carga."""
+        return choose_agent_with_load_balance(self.app, task_type)
+
+    def handle_task_command(self, command: str) -> None:
+        """Processa o comando `/task` no contexto da aplicação."""
+        handle_task_command(self.app, command, CMD_TASK)
 
 
 def _resolve_app_callable(app, public_name: str, legacy_name: str):

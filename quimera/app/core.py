@@ -22,6 +22,8 @@ from .handlers import PromptAwareStderrHandler
 from .protocol import AppProtocol
 from .session_metrics import SessionMetricsService
 from . import task as app_tasks
+from .inputs import AppInputServices
+from .task import AppTaskServices
 from .system_layer import AppSystemLayer
 from .. import plugins
 from ..runtime.executor import ToolExecutor
@@ -104,6 +106,11 @@ class QuimeraApp:
         self.system_layer = AppSystemLayer(self)
         self.protocol = AppProtocol(logger)
         self.session_metrics = SessionMetricsService()
+        self.task_services = AppTaskServices(self)
+        self.input_services = AppInputServices(
+            self,
+            input_resolver=lambda: resolve_app_dependency("input", input),
+        )
 
         # Configuração do histórico persistente (readline)
         self.history_file = self.workspace.history_file
@@ -254,6 +261,25 @@ class QuimeraApp:
             self.session_metrics = metrics
         return metrics
 
+    def _get_task_services(self) -> AppTaskServices:
+        """Retorna os serviços de task associados à instância."""
+        services = getattr(self, "task_services", None)
+        if services is None:
+            services = AppTaskServices(self)
+            self.task_services = services
+        return services
+
+    def _get_input_services(self) -> AppInputServices:
+        """Retorna os serviços de entrada associados à instância."""
+        services = getattr(self, "input_services", None)
+        if services is None:
+            services = AppInputServices(
+                self,
+                input_resolver=lambda: resolve_app_dependency("input", input),
+            )
+            self.input_services = services
+        return services
+
     def __del__(self):
         """Libera recursos associados à instância."""
         try:
@@ -300,31 +326,31 @@ class QuimeraApp:
 
     def _setup_task_executors(self):
         """Set up task executors for explicit human-created task execution."""
-        app_tasks.setup_task_executors(self)
+        self._get_task_services().setup_task_executors()
 
     def _stop_task_executors(self):
         """Executa stop task executors."""
-        app_tasks.stop_task_executors(self)
+        self._get_task_services().stop_task_executors()
 
     def build_task_overview(self) -> dict:
         """Monta task overview."""
-        return app_tasks.build_task_overview(self)
+        return self._get_task_services().build_task_overview()
 
     def task_context_history_window(self) -> int:
         """Executa task context history window."""
-        return app_tasks.task_context_history_window(self)
+        return self._get_task_services().task_context_history_window()
 
     def format_task_chat_context(self) -> str:
         """Formata task chat context."""
-        return app_tasks.format_task_chat_context(self)
+        return self._get_task_services().format_task_chat_context()
 
     def build_task_body(self, description: str) -> str:
         """Monta task body."""
-        return app_tasks.build_task_body(self, description)
+        return self._get_task_services().build_task_body(description)
 
     def refresh_task_shared_state(self) -> None:
         """Atualiza task shared state."""
-        app_tasks.refresh_task_shared_state(self)
+        self._get_task_services().refresh_task_shared_state()
 
     def _redisplay_user_prompt_if_needed(self) -> None:
         """Executa redisplay user prompt if needed."""
@@ -439,7 +465,7 @@ class QuimeraApp:
 
     def get_task_routing_plugins(self):
         """Retorna task routing plugins."""
-        return app_tasks.get_task_routing_plugins(self)
+        return self._get_task_services().get_task_routing_plugins()
 
     @staticmethod
     def classify_task_execution_result(response: str | None) -> tuple[bool, str]:
@@ -448,27 +474,27 @@ class QuimeraApp:
 
     def count_agent_open_tasks(self, agent_name: str) -> int:
         """Conta agent open tasks."""
-        return app_tasks.count_agent_open_tasks(self, agent_name)
+        return self._get_task_services().count_agent_open_tasks(agent_name)
 
     def choose_agent_with_load_balance(self, task_type: str) -> str | None:
         """Choose best agent for task_type, applying open-task penalty to avoid monopolies."""
-        return app_tasks.choose_agent_with_load_balance(self, task_type)
+        return self._get_task_services().choose_agent_with_load_balance(task_type)
 
     def handle_task_command(self, command: str) -> None:
         """Processa task command."""
-        app_tasks.handle_task_command(self, command, CMD_TASK)
+        self._get_task_services().handle_task_command(command)
 
     def read_user_input(self, prompt, timeout: int) -> str | None:
         """Lê user input."""
-        return app_input.read_user_input(self, prompt, timeout, input_fn=resolve_app_dependency("input", input))
+        return self._get_input_services().read_user_input(prompt, timeout)
 
     def read_from_editor(self):
         """Lê from editor."""
-        return app_input.read_from_editor(self)
+        return self._get_input_services().read_from_editor()
 
     def read_from_file(self, path_str):
         """Lê from file."""
-        return app_input.read_from_file(self, path_str)
+        return self._get_input_services().read_from_file(path_str)
 
     def parse_routing(self, user_input):
         """Extrai o agente inicial e rejeita prefixos duplicados na mesma entrada.
@@ -624,7 +650,7 @@ class QuimeraApp:
             call_index_snapshot = self.session_call_index
         start = time.time()
         history = [] if handoff_only else self.history
-        self._refresh_task_shared_state()
+        self._get_task_services().refresh_task_shared_state()
         # Agentes com driver de API recebem tools via schema OpenAI — as instruções
         # text-based conflitariam com o protocolo da API e devem ser omitidas.
         plugin = plugins.get(agent)
