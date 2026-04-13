@@ -1,5 +1,6 @@
 """Componentes de `quimera.app.task`."""
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -91,6 +92,24 @@ def _resolve_executor_factory(app):
     return create_executor
 
 
+def classify_task_review_result(response: str | None) -> tuple[bool, str, str]:
+    """Classifica o resultado de um review de task."""
+    if response is None:
+        return False, "RETENTATIVA", "sem resposta do revisor"
+
+    text = strip_tool_block(response).strip()
+    if not text:
+        return False, "RETENTATIVA", "resposta vazia do revisor"
+    if NEEDS_INPUT_MARKER in text:
+        return False, "RETENTATIVA", "revisor solicitou input humano"
+
+    match = re.search(r"\b(ACEITE|RETENTATIVA|REPLANEJAR|REJEITAR)\b", text.upper())
+    if not match:
+        return False, "RETENTATIVA", text
+    verdict = match.group(1)
+    return verdict == "ACEITE", verdict, text
+
+
 def setup_task_executors(app):
     """Executa setup task executors."""
     def make_task_handler(agent_name):
@@ -149,7 +168,7 @@ def setup_task_executors(app):
 
                 if other_agents:
                     runtime_tasks.submit_for_review(task_id, result=task_result, db_path=app.tasks_db_path)
-                    app.show_system_message(f"[task {task_id}] {agent_name}: aguardando review")
+                    app.show_system_message(f"[task {task_id}] {agent_name}: aguardando review de outro agente")
                 else:
                     runtime_tasks.complete_task(task_id, result=task_result, db_path=app.tasks_db_path)
                     app.show_system_message(f"[task {task_id}] {agent_name}: concluída")
@@ -172,16 +191,59 @@ def setup_task_executors(app):
                 executor = task_dict.get("assigned_to")
                 if executor == agent_name:
                     runtime_tasks.update_task(task_id, "pending_review", db_path=app.tasks_db_path)
+                    app.show_system_message(f"[task {task_id}] {agent_name}: review rejeitado, aguardando outro agente")
                     return False
+                if executor:
+                    app.show_system_message(f"[task {task_id}] {agent_name}: revisando execução de {executor}")
+                else:
+                    app.show_system_message(f"[task {task_id}] {agent_name}: revisando task")
                 task_result = task_dict.get("result", "")
+                description = task_dict.get("description", "")
+                body = task_dict.get("body", "") or description
+                review_prompt = (
+                    "Faça um review real da task abaixo.\n\n"
+                    "Responda com um veredicto explícito na primeira linha: "
+                    "ACEITE, RETENTATIVA, REPLANEJAR ou REJEITAR.\n"
+                    "Depois justifique com evidência concreta e objetiva.\n\n"
+                    f"Task ID: {task_id}\n"
+                    f"Executor: {executor or 'desconhecido'}\n"
+                    f"Descrição: {description}\n\n"
+                    f"Escopo enviado:\n{body}\n\n"
+                    f"Resultado do executor:\n{task_result}"
+                )
+                response = app.call_agent(
+                    agent_name,
+                    handoff=review_prompt,
+                    handoff_only=True,
+                    primary=False,
+                    silent=True,
+                    persist_history=False,
+                    show_output=False,
+                )
+                _resolve_app_callable(app, "show_task_response", "_show_task_response")(task_id, agent_name, response or "")
+                accepted, verdict, review_text = classify_task_review_result(response)
+                if not accepted:
+                    runtime_tasks.update_task(
+                        task_id,
+                        "pending",
+                        result=task_result,
+                        notes=review_text,
+                        db_path=app.tasks_db_path,
+                    )
+                    app.show_system_message(
+                        f"[task {task_id}] {agent_name}: review pediu {verdict.lower()}, task voltou para pending"
+                    )
+                    return False
                 runtime_tasks.complete_task(
                     task_id,
                     result=task_result,
                     reviewed_by=agent_name,
                     db_path=app.tasks_db_path,
                 )
+                app.show_system_message(f"[task {task_id}] {agent_name}: review concluído")
                 return True
             except Exception as exc:
+                app.show_system_message(f"[task {task_dict['id']}] {agent_name}: review falhou: {exc}")
                 runtime_tasks.fail_task(task_dict["id"], reason=str(exc), db_path=app.tasks_db_path)
                 return False
 
