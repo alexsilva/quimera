@@ -308,6 +308,27 @@ def requeue_task(task_id, failed_agent, reason=None, db_path=None):
     return True
 
 
+def can_reassign_task(task_id, candidate_agents, db_path=None):
+    """Return True when at least one candidate agent can still claim the task."""
+    if not candidate_agents:
+        return False
+
+    conn = get_conn(db_path)
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT failed_agents FROM tasks WHERE id = ?", (task_id,))
+        row = cur.fetchone()
+    except sqlite3.Error:
+        conn.close()
+        return True
+    conn.close()
+    if not row:
+        return False
+
+    failed_agents = row[0] or ""
+    return any(_failed_agents_token(agent_name) not in failed_agents for agent_name in candidate_agents)
+
+
 def claim_task(agent_name, job_id=None, db_path=None):
     """Reserva task."""
     conn = get_conn(db_path)

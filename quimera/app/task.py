@@ -112,6 +112,10 @@ def classify_task_review_result(response: str | None) -> tuple[bool, str, str]:
 
 def setup_task_executors(app):
     """Executa setup task executors."""
+    def can_failover(task_id, failed_agent):
+        candidate_agents = [a for a in app.active_agents if a != failed_agent]
+        return runtime_tasks.can_reassign_task(task_id, candidate_agents, db_path=app.tasks_db_path)
+
     def make_task_handler(agent_name):
         def task_handler(task_dict):
             try:
@@ -141,7 +145,7 @@ def setup_task_executors(app):
                 if response is None:
                     app.show_system_message(f"[task {task_id}] {agent_name}: sem resposta")
                     _resolve_app_callable(app, "record_failure", "_record_failure")(agent_name)
-                    if other_agents:
+                    if can_failover(task_id, agent_name):
                         runtime_tasks.requeue_task(
                             task_id,
                             agent_name,
@@ -160,7 +164,7 @@ def setup_task_executors(app):
                 )(response)
                 if not ok:
                     app.show_system_message(f"[task {task_id}] {agent_name}: bloqueada")
-                    if other_agents:
+                    if can_failover(task_id, agent_name):
                         runtime_tasks.requeue_task(task_id, agent_name, reason=task_result, db_path=app.tasks_db_path)
                     else:
                         runtime_tasks.fail_task(task_id, reason=task_result, db_path=app.tasks_db_path)
@@ -174,9 +178,8 @@ def setup_task_executors(app):
                     app.show_system_message(f"[task {task_id}] {agent_name}: concluída")
                 return True
             except Exception as exc:
-                other_agents = [a for a in app.active_agents if a != agent_name]
                 app.show_system_message(f"[task {task_dict['id']}] {agent_name}: erro: {exc}")
-                if other_agents:
+                if can_failover(task_dict["id"], agent_name):
                     runtime_tasks.requeue_task(task_dict["id"], agent_name, reason=str(exc), db_path=app.tasks_db_path)
                 else:
                     runtime_tasks.fail_task(task_dict["id"], reason=str(exc), db_path=app.tasks_db_path)
