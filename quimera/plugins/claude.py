@@ -4,7 +4,7 @@ from quimera.plugins.base import AgentPlugin, register
 plugin = AgentPlugin(
     name="claude",
     prefix="/claude",
-    cmd=["claude", "--permission-mode=bypassPermissions", "--output-format=stream-json", "-p"],
+    cmd=["claude", "--permission-mode=bypassPermissions", "--output-format=stream-json", "--verbose", "-p"],
     output_format="stream-json",
     style=("blue", "Claude"),
     capabilities=["architecture", "code_review", "planning", "documentation", "code_editing"],
