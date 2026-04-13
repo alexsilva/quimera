@@ -5,6 +5,41 @@ import os
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import List, Optional
+
+
+class DecisionsLogger:
+    """Logger persistente para decisões por workspace."""
+
+    def __init__(self, log_path: Path):
+        """Inicializa uma instância de DecisionsLogger."""
+        self._log_path = log_path
+        self._log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def append(self, decision: str, context: Optional[dict] = None) -> None:
+        """Adiciona uma decisão ao log."""
+        entry = {
+            "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "decision": decision,
+            "context": context or {},
+        }
+        with self._log_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+    def load_recent(self, limit: int = 50) -> List[dict]:
+        """Carrega as decisões mais recentes."""
+        if not self._log_path.exists():
+            return []
+        entries = []
+        with self._log_path.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        entries.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        continue
+        return entries[-limit:]
 
 
 def _find_writable(candidates: list) -> Path:
@@ -58,6 +93,11 @@ class Workspace:
         return self._root / "data" / "context" / "session.md"
 
     @property
+    def previous_session_file(self) -> Path:
+        """Arquivo com o resumo da sessão anterior (warm-start)."""
+        return self._root / "data" / "context" / "previous_session.md"
+
+    @property
     def logs_dir(self) -> Path:
         """Executa logs dir."""
         return self._root / "data" / "logs" / "sessions"
@@ -82,11 +122,17 @@ class Workspace:
         """Executa history file."""
         return self._root / "history"
 
+    @property
+    def decisions_log(self) -> Path:
+        """Executa decisions log."""
+        return self._root / "data" / "decisions.jsonl"
+
     def _ensure_dirs(self):
         """Executa ensure dirs."""
         (self._root / "data" / "context").mkdir(parents=True, exist_ok=True)
         (self._root / "data" / "logs" / "sessions").mkdir(parents=True, exist_ok=True)
         (self._root / "data" / "logs" / "metrics").mkdir(parents=True, exist_ok=True)
+        (self._root / "data").mkdir(parents=True, exist_ok=True)
         (self._root / "state").mkdir(parents=True, exist_ok=True)
         (QUIMERA_BASE / "index").mkdir(parents=True, exist_ok=True)
 

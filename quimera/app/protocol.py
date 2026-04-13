@@ -10,9 +10,21 @@ from ..constants import EXTEND_MARKER, NEEDS_INPUT_MARKER, ROUTE_PREFIX, STATE_U
 class AppProtocol:
     """Encapsula parsing de respostas, handoffs e updates de estado."""
 
-    def __init__(self, logger: logging.Logger) -> None:
+    def __init__(self, logger: logging.Logger, decisions_log_path=None) -> None:
         """Inicializa uma instância de AppProtocol."""
         self.logger = logger
+        self._decisions_log_path = decisions_log_path
+        self._decisions_logger = None
+
+    def _get_decisions_logger(self):
+        """Executa lazy load do DecisionsLogger."""
+        if self._decisions_logger is not None:
+            return self._decisions_logger
+        if self._decisions_log_path is None:
+            return None
+        from ..workspace import DecisionsLogger
+        self._decisions_logger = DecisionsLogger(self._decisions_log_path)
+        return self._decisions_logger
 
     @staticmethod
     def merge_state_value(current, incoming):
@@ -50,6 +62,11 @@ class AppProtocol:
                     app.shared_state.pop(normalized_key, None)
                 else:
                     app.shared_state[normalized_key] = merged
+                    if normalized_key == "decisions" and isinstance(value, list):
+                        logger = self._get_decisions_logger()
+                        if logger:
+                            for item in value:
+                                logger.append(item, {"workspace": str(app.workspace.cwd) if hasattr(app, "workspace") else None})
         return True
 
     def strip_payload_residual(self, app, text):

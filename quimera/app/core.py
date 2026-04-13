@@ -136,7 +136,7 @@ class QuimeraApp:
         self.workspace = workspace_cls(cwd)
         self.spy = spy
         self.system_layer = AppSystemLayer(self)
-        self.protocol = AppProtocol(logger)
+        self.protocol = AppProtocol(logger, decisions_log_path=self.workspace.decisions_log)
         self.session_metrics = SessionMetricsService()
         self.task_services = AppTaskServices(self)
         self.input_services = AppInputServices(
@@ -633,6 +633,7 @@ class QuimeraApp:
         silent = dispatch_options.pop("silent", False)
         persist_history = dispatch_options.pop("persist_history", True)
         show_output = dispatch_options.pop("show_output", True)
+        quiet = dispatch_options.pop("quiet", False)
         handoff = dispatch_options.get("handoff")
         handoff_id = handoff.get("handoff_id") if isinstance(handoff, dict) else None
         logger.info(

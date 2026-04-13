@@ -31,6 +31,16 @@ class AppSystemLayer:
     def handle_command(self, user_input: str) -> bool:
         """Processa command."""
         command = user_input.strip()
+        # CLI aliases: provide short forms for common commands
+        # /e -> /edit
+        # /r -> /context
+        # /g -> /help
+        if command == "/e":
+            command = "/edit"
+        elif command == "/r":
+            command = "/context"
+        elif command == "/g":
+            command = "/help"
 
         if command == CMD_HELP:
             self.app.renderer.show_system(build_help(self.app.active_agents))

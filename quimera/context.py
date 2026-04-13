@@ -12,11 +12,12 @@ class ContextManager:
     SUMMARY_MARKER = "## Resumo da última sessão"
     GENERATED_AT_PREFIX = "_Gerado em "
 
-    def __init__(self, base_context_file, session_context_file, renderer):
+    def __init__(self, base_context_file, session_context_file, renderer, previous_session_file=None):
         """Inicializa uma instância de ContextManager."""
         self.base_context_file = base_context_file
         self.session_context_file = session_context_file
         self.renderer = renderer
+        self.previous_session_file = previous_session_file
 
     def _read(self, path):
         """Lê read."""
@@ -31,6 +32,18 @@ class ContextManager:
     def load_session(self):
         """Carrega session."""
         return self._read(self.session_context_file)
+
+    def load_previous_session(self):
+        """Carrega o resumo da sessão anterior (previous_session.md)."""
+        if self.previous_session_file is None:
+            return ""
+        return self._read(self.previous_session_file)
+
+    def save_previous_session(self, summary):
+        """Salva o resumo da sessão como ponto de warm-start para a próxima sessão."""
+        if self.previous_session_file is None:
+            return
+        self.previous_session_file.write_text(summary.strip() + "\n", encoding="utf-8")
 
     def load_session_summary(self):
         """Extrai apenas o corpo do resumo curado salvo em session.md."""

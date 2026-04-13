@@ -270,7 +270,7 @@ class AgentClient:
                     self.tool_event_callback(agent, result=_SyntheticToolResult(ok=ok))
         return result_text
 
-    def call(self, agent, prompt, silent=False, show_status=True):
+    def call(self, agent, prompt, silent=False, show_status=True, quiet=False):
         """Resolve o comando do agente e delega a execução."""
         plugin = plugins.get(agent)
         if plugin is None:
@@ -278,7 +278,7 @@ class AgentClient:
             return None
         driver = getattr(plugin, "driver", "cli")
         if isinstance(driver, str) and driver != "cli":
-            return self._call_api(agent, plugin, prompt, silent=silent, show_status=show_status)
+            return self._call_api(agent, plugin, prompt, silent=silent, show_status=show_status, quiet=quiet)
         if plugin.prompt_as_arg:
             raw = self.run([*plugin.cmd, prompt], input_text=None, silent=silent, agent=agent, show_status=show_status)
         else:
@@ -290,7 +290,7 @@ class AgentClient:
             return self._parse_codex_json(raw, agent)
         return raw
 
-    def _call_api(self, agent, plugin, prompt, silent=False, show_status=True):
+    def _call_api(self, agent, plugin, prompt, silent=False, show_status=True, quiet=False):
         """Executa agentes com driver de API (ex: openai_compat para Ollama)."""
         is_first_call = agent not in self._api_drivers
         if is_first_call:
@@ -306,7 +306,7 @@ class AgentClient:
 
         driver_instance = self._api_drivers[agent]
 
-        status_cm = self.renderer.running_status("", agent=agent) if (show_status and not silent) else nullcontext(None)
+        status_cm = self.renderer.running_status("", agent=agent) if (show_status and not silent and not quiet) else nullcontext(None)
         status_label = f"[dim]{'conectando' if is_first_call else 'aguardando'} {plugin.model}...[/dim]"
 
         with status_cm as status:
@@ -316,6 +316,7 @@ class AgentClient:
             result = driver_instance.run(
                 prompt=prompt,
                 tool_executor=effective_tool_executor,
+                quiet=quiet,
                 on_tool_result=(lambda tool_result: self.tool_event_callback(agent, result=tool_result))
                 if self.tool_event_callback else None,
                 on_tool_abort=(lambda reason: self.tool_event_callback(agent, loop_abort=True, reason=reason))

@@ -128,6 +128,7 @@ class OpenAICompatDriver:
         on_tool_call=None,
         on_tool_result=None,
         on_tool_abort=None,
+        quiet=False,
     ) -> Optional[str]:
         """
         Executa o agente com o prompt dado tratando o loop de tool calling internamente.
