@@ -97,6 +97,6 @@ class ContextManager:
     def update_with_summary(self, summary):
         """Substitui ou cria a seção de resumo curado da última sessão em arquivo local."""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-        new_section = f"{self.SUMMARY_MARKER}\n\n_Gerado em {timestamp}_\n\n{summary}"
+        new_section = f"{self.SUMMARY_MARKER}\n\n_Gerado em {timestamp}_\n{summary}"
         self.session_context_file.write_text(new_section.strip() + "\n", encoding="utf-8")
         self.renderer.show_system(f"[memória] resumo salvo em {self.session_context_file.name}\n")
