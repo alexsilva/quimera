@@ -884,11 +884,26 @@ class QuimeraApp:
 
         self.renderer.show_system(MSG_MEMORY_SAVING)
 
-        summary = self.session_summarizer.summarize(
-            self.history,
-            existing_summary=self.context_manager.load_session_summary(),
-            preferred_agent=getattr(self, "summary_agent_preference", None),
-        )
+        result = [None]
+
+        def _run_summary():
+            try:
+                result[0] = self.session_summarizer.summarize(
+                    self.history,
+                    existing_summary=self.context_manager.load_session_summary(),
+                    preferred_agent=getattr(self, "summary_agent_preference", None),
+                )
+            except Exception:
+                pass
+
+        t = threading.Thread(target=_run_summary, daemon=True)
+        t.start()
+        try:
+            t.join(timeout=30)
+        except KeyboardInterrupt:
+            self.renderer.show_system(MSG_MEMORY_FAILED)
+            return
+        summary = result[0]
         if summary:
             self.context_manager.update_with_summary(summary)
         else:
@@ -1252,9 +1267,12 @@ class QuimeraApp:
         except KeyboardInterrupt:
             self.renderer.show_system(MSG_SHUTDOWN)
         finally:
-            if threaded_chat and chat_queue is not None:
-                chat_queue.put(None)
-                chat_queue.join()
-            if chat_worker is not None:
-                chat_worker.join(timeout=5)
+            try:
+                if threaded_chat and chat_queue is not None:
+                    chat_queue.put(None)
+                    chat_queue.join()
+                if chat_worker is not None:
+                    chat_worker.join(timeout=5)
+            except KeyboardInterrupt:
+                pass
             self.shutdown()
