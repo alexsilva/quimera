@@ -4,7 +4,7 @@ from quimera.plugins.base import AgentPlugin, register
 plugin = AgentPlugin(
     name="claude",
     prefix="/claude",
-    cmd=["claude", "--permission-mode=dontAsk", "-p"],
+    cmd=["claude", "--permission-mode=bypassPermissions", "-p"],
     style=("blue", "Claude"),
     capabilities=["architecture", "code_review", "planning", "documentation", "code_editing"],
     preferred_task_types=["architecture", "code_review", "documentation", "code_edit", "general"],
