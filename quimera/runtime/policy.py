@@ -40,7 +40,14 @@ class ToolPolicy:
 
     def requires_approval(self, call: ToolCall) -> bool:
         """Executa requires approval."""
-        if call.name in {"write_file", "apply_patch", "run_shell"}:
+        if call.name in {
+            "write_file",
+            "apply_patch",
+            "run_shell",
+            "run_shell_command",
+            "exec_command",
+            "close_command_session",
+        }:
             return self.config.require_approval_for_mutations
         return False
 
@@ -132,8 +139,47 @@ class ToolPolicy:
     def _validate_run_shell(self, call: ToolCall) -> None:
         """Executa validate run shell."""
         command = str(call.arguments.get("command", "")).strip()
+        self._validate_shell_command(command, tool_name="run_shell")
+
+    def _validate_run_shell_command(self, call: ToolCall) -> None:
+        """Valida o alias legado `run_shell_command` com a mesma política de `run_shell`."""
+        self._validate_run_shell(call)
+
+    def _validate_exec_command(self, call: ToolCall) -> None:
+        """Valida uma chamada interativa de execução de comando."""
+        command = str(call.arguments.get("cmd", "")).strip()
+        self._validate_shell_command(command, tool_name="exec_command")
+        raw_workdir = call.arguments.get("workdir")
+        if raw_workdir is not None:
+            self._resolve_workspace_path(str(raw_workdir))
+
+    def _validate_write_stdin(self, call: ToolCall) -> None:
+        """Valida uma operação de escrita ou polling em sessão ativa."""
+        if "session_id" not in call.arguments:
+            raise ToolPolicyError("write_stdin requer 'session_id'")
+        try:
+            int(call.arguments["session_id"])
+        except Exception as exc:  # noqa: BLE001
+            raise ToolPolicyError("write_stdin requer um session_id inteiro") from exc
+        if "yield_time_ms" in call.arguments:
+            try:
+                int(call.arguments["yield_time_ms"])
+            except Exception as exc:  # noqa: BLE001
+                raise ToolPolicyError("write_stdin requer yield_time_ms inteiro") from exc
+
+    def _validate_close_command_session(self, call: ToolCall) -> None:
+        """Valida o fechamento explícito de uma sessão de comando."""
+        if "session_id" not in call.arguments:
+            raise ToolPolicyError("close_command_session requer 'session_id'")
+        try:
+            int(call.arguments["session_id"])
+        except Exception as exc:  # noqa: BLE001
+            raise ToolPolicyError("close_command_session requer um session_id inteiro") from exc
+
+    def _validate_shell_command(self, command: str, *, tool_name: str) -> None:
+        """Aplica a política comum de shell para ferramentas de comando."""
         if not command:
-            raise ToolPolicyError("run_shell requer um comando não vazio")
+            raise ToolPolicyError(f"{tool_name} requer um comando não vazio")
         for op in self._SHELL_CHAIN_OPERATORS:
             if op in command:
                 raise ToolPolicyError(f"Comando bloqueado: operador de encadeamento proibido: '{op}'")

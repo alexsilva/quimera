@@ -68,6 +68,35 @@ def test_policy_shell_empty(policy):
     with pytest.raises(ToolPolicyError, match="requer um comando não vazio"):
         policy.validate(call)
 
+
+def test_policy_run_shell_command_alias(policy):
+    call = ToolCall(name="run_shell_command", arguments={"command": "ls"})
+    policy.validate(call)
+
+
+def test_policy_exec_command_empty(policy):
+    call = ToolCall(name="exec_command", arguments={"cmd": "  "})
+    with pytest.raises(ToolPolicyError, match="exec_command requer um comando não vazio"):
+        policy.validate(call)
+
+
+def test_policy_write_stdin_requires_session_id(policy):
+    call = ToolCall(name="write_stdin", arguments={})
+    with pytest.raises(ToolPolicyError, match="session_id"):
+        policy.validate(call)
+
+
+def test_policy_write_stdin_requires_integer_session_id(policy):
+    call = ToolCall(name="write_stdin", arguments={"session_id": "abc"})
+    with pytest.raises(ToolPolicyError, match="session_id inteiro"):
+        policy.validate(call)
+
+
+def test_policy_close_command_session_requires_session_id(policy):
+    call = ToolCall(name="close_command_session", arguments={})
+    with pytest.raises(ToolPolicyError, match="session_id"):
+        policy.validate(call)
+
 def test_policy_shell_denylist(policy):
     # Line 81 coverage
     call = ToolCall(name="run_shell", arguments={"command": "rm -rf /"})
@@ -98,6 +127,7 @@ def test_policy_path_outside_workspace(policy):
 def test_policy_requires_approval(policy):
     assert policy.requires_approval(ToolCall(name="write_file", arguments={})) is True
     assert policy.requires_approval(ToolCall(name="apply_patch", arguments={})) is True
+    assert policy.requires_approval(ToolCall(name="run_shell_command", arguments={})) is True
     assert policy.requires_approval(ToolCall(name="read_file", arguments={})) is False
 
 def test_policy_other_validations(policy):

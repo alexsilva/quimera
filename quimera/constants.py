@@ -206,6 +206,35 @@ TOOL_SCHEMA = {
         },
         "example": 'run_shell("git status")'
     },
+    "exec_command": {
+        "name": "exec_command",
+        "description": "Executa um comando com sessão persistente, polling e stdin opcional",
+        "parameters": {
+            "cmd": {"type": "str", "description": "Comando shell", "required": True},
+            "workdir": {"type": "str", "description": "Diretório relativo ao workspace", "required": False},
+            "yield_time_ms": {"type": "int", "description": "Espera por saída parcial antes de retornar", "required": False},
+            "tty": {"type": "bool", "description": "Executa em PTY simplificado", "required": False},
+        },
+        "example": 'exec_command(cmd="python -i", tty=True)'
+    },
+    "write_stdin": {
+        "name": "write_stdin",
+        "description": "Envia texto ao stdin de uma sessão aberta por exec_command ou faz polling",
+        "parameters": {
+            "session_id": {"type": "int", "description": "ID retornado por exec_command", "required": True},
+            "chars": {"type": "str", "description": "Texto a enviar; vazio faz apenas polling", "required": False},
+            "yield_time_ms": {"type": "int", "description": "Espera por nova saída", "required": False},
+        },
+        "example": 'write_stdin(session_id=7, chars="", yield_time_ms=1000)'
+    },
+    "close_command_session": {
+        "name": "close_command_session",
+        "description": "Fecha explicitamente uma sessão aberta por exec_command",
+        "parameters": {
+            "session_id": {"type": "int", "description": "ID da sessão", "required": True},
+        },
+        "example": 'close_command_session(session_id=7)'
+    },
     "list_tasks": {
         "name": "list_tasks",
         "description": "Lista tarefas de um job ou todas",
@@ -240,6 +269,8 @@ def build_tools_prompt() -> str:
     lines = [
         "USE A TAG PARA EXECUTAR COMANDOS NO SISTEMA!\n"
         ' <tool function="run_shell" command="git status" />\n'
+        " - Para shell interativo, use exatamente exec_command / write_stdin / close_command_session.\n"
+        " - Nunca invente nomes como run_shell_command ou execute_command.\n"
         " - Para payloads longos, use corpo JSON dentro da tag:\n"
         ' <tool function="apply_patch">{\"patch\": \"*** Begin Patch\\n...\\n*** End Patch\"}</tool>\n'
     ]

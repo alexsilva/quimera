@@ -16,6 +16,12 @@ from .tools.tasks import TaskTools
 class ToolExecutor:
     """Executa um loop simples de tool calling com validação e aprovação."""
 
+    _ALIASES = {
+        "run": "run_shell",
+        "run_shell_command": "run_shell",
+        "execute_command": "exec_command",
+    }
+
     def __init__(
         self,
         config: ToolRuntimeConfig,
@@ -42,6 +48,10 @@ class ToolExecutor:
         self.registry.register("apply_patch", patch_tool.apply_patch)
         self.registry.register("grep_search", file_tools.grep_search)
         self.registry.register("run_shell", shell_tool.run_shell)
+        self.registry.register("run_shell_command", shell_tool.run_shell)
+        self.registry.register("exec_command", shell_tool.exec_command)
+        self.registry.register("write_stdin", shell_tool.write_stdin)
+        self.registry.register("close_command_session", shell_tool.close_command_session)
         # Task-related read-only tools
         self.registry.register("list_tasks", task_tools.list_tasks)
         self.registry.register("list_jobs", task_tools.list_jobs)
@@ -49,31 +59,32 @@ class ToolExecutor:
 
     def execute(self, call: ToolCall) -> ToolResult:
         """Executa execute."""
+        normalized_call = self._normalize_call(call)
         try:
-            self.policy.validate(call)
+            self.policy.validate(normalized_call)
             
-            permission_error = self.policy.check_path_permission(call)
+            permission_error = self.policy.check_path_permission(normalized_call)
             if permission_error:
                 approved = self.approval_handler.approve(
-                    tool_name=call.name,
+                    tool_name=normalized_call.name,
                     summary=f"Permissão necessária para acessar: {permission_error.resolved_path}",
                 )
                 if not approved:
-                    return ToolResult(ok=False, tool_name=call.name, error="Acesso negado pelo usuário")
+                    return ToolResult(ok=False, tool_name=normalized_call.name, error="Acesso negado pelo usuário")
             
-            if self.policy.requires_approval(call):
+            if self.policy.requires_approval(normalized_call):
                 approved = self.approval_handler.approve(
-                    tool_name=call.name,
-                    summary=str(call.arguments),
+                    tool_name=normalized_call.name,
+                    summary=str(normalized_call.arguments),
                 )
                 if not approved:
-                    return ToolResult(ok=False, tool_name=call.name, error="Execução negada pelo usuário")
-            handler = self.registry.get(call.name)
-            return handler(call)
+                    return ToolResult(ok=False, tool_name=normalized_call.name, error="Execução negada pelo usuário")
+            handler = self.registry.get(normalized_call.name)
+            return handler(normalized_call)
         except ToolPolicyError as exc:
-            return ToolResult(ok=False, tool_name=call.name, error=str(exc))
+            return ToolResult(ok=False, tool_name=normalized_call.name, error=str(exc))
         except Exception as exc:  # noqa: BLE001
-            return ToolResult(ok=False, tool_name=call.name, error=f"Falha inesperada: {exc}")
+            return ToolResult(ok=False, tool_name=normalized_call.name, error=f"Falha inesperada: {exc}")
 
     def maybe_execute_from_response(self, response: str | None) -> tuple[str | None, ToolResult | None]:
         """Tenta execute from response."""
@@ -85,3 +96,23 @@ class ToolExecutor:
             return response, None
         result = self.execute(call)
         return response, result
+
+    def _normalize_call(self, call: ToolCall) -> ToolCall:
+        """Canoniza aliases conhecidos de tools para aumentar robustez com modelos menos estritos."""
+        canonical_name = self._ALIASES.get(call.name, call.name)
+        arguments = dict(call.arguments)
+
+        if canonical_name == "run_shell" and "command" not in arguments:
+            commands = arguments.get("commands")
+            if isinstance(commands, list) and len(commands) == 1 and isinstance(commands[0], str):
+                arguments["command"] = commands[0]
+
+        if canonical_name == "exec_command" and "cmd" not in arguments and "command" in arguments:
+            arguments["cmd"] = arguments["command"]
+
+        return ToolCall(
+            name=canonical_name,
+            arguments=arguments,
+            call_id=call.call_id,
+            metadata=call.metadata,
+        )

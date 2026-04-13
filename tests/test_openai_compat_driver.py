@@ -73,7 +73,7 @@ def test_all_schemas_have_required_fields():
 
 def test_schema_names_match_registered_tools():
     expected = {"list_files", "read_file", "write_file", "apply_patch", "grep_search", "run_shell",
-                "list_tasks", "list_jobs", "get_job"}
+                "exec_command", "write_stdin", "close_command_session", "list_tasks", "list_jobs", "get_job"}
     actual = {s["function"]["name"] for s in TOOL_SCHEMAS}
     assert actual == expected
 
@@ -83,11 +83,22 @@ def test_resolve_tool_schemas_hides_task_tools_without_db():
     mock_executor.config = SimpleNamespace(db_path=None)
     mock_executor.registry.names.return_value = [
         "list_files", "read_file", "write_file", "apply_patch", "grep_search", "run_shell",
+        "exec_command", "write_stdin", "close_command_session",
         "list_tasks", "list_jobs", "get_job",
     ]
 
     actual = {s["function"]["name"] for s in resolve_tool_schemas(mock_executor)}
-    assert actual == {"list_files", "read_file", "write_file", "apply_patch", "grep_search", "run_shell"}
+    assert actual == {
+        "list_files",
+        "read_file",
+        "write_file",
+        "apply_patch",
+        "grep_search",
+        "run_shell",
+        "exec_command",
+        "write_stdin",
+        "close_command_session",
+    }
 
 
 def test_required_args_are_lists():
@@ -320,9 +331,21 @@ def test_run_tools_system_prompt_guides_tool_usage():
     assert "não repita o mesmo payload inválido" in system_message["content"]
     assert '"action":"execute"' in system_message["content"]
     assert "read_file usa 'path', não 'file_path'" in system_message["content"]
+    assert "use exatamente 'run_shell' para uma execução simples ou 'exec_command' para sessão interativa" in system_message["content"]
+    assert "nunca invente nomes como 'run', 'run_shell_command' ou 'execute_command'" in system_message["content"]
     assert "Workspace raiz: /tmp/workspace." in system_message["content"]
     tool_names = {tool["function"]["name"] for tool in mock_client.chat.completions.create.call_args[1]["tools"]}
-    assert tool_names == {"list_files", "read_file", "write_file", "apply_patch", "grep_search", "run_shell"}
+    assert tool_names == {
+        "list_files",
+        "read_file",
+        "write_file",
+        "apply_patch",
+        "grep_search",
+        "run_shell",
+        "exec_command",
+        "write_stdin",
+        "close_command_session",
+    }
 
 
 def test_run_returns_none_on_empty_response():

@@ -149,6 +149,99 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "exec_command",
+            "description": (
+                "Executa um comando shell com suporte a sessão persistente, stdout/stderr incremental "
+                "e polling posterior via write_stdin."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "cmd": {
+                        "type": "string",
+                        "description": "Comando shell a executar.",
+                    },
+                    "workdir": {
+                        "type": "string",
+                        "description": "Diretório relativo ao workspace onde o comando deve rodar.",
+                    },
+                    "yield_time_ms": {
+                        "type": "integer",
+                        "description": "Tempo em milissegundos para esperar por saída antes de retornar.",
+                    },
+                    "shell": {
+                        "type": "string",
+                        "description": "Shell a usar para executar o comando. Padrão: shell do ambiente.",
+                    },
+                    "login": {
+                        "type": "boolean",
+                        "description": "Usa modo login do shell (-lc) quando true.",
+                    },
+                    "tty": {
+                        "type": "boolean",
+                        "description": "Executa o comando em um PTY simplificado quando true.",
+                    },
+                },
+                "required": ["cmd"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "close_command_session",
+            "description": "Fecha explicitamente uma sessão aberta por exec_command.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "integer",
+                        "description": "ID da sessão a fechar.",
+                    },
+                    "terminate": {
+                        "type": "boolean",
+                        "description": "Tenta terminar o processo antes de remover a sessão.",
+                    },
+                },
+                "required": ["session_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "write_stdin",
+            "description": (
+                "Escreve no stdin de uma sessão aberta por exec_command ou apenas faz polling quando chars "
+                "for vazio."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "integer",
+                        "description": "ID da sessão retornada por exec_command.",
+                    },
+                    "chars": {
+                        "type": "string",
+                        "description": "Texto a enviar para o stdin. Use string vazia para apenas consultar a saída.",
+                    },
+                    "yield_time_ms": {
+                        "type": "integer",
+                        "description": "Tempo em milissegundos para esperar por nova saída.",
+                    },
+                    "close_stdin": {
+                        "type": "boolean",
+                        "description": "Fecha o stdin da sessão após enviar chars.",
+                    },
+                },
+                "required": ["session_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "list_tasks",
             "description": "Lista tarefas com filtros opcionais do job atual ou de qualquer job.",
             "parameters": {

@@ -2344,6 +2344,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         self.assertIn("Descubra o alvo antes de mudar", body)
         self.assertIn("apply_patch", body)
         self.assertIn("run_shell", body)
+        self.assertIn("exec_command", body)
         self.assertIn("arquivos alterados", body)
 
     def test_behavior_metrics_generate_feedback_empty_when_few_responses(self):

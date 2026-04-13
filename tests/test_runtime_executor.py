@@ -52,3 +52,28 @@ def test_maybe_execute_from_response_none(config, approval_handler):
     executor = ToolExecutor(config, approval_handler)
     text, result = executor.maybe_execute_from_response("no tool")
     assert result is None
+
+
+def test_executor_registers_interactive_command_tools(config, approval_handler):
+    executor = ToolExecutor(config, approval_handler)
+    names = executor.registry.names()
+    assert "run_shell_command" in names
+    assert "exec_command" in names
+    assert "write_stdin" in names
+    assert "close_command_session" in names
+
+
+def test_executor_normalizes_run_alias_with_commands_list(tmp_path):
+    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
+    executor.approval_handler.approve.return_value = True
+    result = executor.execute(ToolCall(name="run", arguments={"commands": ["echo hello"]}))
+    assert result.ok is True
+    assert "hello" in result.content
+
+
+def test_executor_normalizes_execute_command_alias(tmp_path):
+    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
+    executor.approval_handler.approve.return_value = True
+    result = executor.execute(ToolCall(name="execute_command", arguments={"command": "echo hello"}))
+    assert result.ok is True
+    assert result.data["status"] == "completed"

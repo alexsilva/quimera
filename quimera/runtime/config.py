@@ -11,6 +11,7 @@ class ToolRuntimeConfig:
     workspace_root: Path
     db_path: Path | None = None
     command_timeout_seconds: int = 20
+    interactive_command_default_yield_ms: int = 1000
     max_output_chars: int = 12_000
     max_file_read_chars: int = 20_000
     max_search_results: int = 100

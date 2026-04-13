@@ -355,7 +355,7 @@ def build_task_body(app, description: str) -> str:
         "1. Descubra o alvo antes de mudar: identifique arquivos, trechos ou comandos relevantes.\n"
         "2. Para código existente, leia antes de editar e prefira alteração mínima.\n"
         "3. Use apply_patch para mudanças parciais; use write_file apenas para arquivo novo ou reescrita total justificada.\n"
-        "4. Use run_shell apenas para inspeção ou validação objetiva.\n"
+        "4. Para shell, use exatamente run_shell em execuções simples e exec_command apenas quando precisar de sessão interativa.\n"
         "5. Ao responder, inclua evidência concreta: arquivos alterados, resultado de validação e próximo passo."
     )
 
