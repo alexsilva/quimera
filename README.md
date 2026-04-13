@@ -83,6 +83,17 @@ Além da saída em tempo real no terminal, o runtime mantém métricas básicas 
 
 Essa observabilidade hoje é usada principalmente para depuração, análise de comportamento e continuidade do contexto operacional.
 
+### Continuidade Sob Limites de API
+
+Para aumentar o "tempo útil" de sessão dos agentes mesmo quando a API externa impõe limites de contexto, throughput ou disponibilidade, a estratégia mais segura no Quimera é reduzir dependência de contexto bruto e tornar cada rodada retomável:
+- usar resumo incremental de sessão como memória canônica, truncando histórico antigo antes de estourar janela de contexto
+- persistir estado operacional mínimo em disco (`shared_state`, resumo, histórico recente e tasks) para permitir retomada após falha, timeout ou troca de agente
+- decompor trabalho longo em tasks menores com checkpoint explícito, evitando uma única execução grande e frágil
+- aplicar failover entre agentes compatíveis quando um backend ficar indisponível ou degradado
+- registrar métricas de falha, latência e resposta vazia para detectar quando um provedor externo está reduzindo a qualidade da sessão
+
+Na prática, isso não "remove" o limite da API; isso faz o sistema sobreviver melhor a ele e manter continuidade operacional entre chamadas e entre sessões.
+
 ### Ferramentas de Runtime
 
 Quando um agente usa o driver `openai_compat`, o Quimera pode expor ferramentas nativas do runtime para operar direto no workspace:
