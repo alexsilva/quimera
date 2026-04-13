@@ -1270,9 +1270,8 @@ class QuimeraApp:
             try:
                 if threaded_chat and chat_queue is not None:
                     chat_queue.put(None)
-                    chat_queue.join()
                 if chat_worker is not None:
-                    chat_worker.join(timeout=5)
+                    chat_worker.join(timeout=0.5)
             except KeyboardInterrupt:
                 pass
             self.shutdown()

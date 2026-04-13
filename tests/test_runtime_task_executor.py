@@ -60,3 +60,15 @@ def test_create_executor(db_path):
     executor = create_executor("agent", handler, db_path)
     assert executor.agent_name == "agent"
     assert executor._handler == handler
+
+
+def test_task_executor_stop_ignores_keyboard_interrupt(db_path):
+    executor = TaskExecutor("agent", db_path)
+    mock_thread = MagicMock()
+    mock_thread.join.side_effect = KeyboardInterrupt()
+    executor._thread = mock_thread
+
+    executor.stop()
+
+    assert executor._running is False
+    mock_thread.join.assert_called_once_with(timeout=5)

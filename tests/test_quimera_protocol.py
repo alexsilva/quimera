@@ -1594,6 +1594,41 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(second, "mensagem")
         mock_input.assert_called_once_with("Você: ")
 
+    def test_read_user_input_nonblocking_tty_raises_keyboard_interrupt(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.renderer = DummyRenderer()
+        app._nonblocking_prompt_visible = False
+        app._nonblocking_input_queue = None
+        app._nonblocking_input_thread = None
+        app._nonblocking_input_status = "idle"
+        app._nonblocking_prompt_text = ""
+
+        stdin = io.StringIO("")
+        stdin.isatty = lambda: True
+        started = threading.Event()
+
+        def fake_input(prompt):
+            started.set()
+            time.sleep(0.05)
+            raise KeyboardInterrupt()
+
+        with patch("sys.stdin", stdin), patch("quimera.app.input", side_effect=fake_input):
+            first = app.read_user_input("Você: ", timeout=0)
+            self.assertIsNone(first)
+            self.assertTrue(started.wait(timeout=1), "reader assíncrono não iniciou")
+
+            deadline = time.time() + 1
+            interrupted = False
+            while time.time() < deadline:
+                try:
+                    app.read_user_input("Você: ", timeout=0)
+                except KeyboardInterrupt:
+                    interrupted = True
+                    break
+                time.sleep(0.01)
+
+            self.assertTrue(interrupted, "read_user_input() não propagou KeyboardInterrupt")
+
     def test_show_system_message_redisplays_prompt_for_task_status_text_while_tty_reader_is_active(self):
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()

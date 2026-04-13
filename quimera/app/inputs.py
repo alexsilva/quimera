@@ -90,6 +90,8 @@ def read_user_input_nonblocking_tty(app, prompt: str, input_fn=input) -> str | N
     app._nonblocking_prompt_text = ""
     if status == "line":
         return value
+    if status == "interrupt":
+        raise KeyboardInterrupt()
     return None
 
 

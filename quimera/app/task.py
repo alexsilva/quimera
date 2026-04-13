@@ -315,6 +315,8 @@ def stop_task_executors(app):
     for executor in getattr(app, "task_executors", []):
         try:
             executor.stop()
+        except KeyboardInterrupt:
+            pass
         except Exception:
             pass
 

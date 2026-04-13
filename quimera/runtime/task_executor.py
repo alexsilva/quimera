@@ -56,7 +56,10 @@ class TaskExecutor:
         """Executa stop."""
         self._running = False
         if self._thread:
-            self._thread.join(timeout=5)
+            try:
+                self._thread.join(timeout=5)
+            except KeyboardInterrupt:
+                _logger.debug("task executor stop interrupted for agent=%s", self.agent_name)
     
     def _poll_loop(self):
         """Executa poll loop."""

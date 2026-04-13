@@ -178,6 +178,46 @@ class TestTurnCycle(unittest.TestCase):
         # read_user_input só deve ter sido chamado APÓS a liberação do turno
         self.assertGreater(len(read_calls), 0)
 
+    def test_run_does_not_block_on_keyboard_interrupt_while_chat_worker_is_busy(self):
+        """run() deve encerrar mesmo se o worker do chat estiver preso processando."""
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.renderer = DummyRenderer()
+        app.threads = 2
+        app.user_name = "User"
+        app.session_state = {
+            "session_id": "test-session",
+            "history_count": 0,
+            "summary_loaded": False,
+        }
+        app._format_yes_no = lambda x: "sim" if x else "não"
+        storage = Mock()
+        storage.get_log_file.return_value = Path("/tmp/quimera-test.log")
+        app.storage = storage
+        app.handle_command = Mock(return_value=False)
+        app.shutdown = Mock()
+
+        reads = iter(["mensagem", KeyboardInterrupt()])
+
+        def mock_read_user_input(prompt, timeout):
+            value = next(reads)
+            if isinstance(value, BaseException):
+                raise value
+            return value
+
+        app.read_user_input = mock_read_user_input
+
+        def slow_process(_user):
+            time.sleep(10)
+
+        app._process_chat_message = slow_process
+
+        run_thread = threading.Thread(target=QuimeraApp.run, args=(app,), daemon=True)
+        run_thread.start()
+        run_thread.join(timeout=2)
+
+        self.assertFalse(run_thread.is_alive(), "run() travou no encerramento com worker ocupado")
+        app.shutdown.assert_called_once()
+
 
 # ---------------------------------------------------------------------------
 # Testes de comportamento: "humano fala → um agente responde"
