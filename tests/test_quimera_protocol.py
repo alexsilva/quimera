@@ -2056,7 +2056,7 @@ class PluginTests(unittest.TestCase):
 
     def test_review_handler_returns_task_to_pending_review_on_failure(self):
         app = QuimeraApp.__new__(QuimeraApp)
-        app.active_agents = [AGENT_CLAUDE, AGENT_GEMINI]
+        app.active_agents = [AGENT_CLAUDE, AGENT_GEMINI, AGENT_CODEX]
         app.tasks_db_path = "/tmp/quimera-tasks-test.db"
         status_updates = []
         review_handlers = {}
@@ -2079,12 +2079,19 @@ class PluginTests(unittest.TestCase):
         def fake_call_agent(*_args, **_kwargs):
             raise RuntimeError("timeout")
 
+        class FakePlugin:
+            def __init__(self, supports_task_execution):
+                self.supports_task_execution = supports_task_execution
+
         app.call_agent = fake_call_agent
         app.show_system_message = lambda message: status_updates.append(message)
 
         with patch("quimera.app.create_executor", side_effect=fake_create_executor), patch(
-            "quimera.runtime.tasks.update_task"
-        ) as update_task, patch("quimera.runtime.tasks.fail_task") as fail_task:
+            "quimera.app.task.plugins.get",
+            side_effect=lambda _agent: FakePlugin(True),
+        ), patch("quimera.runtime.tasks.update_task") as update_task, patch(
+            "quimera.runtime.tasks.fail_task"
+        ) as fail_task:
             app._setup_task_executors()
             ok = review_handlers[AGENT_GEMINI](
                 {"id": 10, "assigned_to": AGENT_CLAUDE, "result": "ok"}
@@ -2106,6 +2113,67 @@ class PluginTests(unittest.TestCase):
             db_path=app.tasks_db_path,
         )
         fail_task.assert_not_called()
+
+    def test_review_handler_fails_when_no_other_operational_reviewer_exists(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.active_agents = [AGENT_CLAUDE, AGENT_GEMINI]
+        app.tasks_db_path = "/tmp/quimera-tasks-test.db"
+        status_updates = []
+        review_handlers = {}
+
+        class FakeExecutor:
+            def __init__(self, handler):
+                self.handler = handler
+
+            def set_review_handler(self, handler):
+                review_handlers[self.agent] = handler
+
+            def set_review_eligibility(self, predicate):
+                return None
+
+            def start(self):
+                return None
+
+        def fake_create_executor(agent, handler, db_path=None, job_id=None):
+            executor = FakeExecutor(handler)
+            executor.agent = agent
+            return executor
+
+        class FakePlugin:
+            def __init__(self, supports_task_execution):
+                self.supports_task_execution = supports_task_execution
+
+        def fake_call_agent(*_args, **_kwargs):
+            raise RuntimeError("timeout")
+
+        app.call_agent = fake_call_agent
+        app.show_system_message = lambda message: status_updates.append(message)
+
+        with patch("quimera.app.create_executor", side_effect=fake_create_executor), patch(
+            "quimera.app.task.plugins.get",
+            side_effect=lambda agent: FakePlugin(agent == AGENT_GEMINI),
+        ), patch("quimera.runtime.tasks.update_task") as update_task, patch(
+            "quimera.runtime.tasks.fail_task"
+        ) as fail_task:
+            app._setup_task_executors()
+            ok = review_handlers[AGENT_GEMINI](
+                {"id": 11, "assigned_to": AGENT_CLAUDE, "result": "ok"}
+            )
+
+        self.assertFalse(ok)
+        self.assertEqual(
+            status_updates,
+            [
+                "[task 11] gemini: revisando execução de claude",
+                "[task 11] gemini: review falhou: timeout",
+            ],
+        )
+        update_task.assert_not_called()
+        fail_task.assert_called_once_with(
+            11,
+            reason="review failed without operational fallback: timeout",
+            db_path=app.tasks_db_path,
+        )
 
     def test_setup_task_executors_only_registers_review_for_operational_agents(self):
         app = QuimeraApp.__new__(QuimeraApp)
@@ -2480,6 +2548,67 @@ class PluginTests(unittest.TestCase):
 
 class FallbackChainTests(unittest.TestCase):
     """Testes para fallback chain quando agente secundário falha."""
+
+    def test_first_agent_failover_to_another_agent(self):
+        """Quando o primeiro agente não responde, outro agente deve assumir a rodada."""
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.history = []
+        app.user_name = "Você"
+        app.round_index = 0
+        app.session_call_index = 0
+        app.debug_prompt_metrics = False
+        app.renderer = DummyRenderer()
+        app.storage = DummyStorage()
+        app.context_manager = None
+        app.agent_client = None
+        app.prompt_builder = None
+        app.summary_agent_preference = None
+        app.session_state = {
+            "session_id": "test-first-agent-failover",
+            "history_count": 0,
+            "summary_loaded": False,
+        }
+        printed = []
+        persisted = []
+        calls = []
+
+        app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
+        app.threads = 1
+        app.shared_state = {}
+        app.handle_command = lambda user: False
+        app.parse_routing = lambda user: (AGENT_CLAUDE, "oi", False)
+        app.parse_response = QuimeraApp.parse_response.__get__(app, QuimeraApp)
+        app.print_response = lambda agent, response: printed.append((agent, response))
+        app.persist_message = lambda role, content: persisted.append((role, content))
+        app._maybe_auto_summarize = lambda preferred_agent=None: None
+
+        responses = iter([
+            None,
+            "codex assumiu e respondeu",
+        ])
+
+        def fake_call(
+            agent,
+            is_first_speaker=False,
+            handoff=None,
+            primary=True,
+            protocol_mode="standard",
+            handoff_only=False,
+            from_agent=None,
+        ):
+            calls.append((agent, is_first_speaker, handoff, handoff_only, from_agent))
+            return next(responses)
+
+        app.call_agent = fake_call
+
+        QuimeraApp._do_process_chat_message(app, "oi")
+
+        self.assertEqual(calls[0][0], AGENT_CLAUDE)
+        self.assertEqual(calls[1][0], AGENT_CODEX)
+        self.assertTrue(calls[1][1])
+        self.assertIn((AGENT_CODEX, "codex assumiu e respondeu"), printed)
+        self.assertIn((AGENT_CODEX, "codex assumiu e respondeu"), persisted)
+        self.assertEqual(app.summary_agent_preference, AGENT_CODEX)
 
     def test_fallback_tries_next_agent_when_secondary_fails(self):
         """Quando o agente secundário não responde, o sistema deve tentar o próximo disponível."""

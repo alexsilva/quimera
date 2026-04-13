@@ -118,10 +118,13 @@ def setup_task_executors(app):
         plugin = plugins.get(agent_name)
         return plugin is not None and can_execute_task(plugin)
 
-    def review_agents_for(executor_agent=None):
+    def review_agents_for(executor_agent=None, exclude_agents=None):
+        excluded = set(exclude_agents or ())
         eligible = []
         for candidate in getattr(app, "active_agents", []) or []:
             if executor_agent is not None and candidate == executor_agent:
+                continue
+            if candidate in excluded:
                 continue
             if is_operational_review_agent(candidate):
                 eligible.append(candidate)
@@ -130,6 +133,14 @@ def setup_task_executors(app):
     def can_failover(task_id, failed_agent):
         candidate_agents = [a for a in app.active_agents if a != failed_agent]
         return runtime_tasks.can_reassign_task(task_id, candidate_agents, db_path=app.tasks_db_path)
+
+    def has_review_failover(executor_agent, failed_reviewer):
+        return bool(
+            review_agents_for(
+                executor_agent=executor_agent,
+                exclude_agents={failed_reviewer},
+            )
+        )
 
     def make_task_handler(agent_name):
         def task_handler(task_dict):
@@ -262,13 +273,20 @@ def setup_task_executors(app):
                 return True
             except Exception as exc:
                 app.show_system_message(f"[task {task_dict['id']}] {agent_name}: review falhou: {exc}")
-                runtime_tasks.update_task(
-                    task_dict["id"],
-                    "pending_review",
-                    result=task_dict.get("result"),
-                    notes=str(exc),
-                    db_path=app.tasks_db_path,
-                )
+                if has_review_failover(task_dict.get("assigned_to"), agent_name):
+                    runtime_tasks.update_task(
+                        task_dict["id"],
+                        "pending_review",
+                        result=task_dict.get("result"),
+                        notes=str(exc),
+                        db_path=app.tasks_db_path,
+                    )
+                else:
+                    runtime_tasks.fail_task(
+                        task_dict["id"],
+                        reason=f"review failed without operational fallback: {exc}",
+                        db_path=app.tasks_db_path,
+                    )
                 return False
 
         return review_handler

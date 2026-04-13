@@ -927,6 +927,34 @@ class QuimeraApp:
         response = self.call_agent(first_agent, is_first_speaker=True, protocol_mode="standard")
         response, route_target, handoff, extend, needs_human_input, _ = self.parse_response(response)
 
+        if response is None and not route_target and not needs_human_input:
+            fallback_candidates = [agent for agent in self.active_agents if agent != first_agent]
+            failed_agent = first_agent
+            for fallback_agent in fallback_candidates:
+                logger.info(
+                    "[CHAT_FAILOVER] trying %s after %s returned no response",
+                    fallback_agent,
+                    failed_agent,
+                )
+                self.renderer.show_system(
+                    f"[fallback] {failed_agent} não respondeu; {fallback_agent} assumiu"
+                )
+                fallback_response = self.call_agent(
+                    fallback_agent,
+                    is_first_speaker=True,
+                    primary=False,
+                    protocol_mode="standard",
+                )
+                fallback_response, route_target, handoff, extend, needs_human_input, _ = self.parse_response(
+                    fallback_response
+                )
+                if fallback_response is None and not route_target and not needs_human_input:
+                    continue
+                first_agent = fallback_agent
+                self.summary_agent_preference = first_agent
+                response = fallback_response
+                break
+
         if needs_human_input:
             if response:
                 self.renderer.show_message(first_agent, response)
