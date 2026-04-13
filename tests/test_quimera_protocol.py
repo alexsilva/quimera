@@ -840,7 +840,8 @@ class ProtocolTests(unittest.TestCase):
         finally:
             app._stop_task_executors()
 
-    def test_run_uses_two_turns_by_default(self):
+    def test_run_uses_single_turn_by_default(self):
+        """No fluxo padrão (sem prefixo explícito, sem EXTEND), apenas um agente responde."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.history = []
         app.user_name = "Você"
@@ -870,23 +871,17 @@ class ProtocolTests(unittest.TestCase):
         app.persist_message = lambda role, content: persisted.append((role, content))
         app.shutdown = lambda: None
         app.read_user_input = Mock(side_effect=["mensagem", "/exit"])
-        other_agents = [n for n in plugins.all_names() if n != AGENT_CLAUDE]
-        all_responses = ["claude responde"] + [f"{a} comenta" for a in other_agents]
-        responses = iter(all_responses)
-        app.call_agent = lambda agent, is_first_speaker=False, handoff=None, primary=True, protocol_mode="standard": next(responses)
+        app.call_agent = Mock(return_value="claude responde")
 
         app.run()
 
-        expected_printed = [(AGENT_CLAUDE, "claude responde")] + [
-            (a, f"{a} comenta") for a in other_agents
-        ]
-        self.assertEqual(printed, expected_printed)
+        # Apenas o agente roteado responde — outros agentes não são acionados
+        self.assertEqual(printed, [(AGENT_CLAUDE, "claude responde")])
         self.assertEqual(
             persisted,
-            [("human", "oi")] + [(AGENT_CLAUDE, "claude responde")] + [
-                (a, f"{a} comenta") for a in other_agents
-            ],
+            [("human", "oi"), (AGENT_CLAUDE, "claude responde")],
         )
+        app.call_agent.assert_called_once()
 
     def test_run_uses_four_turns_when_extended(self):
         app = QuimeraApp.__new__(QuimeraApp)

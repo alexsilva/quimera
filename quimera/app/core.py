@@ -1072,6 +1072,16 @@ class QuimeraApp:
                     tempfile.gettempdir()) / "quimera-staging" / f"{self.session_state['session_id']}-round{self.round_index}"
                 staging_root.mkdir(parents=True, exist_ok=True)
                 logger.info("parallel mode: %d threads, staging=%s", self.threads, staging_root)
+                native_tool_agents = [
+                    a for a in remaining
+                    if getattr(plugins.get(a), "output_format", None) == "stream-json"
+                ]
+                if native_tool_agents:
+                    logger.warning(
+                        "[parallel] agentes com tools nativas não usam staging: %s — "
+                        "escritas de arquivo vão direto ao disco e podem conflitar",
+                        native_tool_agents,
+                    )
                 try:
                     with ThreadPoolExecutor(max_workers=self.threads) as executor:
                         # Criar lista de (agent, handoff, staging_dir, index)

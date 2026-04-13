@@ -24,6 +24,7 @@ class AgentPlugin:
     base_tier: int = 2  # 1: weak, 2: standard, 3: premium
     # API driver fields (driver != "cli" ignora cmd e usa a API diretamente)
     driver: str = "cli"  # "cli" | "openai_compat"
+    output_format: Optional[str] = None  # "stream-json" para parsear output estruturado do CLI
     model: Optional[str] = None
     base_url: Optional[str] = None
     api_key_env: Optional[str] = None  # nome da variável de ambiente com a API key

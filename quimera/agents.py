@@ -19,6 +19,13 @@ _logger = logging.getLogger(__name__)
 _BRALLE_RANGE = re.compile(r'[\u2800-\u28FF]')
 
 
+class _SyntheticToolResult:
+    """Representa uma tool call executada internamente pelo agente CLI."""
+    def __init__(self, ok: bool = True, error: str | None = None):
+        self.ok = ok
+        self.error = error
+
+
 def _strip_spinner(text: str) -> str:
     """Remove caracteres Braille de spinner do texto."""
     return _BRALLE_RANGE.sub('', text)
@@ -202,6 +209,32 @@ class AgentClient:
 
         return output
 
+    def _parse_stream_json(self, raw: str, agent: str) -> str | None:
+        """Parseia output em stream-json do CLI, extrai texto final e dispara callbacks de tool."""
+        result_text = None
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            etype = event.get("type")
+            if etype == "result":
+                if event.get("is_error"):
+                    _logger.warning("[stream-json] agent=%s reported error: %s", agent, event.get("result"))
+                    return None
+                result_text = event.get("result") or ""
+            elif etype == "assistant":
+                content = event.get("message", {}).get("content", [])
+                for block in content:
+                    if block.get("type") == "tool_use" and self.tool_event_callback:
+                        tool_name = block.get("name", "unknown")
+                        _logger.debug("[stream-json] agent=%s used tool=%s", agent, tool_name)
+                        self.tool_event_callback(agent, result=_SyntheticToolResult(ok=True))
+        return result_text
+
     def call(self, agent, prompt, silent=False, show_status=True):
         """Resolve o comando do agente e delega a execução."""
         plugin = plugins.get(agent)
@@ -212,8 +245,12 @@ class AgentClient:
         if isinstance(driver, str) and driver != "cli":
             return self._call_api(agent, plugin, prompt, silent=silent, show_status=show_status)
         if plugin.prompt_as_arg:
-            return self.run([*plugin.cmd, prompt], input_text=None, silent=silent, agent=agent, show_status=show_status)
-        return self.run(plugin.cmd, input_text=prompt, silent=silent, agent=agent, show_status=show_status)
+            raw = self.run([*plugin.cmd, prompt], input_text=None, silent=silent, agent=agent, show_status=show_status)
+        else:
+            raw = self.run(plugin.cmd, input_text=prompt, silent=silent, agent=agent, show_status=show_status)
+        if getattr(plugin, "output_format", None) == "stream-json" and raw is not None:
+            return self._parse_stream_json(raw, agent)
+        return raw
 
     def _call_api(self, agent, plugin, prompt, silent=False, show_status=True):
         """Executa agentes com driver de API (ex: openai_compat para Ollama)."""
