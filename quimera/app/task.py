@@ -497,6 +497,23 @@ def refresh_task_shared_state(app) -> None:
     }
     preserved_state = {k: app.shared_state[k] for k in execution_fields if k in app.shared_state}
     app.shared_state["task_overview"] = _resolve_app_callable(app, "build_task_overview", "_build_task_overview")()
+    completed_tasks = runtime_tasks.list_tasks(
+        {"job_id": app.current_job_id, "status": "completed"},
+        db_path=app.tasks_db_path
+    )
+    if completed_tasks:
+        results = []
+        for task in completed_tasks:
+            desc = task.get("description", "")[:80]
+            result = task.get("result", "")[:200] if task.get("result") else ""
+            if result:
+                results.append(f"[task {task['id']}] {desc}: {result}")
+            else:
+                results.append(f"[task {task['id']}] {desc}: concluído")
+        if results:
+            app.shared_state["completed_task_results"] = "\n".join(results)
+    else:
+        app.shared_state.pop("completed_task_results", None)
     app.shared_state.update(preserved_state)
 
 

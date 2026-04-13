@@ -125,6 +125,10 @@ class PromptBuilder:
         if shared_state and not has_goal:
             state_lines = json.dumps(self._trim_shared_state(shared_state), ensure_ascii=False, indent=2)
             shared_state_block = PROMPT_SHARED_STATE.format(shared_state_json=state_lines)
+        elif shared_state and has_goal and "completed_task_results" in shared_state:
+            results = shared_state["completed_task_results"]
+            if results:
+                shared_state_block = f"TAREFAS CONCLUÍDAS:\n{results}"
 
         metrics_block = ""
         if self.metrics_tracker:
