@@ -193,24 +193,24 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(classify_task_type("investigue por que o handoff falha"), "bug_investigation")
 
     def test_choose_best_agent_uses_plugin_preferences(self):
-        selected = choose_best_agent("test_execution", [plugins.get("claude"), plugins.get("codex"), plugins.get("qwen")])
+        selected = choose_best_agent("test_execution", [plugins.get("claude"), plugins.get("codex"), plugins.get("ollama-qwen")])
         self.assertEqual(selected, "codex")
 
     def test_choose_best_agent_prefers_tooling_for_test_execution(self):
-        selected = choose_best_agent("test_execution", [plugins.get("claude"), plugins.get("qwen"), plugins.get("opencode-qwen")])
+        selected = choose_best_agent("test_execution", [plugins.get("claude"), plugins.get("ollama-qwen"), plugins.get("opencode-qwen")])
         self.assertEqual(selected, "claude")
 
     def test_choose_best_agent_does_not_route_tasks_to_qwen_without_explicit_execution_support(self):
-        selected = choose_best_agent("code_review", [plugins.get("qwen"), plugins.get("claude")])
+        selected = choose_best_agent("code_review", [plugins.get("ollama-qwen"), plugins.get("claude")])
         self.assertEqual(selected, "claude")
 
     def test_choose_best_agent_assigns_qwen_when_it_is_the_only_available_agent(self):
-        # qwen agora suporta task execution via driver openai_compat
-        selected = choose_best_agent("code_review", [plugins.get("qwen")])
-        self.assertEqual(selected, "qwen")
+        # ollama-qwen suporta task execution via driver openai_compat
+        selected = choose_best_agent("code_review", [plugins.get("ollama-qwen")])
+        self.assertEqual(selected, "ollama-qwen")
 
     def test_choose_best_agent_does_not_route_general_to_qwen_on_tie_order(self):
-        selected = choose_best_agent("general", [plugins.get("qwen"), plugins.get("claude"), plugins.get("codex")])
+        selected = choose_best_agent("general", [plugins.get("ollama-qwen"), plugins.get("claude"), plugins.get("codex")])
         self.assertEqual(selected, "claude")
 
     def test_choose_best_agent_does_not_route_general_to_opencode_qwen_on_tie_order(self):

@@ -138,10 +138,12 @@ class QuimeraApp:
         self._create_task_executor = self.task_executor_factory
         self.session_summarizer = summarizer_cls(
             self.renderer,
-            summarizer_call=build_chain_summarizer(self.agent_client,
-                                                   list(dict.fromkeys(["qwen"] + (self.active_agents or [])))),
+            summarizer_call=build_chain_summarizer(
+                self.agent_client,
+                list(dict.fromkeys(["ollama-qwen"] + (self.active_agents or []))),
+            ),
         )
-        self.summary_agent_preference = "qwen"
+        self.summary_agent_preference = "ollama-qwen"
         self._pending_input_for: str | None = None
         last_session = self.storage.load_last_session()
         self.history = last_session["messages"]

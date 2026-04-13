@@ -471,7 +471,7 @@ def test_agent_client_dispatches_api_driver():
 
     with patch("quimera.plugins.get", return_value=mock_plugin):
         with patch.object(client, "_call_api", return_value="api response") as mock_api:
-            result = client.call("qwen", "prompt")
+            result = client.call("ollama-qwen", "prompt")
             mock_api.assert_called_once()
             assert result == "api response"
 

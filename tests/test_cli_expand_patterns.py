@@ -10,7 +10,7 @@ def _base_available():
         "opencode-nano",
         "opencode-omni",
         "opencode-gpt",
-        "qwen",
+        "ollama-qwen",
         "minimax",
         "nemotron",
     ]
