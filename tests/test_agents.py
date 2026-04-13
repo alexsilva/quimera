@@ -351,3 +351,161 @@ def test_agent_client_thread_exceptions(renderer):
         # Check that show_error was called with the expected message
         args, _ = renderer.show_error.call_args
         assert "falha ao comunicar com cmd: Read error" in args[0]
+
+
+def test_synthetic_tool_result(renderer):
+    from quimera.agents import _SyntheticToolResult
+    result_ok = _SyntheticToolResult(ok=True)
+    assert result_ok.ok is True
+    result_err = _SyntheticToolResult(ok=False, error="test error")
+    assert result_err.ok is False
+    assert result_err.error == "test error"
+
+
+def test_agent_client_run_empty_stderr_line(renderer):
+    # Line 144: empty line after strip
+    client = AgentClient(renderer)
+    with patch("subprocess.Popen") as mock_popen:
+        mock_proc = MagicMock()
+        mock_proc.stdout = iter(["output\n", "  \n"])
+        mock_proc.stderr = iter([])
+        mock_proc.returncode = 0
+        mock_proc.stdin = MagicMock()
+        mock_popen.return_value = mock_proc
+        
+        with patch("time.sleep"):
+            result = client.run(["cmd"], silent=False)
+            assert "output" in result
+
+
+def test_agent_client_run_stderr_truncation(renderer):
+    # Line 147-153: stderr truncation at MAX_STDERR_LINES
+    client = AgentClient(renderer)
+    with patch("subprocess.Popen") as mock_popen:
+        mock_proc = MagicMock()
+        lines = [f"error line {i}\n" for i in range(15)]
+        mock_proc.stdout = iter(["output\n"])
+        mock_proc.stderr = iter(lines)
+        mock_proc.returncode = 0
+        mock_proc.stdin = MagicMock()
+        mock_popen.return_value = mock_proc
+        
+        with patch("time.sleep"):
+            result = client.run(["cmd"], silent=False)
+            assert "output" in result
+            # Check truncation message was shown once
+            assert renderer.show_plain.call_count == MAX_STDERR_LINES + 1
+
+
+def test_agent_client_run_no_output_with_error(renderer):
+    # Line 202-219: no output but has error (returncode 0 case)
+    client = AgentClient(renderer)
+    with patch("subprocess.Popen") as mock_popen:
+        mock_proc = MagicMock()
+        mock_proc.stdout = []
+        mock_proc.stderr = ["some stderr\n"]
+        mock_proc.returncode = 0
+        mock_popen.return_value = mock_proc
+        
+        result = client.run(["cmd"], silent=True)
+        assert result is None
+        renderer.show_error.assert_called()
+
+
+def test_agent_client_call_unknown_agent(renderer):
+    # Line 276-278: unknown agent
+    client = AgentClient(renderer)
+    result = client.call("unknown_agent", "prompt")
+    assert result is None
+    renderer.show_error.assert_called()
+
+
+def test_agent_client_call_api_driver(renderer):
+    # Line 280-281, 293-325: API driver path
+    client = AgentClient(renderer, timeout=60)
+    with patch("quimera.plugins.get") as mock_get:
+        mock_plugin = MagicMock()
+        mock_plugin.driver = "api"
+        mock_plugin.model = "llama3"
+        mock_plugin.base_url = "http://localhost:11434"
+        mock_plugin.api_key_env = "OLLAMA_API_KEY"
+        mock_plugin.supports_tools = True
+        mock_plugin.tool_use_reliability = "medium"
+        mock_get.return_value = mock_plugin
+        
+        with patch("quimera.agents.OpenAICompatDriver") as mock_driver_cls:
+            mock_driver = MagicMock()
+            mock_driver.run.return_value = "api response"
+            mock_driver_cls.return_value = mock_driver
+            
+            with patch.object(client, "_api_drivers", {}):
+                result = client.call("test-agent", "prompt")
+            mock_driver_cls.assert_called()
+
+
+def test_parse_stream_json(renderer):
+    # Line 223-247: _parse_stream_json
+    client = AgentClient(renderer)
+    raw = '''{"type":"result","result":"final output"}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"bash"}]}}'''
+    result = client._parse_stream_json(raw, "test-agent")
+    assert result == "final output"
+
+
+def test_parse_stream_json_error(renderer):
+    client = AgentClient(renderer)
+    raw = '{"type":"result","is_error":true,"result":"error msg"}'
+    result = client._parse_stream_json(raw, "test-agent")
+    assert result is None
+
+
+def test_parse_codex_json(renderer):
+    # Line 249-271: _parse_codex_json
+    client = AgentClient(renderer)
+    callback_called = []
+    def track_callback(agent, result=None, loop_abort=None, reason=None):
+        callback_called.append(True)
+    client.tool_event_callback = track_callback
+    
+    raw = '{"type":"item.completed","item":{"type":"command_execution","command":"ls","exit_code":0}}'
+    result = client._parse_codex_json(raw, "codex")
+    assert callback_called
+
+
+def test_parse_codex_json_with_text(renderer):
+    client = AgentClient(renderer)
+    raw = '{"type":"item.completed","item":{"type":"agent_message","text":"final text"}}'
+    result = client._parse_codex_json(raw, "codex")
+    assert result == "final text"
+
+
+def test_agent_client_call_stream_json_format(renderer):
+    # Line 286-288: stream-json format
+    client = AgentClient(renderer)
+    with patch("quimera.plugins.get") as mock_get:
+        mock_plugin = MagicMock()
+        mock_plugin.cmd = ["agent"]
+        mock_plugin.prompt_as_arg = False
+        mock_plugin.output_format = "stream-json"
+        mock_get.return_value = mock_plugin
+        
+        with patch.object(client, "run") as mock_run:
+            mock_run.return_value = '{"type":"result","result":"parsed"}'
+            result = client.call("agent", "prompt")
+            assert result == "parsed"
+
+
+def test_agent_client_call_codex_json_format(renderer):
+    # Line 289-290: codex-json format
+    client = AgentClient(renderer)
+    with patch("quimera.plugins.get") as mock_get:
+        mock_plugin = MagicMock()
+        mock_plugin.cmd = ["agent"]
+        mock_plugin.prompt_as_arg = False
+        mock_plugin.output_format = "codex-json"
+        mock_get.return_value = mock_plugin
+        
+        with patch.object(client, "run") as mock_run:
+            mock_run.return_value = '{"type":"item.completed","item":{"type":"agent_message","text":"parsed"}}'
+            result = client.call("agent", "prompt")
+            assert result == "parsed"

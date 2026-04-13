@@ -673,7 +673,7 @@ def test_existing_cli_plugins_still_register():
     claude = plugins.get("claude")
     assert claude is not None
     assert claude.driver == "cli"
-    assert claude.cmd == ["claude", "--permission-mode=dontAsk", "-p"]
+    assert claude.cmd == ["claude", "--permission-mode=bypassPermissions", "--output-format=stream-json", "--verbose", "-p"]
 
     mock = plugins.get("mock")
     assert mock is not None
