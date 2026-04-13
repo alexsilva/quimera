@@ -178,7 +178,7 @@ class AgentClient:
                     if stream_type == "stderr" and _should_ignore_stderr_line(agent, line):
                         continue
                     # Limita o número de linhas de stderr exibidas
-                    if stream_type == "stderr":
+                    if stream_type == "stderr" and not self.spy:
                         if stderr_lines_shown < MAX_STDERR_LINES:
                             self.renderer.show_plain(cleaned, agent=agent)
                             stderr_lines_shown += 1

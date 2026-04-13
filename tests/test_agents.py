@@ -243,6 +243,24 @@ def test_agent_client_run_suppresses_codex_stdin_noise(renderer):
         assert "agent_message" in result
         renderer.show_plain.assert_not_called()
 
+
+def test_agent_client_run_spy_shows_stderr_lines(renderer):
+    client = AgentClient(renderer, spy=True)
+    with patch("subprocess.Popen") as mock_popen:
+        mock_proc = MagicMock()
+        mock_proc.stdout = iter(['{"type":"item.completed","item":{"id":"1","type":"agent_message","text":"ok"}}\n'])
+        mock_proc.stderr = iter(["tool: exec_command\n", "tool: apply_patch\n"])
+        mock_proc.returncode = 0
+        mock_proc.stdin = MagicMock()
+        mock_popen.return_value = mock_proc
+
+        with patch("time.sleep"):
+            result = client.run(["codex", "exec"], silent=False, agent="codex", show_status=False)
+
+    assert "agent_message" in result
+    renderer.show_plain.assert_any_call("tool: exec_command", agent="codex")
+    renderer.show_plain.assert_any_call("tool: apply_patch", agent="codex")
+
 def test_agent_client_run_post_drain(renderer):
     # Line 166-180 approx - Drain remaining queue after threads die
     client = AgentClient(renderer)
