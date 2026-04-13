@@ -39,6 +39,7 @@ except ImportError:
     _RICH_AVAILABLE = False
 
 import quimera.plugins as plugins
+import quimera.themes as themes
 
 
 def _agent_style(agent: str):
@@ -54,7 +55,7 @@ class TerminalRenderer:
 
     _MAX_WIDTH = 96
 
-    def __init__(self):
+    def __init__(self, theme: str | None = None):
         """Inicializa uma instância de TerminalRenderer."""
         if _RICH_AVAILABLE:
             self._console = Console(
@@ -64,25 +65,17 @@ class TerminalRenderer:
             )
         else:
             self._console = None
+        self._theme = themes.get(theme or themes.DEFAULT_THEME)
         self._live = None
         self._statuses = {}
         self._lock = threading.Lock()
 
     def show_message(self, agent, content):
-        """Exibe message."""
+        """Exibe message usando o tema ativo."""
         style, label = _agent_style(agent)
-        # Remove ANSI escape sequences from content
         clean_content = strip_ansi(str(content))
         if self._console:
-            self._console.print()
-            self._console.print(
-                Panel(
-                    Markdown(clean_content),
-                    title=f"[bold white on {style}] {label} [/bold white on {style}]",
-                    border_style=style,
-                    padding=(0, 1),
-                )
-            )
+            self._theme.render(self._console, label, style, Markdown(clean_content))
         else:
             print(f"\n{label}: {clean_content}\n")
 

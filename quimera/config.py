@@ -2,6 +2,7 @@
 import json
 
 from .workspace import QUIMERA_BASE
+from .themes import DEFAULT_THEME, names as theme_names
 
 _CONFIG_FILE = QUIMERA_BASE / "config.json"
 DEFAULT_USER_NAME = "Você"
@@ -85,4 +86,21 @@ class ConfigManager:
             data["history_window"] = value
         else:
             data.pop("history_window", None)
+        self._save(data)
+
+    @property
+    def theme(self) -> str:
+        """Retorna o tema ativo; fallback para o padrão."""
+        value = self._load().get("theme")
+        if value and value in theme_names():
+            return value
+        return DEFAULT_THEME
+
+    def set_theme(self, name: str):
+        """Persiste o tema padrão."""
+        data = self._load()
+        if name and name in theme_names():
+            data["theme"] = name
+        else:
+            data.pop("theme", None)
         self._save(data)

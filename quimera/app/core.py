@@ -110,7 +110,8 @@ class QuimeraApp:
                  threads: int = 1,
                  timeout: int | None = None,
                  idle_timeout_seconds: int | None = None,
-                 spy: bool = False
+                 spy: bool = False,
+                 theme: str | None = None,
                  ):
         """Inicializa uma instância de QuimeraApp."""
         selected_agents = list(agents) if agents else []
@@ -128,8 +129,9 @@ class QuimeraApp:
         self.threads = int(threads) if threads is not None else 1
         self.agent_failures = defaultdict(int)
         self._agent_failures_lock = threading.Lock()
-        self.renderer = renderer_cls()
         self.config = config_cls()
+        _active_theme = theme if theme is not None else self.config.theme
+        self.renderer = renderer_cls(theme=_active_theme)
         self.user_name = self.config.user_name
         self.workspace = workspace_cls(cwd)
         self.spy = spy

@@ -9,6 +9,7 @@ from typing import List
 from .app import QuimeraApp
 from .config import ConfigManager
 from . import plugins as _plugins
+from . import themes as _themes
 from .runtime.drivers.repl import DriverRepl
 
 try:
@@ -76,6 +77,21 @@ def main():
                         help="Agente para modo de teste (usado com --interactive-test)")
     parser.add_argument("--test-prompt", dest="test_prompt", nargs=argparse.REMAINDER, default=None,
                         help="Prompt para modo de teste")
+    parser.add_argument(
+        "--theme",
+        metavar="TEMA",
+        default=None,
+        choices=_themes.names(),
+        help=f"Tema de exibição para esta sessão. Disponíveis: {', '.join(_themes.names())}",
+    )
+    parser.add_argument(
+        "--set-theme",
+        dest="set_theme",
+        metavar="TEMA",
+        default=None,
+        choices=_themes.names(),
+        help="Define o tema padrão persistente e encerra.",
+    )
     parser.add_argument("--driver-repl", dest="driver_repl", metavar="PLUGIN",
                         default=None,
                         help="Inicia REPL interativo para testar um plugin openai_compat (ex: ollama-qwen)")
@@ -96,6 +112,12 @@ def main():
 
     if args.whoami:
         print(config.user_name)
+        return
+
+    if args.set_theme is not None:
+        config.set_theme(args.set_theme)
+        t = _themes.get(args.set_theme)
+        print(f"Tema padrão definido: {t.name} — {t.description}")
         return
 
     if args.history_window is not None and args.history_window <= 0:
@@ -123,7 +145,8 @@ def main():
                       agents=agents, threads=args.threads,
                       timeout=args.timeout,
                       idle_timeout_seconds=args.idle_timeout,
-                      spy=args.spy)
+                      spy=args.spy,
+                      theme=args.theme)
 
     if args.interactive_test:
         if TerminalRenderer is None or AgentClient is None:
