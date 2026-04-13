@@ -107,6 +107,12 @@ def classify_task_review_result(response: str | None) -> tuple[bool, str, str]:
     if not match:
         return False, "RETENTATIVA", text
     verdict = match.group(1)
+    
+    lines = text.split("\n")
+    has_justification = any(line.strip() and not re.match(r"^\s*(ACEITE|RETENTATIVA|REPLANEJAR|REJEITAR)\s*$", line, re.IGNORECASE) for line in lines)
+    if verdict == "ACEITE" and not has_justification:
+        return False, "RETENTATIVA", "ACEITE sem justificativa"
+    
     return verdict == "ACEITE", verdict, text
 
 

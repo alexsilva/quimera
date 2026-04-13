@@ -264,11 +264,16 @@ def list_tasks(filt=None, db_path=None):
     } for r in rows]
 
 def release_agent_tasks(agent_name, db_path=None):
-    """Release pending/in_progress tasks from a failed agent so others can pick them up."""
+    """Release tasks from a failed agent so others can pick them up.
+
+    Notably, also reset the status to 'pending' so tasks can be claimed again
+    by other agents. Previously, tasks could be left in 'in_progress' state
+    after release, making them unclaimable by the router.
+    """
     conn = get_conn(db_path)
     cur = conn.cursor()
     cur.execute(
-        "UPDATE tasks SET assigned_to = NULL, updated_at = ? "
+        "UPDATE tasks SET assigned_to = NULL, status = 'pending', updated_at = ? "
         "WHERE assigned_to = ? AND status IN ('pending', 'in_progress')",
         (_now(), agent_name),
     )
