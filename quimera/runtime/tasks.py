@@ -308,6 +308,33 @@ def requeue_task(task_id, failed_agent, reason=None, db_path=None):
     return True
 
 
+def requeue_task_after_review(task_id, failed_agent, result=None, notes=None, db_path=None):
+    """Return a reviewed task to pending and force execution failover to another agent."""
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    now = _now()
+    cur.execute("SELECT failed_agents, attempt_count FROM tasks WHERE id = ?", (task_id,))
+    row = cur.fetchone()
+    if not row:
+        conn.close()
+        return False
+
+    failed_agents = row[0] or ""
+    token = _failed_agents_token(failed_agent)
+    if token not in failed_agents:
+        failed_agents += token
+    attempt_count = int(row[1] or 0) + 1
+
+    cur.execute(
+        "UPDATE tasks SET status = ?, assigned_to = NULL, result = ?, notes = ?, "
+        "reviewed_by = NULL, failed_agents = ?, attempt_count = ?, updated_at = ? WHERE id = ?",
+        ("pending", result, notes, failed_agents, attempt_count, now, task_id),
+    )
+    conn.commit()
+    conn.close()
+    return True
+
+
 def can_reassign_task(task_id, candidate_agents, db_path=None):
     """Return True when at least one candidate agent can still claim the task."""
     if not candidate_agents:
@@ -401,22 +428,31 @@ def fail_task(task_id, reason=None, db_path=None):
 
 def submit_for_review(task_id, result=None, db_path=None):
     """Mark a completed task as pending review by another agent."""
-    return update_task(task_id, "pending_review", result=result, notes=None, db_path=db_path)
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE tasks SET status = ?, result = ?, notes = ?, reviewed_by = NULL, updated_at = ? WHERE id = ?",
+        ("pending_review", result, None, _now(), task_id),
+    )
+    conn.commit()
+    conn.close()
+    return True
 
 def claim_review_task(agent_name, job_id=None, db_path=None):
-    """Atomically claim a pending_review task executed by a different agent."""
+    """Atomically claim a pending_review task executed and not already reviewed by this agent."""
     conn = get_conn(db_path)
     cur = conn.cursor()
     try:
         cur.execute("BEGIN IMMEDIATE")
         job_filter = "AND job_id = ?" if job_id is not None else ""
-        params = [agent_name]
+        params = [agent_name, agent_name]
         if job_id is not None:
             params.append(job_id)
         cur.execute(f"""
             SELECT id FROM tasks
             WHERE status = 'pending_review'
               AND (assigned_to IS NULL OR assigned_to != ?)
+              AND (reviewed_by IS NULL OR reviewed_by != ?)
               {job_filter}
             ORDER BY id ASC
             LIMIT 1
@@ -448,7 +484,7 @@ __all__ = [
     "init_db", "add_job", "list_jobs",
     "create_task", "propose_task", "approve_task", "reject_task", "list_tasks",
     "claim_task", "release_agent_tasks", "update_task", "complete_task", "fail_task", "get_job",
-    "submit_for_review", "claim_review_task",
+    "submit_for_review", "claim_review_task", "requeue_task_after_review",
 ]
 
 if __name__ == "__main__":

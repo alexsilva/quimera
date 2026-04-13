@@ -1631,6 +1631,30 @@ class PluginTests(unittest.TestCase):
         self.assertIn(call("Alex: "), mock_write.call_args_list)
         self.assertGreaterEqual(mock_flush.call_count, 1)
 
+    def test_show_system_message_clears_prompt_before_multiline_review_message(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app._output_lock = threading.Lock()
+        app._nonblocking_input_status = "reading"
+        app._nonblocking_prompt_text = "Alex: "
+
+        renderer = Mock()
+        app.renderer = renderer
+
+        stdin = io.StringIO("")
+        stdin.isatty = lambda: True
+
+        with patch("sys.stdin", stdin), patch("quimera.app.readline.get_line_buffer", return_value=""), patch(
+            "quimera.app.readline.redisplay"
+        ), patch("sys.stdout.write") as mock_write, patch("sys.stdout.flush"):
+            app.show_system_message("[task 7] gemini:\nACEITE\nResultado validado com evidência concreta.")
+
+        clear_index = mock_write.call_args_list.index(call("\r\x1b[2K"))
+        prompt_index = mock_write.call_args_list.index(call("Alex: "))
+        self.assertLess(clear_index, prompt_index)
+        renderer.show_system.assert_called_once_with(
+            "[task 7] gemini:\nACEITE\nResultado validado com evidência concreta."
+        )
+
     def test_staging_logger_clears_and_redisplays_prompt_while_tty_reader_is_active(self):
         app = QuimeraApp.__new__(QuimeraApp)
         app._output_lock = threading.Lock()
@@ -1826,6 +1850,58 @@ class PluginTests(unittest.TestCase):
         )
         complete_task.assert_not_called()
 
+    def test_task_handler_completes_when_no_other_operational_reviewer_exists(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.active_agents = [AGENT_CLAUDE, AGENT_GEMINI]
+        app.tasks_db_path = "/tmp/quimera-tasks-test.db"
+        status_updates = []
+        handlers = {}
+
+        class FakeExecutor:
+            def __init__(self, handler):
+                self.handler = handler
+
+            def set_review_handler(self, handler):
+                pass
+
+            def start(self):
+                return None
+
+        def fake_create_executor(agent, handler, db_path=None, job_id=None):
+            handlers[agent] = handler
+            return FakeExecutor(handler)
+
+        class FakePlugin:
+            def __init__(self, supports_task_execution):
+                self.supports_task_execution = supports_task_execution
+
+        app.call_agent = lambda *args, **kwargs: "resposta visivel da task"
+        app.show_system_message = lambda message: status_updates.append(message)
+        app._classify_task_execution_result = lambda response: (True, response)
+
+        with patch("quimera.app.create_executor", side_effect=fake_create_executor), patch(
+            "quimera.app.task.plugins.get",
+            side_effect=lambda agent: FakePlugin(agent == AGENT_CLAUDE),
+        ), patch("quimera.runtime.tasks.submit_for_review") as submit_for_review, patch(
+            "quimera.runtime.tasks.complete_task"
+        ) as complete_task:
+            app._setup_task_executors()
+            ok = handlers[AGENT_CLAUDE]({"id": 11, "description": "rode a task"})
+
+        self.assertTrue(ok)
+        self.assertEqual(
+            status_updates,
+            [
+                "[task 11] claude: iniciando — rode a task",
+                "[task 11] claude:\nresposta visivel da task",
+                "[task 11] claude: concluída",
+            ],
+        )
+        submit_for_review.assert_not_called()
+        complete_task.assert_called_once_with(
+            11, result="resposta visivel da task", db_path=app.tasks_db_path
+        )
+
     def test_review_handler_prints_review_progress_and_completion(self):
         app = QuimeraApp.__new__(QuimeraApp)
         app.active_agents = [AGENT_CLAUDE, AGENT_GEMINI]
@@ -1947,8 +2023,8 @@ class PluginTests(unittest.TestCase):
         app.show_system_message = lambda message: status_updates.append(message)
 
         with patch("quimera.app.create_executor", side_effect=fake_create_executor), patch(
-            "quimera.runtime.tasks.update_task"
-        ) as update_task, patch("quimera.runtime.tasks.complete_task") as complete_task:
+            "quimera.runtime.tasks.requeue_task_after_review"
+        ) as requeue_task_after_review, patch("quimera.runtime.tasks.complete_task") as complete_task:
             app._setup_task_executors()
             ok = review_handlers[AGENT_GEMINI](
                 {
@@ -1969,14 +2045,144 @@ class PluginTests(unittest.TestCase):
                 "[task 9] gemini: review pediu retentativa, task voltou para pending",
             ],
         )
-        update_task.assert_called_once_with(
+        requeue_task_after_review.assert_called_once_with(
             9,
-            "pending",
+            AGENT_CLAUDE,
             result="ok",
             notes="RETENTATIVA\nFaltou evidência de alteração no código.",
             db_path=app.tasks_db_path,
         )
         complete_task.assert_not_called()
+
+    def test_review_handler_returns_task_to_pending_review_on_failure(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.active_agents = [AGENT_CLAUDE, AGENT_GEMINI]
+        app.tasks_db_path = "/tmp/quimera-tasks-test.db"
+        status_updates = []
+        review_handlers = {}
+
+        class FakeExecutor:
+            def __init__(self, handler):
+                self.handler = handler
+
+            def set_review_handler(self, handler):
+                review_handlers[self.agent] = handler
+
+            def start(self):
+                return None
+
+        def fake_create_executor(agent, handler, db_path=None, job_id=None):
+            executor = FakeExecutor(handler)
+            executor.agent = agent
+            return executor
+
+        def fake_call_agent(*_args, **_kwargs):
+            raise RuntimeError("timeout")
+
+        app.call_agent = fake_call_agent
+        app.show_system_message = lambda message: status_updates.append(message)
+
+        with patch("quimera.app.create_executor", side_effect=fake_create_executor), patch(
+            "quimera.runtime.tasks.update_task"
+        ) as update_task, patch("quimera.runtime.tasks.fail_task") as fail_task:
+            app._setup_task_executors()
+            ok = review_handlers[AGENT_GEMINI](
+                {"id": 10, "assigned_to": AGENT_CLAUDE, "result": "ok"}
+            )
+
+        self.assertFalse(ok)
+        self.assertEqual(
+            status_updates,
+            [
+                "[task 10] gemini: revisando execução de claude",
+                "[task 10] gemini: review falhou: timeout",
+            ],
+        )
+        update_task.assert_called_once_with(
+            10,
+            "pending_review",
+            result="ok",
+            notes="timeout",
+            db_path=app.tasks_db_path,
+        )
+        fail_task.assert_not_called()
+
+    def test_setup_task_executors_only_registers_review_for_operational_agents(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.active_agents = [AGENT_CLAUDE, AGENT_GEMINI]
+        app.tasks_db_path = "/tmp/quimera-tasks-test.db"
+        review_handlers = {}
+        review_eligibility = {}
+
+        class FakeExecutor:
+            def __init__(self, handler):
+                self.handler = handler
+
+            def set_review_handler(self, handler):
+                review_handlers[self.agent] = handler
+
+            def set_review_eligibility(self, predicate):
+                review_eligibility[self.agent] = predicate
+
+            def start(self):
+                return None
+
+        def fake_create_executor(agent, handler, db_path=None, job_id=None):
+            executor = FakeExecutor(handler)
+            executor.agent = agent
+            return executor
+
+        class FakePlugin:
+            def __init__(self, supports_task_execution):
+                self.supports_task_execution = supports_task_execution
+
+        with patch("quimera.app.create_executor", side_effect=fake_create_executor), patch(
+            "quimera.app.task.plugins.get",
+            side_effect=lambda agent: FakePlugin(agent == AGENT_GEMINI),
+        ):
+            app._setup_task_executors()
+            self.assertFalse(review_eligibility[AGENT_CLAUDE]())
+            self.assertTrue(review_eligibility[AGENT_GEMINI]())
+
+        self.assertNotIn(AGENT_CLAUDE, review_handlers)
+        self.assertIn(AGENT_GEMINI, review_handlers)
+
+    def test_review_eligibility_tracks_operational_agent_state_dynamically(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.active_agents = [AGENT_CLAUDE, AGENT_GEMINI]
+        app.tasks_db_path = "/tmp/quimera-tasks-test.db"
+        review_eligibility = {}
+
+        class FakeExecutor:
+            def __init__(self, handler):
+                self.handler = handler
+
+            def set_review_handler(self, handler):
+                return None
+
+            def set_review_eligibility(self, predicate):
+                review_eligibility[self.agent] = predicate
+
+            def start(self):
+                return None
+
+        def fake_create_executor(agent, handler, db_path=None, job_id=None):
+            executor = FakeExecutor(handler)
+            executor.agent = agent
+            return executor
+
+        class FakePlugin:
+            def __init__(self, supports_task_execution):
+                self.supports_task_execution = supports_task_execution
+
+        with patch("quimera.app.create_executor", side_effect=fake_create_executor), patch(
+            "quimera.app.task.plugins.get",
+            side_effect=lambda agent: FakePlugin(True),
+        ):
+            app._setup_task_executors()
+            self.assertTrue(review_eligibility[AGENT_GEMINI]())
+            app.active_agents.remove(AGENT_GEMINI)
+            self.assertFalse(review_eligibility[AGENT_GEMINI]())
 
     def test_task_handler_executes_with_serialized_chat_context_in_body(self):
         app = QuimeraApp.__new__(QuimeraApp)

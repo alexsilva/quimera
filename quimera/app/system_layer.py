@@ -18,6 +18,7 @@ class AppSystemLayer:
         if renderer is None:
             return
         with self.app._output_lock:
+            self.app._clear_user_prompt_line_if_needed()
             renderer.show_system(message)
             self.app._redisplay_user_prompt_if_needed()
 

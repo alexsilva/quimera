@@ -30,6 +30,7 @@ class TaskExecutor:
         self._task_queue: queue.Queue = queue.Queue()
         self._handler: Optional[Callable] = None
         self._review_handler: Optional[Callable] = None
+        self._review_eligibility: Optional[Callable[[], bool]] = None
 
     def set_handler(self, handler: Callable[[dict], bool]):
         """Set the task execution handler. Handler receives task dict and returns True on success."""
@@ -38,6 +39,10 @@ class TaskExecutor:
     def set_review_handler(self, handler: Callable[[dict], bool]):
         """Set the review handler. Called with tasks in 'pending_review' state from other agents."""
         self._review_handler = handler
+
+    def set_review_eligibility(self, predicate: Callable[[], bool]):
+        """Set a dynamic predicate that decides whether this agent may claim review work."""
+        self._review_eligibility = predicate
     
     def start(self):
         """Executa start."""
@@ -71,17 +76,23 @@ class TaskExecutor:
                     time.sleep(1)
                     continue
                 # No regular task — check for review tasks from other agents
-                review_id = claim_review_task(self.agent_name, job_id=self.job_id, db_path=self.db_path)
-                if review_id:
-                    tasks = list_tasks({"id": review_id}, db_path=self.db_path)
-                    if tasks and self._review_handler:
-                        self._review_handler(tasks[0])
-                    else:
-                        fail_task(review_id, reason="review handler unavailable or task not found", db_path=self.db_path)
-                        _logger.warning("review task %s claimed by %s but could not be dispatched", review_id, self.agent_name)
-                    time.sleep(1)
-                else:
-                    time.sleep(self.poll_interval)
+                can_review = self._review_eligibility() if self._review_eligibility else True
+                if self._review_handler and can_review:
+                    review_id = claim_review_task(self.agent_name, job_id=self.job_id, db_path=self.db_path)
+                    if review_id:
+                        tasks = list_tasks({"id": review_id}, db_path=self.db_path)
+                        if tasks:
+                            self._review_handler(tasks[0])
+                        else:
+                            fail_task(review_id, reason="review task not found", db_path=self.db_path)
+                            _logger.warning(
+                                "review task %s claimed by %s but could not be loaded",
+                                review_id,
+                                self.agent_name,
+                            )
+                        time.sleep(1)
+                        continue
+                time.sleep(self.poll_interval)
             except Exception as exc:
                 _logger.exception("poll loop error agent=%s task_id=%s: %s", self.agent_name, task_id, exc)
                 if task_id:

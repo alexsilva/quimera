@@ -4,6 +4,7 @@ from pathlib import Path
 from quimera.runtime.executor import ToolExecutor
 from quimera.runtime.models import ToolCall, ToolResult
 from quimera.runtime.config import ToolRuntimeConfig
+from quimera.runtime.task_executor import TaskExecutor
 
 @pytest.fixture
 def config():
@@ -77,3 +78,20 @@ def test_executor_normalizes_execute_command_alias(tmp_path):
     result = executor.execute(ToolCall(name="execute_command", arguments={"command": "echo hello"}))
     assert result.ok is True
     assert result.data["status"] == "completed"
+
+
+def test_task_executor_skips_review_claim_when_agent_is_not_operational(tmp_path):
+    executor = TaskExecutor("gemini", db_path=tmp_path / "tasks.db", poll_interval=0)
+    executor.set_review_handler(lambda _task: True)
+    executor.set_review_eligibility(lambda: False)
+    executor._running = True
+
+    def stop_loop(*_args, **_kwargs):
+        executor._running = False
+
+    with patch("quimera.runtime.task_executor.claim_task", return_value=None), patch(
+        "quimera.runtime.task_executor.claim_review_task"
+    ) as claim_review_task, patch("quimera.runtime.task_executor.time.sleep", side_effect=stop_loop):
+        executor._poll_loop()
+
+    claim_review_task.assert_not_called()

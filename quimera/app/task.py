@@ -112,6 +112,21 @@ def classify_task_review_result(response: str | None) -> tuple[bool, str, str]:
 
 def setup_task_executors(app):
     """Executa setup task executors."""
+    def is_operational_review_agent(agent_name):
+        if agent_name not in (getattr(app, "active_agents", []) or []):
+            return False
+        plugin = plugins.get(agent_name)
+        return plugin is not None and can_execute_task(plugin)
+
+    def review_agents_for(executor_agent=None):
+        eligible = []
+        for candidate in getattr(app, "active_agents", []) or []:
+            if executor_agent is not None and candidate == executor_agent:
+                continue
+            if is_operational_review_agent(candidate):
+                eligible.append(candidate)
+        return eligible
+
     def can_failover(task_id, failed_agent):
         candidate_agents = [a for a in app.active_agents if a != failed_agent]
         return runtime_tasks.can_reassign_task(task_id, candidate_agents, db_path=app.tasks_db_path)
@@ -128,7 +143,7 @@ def setup_task_executors(app):
                     return False
 
                 prompt = f"Execute a seguinte tarefa:\n\n{body}"
-                other_agents = [a for a in app.active_agents if a != agent_name]
+                review_agents = review_agents_for(agent_name)
                 desc_preview = (description[:60] + "…") if len(description) > 60 else description
                 app.show_system_message(f"[task {task_id}] {agent_name}: iniciando — {desc_preview}")
 
@@ -170,7 +185,7 @@ def setup_task_executors(app):
                         runtime_tasks.fail_task(task_id, reason=task_result, db_path=app.tasks_db_path)
                     return False
 
-                if other_agents:
+                if review_agents:
                     runtime_tasks.submit_for_review(task_id, result=task_result, db_path=app.tasks_db_path)
                     app.show_system_message(f"[task {task_id}] {agent_name}: aguardando review de outro agente")
                 else:
@@ -226,9 +241,9 @@ def setup_task_executors(app):
                 _resolve_app_callable(app, "show_task_response", "_show_task_response")(task_id, agent_name, response or "")
                 accepted, verdict, review_text = classify_task_review_result(response)
                 if not accepted:
-                    runtime_tasks.update_task(
+                    runtime_tasks.requeue_task_after_review(
                         task_id,
-                        "pending",
+                        executor or agent_name,
                         result=task_result,
                         notes=review_text,
                         db_path=app.tasks_db_path,
@@ -247,7 +262,13 @@ def setup_task_executors(app):
                 return True
             except Exception as exc:
                 app.show_system_message(f"[task {task_dict['id']}] {agent_name}: review falhou: {exc}")
-                runtime_tasks.fail_task(task_dict["id"], reason=str(exc), db_path=app.tasks_db_path)
+                runtime_tasks.update_task(
+                    task_dict["id"],
+                    "pending_review",
+                    result=task_dict.get("result"),
+                    notes=str(exc),
+                    db_path=app.tasks_db_path,
+                )
                 return False
 
         return review_handler
@@ -257,7 +278,10 @@ def setup_task_executors(app):
     for agent in app.active_agents:
         executor_factory = _resolve_executor_factory(app)
         executor = executor_factory(agent, make_task_handler(agent), db_path=app.tasks_db_path, job_id=job_id)
-        executor.set_review_handler(make_review_handler(agent))
+        if hasattr(executor, "set_review_eligibility"):
+            executor.set_review_eligibility(lambda agent_name=agent: is_operational_review_agent(agent_name))
+        if agent in review_agents_for():
+            executor.set_review_handler(make_review_handler(agent))
         executor.start()
         app.task_executors.append(executor)
 
