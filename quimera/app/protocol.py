@@ -159,6 +159,9 @@ class AppProtocol:
                     route_target = None
                 response = app.ROUTE_PATTERN.sub("", response, count=1).strip() or None
 
+        if response is None:
+            return None, None, None, False, False, None
+
         extend = response.rstrip().endswith(EXTEND_MARKER)
         if extend:
             response = response.rstrip()[: -len(EXTEND_MARKER)].rstrip()
