@@ -30,6 +30,7 @@ from ..runtime.executor import ToolExecutor
 from ..runtime.parser import strip_tool_block
 from ..runtime import ToolRuntimeConfig, ConsoleApprovalHandler, create_executor
 from ..runtime import tasks as runtime_tasks
+from ..runtime.tools.files import set_staging_root
 from ..ui import TerminalRenderer
 from ..context import ContextManager
 from ..storage import SessionStorage
@@ -360,7 +361,6 @@ class QuimeraApp:
         if self._nonblocking_input_status != "reading":
             return
         try:
-            import time
             time.sleep(0.01)
             prompt = getattr(self, "_nonblocking_prompt_text", "")
             line_buffer = ""
@@ -735,8 +735,6 @@ class QuimeraApp:
 
     def _call_agent_for_parallel(self, agent, handoff, protocol_mode, staging_root, index):
         """Executa call_agent e retorna tupla (agent, response, route_target, handoff, extend, needs_input)."""
-        from ..runtime.tools.files import set_staging_root
-
         set_staging_root(staging_root / str(index))
         try:
             raw = self.call_agent(agent, handoff=handoff, primary=False, protocol_mode=protocol_mode)

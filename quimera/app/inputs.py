@@ -5,6 +5,7 @@ import select
 import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -175,6 +176,4 @@ def read_from_file(app, path_str):
 
 def _stdin():
     """Executa stdin."""
-    import sys
-
     return sys.stdin

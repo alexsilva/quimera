@@ -1,5 +1,6 @@
 """Componentes de `quimera.app.task`."""
 import json
+import sys
 from pathlib import Path
 
 from .. import plugins
@@ -14,7 +15,8 @@ from ..runtime.task_planning import (
     normalize_task_description,
     score_plugin_for_task,
 )
-from ..runtime.tasks import create_task, get_job, list_tasks
+from ..runtime import create_executor
+from ..runtime import tasks as runtime_tasks
 
 
 class AppTaskServices:
@@ -77,10 +79,20 @@ def _resolve_app_callable(app, public_name: str, legacy_name: str):
     return getattr(app, public_name)
 
 
+def _resolve_executor_factory(app):
+    """Resolve a fábrica de executores preservando compatibilidade com patches."""
+    if getattr(app, "task_executor_factory", None) is not None:
+        return app.task_executor_factory
+    if getattr(app, "_create_task_executor", None) is not None:
+        return app._create_task_executor
+    app_module = sys.modules.get("quimera.app")
+    if app_module is not None and hasattr(app_module, "create_executor"):
+        return app_module.create_executor
+    return create_executor
+
+
 def setup_task_executors(app):
     """Executa setup task executors."""
-    from ..runtime.tasks import complete_task, fail_task, requeue_task, submit_for_review, update_task
-
     def make_task_handler(agent_name):
         def task_handler(task_dict):
             try:
@@ -89,7 +101,7 @@ def setup_task_executors(app):
                 body = task_dict.get("body", "") or description
 
                 if not body:
-                    fail_task(task_id, reason="empty body", db_path=app.tasks_db_path)
+                    runtime_tasks.fail_task(task_id, reason="empty body", db_path=app.tasks_db_path)
                     return False
 
                 prompt = f"Execute a seguinte tarefa:\n\n{body}"
@@ -111,9 +123,14 @@ def setup_task_executors(app):
                     app.show_system_message(f"[task {task_id}] {agent_name}: sem resposta")
                     _resolve_app_callable(app, "record_failure", "_record_failure")(agent_name)
                     if other_agents:
-                        requeue_task(task_id, agent_name, reason="communication failed", db_path=app.tasks_db_path)
+                        runtime_tasks.requeue_task(
+                            task_id,
+                            agent_name,
+                            reason="communication failed",
+                            db_path=app.tasks_db_path,
+                        )
                     else:
-                        fail_task(task_id, reason="communication failed", db_path=app.tasks_db_path)
+                        runtime_tasks.fail_task(task_id, reason="communication failed", db_path=app.tasks_db_path)
                     return False
 
                 _resolve_app_callable(app, "show_task_response", "_show_task_response")(task_id, agent_name, response)
@@ -125,25 +142,25 @@ def setup_task_executors(app):
                 if not ok:
                     app.show_system_message(f"[task {task_id}] {agent_name}: bloqueada")
                     if other_agents:
-                        requeue_task(task_id, agent_name, reason=task_result, db_path=app.tasks_db_path)
+                        runtime_tasks.requeue_task(task_id, agent_name, reason=task_result, db_path=app.tasks_db_path)
                     else:
-                        fail_task(task_id, reason=task_result, db_path=app.tasks_db_path)
+                        runtime_tasks.fail_task(task_id, reason=task_result, db_path=app.tasks_db_path)
                     return False
 
                 if other_agents:
-                    submit_for_review(task_id, result=task_result, db_path=app.tasks_db_path)
+                    runtime_tasks.submit_for_review(task_id, result=task_result, db_path=app.tasks_db_path)
                     app.show_system_message(f"[task {task_id}] {agent_name}: aguardando review")
                 else:
-                    complete_task(task_id, result=task_result, db_path=app.tasks_db_path)
+                    runtime_tasks.complete_task(task_id, result=task_result, db_path=app.tasks_db_path)
                     app.show_system_message(f"[task {task_id}] {agent_name}: concluída")
                 return True
             except Exception as exc:
                 other_agents = [a for a in app.active_agents if a != agent_name]
                 app.show_system_message(f"[task {task_dict['id']}] {agent_name}: erro: {exc}")
                 if other_agents:
-                    requeue_task(task_dict["id"], agent_name, reason=str(exc), db_path=app.tasks_db_path)
+                    runtime_tasks.requeue_task(task_dict["id"], agent_name, reason=str(exc), db_path=app.tasks_db_path)
                 else:
-                    fail_task(task_dict["id"], reason=str(exc), db_path=app.tasks_db_path)
+                    runtime_tasks.fail_task(task_dict["id"], reason=str(exc), db_path=app.tasks_db_path)
                 return False
 
         return task_handler
@@ -154,13 +171,18 @@ def setup_task_executors(app):
                 task_id = task_dict["id"]
                 executor = task_dict.get("assigned_to")
                 if executor == agent_name:
-                    update_task(task_id, "pending_review", db_path=app.tasks_db_path)
+                    runtime_tasks.update_task(task_id, "pending_review", db_path=app.tasks_db_path)
                     return False
                 task_result = task_dict.get("result", "")
-                complete_task(task_id, result=task_result, reviewed_by=agent_name, db_path=app.tasks_db_path)
+                runtime_tasks.complete_task(
+                    task_id,
+                    result=task_result,
+                    reviewed_by=agent_name,
+                    db_path=app.tasks_db_path,
+                )
                 return True
             except Exception as exc:
-                fail_task(task_dict["id"], reason=str(exc), db_path=app.tasks_db_path)
+                runtime_tasks.fail_task(task_dict["id"], reason=str(exc), db_path=app.tasks_db_path)
                 return False
 
         return review_handler
@@ -168,12 +190,7 @@ def setup_task_executors(app):
     job_id = getattr(app, "current_job_id", None)
     app.task_executors = []
     for agent in app.active_agents:
-        if getattr(app, "task_executor_factory", None) is not None:
-            executor_factory = app.task_executor_factory
-        elif getattr(app, "_create_task_executor", None) is not None:
-            executor_factory = app._create_task_executor
-        else:
-            from . import create_executor as executor_factory
+        executor_factory = _resolve_executor_factory(app)
         executor = executor_factory(agent, make_task_handler(agent), db_path=app.tasks_db_path, job_id=job_id)
         executor.set_review_handler(make_review_handler(agent))
         executor.start()
@@ -223,10 +240,12 @@ def truncate_payload(payload: dict, max_lines: int = 10) -> dict:
 def build_task_overview(app) -> dict:
     """Monta task overview."""
     try:
-        job = get_job(app.current_job_id, db_path=app.tasks_db_path)
+        job = runtime_tasks.get_job(app.current_job_id, db_path=app.tasks_db_path)
         open_tasks = []
         for status in ("pending", "in_progress"):
-            open_tasks.extend(list_tasks({"job_id": app.current_job_id, "status": status}, db_path=app.tasks_db_path))
+            open_tasks.extend(
+                runtime_tasks.list_tasks({"job_id": app.current_job_id, "status": status}, db_path=app.tasks_db_path)
+            )
 
         open_tasks.sort(key=lambda task: task["id"])
         counts = {
@@ -455,7 +474,7 @@ def classify_task_execution_result(response: str | None) -> tuple[bool, str]:
 def count_agent_open_tasks(app, agent_name: str) -> int:
     """Conta agent open tasks."""
     return sum(
-        len(list_tasks({"assigned_to": agent_name, "status": status}, db_path=app.tasks_db_path))
+        len(runtime_tasks.list_tasks({"assigned_to": agent_name, "status": status}, db_path=app.tasks_db_path))
         for status in ("pending", "in_progress")
     )
 
@@ -492,7 +511,7 @@ def handle_task_command(app, command: str, task_prefix: str) -> None:
         "choose_agent_with_load_balance",
         "_choose_agent_with_load_balance",
     )(task_type)
-    task_id = create_task(
+    task_id = runtime_tasks.create_task(
         app.current_job_id,
         description,
         task_type=task_type,

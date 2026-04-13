@@ -1,4 +1,5 @@
 """Componentes de `quimera.runtime.tasks`."""
+import argparse
 import os
 import sqlite3
 from datetime import datetime, timezone
@@ -430,7 +431,6 @@ __all__ = [
 ]
 
 if __name__ == "__main__":
-    import argparse
     parser = argparse.ArgumentParser(prog="quimera-tasks", description="Stage 5: planning tasks (jobs + tasks).")
     parser.add_argument("--db", dest="db", required=True, help="Path to tasks DB")
     sub = parser.add_subparsers(dest="cmd")

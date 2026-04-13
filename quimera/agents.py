@@ -1,4 +1,5 @@
 """Componentes de `quimera.agents`."""
+from contextlib import nullcontext
 import json
 import logging
 import os
@@ -11,6 +12,7 @@ from datetime import datetime, timezone
 
 import quimera.plugins as plugins
 from quimera.constants import MAX_STDERR_LINES
+from .runtime.drivers.openai_compat import OpenAICompatDriver
 
 _logger = logging.getLogger(__name__)
 
@@ -111,7 +113,6 @@ class AgentClient:
             elapsed = 0
             assert log_queue is not None
             
-            from contextlib import nullcontext
             status_cm = self.renderer.running_status("", agent=agent) if show_status else nullcontext(None)
             
             with status_cm as status:
@@ -215,11 +216,8 @@ class AgentClient:
 
     def _call_api(self, agent, plugin, prompt, silent=False, show_status=True):
         """Executa agentes com driver de API (ex: openai_compat para Ollama)."""
-        from .runtime.drivers.openai_compat import OpenAICompatDriver
-
         is_first_call = agent not in self._api_drivers
         if is_first_call:
-            import os
             api_key_env = getattr(plugin, "api_key_env", None)
             api_key = os.environ.get(api_key_env, "ollama") if api_key_env else "ollama"
             self._api_drivers[agent] = OpenAICompatDriver(
@@ -231,7 +229,6 @@ class AgentClient:
 
         driver_instance = self._api_drivers[agent]
 
-        from contextlib import nullcontext
         status_cm = self.renderer.running_status("", agent=agent) if (show_status and not silent) else nullcontext(None)
         status_label = f"[dim]{'conectando' if is_first_call else 'aguardando'} {plugin.model}...[/dim]"
 

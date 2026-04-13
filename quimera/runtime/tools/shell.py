@@ -8,6 +8,7 @@ import warnings
 
 from ..config import ToolRuntimeConfig
 from ..models import ToolCall, ToolResult
+from . import files as file_tools
 
 
 class ShellTool:
@@ -18,9 +19,7 @@ class ShellTool:
 
     def run_shell(self, call: ToolCall) -> ToolResult:
         """Executa shell."""
-        from .files import get_staging_root
-        
-        staging = get_staging_root()
+        staging = file_tools.get_staging_root()
         if staging:
             warnings.warn(
                 f"run_shell called in parallel mode with staging - cwd={self.config.workspace_root}, "

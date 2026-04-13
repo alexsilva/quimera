@@ -10,8 +10,9 @@ Rastreia métricas de eficiência colaborativa:
 """
 from collections import defaultdict
 from dataclasses import dataclass, field, asdict
-import time
 import json
+import sys
+import time
 from pathlib import Path
 
 
@@ -144,7 +145,6 @@ class BehaviorMetricsTracker:
                 encoding="utf-8"
             )
         except Exception as e:
-            import sys
             print(f"[metrics] Falha ao salvar métricas: {e}", file=sys.stderr)
 
     def get_agent(self, agent_name: str) -> AgentBehaviorMetrics:
