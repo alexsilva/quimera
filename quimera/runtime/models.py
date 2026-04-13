@@ -1,3 +1,4 @@
+"""Componentes de `quimera.runtime.models`."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -28,6 +29,7 @@ class ToolResult:
     data: dict[str, Any] = field(default_factory=dict)
 
     def to_model_payload(self) -> dict[str, Any]:
+        """Executa to model payload."""
         return {
             "ok": self.ok,
             "tool_name": self.tool_name,

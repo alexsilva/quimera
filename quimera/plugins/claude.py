@@ -1,3 +1,4 @@
+"""Componentes de `quimera.plugins.claude`."""
 from quimera.plugins.base import AgentPlugin, register
 
 plugin = AgentPlugin(

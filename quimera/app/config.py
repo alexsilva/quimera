@@ -1,3 +1,4 @@
+"""Componentes de `quimera.app.config`."""
 import logging
 import os
 import sys

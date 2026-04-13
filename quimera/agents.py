@@ -1,3 +1,4 @@
+"""Componentes de `quimera.agents`."""
 import json
 import logging
 import os
@@ -25,6 +26,7 @@ class AgentClient:
     """Executa os agentes externos no diretório de trabalho do projeto."""
 
     def __init__(self, renderer, metrics_file=None, timeout=None, spy=False, working_dir=None, workspace_root=None, tool_executor=None):
+        """Inicializa uma instância de AgentClient."""
         self.renderer = renderer
         self.metrics_file = metrics_file
         self._metrics_lock = threading.Lock()
@@ -38,6 +40,7 @@ class AgentClient:
         self._api_drivers: dict = {}
 
     def run(self, cmd, input_text=None, silent=False, agent=None, show_status=True):
+        """Executa run."""
         try:
             env = {**os.environ, "NO_COLOR": "1", "TERM": "dumb", "COLORTERM": ""}
             proc = subprocess.Popen(

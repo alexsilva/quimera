@@ -1,3 +1,4 @@
+"""Componentes de `quimera.app.inputs`."""
 import os
 import queue
 import select
@@ -11,6 +12,7 @@ from pathlib import Path
 
 
 def read_user_input(app, prompt, timeout: int, input_fn=input) -> str | None:
+    """Lê user input."""
     if timeout and timeout > 0:
         value = read_user_input_with_timeout(prompt, timeout, input_fn=input_fn)
         if value is None:
@@ -49,6 +51,7 @@ def read_user_input(app, prompt, timeout: int, input_fn=input) -> str | None:
 
 
 def read_user_input_nonblocking_tty(app, prompt: str, input_fn=input) -> str | None:
+    """Lê user input nonblocking tty."""
     if app._nonblocking_input_queue is None:
         app._nonblocking_input_queue = queue.Queue()
 
@@ -69,6 +72,7 @@ def read_user_input_nonblocking_tty(app, prompt: str, input_fn=input) -> str | N
 
 
 def start_nonblocking_input_reader(app, prompt: str, input_fn=input) -> None:
+    """Executa start nonblocking input reader."""
     if app._nonblocking_input_queue is None:
         app._nonblocking_input_queue = queue.Queue()
 
@@ -92,6 +96,7 @@ def start_nonblocking_input_reader(app, prompt: str, input_fn=input) -> None:
 
 
 def read_user_input_with_timeout(prompt: str, timeout: int, input_fn=input):
+    """Lê user input with timeout."""
     result_queue = queue.Queue()
 
     def _reader():
@@ -109,6 +114,7 @@ def read_user_input_with_timeout(prompt: str, timeout: int, input_fn=input):
 
 
 def read_from_editor(app):
+    """Lê from editor."""
     editor_env = os.environ.get("EDITOR", "")
     if editor_env:
         editor_parts = shlex.split(editor_env)
@@ -137,6 +143,7 @@ def read_from_editor(app):
 
 
 def read_from_file(app, path_str):
+    """Lê from file."""
     path = Path(path_str).expanduser()
     if not path.exists():
         app.renderer.show_error(f"\nArquivo não encontrado: {path}\n")
@@ -146,6 +153,7 @@ def read_from_file(app, path_str):
 
 
 def _stdin():
+    """Executa stdin."""
     import sys
 
     return sys.stdin

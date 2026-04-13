@@ -1,5 +1,4 @@
-import hashlib
-import json
+"""Componentes de `quimera.app.core`."""
 import logging
 import os
 import queue
@@ -20,6 +19,8 @@ except ImportError:
 
 from . import inputs as app_input
 from .handlers import PromptAwareStderrHandler
+from .protocol import AppProtocol
+from .session_metrics import SessionMetricsService
 from . import task as app_tasks
 from .system_layer import AppSystemLayer
 from .. import plugins
@@ -49,6 +50,14 @@ from ..constants import (
 from .config import logger
 
 
+def resolve_app_dependency(name, default):
+    """Resolve app dependency."""
+    package = sys.modules.get("quimera.app")
+    if package is None:
+        return default
+    return getattr(package, name, default)
+
+
 class QuimeraApp:
     """Orquestra comandos locais, roteamento entre agentes e ciclo da sessão."""
     HANDOFF_PAYLOAD_PATTERN = re.compile(
@@ -71,44 +80,63 @@ class QuimeraApp:
                  idle_timeout_seconds: int | None = None,
                  spy: bool = False
                  ):
+        """Inicializa uma instância de QuimeraApp."""
         selected_agents = list(agents) if agents else []
+        renderer_cls = resolve_app_dependency("TerminalRenderer", TerminalRenderer)
+        config_cls = resolve_app_dependency("ConfigManager", ConfigManager)
+        workspace_cls = resolve_app_dependency("Workspace", Workspace)
+        context_manager_cls = resolve_app_dependency("ContextManager", ContextManager)
+        session_storage_cls = resolve_app_dependency("SessionStorage", SessionStorage)
+        agent_client_cls = resolve_app_dependency("AgentClient", AgentClient)
+        summarizer_cls = resolve_app_dependency("SessionSummarizer", SessionSummarizer)
+        prompt_builder_cls = resolve_app_dependency("PromptBuilder", PromptBuilder)
+        metrics_tracker_cls = resolve_app_dependency("BehaviorMetricsTracker", BehaviorMetricsTracker)
+        runtime_readline = resolve_app_dependency("readline", readline)
         self.active_agents = self._agents = selected_agents
         self.threads = int(threads) if threads is not None else 1
         self.agent_failures = defaultdict(int)
         self._agent_failures_lock = threading.Lock()
-        self.renderer = TerminalRenderer()
-        self.config = ConfigManager()
+        self.renderer = renderer_cls()
+        self.config = config_cls()
         self.user_name = self.config.user_name
-        self.workspace = Workspace(cwd)
+        self.workspace = workspace_cls(cwd)
         self.spy = spy
         self.system_layer = AppSystemLayer(self)
+        self.protocol = AppProtocol(logger)
+        self.session_metrics = SessionMetricsService()
 
         # Configuração do histórico persistente (readline)
         self.history_file = self.workspace.history_file
-        if readline:
+        if runtime_readline:
             if self.history_file.exists():
                 try:
-                    readline.read_history_file(str(self.history_file))
+                    runtime_readline.read_history_file(str(self.history_file))
                 except Exception:
                     pass
-            readline.set_history_length(1000)
+            runtime_readline.set_history_length(1000)
 
         migrated = self.workspace.migrate_from_legacy(cwd)
         for item in migrated:
             self.renderer.show_system(MSG_MIGRATION.format(item))
 
-        self.context_manager = ContextManager(
+        self.context_manager = context_manager_cls(
             self.workspace.context_persistent,
             self.workspace.context_session,
             self.renderer,
         )
-        self.storage = SessionStorage(self.workspace.logs_dir, self.renderer)
+        self.storage = session_storage_cls(self.workspace.logs_dir, self.renderer)
         session_id = self.storage.get_history_file().stem
         metrics_file = self.workspace.metrics_dir / f"{session_id}.jsonl" if debug else None
-        self.agent_client = AgentClient(self.renderer, metrics_file=metrics_file, timeout=timeout, spy=self.spy,
-                                        working_dir=str(self.workspace.cwd))
-        self._create_task_executor = create_executor
-        self.session_summarizer = SessionSummarizer(
+        self.agent_client = agent_client_cls(
+            self.renderer,
+            metrics_file=metrics_file,
+            timeout=timeout,
+            spy=self.spy,
+            working_dir=str(self.workspace.cwd),
+        )
+        self.task_executor_factory = resolve_app_dependency("create_executor", create_executor)
+        self._create_task_executor = self.task_executor_factory
+        self.session_summarizer = summarizer_cls(
             self.renderer,
             summarizer_call=build_chain_summarizer(self.agent_client,
                                                    list(dict.fromkeys(["qwen"] + (self.active_agents or [])))),
@@ -139,7 +167,7 @@ class QuimeraApp:
         }
         # Persist metrics state to workspace so agents can resume with previous metrics
         metrics_state_path = self.workspace.state_dir / "metrics_state.json"
-        self.behavior_metrics = BehaviorMetricsTracker(storage_path=metrics_state_path)
+        self.behavior_metrics = metrics_tracker_cls(storage_path=metrics_state_path)
         self.debug_prompt_metrics = debug
         self.round_index = 0
         self.session_call_index = 0
@@ -171,7 +199,7 @@ class QuimeraApp:
             "summary_loaded": self._format_yes_no(summary_loaded),
             "current_job_id": self.current_job_id,
         }
-        self.prompt_builder = PromptBuilder(
+        self.prompt_builder = prompt_builder_cls(
             self.context_manager,
             history_window=history_window or self.config.history_window,
             session_state=session_state,
@@ -197,22 +225,42 @@ class QuimeraApp:
 
     @staticmethod
     def _format_yes_no(value):
+        """Formata yes no."""
         return "sim" if value else "não"
 
     def _get_system_layer(self) -> AppSystemLayer:
+        """Retorna system layer."""
         layer = getattr(self, "system_layer", None)
         if layer is None:
             layer = AppSystemLayer(self)
             self.system_layer = layer
         return layer
 
+    def _get_protocol(self) -> AppProtocol:
+        """Retorna protocol."""
+        protocol = getattr(self, "protocol", None)
+        if protocol is None:
+            protocol = AppProtocol(logger)
+            self.protocol = protocol
+        return protocol
+
+    def _get_session_metrics(self) -> SessionMetricsService:
+        """Retorna session metrics."""
+        metrics = getattr(self, "session_metrics", None)
+        if metrics is None:
+            metrics = SessionMetricsService()
+            self.session_metrics = metrics
+        return metrics
+
     def __del__(self):
+        """Libera recursos associados à instância."""
         try:
             self._stop_task_executors()
         except Exception:
             pass
 
-    def _record_failure(self, agent):
+    def record_failure(self, agent):
+        """Registra failure."""
         with self._agent_failures_lock:
             self.agent_failures[agent] += 1
             failures = self.agent_failures[agent]
@@ -226,8 +274,13 @@ class QuimeraApp:
                     pass
         self._record_agent_metric(agent, "failed", 0)
 
+    def _record_failure(self, agent):
+        """Registra failure."""
+        self.record_failure(agent)
+
     @staticmethod
     def _unique_encodings(*encodings):
+        """Executa unique encodings."""
         seen = set()
         result = []
         for encoding in encodings:
@@ -248,24 +301,31 @@ class QuimeraApp:
         app_tasks.setup_task_executors(self)
 
     def _stop_task_executors(self):
+        """Executa stop task executors."""
         app_tasks.stop_task_executors(self)
 
-    def _build_task_overview(self) -> dict:
+    def build_task_overview(self) -> dict:
+        """Monta task overview."""
         return app_tasks.build_task_overview(self)
 
-    def _task_context_history_window(self) -> int:
+    def task_context_history_window(self) -> int:
+        """Executa task context history window."""
         return app_tasks.task_context_history_window(self)
 
-    def _format_task_chat_context(self) -> str:
+    def format_task_chat_context(self) -> str:
+        """Formata task chat context."""
         return app_tasks.format_task_chat_context(self)
 
-    def _build_task_body(self, description: str) -> str:
+    def build_task_body(self, description: str) -> str:
+        """Monta task body."""
         return app_tasks.build_task_body(self, description)
 
-    def _refresh_task_shared_state(self) -> None:
+    def refresh_task_shared_state(self) -> None:
+        """Atualiza task shared state."""
         app_tasks.refresh_task_shared_state(self)
 
     def _redisplay_user_prompt_if_needed(self) -> None:
+        """Executa redisplay user prompt if needed."""
         stdin = sys.stdin
         if stdin is None or not stdin.isatty():
             return
@@ -276,9 +336,10 @@ class QuimeraApp:
             time.sleep(0.01)
             prompt = getattr(self, "_nonblocking_prompt_text", "")
             line_buffer = ""
-            if readline is not None:
+            runtime_readline = resolve_app_dependency("readline", readline)
+            if runtime_readline is not None:
                 try:
-                    line_buffer = readline.get_line_buffer()
+                    line_buffer = runtime_readline.get_line_buffer()
                 except Exception:
                     line_buffer = ""
             full_line = f"{prompt}{line_buffer}"
@@ -286,15 +347,16 @@ class QuimeraApp:
                 self._clear_user_prompt_line_if_needed()
                 sys.stdout.write(full_line)
                 sys.stdout.flush()
-                if readline is not None:
+                if runtime_readline is not None:
                     try:
-                        readline.redisplay()
+                        runtime_readline.redisplay()
                     except Exception:
                         pass
         except Exception:
             pass
 
     def _clear_user_prompt_line_if_needed(self) -> None:
+        """Executa clear user prompt line if needed."""
         stdin = sys.stdin
         if stdin is None or not stdin.isatty():
             return
@@ -304,9 +366,10 @@ class QuimeraApp:
         sys.stdout.flush()
 
     def show_system_message(self, message: str) -> None:
+        """Exibe system message."""
         self._get_system_layer().show_system_message(message)
 
-    def _show_task_response(self, task_id: int, agent: str, response: str) -> None:
+    def show_task_response(self, task_id: int, agent: str, response: str) -> None:
         """Display the actual agent response for a task execution as a system message."""
         self._get_system_layer().show_task_response(task_id, agent, response)
 
@@ -318,6 +381,7 @@ class QuimeraApp:
             persist_history: bool = True,
             show_output: bool = True,
     ) -> str | None:
+        """Resolve agent response."""
         current_response = response
         max_tool_hops = 8
         tool_history = []
@@ -363,37 +427,45 @@ class QuimeraApp:
         return "Falha: limite de execuções de ferramenta atingido."
 
     def handle_command(self, user_input):
+        """Processa command."""
         return self._get_system_layer().handle_command(user_input)
 
     @staticmethod
-    def _parse_task_command(command: str) -> str:
+    def parse_task_command(command: str) -> str:
+        """Interpreta task command."""
         return app_tasks.parse_task_command(command, CMD_TASK)
 
-    def _get_task_routing_plugins(self):
+    def get_task_routing_plugins(self):
+        """Retorna task routing plugins."""
         return app_tasks.get_task_routing_plugins(self)
 
     @staticmethod
-    def _classify_task_execution_result(response: str | None) -> tuple[bool, str]:
+    def classify_task_execution_result(response: str | None) -> tuple[bool, str]:
         """Return whether the task execution can be considered completed."""
         return app_tasks.classify_task_execution_result(response)
 
-    def _count_agent_open_tasks(self, agent_name: str) -> int:
+    def count_agent_open_tasks(self, agent_name: str) -> int:
+        """Conta agent open tasks."""
         return app_tasks.count_agent_open_tasks(self, agent_name)
 
-    def _choose_agent_with_load_balance(self, task_type: str) -> str | None:
+    def choose_agent_with_load_balance(self, task_type: str) -> str | None:
         """Choose best agent for task_type, applying open-task penalty to avoid monopolies."""
         return app_tasks.choose_agent_with_load_balance(self, task_type)
 
-    def _handle_task_command(self, command: str) -> None:
+    def handle_task_command(self, command: str) -> None:
+        """Processa task command."""
         app_tasks.handle_task_command(self, command, CMD_TASK)
 
     def read_user_input(self, prompt, timeout: int) -> str | None:
-        return app_input.read_user_input(self, prompt, timeout, input_fn=input)
+        """Lê user input."""
+        return app_input.read_user_input(self, prompt, timeout, input_fn=resolve_app_dependency("input", input))
 
     def read_from_editor(self):
+        """Lê from editor."""
         return app_input.read_from_editor(self)
 
     def read_from_file(self, path_str):
+        """Lê from file."""
         return app_input.read_from_file(self, path_str)
 
     def parse_routing(self, user_input):
@@ -426,48 +498,73 @@ class QuimeraApp:
         if not self.active_agents:
             logger.warning("no active agents, resetting to default")
             self.active_agents = self._agents
-        return random.choice(self.active_agents), user_input, False
+        runtime_random = resolve_app_dependency("random", random)
+        return runtime_random.choice(self.active_agents), user_input, False
+
+    def _build_task_overview(self) -> dict:
+        """Monta task overview."""
+        return self.build_task_overview()
+
+    def _task_context_history_window(self) -> int:
+        """Executa task context history window."""
+        return self.task_context_history_window()
+
+    def _format_task_chat_context(self) -> str:
+        """Formata task chat context."""
+        return self.format_task_chat_context()
+
+    def _build_task_body(self, description: str) -> str:
+        """Monta task body."""
+        return self.build_task_body(description)
+
+    def _refresh_task_shared_state(self) -> None:
+        """Atualiza task shared state."""
+        self.refresh_task_shared_state()
+
+    def _show_task_response(self, task_id: int, agent: str, response: str) -> None:
+        """Exibe task response."""
+        self.show_task_response(task_id, agent, response)
+
+    @staticmethod
+    def _parse_task_command(command: str) -> str:
+        """Interpreta task command."""
+        return QuimeraApp.parse_task_command(command)
+
+    def _get_task_routing_plugins(self):
+        """Retorna task routing plugins."""
+        return self.get_task_routing_plugins()
+
+    @staticmethod
+    def _classify_task_execution_result(response: str | None) -> tuple[bool, str]:
+        """Classifica task execution result."""
+        return QuimeraApp.classify_task_execution_result(response)
+
+    def _count_agent_open_tasks(self, agent_name: str) -> int:
+        """Conta agent open tasks."""
+        return self.count_agent_open_tasks(agent_name)
+
+    def _choose_agent_with_load_balance(self, task_type: str) -> str | None:
+        """Seleciona agent with load balance."""
+        return self.choose_agent_with_load_balance(task_type)
+
+    def _handle_task_command(self, command: str) -> None:
+        """Processa task command."""
+        self.handle_task_command(command)
 
     @staticmethod
     def _merge_state_value(current, incoming):
-        if incoming is None:
-            return current
-        if incoming == "":
-            return None
-        if isinstance(current, list) and isinstance(incoming, list):
-            merged = current.copy()
-            for item in incoming:
-                if item not in merged:
-                    merged.append(item)
-            return merged
-        return incoming
+        """Mescla state value."""
+        return AppProtocol.merge_state_value(current, incoming)
 
     def _apply_state_update(self, block_content):
-        try:
-            payload = json.loads(block_content.strip())
-        except json.JSONDecodeError:
-            return False
-
-        if not isinstance(payload, dict):
-            return False
-
-        with self._lock:
-            for key, value in payload.items():
-                normalized_key = str(key).strip().lower().replace(" ", "_")
-                if not normalized_key:
-                    continue
-                current = self.shared_state.get(normalized_key)
-                merged = self._merge_state_value(current, value)
-                if merged is None:
-                    self.shared_state.pop(normalized_key, None)
-                else:
-                    self.shared_state[normalized_key] = merged
-        return True
+        """Executa apply state update."""
+        return self._get_protocol().apply_state_update(self, block_content)
 
     MAX_RETRIES = 2
     RETRY_BACKOFF_SECONDS = 1
 
     def call_agent(self, agent, **options):
+        """Executa call agent."""
         dispatch_options = dict(options)
         silent = dispatch_options.pop("silent", False)
         persist_history = dispatch_options.pop("persist_history", True)
@@ -519,6 +616,7 @@ class QuimeraApp:
 
     def _call_agent(self, agent, is_first_speaker=False, handoff=None, primary=True, protocol_mode="standard",
                     handoff_only=False, silent=False, from_agent=None):
+        """Executa call agent."""
         with self._counter_lock:
             self.session_call_index += 1
             call_index_snapshot = self.session_call_index
@@ -579,174 +677,33 @@ class QuimeraApp:
 
     @staticmethod
     def _strip_payload_residual(text):
-        """Remove trailing non-payload lines from captured ROUTE group."""
-        if not text:
-            return ""
-        logger.debug("[ROUTE] raw_payload before strip: %r", text)
-        kept = []
-        for line in text.splitlines():
-            if QuimeraApp._PAYLOAD_FIELD_RE.match(line) or (kept and not line.strip()):
-                kept.append(line)
-            else:
-                break
-        result = "\n".join(kept).strip()
-        logger.debug("[ROUTE] raw_payload after strip: %r", result)
-        return result
+        """Remove payload residual."""
+        return AppProtocol(logger).strip_payload_residual(QuimeraApp, text)
 
     def _record_agent_metric(self, agent, metric_name, latency):
-        """Track per-agent handoff metrics."""
-        metrics = self.session_state.get("agent_metrics", {})
-        if agent not in metrics:
-            metrics[agent] = {"sent": 0, "received": 0, "succeeded": 0, "failed": 0, "latency": 0.0}
-        if metric_name == "sent":
-            metrics[agent]["sent"] += 1
-        elif metric_name == "received":
-            metrics[agent]["received"] += 1
-        elif metric_name == "succeeded":
-            metrics[agent]["succeeded"] += 1
-        elif metric_name == "failed":
-            metrics[agent]["failed"] += 1
-        if latency:
-            metrics[agent]["latency"] += latency
-        self.session_state["agent_metrics"] = metrics
-
-        if hasattr(self, 'behavior_metrics') and self.behavior_metrics:
-            if metric_name in ("succeeded", "failed"):
-                self.behavior_metrics.record_response(
-                    agent, latency,
-                    has_next_step=metric_name == "succeeded",
-                    is_empty=metric_name == "failed",
-                )
+        """Registra agent metric."""
+        self._get_session_metrics().record_agent_metric(self, agent, metric_name, latency)
 
     def _has_clear_next_step(self, response):
-        """Detecta se a resposta indica próximo passo claro."""
-        if not response:
-            return False
-        response_lower = response.lower()
-        indicators = [
-            "próximo passo",
-            "próxima etapa",
-            "avançar",
-            "continuar com",
-            "a seguir",
-            "para continuar",
-            "próxima ação",
-            "tarefa completa",
-            "finalizado",
-            "concluído",
-            "done",
-            "next step",
-            "continuando",
-        ]
-        return any(ind in response_lower for ind in indicators)
+        """Executa has clear next step."""
+        return self._get_session_metrics().has_clear_next_step(response)
 
     def _is_response_redundant(self, response, history):
-        """Detecta se a resposta é redundante comparada ao histórico recente."""
-        if not response or len(history) < 2:
-            return False
-        response_clean = response.lower().strip()
-        recent_responses = [m["content"].lower().strip() for m in history[-3:] if m.get("role") != "human"]
-        for past in recent_responses:
-            if past and len(past) > 50 and len(response_clean) > 50:
-                from difflib import SequenceMatcher
-                similarity = SequenceMatcher(None, past, response_clean).ratio()
-                if similarity > 0.7:
-                    return True
-        return False
+        """Executa is response redundant."""
+        return self._get_session_metrics().is_response_redundant(response, history)
 
     @staticmethod
     def _generate_handoff_id(task, target, timestamp=None):
-        """Generate a deterministic ID for a handoff based on task content and target."""
-        ts = timestamp or time.time()
-        raw = f"{ts}:{target}:{task}"
-        return hashlib.sha256(raw.encode()).hexdigest()[:12]
+        """Executa generate handoff id."""
+        return AppProtocol.generate_handoff_id(task, target, timestamp=timestamp)
 
     def parse_handoff_payload(self, payload, target=None):
-        if not payload:
-            return None
-        match = self.HANDOFF_PAYLOAD_PATTERN.match(payload.strip())
-        if not match:
-            logger.warning(f"[HANDOFF] Payload did not match regex: {payload!r}")
-            return None
-
-        groups = match.groups()
-        task, context, expected = (groups[i].strip() if groups[i] else None for i in range(3))
-        priority_raw = groups[3].strip() if len(groups) > 3 and groups[3] else None
-        priority = priority_raw.lower() if priority_raw else "normal"
-        if priority not in ("normal", "urgent", "low"):
-            priority = "normal"
-
-        if not task:
-            logger.warning(
-                f"[HANDOFF] Missing required field 'task' - got task={task!r}, context={context!r}, expected={expected!r}")
-            return None
-
-        handoff_id = self._generate_handoff_id(task, target or "unknown")
-
-        return {
-            "task": task,
-            "context": context,
-            "expected": expected,
-            "priority": priority,
-            "handoff_id": handoff_id,
-            "chain": [],
-        }
+        """Interpreta handoff payload."""
+        return self._get_protocol().parse_handoff_payload(self, payload, target=target)
 
     def parse_response(self, response):
-        """Extrai marcadores de controle e retorna (clean, route_target, handoff, extend, needs_human_input, ack_id)."""
-        if response is None:
-            return None, None, None, False, False, None
-
-        route_target, handoff, ack_id = None, None, None
-
-        if STATE_UPDATE_START in response:
-            for state_match in self.STATE_UPDATE_PATTERN.finditer(response):
-                self._apply_state_update(state_match.group(1))
-            response = self.STATE_UPDATE_PATTERN.sub("", response).strip()
-
-        # Extract ACK marker
-        ack_match = self.ACK_PATTERN.search(response)
-        if ack_match:
-            ack_id = ack_match.group(1)
-            response = self.ACK_PATTERN.sub("", response, count=1).strip()
-            logger.info("[ACK] received ack_id=%s", ack_id)
-
-        if ROUTE_PREFIX in response:
-            match = self.ROUTE_PATTERN.search(response)
-            if match:
-                raw_payload = self._strip_payload_residual(match.group(2))
-                route_target = match.group(1)
-                parsed_handoff = self.parse_handoff_payload(raw_payload, target=route_target)
-                logger.info("[ROUTE] match=%s, target=%s", match.group(0)[:100], route_target)
-                if parsed_handoff:
-                    handoff = parsed_handoff
-                    if hasattr(self, 'session_state') and self.session_state:
-                        try:
-                            self.session_state["handoffs_received"] += 1
-                        except KeyError:
-                            pass  # Old session state without metrics
-                else:
-                    logger.warning("[ROUTE] handoff parse failed for target=%s, payload: %r", route_target, raw_payload)
-                    if hasattr(self, 'session_state') and self.session_state:
-                        try:
-                            self.session_state["handoff_invalid_count"] = self.session_state.get(
-                                "handoff_invalid_count", 0) + 1
-                        except KeyError:
-                            pass
-                    if hasattr(self, 'behavior_metrics') and self.behavior_metrics:
-                        self.behavior_metrics.record_handoff_sent(route_target, is_invalid=True)
-                    route_target = None  # Reset target if handoff parse fails
-                response = self.ROUTE_PATTERN.sub("", response, count=1).strip() or None
-
-        extend = response.rstrip().endswith(EXTEND_MARKER)
-        if extend:
-            response = response.rstrip()[: -len(EXTEND_MARKER)].rstrip()
-
-        needs_human_input = NEEDS_INPUT_MARKER in response
-        if needs_human_input:
-            response = response.replace(NEEDS_INPUT_MARKER, "").strip()
-
-        return response, route_target, handoff, extend, needs_human_input, ack_id
+        """Interpreta response."""
+        return self._get_protocol().parse_response(self, response)
 
     def _call_agent_for_parallel(self, agent, handoff, protocol_mode, staging_root, index):
         """Executa call_agent e retorna tupla (agent, response, route_target, handoff, extend, needs_input)."""
@@ -787,6 +744,7 @@ class QuimeraApp:
         logger.info("merge completed: %d files to %s", total_merged, self.workspace.cwd)
 
     def print_response(self, agent, response):
+        """Executa print response."""
         with self._output_lock:
             if response is not None:
                 self.renderer.show_message(agent, response)
@@ -799,30 +757,7 @@ class QuimeraApp:
             self.history.append({"role": role, "content": content})
             self.storage.append_log(role, content)
             self.storage.save_history(self.history, shared_state=self.shared_state)
-            if hasattr(self, 'session_state') and self.session_state and role != "human":
-                try:
-                    self.session_state["total_responses"] = self.session_state.get("total_responses", 0) + 1
-                    has_next = self._has_clear_next_step(content)
-                    is_redundant = self._is_response_redundant(content, self.history)
-                    is_empty = not content or not content.strip()
-                    if has_next:
-                        self.session_state["responses_with_clear_next_step"] = self.session_state.get(
-                            "responses_with_clear_next_step", 0) + 1
-                    if is_redundant:
-                        self.session_state["consecutive_redundant_responses"] = self.session_state.get(
-                            "consecutive_redundant_responses", 0) + 1
-                    else:
-                        self.session_state["consecutive_redundant_responses"] = 0
-                    # Integra com BehaviorMetricsTracker
-                    if hasattr(self, 'behavior_metrics') and self.behavior_metrics:
-                        self.behavior_metrics.record_response(
-                            role, 0.0,
-                            has_next_step=has_next,
-                            is_empty=is_empty,
-                            is_redundant=is_redundant,
-                        )
-                except KeyError:
-                    pass
+            self._get_session_metrics().update_persisted_message_metrics(self, role, content)
 
     def _maybe_auto_summarize(self, preferred_agent=None):
         """Sumariza e trunca o histórico quando excede o threshold configurado."""
@@ -863,9 +798,10 @@ class QuimeraApp:
     def shutdown(self):
         """Finaliza a sessão tentando resumir o histórico no contexto persistente."""
         self._stop_task_executors()
-        if readline:
+        runtime_readline = resolve_app_dependency("readline", readline)
+        if runtime_readline:
             try:
-                readline.write_history_file(str(self.history_file))
+                runtime_readline.write_history_file(str(self.history_file))
             except Exception:
                 pass
 
@@ -885,6 +821,7 @@ class QuimeraApp:
             self.renderer.show_system(MSG_MEMORY_FAILED)
 
     def _process_chat_message(self, user):
+        """Executa process chat message."""
         first_agent, message, explicit = self.parse_routing(user)
         if first_agent is None:
             return
@@ -1119,6 +1056,7 @@ class QuimeraApp:
         self._maybe_auto_summarize(preferred_agent=first_agent)
 
     def _process_chat_queue(self, chat_queue: queue.Queue):
+        """Executa process chat queue."""
         while True:
             user = chat_queue.get()
             try:

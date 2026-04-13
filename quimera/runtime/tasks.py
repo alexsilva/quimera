@@ -1,3 +1,4 @@
+"""Componentes de `quimera.runtime.tasks`."""
 import os
 import sqlite3
 from datetime import datetime, timezone
@@ -6,6 +7,7 @@ from .task_planning import TASK_TYPE_GENERAL
 
 
 def get_conn(db_path):
+    """Retorna conn."""
     if not db_path:
         raise ValueError("db_path is required — use workspace.tasks_db")
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
@@ -14,6 +16,7 @@ def get_conn(db_path):
     return conn
 
 def init_db(db_path=None):
+    """Executa init db."""
     conn = get_conn(db_path)
     cur = conn.cursor()
     cur.execute("""
@@ -64,9 +67,11 @@ def init_db(db_path=None):
     conn.close()
 
 def _now():
+    """Executa now."""
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 def add_job(description, created_by=None, db_path=None, job_id=None):
+    """Executa add job."""
     conn = get_conn(db_path)
     cur = conn.cursor()
     now = _now()
@@ -86,6 +91,7 @@ def add_job(description, created_by=None, db_path=None, job_id=None):
     return job_id
 
 def list_jobs(filt=None, db_path=None):
+    """Lista jobs."""
     filt = filt or {}
     conn = get_conn(db_path)
     cur = conn.cursor()
@@ -114,6 +120,7 @@ def list_jobs(filt=None, db_path=None):
     } for r in rows]
 
 def get_job(job_id, db_path=None):
+    """Retorna job."""
     conn = get_conn(db_path)
     cur = conn.cursor()
     cur.execute("SELECT id, description, status, created_by, created_at, updated_at FROM jobs WHERE id = ?", (job_id,))
@@ -146,6 +153,7 @@ def create_task(
     source_context=None,
     db_path=None,
 ):
+    """Cria task."""
     conn = get_conn(db_path)
     cur = conn.cursor()
     now = _now()
@@ -165,6 +173,7 @@ def create_task(
     return task_id
 
 def propose_task(job_id, description, priority="medium", created_by=None, notes=None, source_context=None, db_path=None, auto_approve=False, body=None):
+    """Executa propose task."""
     status = "approved" if auto_approve else "proposed"
     return create_task(
         job_id,
@@ -181,6 +190,7 @@ def propose_task(job_id, description, priority="medium", created_by=None, notes=
     )
 
 def approve_task(task_id, approved_by, db_path=None):
+    """Aprova task."""
     conn = get_conn(db_path)
     cur = conn.cursor()
     now = _now()
@@ -195,6 +205,7 @@ def approve_task(task_id, approved_by, db_path=None):
     return True
 
 def reject_task(task_id, rejected_by, reason=None, db_path=None):
+    """Rejeita task."""
     conn = get_conn(db_path)
     cur = conn.cursor()
     now = _now()
@@ -210,6 +221,7 @@ def reject_task(task_id, rejected_by, reason=None, db_path=None):
     return True
 
 def list_tasks(filt=None, db_path=None):
+    """Lista tasks."""
     filt = filt or {}
     conn = get_conn(db_path)
     cur = conn.cursor()
@@ -264,6 +276,7 @@ def release_agent_tasks(agent_name, db_path=None):
 
 
 def _failed_agents_token(agent_name: str) -> str:
+    """Executa failed agents token."""
     return f"|{agent_name}|"
 
 
@@ -295,6 +308,7 @@ def requeue_task(task_id, failed_agent, reason=None, db_path=None):
 
 
 def claim_task(agent_name, job_id=None, db_path=None):
+    """Reserva task."""
     conn = get_conn(db_path)
     cur = conn.cursor()
     try:
@@ -330,6 +344,7 @@ def claim_task(agent_name, job_id=None, db_path=None):
         raise
 
 def update_task(task_id, status, result=None, notes=None, db_path=None):
+    """Atualiza task."""
     conn = get_conn(db_path)
     cur = conn.cursor()
     now = _now()
@@ -340,6 +355,7 @@ def update_task(task_id, status, result=None, notes=None, db_path=None):
     return True
 
 def complete_task(task_id, result=None, reviewed_by=None, db_path=None):
+    """Conclui task."""
     conn = get_conn(db_path)
     cur = conn.cursor()
     now = _now()
@@ -358,6 +374,7 @@ def complete_task(task_id, result=None, reviewed_by=None, db_path=None):
     return True
 
 def fail_task(task_id, reason=None, db_path=None):
+    """Marca como falha task."""
     return update_task(task_id, "failed", result=reason, notes=reason, db_path=db_path)
 
 def submit_for_review(task_id, result=None, db_path=None):
@@ -401,6 +418,7 @@ def claim_review_task(agent_name, job_id=None, db_path=None):
         raise
 
 def drop_db(db_path):
+    """Remove db."""
     if os.path.exists(db_path):
         os.remove(db_path)
 

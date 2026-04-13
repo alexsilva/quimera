@@ -1,3 +1,4 @@
+"""Componentes de `quimera.workspace`."""
 import hashlib
 import json
 import os
@@ -7,6 +8,7 @@ from pathlib import Path
 
 
 def _find_writable(candidates: list) -> Path:
+    """Executa find writable."""
     for candidate in candidates:
         try:
             candidate.mkdir(parents=True, exist_ok=True)
@@ -32,6 +34,7 @@ class Workspace:
     """Resolve e gerencia o diretório de dados de um projeto no armazenamento global do quimera."""
 
     def __init__(self, cwd: Path):
+        """Inicializa uma instância de Workspace."""
         self.cwd = cwd.expanduser().resolve()
         self.cwd_hash = hashlib.sha256(str(self.cwd).encode()).hexdigest()[:16]
         self._root = QUIMERA_BASE / "workspaces" / self.cwd_hash
@@ -41,37 +44,46 @@ class Workspace:
 
     @property
     def root(self) -> Path:
+        """Executa root."""
         return self._root
 
     @property
     def context_persistent(self) -> Path:
+        """Executa context persistent."""
         return self._root / "data" / "context" / "persistent.md"
 
     @property
     def context_session(self) -> Path:
+        """Executa context session."""
         return self._root / "data" / "context" / "session.md"
 
     @property
     def logs_dir(self) -> Path:
+        """Executa logs dir."""
         return self._root / "data" / "logs" / "sessions"
 
     @property
     def tasks_db(self) -> Path:
+        """Executa tasks db."""
         return self._root / "data" / "tasks.db"
 
     @property
     def metrics_dir(self) -> Path:
+        """Executa metrics dir."""
         return self._root / "data" / "logs" / "metrics"
 
     @property
     def state_dir(self) -> Path:
+        """Executa state dir."""
         return self._root / "state"
 
     @property
     def history_file(self) -> Path:
+        """Executa history file."""
         return self._root / "history"
 
     def _ensure_dirs(self):
+        """Executa ensure dirs."""
         (self._root / "data" / "context").mkdir(parents=True, exist_ok=True)
         (self._root / "data" / "logs" / "sessions").mkdir(parents=True, exist_ok=True)
         (self._root / "data" / "logs" / "metrics").mkdir(parents=True, exist_ok=True)
@@ -79,6 +91,7 @@ class Workspace:
         (QUIMERA_BASE / "index").mkdir(parents=True, exist_ok=True)
 
     def _write_metadata(self):
+        """Escreve metadata."""
         meta_file = self._root / "workspace.json"
         now = datetime.now(timezone.utc).isoformat(timespec="seconds")
         if meta_file.exists():
@@ -101,6 +114,7 @@ class Workspace:
         meta_file.write_text(json.dumps(meta, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
     def _update_index(self):
+        """Atualiza index."""
         index_file = QUIMERA_BASE / "index" / "workspaces.json"
         now = datetime.now(timezone.utc).isoformat(timespec="seconds")
         if index_file.exists():

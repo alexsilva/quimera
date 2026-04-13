@@ -1,3 +1,4 @@
+"""Componentes de `quimera.runtime.tools.shell`."""
 from __future__ import annotations
 
 import json
@@ -10,10 +11,13 @@ from ..models import ToolCall, ToolResult
 
 
 class ShellTool:
+    """Implementa `ShellTool`."""
     def __init__(self, config: ToolRuntimeConfig) -> None:
+        """Inicializa uma instância de ShellTool."""
         self.config = config
 
     def run_shell(self, call: ToolCall) -> ToolResult:
+        """Executa shell."""
         from .files import get_staging_root
         
         staging = get_staging_root()

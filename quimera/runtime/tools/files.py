@@ -1,3 +1,4 @@
+"""Componentes de `quimera.runtime.tools.files`."""
 from __future__ import annotations
 
 import logging
@@ -12,10 +13,12 @@ _thread_local = threading.local()
 
 
 def get_staging_root() -> Path | None:
+    """Retorna staging root."""
     return getattr(_thread_local, "staging_root", None)
 
 
 def set_staging_root(path: Path | None) -> None:
+    """Define staging root."""
     _thread_local.staging_root = path
     if path:
         _logger.debug("staging initialized: %s (thread=%s)", path, threading.current_thread().name)
@@ -24,10 +27,13 @@ def set_staging_root(path: Path | None) -> None:
 
 
 class FileTools:
+    """Implementa `FileTools`."""
     def __init__(self, config: ToolRuntimeConfig) -> None:
+        """Inicializa uma instância de FileTools."""
         self.config = config
 
     def _resolve(self, raw_path: str) -> Path:
+        """Resolve resolve."""
         normalized = raw_path.lstrip("/") or "."
         staging = get_staging_root()
         base = staging if staging else self.config.workspace_root
@@ -42,6 +48,7 @@ class FileTools:
         raise ValueError(f"Path fora da workspace: {raw_path}")
 
     def list_files(self, call: ToolCall) -> ToolResult:
+        """Lista files."""
         staging = get_staging_root()
         workspace = self.config.workspace_root
         raw_path = call.arguments.get("path", ".")
@@ -73,6 +80,7 @@ class FileTools:
         return ToolResult(ok=True, tool_name=call.name, content="\n".join(entries))
 
     def read_file(self, call: ToolCall) -> ToolResult:
+        """Lê file."""
         staging = get_staging_root()
         raw_path = call.arguments["path"]
 
@@ -102,6 +110,7 @@ class FileTools:
         )
 
     def write_file(self, call: ToolCall) -> ToolResult:
+        """Escreve file."""
         path = self._resolve(call.arguments["path"])
         path.parent.mkdir(parents=True, exist_ok=True)
         mode = str(call.arguments.get("mode", "overwrite"))
@@ -126,6 +135,7 @@ class FileTools:
         return ToolResult(ok=True, tool_name=call.name, content=f"Arquivo salvo: {path}")
 
     def grep_search(self, call: ToolCall) -> ToolResult:
+        """Executa grep search."""
         staging = get_staging_root()
         workspace = self.config.workspace_root
         raw_path = call.arguments.get("path", ".")

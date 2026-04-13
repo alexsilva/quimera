@@ -1,3 +1,4 @@
+"""Componentes de `quimera.context`."""
 import os
 import shlex
 import shutil
@@ -12,19 +13,23 @@ class ContextManager:
     GENERATED_AT_PREFIX = "_Gerado em "
 
     def __init__(self, base_context_file, session_context_file, renderer):
+        """Inicializa uma instância de ContextManager."""
         self.base_context_file = base_context_file
         self.session_context_file = session_context_file
         self.renderer = renderer
 
     def _read(self, path):
+        """Lê read."""
         if not path.exists():
             return ""
         return path.read_text(encoding="utf-8").strip()
 
     def load_base(self):
+        """Carrega base."""
         return self._read(self.base_context_file)
 
     def load_session(self):
+        """Carrega session."""
         return self._read(self.session_context_file)
 
     def load_session_summary(self):
@@ -45,6 +50,7 @@ class ContextManager:
         return "\n".join(lines).strip()
 
     def load(self):
+        """Carrega load."""
         base_context = self.load_base()
         session_context = self.load_session()
 
@@ -57,6 +63,7 @@ class ContextManager:
         return ""
 
     def show(self):
+        """Exibe show."""
         context = self.load()
         if not context:
             self.renderer.show_system("\n[contexto vazio]\n")
@@ -64,6 +71,7 @@ class ContextManager:
         self.renderer.show_plain(f"\n{context}\n")
 
     def edit(self):
+        """Executa edit."""
         editor_env = os.environ.get("EDITOR")
         if editor_env:
             editor_parts = shlex.split(editor_env)

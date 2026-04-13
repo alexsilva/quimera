@@ -1,3 +1,4 @@
+"""Componentes de `quimera.ui`."""
 import os
 import re
 import sys
@@ -54,6 +55,7 @@ class TerminalRenderer:
     _MAX_WIDTH = 96
 
     def __init__(self):
+        """Inicializa uma instância de TerminalRenderer."""
         if _RICH_AVAILABLE:
             self._console = Console(
                 width=self._MAX_WIDTH,
@@ -67,6 +69,7 @@ class TerminalRenderer:
         self._lock = threading.Lock()
 
     def show_message(self, agent, content):
+        """Exibe message."""
         style, label = _agent_style(agent)
         # Remove ANSI escape sequences from content
         clean_content = strip_ansi(str(content))
@@ -84,6 +87,7 @@ class TerminalRenderer:
             print(f"\n{label}: {clean_content}\n")
 
     def show_no_response(self, agent):
+        """Exibe no response."""
         _, label = _agent_style(agent)
         message = "sem resposta válida"
         if self._console:
@@ -92,6 +96,7 @@ class TerminalRenderer:
             print(f"\n{label}: {message}\n")
 
     def show_system(self, message):
+        """Exibe system."""
         clean_message = strip_ansi(str(message))
         if self._console:
             self._console.print(f"[dim]{markup_escape(clean_message)}[/dim]")
@@ -100,6 +105,7 @@ class TerminalRenderer:
 
     def show_plain(self, message, agent=None):
         # Remove ANSI escape sequences to prevent display issues
+        """Exibe plain."""
         clean_message = strip_ansi(str(message))
         if self._console:
             if agent:
@@ -113,6 +119,7 @@ class TerminalRenderer:
             print(f"{prefix}{clean_message}")
 
     def show_error(self, message):
+        """Exibe error."""
         clean_message = strip_ansi(str(message))
         if self._console:
             self._console.print(f"[bold red]{markup_escape(clean_message)}[/bold red]")
@@ -120,6 +127,7 @@ class TerminalRenderer:
             print(clean_message)
 
     def show_warning(self, message):
+        """Exibe warning."""
         clean_message = strip_ansi(str(message))
         if self._console:
             self._console.print(f"[yellow]{markup_escape(clean_message)}[/yellow]")
@@ -127,6 +135,7 @@ class TerminalRenderer:
             print(clean_message)
 
     def show_handoff(self, from_agent, to_agent, task=None):
+        """Exibe handoff."""
         _, from_label = _agent_style(from_agent)
         _, to_label = _agent_style(to_agent)
         message = f"[handoff] {from_label} -> {to_label}"

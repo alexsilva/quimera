@@ -111,6 +111,7 @@ class BehaviorMetricsTracker:
     """Rastreia métricas de comportamento de todos os agentes."""
     
     def __init__(self, storage_path: Path | str | None = None):
+        """Inicializa uma instância de BehaviorMetricsTracker."""
         self._metrics: dict[str, AgentBehaviorMetrics] = {}
         self._storage_path = Path(storage_path) if storage_path else None
         if self._storage_path:

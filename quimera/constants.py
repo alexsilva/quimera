@@ -1,3 +1,4 @@
+"""Componentes de `quimera.constants`."""
 import os
 
 MAX_STDERR_LINES = 5
@@ -252,6 +253,7 @@ def build_tools_prompt() -> str:
 
 
 def build_route_rule(agent_names):
+    """Monta route rule."""
     agents_list = ", ".join(agent_names) if agent_names else "nenhum"
     return (
         f"- Agentes disponíveis para delegação: {agents_list}\n"
@@ -263,6 +265,7 @@ def build_route_rule(agent_names):
 
 
 def build_help(agent_names):
+    """Monta help."""
     help_text = (
         "\nComandos:\n" +
         "\n".join([f"- /{s} <mensagem>: {s.capitalize()} responde" for s in agent_names]) + "\n"

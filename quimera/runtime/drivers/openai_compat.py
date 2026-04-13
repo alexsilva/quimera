@@ -34,6 +34,7 @@ _TEXT_PARAM_RE = re.compile(r"<parameter=(\w+)>")
 
 
 def _strip_thinking(text: str) -> str:
+    """Remove thinking."""
     return _THINK_RE.sub("", text).strip()
 
 
@@ -100,6 +101,7 @@ class OpenAICompatDriver:
         api_key: str = "ollama",
         timeout: Optional[int] = None,
     ) -> None:
+        """Inicializa uma instância de OpenAICompatDriver."""
         if OpenAI is None:
             raise ImportError(
                 "O pacote 'openai' é necessário para usar o driver openai_compat. "

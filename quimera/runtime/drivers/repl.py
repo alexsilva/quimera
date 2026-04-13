@@ -28,12 +28,14 @@ _SEP = "─" * 60
 
 
 def _header(text: str) -> None:
+    """Executa header."""
     print(f"\n{_SEP}")
     print(f"  {text}")
     print(_SEP)
 
 
 def _on_tool_call(name: str, args: dict) -> None:
+    """Executa on tool call."""
     print(f"\n  ▶ TOOL CALL: {name}")
     for k, v in args.items():
         val = str(v)
@@ -43,6 +45,7 @@ def _on_tool_call(name: str, args: dict) -> None:
 
 
 def _on_tool_result(result: ToolResult) -> None:
+    """Executa on tool result."""
     status = "✓ OK" if result.ok else "✗ ERRO"
     content = result.content or result.error or ""
     if len(content) > 400:
@@ -54,6 +57,7 @@ def _on_tool_result(result: ToolResult) -> None:
 
 
 def _list_compat_plugins() -> list:
+    """Lista compat plugins."""
     return [p for p in _plugin_registry.all_plugins() if p.driver == "openai_compat"]
 
 
@@ -61,6 +65,7 @@ class DriverRepl:
     """Loop REPL para testar um plugin baseado em openai_compat."""
 
     def __init__(self, plugin_name: str, working_dir: Optional[Path] = None) -> None:
+        """Inicializa uma instância de DriverRepl."""
         plugin = _plugin_registry.get(plugin_name)
         if plugin is None:
             compat = _list_compat_plugins()
@@ -100,9 +105,11 @@ class DriverRepl:
         self._auto_tool_executor = ToolExecutor(rt_config, AutoApprovalHandler(approve_all=True))
 
     def _probe_url(self) -> str:
+        """Executa probe url."""
         return self.plugin.base_url.rstrip("/") + "/models"
 
     def ensure_backend_available(self, timeout: float = 2.0) -> None:
+        """Executa ensure backend available."""
         probe_url = self._probe_url()
         request = urllib_request.Request(probe_url, method="GET")
         try:
@@ -140,6 +147,7 @@ class DriverRepl:
         )
 
     def run(self, one_shot_prompt: str | None = None) -> None:
+        """Executa run."""
         self.ensure_backend_available()
         print(f"\n{'='*60}")
         print(f"  Driver REPL  •  {self.plugin.name}")

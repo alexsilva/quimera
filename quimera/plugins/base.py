@@ -1,9 +1,11 @@
+"""Componentes de `quimera.plugins.base`."""
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
 
 @dataclass
 class AgentPlugin:
+    """Implementa `AgentPlugin`."""
     name: str
     prefix: str
     style: Tuple[str, str]  # (color, label) para UI
@@ -30,16 +32,20 @@ _registry: dict[str, AgentPlugin] = {}
 
 
 def register(plugin: AgentPlugin) -> None:
+    """Executa register."""
     _registry[plugin.name] = plugin
 
 
 def get(name: str) -> Optional[AgentPlugin]:
+    """Retorna get."""
     return _registry.get(name)
 
 
 def all_names() -> List[str]:
+    """Executa all names."""
     return list(_registry.keys())
 
 
 def all_plugins() -> List[AgentPlugin]:
+    """Executa all plugins."""
     return list(_registry.values())

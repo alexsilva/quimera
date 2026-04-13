@@ -1,3 +1,4 @@
+"""Componentes de `quimera.runtime.executor`."""
 from __future__ import annotations
 
 from .approval import ApprovalHandler
@@ -22,6 +23,7 @@ class ToolExecutor:
         registry: ToolRegistry | None = None,
         policy: ToolPolicy | None = None,
     ) -> None:
+        """Inicializa uma instância de ToolExecutor."""
         self.config = config
         self.approval_handler = approval_handler
         self.registry = registry or ToolRegistry()
@@ -29,6 +31,7 @@ class ToolExecutor:
         self._register_builtin_tools()
 
     def _register_builtin_tools(self) -> None:
+        """Executa register builtin tools."""
         file_tools = FileTools(self.config)
         patch_tool = PatchTool(self.config)
         shell_tool = ShellTool(self.config)
@@ -45,6 +48,7 @@ class ToolExecutor:
         self.registry.register("get_job", task_tools.get_job)
 
     def execute(self, call: ToolCall) -> ToolResult:
+        """Executa execute."""
         try:
             self.policy.validate(call)
             
@@ -72,6 +76,7 @@ class ToolExecutor:
             return ToolResult(ok=False, tool_name=call.name, error=f"Falha inesperada: {exc}")
 
     def maybe_execute_from_response(self, response: str | None) -> tuple[str | None, ToolResult | None]:
+        """Tenta execute from response."""
         try:
             call = extract_tool_call(response)
         except ToolCallParseError as exc:

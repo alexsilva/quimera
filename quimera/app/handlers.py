@@ -1,3 +1,4 @@
+"""Componentes de `quimera.app.handlers`."""
 import logging
 import sys
 
@@ -6,14 +7,19 @@ class PromptAwareStderrHandler(logging.StreamHandler):
     """Clear and redraw the interactive prompt around staging logs."""
 
     def __init__(self, stream=None):
+        """Inicializa uma instância de PromptAwareStderrHandler."""
         super().__init__(stream or sys.stderr)
+        self.app = None
         self._app = None
 
     def bind_app(self, app) -> None:
+        """Executa bind app."""
+        self.app = app
         self._app = app
 
     def emit(self, record):
-        app = self._app
+        """Executa emit."""
+        app = self.app
         if app is None:
             super().emit(record)
             return

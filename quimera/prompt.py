@@ -1,3 +1,4 @@
+"""Componentes de `quimera.prompt`."""
 import json
 
 from . import plugins
@@ -42,6 +43,7 @@ class PromptBuilder:
         active_agents=None,
         metrics_tracker=None,
     ):
+        """Inicializa uma instância de PromptBuilder."""
         self.context_manager = context_manager
         self.history_window = history_window
         self.session_state = session_state or {}
@@ -167,6 +169,7 @@ class PromptBuilder:
     @staticmethod
     def _trim_shared_state(state, decisions_tail=5):
         # Extend trimming to cover new canonical goal/step fields and avoid leaking internal planning data.
+        """Executa trim shared state."""
         core_keys = {
             "goal_canonical",
             "current_step",
@@ -191,6 +194,7 @@ class PromptBuilder:
         return trimmed
 
     def _build_request_block(self, history):
+        """Monta request block."""
         for message in reversed(history[-self.history_window:]):
             if message.get("role") == "human":
                 content = (message.get("content") or "").strip()
@@ -199,6 +203,7 @@ class PromptBuilder:
         return ""
 
     def _build_facts_block(self, history, max_items=4):
+        """Monta facts block."""
         facts = []
         for message in reversed(history[-self.history_window:]):
             role = message.get("role")
@@ -216,6 +221,7 @@ class PromptBuilder:
         return PROMPT_FACTS.format(facts="\n".join(facts))
 
     def _format_handoff(self, handoff, from_agent=None):
+        """Formata handoff."""
         if isinstance(handoff, dict):
             task = (handoff.get("task") or "").strip()
             context = (handoff.get("context") or "").strip()
@@ -243,6 +249,7 @@ class PromptBuilder:
         return str(handoff).strip()
 
     def _display_role(self, role):
+        """Executa display role."""
         if role == "human":
             return self.user_name.upper()
         return role.upper()

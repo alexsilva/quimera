@@ -1,3 +1,4 @@
+"""Componentes de `quimera.storage`."""
 import json
 import re
 from datetime import datetime, MINYEAR
@@ -10,6 +11,7 @@ class SessionStorage:
     """Centraliza logs textuais e snapshots JSON de uma sessão."""
 
     def __init__(self, logs_dir: Path, renderer):
+        """Inicializa uma instância de SessionStorage."""
         self.renderer = renderer
         now = datetime.now()
         date_str = now.strftime("%Y-%m-%d")
@@ -20,17 +22,21 @@ class SessionStorage:
         self._logs_dir = logs_dir
 
     def get_log_file(self):
+        """Retorna log file."""
         return self.log_file
 
     def get_history_file(self):
+        """Retorna history file."""
         return self.history_file
 
     def append_log(self, role, content):
+        """Acrescenta log."""
         timestamp = datetime.now().strftime("%H:%M:%S")
         with self.get_log_file().open("a", encoding="utf-8") as file:
             file.write(f"[{timestamp}] [{role.upper()}] {content}\n")
 
     def save_history(self, history, shared_state=None):
+        """Persiste history."""
         payload = {
             "session_id": self.history_file.stem,
             "saved_at": datetime.now().isoformat(timespec="seconds"),

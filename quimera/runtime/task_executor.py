@@ -14,7 +14,9 @@ _logger = logging.getLogger("quimera.task_executor")
 
 
 class TaskExecutor:
+    """Implementa `TaskExecutor`."""
     def __init__(self, agent_name: str, db_path, max_workers: int = 2, poll_interval: float = 5.0, job_id=None):
+        """Inicializa uma instância de TaskExecutor."""
         if not db_path:
             raise ValueError("db_path is required — use workspace.tasks_db")
         self.agent_name = agent_name
@@ -38,6 +40,7 @@ class TaskExecutor:
         self._review_handler = handler
     
     def start(self):
+        """Executa start."""
         if self._running:
             return
         self._running = True
@@ -45,11 +48,13 @@ class TaskExecutor:
         self._thread.start()
     
     def stop(self):
+        """Executa stop."""
         self._running = False
         if self._thread:
             self._thread.join(timeout=5)
     
     def _poll_loop(self):
+        """Executa poll loop."""
         while self._running:
             task_id = None
             try:

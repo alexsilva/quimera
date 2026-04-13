@@ -1,3 +1,4 @@
+"""Componentes de `quimera.cli`."""
 import argparse
 import locale
 import os
@@ -19,6 +20,7 @@ except ImportError:
 
 
 def _expand_patterns(agents: List[str], available: List[str]) -> List[str]:
+    """Executa expand patterns."""
     result = []
     seen = set()
     for a in agents:
@@ -38,6 +40,7 @@ def _expand_patterns(agents: List[str], available: List[str]) -> List[str]:
 
 
 def main():
+    """Executa main."""
     if hasattr(sys.stdin, "reconfigure"):
         try:
             stdin_encoding = None

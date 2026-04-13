@@ -1,3 +1,4 @@
+"""Componentes de `quimera.runtime.parser`."""
 from __future__ import annotations
 
 import json
@@ -11,6 +12,7 @@ TOOL_ATTR_PATTERN = re.compile(r'([A-Za-z_][\w-]*)\s*=\s*(?:"([^"]*)"|\'([^\']*)
 
 
 class ToolCallParseError(Exception):
+    """Implementa `ToolCallParseError`."""
     pass
 
 
@@ -30,6 +32,7 @@ def _parse_json_object(text: str) -> dict[str, Any]:
 
 
 def _parse_tool_tag_attributes(raw_attrs: str) -> dict[str, str]:
+    """Interpreta tool tag attributes."""
     attrs: dict[str, str] = {}
     for match in TOOL_ATTR_PATTERN.finditer(raw_attrs or ""):
         key = match.group(1)
@@ -39,6 +42,7 @@ def _parse_tool_tag_attributes(raw_attrs: str) -> dict[str, str]:
 
 
 def _build_tool_call_from_tag(raw_attrs: str, body: str = "") -> ToolCall:
+    """Monta tool call from tag."""
     attrs = _parse_tool_tag_attributes(raw_attrs)
     name = attrs.pop("function", None) or attrs.pop("name", None)
     if not isinstance(name, str) or not name.strip():
@@ -87,6 +91,7 @@ def _build_tool_call_from_tag(raw_attrs: str, body: str = "") -> ToolCall:
 
 
 def extract_tool_call(response: str | None) -> ToolCall | None:
+    """Executa extract tool call."""
     if not response:
         return None
 
@@ -99,4 +104,5 @@ def extract_tool_call(response: str | None) -> ToolCall | None:
 
 
 def strip_tool_block(response: str) -> str:
+    """Remove tool block."""
     return TOOL_TAG_PATTERN.sub("", response).strip()

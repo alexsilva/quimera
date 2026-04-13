@@ -1,3 +1,4 @@
+"""Componentes de `quimera.runtime.task_planning`."""
 from __future__ import annotations
 
 import re
@@ -34,10 +35,12 @@ _TASK_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
 
 
 def normalize_task_description(text: str) -> str:
+    """Normaliza task description."""
     return re.sub(r"\s+", " ", str(text or "").strip())
 
 
 def classify_task_type(description: str) -> str:
+    """Classifica task type."""
     normalized = normalize_task_description(description).lower()
     if not normalized:
         return TASK_TYPE_GENERAL
@@ -59,10 +62,12 @@ CAPABILITY_BOOST = {
 
 
 def can_execute_task(plugin: AgentPlugin) -> bool:
+    """Indica se pode execute task."""
     return getattr(plugin, "supports_task_execution", True)
 
 
 def score_plugin_for_task(plugin: AgentPlugin, task_type: str) -> int:
+    """Executa score plugin for task."""
     score = 0
     score += (plugin.base_tier - 1) * 2
 
@@ -89,6 +94,7 @@ def score_plugin_for_task(plugin: AgentPlugin, task_type: str) -> int:
 
 
 def choose_best_agent(task_type: str, active_plugins: Iterable[AgentPlugin]) -> str | None:
+    """Seleciona best agent."""
     plugins = [plugin for plugin in active_plugins if plugin is not None and can_execute_task(plugin)]
     if not plugins:
         return None

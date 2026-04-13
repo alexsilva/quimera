@@ -1,3 +1,4 @@
+"""Componentes de `quimera.app.task`."""
 import json
 from pathlib import Path
 
@@ -15,7 +16,16 @@ from ..runtime.task_planning import (
 from ..runtime.tasks import create_task, get_job, list_tasks
 
 
+def _resolve_app_callable(app, public_name: str, legacy_name: str):
+    """Resolve app callable."""
+    instance_dict = getattr(app, "__dict__", {})
+    if legacy_name in instance_dict:
+        return getattr(app, legacy_name)
+    return getattr(app, public_name)
+
+
 def setup_task_executors(app):
+    """Executa setup task executors."""
     from ..runtime.tasks import complete_task, fail_task, requeue_task, submit_for_review, update_task
 
     def make_task_handler(agent_name):
@@ -46,15 +56,19 @@ def setup_task_executors(app):
 
                 if response is None:
                     app.show_system_message(f"[task {task_id}] {agent_name}: sem resposta")
-                    app._record_failure(agent_name)
+                    _resolve_app_callable(app, "record_failure", "_record_failure")(agent_name)
                     if other_agents:
                         requeue_task(task_id, agent_name, reason="communication failed", db_path=app.tasks_db_path)
                     else:
                         fail_task(task_id, reason="communication failed", db_path=app.tasks_db_path)
                     return False
 
-                app._show_task_response(task_id, agent_name, response)
-                ok, task_result = app._classify_task_execution_result(response)
+                _resolve_app_callable(app, "show_task_response", "_show_task_response")(task_id, agent_name, response)
+                ok, task_result = _resolve_app_callable(
+                    app,
+                    "classify_task_execution_result",
+                    "_classify_task_execution_result",
+                )(response)
                 if not ok:
                     app.show_system_message(f"[task {task_id}] {agent_name}: bloqueada")
                     if other_agents:
@@ -101,7 +115,9 @@ def setup_task_executors(app):
     job_id = getattr(app, "current_job_id", None)
     app.task_executors = []
     for agent in app.active_agents:
-        if getattr(app, "_create_task_executor", None) is not None:
+        if getattr(app, "task_executor_factory", None) is not None:
+            executor_factory = app.task_executor_factory
+        elif getattr(app, "_create_task_executor", None) is not None:
             executor_factory = app._create_task_executor
         else:
             from . import create_executor as executor_factory
@@ -112,6 +128,7 @@ def setup_task_executors(app):
 
 
 def stop_task_executors(app):
+    """Executa stop task executors."""
     for executor in getattr(app, "task_executors", []):
         try:
             executor.stop()
@@ -120,6 +137,7 @@ def stop_task_executors(app):
 
 
 def truncate_tool_result(content: str, max_lines: int = 10) -> str:
+    """Trunca tool result."""
     if not content:
         return content
     lines = content.split("\n")
@@ -131,6 +149,7 @@ def truncate_tool_result(content: str, max_lines: int = 10) -> str:
 
 
 def truncate_payload(payload: dict, max_lines: int = 10) -> dict:
+    """Trunca payload."""
     if not payload:
         return payload
 
@@ -149,6 +168,7 @@ def truncate_payload(payload: dict, max_lines: int = 10) -> dict:
 
 
 def build_task_overview(app) -> dict:
+    """Monta task overview."""
     try:
         job = get_job(app.current_job_id, db_path=app.tasks_db_path)
         open_tasks = []
@@ -192,6 +212,7 @@ def build_task_overview(app) -> dict:
 
 
 def task_context_history_window(app) -> int:
+    """Executa task context history window."""
     prompt_builder = getattr(app, "prompt_builder", None)
     window = getattr(prompt_builder, "history_window", None)
     if isinstance(window, int) and window > 0:
@@ -200,6 +221,7 @@ def task_context_history_window(app) -> int:
 
 
 def format_task_chat_context(app) -> str:
+    """Formata task chat context."""
     history = getattr(app, "history", None) or []
     if not history:
         return "[sem contexto recente do chat]"
@@ -216,6 +238,7 @@ def format_task_chat_context(app) -> str:
 
 
 def build_task_body(app, description: str) -> str:
+    """Monta task body."""
     parts = [
         f"TAREFA:\n{description}",
         f"CONTEXTO RECENTE DO CHAT:\n{format_task_chat_context(app)}"
@@ -273,6 +296,7 @@ def build_task_body(app, description: str) -> str:
 
 
 def refresh_task_shared_state(app) -> None:
+    """Atualiza task shared state."""
     if not hasattr(app, "shared_state") or not isinstance(app.shared_state, dict):
         return
     if not hasattr(app, "current_job_id") or not hasattr(app, "tasks_db_path"):
@@ -287,11 +311,12 @@ def refresh_task_shared_state(app) -> None:
         "next_step",
     }
     preserved_state = {k: app.shared_state[k] for k in execution_fields if k in app.shared_state}
-    app.shared_state["task_overview"] = app._build_task_overview()
+    app.shared_state["task_overview"] = _resolve_app_callable(app, "build_task_overview", "_build_task_overview")()
     app.shared_state.update(preserved_state)
 
 
 def parse_task_command(command: str, task_prefix: str) -> str:
+    """Interpreta task command."""
     raw = command[len(task_prefix):].strip()
     if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in {"'", '"'}:
         raw = raw[1:-1].strip()
@@ -299,6 +324,7 @@ def parse_task_command(command: str, task_prefix: str) -> str:
 
 
 def get_task_routing_plugins(app):
+    """Retorna task routing plugins."""
     if not getattr(app, "active_agents", None) or "*" in app.active_agents:
         return [plugin for plugin in plugins.all_plugins() if can_execute_task(plugin)]
 
@@ -311,6 +337,7 @@ def get_task_routing_plugins(app):
 
 
 def classify_task_execution_result(response: str | None) -> tuple[bool, str]:
+    """Classifica task execution result."""
     if response is None:
         return False, "sem resposta do agente"
 
@@ -373,6 +400,7 @@ def classify_task_execution_result(response: str | None) -> tuple[bool, str]:
 
 
 def count_agent_open_tasks(app, agent_name: str) -> int:
+    """Conta agent open tasks."""
     return sum(
         len(list_tasks({"assigned_to": agent_name, "status": status}, db_path=app.tasks_db_path))
         for status in ("pending", "in_progress")
@@ -380,13 +408,14 @@ def count_agent_open_tasks(app, agent_name: str) -> int:
 
 
 def choose_agent_with_load_balance(app, task_type: str) -> str | None:
-    candidate_plugins = app._get_task_routing_plugins()
+    """Seleciona agent with load balance."""
+    candidate_plugins = _resolve_app_callable(app, "get_task_routing_plugins", "_get_task_routing_plugins")()
     if not candidate_plugins:
         return None
     scored = []
     for plugin in candidate_plugins:
         base_score = score_plugin_for_task(plugin, task_type)
-        load = app._count_agent_open_tasks(plugin.name)
+        load = _resolve_app_callable(app, "count_agent_open_tasks", "_count_agent_open_tasks")(plugin.name)
         effective_score = base_score - load
         scored.append((plugin, base_score, load, effective_score))
     max_score = max(s for _, _, _, s in scored)
@@ -398,13 +427,18 @@ def choose_agent_with_load_balance(app, task_type: str) -> str | None:
 
 
 def handle_task_command(app, command: str, task_prefix: str) -> None:
-    description = app._parse_task_command(command)
+    """Processa task command."""
+    description = _resolve_app_callable(app, "parse_task_command", "_parse_task_command")(command)
     if not description:
         app.renderer.show_warning("Uso: /task <descrição>")
         return
 
     task_type = classify_task_type(description)
-    selected_agent = app._choose_agent_with_load_balance(task_type)
+    selected_agent = _resolve_app_callable(
+        app,
+        "choose_agent_with_load_balance",
+        "_choose_agent_with_load_balance",
+    )(task_type)
     task_id = create_task(
         app.current_job_id,
         description,
@@ -414,11 +448,11 @@ def handle_task_command(app, command: str, task_prefix: str) -> None:
         status="pending",
         created_by=app.user_name,
         requested_by=app.user_name,
-        body=app._build_task_body(description),
+        body=_resolve_app_callable(app, "build_task_body", "_build_task_body")(description),
         source_context=command,
         db_path=app.tasks_db_path,
     )
-    app._refresh_task_shared_state()
+    _resolve_app_callable(app, "refresh_task_shared_state", "_refresh_task_shared_state")()
     lines = [f"task criada com id {task_id}"]
     if selected_agent:
         lines.append(f"atribuída para {selected_agent}")

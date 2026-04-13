@@ -1,3 +1,4 @@
+"""Componentes de `quimera.session_summary`."""
 
 def build_chain_summarizer(agent_client, agents):
     """Tenta cada agente em ordem; retorna o primeiro resultado bem-sucedido ou None."""
@@ -23,10 +24,12 @@ class SessionSummarizer:
     """Consolida memória de sessão via resumidores configurados; retorna None se todos falharem."""
 
     def __init__(self, renderer, summarizer_call):
+        """Inicializa uma instância de SessionSummarizer."""
         self.renderer = renderer
         self.summarizer_call = summarizer_call
 
     def summarize(self, history, existing_summary=None, preferred_agent=None):
+        """Executa summarize."""
         if not history and not existing_summary:
             return None
 
@@ -41,6 +44,7 @@ class SessionSummarizer:
 
     @staticmethod
     def _build_prompt(history, existing_summary=None):
+        """Monta prompt."""
         sections = []
         if existing_summary:
             sections.append(f"RESUMO ANTERIOR:\n{existing_summary}")

@@ -1,3 +1,4 @@
+"""Componentes de `quimera.runtime.tools.patch`."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -9,34 +10,40 @@ from .files import get_staging_root
 
 
 class PatchApplyError(Exception):
+    """Implementa `PatchApplyError`."""
     pass
 
 
 @dataclass(slots=True)
 class AddFileOp:
+    """Implementa `AddFileOp`."""
     path: str
     content: str
 
 
 @dataclass(slots=True)
 class DeleteFileOp:
+    """Implementa `DeleteFileOp`."""
     path: str
 
 
 @dataclass(slots=True)
 class UpdateFileOp:
+    """Implementa `UpdateFileOp`."""
     path: str
     hunks: list[list[str]]
     move_to: str | None = None
 
 
 def _join_patch_lines(lines: list[str]) -> str:
+    """Executa join patch lines."""
     if not lines:
         return ""
     return "\n".join(lines) + "\n"
 
 
 def _parse_patch(patch: str) -> list[AddFileOp | DeleteFileOp | UpdateFileOp]:
+    """Interpreta patch."""
     lines = patch.splitlines()
     if not lines or lines[0] != "*** Begin Patch":
         raise PatchApplyError("Patch deve começar com '*** Begin Patch'")
@@ -101,10 +108,13 @@ def _parse_patch(patch: str) -> list[AddFileOp | DeleteFileOp | UpdateFileOp]:
 
 
 class PatchTool:
+    """Implementa `PatchTool`."""
     def __init__(self, config: ToolRuntimeConfig) -> None:
+        """Inicializa uma instância de PatchTool."""
         self.config = config
 
     def _resolve(self, raw_path: str) -> Path:
+        """Resolve resolve."""
         normalized = raw_path.lstrip("/") or "."
         staging = get_staging_root()
         base = staging if staging else self.config.workspace_root
@@ -114,12 +124,14 @@ class PatchTool:
         return path
 
     def _display_path(self, path: Path) -> str:
+        """Executa display path."""
         staging = get_staging_root()
         base = staging if staging else self.config.workspace_root
         return str(path.relative_to(base))
 
     @staticmethod
     def _find_subsequence(haystack: list[str], needle: list[str], start: int) -> int:
+        """Executa find subsequence."""
         if not needle:
             return start
         max_start = len(haystack) - len(needle)
@@ -129,6 +141,7 @@ class PatchTool:
         return -1
 
     def _apply_update(self, path: Path, op: UpdateFileOp) -> Path:
+        """Executa apply update."""
         if not path.exists():
             raise PatchApplyError(f"Arquivo não existe para update: {op.path}")
 
@@ -152,6 +165,7 @@ class PatchTool:
         return target
 
     def apply_patch(self, call: ToolCall) -> ToolResult:
+        """Executa apply patch."""
         raw_patch = str(call.arguments.get("patch", ""))
         if not raw_patch.strip():
             return ToolResult(ok=False, tool_name=call.name, error="apply_patch requer 'patch'")

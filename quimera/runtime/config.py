@@ -1,3 +1,4 @@
+"""Componentes de `quimera.runtime.config`."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -6,6 +7,7 @@ from pathlib import Path
 
 @dataclass(slots=True)
 class ToolRuntimeConfig:
+    """Implementa `ToolRuntimeConfig`."""
     workspace_root: Path
     db_path: Path | None = None
     command_timeout_seconds: int = 20
@@ -46,6 +48,7 @@ class ToolRuntimeConfig:
     )
 
     def __post_init__(self) -> None:
+        """Executa post init."""
         self.workspace_root = self.workspace_root.resolve()
         if not self.allowed_read_roots:
             self.allowed_read_roots = [self.workspace_root]
