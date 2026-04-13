@@ -17,6 +17,7 @@ from .runtime.drivers.openai_compat import OpenAICompatDriver
 _logger = logging.getLogger(__name__)
 
 _BRALLE_RANGE = re.compile(r'[\u2800-\u28FF]')
+_ANSI_ESCAPE = re.compile(r'\x1B\[[0-?]*[ -/]*[@-~]')
 
 
 class _SyntheticToolResult:
@@ -29,6 +30,12 @@ class _SyntheticToolResult:
 def _strip_spinner(text: str) -> str:
     """Remove caracteres Braille de spinner do texto."""
     return _BRALLE_RANGE.sub('', text)
+
+
+def _should_ignore_stderr_line(agent: str | None, line: str) -> bool:
+    """Filtra ruído conhecido de stderr que não representa erro real."""
+    cleaned = _ANSI_ESCAPE.sub("", _strip_spinner(line)).replace("\r", "").strip()
+    return agent == "codex" and cleaned == "Reading additional input from stdin..."
 
 
 class AgentClient:
@@ -135,6 +142,8 @@ class AgentClient:
                             cleaned = _strip_spinner(line.rstrip("\n"))
                             if not cleaned.strip():
                                 continue
+                            if stream_type == "stderr" and _should_ignore_stderr_line(agent, line):
+                                continue
                             if stream_type == "stderr" and not self.spy:
                                 if stderr_lines_shown < MAX_STDERR_LINES:
                                     self.renderer.show_plain(cleaned, agent=agent)
@@ -165,6 +174,8 @@ class AgentClient:
                     stream_type, line = log_queue.get_nowait()
                     cleaned = _strip_spinner(line.rstrip("\n"))
                     if not cleaned.strip():
+                        continue
+                    if stream_type == "stderr" and _should_ignore_stderr_line(agent, line):
                         continue
                     # Limita o número de linhas de stderr exibidas
                     if stream_type == "stderr":

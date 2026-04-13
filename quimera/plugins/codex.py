@@ -6,7 +6,10 @@ plugin = AgentPlugin(
     prefix="/codex",
     cmd=["codex", "exec", "--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check", "--json"],
     output_format="codex-json",
-    prompt_as_arg=True,
+    # O `codex exec` tenta ler stdin adicional quando recebe prompt por argv
+    # e detecta stdin redirecionado. No Quimera, usar stdin como canal único
+    # evita esse modo ambíguo e garante EOF explícito após o prompt.
+    prompt_as_arg=False,
     style=("green", "Codex"),
     capabilities=["code_editing", "code_review","test_execution", "bug_investigation", "tool_use"],
     preferred_task_types=["code_edit", "code_review", "test_execution", "bug_investigation", "general"],

@@ -4,8 +4,9 @@ import threading
 import subprocess
 import os
 from unittest.mock import MagicMock, patch, ANY
-from quimera.agents import AgentClient, _strip_spinner
+from quimera.agents import AgentClient, _strip_spinner, _should_ignore_stderr_line
 from quimera.constants import MAX_STDERR_LINES
+from quimera.plugins import get as get_plugin
 
 @pytest.fixture
 def renderer():
@@ -14,6 +15,19 @@ def renderer():
 def test_strip_spinner():
     assert _strip_spinner("⠋Executing") == "Executing"
     assert _strip_spinner("Normal text") == "Normal text"
+
+
+def test_should_ignore_codex_stdin_noise():
+    assert _should_ignore_stderr_line("codex", "Reading additional input from stdin...\n") is True
+    assert _should_ignore_stderr_line("codex", "\x1b[2mReading additional input from stdin...\x1b[0m\r\n") is True
+    assert _should_ignore_stderr_line("claude", "Reading additional input from stdin...\n") is False
+    assert _should_ignore_stderr_line("codex", "real error\n") is False
+
+
+def test_codex_plugin_reads_prompt_from_stdin():
+    plugin = get_plugin("codex")
+    assert plugin is not None
+    assert plugin.prompt_as_arg is False
 
 def test_agent_client_run_success(renderer):
     client = AgentClient(renderer)
@@ -211,6 +225,23 @@ def test_agent_client_run_streaming_with_status_and_stderr(renderer):
             renderer.show_plain.assert_any_call("err1", agent=ANY)
             mock_status.__enter__.assert_called()
             mock_status.__exit__.assert_called()
+
+
+def test_agent_client_run_suppresses_codex_stdin_noise(renderer):
+    client = AgentClient(renderer)
+    with patch("subprocess.Popen") as mock_popen:
+        mock_proc = MagicMock()
+        mock_proc.stdout = iter(['{"type":"item.completed","item":{"id":"1","type":"agent_message","text":"ok"}}\n'])
+        mock_proc.stderr = iter(["Reading additional input from stdin...\n"])
+        mock_proc.returncode = 0
+        mock_proc.stdin = MagicMock()
+        mock_popen.return_value = mock_proc
+
+        with patch("time.sleep"):
+            result = client.run(["codex", "exec"], silent=False, agent="codex", show_status=False)
+
+        assert "agent_message" in result
+        renderer.show_plain.assert_not_called()
 
 def test_agent_client_run_post_drain(renderer):
     # Line 166-180 approx - Drain remaining queue after threads die
