@@ -128,6 +128,7 @@ class SessionMetricsService:
                     has_next_step=has_next,
                     is_empty=is_empty,
                     is_redundant=is_redundant,
+                    response_text=content,
                 )
         except KeyError:
             pass

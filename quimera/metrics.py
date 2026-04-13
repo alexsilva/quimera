@@ -32,6 +32,7 @@ class AgentBehaviorMetrics:
     # Qualidade de resposta
     next_steps_claros: int = 0  # Respostas com próximo passo explícito
     redundancias_detectadas: int = 0  # Respostas redundantes
+    respostas_longas: int = 0  # Respostas prolixas acima do limite heurístico
     synthesis_requests: int = 0  # Quantas vezes foi chamado para sintetizar
     synthesis_corrections: int = 0  # Quantas vezes a síntese precisou de correção
     tool_calls_total: int = 0
@@ -42,6 +43,7 @@ class AgentBehaviorMetrics:
     # Timing
     total_latency_seconds: float = 0.0
     response_count: int = 0
+    total_response_chars: int = 0
     
     @property
     def avg_latency_seconds(self) -> float:
@@ -77,19 +79,38 @@ class AgentBehaviorMetrics:
         if self.tool_calls_total == 0:
             return 0.0
         return (self.tool_calls_total - self.tool_calls_failed) / self.tool_calls_total
+
+    @property
+    def avg_response_chars(self) -> float:
+        """Número médio de caracteres por resposta."""
+        if self.responses_total == 0:
+            return 0.0
+        return self.total_response_chars / self.responses_total
+
+    @property
+    def long_response_rate(self) -> float:
+        """Taxa de respostas longas (0.0 a 1.0)."""
+        if self.responses_total == 0:
+            return 0.0
+        return self.respostas_longas / self.responses_total
     
     def record_response(self, latency_seconds: float, has_next_step: bool = False, 
-                        is_empty: bool = False, is_redundant: bool = False):
+                        is_empty: bool = False, is_redundant: bool = False,
+                        response_text: str | None = None):
         """Registra uma resposta do agente."""
         self.responses_total += 1
         self.response_count += 1
         self.total_latency_seconds += latency_seconds
+        response_length = len((response_text or "").strip())
+        self.total_response_chars += response_length
         if has_next_step:
             self.next_steps_claros += 1
         if is_empty:
             self.responses_empty += 1
         if is_redundant:
             self.redundancias_detectadas += 1
+        if response_length >= 280:
+            self.respostas_longas += 1
     
     def record_handoff_sent(self, is_invalid: bool = False):
         """Registra um handoff enviado pelo agente."""
@@ -178,10 +199,16 @@ class BehaviorMetricsTracker:
     
     def record_response(self, agent_name: str, latency_seconds: float,
                         has_next_step: bool = False, is_empty: bool = False,
-                        is_redundant: bool = False):
+                        is_redundant: bool = False, response_text: str | None = None):
         """Registra uma resposta."""
         metrics = self.get_agent(agent_name)
-        metrics.record_response(latency_seconds, has_next_step, is_empty, is_redundant)
+        metrics.record_response(
+            latency_seconds,
+            has_next_step,
+            is_empty,
+            is_redundant,
+            response_text=response_text,
+        )
         self.save()
     
     def record_handoff_sent(self, agent_name: str, is_invalid: bool = False):
@@ -228,6 +255,9 @@ class BehaviorMetricsTracker:
             "handoffs_received": metrics.handoffs_received,
             "circular_detections": metrics.handoffs_circular_detected,
             "redundancias": metrics.redundancias_detectadas,
+            "respostas_longas": metrics.respostas_longas,
+            "avg_response_chars": round(metrics.avg_response_chars, 1),
+            "long_response_rate": round(metrics.long_response_rate, 3),
             "synthesis_requests": metrics.synthesis_requests,
             "synthesis_corrections": metrics.synthesis_corrections,
             "tool_calls_total": metrics.tool_calls_total,
@@ -259,7 +289,8 @@ class BehaviorMetricsTracker:
             f"  Latência média: {metrics.avg_latency_seconds:.1f}s | "
             f"Handoffs: {metrics.handoffs_sent} enviados, {metrics.handoffs_received} recebidos | "
             f"Próximos passos claros: {metrics.next_step_clarity_rate:.0%} | "
-            f"Ferramentas: {metrics.tool_calls_total} chamadas, sucesso {metrics.tool_success_rate:.0%}",
+            f"Ferramentas: {metrics.tool_calls_total} chamadas, sucesso {metrics.tool_success_rate:.0%} | "
+            f"Tamanho médio: {metrics.avg_response_chars:.0f} chars",
         ]
 
         warnings = []
@@ -277,6 +308,8 @@ class BehaviorMetricsTracker:
             warnings.append(f"{metrics.invalid_tool_calls} chamadas de ferramenta inválidas")
         if metrics.tool_loop_abortions > 0:
             warnings.append(f"{metrics.tool_loop_abortions} abortos de loop de ferramenta")
+        if metrics.long_response_rate > 0.4 and metrics.responses_total >= 5:
+            warnings.append(f"respostas longas {metrics.long_response_rate:.0%}")
 
         if warnings:
             parts.append(f"  Atenção: {', '.join(warnings)}")
@@ -322,6 +355,13 @@ class BehaviorMetricsTracker:
                 f"- RESPOSTAS REDUNDANTES ({metrics.redundancias_detectadas}x):\n"
                 "  Construa sobre o trabalho anterior, não repita o que já foi dito.\n"
                 "  Se outro agente já resolveu, complemente ou avance."
+            )
+
+        if metrics.long_response_rate > 0.4 and metrics.responses_total >= 5:
+            feedback_parts.append(
+                f"- RESPOSTAS LONGAS ({metrics.respostas_longas}/{metrics.responses_total}):\n"
+                "  Responda de forma mais curta e objetiva.\n"
+                "  Prefira 2-4 frases, resultado primeiro e detalhe só se for pedido."
             )
         
         # Síntese requer correção frequentemente
@@ -380,7 +420,8 @@ class BehaviorMetricsTracker:
             f"- STATUS OPERACIONAL: {metrics.responses_total} turnos registrados.\n"
             f"  Latência média: {metrics.avg_latency_seconds:.1f}s | "
             f"Próximo passo claro: {metrics.next_step_clarity_rate:.0%} | "
-            f"Ferramentas ok: {metrics.tool_success_rate:.0%}"
+            f"Ferramentas ok: {metrics.tool_success_rate:.0%} | "
+            f"Tamanho médio: {metrics.avg_response_chars:.0f} chars"
         )
         
         if not feedback_parts:

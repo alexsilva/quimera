@@ -21,14 +21,22 @@ class TestAgentBehaviorMetrics(unittest.TestCase):
         """Verifica registro de respostas."""
         metrics = AgentBehaviorMetrics(agent_name="test")
         
-        metrics.record_response(1.5, has_next_step=True, is_empty=False, is_redundant=True)
+        metrics.record_response(
+            1.5,
+            has_next_step=True,
+            is_empty=False,
+            is_redundant=True,
+            response_text="resposta curta",
+        )
         metrics.record_response(2.0, has_next_step=False, is_empty=True)
-        metrics.record_response(1.0, has_next_step=True, is_empty=False)
+        metrics.record_response(1.0, has_next_step=True, is_empty=False, response_text="ok")
         
         self.assertEqual(metrics.responses_total, 3)
         self.assertEqual(metrics.next_steps_claros, 2)
         self.assertEqual(metrics.responses_empty, 1)
         self.assertEqual(metrics.redundancias_detectadas, 1)
+        self.assertEqual(metrics.respostas_longas, 0)
+        self.assertGreater(metrics.avg_response_chars, 0.0)
         self.assertAlmostEqual(metrics.avg_latency_seconds, 1.5, places=2)
         self.assertAlmostEqual(metrics.next_step_clarity_rate, 2/3, places=2)
         self.assertAlmostEqual(metrics.empty_response_rate, 1/3, places=2)
@@ -128,6 +136,18 @@ class TestBehaviorMetricsTracker(unittest.TestCase):
         self.assertEqual(summary["invalid_tool_calls"], 1)
         self.assertEqual(summary["tool_loop_abortions"], 1)
         self.assertEqual(summary["tool_success_rate"], 0.5)
+
+    def test_get_agent_summary_includes_verbosity_metrics(self):
+        """Resumo deve incluir métricas de verbosidade."""
+        tracker = BehaviorMetricsTracker()
+        tracker.record_response("claude", 1.0, response_text="x" * 320)
+        tracker.record_response("claude", 1.0, response_text="curta")
+
+        summary = tracker.get_agent_summary("claude")
+
+        self.assertEqual(summary["respostas_longas"], 1)
+        self.assertEqual(summary["long_response_rate"], 0.5)
+        self.assertGreater(summary["avg_response_chars"], 100)
     
     def test_generate_feedback_low_data(self):
         """Verifica que não gera feedback com poucos dados."""
@@ -322,6 +342,18 @@ class TestBehaviorMetricsTracker(unittest.TestCase):
         self.assertIn("RESPOSTAS REDUNDANTES", feedback)
         self.assertIn("SÍNTESES IMPRECISAS", feedback)
         self.assertIn("BAIXA TAXA DE SUCESSO", feedback)
+
+    def test_generate_feedback_for_verbose_agent(self):
+        """Feedback deve sugerir respostas mais curtas quando houver prolixidade."""
+        tracker = BehaviorMetricsTracker()
+
+        for _ in range(5):
+            tracker.record_response("codex", 1.0, response_text="x" * 320)
+
+        feedback = tracker.generate_feedback("codex")
+
+        self.assertIn("RESPOSTAS LONGAS", feedback)
+        self.assertIn("2-4 frases", feedback)
 
 
 class TestPromptMetricsFeedback(unittest.TestCase):
