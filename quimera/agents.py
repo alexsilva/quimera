@@ -235,6 +235,30 @@ class AgentClient:
                         self.tool_event_callback(agent, result=_SyntheticToolResult(ok=True))
         return result_text
 
+    def _parse_codex_json(self, raw: str, agent: str) -> str | None:
+        """Parseia output JSONL do `codex exec --json`, extrai último agent_message e registra tool calls."""
+        result_text = None
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            etype = event.get("type")
+            if etype == "item.completed":
+                item = event.get("item", {})
+                itype = item.get("type")
+                if itype == "agent_message":
+                    result_text = item.get("text") or ""
+                elif itype == "command_execution" and self.tool_event_callback:
+                    cmd = item.get("command", "unknown")
+                    ok = item.get("exit_code") == 0
+                    _logger.debug("[codex-json] agent=%s ran command=%s ok=%s", agent, cmd, ok)
+                    self.tool_event_callback(agent, result=_SyntheticToolResult(ok=ok))
+        return result_text
+
     def call(self, agent, prompt, silent=False, show_status=True):
         """Resolve o comando do agente e delega a execução."""
         plugin = plugins.get(agent)
@@ -248,8 +272,11 @@ class AgentClient:
             raw = self.run([*plugin.cmd, prompt], input_text=None, silent=silent, agent=agent, show_status=show_status)
         else:
             raw = self.run(plugin.cmd, input_text=prompt, silent=silent, agent=agent, show_status=show_status)
-        if getattr(plugin, "output_format", None) == "stream-json" and raw is not None:
+        fmt = getattr(plugin, "output_format", None)
+        if fmt == "stream-json" and raw is not None:
             return self._parse_stream_json(raw, agent)
+        if fmt == "codex-json" and raw is not None:
+            return self._parse_codex_json(raw, agent)
         return raw
 
     def _call_api(self, agent, plugin, prompt, silent=False, show_status=True):
