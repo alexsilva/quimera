@@ -6,6 +6,7 @@ import random
 import re
 import shutil
 import sys
+import tempfile
 import threading
 import time
 from collections import defaultdict
@@ -51,6 +52,34 @@ from ..constants import (
     HANDOFF_SYNTHESIS_MSG,
 )
 from .config import logger
+
+
+class TurnManager:
+    """Gerencia o turno de fala no diálogo humano ↔ agente."""
+    
+    def __init__(self):
+        self._is_human_turn = True
+        self._lock = threading.Lock()
+    
+    @property
+    def is_human_turn(self) -> bool:
+        with self._lock:
+            return self._is_human_turn
+    
+    @property
+    def is_ai_turn(self) -> bool:
+        with self._lock:
+            return not self._is_human_turn
+    
+    def next_turn(self) -> None:
+        """Alterna o turno: humano <-> agente."""
+        with self._lock:
+            self._is_human_turn = not self._is_human_turn
+    
+    def reset(self) -> None:
+        """Reseta para turno do humano."""
+        with self._lock:
+            self._is_human_turn = True
 
 
 def resolve_app_dependency(name, default):
@@ -191,6 +220,7 @@ class QuimeraApp:
         self._nonblocking_input_thread: threading.Thread | None = None
         self._nonblocking_input_queue: "queue.Queue | None" = None
         self._nonblocking_input_status = "idle"
+        self.turn_manager = TurnManager()
         for handler in logger.handlers:
             if isinstance(handler, PromptAwareStderrHandler):
                 handler.bind_app(self)
@@ -232,6 +262,7 @@ class QuimeraApp:
         # Injeta o executor nos drivers de API do agent_client.
         self.agent_client.tool_executor = self.tool_executor
         # Set up task executors for autonomous task execution
+        self.turn_manager = TurnManager()
         self._setup_task_executors()
 
     @staticmethod
@@ -862,7 +893,16 @@ class QuimeraApp:
             self.renderer.show_system(MSG_MEMORY_FAILED)
 
     def _process_chat_message(self, user):
-        """Executa process chat message."""
+        """Executa process chat message com controle de turno."""
+        try:
+            # O turno já foi alternado para AI no run() ou _process_chat_queue
+            self._do_process_chat_message(user)
+        finally:
+            if hasattr(self, "turn_manager") and self.turn_manager.is_ai_turn:
+                self.turn_manager.next_turn()
+
+    def _do_process_chat_message(self, user):
+        """Implementação real do processamento de mensagens do chat."""
         first_agent, message, explicit = self.parse_routing(user)
         if first_agent is None:
             return
@@ -1020,12 +1060,10 @@ class QuimeraApp:
             # já foi tratado no bloco acima. Aqui só decidimos se existe
             # continuação automática do fluxo normal.
             protocol_mode = "extended" if extend else "standard"
-            if explicit:
+            if explicit or not extend:
                 remaining = []
-            elif extend:
-                remaining = [other_agents[0], first_agent, other_agents[0]] if other_agents else []
             else:
-                remaining = other_agents
+                remaining = [other_agents[0], first_agent, other_agents[0]] if other_agents else []
 
             next_handoff = None
             if self.threads > 1 and len(remaining) > 1:
@@ -1133,6 +1171,13 @@ class QuimeraApp:
 
         try:
             while True:
+                if hasattr(self, "turn_manager") and not self.turn_manager.is_human_turn:
+                    if not getattr(self, "_turn_blocked_warning_shown", False):
+                        self.renderer.show_system("[Aguardando resposta do agente...]")
+                        self._turn_blocked_warning_shown = True
+                    time.sleep(0.1)
+                    continue
+
                 user = self.read_user_input(f"{self.user_name}: ", timeout=0)
                 if user is None:
                     if not sys.stdin.isatty():
@@ -1158,6 +1203,8 @@ class QuimeraApp:
                 if self.handle_command(user):
                     continue
 
+                if hasattr(self, "turn_manager"):
+                    self.turn_manager.next_turn()
                 if chat_queue is not None:
                     chat_queue.put(user)
                 else:
