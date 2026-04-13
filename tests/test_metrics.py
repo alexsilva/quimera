@@ -60,6 +60,20 @@ class TestAgentBehaviorMetrics(unittest.TestCase):
         self.assertEqual(metrics.synthesis_requests, 3)
         self.assertEqual(metrics.synthesis_corrections, 2)
 
+    def test_record_tool_metrics(self):
+        """Verifica registro de métricas de ferramentas."""
+        metrics = AgentBehaviorMetrics(agent_name="test")
+
+        metrics.record_tool_call(ok=True)
+        metrics.record_tool_call(ok=False, is_invalid=True)
+        metrics.record_tool_loop_abort()
+
+        self.assertEqual(metrics.tool_calls_total, 2)
+        self.assertEqual(metrics.tool_calls_failed, 1)
+        self.assertEqual(metrics.invalid_tool_calls, 1)
+        self.assertEqual(metrics.tool_loop_abortions, 1)
+        self.assertAlmostEqual(metrics.tool_success_rate, 0.5, places=2)
+
     def test_to_from_dict(self):
         """Verifica serialização e desserialização."""
         metrics = AgentBehaviorMetrics(agent_name="test", responses_total=10)
@@ -99,6 +113,21 @@ class TestBehaviorMetricsTracker(unittest.TestCase):
         self.assertEqual(summary["agent"], "claude")
         self.assertEqual(summary["responses_total"], 2)
         self.assertEqual(summary["invalid_handoff_rate"], 1.0)
+
+    def test_get_agent_summary_includes_tool_metrics(self):
+        """Resumo deve incluir métricas explícitas de ferramenta."""
+        tracker = BehaviorMetricsTracker()
+        tracker.record_tool_call("claude", ok=True)
+        tracker.record_tool_call("claude", ok=False, is_invalid=True)
+        tracker.record_tool_loop_abort("claude")
+
+        summary = tracker.get_agent_summary("claude")
+
+        self.assertEqual(summary["tool_calls_total"], 2)
+        self.assertEqual(summary["tool_calls_failed"], 1)
+        self.assertEqual(summary["invalid_tool_calls"], 1)
+        self.assertEqual(summary["tool_loop_abortions"], 1)
+        self.assertEqual(summary["tool_success_rate"], 0.5)
     
     def test_generate_feedback_low_data(self):
         """Verifica que não gera feedback com poucos dados."""
@@ -248,6 +277,22 @@ class TestBehaviorMetricsTracker(unittest.TestCase):
         self.assertIn("respostas vazias", summary) # line 227
         self.assertIn("delegações circulares", summary)
         self.assertIn("sínteses com correção", summary) # line 231
+
+    def test_generate_feedback_for_tool_failures(self):
+        """Feedback deve destacar falhas de tool use."""
+        tracker = BehaviorMetricsTracker()
+        for _ in range(5):
+            tracker.record_response("tooly", 1.0, has_next_step=True)
+        tracker.record_tool_call("tooly", ok=False, is_invalid=True)
+        tracker.record_tool_call("tooly", ok=False)
+        tracker.record_tool_call("tooly", ok=True)
+        tracker.record_tool_loop_abort("tooly")
+
+        feedback = tracker.generate_feedback("tooly")
+
+        self.assertIn("FALHAS NO USO DE FERRAMENTAS", feedback)
+        self.assertIn("FERRAMENTAS INVÁLIDAS", feedback)
+        self.assertIn("LOOP DE FERRAMENTA ABORTADO", feedback)
 
     def test_generate_feedback_all_branches(self):
         """Verifica todos os ramos de feedback."""

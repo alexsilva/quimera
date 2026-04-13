@@ -97,6 +97,7 @@ class DriverRepl:
             model=plugin.model,
             base_url=plugin.base_url,
             api_key=api_key,
+            tool_use_reliability=getattr(plugin, "tool_use_reliability", "medium"),
         )
 
         rt_config = ToolRuntimeConfig(workspace_root=self.working_dir)

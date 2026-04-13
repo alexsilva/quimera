@@ -22,6 +22,11 @@ except ImportError:
 _logger = logging.getLogger(__name__)
 
 MAX_TOOL_HOPS = 8
+MAX_TOOL_HOPS_BY_RELIABILITY = {
+    "low": 2,
+    "medium": MAX_TOOL_HOPS,
+    "high": MAX_TOOL_HOPS,
+}
 
 # Remove blocos <think>...</think> ou <thinking>...</thinking> que modelos Qwen3 emitem.
 _THINK_RE = re.compile(r"<think(?:ing)?>.*?</think(?:ing)?>", re.DOTALL)
@@ -100,6 +105,7 @@ class OpenAICompatDriver:
         base_url: str,
         api_key: str = "ollama",
         timeout: Optional[int] = None,
+        tool_use_reliability: str = "medium",
     ) -> None:
         """Inicializa uma instância de OpenAICompatDriver."""
         if OpenAI is None:
@@ -113,6 +119,7 @@ class OpenAICompatDriver:
             api_key=api_key,
             timeout=float(timeout) if timeout else 120.0,
         )
+        self.tool_use_reliability = str(tool_use_reliability or "medium").lower()
 
     def run(
         self,
@@ -120,6 +127,7 @@ class OpenAICompatDriver:
         tool_executor=None,
         on_tool_call=None,
         on_tool_result=None,
+        on_tool_abort=None,
     ) -> Optional[str]:
         """
         Executa o agente com o prompt dado tratando o loop de tool calling internamente.
@@ -173,7 +181,10 @@ class OpenAICompatDriver:
             })
         messages.append({"role": "user", "content": prompt})
 
-        for hop in range(MAX_TOOL_HOPS + 1):
+        max_tool_hops = MAX_TOOL_HOPS_BY_RELIABILITY.get(self.tool_use_reliability, MAX_TOOL_HOPS)
+        last_invalid_tool_name: str | None = None
+
+        for hop in range(max_tool_hops + 1):
             try:
                 response_text, tool_calls = self._chat(messages, tools)
             except Exception as exc:
@@ -183,8 +194,10 @@ class OpenAICompatDriver:
             if not tool_calls:
                 return _sanitize_assistant_text(response_text) if response_text else None
 
-            if hop == MAX_TOOL_HOPS:
-                _logger.warning("OpenAICompatDriver: max tool hops (%d) reached", MAX_TOOL_HOPS)
+            if hop == max_tool_hops:
+                _logger.warning("OpenAICompatDriver: max tool hops (%d) reached", max_tool_hops)
+                if on_tool_abort is not None:
+                    on_tool_abort("max_tool_hops")
                 return _sanitize_assistant_text(response_text) if response_text else "Limite de chamadas de ferramenta atingido."
 
             # Adiciona turno do assistente com os tool calls
@@ -221,8 +234,24 @@ class OpenAICompatDriver:
                     "tool_call_id": tc["id"],
                     "content": json.dumps(result.to_model_payload(), ensure_ascii=False),
                 })
+                if self._is_invalid_tool_result(result):
+                    if self.tool_use_reliability == "low" and last_invalid_tool_name == tc["name"]:
+                        _logger.warning(
+                            "OpenAICompatDriver: repeated invalid tool for low-reliability model: %s",
+                            tc["name"],
+                        )
+                        if on_tool_abort is not None:
+                            on_tool_abort("invalid_tool_loop")
+                        return "Falha: loop de ferramenta inválida detectado."
+                    last_invalid_tool_name = tc["name"]
+                else:
+                    last_invalid_tool_name = None
 
         return None
+
+    def _is_invalid_tool_result(self, result: ToolResult) -> bool:
+        """Indica se o resultado representa uso de ferramenta fora do contrato conhecido."""
+        return (not result.ok) and bool(result.error) and "Sem política para a ferramenta" in result.error
 
     def _chat(self, messages: list[dict], tools: list[dict]) -> tuple[str, list[dict]]:
         """Despacha para o modo correto conforme presença de ferramentas."""

@@ -200,6 +200,10 @@ class PolicyTests(unittest.TestCase):
         selected = choose_best_agent("test_execution", [plugins.get("claude"), plugins.get("ollama-qwen"), plugins.get("opencode-qwen")])
         self.assertEqual(selected, "claude")
 
+    def test_choose_best_agent_penalizes_low_reliability_tool_users_for_bug_investigation(self):
+        selected = choose_best_agent("bug_investigation", [plugins.get("ollama-qwen"), plugins.get("gemini")])
+        self.assertEqual(selected, "gemini")
+
     def test_choose_best_agent_does_not_route_tasks_to_qwen_without_explicit_execution_support(self):
         selected = choose_best_agent("code_review", [plugins.get("ollama-qwen"), plugins.get("claude")])
         self.assertEqual(selected, "claude")

@@ -6,6 +6,7 @@ import time
 import unittest
 from collections import defaultdict
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock, call, patch
 
 import quimera.app as app_module
@@ -13,6 +14,7 @@ import quimera.cli as cli_module
 import quimera.plugins as plugins
 from quimera.agents import AgentClient
 from quimera.app import QuimeraApp
+from quimera.app.session_metrics import SessionMetricsService
 from quimera.cli import main as cli_main
 from quimera.config import DEFAULT_HISTORY_WINDOW
 from quimera.constants import CMD_HELP, EXTEND_MARKER, build_help
@@ -1980,6 +1982,41 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(metrics["claude"]["latency"], 2.3)
         self.assertEqual(metrics["codex"]["failed"], 1)
         self.assertEqual(metrics["codex"]["succeeded"], 0)
+
+    def test_per_agent_tool_metrics_tracking(self):
+        """Tool use deve ser rastreado por agente na sessão."""
+        from quimera.metrics import BehaviorMetricsTracker
+
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.session_state = {
+            "session_id": "test",
+            "history_count": 0,
+            "summary_loaded": False,
+            "handoffs_sent": 0,
+            "handoffs_received": 0,
+            "handoffs_succeeded": 0,
+            "handoffs_failed": 0,
+            "total_latency": 0.0,
+            "agent_metrics": {},
+        }
+        app.behavior_metrics = BehaviorMetricsTracker()
+        app.session_metrics = SessionMetricsService()
+
+        app._record_tool_event("ollama-qwen", result=SimpleNamespace(ok=True, error=None))
+        app._record_tool_event("ollama-qwen", result=SimpleNamespace(ok=False, error="Sem política para a ferramenta: run"))
+        app._record_tool_event("ollama-qwen", loop_abort=True, reason="invalid_tool_loop")
+
+        metrics = app.session_state["agent_metrics"]["ollama-qwen"]
+        self.assertEqual(metrics["tool_calls_total"], 2)
+        self.assertEqual(metrics["tool_calls_failed"], 1)
+        self.assertEqual(metrics["invalid_tool_calls"], 1)
+        self.assertEqual(metrics["tool_loop_abortions"], 1)
+
+        summary = app.behavior_metrics.get_agent_summary("ollama-qwen")
+        self.assertEqual(summary["tool_calls_total"], 2)
+        self.assertEqual(summary["tool_calls_failed"], 1)
+        self.assertEqual(summary["invalid_tool_calls"], 1)
+        self.assertEqual(summary["tool_loop_abortions"], 1)
 
     def test_prompt_includes_proactivity_rules(self):
         """Prompt deve incluir NEEDS_INPUT e instruções de colaboração."""

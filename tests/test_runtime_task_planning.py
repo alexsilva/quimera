@@ -16,7 +16,19 @@ class MockPlugin(AgentPlugin):
     def name(self) -> str: return self._name
     @property
     def cmd(self) -> list[str]: return ["mock"]
-    def __init__(self, name, tier=1, preferred=None, avoid=None, code=False, long=False, tools=False, caps=None, task_execution=True):
+    def __init__(
+        self,
+        name,
+        tier=1,
+        preferred=None,
+        avoid=None,
+        code=False,
+        long=False,
+        tools=False,
+        caps=None,
+        task_execution=True,
+        tool_reliability="medium",
+    ):
         self._name = name
         self.base_tier = tier
         self.preferred_task_types = preferred or []
@@ -24,6 +36,7 @@ class MockPlugin(AgentPlugin):
         self.supports_code_editing = code
         self.supports_long_context = long
         self.supports_tools = tools
+        self.tool_use_reliability = tool_reliability
         self.supports_task_execution = task_execution
         self.capabilities = caps or []
 
@@ -102,6 +115,18 @@ def test_choose_best_agent_penalizes_no_tools_for_bug_investigation():
 
     selected = choose_best_agent(TASK_TYPE_BUG_INVESTIGATION, [agent_with_tools, agent_without_tools])
     assert selected == "with_tools", "Agente com tools deve ser preferido para bug_investigation"
+
+
+def test_test_execution_prefers_high_tool_reliability():
+    low = MockPlugin("low", tier=2, tools=True, tool_reliability="low")
+    high = MockPlugin("high", tier=1, tools=True, tool_reliability="high")
+    assert choose_best_agent(TASK_TYPE_TEST_EXECUTION, [low, high]) == "high"
+
+
+def test_bug_investigation_prefers_high_tool_reliability():
+    low = MockPlugin("low", tier=2, tools=True, code=True, caps=["general_coding"], tool_reliability="low")
+    high = MockPlugin("high", tier=1, tools=True, tool_reliability="high")
+    assert choose_best_agent(TASK_TYPE_BUG_INVESTIGATION, [low, high]) == "high"
 
 def test_choose_best_agent_ignores_agents_without_task_execution():
     non_executor = MockPlugin("qwen-like", tier=3, preferred=[TASK_TYPE_CODE_REVIEW], task_execution=False)

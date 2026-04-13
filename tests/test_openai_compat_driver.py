@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from quimera.runtime.drivers.openai_compat import (
+    MAX_TOOL_HOPS_BY_RELIABILITY,
     OpenAICompatDriver,
     _sanitize_assistant_text,
     _strip_thinking,
@@ -475,6 +476,70 @@ def test_run_max_hops_returns_last_text():
     assert mock_client.chat.completions.create.call_count == MAX_TOOL_HOPS + 1
 
 
+def test_run_low_reliability_uses_lower_max_hops():
+    driver, mock_client = _make_driver()
+    driver.tool_use_reliability = "low"
+    tc = _make_tool_call("c", "run_shell", '{"command":"x"}')
+
+    def always_tool_response(*args, **kwargs):
+        return _make_non_streaming_response(content="parcial", tool_calls=[tc])
+
+    mock_client.chat.completions.create.side_effect = always_tool_response
+
+    mock_executor = MagicMock()
+    mock_executor.config = SimpleNamespace(db_path="/tmp/tasks.db", workspace_root="/tmp/workspace")
+    mock_executor.registry.names.return_value = [s["function"]["name"] for s in TOOL_SCHEMAS]
+    mock_executor.execute.return_value = ToolResult(ok=True, tool_name="run_shell", content="ok")
+
+    result = driver.run("prompt", tool_executor=mock_executor)
+    assert result is not None
+    assert mock_client.chat.completions.create.call_count == MAX_TOOL_HOPS_BY_RELIABILITY["low"] + 1
+
+
+def test_run_low_reliability_aborts_on_repeated_invalid_tool():
+    driver, mock_client = _make_driver()
+    driver.tool_use_reliability = "low"
+    tc = _make_tool_call("c", "bad_tool", '{"path":"x"}')
+    mock_client.chat.completions.create.side_effect = [
+        _make_non_streaming_response(content="", tool_calls=[tc]),
+        _make_non_streaming_response(content="", tool_calls=[tc]),
+    ]
+
+    mock_executor = MagicMock()
+    mock_executor.config = SimpleNamespace(db_path="/tmp/tasks.db", workspace_root="/tmp/workspace")
+    mock_executor.registry.names.return_value = [s["function"]["name"] for s in TOOL_SCHEMAS]
+    mock_executor.execute.side_effect = [
+        ToolResult(ok=False, tool_name="bad_tool", error="Sem política para a ferramenta: bad_tool"),
+        ToolResult(ok=False, tool_name="bad_tool", error="Sem política para a ferramenta: bad_tool"),
+    ]
+
+    result = driver.run("prompt", tool_executor=mock_executor)
+    assert result == "Falha: loop de ferramenta inválida detectado."
+    assert mock_client.chat.completions.create.call_count == 2
+
+
+def test_run_reports_tool_abort_callback():
+    driver, mock_client = _make_driver()
+    driver.tool_use_reliability = "low"
+    tc = _make_tool_call("c", "bad_tool", '{"path":"x"}')
+    mock_client.chat.completions.create.side_effect = [
+        _make_non_streaming_response(content="", tool_calls=[tc]),
+        _make_non_streaming_response(content="", tool_calls=[tc]),
+    ]
+
+    mock_executor = MagicMock()
+    mock_executor.config = SimpleNamespace(db_path="/tmp/tasks.db", workspace_root="/tmp/workspace")
+    mock_executor.registry.names.return_value = [s["function"]["name"] for s in TOOL_SCHEMAS]
+    mock_executor.execute.side_effect = [
+        ToolResult(ok=False, tool_name="bad_tool", error="Sem política para a ferramenta: bad_tool"),
+        ToolResult(ok=False, tool_name="bad_tool", error="Sem política para a ferramenta: bad_tool"),
+    ]
+    aborts = []
+
+    driver.run("prompt", tool_executor=mock_executor, on_tool_abort=aborts.append)
+    assert aborts == ["invalid_tool_loop"]
+
+
 # ---------------------------------------------------------------------------
 # Testes de AgentClient dispatch
 # ---------------------------------------------------------------------------
@@ -497,6 +562,31 @@ def test_agent_client_dispatches_api_driver():
             result = client.call("ollama-qwen", "prompt")
             mock_api.assert_called_once()
             assert result == "api response"
+
+
+def test_agent_client_passes_tool_use_reliability_to_api_driver():
+    from quimera.agents import AgentClient
+
+    renderer = MagicMock()
+    client = AgentClient(renderer)
+    plugin = SimpleNamespace(
+        driver="openai_compat",
+        model="qwen3-coder:30b",
+        base_url="http://localhost:11434/v1",
+        api_key_env=None,
+        tool_use_reliability="low",
+        supports_tools=True,
+    )
+
+    with patch("quimera.plugins.get", return_value=plugin), \
+         patch("quimera.agents.OpenAICompatDriver") as mock_driver_cls:
+        mock_driver = MagicMock()
+        mock_driver.run.return_value = "ok"
+        mock_driver_cls.return_value = mock_driver
+        result = client.call("ollama-qwen", "prompt")
+
+    assert result == "ok"
+    assert mock_driver_cls.call_args.kwargs["tool_use_reliability"] == "low"
 
 
 def test_agent_client_cli_plugins_use_subprocess():

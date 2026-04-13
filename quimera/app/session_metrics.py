@@ -10,7 +10,17 @@ class SessionMetricsService:
         """Registra agent metric."""
         metrics = app.session_state.get("agent_metrics", {})
         if agent not in metrics:
-            metrics[agent] = {"sent": 0, "received": 0, "succeeded": 0, "failed": 0, "latency": 0.0}
+            metrics[agent] = {
+                "sent": 0,
+                "received": 0,
+                "succeeded": 0,
+                "failed": 0,
+                "latency": 0.0,
+                "tool_calls_total": 0,
+                "tool_calls_failed": 0,
+                "invalid_tool_calls": 0,
+                "tool_loop_abortions": 0,
+            }
         if metric_name == "sent":
             metrics[agent]["sent"] += 1
         elif metric_name == "received":
@@ -30,6 +40,30 @@ class SessionMetricsService:
                 has_next_step=metric_name == "succeeded",
                 is_empty=metric_name == "failed",
             )
+
+    @staticmethod
+    def record_tool_event(app, agent, ok: bool, is_invalid: bool = False, loop_abort: bool = False):
+        """Registra métricas de uso de ferramentas por agente na sessão e no tracker persistido."""
+        metrics = app.session_state.get("agent_metrics", {})
+        if agent not in metrics:
+            SessionMetricsService.record_agent_metric(app, agent, "received", 0.0)
+            metrics = app.session_state.get("agent_metrics", {})
+
+        if not loop_abort:
+            metrics[agent]["tool_calls_total"] += 1
+            if not ok:
+                metrics[agent]["tool_calls_failed"] += 1
+            if is_invalid:
+                metrics[agent]["invalid_tool_calls"] += 1
+        if loop_abort:
+            metrics[agent]["tool_loop_abortions"] += 1
+        app.session_state["agent_metrics"] = metrics
+
+        if hasattr(app, "behavior_metrics") and app.behavior_metrics:
+            if not loop_abort:
+                app.behavior_metrics.record_tool_call(agent, ok=ok, is_invalid=is_invalid)
+            if loop_abort:
+                app.behavior_metrics.record_tool_loop_abort(agent)
 
     @staticmethod
     def has_clear_next_step(response):

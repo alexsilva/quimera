@@ -17,6 +17,7 @@ class AgentPlugin:
     preferred_task_types: List[str] = field(default_factory=list)
     avoid_task_types: List[str] = field(default_factory=list)
     supports_tools: bool = True
+    tool_use_reliability: str = "medium"
     supports_code_editing: bool = False
     supports_long_context: bool = False
     supports_task_execution: bool = True

@@ -34,6 +34,10 @@ class AgentBehaviorMetrics:
     redundancias_detectadas: int = 0  # Respostas redundantes
     synthesis_requests: int = 0  # Quantas vezes foi chamado para sintetizar
     synthesis_corrections: int = 0  # Quantas vezes a síntese precisou de correção
+    tool_calls_total: int = 0
+    tool_calls_failed: int = 0
+    invalid_tool_calls: int = 0
+    tool_loop_abortions: int = 0
     
     # Timing
     total_latency_seconds: float = 0.0
@@ -66,6 +70,13 @@ class AgentBehaviorMetrics:
         if self.responses_total == 0:
             return 0.0
         return self.next_steps_claros / self.responses_total
+
+    @property
+    def tool_success_rate(self) -> float:
+        """Taxa de sucesso das chamadas de ferramenta (0.0 a 1.0)."""
+        if self.tool_calls_total == 0:
+            return 0.0
+        return (self.tool_calls_total - self.tool_calls_failed) / self.tool_calls_total
     
     def record_response(self, latency_seconds: float, has_next_step: bool = False, 
                         is_empty: bool = False, is_redundant: bool = False):
@@ -97,6 +108,18 @@ class AgentBehaviorMetrics:
         self.synthesis_requests += 1
         if needed_correction:
             self.synthesis_corrections += 1
+
+    def record_tool_call(self, ok: bool, is_invalid: bool = False):
+        """Registra o resultado de uma chamada de ferramenta."""
+        self.tool_calls_total += 1
+        if not ok:
+            self.tool_calls_failed += 1
+        if is_invalid:
+            self.invalid_tool_calls += 1
+
+    def record_tool_loop_abort(self):
+        """Registra um aborto de loop de ferramenta."""
+        self.tool_loop_abortions += 1
 
     def to_dict(self) -> dict:
         """Converte para dicionário para serialização JSON."""
@@ -178,6 +201,18 @@ class BehaviorMetricsTracker:
         metrics = self.get_agent(agent_name)
         metrics.record_synthesis(needed_correction)
         self.save()
+
+    def record_tool_call(self, agent_name: str, ok: bool, is_invalid: bool = False):
+        """Registra uma chamada de ferramenta associada a um agente."""
+        metrics = self.get_agent(agent_name)
+        metrics.record_tool_call(ok=ok, is_invalid=is_invalid)
+        self.save()
+
+    def record_tool_loop_abort(self, agent_name: str):
+        """Registra um aborto de loop de ferramentas para um agente."""
+        metrics = self.get_agent(agent_name)
+        metrics.record_tool_loop_abort()
+        self.save()
     
     def get_agent_summary(self, agent_name: str) -> dict:
         """Retorna resumo das métricas de um agente."""
@@ -195,6 +230,11 @@ class BehaviorMetricsTracker:
             "redundancias": metrics.redundancias_detectadas,
             "synthesis_requests": metrics.synthesis_requests,
             "synthesis_corrections": metrics.synthesis_corrections,
+            "tool_calls_total": metrics.tool_calls_total,
+            "tool_calls_failed": metrics.tool_calls_failed,
+            "invalid_tool_calls": metrics.invalid_tool_calls,
+            "tool_loop_abortions": metrics.tool_loop_abortions,
+            "tool_success_rate": round(metrics.tool_success_rate, 3),
         }
     
     def get_all_summaries(self) -> list[dict]:
@@ -218,7 +258,8 @@ class BehaviorMetricsTracker:
             f"- SEU HISTÓRICO ({metrics.responses_total} respostas em sessões anteriores):",
             f"  Latência média: {metrics.avg_latency_seconds:.1f}s | "
             f"Handoffs: {metrics.handoffs_sent} enviados, {metrics.handoffs_received} recebidos | "
-            f"Próximos passos claros: {metrics.next_step_clarity_rate:.0%}",
+            f"Próximos passos claros: {metrics.next_step_clarity_rate:.0%} | "
+            f"Ferramentas: {metrics.tool_calls_total} chamadas, sucesso {metrics.tool_success_rate:.0%}",
         ]
 
         warnings = []
@@ -232,6 +273,10 @@ class BehaviorMetricsTracker:
             warnings.append(f"sínteses com correção {metrics.synthesis_corrections}/{metrics.synthesis_requests}")
         if metrics.avg_latency_seconds > 30 and metrics.response_count >= 5:
             warnings.append(f"latência alta ({metrics.avg_latency_seconds:.1f}s)")
+        if metrics.invalid_tool_calls > 0:
+            warnings.append(f"{metrics.invalid_tool_calls} chamadas de ferramenta inválidas")
+        if metrics.tool_loop_abortions > 0:
+            warnings.append(f"{metrics.tool_loop_abortions} abortos de loop de ferramenta")
 
         if warnings:
             parts.append(f"  Atenção: {', '.join(warnings)}")
@@ -295,6 +340,25 @@ class BehaviorMetricsTracker:
                 f"- LATÊNCIA ALTA ({metrics.avg_latency_seconds:.1f}s média):\n"
                 "  Considere respostas mais diretas e menos análise."
             )
+
+        if metrics.tool_calls_total >= 3 and metrics.tool_success_rate < 0.7:
+            feedback_parts.append(
+                f"- FALHAS NO USO DE FERRAMENTAS ({metrics.tool_calls_failed}/{metrics.tool_calls_total}):\n"
+                "  Use apenas nomes e argumentos exatamente como definidos no schema.\n"
+                "  Se uma ferramenta falhar, ajuste o payload antes de tentar novamente."
+            )
+
+        if metrics.invalid_tool_calls > 0:
+            feedback_parts.append(
+                f"- FERRAMENTAS INVÁLIDAS ({metrics.invalid_tool_calls}x):\n"
+                "  Não invente nomes de ferramentas. Reutilize apenas os nomes expostos pelo runtime."
+            )
+
+        if metrics.tool_loop_abortions > 0:
+            feedback_parts.append(
+                f"- LOOP DE FERRAMENTA ABORTADO ({metrics.tool_loop_abortions}x):\n"
+                "  Converja mais rápido após o resultado da ferramenta. Responda quando a evidência já for suficiente."
+            )
         
         # Detecção circular alta
         if metrics.handoffs_circular_detected > 1:
@@ -315,7 +379,8 @@ class BehaviorMetricsTracker:
         summary = (
             f"- STATUS OPERACIONAL: {metrics.responses_total} turnos registrados.\n"
             f"  Latência média: {metrics.avg_latency_seconds:.1f}s | "
-            f"Próximo passo claro: {metrics.next_step_clarity_rate:.0%}"
+            f"Próximo passo claro: {metrics.next_step_clarity_rate:.0%} | "
+            f"Ferramentas ok: {metrics.tool_success_rate:.0%}"
         )
         
         if not feedback_parts:

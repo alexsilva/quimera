@@ -60,10 +60,21 @@ CAPABILITY_BOOST = {
     "planning": {"architecture": 2, "code_review": 1},
 }
 
+TOOL_RELIABILITY_SCORES = {
+    "low": -4,
+    "medium": 0,
+    "high": 3,
+}
+
 
 def can_execute_task(plugin: AgentPlugin) -> bool:
     """Indica se pode execute task."""
     return getattr(plugin, "supports_task_execution", True)
+
+
+def tool_reliability(plugin: AgentPlugin) -> str:
+    """Retorna a confiabilidade declarada do agente para uso de ferramentas."""
+    return str(getattr(plugin, "tool_use_reliability", "medium") or "medium").lower()
 
 
 def score_plugin_for_task(plugin: AgentPlugin, task_type: str) -> int:
@@ -81,6 +92,9 @@ def score_plugin_for_task(plugin: AgentPlugin, task_type: str) -> int:
         score += 2
     if plugin.supports_tools and task_type in {TASK_TYPE_TEST_EXECUTION, TASK_TYPE_BUG_INVESTIGATION}:
         score += 1
+
+    if task_type in {TASK_TYPE_TEST_EXECUTION, TASK_TYPE_BUG_INVESTIGATION}:
+        score += TOOL_RELIABILITY_SCORES.get(tool_reliability(plugin), 0)
 
     # Penalty: for bug investigation tasks, penalize plugins without tooling
     if task_type == TASK_TYPE_BUG_INVESTIGATION and not plugin.supports_tools:

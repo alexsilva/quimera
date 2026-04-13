@@ -40,6 +40,7 @@ class AgentClient:
         self.tool_executor = tool_executor
         # Cache de instâncias de driver por nome de agente.
         self._api_drivers: dict = {}
+        self.tool_event_callback = None
 
     def run(self, cmd, input_text=None, silent=False, agent=None, show_status=True):
         """Executa run."""
@@ -225,6 +226,7 @@ class AgentClient:
                 base_url=plugin.base_url,
                 api_key=api_key,
                 timeout=self.timeout,
+                tool_use_reliability=getattr(plugin, "tool_use_reliability", "medium"),
             )
 
         driver_instance = self._api_drivers[agent]
@@ -239,6 +241,10 @@ class AgentClient:
             result = driver_instance.run(
                 prompt=prompt,
                 tool_executor=effective_tool_executor,
+                on_tool_result=(lambda tool_result: self.tool_event_callback(agent, result=tool_result))
+                if self.tool_event_callback else None,
+                on_tool_abort=(lambda reason: self.tool_event_callback(agent, loop_abort=True, reason=reason))
+                if self.tool_event_callback else None,
             )
 
         return result

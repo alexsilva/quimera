@@ -178,6 +178,7 @@ class QuimeraApp:
         # Persist metrics state to workspace so agents can resume with previous metrics
         metrics_state_path = self.workspace.state_dir / "metrics_state.json"
         self.behavior_metrics = metrics_tracker_cls(storage_path=metrics_state_path)
+        self.agent_client.tool_event_callback = self._record_tool_event
         self.debug_prompt_metrics = debug
         self.round_index = 0
         self.session_call_index = 0
@@ -422,6 +423,8 @@ class QuimeraApp:
 
             if tool_result is None:
                 return current_response
+
+            self._record_tool_event(agent, result=tool_result)
 
             # Truncate tool result to reduce verbosity
             tool_payload = app_tasks.truncate_payload(tool_result.to_model_payload())
@@ -711,6 +714,18 @@ class QuimeraApp:
     def _record_agent_metric(self, agent, metric_name, latency):
         """Registra agent metric."""
         self._get_session_metrics().record_agent_metric(self, agent, metric_name, latency)
+
+    def _record_tool_event(self, agent, result=None, loop_abort=False, reason=None):
+        """Registra métricas de uso de ferramentas atribuídas ao agente."""
+        is_invalid = bool(getattr(result, "error", None)) and "Sem política para a ferramenta" in str(result.error)
+        ok = bool(getattr(result, "ok", False))
+        self._get_session_metrics().record_tool_event(
+            self,
+            agent,
+            ok=ok,
+            is_invalid=is_invalid,
+            loop_abort=loop_abort,
+        )
 
     def _has_clear_next_step(self, response):
         """Executa has clear next step."""

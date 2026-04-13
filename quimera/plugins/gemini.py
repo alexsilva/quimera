@@ -11,6 +11,7 @@ plugin = AgentPlugin(
     preferred_task_types=["code_review", "documentation", "general", "code_edit", "architecture", "bug_investigation"],
     avoid_task_types=[],
     supports_tools=True,
+    tool_use_reliability="high",
     supports_code_editing=True,
     supports_long_context=True, base_tier=3,
 )
