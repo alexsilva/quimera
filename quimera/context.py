@@ -63,16 +63,22 @@ class ContextManager:
         return "\n".join(lines).strip()
 
     def load(self):
-        """Carrega load."""
+        """Carrega load, incluindo previous_session.md se disponível (warm-start)."""
         base_context = self.load_base()
         session_context = self.load_session()
+        previous_context = self.load_previous_session()
 
-        if base_context and session_context:
-            return f"{base_context}\n\n{session_context}"
+        # Priorize: base_context, then previous_session (warm-start), then session_context
+        parts = []
         if base_context:
-            return base_context
+            parts.append(base_context)
+        if previous_context:
+            parts.append(previous_context)
         if session_context:
-            return session_context
+            parts.append(session_context)
+
+        if parts:
+            return "\n\n".join(parts).strip()
         return ""
 
     def show(self):

@@ -149,3 +149,50 @@ def test_update_with_summary(temp_files, renderer):
     assert "## Resumo da última sessão" in content
     assert "New Summary" in content
     renderer.show_system.assert_called()
+
+def test_load_previous_session_exists(tmp_path, renderer):
+    base = tmp_path / "base.md"
+    session = tmp_path / "session.md"
+    previous = tmp_path / "previous_session.md"
+    previous.write_text("Previous session content", encoding="utf-8")
+    cm = ContextManager(base, session, renderer, previous_session_file=previous)
+    assert cm.load_previous_session() == "Previous session content"
+
+def test_load_previous_session_not_exists(temp_files, renderer):
+    base, session = temp_files
+    cm = ContextManager(base, session, renderer, previous_session_file=None)
+    assert cm.load_previous_session() == ""
+
+def test_load_with_previous_session(tmp_path, renderer):
+    base = tmp_path / "base.md"
+    base.write_text("Base Context", encoding="utf-8")
+    session = tmp_path / "session.md"
+    session.write_text("Current Session", encoding="utf-8")
+    previous = tmp_path / "previous_session.md"
+    previous.write_text("Previous Summary", encoding="utf-8")
+    cm = ContextManager(base, session, renderer, previous_session_file=previous)
+    result = cm.load()
+    assert "Base Context" in result
+    assert "Previous Summary" in result
+    assert "Current Session" in result
+    base_idx = result.index("Base Context")
+    prev_idx = result.index("Previous Summary")
+    sess_idx = result.index("Current Session")
+    assert base_idx < prev_idx < sess_idx
+
+def test_load_without_previous_session(temp_files, renderer):
+    base, session = temp_files
+    cm = ContextManager(base, session, renderer, previous_session_file=None)
+    result = cm.load()
+    assert "Base Content" in result
+    assert "## Resumo da última sessão" in result
+    assert "Previous" not in result
+
+def test_save_previous_session(tmp_path, renderer):
+    base = tmp_path / "base.md"
+    session = tmp_path / "session.md"
+    previous = tmp_path / "previous_session.md"
+    cm = ContextManager(base, session, renderer, previous_session_file=previous)
+    cm.save_previous_session("Test summary")
+    content = previous.read_text(encoding="utf-8")
+    assert "Test summary" in content
