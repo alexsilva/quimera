@@ -445,7 +445,7 @@ class QuimeraApp:
     ) -> str | None:
         """Resolve agent response."""
         current_response = response
-        max_tool_hops = 8
+        max_tool_hops = 16
         tool_history = []
 
         for _ in range(max_tool_hops):
@@ -475,9 +475,8 @@ class QuimeraApp:
                     self.persist_message(agent, visible_text)
 
             followup_handoff = (
-                    "Histórico de ferramentas desta rodada:\n\n"
-                    + "\n\n---\n\n".join(tool_history)
-                    + "\n\nContinue a partir daqui. Se precisar de outra ferramenta, emita nova tag <tool ... />."
+                "Histórico de ferramentas desta rodada:\n\n"
+                + "\n\n---\n\n".join(tool_history)
             )
 
             current_response = self._call_agent(
