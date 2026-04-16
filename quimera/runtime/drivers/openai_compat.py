@@ -129,6 +129,7 @@ class OpenAICompatDriver:
         on_tool_result=None,
         on_tool_abort=None,
         quiet=False,
+        cancel_event=None,
     ) -> Optional[str]:
         """
         Executa o agente com o prompt dado tratando o loop de tool calling internamente.
@@ -146,6 +147,10 @@ class OpenAICompatDriver:
             Texto final da resposta do modelo, ou None em caso de falha.
         """
         tools = resolve_tool_schemas(tool_executor) if tool_executor is not None else []
+        # Tratamento rápido de cancelamento cooperativo antes de iniciar
+        if cancel_event is not None and cancel_event.is_set():
+            return None
+
         messages: list[dict] = []
         if tools:
             tool_names = ", ".join(t["function"]["name"] for t in tools)
@@ -186,8 +191,10 @@ class OpenAICompatDriver:
         last_invalid_tool_name: str | None = None
 
         for hop in range(max_tool_hops + 1):
+            if cancel_event is not None and cancel_event.is_set():
+                return None
             try:
-                response_text, tool_calls = self._chat(messages, tools)
+                response_text, tool_calls = self._chat(messages, tools, cancel_event=cancel_event)
             except Exception as exc:
                 _logger.error("OpenAICompatDriver: API error on hop %d: %s", hop, exc)
                 return None
@@ -254,11 +261,14 @@ class OpenAICompatDriver:
         """Indica se o resultado representa uso de ferramenta fora do contrato conhecido."""
         return (not result.ok) and bool(result.error) and "Sem política para a ferramenta" in result.error
 
-    def _chat(self, messages: list[dict], tools: list[dict]) -> tuple[str, list[dict]]:
+    def _chat(self, messages: list[dict], tools: list[dict], cancel_event=None) -> tuple[str, list[dict]]:
         """Despacha para o modo correto conforme presença de ferramentas."""
+        # Cancelamento cooperativo: se já foi solicitado, não iniciar nova interação
+        if cancel_event is not None and cancel_event.is_set():
+            return "", []
         if tools:
             return self._chat_with_tools(messages, tools)
-        return self._chat_streaming(messages)
+        return self._chat_streaming(messages, cancel_event=cancel_event)
 
     def _chat_with_tools(self, messages: list[dict], tools: list[dict]) -> tuple[str, list[dict]]:
         """
@@ -302,7 +312,7 @@ class OpenAICompatDriver:
 
         return _sanitize_assistant_text(text), tool_calls
 
-    def _chat_streaming(self, messages: list[dict]) -> tuple[str, list[dict]]:
+    def _chat_streaming(self, messages: list[dict], cancel_event=None) -> tuple[str, list[dict]]:
         """
         Chamada streaming para respostas de texto puro (sem ferramentas).
         Evita timeout em respostas longas sem bloquear a coleta.
@@ -314,6 +324,8 @@ class OpenAICompatDriver:
         )
         text_parts: list[str] = []
         for chunk in stream:
+            if cancel_event is not None and cancel_event.is_set():
+                break
             if not chunk.choices:
                 continue
             content = chunk.choices[0].delta.content

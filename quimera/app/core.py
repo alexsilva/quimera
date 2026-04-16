@@ -641,9 +641,14 @@ class QuimeraApp:
         )
         last_error = None
         for attempt in range(1, self.MAX_RETRIES + 1):
+            if self.agent_client:
+                self.agent_client._user_cancelled = False
             try:
                 response = self._call_agent(agent, silent=silent, **dispatch_options)
                 if response is None:
+                    if self.agent_client and self.agent_client._user_cancelled:
+                        logger.info("[DISPATCH] agent=%s cancelled by user, aborting", agent)
+                        return None
                     if attempt < self.MAX_RETRIES:
                         logger.warning("[DISPATCH] retry %d/%d for agent=%s", attempt, self.MAX_RETRIES, agent)
                         time.sleep(self.RETRY_BACKOFF_SECONDS * attempt)
@@ -658,6 +663,9 @@ class QuimeraApp:
                     show_output=show_output,
                 )
                 if result is None:
+                    if self.agent_client and self.agent_client._user_cancelled:
+                        logger.info("[DISPATCH] agent=%s cancelled by user, aborting", agent)
+                        return None
                     if attempt < self.MAX_RETRIES:
                         logger.warning("[DISPATCH] retry %d/%d for agent=%s (resolve failed)", attempt,
                                        self.MAX_RETRIES, agent)
@@ -666,6 +674,9 @@ class QuimeraApp:
                     self._record_failure(agent)
                 return result
             except Exception as exc:
+                if self.agent_client and self.agent_client._user_cancelled:
+                    logger.info("[DISPATCH] agent=%s cancelled by user, aborting", agent)
+                    return None
                 last_error = exc
                 if attempt < self.MAX_RETRIES:
                     logger.warning("[DISPATCH] retry %d/%d for agent=%s after exception: %s", attempt, self.MAX_RETRIES,
@@ -944,6 +955,12 @@ class QuimeraApp:
         response = self.call_agent(first_agent, is_first_speaker=True, protocol_mode="standard")
         response, route_target, handoff, extend, needs_human_input, _ = self.parse_response(response)
 
+        if self.agent_client and self.agent_client._user_cancelled:
+            self.renderer.show_system("[cancelado] fluxo interrompido.")
+            if hasattr(self, "turn_manager"):
+                self.turn_manager.reset()
+            return
+
         if response is None and not route_target and not needs_human_input:
             fallback_candidates = [agent for agent in self.active_agents if agent != first_agent]
             failed_agent = first_agent
@@ -1028,6 +1045,11 @@ class QuimeraApp:
                 protocol_mode="handoff",
                 from_agent=first_agent,
             )
+            if self.agent_client and self.agent_client._user_cancelled:
+                self.renderer.show_system("[cancelado] fluxo interrompido.")
+                if hasattr(self, "turn_manager"):
+                    self.turn_manager.reset()
+                return
             expected_ack = handoff.get("handoff_id")
             secondary_response, _, _, _, _, ack_id = self.parse_response(secondary_response)
             if expected_ack and ack_id and ack_id != expected_ack:
@@ -1064,6 +1086,11 @@ class QuimeraApp:
                         protocol_mode="handoff",
                         from_agent=first_agent,
                     )
+                    if self.agent_client and self.agent_client._user_cancelled:
+                        self.renderer.show_system("[cancelado] fluxo interrompido.")
+                        if hasattr(self, "turn_manager"):
+                            self.turn_manager.reset()
+                        return
                     secondary_response, _, _, _, _, ack_id = self.parse_response(secondary_response)
                     if secondary_response:
                         route_target = fallback_agent
@@ -1087,6 +1114,11 @@ class QuimeraApp:
                     primary=False,
                     protocol_mode="handoff",
                 )
+                if self.agent_client and self.agent_client._user_cancelled:
+                    self.renderer.show_system("[cancelado] fluxo interrompido.")
+                    if hasattr(self, "turn_manager"):
+                        self.turn_manager.reset()
+                    return
                 final_response, _, _, _, _, _ = self.parse_response(final_response)
                 self.print_response(first_agent, final_response)
                 if final_response is not None:
@@ -1146,6 +1178,11 @@ class QuimeraApp:
                         results = [f.result() for f in futures]
                     # Merge ordenado para o workspace
                     self._merge_staging_to_workspace(staging_root)
+                    if self.agent_client and self.agent_client._user_cancelled:
+                        self.renderer.show_system("[cancelado] fluxo interrompido.")
+                        if hasattr(self, "turn_manager"):
+                            self.turn_manager.reset()
+                        return
                     # Processar resultados na ordem original
                     needs_input_any = False
                     # Expecting 6-tuple now: (agent, response, route_target, handoff, extend, needs_input)
@@ -1173,6 +1210,11 @@ class QuimeraApp:
                 # Modo sequencial (original)
                 for index, agent in enumerate(remaining):
                     response = self.call_agent(agent, handoff=next_handoff, primary=False, protocol_mode=protocol_mode)
+                    if self.agent_client and self.agent_client._user_cancelled:
+                        self.renderer.show_system("[cancelado] fluxo interrompido.")
+                        if hasattr(self, "turn_manager"):
+                            self.turn_manager.reset()
+                        return
                     next_handoff = None
                     response, route_target, handoff, _, needs_human_input, _ = self.parse_response(response)
                     self.print_response(agent, response)
@@ -1202,6 +1244,8 @@ class QuimeraApp:
 
     def run(self):
         """Executa o loop interativo do chat multiagente."""
+        if self.agent_client:
+            self.agent_client._user_cancelled = False
         self.renderer.show_system(MSG_CHAT_STARTED)
         self.renderer.show_system(
             MSG_SESSION_STATUS.format(

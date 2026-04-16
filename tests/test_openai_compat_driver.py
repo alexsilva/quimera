@@ -627,6 +627,76 @@ def test_agent_client_mock_plugin_driver_uses_cli():
 
 
 # ---------------------------------------------------------------------------
+# Testes de cancelamento cooperativo no driver
+# ---------------------------------------------------------------------------
+
+def test_run_cancel_event_between_hops():
+    """Driver retorna None quando cancel_event é acionado após o primeiro hop."""
+    import threading
+    driver, mock_client = _make_driver()
+    tc = _make_tool_call("c", "run_shell", '{"command":"ls"}')
+    cancel_event = threading.Event()
+    call_count = 0
+
+    def side_effect(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        cancel_event.set()  # sinaliza cancelamento após primeira resposta
+        return _make_non_streaming_response(content="parcial", tool_calls=[tc])
+
+    mock_client.chat.completions.create.side_effect = side_effect
+
+    mock_executor = MagicMock()
+    mock_executor.config = SimpleNamespace(db_path="/tmp/t.db", workspace_root="/tmp")
+    mock_executor.registry.names.return_value = [s["function"]["name"] for s in TOOL_SCHEMAS]
+    mock_executor.execute.return_value = ToolResult(ok=True, tool_name="run_shell", content="ok")
+
+    result = driver.run("prompt", tool_executor=mock_executor, cancel_event=cancel_event)
+
+    assert result is None
+    # Apenas um hop: o cancelamento é checado no início do hop seguinte
+    assert call_count == 1
+
+
+def test_run_cancel_event_in_streaming():
+    """Driver interrompe streaming e retorna texto parcial quando cancel_event é acionado."""
+    import threading
+    driver, mock_client = _make_driver()
+    cancel_event = threading.Event()
+
+    def make_chunks():
+        yield _make_chunk(content="parte1 ")
+        cancel_event.set()  # sinalizado antes do próximo chunk
+        yield _make_chunk(content="parte2")
+
+    _setup_stream(mock_client, make_chunks())
+
+    result = driver.run("prompt", tool_executor=None, cancel_event=cancel_event)
+    # "parte2" não deve ser incluído — cancelamento detectado no início da iteração seguinte
+    assert result == "parte1"
+
+
+def test_run_no_cancel_event_behaves_normally():
+    """Sem cancel_event, o driver funciona igual ao comportamento anterior."""
+    driver, mock_client = _make_driver()
+    _setup_stream(mock_client, [_make_chunk(content="resposta completa")])
+
+    result = driver.run("prompt", tool_executor=None, cancel_event=None)
+    assert result == "resposta completa"
+
+
+def test_run_cancel_event_not_set_completes_normally():
+    """cancel_event fornecido mas não acionado não interfere na execução."""
+    import threading
+    driver, mock_client = _make_driver()
+    cancel_event = threading.Event()  # nunca acionado
+    _setup_stream(mock_client, [_make_chunk(content="ok")])
+
+    result = driver.run("prompt", tool_executor=None, cancel_event=cancel_event)
+    assert result == "ok"
+
+
+# ---------------------------------------------------------------------------
 # Testes de AgentPlugin com driver de API
 # ---------------------------------------------------------------------------
 

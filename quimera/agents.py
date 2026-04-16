@@ -5,7 +5,11 @@ import logging
 import os
 import queue
 import re
+import select
+import signal
 import subprocess
+import sys
+import termios
 import threading
 import time
 from datetime import datetime, timezone
@@ -55,9 +59,19 @@ class AgentClient:
         # Cache de instâncias de driver por nome de agente.
         self._api_drivers: dict = {}
         self.tool_event_callback = None
+        self._cancel_event = threading.Event()
+        self._user_cancelled = False
+        self._agent_running = False
+        self._current_proc = None
+        self._original_termios = None
+        self._esc_monitor_thread = None
+        self._esc_reader_thread = None
 
     def run(self, cmd, input_text=None, silent=False, agent=None, show_status=True):
         """Executa run."""
+        self._cancel_event.clear()
+        self._agent_running = True
+        self._start_esc_monitor()
         try:
             env = {**os.environ, "NO_COLOR": "1", "TERM": "dumb", "COLORTERM": ""}
             proc = subprocess.Popen(
@@ -69,8 +83,12 @@ class AgentClient:
                 bufsize=1,
                 env=env,
                 cwd=self.working_dir,
+                start_new_session=True,
             )
+            self._current_proc = proc
         except OSError as exc:
+            self._agent_running = False
+            self._stop_esc_monitor()
             self.renderer.show_error(f"[erro] não foi possível iniciar {cmd[0]}: {exc}")
             return None
 
@@ -109,95 +127,119 @@ class AgentClient:
         try:
             if input_text and proc.stdin:
                 proc.stdin.write(input_text)
+            proc.stdin.flush()
             if proc.stdin:
                 proc.stdin.close()
         except Exception as exc:
+            self._agent_running = False
+            self._stop_esc_monitor()
             self.renderer.show_error(f"[erro] falha ao enviar input para {cmd[0]}: {exc}")
             proc.kill()
             return None
 
-        if silent:
-            stdout_thread.join()
-            stderr_thread.join()
-            if result_holder["stdout"]:
-                _logger.debug("".join(result_holder["stdout"]))
-            if result_holder["stderr"]:
-                _logger.warning("".join(result_holder["stderr"]))
-        else:
-            start_time = time.time()
-            elapsed = 0
-            assert log_queue is not None
-            
-            status_cm = self.renderer.running_status("", agent=agent) if show_status else nullcontext(None)
-            
-            with status_cm as status:
-                while stdout_thread.is_alive() or stderr_thread.is_alive() or not log_queue.empty():
-                    # Consume log queue in main thread (thread-safe)
-                    while not log_queue.empty():
-                        try:
-                            stream_type, line = log_queue.get_nowait()
-                            if status is not None:
-                                status.update(f"[dim]executing {cmd[0]}... {elapsed}s[/dim]")
-                            # Limita o número de linhas de stderr exibidas
-                            cleaned = _strip_spinner(line.rstrip("\n"))
-                            if not cleaned.strip():
-                                continue
-                            if stream_type == "stderr" and _should_ignore_stderr_line(agent, line):
-                                continue
-                            if stream_type == "stderr" and not self.spy:
-                                if stderr_lines_shown < MAX_STDERR_LINES:
+        try:
+            if silent:
+                stdout_thread.join()
+                stderr_thread.join()
+                if result_holder["stdout"]:
+                    _logger.debug("".join(result_holder["stdout"]))
+                if result_holder["stderr"]:
+                    _logger.warning("".join(result_holder["stderr"]))
+            else:
+                start_time = time.time()
+                elapsed = 0
+                assert log_queue is not None
+
+                status_cm = self.renderer.running_status("", agent=agent) if show_status else nullcontext(None)
+
+                with status_cm as status:
+                    while stdout_thread.is_alive() or stderr_thread.is_alive() or not log_queue.empty():
+                        # Consume log queue in main thread (thread-safe)
+                        while not log_queue.empty():
+                            try:
+                                stream_type, line = log_queue.get_nowait()
+                                if status is not None:
+                                    status.update(f"[dim]executing {cmd[0]}... {elapsed}s[/dim]")
+                                # Limita o número de linhas de stderr exibidas
+                                cleaned = _strip_spinner(line.rstrip("\n"))
+                                if not cleaned.strip():
+                                    continue
+                                if stream_type == "stderr" and _should_ignore_stderr_line(agent, line):
+                                    continue
+                                if stream_type == "stderr" and not self.spy:
+                                    if stderr_lines_shown < MAX_STDERR_LINES:
+                                        self.renderer.show_plain(cleaned, agent=agent)
+                                        stderr_lines_shown += 1
+                                    elif stderr_lines_shown == MAX_STDERR_LINES:
+                                        self.renderer.show_plain(f"... (stderr truncado, máximo {MAX_STDERR_LINES} linhas)", agent=agent)
+                                        stderr_lines_shown += 1
+                                else:
                                     self.renderer.show_plain(cleaned, agent=agent)
-                                    stderr_lines_shown += 1
-                                elif stderr_lines_shown == MAX_STDERR_LINES:
-                                    self.renderer.show_plain(f"... (stderr truncado, máximo {MAX_STDERR_LINES} linhas)", agent=agent)
-                                    stderr_lines_shown += 1
-                            else:
-                                self.renderer.show_plain(cleaned, agent=agent)
-                        except queue.Empty:
-                            break
-                    if status is not None:
-                        status.update(f"[dim]executing {cmd[0]}... {elapsed}s[/dim]")
-                    time.sleep(0.2)
-                    elapsed = int(time.time() - start_time)
-                    if self.timeout is not None and self.timeout > 0:
-                        if time.time() - last_activity_time > self.timeout:
-                            proc.terminate()
+                            except queue.Empty:
+                                break
+                        if status is not None:
+                            status.update(f"[dim]executing {cmd[0]}... {elapsed}s[/dim]")
+                        if self._cancel_event.is_set():
+                            self._terminate_process_group(proc)
                             stdout_thread.join(2)
                             stderr_thread.join(2)
-                            self.renderer.show_error(f"[erro] timeout after {self.timeout}s without output from {cmd[0]}")
+                            self._user_cancelled = True
+                            self._agent_running = False
+                            self._current_proc = None
+                            self._stop_esc_monitor()
+                            self.renderer.show_error("[cancelado] pelo usuário")
                             return None
-            stdout_thread.join()
-            stderr_thread.join()
-            # Drain remaining queue
-            while not log_queue.empty():
-                try:
-                    stream_type, line = log_queue.get_nowait()
-                    cleaned = _strip_spinner(line.rstrip("\n"))
-                    if not cleaned.strip():
-                        continue
-                    if stream_type == "stderr" and _should_ignore_stderr_line(agent, line):
-                        continue
-                    # Limita o número de linhas de stderr exibidas
-                    if stream_type == "stderr" and not self.spy:
-                        if stderr_lines_shown < MAX_STDERR_LINES:
+                        time.sleep(0.2)
+                        elapsed = int(time.time() - start_time)
+                        if self.timeout is not None and self.timeout > 0:
+                            if time.time() - last_activity_time > self.timeout:
+                                proc.terminate()
+                                stdout_thread.join(2)
+                                stderr_thread.join(2)
+                                self._agent_running = False
+                                self._current_proc = None
+                                self._stop_esc_monitor()
+                                self.renderer.show_error(f"[erro] timeout after {self.timeout}s without output from {cmd[0]}")
+                                return None
+                stdout_thread.join()
+                stderr_thread.join()
+                # Drain remaining queue
+                while not log_queue.empty():
+                    try:
+                        stream_type, line = log_queue.get_nowait()
+                        cleaned = _strip_spinner(line.rstrip("\n"))
+                        if not cleaned.strip():
+                            continue
+                        if stream_type == "stderr" and _should_ignore_stderr_line(agent, line):
+                            continue
+                        # Limita o número de linhas de stderr exibidas
+                        if stream_type == "stderr" and not self.spy:
+                            if stderr_lines_shown < MAX_STDERR_LINES:
+                                self.renderer.show_plain(cleaned, agent=agent)
+                                stderr_lines_shown += 1
+                            elif stderr_lines_shown == MAX_STDERR_LINES:
+                                self.renderer.show_plain(f"... (stderr truncado, máximo {MAX_STDERR_LINES} linhas)")
+                                stderr_lines_shown += 1
+                        else:
                             self.renderer.show_plain(cleaned, agent=agent)
-                            stderr_lines_shown += 1
-                        elif stderr_lines_shown == MAX_STDERR_LINES:
-                            self.renderer.show_plain(f"... (stderr truncado, máximo {MAX_STDERR_LINES} linhas)")
-                            stderr_lines_shown += 1
-                    else:
-                        self.renderer.show_plain(cleaned, agent=agent)
-                except queue.Empty:
-                    break
+                    except queue.Empty:
+                        break
 
-        proc.wait()
+            proc.wait()
+            self._agent_running = False
+            self._current_proc = None
+            self._stop_esc_monitor()
 
-        if result_holder["error"]:
-            self.renderer.show_error(f"[erro] falha ao comunicar com {cmd[0]}: {result_holder['error']}")
-            return None
+            if result_holder["error"]:
+                self.renderer.show_error(f"[erro] falha ao comunicar com {cmd[0]}: {result_holder['error']}")
+                return None
 
-        output = "".join(result_holder["stdout"]).strip()
-        error = "".join(result_holder["stderr"]).strip()
+            output = "".join(result_holder["stdout"]).strip()
+            error = "".join(result_holder["stderr"]).strip()
+
+        finally:
+            self._agent_running = False
+            self._stop_esc_monitor()
 
         if proc.returncode != 0:
             self.renderer.show_error(f"[erro] agente {cmd[0]} retornou código {proc.returncode}")
@@ -219,6 +261,91 @@ class AgentClient:
             return None
 
         return output
+
+    def _terminate_process_group(self, proc):
+        """Termina o processo e todo seu grupo (filhos)."""
+        try:
+            os.killpg(os.getpgid(proc.pid), 15)
+        except OSError:
+            try:
+                proc.terminate()
+            except OSError:
+                pass
+
+    def _start_esc_monitor(self):
+        """Inicia monitoramento de cancel via signal handler (Ctrl+C) e ESC (se possível)."""
+        # Evita criar múltiplas threads de monitoramento
+        if self._esc_monitor_thread is not None and self._esc_monitor_thread.is_alive():
+            return
+
+        self._cancel_event.clear()
+
+        def _signal_handler(signum, frame):
+            if signum == signal.SIGINT:
+                self._cancel_event.set()
+
+        self._old_signal_handler = signal.signal(signal.SIGINT, _signal_handler)
+
+        # Monitor ESC/keyboard em TERM reais (quando stdin é tty)
+        def _esc_reader():
+            orig_termios = None
+            fd = None
+            try:
+                if not hasattr(sys.stdin, "fileno").__bool__():  # type: ignore[attr-defined]
+                    return
+                if not sys.stdin.isatty():
+                    return
+                fd = sys.stdin.fileno()
+                orig_termios = termios.tcgetattr(fd)
+                self._original_termios = orig_termios
+                new_attrs = termios.tcgetattr(fd)
+                new_attrs[3] = new_attrs[3] & ~(termios.ICANON | termios.ECHO)
+                termios.tcsetattr(fd, termios.TCSANOW, new_attrs)
+                while not self._cancel_event.is_set():
+                    r, _, _ = select.select([sys.stdin], [], [], 0.2)
+                    if r:
+                        ch = sys.stdin.read(1)
+                        if ch == "\x1b":  # ESC
+                            self._cancel_event.set()
+                            break
+            except Exception:
+                # Não falha o fluxo se o ambiente não permitir leitura direta do teclado
+                return
+            finally:
+                try:
+                    if fd is not None and orig_termios is not None:
+                        termios.tcsetattr(fd, termios.TCSANOW, orig_termios)
+                except Exception:
+                    pass
+
+        self._esc_reader_thread = threading.Thread(target=_esc_reader, daemon=True)
+        self._esc_reader_thread.start()
+
+    def _stop_esc_monitor(self):
+        """Para o monitoramento e restaura signal handler e terminal."""
+        self._agent_running = False
+        # Restaura handler de SIGINT
+        if hasattr(self, '_old_signal_handler') and self._old_signal_handler is not None:
+            try:
+                signal.signal(signal.SIGINT, self._old_signal_handler)
+            except Exception:
+                pass
+            self._old_signal_handler = None
+        # Restaura terminal settings (proteção extra caso thread não tenha restaurado)
+        if hasattr(self, '_original_termios') and self._original_termios is not None:
+            try:
+                fd = sys.stdin.fileno()
+                termios.tcsetattr(fd, termios.TCSANOW, self._original_termios)
+            except Exception:
+                pass
+            self._original_termios = None
+        # Encerra monitor ESC se existente
+        if self._esc_reader_thread is not None and self._esc_reader_thread.is_alive():
+            try:
+                self._esc_reader_thread.join(timeout=0.25)
+            except Exception:
+                pass
+            self._esc_reader_thread = None
 
     def _parse_stream_json(self, raw: str, agent: str) -> str | None:
         """Parseia output em stream-json do CLI, extrai texto final e dispara callbacks de tool."""
@@ -272,6 +399,7 @@ class AgentClient:
 
     def call(self, agent, prompt, silent=False, show_status=True, quiet=False):
         """Resolve o comando do agente e delega a execução."""
+        self._user_cancelled = False
         plugin = plugins.get(agent)
         if plugin is None:
             self.renderer.show_error(f"[erro] agente desconhecido: {agent}")
@@ -305,25 +433,54 @@ class AgentClient:
             )
 
         driver_instance = self._api_drivers[agent]
-
+        self._cancel_event.clear()
+        self._agent_running = True
+        self._start_esc_monitor()
         status_cm = self.renderer.running_status("", agent=agent) if (show_status and not silent and not quiet) else nullcontext(None)
         status_label = f"[dim]{'conectando' if is_first_call else 'aguardando'} {plugin.model}...[/dim]"
 
-        with status_cm as status:
-            if status is not None:
-                status.update(status_label)
-            effective_tool_executor = self.tool_executor if getattr(plugin, "supports_tools", True) else None
-            result = driver_instance.run(
-                prompt=prompt,
-                tool_executor=effective_tool_executor,
-                quiet=quiet,
-                on_tool_result=(lambda tool_result: self.tool_event_callback(agent, result=tool_result))
-                if self.tool_event_callback else None,
-                on_tool_abort=(lambda reason: self.tool_event_callback(agent, loop_abort=True, reason=reason))
-                if self.tool_event_callback else None,
-            )
+        try:
+            with status_cm as status:
+                if status is not None:
+                    status.update(status_label)
+                effective_tool_executor = self.tool_executor if getattr(plugin, "supports_tools", True) else None
+                result_holder = {"result": None, "error": None}
 
-        return result
+                def _run_driver():
+                    try:
+                        result_holder["result"] = driver_instance.run(
+                            prompt=prompt,
+                            tool_executor=effective_tool_executor,
+                            quiet=quiet,
+                            cancel_event=self._cancel_event,
+                            on_tool_result=(lambda tool_result: self.tool_event_callback(agent, result=tool_result))
+                            if self.tool_event_callback else None,
+                            on_tool_abort=(lambda reason: self.tool_event_callback(agent, loop_abort=True, reason=reason))
+                            if self.tool_event_callback else None,
+                        )
+                    except Exception as exc:
+                        result_holder["error"] = exc
+
+                t = threading.Thread(target=_run_driver, daemon=True)
+                t.start()
+
+                while t.is_alive():
+                    if self._cancel_event.is_set():
+                        self._user_cancelled = True
+                        self.renderer.show_error("[cancelado] pelo usuário")
+                        return None
+                    time.sleep(0.25)
+
+                if result_holder["error"]:
+                    _cmd = getattr(plugin, "cmd", None)
+                    _name = (_cmd[0] if isinstance(_cmd, (list, tuple)) and _cmd else None) or getattr(plugin, "model", "driver")
+                    self.renderer.show_error(f"[erro] falha ao comunicar com {_name}: {result_holder['error']}")
+                    return None
+
+                return result_holder["result"]
+        finally:
+            self._agent_running = False
+            self._stop_esc_monitor()
 
     def log_prompt_metrics(
         self, agent, metrics, session_id=None,

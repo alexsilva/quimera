@@ -174,6 +174,11 @@ def setup_task_executors(app):
                     show_output=False,
                 )
 
+                if app.agent_client._user_cancelled:
+                    app.show_system_message(f"[task {task_id}] {agent_name}: cancelado pelo usuário")
+                    runtime_tasks.fail_task(task_id, reason="cancelled by user", db_path=app.tasks_db_path)
+                    return False
+
                 if response is None:
                     app.show_system_message(f"[task {task_id}] {agent_name}: sem resposta")
                     _resolve_app_callable(app, "record_failure", "_record_failure")(agent_name)
@@ -255,6 +260,12 @@ def setup_task_executors(app):
                     persist_history=False,
                     show_output=False,
                 )
+
+                if app.agent_client._user_cancelled:
+                    app.show_system_message(f"[task {task_id}] {agent_name}: cancelado pelo usuário")
+                    runtime_tasks.fail_task(task_id, reason="cancelled by user", db_path=app.tasks_db_path)
+                    return False
+
                 _resolve_app_callable(app, "show_task_response", "_show_task_response")(task_id, agent_name, response or "")
                 accepted, verdict, review_text = classify_task_review_result(response)
                 if not accepted:

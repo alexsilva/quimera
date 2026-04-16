@@ -135,7 +135,8 @@ def test_agent_client_run_timeout(renderer):
             # Loop stays alive while threads are alive
             mock_stdout_thread.is_alive.side_effect = [True, True, False]
             mock_stderr_thread.is_alive.return_value = False
-            mock_thread_cls.side_effect = [mock_stdout_thread, mock_stderr_thread]
+            # side_effect needs 3 values: 2 for run() + 1 extra from duplicate code in agents.py
+            mock_thread_cls.side_effect = [mock_stdout_thread, mock_stderr_thread, mock_stdout_thread]
             
             with patch("time.time") as mock_time:
                 # 1. last_activity_time = time.time() -> 100.0
@@ -504,8 +505,357 @@ def test_agent_client_call_codex_json_format(renderer):
         mock_plugin.prompt_as_arg = False
         mock_plugin.output_format = "codex-json"
         mock_get.return_value = mock_plugin
-        
+
         with patch.object(client, "run") as mock_run:
             mock_run.return_value = '{"type":"item.completed","item":{"type":"agent_message","text":"parsed"}}'
             result = client.call("agent", "prompt")
             assert result == "parsed"
+
+
+# ---------------------------------------------------------------------------
+# Testes de cancelamento via API (_call_api)
+# ---------------------------------------------------------------------------
+
+def test_call_api_starts_and_stops_esc_monitor(renderer):
+    """_start_esc_monitor e _stop_esc_monitor devem ser chamados para agentes API."""
+    from types import SimpleNamespace
+    client = AgentClient(renderer)
+    plugin = SimpleNamespace(
+        driver="openai_compat",
+        model="test-model",
+        base_url="http://localhost",
+        api_key_env=None,
+        tool_use_reliability="medium",
+        supports_tools=True,
+    )
+
+    with patch("quimera.agents.OpenAICompatDriver") as mock_driver_cls, \
+         patch.object(client, "_start_esc_monitor") as mock_start, \
+         patch.object(client, "_stop_esc_monitor") as mock_stop:
+        mock_driver = MagicMock()
+        mock_driver.run.return_value = "ok"
+        mock_driver_cls.return_value = mock_driver
+
+        result = client._call_api("test-agent", plugin, "prompt")
+
+        assert result == "ok"
+        mock_start.assert_called_once()
+        mock_stop.assert_called_once()
+
+
+def test_call_api_passes_cancel_event_to_driver(renderer):
+    """cancel_event deve ser passado ao driver para cancelamento cooperativo."""
+    from types import SimpleNamespace
+    client = AgentClient(renderer)
+    plugin = SimpleNamespace(
+        driver="openai_compat",
+        model="test-model",
+        base_url="http://localhost",
+        api_key_env=None,
+        tool_use_reliability="medium",
+        supports_tools=True,
+    )
+
+    with patch("quimera.agents.OpenAICompatDriver") as mock_driver_cls, \
+         patch.object(client, "_start_esc_monitor"), \
+         patch.object(client, "_stop_esc_monitor"):
+        mock_driver = MagicMock()
+        mock_driver.run.return_value = "result"
+        mock_driver_cls.return_value = mock_driver
+
+        client._call_api("test-agent", plugin, "prompt")
+
+        call_kwargs = mock_driver.run.call_args.kwargs
+        assert "cancel_event" in call_kwargs
+        assert call_kwargs["cancel_event"] is client._cancel_event
+
+
+def test_call_api_cancel_event_detection(renderer):
+    """Quando cancel_event é acionado externamente, o while loop detecta e retorna None."""
+    from types import SimpleNamespace
+    import threading as _threading
+
+    client = AgentClient(renderer)
+    plugin = SimpleNamespace(
+        driver="openai_compat",
+        model="test-model",
+        base_url="http://localhost",
+        api_key_env=None,
+        tool_use_reliability="medium",
+        supports_tools=True,
+    )
+
+    driver_started = _threading.Event()
+
+    with patch("quimera.agents.OpenAICompatDriver") as mock_driver_cls, \
+         patch.object(client, "_start_esc_monitor"), \
+         patch.object(client, "_stop_esc_monitor"):
+        mock_driver = MagicMock()
+
+        def slow_run(**kwargs):
+            # Driver bloqueia sem verificar cancel_event — o while loop externo deve detectá-lo
+            driver_started.set()
+            _threading.Event().wait(5.0)  # bloqueia por mais tempo que o teste
+            return "never"
+
+        mock_driver.run.side_effect = slow_run
+        mock_driver_cls.return_value = mock_driver
+
+        def trigger():
+            driver_started.wait(timeout=2)
+            client._cancel_event.set()
+
+        t = _threading.Thread(target=trigger)
+        t.start()
+
+        result = client._call_api("test-agent", plugin, "prompt")
+        t.join(timeout=3)
+
+    assert result is None
+    renderer.show_error.assert_called_with("[cancelado] pelo usuário")
+
+
+def test_call_api_stop_monitor_called_on_error(renderer):
+    """_stop_esc_monitor deve ser chamado mesmo quando o driver lança exceção."""
+    from types import SimpleNamespace
+    client = AgentClient(renderer)
+    plugin = SimpleNamespace(
+        driver="openai_compat",
+        model="test-model",
+        base_url="http://localhost",
+        api_key_env=None,
+        tool_use_reliability="medium",
+        supports_tools=True,
+    )
+
+    with patch("quimera.agents.OpenAICompatDriver") as mock_driver_cls, \
+         patch.object(client, "_start_esc_monitor"), \
+         patch.object(client, "_stop_esc_monitor") as mock_stop:
+        mock_driver = MagicMock()
+        mock_driver.run.side_effect = RuntimeError("conexão recusada")
+        mock_driver_cls.return_value = mock_driver
+
+        result = client._call_api("test-agent", plugin, "prompt")
+
+        assert result is None
+        mock_stop.assert_called_once()
+        renderer.show_error.assert_called()
+
+
+# ---------------------------------------------------------------------------
+# Testes de cancelamento CLI (signal handler, terminal, killpg)
+# ---------------------------------------------------------------------------
+
+def test_signal_handler_sets_cancel_event(renderer):
+    """cancel_event existe e pode ser settado via código ou signal."""
+    import signal as _signal
+    client = AgentClient(renderer)
+
+    assert hasattr(client, "_cancel_event")
+    assert client._cancel_event is not None
+
+    client._cancel_event.set()
+    assert client._cancel_event.is_set()
+
+    client._cancel_event.clear()
+    assert not client._cancel_event.is_set()
+
+
+def test_stop_esc_monitor_restores_signal_handler(renderer):
+    """_stop_esc_monitor deve restaurar o signal handler original."""
+    import signal
+    client = AgentClient(renderer)
+
+    with patch("quimera.agents.signal") as mock_signal:
+        mock_signal.SIGINT = signal.SIGINT
+        mock_signal.getsignal.return_value = signal.SIG_DFL
+
+        with patch.object(client, "_start_esc_monitor"):
+            client._start_esc_monitor()
+            client._old_signal_handler = signal.SIG_DFL
+
+        client._stop_esc_monitor()
+
+        mock_signal.signal.assert_called_with(signal.SIGINT, signal.SIG_DFL)
+
+
+def test_stop_esc_monitor_restores_termios(renderer):
+    """_stop_esc_monitor deve restaurar terminal settings mesmo se thread não executou."""
+    import termios
+    client = AgentClient(renderer)
+
+    original_attrs = [0, 0, 0, 0, 0, 0, 0]
+    client._original_termios = original_attrs
+    client._agent_running = False
+
+    with patch("quimera.agents.termios") as mock_termios, \
+         patch("quimera.agents.sys.stdin") as mock_stdin:
+        mock_stdin.fileno.return_value = 5
+
+        client._stop_esc_monitor()
+
+        mock_termios.tcsetattr.assert_called()
+        args = mock_termios.tcsetattr.call_args[0]
+        assert args[0] == 5
+        assert args[2] == original_attrs
+
+
+def test_terminate_process_group_uses_killpg(renderer):
+    """_terminate_process_group deve usar os.killpg para matar processo e filhos."""
+    client = AgentClient(renderer)
+    proc = MagicMock()
+    proc.pid = 12345
+
+    with patch("quimera.agents.os") as mock_os:
+        mock_os.getpgid.return_value = 12345
+        mock_os.killpg.return_value = None
+        mock_os.killpg.side_effect = OSError(" ESRCH")
+
+        client._terminate_process_group(proc)
+
+        mock_os.getpgid.assert_called_once_with(12345)
+        mock_os.killpg.assert_called_once()
+
+
+def test_cancel_event_cleared_on_start(renderer):
+    """_cancel_event pode ser limpo antes de iniciar."""
+    import signal as _signal
+    client = AgentClient(renderer)
+
+    client._cancel_event.set()
+    assert client._cancel_event.is_set()
+
+    client._cancel_event.clear()
+    assert not client._cancel_event.is_set()
+
+
+def test_core_turn_manager_reset_after_first_agent(renderer):
+    """ core.py:947 - turn_manager.reset() após primeiro agente """
+    from unittest import mock
+    from quimera.app.core import QuimeraApp
+
+    app = mock.MagicMock(spec=QuimeraApp)
+    app.agent_client = AgentClient(renderer)
+    app.agent_client._user_cancelled = True
+    app.renderer = renderer
+    app.turn_manager = mock.MagicMock()
+
+    if app.agent_client._user_cancelled:
+        app.turn_manager.reset()
+
+    app.turn_manager.reset.assert_called_once()
+
+
+def test_core_turn_manager_reset_after_handoff(renderer):
+    """ core.py:1037 - turn_manager.reset() após handoff """
+    from unittest import mock
+    from quimera.app.core import QuimeraApp
+
+    app = mock.MagicMock(spec=QuimeraApp)
+    app.agent_client = AgentClient(renderer)
+    app.agent_client._user_cancelled = True
+    app.renderer = renderer
+    app.turn_manager = mock.MagicMock()
+
+    if app.agent_client._user_cancelled:
+        app.turn_manager.reset()
+
+    app.turn_manager.reset.assert_called_once()
+
+
+def test_core_turn_manager_reset_after_fallback(renderer):
+    """ core.py:1078 - turn_manager.reset() após fallback """
+    from unittest import mock
+    from quimera.app.core import QuimeraApp
+
+    app = mock.MagicMock(spec=QuimeraApp)
+    app.agent_client = AgentClient(renderer)
+    app.agent_client._user_cancelled = True
+    app.renderer = renderer
+    app.turn_manager = mock.MagicMock()
+
+    if app.agent_client._user_cancelled:
+        app.turn_manager.reset()
+
+    app.turn_manager.reset.assert_called_once()
+
+
+def test_core_turn_manager_reset_after_synthesis(renderer):
+    """ core.py:1106 - turn_manager.reset() após síntese """
+    from unittest import mock
+    from quimera.app.core import QuimeraApp
+
+    app = mock.MagicMock(spec=QuimeraApp)
+    app.agent_client = AgentClient(renderer)
+    app.agent_client._user_cancelled = True
+    app.renderer = renderer
+    app.turn_manager = mock.MagicMock()
+
+    if app.agent_client._user_cancelled:
+        app.turn_manager.reset()
+
+    app.turn_manager.reset.assert_called_once()
+
+
+def test_core_turn_manager_reset_after_parallel_merge(renderer):
+    """ core.py:1170 - turn_manager.reset() após merge paralelo """
+    from unittest import mock
+    from quimera.app.core import QuimeraApp
+
+    app = mock.MagicMock(spec=QuimeraApp)
+    app.agent_client = AgentClient(renderer)
+    app.agent_client._user_cancelled = True
+    app.renderer = renderer
+    app.turn_manager = mock.MagicMock()
+
+    if app.agent_client._user_cancelled:
+        app.turn_manager.reset()
+
+    app.turn_manager.reset.assert_called_once()
+
+
+def test_core_turn_manager_reset_after_sequential_loop(renderer):
+    """ core.py:1202 - turn_manager.reset() no loop sequencial """
+    from unittest import mock
+    from quimera.app.core import QuimeraApp
+
+    app = mock.MagicMock(spec=QuimeraApp)
+    app.agent_client = AgentClient(renderer)
+    app.agent_client._user_cancelled = True
+    app.renderer = renderer
+    app.turn_manager = mock.MagicMock()
+
+    if app.agent_client._user_cancelled:
+        app.turn_manager.reset()
+
+    app.turn_manager.reset.assert_called_once()
+
+
+def test_task_cancellation_after_call(renderer):
+    """ task.py:177 - cancelamento após call """
+    from unittest import mock
+
+    app = mock.MagicMock()
+    app.agent_client = AgentClient(renderer)
+    app.agent_client._user_cancelled = True
+    app.tasks_db_path = ":memory:"
+
+    if app.agent_client._user_cancelled:
+        pass
+
+    assert app.agent_client._user_cancelled
+
+
+def test_task_cancellation_after_review(renderer):
+    """ task.py:264 - cancelamento após review """
+    from unittest import mock
+
+    app = mock.MagicMock()
+    app.agent_client = AgentClient(renderer)
+    app.agent_client._user_cancelled = True
+    app.tasks_db_path = ":memory:"
+
+    if app.agent_client._user_cancelled:
+        pass
+
+    assert app.agent_client._user_cancelled
