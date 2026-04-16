@@ -1,6 +1,6 @@
 """Componentes de `quimera.plugins.base`."""
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 
 @dataclass
@@ -29,6 +29,7 @@ class AgentPlugin:
     model: Optional[str] = None
     base_url: Optional[str] = None
     api_key_env: Optional[str] = None  # nome da variável de ambiente com a API key
+    spy_stdout_formatter: Optional[Callable[[str], List[str]]] = None
 
 
 _registry: dict[str, AgentPlugin] = {}

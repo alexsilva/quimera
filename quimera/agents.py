@@ -40,52 +40,6 @@ def _should_ignore_stderr_line(agent: str | None, line: str) -> bool:
     return agent == "codex" and cleaned == "Reading additional input from stdin..."
 
 
-def _format_codex_spy_event(line: str) -> list[str]:
-    """Resume eventos JSONL do Codex em mensagens curtas para o modo spy."""
-    try:
-        event = json.loads(line)
-    except json.JSONDecodeError:
-        return []
-
-    etype = event.get("type")
-    if etype in {"turn.started", "session.started"}:
-        return ["contexto: iniciando execução"]
-    if etype == "turn.completed":
-        return ["contexto: execução concluída"]
-
-    if etype not in {"item.started", "item.completed"}:
-        return []
-
-    item = event.get("item", {})
-    itype = item.get("type")
-    if not itype:
-        return []
-
-    phase = "iniciado" if etype == "item.started" else "concluído"
-    if itype == "command_execution":
-        cmd = (item.get("command") or "").strip()
-        if not cmd:
-            return [f"contexto: comando {phase}"]
-        if etype == "item.completed":
-            exit_code = item.get("exit_code")
-            if exit_code is None:
-                return [f"contexto: comando concluído: {cmd}"]
-            return [f"contexto: comando concluído ({exit_code}): {cmd}"]
-        return [f"contexto: comando iniciado: {cmd}"]
-
-    if itype == "reasoning":
-        text = (item.get("text") or item.get("summary") or "").strip()
-        if not text:
-            return [f"contexto: reasoning {phase}"]
-        first_line = text.splitlines()[0][:160]
-        return [f"contexto: {first_line}"]
-
-    if itype == "agent_message":
-        return []
-
-    return [f"contexto: {itype} {phase}"]
-
-
 class AgentClient:
     """Executa os agentes externos no diretório de trabalho do projeto."""
 
@@ -107,6 +61,17 @@ class AgentClient:
         self._user_cancelled = False
         self._agent_running = False
         self._current_proc = None
+
+    def _format_spy_stdout(self, agent: str | None, line: str) -> list[str]:
+        """Delega resumo de stdout ao plugin quando ele expõe esse hook."""
+        if not agent:
+            return []
+        plugin = plugins.get(agent)
+        formatter = getattr(plugin, "spy_stdout_formatter", None) if plugin else None
+        if not callable(formatter):
+            return []
+        return formatter(line)
+
     def run(self, cmd, input_text=None, silent=False, agent=None, show_status=True):
         """Executa run."""
         self._cancel_event.clear()
@@ -207,8 +172,8 @@ class AgentClient:
                                 if not cleaned.strip():
                                     continue
                                 if stream_type == "stdout":
-                                    if self.spy and agent == "codex":
-                                        for message in _format_codex_spy_event(cleaned):
+                                    if self.spy:
+                                        for message in self._format_spy_stdout(agent, cleaned):
                                             self.renderer.show_plain(message, agent=agent)
                                     continue
                                 if stream_type == "stderr" and _should_ignore_stderr_line(agent, line):
@@ -258,8 +223,8 @@ class AgentClient:
                         if not cleaned.strip():
                             continue
                         if stream_type == "stdout":
-                            if self.spy and agent == "codex":
-                                for message in _format_codex_spy_event(cleaned):
+                            if self.spy:
+                                for message in self._format_spy_stdout(agent, cleaned):
                                     self.renderer.show_plain(message, agent=agent)
                             continue
                         if stream_type == "stderr" and _should_ignore_stderr_line(agent, line):

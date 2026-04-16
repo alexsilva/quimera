@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch, ANY
 from quimera.agents import AgentClient, _strip_spinner, _should_ignore_stderr_line
 from quimera.constants import MAX_STDERR_LINES
 from quimera.plugins import get as get_plugin
+from quimera.plugins.codex import _format_codex_spy_event
 
 @pytest.fixture
 def renderer():
@@ -268,9 +269,10 @@ def test_agent_client_run_spy_shows_codex_stdout_context(renderer):
     with patch("subprocess.Popen") as mock_popen:
         mock_proc = MagicMock()
         mock_proc.stdout = iter([
+            '{"type":"item.started","item":{"type":"reasoning","summary":"Vou checar o estado do repositório antes de editar"}}\n',
             '{"type":"item.started","item":{"type":"command_execution","command":"git status"}}\n',
             '{"type":"item.completed","item":{"type":"command_execution","command":"git status","exit_code":0}}\n',
-            '{"type":"item.completed","item":{"id":"1","type":"agent_message","text":"ok"}}\n',
+            '{"type":"item.completed","item":{"id":"1","type":"agent_message","text":"Encontrei alterações locais e vou seguir sem revertê-las."}}\n',
         ])
         mock_proc.stderr = iter([])
         mock_proc.returncode = 0
@@ -281,8 +283,10 @@ def test_agent_client_run_spy_shows_codex_stdout_context(renderer):
             result = client.run(["codex", "exec"], silent=False, agent="codex", show_status=False)
 
     assert "agent_message" in result
-    renderer.show_plain.assert_any_call("contexto: comando iniciado: git status", agent="codex")
-    renderer.show_plain.assert_any_call("contexto: comando concluído (0): git status", agent="codex")
+    renderer.show_plain.assert_any_call("contexto: Vou checar o estado do repositório antes de editar", agent="codex")
+    renderer.show_plain.assert_any_call("contexto: checando repositório: git status", agent="codex")
+    renderer.show_plain.assert_any_call("contexto: checando repositório: git status [ok]", agent="codex")
+    renderer.show_plain.assert_any_call("resposta: Encontrei alterações locais e vou seguir sem revertê-las.", agent="codex")
 
 def test_agent_client_run_post_drain(renderer):
     # Line 166-180 approx - Drain remaining queue after threads die
@@ -503,11 +507,34 @@ def test_parse_codex_json_with_text(renderer):
 
 
 def test_format_codex_spy_event_command():
-    from quimera.agents import _format_codex_spy_event
     started = _format_codex_spy_event('{"type":"item.started","item":{"type":"command_execution","command":"ls"}}')
     completed = _format_codex_spy_event('{"type":"item.completed","item":{"type":"command_execution","command":"ls","exit_code":0}}')
-    assert started == ["contexto: comando iniciado: ls"]
-    assert completed == ["contexto: comando concluído (0): ls"]
+    assert started == ["contexto: inspecionando arquivos: ls"]
+    assert completed == ["contexto: inspecionando arquivos: ls [ok]"]
+
+
+def test_format_codex_spy_event_reasoning_and_message():
+    reasoning = _format_codex_spy_event(
+        '{"type":"item.started","item":{"type":"reasoning","summary":"Vou localizar o formatter do plugin e ajustar a mensagem"}}'
+    )
+    message = _format_codex_spy_event(
+        '{"type":"item.completed","item":{"type":"agent_message","text":"Ajustei a saída para mostrar progresso útil ao usuário."}}'
+    )
+    assert reasoning == ["contexto: Vou localizar o formatter do plugin e ajustar a mensagem"]
+    assert message == ["resposta: Ajustei a saída para mostrar progresso útil ao usuário."]
+
+
+def test_format_codex_spy_event_reports_failed_test_command():
+    completed = _format_codex_spy_event(
+        '{"type":"item.completed","item":{"type":"command_execution","command":"pytest -q tests/test_agents.py","exit_code":1}}'
+    )
+    assert completed == ["contexto: rodando testes: pytest -q tests/test_agents.py [falhou (1)]"]
+
+
+def test_codex_plugin_exposes_spy_stdout_formatter():
+    plugin = get_plugin("codex")
+    assert plugin is not None
+    assert plugin.spy_stdout_formatter is _format_codex_spy_event
 
 
 def test_agent_client_call_stream_json_format(renderer):
