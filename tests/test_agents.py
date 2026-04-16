@@ -262,6 +262,28 @@ def test_agent_client_run_spy_shows_stderr_lines(renderer):
     renderer.show_plain.assert_any_call("tool: exec_command", agent="codex")
     renderer.show_plain.assert_any_call("tool: apply_patch", agent="codex")
 
+
+def test_agent_client_run_spy_shows_codex_stdout_context(renderer):
+    client = AgentClient(renderer, spy=True)
+    with patch("subprocess.Popen") as mock_popen:
+        mock_proc = MagicMock()
+        mock_proc.stdout = iter([
+            '{"type":"item.started","item":{"type":"command_execution","command":"git status"}}\n',
+            '{"type":"item.completed","item":{"type":"command_execution","command":"git status","exit_code":0}}\n',
+            '{"type":"item.completed","item":{"id":"1","type":"agent_message","text":"ok"}}\n',
+        ])
+        mock_proc.stderr = iter([])
+        mock_proc.returncode = 0
+        mock_proc.stdin = MagicMock()
+        mock_popen.return_value = mock_proc
+
+        with patch("time.sleep"):
+            result = client.run(["codex", "exec"], silent=False, agent="codex", show_status=False)
+
+    assert "agent_message" in result
+    renderer.show_plain.assert_any_call("contexto: comando iniciado: git status", agent="codex")
+    renderer.show_plain.assert_any_call("contexto: comando concluído (0): git status", agent="codex")
+
 def test_agent_client_run_post_drain(renderer):
     # Line 166-180 approx - Drain remaining queue after threads die
     client = AgentClient(renderer)
@@ -478,6 +500,14 @@ def test_parse_codex_json_with_text(renderer):
     raw = '{"type":"item.completed","item":{"type":"agent_message","text":"final text"}}'
     result = client._parse_codex_json(raw, "codex")
     assert result == "final text"
+
+
+def test_format_codex_spy_event_command():
+    from quimera.agents import _format_codex_spy_event
+    started = _format_codex_spy_event('{"type":"item.started","item":{"type":"command_execution","command":"ls"}}')
+    completed = _format_codex_spy_event('{"type":"item.completed","item":{"type":"command_execution","command":"ls","exit_code":0}}')
+    assert started == ["contexto: comando iniciado: ls"]
+    assert completed == ["contexto: comando concluído (0): ls"]
 
 
 def test_agent_client_call_stream_json_format(renderer):
