@@ -4,6 +4,7 @@ from quimera.plugins.base import AgentPlugin, register
 plugin = AgentPlugin(
     name="codex",
     prefix="/codex",
+    icon="🛠",
     cmd=["codex", "exec", "--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check", "--json"],
     output_format="codex-json",
     # O `codex exec` tenta ler stdin adicional quando recebe prompt por argv

@@ -46,8 +46,10 @@ def _agent_style(agent: str):
     """Retorna (color, label) para o agente; fallback para white/capitalize."""
     plugin = plugins.get(agent.lower())
     if plugin:
-        return plugin.style
-    return ("white", agent.capitalize())
+        color, label = plugin.style
+        icon = getattr(plugin, "icon", "🤖")
+        return (color, f"{icon} {label}")
+    return ("white", f"🤖 {agent.capitalize()}")
 
 
 class TerminalRenderer:

@@ -4,6 +4,7 @@ from quimera.plugins.base import AgentPlugin, register
 plugin = AgentPlugin(
     name="ollama-qwen",
     prefix="/ollama-qwen",
+    icon="⚡",
     style=("green", "OllamaQwen"),
     driver="openai_compat",
     model="qwen3-coder:30b",
@@ -24,6 +25,7 @@ register(plugin)
 plugin = AgentPlugin(
     name="ollama-gpt-oss",
     prefix="/ollama-gpt-oss",
+    icon="🔓",
     style=("cyan", "OllamaGptOss"),
     driver="openai_compat",
     model="gpt-oss:20b",
@@ -44,6 +46,7 @@ register(plugin)
 plugin = AgentPlugin(
     name="ollama-gemma4",
     prefix="/ollama-gemma4",
+    icon="💠",
     style=("green", "OllamaGemma4"),
     driver="openai_compat",
     model="gemma4",

@@ -9,6 +9,7 @@ class AgentPlugin:
     name: str
     prefix: str
     style: Tuple[str, str]  # (color, label) para UI
+    icon: str = "🤖"
     # CLI fields
     cmd: List[str] = field(default_factory=list)
     prompt_as_arg: bool = False  # se True, prompt é passado como argumento CLI em vez de stdin

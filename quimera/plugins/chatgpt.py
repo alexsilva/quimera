@@ -4,6 +4,7 @@ from quimera.plugins.base import AgentPlugin, register
 plugin = AgentPlugin(
     name="chatgpt",
     prefix="/chatgpt",
+    icon="💬",
     style=("bright_yellow", "ChatGPT"),
     driver="openai_compat",
     model="gpt-4o",
