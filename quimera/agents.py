@@ -5,11 +5,9 @@ import logging
 import os
 import queue
 import re
-import select
 import signal
 import subprocess
 import sys
-import termios
 import threading
 import time
 from datetime import datetime, timezone
@@ -63,10 +61,6 @@ class AgentClient:
         self._user_cancelled = False
         self._agent_running = False
         self._current_proc = None
-        self._original_termios = None
-        self._esc_monitor_thread = None
-        self._esc_reader_thread = None
-
     def run(self, cmd, input_text=None, silent=False, agent=None, show_status=True):
         """Executa run."""
         self._cancel_event.clear()
@@ -273,11 +267,7 @@ class AgentClient:
                 pass
 
     def _start_esc_monitor(self):
-        """Inicia monitoramento de cancel via signal handler (Ctrl+C) e ESC (se possível)."""
-        # Evita criar múltiplas threads de monitoramento
-        if self._esc_monitor_thread is not None and self._esc_monitor_thread.is_alive():
-            return
-
+        """Inicia monitoramento de cancel via signal handler (Ctrl+C)."""
         self._cancel_event.clear()
 
         def _signal_handler(signum, frame):
@@ -286,66 +276,15 @@ class AgentClient:
 
         self._old_signal_handler = signal.signal(signal.SIGINT, _signal_handler)
 
-        # Monitor ESC/keyboard em TERM reais (quando stdin é tty)
-        def _esc_reader():
-            orig_termios = None
-            fd = None
-            try:
-                if not hasattr(sys.stdin, "fileno").__bool__():  # type: ignore[attr-defined]
-                    return
-                if not sys.stdin.isatty():
-                    return
-                fd = sys.stdin.fileno()
-                orig_termios = termios.tcgetattr(fd)
-                self._original_termios = orig_termios
-                new_attrs = termios.tcgetattr(fd)
-                new_attrs[3] = new_attrs[3] & ~(termios.ICANON | termios.ECHO)
-                termios.tcsetattr(fd, termios.TCSANOW, new_attrs)
-                while not self._cancel_event.is_set():
-                    r, _, _ = select.select([sys.stdin], [], [], 0.2)
-                    if r:
-                        ch = sys.stdin.read(1)
-                        if ch == "\x1b":  # ESC
-                            self._cancel_event.set()
-                            break
-            except Exception:
-                # Não falha o fluxo se o ambiente não permitir leitura direta do teclado
-                return
-            finally:
-                try:
-                    if fd is not None and orig_termios is not None:
-                        termios.tcsetattr(fd, termios.TCSANOW, orig_termios)
-                except Exception:
-                    pass
-
-        self._esc_reader_thread = threading.Thread(target=_esc_reader, daemon=True)
-        self._esc_reader_thread.start()
-
     def _stop_esc_monitor(self):
-        """Para o monitoramento e restaura signal handler e terminal."""
+        """Para o monitoramento e restaura o signal handler."""
         self._agent_running = False
-        # Restaura handler de SIGINT
         if hasattr(self, '_old_signal_handler') and self._old_signal_handler is not None:
             try:
                 signal.signal(signal.SIGINT, self._old_signal_handler)
             except Exception:
                 pass
             self._old_signal_handler = None
-        # Restaura terminal settings (proteção extra caso thread não tenha restaurado)
-        if hasattr(self, '_original_termios') and self._original_termios is not None:
-            try:
-                fd = sys.stdin.fileno()
-                termios.tcsetattr(fd, termios.TCSANOW, self._original_termios)
-            except Exception:
-                pass
-            self._original_termios = None
-        # Encerra monitor ESC se existente
-        if self._esc_reader_thread is not None and self._esc_reader_thread.is_alive():
-            try:
-                self._esc_reader_thread.join(timeout=0.25)
-            except Exception:
-                pass
-            self._esc_reader_thread = None
 
     def _parse_stream_json(self, raw: str, agent: str) -> str | None:
         """Parseia output em stream-json do CLI, extrai texto final e dispara callbacks de tool."""

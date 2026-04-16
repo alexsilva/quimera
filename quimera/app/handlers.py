@@ -24,6 +24,14 @@ class PromptAwareStderrHandler(logging.StreamHandler):
             super().emit(record)
             return
 
+        # INFO/DEBUG internos geram churn no TTY quando o prompt não bloqueante
+        # está ativo. Mantemos warnings e errors visíveis.
+        if (
+            getattr(app, "_nonblocking_input_status", None) == "reading"
+            and record.levelno < logging.WARNING
+        ):
+            return
+
         stdin_is_tty = sys.stdin is not None and sys.stdin.isatty()
         if stdin_is_tty and self.stream is sys.stderr:
             self.stream = sys.stdout
@@ -32,4 +40,4 @@ class PromptAwareStderrHandler(logging.StreamHandler):
             app._clear_user_prompt_line_if_needed()
             super().emit(record)
             self.flush()
-            app._redisplay_user_prompt_if_needed()
+            app._redisplay_user_prompt_if_needed(clear_first=False)

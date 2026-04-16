@@ -60,6 +60,8 @@ class TurnManager:
     def __init__(self):
         self._is_human_turn = True
         self._lock = threading.Lock()
+        self._human_turn_event = threading.Event()
+        self._human_turn_event.set()
     
     @property
     def is_human_turn(self) -> bool:
@@ -75,11 +77,20 @@ class TurnManager:
         """Alterna o turno: humano <-> agente."""
         with self._lock:
             self._is_human_turn = not self._is_human_turn
+            if self._is_human_turn:
+                self._human_turn_event.set()
+            else:
+                self._human_turn_event.clear()
     
     def reset(self) -> None:
         """Reseta para turno do humano."""
         with self._lock:
             self._is_human_turn = True
+            self._human_turn_event.set()
+
+    def wait_for_human_turn(self, timeout: float | None = None) -> bool:
+        """Aguarda até o turno humano ficar disponível."""
+        return self._human_turn_event.wait(timeout=timeout)
 
 
 def resolve_app_dependency(name, default):
@@ -219,6 +230,7 @@ class QuimeraApp:
         self._counter_lock = threading.Lock()
         self._nonblocking_prompt_visible = False
         self._nonblocking_prompt_text = ""
+        self._deferred_system_messages: list[str] = []
         self._nonblocking_input_thread: threading.Thread | None = None
         self._nonblocking_input_queue: "queue.Queue | None" = None
         self._nonblocking_input_status = "idle"
@@ -387,7 +399,7 @@ class QuimeraApp:
         """Atualiza task shared state."""
         self._get_task_services().refresh_task_shared_state()
 
-    def _redisplay_user_prompt_if_needed(self) -> None:
+    def _redisplay_user_prompt_if_needed(self, clear_first: bool = True) -> None:
         """Executa redisplay user prompt if needed."""
         stdin = sys.stdin
         if stdin is None or not stdin.isatty():
@@ -395,7 +407,6 @@ class QuimeraApp:
         if self._nonblocking_input_status != "reading":
             return
         try:
-            time.sleep(0.01)
             prompt = getattr(self, "_nonblocking_prompt_text", "")
             line_buffer = ""
             runtime_readline = resolve_app_dependency("readline", readline)
@@ -406,7 +417,8 @@ class QuimeraApp:
                     line_buffer = ""
             full_line = f"{prompt}{line_buffer}"
             if len(full_line) > 0:
-                self._clear_user_prompt_line_if_needed()
+                if clear_first:
+                    self._clear_user_prompt_line_if_needed()
                 sys.stdout.write(full_line)
                 sys.stdout.flush()
                 if runtime_readline is not None:
@@ -831,10 +843,12 @@ class QuimeraApp:
     def print_response(self, agent, response):
         """Executa print response."""
         with self._output_lock:
+            self._clear_user_prompt_line_if_needed()
             if response is not None:
                 self.renderer.show_message(agent, response)
             else:
                 self.renderer.show_no_response(agent)
+            self._redisplay_user_prompt_if_needed(clear_first=False)
 
     def persist_message(self, role, content):
         """Persiste uma mensagem no histórico em memória, log e snapshot JSON."""
@@ -1274,8 +1288,9 @@ class QuimeraApp:
                     if not getattr(self, "_turn_blocked_warning_shown", False):
                         self.renderer.show_system("[Aguardando resposta do agente...]")
                         self._turn_blocked_warning_shown = True
-                    time.sleep(0.1)
+                    self.turn_manager.wait_for_human_turn(timeout=0.01)
                     continue
+                self._turn_blocked_warning_shown = False
 
                 user = self.read_user_input(f"{self.user_name}: ", timeout=0)
                 if user is None:

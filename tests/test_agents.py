@@ -679,25 +679,11 @@ def test_stop_esc_monitor_restores_signal_handler(renderer):
         mock_signal.signal.assert_called_with(signal.SIGINT, signal.SIG_DFL)
 
 
-def test_stop_esc_monitor_restores_termios(renderer):
-    """_stop_esc_monitor deve restaurar terminal settings mesmo se thread não executou."""
-    import termios
+def test_stop_esc_monitor_without_termios_state(renderer):
+    """_stop_esc_monitor não deve depender de state de termios."""
     client = AgentClient(renderer)
-
-    original_attrs = [0, 0, 0, 0, 0, 0, 0]
-    client._original_termios = original_attrs
     client._agent_running = False
-
-    with patch("quimera.agents.termios") as mock_termios, \
-         patch("quimera.agents.sys.stdin") as mock_stdin:
-        mock_stdin.fileno.return_value = 5
-
-        client._stop_esc_monitor()
-
-        mock_termios.tcsetattr.assert_called()
-        args = mock_termios.tcsetattr.call_args[0]
-        assert args[0] == 5
-        assert args[2] == original_attrs
+    client._stop_esc_monitor()
 
 
 def test_terminate_process_group_uses_killpg(renderer):

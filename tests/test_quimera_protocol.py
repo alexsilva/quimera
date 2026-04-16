@@ -1,4 +1,5 @@
 import io
+import queue
 import re
 import tempfile
 import threading
@@ -14,6 +15,7 @@ import quimera.cli as cli_module
 import quimera.plugins as plugins
 from quimera.agents import AgentClient
 from quimera.app import QuimeraApp
+from quimera.app.core import TurnManager
 from quimera.app.session_metrics import SessionMetricsService
 from quimera.cli import main as cli_main
 from quimera.config import DEFAULT_HISTORY_WINDOW
@@ -1562,41 +1564,32 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(persisted[0], ("human", "oi"))
         self.assertIn((AGENT_CLAUDE, "claude responde"), printed)
 
-    def test_read_user_input_nonblocking_tty_preserves_input_path(self):
-        app = QuimeraApp.__new__(QuimeraApp)
-        app.renderer = DummyRenderer()
-        app._nonblocking_prompt_visible = False
-        app._nonblocking_input_queue = None
-        app._nonblocking_input_thread = None
-        app._nonblocking_input_status = "idle"
+    def test_turn_manager_wait_for_human_turn_unblocks_immediately_after_agent_response(self):
+        turn_manager = TurnManager()
+        turn_manager.next_turn()
 
-        stdin = io.StringIO("")
-        stdin.isatty = lambda: True
         started = threading.Event()
+        released = []
 
-        def fake_input(prompt):
+        def _waiter():
             started.set()
-            time.sleep(0.05)
-            return "mensagem"
+            released.append(turn_manager.wait_for_human_turn(timeout=1))
 
-        with patch("sys.stdin", stdin), patch("quimera.app.input", side_effect=fake_input) as mock_input:
-            first = app.read_user_input("Você: ", timeout=0)
-            self.assertIsNone(first)
-            self.assertTrue(started.wait(timeout=1), "reader assíncrono não iniciou")
+        waiter = threading.Thread(target=_waiter, daemon=True)
+        waiter.start()
 
-            deadline = time.time() + 1
-            second = None
-            while time.time() < deadline and second is None:
-                second = app.read_user_input("Você: ", timeout=0)
-                if second is None:
-                    time.sleep(0.01)
+        self.assertTrue(started.wait(timeout=1), "thread de espera não iniciou")
+        time.sleep(0.02)
+        turn_manager.next_turn()
 
-        self.assertEqual(second, "mensagem")
-        mock_input.assert_called_once_with("Você: ")
+        waiter.join(timeout=0.2)
+        self.assertFalse(waiter.is_alive(), "espera pelo turno humano não deveria depender de polling lento")
+        self.assertEqual(released, [True])
 
-    def test_read_user_input_nonblocking_tty_raises_keyboard_interrupt(self):
+    def test_read_user_input_zero_timeout_tty_uses_blocking_input_path(self):
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
+        app._deferred_system_messages = []
         app._nonblocking_prompt_visible = False
         app._nonblocking_input_queue = None
         app._nonblocking_input_thread = None
@@ -1605,34 +1598,56 @@ class PluginTests(unittest.TestCase):
 
         stdin = io.StringIO("")
         stdin.isatty = lambda: True
-        started = threading.Event()
+        with patch("sys.stdin", stdin), patch("quimera.app.input", return_value="mensagem") as mock_input:
+            result = app.read_user_input("Você: ", timeout=0)
 
-        def fake_input(prompt):
-            started.set()
-            time.sleep(0.05)
-            raise KeyboardInterrupt()
+        self.assertEqual(result, "mensagem")
+        mock_input.assert_called_once_with("Você: ")
 
-        with patch("sys.stdin", stdin), patch("quimera.app.input", side_effect=fake_input):
-            first = app.read_user_input("Você: ", timeout=0)
-            self.assertIsNone(first)
-            self.assertTrue(started.wait(timeout=1), "reader assíncrono não iniciou")
+    def test_read_user_input_zero_timeout_tty_flushes_deferred_messages_before_prompt(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.renderer = DummyRenderer()
+        app._deferred_system_messages = ["[task 7] claude:\nresultado final"]
+        app._nonblocking_prompt_visible = False
+        app._nonblocking_input_queue = None
+        app._nonblocking_input_thread = None
+        app._nonblocking_input_status = "reading"
+        app._nonblocking_prompt_text = "Você: "
+        app._output_lock = threading.Lock()
 
-            deadline = time.time() + 1
-            interrupted = False
-            while time.time() < deadline:
-                try:
-                    app.read_user_input("Você: ", timeout=0)
-                except KeyboardInterrupt:
-                    interrupted = True
-                    break
-                time.sleep(0.01)
+        stdin = io.StringIO("")
+        stdin.isatty = lambda: True
 
-            self.assertTrue(interrupted, "read_user_input() não propagou KeyboardInterrupt")
+        with patch("sys.stdin", stdin), patch("quimera.app.input", return_value="oi"):
+            value = app.read_user_input("Você: ", timeout=0)
 
-    def test_show_system_message_redisplays_prompt_for_task_status_text_while_tty_reader_is_active(self):
+        self.assertEqual(value, "oi")
+        self.assertEqual(app._nonblocking_input_status, "idle")
+        self.assertEqual(app._nonblocking_prompt_text, "")
+        self.assertEqual(app._deferred_system_messages, [])
+        self.assertEqual(app.renderer.system_messages, ["[task 7] claude:\nresultado final"])
+
+    def test_read_user_input_zero_timeout_tty_raises_keyboard_interrupt(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.renderer = DummyRenderer()
+        app._deferred_system_messages = []
+        app._nonblocking_prompt_visible = False
+        app._nonblocking_input_queue = None
+        app._nonblocking_input_thread = None
+        app._nonblocking_input_status = "idle"
+        app._nonblocking_prompt_text = ""
+
+        stdin = io.StringIO("")
+        stdin.isatty = lambda: True
+        with patch("sys.stdin", stdin), patch("quimera.app.input", side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                app.read_user_input("Você: ", timeout=0)
+
+    def test_show_system_message_suppresses_transient_task_status_while_tty_reader_is_active(self):
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
         app._output_lock = threading.Lock()
+        app._deferred_system_messages = []
         app._nonblocking_input_status = "reading"
         app._nonblocking_prompt_text = "Alex: "
 
@@ -1644,13 +1659,14 @@ class PluginTests(unittest.TestCase):
         ) as mock_redisplay:
             app.show_system_message("[task 7] claude: iniciando")
 
-        self.assertEqual(app.renderer.system_messages, ["[task 7] claude: iniciando"])
-        mock_redisplay.assert_called_once_with()
+        self.assertEqual(app.renderer.system_messages, [])
+        mock_redisplay.assert_not_called()
 
-    def test_show_system_message_redraws_human_prompt_with_user_name_for_task_status_text(self):
+    def test_show_system_message_redraws_human_prompt_with_user_name_for_task_error_text(self):
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
         app._output_lock = threading.Lock()
+        app._deferred_system_messages = []
         app._nonblocking_input_status = "reading"
         app._nonblocking_prompt_text = "Alex: "
 
@@ -1660,15 +1676,35 @@ class PluginTests(unittest.TestCase):
         with patch("sys.stdin", stdin), patch("quimera.app.readline.get_line_buffer", return_value=""), patch(
             "quimera.app.readline.redisplay"
         ), patch("sys.stdout.write") as mock_write, patch("sys.stdout.flush") as mock_flush:
-            app.show_system_message("[task 7] claude: concluída")
+            app.show_system_message("[task 7] claude: erro: falha de rede")
 
         self.assertIn(call("\r\x1b[2K"), mock_write.call_args_list)
         self.assertIn(call("Alex: "), mock_write.call_args_list)
         self.assertGreaterEqual(mock_flush.call_count, 1)
 
-    def test_show_system_message_clears_prompt_before_multiline_review_message(self):
+    def test_redisplay_user_prompt_does_not_sleep_while_redrawing_after_agent_output(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app._nonblocking_input_status = "reading"
+        app._nonblocking_prompt_text = "Alex: "
+
+        stdin = io.StringIO("")
+        stdin.isatty = lambda: True
+
+        with patch("sys.stdin", stdin), patch("quimera.app.readline.get_line_buffer", return_value="digitando"), patch(
+            "quimera.app.readline.redisplay"
+        ) as mock_redisplay, patch("sys.stdout.write"), patch("sys.stdout.flush"), patch(
+            "quimera.app.core.time.sleep"
+        ) as mock_sleep:
+            for _ in range(5):
+                app._redisplay_user_prompt_if_needed()
+
+        mock_sleep.assert_not_called()
+        self.assertEqual(mock_redisplay.call_count, 5)
+
+    def test_show_system_message_defers_multiline_review_message_while_tty_reader_is_active(self):
         app = QuimeraApp.__new__(QuimeraApp)
         app._output_lock = threading.Lock()
+        app._deferred_system_messages = []
         app._nonblocking_input_status = "reading"
         app._nonblocking_prompt_text = "Alex: "
 
@@ -1683,16 +1719,17 @@ class PluginTests(unittest.TestCase):
         ), patch("sys.stdout.write") as mock_write, patch("sys.stdout.flush"):
             app.show_system_message("[task 7] gemini:\nACEITE\nResultado validado com evidência concreta.")
 
-        clear_index = mock_write.call_args_list.index(call("\r\x1b[2K"))
-        prompt_index = mock_write.call_args_list.index(call("Alex: "))
-        self.assertLess(clear_index, prompt_index)
-        renderer.show_system.assert_called_once_with(
-            "[task 7] gemini:\nACEITE\nResultado validado com evidência concreta."
+        self.assertEqual(mock_write.call_args_list, [])
+        renderer.show_system.assert_not_called()
+        self.assertEqual(
+            app._deferred_system_messages,
+            ["[task 7] gemini:\nACEITE\nResultado validado com evidência concreta."],
         )
 
-    def test_staging_logger_clears_and_redisplays_prompt_while_tty_reader_is_active(self):
+    def test_staging_logger_does_not_touch_prompt_for_info_logs_while_tty_reader_is_active(self):
         app = QuimeraApp.__new__(QuimeraApp)
         app._output_lock = threading.Lock()
+        app._deferred_system_messages = []
         app._nonblocking_input_status = "reading"
         app._nonblocking_prompt_text = "Alex: "
 
@@ -1709,12 +1746,91 @@ class PluginTests(unittest.TestCase):
             ) as mock_redisplay, patch("sys.stdout.write") as mock_write, patch("sys.stdout.flush") as mock_flush:
                 app_module.logger.info("[DISPATCH] sending to agent=%s", AGENT_CODEX)
 
+            self.assertNotIn(call("\r\x1b[2K"), mock_write.call_args_list)
+            self.assertNotIn(call("Alex: "), mock_write.call_args_list)
+            self.assertEqual(mock_flush.call_count, 0)
+            mock_redisplay.assert_not_called()
+        finally:
+            prompt_handler.bind_app(previous_app)
+
+    def test_staging_logger_still_shows_warning_logs_while_tty_reader_is_active(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app._output_lock = threading.Lock()
+        app._deferred_system_messages = []
+        app._nonblocking_input_status = "reading"
+        app._nonblocking_prompt_text = "Alex: "
+
+        stdin = io.StringIO("")
+        stdin.isatty = lambda: True
+
+        prompt_handler = next(handler for handler in app_module.logger.handlers if
+                              isinstance(handler, app_module.PromptAwareStderrHandler))
+        previous_app = prompt_handler._app
+        prompt_handler.bind_app(app)
+        try:
+            with patch("sys.stdin", stdin), patch("quimera.app.readline.get_line_buffer", return_value=""), patch(
+                "quimera.app.readline.redisplay"
+            ) as mock_redisplay, patch("sys.stdout.write") as mock_write, patch("sys.stdout.flush"):
+                app_module.logger.warning("[DISPATCH] retry for agent=%s", AGENT_CODEX)
+
             self.assertIn(call("\r\x1b[2K"), mock_write.call_args_list)
             self.assertIn(call("Alex: "), mock_write.call_args_list)
-            self.assertGreaterEqual(mock_flush.call_count, 2)
             mock_redisplay.assert_called_once_with()
         finally:
             prompt_handler.bind_app(previous_app)
+
+    def test_show_system_message_clears_prompt_only_once_before_redisplay(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.renderer = DummyRenderer()
+        app._output_lock = threading.Lock()
+        app._deferred_system_messages = []
+        app._nonblocking_input_status = "reading"
+        app._nonblocking_prompt_text = "Alex: "
+
+        stdin = io.StringIO("")
+        stdin.isatty = lambda: True
+
+        with patch("sys.stdin", stdin), patch("quimera.app.readline.get_line_buffer", return_value="oi"), patch(
+            "quimera.app.readline.redisplay"
+        ), patch("sys.stdout.write") as mock_write, patch("sys.stdout.flush"):
+            app.show_system_message("[task 7] claude: erro: timeout")
+
+        clear_calls = [call_args for call_args in mock_write.call_args_list if call_args == call("\r\x1b[2K")]
+        self.assertEqual(len(clear_calls), 1)
+
+    def test_print_response_clears_prompt_before_agent_output_and_redisplays_once(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app._output_lock = threading.Lock()
+        app._deferred_system_messages = []
+        app._nonblocking_input_status = "reading"
+        app._nonblocking_prompt_text = "Alex: "
+        app.renderer = Mock()
+
+        stdin = io.StringIO("")
+        stdin.isatty = lambda: True
+
+        with patch("sys.stdin", stdin), patch("quimera.app.readline.get_line_buffer", return_value="oi"), patch(
+            "quimera.app.readline.redisplay"
+        ) as mock_redisplay, patch("sys.stdout.write") as mock_write, patch("sys.stdout.flush"):
+            app.print_response("claude", "resposta final")
+
+        app.renderer.show_message.assert_called_once_with("claude", "resposta final")
+        clear_calls = [call_args for call_args in mock_write.call_args_list if call_args == call("\r\x1b[2K")]
+        self.assertEqual(len(clear_calls), 1)
+        self.assertIn(call("Alex: oi"), mock_write.call_args_list)
+        mock_redisplay.assert_called_once_with()
+
+    def test_show_system_message_defers_task_output_while_tty_reader_is_active(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.renderer = DummyRenderer()
+        app._output_lock = threading.Lock()
+        app._deferred_system_messages = []
+        app._nonblocking_input_status = "reading"
+
+        app.show_system_message("[task 7] claude:\nresultado final")
+
+        self.assertEqual(app.renderer.system_messages, [])
+        self.assertEqual(app._deferred_system_messages, ["[task 7] claude:\nresultado final"])
 
     def test_parse_routing_selects_random_initial_agent(self):
         app = QuimeraApp.__new__(QuimeraApp)

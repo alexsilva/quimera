@@ -48,7 +48,10 @@ def read_user_input(app, prompt, timeout: int, input_fn=input) -> str | None:
             if stdin is None:
                 return None
             if stdin.isatty():
-                return read_user_input_nonblocking_tty(app, prompt, input_fn=input_fn)
+                app._nonblocking_input_status = "idle"
+                app._nonblocking_prompt_text = ""
+                app._get_system_layer().flush_deferred_messages()
+                return input_fn(prompt)
             if select.select([stdin], [], [], 0)[0]:
                 line = stdin.readline()
                 if line == "":
@@ -83,11 +86,15 @@ def read_user_input_nonblocking_tty(app, prompt: str, input_fn=input) -> str | N
         thread = app._nonblocking_input_thread
         if thread is None or not thread.is_alive():
             start_nonblocking_input_reader(app, prompt, input_fn=input_fn)
+        else:
+            # Amortece o polling sem adicionar atraso perceptível ao retorno do prompt.
+            time.sleep(0.01)
         return None
 
     app._nonblocking_input_status = "idle"
     app._nonblocking_input_thread = None
     app._nonblocking_prompt_text = ""
+    app._get_system_layer().flush_deferred_messages()
     if status == "line":
         return value
     if status == "interrupt":
