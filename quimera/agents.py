@@ -127,7 +127,7 @@ class AgentClient:
         try:
             if input_text and proc.stdin:
                 proc.stdin.write(input_text)
-            proc.stdin.flush()
+                proc.stdin.flush()
             if proc.stdin:
                 proc.stdin.close()
         except Exception as exc:
