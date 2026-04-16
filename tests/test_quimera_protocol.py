@@ -1453,6 +1453,59 @@ class ProtocolTests(unittest.TestCase):
         self.assertIsNone(summary)
         self.assertEqual(renderer.system_messages, [])
 
+    def test_chain_summarizer_stops_fallback_when_cancel_event_is_already_set(self):
+        class DummyAgentClient:
+            def __init__(self, renderer):
+                self.renderer = renderer
+                self._user_cancelled = False
+                self._cancel_event = threading.Event()
+                self.calls = []
+
+            def call(self, agent, prompt):
+                self.calls.append((agent, prompt))
+                self._cancel_event.set()
+                return None
+
+        renderer = DummyRenderer()
+        agent_client = DummyAgentClient(renderer)
+        summarizer_call = build_chain_summarizer(agent_client, ["chatgpt", "codex"])
+
+        result = summarizer_call("resuma", preferred_agent="chatgpt")
+
+        self.assertIsNone(result)
+        self.assertEqual(agent_client.calls, [("chatgpt", "resuma")])
+        self.assertEqual(renderer.system_messages, [])
+        self.assertEqual(summarizer_call.last_outcome, "cancelled")
+
+    def test_chain_summarizer_does_not_emit_per_agent_unavailable_messages(self):
+        class DummyAgentClient:
+            def __init__(self, renderer):
+                self.renderer = renderer
+                self._user_cancelled = False
+                self._cancel_event = threading.Event()
+                self.calls = []
+
+            def call(self, agent, prompt):
+                self.calls.append((agent, prompt))
+                return None
+
+        renderer = DummyRenderer()
+        agent_client = DummyAgentClient(renderer)
+        summarizer_call = build_chain_summarizer(agent_client, ["chatgpt", "codex"])
+        summarizer = SessionSummarizer(renderer, summarizer_call=summarizer_call)
+
+        summary = summarizer.summarize(
+            [{"role": "human", "content": "gerar resumo"}],
+            preferred_agent="chatgpt",
+        )
+
+        self.assertIsNone(summary)
+        self.assertEqual(
+            agent_client.calls,
+            [("chatgpt", unittest.mock.ANY), ("codex", unittest.mock.ANY)],
+        )
+        self.assertEqual(renderer.system_messages, ["[memória] resumidores indisponíveis"])
+
     def test_shutdown_summary_thread_does_not_mark_agents_unavailable_due_to_signal_registration(self):
         class DummyStatusContext:
             def __init__(self, status):
@@ -1498,6 +1551,45 @@ class ProtocolTests(unittest.TestCase):
 
         self.assertEqual(result["summary"], "Resumo final")
         renderer.show_system.assert_not_called()
+
+    def test_call_api_marks_user_cancelled_when_cancel_event_finishes_driver_without_result(self):
+        class DummyStatusContext:
+            def __init__(self, status):
+                self._status = status
+
+            def __enter__(self):
+                return self._status
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        renderer = Mock()
+        status = Mock()
+        renderer.running_status.return_value = DummyStatusContext(status)
+        agent_client = AgentClient(renderer)
+
+        plugin = SimpleNamespace(
+            driver="openai_compat",
+            model="qwen3-coder:30b",
+            base_url="http://localhost:11434/v1",
+            api_key_env=None,
+            tool_use_reliability="medium",
+            supports_tools=True,
+            cmd=None,
+        )
+
+        def driver_run(*, cancel_event=None, **kwargs):
+            if cancel_event is not None:
+                cancel_event.set()
+            return None
+
+        with patch.object(agent_client, "_api_drivers", {"ollama-qwen": Mock()}):
+            agent_client._api_drivers["ollama-qwen"].run.side_effect = driver_run
+            result = agent_client._call_api("ollama-qwen", plugin, "resuma", quiet=True)
+
+        self.assertIsNone(result)
+        self.assertTrue(agent_client._user_cancelled)
+        renderer.show_error.assert_not_called()
 
 
 class PluginTests(unittest.TestCase):

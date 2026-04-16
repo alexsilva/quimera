@@ -413,6 +413,10 @@ class AgentClient:
                         return None
                     time.sleep(0.25)
 
+                if self._cancel_event.is_set() and result_holder["result"] is None:
+                    self._user_cancelled = True
+                    return None
+
                 if result_holder["error"]:
                     _cmd = getattr(plugin, "cmd", None)
                     _name = (_cmd[0] if isinstance(_cmd, (list, tuple)) and _cmd else None) or getattr(plugin, "model", "driver")

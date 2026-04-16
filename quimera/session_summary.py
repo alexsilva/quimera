@@ -1,5 +1,13 @@
 """Componentes de `quimera.session_summary`."""
 
+def _is_cancelled(agent_client) -> bool:
+    """Indica se houve cancelamento cooperativo do resumo."""
+    if getattr(agent_client, "_user_cancelled", False):
+        return True
+    cancel_event = getattr(agent_client, "_cancel_event", None)
+    return bool(cancel_event is not None and cancel_event.is_set())
+
+
 def build_chain_summarizer(agent_client, agents):
     """Tenta cada agente em ordem; retorna o primeiro resultado bem-sucedido ou None."""
     def _ordered_agents(preferred_agent=None):
@@ -10,6 +18,9 @@ def build_chain_summarizer(agent_client, agents):
     def _call(prompt, preferred_agent=None):
         _call.last_outcome = "unavailable"
         for agent in _ordered_agents(preferred_agent):
+            if _is_cancelled(agent_client):
+                _call.last_outcome = "cancelled"
+                return None
             try:
                 result = agent_client.call(agent, prompt)
             except Exception:
@@ -17,10 +28,9 @@ def build_chain_summarizer(agent_client, agents):
             if result:
                 _call.last_outcome = "success"
                 return result
-            if getattr(agent_client, "_user_cancelled", False):
+            if _is_cancelled(agent_client):
                 _call.last_outcome = "cancelled"
                 return None
-            agent_client.renderer.show_system(f"[memória] {agent} indisponível, tentando próximo...")
         return None
 
     _call.last_outcome = None
