@@ -926,7 +926,14 @@ class QuimeraApp:
         try:
             t.join(timeout=30)
         except KeyboardInterrupt:
-            self.renderer.show_system(MSG_MEMORY_FAILED)
+            if self.agent_client:
+                self.agent_client._user_cancelled = True
+                self.agent_client._cancel_event.set()
+            self.renderer.show_system(MSG_MEMORY_FAILED.strip())
+            try:
+                t.join(timeout=1)
+            except KeyboardInterrupt:
+                pass
             return
         summary = result[0]
         if summary:

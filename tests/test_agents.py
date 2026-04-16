@@ -686,6 +686,28 @@ def test_stop_esc_monitor_without_termios_state(renderer):
     client._stop_esc_monitor()
 
 
+def test_start_esc_monitor_is_noop_outside_main_thread(renderer):
+    """Resumo final roda em thread; monitor de SIGINT não pode explodir fora da main thread."""
+    client = AgentClient(renderer)
+    result = {}
+
+    def worker():
+        try:
+            client._start_esc_monitor()
+            result["ok"] = True
+        except Exception as exc:  # pragma: no cover - o teste garante que isso não acontece
+            result["error"] = exc
+        finally:
+            client._stop_esc_monitor()
+
+    thread = threading.Thread(target=worker)
+    thread.start()
+    thread.join()
+
+    assert result == {"ok": True}
+    assert client._old_signal_handler is None
+
+
 def test_terminate_process_group_uses_killpg(renderer):
     """_terminate_process_group deve usar os.killpg para matar processo e filhos."""
     client = AgentClient(renderer)

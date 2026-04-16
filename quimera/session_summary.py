@@ -8,15 +8,22 @@ def build_chain_summarizer(agent_client, agents):
         return list(agents)
 
     def _call(prompt, preferred_agent=None):
+        _call.last_outcome = "unavailable"
         for agent in _ordered_agents(preferred_agent):
             try:
                 result = agent_client.call(agent, prompt)
             except Exception:
                 result = None
             if result:
+                _call.last_outcome = "success"
                 return result
+            if getattr(agent_client, "_user_cancelled", False):
+                _call.last_outcome = "cancelled"
+                return None
             agent_client.renderer.show_system(f"[memória] {agent} indisponível, tentando próximo...")
         return None
+
+    _call.last_outcome = None
     return _call
 
 
@@ -38,7 +45,7 @@ class SessionSummarizer:
             summary = self.summarizer_call(prompt, preferred_agent=preferred_agent)
         except Exception:
             summary = None
-        if not summary:
+        if not summary and getattr(self.summarizer_call, "last_outcome", None) != "cancelled":
             self.renderer.show_system("[memória] resumidores indisponíveis")
         return summary or None
 

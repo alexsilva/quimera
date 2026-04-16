@@ -269,6 +269,9 @@ class AgentClient:
     def _start_esc_monitor(self):
         """Inicia monitoramento de cancel via signal handler (Ctrl+C)."""
         self._cancel_event.clear()
+        if threading.current_thread() is not threading.main_thread():
+            self._old_signal_handler = None
+            return
 
         def _signal_handler(signum, frame):
             if signum == signal.SIGINT:

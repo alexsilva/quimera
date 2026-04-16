@@ -26,7 +26,7 @@ from quimera.runtime.approval import ApprovalHandler
 from quimera.runtime.config import ToolRuntimeConfig
 from quimera.runtime.executor import ToolExecutor
 from quimera.runtime.tasks import add_job, init_db, list_tasks
-from quimera.session_summary import SessionSummarizer
+from quimera.session_summary import SessionSummarizer, build_chain_summarizer
 from quimera.ui import _agent_style
 
 AGENT_CLAUDE = "claude"
@@ -1328,6 +1328,37 @@ class ProtocolTests(unittest.TestCase):
         )
         self.assertEqual(app.context_manager.saved_summary, "## Resumo da Conversa\n\n- Memória consolidada")
 
+    def test_shutdown_cancels_agent_summary_when_join_is_interrupted(self):
+        class FakeThread:
+            def __init__(self, target=None, daemon=None):
+                self.target = target
+                self.daemon = daemon
+                self.started = False
+                self.join_calls = 0
+
+            def start(self):
+                self.started = True
+
+            def join(self, timeout=None):
+                self.join_calls += 1
+                if self.join_calls == 1:
+                    raise KeyboardInterrupt()
+
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.history = [{"role": "human", "content": "mensagem final"}]
+        app.context_manager = DummyContextManager()
+        app.session_summarizer = Mock()
+        app.renderer = DummyRenderer()
+        app.summary_agent_preference = "ollama-qwen"
+        app.agent_client = SimpleNamespace(_user_cancelled=False, _cancel_event=threading.Event())
+
+        with patch("quimera.app.core.threading.Thread", FakeThread):
+            app.shutdown()
+
+        self.assertTrue(app.agent_client._user_cancelled)
+        self.assertTrue(app.agent_client._cancel_event.is_set())
+        self.assertEqual(app.renderer.system_messages[-1], "[memória] não foi possível gerar o resumo.")
+
     def test_summarize_session_returns_none_when_all_backends_unavailable(self):
         class DummyRendererWithSystem(DummyRenderer):
             def __init__(self):
@@ -1376,6 +1407,97 @@ class ProtocolTests(unittest.TestCase):
 
         self.assertIsNone(summary)
         self.assertEqual(renderer.system_messages, ["[memória] resumidores indisponíveis"])
+
+    def test_chain_summarizer_stops_fallback_when_user_cancels(self):
+        class DummyAgentClient:
+            def __init__(self, renderer):
+                self.renderer = renderer
+                self._user_cancelled = False
+                self.calls = []
+
+            def call(self, agent, prompt):
+                self.calls.append((agent, prompt))
+                self._user_cancelled = True
+                return None
+
+        renderer = DummyRenderer()
+        agent_client = DummyAgentClient(renderer)
+        summarizer_call = build_chain_summarizer(agent_client, ["chatgpt", "codex"])
+
+        result = summarizer_call("resuma", preferred_agent="chatgpt")
+
+        self.assertIsNone(result)
+        self.assertEqual(agent_client.calls, [("chatgpt", "resuma")])
+        self.assertEqual(renderer.system_messages, [])
+        self.assertEqual(summarizer_call.last_outcome, "cancelled")
+
+    def test_summarize_session_suppresses_unavailable_message_on_user_cancel(self):
+        class DummyAgentClient:
+            def __init__(self, renderer):
+                self.renderer = renderer
+                self._user_cancelled = False
+
+            def call(self, agent, prompt):
+                self._user_cancelled = True
+                return None
+
+        renderer = DummyRenderer()
+        summarizer_call = build_chain_summarizer(DummyAgentClient(renderer), ["chatgpt", "codex"])
+        summarizer = SessionSummarizer(renderer, summarizer_call=summarizer_call)
+
+        summary = summarizer.summarize(
+            [{"role": "human", "content": "gerar resumo"}],
+            preferred_agent="chatgpt",
+        )
+
+        self.assertIsNone(summary)
+        self.assertEqual(renderer.system_messages, [])
+
+    def test_shutdown_summary_thread_does_not_mark_agents_unavailable_due_to_signal_registration(self):
+        class DummyStatusContext:
+            def __init__(self, status):
+                self._status = status
+
+            def __enter__(self):
+                return self._status
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        renderer = Mock()
+        status = Mock()
+        renderer.running_status.return_value = DummyStatusContext(status)
+        agent_client = AgentClient(renderer)
+
+        with patch("quimera.plugins.get") as mock_get:
+            mock_plugin = SimpleNamespace(
+                driver="openai_compat",
+                model="qwen3-coder:30b",
+                base_url="http://localhost:11434/v1",
+                api_key_env=None,
+                tool_use_reliability="medium",
+                supports_tools=True,
+            )
+            mock_get.return_value = mock_plugin
+
+            with patch.object(agent_client, "_api_drivers", {"ollama-qwen": Mock()}):
+                agent_client._api_drivers["ollama-qwen"].run.return_value = "Resumo final"
+                summarizer_call = build_chain_summarizer(agent_client, ["ollama-qwen"])
+                summarizer = SessionSummarizer(renderer, summarizer_call=summarizer_call)
+                result = {}
+
+                def worker():
+                    result["summary"] = summarizer.summarize(
+                        [{"role": "human", "content": "encerrar sessão"}],
+                        preferred_agent="ollama-qwen",
+                    )
+
+                thread = threading.Thread(target=worker)
+                thread.start()
+                thread.join()
+
+        self.assertEqual(result["summary"], "Resumo final")
+        renderer.show_system.assert_not_called()
 
 
 class PluginTests(unittest.TestCase):
