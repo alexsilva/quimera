@@ -463,7 +463,7 @@ class BehaviorMetricsTracker:
             f"- STATUS OPERACIONAL: {metrics.responses_total} turnos registrados.\n"
             f"  Latência média: {metrics.avg_latency_seconds:.1f}s | "
             f"Próximo passo claro: {metrics.next_step_clarity_rate:.0%} | "
-            f"Ferramentas ok: {metrics.tool_success_rate:.0%} | "
+            f"Sucesso em ferramentas: {metrics.tool_success_rate:.0%} | "
             f"Tamanho médio: {metrics.avg_response_chars:.0f} chars"
         )
         
