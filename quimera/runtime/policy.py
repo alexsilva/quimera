@@ -29,9 +29,14 @@ class ToolPolicy:
     def __init__(self, config: ToolRuntimeConfig) -> None:
         """Inicializa uma instância de ToolPolicy."""
         self.config = config
+        self.blocked_tools: list[str] = []
 
     def validate(self, call: ToolCall) -> None:
         """Executa validate."""
+        if call.name in self.blocked_tools:
+            raise ToolPolicyError(
+                f"Ferramenta '{call.name}' bloqueada pelo modo de execução ativo."
+            )
         validator_name = f"_validate_{call.name}"
         validator = getattr(self, validator_name, None)
         if validator is None:

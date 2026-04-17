@@ -82,6 +82,7 @@ def test_schema_names_match_registered_tools():
 def test_resolve_tool_schemas_hides_task_tools_without_db():
     mock_executor = MagicMock()
     mock_executor.config = SimpleNamespace(db_path=None)
+    mock_executor.policy = SimpleNamespace(blocked_tools=[])
     mock_executor.registry.names.return_value = [
         "list_files", "read_file", "write_file", "apply_patch", "grep_search", "run_shell",
         "exec_command", "write_stdin", "close_command_session",
@@ -100,6 +101,20 @@ def test_resolve_tool_schemas_hides_task_tools_without_db():
         "write_stdin",
         "close_command_session",
     }
+
+
+def test_resolve_tool_schemas_hides_blocked_tools_from_active_mode():
+    mock_executor = MagicMock()
+    mock_executor.config = SimpleNamespace(db_path="/tmp/tasks.db")
+    mock_executor.policy = SimpleNamespace(blocked_tools=["run_shell", "exec_command", "apply_patch"])
+    mock_executor.registry.names.return_value = [s["function"]["name"] for s in TOOL_SCHEMAS]
+
+    actual = {s["function"]["name"] for s in resolve_tool_schemas(mock_executor)}
+    assert "run_shell" not in actual
+    assert "exec_command" not in actual
+    assert "apply_patch" not in actual
+    assert "read_file" in actual
+    assert "list_files" in actual
 
 
 def test_required_args_are_lists():

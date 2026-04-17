@@ -331,4 +331,13 @@ def resolve_tool_schemas(tool_executor=None) -> list[dict]:
             if schema["function"]["name"] not in _TASK_TOOL_NAMES
         ]
 
+    policy = getattr(tool_executor, "policy", None)
+    blocked_tools = getattr(policy, "blocked_tools", None)
+    if blocked_tools:
+        blocked_names = set(blocked_tools)
+        schemas = [
+            schema for schema in schemas
+            if schema["function"]["name"] not in blocked_names
+        ]
+
     return schemas

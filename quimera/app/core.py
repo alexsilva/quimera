@@ -51,6 +51,7 @@ from ..constants import (
     MSG_DOUBLE_PREFIX, MSG_EMPTY_INPUT,
     HANDOFF_SYNTHESIS_MSG,
 )
+from ..modes import get_mode
 from .config import logger
 
 
@@ -275,6 +276,8 @@ class QuimeraApp:
         )
         # Injeta o executor nos drivers de API do agent_client.
         self.agent_client.tool_executor = self.tool_executor
+        # Modo de execução ativo (definido via /planning, /analysis, etc.)
+        self.execution_mode = None
         # Set up task executors for autonomous task execution
         self.turn_manager = TurnManager()
         self._setup_task_executors()
@@ -543,14 +546,46 @@ class QuimeraApp:
         """Lê from file."""
         return self._get_input_services().read_from_file(path_str)
 
+    def _set_execution_mode(self, mode):
+        """Define o modo de execução ativo e propaga para policy e agent_client."""
+        self.execution_mode = mode
+        self.agent_client.execution_mode = mode
+        if mode is not None:
+            self.tool_executor.policy.blocked_tools = list(mode.blocked_tools)
+        else:
+            self.tool_executor.policy.blocked_tools = []
+
     def parse_routing(self, user_input):
         """Extrai o agente inicial e rejeita prefixos duplicados na mesma entrada.
 
-        Retorna (agent, message, explicit) onde explicit=True indica que o usuário
-        usou /claude ou /codex explicitamente.
+        Detecta comandos de modo (/planning, /analysis, etc.) e os aplica antes
+        do roteamento normal. Retorna (agent, message, explicit) onde explicit=True
+        indica que o usuário usou /claude ou /codex explicitamente.
         """
         stripped = user_input.lstrip()
         lowered = stripped.lower()
+
+        # Detecta comandos de modo: /planning, /analysis, /design, /review, /execute
+        first_token = lowered.split()[0] if lowered.split() else ""
+        mode = get_mode(first_token)
+        if mode is not None:
+            self._set_execution_mode(mode)
+            rest = stripped[len(first_token):].lstrip()
+            mode_message = (
+                f"[modo] {mode.name} ativado — restrições anteriores removidas; "
+                "ferramentas bloqueadas: nenhuma"
+                if mode.name == "execute"
+                else f"[modo] {mode.name} ativado — ferramentas bloqueadas: "
+                f"{', '.join(mode.blocked_tools) or 'nenhuma'}"
+            )
+            if rest:
+                self.renderer.show_system(mode_message)
+                return self.parse_routing(rest)
+            self.renderer.show_system(mode_message)
+            if not self.active_agents:
+                self.active_agents = self._agents
+            runtime_random = resolve_app_dependency("random", random)
+            return runtime_random.choice(self.active_agents), "", False
 
         active_plugins = []
         for n in self.active_agents:
@@ -558,17 +593,23 @@ class QuimeraApp:
             if plugin is not None:
                 active_plugins.append(plugin)
         for p in active_plugins:
-            prefix, agent = p.prefix, p.name
-            if lowered == prefix:
-                return agent, "", True
-            if lowered.startswith(f"{prefix} "):
-                message = stripped[len(prefix):].lstrip()
-                lowered_message = message.lower()
-                other_prefixes = [op.prefix for op in active_plugins if op.prefix != prefix]
-                if any(lowered_message == op or lowered_message.startswith(f"{op} ") for op in other_prefixes):
-                    self.renderer.show_warning(MSG_DOUBLE_PREFIX)
-                    return None, None, False
-                return agent, message, True
+            prefixes = [p.prefix, *(getattr(p, "aliases", None) or [])]
+            agent = p.name
+            for prefix in prefixes:
+                if lowered == prefix:
+                    return agent, "", True
+                if lowered.startswith(f"{prefix} "):
+                    message = stripped[len(prefix):].lstrip()
+                    lowered_message = message.lower()
+                    other_prefixes = []
+                    for op in active_plugins:
+                        if op.name == agent:
+                            continue
+                        other_prefixes.extend([op.prefix, *(getattr(op, "aliases", None) or [])])
+                    if any(lowered_message == op or lowered_message.startswith(f"{op} ") for op in other_prefixes):
+                        self.renderer.show_warning(MSG_DOUBLE_PREFIX)
+                        return None, None, False
+                    return agent, message, True
 
         if not self.active_agents:
             logger.warning("no active agents, resetting to default")
