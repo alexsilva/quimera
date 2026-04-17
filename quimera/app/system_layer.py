@@ -1,7 +1,7 @@
 """Componentes de `quimera.app.system_layer`."""
 from __future__ import annotations
 
-from ..constants import CMD_AGENTS, CMD_ALIASES, CMD_CONTEXT, CMD_CONTEXT_EDIT, CMD_HELP, CMD_TASK, build_agents_help, build_help
+from ..constants import CMD_AGENTS, CMD_ALIASES, CMD_CLEAR, CMD_CONTEXT, CMD_CONTEXT_EDIT, CMD_HELP, CMD_TASK, build_agents_help, build_help
 from ..runtime.parser import strip_tool_block
 
 
@@ -84,6 +84,10 @@ class AppSystemLayer:
 
         if command == CMD_AGENTS:
             self.app.renderer.show_system(build_agents_help(self.app.active_agents))
+            return True
+
+        if command == CMD_CLEAR:
+            self.app.clear_terminal_screen()
             return True
 
         if command.startswith(CMD_TASK):

@@ -116,6 +116,7 @@ STATE_UPDATE_END = "[/STATE_UPDATE]"
 
 # Commands
 CMD_EXIT = "/exit"
+CMD_CLEAR = "/clear"
 CMD_HELP = "/help"
 CMD_AGENTS = "/agents"
 CMD_CONTEXT = "/context"
@@ -307,6 +308,7 @@ def build_help(agent_names):
         "- /review <mensagem>: modo revisão — somente revisão de código, sem edições\n"
         "- /execute <mensagem>: modo execução — acesso completo a ferramentas e remove restrições do modo anterior\n"
         "- /agents: lista os agentes disponíveis\n"
+        "- /clear: limpa a tela do terminal\n"
         "- /context: mostra o contexto atual\n"
         "- /context-edit: abre o contexto persistente no editor ($EDITOR, ou nano/vim/vi como fallback)\n"
         "- /edit: abre o editor ($EDITOR, ou nano/vim/vi como fallback) para compor uma mensagem longa\n"

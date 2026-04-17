@@ -19,7 +19,7 @@ from quimera.app.core import TurnManager
 from quimera.app.session_metrics import SessionMetricsService
 from quimera.cli import main as cli_main
 from quimera.config import DEFAULT_HISTORY_WINDOW
-from quimera.constants import CMD_AGENTS, CMD_HELP, EXTEND_MARKER, build_agents_help, build_help
+from quimera.constants import CMD_AGENTS, CMD_CLEAR, CMD_HELP, EXTEND_MARKER, build_agents_help, build_help
 from quimera.plugins import AgentPlugin
 from quimera.prompt import PromptBuilder
 from quimera.runtime.approval import ApprovalHandler
@@ -432,6 +432,16 @@ class ProtocolTests(unittest.TestCase):
         self.assertTrue(handled)
         expected_agents = build_agents_help([AGENT_CLAUDE, AGENT_CODEX])
         self.assertEqual(app.renderer.system_messages, [expected_agents])
+
+    def test_handle_command_clears_terminal(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.renderer = DummyRenderer()
+        app.clear_terminal_screen = Mock()
+
+        handled = app.handle_command(CMD_CLEAR)
+
+        self.assertTrue(handled)
+        app.clear_terminal_screen.assert_called_once_with()
 
     def test_handle_task_command_creates_task_and_assigns_best_agent(self):
         app = QuimeraApp.__new__(QuimeraApp)

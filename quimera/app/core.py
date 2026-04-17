@@ -45,7 +45,7 @@ from ..constants import (
     EXTEND_MARKER,
     NEEDS_INPUT_MARKER,
     ROUTE_PREFIX,
-    STATE_UPDATE_START, CMD_AGENTS, CMD_ALIASES, CMD_CONTEXT, CMD_CONTEXT_EDIT, CMD_EDIT, CMD_EXIT, CMD_FILE_PREFIX, CMD_HELP,
+    STATE_UPDATE_START, CMD_AGENTS, CMD_ALIASES, CMD_CLEAR, CMD_CONTEXT, CMD_CONTEXT_EDIT, CMD_EDIT, CMD_EXIT, CMD_FILE_PREFIX, CMD_HELP,
     CMD_TASK,
     USER_ROLE, MSG_CHAT_STARTED, MSG_SESSION_LOG, MSG_SESSION_STATUS, MSG_MIGRATION,
     MSG_MEMORY_SAVING, MSG_MEMORY_FAILED, MSG_SHUTDOWN,
@@ -119,6 +119,7 @@ class QuimeraApp:
         """Retorna os comandos internos e aliases aceitos pela aplicação."""
         commands = {
             CMD_AGENTS,
+            CMD_CLEAR,
             CMD_CONTEXT,
             CMD_CONTEXT_EDIT,
             CMD_EDIT,
@@ -486,6 +487,15 @@ class QuimeraApp:
             return
         sys.stdout.write("\r\x1b[2K")
         sys.stdout.flush()
+
+    def clear_terminal_screen(self) -> None:
+        """Limpa a tela inteira do terminal e reposiciona o cursor no topo."""
+        stdout = sys.stdout
+        if stdout is None or not stdout.isatty():
+            return
+        self._clear_user_prompt_line_if_needed()
+        stdout.write("\x1b[2J\x1b[H")
+        stdout.flush()
 
     def show_system_message(self, message: str) -> None:
         """Exibe system message."""

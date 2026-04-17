@@ -71,6 +71,17 @@ class TestAppHistory(unittest.TestCase):
 
         completer = mock_readline.set_completer.call_args.args[0]
 
+        c_matches = []
+        state = 0
+        while True:
+            match = completer("/c", state)
+            if match is None:
+                break
+            c_matches.append(match)
+            state += 1
+
+        self.assertIn("/clear", c_matches)
+        self.assertEqual(len(c_matches), len(set(c_matches)))
         self.assertEqual(completer("/h", 0), "/help")
         self.assertIsNone(completer("/h", 1))
         self.assertIsNone(completer("h", 0))
