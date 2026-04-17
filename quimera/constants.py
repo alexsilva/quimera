@@ -287,11 +287,12 @@ def build_route_rule(agent_names):
     """Monta route rule."""
     agents_list = ", ".join(agent_names) if agent_names else "nenhum"
     return (
-        f"- Agentes disponíveis para delegação: {agents_list}\n"
-        "- Para delegar: [ROUTE:agente] task: <o que fazer> | context: <contexto> | expected: <formato>\n"
-        "- 'task' é obrigatório. Inclua contexto suficiente, paths/arquivos/comandos quando existirem — o outro agente não vê o histórico.\n"
-        "- Só delegue quando houver ganho real. Se consegue fazer, faça.\n"
-        "- Nunca roteie para o usuário humano — use [NEEDS_INPUT] se precisar de input humano.\n"
+        f"- Delegação disponível: {agents_list}\n"
+        "- Formato: [ROUTE:agente] task: <o que fazer> | context: <contexto> | expected: <formato>\n"
+        "- 'task' é obrigatório. Inclua contexto suficiente e paths/comandos quando existirem.\n"
+        "- Só delegue quando houver ganho real: paralelizar, destravar a próxima etapa ou usar especialidade clara.\n"
+        "- Se você consegue fazer sozinho sem perder eficiência, faça. Delegue só subtarefas independentes.\n"
+        "- Nunca roteie para o usuário humano — use [NEEDS_INPUT] se precisar.\n"
     )
 
 

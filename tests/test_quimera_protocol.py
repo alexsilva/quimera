@@ -3323,6 +3323,8 @@ class MetricsFeedbackTests(unittest.TestCase):
         self.assertIn("codex", rule)
         self.assertIn("NEEDS_INPUT", rule)
         self.assertIn("paths", rule)
+        self.assertIn("paralelizar", rule)
+        self.assertIn("especialidade", rule)
         self.assertLess(len(rule), 500)
 
     def test_reviewer_rule_is_concise(self):
