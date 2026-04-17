@@ -443,6 +443,20 @@ class ProtocolTests(unittest.TestCase):
         self.assertTrue(handled)
         app.clear_terminal_screen.assert_called_once_with()
 
+    def test_clear_terminal_screen_clears_scrollback_and_repositions_cursor(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app._clear_user_prompt_line_if_needed = Mock()
+
+        stdout = Mock()
+        stdout.isatty.return_value = True
+
+        with patch("sys.stdout", stdout):
+            QuimeraApp.clear_terminal_screen(app)
+
+        app._clear_user_prompt_line_if_needed.assert_called_once_with()
+        stdout.write.assert_called_once_with("\x1b[3J\x1b[2J\x1b[H")
+        stdout.flush.assert_called_once_with()
+
     def test_handle_task_command_creates_task_and_assigns_best_agent(self):
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()

@@ -489,12 +489,12 @@ class QuimeraApp:
         sys.stdout.flush()
 
     def clear_terminal_screen(self) -> None:
-        """Limpa a tela inteira do terminal e reposiciona o cursor no topo."""
+        """Limpa a viewport e o scrollback do terminal, reposicionando o cursor."""
         stdout = sys.stdout
         if stdout is None or not stdout.isatty():
             return
         self._clear_user_prompt_line_if_needed()
-        stdout.write("\x1b[2J\x1b[H")
+        stdout.write("\x1b[3J\x1b[2J\x1b[H")
         stdout.flush()
 
     def show_system_message(self, message: str) -> None:
