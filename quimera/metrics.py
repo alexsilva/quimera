@@ -7,6 +7,7 @@ Rastreia métricas de eficiência colaborativa:
 - Frequência de próximos passos claros
 - Tempo médio de resposta por agente
 - Taxa de síntese que requer correção
+ - Em caso de falta de contexto suficiente, o roteamento deve delegar a tarefa a outro agente, não improvisar.
 """
 from collections import defaultdict
 from dataclasses import dataclass, field, asdict
@@ -365,7 +366,8 @@ class BehaviorMetricsTracker:
                 f"- ALTA TAXA DE HANDOFF INVÁLIDO ({metrics.invalid_handoff_rate:.0%}):\n"
                 "  Verifique o formato [ROUTE:agente] task: ...\n"
                 "  Use apenas '|' OU quebra de linha para separar campos, nunca misture.\n"
-                "  Se não tiver contexto suficiente, resolva você mesmo."
+                "  Se faltar contexto suficiente, isso indica falha no roteamento inicial; não improvise, delegue.\n"
+                "  Só tente executar quando a tarefa e o contexto estiverem claros."
             )
         
         # Respostas vazias frequentes

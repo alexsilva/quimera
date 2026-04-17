@@ -117,6 +117,7 @@ STATE_UPDATE_END = "[/STATE_UPDATE]"
 # Commands
 CMD_EXIT = "/exit"
 CMD_CLEAR = "/clear"
+CMD_PROMPT = "/prompt"
 CMD_HELP = "/help"
 CMD_AGENTS = "/agents"
 CMD_CONTEXT = "/context"
@@ -288,12 +289,13 @@ def build_route_rule(agent_names):
     """Monta route rule."""
     agents_list = ", ".join(agent_names) if agent_names else "nenhum"
     return (
-        f"- Delegação disponível: {agents_list}\n"
-        "- Formato: [ROUTE:agente] task: <o que fazer> | context: <contexto> | expected: <formato>\n"
-        "- 'task' é obrigatório. Inclua contexto suficiente e paths/comandos quando existirem.\n"
-        "- Só delegue quando houver ganho real: paralelizar, destravar a próxima etapa ou usar especialidade clara.\n"
-        "- Se você consegue fazer sozinho sem perder eficiência, faça. Delegue só subtarefas independentes.\n"
-        "- Nunca roteie para o usuário humano — use [NEEDS_INPUT] se precisar.\n"
+        f"- Agentes: {agents_list}\n"
+        "- Formato: [ROUTE:agente] task: <tarefa> | context: <contexto> | expected: <formato>\n"
+        "- 'task' é obrigatório; inclua contexto suficiente e paths/comandos quando existirem.\n"
+        "- Só delegue com ganho real: paralelizar, destravar a próxima etapa ou usar especialidade clara.\n"
+        "- Se faltar contexto, não improvise: delegue; se faltar dado humano, use [NEEDS_INPUT].\n"
+        "- Se consegue fazer sozinho sem perder eficiência, faça; delegue subtarefas.\n"
+        "- Nunca roteie para o humano.\n"
     )
 
 
@@ -309,6 +311,7 @@ def build_help(agent_names):
         "- /execute <mensagem>: modo execução — acesso completo a ferramentas e remove restrições do modo anterior\n"
         "- /agents: lista os agentes disponíveis\n"
         "- /clear: limpa a tela do terminal\n"
+        "- /prompt [agente]: simula o prompt final e mostra análise dos blocos\n"
         "- /context: mostra o contexto atual\n"
         "- /context-edit: abre o contexto persistente no editor ($EDITOR, ou nano/vim/vi como fallback)\n"
         "- /edit: abre o editor ($EDITOR, ou nano/vim/vi como fallback) para compor uma mensagem longa\n"

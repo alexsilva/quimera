@@ -19,7 +19,7 @@ from quimera.app.core import TurnManager
 from quimera.app.session_metrics import SessionMetricsService
 from quimera.cli import main as cli_main
 from quimera.config import DEFAULT_HISTORY_WINDOW
-from quimera.constants import CMD_AGENTS, CMD_CLEAR, CMD_HELP, EXTEND_MARKER, build_agents_help, build_help
+from quimera.constants import CMD_AGENTS, CMD_CLEAR, CMD_HELP, CMD_PROMPT, EXTEND_MARKER, build_agents_help, build_help
 from quimera.plugins import AgentPlugin
 from quimera.prompt import PromptBuilder
 from quimera.runtime.approval import ApprovalHandler
@@ -442,6 +442,91 @@ class ProtocolTests(unittest.TestCase):
 
         self.assertTrue(handled)
         app.clear_terminal_screen.assert_called_once_with()
+
+    def test_handle_command_shows_prompt_preview_for_default_agent(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.renderer = DummyRenderer()
+        app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
+        app.history = [{"role": "human", "content": "Pedido atual"}]
+        app.shared_state = {"goal": "corrigir prompt"}
+        app.prompt_builder = Mock()
+        app.prompt_builder.build.return_value = (
+            "PROMPT GERADO",
+            {
+                "rules_chars": 10,
+                "session_state_chars": 20,
+                "persistent_chars": 30,
+                "request_chars": 40,
+                "facts_chars": 50,
+                "shared_state_chars": 60,
+                "history_chars": 70,
+                "handoff_chars": 0,
+                "history_messages": 1,
+                "total_chars": 280,
+                "primary": True,
+            },
+        )
+
+        handled = app.handle_command(CMD_PROMPT)
+
+        self.assertTrue(handled)
+        app.prompt_builder.build.assert_called_once_with(
+            AGENT_CLAUDE,
+            app.history,
+            is_first_speaker=True,
+            debug=True,
+            primary=True,
+            shared_state=app.shared_state,
+            skip_tool_prompt=False,
+        )
+        message = app.renderer.system_messages[0]
+        self.assertIn("PROMPT PREVIEW: claude", message)
+        self.assertIn("ANÁLISE DOS BLOCOS:", message)
+        self.assertIn("- total_chars: 280", message)
+        self.assertIn("PROMPT FINAL:\nPROMPT GERADO", message)
+
+    def test_handle_command_shows_prompt_preview_for_agent_alias(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.renderer = DummyRenderer()
+        app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
+        app.history = []
+        app.shared_state = {}
+        app.prompt_builder = Mock()
+        app.prompt_builder.build.return_value = (
+            "PROMPT CODex",
+            {
+                "rules_chars": 1,
+                "session_state_chars": 2,
+                "persistent_chars": 3,
+                "request_chars": 4,
+                "facts_chars": 5,
+                "shared_state_chars": 6,
+                "history_chars": 7,
+                "handoff_chars": 0,
+                "history_messages": 0,
+                "total_chars": 28,
+                "primary": True,
+            },
+        )
+
+        handled = app.handle_command("/prompt /code")
+
+        self.assertTrue(handled)
+        app.prompt_builder.build.assert_called_once()
+        self.assertEqual(app.prompt_builder.build.call_args.args[0], AGENT_CODEX)
+
+    def test_handle_command_warns_on_unknown_prompt_agent(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.renderer = DummyRenderer()
+        app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
+
+        handled = app.handle_command("/prompt inexistente")
+
+        self.assertTrue(handled)
+        self.assertEqual(app.renderer.warnings, ["Uso: /prompt [agente]"])
+
+    def test_available_internal_commands_include_prompt(self):
+        self.assertIn(CMD_PROMPT, QuimeraApp._available_internal_commands())
 
     def test_clear_terminal_screen_clears_scrollback_and_repositions_cursor(self):
         app = QuimeraApp.__new__(QuimeraApp)
@@ -2989,6 +3074,8 @@ class PluginTests(unittest.TestCase):
         self.assertIn("[ROUTE:agente]", rule)
         self.assertIn("task", rule)
         self.assertIn("obrigatório", rule)
+        self.assertIn("não improvise", rule)
+        self.assertIn("NEEDS_INPUT", rule)
 
 
 class FallbackChainTests(unittest.TestCase):
@@ -3349,6 +3436,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         self.assertIn("paths", rule)
         self.assertIn("paralelizar", rule)
         self.assertIn("especialidade", rule)
+        self.assertIn("não improvise", rule)
         self.assertLess(len(rule), 500)
 
     def test_reviewer_rule_is_concise(self):
@@ -3437,6 +3525,24 @@ class MetricsFeedbackTests(unittest.TestCase):
 
         feedback = tracker.generate_feedback("claude")
         self.assertIn("SÍNTESES IMPRECISAS", feedback)
+
+    def test_behavior_metrics_generate_feedback_for_invalid_handoff_context_gap(self):
+        """Feedback de handoff inválido deve tratar falta de contexto como erro de roteamento."""
+        from quimera.metrics import BehaviorMetricsTracker
+
+        tracker = BehaviorMetricsTracker()
+        for _ in range(5):
+            tracker.record_response("claude", 1.0)
+        for _ in range(2):
+            tracker.record_handoff_sent("claude", is_invalid=True)
+
+        feedback = tracker.generate_feedback("claude")
+        self.assertIn("ALTA TAXA DE HANDOFF INVÁLIDO", feedback)
+        self.assertIn("faltar contexto suficiente", feedback)
+        self.assertIn("falha no roteamento inicial", feedback)
+        self.assertIn("delegue", feedback)
+        self.assertIn("não improvise", feedback)
+        self.assertNotIn("resolva você mesmo", feedback)
 
     def test_prompt_builder_injects_metrics_when_tracker_has_data(self):
         """PromptBuilder deve incluir bloco MÉTRICAS DO AGENTE quando há feedback do tracker."""
