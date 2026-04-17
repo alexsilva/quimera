@@ -44,10 +44,10 @@ def _format_claude_spy_event(line: str) -> list[str]:
 plugin = AgentPlugin(
     name="claude",
     prefix="/claude",
-    icon="🧐",
+    icon="🔮",
     cmd=["claude", "--permission-mode=bypassPermissions", "--output-format=stream-json", "--verbose", "-p"],
     output_format="stream-json",
-    style=("blue", "Claude"),
+    style=("magenta", "Claude"),
     capabilities=["architecture", "code_review", "planning", "documentation", "code_editing"],
     preferred_task_types=["architecture", "code_review", "documentation", "code_edit", "general"],
     avoid_task_types=[],

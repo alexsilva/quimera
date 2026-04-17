@@ -108,7 +108,7 @@ plugin = AgentPlugin(
     name="codex",
     prefix="/codex",
     aliases=["/code"],
-    icon="🛠",
+    icon="🔷",
     runtime_rw_paths=[str(Path.home() / ".codex")],
     cmd=["codex", "exec", "--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check", "--json"],
     output_format="codex-json",
@@ -116,7 +116,7 @@ plugin = AgentPlugin(
     # e detecta stdin redirecionado. No Quimera, usar stdin como canal único
     # evita esse modo ambíguo e garante EOF explícito após o prompt.
     prompt_as_arg=False,
-    style=("green", "Codex"),
+    style=("blue", "Codex"),
     capabilities=["code_editing", "code_review","test_execution", "bug_investigation", "tool_use"],
     preferred_task_types=["code_edit", "code_review", "test_execution", "bug_investigation", "general"],
     avoid_task_types=[],
