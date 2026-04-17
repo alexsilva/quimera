@@ -123,6 +123,7 @@ STATE_UPDATE_END = "[/STATE_UPDATE]"
 # Commands
 CMD_EXIT = "/exit"
 CMD_HELP = "/help"
+CMD_AGENTS = "/agents"
 CMD_CONTEXT = "/context"
 CMD_CONTEXT_EDIT = "/context-edit"
 CMD_EDIT = "/edit"
@@ -299,13 +300,13 @@ def build_help(agent_names):
     """Monta help."""
     help_text = (
         "\nComandos:\n" +
-        "\n".join([f"- /{s} <mensagem>: {s.capitalize()} responde" for s in agent_names]) + "\n"
         "- /task <descrição>: cria uma task explícita do humano e roteia para o melhor agente\n"
         "- /planning <mensagem>: modo planejamento — workspace somente leitura, sem edição de arquivos\n"
         "- /analysis <mensagem>: modo análise — somente leitura, sem edição de arquivos\n"
         "- /design <mensagem>: modo design — arquitetura e design sem execução\n"
         "- /review <mensagem>: modo revisão — somente revisão de código, sem edições\n"
         "- /execute <mensagem>: modo execução — acesso completo a ferramentas e remove restrições do modo anterior\n"
+        "- /agents: lista os agentes disponíveis\n"
         "- /context: mostra o contexto atual\n"
         "- /context-edit: abre o contexto persistente no editor ($EDITOR, ou nano/vim/vi como fallback)\n"
         "- /edit: abre o editor ($EDITOR, ou nano/vim/vi como fallback) para compor uma mensagem longa\n"
@@ -314,6 +315,12 @@ def build_help(agent_names):
         "- /exit: encerra a sessão\n"
     )
     return help_text
+
+
+def build_agents_help(agent_names):
+    """Monta a lista de agentes disponíveis."""
+    agents = "\n".join(f"- /{name} <mensagem>: {name.capitalize()} responde" for name in agent_names)
+    return "\nAgentes:\n" + (agents if agents else "- nenhum")
 
 
 # Shared state keys that should be trimmed when building prompts
