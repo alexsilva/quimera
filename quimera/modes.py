@@ -40,7 +40,7 @@ MODES: dict[str, ExecutionMode] = {
     "/design": ExecutionMode(
         name="design",
         read_only_fs=True,
-        allow_network=False,
+        allow_network=True,
         blocked_tools=[
             "write_file", "apply_patch",
             "run_shell", "exec_command", "write_stdin", "close_command_session",
@@ -52,7 +52,7 @@ MODES: dict[str, ExecutionMode] = {
     "/review": ExecutionMode(
         name="review",
         read_only_fs=True,
-        allow_network=False,
+        allow_network=True,
         blocked_tools=[
             "write_file", "apply_patch",
             "run_shell", "exec_command", "write_stdin", "close_command_session",

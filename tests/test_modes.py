@@ -51,11 +51,11 @@ class TestExecutionMode(unittest.TestCase):
         self.assertTrue(mode.allow_network)
         self.assertEqual(mode.blocked_tools, [])
 
-    def test_design_review_are_read_only_no_network(self):
+    def test_design_review_are_read_only_with_network(self):
         for cmd in ["/design", "/review"]:
             mode = get_mode(cmd)
             self.assertTrue(mode.read_only_fs, f"{cmd} should be read_only_fs")
-            self.assertFalse(mode.allow_network, f"{cmd} should block network")
+            self.assertTrue(mode.allow_network, f"{cmd} should allow network")
 
 
 class TestToolPolicyBlockedTools(unittest.TestCase):
