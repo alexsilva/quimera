@@ -738,13 +738,14 @@ class QuimeraApp:
             agent, dispatch_options.get("handoff_only", False), handoff_id,
         )
         last_error = None
+        _agent_client = getattr(self, "agent_client", None)
         for attempt in range(1, self.MAX_RETRIES + 1):
-            if self.agent_client:
-                self.agent_client._user_cancelled = False
+            if _agent_client:
+                _agent_client._user_cancelled = False
             try:
                 response = self._call_agent(agent, silent=silent, **dispatch_options)
                 if response is None:
-                    if self.agent_client and self.agent_client._user_cancelled:
+                    if _agent_client and _agent_client._user_cancelled:
                         logger.info("[DISPATCH] agent=%s cancelled by user, aborting", agent)
                         return None
                     if attempt < self.MAX_RETRIES:
@@ -761,7 +762,7 @@ class QuimeraApp:
                     show_output=show_output,
                 )
                 if result is None:
-                    if self.agent_client and self.agent_client._user_cancelled:
+                    if _agent_client and _agent_client._user_cancelled:
                         logger.info("[DISPATCH] agent=%s cancelled by user, aborting", agent)
                         return None
                     if attempt < self.MAX_RETRIES:
@@ -772,7 +773,7 @@ class QuimeraApp:
                     self._record_failure(agent)
                 return result
             except Exception as exc:
-                if self.agent_client and self.agent_client._user_cancelled:
+                if _agent_client and _agent_client._user_cancelled:
                     logger.info("[DISPATCH] agent=%s cancelled by user, aborting", agent)
                     return None
                 last_error = exc

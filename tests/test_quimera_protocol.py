@@ -67,6 +67,7 @@ class DummyConfigManager:
         self.history_window = DEFAULT_HISTORY_WINDOW
         self.auto_summarize_threshold = 30
         self.idle_timeout_seconds = 300
+        self.theme = None
 
 
 class DummyStorage:
@@ -686,9 +687,10 @@ class ProtocolTests(unittest.TestCase):
 
         self.assertIn("ESTADO DA SESSÃO", prompt)
         self.assertIn("SESSÃO ATUAL: sessao-2026-03-27-123456", prompt)
-        self.assertIn("NOVA SESSÃO: não", prompt)
-        self.assertIn("HISTÓRICO RESTAURADO: sim", prompt)
-        self.assertIn("RESUMO CARREGADO: não", prompt)
+        self.assertIn("JOB_ID ATUAL: 1", prompt)
+        self.assertNotIn("NOVA SESSÃO", prompt)
+        self.assertNotIn("HISTÓRICO RESTAURADO", prompt)
+        self.assertNotIn("RESUMO CARREGADO", prompt)
 
     def test_prompt_includes_shared_state_as_json(self):
         builder = PromptBuilder(DummyContextManager(), history_window=3)
@@ -759,6 +761,7 @@ class ProtocolTests(unittest.TestCase):
                 self.history_file = temp_root / "quimera_history"
                 self.state_dir = temp_root / "quimera_state"
                 self.tasks_db = temp_root / "quimera_tasks.db"
+                self.decisions_log = temp_root / "decisions.jsonl"
 
             def migrate_from_legacy(self, cwd):
                 return []
@@ -815,6 +818,7 @@ class ProtocolTests(unittest.TestCase):
                 self.history_file = temp_root / "quimera_history"
                 self.state_dir = temp_root / "quimera_state"
                 self.tasks_db = temp_root / "quimera_tasks.db"
+                self.decisions_log = temp_root / "decisions.jsonl"
 
             def migrate_from_legacy(self, cwd):
                 return []
@@ -861,6 +865,7 @@ class ProtocolTests(unittest.TestCase):
                 self.history_file = temp_root / "quimera_history"
                 self.state_dir = temp_root / "quimera_state"
                 self.tasks_db = temp_root / "quimera_tasks.db"
+                self.decisions_log = temp_root / "decisions.jsonl"
 
             def migrate_from_legacy(self, cwd):
                 return []
@@ -1680,13 +1685,13 @@ class PluginTests(unittest.TestCase):
     def test_agent_style_returns_plugin_style(self):
         stub = AgentPlugin(name="stub", prefix="/stub", cmd=["stub"], style=("magenta", "Stub"))
         with patch.dict(plugins._registry, {"stub": stub}):
-            self.assertEqual(_agent_style("stub"), ("magenta", "Stub"))
+            self.assertEqual(_agent_style("stub"), ("magenta", "🤖 Stub"))
 
     def test_agent_style_fallback_for_unknown(self):
         with patch.dict(plugins._registry, {}, clear=True):
             color, label = _agent_style("unknown")
             self.assertEqual(color, "white")
-            self.assertEqual(label, "Unknown")
+            self.assertEqual(label, "🤖 Unknown")
 
     def test_agent_client_call_uses_plugin_cmd(self):
         stub = AgentPlugin(name="stub", prefix="/stub", cmd=["stub", "-x"], style=("white", "Stub"))
@@ -3342,6 +3347,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         self.assertIn("prioridade", PROMPT_BASE_RULES.lower())
         self.assertIn("foco", PROMPT_BASE_RULES.lower())
         self.assertIn("editar arquivos", PROMPT_BASE_RULES.lower())
+        self.assertIn("mude o mínimo necessário", PROMPT_BASE_RULES.lower())
         self.assertLess(len(PROMPT_BASE_RULES), 1600)
 
     def test_tool_rule_guides_discovery_before_edits(self):
@@ -3352,6 +3358,20 @@ class MetricsFeedbackTests(unittest.TestCase):
         self.assertIn("read_file", PROMPT_TOOL_RULE)
         self.assertIn("apply_patch", PROMPT_TOOL_RULE)
         self.assertIn("run_shell", PROMPT_TOOL_RULE)
+
+    def test_build_tools_prompt_is_compact_but_preserves_essentials(self):
+        from quimera.constants import build_tools_prompt
+
+        prompt = build_tools_prompt()
+
+        self.assertIn('function="apply_patch"', prompt)
+        self.assertIn("Ferramentas disponíveis", prompt)
+        self.assertIn("- list_files:", prompt)
+        self.assertIn("- read_file:", prompt)
+        self.assertIn("- apply_patch:", prompt)
+        self.assertIn("- run_shell:", prompt)
+        self.assertNotIn("  Exemplo:", prompt)
+        self.assertLess(len(prompt), 2600)
 
     def test_build_task_body_includes_operational_protocol(self):
         app = QuimeraApp.__new__(QuimeraApp)

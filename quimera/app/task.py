@@ -174,7 +174,7 @@ def setup_task_executors(app):
                     show_output=False,
                 )
 
-                if app.agent_client._user_cancelled:
+                if getattr(app, "agent_client", None) and app.agent_client._user_cancelled:
                     app.show_system_message(f"[task {task_id}] {agent_name}: cancelado pelo usuário")
                     runtime_tasks.fail_task(task_id, reason="cancelled by user", db_path=app.tasks_db_path)
                     return False
@@ -261,7 +261,7 @@ def setup_task_executors(app):
                     show_output=False,
                 )
 
-                if app.agent_client._user_cancelled:
+                if getattr(app, "agent_client", None) and app.agent_client._user_cancelled:
                     app.show_system_message(f"[task {task_id}] {agent_name}: cancelado pelo usuário")
                     runtime_tasks.fail_task(task_id, reason="cancelled by user", db_path=app.tasks_db_path)
                     return False

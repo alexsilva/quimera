@@ -22,15 +22,11 @@ PROMPT_BASE_RULES = """SUAS REGRAS:
 
 4. Se faltar informação crítica, use [NEEDS_INPUT].
 
-5. Ao editar projeto, prefira mudanças mínimas e locais. Não reescreva arquivo inteiro se uma alteração parcial resolver.
+5. Ao editar arquivos ou interagir com o sistema: descubra o alvo correto, leia antes de editar, preserve o que não foi pedido, mude o mínimo necessário e valide com evidência concreta.
 
-6. Para arquivo existente: leia antes de editar, preserve o que não foi pedido e valide o resultado antes de concluir.
+6. Para edição, prefira patch/alteração parcial; só reescreva arquivo inteiro quando isso for realmente necessário.
 
-7. Se houver ferramentas de edição disponíveis, prefira patch/edição parcial antes de sobrescrita completa.
-
-8. Responda de forma objetiva e curta. Não narre raciocínio, não faça relato passo a passo e não descreva ferramentas usadas, a menos que o humano peça isso.
-
-9. Para interagir com o sistema ou editar arquivos: primeiro descubra o alvo correto (paths, trechos, comando), depois mude o mínimo necessário e só então valide com evidência concreta.
+7. Responda de forma objetiva e curta. Não narre raciocínio, não faça relato passo a passo e não descreva ferramentas usadas, a menos que o humano peça isso.
 """
 
 PROMPT_GOAL_EXECUTION_RULES = """Regras de execução orientada a objetivos:
@@ -94,9 +90,6 @@ PROMPT_SESSION_STATE = (
     "ESTADO DA SESSÃO:\n"
     "- SESSÃO ATUAL: {session_id}\n"
     "- JOB_ID ATUAL: {current_job_id}\n"
-    "- NOVA SESSÃO: {is_new_session}\n"
-    "- HISTÓRICO RESTAURADO: {history_restored}\n"
-    "- RESUMO CARREGADO: {summary_loaded}\n"
 )
 PROMPT_HANDOFF_RULE = (
     "- Você recebeu uma subtarefa delegada por outro agente. Responda diretamente à tarefa.\n"
@@ -268,7 +261,7 @@ TOOL_SCHEMA = {
 
 
 def build_tools_prompt() -> str:
-    """Gera um bloco de ferramentas disponíveis a partir do TOOL_SCHEMA."""
+    """Gera um bloco compacto de ferramentas disponíveis."""
     lines = [
         "USE A TAG PARA EXECUTAR COMANDOS NO SISTEMA!\n"
         "Exemplo: Usuário pergunta sobre 'onde está a função foo' → você usa list_files/grep_search para encontrar → responde com a localização real.\n"
@@ -277,13 +270,16 @@ def build_tools_prompt() -> str:
         " - Nunca invente nomes como run_shell_command ou execute_command.\n"
         " - Para payloads longos, use corpo JSON dentro da tag:\n"
         ' <tool function="apply_patch">{"patch": "*** Begin Patch\\n...\\n*** End Patch"}</tool>\n'
+        "\nFerramentas disponíveis:\n"
     ]
     for tool in TOOL_SCHEMA.values():
         params = ", ".join(f"{k}: {v['type']}" for k, v in tool["parameters"].items())
-        lines.append(f"- {tool['name']}: {params}")
-        lines.append(f"  Descrição: {tool['description']}")
-        if tool.get("example"):
-            lines.append(f"  Exemplo: {tool['example']}")
+        line = f"- {tool['name']}"
+        if params:
+            line += f": {params}"
+        if tool.get("description"):
+            line += f" — {tool['description']}"
+        lines.append(line)
     return "\n".join(lines) + "\n"
 
 
