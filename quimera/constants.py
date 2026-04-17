@@ -107,8 +107,9 @@ PROMPT_HANDOFF_RULE = (
 )
 PROMPT_TOOL_RULE = (
     "- Você tem acesso às ferramentas customizadas listadas abaixo em 'Ferramentas disponíveis'.\n"
-    "- Para entender o projeto, prefira list_files, grep_search e read_file antes de mudar qualquer arquivo.\n"
-    "- Para editar arquivo existente, prefira apply_patch. Use write_file para criar arquivo novo ou reescrever por completo só quando isso for explicitamente necessário.\n"
+    "- ANTES de responder sobre qualquer arquivo ou código, DEVE usar list_files/grep_search/read_file para verificar os fatos.\n"
+    "- Para editar arquivo existente, DEVE usar apply_patch. Use write_file apenas para arquivo novo ou rewrite completa quando explícito.\n"
+    "- NUNCA escreva o conteúdo editado de um arquivo diretamente na resposta — use a ferramenta; texto sem tag é ignorado pelo sistema.\n"
     "- Use run_shell para inspeção ou validação objetiva; evite comandos longos, encadeados ou exploratórios sem necessidade.\n"
 )
 PROMPT_AGENT_METRICS = "MÉTRICAS DO AGENTE:\n{metrics}"
@@ -270,11 +271,12 @@ def build_tools_prompt() -> str:
     """Gera um bloco de ferramentas disponíveis a partir do TOOL_SCHEMA."""
     lines = [
         "USE A TAG PARA EXECUTAR COMANDOS NO SISTEMA!\n"
+        "Exemplo: Usuário pergunta sobre 'onde está a função foo' → você usa list_files/grep_search para encontrar → responde com a localização real.\n"
         ' <tool function="run_shell" command="git status" />\n'
         " - Para shell interativo, use exatamente exec_command / write_stdin / close_command_session.\n"
         " - Nunca invente nomes como run_shell_command ou execute_command.\n"
         " - Para payloads longos, use corpo JSON dentro da tag:\n"
-        ' <tool function="apply_patch">{\"patch\": \"*** Begin Patch\\n...\\n*** End Patch\"}</tool>\n'
+        ' <tool function="apply_patch">{"patch": "*** Begin Patch\\n...\\n*** End Patch"}</tool>\n'
     ]
     for tool in TOOL_SCHEMA.values():
         params = ", ".join(f"{k}: {v['type']}" for k, v in tool["parameters"].items())

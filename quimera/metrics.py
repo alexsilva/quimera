@@ -35,6 +35,7 @@ class AgentBehaviorMetrics:
     respostas_longas: int = 0  # Respostas prolixas acima do limite heurístico
     synthesis_requests: int = 0  # Quantas vezes foi chamado para sintetizar
     synthesis_corrections: int = 0  # Quantas vezes a síntese precisou de correção
+    responses_code_context: int = 0  # Respostas com sinais de contexto de código/arquivo
     tool_calls_total: int = 0
     tool_calls_failed: int = 0
     invalid_tool_calls: int = 0
@@ -111,6 +112,39 @@ class AgentBehaviorMetrics:
             self.redundancias_detectadas += 1
         if response_length >= 280:
             self.respostas_longas += 1
+        if self._looks_like_code_context(response_text):
+            self.responses_code_context += 1
+
+    @staticmethod
+    def _looks_like_code_context(response_text: str | None) -> bool:
+        """Detecta heurísticamente respostas sobre arquivos/código."""
+        if not response_text:
+            return False
+        text = response_text.lower()
+        indicators = (
+            ".py",
+            ".md",
+            ".json",
+            ".yaml",
+            ".yml",
+            ".toml",
+            ".sh",
+            "arquivo",
+            "arquivos",
+            "código",
+            "code",
+            "path",
+            "paths",
+            "linha",
+            "linhas",
+            "função",
+            "function",
+            "classe",
+            "class",
+            "teste",
+            "testes",
+        )
+        return any(indicator in text for indicator in indicators)
     
     def record_handoff_sent(self, is_invalid: bool = False):
         """Registra um handoff enviado pelo agente."""
@@ -379,6 +413,13 @@ class BehaviorMetricsTracker:
             feedback_parts.append(
                 f"- LATÊNCIA ALTA ({metrics.avg_latency_seconds:.1f}s média):\n"
                 "  Considere respostas mais diretas e menos análise."
+            )
+
+        if metrics.tool_calls_total == 0 and metrics.responses_code_context >= 3:
+            feedback_parts.append(
+                "- ZERO USO DE FERRAMENTAS:\n"
+                "  Para tarefas com arquivos/código, DEVE usar ferramentas de leitura/busca para verificar fatos antes de responder.\n"
+                "  Use list_files/grep_search/read_file — não invente respostas baseado apenas no prompt.\n"
             )
 
         if metrics.tool_calls_total >= 3 and metrics.tool_success_rate < 0.7:

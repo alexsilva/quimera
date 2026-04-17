@@ -611,6 +611,20 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn("PEDIDO ATUAL DO HUMANO", prompt)
         self.assertIn("Pedido atual", prompt)
 
+    def test_prompt_does_not_repeat_current_human_request_in_conversation(self):
+        builder = PromptBuilder(DummyContextManager(), history_window=4)
+        history = [
+            {"role": "human", "content": "Primeiro pedido"},
+            {"role": "claude", "content": "Resposta anterior"},
+            {"role": "human", "content": "Pedido atual"},
+        ]
+
+        prompt = builder.build(AGENT_CODEX, history)
+
+        conversation = prompt.split("CONVERSA:\n", 1)[1]
+        self.assertNotIn("[VOCÊ]: Pedido atual", conversation)
+        self.assertIn("[VOCÊ]: Primeiro pedido", conversation)
+
     def test_prompt_includes_recent_facts_block(self):
         builder = PromptBuilder(DummyContextManager(), history_window=5)
         history = [
@@ -624,6 +638,21 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn("FATOS OBSERVADOS RECENTES", prompt)
         self.assertIn("[CLAUDE] Arquivo alterado: app.py", prompt)
         self.assertIn("[CODEX] Teste falhou em test_x", prompt)
+
+    def test_prompt_does_not_repeat_recent_facts_in_conversation(self):
+        builder = PromptBuilder(DummyContextManager(), history_window=5)
+        history = [
+            {"role": "human", "content": "Investigue"},
+            {"role": "claude", "content": "Arquivo alterado: app.py"},
+            {"role": "codex", "content": "Teste falhou em test_x"},
+        ]
+
+        prompt = builder.build(AGENT_CLAUDE, history)
+
+        conversation = prompt.split("CONVERSA:\n", 1)[1]
+        self.assertNotIn("[CLAUDE]: Arquivo alterado: app.py", conversation)
+        self.assertNotIn("[CODEX]: Teste falhou em test_x", conversation)
+        self.assertIn("[sem itens residuais na conversa recente]", conversation)
 
     def test_prompt_lists_only_active_agents(self):
         builder = PromptBuilder(

@@ -119,8 +119,8 @@ class PromptBuilder:
         session_block = PROMPT_SESSION_STATE.format(**self.session_state) if (self.session_state and primary) else ""
         context_block = PROMPT_CONTEXT.format(context=context) if context else ""
         handoff_block = PROMPT_HANDOFF.format(handoff=self._format_handoff(handoff, from_agent)) if handoff else ""
-        request_block = self._build_request_block(history)
-        facts_block = self._build_facts_block(history)
+        request_index, request_block = self._build_request_block(history)
+        fact_indexes, facts_block = self._build_facts_block(history)
         shared_state_block = ""
         if shared_state and not has_goal:
             state_lines = json.dumps(self._trim_shared_state(shared_state), ensure_ascii=False, indent=2)
@@ -136,9 +136,9 @@ class PromptBuilder:
             if feedback:
                 metrics_block = PROMPT_AGENT_METRICS.format(metrics=feedback)
 
-        conversation = "\n".join(
-            f"[{self._display_role(m['role'])}]: {m['content']}"
-            for m in history[-self.history_window:]
+        conversation = self._build_conversation_block(
+            history,
+            skip_indexes={idx for idx in [request_index, *fact_indexes] if idx is not None},
         )
         conversation_block = PROMPT_CONVERSATION.format(conversation=conversation)
         speaker_block = PROMPT_SPEAKER.format(agent=agent.upper())
@@ -159,6 +159,8 @@ class PromptBuilder:
                 "rules_chars": len(rules),
                 "session_state_chars": len(session_block),
                 "persistent_chars": len(context_block),
+                "request_chars": len(request_block),
+                "facts_chars": len(facts_block),
                 "shared_state_chars": len(shared_state_block),
                 "history_chars": len(conversation_block),
                 "handoff_chars": len(handoff_block),
@@ -199,17 +201,22 @@ class PromptBuilder:
 
     def _build_request_block(self, history):
         """Monta request block."""
-        for message in reversed(history[-self.history_window:]):
+        window_start = max(0, len(history) - self.history_window)
+        for index in range(len(history) - 1, window_start - 1, -1):
+            message = history[index]
             if message.get("role") == "human":
                 content = (message.get("content") or "").strip()
                 if content:
-                    return PROMPT_REQUEST.format(request=content)
-        return ""
+                    return index, PROMPT_REQUEST.format(request=content)
+        return None, ""
 
     def _build_facts_block(self, history, max_items=4):
         """Monta facts block."""
         facts = []
-        for message in reversed(history[-self.history_window:]):
+        fact_indexes = []
+        window_start = max(0, len(history) - self.history_window)
+        for index in range(len(history) - 1, window_start - 1, -1):
+            message = history[index]
             role = message.get("role")
             if role == "human":
                 continue
@@ -217,12 +224,28 @@ class PromptBuilder:
             if not content:
                 continue
             facts.append(f"[{self._display_role(role)}] {content}")
+            fact_indexes.append(index)
             if len(facts) >= max_items:
                 break
         if not facts:
-            return ""
+            return [], ""
         facts.reverse()
-        return PROMPT_FACTS.format(facts="\n".join(facts))
+        fact_indexes.reverse()
+        return fact_indexes, PROMPT_FACTS.format(facts="\n".join(facts))
+
+    def _build_conversation_block(self, history, skip_indexes=None):
+        """Monta conversa residual sem repetir blocos destacados acima."""
+        skip_indexes = skip_indexes or set()
+        window_start = max(0, len(history) - self.history_window)
+        lines = []
+        for index, message in enumerate(history[window_start:], start=window_start):
+            if index in skip_indexes:
+                continue
+            content = (message.get("content") or "").strip()
+            if not content:
+                continue
+            lines.append(f"[{self._display_role(message['role'])}]: {content}")
+        return "\n".join(lines) if lines else "[sem itens residuais na conversa recente]"
 
     def _format_handoff(self, handoff, from_agent=None):
         """Formata handoff."""
