@@ -6,15 +6,10 @@ import shutil
 from pathlib import Path
 
 from quimera.modes import ExecutionMode
+from quimera.plugins.base import AgentPlugin
 
 _HOME_DIR = str(Path.home())
 _COMMON_RO_PATHS = ["/usr", "/lib", "/lib64", "/bin", "/sbin", "/etc", "/opt", _HOME_DIR]
-
-# Diretórios de dados de agentes que precisam de escrita mesmo em modos restritos
-_AGENT_RW_PATHS = [
-    str(Path.home() / ".codex"),
-    str(Path.home() / ".local" / "share" / "opencode"),
-]
 
 
 def is_bwrap_available() -> bool:
@@ -22,7 +17,9 @@ def is_bwrap_available() -> bool:
     return shutil.which("bwrap") is not None
 
 
-def build_bwrap_cmd(mode: ExecutionMode, working_dir: str, cmd: list[str]) -> list[str]:
+def build_bwrap_cmd(
+    mode: ExecutionMode, working_dir: str, cmd: list[str], plugin: AgentPlugin | None = None
+) -> list[str]:
     """Envolve cmd com bwrap aplicando as restrições do ExecutionMode.
 
     Se bwrap não estiver disponível, retorna cmd inalterado.
@@ -36,7 +33,7 @@ def build_bwrap_cmd(mode: ExecutionMode, working_dir: str, cmd: list[str]) -> li
         if os.path.exists(path):
             bwrap += ["--ro-bind", path, path]
 
-    for path in _AGENT_RW_PATHS:
+    for path in getattr(plugin, "runtime_rw_paths", []):
         if os.path.exists(path):
             bwrap += ["--bind", path, path]
 

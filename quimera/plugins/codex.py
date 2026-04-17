@@ -1,6 +1,7 @@
 """Componentes de `quimera.plugins.codex`."""
 import json
 import shlex
+from pathlib import Path
 
 from quimera.plugins.base import AgentPlugin, register
 
@@ -108,6 +109,7 @@ plugin = AgentPlugin(
     prefix="/codex",
     aliases=["/code"],
     icon="🛠",
+    runtime_rw_paths=[str(Path.home() / ".codex")],
     cmd=["codex", "exec", "--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check", "--json"],
     output_format="codex-json",
     # O `codex exec` tenta ler stdin adicional quando recebe prompt por argv

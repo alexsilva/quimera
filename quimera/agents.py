@@ -84,7 +84,12 @@ class AgentClient:
             env = {**os.environ, "NO_COLOR": "1", "TERM": "dumb", "COLORTERM": ""}
             effective_cmd = cmd
             if self.execution_mode is not None and self.working_dir:
-                effective_cmd = build_bwrap_cmd(self.execution_mode, self.working_dir, cmd)
+                effective_cmd = build_bwrap_cmd(
+                    self.execution_mode,
+                    self.working_dir,
+                    cmd,
+                    plugin=plugins.get(agent) if agent else None,
+                )
             proc = subprocess.Popen(
                 effective_cmd,
                 stdin=subprocess.PIPE,

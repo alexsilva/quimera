@@ -4,6 +4,7 @@ import tempfile
 import os
 import unittest
 from pathlib import Path
+from unittest.mock import Mock
 
 from quimera.modes import get_mode
 from quimera.sandbox.bwrap import build_bwrap_cmd, is_bwrap_available
@@ -31,6 +32,12 @@ def is_bwrap_usable() -> bool:
 
 class TestBuildBwrapCmd(unittest.TestCase):
     """Testes unitários do builder (sem executar bwrap)."""
+
+    @staticmethod
+    def _plugin_with_rw_paths(*paths: str):
+        plugin = Mock()
+        plugin.runtime_rw_paths = list(paths)
+        return plugin
 
     def test_returns_original_cmd_when_bwrap_unavailable(self):
         from unittest.mock import patch
@@ -67,10 +74,11 @@ class TestBuildBwrapCmd(unittest.TestCase):
     def test_opencode_data_dir_keeps_rw_bind_inside_read_only_home(self):
         from unittest.mock import patch
         opencode_dir = str(Path.home() / ".local" / "share" / "opencode")
+        plugin = self._plugin_with_rw_paths(opencode_dir)
         with patch("quimera.sandbox.bwrap.is_bwrap_available", return_value=True), patch(
             "quimera.sandbox.bwrap.os.path.exists", return_value=True
         ):
-            result = build_bwrap_cmd(PLANNING, "/tmp", ["echo"])
+            result = build_bwrap_cmd(PLANNING, "/tmp", ["echo"], plugin=plugin)
         pairs = list(zip(result, result[1:], result[2:]))
         self.assertTrue(
             any(a == "--bind" and b == opencode_dir and c == opencode_dir for a, b, c in pairs),

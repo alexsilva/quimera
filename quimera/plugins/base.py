@@ -11,6 +11,7 @@ class AgentPlugin:
     style: Tuple[str, str]  # (color, label) para UI
     aliases: List[str] = field(default_factory=list)
     icon: str = "🤖"
+    runtime_rw_paths: List[str] = field(default_factory=list)
     # CLI fields
     cmd: List[str] = field(default_factory=list)
     prompt_as_arg: bool = False  # se True, prompt é passado como argumento CLI em vez de stdin
