@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch, ANY
 from quimera.agents import AgentClient, _strip_spinner, _should_ignore_stderr_line
 from quimera.constants import MAX_STDERR_LINES
 from quimera.plugins import get as get_plugin
+from quimera.plugins.claude import _format_claude_spy_event
 from quimera.plugins.codex import _format_codex_spy_event
 
 @pytest.fixture
@@ -289,6 +290,28 @@ def test_agent_client_run_spy_shows_codex_stdout_context(renderer):
     renderer.show_plain.assert_any_call("contexto: checando repositório: git status [ok]", agent="codex")
     renderer.show_plain.assert_any_call("resposta: Encontrei alterações locais e vou seguir sem revertê-las.", agent="codex")
 
+
+def test_agent_client_run_spy_shows_claude_stdout_context(renderer):
+    client = AgentClient(renderer, spy=True)
+    with patch("subprocess.Popen") as mock_popen:
+        mock_proc = MagicMock()
+        mock_proc.stdout = iter([
+            '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read"},{"type":"text","text":"Vou inspecionar o arquivo antes de sugerir a mudança."}]}}\n',
+            '{"type":"result","result":"ok","is_error":false}\n',
+        ])
+        mock_proc.stderr = iter([])
+        mock_proc.returncode = 0
+        mock_proc.stdin = MagicMock()
+        mock_popen.return_value = mock_proc
+
+        with patch("time.sleep"):
+            result = client.run(["claude", "-p"], silent=False, agent="claude", show_status=False)
+
+    assert result == '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read"},{"type":"text","text":"Vou inspecionar o arquivo antes de sugerir a mudança."}]}}\n{"type":"result","result":"ok","is_error":false}'
+    renderer.show_plain.assert_any_call("contexto: usando Read", agent="claude")
+    renderer.show_plain.assert_any_call("resposta: Vou inspecionar o arquivo antes de sugerir a mudança.", agent="claude")
+    renderer.show_plain.assert_any_call("contexto: execução concluída", agent="claude")
+
 def test_agent_client_run_post_drain(renderer):
     # Line 166-180 approx - Drain remaining queue after threads die
     client = AgentClient(renderer)
@@ -536,6 +559,24 @@ def test_codex_plugin_exposes_spy_stdout_formatter():
     plugin = get_plugin("codex")
     assert plugin is not None
     assert plugin.spy_stdout_formatter is _format_codex_spy_event
+
+
+def test_claude_plugin_exposes_spy_stdout_formatter():
+    plugin = get_plugin("claude")
+    assert plugin is not None
+    assert plugin.spy_stdout_formatter is _format_claude_spy_event
+
+
+def test_format_claude_spy_event_summarizes_assistant_and_result():
+    assistant = _format_claude_spy_event(
+        '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash"},{"type":"text","text":"Vou validar com um teste focado antes de concluir."}]}}'
+    )
+    result = _format_claude_spy_event('{"type":"result","result":"ok","is_error":false}')
+    assert assistant == [
+        "contexto: usando Bash",
+        "resposta: Vou validar com um teste focado antes de concluir.",
+    ]
+    assert result == ["contexto: execução concluída"]
 
 
 def test_agent_client_call_stream_json_format(renderer):

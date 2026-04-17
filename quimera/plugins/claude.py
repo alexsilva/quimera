@@ -1,5 +1,45 @@
 """Componentes de `quimera.plugins.claude`."""
+import json
+
 from quimera.plugins.base import AgentPlugin, register
+
+
+def _truncate_text(value: str, limit: int = 160) -> str:
+    value = " ".join((value or "").split())
+    if len(value) <= limit:
+        return value
+    return value[: limit - 3].rstrip() + "..."
+
+
+def _format_claude_spy_event(line: str) -> list[str]:
+    """Resume eventos stream-json do Claude em mensagens úteis para o modo spy."""
+    try:
+        event = json.loads(line)
+    except json.JSONDecodeError:
+        return []
+
+    etype = event.get("type")
+    if etype == "result":
+        if event.get("is_error"):
+            detail = _truncate_text(str(event.get("result") or "erro"))
+            return [f"contexto: execução falhou: {detail}"]
+        return ["contexto: execução concluída"]
+
+    if etype != "assistant":
+        return []
+
+    messages: list[str] = []
+    content = event.get("message", {}).get("content", [])
+    for block in content:
+        btype = block.get("type")
+        if btype == "text":
+            text = (block.get("text") or "").strip()
+            if text:
+                messages.append(f"resposta: {_truncate_text(text.splitlines()[0])}")
+        elif btype == "tool_use":
+            tool_name = block.get("name") or "ferramenta"
+            messages.append(f"contexto: usando {tool_name}")
+    return messages
 
 plugin = AgentPlugin(
     name="claude",
@@ -14,6 +54,7 @@ plugin = AgentPlugin(
     supports_tools=True,
     tool_use_reliability="high",
     supports_code_editing=True,
+    spy_stdout_formatter=_format_claude_spy_event,
     supports_long_context=True,
     base_tier=3,
 )

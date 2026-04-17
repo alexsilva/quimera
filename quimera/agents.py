@@ -118,7 +118,7 @@ class AgentClient:
                 if proc.stdout:
                     for line in proc.stdout:
                         result_holder["stdout"].append(line)
-                        if log_queue is not None and self.spy and agent == "codex":
+                        if log_queue is not None and self.spy:
                             log_queue.put(("stdout", line))
                         nonlocal last_activity_time
                         last_activity_time = time.time()
