@@ -43,6 +43,37 @@ class TestAppHistory(unittest.TestCase):
                     
                     mock_readline.read_history_file.assert_called_with(str(self.history_file))
                     mock_readline.set_history_length.assert_called_with(1000)
+                    mock_readline.set_completer_delims.assert_called_with(" \t\n")
+                    mock_readline.parse_and_bind.assert_called_with("tab: complete")
+
+    @patch('quimera.runtime.tasks.init_db')
+    @patch('quimera.runtime.tasks.add_job')
+    @patch('quimera.app.TerminalRenderer')
+    @patch('quimera.app.ConfigManager')
+    @patch('quimera.app.ContextManager')
+    @patch('quimera.app.SessionStorage')
+    @patch('quimera.app.AgentClient')
+    @patch('quimera.app.SessionSummarizer')
+    @patch('quimera.app.readline')
+    def test_readline_completer_completes_slash_commands_without_duplication(self, mock_readline, mock_session_sum, mock_agent, mock_storage, mock_context, mock_config, mock_term, mock_add_job, mock_init_db):
+        mock_add_job.return_value = 1
+        self._setup_common_mocks(mock_storage, mock_context)
+
+        with patch('quimera.app.Workspace') as mock_ws:
+            mock_ws_instance = MagicMock()
+            mock_ws_instance.history_file = self.history_file
+            mock_ws_instance.root = Path("/tmp/quimera_test_workspace")
+            mock_ws.return_value = mock_ws_instance
+
+            with patch('quimera.app.create_executor'):
+                from quimera.app import QuimeraApp
+                QuimeraApp(self.tmp_cwd)
+
+        completer = mock_readline.set_completer.call_args.args[0]
+
+        self.assertEqual(completer("/h", 0), "/help")
+        self.assertIsNone(completer("/h", 1))
+        self.assertIsNone(completer("h", 0))
 
     @patch('quimera.runtime.tasks.init_db')
     @patch('quimera.runtime.tasks.add_job')

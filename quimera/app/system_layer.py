@@ -1,7 +1,7 @@
 """Componentes de `quimera.app.system_layer`."""
 from __future__ import annotations
 
-from ..constants import CMD_AGENTS, CMD_CONTEXT, CMD_CONTEXT_EDIT, CMD_HELP, CMD_TASK, build_agents_help, build_help
+from ..constants import CMD_AGENTS, CMD_ALIASES, CMD_CONTEXT, CMD_CONTEXT_EDIT, CMD_HELP, CMD_TASK, build_agents_help, build_help
 from ..runtime.parser import strip_tool_block
 
 
@@ -76,16 +76,7 @@ class AppSystemLayer:
     def handle_command(self, user_input: str) -> bool:
         """Processa command."""
         command = user_input.strip()
-        # CLI aliases: provide short forms for common commands
-        # /e -> /edit
-        # /r -> /context
-        # /g -> /help
-        if command == "/e":
-            command = "/edit"
-        elif command == "/r":
-            command = "/context"
-        elif command == "/g":
-            command = "/help"
+        command = CMD_ALIASES.get(command, command)
 
         if command == CMD_HELP:
             self.app.renderer.show_system(build_help(self.app.active_agents))

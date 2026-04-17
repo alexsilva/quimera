@@ -129,6 +129,7 @@ CMD_CONTEXT_EDIT = "/context-edit"
 CMD_EDIT = "/edit"
 CMD_FILE_PREFIX = "/file"
 CMD_TASK = "/task"
+CMD_ALIASES = {"/e": CMD_EDIT, "/r": CMD_CONTEXT, "/g": CMD_HELP}
 USER_ROLE = "human"
 
 # Messages

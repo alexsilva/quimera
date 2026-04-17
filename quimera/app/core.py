@@ -45,15 +45,15 @@ from ..constants import (
     EXTEND_MARKER,
     NEEDS_INPUT_MARKER,
     ROUTE_PREFIX,
-    STATE_UPDATE_START, CMD_EXIT, CMD_EDIT, CMD_FILE_PREFIX, CMD_TASK,
+    STATE_UPDATE_START, CMD_AGENTS, CMD_ALIASES, CMD_CONTEXT, CMD_CONTEXT_EDIT, CMD_EDIT, CMD_EXIT, CMD_FILE_PREFIX, CMD_HELP,
+    CMD_TASK,
     USER_ROLE, MSG_CHAT_STARTED, MSG_SESSION_LOG, MSG_SESSION_STATUS, MSG_MIGRATION,
     MSG_MEMORY_SAVING, MSG_MEMORY_FAILED, MSG_SHUTDOWN,
     MSG_DOUBLE_PREFIX, MSG_EMPTY_INPUT,
     HANDOFF_SYNTHESIS_MSG,
 )
-from ..modes import get_mode
+from ..modes import MODES, get_mode
 from .config import logger
-
 
 class TurnManager:
     """Gerencia o turno de fala no diálogo humano ↔ agente."""
@@ -114,6 +114,23 @@ class QuimeraApp:
     ROUTE_PATTERN = re.compile(r"\[ROUTE:([A-Za-z0-9_-]+)\]\s*([\s\S]+)", re.M | re.I)
     ACK_PATTERN = re.compile(r"^\s*\[ACK:([A-Za-z0-9]+)\]\s*", re.M)
 
+    @staticmethod
+    def _available_internal_commands() -> list[str]:
+        """Retorna os comandos internos e aliases aceitos pela aplicação."""
+        commands = {
+            CMD_AGENTS,
+            CMD_CONTEXT,
+            CMD_CONTEXT_EDIT,
+            CMD_EDIT,
+            CMD_EXIT,
+            CMD_FILE_PREFIX,
+            CMD_HELP,
+            CMD_TASK,
+            *CMD_ALIASES,
+            *MODES.keys(),
+        }
+        return sorted(commands)
+
     def __init__(self,
                  cwd: Path,
                  debug: bool = False,
@@ -165,6 +182,7 @@ class QuimeraApp:
                 except Exception:
                     pass
             runtime_readline.set_history_length(1000)
+            self._configure_readline_completion(runtime_readline)
 
         migrated = self.workspace.migrate_from_legacy(cwd)
         for item in migrated:
@@ -286,6 +304,33 @@ class QuimeraApp:
     def _format_yes_no(value):
         """Formata yes no."""
         return "sim" if value else "não"
+
+    def _available_commands(self) -> list[str]:
+        """Retorna todos os comandos disponíveis para autocomplete."""
+        commands = set(self._available_internal_commands())
+        for plugin in plugins.all_plugins():
+            if plugin.prefix:
+                commands.add(plugin.prefix)
+            commands.update(alias for alias in (plugin.aliases or []) if alias)
+        return sorted(commands)
+
+    def _configure_readline_completion(self, runtime_readline) -> None:
+        """Registra autocomplete de comandos slash quando readline estiver disponível."""
+        if runtime_readline is None:
+            return
+
+        def completer(text: str, state: int) -> str | None:
+            if not text.startswith("/"):
+                return None
+            matches = [cmd for cmd in self._available_commands() if cmd.startswith(text)]
+            return matches[state] if state < len(matches) else None
+
+        try:
+            runtime_readline.set_completer_delims(" \t\n")
+            runtime_readline.set_completer(completer)
+            runtime_readline.parse_and_bind("tab: complete")
+        except Exception:
+            logger.debug("falha ao configurar autocomplete do readline", exc_info=True)
 
     def _get_system_layer(self) -> AppSystemLayer:
         """Retorna system layer."""
