@@ -106,6 +106,7 @@ def _format_codex_spy_event(line: str) -> list[str]:
 plugin = AgentPlugin(
     name="codex",
     prefix="/codex",
+    aliases=["/code"],
     icon="🛠",
     cmd=["codex", "exec", "--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check", "--json"],
     output_format="codex-json",

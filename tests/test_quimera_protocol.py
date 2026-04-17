@@ -399,6 +399,17 @@ class ProtocolTests(unittest.TestCase):
         self.assertIsNone(message)
         self.assertTrue(app.renderer.warnings)
 
+    def test_parse_routing_accepts_code_alias_for_codex(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.renderer = DummyRenderer()
+        app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
+
+        agent, message, explicit = app.parse_routing("/code revise isso")
+
+        self.assertEqual(agent, AGENT_CODEX)
+        self.assertEqual(message, "revise isso")
+        self.assertTrue(explicit)
+
     def test_handle_command_shows_help(self):
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()

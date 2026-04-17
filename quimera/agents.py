@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 
 import quimera.plugins as plugins
 from quimera.constants import MAX_STDERR_LINES
+from quimera.sandbox.bwrap import build_bwrap_cmd
 from .runtime.drivers.openai_compat import OpenAICompatDriver
 
 _logger = logging.getLogger(__name__)
@@ -57,6 +58,8 @@ class AgentClient:
         # Cache de instâncias de driver por nome de agente.
         self._api_drivers: dict = {}
         self.tool_event_callback = None
+        # Modo de execução ativo; quando definido, subprocessos são envolvidos com bwrap.
+        self.execution_mode = None
         self._cancel_event = threading.Event()
         self._user_cancelled = False
         self._agent_running = False
@@ -79,8 +82,11 @@ class AgentClient:
         self._start_esc_monitor()
         try:
             env = {**os.environ, "NO_COLOR": "1", "TERM": "dumb", "COLORTERM": ""}
+            effective_cmd = cmd
+            if self.execution_mode is not None and self.working_dir:
+                effective_cmd = build_bwrap_cmd(self.execution_mode, self.working_dir, cmd)
             proc = subprocess.Popen(
-                cmd,
+                effective_cmd,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -365,6 +371,8 @@ class AgentClient:
     def call(self, agent, prompt, silent=False, show_status=True, quiet=False):
         """Resolve o comando do agente e delega a execução."""
         self._user_cancelled = False
+        if self.execution_mode and self.execution_mode.prompt_addon:
+            prompt = f"{self.execution_mode.prompt_addon}\n\n{prompt}"
         plugin = plugins.get(agent)
         if plugin is None:
             self.renderer.show_error(f"[erro] agente desconhecido: {agent}")

@@ -12,12 +12,14 @@ class ContextManager:
     SUMMARY_MARKER = "## Resumo da última sessão"
     GENERATED_AT_PREFIX = "_Gerado em "
 
-    def __init__(self, base_context_file, session_context_file, renderer, previous_session_file=None):
+    def __init__(self, base_context_file, session_context_file, renderer, previous_session_file=None, max_context_lines: int = 2000):
         """Inicializa uma instância de ContextManager."""
         self.base_context_file = base_context_file
         self.session_context_file = session_context_file
         self.renderer = renderer
         self.previous_session_file = previous_session_file
+        # Limita o tamanho do contexto para evitar consumo de memória excessivo
+        self.max_context_lines = int(max_context_lines) if max_context_lines is not None else 2000
 
     def _read(self, path):
         """Lê read."""
@@ -78,7 +80,12 @@ class ContextManager:
             parts.append(session_context)
 
         if parts:
-            return "\n\n".join(parts).strip()
+            context = "\n\n".join(parts).strip()
+            # Enforce maximum number of lines to prevent unbounded growth
+            lines = context.splitlines()
+            if self.max_context_lines > 0 and len(lines) > self.max_context_lines:
+                context = "\n".join(lines[-self.max_context_lines:])
+            return context
         return ""
 
     def show(self):

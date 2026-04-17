@@ -9,6 +9,7 @@ class AgentPlugin:
     name: str
     prefix: str
     style: Tuple[str, str]  # (color, label) para UI
+    aliases: List[str] = field(default_factory=list)
     icon: str = "🤖"
     # CLI fields
     cmd: List[str] = field(default_factory=list)

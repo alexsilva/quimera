@@ -301,6 +301,11 @@ def build_help(agent_names):
         "\nComandos:\n" +
         "\n".join([f"- /{s} <mensagem>: {s.capitalize()} responde" for s in agent_names]) + "\n"
         "- /task <descrição>: cria uma task explícita do humano e roteia para o melhor agente\n"
+        "- /planning <mensagem>: modo planejamento — workspace somente leitura, sem edição de arquivos\n"
+        "- /analysis <mensagem>: modo análise — somente leitura, sem edição de arquivos\n"
+        "- /design <mensagem>: modo design — arquitetura e design sem execução\n"
+        "- /review <mensagem>: modo revisão — somente revisão de código, sem edições\n"
+        "- /execute <mensagem>: modo execução — acesso completo a ferramentas e remove restrições do modo anterior\n"
         "- /context: mostra o contexto atual\n"
         "- /context-edit: abre o contexto persistente no editor ($EDITOR, ou nano/vim/vi como fallback)\n"
         "- /edit: abre o editor ($EDITOR, ou nano/vim/vi como fallback) para compor uma mensagem longa\n"
