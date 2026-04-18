@@ -2,10 +2,9 @@ import json
 import os
 import subprocess
 import tempfile
-import time
 import unittest
 from pathlib import Path
-from unittest.mock import ANY, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import quimera.plugins.mock  # noqa: F401
 from quimera.agents import AgentClient, _strip_spinner
@@ -91,7 +90,7 @@ class AgentsCoverageTests(unittest.TestCase):
         stdout_thread.is_alive.side_effect = [True, False]
         stderr_thread.is_alive.return_value = False
         with patch("subprocess.Popen", return_value=proc), patch(
-            "threading.Thread", side_effect=[stdout_thread, stderr_thread]
+                "threading.Thread", side_effect=[stdout_thread, stderr_thread]
         ), patch("time.sleep"), patch(
             "time.time", side_effect=[100.0, 100.0, 100.2, 100.2]
         ):
@@ -152,7 +151,8 @@ class AgentsCoverageTests(unittest.TestCase):
         plugin.prompt_as_arg = True
         with patch("quimera.plugins.get", return_value=plugin), patch.object(client, "run", return_value="ok") as run:
             self.assertEqual(client.call("mock", "hello"), "ok")
-        run.assert_called_once_with(["mock-agent", "hello"], input_text=None, silent=False, agent="mock", show_status=True)
+        run.assert_called_once_with(["mock-agent", "hello"], input_text=None, silent=False, agent="mock",
+                                    show_status=True)
         with patch("quimera.plugins.get", return_value=None):
             self.assertIsNone(client.call("missing", "hello"))
         self.renderer.show_error.assert_called()
@@ -212,8 +212,9 @@ class ContextCoverageTests(unittest.TestCase):
         with patch("os.environ.get", return_value="code --wait"), patch("subprocess.run") as run:
             manager.edit()
         run.assert_called_once_with(["code", "--wait", str(self.base)], check=True)
-        with patch("os.environ.get", return_value=None), patch("shutil.which", side_effect=lambda name: name == "nano"), patch(
-            "subprocess.run"
+        with patch("os.environ.get", return_value=None), patch("shutil.which",
+                                                               side_effect=lambda name: name == "nano"), patch(
+                "subprocess.run"
         ) as fallback_run:
             manager.edit()
         fallback_run.assert_called_once_with(["nano", str(self.base)], check=True)
@@ -223,7 +224,7 @@ class ContextCoverageTests(unittest.TestCase):
         with patch("os.environ.get", return_value="missing"), patch("subprocess.run", side_effect=FileNotFoundError):
             manager.edit()
         with patch("os.environ.get", return_value="vim"), patch(
-            "subprocess.run", side_effect=subprocess.CalledProcessError(1, "vim")
+                "subprocess.run", side_effect=subprocess.CalledProcessError(1, "vim")
         ):
             manager.edit()
         self.assertGreaterEqual(self.renderer.show_error.call_count, 3)
@@ -385,7 +386,8 @@ class TaskPlanningCoverageTests(unittest.TestCase):
         def cmd(self):
             return ["mock"]
 
-        def __init__(self, name, tier=1, preferred=None, avoid=None, code=False, long=False, tools=False, capabilities=None):
+        def __init__(self, name, tier=1, preferred=None, avoid=None, code=False, long=False, tools=False,
+                     capabilities=None):
             self._name = name
             self.base_tier = tier
             self.preferred_task_types = preferred or []
@@ -450,7 +452,7 @@ class TaskExecutorCoverageTests(unittest.TestCase):
             with patch("quimera.runtime.task_executor.claim_task", return_value=None):
                 self.assertIsNone(executor.process_pending())
             with patch("quimera.runtime.task_executor.claim_task", return_value=1), patch(
-                "quimera.runtime.task_executor.list_tasks", return_value=[{"id": 1}]
+                    "quimera.runtime.task_executor.list_tasks", return_value=[{"id": 1}]
             ):
                 self.assertEqual(executor.process_pending(), 1)
             handler.assert_called_with({"id": 1})
@@ -473,7 +475,7 @@ class TaskExecutorCoverageTests(unittest.TestCase):
 
             executor._running = True
             with patch("quimera.runtime.task_executor.claim_task", side_effect=claim_task_side_effect), patch(
-                "quimera.runtime.task_executor.claim_review_task", return_value=2
+                    "quimera.runtime.task_executor.claim_review_task", return_value=2
             ), patch("quimera.runtime.task_executor.list_tasks", side_effect=[[{"id": 1}], [{"id": 2}]]), patch(
                 "quimera.runtime.task_executor.time.sleep", side_effect=fake_sleep
             ):
@@ -540,8 +542,8 @@ class FileToolsCoverageTests(unittest.TestCase):
         empty = self.tools.grep_search(ToolCall(name="grep_search", arguments={"path": "missing", "pattern": "needle"}))
         self.assertEqual(empty.content, "")
         with patch("pathlib.Path.is_file", side_effect=lambda self_path: self_path.name != "skip.txt"), patch(
-            "pathlib.Path.rglob",
-            return_value=[Path("/tmp/skip.txt"), Path("/tmp/visible.txt")],
+                "pathlib.Path.rglob",
+                return_value=[Path("/tmp/skip.txt"), Path("/tmp/visible.txt")],
         ), patch("pathlib.Path.read_text", return_value="needle"):
             pass
         with patch("pathlib.Path.read_text", side_effect=RuntimeError("boom")):
@@ -559,7 +561,7 @@ class ShellToolCoverageTests(unittest.TestCase):
         self.assertTrue(result.ok)
         self.assertIn("hello", result.content)
         with patch("quimera.runtime.tools.files.get_staging_root", return_value=Path("/tmp/staging")), patch(
-            "subprocess.run", return_value=proc
+                "subprocess.run", return_value=proc
         ):
             with self.assertWarnsRegex(UserWarning, "Shell writes bypass staging isolation"):
                 tool.run_shell(ToolCall(name="run_shell", arguments={"command": "ls"}))
@@ -576,20 +578,20 @@ class TaskToolsCoverageTests(unittest.TestCase):
         with patch.dict(os.environ, {"QUIMERA_CURRENT_JOB_ID": "bad"}):
             self.assertIsNone(self.tools._resolve_job_id(None))
         with patch.dict(os.environ, {}, clear=True), patch(
-            "quimera.runtime.tools.tasks._list_jobs", side_effect=[[{"id": 10}], []]
+                "quimera.runtime.tools.tasks._list_jobs", side_effect=[[{"id": 10}], []]
         ):
             self.assertEqual(self.tools._resolve_job_id(None, allow_recent_fallback=True), 10)
         with patch.dict(os.environ, {}, clear=True), patch(
-            "quimera.runtime.tools.tasks._list_jobs", side_effect=[[], [{"id": 20}]]
+                "quimera.runtime.tools.tasks._list_jobs", side_effect=[[], [{"id": 20}]]
         ):
             self.assertEqual(self.tools._resolve_job_id(None, allow_recent_fallback=True), 20)
         with patch.dict(os.environ, {}, clear=True), patch(
-            "quimera.runtime.tools.tasks._list_jobs", side_effect=RuntimeError("db down")
+                "quimera.runtime.tools.tasks._list_jobs", side_effect=RuntimeError("db down")
         ):
             self.assertIsNone(self.tools._resolve_job_id(None, allow_recent_fallback=True))
         with patch(
-            "quimera.runtime.tools.tasks._list_tasks",
-            side_effect=[[{"description": " TEST task "}], [], [], []],
+                "quimera.runtime.tools.tasks._list_tasks",
+                side_effect=[[{"description": " TEST task "}], [], [], []],
         ):
             self.assertIsNotNone(self.tools._find_duplicate_task(1, "test task"))
             self.assertIsNone(self.tools._find_duplicate_task(1, ""))
@@ -612,12 +614,12 @@ class TaskToolsCoverageTests(unittest.TestCase):
             missing_job = self.tools.get_job(ToolCall(name="get_job", arguments={}))
         self.assertFalse(missing_job.ok)
         with patch.object(self.tools, "_resolve_job_id", return_value=1), patch(
-            "quimera.runtime.tools.tasks._get_job", return_value=None
+                "quimera.runtime.tools.tasks._get_job", return_value=None
         ):
             null_job = self.tools.get_job(ToolCall(name="get_job", arguments={}))
         self.assertEqual(null_job.content, "null")
         with patch.object(self.tools, "_resolve_job_id", return_value=1), patch(
-            "quimera.runtime.tools.tasks._get_job", side_effect=RuntimeError("boom")
+                "quimera.runtime.tools.tasks._get_job", side_effect=RuntimeError("boom")
         ):
             failed_job = self.tools.get_job(ToolCall(name="get_job", arguments={}))
         self.assertFalse(failed_job.ok)

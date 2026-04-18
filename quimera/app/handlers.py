@@ -27,8 +27,8 @@ class PromptAwareStderrHandler(logging.StreamHandler):
         # INFO/DEBUG internos geram churn no TTY quando o prompt não bloqueante
         # está ativo. Mantemos warnings e errors visíveis.
         if (
-            getattr(app, "_nonblocking_input_status", None) == "reading"
-            and record.levelno < logging.WARNING
+                getattr(app, "_nonblocking_input_status", None) == "reading"
+                and record.levelno < logging.WARNING
         ):
             return
 

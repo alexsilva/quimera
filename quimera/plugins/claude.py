@@ -41,6 +41,7 @@ def _format_claude_spy_event(line: str) -> list[str]:
             messages.append(f"contexto: usando {tool_name}")
     return messages
 
+
 plugin = AgentPlugin(
     name="claude",
     prefix="/claude",

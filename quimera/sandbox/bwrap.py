@@ -18,7 +18,7 @@ def is_bwrap_available() -> bool:
 
 
 def build_bwrap_cmd(
-    mode: ExecutionMode, working_dir: str, cmd: list[str], plugin: AgentPlugin | None = None
+        mode: ExecutionMode, working_dir: str, cmd: list[str], plugin: AgentPlugin | None = None
 ) -> list[str]:
     """Envolve cmd com bwrap aplicando as restrições do ExecutionMode.
 

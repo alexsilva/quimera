@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
+
 class TestAppHistory(unittest.TestCase):
     def setUp(self):
         self.tmp_cwd = Path("/tmp/quimera_test_cwd")
@@ -26,21 +27,22 @@ class TestAppHistory(unittest.TestCase):
     @patch('quimera.app.core.AgentClient')
     @patch('quimera.app.core.SessionSummarizer')
     @patch('quimera.app.core.readline')
-    def test_history_loading_on_init(self, mock_readline, mock_session_sum, mock_agent, mock_storage, mock_context, mock_config, mock_term, mock_add_job, mock_init_db):
+    def test_history_loading_on_init(self, mock_readline, mock_session_sum, mock_agent, mock_storage, mock_context,
+                                     mock_config, mock_term, mock_add_job, mock_init_db):
         mock_add_job.return_value = 1
         self._setup_common_mocks(mock_storage, mock_context)
-        
+
         with patch('quimera.app.core.Workspace') as mock_ws:
             mock_ws_instance = MagicMock()
             mock_ws_instance.history_file = self.history_file
             mock_ws_instance.root = Path("/tmp/quimera_test_workspace")
             mock_ws.return_value = mock_ws_instance
-            
+
             with patch('quimera.app.core.create_executor'):
                 with patch.object(Path, 'exists', return_value=True):
                     from quimera.app import QuimeraApp
                     QuimeraApp(self.tmp_cwd)
-                    
+
                     mock_readline.read_history_file.assert_called_with(str(self.history_file))
                     mock_readline.set_history_length.assert_called_with(1000)
                     mock_readline.set_completer_delims.assert_called_with(" \t\n")
@@ -55,7 +57,10 @@ class TestAppHistory(unittest.TestCase):
     @patch('quimera.app.core.AgentClient')
     @patch('quimera.app.core.SessionSummarizer')
     @patch('quimera.app.core.readline')
-    def test_readline_completer_completes_slash_commands_without_duplication(self, mock_readline, mock_session_sum, mock_agent, mock_storage, mock_context, mock_config, mock_term, mock_add_job, mock_init_db):
+    def test_readline_completer_completes_slash_commands_without_duplication(self, mock_readline, mock_session_sum,
+                                                                             mock_agent, mock_storage, mock_context,
+                                                                             mock_config, mock_term, mock_add_job,
+                                                                             mock_init_db):
         mock_add_job.return_value = 1
         self._setup_common_mocks(mock_storage, mock_context)
 
@@ -95,22 +100,23 @@ class TestAppHistory(unittest.TestCase):
     @patch('quimera.app.core.AgentClient')
     @patch('quimera.app.core.SessionSummarizer')
     @patch('quimera.app.core.readline')
-    def test_history_saving_on_shutdown(self, mock_readline, mock_session_sum, mock_agent, mock_storage, mock_context, mock_config, mock_term, mock_add_job, mock_init_db):
+    def test_history_saving_on_shutdown(self, mock_readline, mock_session_sum, mock_agent, mock_storage, mock_context,
+                                        mock_config, mock_term, mock_add_job, mock_init_db):
         mock_add_job.return_value = 1
         self._setup_common_mocks(mock_storage, mock_context)
-        
+
         with patch('quimera.app.core.Workspace') as mock_ws:
             mock_ws_instance = MagicMock()
             mock_ws_instance.history_file = self.history_file
             mock_ws_instance.root = Path("/tmp/quimera_test_workspace")
             mock_ws.return_value = mock_ws_instance
-            
+
             with patch('quimera.app.core.create_executor'):
                 from quimera.app import QuimeraApp
                 app = QuimeraApp(self.tmp_cwd)
-                
+
                 app.shutdown()
-                
+
                 mock_readline.write_history_file.assert_called_with(str(self.history_file))
 
     @patch('quimera.runtime.tasks.init_db')
@@ -123,10 +129,12 @@ class TestAppHistory(unittest.TestCase):
     @patch('quimera.app.core.SessionSummarizer')
     @patch('quimera.app.core.readline')
     @patch('builtins.input', return_value="test input")
-    def test_read_user_input_uses_input_function(self, mock_input, mock_readline, mock_session_sum, mock_agent, mock_storage, mock_context, mock_config, mock_term, mock_add_job, mock_init_db):
+    def test_read_user_input_uses_input_function(self, mock_input, mock_readline, mock_session_sum, mock_agent,
+                                                 mock_storage, mock_context, mock_config, mock_term, mock_add_job,
+                                                 mock_init_db):
         mock_add_job.return_value = 1
         self._setup_common_mocks(mock_storage, mock_context)
-        
+
         with patch('quimera.app.core.Workspace') as mock_ws:
             mock_ws_instance = MagicMock()
             mock_ws_instance.history_file = self.history_file
@@ -137,11 +145,12 @@ class TestAppHistory(unittest.TestCase):
                 from quimera.app import QuimeraApp
                 app = QuimeraApp(self.tmp_cwd)
             app.user_name = "user"
-            
+
             result = app.read_user_input(prompt="user: ", timeout=30)
-            
+
             self.assertEqual(result, "test input")
             mock_input.assert_called_with("user: ")
+
 
 if __name__ == '__main__':
     unittest.main()

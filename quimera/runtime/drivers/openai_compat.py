@@ -11,8 +11,8 @@ import logging
 import re
 from typing import Optional
 
-from ..models import ToolCall, ToolResult
 from .tool_schemas import resolve_tool_schemas
+from ..models import ToolCall, ToolResult
 
 try:
     from openai import OpenAI
@@ -100,12 +100,12 @@ class OpenAICompatDriver:
     """
 
     def __init__(
-        self,
-        model: str,
-        base_url: str,
-        api_key: str = "ollama",
-        timeout: Optional[int] = None,
-        tool_use_reliability: str = "medium",
+            self,
+            model: str,
+            base_url: str,
+            api_key: str = "ollama",
+            timeout: Optional[int] = None,
+            tool_use_reliability: str = "medium",
     ) -> None:
         """Inicializa uma instância de OpenAICompatDriver."""
         if OpenAI is None:
@@ -122,14 +122,14 @@ class OpenAICompatDriver:
         self.tool_use_reliability = str(tool_use_reliability or "medium").lower()
 
     def run(
-        self,
-        prompt: str,
-        tool_executor=None,
-        on_tool_call=None,
-        on_tool_result=None,
-        on_tool_abort=None,
-        quiet=False,
-        cancel_event=None,
+            self,
+            prompt: str,
+            tool_executor=None,
+            on_tool_call=None,
+            on_tool_result=None,
+            on_tool_abort=None,
+            quiet=False,
+            cancel_event=None,
     ) -> Optional[str]:
         """
         Executa o agente com o prompt dado tratando o loop de tool calling internamente.
@@ -206,7 +206,8 @@ class OpenAICompatDriver:
                 _logger.warning("OpenAICompatDriver: max tool hops (%d) reached", max_tool_hops)
                 if on_tool_abort is not None:
                     on_tool_abort("max_tool_hops")
-                return _sanitize_assistant_text(response_text) if response_text else "Limite de chamadas de ferramenta atingido."
+                return _sanitize_assistant_text(
+                    response_text) if response_text else "Limite de chamadas de ferramenta atingido."
 
             # Adiciona turno do assistente com os tool calls
             assistant_msg: dict = {

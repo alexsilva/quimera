@@ -1,8 +1,10 @@
-import pytest
-from unittest.mock import MagicMock, patch
-from pathlib import Path
 import subprocess
+from unittest.mock import MagicMock, patch
+
+import pytest
+
 from quimera.context import ContextManager
+
 
 @pytest.fixture
 def temp_files(tmp_path):
@@ -12,14 +14,17 @@ def temp_files(tmp_path):
     session.write_text("## Resumo da última sessão\n\n_Gerado em 2026-01-01 10:00_\n\nActual Summary", encoding="utf-8")
     return base, session
 
+
 @pytest.fixture
 def renderer():
     return MagicMock()
+
 
 def test_load_base(temp_files, renderer):
     base, session = temp_files
     cm = ContextManager(base, session, renderer)
     assert cm.load_base() == "Base Content"
+
 
 def test_load_base_not_exists(tmp_path, renderer):
     base = tmp_path / "nonexistent.md"
@@ -27,15 +32,18 @@ def test_load_base_not_exists(tmp_path, renderer):
     cm = ContextManager(base, session, renderer)
     assert cm.load_base() == ""
 
+
 def test_load_session(temp_files, renderer):
     base, session = temp_files
     cm = ContextManager(base, session, renderer)
     assert cm.load_session() == "## Resumo da última sessão\n\n_Gerado em 2026-01-01 10:00_\n\nActual Summary"
 
+
 def test_load_session_summary(temp_files, renderer):
     base, session = temp_files
     cm = ContextManager(base, session, renderer)
     assert cm.load_session_summary() == "Actual Summary"
+
 
 def test_load_session_summary_invalid(tmp_path, renderer):
     base = tmp_path / "base.md"
@@ -44,12 +52,14 @@ def test_load_session_summary_invalid(tmp_path, renderer):
     cm = ContextManager(base, session, renderer)
     assert cm.load_session_summary() == ""
 
+
 def test_load_session_summary_empty(tmp_path, renderer):
     base = tmp_path / "base.md"
     session = tmp_path / "session.md"
     session.write_text("## Resumo da última sessão\n\n", encoding="utf-8")
     cm = ContextManager(base, session, renderer)
     assert cm.load_session_summary() == ""
+
 
 def test_load_combined(temp_files, renderer):
     base, session = temp_files
@@ -59,12 +69,14 @@ def test_load_combined(temp_files, renderer):
     assert "Actual Summary" in combined
     assert "## Resumo da última sessão" not in combined
 
+
 def test_load_only_base(tmp_path, renderer):
     base = tmp_path / "base.md"
     base.write_text("Base Only", encoding="utf-8")
     session = tmp_path / "nonexistent.md"
     cm = ContextManager(base, session, renderer)
     assert cm.load() == "Base Only"
+
 
 def test_load_only_session(tmp_path, renderer):
     base = tmp_path / "nonexistent.md"
@@ -73,11 +85,13 @@ def test_load_only_session(tmp_path, renderer):
     cm = ContextManager(base, session, renderer)
     assert cm.load() == "Session Only"
 
+
 def test_load_empty(tmp_path, renderer):
     base = tmp_path / "nonexistent.md"
     session = tmp_path / "nonexistent.md"
     cm = ContextManager(base, session, renderer)
     assert cm.load() == ""
+
 
 def test_show(temp_files, renderer):
     base, session = temp_files
@@ -85,12 +99,14 @@ def test_show(temp_files, renderer):
     cm.show()
     renderer.show_plain.assert_called_once()
 
+
 def test_show_empty(tmp_path, renderer):
     base = tmp_path / "nonexistent.md"
     session = tmp_path / "nonexistent.md"
     cm = ContextManager(base, session, renderer)
     cm.show()
     renderer.show_system.assert_called_with("\n[contexto vazio]\n")
+
 
 @patch('os.environ.get')
 @patch('subprocess.run')
@@ -100,6 +116,7 @@ def test_edit_with_editor_env(mock_run, mock_get, temp_files, renderer):
     cm = ContextManager(base, session, renderer)
     cm.edit()
     mock_run.assert_called_once_with(["code", "--wait", str(base)], check=True)
+
 
 @patch('os.environ.get')
 @patch('shutil.which')
@@ -112,6 +129,7 @@ def test_edit_fallback_editor(mock_run, mock_which, mock_get, temp_files, render
     cm.edit()
     mock_run.assert_called_once_with(["nano", str(base)], check=True)
 
+
 @patch('os.environ.get')
 @patch('shutil.which')
 def test_edit_no_editor_found(mock_which, mock_get, temp_files, renderer):
@@ -121,6 +139,7 @@ def test_edit_no_editor_found(mock_which, mock_get, temp_files, renderer):
     cm = ContextManager(base, session, renderer)
     cm.edit()
     renderer.show_error.assert_called_with("\nNenhum editor disponível. Instale nano, vim ou vi.\n")
+
 
 @patch('os.environ.get')
 @patch('subprocess.run')
@@ -132,6 +151,7 @@ def test_edit_file_not_found(mock_run, mock_get, temp_files, renderer):
     cm.edit()
     renderer.show_error.assert_called()
 
+
 @patch('os.environ.get')
 @patch('subprocess.run')
 def test_edit_error(mock_run, mock_get, temp_files, renderer):
@@ -142,6 +162,7 @@ def test_edit_error(mock_run, mock_get, temp_files, renderer):
     cm.edit()
     renderer.show_error.assert_called()
 
+
 def test_update_with_summary(temp_files, renderer):
     base, session = temp_files
     cm = ContextManager(base, session, renderer)
@@ -151,6 +172,7 @@ def test_update_with_summary(temp_files, renderer):
     assert "New Summary" in content
     renderer.show_system.assert_called()
 
+
 def test_load_previous_session_exists(tmp_path, renderer):
     base = tmp_path / "base.md"
     session = tmp_path / "session.md"
@@ -159,10 +181,12 @@ def test_load_previous_session_exists(tmp_path, renderer):
     cm = ContextManager(base, session, renderer, previous_session_file=previous)
     assert cm.load_previous_session() == "Previous session content"
 
+
 def test_load_previous_session_not_exists(temp_files, renderer):
     base, session = temp_files
     cm = ContextManager(base, session, renderer, previous_session_file=None)
     assert cm.load_previous_session() == ""
+
 
 def test_load_with_previous_session(tmp_path, renderer):
     base = tmp_path / "base.md"
@@ -180,6 +204,7 @@ def test_load_with_previous_session(tmp_path, renderer):
     assert base_idx < sess_idx
     assert "Previous Summary" not in result
 
+
 def test_load_without_previous_session(temp_files, renderer):
     base, session = temp_files
     cm = ContextManager(base, session, renderer, previous_session_file=None)
@@ -188,6 +213,7 @@ def test_load_without_previous_session(temp_files, renderer):
     assert "Actual Summary" in result
     assert "## Resumo da última sessão" not in result
     assert "Previous" not in result
+
 
 def test_load_filters_pending_sections_from_session_summary(tmp_path, renderer):
     base = tmp_path / "base.md"
@@ -213,6 +239,7 @@ def test_load_filters_pending_sections_from_session_summary(tmp_path, renderer):
     assert "Pendências ou próximos passos" not in result
     assert "corrigir objetivo antigo" not in result
 
+
 def test_save_previous_session(tmp_path, renderer):
     base = tmp_path / "base.md"
     session = tmp_path / "session.md"
@@ -222,12 +249,14 @@ def test_save_previous_session(tmp_path, renderer):
     content = previous.read_text(encoding="utf-8")
     assert "Test summary" in content
 
+
 def test_save_previous_session_without_file_is_noop(tmp_path, renderer):
     base = tmp_path / "base.md"
     session = tmp_path / "session.md"
     cm = ContextManager(base, session, renderer, previous_session_file=None)
     cm.save_previous_session("Ignored summary")
     assert not (tmp_path / "previous_session.md").exists()
+
 
 def test_load_truncates_context_to_max_lines(tmp_path, renderer):
     base = tmp_path / "base.md"

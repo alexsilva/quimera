@@ -3,10 +3,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from quimera.modes import ExecutionMode, MODES, get_mode
-from quimera.runtime.policy import ToolPolicy, ToolPolicyError
+from quimera.modes import MODES, get_mode
 from quimera.runtime.config import ToolRuntimeConfig
 from quimera.runtime.models import ToolCall
+from quimera.runtime.policy import ToolPolicy, ToolPolicyError
 
 
 class TestExecutionMode(unittest.TestCase):
@@ -157,7 +157,8 @@ class TestParseRoutingWithModes(unittest.TestCase):
     def test_mode_command_sets_execution_mode(self):
         app, _, _ = self._make_app()
         with patch("quimera.app.core.plugins") as mp:
-            mp.get = lambda n: {"claude": MagicMock(prefix="/claude", name="claude"), "codex": MagicMock(prefix="/codex", name="codex")}.get(n)
+            mp.get = lambda n: {"claude": MagicMock(prefix="/claude", name="claude"),
+                                "codex": MagicMock(prefix="/codex", name="codex")}.get(n)
             app.parse_routing("/planning")
         self.assertIsNotNone(app.execution_mode)
         self.assertEqual(app.execution_mode.name, "planning")
@@ -165,14 +166,16 @@ class TestParseRoutingWithModes(unittest.TestCase):
     def test_mode_propagates_to_policy(self):
         app, _, _ = self._make_app()
         with patch("quimera.app.core.plugins") as mp:
-            mp.get = lambda n: {"claude": MagicMock(prefix="/claude", name="claude"), "codex": MagicMock(prefix="/codex", name="codex")}.get(n)
+            mp.get = lambda n: {"claude": MagicMock(prefix="/claude", name="claude"),
+                                "codex": MagicMock(prefix="/codex", name="codex")}.get(n)
             app.parse_routing("/planning faz algo")
         self.assertIn("write_file", app.tool_executor.policy.blocked_tools)
 
     def test_mode_propagates_to_agent_client(self):
         app, _, _ = self._make_app()
         with patch("quimera.app.core.plugins") as mp:
-            mp.get = lambda n: {"claude": MagicMock(prefix="/claude", name="claude"), "codex": MagicMock(prefix="/codex", name="codex")}.get(n)
+            mp.get = lambda n: {"claude": MagicMock(prefix="/claude", name="claude"),
+                                "codex": MagicMock(prefix="/codex", name="codex")}.get(n)
             app.parse_routing("/analysis analise o código")
         self.assertIsNotNone(app.agent_client.execution_mode)
         self.assertEqual(app.agent_client.execution_mode.name, "analysis")
@@ -182,14 +185,16 @@ class TestParseRoutingWithModes(unittest.TestCase):
         # Primeiro ativa planning
         app.tool_executor.policy.blocked_tools = ["write_file", "apply_patch"]
         with patch("quimera.app.core.plugins") as mp:
-            mp.get = lambda n: {"claude": MagicMock(prefix="/claude", name="claude"), "codex": MagicMock(prefix="/codex", name="codex")}.get(n)
+            mp.get = lambda n: {"claude": MagicMock(prefix="/claude", name="claude"),
+                                "codex": MagicMock(prefix="/codex", name="codex")}.get(n)
             app.parse_routing("/execute faz a tarefa")
         self.assertEqual(app.tool_executor.policy.blocked_tools, [])
 
     def test_execute_mode_announces_previous_restrictions_were_removed(self):
         app, _, _ = self._make_app()
         with patch("quimera.app.core.plugins") as mp:
-            mp.get = lambda n: {"claude": MagicMock(prefix="/claude", name="claude"), "codex": MagicMock(prefix="/codex", name="codex")}.get(n)
+            mp.get = lambda n: {"claude": MagicMock(prefix="/claude", name="claude"),
+                                "codex": MagicMock(prefix="/codex", name="codex")}.get(n)
             app.parse_routing("/execute faz a tarefa")
         app.renderer.show_system.assert_any_call(
             "[modo] execute ativado — restrições anteriores removidas; ferramentas bloqueadas: nenhuma"

@@ -14,9 +14,9 @@ def _merge_staging_to_workspace(staging_root: Path, workspace: Path):
     """Helper de merge para testes - simula app._merge_staging_to_workspace."""
     if not staging_root.exists():
         return
-    
+
     index_dirs = sorted(staging_root.iterdir(), key=lambda p: int(p.name) if p.name.isdigit() else 999)
-    
+
     for index_dir in index_dirs:
         if not index_dir.is_dir():
             continue

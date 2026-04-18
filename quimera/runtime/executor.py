@@ -5,7 +5,7 @@ from .approval import ApprovalHandler
 from .config import ToolRuntimeConfig
 from .models import ToolCall, ToolResult
 from .parser import ToolCallParseError, extract_tool_call
-from .policy import ToolPolicy, ToolPolicyError, PathPermissionError
+from .policy import ToolPolicy, ToolPolicyError
 from .registry import ToolRegistry
 from .tools.files import FileTools
 from .tools.patch import PatchTool
@@ -23,11 +23,11 @@ class ToolExecutor:
     }
 
     def __init__(
-        self,
-        config: ToolRuntimeConfig,
-        approval_handler: ApprovalHandler,
-        registry: ToolRegistry | None = None,
-        policy: ToolPolicy | None = None,
+            self,
+            config: ToolRuntimeConfig,
+            approval_handler: ApprovalHandler,
+            registry: ToolRegistry | None = None,
+            policy: ToolPolicy | None = None,
     ) -> None:
         """Inicializa uma instância de ToolExecutor."""
         self.config = config
@@ -62,7 +62,7 @@ class ToolExecutor:
         normalized_call = self._normalize_call(call)
         try:
             self.policy.validate(normalized_call)
-            
+
             permission_error = self.policy.check_path_permission(normalized_call)
             if permission_error:
                 approved = self.approval_handler.approve(
@@ -71,7 +71,7 @@ class ToolExecutor:
                 )
                 if not approved:
                     return ToolResult(ok=False, tool_name=normalized_call.name, error="Acesso negado pelo usuário")
-            
+
             if self.policy.requires_approval(normalized_call):
                 approved = self.approval_handler.approve(
                     tool_name=normalized_call.name,

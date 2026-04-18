@@ -1,5 +1,6 @@
 """Componentes de `quimera.session_summary`."""
 
+
 def _is_cancelled(agent_client) -> bool:
     """Indica se houve cancelamento cooperativo do resumo."""
     if getattr(agent_client, "_user_cancelled", False):
@@ -10,6 +11,7 @@ def _is_cancelled(agent_client) -> bool:
 
 def build_chain_summarizer(agent_client, agents):
     """Tenta cada agente em ordem; retorna o primeiro resultado bem-sucedido ou None."""
+
     def _ordered_agents(preferred_agent=None):
         if preferred_agent and preferred_agent in agents:
             return [preferred_agent, *[agent for agent in agents if agent != preferred_agent]]

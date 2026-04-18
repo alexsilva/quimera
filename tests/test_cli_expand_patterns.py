@@ -1,4 +1,3 @@
-
 from quimera.cli import _expand_patterns
 
 

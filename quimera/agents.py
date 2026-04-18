@@ -1,5 +1,4 @@
 """Componentes de `quimera.agents`."""
-from contextlib import nullcontext
 import json
 import logging
 import os
@@ -7,9 +6,9 @@ import queue
 import re
 import signal
 import subprocess
-import sys
 import threading
 import time
+from contextlib import nullcontext
 from datetime import datetime, timezone
 
 import quimera.plugins as plugins
@@ -25,6 +24,7 @@ _ANSI_ESCAPE = re.compile(r'\x1B\[[0-?]*[ -/]*[@-~]')
 
 class _SyntheticToolResult:
     """Representa uma tool call executada internamente pelo agente CLI."""
+
     def __init__(self, ok: bool = True, error: str | None = None):
         self.ok = ok
         self.error = error
@@ -44,7 +44,8 @@ def _should_ignore_stderr_line(agent: str | None, line: str) -> bool:
 class AgentClient:
     """Executa os agentes externos no diretório de trabalho do projeto."""
 
-    def __init__(self, renderer, metrics_file=None, timeout=None, spy=False, working_dir=None, workspace_root=None, tool_executor=None):
+    def __init__(self, renderer, metrics_file=None, timeout=None, spy=False, working_dir=None, workspace_root=None,
+                 tool_executor=None):
         """Inicializa uma instância de AgentClient."""
         self.renderer = renderer
         self.metrics_file = metrics_file
@@ -194,7 +195,8 @@ class AgentClient:
                                         self.renderer.show_plain(cleaned, agent=agent)
                                         stderr_lines_shown += 1
                                     elif stderr_lines_shown == MAX_STDERR_LINES:
-                                        self.renderer.show_plain(f"... (stderr truncado, máximo {MAX_STDERR_LINES} linhas)", agent=agent)
+                                        self.renderer.show_plain(
+                                            f"... (stderr truncado, máximo {MAX_STDERR_LINES} linhas)", agent=agent)
                                         stderr_lines_shown += 1
                                 else:
                                     self.renderer.show_plain(cleaned, agent=agent)
@@ -222,7 +224,8 @@ class AgentClient:
                                 self._agent_running = False
                                 self._current_proc = None
                                 self._stop_esc_monitor()
-                                self.renderer.show_error(f"[erro] timeout after {self.timeout}s without output from {cmd[0]}")
+                                self.renderer.show_error(
+                                    f"[erro] timeout after {self.timeout}s without output from {cmd[0]}")
                                 return None
                 stdout_thread.join()
                 stderr_thread.join()
@@ -414,7 +417,8 @@ class AgentClient:
         self._cancel_event.clear()
         self._agent_running = True
         self._start_esc_monitor()
-        status_cm = self.renderer.running_status("", agent=agent) if (show_status and not silent and not quiet) else nullcontext(None)
+        status_cm = self.renderer.running_status("", agent=agent) if (
+                    show_status and not silent and not quiet) else nullcontext(None)
         status_label = f"[dim]{'conectando' if is_first_call else 'aguardando'} {plugin.model}...[/dim]"
 
         try:
@@ -433,7 +437,8 @@ class AgentClient:
                             cancel_event=self._cancel_event,
                             on_tool_result=(lambda tool_result: self.tool_event_callback(agent, result=tool_result))
                             if self.tool_event_callback else None,
-                            on_tool_abort=(lambda reason: self.tool_event_callback(agent, loop_abort=True, reason=reason))
+                            on_tool_abort=(
+                                lambda reason: self.tool_event_callback(agent, loop_abort=True, reason=reason))
                             if self.tool_event_callback else None,
                         )
                     except Exception as exc:
@@ -455,7 +460,8 @@ class AgentClient:
 
                 if result_holder["error"]:
                     _cmd = getattr(plugin, "cmd", None)
-                    _name = (_cmd[0] if isinstance(_cmd, (list, tuple)) and _cmd else None) or getattr(plugin, "model", "driver")
+                    _name = (_cmd[0] if isinstance(_cmd, (list, tuple)) and _cmd else None) or getattr(plugin, "model",
+                                                                                                       "driver")
                     self.renderer.show_error(f"[erro] falha ao comunicar com {_name}: {result_holder['error']}")
                     return None
 
@@ -465,9 +471,9 @@ class AgentClient:
             self._stop_esc_monitor()
 
     def log_prompt_metrics(
-        self, agent, metrics, session_id=None,
-        round_index=0, session_call_index=0,
-        history_window=12, protocol_mode="standard",
+            self, agent, metrics, session_id=None,
+            round_index=0, session_call_index=0,
+            history_window=12, protocol_mode="standard",
     ):
         """Exibe métricas do prompt e persiste em JSONL quando metrics_file estiver configurado."""
         largest_block = max(

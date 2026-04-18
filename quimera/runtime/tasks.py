@@ -16,41 +16,44 @@ def get_conn(db_path):
     conn.execute("PRAGMA foreign_keys = ON;")
     return conn
 
+
 def init_db(db_path=None):
     """Executa init db."""
     conn = get_conn(db_path)
     cur = conn.cursor()
     cur.execute("""
-        CREATE TABLE IF NOT EXISTS jobs (
-            id INTEGER PRIMARY KEY,
-            description TEXT NOT NULL,
-            status TEXT NOT NULL,
-            created_by TEXT,
-            created_at DATETIME,
-            updated_at DATETIME
-        );
-    """)
+                CREATE TABLE IF NOT EXISTS jobs
+                (
+                    id          INTEGER PRIMARY KEY,
+                    description TEXT NOT NULL,
+                    status      TEXT NOT NULL,
+                    created_by  TEXT,
+                    created_at  DATETIME,
+                    updated_at  DATETIME
+                );
+                """)
     cur.execute("""
-        CREATE TABLE IF NOT EXISTS tasks (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            job_id INTEGER NOT NULL,
-            description TEXT NOT NULL,
-            body TEXT,
-            status TEXT NOT NULL,
-            task_type TEXT NOT NULL DEFAULT 'general',
-            origin TEXT NOT NULL DEFAULT 'legacy',
-            assigned_to TEXT,
-            result TEXT,
-            notes TEXT,
-            priority TEXT,
-            created_at DATETIME,
-            updated_at DATETIME,
-            created_by TEXT,
-            approved_by TEXT,
-            source_context TEXT,
-            FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE
-        );
-    """)
+                CREATE TABLE IF NOT EXISTS tasks
+                (
+                    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                    job_id         INTEGER NOT NULL,
+                    description    TEXT    NOT NULL,
+                    body           TEXT,
+                    status         TEXT    NOT NULL,
+                    task_type      TEXT    NOT NULL DEFAULT 'general',
+                    origin         TEXT    NOT NULL DEFAULT 'legacy',
+                    assigned_to    TEXT,
+                    result         TEXT,
+                    notes          TEXT,
+                    priority       TEXT,
+                    created_at     DATETIME,
+                    updated_at     DATETIME,
+                    created_by     TEXT,
+                    approved_by    TEXT,
+                    source_context TEXT,
+                    FOREIGN KEY (job_id) REFERENCES jobs (id) ON DELETE CASCADE
+                );
+                """)
     cur.execute("PRAGMA table_info(tasks)")
     existing_columns = {row[1] for row in cur.fetchall()}
     column_specs = {
@@ -67,9 +70,11 @@ def init_db(db_path=None):
     conn.commit()
     conn.close()
 
+
 def _now():
     """Executa now."""
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
 
 def add_job(description, created_by=None, db_path=None, job_id=None):
     """Executa add job."""
@@ -81,8 +86,9 @@ def add_job(description, created_by=None, db_path=None, job_id=None):
         if cur.fetchone():
             conn.close()
             return job_id
-        cur.execute("INSERT INTO jobs(id, description, status, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
-                    (job_id, description, "planning", created_by, now, now))
+        cur.execute(
+            "INSERT INTO jobs(id, description, status, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (job_id, description, "planning", created_by, now, now))
     else:
         cur.execute("INSERT INTO jobs(description, status, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
                     (description, "planning", created_by, now, now))
@@ -90,6 +96,7 @@ def add_job(description, created_by=None, db_path=None, job_id=None):
     conn.commit()
     conn.close()
     return job_id
+
 
 def list_jobs(filt=None, db_path=None):
     """Lista jobs."""
@@ -120,6 +127,7 @@ def list_jobs(filt=None, db_path=None):
         "updated_at": r[5],
     } for r in rows]
 
+
 def get_job(job_id, db_path=None):
     """Retorna job."""
     conn = get_conn(db_path)
@@ -138,42 +146,43 @@ def get_job(job_id, db_path=None):
         "updated_at": row[5],
     }
 
+
 def create_task(
-    job_id,
-    description,
-    *,
-    task_type=TASK_TYPE_GENERAL,
-    assigned_to=None,
-    origin="human_command",
-    status="pending",
-    priority="medium",
-    created_by=None,
-    requested_by=None,
-    notes=None,
-    body=None,
-    source_context=None,
-    db_path=None,
+        job_id,
+        description,
+        *,
+        task_type=TASK_TYPE_GENERAL,
+        assigned_to=None,
+        origin="human_command",
+        status="pending",
+        priority="medium",
+        created_by=None,
+        requested_by=None,
+        notes=None,
+        body=None,
+        source_context=None,
+        db_path=None,
 ):
     """Cria task."""
     conn = get_conn(db_path)
     cur = conn.cursor()
     now = _now()
     cur.execute("""
-        INSERT INTO tasks(
-            job_id, description, body, status, task_type, origin, assigned_to,
-            priority, created_at, updated_at, created_by, requested_by, notes, source_context
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        job_id, description, body, status, task_type, origin, assigned_to,
-        priority, now, now, created_by, requested_by, notes, source_context,
-    ))
+                INSERT INTO tasks(job_id, description, body, status, task_type, origin, assigned_to,
+                                  priority, created_at, updated_at, created_by, requested_by, notes, source_context)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    job_id, description, body, status, task_type, origin, assigned_to,
+                    priority, now, now, created_by, requested_by, notes, source_context,
+                ))
     task_id = cur.lastrowid
     conn.commit()
     conn.close()
     return task_id
 
-def propose_task(job_id, description, priority="medium", created_by=None, notes=None, source_context=None, db_path=None, auto_approve=False, body=None):
+
+def propose_task(job_id, description, priority="medium", created_by=None, notes=None, source_context=None, db_path=None,
+                 auto_approve=False, body=None):
     """Executa propose task."""
     status = "approved" if auto_approve else "proposed"
     return create_task(
@@ -190,6 +199,7 @@ def propose_task(job_id, description, priority="medium", created_by=None, notes=
         db_path=db_path,
     )
 
+
 def approve_task(task_id, approved_by, db_path=None):
     """Aprova task."""
     conn = get_conn(db_path)
@@ -200,10 +210,12 @@ def approve_task(task_id, approved_by, db_path=None):
     if not row or row[0] != "proposed":
         conn.close()
         return False
-    cur.execute("UPDATE tasks SET status = ?, approved_by = ?, updated_at = ? WHERE id = ?", ("approved", approved_by, now, task_id))
+    cur.execute("UPDATE tasks SET status = ?, approved_by = ?, updated_at = ? WHERE id = ?",
+                ("approved", approved_by, now, task_id))
     conn.commit()
     conn.close()
     return True
+
 
 def reject_task(task_id, rejected_by, reason=None, db_path=None):
     """Rejeita task."""
@@ -215,11 +227,12 @@ def reject_task(task_id, rejected_by, reason=None, db_path=None):
     if not row or row[0] != "proposed":
         conn.close()
         return False
-    cur.execute("UPDATE tasks SET status = ?, approved_by = ?, notes = ?, updated_at = ? WHERE id = ?", 
+    cur.execute("UPDATE tasks SET status = ?, approved_by = ?, notes = ?, updated_at = ? WHERE id = ?",
                 ("rejected", rejected_by, reason, now, task_id))
     conn.commit()
     conn.close()
     return True
+
 
 def list_tasks(filt=None, db_path=None):
     """Lista tasks."""
@@ -262,6 +275,7 @@ def list_tasks(filt=None, db_path=None):
         "task_type": r[5], "origin": r[6], "assigned_to": r[7], "result": r[8], "notes": r[9], "priority": r[10],
         "created_at": r[11], "updated_at": r[12], "created_by": r[13], "requested_by": r[14],
     } for r in rows]
+
 
 def release_agent_tasks(agent_name, db_path=None):
     """Release tasks from a failed agent so others can pick them up.
@@ -397,6 +411,7 @@ def claim_task(agent_name, job_id=None, db_path=None):
         conn.close()
         raise
 
+
 def update_task(task_id, status, result=None, notes=None, db_path=None):
     """Atualiza task."""
     conn = get_conn(db_path)
@@ -407,6 +422,7 @@ def update_task(task_id, status, result=None, notes=None, db_path=None):
     conn.commit()
     conn.close()
     return True
+
 
 def complete_task(task_id, result=None, reviewed_by=None, db_path=None):
     """Conclui task."""
@@ -427,9 +443,11 @@ def complete_task(task_id, result=None, reviewed_by=None, db_path=None):
     conn.close()
     return True
 
+
 def fail_task(task_id, reason=None, db_path=None):
     """Marca como falha task."""
     return update_task(task_id, "failed", result=reason, notes=reason, db_path=db_path)
+
 
 def submit_for_review(task_id, result=None, db_path=None):
     """Mark a completed task as pending review by another agent."""
@@ -442,6 +460,7 @@ def submit_for_review(task_id, result=None, db_path=None):
     conn.commit()
     conn.close()
     return True
+
 
 def claim_review_task(agent_name, job_id=None, db_path=None):
     """Atomically claim a pending_review task executed and not already reviewed by this agent."""
@@ -480,10 +499,12 @@ def claim_review_task(agent_name, job_id=None, db_path=None):
         conn.close()
         raise
 
+
 def drop_db(db_path):
     """Remove db."""
     if os.path.exists(db_path):
         os.remove(db_path)
+
 
 __all__ = [
     "init_db", "add_job", "list_jobs",
@@ -554,7 +575,8 @@ if __name__ == "__main__":
             print(j)
         exit(0)
     elif ns.cmd == "propose":
-        tid = propose_task(ns.job_id, ns.description, priority=ns.priority, created_by=ns.by, body=ns.body, db_path=ns.db if hasattr(ns, "db") else None)
+        tid = propose_task(ns.job_id, ns.description, priority=ns.priority, created_by=ns.by, body=ns.body,
+                           db_path=ns.db if hasattr(ns, "db") else None)
         print(f"task:{tid}")
         exit(0)
     elif ns.cmd == "approve":
@@ -577,7 +599,8 @@ if __name__ == "__main__":
             print("no-tasks-available")
         exit(0)
     elif ns.cmd == "update":
-        update_task(ns.task_id, ns.status, result=ns.result, notes=ns.notes, db_path=ns.db if hasattr(ns, "db") else None)
+        update_task(ns.task_id, ns.status, result=ns.result, notes=ns.notes,
+                    db_path=ns.db if hasattr(ns, "db") else None)
         print("updated")
         exit(0)
     elif ns.cmd == "complete":

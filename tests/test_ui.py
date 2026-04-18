@@ -1,5 +1,5 @@
 """Tests for quimera.ui."""
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import patch, MagicMock
 
 import pytest
 
@@ -107,8 +107,8 @@ class TestTerminalRenderer:
         """Test show_message with Rich available."""
         mock_panel = MagicMock()
         with patch("quimera.ui.Panel", return_value=mock_panel), \
-             patch("quimera.ui.Markdown") as mock_md, \
-             patch("quimera.ui._agent_style", return_value=("blue", "Test")):
+                patch("quimera.ui.Markdown") as mock_md, \
+                patch("quimera.ui._agent_style", return_value=("blue", "Test")):
             mock_renderer.show_message("test", "Hello")
 
     def test_show_message_without_rich(self, renderer_no_rich, capsys):
@@ -195,7 +195,7 @@ class TestTerminalRenderer:
         """Test _render_status_panel."""
         mock_renderer._statuses = {"agent1": "running", "agent2": "done"}
         with patch("quimera.ui._agent_style", side_effect=lambda x: ("blue", x.capitalize())), \
-             patch("quimera.ui.Panel") as mock_panel:
+                patch("quimera.ui.Panel") as mock_panel:
             result = mock_renderer._render_status_panel()
             assert mock_panel.called
 

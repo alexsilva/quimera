@@ -25,10 +25,14 @@ TASK_TYPES = (
 )
 
 _TASK_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    (TASK_TYPE_TEST_EXECUTION, ("execute os testes", "executar testes", "rode pytest", "rodar testes", "run tests", "pytest", "testes")),
-    (TASK_TYPE_CODE_REVIEW, ("revise", "review", "analise esse arquivo", "code review", "revisar arquivo", "inspecione")),
-    (TASK_TYPE_CODE_EDIT, ("corrija", "implemente", "edite", "refatore", "refatoração", "refactor", "ajuste", "altere", "modifique")),
-    (TASK_TYPE_BUG_INVESTIGATION, ("investigue", "descubra por que", "erro", "falha", "bug", "quebrou", "não funciona")),
+    (TASK_TYPE_TEST_EXECUTION,
+     ("execute os testes", "executar testes", "rode pytest", "rodar testes", "run tests", "pytest", "testes")),
+    (TASK_TYPE_CODE_REVIEW,
+     ("revise", "review", "analise esse arquivo", "code review", "revisar arquivo", "inspecione")),
+    (TASK_TYPE_CODE_EDIT,
+     ("corrija", "implemente", "edite", "refatore", "refatoração", "refactor", "ajuste", "altere", "modifique")),
+    (TASK_TYPE_BUG_INVESTIGATION,
+     ("investigue", "descubra por que", "erro", "falha", "bug", "quebrou", "não funciona")),
     (TASK_TYPE_ARCHITECTURE, ("arquitetura", "design", "protocolo", "estratégia", "modelagem")),
     (TASK_TYPE_DOCUMENTATION, ("documente", "readme", "explicar", "documentação", "docs")),
 )
@@ -86,9 +90,11 @@ def score_plugin_for_task(plugin: AgentPlugin, task_type: str) -> int:
         score += 5
     if task_type in plugin.avoid_task_types:
         score -= 5
-    if task_type in {TASK_TYPE_CODE_EDIT, TASK_TYPE_BUG_INVESTIGATION, TASK_TYPE_CODE_REVIEW} and plugin.supports_code_editing:
+    if task_type in {TASK_TYPE_CODE_EDIT, TASK_TYPE_BUG_INVESTIGATION,
+                     TASK_TYPE_CODE_REVIEW} and plugin.supports_code_editing:
         score += 2
-    if task_type in {TASK_TYPE_ARCHITECTURE, TASK_TYPE_CODE_REVIEW, TASK_TYPE_DOCUMENTATION} and plugin.supports_long_context:
+    if task_type in {TASK_TYPE_ARCHITECTURE, TASK_TYPE_CODE_REVIEW,
+                     TASK_TYPE_DOCUMENTATION} and plugin.supports_long_context:
         score += 2
     if plugin.supports_tools and task_type in {TASK_TYPE_TEST_EXECUTION, TASK_TYPE_BUG_INVESTIGATION}:
         score += 1

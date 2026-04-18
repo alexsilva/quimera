@@ -1,18 +1,19 @@
-import pytest
-import json
 import threading
-import subprocess
-import os
 from unittest.mock import MagicMock, patch, ANY
+
+import pytest
+
 from quimera.agents import AgentClient, _strip_spinner, _should_ignore_stderr_line
 from quimera.constants import MAX_STDERR_LINES
 from quimera.plugins import get as get_plugin
 from quimera.plugins.claude import _format_claude_spy_event
 from quimera.plugins.codex import _format_codex_spy_event
 
+
 @pytest.fixture
 def renderer():
     return MagicMock()
+
 
 def test_strip_spinner():
     assert _strip_spinner("⠋Executing") == "Executing"
@@ -32,6 +33,7 @@ def test_codex_plugin_reads_prompt_from_stdin():
     assert plugin.prompt_as_arg is False
     assert "/code" in plugin.aliases
 
+
 def test_agent_client_run_success(renderer):
     client = AgentClient(renderer)
     with patch("subprocess.Popen") as mock_popen:
@@ -40,9 +42,10 @@ def test_agent_client_run_success(renderer):
         mock_proc.stderr = []
         mock_proc.returncode = 0
         mock_popen.return_value = mock_proc
-        
+
         result = client.run(["echo", "hi"], silent=True)
         assert result == "Success"
+
 
 def test_agent_client_run_os_error(renderer):
     client = AgentClient(renderer)
@@ -52,6 +55,7 @@ def test_agent_client_run_os_error(renderer):
         assert result is None
         renderer.show_error.assert_called()
 
+
 def test_agent_client_run_failure_return_code(renderer):
     client = AgentClient(renderer)
     with patch("subprocess.Popen") as mock_popen:
@@ -60,10 +64,11 @@ def test_agent_client_run_failure_return_code(renderer):
         mock_proc.stderr = ["Error detail\n"]
         mock_proc.returncode = 1
         mock_popen.return_value = mock_proc
-        
+
         result = client.run(["fail"], silent=True)
         assert result is None
         renderer.show_error.assert_called()
+
 
 def test_agent_client_call(renderer):
     client = AgentClient(renderer)
@@ -72,12 +77,14 @@ def test_agent_client_call(renderer):
         mock_plugin.cmd = ["mock-agent"]
         mock_plugin.prompt_as_arg = False
         mock_get.return_value = mock_plugin
-        
+
         with patch.object(client, "run") as mock_run:
             mock_run.return_value = "output"
             result = client.call("mock", "prompt")
             assert result == "output"
-            mock_run.assert_called_with(["mock-agent"], input_text="prompt", silent=False, agent="mock", show_status=True)
+            mock_run.assert_called_with(["mock-agent"], input_text="prompt", silent=False, agent="mock",
+                                        show_status=True)
+
 
 def test_agent_client_call_prompt_as_arg(renderer):
     client = AgentClient(renderer)
@@ -86,23 +93,26 @@ def test_agent_client_call_prompt_as_arg(renderer):
         mock_plugin.cmd = ["mock-agent"]
         mock_plugin.prompt_as_arg = True
         mock_get.return_value = mock_plugin
-        
+
         with patch.object(client, "run") as mock_run:
             mock_run.return_value = "output"
             result = client.call("mock", "prompt")
             assert result == "output"
-            mock_run.assert_called_with(["mock-agent", "prompt"], input_text=None, silent=False, agent="mock", show_status=True)
+            mock_run.assert_called_with(["mock-agent", "prompt"], input_text=None, silent=False, agent="mock",
+                                        show_status=True)
+
 
 def test_agent_client_log_metrics(renderer, tmp_path):
     metrics_file = tmp_path / "metrics.jsonl"
     client = AgentClient(renderer, metrics_file=str(metrics_file))
     metrics = {"total_chars": 100, "history_chars": 50}
     client.log_prompt_metrics("claude", metrics)
-    
+
     assert metrics_file.exists()
     content = metrics_file.read_text()
     assert '"agent": "claude"' in content
     assert '"total_chars": 100' in content
+
 
 def test_agent_client_run_streaming(renderer):
     # Line 100-161 coverage approx
@@ -114,12 +124,13 @@ def test_agent_client_run_streaming(renderer):
         mock_proc.returncode = 0
         mock_proc.stdin = MagicMock()
         mock_popen.return_value = mock_proc
-        
+
         # Mocking time.sleep to avoid waiting
         with patch("time.sleep"):
             result = client.run(["echo"], silent=False, show_status=True)
             assert "line1" in result
             assert "line2" in result
+
 
 def test_agent_client_run_timeout(renderer):
     # Line 152-161 coverage approx
@@ -131,7 +142,7 @@ def test_agent_client_run_timeout(renderer):
         mock_proc.returncode = 0
         mock_proc.stdin = MagicMock()
         mock_popen.return_value = mock_proc
-        
+
         with patch("threading.Thread") as mock_thread_cls:
             mock_stdout_thread = MagicMock()
             mock_stderr_thread = MagicMock()
@@ -140,7 +151,7 @@ def test_agent_client_run_timeout(renderer):
             mock_stderr_thread.is_alive.return_value = False
             # side_effect needs 3 values: 2 for run() + 1 extra from duplicate code in agents.py
             mock_thread_cls.side_effect = [mock_stdout_thread, mock_stderr_thread, mock_stdout_thread]
-            
+
             with patch("time.time") as mock_time:
                 # 1. last_activity_time = time.time() -> 100.0
                 # 2. start_time = time.time() -> 100.0
@@ -152,17 +163,19 @@ def test_agent_client_run_timeout(renderer):
                     assert result is None
                     renderer.show_error.assert_called()
 
+
 def test_agent_client_run_input_failure(renderer):
     client = AgentClient(renderer)
     with patch("subprocess.Popen") as mock_popen:
         mock_proc = MagicMock()
         mock_proc.stdin.write.side_effect = Exception("broken pipe")
         mock_popen.return_value = mock_proc
-        
+
         result = client.run(["cmd"], input_text="input", silent=True)
         assert result is None
         mock_proc.kill.assert_called()
         renderer.show_error.assert_called()
+
 
 def test_agent_client_run_communication_error(renderer):
     client = AgentClient(renderer)
@@ -172,13 +185,14 @@ def test_agent_client_run_communication_error(renderer):
         mock_proc.stderr = iter([])
         mock_proc.returncode = 0
         mock_popen.return_value = mock_proc
-        
+
         # We need to wait for threads, but we can mock them or force error
         with patch("threading.Thread") as mock_thread:
             # We want to set result_holder["error"]
             # This is hard because result_holder is local to run()
             # Let's mock the whole run method's internals or use a different approach
             pass
+
 
 def test_agent_client_run_silent_logs(renderer):
     client = AgentClient(renderer)
@@ -188,12 +202,13 @@ def test_agent_client_run_silent_logs(renderer):
         mock_proc.stderr = ["Err\n"]
         mock_proc.returncode = 0
         mock_popen.return_value = mock_proc
-        
+
         with patch("quimera.agents._logger") as mock_logger:
             result = client.run(["cmd"], silent=True)
             assert result == "Out"
             mock_logger.debug.assert_called()
             mock_logger.warning.assert_called()
+
 
 def test_agent_client_run_failure_with_tail(renderer):
     client = AgentClient(renderer)
@@ -203,11 +218,12 @@ def test_agent_client_run_failure_with_tail(renderer):
         mock_proc.stderr = ["Line 1\n", "Line 2\n", "Line 3\n", "Line 4\n", "Line 5\n", "Line 6\n"]
         mock_proc.returncode = 1
         mock_popen.return_value = mock_proc
-        
+
         result = client.run(["fail"], silent=True)
         assert result is None
         # Should show error message AND tail (last 5 lines)
         assert renderer.show_error.call_count >= 2
+
 
 def test_agent_client_run_streaming_with_status_and_stderr(renderer):
     # Line 118, 123-129, 131-140 approx
@@ -219,10 +235,10 @@ def test_agent_client_run_streaming_with_status_and_stderr(renderer):
         mock_proc.returncode = 0
         mock_proc.stdin = MagicMock()
         mock_popen.return_value = mock_proc
-        
+
         mock_status = MagicMock()
         renderer.running_status.return_value = mock_status
-        
+
         with patch("time.sleep"):
             result = client.run(["echo"], silent=False, show_status=True)
             assert "out1" in result
@@ -288,7 +304,8 @@ def test_agent_client_run_spy_shows_codex_stdout_context(renderer):
     renderer.show_plain.assert_any_call("contexto: Vou checar o estado do repositório antes de editar", agent="codex")
     renderer.show_plain.assert_any_call("contexto: checando repositório: git status", agent="codex")
     renderer.show_plain.assert_any_call("contexto: checando repositório: git status [ok]", agent="codex")
-    renderer.show_plain.assert_any_call("resposta: Encontrei alterações locais e vou seguir sem revertê-las.", agent="codex")
+    renderer.show_plain.assert_any_call("resposta: Encontrei alterações locais e vou seguir sem revertê-las.",
+                                        agent="codex")
 
 
 def test_agent_client_run_spy_shows_claude_stdout_context(renderer):
@@ -309,8 +326,10 @@ def test_agent_client_run_spy_shows_claude_stdout_context(renderer):
 
     assert result == '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read"},{"type":"text","text":"Vou inspecionar o arquivo antes de sugerir a mudança."}]}}\n{"type":"result","result":"ok","is_error":false}'
     renderer.show_plain.assert_any_call("contexto: usando Read", agent="claude")
-    renderer.show_plain.assert_any_call("resposta: Vou inspecionar o arquivo antes de sugerir a mudança.", agent="claude")
+    renderer.show_plain.assert_any_call("resposta: Vou inspecionar o arquivo antes de sugerir a mudança.",
+                                        agent="claude")
     renderer.show_plain.assert_any_call("contexto: execução concluída", agent="claude")
+
 
 def test_agent_client_run_post_drain(renderer):
     # Line 166-180 approx - Drain remaining queue after threads die
@@ -322,7 +341,7 @@ def test_agent_client_run_post_drain(renderer):
         mock_proc.returncode = 0
         mock_proc.stdin = MagicMock()
         mock_popen.return_value = mock_proc
-        
+
         with patch("threading.Thread") as mock_thread_cls:
             mock_stdout_thread = MagicMock()
             mock_stderr_thread = MagicMock()
@@ -330,13 +349,14 @@ def test_agent_client_run_post_drain(renderer):
             mock_stdout_thread.is_alive.return_value = False
             mock_stderr_thread.is_alive.return_value = False
             mock_thread_cls.side_effect = [mock_stdout_thread, mock_stderr_thread]
-            
+
             # But we put something in the queue manually if we could...
             # Actually, the real threads put things in log_queue.
             # Since we mocked Thread, we have to simulate what they do.
-            
+
             # Let's use a real thread for a moment or mock the queue behavior in the loop
             pass
+
 
 def test_agent_client_run_uses_working_dir(renderer, tmp_path):
     workspace = str(tmp_path)
@@ -387,15 +407,17 @@ def test_agent_client_thread_exceptions(renderer):
     client = AgentClient(renderer)
     with patch("subprocess.Popen") as mock_popen:
         mock_proc = MagicMock()
+
         # stdout that raises exception when iterated
         def error_iter():
             raise Exception("Read error")
             yield "never"
+
         mock_proc.stdout = error_iter()
         mock_proc.stderr = iter([])
         mock_proc.returncode = 0
         mock_popen.return_value = mock_proc
-        
+
         # This will set result_holder["error"]
         result = client.run(["cmd"], silent=True)
         assert result is None
@@ -423,7 +445,7 @@ def test_agent_client_run_empty_stderr_line(renderer):
         mock_proc.returncode = 0
         mock_proc.stdin = MagicMock()
         mock_popen.return_value = mock_proc
-        
+
         with patch("time.sleep"):
             result = client.run(["cmd"], silent=False)
             assert "output" in result
@@ -440,7 +462,7 @@ def test_agent_client_run_stderr_truncation(renderer):
         mock_proc.returncode = 0
         mock_proc.stdin = MagicMock()
         mock_popen.return_value = mock_proc
-        
+
         with patch("time.sleep"):
             result = client.run(["cmd"], silent=False)
             assert "output" in result
@@ -457,7 +479,7 @@ def test_agent_client_run_no_output_with_error(renderer):
         mock_proc.stderr = ["some stderr\n"]
         mock_proc.returncode = 0
         mock_popen.return_value = mock_proc
-        
+
         result = client.run(["cmd"], silent=True)
         assert result is None
         renderer.show_error.assert_called()
@@ -483,12 +505,12 @@ def test_agent_client_call_api_driver(renderer):
         mock_plugin.supports_tools = True
         mock_plugin.tool_use_reliability = "medium"
         mock_get.return_value = mock_plugin
-        
+
         with patch("quimera.agents.OpenAICompatDriver") as mock_driver_cls:
             mock_driver = MagicMock()
             mock_driver.run.return_value = "api response"
             mock_driver_cls.return_value = mock_driver
-            
+
             with patch.object(client, "_api_drivers", {}):
                 result = client.call("test-agent", "prompt")
             mock_driver_cls.assert_called()
@@ -514,10 +536,12 @@ def test_parse_codex_json(renderer):
     # Line 249-271: _parse_codex_json
     client = AgentClient(renderer)
     callback_called = []
+
     def track_callback(agent, result=None, loop_abort=None, reason=None):
         callback_called.append(True)
+
     client.tool_event_callback = track_callback
-    
+
     raw = '{"type":"item.completed","item":{"type":"command_execution","command":"ls","exit_code":0}}'
     result = client._parse_codex_json(raw, "codex")
     assert callback_called
@@ -532,7 +556,8 @@ def test_parse_codex_json_with_text(renderer):
 
 def test_format_codex_spy_event_command():
     started = _format_codex_spy_event('{"type":"item.started","item":{"type":"command_execution","command":"ls"}}')
-    completed = _format_codex_spy_event('{"type":"item.completed","item":{"type":"command_execution","command":"ls","exit_code":0}}')
+    completed = _format_codex_spy_event(
+        '{"type":"item.completed","item":{"type":"command_execution","command":"ls","exit_code":0}}')
     assert started == ["contexto: inspecionando arquivos: ls"]
     assert completed == ["contexto: inspecionando arquivos: ls [ok]"]
 
@@ -588,7 +613,7 @@ def test_agent_client_call_stream_json_format(renderer):
         mock_plugin.prompt_as_arg = False
         mock_plugin.output_format = "stream-json"
         mock_get.return_value = mock_plugin
-        
+
         with patch.object(client, "run") as mock_run:
             mock_run.return_value = '{"type":"result","result":"parsed"}'
             result = client.call("agent", "prompt")
@@ -629,8 +654,8 @@ def test_call_api_starts_and_stops_esc_monitor(renderer):
     )
 
     with patch("quimera.agents.OpenAICompatDriver") as mock_driver_cls, \
-         patch.object(client, "_start_esc_monitor") as mock_start, \
-         patch.object(client, "_stop_esc_monitor") as mock_stop:
+            patch.object(client, "_start_esc_monitor") as mock_start, \
+            patch.object(client, "_stop_esc_monitor") as mock_stop:
         mock_driver = MagicMock()
         mock_driver.run.return_value = "ok"
         mock_driver_cls.return_value = mock_driver
@@ -656,8 +681,8 @@ def test_call_api_passes_cancel_event_to_driver(renderer):
     )
 
     with patch("quimera.agents.OpenAICompatDriver") as mock_driver_cls, \
-         patch.object(client, "_start_esc_monitor"), \
-         patch.object(client, "_stop_esc_monitor"):
+            patch.object(client, "_start_esc_monitor"), \
+            patch.object(client, "_stop_esc_monitor"):
         mock_driver = MagicMock()
         mock_driver.run.return_value = "result"
         mock_driver_cls.return_value = mock_driver
@@ -687,8 +712,8 @@ def test_call_api_cancel_event_detection(renderer):
     driver_started = _threading.Event()
 
     with patch("quimera.agents.OpenAICompatDriver") as mock_driver_cls, \
-         patch.object(client, "_start_esc_monitor"), \
-         patch.object(client, "_stop_esc_monitor"):
+            patch.object(client, "_start_esc_monitor"), \
+            patch.object(client, "_stop_esc_monitor"):
         mock_driver = MagicMock()
 
         def slow_run(**kwargs):
@@ -728,8 +753,8 @@ def test_call_api_stop_monitor_called_on_error(renderer):
     )
 
     with patch("quimera.agents.OpenAICompatDriver") as mock_driver_cls, \
-         patch.object(client, "_start_esc_monitor"), \
-         patch.object(client, "_stop_esc_monitor") as mock_stop:
+            patch.object(client, "_start_esc_monitor"), \
+            patch.object(client, "_stop_esc_monitor") as mock_stop:
         mock_driver = MagicMock()
         mock_driver.run.side_effect = RuntimeError("conexão recusada")
         mock_driver_cls.return_value = mock_driver
@@ -747,7 +772,6 @@ def test_call_api_stop_monitor_called_on_error(renderer):
 
 def test_signal_handler_sets_cancel_event(renderer):
     """cancel_event existe e pode ser settado via código ou signal."""
-    import signal as _signal
     client = AgentClient(renderer)
 
     assert hasattr(client, "_cancel_event")
@@ -826,7 +850,6 @@ def test_terminate_process_group_uses_killpg(renderer):
 
 def test_cancel_event_cleared_on_start(renderer):
     """_cancel_event pode ser limpo antes de iniciar."""
-    import signal as _signal
     client = AgentClient(renderer)
 
     client._cancel_event.set()

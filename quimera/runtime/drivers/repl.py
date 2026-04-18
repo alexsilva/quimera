@@ -17,12 +17,12 @@ from typing import Optional
 from urllib import error as urllib_error
 from urllib import request as urllib_request
 
-from ...plugins import base as _plugin_registry
+from .openai_compat import OpenAICompatDriver
 from ..approval import AutoApprovalHandler, ConsoleApprovalHandler
 from ..config import ToolRuntimeConfig
 from ..executor import ToolExecutor
 from ..models import ToolResult
-from .openai_compat import OpenAICompatDriver
+from ...plugins import base as _plugin_registry
 
 _SEP = "─" * 60
 
@@ -150,12 +150,12 @@ class DriverRepl:
     def run(self, one_shot_prompt: str | None = None) -> None:
         """Executa run."""
         self.ensure_backend_available()
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print(f"  Driver REPL  •  {self.plugin.name}")
         print(f"  Modelo : {self.plugin.model}")
         print(f"  URL    : {self.plugin.base_url}")
         print(f"  Dir    : {self.working_dir}")
-        print(f"{'='*60}")
+        print(f"{'=' * 60}")
 
         if one_shot_prompt is not None:
             print(f"  [modo one-shot]\n")
@@ -170,7 +170,7 @@ class DriverRepl:
         print("    /tools      — reabilita ferramentas")
         print("    /info       — mostra configuração atual")
         print("    exit / sair — encerra")
-        print(f"{'='*60}\n")
+        print(f"{'=' * 60}\n")
 
         use_tools = True
 

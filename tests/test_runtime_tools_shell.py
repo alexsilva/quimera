@@ -1,14 +1,17 @@
-import pytest
-import warnings
-from unittest.mock import patch, MagicMock
 from pathlib import Path
-from quimera.runtime.tools.shell import ShellTool
+from unittest.mock import patch, MagicMock
+
+import pytest
+
 from quimera.runtime.config import ToolRuntimeConfig
 from quimera.runtime.models import ToolCall
+from quimera.runtime.tools.shell import ShellTool
+
 
 @pytest.fixture
 def config():
     return ToolRuntimeConfig(workspace_root=Path("/tmp"))
+
 
 def test_shell_tool_run_basic(config):
     tool = ShellTool(config)
@@ -18,6 +21,7 @@ def test_shell_tool_run_basic(config):
         result = tool.run_shell(call)
         assert result.ok is True
         assert "hello" in result.content
+
 
 def test_shell_tool_with_staging_warning(config):
     # Line 21 coverage

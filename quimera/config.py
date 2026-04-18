@@ -2,6 +2,7 @@
 import json
 
 from .themes import DEFAULT_THEME, names as theme_names
+
 DEFAULT_USER_NAME = "Você"
 DEFAULT_HISTORY_WINDOW = 8
 DEFAULT_AUTO_SUMMARIZE_THRESHOLD = 30

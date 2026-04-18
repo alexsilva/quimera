@@ -1,18 +1,23 @@
-import pytest
-from unittest.mock import MagicMock, patch
 from pathlib import Path
-from quimera.runtime.executor import ToolExecutor
-from quimera.runtime.models import ToolCall, ToolResult
+from unittest.mock import MagicMock, patch
+
+import pytest
+
 from quimera.runtime.config import ToolRuntimeConfig
+from quimera.runtime.executor import ToolExecutor
+from quimera.runtime.models import ToolCall
 from quimera.runtime.task_executor import TaskExecutor
+
 
 @pytest.fixture
 def config():
     return ToolRuntimeConfig(workspace_root=Path("/tmp"))
 
+
 @pytest.fixture
 def approval_handler():
     return MagicMock()
+
 
 def test_executor_denied(config, approval_handler):
     # Line 58-59 coverage
@@ -23,6 +28,7 @@ def test_executor_denied(config, approval_handler):
     assert result.ok is False
     assert "Execução negada" in result.error
 
+
 def test_executor_apply_patch_requires_approval(config, approval_handler):
     executor = ToolExecutor(config, approval_handler)
     call = ToolCall(name="apply_patch", arguments={"patch": "*** Begin Patch\n*** End Patch"})
@@ -30,6 +36,7 @@ def test_executor_apply_patch_requires_approval(config, approval_handler):
     result = executor.execute(call)
     assert result.ok is False
     assert "Execução negada" in result.error
+
 
 def test_executor_unexpected_exception(config, approval_handler):
     # Line 64-65 coverage
@@ -42,12 +49,14 @@ def test_executor_unexpected_exception(config, approval_handler):
         assert result.ok is False
         assert "Falha inesperada: Boom" in result.error
 
+
 def test_maybe_execute_from_response_parse_error(config, approval_handler):
     executor = ToolExecutor(config, approval_handler)
     response = '<tool function="read_file" arguments="{invalid}" />'
     text, result = executor.maybe_execute_from_response(response)
     assert result.ok is False
     assert result.tool_name == "parse"
+
 
 def test_maybe_execute_from_response_none(config, approval_handler):
     executor = ToolExecutor(config, approval_handler)
@@ -90,7 +99,7 @@ def test_task_executor_skips_review_claim_when_agent_is_not_operational(tmp_path
         executor._running = False
 
     with patch("quimera.runtime.task_executor.claim_task", return_value=None), patch(
-        "quimera.runtime.task_executor.claim_review_task"
+            "quimera.runtime.task_executor.claim_review_task"
     ) as claim_review_task, patch("quimera.runtime.task_executor.time.sleep", side_effect=stop_loop):
         executor._poll_loop()
 

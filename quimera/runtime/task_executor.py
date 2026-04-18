@@ -2,19 +2,20 @@
 Task executor for Stage 5 - autonomous task consumption and execution.
 """
 import logging
+import queue
 import threading
 import time
-import queue
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Optional
 
-from .tasks import list_tasks, claim_task, complete_task, fail_task, get_conn, claim_review_task
+from .tasks import list_tasks, claim_task, fail_task, claim_review_task
 
 _logger = logging.getLogger("quimera.task_executor")
 
 
 class TaskExecutor:
     """Implementa `TaskExecutor`."""
+
     def __init__(self, agent_name: str, db_path, max_workers: int = 2, poll_interval: float = 5.0, job_id=None):
         """Inicializa uma instância de TaskExecutor."""
         if not db_path:
@@ -43,7 +44,7 @@ class TaskExecutor:
     def set_review_eligibility(self, predicate: Callable[[], bool]):
         """Set a dynamic predicate that decides whether this agent may claim review work."""
         self._review_eligibility = predicate
-    
+
     def start(self):
         """Executa start."""
         if self._running:
@@ -51,7 +52,7 @@ class TaskExecutor:
         self._running = True
         self._thread = threading.Thread(target=self._poll_loop, daemon=True)
         self._thread.start()
-    
+
     def stop(self):
         """Executa stop."""
         self._running = False
@@ -60,7 +61,7 @@ class TaskExecutor:
                 self._thread.join(timeout=5)
             except KeyboardInterrupt:
                 _logger.debug("task executor stop interrupted for agent=%s", self.agent_name)
-    
+
     def _poll_loop(self):
         """Executa poll loop."""
         while self._running:
@@ -104,7 +105,7 @@ class TaskExecutor:
                     except Exception:
                         pass
                 time.sleep(self.poll_interval)
-    
+
     def process_pending(self):
         """Process one iteration of pending tasks (for manual/batch execution)."""
         task_id = claim_task(self.agent_name, job_id=self.job_id, db_path=self.db_path)

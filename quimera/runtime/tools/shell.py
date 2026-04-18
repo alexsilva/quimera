@@ -11,9 +11,9 @@ import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import files as file_tools
 from ..config import ToolRuntimeConfig
 from ..models import ToolCall, ToolResult
-from . import files as file_tools
 
 
 @dataclass
@@ -36,6 +36,7 @@ class CommandSession:
 
 class ShellTool:
     """Implementa `ShellTool`."""
+
     def __init__(self, config: ToolRuntimeConfig) -> None:
         """Inicializa uma instância de ShellTool."""
         self.config = config
@@ -53,7 +54,7 @@ class ShellTool:
                 UserWarning,
                 stacklevel=2,
             )
-        
+
         command = str(call.arguments["command"])
         started = time.perf_counter()
         proc = subprocess.run(
@@ -217,13 +218,13 @@ class ShellTool:
         return max(0, int(raw_value))
 
     def _spawn_process(
-        self,
-        command: str,
-        workdir: Path,
-        *,
-        shell: str,
-        login: bool,
-        tty: bool,
+            self,
+            command: str,
+            workdir: Path,
+            *,
+            shell: str,
+            login: bool,
+            tty: bool,
     ) -> tuple[subprocess.Popen, int | None]:
         """Cria o subprocesso usado por exec_command."""
         shell_args = [shell, "-lc" if login else "-c", command]
@@ -251,13 +252,13 @@ class ShellTool:
         return process, None
 
     def _create_session(
-        self,
-        process: subprocess.Popen,
-        *,
-        command: str,
-        cwd: Path,
-        tty: bool,
-        tty_master_fd: int | None,
+            self,
+            process: subprocess.Popen,
+            *,
+            command: str,
+            cwd: Path,
+            tty: bool,
+            tty_master_fd: int | None,
     ) -> CommandSession:
         """Registra uma nova sessão interativa e devolve seu estado."""
         with self._sessions_lock:
@@ -323,12 +324,12 @@ class ShellTool:
         ).start()
 
     def _collect_session_result(
-        self,
-        session: CommandSession,
-        *,
-        yield_time_ms: int,
-        tool_name: str,
-        include_session_id: bool,
+            self,
+            session: CommandSession,
+            *,
+            yield_time_ms: int,
+            tool_name: str,
+            include_session_id: bool,
     ) -> ToolResult:
         """Coleta a saída incremental de uma sessão e devolve o estado atual."""
         deadline = time.perf_counter() + (yield_time_ms / 1000)

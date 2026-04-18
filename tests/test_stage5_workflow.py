@@ -6,8 +6,7 @@ import unittest
 from quimera.runtime.tasks import (
     init_db, add_job, create_task, propose_task, approve_task, reject_task,
     list_tasks, list_jobs, claim_task, update_task, complete_task,
-    fail_task, requeue_task, drop_db, get_conn,
-)
+    fail_task, requeue_task, )
 
 
 class TestStage5Workflow(unittest.TestCase):
@@ -25,8 +24,10 @@ class TestStage5Workflow(unittest.TestCase):
         job_id = add_job("Refactor auth module", created_by="alex", db_path=self.tmp)
         self.assertIsInstance(job_id, int)
 
-        t1 = create_task(job_id, "Add JWT validation", task_type="code_edit", assigned_to="agent-2", origin="human_command", db_path=self.tmp)
-        t2 = create_task(job_id, "Update login endpoint", task_type="code_edit", assigned_to="agent-2", origin="human_command", db_path=self.tmp)
+        t1 = create_task(job_id, "Add JWT validation", task_type="code_edit", assigned_to="agent-2",
+                         origin="human_command", db_path=self.tmp)
+        t2 = create_task(job_id, "Update login endpoint", task_type="code_edit", assigned_to="agent-2",
+                         origin="human_command", db_path=self.tmp)
 
         claimed = claim_task("agent-2", db_path=self.tmp)
         self.assertEqual(claimed, t1)

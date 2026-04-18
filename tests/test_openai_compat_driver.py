@@ -347,7 +347,8 @@ def test_run_tools_system_prompt_guides_tool_usage():
     assert "não repita o mesmo payload inválido" in system_message["content"]
     assert '"action":"execute"' in system_message["content"]
     assert "read_file usa 'path', não 'file_path'" in system_message["content"]
-    assert "use exatamente 'run_shell' para uma execução simples ou 'exec_command' para sessão interativa" in system_message["content"]
+    assert "use exatamente 'run_shell' para uma execução simples ou 'exec_command' para sessão interativa" in \
+           system_message["content"]
     assert "nunca invente nomes como 'run', 'run_shell_command' ou 'execute_command'" in system_message["content"]
     assert "Workspace raiz: /tmp/workspace." in system_message["content"]
     tool_names = {tool["function"]["name"] for tool in mock_client.chat.completions.create.call_args[1]["tools"]}
@@ -443,8 +444,8 @@ def test_driver_repl_probe_backend_success():
     fake_response.__exit__.return_value = False
 
     with patch("quimera.runtime.drivers.repl._plugin_registry.get", return_value=fake_plugin), \
-         patch("quimera.runtime.drivers.repl.urllib_request.urlopen", return_value=fake_response), \
-         patch("quimera.runtime.drivers.repl.OpenAICompatDriver"):
+            patch("quimera.runtime.drivers.repl.urllib_request.urlopen", return_value=fake_response), \
+            patch("quimera.runtime.drivers.repl.OpenAICompatDriver"):
         repl = DriverRepl("ollama-qwen")
         repl.ensure_backend_available()
 
@@ -459,11 +460,11 @@ def test_driver_repl_probe_backend_unavailable_raises_clear_error():
     )
 
     with patch("quimera.runtime.drivers.repl._plugin_registry.get", return_value=fake_plugin), \
-         patch("quimera.runtime.drivers.repl.OpenAICompatDriver"), \
-         patch(
-             "quimera.runtime.drivers.repl.urllib_request.urlopen",
-             side_effect=OSError("connection refused"),
-         ):
+            patch("quimera.runtime.drivers.repl.OpenAICompatDriver"), \
+            patch(
+                "quimera.runtime.drivers.repl.urllib_request.urlopen",
+                side_effect=OSError("connection refused"),
+            ):
         repl = DriverRepl("ollama-qwen")
         with pytest.raises(RuntimeError, match="indisponível"):
             repl.ensure_backend_available()
@@ -594,7 +595,7 @@ def test_agent_client_passes_tool_use_reliability_to_api_driver():
     )
 
     with patch("quimera.plugins.get", return_value=plugin), \
-         patch("quimera.agents.OpenAICompatDriver") as mock_driver_cls:
+            patch("quimera.agents.OpenAICompatDriver") as mock_driver_cls:
         mock_driver = MagicMock()
         mock_driver.run.return_value = "ok"
         mock_driver_cls.return_value = mock_driver
@@ -758,7 +759,8 @@ def test_existing_cli_plugins_still_register():
     claude = plugins.get("claude")
     assert claude is not None
     assert claude.driver == "cli"
-    assert claude.cmd == ["claude", "--permission-mode=bypassPermissions", "--output-format=stream-json", "--verbose", "-p"]
+    assert claude.cmd == ["claude", "--permission-mode=bypassPermissions", "--output-format=stream-json", "--verbose",
+                          "-p"]
 
     mock = plugins.get("mock")
     assert mock is not None

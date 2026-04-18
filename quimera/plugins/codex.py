@@ -117,7 +117,7 @@ plugin = AgentPlugin(
     # evita esse modo ambíguo e garante EOF explícito após o prompt.
     prompt_as_arg=False,
     style=("blue", "Codex"),
-    capabilities=["code_editing", "code_review","test_execution", "bug_investigation", "tool_use"],
+    capabilities=["code_editing", "code_review", "test_execution", "bug_investigation", "tool_use"],
     preferred_task_types=["code_edit", "code_review", "test_execution", "bug_investigation", "general"],
     avoid_task_types=[],
     supports_tools=True,

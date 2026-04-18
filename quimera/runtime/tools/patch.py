@@ -4,9 +4,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from .files import get_staging_root
 from ..config import ToolRuntimeConfig
 from ..models import ToolCall, ToolResult
-from .files import get_staging_root
 
 
 class PatchApplyError(Exception):
@@ -109,6 +109,7 @@ def _parse_patch(patch: str) -> list[AddFileOp | DeleteFileOp | UpdateFileOp]:
 
 class PatchTool:
     """Implementa `PatchTool`."""
+
     def __init__(self, config: ToolRuntimeConfig) -> None:
         """Inicializa uma instância de PatchTool."""
         self.config = config

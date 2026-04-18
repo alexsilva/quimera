@@ -1,5 +1,4 @@
 """Componentes de `quimera.app.core`."""
-import logging
 import os
 import queue
 import random
@@ -17,7 +16,6 @@ try:
 except ImportError:
     readline = None
 
-from . import inputs as app_input
 from .handlers import PromptAwareStderrHandler
 from .protocol import AppProtocol
 from .session_metrics import SessionMetricsService
@@ -41,10 +39,8 @@ from ..workspace import Workspace
 from ..config import ConfigManager
 from ..metrics import BehaviorMetricsTracker
 from ..constants import (
-    EXTEND_MARKER,
-    NEEDS_INPUT_MARKER,
-    ROUTE_PREFIX,
-    STATE_UPDATE_START, CMD_AGENTS, CMD_ALIASES, CMD_CLEAR, CMD_CONTEXT, CMD_CONTEXT_EDIT, CMD_EDIT, CMD_EXIT, CMD_FILE_PREFIX, CMD_HELP,
+    CMD_AGENTS, CMD_ALIASES, CMD_CLEAR, CMD_CONTEXT, CMD_CONTEXT_EDIT, CMD_EDIT, CMD_EXIT,
+    CMD_FILE_PREFIX, CMD_HELP,
     CMD_PROMPT, CMD_TASK,
     USER_ROLE, MSG_CHAT_STARTED, MSG_SESSION_LOG, MSG_SESSION_STATUS, MSG_MIGRATION,
     MSG_MEMORY_SAVING, MSG_MEMORY_FAILED, MSG_SHUTDOWN,
@@ -54,25 +50,26 @@ from ..constants import (
 from ..modes import MODES, get_mode
 from .config import logger
 
+
 class TurnManager:
     """Gerencia o turno de fala no diálogo humano ↔ agente."""
-    
+
     def __init__(self):
         self._is_human_turn = True
         self._lock = threading.Lock()
         self._human_turn_event = threading.Event()
         self._human_turn_event.set()
-    
+
     @property
     def is_human_turn(self) -> bool:
         with self._lock:
             return self._is_human_turn
-    
+
     @property
     def is_ai_turn(self) -> bool:
         with self._lock:
             return not self._is_human_turn
-    
+
     def next_turn(self) -> None:
         """Alterna o turno: humano <-> agente."""
         with self._lock:
@@ -81,7 +78,7 @@ class TurnManager:
                 self._human_turn_event.set()
             else:
                 self._human_turn_event.clear()
-    
+
     def reset(self) -> None:
         """Reseta para turno do humano."""
         with self._lock:
@@ -95,25 +92,6 @@ class TurnManager:
 
 class QuimeraApp:
     """Orquestra comandos locais, roteamento entre agentes e ciclo da sessão."""
-
-    @staticmethod
-    def _available_internal_commands() -> list[str]:
-        """Retorna os comandos internos e aliases aceitos pela aplicação."""
-        commands = {
-            CMD_AGENTS,
-            CMD_CLEAR,
-            CMD_CONTEXT,
-            CMD_CONTEXT_EDIT,
-            CMD_EDIT,
-            CMD_EXIT,
-            CMD_FILE_PREFIX,
-            CMD_HELP,
-            CMD_PROMPT,
-            CMD_TASK,
-            *CMD_ALIASES,
-            *MODES.keys(),
-        }
-        return sorted(commands)
 
     def __init__(self,
                  cwd: Path,
@@ -275,6 +253,25 @@ class QuimeraApp:
         # Set up task executors for autonomous task execution
         self.turn_manager = TurnManager()
         self._setup_task_executors()
+
+    @staticmethod
+    def _available_internal_commands() -> list[str]:
+        """Retorna os comandos internos e aliases aceitos pela aplicação."""
+        commands = {
+            CMD_AGENTS,
+            CMD_CLEAR,
+            CMD_CONTEXT,
+            CMD_CONTEXT_EDIT,
+            CMD_EDIT,
+            CMD_EXIT,
+            CMD_FILE_PREFIX,
+            CMD_HELP,
+            CMD_PROMPT,
+            CMD_TASK,
+            *CMD_ALIASES,
+            *MODES.keys(),
+        }
+        return sorted(commands)
 
     @staticmethod
     def _format_yes_no(value):
@@ -525,8 +522,8 @@ class QuimeraApp:
                     self.persist_message(agent, visible_text)
 
             followup_handoff = (
-                "Histórico de ferramentas desta rodada:\n\n"
-                + "\n\n---\n\n".join(tool_history)
+                    "Histórico de ferramentas desta rodada:\n\n"
+                    + "\n\n---\n\n".join(tool_history)
             )
 
             current_response = self._call_agent(
@@ -611,7 +608,7 @@ class QuimeraApp:
                 "ferramentas bloqueadas: nenhuma"
                 if mode.name == "execute"
                 else f"[modo] {mode.name} ativado — ferramentas bloqueadas: "
-                f"{', '.join(mode.blocked_tools) or 'nenhuma'}"
+                     f"{', '.join(mode.blocked_tools) or 'nenhuma'}"
             )
             if rest:
                 self.renderer.show_system(mode_message)

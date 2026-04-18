@@ -3,10 +3,10 @@ import threading
 import time
 import unittest
 from pathlib import Path
-from unittest.mock import Mock, call, patch
+from unittest.mock import Mock
 
 from quimera.app.core import QuimeraApp, TurnManager
-from quimera.constants import CMD_EXIT, EXTEND_MARKER
+from quimera.constants import CMD_EXIT
 
 
 # ---------------------------------------------------------------------------
@@ -19,9 +19,13 @@ class DummyRenderer:
         self.system_messages = []
 
     def show_system(self, msg): self.system_messages.append(msg)
+
     def show_warning(self, msg): self.warnings.append(msg)
+
     def show_message(self, *a, **kw): pass
+
     def show_no_response(self, *a, **kw): pass
+
     def show_handoff(self, *a, **kw): pass
 
 
@@ -72,7 +76,7 @@ class TestTurnManager(unittest.TestCase):
 
     def test_reset_always_returns_to_human(self):
         tm = TurnManager()
-        tm.next_turn()          # AI
+        tm.next_turn()  # AI
         tm.reset()
         self.assertTrue(tm.is_human_turn)
 
@@ -109,7 +113,7 @@ class TestTurnCycle(unittest.TestCase):
         """_process_chat_message deve devolver o turno ao humano via finally."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.turn_manager = TurnManager()
-        app.turn_manager.next_turn()   # simula: loop já cedeu turno para AI
+        app.turn_manager.next_turn()  # simula: loop já cedeu turno para AI
 
         app._do_process_chat_message = Mock()
 
@@ -258,7 +262,7 @@ class TestSingleAgentPerTurn(unittest.TestCase):
 
         # Primeira chamada retorna extend=True; demais retornam False
         responses = [
-            ("resposta1", None, None, True,  False, None),  # claude, extend=True
+            ("resposta1", None, None, True, False, None),  # claude, extend=True
             ("resposta2", None, None, False, False, None),  # codex
             ("resposta3", None, None, False, False, None),  # claude
             ("resposta4", None, None, False, False, None),  # codex

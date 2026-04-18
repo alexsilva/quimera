@@ -193,11 +193,13 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(classify_task_type("investigue por que o handoff falha"), "bug_investigation")
 
     def test_choose_best_agent_uses_plugin_preferences(self):
-        selected = choose_best_agent("test_execution", [plugins.get("claude"), plugins.get("codex"), plugins.get("ollama-qwen")])
+        selected = choose_best_agent("test_execution",
+                                     [plugins.get("claude"), plugins.get("codex"), plugins.get("ollama-qwen")])
         self.assertEqual(selected, "codex")
 
     def test_choose_best_agent_prefers_tooling_for_test_execution(self):
-        selected = choose_best_agent("test_execution", [plugins.get("claude"), plugins.get("ollama-qwen"), plugins.get("opencode-qwen")])
+        selected = choose_best_agent("test_execution",
+                                     [plugins.get("claude"), plugins.get("ollama-qwen"), plugins.get("opencode-qwen")])
         self.assertEqual(selected, "claude")
 
     def test_choose_best_agent_penalizes_low_reliability_tool_users_for_bug_investigation(self):
@@ -214,18 +216,21 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(selected, "ollama-qwen")
 
     def test_choose_best_agent_does_not_route_general_to_qwen_on_tie_order(self):
-        selected = choose_best_agent("general", [plugins.get("ollama-qwen"), plugins.get("claude"), plugins.get("codex")])
+        selected = choose_best_agent("general",
+                                     [plugins.get("ollama-qwen"), plugins.get("claude"), plugins.get("codex")])
         self.assertEqual(selected, "claude")
 
     def test_choose_best_agent_does_not_route_general_to_opencode_qwen_on_tie_order(self):
-        selected = choose_best_agent("general", [plugins.get("opencode-qwen"), plugins.get("claude"), plugins.get("codex")])
+        selected = choose_best_agent("general",
+                                     [plugins.get("opencode-qwen"), plugins.get("claude"), plugins.get("codex")])
         self.assertEqual(selected, "claude")
 
     def test_choose_best_agent_prefers_higher_tier_for_general_tasks(self):
         # opencode-omni-pro has general preferred (5) + tier 1 (0 boost) = 5
         # codex has general preferred (5) + tier 2 (2 boost) = 7
         # claude has general preferred (5) + tier 3 (4 boost) = 9
-        selected = choose_best_agent("general", [plugins.get("opencode-omni-pro"), plugins.get("claude"), plugins.get("codex")])
+        selected = choose_best_agent("general",
+                                     [plugins.get("opencode-omni-pro"), plugins.get("claude"), plugins.get("codex")])
         self.assertEqual(selected, "claude")
 
     def test_all_code_editing_agents_are_review_eligible(self):

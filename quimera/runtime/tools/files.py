@@ -28,6 +28,7 @@ def set_staging_root(path: Path | None) -> None:
 
 class FileTools:
     """Implementa `FileTools`."""
+
     def __init__(self, config: ToolRuntimeConfig) -> None:
         """Inicializa uma instância de FileTools."""
         self.config = config
@@ -38,13 +39,13 @@ class FileTools:
         staging = get_staging_root()
         base = staging if staging else self.config.workspace_root
         path = (base / normalized).resolve()
-        
+
         for allowed in self.config.allowed_read_roots:
             if staging and path.is_relative_to(staging):
                 return path
             if str(path).startswith(str(allowed)):
                 return path
-        
+
         raise ValueError(f"Path fora da workspace: {raw_path}")
 
     def list_files(self, call: ToolCall) -> ToolResult:
@@ -52,31 +53,31 @@ class FileTools:
         staging = get_staging_root()
         workspace = self.config.workspace_root
         raw_path = call.arguments.get("path", ".")
-        
+
         path = self._resolve(raw_path)
-        
+
         if staging and path.is_relative_to(staging):
             base = path
         else:
             base = path
-        
+
         all_names: dict[str, tuple[Path, bool]] = {}
-        
+
         if base.exists():
             for item in base.iterdir():
                 all_names[item.name] = (item, item.is_dir())
-        
+
         if staging and base != staging and str(path).startswith(str(workspace)):
             staging_check = staging / (raw_path.lstrip("/") or ".")
             if staging_check.exists():
                 for item in staging_check.iterdir():
                     all_names[item.name] = (item, item.is_dir())
-        
+
         entries = []
         for name, (item, is_dir) in sorted(all_names.items(), key=lambda x: (not x[1][1], x[0].lower())):
             suffix = "/" if is_dir else ""
             entries.append(f"{name}{suffix}")
-        
+
         return ToolResult(ok=True, tool_name=call.name, content="\n".join(entries))
 
     def read_file(self, call: ToolCall) -> ToolResult:
@@ -142,17 +143,17 @@ class FileTools:
         base = self._resolve(raw_path)
         pattern = str(call.arguments["pattern"])
         results: list[str] = []
-        
+
         # We always want to search the resolved path (which might be in staging)
         search_paths = [base]
-        
+
         # If we are in staging, we ALSO want to search the corresponding path in the real workspace
         if staging and base.is_relative_to(staging):
             rel = base.relative_to(staging)
             workspace_base = (workspace / rel).resolve()
             if workspace_base.exists() and workspace_base != base:
                 search_paths.append(workspace_base)
-        
+
         seen_results = set()
         for search_path in search_paths:
             if not search_path.exists():
@@ -164,7 +165,7 @@ class FileTools:
                     text = file_path.read_text(encoding="utf-8")
                 except Exception:  # noqa: BLE001
                     continue
-                
+
                 # Determine display path
                 try:
                     display_path = file_path.relative_to(workspace)
@@ -180,7 +181,7 @@ class FileTools:
                         if res_key in seen_results:
                             continue
                         seen_results.add(res_key)
-                        
+
                         results.append(f"{display_path}:{line_no}:{line}")
                         if len(results) >= self.config.max_search_results:
                             return ToolResult(

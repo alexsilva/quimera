@@ -78,7 +78,8 @@ class AppProtocol:
                         logger = self._get_decisions_logger()
                         if logger:
                             for item in value:
-                                logger.append(item, {"workspace": str(app.workspace.cwd) if hasattr(app, "workspace") else None})
+                                logger.append(item, {
+                                    "workspace": str(app.workspace.cwd) if hasattr(app, "workspace") else None})
         return True
 
     def strip_payload_residual(self, app, text):

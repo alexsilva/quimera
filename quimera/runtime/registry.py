@@ -10,6 +10,7 @@ ToolHandler = Callable[[ToolCall], ToolResult]
 
 class ToolRegistry:
     """Implementa `ToolRegistry`."""
+
     def __init__(self) -> None:
         """Inicializa uma instância de ToolRegistry."""
         self._handlers: dict[str, ToolHandler] = {}

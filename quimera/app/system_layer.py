@@ -46,9 +46,9 @@ class AppSystemLayer:
     def _should_defer_active_prompt_message(self, message: str) -> bool:
         """Adia mensagens de task enquanto o input TTY estiver ativo."""
         return (
-            getattr(self.app, "_nonblocking_input_status", None) == "reading"
-            and message.startswith("[task ")
-            and "\n" in message
+                getattr(self.app, "_nonblocking_input_status", None) == "reading"
+                and message.startswith("[task ")
+                and "\n" in message
         )
 
     def flush_deferred_messages(self) -> None:

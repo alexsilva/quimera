@@ -2,12 +2,13 @@
 import json
 import re
 import sys
-from pathlib import Path
 
 from .. import plugins
 from ..constants import CMD_TASK
 from ..constants import NEEDS_INPUT_MARKER, USER_ROLE
 from ..prompt import PromptBuilder
+from ..runtime import create_executor
+from ..runtime import tasks as runtime_tasks
 from ..runtime.parser import strip_tool_block
 from ..runtime.task_planning import (
     can_execute_task,
@@ -16,8 +17,6 @@ from ..runtime.task_planning import (
     normalize_task_description,
     score_plugin_for_task,
 )
-from ..runtime import create_executor
-from ..runtime import tasks as runtime_tasks
 
 
 class AppTaskServices:
@@ -108,17 +107,20 @@ def classify_task_review_result(response: str | None) -> tuple[bool, str, str]:
     if not match:
         return False, "RETENTATIVA", text
     verdict = match.group(1)
-    
+
     lines = text.split("\n")
-    has_justification = any(line.strip() and not re.match(r"^\s*(ACEITE|RETENTATIVA|REPLANEJAR|REJEITAR)\s*$", line, re.IGNORECASE) for line in lines)
+    has_justification = any(
+        line.strip() and not re.match(r"^\s*(ACEITE|RETENTATIVA|REPLANEJAR|REJEITAR)\s*$", line, re.IGNORECASE) for line
+        in lines)
     if verdict == "ACEITE" and not has_justification:
         return False, "RETENTATIVA", "ACEITE sem justificativa"
-    
+
     return verdict == "ACEITE", verdict, text
 
 
 def setup_task_executors(app):
     """Executa setup task executors."""
+
     def is_operational_review_agent(agent_name):
         if agent_name not in (getattr(app, "active_agents", []) or []):
             return False
@@ -267,7 +269,8 @@ def setup_task_executors(app):
                     runtime_tasks.fail_task(task_id, reason="cancelled by user", db_path=app.tasks_db_path)
                     return False
 
-                _resolve_app_callable(app, "show_task_response", "_show_task_response")(task_id, agent_name, response or "")
+                _resolve_app_callable(app, "show_task_response", "_show_task_response")(task_id, agent_name,
+                                                                                        response or "")
                 accepted, verdict, review_text = classify_task_review_result(response)
                 if not accepted:
                     runtime_tasks.requeue_task_after_review(

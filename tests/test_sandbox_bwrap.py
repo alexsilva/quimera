@@ -1,14 +1,12 @@
 """Testes para quimera.sandbox.bwrap."""
 import subprocess
 import tempfile
-import os
 import unittest
 from pathlib import Path
 from unittest.mock import Mock
 
 from quimera.modes import get_mode
 from quimera.sandbox.bwrap import build_bwrap_cmd, is_bwrap_available
-
 
 ANALYSIS = get_mode("/analysis")
 PLANNING = get_mode("/planning")
@@ -76,7 +74,7 @@ class TestBuildBwrapCmd(unittest.TestCase):
         opencode_dir = str(Path.home() / ".local" / "share" / "opencode")
         plugin = self._plugin_with_rw_paths(opencode_dir)
         with patch("quimera.sandbox.bwrap.is_bwrap_available", return_value=True), patch(
-            "quimera.sandbox.bwrap.os.path.exists", return_value=True
+                "quimera.sandbox.bwrap.os.path.exists", return_value=True
         ):
             result = build_bwrap_cmd(PLANNING, "/tmp", ["echo"], plugin=plugin)
         pairs = list(zip(result, result[1:], result[2:]))
@@ -158,7 +156,8 @@ class TestBuildBwrapCmd(unittest.TestCase):
         self.assertEqual(result[idx + 1], wd)
 
 
-@unittest.skipUnless(is_bwrap_usable(), "bwrap indisponível ou sem suporte a user namespace — testes de integração ignorados")
+@unittest.skipUnless(is_bwrap_usable(),
+                     "bwrap indisponível ou sem suporte a user namespace — testes de integração ignorados")
 class TestBwrapIntegration(unittest.TestCase):
     """Testes de integração que executam bwrap de verdade."""
 

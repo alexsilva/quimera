@@ -2,6 +2,7 @@
 import json
 
 from . import plugins
+from .config import DEFAULT_HISTORY_WINDOW
 from .constants import (
     EXTEND_MARKER,
     PROMPT_HEADER,
@@ -12,11 +13,6 @@ from .constants import (
     PROMPT_SPEAKER,
     PROMPT_BASE_RULES,
     PROMPT_DEBATE_RULE,
-    PROMPT_GOAL_LOCK,
-    PROMPT_STEP_LOCK,
-    PROMPT_ACCEPTANCE_CRITERIA,
-    PROMPT_SCOPE_CONTROL,
-    PROMPT_GOAL_EXECUTION_RULES,
     build_route_rule,
     build_tools_prompt,
     PROMPT_SESSION_STATE,
@@ -28,20 +24,19 @@ from .constants import (
     PROMPT_TOOL_RULE,
     PROMPT_AGENT_METRICS,
 )
-from .config import DEFAULT_HISTORY_WINDOW
 
 
 class PromptBuilder:
     """Monta o prompt com contexto persistente e janela recente da conversa."""
 
     def __init__(
-        self,
-        context_manager,
-        history_window=DEFAULT_HISTORY_WINDOW,
-        session_state=None,
-        user_name=None,
-        active_agents=None,
-        metrics_tracker=None,
+            self,
+            context_manager,
+            history_window=DEFAULT_HISTORY_WINDOW,
+            session_state=None,
+            user_name=None,
+            active_agents=None,
+            metrics_tracker=None,
     ):
         """Inicializa uma instância de PromptBuilder."""
         self.context_manager = context_manager
@@ -52,17 +47,17 @@ class PromptBuilder:
         self.metrics_tracker = metrics_tracker
 
     def build(
-        self,
-        agent,
-        history,
-        is_first_speaker=False,
-        handoff=None,
-        debug=False,
-        primary=True,
-        shared_state=None,
-        handoff_only=False,
-        from_agent=None,
-        skip_tool_prompt=False,
+            self,
+            agent,
+            history,
+            is_first_speaker=False,
+            handoff=None,
+            debug=False,
+            primary=True,
+            shared_state=None,
+            handoff_only=False,
+            from_agent=None,
+            skip_tool_prompt=False,
     ):
         """Gera o prompt final enviado ao agente da vez.
 
@@ -278,7 +273,7 @@ class PromptBuilder:
             handoff_id = handoff.get("handoff_id")
             priority = handoff.get("priority", "normal")
             chain = handoff.get("chain", [])
-            
+
             parts = []
             if handoff_id:
                 parts.append(f"HANDOFF_ID:\n{handoff_id}")
@@ -293,7 +288,7 @@ class PromptBuilder:
                 parts.append(f"PRIORITY:\n{priority.upper()}")
             if chain:
                 parts.append(f"CHAIN:\n{' -> '.join(chain)}")
-            
+
             return "\n\n".join(parts).strip()
         return str(handoff).strip()
 

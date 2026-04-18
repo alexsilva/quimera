@@ -13,7 +13,8 @@ class ContextManager:
     SUMMARY_MARKER = "## Resumo da última sessão"
     GENERATED_AT_PREFIX = "_Gerado em "
 
-    def __init__(self, base_context_file, session_context_file, renderer, previous_session_file=None, max_context_lines: int = 2000):
+    def __init__(self, base_context_file, session_context_file, renderer, previous_session_file=None,
+                 max_context_lines: int = 2000):
         """Inicializa uma instância de ContextManager."""
         self.base_context_file = base_context_file
         self.session_context_file = session_context_file

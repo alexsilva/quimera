@@ -1,5 +1,6 @@
 from quimera.runtime.models import ToolResult, ToolCall
 
+
 def test_tool_result_to_model_payload():
     result = ToolResult(
         ok=True,
@@ -16,6 +17,7 @@ def test_tool_result_to_model_payload():
     assert payload["tool_name"] == "test"
     assert payload["content"] == "success"
     assert payload["data"] == {"meta": "info"}
+
 
 def test_tool_call_init():
     call = ToolCall(name="test", arguments={"a": 1})

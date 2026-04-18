@@ -16,6 +16,7 @@ from ..tasks import (
 
 class TaskTools:
     """Implementa `TaskTools`."""
+
     def __init__(self, config: ToolRuntimeConfig) -> None:
         """Inicializa uma instância de TaskTools."""
         self.config = config
@@ -94,9 +95,11 @@ class TaskTools:
         """Retorna job."""
         job_id = self._resolve_job_id(call.arguments.get("job_id"), allow_recent_fallback=True)
         if job_id is None:
-            return ToolResult(ok=False, tool_name=call.name, error="job_id is required (set QUIMERA_CURRENT_JOB_ID or create a job first)")
+            return ToolResult(ok=False, tool_name=call.name,
+                              error="job_id is required (set QUIMERA_CURRENT_JOB_ID or create a job first)")
         try:
             job = _get_job(job_id, db_path=self.config.db_path)
-            return ToolResult(ok=True, tool_name=call.name, content=json.dumps(job) if job is not None else "null", data={"job": job})
+            return ToolResult(ok=True, tool_name=call.name, content=json.dumps(job) if job is not None else "null",
+                              data={"job": job})
         except Exception as exc:  # noqa: BLE001
             return ToolResult(ok=False, tool_name=call.name, error=str(exc))

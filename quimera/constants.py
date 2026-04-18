@@ -175,7 +175,9 @@ TOOL_SCHEMA = {
         "parameters": {
             "path": {"type": "str", "description": "Caminho absoluto do arquivo", "required": True},
             "content": {"type": "str", "description": "Conteúdo a escrever", "required": True},
-            "replace_existing": {"type": "bool", "description": "Use true apenas para sobrescrever arquivo existente por completo", "required": False},
+            "replace_existing": {"type": "bool",
+                                 "description": "Use true apenas para sobrescrever arquivo existente por completo",
+                                 "required": False},
         },
         "example": 'write_file(path="/src/new.py", content="print(\"hello\")")'
     },
@@ -183,7 +185,8 @@ TOOL_SCHEMA = {
         "name": "apply_patch",
         "description": "Aplica um patch textual estruturado. Ferramenta preferida para alterações parciais em arquivos existentes",
         "parameters": {
-            "patch": {"type": "str", "description": "Patch no formato *** Begin Patch ... *** End Patch", "required": True}
+            "patch": {"type": "str", "description": "Patch no formato *** Begin Patch ... *** End Patch",
+                      "required": True}
         },
         "example": 'apply_patch(patch="*** Begin Patch\\n*** Update File: /src/app.py\\n@@\\n-old\\n+new\\n*** End Patch")'
     },
@@ -210,7 +213,8 @@ TOOL_SCHEMA = {
         "parameters": {
             "cmd": {"type": "str", "description": "Comando shell", "required": True},
             "workdir": {"type": "str", "description": "Diretório relativo ao workspace", "required": False},
-            "yield_time_ms": {"type": "int", "description": "Espera por saída parcial antes de retornar", "required": False},
+            "yield_time_ms": {"type": "int", "description": "Espera por saída parcial antes de retornar",
+                              "required": False},
             "tty": {"type": "bool", "description": "Executa em PTY simplificado", "required": False},
         },
         "example": 'exec_command(cmd="python -i", tty=True)'
@@ -238,7 +242,8 @@ TOOL_SCHEMA = {
         "description": "Lista tarefas de um job ou todas",
         "parameters": {
             "job_id": {"type": "int", "description": "Filtrar por job ID", "required": False},
-            "status": {"type": "str", "description": "pending|in_progress|completed|failed|proposed|approved|rejected", "required": False},
+            "status": {"type": "str", "description": "pending|in_progress|completed|failed|proposed|approved|rejected",
+                       "required": False},
         },
         "example": 'list_tasks(job_id=1, status="approved")'
     },
@@ -255,7 +260,8 @@ TOOL_SCHEMA = {
         "name": "get_job",
         "description": "Consulta detalhes de um job específico. O job_id pode ser omitido se a variável de ambiente QUIMERA_CURRENT_JOB_ID estiver definida.",
         "parameters": {
-            "job_id": {"type": "int", "description": "ID do job (opcional se QUIMERA_CURRENT_JOB_ID definida)", "required": False}
+            "job_id": {"type": "int", "description": "ID do job (opcional se QUIMERA_CURRENT_JOB_ID definida)",
+                       "required": False}
         },
         "example": 'get_job()'
     },
@@ -302,22 +308,22 @@ def build_route_rule(agent_names):
 def build_help(agent_names):
     """Monta help."""
     help_text = (
-        "\nComandos:\n" +
-        "- /task <descrição>: cria uma task explícita do humano e roteia para o melhor agente\n"
-        "- /planning <mensagem>: modo planejamento — workspace somente leitura, sem edição de arquivos\n"
-        "- /analysis <mensagem>: modo análise — somente leitura, sem edição de arquivos\n"
-        "- /design <mensagem>: modo design — arquitetura e design sem execução\n"
-        "- /review <mensagem>: modo revisão — somente revisão de código, sem edições\n"
-        "- /execute <mensagem>: modo execução — acesso completo a ferramentas e remove restrições do modo anterior\n"
-        "- /agents: lista os agentes disponíveis\n"
-        "- /clear: limpa a tela do terminal\n"
-        "- /prompt [agente]: simula o prompt final e mostra análise dos blocos\n"
-        "- /context: mostra o contexto atual\n"
-        "- /context-edit: abre o contexto persistente no editor ($EDITOR, ou nano/vim/vi como fallback)\n"
-        "- /edit: abre o editor ($EDITOR, ou nano/vim/vi como fallback) para compor uma mensagem longa\n"
-        "- /file <caminho>: usa o conteúdo de um arquivo como mensagem\n"
-        "- /help: mostra esta ajuda\n"
-        "- /exit: encerra a sessão\n"
+            "\nComandos:\n" +
+            "- /task <descrição>: cria uma task explícita do humano e roteia para o melhor agente\n"
+            "- /planning <mensagem>: modo planejamento — workspace somente leitura, sem edição de arquivos\n"
+            "- /analysis <mensagem>: modo análise — somente leitura, sem edição de arquivos\n"
+            "- /design <mensagem>: modo design — arquitetura e design sem execução\n"
+            "- /review <mensagem>: modo revisão — somente revisão de código, sem edições\n"
+            "- /execute <mensagem>: modo execução — acesso completo a ferramentas e remove restrições do modo anterior\n"
+            "- /agents: lista os agentes disponíveis\n"
+            "- /clear: limpa a tela do terminal\n"
+            "- /prompt [agente]: simula o prompt final e mostra análise dos blocos\n"
+            "- /context: mostra o contexto atual\n"
+            "- /context-edit: abre o contexto persistente no editor ($EDITOR, ou nano/vim/vi como fallback)\n"
+            "- /edit: abre o editor ($EDITOR, ou nano/vim/vi como fallback) para compor uma mensagem longa\n"
+            "- /file <caminho>: usa o conteúdo de um arquivo como mensagem\n"
+            "- /help: mostra esta ajuda\n"
+            "- /exit: encerra a sessão\n"
     )
     return help_text
 

@@ -15,6 +15,7 @@ class ToolPolicyError(Exception):
 
 class PathPermissionError(ToolPolicyError):
     """Raised when a tool needs user permission to access a path outside the default workspace."""
+
     def __init__(self, raw_path: str, resolved_path: Path) -> None:
         """Inicializa uma instância de PathPermissionError."""
         self.raw_path = raw_path
@@ -60,15 +61,15 @@ class ToolPolicy:
         """Check if the tool needs user permission to access a path outside allowed roots."""
         if call.name not in {"read_file", "list_files", "grep_search"}:
             return None
-        
+
         raw = call.arguments.get("path", ".")
         normalized = raw.lstrip("/") or "."
         path = (self.config.workspace_root / normalized).resolve()
-        
+
         for allowed_root in self.config.allowed_read_roots:
             if str(path).startswith(str(allowed_root)):
                 return None
-        
+
         return PathPermissionError(raw, path)
 
     def _validate_list_files(self, call: ToolCall) -> None:

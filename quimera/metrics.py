@@ -9,11 +9,9 @@ Rastreia métricas de eficiência colaborativa:
 - Taxa de síntese que requer correção
  - Em caso de falta de contexto suficiente, o roteamento deve delegar a tarefa a outro agente, não improvisar.
 """
-from collections import defaultdict
-from dataclasses import dataclass, field, asdict
 import json
 import sys
-import time
+from dataclasses import dataclass, asdict
 from pathlib import Path
 
 
@@ -21,7 +19,7 @@ from pathlib import Path
 class AgentBehaviorMetrics:
     """Métricas de comportamento de um agente específico."""
     agent_name: str
-    
+
     # Contadores básicos
     responses_total: int = 0
     responses_empty: int = 0  # Respostas vazias ou sem conteúdo útil
@@ -29,7 +27,7 @@ class AgentBehaviorMetrics:
     handoffs_received: int = 0
     handoffs_invalid: int = 0  # Payload malformado
     handoffs_circular_detected: int = 0
-    
+
     # Qualidade de resposta
     next_steps_claros: int = 0  # Respostas com próximo passo explícito
     redundancias_detectadas: int = 0  # Respostas redundantes
@@ -41,33 +39,33 @@ class AgentBehaviorMetrics:
     tool_calls_failed: int = 0
     invalid_tool_calls: int = 0
     tool_loop_abortions: int = 0
-    
+
     # Timing
     total_latency_seconds: float = 0.0
     response_count: int = 0
     total_response_chars: int = 0
-    
+
     @property
     def avg_latency_seconds(self) -> float:
         """Tempo médio de resposta em segundos."""
         if self.response_count == 0:
             return 0.0
         return self.total_latency_seconds / self.response_count
-    
+
     @property
     def invalid_handoff_rate(self) -> float:
         """Taxa de handoffs inválidos (0.0 a 1.0)."""
         if self.handoffs_sent == 0:
             return 0.0
         return self.handoffs_invalid / self.handoffs_sent
-    
+
     @property
     def empty_response_rate(self) -> float:
         """Taxa de respostas vazias (0.0 a 1.0)."""
         if self.responses_total == 0:
             return 0.0
         return self.responses_empty / self.responses_total
-    
+
     @property
     def next_step_clarity_rate(self) -> float:
         """Taxa de respostas com próximo passo claro (0.0 a 1.0)."""
@@ -95,8 +93,8 @@ class AgentBehaviorMetrics:
         if self.responses_total == 0:
             return 0.0
         return self.respostas_longas / self.responses_total
-    
-    def record_response(self, latency_seconds: float, has_next_step: bool = False, 
+
+    def record_response(self, latency_seconds: float, has_next_step: bool = False,
                         is_empty: bool = False, is_redundant: bool = False,
                         response_text: str | None = None):
         """Registra uma resposta do agente."""
@@ -146,19 +144,19 @@ class AgentBehaviorMetrics:
             "testes",
         )
         return any(indicator in text for indicator in indicators)
-    
+
     def record_handoff_sent(self, is_invalid: bool = False):
         """Registra um handoff enviado pelo agente."""
         self.handoffs_sent += 1
         if is_invalid:
             self.handoffs_invalid += 1
-    
+
     def record_handoff_received(self, is_circular: bool = False):
         """Registra um handoff recebido pelo agente."""
         self.handoffs_received += 1
         if is_circular:
             self.handoffs_circular_detected += 1
-    
+
     def record_synthesis(self, needed_correction: bool = False):
         """Registra uma operação de síntese."""
         self.synthesis_requests += 1
@@ -189,19 +187,19 @@ class AgentBehaviorMetrics:
 
 class BehaviorMetricsTracker:
     """Rastreia métricas de comportamento de todos os agentes."""
-    
+
     def __init__(self, storage_path: Path | str | None = None):
         """Inicializa uma instância de BehaviorMetricsTracker."""
         self._metrics: dict[str, AgentBehaviorMetrics] = {}
         self._storage_path = Path(storage_path) if storage_path else None
         if self._storage_path:
             self.load()
-    
+
     def load(self):
         """Carrega métricas do armazenamento persistente."""
         if not self._storage_path or not self._storage_path.exists():
             return 0
-            
+
         try:
             data = json.loads(self._storage_path.read_text(encoding="utf-8"))
             for agent_name, metrics_data in data.items():
@@ -215,7 +213,7 @@ class BehaviorMetricsTracker:
         """Grava métricas no armazenamento persistente."""
         if not self._storage_path:
             return
-            
+
         try:
             self._storage_path.parent.mkdir(parents=True, exist_ok=True)
             data = {name: metrics.to_dict() for name, metrics in self._metrics.items()}
@@ -231,7 +229,7 @@ class BehaviorMetricsTracker:
         if agent_name not in self._metrics:
             self._metrics[agent_name] = AgentBehaviorMetrics(agent_name=agent_name)
         return self._metrics[agent_name]
-    
+
     def record_response(self, agent_name: str, latency_seconds: float,
                         has_next_step: bool = False, is_empty: bool = False,
                         is_redundant: bool = False, response_text: str | None = None):
@@ -245,19 +243,19 @@ class BehaviorMetricsTracker:
             response_text=response_text,
         )
         self.save()
-    
+
     def record_handoff_sent(self, agent_name: str, is_invalid: bool = False):
         """Registra um handoff enviado."""
         metrics = self.get_agent(agent_name)
         metrics.record_handoff_sent(is_invalid)
         self.save()
-    
+
     def record_handoff_received(self, agent_name: str, is_circular: bool = False):
         """Registra um handoff recebido."""
         metrics = self.get_agent(agent_name)
         metrics.record_handoff_received(is_circular)
         self.save()
-    
+
     def record_synthesis(self, agent_name: str, needed_correction: bool = False):
         """Registra uma operação de síntese."""
         metrics = self.get_agent(agent_name)
@@ -275,7 +273,7 @@ class BehaviorMetricsTracker:
         metrics = self.get_agent(agent_name)
         metrics.record_tool_loop_abort()
         self.save()
-    
+
     def get_agent_summary(self, agent_name: str) -> dict:
         """Retorna resumo das métricas de um agente."""
         metrics = self.get_agent(agent_name)
@@ -301,7 +299,7 @@ class BehaviorMetricsTracker:
             "tool_loop_abortions": metrics.tool_loop_abortions,
             "tool_success_rate": round(metrics.tool_success_rate, 3),
         }
-    
+
     def get_all_summaries(self) -> list[dict]:
         """Retorna resumo de todos os agentes."""
         return [
@@ -354,12 +352,12 @@ class BehaviorMetricsTracker:
     def generate_feedback(self, agent_name: str) -> str:
         """Gera feedback acionável baseado nas métricas do agente."""
         metrics = self.get_agent(agent_name)
-        
+
         if metrics.responses_total < 3:
             return ""  # Não há dados suficientes
-        
+
         feedback_parts = []
-        
+
         # Taxa de handoff inválido alta
         if metrics.invalid_handoff_rate > 0.3:
             feedback_parts.append(
@@ -369,7 +367,7 @@ class BehaviorMetricsTracker:
                 "  Se faltar contexto suficiente, isso indica falha no roteamento inicial; não improvise, delegue.\n"
                 "  Só tente executar quando a tarefa e o contexto estiverem claros."
             )
-        
+
         # Respostas vazias frequentes
         if metrics.empty_response_rate > 0.2:
             feedback_parts.append(
@@ -377,14 +375,14 @@ class BehaviorMetricsTracker:
                 "  Garanta que sua resposta contém informação concreta e próxima ação.\n"
                 "  Cada resposta deve avançar a tarefa."
             )
-        
+
         # Falta de próximos passos claros
         if metrics.next_step_clarity_rate < 0.3 and metrics.responses_total >= 5:
             feedback_parts.append(
                 f"- FALTA PRÓXIMO PASSO ({metrics.next_step_clarity_rate:.0%} das respostas):\n"
                 "  Finalize sempre indicando o que fazer a seguir: continuar, pedir input, ou finalizar."
             )
-        
+
         # Redundância detectada
         if metrics.redundancias_detectadas > 2:
             feedback_parts.append(
@@ -399,17 +397,17 @@ class BehaviorMetricsTracker:
                 "  Responda de forma mais curta e objetiva.\n"
                 "  Prefira 2-4 frases, resultado primeiro e detalhe só se for pedido."
             )
-        
+
         # Síntese requer correção frequentemente
         if metrics.synthesis_requests >= 3 and (
-            metrics.synthesis_corrections / metrics.synthesis_requests > 0.5
+                metrics.synthesis_corrections / metrics.synthesis_requests > 0.5
         ):
             feedback_parts.append(
                 f"- SÍNTESES IMPRECISAS ({metrics.synthesis_corrections}/{metrics.synthesis_requests}):\n"
                 "  Incorpore a resposta do agente delegado, não a repita.\n"
                 "  Avance o diálogo em vez de resumir."
             )
-        
+
         # Tempo de resposta muito alto
         if metrics.avg_latency_seconds > 30 and metrics.response_count >= 5:
             feedback_parts.append(
@@ -442,14 +440,14 @@ class BehaviorMetricsTracker:
                 f"- LOOP DE FERRAMENTA ABORTADO ({metrics.tool_loop_abortions}x):\n"
                 "  Converja mais rápido após o resultado da ferramenta. Responda quando a evidência já for suficiente."
             )
-        
+
         # Detecção circular alta
         if metrics.handoffs_circular_detected > 1:
             feedback_parts.append(
                 f"- DELEGAÇÕES CIRCULARES ({metrics.handoffs_circular_detected}x):\n"
                 "  Verifique a cadeia antes de delegar. Se já participou, resolva diretamente."
             )
-        
+
         # Taxa de sucesso baixa
         if metrics.handoffs_sent > 3:
             success_rate = (metrics.handoffs_sent - metrics.handoffs_invalid) / metrics.handoffs_sent
@@ -458,7 +456,7 @@ class BehaviorMetricsTracker:
                     f"- BAIXA TAXA DE SUCESSO EM HANDOFFS ({success_rate:.0%}):\n"
                     "  Revise o formato do payload ou resolva sem delegar."
                 )
-        
+
         summary = (
             f"- STATUS OPERACIONAL: {metrics.responses_total} turnos registrados.\n"
             f"  Latência média: {metrics.avg_latency_seconds:.1f}s | "
@@ -466,9 +464,9 @@ class BehaviorMetricsTracker:
             f"Sucesso em ferramentas: {metrics.tool_success_rate:.0%} | "
             f"Tamanho médio: {metrics.avg_response_chars:.0f} chars"
         )
-        
+
         if not feedback_parts:
             return summary
-        
+
         header = summary + "\n" + "\n".join(feedback_parts)
         return header
