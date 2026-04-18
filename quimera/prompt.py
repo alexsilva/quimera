@@ -115,6 +115,8 @@ class PromptBuilder:
             ])
             rules += PROMPT_GOAL_EXECUTION_RULES
             rules += PROMPT_STATE_UPDATE_RULE
+        elif shared:
+            rules += PROMPT_STATE_UPDATE_RULE
 
         session_block = PROMPT_SESSION_STATE.format(**self.session_state) if (self.session_state and primary) else ""
         context_block = PROMPT_CONTEXT.format(context=context) if context else ""

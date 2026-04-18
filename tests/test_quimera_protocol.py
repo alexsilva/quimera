@@ -870,6 +870,20 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn('"job_id": 23', prompt)
         self.assertIn('Execute approved antes de criar novas.', prompt)
 
+    def test_prompt_includes_state_update_rule_with_shared_state_fallback(self):
+        builder = PromptBuilder(DummyContextManager(), history_window=3)
+        history = [{"role": "human", "content": "Pergunta"}]
+
+        prompt = builder.build(
+            AGENT_CLAUDE,
+            history,
+            shared_state={"next_step": "continuar"},
+        )
+
+        self.assertIn("ESTADO COMPARTILHADO", prompt)
+        self.assertIn("Você pode atualizar o estado compartilhado usando:", prompt)
+        self.assertIn("[STATE_UPDATE]", prompt)
+
     def test_app_builds_explicit_session_state_for_prompt(self):
         temp_root = Path(self.enterContext(tempfile.TemporaryDirectory()))
 
