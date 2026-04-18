@@ -115,7 +115,7 @@ class TestAppHistory(unittest.TestCase):
                 from quimera.app import QuimeraApp
                 app = QuimeraApp(self.tmp_cwd)
 
-                app.shutdown()
+                app.session_services.shutdown()
 
                 mock_readline.write_history_file.assert_called_with(str(self.history_file))
 
@@ -146,7 +146,7 @@ class TestAppHistory(unittest.TestCase):
                 app = QuimeraApp(self.tmp_cwd)
             app.user_name = "user"
 
-            result = app.read_user_input(prompt="user: ", timeout=30)
+            result = app.input_services.read_user_input(prompt="user: ", timeout=30)
 
             self.assertEqual(result, "test input")
             mock_input.assert_called_with("user: ")

@@ -1,9 +1,9 @@
 """Componentes de `quimera.app.dispatch`."""
 import time
+from contextlib import nullcontext
 
 from .. import plugins
 from ..runtime.parser import strip_tool_block
-from . import task as app_tasks
 from .config import logger
 
 
@@ -37,9 +37,14 @@ class AppDispatchServices:
             if tool_result is None:
                 return current_response
 
-            app._record_tool_event(agent, result=tool_result)
+            is_invalid = bool(getattr(tool_result, "error", None)) and "Sem política para a ferramenta" in str(tool_result.error)
+            ok = bool(getattr(tool_result, "ok", False))
+            session_metrics = getattr(app, "session_metrics", None)
+            if session_metrics is not None:
+                session_metrics.record_tool_event(app, agent, ok=ok, is_invalid=is_invalid)
 
-            tool_payload = app_tasks.truncate_payload(tool_result.to_model_payload())
+            task_services = app._task_services() if hasattr(app, "_task_services") else app.task_services
+            tool_payload = task_services.truncate_payload(tool_result.to_model_payload())
             tool_history.append(
                 f"Sua resposta anterior:\n{current_response.strip()}\n\n"
                 f"Resultado da ferramenta:\n{tool_payload}"
@@ -50,20 +55,29 @@ class AppDispatchServices:
                 if show_output:
                     app.print_response(agent, visible_text)
                 if persist_history:
-                    app.persist_message(agent, visible_text)
+                    app.session_services.persist_message(agent, visible_text)
 
             followup_handoff = (
                 "Histórico de ferramentas desta rodada:\n\n"
                 + "\n\n---\n\n".join(tool_history)
             )
 
-            current_response = app._call_agent(
-                agent,
-                handoff=followup_handoff,
-                primary=False,
-                protocol_mode="tool_loop",
-                silent=silent,
-            )
+            if hasattr(app, "_call_agent"):
+                current_response = app._call_agent(
+                    agent,
+                    handoff=followup_handoff,
+                    primary=False,
+                    protocol_mode="tool_loop",
+                    silent=silent,
+                )
+            else:
+                current_response = self.call_agent_low_level(
+                    agent,
+                    handoff=followup_handoff,
+                    primary=False,
+                    protocol_mode="tool_loop",
+                    silent=silent,
+                )
 
         return "Falha: limite de execuções de ferramenta atingido."
 
@@ -84,23 +98,25 @@ class AppDispatchServices:
         last_error = None
         agent_client = getattr(app, "agent_client", None)
 
-        for attempt in range(1, app.MAX_RETRIES + 1):
+        max_retries = getattr(app, "MAX_RETRIES", 2)
+        retry_backoff = getattr(app, "RETRY_BACKOFF_SECONDS", 1)
+        for attempt in range(1, max_retries + 1):
             if agent_client:
                 agent_client._user_cancelled = False
             try:
-                response = app._call_agent(agent, silent=silent, **dispatch_options)
+                response = self.call_agent_low_level(agent, silent=silent, **dispatch_options)
                 if response is None:
                     if agent_client and agent_client._user_cancelled:
                         logger.info("[DISPATCH] agent=%s cancelled by user, aborting", agent)
                         return None
-                    if attempt < app.MAX_RETRIES:
-                        logger.warning("[DISPATCH] retry %d/%d for agent=%s", attempt, app.MAX_RETRIES, agent)
-                        time.sleep(app.RETRY_BACKOFF_SECONDS * attempt)
+                    if attempt < max_retries:
+                        logger.warning("[DISPATCH] retry %d/%d for agent=%s", attempt, max_retries, agent)
+                        time.sleep(retry_backoff * attempt)
                         continue
-                    app._record_failure(agent)
+                    app.record_failure(agent)
                     return None
 
-                result = app.resolve_agent_response(
+                result = self.resolve_agent_response(
                     agent,
                     response,
                     silent=silent,
@@ -111,33 +127,33 @@ class AppDispatchServices:
                     if agent_client and agent_client._user_cancelled:
                         logger.info("[DISPATCH] agent=%s cancelled by user, aborting", agent)
                         return None
-                    if attempt < app.MAX_RETRIES:
+                    if attempt < max_retries:
                         logger.warning(
                             "[DISPATCH] retry %d/%d for agent=%s (resolve failed)",
                             attempt,
-                            app.MAX_RETRIES,
+                            max_retries,
                             agent,
                         )
-                        time.sleep(app.RETRY_BACKOFF_SECONDS * attempt)
+                        time.sleep(retry_backoff * attempt)
                         continue
-                    app._record_failure(agent)
+                    app.record_failure(agent)
                 return result
             except Exception as exc:
                 if agent_client and agent_client._user_cancelled:
                     logger.info("[DISPATCH] agent=%s cancelled by user, aborting", agent)
                     return None
                 last_error = exc
-                if attempt < app.MAX_RETRIES:
+                if attempt < max_retries:
                     logger.warning(
                         "[DISPATCH] retry %d/%d for agent=%s after exception: %s",
                         attempt,
-                        app.MAX_RETRIES,
+                        max_retries,
                         agent,
                         exc,
                     )
-                    time.sleep(app.RETRY_BACKOFF_SECONDS * attempt)
+                    time.sleep(retry_backoff * attempt)
                     continue
-                app._record_failure(agent)
+                app.record_failure(agent)
                 raise
 
         if last_error:
@@ -157,12 +173,16 @@ class AppDispatchServices:
     ):
         """Monta o prompt final e executa a chamada ao backend do agente."""
         app = self.app
-        with app._counter_lock:
+        counter_lock = getattr(app, "_counter_lock", None)
+        with (counter_lock if counter_lock is not None else nullcontext()):
             app.session_call_index += 1
             call_index_snapshot = app.session_call_index
         start = time.time()
         history = [] if handoff_only else app.history
-        app._get_task_services().refresh_task_shared_state()
+        if hasattr(app, "_refresh_task_shared_state"):
+            app._refresh_task_shared_state()
+        else:
+            app.task_services.refresh_task_shared_state()
 
         plugin = plugins.get(agent)
         driver = getattr(plugin, "driver", "cli") if plugin else "cli"
@@ -205,7 +225,7 @@ class AppDispatchServices:
         result = app.agent_client.call(agent, prompt, silent=silent)
         elapsed = time.time() - start
         if hasattr(app, "session_state") and app.session_state:
-            with app._counter_lock:
+            with (counter_lock if counter_lock is not None else nullcontext()):
                 try:
                     app.session_state["handoffs_sent"] += 1
                     app.session_state["total_latency"] += elapsed
@@ -215,26 +235,22 @@ class AppDispatchServices:
                         app.session_state["handoffs_failed"] += 1
                 except KeyError:
                     pass
-            app._record_agent_metric(agent, "succeeded" if result else "failed", elapsed)
+            session_metrics = getattr(app, "session_metrics", None)
+            if session_metrics is not None:
+                session_metrics.record_agent_metric(app, agent, "succeeded" if result else "failed", elapsed)
         logger.info("[DISPATCH] agent=%s latency=%.2fs result=%s", agent, elapsed, "ok" if result else "none")
         return result
 
     def print_response(self, agent, response):
         """Exibe saída do agente preservando o prompt não bloqueante."""
         app = self.app
-        with app._output_lock:
-            app._clear_user_prompt_line_if_needed()
+        output_lock = getattr(app, "_output_lock", None)
+        with (output_lock if output_lock is not None else nullcontext()):
+            if hasattr(app, "_clear_user_prompt_line_if_needed"):
+                app._clear_user_prompt_line_if_needed()
             if response is not None:
                 app.renderer.show_message(agent, response)
             else:
                 app.renderer.show_no_response(agent)
-            app._redisplay_user_prompt_if_needed(clear_first=False)
-
-    def persist_message(self, role, content):
-        """Persiste mensagem no histórico, log e snapshot."""
-        app = self.app
-        with app._lock:
-            app.history.append({"role": role, "content": content})
-            app.storage.append_log(role, content)
-            app.storage.save_history(app.history, shared_state=app.shared_state)
-            app._get_session_metrics().update_persisted_message_metrics(app, role, content)
+            if hasattr(app, "_redisplay_user_prompt_if_needed"):
+                app._redisplay_user_prompt_if_needed(clear_first=False)

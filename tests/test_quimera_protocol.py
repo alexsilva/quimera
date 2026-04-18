@@ -14,7 +14,12 @@ import quimera.cli as cli_module
 import quimera.plugins as plugins
 from quimera.agents import AgentClient
 from quimera.app import QuimeraApp
+from quimera.app.chat_round import ChatRoundOrchestrator
 from quimera.app.core import TurnManager
+from quimera.app.dispatch import AppDispatchServices
+from quimera.app.session import AppSessionServices
+from quimera.app.system_layer import AppSystemLayer
+from quimera.app.task import AppTaskServices
 from quimera.app.protocol import AppProtocol
 from quimera.app.session_metrics import SessionMetricsService
 from quimera.cli import main as cli_main
@@ -40,6 +45,7 @@ class DummyRenderer:
         self.system_messages = []
         self.handoffs = []
         self._output_lock = threading.Lock()
+        self.task_services = None
 
     def show_warning(self, message):
         self.warnings.append(message)
@@ -415,8 +421,9 @@ class ProtocolTests(unittest.TestCase):
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
+        app.system_layer = AppSystemLayer(app)
 
-        handled = app.handle_command(CMD_HELP)
+        handled = app.system_layer.handle_command(CMD_HELP)
 
         self.assertTrue(handled)
         expected_help = build_help([AGENT_CLAUDE, AGENT_CODEX])
@@ -426,8 +433,9 @@ class ProtocolTests(unittest.TestCase):
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
+        app.system_layer = AppSystemLayer(app)
 
-        handled = app.handle_command(CMD_AGENTS)
+        handled = app.system_layer.handle_command(CMD_AGENTS)
 
         self.assertTrue(handled)
         expected_agents = build_agents_help([AGENT_CLAUDE, AGENT_CODEX])
@@ -437,8 +445,9 @@ class ProtocolTests(unittest.TestCase):
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
         app.clear_terminal_screen = Mock()
+        app.system_layer = AppSystemLayer(app)
 
-        handled = app.handle_command(CMD_CLEAR)
+        handled = app.system_layer.handle_command(CMD_CLEAR)
 
         self.assertTrue(handled)
         app.clear_terminal_screen.assert_called_once_with()
@@ -467,7 +476,8 @@ class ProtocolTests(unittest.TestCase):
             },
         )
 
-        handled = app.handle_command(CMD_PROMPT)
+        app.system_layer = AppSystemLayer(app)
+        handled = app.system_layer.handle_command(CMD_PROMPT)
 
         self.assertTrue(handled)
         app.prompt_builder.build.assert_called_once_with(
@@ -509,7 +519,8 @@ class ProtocolTests(unittest.TestCase):
             },
         )
 
-        handled = app.handle_command("/prompt /code")
+        app.system_layer = AppSystemLayer(app)
+        handled = app.system_layer.handle_command("/prompt /code")
 
         self.assertTrue(handled)
         app.prompt_builder.build.assert_called_once()
@@ -519,8 +530,9 @@ class ProtocolTests(unittest.TestCase):
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
+        app.system_layer = AppSystemLayer(app)
 
-        handled = app.handle_command("/prompt inexistente")
+        handled = app.system_layer.handle_command("/prompt inexistente")
 
         self.assertTrue(handled)
         self.assertEqual(app.renderer.warnings, ["Uso: /prompt [agente]"])
@@ -560,10 +572,9 @@ class ProtocolTests(unittest.TestCase):
         init_db(str(db_path))
         add_job("Session", db_path=str(db_path), job_id=1)
         app.tasks_db_path = str(db_path)
-        app._refresh_task_shared_state = QuimeraApp._refresh_task_shared_state.__get__(app, QuimeraApp)
-        app._build_task_overview = QuimeraApp._build_task_overview.__get__(app, QuimeraApp)
-
-        handled = app.handle_command('/task "execute os testes"')
+        app.task_services = AppTaskServices(app)
+        app.system_layer = AppSystemLayer(app)
+        handled = app.system_layer.handle_command('/task "execute os testes"')
 
         self.assertTrue(handled)
         tasks = list_tasks({"job_id": 1}, db_path=str(db_path))
@@ -594,10 +605,9 @@ class ProtocolTests(unittest.TestCase):
         init_db(str(db_path))
         add_job("Session", db_path=str(db_path), job_id=1)
         app.tasks_db_path = str(db_path)
-        app._refresh_task_shared_state = QuimeraApp._refresh_task_shared_state.__get__(app, QuimeraApp)
-        app._build_task_overview = QuimeraApp._build_task_overview.__get__(app, QuimeraApp)
-
-        handled = app.handle_command('/task "revise o arquivo quimera/app.py"')
+        app.task_services = AppTaskServices(app)
+        app.system_layer = AppSystemLayer(app)
+        handled = app.system_layer.handle_command('/task "revise o arquivo quimera/app.py"')
 
         self.assertTrue(handled)
         tasks = list_tasks({"job_id": 1}, db_path=str(db_path))
@@ -606,7 +616,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn("atribuída para ollama-qwen", app.renderer.system_messages[-1])
 
     def test_classify_task_execution_result_rejects_needs_input(self):
-        ok, reason = QuimeraApp._classify_task_execution_result(
+        ok, reason = QuimeraApp.classify_task_execution_result(
             "Preciso de mais contexto. [NEEDS_INPUT]"
         )
 
@@ -614,7 +624,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(reason, "agente solicitou input humano")
 
     def test_classify_task_execution_result_rejects_inability_text(self):
-        ok, reason = QuimeraApp._classify_task_execution_result(
+        ok, reason = QuimeraApp.classify_task_execution_result(
             "Não consigo executar isso sem acesso ao ambiente."
         )
 
@@ -631,9 +641,6 @@ class ProtocolTests(unittest.TestCase):
         init_db(str(db_path))
         add_job("Session", db_path=str(db_path), job_id=1)
         app.tasks_db_path = str(db_path)
-        app._get_task_routing_plugins = QuimeraApp._get_task_routing_plugins.__get__(app, QuimeraApp)
-        app._count_agent_open_tasks = QuimeraApp._count_agent_open_tasks.__get__(app, QuimeraApp)
-
         for idx in range(3):
             create_task(
                 1,
@@ -644,7 +651,7 @@ class ProtocolTests(unittest.TestCase):
                 db_path=str(db_path),
             )
 
-        selected = QuimeraApp._choose_agent_with_load_balance(app, "general")
+        selected = AppTaskServices(app).choose_agent_with_load_balance("general")
 
         self.assertEqual(selected, AGENT_CODEX)
 
@@ -660,8 +667,10 @@ class ProtocolTests(unittest.TestCase):
         init_db(str(db_path))
         add_job("Session", db_path=str(db_path), job_id=1)
         app.tasks_db_path = str(db_path)
+        app.task_services = AppTaskServices(app)
+        app.system_layer = AppSystemLayer(app)
 
-        handled = app.handle_command('/task ""')
+        handled = app.system_layer.handle_command('/task ""')
 
         self.assertTrue(handled)
         self.assertEqual(app.renderer.warnings, ["Uso: /task <descrição>"])
@@ -1102,15 +1111,21 @@ class ProtocolTests(unittest.TestCase):
 
         app.active_agents = list(plugins.all_names())
         app.threads = 1
-        app.handle_command = lambda user: False
         app.parse_routing = lambda user: (AGENT_CLAUDE, "oi", False)
-        app.parse_response = QuimeraApp.parse_response.__get__(app, QuimeraApp)
         app.shared_state = {}
-        app.print_response = lambda agent, response: printed.append((agent, response))
-        app.persist_message = lambda role, content: persisted.append((role, content))
-        app.shutdown = lambda: None
-        app.read_user_input = Mock(side_effect=["mensagem", "/exit"])
-        app.call_agent = Mock(return_value="claude responde")
+        app.session_services = Mock()
+        app.session_services.persist_message = lambda role, content: persisted.append((role, content))
+        app.session_services.maybe_auto_summarize = Mock()
+        app.system_layer = Mock()
+        app.system_layer.handle_command = Mock(return_value=False)
+        app.protocol = AppProtocol(Mock())
+        app.dispatch_services = Mock(spec=AppDispatchServices)
+        app.dispatch_services.call_agent = Mock(return_value="claude responde")
+        app.dispatch_services.print_response = lambda agent, response: printed.append((agent, response))
+        app.input_services = Mock()
+        app.input_services.read_user_input = Mock(side_effect=["mensagem", "/exit"])
+        app.turn_manager = TurnManager()
+        app.chat_round_orchestrator = ChatRoundOrchestrator(app)
 
         app.run()
 
@@ -1120,7 +1135,7 @@ class ProtocolTests(unittest.TestCase):
             persisted,
             [("human", "oi"), (AGENT_CLAUDE, "claude responde")],
         )
-        app.call_agent.assert_called_once()
+        app.dispatch_services.call_agent.assert_called_once()
 
     def test_run_uses_four_turns_when_extended(self):
         app = QuimeraApp.__new__(QuimeraApp)
@@ -1149,8 +1164,8 @@ class ProtocolTests(unittest.TestCase):
         app.parse_response = QuimeraApp.parse_response.__get__(app, QuimeraApp)
         app.shared_state = {}
         app.print_response = lambda agent, response: printed.append((agent, response))
-        app.persist_message = lambda role, content: persisted.append((role, content))
-        app.shutdown = lambda: None
+        app.session_services = Mock()
+        app.session_services.persist_message = lambda role, content: persisted.append((role, content))
         app.read_user_input = Mock(side_effect=["mensagem", "/exit"])
         responses = iter(
             [
@@ -1212,8 +1227,8 @@ class ProtocolTests(unittest.TestCase):
         app.parse_response = QuimeraApp.parse_response.__get__(app, QuimeraApp)
         app.shared_state = {}
         app.print_response = lambda agent, response: printed.append((agent, response))
-        app.persist_message = lambda role, content: persisted.append((role, content))
-        app.shutdown = lambda: None
+        app.session_services = Mock()
+        app.session_services.persist_message = lambda role, content: persisted.append((role, content))
         app.read_user_input = Mock(side_effect=["mensagem", "/exit"])
         responses = iter(
             [
@@ -1283,8 +1298,8 @@ class ProtocolTests(unittest.TestCase):
         app.parse_response = QuimeraApp.parse_response.__get__(app, QuimeraApp)
         app.shared_state = {}
         app.print_response = lambda agent, response: printed.append((agent, response))
-        app.persist_message = lambda role, content: persisted.append((role, content))
-        app.shutdown = lambda: None
+        app.session_services = Mock()
+        app.session_services.persist_message = lambda role, content: persisted.append((role, content))
         app.read_user_input = Mock(side_effect=["/claude mensagem", "/exit"])
         responses = iter(
             [
@@ -1404,8 +1419,8 @@ class ProtocolTests(unittest.TestCase):
         app.call_agent = QuimeraApp.call_agent.__get__(app, QuimeraApp)
         app._refresh_task_shared_state = lambda: None
         app.print_response = lambda agent, response: printed.append((agent, response))
-        app.persist_message = lambda role, content: persisted.append((role, content))
-        app.shutdown = lambda: None
+        app.session_services = Mock()
+        app.session_services.persist_message = lambda role, content: persisted.append((role, content))
         app.read_user_input = Mock(side_effect=["mensagem", "/exit"])
 
         responses = iter(
@@ -1460,7 +1475,8 @@ class ProtocolTests(unittest.TestCase):
         app.storage = DummyStorage()
         app._lock = threading.Lock()
 
-        app.persist_message("human", "oi")
+        app.session_services = AppSessionServices(app)
+        app.session_services.persist_message("human", "oi")
 
         self.assertEqual(app.storage.saved_shared_state, {"goal": "corrigir protocolo"})
 
@@ -1499,7 +1515,8 @@ class ProtocolTests(unittest.TestCase):
         app.storage = DummyStorage()
         app.shared_state = {"goal": "manter memória"}
 
-        app._maybe_auto_summarize()
+        app.session_services = AppSessionServices(app)
+        app.session_services.maybe_auto_summarize()
 
         self.assertEqual(
             app.session_summarizer.calls,
@@ -1550,7 +1567,7 @@ class ProtocolTests(unittest.TestCase):
         app.renderer = DummyRenderer()
         app.summary_agent_preference = "codex"
 
-        app.shutdown()
+        AppSessionServices(app).shutdown()
 
         self.assertEqual(
             app.session_summarizer.calls,
@@ -1588,8 +1605,8 @@ class ProtocolTests(unittest.TestCase):
         app.summary_agent_preference = "ollama-qwen"
         app.agent_client = SimpleNamespace(_user_cancelled=False, _cancel_event=threading.Event())
 
-        with patch("quimera.app.core.threading.Thread", FakeThread):
-            app.shutdown()
+        with patch("quimera.app.session.threading.Thread", FakeThread):
+            AppSessionServices(app).shutdown()
 
         self.assertTrue(app.agent_client._user_cancelled)
         self.assertTrue(app.agent_client._cancel_event.is_set())
@@ -1940,7 +1957,6 @@ class PluginTests(unittest.TestCase):
         app.round_index = 0
         app.summary_agent_preference = None
         app.parse_response = QuimeraApp.parse_response.__get__(app, QuimeraApp)
-        app._maybe_auto_summarize = lambda preferred_agent=None: None
         app._record_agent_metric = Mock()
 
         from pathlib import Path
@@ -1979,12 +1995,10 @@ class PluginTests(unittest.TestCase):
         app.handle_command = lambda user: False
         app.parse_routing = lambda user: (AGENT_CLAUDE, "oi", False)
         app.parse_response = QuimeraApp.parse_response.__get__(app, QuimeraApp)
-        app._maybe_auto_summarize = lambda preferred_agent=None: None
-        app.shutdown = lambda: None
-
         persisted = []
         printed = []
-        app.persist_message = lambda role, content: persisted.append((role, content))
+        app.session_services = Mock()
+        app.session_services.persist_message = lambda role, content: persisted.append((role, content))
         app.print_response = lambda agent, response: printed.append((agent, response))
 
         call_started = threading.Event()
@@ -2350,6 +2364,8 @@ class PluginTests(unittest.TestCase):
         app.active_agents = ["claude"]
         app.agent_failures = {}
         app._agent_failures_lock = threading.Lock()
+        app.session_metrics = SessionMetricsService()
+        app.session_state = {}
         call_count = [0]
 
         def fake_call_agent(*args, **kwargs):
@@ -2358,10 +2374,11 @@ class PluginTests(unittest.TestCase):
                 return None
             return "sucesso no retry"
 
-        app._call_agent = fake_call_agent
-        app.resolve_agent_response = lambda agent, response, silent=False, persist_history=True, show_output=True: response
+        dispatch = AppDispatchServices(app)
+        dispatch.call_agent_low_level = fake_call_agent
+        dispatch.resolve_agent_response = lambda agent, response, silent=False, persist_history=True, show_output=True: response
 
-        result = app.call_agent("claude")
+        result = dispatch.call_agent("claude")
         self.assertEqual(result, "sucesso no retry")
         self.assertEqual(call_count[0], 2)
 
@@ -2388,7 +2405,7 @@ class PluginTests(unittest.TestCase):
 
         app.call_agent = lambda *args, **kwargs: "resposta visivel da task"
         app.show_system_message = lambda message: status_updates.append(message)
-        app._classify_task_execution_result = lambda response: (True, response)
+        app.classify_task_execution_result = lambda response: (True, response)
 
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
                 "quimera.runtime.tasks.complete_task"
@@ -2433,7 +2450,7 @@ class PluginTests(unittest.TestCase):
 
         app.call_agent = lambda *args, **kwargs: "resposta visivel da task"
         app.show_system_message = lambda message: status_updates.append(message)
-        app._classify_task_execution_result = lambda response: (True, response)
+        app.classify_task_execution_result = lambda response: (True, response)
 
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
                 "quimera.runtime.tasks.submit_for_review"
@@ -2482,7 +2499,7 @@ class PluginTests(unittest.TestCase):
 
         app.call_agent = lambda *args, **kwargs: "resposta visivel da task"
         app.show_system_message = lambda message: status_updates.append(message)
-        app._classify_task_execution_result = lambda response: (True, response)
+        app.classify_task_execution_result = lambda response: (True, response)
 
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
                 "quimera.app.task.plugins.get",
@@ -2885,7 +2902,7 @@ class PluginTests(unittest.TestCase):
 
         app.call_agent = fake_call_agent
         app.show_system_message = lambda message: None
-        app._classify_task_execution_result = lambda response: (True, response)
+        app.classify_task_execution_result = lambda response: (True, response)
 
         task_body = (
             "TAREFA:\nvalidar regressão\n\n"
@@ -2937,8 +2954,8 @@ class PluginTests(unittest.TestCase):
 
         app.call_agent = lambda *args, **kwargs: None
         app.show_system_message = lambda message: None
-        app._classify_task_execution_result = lambda response: (True, response)
-        app._record_failure = lambda agent: None
+        app.classify_task_execution_result = lambda response: (True, response)
+        app.record_failure = lambda agent: None
 
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
                 "quimera.runtime.tasks.requeue_task"
@@ -2974,8 +2991,8 @@ class PluginTests(unittest.TestCase):
 
         app.call_agent = lambda *args, **kwargs: None
         app.show_system_message = lambda message: None
-        app._classify_task_execution_result = lambda response: (True, response)
-        app._record_failure = lambda agent: None
+        app.classify_task_execution_result = lambda response: (True, response)
+        app.record_failure = lambda agent: None
 
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
                 "quimera.runtime.tasks.can_reassign_task", return_value=False
@@ -3074,13 +3091,14 @@ class PluginTests(unittest.TestCase):
         }
         app.agent_failures = {}
         app._agent_failures_lock = threading.Lock()
+        app.session_metrics = SessionMetricsService()
 
         # Simulate successful call to claude
-        app._record_agent_metric("claude", "succeeded", 1.5)
-        app._record_agent_metric("claude", "succeeded", 0.8)
+        app.session_metrics.record_agent_metric(app, "claude", "succeeded", 1.5)
+        app.session_metrics.record_agent_metric(app, "claude", "succeeded", 0.8)
 
         # Simulate failed call to codex
-        app._record_agent_metric("codex", "failed", 0.0)
+        app.session_metrics.record_agent_metric(app, "codex", "failed", 0.0)
 
         metrics = app.session_state["agent_metrics"]
         self.assertEqual(metrics["claude"]["succeeded"], 2)
@@ -3180,8 +3198,8 @@ class FallbackChainTests(unittest.TestCase):
         app.parse_routing = lambda user: (AGENT_CLAUDE, "oi", False)
         app.parse_response = QuimeraApp.parse_response.__get__(app, QuimeraApp)
         app.print_response = lambda agent, response: printed.append((agent, response))
-        app.persist_message = lambda role, content: persisted.append((role, content))
-        app._maybe_auto_summarize = lambda preferred_agent=None: None
+        app.session_services = Mock()
+        app.session_services.persist_message = lambda role, content: persisted.append((role, content))
 
         responses = iter([
             None,
@@ -3240,8 +3258,8 @@ class FallbackChainTests(unittest.TestCase):
         app.parse_response = QuimeraApp.parse_response.__get__(app, QuimeraApp)
         app.shared_state = {}
         app.print_response = lambda agent, response: printed.append((agent, response))
-        app.persist_message = lambda role, content: persisted.append((role, content))
-        app.shutdown = lambda: None
+        app.session_services = Mock()
+        app.session_services.persist_message = lambda role, content: persisted.append((role, content))
         app.read_user_input = Mock(side_effect=["mensagem", "/exit"])
         responses = iter([
             # Claude responde e delega para codex
@@ -3325,30 +3343,26 @@ class MetricsFeedbackTests(unittest.TestCase):
     """Testes para métricas e feedback operacional."""
 
     def test_has_clear_next_step_detects_clear_indicators(self):
-        """_has_clear_next_step deve detectar indicadores de próximo passo."""
-        app = QuimeraApp.__new__(QuimeraApp)
-
-        self.assertTrue(app._has_clear_next_step("Próximo passo: revisar o código."))
-        self.assertTrue(app._has_clear_next_step("Próxima etapa: implementar a feature."))
-        self.assertTrue(app._has_clear_next_step("Tarefa completa."))
-        self.assertTrue(app._has_clear_next_step("Concluído."))
-        self.assertFalse(app._has_clear_next_step("Apenas uma resposta qualquer."))
-        self.assertFalse(app._has_clear_next_step(""))
+        """SessionMetricsService.has_clear_next_step deve detectar indicadores de próximo passo."""
+        self.assertTrue(SessionMetricsService.has_clear_next_step("Próximo passo: revisar o código."))
+        self.assertTrue(SessionMetricsService.has_clear_next_step("Próxima etapa: implementar a feature."))
+        self.assertTrue(SessionMetricsService.has_clear_next_step("Tarefa completa."))
+        self.assertTrue(SessionMetricsService.has_clear_next_step("Concluído."))
+        self.assertFalse(SessionMetricsService.has_clear_next_step("Apenas uma resposta qualquer."))
+        self.assertFalse(SessionMetricsService.has_clear_next_step(""))
 
     def test_is_response_redundant_detects_similarity(self):
-        """_is_response_redundant deve detectar respostas similares."""
-        app = QuimeraApp.__new__(QuimeraApp)
-
+        """SessionMetricsService.is_response_redundant deve detectar respostas similares."""
         history = [
             {"role": "human", "content": "Faça algo"},
             {"role": "claude", "content": "Vou implementar a feature X agora. Isso envolve criar o arquivo e testar."},
         ]
 
         similar_response = "Vou implementar a feature X agora. Isso envolve criar o arquivo e testar."
-        self.assertTrue(app._is_response_redundant(similar_response, history))
+        self.assertTrue(SessionMetricsService.is_response_redundant(similar_response, history))
 
         different_response = "Vou corrigir o bug Y no parser."
-        self.assertFalse(app._is_response_redundant(different_response, history))
+        self.assertFalse(SessionMetricsService.is_response_redundant(different_response, history))
 
     def test_session_state_tracks_new_metrics(self):
         """session_state deve rastrear as novas métricas."""
@@ -3415,7 +3429,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         app = QuimeraApp.__new__(QuimeraApp)
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
 
-        selected = [plugin.name for plugin in app._get_task_routing_plugins()]
+        selected = [plugin.name for plugin in AppTaskServices(app).get_task_routing_plugins()]
 
         self.assertEqual(selected, [AGENT_CLAUDE, AGENT_CODEX])
 
@@ -3423,7 +3437,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         app = QuimeraApp.__new__(QuimeraApp)
         app.active_agents = ["*"]
 
-        selected = [plugin.name for plugin in app._get_task_routing_plugins()]
+        selected = [plugin.name for plugin in AppTaskServices(app).get_task_routing_plugins()]
 
         self.assertEqual(
             selected,
@@ -3457,12 +3471,13 @@ class MetricsFeedbackTests(unittest.TestCase):
         app.agent_failures = {}
         app._agent_failures_lock = threading.Lock()
         app.behavior_metrics = BehaviorMetricsTracker()
+        app.session_metrics = SessionMetricsService()
 
         # Simulate successful calls
-        app._record_agent_metric("claude", "succeeded", 1.5)
-        app._record_agent_metric("claude", "succeeded", 2.0)
-        app._record_agent_metric("claude", "succeeded", 1.0)
-        app._record_agent_metric("claude", "succeeded", 0.5)
+        app.session_metrics.record_agent_metric(app, "claude", "succeeded", 1.5)
+        app.session_metrics.record_agent_metric(app, "claude", "succeeded", 2.0)
+        app.session_metrics.record_agent_metric(app, "claude", "succeeded", 1.0)
+        app.session_metrics.record_agent_metric(app, "claude", "succeeded", 0.5)
 
         # Verifica que o tracker foi alimentado
         claude_metrics = app.behavior_metrics.get_agent_summary("claude")
@@ -3563,7 +3578,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         app.history = [{"role": "human", "content": "Corrija o parser atual"}]
         app.shared_state = {}
 
-        body = app._build_task_body("corrigir parser")
+        body = AppTaskServices(app).build_task_body("corrigir parser")
 
         self.assertIn("PROTOCOLO OPERACIONAL:", body)
         self.assertIn("Descubra o alvo antes de mudar", body)
@@ -3582,7 +3597,7 @@ class MetricsFeedbackTests(unittest.TestCase):
             "allowed_scope": ["parser.py"],
         }
 
-        body = app._build_task_body("corrigir parser")
+        body = AppTaskServices(app).build_task_body("corrigir parser")
 
         self.assertIn("ESTADO COMPARTILHADO (referência):", body)
         self.assertIn('"goal_canonical": "Corrigir parser legado"', body)
@@ -3606,10 +3621,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         )
         complete_task(task_id, result="ok" * 200, db_path=str(db_path))
         app.tasks_db_path = str(db_path)
-        app._build_task_overview = QuimeraApp._build_task_overview.__get__(app, QuimeraApp)
-
-        app._refresh_task_shared_state = QuimeraApp._refresh_task_shared_state.__get__(app, QuimeraApp)
-        app._refresh_task_shared_state()
+        AppTaskServices(app).refresh_task_shared_state()
 
         self.assertIn("task_overview", app.shared_state)
         results = app.shared_state.get("completed_task_results", "")
@@ -3626,10 +3638,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         init_db(str(db_path))
         add_job("Session", db_path=str(db_path), job_id=1)
         app.tasks_db_path = str(db_path)
-        app._build_task_overview = QuimeraApp._build_task_overview.__get__(app, QuimeraApp)
-
-        app._refresh_task_shared_state = QuimeraApp._refresh_task_shared_state.__get__(app, QuimeraApp)
-        app._refresh_task_shared_state()
+        AppTaskServices(app).refresh_task_shared_state()
 
         self.assertIn("task_overview", app.shared_state)
         self.assertNotIn("completed_task_results", app.shared_state)
@@ -3640,8 +3649,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         app.current_job_id = 1
         app.tasks_db_path = "/tmp/unused.db"
 
-        app._refresh_task_shared_state = QuimeraApp._refresh_task_shared_state.__get__(app, QuimeraApp)
-        app._refresh_task_shared_state()
+        AppTaskServices(app).refresh_task_shared_state()
 
         self.assertIsNone(app.shared_state)
 

@@ -1,11 +1,11 @@
 """Componentes de `quimera.app.protocol`."""
 import hashlib
 import json
-import logging
 import re
 import time
 
 from ..constants import EXTEND_MARKER, NEEDS_INPUT_MARKER, ROUTE_PREFIX, STATE_UPDATE_START
+from .config import logger
 
 
 class AppProtocol:
@@ -22,9 +22,8 @@ class AppProtocol:
     ACK_PATTERN = re.compile(r"^\s*\[ACK:([A-Za-z0-9]+)\]\s*", re.M)
     PAYLOAD_FIELD_RE = re.compile(r"^\s*(task|context|expected)\s*:", re.IGNORECASE)
 
-    def __init__(self, logger: logging.Logger, decisions_log_path=None) -> None:
+    def __init__(self, app=None, decisions_log_path=None) -> None:
         """Inicializa uma instância de AppProtocol."""
-        self.logger = logger
         self._decisions_log_path = decisions_log_path
         self._decisions_logger = None
 
@@ -86,7 +85,7 @@ class AppProtocol:
         """Remove trailing non-payload lines from captured ROUTE group."""
         if not text:
             return ""
-        self.logger.debug("[ROUTE] raw_payload before strip: %r", text)
+        logger.debug("[ROUTE] raw_payload before strip: %r", text)
         kept = []
         for line in text.splitlines():
             if self.PAYLOAD_FIELD_RE.match(line) or (kept and not line.strip()):
@@ -94,7 +93,7 @@ class AppProtocol:
             else:
                 break
         result = "\n".join(kept).strip()
-        self.logger.debug("[ROUTE] raw_payload after strip: %r", result)
+        logger.debug("[ROUTE] raw_payload after strip: %r", result)
         return result
 
     @staticmethod
@@ -110,7 +109,7 @@ class AppProtocol:
             return None
         match = self.HANDOFF_PAYLOAD_PATTERN.match(payload.strip())
         if not match:
-            self.logger.warning("[HANDOFF] Payload did not match regex: %r", payload)
+            logger.warning("[HANDOFF] Payload did not match regex: %r", payload)
             return None
 
         groups = match.groups()
@@ -121,7 +120,7 @@ class AppProtocol:
             priority = "normal"
 
         if not task:
-            self.logger.warning(
+            logger.warning(
                 "[HANDOFF] Missing required field 'task' - got task=%r, context=%r, expected=%r",
                 task,
                 context,
@@ -155,7 +154,7 @@ class AppProtocol:
         if ack_match:
             ack_id = ack_match.group(1)
             response = self.ACK_PATTERN.sub("", response, count=1).strip()
-            self.logger.info("[ACK] received ack_id=%s", ack_id)
+            logger.info("[ACK] received ack_id=%s", ack_id)
 
         if ROUTE_PREFIX in response:
             match = self.ROUTE_PATTERN.search(response)
@@ -163,7 +162,7 @@ class AppProtocol:
                 raw_payload = self.strip_payload_residual(app, match.group(2))
                 route_target = match.group(1)
                 parsed_handoff = self.parse_handoff_payload(app, raw_payload, target=route_target)
-                self.logger.info("[ROUTE] match=%s, target=%s", match.group(0)[:100], route_target)
+                logger.info("[ROUTE] match=%s, target=%s", match.group(0)[:100], route_target)
                 if parsed_handoff:
                     handoff = parsed_handoff
                     if hasattr(app, "session_state") and app.session_state:
@@ -172,7 +171,7 @@ class AppProtocol:
                         except KeyError:
                             pass
                 else:
-                    self.logger.warning(
+                    logger.warning(
                         "[ROUTE] handoff parse failed for target=%s, payload: %r",
                         route_target,
                         raw_payload,

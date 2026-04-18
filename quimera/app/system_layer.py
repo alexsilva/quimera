@@ -84,7 +84,7 @@ class AppSystemLayer:
         """Exibe task response."""
         text = strip_tool_block(response).strip()
         if text:
-            self.app.show_system_message(f"[task {task_id}] {agent}:\n{text}")
+            self.show_system_message(f"[task {task_id}] {agent}:\n{text}")
 
     def _resolve_prompt_target(self, command: str) -> str | None:
         """Resolve o agente alvo para preview de prompt."""
@@ -176,7 +176,7 @@ class AppSystemLayer:
             return True
 
         if command.startswith(CMD_TASK):
-            self.app.handle_task_command(command)
+            self.app.task_services.handle_task_command(command)
             return True
 
         if command == CMD_CONTEXT:

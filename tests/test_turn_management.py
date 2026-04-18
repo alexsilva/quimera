@@ -45,8 +45,7 @@ def _make_app(active_agents=None):
     app.call_agent = Mock(return_value="resposta")
     app.parse_response = Mock(return_value=("resposta", None, None, False, False, None))
     app.print_response = Mock()
-    app.persist_message = Mock()
-    app._maybe_auto_summarize = Mock()
+    app.session_services = Mock()
 
     return app
 
@@ -164,7 +163,7 @@ class TestTurnCycle(unittest.TestCase):
         app.read_user_input = mock_read_user_input
         app.handle_command = Mock(return_value=False)
         app._process_chat_message = Mock()
-        app.shutdown = Mock()
+        app.session_services = Mock()
 
         # Libera o turno para o humano depois de 0,25 s
         def release_turn():
@@ -198,7 +197,7 @@ class TestTurnCycle(unittest.TestCase):
         storage.get_log_file.return_value = Path("/tmp/quimera-test.log")
         app.storage = storage
         app.handle_command = Mock(return_value=False)
-        app.shutdown = Mock()
+        app.session_services = Mock()
 
         reads = iter(["mensagem", KeyboardInterrupt()])
 
@@ -220,7 +219,7 @@ class TestTurnCycle(unittest.TestCase):
         run_thread.join(timeout=2)
 
         self.assertFalse(run_thread.is_alive(), "run() travou no encerramento com worker ocupado")
-        app.shutdown.assert_called_once()
+        app.session_services.shutdown.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
