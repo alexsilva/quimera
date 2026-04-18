@@ -1417,7 +1417,9 @@ class ProtocolTests(unittest.TestCase):
         app.parse_response = QuimeraApp.parse_response.__get__(app, QuimeraApp)
         app.resolve_agent_response = QuimeraApp.resolve_agent_response.__get__(app, QuimeraApp)
         app.call_agent = QuimeraApp.call_agent.__get__(app, QuimeraApp)
-        app._refresh_task_shared_state = lambda: None
+        app.task_services = Mock()
+        app.task_services.refresh_task_shared_state = Mock()
+        app.task_services.truncate_payload = lambda payload: payload
         app.print_response = lambda agent, response: printed.append((agent, response))
         app.session_services = Mock()
         app.session_services.persist_message = lambda role, content: persisted.append((role, content))
@@ -1957,6 +1959,8 @@ class PluginTests(unittest.TestCase):
         app.round_index = 0
         app.summary_agent_preference = None
         app.parse_response = QuimeraApp.parse_response.__get__(app, QuimeraApp)
+        app.task_services = Mock()
+        app.task_services.refresh_task_shared_state = Mock()
         app._record_agent_metric = Mock()
 
         from pathlib import Path

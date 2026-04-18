@@ -24,7 +24,7 @@ class AppDispatchServices:
     ) -> str | None:
         """Resolve respostas com loop de ferramentas até estabilizar a saída."""
         app = self.app
-        task_services = app._task_services() if hasattr(app, "_task_services") else app.task_services
+        task_services = app.task_services
         current_response = response
         max_tool_hops = 16
         tool_history = []
@@ -179,8 +179,7 @@ class AppDispatchServices:
             call_index_snapshot = app.session_call_index
         start = time.time()
         history = [] if handoff_only else app.history
-        task_services = app._task_services() if hasattr(app, "_task_services") else app.task_services
-        task_services.refresh_task_shared_state()
+        app.task_services.refresh_task_shared_state()
 
         plugin = plugins.get(agent)
         driver = getattr(plugin, "driver", "cli") if plugin else "cli"
