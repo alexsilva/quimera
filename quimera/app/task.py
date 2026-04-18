@@ -127,7 +127,7 @@ class AppTaskServices:
                         return False
 
                     app.show_system_message(f"[task {task_id}] {agent_name}:\n{strip_tool_block(response).strip()}")
-                    ok, task_result = app.classify_task_execution_result(response)
+                    ok, task_result = self.classify_task_execution_result(response)
                     if not ok:
                         app.show_system_message(f"[task {task_id}] {agent_name}: bloqueada")
                         if can_failover(task_id, agent_name):

@@ -43,8 +43,7 @@ class AppDispatchServices:
             if session_metrics is not None:
                 session_metrics.record_tool_event(app, agent, ok=ok, is_invalid=is_invalid)
 
-            task_services = app._task_services() if hasattr(app, "_task_services") else app.task_services
-            tool_payload = task_services.truncate_payload(tool_result.to_model_payload())
+            tool_payload = app.task_services.truncate_payload(tool_result.to_model_payload())
             tool_history.append(
                 f"Sua resposta anterior:\n{current_response.strip()}\n\n"
                 f"Resultado da ferramenta:\n{tool_payload}"
@@ -179,10 +178,7 @@ class AppDispatchServices:
             call_index_snapshot = app.session_call_index
         start = time.time()
         history = [] if handoff_only else app.history
-        if hasattr(app, "_refresh_task_shared_state"):
-            app._refresh_task_shared_state()
-        else:
-            app.task_services.refresh_task_shared_state()
+        app.task_services.refresh_task_shared_state()
 
         plugin = plugins.get(agent)
         driver = getattr(plugin, "driver", "cli") if plugin else "cli"
