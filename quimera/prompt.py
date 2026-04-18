@@ -123,8 +123,11 @@ class PromptBuilder:
         fact_indexes, facts_block = self._build_facts_block(history)
         shared_state_block = ""
         if shared_state and not has_goal:
-            state_lines = json.dumps(self._trim_shared_state(shared_state), ensure_ascii=False, indent=2)
-            shared_state_block = PROMPT_SHARED_STATE.format(shared_state_json=state_lines)
+            _legacy_keys = {"goal", "decisions"}
+            trimmed = {k: v for k, v in self._trim_shared_state(shared_state).items() if k not in _legacy_keys}
+            if trimmed:
+                state_lines = json.dumps(trimmed, ensure_ascii=False, indent=2)
+                shared_state_block = PROMPT_SHARED_STATE.format(shared_state_json=state_lines)
         elif shared_state and has_goal and "completed_task_results" in shared_state:
             results = shared_state["completed_task_results"]
             if results:

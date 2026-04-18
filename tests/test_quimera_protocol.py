@@ -805,15 +805,26 @@ class ProtocolTests(unittest.TestCase):
         builder = PromptBuilder(DummyContextManager(), history_window=3)
         history = [{"role": "human", "content": "Pergunta"}]
 
+        # Chaves legadas (goal, decisions) sem goal_canonical não devem aparecer no prompt
         prompt = builder.build(
             AGENT_CLAUDE,
             history,
             shared_state={"goal": "corrigir", "decisions": ["usar json"]},
         )
 
-        self.assertIn("ESTADO COMPARTILHADO", prompt)
-        self.assertIn('"goal": "corrigir"', prompt)
-        self.assertIn('"decisions": [', prompt)
+        self.assertNotIn("ESTADO COMPARTILHADO", prompt)
+        self.assertNotIn('"goal": "corrigir"', prompt)
+        self.assertNotIn('"decisions": [', prompt)
+
+        # Chave não-legada deve aparecer normalmente
+        prompt2 = builder.build(
+            AGENT_CLAUDE,
+            history,
+            shared_state={"next_step": "continuar", "goal": "ignorado"},
+        )
+        self.assertIn("ESTADO COMPARTILHADO", prompt2)
+        self.assertIn('"next_step": "continuar"', prompt2)
+        self.assertNotIn('"goal":', prompt2)
 
     def test_prompt_truncates_shared_state_to_last_five_decisions(self):
         builder = PromptBuilder(DummyContextManager(), history_window=3)
@@ -830,10 +841,12 @@ class ProtocolTests(unittest.TestCase):
         # Extrai apenas o bloco ESTADO COMPARTILHADO para verificar o conteúdo truncado
         state_start = prompt.index("ESTADO COMPARTILHADO:")
         state_block = prompt[state_start:]
-        self.assertIn('"goal": "objetivo"', state_block)
+        # goal e decisions são chaves legadas e não devem aparecer
+        self.assertNotIn('"goal":', state_block)
+        self.assertNotIn('"decisions":', state_block)
+        self.assertNotIn('"d9"', state_block)
+        # next_step é chave ativa e deve aparecer
         self.assertIn('"next_step": "próximo passo"', state_block)
-        self.assertIn('"d9"', state_block)
-        self.assertNotIn('"d0"', state_block)
         self.assertNotIn('"open_disagreements"', state_block)
 
     def test_prompt_includes_task_overview_in_shared_state(self):
