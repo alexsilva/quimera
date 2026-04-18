@@ -119,7 +119,7 @@ class TestParseRoutingWithModes(unittest.TestCase):
         app = QuimeraApp.__new__(QuimeraApp)
         app._lock = __import__("threading").Lock()
         app.active_agents = ["claude", "codex"]
-        app._agents = ["claude", "codex"]
+        app.selected_agents = ["claude", "codex"]
         app.execution_mode = None
         app.renderer = MagicMock()
 
@@ -150,37 +150,29 @@ class TestParseRoutingWithModes(unittest.TestCase):
         app._set_execution_mode = QuimeraApp._set_execution_mode.__get__(app, QuimeraApp)
         app.parse_routing = QuimeraApp.parse_routing.__get__(app, QuimeraApp)
 
-        with patch("quimera.app.core.plugins") as mock_plugins, \
-             patch("quimera.app.core.resolve_app_dependency") as mock_rand:
+        with patch("quimera.app.core.plugins") as mock_plugins:
             mock_plugins.get = fake_get
-            mock_rand.return_value = __import__("random")
-            return app, mock_plugins, mock_rand
+            return app, mock_plugins, None
 
     def test_mode_command_sets_execution_mode(self):
-        app, mock_plugins, mock_rand = self._make_app()
-        with patch("quimera.app.core.plugins") as mp, \
-             patch("quimera.app.core.resolve_app_dependency") as mr:
+        app, _, _ = self._make_app()
+        with patch("quimera.app.core.plugins") as mp:
             mp.get = lambda n: {"claude": MagicMock(prefix="/claude", name="claude"), "codex": MagicMock(prefix="/codex", name="codex")}.get(n)
-            mr.return_value = __import__("random")
             app.parse_routing("/planning")
         self.assertIsNotNone(app.execution_mode)
         self.assertEqual(app.execution_mode.name, "planning")
 
     def test_mode_propagates_to_policy(self):
         app, _, _ = self._make_app()
-        with patch("quimera.app.core.plugins") as mp, \
-             patch("quimera.app.core.resolve_app_dependency") as mr:
+        with patch("quimera.app.core.plugins") as mp:
             mp.get = lambda n: {"claude": MagicMock(prefix="/claude", name="claude"), "codex": MagicMock(prefix="/codex", name="codex")}.get(n)
-            mr.return_value = __import__("random")
             app.parse_routing("/planning faz algo")
         self.assertIn("write_file", app.tool_executor.policy.blocked_tools)
 
     def test_mode_propagates_to_agent_client(self):
         app, _, _ = self._make_app()
-        with patch("quimera.app.core.plugins") as mp, \
-             patch("quimera.app.core.resolve_app_dependency") as mr:
+        with patch("quimera.app.core.plugins") as mp:
             mp.get = lambda n: {"claude": MagicMock(prefix="/claude", name="claude"), "codex": MagicMock(prefix="/codex", name="codex")}.get(n)
-            mr.return_value = __import__("random")
             app.parse_routing("/analysis analise o código")
         self.assertIsNotNone(app.agent_client.execution_mode)
         self.assertEqual(app.agent_client.execution_mode.name, "analysis")
@@ -189,19 +181,15 @@ class TestParseRoutingWithModes(unittest.TestCase):
         app, _, _ = self._make_app()
         # Primeiro ativa planning
         app.tool_executor.policy.blocked_tools = ["write_file", "apply_patch"]
-        with patch("quimera.app.core.plugins") as mp, \
-             patch("quimera.app.core.resolve_app_dependency") as mr:
+        with patch("quimera.app.core.plugins") as mp:
             mp.get = lambda n: {"claude": MagicMock(prefix="/claude", name="claude"), "codex": MagicMock(prefix="/codex", name="codex")}.get(n)
-            mr.return_value = __import__("random")
             app.parse_routing("/execute faz a tarefa")
         self.assertEqual(app.tool_executor.policy.blocked_tools, [])
 
     def test_execute_mode_announces_previous_restrictions_were_removed(self):
         app, _, _ = self._make_app()
-        with patch("quimera.app.core.plugins") as mp, \
-             patch("quimera.app.core.resolve_app_dependency") as mr:
+        with patch("quimera.app.core.plugins") as mp:
             mp.get = lambda n: {"claude": MagicMock(prefix="/claude", name="claude"), "codex": MagicMock(prefix="/codex", name="codex")}.get(n)
-            mr.return_value = __import__("random")
             app.parse_routing("/execute faz a tarefa")
         app.renderer.show_system.assert_any_call(
             "[modo] execute ativado — restrições anteriores removidas; ferramentas bloqueadas: nenhuma"

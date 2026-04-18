@@ -2,6 +2,7 @@
 import hashlib
 import json
 import logging
+import re
 import time
 
 from ..constants import EXTEND_MARKER, NEEDS_INPUT_MARKER, ROUTE_PREFIX, STATE_UPDATE_START
@@ -9,6 +10,17 @@ from ..constants import EXTEND_MARKER, NEEDS_INPUT_MARKER, ROUTE_PREFIX, STATE_U
 
 class AppProtocol:
     """Encapsula parsing de respostas, handoffs e updates de estado."""
+
+    HANDOFF_PAYLOAD_PATTERN = re.compile(
+        r"^\s*task:\s*([^\n]+?)\s*(?:(?:\n|\|\s*)context:\s*([^\n]+?))?\s*(?:(?:\n|\|\s*)expected:\s*([^\n]+?))?\s*(?:(?:\n|\|\s*)priority:\s*([^\n]+?))?\s*$",
+        re.IGNORECASE,
+    )
+    STATE_UPDATE_PATTERN = re.compile(
+        r"\[STATE_UPDATE\](.*?)\[/STATE_UPDATE\]", re.DOTALL
+    )
+    ROUTE_PATTERN = re.compile(r"\[ROUTE:([A-Za-z0-9_-]+)\]\s*([\s\S]+)", re.M | re.I)
+    ACK_PATTERN = re.compile(r"^\s*\[ACK:([A-Za-z0-9]+)\]\s*", re.M)
+    PAYLOAD_FIELD_RE = re.compile(r"^\s*(task|context|expected)\s*:", re.IGNORECASE)
 
     def __init__(self, logger: logging.Logger, decisions_log_path=None) -> None:
         """Inicializa uma instância de AppProtocol."""
@@ -76,7 +88,7 @@ class AppProtocol:
         self.logger.debug("[ROUTE] raw_payload before strip: %r", text)
         kept = []
         for line in text.splitlines():
-            if app._PAYLOAD_FIELD_RE.match(line) or (kept and not line.strip()):
+            if self.PAYLOAD_FIELD_RE.match(line) or (kept and not line.strip()):
                 kept.append(line)
             else:
                 break
@@ -95,7 +107,7 @@ class AppProtocol:
         """Interpreta handoff payload."""
         if not payload:
             return None
-        match = app.HANDOFF_PAYLOAD_PATTERN.match(payload.strip())
+        match = self.HANDOFF_PAYLOAD_PATTERN.match(payload.strip())
         if not match:
             self.logger.warning("[HANDOFF] Payload did not match regex: %r", payload)
             return None
@@ -134,18 +146,18 @@ class AppProtocol:
         route_target, handoff, ack_id = None, None, None
 
         if STATE_UPDATE_START in response:
-            for state_match in app.STATE_UPDATE_PATTERN.finditer(response):
+            for state_match in self.STATE_UPDATE_PATTERN.finditer(response):
                 self.apply_state_update(app, state_match.group(1))
-            response = app.STATE_UPDATE_PATTERN.sub("", response).strip()
+            response = self.STATE_UPDATE_PATTERN.sub("", response).strip()
 
-        ack_match = app.ACK_PATTERN.search(response)
+        ack_match = self.ACK_PATTERN.search(response)
         if ack_match:
             ack_id = ack_match.group(1)
-            response = app.ACK_PATTERN.sub("", response, count=1).strip()
+            response = self.ACK_PATTERN.sub("", response, count=1).strip()
             self.logger.info("[ACK] received ack_id=%s", ack_id)
 
         if ROUTE_PREFIX in response:
-            match = app.ROUTE_PATTERN.search(response)
+            match = self.ROUTE_PATTERN.search(response)
             if match:
                 raw_payload = self.strip_payload_residual(app, match.group(2))
                 route_target = match.group(1)
@@ -174,7 +186,7 @@ class AppProtocol:
                     if hasattr(app, "behavior_metrics") and app.behavior_metrics:
                         app.behavior_metrics.record_handoff_sent(route_target, is_invalid=True)
                     route_target = None
-                response = app.ROUTE_PATTERN.sub("", response, count=1).strip() or None
+                response = self.ROUTE_PATTERN.sub("", response, count=1).strip() or None
 
         if response is None:
             return None, None, None, False, False, None

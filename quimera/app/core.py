@@ -3,7 +3,6 @@ import logging
 import os
 import queue
 import random
-import re
 import shutil
 import sys
 import tempfile
@@ -94,25 +93,8 @@ class TurnManager:
         return self._human_turn_event.wait(timeout=timeout)
 
 
-def resolve_app_dependency(name, default):
-    """Resolve app dependency."""
-    package = sys.modules.get("quimera.app")
-    if package is None:
-        return default
-    return getattr(package, name, default)
-
-
 class QuimeraApp:
     """Orquestra comandos locais, roteamento entre agentes e ciclo da sessão."""
-    HANDOFF_PAYLOAD_PATTERN = re.compile(
-        r"^\s*task:\s*([^\n]+?)\s*(?:(?:\n|\|\s*)context:\s*([^\n]+?))?\s*(?:(?:\n|\|\s*)expected:\s*([^\n]+?))?\s*(?:(?:\n|\|\s*)priority:\s*([^\n]+?))?\s*$",
-        re.IGNORECASE,
-    )
-    STATE_UPDATE_PATTERN = re.compile(
-        r"\[STATE_UPDATE\](.*?)\[/STATE_UPDATE\]", re.DOTALL
-    )
-    ROUTE_PATTERN = re.compile(r"\[ROUTE:([A-Za-z0-9_-]+)\]\s*([\s\S]+)", re.M | re.I)
-    ACK_PATTERN = re.compile(r"^\s*\[ACK:([A-Za-z0-9]+)\]\s*", re.M)
 
     @staticmethod
     def _available_internal_commands() -> list[str]:
@@ -146,25 +128,15 @@ class QuimeraApp:
                  workspace: Workspace | None = None,
                  ):
         """Inicializa uma instância de QuimeraApp."""
-        selected_agents = list(agents) if agents else []
-        renderer_cls = resolve_app_dependency("TerminalRenderer", TerminalRenderer)
-        config_cls = resolve_app_dependency("ConfigManager", ConfigManager)
-        workspace_cls = resolve_app_dependency("Workspace", Workspace)
-        context_manager_cls = resolve_app_dependency("ContextManager", ContextManager)
-        session_storage_cls = resolve_app_dependency("SessionStorage", SessionStorage)
-        agent_client_cls = resolve_app_dependency("AgentClient", AgentClient)
-        summarizer_cls = resolve_app_dependency("SessionSummarizer", SessionSummarizer)
-        prompt_builder_cls = resolve_app_dependency("PromptBuilder", PromptBuilder)
-        metrics_tracker_cls = resolve_app_dependency("BehaviorMetricsTracker", BehaviorMetricsTracker)
-        runtime_readline = resolve_app_dependency("readline", readline)
-        self.active_agents = self._agents = selected_agents
+        self.selected_agents = list(agents) if agents else []
+        self.active_agents = self.selected_agents
         self.threads = int(threads) if threads is not None else 1
         self.agent_failures = defaultdict(int)
         self._agent_failures_lock = threading.Lock()
-        self.workspace = workspace if workspace is not None else workspace_cls(cwd)
-        self.config = config_cls(self.workspace.config_file)
+        self.workspace = workspace if workspace is not None else Workspace(cwd)
+        self.config = ConfigManager(self.workspace.config_file)
         _active_theme = theme if theme is not None else self.config.theme
-        self.renderer = renderer_cls(theme=_active_theme)
+        self.renderer = TerminalRenderer(theme=_active_theme)
         self.user_name = self.config.user_name
         self.spy = spy
         self.system_layer = AppSystemLayer(self)
@@ -173,11 +145,12 @@ class QuimeraApp:
         self.task_services = AppTaskServices(self)
         self.input_services = AppInputServices(
             self,
-            input_resolver=lambda: resolve_app_dependency("input", input),
+            input_resolver=lambda: input,
         )
 
         # Configuração do histórico persistente (readline)
         self.history_file = self.workspace.history_file
+        runtime_readline = self._get_readline()
         if runtime_readline:
             if self.history_file.exists():
                 try:
@@ -191,24 +164,24 @@ class QuimeraApp:
         for item in migrated:
             self.renderer.show_system(MSG_MIGRATION.format(item))
 
-        self.context_manager = context_manager_cls(
+        self.context_manager = ContextManager(
             self.workspace.context_persistent,
             self.workspace.context_session,
             self.renderer,
         )
-        self.storage = session_storage_cls(self.workspace.logs_dir, self.renderer)
+        self.storage = SessionStorage(self.workspace.logs_dir, self.renderer)
         session_id = self.storage.get_history_file().stem
         metrics_file = self.workspace.metrics_dir / f"{session_id}.jsonl" if debug else None
-        self.agent_client = agent_client_cls(
+        self.agent_client = AgentClient(
             self.renderer,
             metrics_file=metrics_file,
             timeout=timeout,
             spy=self.spy,
             working_dir=str(self.workspace.cwd),
         )
-        self.task_executor_factory = resolve_app_dependency("create_executor", create_executor)
+        self.task_executor_factory = create_executor
         self._create_task_executor = self.task_executor_factory
-        self.session_summarizer = summarizer_cls(
+        self.session_summarizer = SessionSummarizer(
             self.renderer,
             summarizer_call=build_chain_summarizer(
                 self.agent_client,
@@ -241,7 +214,7 @@ class QuimeraApp:
         }
         # Persist metrics state to workspace so agents can resume with previous metrics
         metrics_state_path = self.workspace.state_dir / "metrics_state.json"
-        self.behavior_metrics = metrics_tracker_cls(storage_path=metrics_state_path)
+        self.behavior_metrics = BehaviorMetricsTracker(storage_path=metrics_state_path)
         self.agent_client.tool_event_callback = self._record_tool_event
         self.debug_prompt_metrics = debug
         self.round_index = 0
@@ -276,7 +249,7 @@ class QuimeraApp:
             "summary_loaded": self._format_yes_no(summary_loaded),
             "current_job_id": self.current_job_id,
         }
-        self.prompt_builder = prompt_builder_cls(
+        self.prompt_builder = PromptBuilder(
             self.context_manager,
             history_window=history_window or self.config.history_window,
             session_state=session_state,
@@ -316,6 +289,11 @@ class QuimeraApp:
                 commands.add(plugin.prefix)
             commands.update(alias for alias in (plugin.aliases or []) if alias)
         return sorted(commands)
+
+    @staticmethod
+    def _get_readline():
+        """Retorna o módulo readline quando disponível."""
+        return readline
 
     def _configure_readline_completion(self, runtime_readline) -> None:
         """Registra autocomplete de comandos slash quando readline estiver disponível."""
@@ -373,7 +351,7 @@ class QuimeraApp:
         if services is None:
             services = AppInputServices(
                 self,
-                input_resolver=lambda: resolve_app_dependency("input", input),
+                input_resolver=lambda: input,
             )
             self.input_services = services
         return services
@@ -460,7 +438,7 @@ class QuimeraApp:
         try:
             prompt = getattr(self, "_nonblocking_prompt_text", "")
             line_buffer = ""
-            runtime_readline = resolve_app_dependency("readline", readline)
+            runtime_readline = self._get_readline()
             if runtime_readline is not None:
                 try:
                     line_buffer = runtime_readline.get_line_buffer()
@@ -640,9 +618,8 @@ class QuimeraApp:
                 return self.parse_routing(rest)
             self.renderer.show_system(mode_message)
             if not self.active_agents:
-                self.active_agents = self._agents
-            runtime_random = resolve_app_dependency("random", random)
-            return runtime_random.choice(self.active_agents), "", False
+                self.active_agents = self.selected_agents
+            return random.choice(self.active_agents), "", False
 
         active_plugins = []
         for n in self.active_agents:
@@ -670,9 +647,8 @@ class QuimeraApp:
 
         if not self.active_agents:
             logger.warning("no active agents, resetting to default")
-            self.active_agents = self._agents
-        runtime_random = resolve_app_dependency("random", random)
-        return runtime_random.choice(self.active_agents), user_input, False
+            self.active_agents = self.selected_agents
+        return random.choice(self.active_agents), user_input, False
 
     def _build_task_overview(self) -> dict:
         """Monta task overview."""
@@ -859,12 +835,10 @@ class QuimeraApp:
         logger.info("[DISPATCH] agent=%s latency=%.2fs result=%s", agent, elapsed, "ok" if result else "none")
         return result
 
-    _PAYLOAD_FIELD_RE = re.compile(r"^\s*(task|context|expected)\s*:", re.IGNORECASE)
-
     @staticmethod
     def _strip_payload_residual(text):
         """Remove payload residual."""
-        return AppProtocol(logger).strip_payload_residual(QuimeraApp, text)
+        return AppProtocol(logger).strip_payload_residual(None, text)
 
     def _record_agent_metric(self, agent, metric_name, latency):
         """Registra agent metric."""
@@ -996,7 +970,7 @@ class QuimeraApp:
     def shutdown(self):
         """Finaliza a sessão tentando resumir o histórico no contexto persistente."""
         self._stop_task_executors()
-        runtime_readline = resolve_app_dependency("readline", readline)
+        runtime_readline = self._get_readline()
         if runtime_readline:
             try:
                 runtime_readline.write_history_file(str(self.history_file))

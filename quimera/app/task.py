@@ -86,9 +86,10 @@ def _resolve_executor_factory(app):
         return app.task_executor_factory
     if getattr(app, "_create_task_executor", None) is not None:
         return app._create_task_executor
-    app_module = sys.modules.get("quimera.app")
-    if app_module is not None and hasattr(app_module, "create_executor"):
-        return app_module.create_executor
+    for mod_name in ("quimera.app.core", "quimera.app"):
+        mod = sys.modules.get(mod_name)
+        if mod is not None and hasattr(mod, "create_executor"):
+            return mod.create_executor
     return create_executor
 
 

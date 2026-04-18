@@ -16,6 +16,7 @@ import quimera.plugins as plugins
 from quimera.agents import AgentClient
 from quimera.app import QuimeraApp
 from quimera.app.core import TurnManager
+from quimera.app.protocol import AppProtocol
 from quimera.app.session_metrics import SessionMetricsService
 from quimera.cli import main as cli_main
 from quimera.config import DEFAULT_HISTORY_WINDOW
@@ -163,8 +164,7 @@ class ProtocolTests(unittest.TestCase):
 
     def test_parse_response_detects_extend_marker_at_end(self):
         app = QuimeraApp.__new__(QuimeraApp)
-        app.ROUTE_PATTERN = QuimeraApp.ROUTE_PATTERN
-        app.STATE_UPDATE_PATTERN = QuimeraApp.STATE_UPDATE_PATTERN
+        app.protocol = AppProtocol(Mock())
         app.shared_state = {}
 
         response, _, _, extend, _, _ = app.parse_response(f"Resposta objetiva {EXTEND_MARKER}")
@@ -174,8 +174,7 @@ class ProtocolTests(unittest.TestCase):
 
     def test_parse_response_keeps_plain_response(self):
         app = QuimeraApp.__new__(QuimeraApp)
-        app.ROUTE_PATTERN = QuimeraApp.ROUTE_PATTERN
-        app.STATE_UPDATE_PATTERN = QuimeraApp.STATE_UPDATE_PATTERN
+        app.protocol = AppProtocol(Mock())
         app.shared_state = {}
 
         response, target, handoff, extend, _, _ = app.parse_response("Resposta objetiva")
@@ -187,9 +186,7 @@ class ProtocolTests(unittest.TestCase):
 
     def test_parse_response_extracts_internal_handoff(self):
         app = QuimeraApp.__new__(QuimeraApp)
-        app.ROUTE_PATTERN = QuimeraApp.ROUTE_PATTERN
-        app.HANDOFF_PAYLOAD_PATTERN = QuimeraApp.HANDOFF_PAYLOAD_PATTERN
-        app.STATE_UPDATE_PATTERN = QuimeraApp.STATE_UPDATE_PATTERN
+        app.protocol = AppProtocol(Mock())
         app.shared_state = {}
 
         response, target, message, extend, _, _ = app.parse_response(
@@ -209,9 +206,7 @@ class ProtocolTests(unittest.TestCase):
 
     def test_parse_response_extracts_multiline_handoff(self):
         app = QuimeraApp.__new__(QuimeraApp)
-        app.ROUTE_PATTERN = QuimeraApp.ROUTE_PATTERN
-        app.HANDOFF_PAYLOAD_PATTERN = QuimeraApp.HANDOFF_PAYLOAD_PATTERN
-        app.STATE_UPDATE_PATTERN = QuimeraApp.STATE_UPDATE_PATTERN
+        app.protocol = AppProtocol(Mock())
         app.shared_state = {}
 
         response, target, message, extend, _, _ = app.parse_response(
@@ -233,9 +228,7 @@ class ProtocolTests(unittest.TestCase):
 
     def test_parse_response_ignores_invalid_handoff_payload(self):
         app = QuimeraApp.__new__(QuimeraApp)
-        app.ROUTE_PATTERN = QuimeraApp.ROUTE_PATTERN
-        app.HANDOFF_PAYLOAD_PATTERN = QuimeraApp.HANDOFF_PAYLOAD_PATTERN
-        app.STATE_UPDATE_PATTERN = QuimeraApp.STATE_UPDATE_PATTERN
+        app.protocol = AppProtocol(Mock())
         app.shared_state = {}
 
         response, target, message, extend, _, _ = app.parse_response(
@@ -249,7 +242,7 @@ class ProtocolTests(unittest.TestCase):
 
     def test_parse_handoff_payload_task_only(self):
         app = QuimeraApp.__new__(QuimeraApp)
-        app.HANDOFF_PAYLOAD_PATTERN = QuimeraApp.HANDOFF_PAYLOAD_PATTERN
+        app.protocol = AppProtocol(Mock())
         result = app.parse_handoff_payload("task: Revise este código")
         self.assertEqual(result["task"], "Revise este código")
         self.assertIsNone(result["context"])
@@ -259,7 +252,7 @@ class ProtocolTests(unittest.TestCase):
 
     def test_parse_handoff_payload_task_and_context(self):
         app = QuimeraApp.__new__(QuimeraApp)
-        app.HANDOFF_PAYLOAD_PATTERN = QuimeraApp.HANDOFF_PAYLOAD_PATTERN
+        app.protocol = AppProtocol(Mock())
         result = app.parse_handoff_payload("task: Revise este código | context: Verificar performance")
         self.assertEqual(result["task"], "Revise este código")
         self.assertEqual(result["context"], "Verificar performance")
@@ -269,9 +262,7 @@ class ProtocolTests(unittest.TestCase):
     def test_parse_response_route_with_residual_text(self):
         """ROUTE block should be recognized even when followed by residual text."""
         app = QuimeraApp.__new__(QuimeraApp)
-        app.ROUTE_PATTERN = QuimeraApp.ROUTE_PATTERN
-        app.HANDOFF_PAYLOAD_PATTERN = QuimeraApp.HANDOFF_PAYLOAD_PATTERN
-        app.STATE_UPDATE_PATTERN = QuimeraApp.STATE_UPDATE_PATTERN
+        app.protocol = AppProtocol(Mock())
         app.shared_state = {}
 
         # Test with residual text after the ROUTE block
@@ -295,12 +286,11 @@ class ProtocolTests(unittest.TestCase):
             r'[A-Za-z0-9_-]+' if agent == '*' else re.escape(agent)
             for agent in app.active_agents
         ]
-        app.ROUTE_PATTERN = re.compile(
+        app.protocol = AppProtocol(Mock())
+        app.protocol.ROUTE_PATTERN = re.compile(
             rf"^\[ROUTE:({'|'.join(escaped_agents)})\]\s*([\s\S]+)\s*\Z",
             re.MULTILINE
         )
-        app.HANDOFF_PAYLOAD_PATTERN = QuimeraApp.HANDOFF_PAYLOAD_PATTERN
-        app.STATE_UPDATE_PATTERN = QuimeraApp.STATE_UPDATE_PATTERN
         app.shared_state = {}
 
         response, target, message, extend, _, _ = app.parse_response(
@@ -320,8 +310,7 @@ class ProtocolTests(unittest.TestCase):
     def test_parse_response_extracts_state_update_before_debate(self):
         import threading
         app = QuimeraApp.__new__(QuimeraApp)
-        app.ROUTE_PATTERN = QuimeraApp.ROUTE_PATTERN
-        app.STATE_UPDATE_PATTERN = QuimeraApp.STATE_UPDATE_PATTERN
+        app.protocol = AppProtocol(Mock())
         app.shared_state = {}
         app._lock = threading.Lock()
 
@@ -343,8 +332,7 @@ class ProtocolTests(unittest.TestCase):
     def test_parse_response_extracts_state_update_after_debate_marker(self):
         import threading
         app = QuimeraApp.__new__(QuimeraApp)
-        app.ROUTE_PATTERN = QuimeraApp.ROUTE_PATTERN
-        app.STATE_UPDATE_PATTERN = QuimeraApp.STATE_UPDATE_PATTERN
+        app.protocol = AppProtocol(Mock())
         app.shared_state = {}
         app._lock = threading.Lock()
 
@@ -363,8 +351,7 @@ class ProtocolTests(unittest.TestCase):
     def test_parse_response_merges_multiple_state_updates(self):
         import threading
         app = QuimeraApp.__new__(QuimeraApp)
-        app.ROUTE_PATTERN = QuimeraApp.ROUTE_PATTERN
-        app.STATE_UPDATE_PATTERN = QuimeraApp.STATE_UPDATE_PATTERN
+        app.protocol = AppProtocol(Mock())
         app.shared_state = {"decisions": ["A"]}
         app._lock = threading.Lock()
 
@@ -963,9 +950,9 @@ class ProtocolTests(unittest.TestCase):
             def get_history_file(self):
                 return Path("/tmp/sessao-2026-03-27-123456.json")
 
-        with patch("quimera.app.ConfigManager", DummyConfigManager), patch("quimera.app.Workspace", FakeWorkspace), patch(
-            "quimera.app.ContextManager", FakeContextManager
-        ), patch("quimera.app.SessionStorage", FakeSessionStorage):
+        with patch("quimera.app.core.ConfigManager", DummyConfigManager), patch("quimera.app.core.Workspace", FakeWorkspace), patch(
+            "quimera.app.core.ContextManager", FakeContextManager
+        ), patch("quimera.app.core.SessionStorage", FakeSessionStorage):
             app = QuimeraApp(Path("/tmp/projeto"))
 
         try:
@@ -1018,9 +1005,9 @@ class ProtocolTests(unittest.TestCase):
             def get_history_file(self):
                 return Path("/tmp/sessao-2026-03-27-123456.json")
 
-        with patch("quimera.app.ConfigManager", DummyConfigManager), patch("quimera.app.Workspace", FakeWorkspace), patch(
-            "quimera.app.ContextManager", FakeContextManager
-        ), patch("quimera.app.SessionStorage", FakeSessionStorage):
+        with patch("quimera.app.core.ConfigManager", DummyConfigManager), patch("quimera.app.core.Workspace", FakeWorkspace), patch(
+            "quimera.app.core.ContextManager", FakeContextManager
+        ), patch("quimera.app.core.SessionStorage", FakeSessionStorage):
             app = QuimeraApp(Path("/tmp/projeto"))
 
         try:
@@ -1066,9 +1053,9 @@ class ProtocolTests(unittest.TestCase):
             def get_history_file(self):
                 return Path("/tmp/sessao-2026-03-27-123456.json")
 
-        with patch("quimera.app.ConfigManager", DummyConfigManager), patch("quimera.app.Workspace", FakeWorkspace), patch(
-            "quimera.app.ContextManager", FakeContextManager
-        ), patch("quimera.app.SessionStorage", FakeSessionStorage):
+        with patch("quimera.app.core.ConfigManager", DummyConfigManager), patch("quimera.app.core.Workspace", FakeWorkspace), patch(
+            "quimera.app.core.ContextManager", FakeContextManager
+        ), patch("quimera.app.core.SessionStorage", FakeSessionStorage):
             app = QuimeraApp(Path("/tmp/projeto"), history_window=5)
 
         try:
@@ -2045,7 +2032,7 @@ class PluginTests(unittest.TestCase):
 
         stdin = io.StringIO("")
         stdin.isatty = lambda: True
-        with patch("sys.stdin", stdin), patch("quimera.app.input", return_value="mensagem") as mock_input:
+        with patch("sys.stdin", stdin), patch("builtins.input", return_value="mensagem") as mock_input:
             result = app.read_user_input("Você: ", timeout=0)
 
         self.assertEqual(result, "mensagem")
@@ -2065,7 +2052,7 @@ class PluginTests(unittest.TestCase):
         stdin = io.StringIO("")
         stdin.isatty = lambda: True
 
-        with patch("sys.stdin", stdin), patch("quimera.app.input", return_value="oi"):
+        with patch("sys.stdin", stdin), patch("builtins.input", return_value="oi"):
             value = app.read_user_input("Você: ", timeout=0)
 
         self.assertEqual(value, "oi")
@@ -2086,7 +2073,7 @@ class PluginTests(unittest.TestCase):
 
         stdin = io.StringIO("")
         stdin.isatty = lambda: True
-        with patch("sys.stdin", stdin), patch("quimera.app.input", side_effect=KeyboardInterrupt):
+        with patch("sys.stdin", stdin), patch("builtins.input", side_effect=KeyboardInterrupt):
             with self.assertRaises(KeyboardInterrupt):
                 app.read_user_input("Você: ", timeout=0)
 
@@ -2101,8 +2088,8 @@ class PluginTests(unittest.TestCase):
         stdin = io.StringIO("")
         stdin.isatty = lambda: True
 
-        with patch("sys.stdin", stdin), patch("quimera.app.readline.get_line_buffer", return_value=""), patch(
-            "quimera.app.readline.redisplay"
+        with patch("sys.stdin", stdin), patch("quimera.app.core.readline.get_line_buffer", return_value=""), patch(
+            "quimera.app.core.readline.redisplay"
         ) as mock_redisplay:
             app.show_system_message("[task 7] claude: iniciando")
 
@@ -2120,8 +2107,8 @@ class PluginTests(unittest.TestCase):
         stdin = io.StringIO("")
         stdin.isatty = lambda: True
 
-        with patch("sys.stdin", stdin), patch("quimera.app.readline.get_line_buffer", return_value=""), patch(
-            "quimera.app.readline.redisplay"
+        with patch("sys.stdin", stdin), patch("quimera.app.core.readline.get_line_buffer", return_value=""), patch(
+            "quimera.app.core.readline.redisplay"
         ), patch("sys.stdout.write") as mock_write, patch("sys.stdout.flush") as mock_flush:
             app.show_system_message("[task 7] claude: erro: falha de rede")
 
@@ -2137,8 +2124,8 @@ class PluginTests(unittest.TestCase):
         stdin = io.StringIO("")
         stdin.isatty = lambda: True
 
-        with patch("sys.stdin", stdin), patch("quimera.app.readline.get_line_buffer", return_value="digitando"), patch(
-            "quimera.app.readline.redisplay"
+        with patch("sys.stdin", stdin), patch("quimera.app.core.readline.get_line_buffer", return_value="digitando"), patch(
+            "quimera.app.core.readline.redisplay"
         ) as mock_redisplay, patch("sys.stdout.write"), patch("sys.stdout.flush"), patch(
             "quimera.app.core.time.sleep"
         ) as mock_sleep:
@@ -2161,8 +2148,8 @@ class PluginTests(unittest.TestCase):
         stdin = io.StringIO("")
         stdin.isatty = lambda: True
 
-        with patch("sys.stdin", stdin), patch("quimera.app.readline.get_line_buffer", return_value=""), patch(
-            "quimera.app.readline.redisplay"
+        with patch("sys.stdin", stdin), patch("quimera.app.core.readline.get_line_buffer", return_value=""), patch(
+            "quimera.app.core.readline.redisplay"
         ), patch("sys.stdout.write") as mock_write, patch("sys.stdout.flush"):
             app.show_system_message("[task 7] gemini:\nACEITE\nResultado validado com evidência concreta.")
 
@@ -2188,8 +2175,8 @@ class PluginTests(unittest.TestCase):
         previous_app = prompt_handler._app
         prompt_handler.bind_app(app)
         try:
-            with patch("sys.stdin", stdin), patch("quimera.app.readline.get_line_buffer", return_value=""), patch(
-                "quimera.app.readline.redisplay"
+            with patch("sys.stdin", stdin), patch("quimera.app.core.readline.get_line_buffer", return_value=""), patch(
+                "quimera.app.core.readline.redisplay"
             ) as mock_redisplay, patch("sys.stdout.write") as mock_write, patch("sys.stdout.flush") as mock_flush:
                 app_module.logger.info("[DISPATCH] sending to agent=%s", AGENT_CODEX)
 
@@ -2215,8 +2202,8 @@ class PluginTests(unittest.TestCase):
         previous_app = prompt_handler._app
         prompt_handler.bind_app(app)
         try:
-            with patch("sys.stdin", stdin), patch("quimera.app.readline.get_line_buffer", return_value=""), patch(
-                "quimera.app.readline.redisplay"
+            with patch("sys.stdin", stdin), patch("quimera.app.core.readline.get_line_buffer", return_value=""), patch(
+                "quimera.app.core.readline.redisplay"
             ) as mock_redisplay, patch("sys.stdout.write") as mock_write, patch("sys.stdout.flush"):
                 app_module.logger.warning("[DISPATCH] retry for agent=%s", AGENT_CODEX)
 
@@ -2237,8 +2224,8 @@ class PluginTests(unittest.TestCase):
         stdin = io.StringIO("")
         stdin.isatty = lambda: True
 
-        with patch("sys.stdin", stdin), patch("quimera.app.readline.get_line_buffer", return_value="oi"), patch(
-            "quimera.app.readline.redisplay"
+        with patch("sys.stdin", stdin), patch("quimera.app.core.readline.get_line_buffer", return_value="oi"), patch(
+            "quimera.app.core.readline.redisplay"
         ), patch("sys.stdout.write") as mock_write, patch("sys.stdout.flush"):
             app.show_system_message("[task 7] claude: erro: timeout")
 
@@ -2256,8 +2243,8 @@ class PluginTests(unittest.TestCase):
         stdin = io.StringIO("")
         stdin.isatty = lambda: True
 
-        with patch("sys.stdin", stdin), patch("quimera.app.readline.get_line_buffer", return_value="oi"), patch(
-            "quimera.app.readline.redisplay"
+        with patch("sys.stdin", stdin), patch("quimera.app.core.readline.get_line_buffer", return_value="oi"), patch(
+            "quimera.app.core.readline.redisplay"
         ) as mock_redisplay, patch("sys.stdout.write") as mock_write, patch("sys.stdout.flush"):
             app.print_response("claude", "resposta final")
 
@@ -2285,7 +2272,7 @@ class PluginTests(unittest.TestCase):
         app.round_index = 0
         app.renderer = DummyRenderer()
 
-        with patch("quimera.app.random.choice", return_value=AGENT_CODEX) as mock_choice:
+        with patch("quimera.app.core.random.choice", return_value=AGENT_CODEX) as mock_choice:
             agent, message, explicit = app.parse_routing("oi")
 
         self.assertEqual(agent, AGENT_CODEX)
@@ -2295,7 +2282,7 @@ class PluginTests(unittest.TestCase):
 
     def test_parse_handoff_payload_with_priority(self):
         app = QuimeraApp.__new__(QuimeraApp)
-        app.HANDOFF_PAYLOAD_PATTERN = QuimeraApp.HANDOFF_PAYLOAD_PATTERN
+        app.protocol = AppProtocol(Mock())
         result = app.parse_handoff_payload("task: Corrigir bug crítico | priority: urgent")
         self.assertEqual(result["task"], "Corrigir bug crítico")
         self.assertEqual(result["priority"], "urgent")
@@ -2303,13 +2290,13 @@ class PluginTests(unittest.TestCase):
 
     def test_parse_handoff_payload_invalid_priority_defaults_to_normal(self):
         app = QuimeraApp.__new__(QuimeraApp)
-        app.HANDOFF_PAYLOAD_PATTERN = QuimeraApp.HANDOFF_PAYLOAD_PATTERN
+        app.protocol = AppProtocol(Mock())
         result = app.parse_handoff_payload("task: Algo qualquer | priority: invalido")
         self.assertEqual(result["priority"], "normal")
 
     def test_parse_handoff_payload_generates_unique_ids(self):
         app = QuimeraApp.__new__(QuimeraApp)
-        app.HANDOFF_PAYLOAD_PATTERN = QuimeraApp.HANDOFF_PAYLOAD_PATTERN
+        app.protocol = AppProtocol(Mock())
         r1 = app.parse_handoff_payload("task: Tarefa 1")
         r2 = app.parse_handoff_payload("task: Tarefa 2")
         self.assertNotEqual(r1["handoff_id"], r2["handoff_id"])
@@ -2383,7 +2370,7 @@ class PluginTests(unittest.TestCase):
         app.show_system_message = lambda message: status_updates.append(message)
         app._classify_task_execution_result = lambda response: (True, response)
 
-        with patch("quimera.app.create_executor", side_effect=fake_create_executor), patch(
+        with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
             "quimera.runtime.tasks.complete_task"
         ) as complete_task, patch("quimera.runtime.tasks.fail_task") as fail_task:
             app._setup_task_executors()
@@ -2428,7 +2415,7 @@ class PluginTests(unittest.TestCase):
         app.show_system_message = lambda message: status_updates.append(message)
         app._classify_task_execution_result = lambda response: (True, response)
 
-        with patch("quimera.app.create_executor", side_effect=fake_create_executor), patch(
+        with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
             "quimera.runtime.tasks.submit_for_review"
         ) as submit_for_review, patch("quimera.runtime.tasks.complete_task") as complete_task:
             app._setup_task_executors()
@@ -2477,7 +2464,7 @@ class PluginTests(unittest.TestCase):
         app.show_system_message = lambda message: status_updates.append(message)
         app._classify_task_execution_result = lambda response: (True, response)
 
-        with patch("quimera.app.create_executor", side_effect=fake_create_executor), patch(
+        with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
             "quimera.app.task.plugins.get",
             side_effect=lambda agent: FakePlugin(agent == AGENT_CLAUDE),
         ), patch("quimera.runtime.tasks.submit_for_review") as submit_for_review, patch(
@@ -2530,7 +2517,7 @@ class PluginTests(unittest.TestCase):
         app.call_agent = fake_call_agent
         app.show_system_message = lambda message: status_updates.append(message)
 
-        with patch("quimera.app.create_executor", side_effect=fake_create_executor), patch(
+        with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
             "quimera.runtime.tasks.complete_task"
         ) as complete_task:
             app._setup_task_executors()
@@ -2579,7 +2566,7 @@ class PluginTests(unittest.TestCase):
         app.call_agent = lambda *args, **kwargs: None
         app.show_system_message = lambda message: status_updates.append(message)
 
-        with patch("quimera.app.create_executor", side_effect=fake_create_executor), patch(
+        with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
             "quimera.runtime.tasks.update_task"
         ) as update_task, patch("quimera.runtime.tasks.complete_task") as complete_task:
             app._setup_task_executors()
@@ -2620,7 +2607,7 @@ class PluginTests(unittest.TestCase):
         app.call_agent = lambda *args, **kwargs: "RETENTATIVA\nFaltou evidência de alteração no código."
         app.show_system_message = lambda message: status_updates.append(message)
 
-        with patch("quimera.app.create_executor", side_effect=fake_create_executor), patch(
+        with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
             "quimera.runtime.tasks.requeue_task_after_review"
         ) as requeue_task_after_review, patch("quimera.runtime.tasks.complete_task") as complete_task:
             app._setup_task_executors()
@@ -2684,7 +2671,7 @@ class PluginTests(unittest.TestCase):
         app.call_agent = fake_call_agent
         app.show_system_message = lambda message: status_updates.append(message)
 
-        with patch("quimera.app.create_executor", side_effect=fake_create_executor), patch(
+        with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
             "quimera.app.task.plugins.get",
             side_effect=lambda _agent: FakePlugin(True),
         ), patch("quimera.runtime.tasks.update_task") as update_task, patch(
@@ -2747,7 +2734,7 @@ class PluginTests(unittest.TestCase):
         app.call_agent = fake_call_agent
         app.show_system_message = lambda message: status_updates.append(message)
 
-        with patch("quimera.app.create_executor", side_effect=fake_create_executor), patch(
+        with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
             "quimera.app.task.plugins.get",
             side_effect=lambda agent: FakePlugin(agent == AGENT_GEMINI),
         ), patch("quimera.runtime.tasks.update_task") as update_task, patch(
@@ -2802,7 +2789,7 @@ class PluginTests(unittest.TestCase):
             def __init__(self, supports_task_execution):
                 self.supports_task_execution = supports_task_execution
 
-        with patch("quimera.app.create_executor", side_effect=fake_create_executor), patch(
+        with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
             "quimera.app.task.plugins.get",
             side_effect=lambda agent: FakePlugin(agent == AGENT_GEMINI),
         ):
@@ -2841,7 +2828,7 @@ class PluginTests(unittest.TestCase):
             def __init__(self, supports_task_execution):
                 self.supports_task_execution = supports_task_execution
 
-        with patch("quimera.app.create_executor", side_effect=fake_create_executor), patch(
+        with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
             "quimera.app.task.plugins.get",
             side_effect=lambda agent: FakePlugin(True),
         ):
@@ -2889,7 +2876,7 @@ class PluginTests(unittest.TestCase):
             "Execute a tarefa usando o contexto acima como referência."
         )
 
-        with patch("quimera.app.create_executor", side_effect=fake_create_executor), patch(
+        with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
             "quimera.runtime.tasks.complete_task"
         ) as complete_task:
             app._setup_task_executors()
@@ -2933,7 +2920,7 @@ class PluginTests(unittest.TestCase):
         app._classify_task_execution_result = lambda response: (True, response)
         app._record_failure = lambda agent: None
 
-        with patch("quimera.app.create_executor", side_effect=fake_create_executor), patch(
+        with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
             "quimera.runtime.tasks.requeue_task"
         ) as requeue_task, patch("quimera.runtime.tasks.fail_task") as fail_task:
             app._setup_task_executors()
@@ -2970,7 +2957,7 @@ class PluginTests(unittest.TestCase):
         app._classify_task_execution_result = lambda response: (True, response)
         app._record_failure = lambda agent: None
 
-        with patch("quimera.app.create_executor", side_effect=fake_create_executor), patch(
+        with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
             "quimera.runtime.tasks.can_reassign_task", return_value=False
         ) as can_reassign_task, patch("quimera.runtime.tasks.requeue_task") as requeue_task, patch(
             "quimera.runtime.tasks.fail_task"
@@ -2987,9 +2974,7 @@ class PluginTests(unittest.TestCase):
 
     def test_parse_response_extracts_ack_marker(self):
         app = QuimeraApp.__new__(QuimeraApp)
-        app.ROUTE_PATTERN = QuimeraApp.ROUTE_PATTERN
-        app.ACK_PATTERN = QuimeraApp.ACK_PATTERN
-        app.STATE_UPDATE_PATTERN = QuimeraApp.STATE_UPDATE_PATTERN
+        app.protocol = AppProtocol(Mock())
         app.shared_state = {}
 
         response, target, handoff, extend, needs_input, ack_id = app.parse_response(
@@ -3005,9 +2990,7 @@ class PluginTests(unittest.TestCase):
 
     def test_parse_response_without_ack(self):
         app = QuimeraApp.__new__(QuimeraApp)
-        app.ROUTE_PATTERN = QuimeraApp.ROUTE_PATTERN
-        app.ACK_PATTERN = QuimeraApp.ACK_PATTERN
-        app.STATE_UPDATE_PATTERN = QuimeraApp.STATE_UPDATE_PATTERN
+        app.protocol = AppProtocol(Mock())
         app.shared_state = {}
 
         response, _, _, _, _, ack_id = app.parse_response("Resposta sem ACK")
@@ -3018,7 +3001,7 @@ class PluginTests(unittest.TestCase):
     def test_handoff_chain_propagation(self):
         """Test that handoff chain is propagated correctly."""
         app = QuimeraApp.__new__(QuimeraApp)
-        app.HANDOFF_PAYLOAD_PATTERN = QuimeraApp.HANDOFF_PAYLOAD_PATTERN
+        app.protocol = AppProtocol(Mock())
         result = app.parse_handoff_payload("task: Test task")
         self.assertEqual(result["chain"], [])
         
@@ -3030,7 +3013,7 @@ class PluginTests(unittest.TestCase):
     def test_handoff_id_uses_real_target(self):
         """Test that handoff_id includes target in its generation."""
         app = QuimeraApp.__new__(QuimeraApp)
-        app.HANDOFF_PAYLOAD_PATTERN = QuimeraApp.HANDOFF_PAYLOAD_PATTERN
+        app.protocol = AppProtocol(Mock())
         # Generate IDs with same timestamp to verify target affects the hash
         ts = 1234567890.0
         id1 = app._generate_handoff_id("Test task", "codex", timestamp=ts)
@@ -3044,10 +3027,7 @@ class PluginTests(unittest.TestCase):
     def test_ack_mismatch_logged_on_validation(self):
         """Test that ACK mismatch is detected when ack_id != handoff_id."""
         app = QuimeraApp.__new__(QuimeraApp)
-        app.ROUTE_PATTERN = QuimeraApp.ROUTE_PATTERN
-        app.ACK_PATTERN = QuimeraApp.ACK_PATTERN
-        app.HANDOFF_PAYLOAD_PATTERN = QuimeraApp.HANDOFF_PAYLOAD_PATTERN
-        app.STATE_UPDATE_PATTERN = QuimeraApp.STATE_UPDATE_PATTERN
+        app.protocol = AppProtocol(Mock())
         app.shared_state = {}
         app.renderer = DummyRenderer()
 
@@ -3284,9 +3264,7 @@ class FallbackChainTests(unittest.TestCase):
     def test_fallback_skips_original_agent_and_chain(self):
         """Fallback não deve tentar o agente original nem os já na cadeia."""
         app = QuimeraApp.__new__(QuimeraApp)
-        app.HANDOFF_PAYLOAD_PATTERN = QuimeraApp.HANDOFF_PAYLOAD_PATTERN
-        app.ROUTE_PATTERN = QuimeraApp.ROUTE_PATTERN
-        app.STATE_UPDATE_PATTERN = QuimeraApp.STATE_UPDATE_PATTERN
+        app.protocol = AppProtocol(Mock())
         app.shared_state = {}
 
         # Simula handoff com chain
@@ -3473,9 +3451,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         from quimera.metrics import BehaviorMetricsTracker
 
         app = QuimeraApp.__new__(QuimeraApp)
-        app.ROUTE_PATTERN = QuimeraApp.ROUTE_PATTERN
-        app.HANDOFF_PAYLOAD_PATTERN = QuimeraApp.HANDOFF_PAYLOAD_PATTERN
-        app.STATE_UPDATE_PATTERN = QuimeraApp.STATE_UPDATE_PATTERN
+        app.protocol = AppProtocol(Mock())
         app.shared_state = {}
         app.behavior_metrics = BehaviorMetricsTracker()
 
@@ -3750,6 +3726,184 @@ class MetricsFeedbackTests(unittest.TestCase):
         prompt = builder.build("claude", [])
 
         self.assertNotIn("MÉTRICAS DO AGENTE", prompt)
+
+
+class AppProtocolDirectTests(unittest.TestCase):
+    """Testes unitários diretos de AppProtocol para cobertura de ramos não exercidos."""
+
+    def _make_app(self, shared_state=None, session_state=None):
+        app = QuimeraApp.__new__(QuimeraApp)
+        import threading
+        app._lock = threading.Lock()
+        app.shared_state = shared_state if shared_state is not None else {}
+        app.session_state = session_state
+        return app
+
+    # --- _get_decisions_logger ---
+
+    def test_get_decisions_logger_returns_none_when_no_path(self):
+        proto = AppProtocol(Mock(), decisions_log_path=None)
+        result = proto._get_decisions_logger()
+        self.assertIsNone(result)
+
+    def test_get_decisions_logger_caches_instance(self):
+        with patch("quimera.workspace.DecisionsLogger") as MockDL:
+            import tempfile, os
+            tmp = tempfile.mktemp(suffix=".json")
+            proto = AppProtocol(Mock(), decisions_log_path=tmp)
+            # first call creates it
+            first = proto._get_decisions_logger()
+            # second call returns cached (line 34)
+            second = proto._get_decisions_logger()
+            self.assertIs(first, second)
+
+    def test_get_decisions_logger_creates_instance_with_path(self):
+        with patch("quimera.app.protocol.DecisionsLogger", create=True) as MockDL:
+            pass
+        # test via apply_state_update which calls the logger (lines 37-39, 80-81)
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = tmp + "/decisions.json"
+            proto = AppProtocol(Mock(), decisions_log_path=log_path)
+            mock_logger = Mock()
+            with patch("quimera.workspace.DecisionsLogger", return_value=mock_logger):
+                app = self._make_app()
+                app.workspace = SimpleNamespace(cwd="/tmp")
+                payload = '{"decisions": ["dec1", "dec2"]}'
+                result = proto.apply_state_update(app, payload)
+            self.assertTrue(result)
+            mock_logger.append.assert_called()
+
+    # --- merge_state_value ---
+
+    def test_merge_state_value_incoming_none_returns_current(self):
+        result = AppProtocol.merge_state_value("existing", None)
+        self.assertEqual(result, "existing")
+
+    def test_merge_state_value_incoming_empty_string_returns_none(self):
+        result = AppProtocol.merge_state_value("existing", "")
+        self.assertIsNone(result)
+
+    # --- apply_state_update ---
+
+    def test_apply_state_update_invalid_json_returns_false(self):
+        proto = AppProtocol(Mock())
+        app = self._make_app()
+        result = proto.apply_state_update(app, "not json {{")
+        self.assertFalse(result)
+
+    def test_apply_state_update_non_dict_returns_false(self):
+        proto = AppProtocol(Mock())
+        app = self._make_app()
+        result = proto.apply_state_update(app, '"just a string"')
+        self.assertFalse(result)
+
+    def test_apply_state_update_skips_empty_key(self):
+        proto = AppProtocol(Mock())
+        app = self._make_app()
+        result = proto.apply_state_update(app, '{"": "value", "valid": "ok"}')
+        self.assertTrue(result)
+        self.assertNotIn("", app.shared_state)
+        self.assertEqual(app.shared_state["valid"], "ok")
+
+    def test_apply_state_update_pops_key_when_merged_is_none(self):
+        proto = AppProtocol(Mock())
+        app = self._make_app(shared_state={"goal": "old"})
+        # incoming "" causes merge to return None → pop
+        result = proto.apply_state_update(app, '{"goal": ""}')
+        self.assertTrue(result)
+        self.assertNotIn("goal", app.shared_state)
+
+    # --- strip_payload_residual ---
+
+    def test_strip_payload_residual_empty_text_returns_empty(self):
+        proto = AppProtocol(Mock())
+        app = self._make_app()
+        result = proto.strip_payload_residual(app, "")
+        self.assertEqual(result, "")
+
+    def test_strip_payload_residual_none_returns_empty(self):
+        proto = AppProtocol(Mock())
+        app = self._make_app()
+        result = proto.strip_payload_residual(app, None)
+        self.assertEqual(result, "")
+
+    # --- parse_handoff_payload ---
+
+    def test_parse_handoff_payload_no_match_returns_none(self):
+        proto = AppProtocol(Mock())
+        app = self._make_app()
+        result = proto.parse_handoff_payload(app, "completely invalid payload no task keyword", target="codex")
+        self.assertIsNone(result)
+
+    def test_parse_handoff_payload_empty_task_returns_none(self):
+        # Usa regex customizado que aceita grupo vazio para exercer linha 123-129
+        proto = AppProtocol(Mock())
+        proto.HANDOFF_PAYLOAD_PATTERN = re.compile(
+            r"^\s*task:\s*([^\n]*?)\s*(?:context:\s*([^\n]*?))?\s*(?:expected:\s*([^\n]*?))?\s*(?:priority:\s*([^\n]*?))?\s*$",
+            re.IGNORECASE,
+        )
+        result = proto.parse_handoff_payload(None, "task:", target="codex")
+        self.assertIsNone(result)
+
+    # --- parse_response ---
+
+    def test_parse_response_none_returns_all_none(self):
+        proto = AppProtocol(Mock())
+        app = self._make_app()
+        result = proto.parse_response(app, None)
+        self.assertEqual(result, (None, None, None, False, False, None))
+
+    def test_parse_response_needs_human_input_marker(self):
+        from quimera.constants import NEEDS_INPUT_MARKER
+        proto = AppProtocol(Mock())
+        app = self._make_app()
+        response, _, _, _, needs_input, _ = proto.parse_response(app, f"pergunta {NEEDS_INPUT_MARKER}")
+        self.assertTrue(needs_input)
+        self.assertNotIn(NEEDS_INPUT_MARKER, response)
+
+    def test_parse_response_invalid_handoff_increments_session_state(self):
+        proto = AppProtocol(Mock())
+        session_state = {"handoff_invalid_count": 0}
+        app = self._make_app(session_state=session_state)
+        app.behavior_metrics = None
+        # ROUTE com payload inválido → handoff_invalid_count sobe
+        response, target, handoff, _, _, _ = proto.parse_response(
+            app, "[ROUTE:codex] texto sem task keyword válido\nline2\n"
+        )
+        self.assertIsNone(target)
+        self.assertIsNone(handoff)
+        self.assertEqual(session_state["handoff_invalid_count"], 1)
+
+    def test_parse_response_invalid_handoff_calls_behavior_metrics(self):
+        proto = AppProtocol(Mock())
+        session_state = {"handoff_invalid_count": 0}
+        app = self._make_app(session_state=session_state)
+        app.behavior_metrics = Mock()
+        proto.parse_response(app, "[ROUTE:codex] texto sem task keyword válido\nline2\n")
+        app.behavior_metrics.record_handoff_sent.assert_called_once_with("codex", is_invalid=True)
+
+    def test_parse_response_invalid_handoff_session_state_key_error_is_swallowed(self):
+        # Exercita o except KeyError: pass (linhas 184-185) no bloco de contagem de handoff inválido
+        class _RaisingDict(dict):
+            def __setitem__(self, key, value):
+                raise KeyError(key)
+
+        session_state = _RaisingDict()
+        dict.__setitem__(session_state, "handoff_invalid_count", 0)  # inicializa sem usar __setitem__
+
+        proto = AppProtocol(Mock())
+        app = self._make_app(session_state=session_state)
+        app.behavior_metrics = None
+        # Não deve levantar exceção
+        proto.parse_response(app, "[ROUTE:codex] texto sem task keyword\nline2\n")
+
+    def test_parse_response_returns_none_when_route_consumes_all(self):
+        proto = AppProtocol(Mock())
+        app = self._make_app()
+        # ROUTE que consome a resposta inteira → response vira None após sub → retorna None tuple
+        result = proto.parse_response(app, "[ROUTE:codex] task: fazer algo")
+        self.assertEqual(result[:3], (None, None, None))
 
 
 if __name__ == "__main__":
