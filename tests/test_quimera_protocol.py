@@ -816,15 +816,23 @@ class ProtocolTests(unittest.TestCase):
         self.assertNotIn('"goal": "corrigir"', prompt)
         self.assertNotIn('"decisions": [', prompt)
 
-        # Chave não-legada deve aparecer normalmente
+        # Chaves de execução (next_step, etc.) sem goal_canonical também não devem aparecer
         prompt2 = builder.build(
             AGENT_CLAUDE,
             history,
             shared_state={"next_step": "continuar", "goal": "ignorado"},
         )
-        self.assertIn("ESTADO COMPARTILHADO", prompt2)
-        self.assertIn('"next_step": "continuar"', prompt2)
-        self.assertNotIn('"goal":', prompt2)
+        self.assertNotIn("ESTADO COMPARTILHADO", prompt2)
+
+        # task_overview é campo de infra (não execução) e deve aparecer normalmente
+        prompt3 = builder.build(
+            AGENT_CLAUDE,
+            history,
+            shared_state={"task_overview": {"job_id": 1}, "goal": "ignorado"},
+        )
+        self.assertIn("ESTADO COMPARTILHADO", prompt3)
+        self.assertIn('"task_overview"', prompt3)
+        self.assertNotIn('"goal":', prompt3)
 
     def test_prompt_truncates_shared_state_to_last_five_decisions(self):
         builder = PromptBuilder(DummyContextManager(), history_window=3)
@@ -838,16 +846,21 @@ class ProtocolTests(unittest.TestCase):
 
         prompt = builder.build(AGENT_CLAUDE, history, shared_state=big_state)
 
-        # Extrai apenas o bloco ESTADO COMPARTILHADO para verificar o conteúdo truncado
-        state_start = prompt.index("ESTADO COMPARTILHADO:")
-        state_block = prompt[state_start:]
-        # goal e decisions são chaves legadas e não devem aparecer
+        # Sem goal_canonical, todos os campos de execução (goal, decisions, next_step) são filtrados
+        self.assertNotIn("ESTADO COMPARTILHADO", prompt)
+        self.assertNotIn('"goal":', prompt)
+        self.assertNotIn('"decisions":', prompt)
+        self.assertNotIn('"next_step":', prompt)
+        self.assertNotIn('"open_disagreements"', prompt)
+
+        # Com task_overview (campo de infra), o bloco aparece normalmente
+        state_with_overview = {**big_state, "task_overview": {"job_id": 42}}
+        prompt2 = builder.build(AGENT_CLAUDE, history, shared_state=state_with_overview)
+        state_start = prompt2.index("ESTADO COMPARTILHADO:")
+        state_block = prompt2[state_start:]
+        self.assertIn('"task_overview"', state_block)
         self.assertNotIn('"goal":', state_block)
-        self.assertNotIn('"decisions":', state_block)
-        self.assertNotIn('"d9"', state_block)
-        # next_step é chave ativa e deve aparecer
-        self.assertIn('"next_step": "próximo passo"', state_block)
-        self.assertNotIn('"open_disagreements"', state_block)
+        self.assertNotIn('"next_step":', state_block)
 
     def test_prompt_includes_task_overview_in_shared_state(self):
         builder = PromptBuilder(DummyContextManager(), history_window=3)
@@ -874,15 +887,24 @@ class ProtocolTests(unittest.TestCase):
         builder = PromptBuilder(DummyContextManager(), history_window=3)
         history = [{"role": "human", "content": "Pergunta"}]
 
+        # next_step sem goal_canonical é campo de execução e não aciona o bloco
         prompt = builder.build(
             AGENT_CLAUDE,
             history,
             shared_state={"next_step": "continuar"},
         )
+        self.assertNotIn("ESTADO COMPARTILHADO", prompt)
 
-        self.assertIn("ESTADO COMPARTILHADO", prompt)
-        self.assertIn("Você pode atualizar o estado compartilhado usando:", prompt)
-        self.assertIn("[STATE_UPDATE]", prompt)
+        # task_overview (campo de infra) deve acionar o bloco e incluir a regra STATE_UPDATE
+        prompt2 = builder.build(
+            AGENT_CLAUDE,
+            history,
+            shared_state={"task_overview": {"job_id": 1}},
+        )
+        self.assertIn("ESTADO COMPARTILHADO", prompt2)
+        self.assertIn("Você pode atualizar o estado compartilhado usando:", prompt2)
+        self.assertIn("[STATE_UPDATE]", prompt2)
+        self.assertEqual(prompt2.count("Você pode atualizar o estado compartilhado usando:"), 1)
 
     def test_app_builds_explicit_session_state_for_prompt(self):
         temp_root = Path(self.enterContext(tempfile.TemporaryDirectory()))

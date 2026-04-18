@@ -1,8 +1,10 @@
 """Componentes de `quimera.storage`."""
 import json
 import re
-from datetime import datetime, MINYEAR
+from datetime import datetime, timedelta, MINYEAR
 from pathlib import Path
+
+SHARED_STATE_TTL_HOURS = 24
 
 _SESSION_TIMESTAMP_RE = re.compile(r"sessao-(\d{4}-\d{2}-\d{2}-\d{6})\.json$")
 
@@ -102,6 +104,21 @@ class SessionStorage:
             )
         if not isinstance(shared_state, dict):
             shared_state = {}
+
+        # Descarta shared_state se o snapshot for mais antigo que o TTL
+        # Snapshots sem saved_at são considerados expirados por segurança
+        saved_at_raw = data.get("saved_at") if isinstance(data, dict) else None
+        if shared_state and not saved_at_raw:
+            shared_state = {}
+        elif shared_state and saved_at_raw:
+            try:
+                saved_at = datetime.fromisoformat(saved_at_raw)
+                saved_at = self._normalize_sort_datetime(saved_at)
+                if datetime.now() - saved_at > timedelta(hours=SHARED_STATE_TTL_HOURS):
+                    shared_state = {}
+            except (ValueError, TypeError):
+                shared_state = {}
+
         return {"messages": messages, "shared_state": shared_state}
 
     def load_last_history(self):

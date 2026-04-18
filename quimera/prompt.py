@@ -125,8 +125,12 @@ class PromptBuilder:
         fact_indexes, facts_block = self._build_facts_block(history)
         shared_state_block = ""
         if shared_state and not has_goal:
-            _legacy_keys = {"goal", "decisions"}
-            trimmed = {k: v for k, v in self._trim_shared_state(shared_state).items() if k not in _legacy_keys}
+            _execution_keys = {
+                "goal", "goal_canonical", "decisions", "current_step",
+                "acceptance_criteria", "allowed_scope", "non_goals",
+                "out_of_scope_notes", "evidence", "next_step",
+            }
+            trimmed = {k: v for k, v in self._trim_shared_state(shared_state).items() if k not in _execution_keys}
             if trimmed:
                 state_lines = json.dumps(trimmed, ensure_ascii=False, indent=2)
                 shared_state_block = PROMPT_SHARED_STATE.format(shared_state_json=state_lines)
