@@ -894,6 +894,7 @@ class ProtocolTests(unittest.TestCase):
             shared_state={"next_step": "continuar"},
         )
         self.assertNotIn("ESTADO COMPARTILHADO", prompt)
+        self.assertNotIn("Você pode atualizar o estado compartilhado usando:", prompt)
 
         # task_overview (campo de infra) deve acionar o bloco e incluir a regra STATE_UPDATE
         prompt2 = builder.build(

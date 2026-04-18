@@ -98,6 +98,18 @@ class PromptBuilder:
         )
         shared = shared_state or {}
         has_goal = "goal_canonical" in shared
+        fallback_shared = {}
+        if shared and not has_goal:
+            execution_keys = {
+                "goal", "goal_canonical", "decisions", "current_step",
+                "acceptance_criteria", "allowed_scope", "non_goals",
+                "out_of_scope_notes", "evidence", "next_step",
+            }
+            fallback_shared = {
+                k: v
+                for k, v in self._trim_shared_state(shared).items()
+                if k not in execution_keys
+            }
 
         execution_context = ""
         if has_goal:
@@ -115,7 +127,7 @@ class PromptBuilder:
             ])
             rules += PROMPT_GOAL_EXECUTION_RULES
             rules += PROMPT_STATE_UPDATE_RULE
-        elif shared:
+        elif fallback_shared:
             rules += PROMPT_STATE_UPDATE_RULE
 
         session_block = PROMPT_SESSION_STATE.format(**self.session_state) if (self.session_state and primary) else ""
@@ -125,14 +137,8 @@ class PromptBuilder:
         fact_indexes, facts_block = self._build_facts_block(history)
         shared_state_block = ""
         if shared_state and not has_goal:
-            _execution_keys = {
-                "goal", "goal_canonical", "decisions", "current_step",
-                "acceptance_criteria", "allowed_scope", "non_goals",
-                "out_of_scope_notes", "evidence", "next_step",
-            }
-            trimmed = {k: v for k, v in self._trim_shared_state(shared_state).items() if k not in _execution_keys}
-            if trimmed:
-                state_lines = json.dumps(trimmed, ensure_ascii=False, indent=2)
+            if fallback_shared:
+                state_lines = json.dumps(fallback_shared, ensure_ascii=False, indent=2)
                 shared_state_block = PROMPT_SHARED_STATE.format(shared_state_json=state_lines)
         elif shared_state and has_goal and "completed_task_results" in shared_state:
             results = shared_state["completed_task_results"]
