@@ -173,7 +173,7 @@ def main():
         client = AgentClient(renderer)
         result = client.call(agent_name, prompt)
 
-        renderer.show_system(default_prompt)
+        renderer.show_system(prompt)
         renderer.show_plain("\n--- RESULTADO LIMPO ---\n")
         renderer.show_plain(result)
         return

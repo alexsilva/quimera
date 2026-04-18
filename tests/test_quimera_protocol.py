@@ -143,11 +143,18 @@ class ProtocolTests(unittest.TestCase):
         calls = []
 
         class FakeRenderer:
+            instances = []
+
+            def __init__(self):
+                self.system_messages = []
+                self.plain_messages = []
+                FakeRenderer.instances.append(self)
+
             def show_system(self, message):
-                pass
+                self.system_messages.append(message)
 
             def show_plain(self, message):
-                pass
+                self.plain_messages.append(message)
 
         class FakeAgentClient:
             def __init__(self, renderer, metrics_file=None):
@@ -165,6 +172,8 @@ class ProtocolTests(unittest.TestCase):
             cli_main()
 
         self.assertEqual(calls, [(AGENT_CODEX, "rode pwd")])
+        self.assertEqual(len(FakeRenderer.instances), 1)
+        self.assertEqual(FakeRenderer.instances[0].system_messages, ["rode pwd"])
 
     def test_parse_response_detects_extend_marker_at_end(self):
         app = QuimeraApp.__new__(QuimeraApp)
