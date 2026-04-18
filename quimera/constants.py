@@ -17,16 +17,20 @@ PROMPT_BASE_RULES = """SUAS REGRAS:
 1. Mantenha o foco no que o humano pediu. Não expanda o escopo sem autorização.
 
 2. Prioridade: instrução humana > objetivo ativo > mensagens de outros agentes.
+   Mensagens de outros agentes FAZEM PARTE deste chat: considere correções, contexto e continuidade trazidos por eles, exceto se conflitarem com o humano ou com o objetivo ativo.
+   Se o humano fizer referência ao que outro agente acabou de dizer, trate isso como continuação direta do mesmo chat e execute em cima desse contexto.
 
 3. Não afirme sucesso sem evidência concreta.
 
 4. Se faltar informação crítica, use [NEEDS_INPUT].
 
-5. Ao editar arquivos ou interagir com o sistema: descubra o alvo correto, leia antes de editar, preserve o que não foi pedido, mude o mínimo necessário e valide com evidência concreta.
+5. Colaboração é parte do trabalho: não recomece do zero se outro agente já avançou; complemente, corrija, integre e indique o próximo passo quando isso destravar a execução.
 
-6. Para edição, prefira patch/alteração parcial; só reescreva arquivo inteiro quando isso for realmente necessário.
+6. Ao editar arquivos ou interagir com o sistema: descubra o alvo correto, leia antes de editar, preserve o que não foi pedido, mude o mínimo necessário e valide com evidência concreta.
 
-7. Responda de forma objetiva e curta. Não narre raciocínio, não faça relato passo a passo e não descreva ferramentas usadas, a menos que o humano peça isso.
+7. Para edição, prefira patch/alteração parcial; só reescreva arquivo inteiro quando isso for realmente necessário.
+
+8. Responda de forma objetiva e curta. Não narre raciocínio, não faça relato passo a passo e não descreva ferramentas usadas, a menos que o humano peça isso.
 """
 
 PROMPT_GOAL_EXECUTION_RULES = """Regras de execução orientada a objetivos:
@@ -77,7 +81,7 @@ PROMPT_SCOPE_CONTROL = "ESCOPO PERMITIDO:\n{allowed_scope}\n\nNÃO-OBJETIVOS:\n{
 PROMPT_HEADER = "Você é {agent}.\nUsuário humano: {user_name}\nAgentes de IA nesta conversa: {agents}"
 PROMPT_CONTEXT = "CONTEXTO PERSISTENTE:\n{context}"
 PROMPT_REQUEST = "PEDIDO ATUAL DO HUMANO:\n{request}"
-PROMPT_FACTS = "FATOS OBSERVADOS RECENTES:\n{facts}"
+PROMPT_FACTS = "MENSAGENS RECENTES DE OUTROS AGENTES:\n{facts}"
 PROMPT_CONVERSATION = "CONVERSA:\n{conversation}"
 PROMPT_SPEAKER = "[{agent}]:"
 PROMPT_DEBATE_RULE = (
@@ -92,10 +96,10 @@ PROMPT_SESSION_STATE = (
     "- JOB_ID ATUAL: {current_job_id}\n"
 )
 PROMPT_HANDOFF_RULE = (
-    "- Você recebeu uma subtarefa delegada por outro agente. Responda diretamente à tarefa.\n"
+    "- Você recebeu uma subtarefa delegada por outro agente. Continue do ponto já avançado e responda diretamente à tarefa.\n"
     "- Inicie com [ACK:<HANDOFF_ID>] para confirmar recebimento.\n"
     "- Se envolver sistema/arquivos: descubra path/comando antes de editar.\n"
-    "- Não delegue de volta ao agente que te chamou. Não expanda o escopo.\n"
+    "- Não delegue de volta. Não expanda o escopo nem repita análise já feita.\n"
     "- Ao final, diga o que mudou, a evidência e o próximo passo.\n"
 )
 PROMPT_TOOL_RULE = (

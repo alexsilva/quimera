@@ -20,6 +20,7 @@ from .handlers import PromptAwareStderrHandler
 from .protocol import AppProtocol
 from .session_metrics import SessionMetricsService
 from . import task as app_tasks
+from .dispatch import AppDispatchServices
 from .inputs import AppInputServices
 from .task import AppTaskServices
 from .system_layer import AppSystemLayer
@@ -121,6 +122,7 @@ class QuimeraApp:
         self.protocol = AppProtocol(logger, decisions_log_path=self.workspace.decisions_log)
         self.session_metrics = SessionMetricsService()
         self.task_services = AppTaskServices(self)
+        self.dispatch_services = AppDispatchServices(self)
         self.input_services = AppInputServices(
             self,
             input_resolver=lambda: input,
@@ -353,6 +355,14 @@ class QuimeraApp:
             self.input_services = services
         return services
 
+    def _get_dispatch_services(self) -> AppDispatchServices:
+        """Retorna os serviços de despacho associados à instância."""
+        services = getattr(self, "dispatch_services", None)
+        if services is None:
+            services = AppDispatchServices(self)
+            self.dispatch_services = services
+        return services
+
     def __del__(self):
         """Libera recursos associados à instância."""
         try:
@@ -491,50 +501,13 @@ class QuimeraApp:
             show_output: bool = True,
     ) -> str | None:
         """Resolve agent response."""
-        current_response = response
-        max_tool_hops = 16
-        tool_history = []
-
-        for _ in range(max_tool_hops):
-            if not current_response:
-                return current_response
-
-            raw_response, tool_result = self.tool_executor.maybe_execute_from_response(current_response)
-
-            if tool_result is None:
-                return current_response
-
-            self._record_tool_event(agent, result=tool_result)
-
-            # Truncate tool result to reduce verbosity
-            tool_payload = app_tasks.truncate_payload(tool_result.to_model_payload())
-
-            tool_history.append(
-                f"Sua resposta anterior:\n{current_response.strip()}\n\n"
-                f"Resultado da ferramenta:\n{tool_payload}"
-            )
-
-            visible_text = strip_tool_block(raw_response or "")
-            if visible_text:
-                if show_output:
-                    self.print_response(agent, visible_text)
-                if persist_history:
-                    self.persist_message(agent, visible_text)
-
-            followup_handoff = (
-                    "Histórico de ferramentas desta rodada:\n\n"
-                    + "\n\n---\n\n".join(tool_history)
-            )
-
-            current_response = self._call_agent(
-                agent,
-                handoff=followup_handoff,
-                primary=False,
-                protocol_mode="tool_loop",
-                silent=silent,
-            )
-
-        return "Falha: limite de execuções de ferramenta atingido."
+        return self._get_dispatch_services().resolve_agent_response(
+            agent,
+            response,
+            silent=silent,
+            persist_history=persist_history,
+            show_output=show_output,
+        )
 
     def handle_command(self, user_input):
         """Processa command."""
@@ -711,126 +684,21 @@ class QuimeraApp:
 
     def call_agent(self, agent, **options):
         """Executa call agent."""
-        dispatch_options = dict(options)
-        silent = dispatch_options.pop("silent", False)
-        persist_history = dispatch_options.pop("persist_history", True)
-        show_output = dispatch_options.pop("show_output", True)
-        quiet = dispatch_options.pop("quiet", False)
-        handoff = dispatch_options.get("handoff")
-        handoff_id = handoff.get("handoff_id") if isinstance(handoff, dict) else None
-        logger.info(
-            "[DISPATCH] sending to agent=%s, handoff_only=%s, handoff_id=%s",
-            agent, dispatch_options.get("handoff_only", False), handoff_id,
-        )
-        last_error = None
-        _agent_client = getattr(self, "agent_client", None)
-        for attempt in range(1, self.MAX_RETRIES + 1):
-            if _agent_client:
-                _agent_client._user_cancelled = False
-            try:
-                response = self._call_agent(agent, silent=silent, **dispatch_options)
-                if response is None:
-                    if _agent_client and _agent_client._user_cancelled:
-                        logger.info("[DISPATCH] agent=%s cancelled by user, aborting", agent)
-                        return None
-                    if attempt < self.MAX_RETRIES:
-                        logger.warning("[DISPATCH] retry %d/%d for agent=%s", attempt, self.MAX_RETRIES, agent)
-                        time.sleep(self.RETRY_BACKOFF_SECONDS * attempt)
-                        continue
-                    self._record_failure(agent)
-                    return None
-                result = self.resolve_agent_response(
-                    agent,
-                    response,
-                    silent=silent,
-                    persist_history=persist_history,
-                    show_output=show_output,
-                )
-                if result is None:
-                    if _agent_client and _agent_client._user_cancelled:
-                        logger.info("[DISPATCH] agent=%s cancelled by user, aborting", agent)
-                        return None
-                    if attempt < self.MAX_RETRIES:
-                        logger.warning("[DISPATCH] retry %d/%d for agent=%s (resolve failed)", attempt,
-                                       self.MAX_RETRIES, agent)
-                        time.sleep(self.RETRY_BACKOFF_SECONDS * attempt)
-                        continue
-                    self._record_failure(agent)
-                return result
-            except Exception as exc:
-                if _agent_client and _agent_client._user_cancelled:
-                    logger.info("[DISPATCH] agent=%s cancelled by user, aborting", agent)
-                    return None
-                last_error = exc
-                if attempt < self.MAX_RETRIES:
-                    logger.warning("[DISPATCH] retry %d/%d for agent=%s after exception: %s", attempt, self.MAX_RETRIES,
-                                   agent, exc)
-                    time.sleep(self.RETRY_BACKOFF_SECONDS * attempt)
-                    continue
-                self._record_failure(agent)
-                raise
-        if last_error:
-            logger.error("[DISPATCH] all retries exhausted for agent=%s", agent)
-        return None
+        return self._get_dispatch_services().call_agent(agent, **options)
 
     def _call_agent(self, agent, is_first_speaker=False, handoff=None, primary=True, protocol_mode="standard",
                     handoff_only=False, silent=False, from_agent=None):
         """Executa call agent."""
-        with self._counter_lock:
-            self.session_call_index += 1
-            call_index_snapshot = self.session_call_index
-        start = time.time()
-        history = [] if handoff_only else self.history
-        self._get_task_services().refresh_task_shared_state()
-        # Agentes com driver de API recebem tools via schema OpenAI — as instruções
-        # text-based conflitariam com o protocolo da API e devem ser omitidas.
-        plugin = plugins.get(agent)
-        _driver = getattr(plugin, "driver", "cli") if plugin else "cli"
-        skip_tool_prompt = isinstance(_driver, str) and _driver != "cli"
-        if self.debug_prompt_metrics:
-            prompt, metrics = self.prompt_builder.build(
-                agent,
-                history,
-                is_first_speaker,
-                handoff,
-                debug=True,
-                primary=primary,
-                shared_state=self.shared_state,
-                handoff_only=handoff_only,
-                from_agent=from_agent,
-                skip_tool_prompt=skip_tool_prompt,
-            )
-            self.agent_client.log_prompt_metrics(
-                agent, metrics,
-                session_id=self.session_state["session_id"],
-                round_index=self.round_index,
-                session_call_index=call_index_snapshot,
-                history_window=self.prompt_builder.history_window,
-                protocol_mode=protocol_mode,
-            )
-        else:
-            prompt = self.prompt_builder.build(
-                agent, history, is_first_speaker, handoff,
-                primary=primary, shared_state=self.shared_state,
-                handoff_only=handoff_only, from_agent=from_agent,
-                skip_tool_prompt=skip_tool_prompt,
-            )
-        result = self.agent_client.call(agent, prompt, silent=silent)
-        elapsed = time.time() - start
-        if hasattr(self, 'session_state') and self.session_state:
-            with self._counter_lock:
-                try:
-                    self.session_state["handoffs_sent"] += 1
-                    self.session_state["total_latency"] += elapsed
-                    if result:
-                        self.session_state["handoffs_succeeded"] += 1
-                    else:
-                        self.session_state["handoffs_failed"] += 1
-                except KeyError:
-                    pass  # Old session state without metrics
-            self._record_agent_metric(agent, "succeeded" if result else "failed", elapsed)
-        logger.info("[DISPATCH] agent=%s latency=%.2fs result=%s", agent, elapsed, "ok" if result else "none")
-        return result
+        return self._get_dispatch_services().call_agent_low_level(
+            agent,
+            is_first_speaker=is_first_speaker,
+            handoff=handoff,
+            primary=primary,
+            protocol_mode=protocol_mode,
+            handoff_only=handoff_only,
+            silent=silent,
+            from_agent=from_agent,
+        )
 
     @staticmethod
     def _strip_payload_residual(text):
@@ -912,21 +780,11 @@ class QuimeraApp:
 
     def print_response(self, agent, response):
         """Executa print response."""
-        with self._output_lock:
-            self._clear_user_prompt_line_if_needed()
-            if response is not None:
-                self.renderer.show_message(agent, response)
-            else:
-                self.renderer.show_no_response(agent)
-            self._redisplay_user_prompt_if_needed(clear_first=False)
+        self._get_dispatch_services().print_response(agent, response)
 
     def persist_message(self, role, content):
         """Persiste uma mensagem no histórico em memória, log e snapshot JSON."""
-        with self._lock:
-            self.history.append({"role": role, "content": content})
-            self.storage.append_log(role, content)
-            self.storage.save_history(self.history, shared_state=self.shared_state)
-            self._get_session_metrics().update_persisted_message_metrics(self, role, content)
+        self._get_dispatch_services().persist_message(role, content)
 
     def _maybe_auto_summarize(self, preferred_agent=None):
         """Sumariza e trunca o histórico quando excede o threshold configurado."""

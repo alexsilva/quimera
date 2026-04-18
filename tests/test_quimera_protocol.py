@@ -745,7 +745,7 @@ class ProtocolTests(unittest.TestCase):
 
         prompt = builder.build(AGENT_CLAUDE, history)
 
-        self.assertIn("FATOS OBSERVADOS RECENTES", prompt)
+        self.assertIn("MENSAGENS RECENTES DE OUTROS AGENTES", prompt)
         self.assertIn("[CLAUDE] Arquivo alterado: app.py", prompt)
         self.assertIn("[CODEX] Teste falhou em test_x", prompt)
 
@@ -759,7 +759,7 @@ class ProtocolTests(unittest.TestCase):
 
         prompt = builder.build(AGENT_CLAUDE, history)
 
-        self.assertIn("FATOS OBSERVADOS RECENTES", prompt)
+        self.assertIn("MENSAGENS RECENTES DE OUTROS AGENTES", prompt)
         self.assertIn("[CLAUDE] Arquivo alterado: app.py", prompt)
         self.assertNotIn("goal_canonical continua ativo", prompt)
         self.assertNotIn("não redefina o objetivo", prompt)
@@ -3400,6 +3400,7 @@ class MetricsFeedbackTests(unittest.TestCase):
 
         self.assertIn("prioridade", prompt.lower())
         self.assertIn("foco", prompt.lower())
+        self.assertIn("fazem parte deste chat", prompt.lower())
 
     def test_prompt_is_concise(self):
         """Prompt deve ser conciso após enxugamento."""
@@ -3509,6 +3510,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         from quimera.constants import PROMPT_REVIEWER_RULE
 
         self.assertIn("veredicto", PROMPT_REVIEWER_RULE.lower())
+        self.assertIn("aceite", PROMPT_REVIEWER_RULE.lower())
         self.assertLess(len(PROMPT_REVIEWER_RULE), 550)
 
     def test_handoff_rule_is_concise(self):
@@ -3516,6 +3518,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         from quimera.constants import PROMPT_HANDOFF_RULE
 
         self.assertIn("ACK", PROMPT_HANDOFF_RULE)
+        self.assertIn("continue do ponto já avançado", PROMPT_HANDOFF_RULE.lower())
         self.assertLess(len(PROMPT_HANDOFF_RULE), 400)
 
     def test_base_rules_are_concise(self):
@@ -3525,6 +3528,8 @@ class MetricsFeedbackTests(unittest.TestCase):
         self.assertIn("humano", PROMPT_BASE_RULES.lower())
         self.assertIn("prioridade", PROMPT_BASE_RULES.lower())
         self.assertIn("foco", PROMPT_BASE_RULES.lower())
+        self.assertIn("continuação direta do mesmo chat", PROMPT_BASE_RULES.lower())
+        self.assertIn("colaboração é parte do trabalho", PROMPT_BASE_RULES.lower())
         self.assertIn("editar arquivos", PROMPT_BASE_RULES.lower())
         self.assertIn("mude o mínimo necessário", PROMPT_BASE_RULES.lower())
         self.assertLess(len(PROMPT_BASE_RULES), 1600)
