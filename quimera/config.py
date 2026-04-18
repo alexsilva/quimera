@@ -1,10 +1,7 @@
 """Componentes de `quimera.config`."""
 import json
 
-from .workspace import QUIMERA_BASE
 from .themes import DEFAULT_THEME, names as theme_names
-
-_CONFIG_FILE = QUIMERA_BASE / "config.json"
 DEFAULT_USER_NAME = "Você"
 DEFAULT_HISTORY_WINDOW = 8
 DEFAULT_AUTO_SUMMARIZE_THRESHOLD = 30
@@ -14,9 +11,9 @@ DEFAULT_IDLE_TIMEOUT_SECONDS = 60
 class ConfigManager:
     """Lê e grava configurações globais do usuário em ~/.local/share/quimera/config.json."""
 
-    def __init__(self):
+    def __init__(self, path):
         """Inicializa uma instância de ConfigManager."""
-        self._path = _CONFIG_FILE
+        self._path = path
 
     def _load(self) -> dict:
         """Carrega load."""

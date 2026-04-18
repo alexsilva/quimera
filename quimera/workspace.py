@@ -1,11 +1,11 @@
 """Componentes de `quimera.workspace`."""
 import hashlib
 import json
-import os
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
+
+from .paths import CANDIDATE_DIRS, find_base_writable
 
 
 class DecisionsLogger:
@@ -42,37 +42,15 @@ class DecisionsLogger:
         return entries[-limit:]
 
 
-def _find_writable(candidates: list) -> Path:
-    """Executa find writable."""
-    for candidate in candidates:
-        try:
-            candidate.mkdir(parents=True, exist_ok=True)
-            probe = candidate / ".write_probe"
-            probe.write_text("", encoding="utf-8")
-            probe.unlink(missing_ok=True)
-            return candidate
-        except OSError:
-            continue
-    raise OSError("Não foi possível resolver um diretório gravável para o workspace do Quimera")
-
-
-_base_candidates = []
-if os.environ.get("QUIMERA_BASE"):
-    _base_candidates.append(Path(os.environ["QUIMERA_BASE"]).expanduser())
-_base_candidates.append(Path.home() / ".local" / "share" / "quimera")
-_base_candidates.append(Path(tempfile.gettempdir()) / "quimera")
-
-QUIMERA_BASE = _find_writable(_base_candidates)
-
-
 class Workspace:
     """Resolve e gerencia o diretório de dados de um projeto no armazenamento global do quimera."""
 
     def __init__(self, cwd: Path):
         """Inicializa uma instância de Workspace."""
+        self.base_dir = find_base_writable(CANDIDATE_DIRS)
         self.cwd = cwd.expanduser().resolve()
         self.cwd_hash = hashlib.sha256(str(self.cwd).encode()).hexdigest()[:16]
-        self._root = QUIMERA_BASE / "workspaces" / self.cwd_hash
+        self._root = self.base_dir / "workspaces" / self.cwd_hash
         self._ensure_dirs()
         self._write_metadata()
         self._update_index()
@@ -127,6 +105,11 @@ class Workspace:
         """Executa decisions log."""
         return self._root / "data" / "decisions.jsonl"
 
+    @property
+    def config_file(self) -> Path:
+        """Caminho do arquivo de configuração global do usuário."""
+        return self.base_dir / "config.json"
+
     def _ensure_dirs(self):
         """Executa ensure dirs."""
         (self._root / "data" / "context").mkdir(parents=True, exist_ok=True)
@@ -134,7 +117,7 @@ class Workspace:
         (self._root / "data" / "logs" / "metrics").mkdir(parents=True, exist_ok=True)
         (self._root / "data").mkdir(parents=True, exist_ok=True)
         (self._root / "state").mkdir(parents=True, exist_ok=True)
-        (QUIMERA_BASE / "index").mkdir(parents=True, exist_ok=True)
+        (self.base_dir / "index").mkdir(parents=True, exist_ok=True)
 
     def _write_metadata(self):
         """Escreve metadata."""
@@ -161,7 +144,7 @@ class Workspace:
 
     def _update_index(self):
         """Atualiza index."""
-        index_file = QUIMERA_BASE / "index" / "workspaces.json"
+        index_file = self.base_dir / "index" / "workspaces.json"
         now = datetime.now(timezone.utc).isoformat(timespec="seconds")
         if index_file.exists():
             try:

@@ -143,6 +143,7 @@ class QuimeraApp:
                  idle_timeout_seconds: int | None = None,
                  spy: bool = False,
                  theme: str | None = None,
+                 workspace: Workspace | None = None,
                  ):
         """Inicializa uma instância de QuimeraApp."""
         selected_agents = list(agents) if agents else []
@@ -160,11 +161,11 @@ class QuimeraApp:
         self.threads = int(threads) if threads is not None else 1
         self.agent_failures = defaultdict(int)
         self._agent_failures_lock = threading.Lock()
-        self.config = config_cls()
+        self.workspace = workspace if workspace is not None else workspace_cls(cwd)
+        self.config = config_cls(self.workspace.config_file)
         _active_theme = theme if theme is not None else self.config.theme
         self.renderer = renderer_cls(theme=_active_theme)
         self.user_name = self.config.user_name
-        self.workspace = workspace_cls(cwd)
         self.spy = spy
         self.system_layer = AppSystemLayer(self)
         self.protocol = AppProtocol(logger, decisions_log_path=self.workspace.decisions_log)

@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from quimera.workspace import _find_writable, QUIMERA_BASE, Workspace
+from quimera.workspace import Workspace, find_base_writable
 
 
 class TestWorkspace(unittest.TestCase):
@@ -20,7 +20,7 @@ class TestWorkspace(unittest.TestCase):
             try:
                 os.chmod(p1, stat.S_IRUSR | stat.S_IXUSR | stat.S_IRGRP | stat.S_IXGRP)
                 # Agora o _find_writable deve pular o primeiro e usar o segundo
-                res = _find_writable([p1, p2])
+                res = find_base_writable([p1, p2])
                 self.assertEqual(res, p2)
             finally:
                 # restaura permissão para limpeza
@@ -31,7 +31,7 @@ class TestWorkspace(unittest.TestCase):
             base = Path(base_dir)
             proj = Path(proj_tmp) / "myproj"
             proj.mkdir()
-            with patch("quimera.workspace.QUIMERA_BASE", base):
+            with patch("quimera.workspace._find_writable", lambda dirs: base):
                 ws = Workspace(proj)
                 # root e metadados devem ter sido criados
                 self.assertTrue((ws.root / "workspace.json").exists())
@@ -49,24 +49,21 @@ class TestWorkspace(unittest.TestCase):
             base = Path(base_dir)
             project = Path(project_dir) / "projX"
             project.mkdir()
-            # cria arquivos legados
             legacy_context = project / "quimera_context.md"
             legacy_session = project / "quimera_session_context.md"
             legacy_context.write_text("Legacy Context", encoding="utf-8")
             legacy_session.write_text("Legacy Session", encoding="utf-8")
-            # logs antigos
             old_logs = project / "logs"
             old_logs.mkdir()
             (old_logs / "old.log").write_text("log", encoding="utf-8")
 
-            with patch("quimera.workspace.QUIMERA_BASE", base):
+            with patch("quimera.workspace._find_writable", lambda dirs: base):
                 ws = Workspace(project)
                 migrated = ws.migrate_from_legacy(project)
-            # verifica migração esperada
-            self.assertTrue(any("quimera_context.md" in m for m in migrated) or True)
-            self.assertTrue(any("quimera_session_context.md" in m for m in migrated) or True)
-            # cópia de contexto e sessão deve ter acontecido
-            self.assertTrue(ws.context_persistent.exists())
-            self.assertTrue(ws.context_session.exists())
-            self.assertEqual(ws.context_persistent.read_text(encoding="utf-8"), "Legacy Context")
-            self.assertEqual(ws.context_session.read_text(encoding="utf-8"), "Legacy Session")
+                # todas verificações dentro do patch
+                self.assertTrue(any("quimera_context.md" in m for m in migrated) or True)
+                self.assertTrue(any("quimera_session_context.md" in m for m in migrated) or True)
+                self.assertTrue(ws.context_persistent.exists())
+                self.assertTrue(ws.context_session.exists())
+                self.assertEqual(ws.context_persistent.read_text(encoding="utf-8"), "Legacy Context")
+                self.assertEqual(ws.context_session.read_text(encoding="utf-8"), "Legacy Session")

@@ -102,24 +102,6 @@ def main():
     
     args, _ = parser.parse_known_args()
 
-    config = ConfigManager()
-    
-
-    if args.name is not None:
-        config.set_user_name(" ".join(args.name).strip())
-        print(f"Nome configurado: {config.user_name}")
-        return
-
-    if args.whoami:
-        print(config.user_name)
-        return
-
-    if args.set_theme is not None:
-        config.set_theme(args.set_theme)
-        t = _themes.get(args.set_theme)
-        print(f"Tema padrão definido: {t.name} — {t.description}")
-        return
-
     if args.history_window is not None and args.history_window <= 0:
         parser.error("--history-window deve ser maior que zero")
 
@@ -147,6 +129,21 @@ def main():
                       idle_timeout_seconds=args.idle_timeout,
                       spy=args.spy,
                       theme=args.theme)
+
+    if args.name is not None:
+        app.config.set_user_name(" ".join(args.name).strip())
+        print(f"Nome configurado: {app.config.user_name}")
+        return
+
+    if args.whoami:
+        print(app.config.user_name)
+        return
+
+    if args.set_theme is not None:
+        app.config.set_theme(args.set_theme)
+        t = _themes.get(args.set_theme)
+        print(f"Tema padrão definido: {t.name} — {t.description}")
+        return
 
     if args.interactive_test:
         if TerminalRenderer is None or AgentClient is None:
