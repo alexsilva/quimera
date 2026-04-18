@@ -183,7 +183,7 @@ class ProtocolTests(unittest.TestCase):
 
     def test_parse_response_detects_extend_marker_at_end(self):
         app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = AppProtocol(Mock())
+        app.protocol = AppProtocol(app)
         app.shared_state = {}
 
         response, _, _, extend, _, _ = app.parse_response(f"Resposta objetiva {EXTEND_MARKER}")
@@ -193,7 +193,7 @@ class ProtocolTests(unittest.TestCase):
 
     def test_parse_response_keeps_plain_response(self):
         app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = AppProtocol(Mock())
+        app.protocol = AppProtocol(app)
         app.shared_state = {}
 
         response, target, handoff, extend, _, _ = app.parse_response("Resposta objetiva")
@@ -205,7 +205,7 @@ class ProtocolTests(unittest.TestCase):
 
     def test_parse_response_extracts_internal_handoff(self):
         app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = AppProtocol(Mock())
+        app.protocol = AppProtocol(app)
         app.shared_state = {}
 
         response, target, message, extend, _, _ = app.parse_response(
@@ -225,7 +225,7 @@ class ProtocolTests(unittest.TestCase):
 
     def test_parse_response_extracts_multiline_handoff(self):
         app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = AppProtocol(Mock())
+        app.protocol = AppProtocol(app)
         app.shared_state = {}
 
         response, target, message, extend, _, _ = app.parse_response(
@@ -247,7 +247,7 @@ class ProtocolTests(unittest.TestCase):
 
     def test_parse_response_ignores_invalid_handoff_payload(self):
         app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = AppProtocol(Mock())
+        app.protocol = AppProtocol(app)
         app.shared_state = {}
 
         response, target, message, extend, _, _ = app.parse_response(
@@ -261,7 +261,7 @@ class ProtocolTests(unittest.TestCase):
 
     def test_parse_handoff_payload_task_only(self):
         app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = AppProtocol(Mock())
+        app.protocol = AppProtocol(app)
         result = app.parse_handoff_payload("task: Revise este código")
         self.assertEqual(result["task"], "Revise este código")
         self.assertIsNone(result["context"])
@@ -271,7 +271,7 @@ class ProtocolTests(unittest.TestCase):
 
     def test_parse_handoff_payload_task_and_context(self):
         app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = AppProtocol(Mock())
+        app.protocol = AppProtocol(app)
         result = app.parse_handoff_payload("task: Revise este código | context: Verificar performance")
         self.assertEqual(result["task"], "Revise este código")
         self.assertEqual(result["context"], "Verificar performance")
@@ -281,7 +281,7 @@ class ProtocolTests(unittest.TestCase):
     def test_parse_response_route_with_residual_text(self):
         """ROUTE block should be recognized even when followed by residual text."""
         app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = AppProtocol(Mock())
+        app.protocol = AppProtocol(app)
         app.shared_state = {}
 
         # Test with residual text after the ROUTE block
@@ -305,7 +305,7 @@ class ProtocolTests(unittest.TestCase):
             r'[A-Za-z0-9_-]+' if agent == '*' else re.escape(agent)
             for agent in app.active_agents
         ]
-        app.protocol = AppProtocol(Mock())
+        app.protocol = AppProtocol(app)
         app.protocol.ROUTE_PATTERN = re.compile(
             rf"^\[ROUTE:({'|'.join(escaped_agents)})\]\s*([\s\S]+)\s*\Z",
             re.MULTILINE
@@ -329,7 +329,7 @@ class ProtocolTests(unittest.TestCase):
     def test_parse_response_extracts_state_update_before_debate(self):
         import threading
         app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = AppProtocol(Mock())
+        app.protocol = AppProtocol(app)
         app.shared_state = {}
         app._lock = threading.Lock()
 
@@ -351,7 +351,7 @@ class ProtocolTests(unittest.TestCase):
     def test_parse_response_extracts_state_update_after_debate_marker(self):
         import threading
         app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = AppProtocol(Mock())
+        app.protocol = AppProtocol(app)
         app.shared_state = {}
         app._lock = threading.Lock()
 
@@ -370,7 +370,7 @@ class ProtocolTests(unittest.TestCase):
     def test_parse_response_merges_multiple_state_updates(self):
         import threading
         app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = AppProtocol(Mock())
+        app.protocol = AppProtocol(app)
         app.shared_state = {"decisions": ["A"]}
         app._lock = threading.Lock()
 
@@ -1118,7 +1118,7 @@ class ProtocolTests(unittest.TestCase):
         app.session_services.maybe_auto_summarize = Mock()
         app.system_layer = Mock()
         app.system_layer.handle_command = Mock(return_value=False)
-        app.protocol = AppProtocol(Mock())
+        app.protocol = AppProtocol(app)
         app.dispatch_services = Mock(spec=AppDispatchServices)
         app.dispatch_services.call_agent = Mock(return_value="claude responde")
         app.dispatch_services.print_response = lambda agent, response: printed.append((agent, response))
@@ -2316,7 +2316,7 @@ class PluginTests(unittest.TestCase):
 
     def test_parse_handoff_payload_with_priority(self):
         app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = AppProtocol(Mock())
+        app.protocol = AppProtocol(app)
         result = app.parse_handoff_payload("task: Corrigir bug crítico | priority: urgent")
         self.assertEqual(result["task"], "Corrigir bug crítico")
         self.assertEqual(result["priority"], "urgent")
@@ -2324,13 +2324,13 @@ class PluginTests(unittest.TestCase):
 
     def test_parse_handoff_payload_invalid_priority_defaults_to_normal(self):
         app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = AppProtocol(Mock())
+        app.protocol = AppProtocol(app)
         result = app.parse_handoff_payload("task: Algo qualquer | priority: invalido")
         self.assertEqual(result["priority"], "normal")
 
     def test_parse_handoff_payload_generates_unique_ids(self):
         app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = AppProtocol(Mock())
+        app.protocol = AppProtocol(app)
         r1 = app.parse_handoff_payload("task: Tarefa 1")
         r2 = app.parse_handoff_payload("task: Tarefa 2")
         self.assertNotEqual(r1["handoff_id"], r2["handoff_id"])
@@ -3011,7 +3011,7 @@ class PluginTests(unittest.TestCase):
 
     def test_parse_response_extracts_ack_marker(self):
         app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = AppProtocol(Mock())
+        app.protocol = AppProtocol(app)
         app.shared_state = {}
 
         response, target, handoff, extend, needs_input, ack_id = app.parse_response(
@@ -3027,7 +3027,7 @@ class PluginTests(unittest.TestCase):
 
     def test_parse_response_without_ack(self):
         app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = AppProtocol(Mock())
+        app.protocol = AppProtocol(app)
         app.shared_state = {}
 
         response, _, _, _, _, ack_id = app.parse_response("Resposta sem ACK")
@@ -3038,7 +3038,7 @@ class PluginTests(unittest.TestCase):
     def test_handoff_chain_propagation(self):
         """Test that handoff chain is propagated correctly."""
         app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = AppProtocol(Mock())
+        app.protocol = AppProtocol(app)
         result = app.parse_handoff_payload("task: Test task")
         self.assertEqual(result["chain"], [])
 
@@ -3050,7 +3050,7 @@ class PluginTests(unittest.TestCase):
     def test_handoff_id_uses_real_target(self):
         """Test that handoff_id includes target in its generation."""
         app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = AppProtocol(Mock())
+        app.protocol = AppProtocol(app)
         # Generate IDs with same timestamp to verify target affects the hash
         ts = 1234567890.0
         id1 = app._generate_handoff_id("Test task", "codex", timestamp=ts)
@@ -3064,7 +3064,7 @@ class PluginTests(unittest.TestCase):
     def test_ack_mismatch_logged_on_validation(self):
         """Test that ACK mismatch is detected when ack_id != handoff_id."""
         app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = AppProtocol(Mock())
+        app.protocol = AppProtocol(app)
         app.shared_state = {}
         app.renderer = DummyRenderer()
 
@@ -3303,7 +3303,7 @@ class FallbackChainTests(unittest.TestCase):
     def test_fallback_skips_original_agent_and_chain(self):
         """Fallback não deve tentar o agente original nem os já na cadeia."""
         app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = AppProtocol(Mock())
+        app.protocol = AppProtocol(app)
         app.shared_state = {}
 
         # Simula handoff com chain
@@ -3488,7 +3488,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         from quimera.metrics import BehaviorMetricsTracker
 
         app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = AppProtocol(Mock())
+        app.protocol = AppProtocol(app)
         app.shared_state = {}
         app.behavior_metrics = BehaviorMetricsTracker()
 
@@ -3798,13 +3798,13 @@ class AppProtocolDirectTests(unittest.TestCase):
         import tempfile
         with tempfile.TemporaryDirectory() as tmp:
             log_path = tmp + "/decisions.json"
-            proto = AppProtocol(Mock(), decisions_log_path=log_path)
             mock_logger = Mock()
             with patch("quimera.workspace.DecisionsLogger", return_value=mock_logger):
                 app = self._make_app()
                 app.workspace = SimpleNamespace(cwd="/tmp")
+                proto = AppProtocol(app, decisions_log_path=log_path)
                 payload = '{"decisions": ["dec1", "dec2"]}'
-                result = proto.apply_state_update(app, payload)
+                result = proto.apply_state_update(payload)
             self.assertTrue(result)
             mock_logger.append.assert_called()
 
@@ -3821,30 +3821,30 @@ class AppProtocolDirectTests(unittest.TestCase):
     # --- apply_state_update ---
 
     def test_apply_state_update_invalid_json_returns_false(self):
-        proto = AppProtocol(Mock())
         app = self._make_app()
-        result = proto.apply_state_update(app, "not json {{")
+        proto = AppProtocol(app)
+        result = proto.apply_state_update("not json {{")
         self.assertFalse(result)
 
     def test_apply_state_update_non_dict_returns_false(self):
-        proto = AppProtocol(Mock())
         app = self._make_app()
-        result = proto.apply_state_update(app, '"just a string"')
+        proto = AppProtocol(app)
+        result = proto.apply_state_update('"just a string"')
         self.assertFalse(result)
 
     def test_apply_state_update_skips_empty_key(self):
-        proto = AppProtocol(Mock())
         app = self._make_app()
-        result = proto.apply_state_update(app, '{"": "value", "valid": "ok"}')
+        proto = AppProtocol(app)
+        result = proto.apply_state_update('{"": "value", "valid": "ok"}')
         self.assertTrue(result)
         self.assertNotIn("", app.shared_state)
         self.assertEqual(app.shared_state["valid"], "ok")
 
     def test_apply_state_update_pops_key_when_merged_is_none(self):
-        proto = AppProtocol(Mock())
         app = self._make_app(shared_state={"goal": "old"})
+        proto = AppProtocol(app)
         # incoming "" causes merge to return None → pop
-        result = proto.apply_state_update(app, '{"goal": ""}')
+        result = proto.apply_state_update('{"goal": ""}')
         self.assertTrue(result)
         self.assertNotIn("goal", app.shared_state)
 
@@ -3852,22 +3852,19 @@ class AppProtocolDirectTests(unittest.TestCase):
 
     def test_strip_payload_residual_empty_text_returns_empty(self):
         proto = AppProtocol(Mock())
-        app = self._make_app()
-        result = proto.strip_payload_residual(app, "")
+        result = proto.strip_payload_residual("")
         self.assertEqual(result, "")
 
     def test_strip_payload_residual_none_returns_empty(self):
         proto = AppProtocol(Mock())
-        app = self._make_app()
-        result = proto.strip_payload_residual(app, None)
+        result = proto.strip_payload_residual(None)
         self.assertEqual(result, "")
 
     # --- parse_handoff_payload ---
 
     def test_parse_handoff_payload_no_match_returns_none(self):
         proto = AppProtocol(Mock())
-        app = self._make_app()
-        result = proto.parse_handoff_payload(app, "completely invalid payload no task keyword", target="codex")
+        result = proto.parse_handoff_payload("completely invalid payload no task keyword", target="codex")
         self.assertIsNone(result)
 
     def test_parse_handoff_payload_empty_task_returns_none(self):
@@ -3877,44 +3874,44 @@ class AppProtocolDirectTests(unittest.TestCase):
             r"^\s*task:\s*([^\n]*?)\s*(?:context:\s*([^\n]*?))?\s*(?:expected:\s*([^\n]*?))?\s*(?:priority:\s*([^\n]*?))?\s*$",
             re.IGNORECASE,
         )
-        result = proto.parse_handoff_payload(None, "task:", target="codex")
+        result = proto.parse_handoff_payload("task:", target="codex")
         self.assertIsNone(result)
 
     # --- parse_response ---
 
     def test_parse_response_none_returns_all_none(self):
-        proto = AppProtocol(Mock())
         app = self._make_app()
-        result = proto.parse_response(app, None)
+        proto = AppProtocol(app)
+        result = proto.parse_response(None)
         self.assertEqual(result, (None, None, None, False, False, None))
 
     def test_parse_response_needs_human_input_marker(self):
         from quimera.constants import NEEDS_INPUT_MARKER
-        proto = AppProtocol(Mock())
         app = self._make_app()
-        response, _, _, _, needs_input, _ = proto.parse_response(app, f"pergunta {NEEDS_INPUT_MARKER}")
+        proto = AppProtocol(app)
+        response, _, _, _, needs_input, _ = proto.parse_response(f"pergunta {NEEDS_INPUT_MARKER}")
         self.assertTrue(needs_input)
         self.assertNotIn(NEEDS_INPUT_MARKER, response)
 
     def test_parse_response_invalid_handoff_increments_session_state(self):
-        proto = AppProtocol(Mock())
         session_state = {"handoff_invalid_count": 0}
         app = self._make_app(session_state=session_state)
         app.behavior_metrics = None
+        proto = AppProtocol(app)
         # ROUTE com payload inválido → handoff_invalid_count sobe
         response, target, handoff, _, _, _ = proto.parse_response(
-            app, "[ROUTE:codex] texto sem task keyword válido\nline2\n"
+            "[ROUTE:codex] texto sem task keyword válido\nline2\n"
         )
         self.assertIsNone(target)
         self.assertIsNone(handoff)
         self.assertEqual(session_state["handoff_invalid_count"], 1)
 
     def test_parse_response_invalid_handoff_calls_behavior_metrics(self):
-        proto = AppProtocol(Mock())
         session_state = {"handoff_invalid_count": 0}
         app = self._make_app(session_state=session_state)
         app.behavior_metrics = Mock()
-        proto.parse_response(app, "[ROUTE:codex] texto sem task keyword válido\nline2\n")
+        proto = AppProtocol(app)
+        proto.parse_response("[ROUTE:codex] texto sem task keyword válido\nline2\n")
         app.behavior_metrics.record_handoff_sent.assert_called_once_with("codex", is_invalid=True)
 
     def test_parse_response_invalid_handoff_session_state_key_error_is_swallowed(self):
@@ -3926,17 +3923,17 @@ class AppProtocolDirectTests(unittest.TestCase):
         session_state = _RaisingDict()
         dict.__setitem__(session_state, "handoff_invalid_count", 0)  # inicializa sem usar __setitem__
 
-        proto = AppProtocol(Mock())
         app = self._make_app(session_state=session_state)
         app.behavior_metrics = None
+        proto = AppProtocol(app)
         # Não deve levantar exceção
-        proto.parse_response(app, "[ROUTE:codex] texto sem task keyword\nline2\n")
+        proto.parse_response("[ROUTE:codex] texto sem task keyword\nline2\n")
 
     def test_parse_response_returns_none_when_route_consumes_all(self):
-        proto = AppProtocol(Mock())
         app = self._make_app()
+        proto = AppProtocol(app)
         # ROUTE que consome a resposta inteira → response vira None após sub → retorna None tuple
-        result = proto.parse_response(app, "[ROUTE:codex] task: fazer algo")
+        result = proto.parse_response("[ROUTE:codex] task: fazer algo")
         self.assertEqual(result[:3], (None, None, None))
 
 

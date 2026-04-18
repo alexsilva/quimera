@@ -24,6 +24,7 @@ class AppDispatchServices:
     ) -> str | None:
         """Resolve respostas com loop de ferramentas até estabilizar a saída."""
         app = self.app
+        task_services = app._task_services() if hasattr(app, "_task_services") else app.task_services
         current_response = response
         max_tool_hops = 16
         tool_history = []
@@ -43,7 +44,7 @@ class AppDispatchServices:
             if session_metrics is not None:
                 session_metrics.record_tool_event(app, agent, ok=ok, is_invalid=is_invalid)
 
-            tool_payload = app.task_services.truncate_payload(tool_result.to_model_payload())
+            tool_payload = task_services.truncate_payload(tool_result.to_model_payload())
             tool_history.append(
                 f"Sua resposta anterior:\n{current_response.strip()}\n\n"
                 f"Resultado da ferramenta:\n{tool_payload}"
@@ -178,7 +179,8 @@ class AppDispatchServices:
             call_index_snapshot = app.session_call_index
         start = time.time()
         history = [] if handoff_only else app.history
-        app.task_services.refresh_task_shared_state()
+        task_services = app._task_services() if hasattr(app, "_task_services") else app.task_services
+        task_services.refresh_task_shared_state()
 
         plugin = plugins.get(agent)
         driver = getattr(plugin, "driver", "cli") if plugin else "cli"

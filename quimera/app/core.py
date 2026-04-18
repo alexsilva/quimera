@@ -492,7 +492,7 @@ class QuimeraApp:
 
     def _apply_state_update(self, block_content):
         """Executa apply state update."""
-        return self._protocol().apply_state_update(self, block_content)
+        return self._protocol().apply_state_update(block_content)
 
     MAX_RETRIES = 2
     RETRY_BACKOFF_SECONDS = 1
@@ -500,7 +500,7 @@ class QuimeraApp:
     @staticmethod
     def _strip_payload_residual(text):
         """Remove payload residual."""
-        return AppProtocol().strip_payload_residual(None, text)
+        return AppProtocol().strip_payload_residual(text)
 
     def _record_tool_event(self, agent, result=None, loop_abort=False, reason=None):
         """Registra métricas de uso de ferramentas atribuídas ao agente."""
@@ -573,11 +573,11 @@ class QuimeraApp:
 
     def parse_handoff_payload(self, payload, target=None):
         """Interpreta handoff payload."""
-        return self._protocol().parse_handoff_payload(self, payload, target=target)
+        return self._protocol().parse_handoff_payload(payload, target=target)
 
     def parse_response(self, response):
         """Interpreta response."""
-        return self._protocol().parse_response(self, response)
+        return self._protocol().parse_response(response)
 
     def _call_agent_for_parallel(self, agent, handoff, protocol_mode, staging_root, index):
         """Executa call_agent e retorna tupla (agent, response, route_target, handoff, extend, needs_input)."""

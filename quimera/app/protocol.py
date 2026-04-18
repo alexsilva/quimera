@@ -5,7 +5,7 @@ import re
 import time
 
 from ..constants import EXTEND_MARKER, NEEDS_INPUT_MARKER, ROUTE_PREFIX, STATE_UPDATE_START
-from .config import logger
+from . import logger
 
 
 class AppProtocol:
@@ -24,6 +24,7 @@ class AppProtocol:
 
     def __init__(self, app=None, decisions_log_path=None) -> None:
         """Inicializa uma instância de AppProtocol."""
+        self.app = app
         self._decisions_log_path = decisions_log_path
         self._decisions_logger = None
 
@@ -52,7 +53,7 @@ class AppProtocol:
             return merged
         return incoming
 
-    def apply_state_update(self, app, block_content):
+    def apply_state_update(self, block_content):
         """Executa apply state update."""
         try:
             payload = json.loads(block_content.strip())
@@ -62,6 +63,7 @@ class AppProtocol:
         if not isinstance(payload, dict):
             return False
 
+        app = self.app
         with app._lock:
             for key, value in payload.items():
                 normalized_key = str(key).strip().lower().replace(" ", "_")
@@ -74,14 +76,14 @@ class AppProtocol:
                 else:
                     app.shared_state[normalized_key] = merged
                     if normalized_key == "decisions" and isinstance(value, list):
-                        logger = self._get_decisions_logger()
-                        if logger:
+                        dlogger = self._get_decisions_logger()
+                        if dlogger:
                             for item in value:
-                                logger.append(item, {
+                                dlogger.append(item, {
                                     "workspace": str(app.workspace.cwd) if hasattr(app, "workspace") else None})
         return True
 
-    def strip_payload_residual(self, app, text):
+    def strip_payload_residual(self, text):
         """Remove trailing non-payload lines from captured ROUTE group."""
         if not text:
             return ""
@@ -103,7 +105,7 @@ class AppProtocol:
         raw = f"{ts}:{target}:{task}"
         return hashlib.sha256(raw.encode()).hexdigest()[:12]
 
-    def parse_handoff_payload(self, app, payload, target=None):
+    def parse_handoff_payload(self, payload, target=None):
         """Interpreta handoff payload."""
         if not payload:
             return None
@@ -138,16 +140,17 @@ class AppProtocol:
             "chain": [],
         }
 
-    def parse_response(self, app, response):
+    def parse_response(self, response):
         """Extrai marcadores de controle e retorna estado estruturado."""
         if response is None:
             return None, None, None, False, False, None
 
+        app = self.app
         route_target, handoff, ack_id = None, None, None
 
         if STATE_UPDATE_START in response:
             for state_match in self.STATE_UPDATE_PATTERN.finditer(response):
-                self.apply_state_update(app, state_match.group(1))
+                self.apply_state_update(state_match.group(1))
             response = self.STATE_UPDATE_PATTERN.sub("", response).strip()
 
         ack_match = self.ACK_PATTERN.search(response)
@@ -159,9 +162,9 @@ class AppProtocol:
         if ROUTE_PREFIX in response:
             match = self.ROUTE_PATTERN.search(response)
             if match:
-                raw_payload = self.strip_payload_residual(app, match.group(2))
+                raw_payload = self.strip_payload_residual(match.group(2))
                 route_target = match.group(1)
-                parsed_handoff = self.parse_handoff_payload(app, raw_payload, target=route_target)
+                parsed_handoff = self.parse_handoff_payload(raw_payload, target=route_target)
                 logger.info("[ROUTE] match=%s, target=%s", match.group(0)[:100], route_target)
                 if parsed_handoff:
                     handoff = parsed_handoff
