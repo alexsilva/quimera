@@ -1075,7 +1075,8 @@ class QuimeraApp:
         response = self.call_agent(first_agent, is_first_speaker=True, protocol_mode="standard")
         response, route_target, handoff, extend, needs_human_input, _ = self.parse_response(response)
 
-        if self.agent_client and self.agent_client._user_cancelled:
+        agent_client = getattr(self, "agent_client", None)
+        if agent_client and agent_client._user_cancelled:
             self.renderer.show_system("[cancelado] fluxo interrompido.")
             if hasattr(self, "turn_manager"):
                 self.turn_manager.reset()
@@ -1165,7 +1166,8 @@ class QuimeraApp:
                 protocol_mode="handoff",
                 from_agent=first_agent,
             )
-            if self.agent_client and self.agent_client._user_cancelled:
+            agent_client = getattr(self, "agent_client", None)
+            if agent_client and agent_client._user_cancelled:
                 self.renderer.show_system("[cancelado] fluxo interrompido.")
                 if hasattr(self, "turn_manager"):
                     self.turn_manager.reset()
@@ -1206,7 +1208,8 @@ class QuimeraApp:
                         protocol_mode="handoff",
                         from_agent=first_agent,
                     )
-                    if self.agent_client and self.agent_client._user_cancelled:
+                    agent_client = getattr(self, "agent_client", None)
+                    if agent_client and agent_client._user_cancelled:
                         self.renderer.show_system("[cancelado] fluxo interrompido.")
                         if hasattr(self, "turn_manager"):
                             self.turn_manager.reset()
@@ -1234,7 +1237,8 @@ class QuimeraApp:
                     primary=False,
                     protocol_mode="handoff",
                 )
-                if self.agent_client and self.agent_client._user_cancelled:
+                agent_client = getattr(self, "agent_client", None)
+                if agent_client and agent_client._user_cancelled:
                     self.renderer.show_system("[cancelado] fluxo interrompido.")
                     if hasattr(self, "turn_manager"):
                         self.turn_manager.reset()
@@ -1298,7 +1302,8 @@ class QuimeraApp:
                         results = [f.result() for f in futures]
                     # Merge ordenado para o workspace
                     self._merge_staging_to_workspace(staging_root)
-                    if self.agent_client and self.agent_client._user_cancelled:
+                    agent_client = getattr(self, "agent_client", None)
+                    if agent_client and agent_client._user_cancelled:
                         self.renderer.show_system("[cancelado] fluxo interrompido.")
                         if hasattr(self, "turn_manager"):
                             self.turn_manager.reset()
@@ -1330,7 +1335,8 @@ class QuimeraApp:
                 # Modo sequencial (original)
                 for index, agent in enumerate(remaining):
                     response = self.call_agent(agent, handoff=next_handoff, primary=False, protocol_mode=protocol_mode)
-                    if self.agent_client and self.agent_client._user_cancelled:
+                    agent_client = getattr(self, "agent_client", None)
+                    if agent_client and agent_client._user_cancelled:
                         self.renderer.show_system("[cancelado] fluxo interrompido.")
                         if hasattr(self, "turn_manager"):
                             self.turn_manager.reset()
@@ -1364,8 +1370,9 @@ class QuimeraApp:
 
     def run(self):
         """Executa o loop interativo do chat multiagente."""
-        if self.agent_client:
-            self.agent_client._user_cancelled = False
+        agent_client = getattr(self, "agent_client", None)
+        if agent_client:
+            agent_client._user_cancelled = False
         self.renderer.show_system(MSG_CHAT_STARTED)
         self.renderer.show_system(
             MSG_SESSION_STATUS.format(

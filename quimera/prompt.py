@@ -112,22 +112,7 @@ class PromptBuilder:
             }
 
         execution_context = ""
-        if has_goal:
-            current_step = shared.get("current_step") or "(não definido)"
-            if current_step.lower() == "undefined":
-                current_step = "(não definido)"
-            execution_context = "\n\n".join([
-                PROMPT_GOAL_LOCK.format(goal_canonical=shared["goal_canonical"]),
-                PROMPT_STEP_LOCK.format(current_step=current_step),
-                PROMPT_ACCEPTANCE_CRITERIA.format(acceptance_criteria=shared.get("acceptance_criteria", "{unspecified}")),
-                PROMPT_SCOPE_CONTROL.format(
-                    allowed_scope=shared.get("allowed_scope", "unspecified"),
-                    non_goals=shared.get("non_goals", "unspecified"),
-                ),
-            ])
-            rules += PROMPT_GOAL_EXECUTION_RULES
-            rules += PROMPT_STATE_UPDATE_RULE
-        elif fallback_shared:
+        if fallback_shared:
             rules += PROMPT_STATE_UPDATE_RULE
 
         session_block = PROMPT_SESSION_STATE.format(**self.session_state) if (self.session_state and primary) else ""
@@ -238,6 +223,8 @@ class PromptBuilder:
             content = (message.get("content") or "").strip()
             if not content:
                 continue
+            if self._should_skip_fact(content):
+                continue
             facts.append(f"[{self._display_role(role)}] {content}")
             fact_indexes.append(index)
             if len(facts) >= max_items:
@@ -247,6 +234,24 @@ class PromptBuilder:
         facts.reverse()
         fact_indexes.reverse()
         return fact_indexes, PROMPT_FACTS.format(facts="\n".join(facts))
+
+    @staticmethod
+    def _should_skip_fact(content):
+        """Evita promover meta-instruções antigas para o bloco de fatos."""
+        lowered = content.lower()
+        blocked_markers = (
+            "goal_canonical",
+            "prompt_state",
+            "shared_state",
+            "estado compartilhado",
+            "objetivo fixo",
+            "não redefina o objetivo",
+            "nao redefina o objetivo",
+            "[state_update]",
+            "fatos observados recentes",
+            "contexto persistente",
+        )
+        return any(marker in lowered for marker in blocked_markers)
 
     def _build_conversation_block(self, history, skip_indexes=None):
         """Monta conversa residual sem repetir blocos destacados acima."""
@@ -258,6 +263,8 @@ class PromptBuilder:
                 continue
             content = (message.get("content") or "").strip()
             if not content:
+                continue
+            if message.get("role") != "human" and self._should_skip_fact(content):
                 continue
             lines.append(f"[{self._display_role(message['role'])}]: {content}")
         return "\n".join(lines) if lines else "[sem itens residuais na conversa recente]"

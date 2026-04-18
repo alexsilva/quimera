@@ -3,6 +3,7 @@ import os
 import shlex
 import shutil
 import subprocess
+import unicodedata
 from datetime import datetime
 
 
@@ -64,19 +65,46 @@ class ContextManager:
             lines = lines[1:]
         return "\n".join(lines).strip()
 
+    @staticmethod
+    def _normalize_heading(text):
+        """Normaliza headings para filtros simples e previsíveis."""
+        normalized = unicodedata.normalize("NFKD", text or "")
+        return "".join(char for char in normalized if not unicodedata.combining(char)).lower()
+
+    def _filter_summary_for_prompt(self, summary):
+        """Remove seções de pendências para não ancorar o prompt no objetivo antigo."""
+        if not summary:
+            return ""
+
+        blocked_tokens = ("pendenc", "proximos passos", "proximo passo", "next step", "next steps")
+        kept_lines = []
+        skipping_section = False
+
+        for line in summary.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("## "):
+                normalized = self._normalize_heading(stripped[3:])
+                skipping_section = any(token in normalized for token in blocked_tokens)
+                if skipping_section:
+                    continue
+            if skipping_section:
+                continue
+            kept_lines.append(line)
+
+        return "\n".join(kept_lines).strip()
+
     def load(self):
         """Carrega load, incluindo previous_session.md se disponível (warm-start)."""
         base_context = self.load_base()
         session_context = self.load_session()
-        previous_context = self.load_previous_session()
+        session_summary = self._filter_summary_for_prompt(self.load_session_summary())
 
-        # Priorize: base_context, then previous_session (warm-start), then session_context
         parts = []
         if base_context:
             parts.append(base_context)
-        if previous_context:
-            parts.append(previous_context)
-        if session_context:
+        if session_summary:
+            parts.append(session_summary)
+        elif session_context and not session_context.startswith(self.SUMMARY_MARKER):
             parts.append(session_context)
 
         if parts:

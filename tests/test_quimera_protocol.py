@@ -25,7 +25,7 @@ from quimera.prompt import PromptBuilder
 from quimera.runtime.approval import ApprovalHandler
 from quimera.runtime.config import ToolRuntimeConfig
 from quimera.runtime.executor import ToolExecutor
-from quimera.runtime.tasks import add_job, init_db, list_tasks
+from quimera.runtime.tasks import add_job, complete_task, create_task, init_db, list_tasks
 from quimera.session_summary import SessionSummarizer, build_chain_summarizer
 from quimera.ui import _agent_style
 
@@ -62,7 +62,7 @@ class DummyContextManager:
 
 
 class DummyConfigManager:
-    def __init__(self):
+    def __init__(self, _config_path=None):
         self.user_name = "Você"
         self.history_window = DEFAULT_HISTORY_WINDOW
         self.auto_summarize_threshold = 30
@@ -749,6 +749,21 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn("[CLAUDE] Arquivo alterado: app.py", prompt)
         self.assertIn("[CODEX] Teste falhou em test_x", prompt)
 
+    def test_prompt_skips_meta_lock_messages_from_facts_block(self):
+        builder = PromptBuilder(DummyContextManager(), history_window=5)
+        history = [
+            {"role": "human", "content": "Mude o foco"},
+            {"role": "codex", "content": "goal_canonical continua ativo e não redefina o objetivo"},
+            {"role": "claude", "content": "Arquivo alterado: app.py"},
+        ]
+
+        prompt = builder.build(AGENT_CLAUDE, history)
+
+        self.assertIn("FATOS OBSERVADOS RECENTES", prompt)
+        self.assertIn("[CLAUDE] Arquivo alterado: app.py", prompt)
+        self.assertNotIn("goal_canonical continua ativo", prompt)
+        self.assertNotIn("não redefina o objetivo", prompt)
+
     def test_prompt_does_not_repeat_recent_facts_in_conversation(self):
         builder = PromptBuilder(DummyContextManager(), history_window=5)
         history = [
@@ -914,6 +929,7 @@ class ProtocolTests(unittest.TestCase):
             def __init__(self, cwd):
                 self.root = temp_root
                 self.cwd = cwd
+                self.config_file = temp_root / "config.json"
                 self.context_persistent = temp_root / "quimera_context.md"
                 self.context_session = temp_root / "quimera_session_context.md"
                 self.logs_dir = temp_root / "quimera_logs"
@@ -971,6 +987,7 @@ class ProtocolTests(unittest.TestCase):
             def __init__(self, cwd):
                 self.root = temp_root
                 self.cwd = cwd
+                self.config_file = temp_root / "config.json"
                 self.context_persistent = temp_root / "quimera_context.md"
                 self.context_session = temp_root / "quimera_session_context.md"
                 self.logs_dir = temp_root / "quimera_logs"
@@ -1018,6 +1035,7 @@ class ProtocolTests(unittest.TestCase):
             def __init__(self, cwd):
                 self.root = temp_root
                 self.cwd = cwd
+                self.config_file = temp_root / "config.json"
                 self.context_persistent = temp_root / "quimera_context.md"
                 self.context_session = temp_root / "quimera_session_context.md"
                 self.logs_dir = temp_root / "quimera_logs"
@@ -3551,6 +3569,109 @@ class MetricsFeedbackTests(unittest.TestCase):
         self.assertIn("run_shell", body)
         self.assertIn("exec_command", body)
         self.assertIn("arquivos alterados", body)
+
+    def test_build_task_body_uses_shared_state_as_reference_only(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.user_name = "Alex"
+        app.history = [{"role": "human", "content": "Corrija o parser atual"}]
+        app.shared_state = {
+            "goal_canonical": "Corrigir parser legado",
+            "current_step": "Ajustar tokenizer",
+            "allowed_scope": ["parser.py"],
+        }
+
+        body = app._build_task_body("corrigir parser")
+
+        self.assertIn("ESTADO COMPARTILHADO (referência):", body)
+        self.assertIn('"goal_canonical": "Corrigir parser legado"', body)
+        self.assertNotIn("CONTEXTO DE EXECUÇÃO:", body)
+        self.assertNotIn("GOAL_CANONICAL:", body)
+        self.assertIn("Use o estado compartilhado apenas como referência auxiliar", body)
+
+    def test_refresh_task_shared_state_adds_completed_task_results(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.shared_state = {}
+        app.current_job_id = 1
+        tmp_dir = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        db_path = tmp_dir / "tasks.db"
+        init_db(str(db_path))
+        add_job("Session", db_path=str(db_path), job_id=1)
+        task_id = create_task(
+            1,
+            "validar cobertura dos testes",
+            db_path=str(db_path),
+            status="completed",
+        )
+        complete_task(task_id, result="ok" * 200, db_path=str(db_path))
+        app.tasks_db_path = str(db_path)
+        app._build_task_overview = QuimeraApp._build_task_overview.__get__(app, QuimeraApp)
+
+        app._refresh_task_shared_state = QuimeraApp._refresh_task_shared_state.__get__(app, QuimeraApp)
+        app._refresh_task_shared_state()
+
+        self.assertIn("task_overview", app.shared_state)
+        results = app.shared_state.get("completed_task_results", "")
+        self.assertIn("[task ", results)
+        self.assertIn("validar cobertura dos testes", results)
+        self.assertLessEqual(len(results.split(": ", 1)[1]), 200)
+
+    def test_refresh_task_shared_state_removes_completed_task_results_when_none_exist(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.shared_state = {"completed_task_results": "stale"}
+        app.current_job_id = 1
+        tmp_dir = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        db_path = tmp_dir / "tasks.db"
+        init_db(str(db_path))
+        add_job("Session", db_path=str(db_path), job_id=1)
+        app.tasks_db_path = str(db_path)
+        app._build_task_overview = QuimeraApp._build_task_overview.__get__(app, QuimeraApp)
+
+        app._refresh_task_shared_state = QuimeraApp._refresh_task_shared_state.__get__(app, QuimeraApp)
+        app._refresh_task_shared_state()
+
+        self.assertIn("task_overview", app.shared_state)
+        self.assertNotIn("completed_task_results", app.shared_state)
+
+    def test_refresh_task_shared_state_returns_when_shared_state_is_invalid(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.shared_state = None
+        app.current_job_id = 1
+        app.tasks_db_path = "/tmp/unused.db"
+
+        app._refresh_task_shared_state = QuimeraApp._refresh_task_shared_state.__get__(app, QuimeraApp)
+        app._refresh_task_shared_state()
+
+        self.assertIsNone(app.shared_state)
+
+    def test_prompt_includes_completed_task_results_when_goal_is_locked(self):
+        builder = PromptBuilder(DummyContextManager(), history_window=3)
+        history = [{"role": "human", "content": "Pergunta"}]
+
+        prompt = builder.build(
+            AGENT_CLAUDE,
+            history,
+            shared_state={
+                "goal_canonical": "Fechar cobertura",
+                "completed_task_results": "[task 1] testes: ok",
+            },
+        )
+
+        self.assertIn("TAREFAS CONCLUÍDAS:", prompt)
+        self.assertIn("[task 1] testes: ok", prompt)
+
+    def test_prompt_debug_metrics_include_prompt_sizes(self):
+        builder = PromptBuilder(DummyContextManager(), history_window=3)
+        history = [
+            {"role": "human", "content": "Pergunta"},
+            {"role": "claude", "content": "Resposta objetiva"},
+        ]
+
+        prompt, metrics = builder.build(AGENT_CLAUDE, history, debug=True)
+
+        self.assertIn("CONVERSA:", prompt)
+        self.assertTrue(metrics["primary"])
+        self.assertGreater(metrics["total_chars"], 0)
+        self.assertIn("facts_chars", metrics)
 
     def test_behavior_metrics_generate_feedback_empty_when_few_responses(self):
         """generate_feedback deve retornar vazio com menos de 3 respostas."""

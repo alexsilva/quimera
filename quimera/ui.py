@@ -70,7 +70,7 @@ class TerminalRenderer:
         self._theme = themes.get(theme or themes.DEFAULT_THEME)
         self._live = None
         self._statuses = {}
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
 
     def show_message(self, agent, content):
         """Exibe message usando o tema ativo."""

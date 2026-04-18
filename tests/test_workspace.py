@@ -31,7 +31,7 @@ class TestWorkspace(unittest.TestCase):
             base = Path(base_dir)
             proj = Path(proj_tmp) / "myproj"
             proj.mkdir()
-            with patch("quimera.workspace._find_writable", lambda dirs: base):
+            with patch("quimera.workspace.find_base_writable", lambda dirs: base):
                 ws = Workspace(proj)
                 # root e metadados devem ter sido criados
                 self.assertTrue((ws.root / "workspace.json").exists())
@@ -57,7 +57,7 @@ class TestWorkspace(unittest.TestCase):
             old_logs.mkdir()
             (old_logs / "old.log").write_text("log", encoding="utf-8")
 
-            with patch("quimera.workspace._find_writable", lambda dirs: base):
+            with patch("quimera.workspace.find_base_writable", lambda dirs: base):
                 ws = Workspace(project)
                 migrated = ws.migrate_from_legacy(project)
                 # todas verificações dentro do patch

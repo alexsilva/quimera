@@ -74,14 +74,14 @@ class TestAgentStyle:
         with patch.dict("quimera.plugins._registry", {"testagent": stub}):
             color, label = _agent_style("testagent")
             assert color == "cyan"
-            assert label == "TestAgent"
+            assert label == "🤖 TestAgent"
 
     def test_fallback_for_unknown_agent(self):
         """Test fallback for unknown agent names."""
         with patch.dict("quimera.plugins._registry", {}, clear=True):
             color, label = _agent_style("unknownagent")
             assert color == "white"
-            assert label == "Unknownagent"
+            assert label == "🤖 Unknownagent"
 
 
 class TestTerminalRenderer:

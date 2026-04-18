@@ -56,7 +56,8 @@ def test_load_combined(temp_files, renderer):
     cm = ContextManager(base, session, renderer)
     combined = cm.load()
     assert "Base Content" in combined
-    assert "## Resumo da última sessão" in combined
+    assert "Actual Summary" in combined
+    assert "## Resumo da última sessão" not in combined
 
 def test_load_only_base(tmp_path, renderer):
     base = tmp_path / "base.md"
@@ -173,20 +174,44 @@ def test_load_with_previous_session(tmp_path, renderer):
     cm = ContextManager(base, session, renderer, previous_session_file=previous)
     result = cm.load()
     assert "Base Context" in result
-    assert "Previous Summary" in result
     assert "Current Session" in result
     base_idx = result.index("Base Context")
-    prev_idx = result.index("Previous Summary")
     sess_idx = result.index("Current Session")
-    assert base_idx < prev_idx < sess_idx
+    assert base_idx < sess_idx
+    assert "Previous Summary" not in result
 
 def test_load_without_previous_session(temp_files, renderer):
     base, session = temp_files
     cm = ContextManager(base, session, renderer, previous_session_file=None)
     result = cm.load()
     assert "Base Content" in result
-    assert "## Resumo da última sessão" in result
+    assert "Actual Summary" in result
+    assert "## Resumo da última sessão" not in result
     assert "Previous" not in result
+
+def test_load_filters_pending_sections_from_session_summary(tmp_path, renderer):
+    base = tmp_path / "base.md"
+    base.write_text("Base Context", encoding="utf-8")
+    session = tmp_path / "session.md"
+    session.write_text(
+        "## Resumo da última sessão\n\n"
+        "_Gerado em 2026-01-01 10:00_\n\n"
+        "## Decisões tomadas\n"
+        "- manter filtro\n\n"
+        "## Pendências ou próximos passos\n"
+        "- corrigir objetivo antigo\n",
+        encoding="utf-8",
+    )
+
+    cm = ContextManager(base, session, renderer)
+
+    result = cm.load()
+
+    assert "Base Context" in result
+    assert "Decisões tomadas" in result
+    assert "manter filtro" in result
+    assert "Pendências ou próximos passos" not in result
+    assert "corrigir objetivo antigo" not in result
 
 def test_save_previous_session(tmp_path, renderer):
     base = tmp_path / "base.md"
@@ -196,3 +221,21 @@ def test_save_previous_session(tmp_path, renderer):
     cm.save_previous_session("Test summary")
     content = previous.read_text(encoding="utf-8")
     assert "Test summary" in content
+
+def test_save_previous_session_without_file_is_noop(tmp_path, renderer):
+    base = tmp_path / "base.md"
+    session = tmp_path / "session.md"
+    cm = ContextManager(base, session, renderer, previous_session_file=None)
+    cm.save_previous_session("Ignored summary")
+    assert not (tmp_path / "previous_session.md").exists()
+
+def test_load_truncates_context_to_max_lines(tmp_path, renderer):
+    base = tmp_path / "base.md"
+    session = tmp_path / "session.md"
+    base.write_text("linha 1\nlinha 2", encoding="utf-8")
+    session.write_text("linha 3\nlinha 4", encoding="utf-8")
+    cm = ContextManager(base, session, renderer, max_context_lines=3)
+
+    result = cm.load()
+
+    assert result == "\nlinha 3\nlinha 4"
