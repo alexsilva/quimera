@@ -1,5 +1,4 @@
 import io
-import queue
 import re
 import tempfile
 import threading
@@ -54,10 +53,13 @@ class DummyRenderer:
 
 class DummyContextManager:
     SUMMARY_MARKER = "<SUMMARY>"
+
     def __init__(self, *args, **kwargs):
         pass
+
     def load(self):
         return ""
+
     def load_session(self):
         return ""
 
@@ -74,6 +76,7 @@ class DummyConfigManager:
 class DummyStorage:
     def __init__(self, *args, **kwargs):
         pass
+
     def append_log(self, role, content):
         self.last_log = (role, content)
 
@@ -122,12 +125,13 @@ class ProtocolTests(unittest.TestCase):
                 return "saida limpa"
 
         with patch("quimera.cli.TerminalRenderer", FakeRenderer), patch(
-            "quimera.cli.AgentClient", FakeAgentClient
+                "quimera.cli.AgentClient", FakeAgentClient
         ), patch("sys.argv", ["quimera", "--interactive-test"]):
             cli_main()
 
         self.assertEqual(len(FakeRenderer.instances), 1)
-        self.assertEqual(calls, [(AGENT_CLAUDE, "Use uma ferramenta de shell para executar o comando `pwd` e me diga o diretório atual. Se a ferramenta pedir aprovação, mostre o prompt normalmente.")])
+        self.assertEqual(calls, [(AGENT_CLAUDE,
+                                  "Use uma ferramenta de shell para executar o comando `pwd` e me diga o diretório atual. Se a ferramenta pedir aprovação, mostre o prompt normalmente.")])
         self.assertTrue(FakeRenderer.instances[0].system_messages)
         self.assertEqual(FakeRenderer.instances[0].plain_messages, ["\n--- RESULTADO LIMPO ---\n", "saida limpa"])
 
@@ -154,7 +158,7 @@ class ProtocolTests(unittest.TestCase):
                 return None
 
         with patch("quimera.cli.ConfigManager", DummyConfigManager), patch(
-            "quimera.cli.TerminalRenderer", FakeRenderer
+                "quimera.cli.TerminalRenderer", FakeRenderer
         ), patch("quimera.cli.AgentClient", FakeAgentClient), patch(
             "sys.argv", ["quimera", "--interactive-test", "codex", "--test-prompt", "rode", "pwd"]
         ):
@@ -950,8 +954,9 @@ class ProtocolTests(unittest.TestCase):
             def get_history_file(self):
                 return Path("/tmp/sessao-2026-03-27-123456.json")
 
-        with patch("quimera.app.core.ConfigManager", DummyConfigManager), patch("quimera.app.core.Workspace", FakeWorkspace), patch(
-            "quimera.app.core.ContextManager", FakeContextManager
+        with patch("quimera.app.core.ConfigManager", DummyConfigManager), patch("quimera.app.core.Workspace",
+                                                                                FakeWorkspace), patch(
+                "quimera.app.core.ContextManager", FakeContextManager
         ), patch("quimera.app.core.SessionStorage", FakeSessionStorage):
             app = QuimeraApp(Path("/tmp/projeto"))
 
@@ -1005,8 +1010,9 @@ class ProtocolTests(unittest.TestCase):
             def get_history_file(self):
                 return Path("/tmp/sessao-2026-03-27-123456.json")
 
-        with patch("quimera.app.core.ConfigManager", DummyConfigManager), patch("quimera.app.core.Workspace", FakeWorkspace), patch(
-            "quimera.app.core.ContextManager", FakeContextManager
+        with patch("quimera.app.core.ConfigManager", DummyConfigManager), patch("quimera.app.core.Workspace",
+                                                                                FakeWorkspace), patch(
+                "quimera.app.core.ContextManager", FakeContextManager
         ), patch("quimera.app.core.SessionStorage", FakeSessionStorage):
             app = QuimeraApp(Path("/tmp/projeto"))
 
@@ -1053,8 +1059,9 @@ class ProtocolTests(unittest.TestCase):
             def get_history_file(self):
                 return Path("/tmp/sessao-2026-03-27-123456.json")
 
-        with patch("quimera.app.core.ConfigManager", DummyConfigManager), patch("quimera.app.core.Workspace", FakeWorkspace), patch(
-            "quimera.app.core.ContextManager", FakeContextManager
+        with patch("quimera.app.core.ConfigManager", DummyConfigManager), patch("quimera.app.core.Workspace",
+                                                                                FakeWorkspace), patch(
+                "quimera.app.core.ContextManager", FakeContextManager
         ), patch("quimera.app.core.SessionStorage", FakeSessionStorage):
             app = QuimeraApp(Path("/tmp/projeto"), history_window=5)
 
@@ -1210,13 +1217,13 @@ class ProtocolTests(unittest.TestCase):
         )
 
         def fake_call(
-            agent,
-            is_first_speaker=False,
-            handoff=None,
-            primary=True,
-            protocol_mode="standard",
-            handoff_only=False,
-            from_agent=None,
+                agent,
+                is_first_speaker=False,
+                handoff=None,
+                primary=True,
+                protocol_mode="standard",
+                handoff_only=False,
+                from_agent=None,
         ):
             calls.append((agent, is_first_speaker, handoff, handoff_only, from_agent))
             return next(responses)
@@ -1281,13 +1288,13 @@ class ProtocolTests(unittest.TestCase):
         )
 
         def fake_call(
-            agent,
-            is_first_speaker=False,
-            handoff=None,
-            primary=True,
-            protocol_mode="standard",
-            handoff_only=False,
-            from_agent=None,
+                agent,
+                is_first_speaker=False,
+                handoff=None,
+                primary=True,
+                protocol_mode="standard",
+                handoff_only=False,
+                from_agent=None,
         ):
             calls.append((agent, is_first_speaker, handoff, handoff_only, from_agent))
             return next(responses)
@@ -1401,14 +1408,14 @@ class ProtocolTests(unittest.TestCase):
         )
 
         def fake_call_agent(
-            agent,
-            is_first_speaker=False,
-            handoff=None,
-            primary=True,
-            protocol_mode="standard",
-            handoff_only=False,
-            silent=False,
-            from_agent=None,
+                agent,
+                is_first_speaker=False,
+                handoff=None,
+                primary=True,
+                protocol_mode="standard",
+                handoff_only=False,
+                silent=False,
+                from_agent=None,
         ):
             calls.append((agent, protocol_mode, handoff_only, from_agent, handoff))
             return next(responses)
@@ -1931,7 +1938,9 @@ class PluginTests(unittest.TestCase):
         import tempfile
         staging_root = Path(self.enterContext(tempfile.TemporaryDirectory()))
 
-        agent, response, route_target, handoff, extend, needs_input = app._call_agent_for_parallel("agent1", None, "standard", staging_root, 0)
+        agent, response, route_target, handoff, extend, needs_input = app._call_agent_for_parallel("agent1", None,
+                                                                                                   "standard",
+                                                                                                   staging_root, 0)
         self.assertEqual(agent, "agent1")
         self.assertEqual(response, "Resposta mock")
         self.assertIsNone(route_target)
@@ -1990,7 +1999,8 @@ class PluginTests(unittest.TestCase):
         run_thread = threading.Thread(target=app.run)
         run_thread.start()
 
-        self.assertTrue(second_prompt_seen.wait(timeout=1), "run() não voltou ao prompt enquanto o agente ainda executava")
+        self.assertTrue(second_prompt_seen.wait(timeout=1),
+                        "run() não voltou ao prompt enquanto o agente ainda executava")
         allow_finish.set()
         run_thread.join(timeout=2)
 
@@ -2089,7 +2099,7 @@ class PluginTests(unittest.TestCase):
         stdin.isatty = lambda: True
 
         with patch("sys.stdin", stdin), patch("quimera.app.core.readline.get_line_buffer", return_value=""), patch(
-            "quimera.app.core.readline.redisplay"
+                "quimera.app.core.readline.redisplay"
         ) as mock_redisplay:
             app.show_system_message("[task 7] claude: iniciando")
 
@@ -2108,7 +2118,7 @@ class PluginTests(unittest.TestCase):
         stdin.isatty = lambda: True
 
         with patch("sys.stdin", stdin), patch("quimera.app.core.readline.get_line_buffer", return_value=""), patch(
-            "quimera.app.core.readline.redisplay"
+                "quimera.app.core.readline.redisplay"
         ), patch("sys.stdout.write") as mock_write, patch("sys.stdout.flush") as mock_flush:
             app.show_system_message("[task 7] claude: erro: falha de rede")
 
@@ -2124,8 +2134,9 @@ class PluginTests(unittest.TestCase):
         stdin = io.StringIO("")
         stdin.isatty = lambda: True
 
-        with patch("sys.stdin", stdin), patch("quimera.app.core.readline.get_line_buffer", return_value="digitando"), patch(
-            "quimera.app.core.readline.redisplay"
+        with patch("sys.stdin", stdin), patch("quimera.app.core.readline.get_line_buffer",
+                                              return_value="digitando"), patch(
+                "quimera.app.core.readline.redisplay"
         ) as mock_redisplay, patch("sys.stdout.write"), patch("sys.stdout.flush"), patch(
             "quimera.app.core.time.sleep"
         ) as mock_sleep:
@@ -2149,7 +2160,7 @@ class PluginTests(unittest.TestCase):
         stdin.isatty = lambda: True
 
         with patch("sys.stdin", stdin), patch("quimera.app.core.readline.get_line_buffer", return_value=""), patch(
-            "quimera.app.core.readline.redisplay"
+                "quimera.app.core.readline.redisplay"
         ), patch("sys.stdout.write") as mock_write, patch("sys.stdout.flush"):
             app.show_system_message("[task 7] gemini:\nACEITE\nResultado validado com evidência concreta.")
 
@@ -2176,7 +2187,7 @@ class PluginTests(unittest.TestCase):
         prompt_handler.bind_app(app)
         try:
             with patch("sys.stdin", stdin), patch("quimera.app.core.readline.get_line_buffer", return_value=""), patch(
-                "quimera.app.core.readline.redisplay"
+                    "quimera.app.core.readline.redisplay"
             ) as mock_redisplay, patch("sys.stdout.write") as mock_write, patch("sys.stdout.flush") as mock_flush:
                 app_module.logger.info("[DISPATCH] sending to agent=%s", AGENT_CODEX)
 
@@ -2203,7 +2214,7 @@ class PluginTests(unittest.TestCase):
         prompt_handler.bind_app(app)
         try:
             with patch("sys.stdin", stdin), patch("quimera.app.core.readline.get_line_buffer", return_value=""), patch(
-                "quimera.app.core.readline.redisplay"
+                    "quimera.app.core.readline.redisplay"
             ) as mock_redisplay, patch("sys.stdout.write") as mock_write, patch("sys.stdout.flush"):
                 app_module.logger.warning("[DISPATCH] retry for agent=%s", AGENT_CODEX)
 
@@ -2225,7 +2236,7 @@ class PluginTests(unittest.TestCase):
         stdin.isatty = lambda: True
 
         with patch("sys.stdin", stdin), patch("quimera.app.core.readline.get_line_buffer", return_value="oi"), patch(
-            "quimera.app.core.readline.redisplay"
+                "quimera.app.core.readline.redisplay"
         ), patch("sys.stdout.write") as mock_write, patch("sys.stdout.flush"):
             app.show_system_message("[task 7] claude: erro: timeout")
 
@@ -2244,7 +2255,7 @@ class PluginTests(unittest.TestCase):
         stdin.isatty = lambda: True
 
         with patch("sys.stdin", stdin), patch("quimera.app.core.readline.get_line_buffer", return_value="oi"), patch(
-            "quimera.app.core.readline.redisplay"
+                "quimera.app.core.readline.redisplay"
         ) as mock_redisplay, patch("sys.stdout.write") as mock_write, patch("sys.stdout.flush"):
             app.print_response("claude", "resposta final")
 
@@ -2371,7 +2382,7 @@ class PluginTests(unittest.TestCase):
         app._classify_task_execution_result = lambda response: (True, response)
 
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
-            "quimera.runtime.tasks.complete_task"
+                "quimera.runtime.tasks.complete_task"
         ) as complete_task, patch("quimera.runtime.tasks.fail_task") as fail_task:
             app._setup_task_executors()
             ok = handlers[AGENT_CLAUDE]({"id": 1, "description": "rode a task"})
@@ -2416,7 +2427,7 @@ class PluginTests(unittest.TestCase):
         app._classify_task_execution_result = lambda response: (True, response)
 
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
-            "quimera.runtime.tasks.submit_for_review"
+                "quimera.runtime.tasks.submit_for_review"
         ) as submit_for_review, patch("quimera.runtime.tasks.complete_task") as complete_task:
             app._setup_task_executors()
             ok = handlers[AGENT_CLAUDE]({"id": 1, "description": "rode a task"})
@@ -2465,8 +2476,8 @@ class PluginTests(unittest.TestCase):
         app._classify_task_execution_result = lambda response: (True, response)
 
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
-            "quimera.app.task.plugins.get",
-            side_effect=lambda agent: FakePlugin(agent == AGENT_CLAUDE),
+                "quimera.app.task.plugins.get",
+                side_effect=lambda agent: FakePlugin(agent == AGENT_CLAUDE),
         ), patch("quimera.runtime.tasks.submit_for_review") as submit_for_review, patch(
             "quimera.runtime.tasks.complete_task"
         ) as complete_task:
@@ -2518,7 +2529,7 @@ class PluginTests(unittest.TestCase):
         app.show_system_message = lambda message: status_updates.append(message)
 
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
-            "quimera.runtime.tasks.complete_task"
+                "quimera.runtime.tasks.complete_task"
         ) as complete_task:
             app._setup_task_executors()
             ok = review_handlers[AGENT_GEMINI](
@@ -2567,7 +2578,7 @@ class PluginTests(unittest.TestCase):
         app.show_system_message = lambda message: status_updates.append(message)
 
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
-            "quimera.runtime.tasks.update_task"
+                "quimera.runtime.tasks.update_task"
         ) as update_task, patch("quimera.runtime.tasks.complete_task") as complete_task:
             app._setup_task_executors()
             ok = review_handlers[AGENT_CLAUDE](
@@ -2608,7 +2619,7 @@ class PluginTests(unittest.TestCase):
         app.show_system_message = lambda message: status_updates.append(message)
 
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
-            "quimera.runtime.tasks.requeue_task_after_review"
+                "quimera.runtime.tasks.requeue_task_after_review"
         ) as requeue_task_after_review, patch("quimera.runtime.tasks.complete_task") as complete_task:
             app._setup_task_executors()
             ok = review_handlers[AGENT_GEMINI](
@@ -2672,8 +2683,8 @@ class PluginTests(unittest.TestCase):
         app.show_system_message = lambda message: status_updates.append(message)
 
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
-            "quimera.app.task.plugins.get",
-            side_effect=lambda _agent: FakePlugin(True),
+                "quimera.app.task.plugins.get",
+                side_effect=lambda _agent: FakePlugin(True),
         ), patch("quimera.runtime.tasks.update_task") as update_task, patch(
             "quimera.runtime.tasks.fail_task"
         ) as fail_task:
@@ -2735,8 +2746,8 @@ class PluginTests(unittest.TestCase):
         app.show_system_message = lambda message: status_updates.append(message)
 
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
-            "quimera.app.task.plugins.get",
-            side_effect=lambda agent: FakePlugin(agent == AGENT_GEMINI),
+                "quimera.app.task.plugins.get",
+                side_effect=lambda agent: FakePlugin(agent == AGENT_GEMINI),
         ), patch("quimera.runtime.tasks.update_task") as update_task, patch(
             "quimera.runtime.tasks.fail_task"
         ) as fail_task:
@@ -2790,8 +2801,8 @@ class PluginTests(unittest.TestCase):
                 self.supports_task_execution = supports_task_execution
 
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
-            "quimera.app.task.plugins.get",
-            side_effect=lambda agent: FakePlugin(agent == AGENT_GEMINI),
+                "quimera.app.task.plugins.get",
+                side_effect=lambda agent: FakePlugin(agent == AGENT_GEMINI),
         ):
             app._setup_task_executors()
             self.assertFalse(review_eligibility[AGENT_CLAUDE]())
@@ -2829,8 +2840,8 @@ class PluginTests(unittest.TestCase):
                 self.supports_task_execution = supports_task_execution
 
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
-            "quimera.app.task.plugins.get",
-            side_effect=lambda agent: FakePlugin(True),
+                "quimera.app.task.plugins.get",
+                side_effect=lambda agent: FakePlugin(True),
         ):
             app._setup_task_executors()
             self.assertTrue(review_eligibility[AGENT_GEMINI]())
@@ -2877,7 +2888,7 @@ class PluginTests(unittest.TestCase):
         )
 
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
-            "quimera.runtime.tasks.complete_task"
+                "quimera.runtime.tasks.complete_task"
         ) as complete_task:
             app._setup_task_executors()
             ok = handlers[AGENT_CLAUDE](
@@ -2921,7 +2932,7 @@ class PluginTests(unittest.TestCase):
         app._record_failure = lambda agent: None
 
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
-            "quimera.runtime.tasks.requeue_task"
+                "quimera.runtime.tasks.requeue_task"
         ) as requeue_task, patch("quimera.runtime.tasks.fail_task") as fail_task:
             app._setup_task_executors()
             ok = handlers[AGENT_CLAUDE]({"id": 1, "description": "rode a task"})
@@ -2958,7 +2969,7 @@ class PluginTests(unittest.TestCase):
         app._record_failure = lambda agent: None
 
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
-            "quimera.runtime.tasks.can_reassign_task", return_value=False
+                "quimera.runtime.tasks.can_reassign_task", return_value=False
         ) as can_reassign_task, patch("quimera.runtime.tasks.requeue_task") as requeue_task, patch(
             "quimera.runtime.tasks.fail_task"
         ) as fail_task:
@@ -3004,7 +3015,7 @@ class PluginTests(unittest.TestCase):
         app.protocol = AppProtocol(Mock())
         result = app.parse_handoff_payload("task: Test task")
         self.assertEqual(result["chain"], [])
-        
+
         # Simulate chain propagation
         result["chain"] = ["claude"]
         result["chain"].append("codex")
@@ -3034,7 +3045,7 @@ class PluginTests(unittest.TestCase):
         # Simulate a handoff with handoff_id="abc123" but agent responds with ACK:def456
         response_text = "[ACK:def456]\nTarefa concluída."
         response, _, _, _, _, ack_id = app.parse_response(response_text)
-        
+
         self.assertEqual(ack_id, "def456")
         self.assertEqual(response, "Tarefa concluída.")
 
@@ -3058,7 +3069,7 @@ class PluginTests(unittest.TestCase):
         # Simulate successful call to claude
         app._record_agent_metric("claude", "succeeded", 1.5)
         app._record_agent_metric("claude", "succeeded", 0.8)
-        
+
         # Simulate failed call to codex
         app._record_agent_metric("codex", "failed", 0.0)
 
@@ -3088,7 +3099,8 @@ class PluginTests(unittest.TestCase):
         app.session_metrics = SessionMetricsService()
 
         app._record_tool_event("ollama-qwen", result=SimpleNamespace(ok=True, error=None))
-        app._record_tool_event("ollama-qwen", result=SimpleNamespace(ok=False, error="Sem política para a ferramenta: run"))
+        app._record_tool_event("ollama-qwen",
+                               result=SimpleNamespace(ok=False, error="Sem política para a ferramenta: run"))
         app._record_tool_event("ollama-qwen", loop_abort=True, reason="invalid_tool_loop")
 
         metrics = app.session_state["agent_metrics"]["ollama-qwen"]
@@ -3168,13 +3180,13 @@ class FallbackChainTests(unittest.TestCase):
         ])
 
         def fake_call(
-            agent,
-            is_first_speaker=False,
-            handoff=None,
-            primary=True,
-            protocol_mode="standard",
-            handoff_only=False,
-            from_agent=None,
+                agent,
+                is_first_speaker=False,
+                handoff=None,
+                primary=True,
+                protocol_mode="standard",
+                handoff_only=False,
+                from_agent=None,
         ):
             calls.append((agent, is_first_speaker, handoff, handoff_only, from_agent))
             return next(responses)
@@ -3234,13 +3246,13 @@ class FallbackChainTests(unittest.TestCase):
         ])
 
         def fake_call(
-            agent,
-            is_first_speaker=False,
-            handoff=None,
-            primary=True,
-            protocol_mode="standard",
-            handoff_only=False,
-            from_agent=None,
+                agent,
+                is_first_speaker=False,
+                handoff=None,
+                primary=True,
+                protocol_mode="standard",
+                handoff_only=False,
+                from_agent=None,
         ):
             calls.append((agent, is_first_speaker, handoff, handoff_only, from_agent))
             return next(responses)
@@ -3306,7 +3318,7 @@ class MetricsFeedbackTests(unittest.TestCase):
     def test_has_clear_next_step_detects_clear_indicators(self):
         """_has_clear_next_step deve detectar indicadores de próximo passo."""
         app = QuimeraApp.__new__(QuimeraApp)
-        
+
         self.assertTrue(app._has_clear_next_step("Próximo passo: revisar o código."))
         self.assertTrue(app._has_clear_next_step("Próxima etapa: implementar a feature."))
         self.assertTrue(app._has_clear_next_step("Tarefa completa."))
@@ -3317,15 +3329,15 @@ class MetricsFeedbackTests(unittest.TestCase):
     def test_is_response_redundant_detects_similarity(self):
         """_is_response_redundant deve detectar respostas similares."""
         app = QuimeraApp.__new__(QuimeraApp)
-        
+
         history = [
             {"role": "human", "content": "Faça algo"},
             {"role": "claude", "content": "Vou implementar a feature X agora. Isso envolve criar o arquivo e testar."},
         ]
-        
+
         similar_response = "Vou implementar a feature X agora. Isso envolve criar o arquivo e testar."
         self.assertTrue(app._is_response_redundant(similar_response, history))
-        
+
         different_response = "Vou corrigir o bug Y no parser."
         self.assertFalse(app._is_response_redundant(different_response, history))
 
@@ -3333,13 +3345,13 @@ class MetricsFeedbackTests(unittest.TestCase):
         """session_state deve rastrear as novas métricas."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.session_state = {}
-        
+
         app.session_state["total_responses"] = 5
         app.session_state["responses_with_clear_next_step"] = 3
         app.session_state["consecutive_redundant_responses"] = 2
         app.session_state["handoff_invalid_count"] = 1
         app.session_state["rounds_without_progress"] = 0
-        
+
         self.assertEqual(app.session_state["total_responses"], 5)
         self.assertEqual(app.session_state["responses_with_clear_next_step"], 3)
         self.assertEqual(app.session_state["consecutive_redundant_responses"], 2)
@@ -3469,9 +3481,9 @@ class MetricsFeedbackTests(unittest.TestCase):
     def test_route_rule_is_concise(self):
         """build_route_rule deve ser conciso e incluir task como obrigatório."""
         from quimera.constants import build_route_rule
-        
+
         rule = build_route_rule(["claude", "codex"])
-        
+
         self.assertIn("task", rule)
         self.assertIn("obrigatório", rule)
         self.assertIn("claude", rule)
@@ -3486,21 +3498,21 @@ class MetricsFeedbackTests(unittest.TestCase):
     def test_reviewer_rule_is_concise(self):
         """PROMPT_REVIEWER_RULE deve ser conciso."""
         from quimera.constants import PROMPT_REVIEWER_RULE
-        
+
         self.assertIn("veredicto", PROMPT_REVIEWER_RULE.lower())
         self.assertLess(len(PROMPT_REVIEWER_RULE), 550)
 
     def test_handoff_rule_is_concise(self):
         """PROMPT_HANDOFF_RULE deve ser conciso."""
         from quimera.constants import PROMPT_HANDOFF_RULE
-        
+
         self.assertIn("ACK", PROMPT_HANDOFF_RULE)
         self.assertLess(len(PROMPT_HANDOFF_RULE), 400)
 
     def test_base_rules_are_concise(self):
         """PROMPT_BASE_RULES deve ser conciso e cobrir prioridades."""
         from quimera.constants import PROMPT_BASE_RULES
-        
+
         self.assertIn("humano", PROMPT_BASE_RULES.lower())
         self.assertIn("prioridade", PROMPT_BASE_RULES.lower())
         self.assertIn("foco", PROMPT_BASE_RULES.lower())
@@ -3652,11 +3664,11 @@ class MetricsFeedbackTests(unittest.TestCase):
     def test_behavior_metrics_generate_feedback_empty_when_few_responses(self):
         """generate_feedback deve retornar vazio com menos de 3 respostas."""
         from quimera.metrics import BehaviorMetricsTracker
-        
+
         tracker = BehaviorMetricsTracker()
         tracker.record_response("claude", 1.0)
         tracker.record_response("claude", 1.0)
-        
+
         feedback = tracker.generate_feedback("claude")
         self.assertEqual(feedback, "")
 
@@ -3748,7 +3760,7 @@ class AppProtocolDirectTests(unittest.TestCase):
 
     def test_get_decisions_logger_caches_instance(self):
         with patch("quimera.workspace.DecisionsLogger") as MockDL:
-            import tempfile, os
+            import tempfile
             tmp = tempfile.mktemp(suffix=".json")
             proto = AppProtocol(Mock(), decisions_log_path=tmp)
             # first call creates it
