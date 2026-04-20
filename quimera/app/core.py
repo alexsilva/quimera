@@ -21,15 +21,12 @@ from .session import AppSessionServices
 from .session_metrics import SessionMetricsService
 from .dispatch import AppDispatchServices
 from .inputs import AppInputServices
-from .task import AppTaskServices
+from .task import AppTaskServices, call_agent_for_parallel, create_executor
 from .system_layer import AppSystemLayer
 from .turn import TurnManager
 from .. import plugins
-from ..runtime.executor import ToolExecutor
 from ..runtime.parser import strip_tool_block
-from ..runtime import ToolRuntimeConfig, ConsoleApprovalHandler, create_executor
 from ..runtime import tasks as runtime_tasks
-from ..runtime.tools.files import set_staging_root
 from ..ui import TerminalRenderer
 from ..context import ContextManager
 from ..storage import SessionStorage
@@ -201,14 +198,7 @@ class QuimeraApp:
         self.auto_summarize_threshold = self.config.auto_summarize_threshold
         self.idle_timeout_seconds = idle_timeout_seconds if idle_timeout_seconds is not None else self.config.idle_timeout_seconds
 
-        self.tool_executor = ToolExecutor(
-            config=ToolRuntimeConfig(
-                workspace_root=self.workspace.cwd,
-                db_path=Path(self.tasks_db_path) if self.tasks_db_path else None,
-                require_approval_for_mutations=False,
-            ),
-            approval_handler=ConsoleApprovalHandler(),
-        )
+        self.tool_executor = self.task_services.build_tool_executor()
         # Injeta o executor nos drivers de API do agent_client.
         self.agent_client.tool_executor = self.tool_executor
         # Modo de execução ativo (definido via /planning, /analysis, etc.)
@@ -538,14 +528,7 @@ class QuimeraApp:
 
     def _call_agent_for_parallel(self, agent, handoff, protocol_mode, staging_root, index):
         """Executa call_agent e retorna tupla (agent, response, route_target, handoff, extend, needs_input)."""
-        set_staging_root(staging_root / str(index))
-        try:
-            raw = self.call_agent(agent, handoff=handoff, primary=False, protocol_mode=protocol_mode)
-            response, route_target, handoff, extend, needs_input, _ = self.parse_response(raw)
-            # Propaga o flag de necessidade de input humano (6º elemento)
-            return agent, response, route_target, handoff, extend, needs_input
-        finally:
-            set_staging_root(None)
+        return call_agent_for_parallel(self, agent, handoff, protocol_mode, staging_root, index)
 
     def _merge_staging_to_workspace(self, staging_root: Path):
         """Mescla arquivos do staging para o workspace em ordem de índice."""

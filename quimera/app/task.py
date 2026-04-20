@@ -1,12 +1,16 @@
 """Componentes de `quimera.app.task`."""
 import json
 import re
+from pathlib import Path
 
 from .. import plugins
 from ..constants import CMD_TASK
 from ..constants import NEEDS_INPUT_MARKER, USER_ROLE
+from ..runtime import ToolRuntimeConfig, ConsoleApprovalHandler, create_executor
+from ..runtime.executor import ToolExecutor
 from ..runtime import tasks as runtime_tasks
 from ..runtime.parser import strip_tool_block
+from ..runtime.tools.files import set_staging_root
 from ..runtime.task_planning import (
     can_execute_task,
     choose_best_agent,
@@ -57,7 +61,7 @@ class AppTaskServices:
     def setup_task_executors(self):
         """Inicializa executores assíncronos para tasks humanas."""
         app = self.app
-        task_executor_factory = app.task_executor_factory
+        task_executor_factory = getattr(app, "task_executor_factory", create_executor)
         dispatch_services = app.dispatch_services
         system_layer = app.system_layer
 
@@ -249,6 +253,22 @@ class AppTaskServices:
                 executor.set_review_handler(make_review_handler(agent))
             executor.start()
             app.task_executors.append(executor)
+
+    def build_tool_executor(self) -> ToolExecutor:
+        """Cria o executor de ferramentas do app com a configuração padrão."""
+        app = self.app
+        return ToolExecutor(
+            config=ToolRuntimeConfig(
+                workspace_root=app.workspace.cwd,
+                db_path=Path(app.tasks_db_path) if app.tasks_db_path else None,
+                require_approval_for_mutations=False,
+            ),
+            approval_handler=ConsoleApprovalHandler(),
+        )
+
+    def call_agent_for_parallel(self, agent, handoff, protocol_mode, staging_root: Path, index: int):
+        """Executa uma chamada paralela do agente isolando staging por thread."""
+        return call_agent_for_parallel(self.app, agent, handoff, protocol_mode, staging_root, index)
 
     def stop_task_executors(self):
         """Interrompe executores de tasks em segundo plano."""
@@ -519,3 +539,14 @@ class AppTaskServices:
             lines.append(f"atribuída para {selected_agent}")
         lines.append(f"tipo inferido: {task_type}")
         app.system_layer.show_system_message(" | ".join(lines))
+
+
+def call_agent_for_parallel(app, agent, handoff, protocol_mode, staging_root: Path, index: int):
+    """Executa uma chamada paralela do agente isolando staging por thread."""
+    set_staging_root(staging_root / str(index))
+    try:
+        raw = app.call_agent(agent, handoff=handoff, primary=False, protocol_mode=protocol_mode)
+        response, route_target, handoff, extend, needs_input, _ = app.parse_response(raw)
+        return agent, response, route_target, handoff, extend, needs_input
+    finally:
+        set_staging_root(None)
