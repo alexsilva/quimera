@@ -4,9 +4,17 @@ from __future__ import annotations
 import os
 import shutil
 from pathlib import Path
+from typing import Protocol, runtime_checkable
 
-from quimera.modes import ExecutionMode
 from quimera.plugins.base import AgentPlugin
+
+
+@runtime_checkable
+class _ExecutionModeProto(Protocol):
+    """Interface mínima esperada pelo sandbox; desacopla bwrap de quimera.modes."""
+
+    read_only_fs: bool
+    allow_network: bool
 
 _HOME_DIR = str(Path.home())
 _COMMON_RO_PATHS = ["/usr", "/lib", "/lib64", "/bin", "/sbin", "/etc", "/opt", _HOME_DIR]
@@ -18,7 +26,7 @@ def is_bwrap_available() -> bool:
 
 
 def build_bwrap_cmd(
-        mode: ExecutionMode, working_dir: str, cmd: list[str], plugin: AgentPlugin | None = None
+        mode: _ExecutionModeProto, working_dir: str, cmd: list[str], plugin: AgentPlugin | None = None
 ) -> list[str]:
     """Envolve cmd com bwrap aplicando as restrições do ExecutionMode.
 
