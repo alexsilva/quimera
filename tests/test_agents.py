@@ -3,6 +3,7 @@ from unittest.mock import MagicMock, patch, ANY
 
 import pytest
 
+from quimera.agent_events import SpyEvent
 from quimera.agents import AgentClient, _strip_spinner, _should_ignore_stderr_line
 from quimera.constants import MAX_STDERR_LINES, Visibility
 from quimera.plugins import get as get_plugin
@@ -358,7 +359,7 @@ def test_agent_client_run_summary_flushes_compacted_responses_before_context(ren
 
     renderer.show_plain.assert_any_call("linha 1", agent="codex")
     renderer.show_plain.assert_any_call("linha 2", agent="codex")
-    status.update.assert_any_call("[dim]$ git status[/dim]")
+    assert any("$ git status" in str(c) for c in status.update.call_args_list)
     assert ("$ git status",) not in [call.args for call in renderer.show_plain.call_args_list]
 
 
@@ -383,7 +384,7 @@ def test_agent_client_run_summary_persists_only_completed_tool_line(renderer):
         with patch("time.sleep"):
             client.run(["codex", "exec"], silent=False, agent="codex", show_status=True)
 
-    status.update.assert_any_call("[dim]$ git diff -- quimera/agents.py[/dim]")
+    assert any("$ git diff -- quimera/agents.py" in str(c) for c in status.update.call_args_list)
     renderer.show_plain.assert_any_call("✓ git diff -- quimera/agents.py", agent="codex")
     assert ("$ git diff -- quimera/agents.py",) not in [call.args for call in renderer.show_plain.call_args_list]
 
@@ -666,8 +667,8 @@ def test_format_codex_spy_event_command():
     started = _format_codex_spy_event('{"type":"item.started","item":{"type":"command_execution","command":"ls"}}')
     completed = _format_codex_spy_event(
         '{"type":"item.completed","item":{"type":"command_execution","command":"ls","exit_code":0}}')
-    assert started == ["ferramenta: $ ls"]
-    assert completed == ["ferramenta: ✓ ls"]
+    assert started == [SpyEvent(kind="tool", text="$ ls")]
+    assert completed == [SpyEvent(kind="tool", text="✓ ls")]
 
 
 def test_format_codex_spy_event_reasoning_and_message():
@@ -677,8 +678,8 @@ def test_format_codex_spy_event_reasoning_and_message():
     message = _format_codex_spy_event(
         '{"type":"item.completed","item":{"type":"agent_message","text":"Ajustei a saída para mostrar progresso útil ao usuário."}}'
     )
-    assert reasoning == ["contexto: Vou localizar o formatter do plugin e ajustar a mensagem"]
-    assert message == ["resposta: Ajustei a saída para mostrar progresso útil ao usuário."]
+    assert reasoning == [SpyEvent(kind="context", text="Vou localizar o formatter do plugin e ajustar a mensagem", transient=True)]
+    assert message == [SpyEvent(kind="response", text="Ajustei a saída para mostrar progresso útil ao usuário.", final=True)]
 
 
 def test_format_codex_spy_event_splits_multiline_agent_messages():
@@ -686,10 +687,10 @@ def test_format_codex_spy_event_splits_multiline_agent_messages():
         '{"type":"item.completed","item":{"type":"agent_message","text":"message 1\\nmessage 2\\nclear\\nmessage 3"}}'
     )
     assert message == [
-        "resposta: message 1",
-        "resposta: message 2",
-        "clear",
-        "resposta: message 3",
+        SpyEvent(kind="response", text="message 1", final=True),
+        SpyEvent(kind="response", text="message 2", final=True),
+        SpyEvent(kind="clear", text="", transient=True),
+        SpyEvent(kind="response", text="message 3", final=True),
     ]
 
 
@@ -697,7 +698,7 @@ def test_format_codex_spy_event_reports_failed_test_command():
     completed = _format_codex_spy_event(
         '{"type":"item.completed","item":{"type":"command_execution","command":"pytest -q tests/test_agents.py","exit_code":1}}'
     )
-    assert completed == ["ferramenta: ✗ pytest -q tests/test_agents.py (exit 1)"]
+    assert completed == [SpyEvent(kind="tool", text="✗ pytest -q tests/test_agents.py (exit 1)")]
 
 
 def test_format_codex_spy_event_hides_successful_command_completion():
@@ -707,8 +708,8 @@ def test_format_codex_spy_event_hides_successful_command_completion():
     completed = _format_codex_spy_event(
         '{"type":"item.completed","item":{"type":"command_execution","command":"git status --short","exit_code":0}}'
     )
-    assert started == ["ferramenta: $ git status --short"]
-    assert completed == ["ferramenta: ✓ git status --short"]
+    assert started == [SpyEvent(kind="tool", text="$ git status --short")]
+    assert completed == [SpyEvent(kind="tool", text="✓ git status --short")]
 
 
 def test_format_codex_spy_event_reports_file_change_start_and_completion():
@@ -718,15 +719,15 @@ def test_format_codex_spy_event_reports_file_change_start_and_completion():
     completed = _format_codex_spy_event(
         '{"type":"item.completed","item":{"type":"file_change","path":"quimera/agents.py"}}'
     )
-    assert started == ["ferramenta: editar quimera/agents.py"]
-    assert completed == ["ferramenta: ✓ editar quimera/agents.py"]
+    assert started == [SpyEvent(kind="tool", text="editar quimera/agents.py")]
+    assert completed == [SpyEvent(kind="tool", text="✓ editar quimera/agents.py")]
 
 
 def test_format_codex_spy_event_reports_tool_calls_as_tool_messages():
     message = _format_codex_spy_event(
         '{"type":"item.started","item":{"type":"tool_call","name":"apply_patch"}}'
     )
-    assert message == ["ferramenta: usando apply_patch"]
+    assert message == [SpyEvent(kind="tool", text="usando apply_patch")]
 
 
 def test_codex_plugin_exposes_spy_stdout_formatter():
@@ -755,10 +756,10 @@ def test_format_claude_spy_event_summarizes_assistant_and_result():
     )
     result = _format_claude_spy_event('{"type":"result","result":"ok","is_error":false}')
     assert assistant == [
-        "ferramenta: usando Bash",
-        "resposta: Vou validar com um teste focado antes de concluir.",
+        SpyEvent(kind="tool", text="usando Bash"),
+        SpyEvent(kind="response", text="Vou validar com um teste focado antes de concluir.", final=True),
     ]
-    assert result == ["contexto: execução concluída"]
+    assert result == [SpyEvent(kind="context", text="execução concluída", transient=True)]
 
 
 def test_format_opencode_spy_event_summarizes_text_and_result():
@@ -769,20 +770,20 @@ def test_format_opencode_spy_event_summarizes_text_and_result():
     result = _format_opencode_spy_event(
         '{"type":"step_finish","part":{"type":"step-finish","reason":"stop"}}'
     )
-    assert started == ["contexto: iniciando execução"]
+    assert started == [SpyEvent(kind="context", text="iniciando execução", transient=True)]
     assert message == [
-        "resposta: message 1",
-        "clear",
-        "resposta: message 2",
+        SpyEvent(kind="response", text="message 1", final=True),
+        SpyEvent(kind="clear", text="", transient=True),
+        SpyEvent(kind="response", text="message 2", final=True),
     ]
-    assert result == ["contexto: execução concluída"]
+    assert result == [SpyEvent(kind="context", text="execução concluída", transient=True)]
 
 
 def test_format_opencode_spy_event_reports_tool_calls_as_tool_messages():
     tool = _format_opencode_spy_event(
         '{"type":"tool_call","part":{"type":"tool-call","tool":"run_shell"}}'
     )
-    assert tool == ["ferramenta: usando run_shell"]
+    assert tool == [SpyEvent(kind="tool", text="usando run_shell")]
 
 
 def test_parse_opencode_json_with_text(renderer):

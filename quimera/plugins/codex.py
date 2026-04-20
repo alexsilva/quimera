@@ -3,6 +3,7 @@ import json
 import shlex
 from pathlib import Path
 
+from quimera.agent_events import SpyEvent
 from quimera.plugins.base import AgentPlugin, register
 
 
@@ -13,69 +14,47 @@ def _truncate_text(value: str, limit: int = 160) -> str:
     return value[: limit - 3].rstrip() + "..."
 
 
-def _describe_command(command: str, phase: str, exit_code: int | None = None) -> str:
+def _describe_command(command: str, phase: str, exit_code: int | None = None) -> SpyEvent:
     command = (command or "").strip()
     if not command:
-        return f"contexto: comando {phase}"
+        return SpyEvent(kind="context", text=f"comando {phase}", transient=True)
 
     try:
         parts = shlex.split(command)
     except ValueError:
         parts = command.split()
 
-    head = parts[0] if parts else command
-    category = "executando comando"
-    if head in {"rg", "grep", "find", "fd", "ls", "tree", "sed", "cat", "head", "tail"}:
-        category = "inspecionando arquivos"
-    elif head in {"pytest", "tox", "nox"}:
-        category = "rodando testes"
-    elif head == "git":
-        git_subcommand = parts[1] if len(parts) > 1 else ""
-        if git_subcommand in {"status", "diff", "show", "log"}:
-            category = "checando repositório"
-        else:
-            category = "executando git"
-    elif head == "python":
-        if any(part == "pytest" for part in parts[1:]):
-            category = "rodando testes"
-        elif "compileall" in parts:
-            category = "validando sintaxe"
-        else:
-            category = "executando python"
-    elif head in {"bash", "sh"}:
-        category = "executando script"
-
     summary = _truncate_text(command)
     if phase == "concluído":
         if exit_code == 0 or exit_code is None:
-            return f"ferramenta: ✓ {summary}"
-        return f"ferramenta: ✗ {summary} (exit {exit_code})"
-    return f"ferramenta: $ {summary}"
+            return SpyEvent(kind="tool", text=f"✓ {summary}")
+        return SpyEvent(kind="tool", text=f"✗ {summary} (exit {exit_code})")
+    return SpyEvent(kind="tool", text=f"$ {summary}")
 
 
-def _describe_file_change(item: dict, phase: str) -> str:
+def _describe_file_change(item: dict, phase: str) -> SpyEvent:
     target = item.get("path") or item.get("file_path") or item.get("target") or ""
     subject = target or "arquivo"
     if phase == "concluído":
-        return f"ferramenta: ✓ editar {subject}"
-    return f"ferramenta: editar {subject}"
+        return SpyEvent(kind="tool", text=f"✓ editar {subject}")
+    return SpyEvent(kind="tool", text=f"editar {subject}")
 
 
-def _format_agent_message_lines(text: str) -> list[str]:
+def _format_agent_message_lines(text: str) -> list[SpyEvent]:
     """Quebra mensagens do agente em eventos curtos e preserva marcadores simples."""
-    messages: list[str] = []
+    messages: list[SpyEvent] = []
     for raw_line in (text or "").splitlines():
         line = raw_line.strip()
         if not line:
             continue
         if line.lower() == "clear":
-            messages.append("clear")
+            messages.append(SpyEvent(kind="clear", text="", transient=True))
             continue
-        messages.append(f"resposta: {_truncate_text(line)}")
+        messages.append(SpyEvent(kind="response", text=_truncate_text(line), final=True))
     return messages
 
 
-def _format_codex_spy_event(line: str) -> list[str]:
+def _format_codex_spy_event(line: str) -> list[SpyEvent]:
     """Resume eventos JSONL do Codex em mensagens curtas para o modo spy."""
     try:
         event = json.loads(line)
@@ -84,9 +63,9 @@ def _format_codex_spy_event(line: str) -> list[str]:
 
     etype = event.get("type")
     if etype in {"turn.started", "session.started"}:
-        return ["contexto: iniciando execução"]
+        return [SpyEvent(kind="context", text="iniciando execução", transient=True)]
     if etype == "turn.completed":
-        return ["contexto: execução concluída"]
+        return [SpyEvent(kind="context", text="execução concluída", transient=True)]
 
     if etype not in {"item.started", "item.completed"}:
         return []
@@ -98,14 +77,13 @@ def _format_codex_spy_event(line: str) -> list[str]:
 
     phase = "iniciado" if etype == "item.started" else "concluído"
     if itype == "command_execution":
-        message = _describe_command(item.get("command") or "", phase, item.get("exit_code"))
-        return [message] if message else []
+        return [_describe_command(item.get("command") or "", phase, item.get("exit_code"))]
 
     if itype == "reasoning":
         text = (item.get("text") or item.get("summary") or "").strip()
         if not text:
-            return [f"contexto: raciocínio {phase}"]
-        return [f"contexto: {_truncate_text(text.splitlines()[0])}"]
+            return [SpyEvent(kind="context", text=f"raciocínio {phase}", transient=True)]
+        return [SpyEvent(kind="context", text=_truncate_text(text.splitlines()[0]), transient=True)]
 
     if itype == "agent_message":
         text = (item.get("text") or "").strip()
@@ -118,9 +96,9 @@ def _format_codex_spy_event(line: str) -> list[str]:
 
     if itype in {"tool_call", "function_call"}:
         name = item.get("name") or item.get("tool_name") or "ferramenta"
-        return [f"ferramenta: usando {name}"]
+        return [SpyEvent(kind="tool", text=f"usando {name}")]
 
-    return [f"contexto: {itype} {phase}"]
+    return [SpyEvent(kind="context", text=f"{itype} {phase}", transient=True)]
 
 
 plugin = AgentPlugin(

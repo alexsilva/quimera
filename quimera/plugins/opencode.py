@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 
+from quimera.agent_events import SpyEvent
 from quimera.plugins.base import AgentPlugin, register
 
 
@@ -12,20 +13,20 @@ def _truncate_text(value: str, limit: int = 160) -> str:
     return value[: limit - 3].rstrip() + "..."
 
 
-def _format_agent_message_lines(text: str) -> list[str]:
-    messages: list[str] = []
+def _format_agent_message_lines(text: str) -> list[SpyEvent]:
+    messages: list[SpyEvent] = []
     for raw_line in (text or "").splitlines():
         line = raw_line.strip()
         if not line:
             continue
         if line.lower() == "clear":
-            messages.append("clear")
+            messages.append(SpyEvent(kind="clear", text="", transient=True))
             continue
-        messages.append(f"resposta: {_truncate_text(line)}")
+        messages.append(SpyEvent(kind="response", text=_truncate_text(line), final=True))
     return messages
 
 
-def _format_opencode_spy_event(line: str) -> list[str]:
+def _format_opencode_spy_event(line: str) -> list[SpyEvent]:
     """Resume eventos JSON do OpenCode em mensagens curtas para o modo SUMMARY."""
     try:
         event = json.loads(line)
@@ -37,12 +38,12 @@ def _format_opencode_spy_event(line: str) -> list[str]:
     ptype = part.get("type")
 
     if etype == "step_start" or ptype == "step-start":
-        return ["contexto: iniciando execução"]
+        return [SpyEvent(kind="context", text="iniciando execução", transient=True)]
     if etype == "step_finish" or ptype == "step-finish":
         reason = (part.get("reason") or "").strip().lower()
         if reason in {"error", "failed", "fail"}:
-            return ["contexto: execução falhou"]
-        return ["contexto: execução concluída"]
+            return [SpyEvent(kind="context", text="execução falhou", transient=True)]
+        return [SpyEvent(kind="context", text="execução concluída", transient=True)]
 
     if etype == "text" or ptype == "text":
         return _format_agent_message_lines(part.get("text") or "")
@@ -57,7 +58,7 @@ def _format_opencode_spy_event(line: str) -> list[str]:
     )
     marker = " ".join(filter(None, [str(etype or ""), str(ptype or "")])).lower()
     if tool_name and any(token in marker for token in {"tool", "call"}):
-        return [f"ferramenta: usando {tool_name}"]
+        return [SpyEvent(kind="tool", text=f"usando {tool_name}")]
 
     return []
 

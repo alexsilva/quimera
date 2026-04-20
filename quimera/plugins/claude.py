@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 
+from quimera.agent_events import SpyEvent
 from quimera.plugins.base import AgentPlugin, register
 
 
@@ -12,7 +13,7 @@ def _truncate_text(value: str, limit: int = 160) -> str:
     return value[: limit - 3].rstrip() + "..."
 
 
-def _format_claude_spy_event(line: str) -> list[str]:
+def _format_claude_spy_event(line: str) -> list[SpyEvent]:
     """Resume eventos stream-json do Claude em mensagens úteis para o modo spy."""
     try:
         event = json.loads(line)
@@ -23,23 +24,23 @@ def _format_claude_spy_event(line: str) -> list[str]:
     if etype == "result":
         if event.get("is_error"):
             detail = _truncate_text(str(event.get("result") or "erro"))
-            return [f"contexto: execução falhou: {detail}"]
-        return ["contexto: execução concluída"]
+            return [SpyEvent(kind="context", text=f"execução falhou: {detail}", transient=True)]
+        return [SpyEvent(kind="context", text="execução concluída", transient=True)]
 
     if etype != "assistant":
         return []
 
-    messages: list[str] = []
+    messages: list[SpyEvent] = []
     content = event.get("message", {}).get("content", [])
     for block in content:
         btype = block.get("type")
         if btype == "text":
             text = (block.get("text") or "").strip()
             if text:
-                messages.append(f"resposta: {text}")
+                messages.append(SpyEvent(kind="response", text=text, final=True))
         elif btype == "tool_use":
             tool_name = block.get("name") or "ferramenta"
-            messages.append(f"ferramenta: usando {tool_name}")
+            messages.append(SpyEvent(kind="tool", text=f"usando {tool_name}"))
     return messages
 
 

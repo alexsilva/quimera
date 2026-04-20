@@ -2,6 +2,11 @@
 from dataclasses import dataclass, field
 from typing import Callable, FrozenSet, List, Optional, Tuple
 
+from quimera.agent_events import SpyEvent
+
+
+SpyFormatterOutput = List[SpyEvent]
+
 
 @dataclass
 class AgentPlugin:
@@ -31,7 +36,7 @@ class AgentPlugin:
     model: Optional[str] = None
     base_url: Optional[str] = None
     api_key_env: Optional[str] = None  # nome da variável de ambiente com a API key
-    spy_stdout_formatter: Optional[Callable[[str], List[str]]] = None
+    spy_stdout_formatter: Optional[Callable[[str], SpyFormatterOutput]] = None
     stderr_noise: FrozenSet[str] = field(default_factory=frozenset)
 
     @property
