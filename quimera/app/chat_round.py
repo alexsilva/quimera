@@ -20,6 +20,7 @@ class ChatRoundOrchestrator:
     def process(self, user):
         """Implementação real do processamento de mensagens do chat."""
         app = self.app
+        dispatch_services = app.dispatch_services
         first_agent, message, explicit = app.parse_routing(user)
         if first_agent is None:
             return
@@ -38,7 +39,7 @@ class ChatRoundOrchestrator:
         app.summary_agent_preference = first_agent
         app.session_services.persist_message(USER_ROLE, message)
 
-        response = app.call_agent(first_agent, is_first_speaker=True, protocol_mode="standard")
+        response = dispatch_services.call_agent(first_agent, is_first_speaker=True, protocol_mode="standard")
         response, route_target, handoff, extend, needs_human_input, _ = app.parse_response(response)
 
         agent_client = getattr(app, "agent_client", None)
@@ -59,7 +60,7 @@ class ChatRoundOrchestrator:
                 app.renderer.show_system(
                     f"[fallback] {failed_agent} não respondeu; {fallback_agent} assumiu"
                 )
-                fallback_response = app.call_agent(
+                fallback_response = dispatch_services.call_agent(
                     fallback_agent,
                     is_first_speaker=True,
                     primary=False,
@@ -81,7 +82,7 @@ class ChatRoundOrchestrator:
             app._pending_input_for = first_agent
             app.renderer.show_system(f"\nResponda para {first_agent.upper()}:\n")
             return
-        app.print_response(first_agent, response)
+        dispatch_services.print_response(first_agent, response)
         if response is not None:
             app.session_services.persist_message(first_agent, response)
 
@@ -94,6 +95,7 @@ class ChatRoundOrchestrator:
 
     def _process_handoff(self, first_agent, route_target, handoff):
         app = self.app
+        dispatch_services = app.dispatch_services
         handoff_id = handoff.get("handoff_id", "?")
         priority = handoff.get("priority", "normal")
         chain = handoff.get("chain", []) if isinstance(handoff, dict) else []
@@ -124,7 +126,7 @@ class ChatRoundOrchestrator:
         if hasattr(app, "behavior_metrics") and app.behavior_metrics:
             app.behavior_metrics.record_handoff_sent(first_agent)
             app.behavior_metrics.record_handoff_received(route_target)
-        secondary_response = app.call_agent(
+        secondary_response = dispatch_services.call_agent(
             route_target,
             handoff=handoff,
             handoff_only=True,
@@ -144,7 +146,7 @@ class ChatRoundOrchestrator:
                 "[ACK] mismatch: expected=%s, received=%s from agent=%s",
                 expected_ack, ack_id, route_target,
             )
-        app.print_response(route_target, secondary_response)
+        dispatch_services.print_response(route_target, secondary_response)
         if secondary_response is not None:
             app.session_services.persist_message(route_target, secondary_response)
 
@@ -164,7 +166,7 @@ class ChatRoundOrchestrator:
                 fallback_handoff = dict(handoff) if isinstance(handoff, dict) else handoff
                 if isinstance(fallback_handoff, dict):
                     fallback_handoff["chain"] = handoff.get("chain", []) + [route_target]
-                secondary_response = app.call_agent(
+                secondary_response = dispatch_services.call_agent(
                     fallback_agent,
                     handoff=fallback_handoff,
                     handoff_only=True,
@@ -180,7 +182,7 @@ class ChatRoundOrchestrator:
                 secondary_response, _, _, _, _, ack_id = app.parse_response(secondary_response)
                 if secondary_response:
                     route_target = fallback_agent
-                    app.print_response(fallback_agent, secondary_response)
+                    dispatch_services.print_response(fallback_agent, secondary_response)
                     app.session_services.persist_message(fallback_agent, secondary_response)
                     break
 
@@ -192,7 +194,7 @@ class ChatRoundOrchestrator:
             )
             if hasattr(app, "behavior_metrics") and app.behavior_metrics:
                 app.behavior_metrics.record_synthesis(first_agent)
-            final_response = app.call_agent(
+            final_response = dispatch_services.call_agent(
                 first_agent,
                 handoff=synthesis_handoff,
                 primary=False,
@@ -204,7 +206,7 @@ class ChatRoundOrchestrator:
                 app.turn_manager.reset()
                 return
             final_response, _, _, _, _, _ = app.parse_response(final_response)
-            app.print_response(first_agent, final_response)
+            dispatch_services.print_response(first_agent, final_response)
             if final_response is not None:
                 app.session_services.persist_message(first_agent, final_response)
         else:
@@ -218,6 +220,7 @@ class ChatRoundOrchestrator:
 
     def _process_standard_flow(self, first_agent, explicit, extend, other_agents):
         app = self.app
+        dispatch_services = app.dispatch_services
         protocol_mode = "extended" if extend else "standard"
         if explicit or not extend:
             remaining = []
@@ -265,7 +268,7 @@ class ChatRoundOrchestrator:
                 needs_input_any = False
                 for item in results:
                     agent, response, route_target, handoff, extend, needs_input = item
-                    app.print_response(agent, response)
+                    dispatch_services.print_response(agent, response)
                     if response is not None:
                         app.session_services.persist_message(agent, response)
                     needs_input_any = needs_input or needs_input_any
@@ -282,7 +285,7 @@ class ChatRoundOrchestrator:
             return
 
         for index, agent in enumerate(remaining):
-            response = app.call_agent(agent, handoff=next_handoff, primary=False, protocol_mode=protocol_mode)
+            response = dispatch_services.call_agent(agent, handoff=next_handoff, primary=False, protocol_mode=protocol_mode)
             agent_client = getattr(app, "agent_client", None)
             if agent_client and agent_client._user_cancelled:
                 app.renderer.show_system("[cancelado] fluxo interrompido.")
@@ -290,7 +293,7 @@ class ChatRoundOrchestrator:
                 return
             next_handoff = None
             response, route_target, handoff, _, needs_human_input, _ = app.parse_response(response)
-            app.print_response(agent, response)
+            dispatch_services.print_response(agent, response)
             if response is not None:
                 app.session_services.persist_message(agent, response)
             if needs_human_input:

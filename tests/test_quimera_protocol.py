@@ -114,6 +114,10 @@ def materialize_internal_services(app):
         app.system_layer = AppSystemLayer(app)
     if not hasattr(app, "chat_round_orchestrator"):
         app.chat_round_orchestrator = ChatRoundOrchestrator(app)
+    if not hasattr(app, "task_executor_factory"):
+        app.task_executor_factory = lambda *args, **kwargs: __import__(
+            "quimera.app.core", fromlist=["create_executor"]
+        ).create_executor(*args, **kwargs)
     return app
 
 
@@ -1181,7 +1185,7 @@ class ProtocolTests(unittest.TestCase):
         app.parse_routing = lambda user: (AGENT_CLAUDE, "oi", False)
         app.parse_response = QuimeraApp.parse_response.__get__(app, QuimeraApp)
         app.shared_state = {}
-        app.print_response = lambda agent, response: printed.append((agent, response))
+        app.dispatch_services.print_response = lambda agent, response: printed.append((agent, response))
         app.session_services = Mock()
         app.session_services.persist_message = lambda role, content: persisted.append((role, content))
         app.read_user_input = Mock(side_effect=["mensagem", "/exit"])
@@ -1193,7 +1197,7 @@ class ProtocolTests(unittest.TestCase):
                 "codex fecha",
             ]
         )
-        app.call_agent = lambda agent, is_first_speaker=False, handoff=None, primary=True, protocol_mode="standard": next(responses)
+        app.dispatch_services.call_agent = lambda agent, is_first_speaker=False, handoff=None, primary=True, protocol_mode="standard": next(responses)
 
         app.run()
 
@@ -1245,7 +1249,7 @@ class ProtocolTests(unittest.TestCase):
         app.parse_routing = lambda user: (AGENT_CLAUDE, "oi", False)
         app.parse_response = QuimeraApp.parse_response.__get__(app, QuimeraApp)
         app.shared_state = {}
-        app.print_response = lambda agent, response: printed.append((agent, response))
+        app.dispatch_services.print_response = lambda agent, response: printed.append((agent, response))
         app.session_services = Mock()
         app.session_services.persist_message = lambda role, content: persisted.append((role, content))
         app.read_user_input = Mock(side_effect=["mensagem", "/exit"])
@@ -1271,7 +1275,7 @@ class ProtocolTests(unittest.TestCase):
             calls.append((agent, is_first_speaker, handoff, handoff_only, from_agent))
             return next(responses)
 
-        app.call_agent = fake_call
+        app.dispatch_services.call_agent = fake_call
 
         app.run()
 
@@ -1317,7 +1321,7 @@ class ProtocolTests(unittest.TestCase):
         app.parse_routing = lambda user: (AGENT_CLAUDE, "oi", True)
         app.parse_response = QuimeraApp.parse_response.__get__(app, QuimeraApp)
         app.shared_state = {}
-        app.print_response = lambda agent, response: printed.append((agent, response))
+        app.dispatch_services.print_response = lambda agent, response: printed.append((agent, response))
         app.session_services = Mock()
         app.session_services.persist_message = lambda role, content: persisted.append((role, content))
         app.read_user_input = Mock(side_effect=["/claude mensagem", "/exit"])
@@ -1343,7 +1347,7 @@ class ProtocolTests(unittest.TestCase):
             calls.append((agent, is_first_speaker, handoff, handoff_only, from_agent))
             return next(responses)
 
-        app.call_agent = fake_call
+        app.dispatch_services.call_agent = fake_call
 
         app.run()
 
@@ -1441,7 +1445,8 @@ class ProtocolTests(unittest.TestCase):
         app.task_services = Mock()
         app.task_services.refresh_task_shared_state = Mock()
         app.task_services.truncate_payload = lambda payload: payload
-        app.print_response = lambda agent, response: printed.append((agent, response))
+        app.dispatch_services.call_agent = app.call_agent
+        app.dispatch_services.print_response = lambda agent, response: printed.append((agent, response))
         app.session_services = Mock()
         app.session_services.persist_message = lambda role, content: persisted.append((role, content))
         app.read_user_input = Mock(side_effect=["mensagem", "/exit"])
@@ -1589,6 +1594,8 @@ class ProtocolTests(unittest.TestCase):
         app.session_summarizer = FakeSessionSummarizer()
         app.renderer = DummyRenderer()
         app.summary_agent_preference = "codex"
+        app.task_services = Mock()
+        app.task_services.stop_task_executors = Mock()
 
         AppSessionServices(app).shutdown()
 
@@ -1627,6 +1634,8 @@ class ProtocolTests(unittest.TestCase):
         app.renderer = DummyRenderer()
         app.summary_agent_preference = "ollama-qwen"
         app.agent_client = SimpleNamespace(_user_cancelled=False, _cancel_event=threading.Event())
+        app.task_services = Mock()
+        app.task_services.stop_task_executors = Mock()
 
         with patch("quimera.app.session.threading.Thread", FakeThread):
             AppSessionServices(app).shutdown()
@@ -2026,7 +2035,7 @@ class PluginTests(unittest.TestCase):
         printed = []
         app.session_services = Mock()
         app.session_services.persist_message = lambda role, content: persisted.append((role, content))
-        app.print_response = lambda agent, response: printed.append((agent, response))
+        app.dispatch_services.print_response = lambda agent, response: printed.append((agent, response))
 
         call_started = threading.Event()
         second_prompt_seen = threading.Event()
@@ -2044,7 +2053,7 @@ class PluginTests(unittest.TestCase):
             return "claude responde"
 
         app.read_user_input = Mock(side_effect=fake_read_user_input)
-        app.call_agent = fake_call_agent
+        app.dispatch_services.call_agent = fake_call_agent
 
         run_thread = threading.Thread(target=app.run)
         run_thread.start()
@@ -2440,8 +2449,8 @@ class PluginTests(unittest.TestCase):
             handlers[agent] = handler
             return FakeExecutor(handler)
 
-        app.call_agent = lambda *args, **kwargs: "resposta visivel da task"
-        app.show_system_message = lambda message: status_updates.append(message)
+        app.dispatch_services.call_agent = lambda *args, **kwargs: "resposta visivel da task"
+        app.system_layer.show_system_message = lambda message: status_updates.append(message)
         app.classify_task_execution_result = lambda response: (True, response)
 
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
@@ -2486,8 +2495,8 @@ class PluginTests(unittest.TestCase):
             handlers[agent] = handler
             return FakeExecutor(handler)
 
-        app.call_agent = lambda *args, **kwargs: "resposta visivel da task"
-        app.show_system_message = lambda message: status_updates.append(message)
+        app.dispatch_services.call_agent = lambda *args, **kwargs: "resposta visivel da task"
+        app.system_layer.show_system_message = lambda message: status_updates.append(message)
         app.classify_task_execution_result = lambda response: (True, response)
 
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
@@ -2536,8 +2545,8 @@ class PluginTests(unittest.TestCase):
             def __init__(self, supports_task_execution):
                 self.supports_task_execution = supports_task_execution
 
-        app.call_agent = lambda *args, **kwargs: "resposta visivel da task"
-        app.show_system_message = lambda message: status_updates.append(message)
+        app.dispatch_services.call_agent = lambda *args, **kwargs: "resposta visivel da task"
+        app.system_layer.show_system_message = lambda message: status_updates.append(message)
         app.classify_task_execution_result = lambda response: (True, response)
 
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
@@ -2591,8 +2600,8 @@ class PluginTests(unittest.TestCase):
             review_prompts.append(kwargs.get("handoff", ""))
             return "ACEITE\nResultado validado com evidência concreta."
 
-        app.call_agent = fake_call_agent
-        app.show_system_message = lambda message: status_updates.append(message)
+        app.dispatch_services.call_agent = fake_call_agent
+        app.system_layer.show_system_message = lambda message: status_updates.append(message)
 
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
                 "quimera.runtime.tasks.complete_task"
@@ -2641,8 +2650,8 @@ class PluginTests(unittest.TestCase):
             executor.agent = agent
             return executor
 
-        app.call_agent = lambda *args, **kwargs: None
-        app.show_system_message = lambda message: status_updates.append(message)
+        app.dispatch_services.call_agent = lambda *args, **kwargs: None
+        app.system_layer.show_system_message = lambda message: status_updates.append(message)
 
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
                 "quimera.runtime.tasks.update_task"
@@ -2683,8 +2692,8 @@ class PluginTests(unittest.TestCase):
             executor.agent = agent
             return executor
 
-        app.call_agent = lambda *args, **kwargs: "RETENTATIVA\nFaltou evidência de alteração no código."
-        app.show_system_message = lambda message: status_updates.append(message)
+        app.dispatch_services.call_agent = lambda *args, **kwargs: "RETENTATIVA\nFaltou evidência de alteração no código."
+        app.system_layer.show_system_message = lambda message: status_updates.append(message)
 
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
                 "quimera.runtime.tasks.requeue_task_after_review"
@@ -2748,8 +2757,8 @@ class PluginTests(unittest.TestCase):
             def __init__(self, supports_task_execution):
                 self.supports_task_execution = supports_task_execution
 
-        app.call_agent = fake_call_agent
-        app.show_system_message = lambda message: status_updates.append(message)
+        app.dispatch_services.call_agent = fake_call_agent
+        app.system_layer.show_system_message = lambda message: status_updates.append(message)
 
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
                 "quimera.app.task.plugins.get",
@@ -2812,8 +2821,8 @@ class PluginTests(unittest.TestCase):
         def fake_call_agent(*_args, **_kwargs):
             raise RuntimeError("timeout")
 
-        app.call_agent = fake_call_agent
-        app.show_system_message = lambda message: status_updates.append(message)
+        app.dispatch_services.call_agent = fake_call_agent
+        app.system_layer.show_system_message = lambda message: status_updates.append(message)
 
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
                 "quimera.app.task.plugins.get",
@@ -2947,8 +2956,8 @@ class PluginTests(unittest.TestCase):
             captured["kwargs"] = kwargs
             return "resposta visivel da task"
 
-        app.call_agent = fake_call_agent
-        app.show_system_message = lambda message: None
+        app.dispatch_services.call_agent = fake_call_agent
+        app.system_layer.show_system_message = lambda message: None
         app.classify_task_execution_result = lambda response: (True, response)
 
         task_body = (
@@ -3000,8 +3009,8 @@ class PluginTests(unittest.TestCase):
             handlers[agent] = handler
             return FakeExecutor(handler)
 
-        app.call_agent = lambda *args, **kwargs: None
-        app.show_system_message = lambda message: None
+        app.dispatch_services.call_agent = lambda *args, **kwargs: None
+        app.system_layer.show_system_message = lambda message: None
         app.classify_task_execution_result = lambda response: (True, response)
         app.record_failure = lambda agent: None
 
@@ -3038,8 +3047,8 @@ class PluginTests(unittest.TestCase):
             handlers[agent] = handler
             return FakeExecutor(handler)
 
-        app.call_agent = lambda *args, **kwargs: None
-        app.show_system_message = lambda message: None
+        app.dispatch_services.call_agent = lambda *args, **kwargs: None
+        app.system_layer.show_system_message = lambda message: None
         app.classify_task_execution_result = lambda response: (True, response)
         app.record_failure = lambda agent: None
 
@@ -3247,7 +3256,7 @@ class FallbackChainTests(unittest.TestCase):
         app.handle_command = lambda user: False
         app.parse_routing = lambda user: (AGENT_CLAUDE, "oi", False)
         app.parse_response = QuimeraApp.parse_response.__get__(app, QuimeraApp)
-        app.print_response = lambda agent, response: printed.append((agent, response))
+        app.dispatch_services.print_response = lambda agent, response: printed.append((agent, response))
         app.session_services = Mock()
         app.session_services.persist_message = lambda role, content: persisted.append((role, content))
 
@@ -3268,7 +3277,7 @@ class FallbackChainTests(unittest.TestCase):
             calls.append((agent, is_first_speaker, handoff, handoff_only, from_agent))
             return next(responses)
 
-        app.call_agent = fake_call
+        app.dispatch_services.call_agent = fake_call
 
         QuimeraApp._do_process_chat_message(app, "oi")
 
@@ -3308,7 +3317,7 @@ class FallbackChainTests(unittest.TestCase):
         app.parse_routing = lambda user: (AGENT_CLAUDE, "oi", False)
         app.parse_response = QuimeraApp.parse_response.__get__(app, QuimeraApp)
         app.shared_state = {}
-        app.print_response = lambda agent, response: printed.append((agent, response))
+        app.dispatch_services.print_response = lambda agent, response: printed.append((agent, response))
         app.session_services = Mock()
         app.session_services.persist_message = lambda role, content: persisted.append((role, content))
         app.read_user_input = Mock(side_effect=["mensagem", "/exit"])
@@ -3335,7 +3344,7 @@ class FallbackChainTests(unittest.TestCase):
             calls.append((agent, is_first_speaker, handoff, handoff_only, from_agent))
             return next(responses)
 
-        app.call_agent = fake_call
+        app.dispatch_services.call_agent = fake_call
         app.run()
 
         # Deve ter 4 chamadas: claude inicial, codex (falha), qwen (fallback), claude (síntese)

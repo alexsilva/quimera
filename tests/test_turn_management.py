@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock
 
+from quimera.app.chat_round import ChatRoundOrchestrator
 from quimera.app.core import QuimeraApp, TurnManager
 from quimera.constants import CMD_EXIT
 
@@ -42,10 +43,12 @@ def _make_app(active_agents=None):
 
     # Comportamento padrão: primeira chamada retorna resposta simples (sem handoff, sem extend)
     app.parse_routing = Mock(return_value=("claude", "olá", False))
-    app.call_agent = Mock(return_value="resposta")
     app.parse_response = Mock(return_value=("resposta", None, None, False, False, None))
-    app.print_response = Mock()
     app.session_services = Mock()
+    app.dispatch_services = Mock()
+    app.dispatch_services.call_agent = Mock(return_value="resposta")
+    app.dispatch_services.print_response = Mock()
+    app.chat_round_orchestrator = ChatRoundOrchestrator(app)
 
     return app
 
@@ -239,8 +242,8 @@ class TestSingleAgentPerTurn(unittest.TestCase):
         QuimeraApp._do_process_chat_message(app, "olá")
 
         # call_agent chamado exatamente uma vez (apenas para claude)
-        self.assertEqual(app.call_agent.call_count, 1)
-        first_call_agent = app.call_agent.call_args_list[0][0][0]
+        self.assertEqual(app.dispatch_services.call_agent.call_count, 1)
+        first_call_agent = app.dispatch_services.call_agent.call_args_list[0][0][0]
         self.assertEqual(first_call_agent, "claude")
 
     def test_explicit_prefix_only_that_agent_responds(self):
@@ -251,8 +254,8 @@ class TestSingleAgentPerTurn(unittest.TestCase):
 
         QuimeraApp._do_process_chat_message(app, "/codex revisa isso")
 
-        self.assertEqual(app.call_agent.call_count, 1)
-        self.assertEqual(app.call_agent.call_args_list[0][0][0], "codex")
+        self.assertEqual(app.dispatch_services.call_agent.call_count, 1)
+        self.assertEqual(app.dispatch_services.call_agent.call_args_list[0][0][0], "codex")
 
     def test_extend_mode_allows_alternation(self):
         """EXTEND_MARKER permite debate estendido: primeiro agente → segundo → primeiro → segundo."""
@@ -267,13 +270,13 @@ class TestSingleAgentPerTurn(unittest.TestCase):
             ("resposta4", None, None, False, False, None),  # codex
         ]
         app.parse_response = Mock(side_effect=responses)
-        app.call_agent = Mock(side_effect=["r1", "r2", "r3", "r4"])
+        app.dispatch_services.call_agent = Mock(side_effect=["r1", "r2", "r3", "r4"])
 
         QuimeraApp._do_process_chat_message(app, "debate isso")
 
         # 1 (first_agent) + 3 (remaining=[codex, claude, codex]) = 4 chamadas
-        self.assertEqual(app.call_agent.call_count, 4)
-        agents_called = [c[0][0] for c in app.call_agent.call_args_list]
+        self.assertEqual(app.dispatch_services.call_agent.call_count, 4)
+        agents_called = [c[0][0] for c in app.dispatch_services.call_agent.call_args_list]
         self.assertEqual(agents_called, ["claude", "codex", "claude", "codex"])
 
     def test_extend_with_explicit_prefix_still_single_agent(self):
@@ -285,7 +288,7 @@ class TestSingleAgentPerTurn(unittest.TestCase):
 
         QuimeraApp._do_process_chat_message(app, "/claude faz algo")
 
-        self.assertEqual(app.call_agent.call_count, 1)
+        self.assertEqual(app.dispatch_services.call_agent.call_count, 1)
 
     def test_handoff_triggers_secondary_agent(self):
         """[ROUTE:codex] no fluxo padrão ainda aciona o agente secundário."""
@@ -308,7 +311,7 @@ class TestSingleAgentPerTurn(unittest.TestCase):
             ("síntese", None, None, False, False, None),
         ]
         app.parse_response = Mock(side_effect=responses)
-        app.call_agent = Mock(side_effect=["r1", "r2", "r3"])
+        app.dispatch_services.call_agent = Mock(side_effect=["r1", "r2", "r3"])
 
         # behavior_metrics opcional
         app.behavior_metrics = None
@@ -316,8 +319,8 @@ class TestSingleAgentPerTurn(unittest.TestCase):
         QuimeraApp._do_process_chat_message(app, "analisa")
 
         # 3 chamadas: claude (primary) → codex (handoff) → claude (síntese)
-        self.assertEqual(app.call_agent.call_count, 3)
-        agents_called = [c[0][0] for c in app.call_agent.call_args_list]
+        self.assertEqual(app.dispatch_services.call_agent.call_count, 3)
+        agents_called = [c[0][0] for c in app.dispatch_services.call_agent.call_args_list]
         self.assertEqual(agents_called, ["claude", "codex", "claude"])
 
     def test_single_active_agent_works(self):
@@ -328,7 +331,7 @@ class TestSingleAgentPerTurn(unittest.TestCase):
 
         QuimeraApp._do_process_chat_message(app, "oi")
 
-        self.assertEqual(app.call_agent.call_count, 1)
+        self.assertEqual(app.dispatch_services.call_agent.call_count, 1)
 
     def test_needs_human_input_suspends_turn(self):
         """Quando agente sinaliza NEEDS_INPUT, o turno é suspenso e _pending_input_for é definido."""
@@ -339,7 +342,7 @@ class TestSingleAgentPerTurn(unittest.TestCase):
         QuimeraApp._do_process_chat_message(app, "pergunta")
 
         # Apenas o primeiro agente respondeu
-        self.assertEqual(app.call_agent.call_count, 1)
+        self.assertEqual(app.dispatch_services.call_agent.call_count, 1)
         # Turno suspenso: próxima fala do humano vai para claude
         self.assertEqual(app._pending_input_for, "claude")
 
@@ -357,8 +360,8 @@ class TestSingleAgentPerTurn(unittest.TestCase):
         QuimeraApp._do_process_chat_message(app, "primeira fala")
         QuimeraApp._do_process_chat_message(app, "segunda fala")
 
-        self.assertEqual(app.call_agent.call_count, 2)
-        agents_called = [c[0][0] for c in app.call_agent.call_args_list]
+        self.assertEqual(app.dispatch_services.call_agent.call_count, 2)
+        agents_called = [c[0][0] for c in app.dispatch_services.call_agent.call_args_list]
         self.assertEqual(agents_called, ["claude", "codex"])
 
 

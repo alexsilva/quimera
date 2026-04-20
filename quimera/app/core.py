@@ -469,10 +469,6 @@ class QuimeraApp:
         ok = bool(getattr(result, "ok", False))
         self.session_metrics.record_tool_event(self, agent, ok=ok, is_invalid=is_invalid, loop_abort=loop_abort)
 
-    def _refresh_task_shared_state(self) -> None:
-        """Compatibilidade para testes que ainda acessam o hook legado."""
-        self.task_services.refresh_task_shared_state()
-
     def resolve_agent_response(
             self,
             agent: str,

@@ -61,9 +61,7 @@ class AppSessionServices:
     def shutdown(self):
         """Finaliza a sessão tentando resumir o histórico no contexto persistente."""
         app = self.app
-        task_services = getattr(app, "task_services", None)
-        if task_services is not None:
-            task_services.stop_task_executors()
+        app.task_services.stop_task_executors()
         runtime_readline = app.readline if hasattr(app, "readline") else None
         if runtime_readline:
             try:

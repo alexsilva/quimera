@@ -57,10 +57,9 @@ class AppTaskServices:
     def setup_task_executors(self):
         """Inicializa executores assíncronos para tasks humanas."""
         app = self.app
-        task_executor_factory = getattr(app, "task_executor_factory", None)
-        if task_executor_factory is None:
-            from . import core as app_core
-            task_executor_factory = app_core.create_executor
+        task_executor_factory = app.task_executor_factory
+        dispatch_services = app.dispatch_services
+        system_layer = app.system_layer
 
         def is_operational_review_agent(agent_name):
             if agent_name not in (getattr(app, "active_agents", []) or []):
@@ -100,9 +99,9 @@ class AppTaskServices:
                     prompt = f"Execute a seguinte tarefa:\n\n{body}"
                     review_agents = review_agents_for(agent_name)
                     desc_preview = (description[:60] + "…") if len(description) > 60 else description
-                    app.show_system_message(f"[task {task_id}] {agent_name}: iniciando — {desc_preview}")
+                    system_layer.show_system_message(f"[task {task_id}] {agent_name}: iniciando — {desc_preview}")
 
-                    response = app.call_agent(
+                    response = dispatch_services.call_agent(
                         agent_name,
                         handoff=prompt,
                         handoff_only=True,
@@ -113,12 +112,12 @@ class AppTaskServices:
                     )
 
                     if getattr(app, "agent_client", None) and app.agent_client._user_cancelled:
-                        app.show_system_message(f"[task {task_id}] {agent_name}: cancelado pelo usuário")
+                        system_layer.show_system_message(f"[task {task_id}] {agent_name}: cancelado pelo usuário")
                         runtime_tasks.fail_task(task_id, reason="cancelled by user", db_path=app.tasks_db_path)
                         return False
 
                     if response is None:
-                        app.show_system_message(f"[task {task_id}] {agent_name}: sem resposta")
+                        system_layer.show_system_message(f"[task {task_id}] {agent_name}: sem resposta")
                         app.record_failure(agent_name)
                         if can_failover(task_id, agent_name):
                             runtime_tasks.requeue_task(task_id, agent_name, reason="communication failed", db_path=app.tasks_db_path)
@@ -126,10 +125,10 @@ class AppTaskServices:
                             runtime_tasks.fail_task(task_id, reason="communication failed", db_path=app.tasks_db_path)
                         return False
 
-                    app.show_system_message(f"[task {task_id}] {agent_name}:\n{strip_tool_block(response).strip()}")
+                    system_layer.show_system_message(f"[task {task_id}] {agent_name}:\n{strip_tool_block(response).strip()}")
                     ok, task_result = self.classify_task_execution_result(response)
                     if not ok:
-                        app.show_system_message(f"[task {task_id}] {agent_name}: bloqueada")
+                        system_layer.show_system_message(f"[task {task_id}] {agent_name}: bloqueada")
                         if can_failover(task_id, agent_name):
                             runtime_tasks.requeue_task(task_id, agent_name, reason=task_result, db_path=app.tasks_db_path)
                         else:
@@ -138,13 +137,13 @@ class AppTaskServices:
 
                     if review_agents:
                         runtime_tasks.submit_for_review(task_id, result=task_result, db_path=app.tasks_db_path)
-                        app.show_system_message(f"[task {task_id}] {agent_name}: aguardando review de outro agente")
+                        system_layer.show_system_message(f"[task {task_id}] {agent_name}: aguardando review de outro agente")
                     else:
                         runtime_tasks.complete_task(task_id, result=task_result, db_path=app.tasks_db_path)
-                        app.show_system_message(f"[task {task_id}] {agent_name}: concluída")
+                        system_layer.show_system_message(f"[task {task_id}] {agent_name}: concluída")
                     return True
                 except Exception as exc:
-                    app.show_system_message(f"[task {task_dict['id']}] {agent_name}: erro: {exc}")
+                    system_layer.show_system_message(f"[task {task_dict['id']}] {agent_name}: erro: {exc}")
                     if can_failover(task_dict["id"], agent_name):
                         runtime_tasks.requeue_task(task_dict["id"], agent_name, reason=str(exc), db_path=app.tasks_db_path)
                     else:
@@ -159,12 +158,12 @@ class AppTaskServices:
                     executor = task_dict.get("assigned_to")
                     if executor == agent_name:
                         runtime_tasks.update_task(task_id, "pending_review", db_path=app.tasks_db_path)
-                        app.show_system_message(f"[task {task_id}] {agent_name}: review rejeitado, aguardando outro agente")
+                        system_layer.show_system_message(f"[task {task_id}] {agent_name}: review rejeitado, aguardando outro agente")
                         return False
                     if executor:
-                        app.show_system_message(f"[task {task_id}] {agent_name}: revisando execução de {executor}")
+                        system_layer.show_system_message(f"[task {task_id}] {agent_name}: revisando execução de {executor}")
                     else:
-                        app.show_system_message(f"[task {task_id}] {agent_name}: revisando task")
+                        system_layer.show_system_message(f"[task {task_id}] {agent_name}: revisando task")
 
                     task_result = task_dict.get("result", "")
                     description = task_dict.get("description", "")
@@ -180,7 +179,7 @@ class AppTaskServices:
                         f"Escopo enviado:\n{body}\n\n"
                         f"Resultado do executor:\n{task_result}"
                     )
-                    response = app.call_agent(
+                    response = dispatch_services.call_agent(
                         agent_name,
                         handoff=review_prompt,
                         handoff_only=True,
@@ -191,11 +190,11 @@ class AppTaskServices:
                     )
 
                     if getattr(app, "agent_client", None) and app.agent_client._user_cancelled:
-                        app.show_system_message(f"[task {task_id}] {agent_name}: cancelado pelo usuário")
+                        system_layer.show_system_message(f"[task {task_id}] {agent_name}: cancelado pelo usuário")
                         runtime_tasks.fail_task(task_id, reason="cancelled by user", db_path=app.tasks_db_path)
                         return False
 
-                    app.show_system_message(f"[task {task_id}] {agent_name}:\n{response or ''}")
+                    system_layer.show_system_message(f"[task {task_id}] {agent_name}:\n{response or ''}")
                     accepted, verdict, review_text = self.classify_task_review_result(response)
                     if not accepted:
                         runtime_tasks.requeue_task_after_review(
@@ -205,7 +204,7 @@ class AppTaskServices:
                             notes=review_text,
                             db_path=app.tasks_db_path,
                         )
-                        app.show_system_message(f"[task {task_id}] {agent_name}: review pediu {verdict.lower()}, task voltou para pending")
+                        system_layer.show_system_message(f"[task {task_id}] {agent_name}: review pediu {verdict.lower()}, task voltou para pending")
                         return False
                     runtime_tasks.complete_task(
                         task_id,
@@ -213,10 +212,10 @@ class AppTaskServices:
                         reviewed_by=agent_name,
                         db_path=app.tasks_db_path,
                     )
-                    app.show_system_message(f"[task {task_id}] {agent_name}: review concluído")
+                    system_layer.show_system_message(f"[task {task_id}] {agent_name}: review concluído")
                     return True
                 except Exception as exc:
-                    app.show_system_message(f"[task {task_dict['id']}] {agent_name}: review falhou: {exc}")
+                    system_layer.show_system_message(f"[task {task_dict['id']}] {agent_name}: review falhou: {exc}")
                     if has_review_failover(task_dict.get("assigned_to"), agent_name):
                         runtime_tasks.update_task(
                             task_dict["id"],
@@ -519,4 +518,4 @@ class AppTaskServices:
         if selected_agent:
             lines.append(f"atribuída para {selected_agent}")
         lines.append(f"tipo inferido: {task_type}")
-        app.show_system_message(" | ".join(lines))
+        app.system_layer.show_system_message(" | ".join(lines))

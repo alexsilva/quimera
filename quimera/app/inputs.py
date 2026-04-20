@@ -50,15 +50,7 @@ def read_user_input(app, prompt, timeout: int, input_fn=input) -> str | None:
             if stdin.isatty():
                 app._nonblocking_input_status = "idle"
                 app._nonblocking_prompt_text = ""
-                system_layer = getattr(app, "system_layer", None)
-                if system_layer is not None:
-                    system_layer.flush_deferred_messages()
-                else:
-                    deferred = getattr(app, "_deferred_system_messages", None) or []
-                    if deferred and hasattr(app, "renderer"):
-                        for message in deferred:
-                            app.renderer.show_system(message)
-                        app._deferred_system_messages = []
+                app.system_layer.flush_deferred_messages()
                 return input_fn(prompt)
             if select.select([stdin], [], [], 0)[0]:
                 line = stdin.readline()
@@ -102,15 +94,7 @@ def read_user_input_nonblocking_tty(app, prompt: str, input_fn=input) -> str | N
     app._nonblocking_input_status = "idle"
     app._nonblocking_input_thread = None
     app._nonblocking_prompt_text = ""
-    system_layer = getattr(app, "system_layer", None)
-    if system_layer is not None:
-        system_layer.flush_deferred_messages()
-    else:
-        deferred = getattr(app, "_deferred_system_messages", None) or []
-        if deferred and hasattr(app, "renderer"):
-            for message in deferred:
-                app.renderer.show_system(message)
-            app._deferred_system_messages = []
+    app.system_layer.flush_deferred_messages()
     if status == "line":
         return value
     if status == "interrupt":
