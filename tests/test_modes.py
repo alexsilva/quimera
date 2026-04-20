@@ -208,3 +208,102 @@ class TestParseRoutingWithModes(unittest.TestCase):
         app._set_execution_mode(None)
         self.assertEqual(app.tool_executor.policy.blocked_tools, [])
         self.assertIsNone(app.execution_mode)
+
+    # --- novos: /modo sem texto retorna None como agente ---
+
+    def test_planning_alone_returns_none_agent(self):
+        app, _, _ = self._make_app()
+        with patch("quimera.app.core.plugins") as mp:
+            mp.get = lambda n: None
+            agent, msg, explicit = app.parse_routing("/planning")
+        self.assertIsNone(agent)
+        self.assertEqual(msg, "")
+        self.assertFalse(explicit)
+
+    def test_analysis_alone_returns_none_agent(self):
+        app, _, _ = self._make_app()
+        with patch("quimera.app.core.plugins") as mp:
+            mp.get = lambda n: None
+            agent, msg, explicit = app.parse_routing("/analysis")
+        self.assertIsNone(agent)
+
+    def test_design_alone_returns_none_agent(self):
+        app, _, _ = self._make_app()
+        with patch("quimera.app.core.plugins") as mp:
+            mp.get = lambda n: None
+            agent, _, _ = app.parse_routing("/design")
+        self.assertIsNone(agent)
+
+    def test_review_alone_returns_none_agent(self):
+        app, _, _ = self._make_app()
+        with patch("quimera.app.core.plugins") as mp:
+            mp.get = lambda n: None
+            agent, _, _ = app.parse_routing("/review")
+        self.assertIsNone(agent)
+
+    def test_execute_alone_returns_none_agent(self):
+        app, _, _ = self._make_app()
+        with patch("quimera.app.core.plugins") as mp:
+            mp.get = lambda n: None
+            agent, _, _ = app.parse_routing("/execute")
+        self.assertIsNone(agent)
+
+    def test_mode_with_text_routes_to_agent(self):
+        """Modo seguido de texto deve rotear normalmente (não retornar None)."""
+        app, _, _ = self._make_app()
+        mock_claude = MagicMock()
+        mock_claude.prefix = "/claude"
+        mock_claude.name = "claude"
+        mock_claude.aliases = []
+        mock_codex = MagicMock()
+        mock_codex.prefix = "/codex"
+        mock_codex.name = "codex"
+        mock_codex.aliases = []
+        app.active_agents = ["claude", "codex"]
+
+        with patch("quimera.app.core.plugins") as mp:
+            mp.get = lambda n: {"claude": mock_claude, "codex": mock_codex}.get(n)
+            with patch.object(app, "get_active_agent_plugins", return_value=[mock_claude, mock_codex]):
+                agent, msg, _ = app.parse_routing("/planning analisa o código")
+        self.assertIsNotNone(agent)
+        self.assertEqual(msg, "analisa o código")
+
+
+class TestBuildInputPrompt(unittest.TestCase):
+    """Testa _build_input_prompt: formato do prompt conforme modo ativo."""
+
+    def _make_app(self, mode_cmd=None, user_name="Você"):
+        from quimera.app.core import QuimeraApp
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.user_name = user_name
+        app.execution_mode = get_mode(mode_cmd) if mode_cmd else None
+        app._build_input_prompt = QuimeraApp._build_input_prompt.__get__(app, QuimeraApp)
+        return app
+
+    def test_no_mode_plain_prompt(self):
+        app = self._make_app()
+        self.assertEqual(app._build_input_prompt(), "Você: ")
+
+    def test_execute_mode_plain_prompt(self):
+        app = self._make_app("/execute")
+        self.assertEqual(app._build_input_prompt(), "Você: ")
+
+    def test_planning_shows_mode_label(self):
+        app = self._make_app("/planning")
+        self.assertEqual(app._build_input_prompt(), "Você [planning]: ")
+
+    def test_analysis_shows_mode_label(self):
+        app = self._make_app("/analysis")
+        self.assertEqual(app._build_input_prompt(), "Você [analysis]: ")
+
+    def test_design_shows_mode_label(self):
+        app = self._make_app("/design")
+        self.assertEqual(app._build_input_prompt(), "Você [design]: ")
+
+    def test_review_shows_mode_label(self):
+        app = self._make_app("/review")
+        self.assertEqual(app._build_input_prompt(), "Você [review]: ")
+
+    def test_custom_user_name(self):
+        app = self._make_app("/planning", user_name="Alex")
+        self.assertEqual(app._build_input_prompt(), "Alex [planning]: ")

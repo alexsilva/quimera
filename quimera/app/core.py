@@ -429,7 +429,7 @@ class QuimeraApp:
             self.renderer.show_system(mode_message)
             if not self.active_agents:
                 self.active_agents = self.selected_agents
-            return random.choice(self.active_agents), "", False
+            return None, "", False
 
         active_plugins = self.get_active_agent_plugins()
         for p in active_plugins:
@@ -516,6 +516,13 @@ class QuimeraApp:
     def print_response(self, agent, response):
         """Fachada compatível para renderização de respostas."""
         return self.dispatch_services.print_response(agent, response)
+
+    def _build_input_prompt(self) -> str:
+        """Retorna o texto do prompt de input conforme o modo ativo."""
+        mode = self.execution_mode
+        if mode is not None and mode.name != "execute":
+            return f"{self.user_name} [{mode.name}]: "
+        return f"{self.user_name}: "
 
     def read_user_input(self, prompt, timeout: int):
         """Fachada compatível para leitura de input."""
@@ -627,7 +634,7 @@ class QuimeraApp:
                     continue
                 self._turn_blocked_warning_shown = False
 
-                user = self.read_user_input(f"{self.user_name}: ", timeout=0)
+                user = self.read_user_input(self._build_input_prompt(), timeout=0)
                 if user is None:
                     if not sys.stdin.isatty():
                         break
