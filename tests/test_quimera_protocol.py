@@ -17,6 +17,7 @@ from quimera.app import QuimeraApp
 from quimera.app.chat_round import ChatRoundOrchestrator
 from quimera.app.core import TurnManager
 from quimera.app.dispatch import AppDispatchServices
+from quimera.app.inputs import AppInputServices
 from quimera.app.session import AppSessionServices
 from quimera.app.system_layer import AppSystemLayer
 from quimera.app.task import AppTaskServices
@@ -98,6 +99,22 @@ class DummyStorage:
 
     def load_last_session(self):
         return {"messages": [], "shared_state": {}}
+
+
+def materialize_internal_services(app):
+    if not hasattr(app, "protocol"):
+        app.protocol = AppProtocol(app)
+    if not hasattr(app, "task_services"):
+        app.task_services = AppTaskServices(app)
+    if not hasattr(app, "dispatch_services"):
+        app.dispatch_services = AppDispatchServices(app)
+    if not hasattr(app, "input_services"):
+        app.input_services = AppInputServices(app, input_resolver=lambda: input)
+    if not hasattr(app, "system_layer"):
+        app.system_layer = AppSystemLayer(app)
+    if not hasattr(app, "chat_round_orchestrator"):
+        app.chat_round_orchestrator = ChatRoundOrchestrator(app)
+    return app
 
 
 class ProtocolTests(unittest.TestCase):
@@ -1139,6 +1156,7 @@ class ProtocolTests(unittest.TestCase):
 
     def test_run_uses_four_turns_when_extended(self):
         app = QuimeraApp.__new__(QuimeraApp)
+        materialize_internal_services(app)
         app.history = []
         app.user_name = "Você"
         app.round_index = 0
@@ -1201,6 +1219,7 @@ class ProtocolTests(unittest.TestCase):
 
     def test_run_passes_handoff_to_target_agent(self):
         app = QuimeraApp.__new__(QuimeraApp)
+        materialize_internal_services(app)
         app.history = []
         app.user_name = "Você"
         app.round_index = 0
@@ -1272,6 +1291,7 @@ class ProtocolTests(unittest.TestCase):
 
     def test_run_passes_handoff_even_with_explicit_prefix(self):
         app = QuimeraApp.__new__(QuimeraApp)
+        materialize_internal_services(app)
         app.history = []
         app.user_name = "Você"
         app.round_index = 0
@@ -1367,6 +1387,7 @@ class ProtocolTests(unittest.TestCase):
                 return True
 
         app = QuimeraApp.__new__(QuimeraApp)
+        materialize_internal_services(app)
         app.history = []
         app.user_name = "Você"
         app.round_index = 0
@@ -1935,6 +1956,7 @@ class PluginTests(unittest.TestCase):
     def test_parallel_threads_calls_agents_concurrently(self):
         # Testa que o método _call_agent_for_parallel retorna tupla correta
         app = QuimeraApp.__new__(QuimeraApp)
+        materialize_internal_services(app)
         app.threads = 2
         app.active_agents = ["agent1", "agent2"]
         app.debug_prompt_metrics = False
@@ -1978,6 +2000,7 @@ class PluginTests(unittest.TestCase):
 
     def test_run_thread_mode_accepts_new_human_input_while_agent_is_running(self):
         app = QuimeraApp.__new__(QuimeraApp)
+        materialize_internal_services(app)
         app.history = []
         app.user_name = "Você"
         app.round_index = 0
@@ -2059,6 +2082,7 @@ class PluginTests(unittest.TestCase):
 
     def test_read_user_input_zero_timeout_tty_uses_blocking_input_path(self):
         app = QuimeraApp.__new__(QuimeraApp)
+        materialize_internal_services(app)
         app.renderer = DummyRenderer()
         app._deferred_system_messages = []
         app._nonblocking_prompt_visible = False
@@ -2077,6 +2101,7 @@ class PluginTests(unittest.TestCase):
 
     def test_read_user_input_zero_timeout_tty_flushes_deferred_messages_before_prompt(self):
         app = QuimeraApp.__new__(QuimeraApp)
+        materialize_internal_services(app)
         app.renderer = DummyRenderer()
         app._deferred_system_messages = ["[task 7] claude:\nresultado final"]
         app._nonblocking_prompt_visible = False
@@ -2100,6 +2125,7 @@ class PluginTests(unittest.TestCase):
 
     def test_read_user_input_zero_timeout_tty_raises_keyboard_interrupt(self):
         app = QuimeraApp.__new__(QuimeraApp)
+        materialize_internal_services(app)
         app.renderer = DummyRenderer()
         app._deferred_system_messages = []
         app._nonblocking_prompt_visible = False
@@ -2116,6 +2142,7 @@ class PluginTests(unittest.TestCase):
 
     def test_show_system_message_suppresses_transient_task_status_while_tty_reader_is_active(self):
         app = QuimeraApp.__new__(QuimeraApp)
+        materialize_internal_services(app)
         app.renderer = DummyRenderer()
         app._output_lock = threading.Lock()
         app._deferred_system_messages = []
@@ -2135,6 +2162,7 @@ class PluginTests(unittest.TestCase):
 
     def test_show_system_message_redraws_human_prompt_with_user_name_for_task_error_text(self):
         app = QuimeraApp.__new__(QuimeraApp)
+        materialize_internal_services(app)
         app.renderer = DummyRenderer()
         app._output_lock = threading.Lock()
         app._deferred_system_messages = []
@@ -2175,6 +2203,7 @@ class PluginTests(unittest.TestCase):
 
     def test_show_system_message_defers_multiline_review_message_while_tty_reader_is_active(self):
         app = QuimeraApp.__new__(QuimeraApp)
+        materialize_internal_services(app)
         app._output_lock = threading.Lock()
         app._deferred_system_messages = []
         app._nonblocking_input_status = "reading"
@@ -2253,6 +2282,7 @@ class PluginTests(unittest.TestCase):
 
     def test_show_system_message_clears_prompt_only_once_before_redisplay(self):
         app = QuimeraApp.__new__(QuimeraApp)
+        materialize_internal_services(app)
         app.renderer = DummyRenderer()
         app._output_lock = threading.Lock()
         app._deferred_system_messages = []
@@ -2272,6 +2302,7 @@ class PluginTests(unittest.TestCase):
 
     def test_print_response_clears_prompt_before_agent_output_and_redisplays_once(self):
         app = QuimeraApp.__new__(QuimeraApp)
+        materialize_internal_services(app)
         app._output_lock = threading.Lock()
         app._deferred_system_messages = []
         app._nonblocking_input_status = "reading"
@@ -2294,6 +2325,7 @@ class PluginTests(unittest.TestCase):
 
     def test_show_system_message_defers_task_output_while_tty_reader_is_active(self):
         app = QuimeraApp.__new__(QuimeraApp)
+        materialize_internal_services(app)
         app.renderer = DummyRenderer()
         app._output_lock = threading.Lock()
         app._deferred_system_messages = []
@@ -2388,6 +2420,7 @@ class PluginTests(unittest.TestCase):
 
     def test_task_handler_prints_and_persists_agent_response(self):
         app = QuimeraApp.__new__(QuimeraApp)
+        materialize_internal_services(app)
         app.active_agents = [AGENT_CLAUDE]
         app.tasks_db_path = "/tmp/quimera-tasks-test.db"
         status_updates = []
@@ -2433,6 +2466,7 @@ class PluginTests(unittest.TestCase):
 
     def test_task_handler_marks_task_waiting_for_review_from_another_agent(self):
         app = QuimeraApp.__new__(QuimeraApp)
+        materialize_internal_services(app)
         app.active_agents = [AGENT_CLAUDE, AGENT_GEMINI]
         app.tasks_db_path = "/tmp/quimera-tasks-test.db"
         status_updates = []
@@ -2478,6 +2512,7 @@ class PluginTests(unittest.TestCase):
 
     def test_task_handler_completes_when_no_other_operational_reviewer_exists(self):
         app = QuimeraApp.__new__(QuimeraApp)
+        materialize_internal_services(app)
         app.active_agents = [AGENT_CLAUDE, AGENT_GEMINI]
         app.tasks_db_path = "/tmp/quimera-tasks-test.db"
         status_updates = []
@@ -2530,6 +2565,7 @@ class PluginTests(unittest.TestCase):
 
     def test_review_handler_prints_review_progress_and_completion(self):
         app = QuimeraApp.__new__(QuimeraApp)
+        materialize_internal_services(app)
         app.active_agents = [AGENT_CLAUDE, AGENT_GEMINI]
         app.tasks_db_path = "/tmp/quimera-tasks-test.db"
         status_updates = []
@@ -2584,6 +2620,7 @@ class PluginTests(unittest.TestCase):
 
     def test_review_handler_reports_rejected_self_review(self):
         app = QuimeraApp.__new__(QuimeraApp)
+        materialize_internal_services(app)
         app.active_agents = [AGENT_CLAUDE, AGENT_GEMINI]
         app.tasks_db_path = "/tmp/quimera-tasks-test.db"
         status_updates = []
@@ -2625,6 +2662,7 @@ class PluginTests(unittest.TestCase):
 
     def test_review_handler_returns_task_to_pending_on_retentativa(self):
         app = QuimeraApp.__new__(QuimeraApp)
+        materialize_internal_services(app)
         app.active_agents = [AGENT_CLAUDE, AGENT_GEMINI]
         app.tasks_db_path = "/tmp/quimera-tasks-test.db"
         status_updates = []
@@ -2682,6 +2720,7 @@ class PluginTests(unittest.TestCase):
 
     def test_review_handler_returns_task_to_pending_review_on_failure(self):
         app = QuimeraApp.__new__(QuimeraApp)
+        materialize_internal_services(app)
         app.active_agents = [AGENT_CLAUDE, AGENT_GEMINI, AGENT_CODEX]
         app.tasks_db_path = "/tmp/quimera-tasks-test.db"
         status_updates = []
@@ -2742,6 +2781,7 @@ class PluginTests(unittest.TestCase):
 
     def test_review_handler_fails_when_no_other_operational_reviewer_exists(self):
         app = QuimeraApp.__new__(QuimeraApp)
+        materialize_internal_services(app)
         app.active_agents = [AGENT_CLAUDE, AGENT_GEMINI]
         app.tasks_db_path = "/tmp/quimera-tasks-test.db"
         status_updates = []
@@ -2803,6 +2843,7 @@ class PluginTests(unittest.TestCase):
 
     def test_setup_task_executors_only_registers_review_for_operational_agents(self):
         app = QuimeraApp.__new__(QuimeraApp)
+        materialize_internal_services(app)
         app.active_agents = [AGENT_CLAUDE, AGENT_GEMINI]
         app.tasks_db_path = "/tmp/quimera-tasks-test.db"
         review_handlers = {}
@@ -2843,6 +2884,7 @@ class PluginTests(unittest.TestCase):
 
     def test_review_eligibility_tracks_operational_agent_state_dynamically(self):
         app = QuimeraApp.__new__(QuimeraApp)
+        materialize_internal_services(app)
         app.active_agents = [AGENT_CLAUDE, AGENT_GEMINI]
         app.tasks_db_path = "/tmp/quimera-tasks-test.db"
         review_eligibility = {}
@@ -2880,6 +2922,7 @@ class PluginTests(unittest.TestCase):
 
     def test_task_handler_executes_with_serialized_chat_context_in_body(self):
         app = QuimeraApp.__new__(QuimeraApp)
+        materialize_internal_services(app)
         app.active_agents = [AGENT_CLAUDE]
         app.tasks_db_path = "/tmp/quimera-tasks-test.db"
         handlers = {}
@@ -2938,6 +2981,7 @@ class PluginTests(unittest.TestCase):
 
     def test_task_handler_requeues_failed_execution_for_other_agent(self):
         app = QuimeraApp.__new__(QuimeraApp)
+        materialize_internal_services(app)
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
         app.tasks_db_path = "/tmp/quimera-tasks-test.db"
         handlers = {}
@@ -2975,6 +3019,7 @@ class PluginTests(unittest.TestCase):
 
     def test_task_handler_fails_when_all_other_agents_already_failed(self):
         app = QuimeraApp.__new__(QuimeraApp)
+        materialize_internal_services(app)
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
         app.tasks_db_path = "/tmp/quimera-tasks-test.db"
         handlers = {}
@@ -3175,6 +3220,7 @@ class FallbackChainTests(unittest.TestCase):
     def test_first_agent_failover_to_another_agent(self):
         """Quando o primeiro agente não responde, outro agente deve assumir a rodada."""
         app = QuimeraApp.__new__(QuimeraApp)
+        materialize_internal_services(app)
         app.history = []
         app.user_name = "Você"
         app.round_index = 0
@@ -3236,6 +3282,7 @@ class FallbackChainTests(unittest.TestCase):
     def test_fallback_tries_next_agent_when_secondary_fails(self):
         """Quando o agente secundário não responde, o sistema deve tentar o próximo disponível."""
         app = QuimeraApp.__new__(QuimeraApp)
+        materialize_internal_services(app)
         app.history = []
         app.user_name = "Você"
         app.round_index = 0

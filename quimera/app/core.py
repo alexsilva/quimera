@@ -311,50 +311,11 @@ class QuimeraApp:
 
     def _setup_task_executors(self):
         """Set up task executors for explicit human-created task execution."""
-        self._task_services().setup_task_executors()
+        self.task_services.setup_task_executors()
 
     def _stop_task_executors(self):
         """Executa stop task executors."""
-        self._task_services().stop_task_executors()
-
-    def _task_services(self):
-        """Retorna o serviço de task, criando sob demanda para compatibilidade."""
-        if not hasattr(self, "task_services"):
-            self.task_services = AppTaskServices(self)
-        return self.task_services
-
-    def _dispatch_services(self):
-        """Retorna o serviço de dispatch, criando sob demanda para compatibilidade."""
-        if not hasattr(self, "dispatch_services"):
-            self.dispatch_services = AppDispatchServices(self)
-        return self.dispatch_services
-
-    def _input_services(self):
-        """Retorna o serviço de input, criando sob demanda para compatibilidade."""
-        if not hasattr(self, "input_services"):
-            self.input_services = AppInputServices(
-                self,
-                input_resolver=lambda: input,
-            )
-        return self.input_services
-
-    def _system_layer(self):
-        """Retorna a system layer, criando sob demanda para compatibilidade."""
-        if not hasattr(self, "system_layer"):
-            self.system_layer = AppSystemLayer(self)
-        return self.system_layer
-
-    def _chat_round_orchestrator(self):
-        """Retorna o orquestrador de rodada, criando sob demanda para compatibilidade."""
-        if not hasattr(self, "chat_round_orchestrator"):
-            self.chat_round_orchestrator = ChatRoundOrchestrator(self)
-        return self.chat_round_orchestrator
-
-    def _protocol(self):
-        """Retorna o protocolo, criando sob demanda para compatibilidade."""
-        if not hasattr(self, "protocol"):
-            self.protocol = AppProtocol(self)
-        return self.protocol
+        self.task_services.stop_task_executors()
 
     def _redisplay_user_prompt_if_needed(self, clear_first: bool = True) -> None:
         """Executa redisplay user prompt if needed."""
@@ -492,7 +453,7 @@ class QuimeraApp:
 
     def _apply_state_update(self, block_content):
         """Executa apply state update."""
-        return self._protocol().apply_state_update(block_content)
+        return self.protocol.apply_state_update(block_content)
 
     MAX_RETRIES = 2
     RETRY_BACKOFF_SECONDS = 1
@@ -510,7 +471,7 @@ class QuimeraApp:
 
     def _refresh_task_shared_state(self) -> None:
         """Compatibilidade para testes que ainda acessam o hook legado."""
-        self._task_services().refresh_task_shared_state()
+        self.task_services.refresh_task_shared_state()
 
     def resolve_agent_response(
             self,
@@ -521,7 +482,7 @@ class QuimeraApp:
             show_output: bool = True,
     ) -> str | None:
         """Fachada compatível para resolução de respostas com tools."""
-        return self._dispatch_services().resolve_agent_response(
+        return self.dispatch_services.resolve_agent_response(
             agent,
             response,
             silent=silent,
@@ -544,27 +505,27 @@ class QuimeraApp:
                 persist_history=persist_history,
                 show_output=show_output,
             )
-        return self._dispatch_services().call_agent(agent, **options)
+        return self.dispatch_services.call_agent(agent, **options)
 
     def print_response(self, agent, response):
         """Fachada compatível para renderização de respostas."""
-        return self._dispatch_services().print_response(agent, response)
+        return self.dispatch_services.print_response(agent, response)
 
     def read_user_input(self, prompt, timeout: int):
         """Fachada compatível para leitura de input."""
-        return self._input_services().read_user_input(prompt, timeout)
+        return self.input_services.read_user_input(prompt, timeout)
 
     def handle_command(self, user_input: str) -> bool:
         """Fachada compatível para comandos slash."""
-        return self._system_layer().handle_command(user_input)
+        return self.system_layer.handle_command(user_input)
 
     def show_system_message(self, message: str) -> None:
         """Fachada compatível para mensagens de sistema."""
-        self._system_layer().show_system_message(message)
+        self.system_layer.show_system_message(message)
 
     def _do_process_chat_message(self, user):
         """Fachada compatível para a implementação da rodada de chat."""
-        self._chat_round_orchestrator().process(user)
+        self.chat_round_orchestrator.process(user)
 
     @staticmethod
     def _generate_handoff_id(task, target, timestamp=None):
@@ -573,11 +534,11 @@ class QuimeraApp:
 
     def parse_handoff_payload(self, payload, target=None):
         """Interpreta handoff payload."""
-        return self._protocol().parse_handoff_payload(payload, target=target)
+        return self.protocol.parse_handoff_payload(payload, target=target)
 
     def parse_response(self, response):
         """Interpreta response."""
-        return self._protocol().parse_response(response)
+        return self.protocol.parse_response(response)
 
     def _call_agent_for_parallel(self, agent, handoff, protocol_mode, staging_root, index):
         """Executa call_agent e retorna tupla (agent, response, route_target, handoff, extend, needs_input)."""
@@ -681,14 +642,14 @@ class QuimeraApp:
                     break
 
                 if user.strip() == CMD_EDIT:
-                    content = self._input_services().read_from_editor()
+                    content = self.input_services.read_from_editor()
                     if not content:
                         continue
                     user = content
 
                 elif user.strip().startswith(CMD_FILE_PREFIX):
                     path_str = user.strip()[len(CMD_FILE_PREFIX):]
-                    content = self._input_services().read_from_file(path_str)
+                    content = self.input_services.read_from_file(path_str)
                     if not content:
                         continue
                     user = content
