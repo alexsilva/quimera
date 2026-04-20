@@ -1,4 +1,8 @@
-"""Componentes de `quimera.app.__init__`."""
-from .config import logger  # noqa: F401
-from .core import QuimeraApp  # noqa: F401
-from .handlers import PromptAwareStderrHandler  # noqa: F401
+"""Superfície pública estável do pacote ``quimera.app``."""
+
+from .config import logger
+from .core import QuimeraApp
+from .handlers import PromptAwareStderrHandler
+
+# Keep package-level exports limited to the supported public API.
+__all__ = ["QuimeraApp", "logger", "PromptAwareStderrHandler"]
