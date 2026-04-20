@@ -50,6 +50,8 @@ class TestExecutionMode(unittest.TestCase):
         self.assertFalse(mode.read_only_fs)
         self.assertTrue(mode.allow_network)
         self.assertEqual(mode.blocked_tools, [])
+        self.assertIn("não muda a intenção", mode.prompt_addon.lower())
+        self.assertIn("se o humano pedir análise, analise", mode.prompt_addon.lower())
 
     def test_design_review_are_read_only_with_network(self):
         for cmd in ["/design", "/review"]:

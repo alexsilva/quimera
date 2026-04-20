@@ -66,7 +66,12 @@ MODES: dict[str, ExecutionMode] = {
         read_only_fs=False,
         allow_network=True,
         blocked_tools=[],
-        prompt_addon="",
+        prompt_addon=(
+            "[MODO: EXECUÇÃO] Ferramentas de escrita e execução estão liberadas. "
+            "Isso amplia permissões, mas não muda a intenção do pedido do humano. "
+            "Se o humano pedir análise, analise; só implemente ou execute mudanças "
+            "quando isso for solicitado explicitamente."
+        ),
     ),
 }
 
