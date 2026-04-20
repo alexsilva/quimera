@@ -42,6 +42,7 @@ from ..constants import (
     CMD_PROMPT, CMD_TASK,
     MSG_CHAT_STARTED, MSG_SESSION_LOG, MSG_SESSION_STATUS, MSG_MIGRATION,
     MSG_SHUTDOWN, MSG_DOUBLE_PREFIX,
+    Visibility,
 )
 from ..modes import MODES, get_mode
 from .config import logger
@@ -58,7 +59,7 @@ class QuimeraApp:
                  threads: int = 1,
                  timeout: int | None = None,
                  idle_timeout_seconds: int | None = None,
-                 spy: bool = False,
+                 visibility: Visibility = Visibility.SUMMARY,
                  theme: str | None = None,
                  workspace: Workspace | None = None,
                  ):
@@ -73,7 +74,7 @@ class QuimeraApp:
         _active_theme = theme if theme is not None else self.config.theme
         self.renderer = TerminalRenderer(theme=_active_theme, get_plugin_style=self._resolve_plugin_style)
         self.user_name = self.config.user_name
-        self.spy = spy
+        self.visibility = Visibility(visibility)
         self.system_layer = AppSystemLayer(self)
         self.protocol = AppProtocol(self, decisions_log_path=self.workspace.decisions_log)
         self.session_metrics = SessionMetricsService()
@@ -115,7 +116,7 @@ class QuimeraApp:
             self.renderer,
             metrics_file=metrics_file,
             timeout=timeout,
-            spy=self.spy,
+            visibility=self.visibility,
             working_dir=str(self.workspace.cwd),
         )
         self.task_executor_factory = create_executor
@@ -519,7 +520,7 @@ class QuimeraApp:
 
     def _build_input_prompt(self) -> str:
         """Retorna o texto do prompt de input conforme o modo ativo."""
-        mode = self.execution_mode
+        mode = getattr(self, "execution_mode", None)
         if mode is not None and mode.name != "execute":
             return f"{self.user_name} [{mode.name}]: "
         return f"{self.user_name}: "

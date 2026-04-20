@@ -12,7 +12,7 @@ from contextlib import nullcontext
 from datetime import datetime, timezone
 
 import quimera.plugins as plugins
-from quimera.constants import MAX_STDERR_LINES
+from quimera.constants import MAX_STDERR_LINES, Visibility
 from quimera.sandbox.bwrap import build_bwrap_cmd
 from .runtime.drivers.openai_compat import OpenAICompatDriver
 
@@ -37,21 +37,26 @@ def _strip_spinner(text: str) -> str:
 
 def _should_ignore_stderr_line(agent: str | None, line: str) -> bool:
     """Filtra ruído conhecido de stderr que não representa erro real."""
+    if not agent:
+        return False
+    plugin = plugins.get(agent)
+    if not plugin or not plugin.stderr_noise:
+        return False
     cleaned = _ANSI_ESCAPE.sub("", _strip_spinner(line)).replace("\r", "").strip()
-    return agent == "codex" and cleaned == "Reading additional input from stdin..."
+    return cleaned in plugin.stderr_noise
 
 
 class AgentClient:
     """Executa os agentes externos no diretório de trabalho do projeto."""
 
-    def __init__(self, renderer, metrics_file=None, timeout=None, spy=False, working_dir=None, workspace_root=None,
-                 tool_executor=None):
+    def __init__(self, renderer, metrics_file=None, timeout=None, visibility=Visibility.SUMMARY,
+                 working_dir=None, workspace_root=None, tool_executor=None):
         """Inicializa uma instância de AgentClient."""
         self.renderer = renderer
         self.metrics_file = metrics_file
         self._metrics_lock = threading.Lock()
         self.timeout = timeout
-        self.spy = spy
+        self.visibility = Visibility(visibility)
         # `workspace_root` é mantido como alias compatível.
         self.working_dir = working_dir if working_dir is not None else workspace_root
         # Injetado de app.py após criação do ToolExecutor; usado pelos drivers de API.
@@ -65,6 +70,11 @@ class AgentClient:
         self._user_cancelled = False
         self._agent_running = False
         self._current_proc = None
+        self._last_spy_message = None
+        self._pending_spy_message = None
+        # Status transitório ativo durante run(); usado para redirecionar eventos contexto:.
+        self._current_status = None
+        self._current_status_label = ""
 
     def _format_spy_stdout(self, agent: str | None, line: str) -> list[str]:
         """Delega resumo de stdout ao plugin quando ele expõe esse hook."""
@@ -72,9 +82,91 @@ class AgentClient:
             return []
         plugin = plugins.get(agent)
         formatter = getattr(plugin, "spy_stdout_formatter", None) if plugin else None
-        if not callable(formatter):
+        if callable(formatter):
+            return formatter(line)
+        # Fallback genérico: exibe a linha bruta (truncada) para agentes sem formatter
+        text = line.strip()
+        if not text:
             return []
-        return formatter(line)
+        if len(text) > 200:
+            text = text[:197] + "..."
+        return [text]
+
+    def _show_formatted_stdout(self, agent: str | None, line: str) -> bool:
+        """Exibe mensagens resumidas de stdout quando o plugin oferece formatter."""
+        messages = self._format_spy_stdout(agent, line)
+        for message in messages:
+            self._emit_spy_message(agent, message)
+        return bool(messages)
+
+    def _emit_spy_message(self, agent: str | None, message: str) -> None:
+        """Compacta mensagens consecutivas no modo SUMMARY sem perder conteúdo."""
+        if self.visibility != Visibility.SUMMARY:
+            self._show_spy_message(agent, message)
+            return
+
+        if message == "clear":
+            self._flush_pending_spy_message(agent)
+            return
+
+        if message.startswith("ferramenta: "):
+            self._flush_pending_spy_message(agent)
+            payload = message[len("ferramenta: "):].strip()
+            if payload.startswith(("✓ ", "✗ ")):
+                self._show_spy_message(agent, message)
+                self._current_status_label = ""
+                if self._current_status is not None:
+                    self._current_status.update("")
+                return
+
+            self._current_status_label = payload
+            if self._current_status is not None:
+                self._current_status.update(f"[dim]{payload}[/dim]")
+            return
+
+        # Eventos de contexto são transitórios: atualizam apenas o spinner.
+        if message.startswith("contexto: "):
+            self._flush_pending_spy_message(agent)
+            label = message[len("contexto: "):]
+            self._current_status_label = label
+            if self._current_status is not None:
+                self._current_status.update(f"[dim]{label}[/dim]")
+            else:
+                self._show_spy_message(agent, message)
+            return
+
+        if not message.startswith("resposta: "):
+            self._flush_pending_spy_message(agent)
+            self._show_spy_message(agent, message)
+            return
+
+        payload = message[len("resposta: "):].strip()
+        if not payload:
+            return
+
+        self._flush_pending_spy_message(agent)
+        self._show_spy_message(agent, message)
+
+    def _flush_pending_spy_message(self, agent: str | None) -> None:
+        """Emite a mensagem agrupada pendente, se existir."""
+        if self._pending_spy_message is None:
+            return
+        self._show_spy_message(agent, self._pending_spy_message)
+        self._pending_spy_message = None
+
+    def _show_spy_message(self, agent: str | None, message: str) -> None:
+        """Mostra uma mensagem já formatada, evitando duplicatas consecutivas."""
+        if message != "clear" and message == self._last_spy_message:
+            return
+        rendered = message
+        if message.startswith("contexto: "):
+            rendered = message[len("contexto: "):]
+        elif message.startswith("ferramenta: "):
+            rendered = message[len("ferramenta: "):]
+        elif message.startswith("resposta: "):
+            rendered = message[len("resposta: "):]
+        self.renderer.show_plain(rendered, agent=agent)
+        self._last_spy_message = message
 
     def run(self, cmd, input_text=None, silent=False, agent=None, show_status=True):
         """Executa run."""
@@ -113,13 +205,14 @@ class AgentClient:
         last_activity_time = time.time()
         log_queue = queue.Queue() if not silent else None
         stderr_lines_shown = 0  # Contador de linhas de stderr exibidas
+        self._last_spy_message = None
 
         def _read_stdout():
             try:
                 if proc.stdout:
                     for line in proc.stdout:
                         result_holder["stdout"].append(line)
-                        if log_queue is not None and self.spy:
+                        if log_queue is not None and self.visibility in {Visibility.SUMMARY, Visibility.FULL}:
                             log_queue.put(("stdout", line))
                         nonlocal last_activity_time
                         last_activity_time = time.time()
@@ -171,26 +264,32 @@ class AgentClient:
 
                 status_cm = self.renderer.running_status("", agent=agent) if show_status else nullcontext(None)
 
+                if self.visibility == Visibility.SUMMARY:
+                    self.renderer.show_plain(f"→ {cmd[0]} iniciando...", agent=agent)
+
                 with status_cm as status:
+                    self._current_status = status
+                    self._current_status_label = ""
                     while stdout_thread.is_alive() or stderr_thread.is_alive() or not log_queue.empty():
                         # Consume log queue in main thread (thread-safe)
                         while not log_queue.empty():
                             try:
                                 stream_type, line = log_queue.get_nowait()
                                 if status is not None:
-                                    status.update(f"[dim]executing {cmd[0]}... {elapsed}s[/dim]")
+                                    _lbl = self._current_status_label or cmd[0]
+                                    status.update(f"[dim]{_lbl}... {elapsed}s[/dim]")
                                 # Limita o número de linhas de stderr exibidas
                                 cleaned = _strip_spinner(line.rstrip("\n"))
                                 if not cleaned.strip():
                                     continue
                                 if stream_type == "stdout":
-                                    if self.spy:
-                                        for message in self._format_spy_stdout(agent, cleaned):
-                                            self.renderer.show_plain(message, agent=agent)
+                                    if self.visibility in {Visibility.SUMMARY, Visibility.FULL}:
+                                        self._show_formatted_stdout(agent, cleaned)
                                     continue
+                                self._flush_pending_spy_message(agent)
                                 if stream_type == "stderr" and _should_ignore_stderr_line(agent, line):
                                     continue
-                                if stream_type == "stderr" and not self.spy:
+                                if stream_type == "stderr" and self.visibility != Visibility.FULL:
                                     if stderr_lines_shown < MAX_STDERR_LINES:
                                         self.renderer.show_plain(cleaned, agent=agent)
                                         stderr_lines_shown += 1
@@ -203,7 +302,8 @@ class AgentClient:
                             except queue.Empty:
                                 break
                         if status is not None:
-                            status.update(f"[dim]executing {cmd[0]}... {elapsed}s[/dim]")
+                            _lbl = self._current_status_label or cmd[0]
+                            status.update(f"[dim]{_lbl}... {elapsed}s[/dim]")
                         if self._cancel_event.is_set():
                             self._terminate_process_group(proc)
                             stdout_thread.join(2)
@@ -237,14 +337,14 @@ class AgentClient:
                         if not cleaned.strip():
                             continue
                         if stream_type == "stdout":
-                            if self.spy:
-                                for message in self._format_spy_stdout(agent, cleaned):
-                                    self.renderer.show_plain(message, agent=agent)
+                            if self.visibility in {Visibility.SUMMARY, Visibility.FULL}:
+                                self._show_formatted_stdout(agent, cleaned)
                             continue
+                        self._flush_pending_spy_message(agent)
                         if stream_type == "stderr" and _should_ignore_stderr_line(agent, line):
                             continue
                         # Limita o número de linhas de stderr exibidas
-                        if stream_type == "stderr" and not self.spy:
+                        if stream_type == "stderr" and self.visibility != Visibility.FULL:
                             if stderr_lines_shown < MAX_STDERR_LINES:
                                 self.renderer.show_plain(cleaned, agent=agent)
                                 stderr_lines_shown += 1
@@ -256,7 +356,11 @@ class AgentClient:
                     except queue.Empty:
                         break
 
+            self._flush_pending_spy_message(agent)
             proc.wait()
+            if not silent and self.visibility == Visibility.SUMMARY:
+                status_word = "concluído" if proc.returncode == 0 else f"falhou (código {proc.returncode})"
+                self.renderer.show_plain(f"← {cmd[0]} {status_word}", agent=agent)
             self._agent_running = False
             self._current_proc = None
             self._stop_esc_monitor()
@@ -271,6 +375,10 @@ class AgentClient:
         finally:
             self._agent_running = False
             self._stop_esc_monitor()
+            self._last_spy_message = None
+            self._pending_spy_message = None
+            self._current_status = None
+            self._current_status_label = ""
 
         if proc.returncode != 0:
             self.renderer.show_error(f"[erro] agente {cmd[0]} retornou código {proc.returncode}")
@@ -376,6 +484,48 @@ class AgentClient:
                     self.tool_event_callback(agent, result=_SyntheticToolResult(ok=ok))
         return result_text
 
+    def _parse_opencode_json(self, raw: str, agent: str) -> str | None:
+        """Parseia eventos JSON do `opencode run --format=json` e recompõe o texto final."""
+        text_parts: list[str] = []
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            etype = event.get("type")
+            part = event.get("part", {}) or {}
+            ptype = part.get("type")
+
+            if etype == "text" or ptype == "text":
+                text = part.get("text") or ""
+                if text:
+                    text_parts.append(text)
+                continue
+
+            if not self.tool_event_callback:
+                continue
+
+            tool_name = (
+                part.get("tool")
+                or part.get("tool_name")
+                or part.get("name")
+                or event.get("tool")
+                or event.get("tool_name")
+                or event.get("name")
+            )
+            marker = " ".join(filter(None, [str(etype or ""), str(ptype or "")])).lower()
+            if tool_name and any(token in marker for token in {"tool", "call"}):
+                _logger.debug("[opencode-json] agent=%s used tool=%s", agent, tool_name)
+                self.tool_event_callback(agent, result=_SyntheticToolResult(ok=True))
+
+        if not text_parts:
+            return None
+        return "\n".join(text_parts).strip() or None
+
     def call(self, agent, prompt, silent=False, show_status=True, quiet=False):
         """Resolve o comando do agente e delega a execução."""
         self._user_cancelled = False
@@ -397,6 +547,8 @@ class AgentClient:
             return self._parse_stream_json(raw, agent)
         if fmt == "codex-json" and raw is not None:
             return self._parse_codex_json(raw, agent)
+        if fmt == "opencode-json" and raw is not None:
+            return self._parse_opencode_json(raw, agent)
         return raw
 
     def _call_api(self, agent, plugin, prompt, silent=False, show_status=True, quiet=False):

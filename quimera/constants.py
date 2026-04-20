@@ -1,5 +1,13 @@
 """Componentes de `quimera.constants`."""
+import enum
 import os
+
+
+class Visibility(str, enum.Enum):
+    """Nível de visibilidade da execução do agente."""
+    QUIET = "quiet"
+    SUMMARY = "summary"
+    FULL = "full"
 
 MAX_STDERR_LINES = 5
 _env_limit = os.getenv("QUIMERA_MAX_STDERR_LINES")

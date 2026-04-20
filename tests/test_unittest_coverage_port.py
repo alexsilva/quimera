@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import quimera.plugins.mock  # noqa: F401
 from quimera.agents import AgentClient, _strip_spinner
+from quimera.constants import Visibility
 from quimera.context import ContextManager
 from quimera.plugins import get
 from quimera.plugins.base import AgentPlugin
@@ -115,7 +116,7 @@ class AgentsCoverageTests(unittest.TestCase):
         self.assertIn("falha ao comunicar com cmd: read error", error_message)
 
     def test_run_streaming_shows_output_and_truncates_stderr(self):
-        client = AgentClient(self.renderer, spy=False)
+        client = AgentClient(self.renderer, visibility=Visibility.SUMMARY)
         proc = MagicMock()
         proc.stdout = iter(["out\n"])
         proc.stderr = iter(["err1\n", "err2\n"])

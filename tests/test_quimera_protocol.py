@@ -25,7 +25,7 @@ from quimera.app.protocol import AppProtocol
 from quimera.app.session_metrics import SessionMetricsService
 from quimera.cli import main as cli_main
 from quimera.config import DEFAULT_HISTORY_WINDOW
-from quimera.constants import CMD_AGENTS, CMD_CLEAR, CMD_HELP, CMD_PROMPT, EXTEND_MARKER, build_agents_help, build_help
+from quimera.constants import CMD_AGENTS, CMD_CLEAR, CMD_HELP, CMD_PROMPT, EXTEND_MARKER, Visibility, build_agents_help, build_help
 from quimera.plugins import AgentPlugin
 from quimera.prompt import PromptBuilder
 from quimera.runtime.approval import ApprovalHandler
@@ -118,6 +118,8 @@ def materialize_internal_services(app):
         app.task_executor_factory = lambda *args, **kwargs: __import__(
             "quimera.app.core", fromlist=["create_executor"]
         ).create_executor(*args, **kwargs)
+    if not hasattr(app, "execution_mode"):
+        app.execution_mode = None
     return app
 
 
@@ -201,6 +203,30 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(calls, [(AGENT_CODEX, "rode pwd")])
         self.assertEqual(len(FakeRenderer.instances), 1)
         self.assertEqual(FakeRenderer.instances[0].system_messages, ["rode pwd"])
+
+    def test_cli_passes_visibility_to_app(self):
+        captured = {}
+
+        class FakeApp:
+            def __init__(self, cwd, **kwargs):
+                captured["cwd"] = cwd
+                captured.update(kwargs)
+
+            def run(self):
+                captured["ran"] = True
+
+        with patch("quimera.cli.QuimeraApp", FakeApp), patch("sys.argv", ["quimera", "--visibility", "full"]):
+            cli_main()
+
+        self.assertEqual(captured["visibility"], Visibility.FULL)
+        self.assertTrue(captured["ran"])
+
+    def test_cli_rejects_legacy_spy_flag(self):
+        with patch("sys.argv", ["quimera", "--spy"]):
+            with self.assertRaises(SystemExit) as exc:
+                cli_main()
+
+        self.assertEqual(exc.exception.code, 2)
 
     def test_parse_response_detects_extend_marker_at_end(self):
         app = QuimeraApp.__new__(QuimeraApp)
@@ -1700,8 +1726,8 @@ class ProtocolTests(unittest.TestCase):
                 self._user_cancelled = False
                 self.calls = []
 
-            def call(self, agent, prompt):
-                self.calls.append((agent, prompt))
+            def call(self, agent, prompt, silent=False):
+                self.calls.append((agent, prompt, silent))
                 self._user_cancelled = True
                 return None
 
@@ -1712,7 +1738,7 @@ class ProtocolTests(unittest.TestCase):
         result = summarizer_call("resuma", preferred_agent="chatgpt")
 
         self.assertIsNone(result)
-        self.assertEqual(agent_client.calls, [("chatgpt", "resuma")])
+        self.assertEqual(agent_client.calls, [("chatgpt", "resuma", True)])
         self.assertEqual(renderer.system_messages, [])
         self.assertEqual(summarizer_call.last_outcome, "cancelled")
 
@@ -1722,7 +1748,7 @@ class ProtocolTests(unittest.TestCase):
                 self.renderer = renderer
                 self._user_cancelled = False
 
-            def call(self, agent, prompt):
+            def call(self, agent, prompt, silent=False):
                 self._user_cancelled = True
                 return None
 
@@ -1746,8 +1772,8 @@ class ProtocolTests(unittest.TestCase):
                 self._cancel_event = threading.Event()
                 self.calls = []
 
-            def call(self, agent, prompt):
-                self.calls.append((agent, prompt))
+            def call(self, agent, prompt, silent=False):
+                self.calls.append((agent, prompt, silent))
                 self._cancel_event.set()
                 return None
 
@@ -1758,7 +1784,7 @@ class ProtocolTests(unittest.TestCase):
         result = summarizer_call("resuma", preferred_agent="chatgpt")
 
         self.assertIsNone(result)
-        self.assertEqual(agent_client.calls, [("chatgpt", "resuma")])
+        self.assertEqual(agent_client.calls, [("chatgpt", "resuma", True)])
         self.assertEqual(renderer.system_messages, [])
         self.assertEqual(summarizer_call.last_outcome, "cancelled")
 
@@ -1770,8 +1796,8 @@ class ProtocolTests(unittest.TestCase):
                 self._cancel_event = threading.Event()
                 self.calls = []
 
-            def call(self, agent, prompt):
-                self.calls.append((agent, prompt))
+            def call(self, agent, prompt, silent=False):
+                self.calls.append((agent, prompt, silent))
                 return None
 
         renderer = DummyRenderer()
@@ -1787,7 +1813,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertIsNone(summary)
         self.assertEqual(
             agent_client.calls,
-            [("chatgpt", unittest.mock.ANY), ("codex", unittest.mock.ANY)],
+            [("chatgpt", unittest.mock.ANY, True), ("codex", unittest.mock.ANY, True)],
         )
         self.assertEqual(renderer.system_messages, ["[memória] resumidores indisponíveis"])
 

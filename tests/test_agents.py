@@ -4,10 +4,11 @@ from unittest.mock import MagicMock, patch, ANY
 import pytest
 
 from quimera.agents import AgentClient, _strip_spinner, _should_ignore_stderr_line
-from quimera.constants import MAX_STDERR_LINES
+from quimera.constants import MAX_STDERR_LINES, Visibility
 from quimera.plugins import get as get_plugin
 from quimera.plugins.claude import _format_claude_spy_event
 from quimera.plugins.codex import _format_codex_spy_event
+from quimera.plugins.opencode import _format_opencode_spy_event
 
 
 @pytest.fixture
@@ -23,6 +24,7 @@ def test_strip_spinner():
 def test_should_ignore_codex_stdin_noise():
     assert _should_ignore_stderr_line("codex", "Reading additional input from stdin...\n") is True
     assert _should_ignore_stderr_line("codex", "\x1b[2mReading additional input from stdin...\x1b[0m\r\n") is True
+    assert _should_ignore_stderr_line("codex", "Reading prompt from stdin...\n") is True
     assert _should_ignore_stderr_line("claude", "Reading additional input from stdin...\n") is False
     assert _should_ignore_stderr_line("codex", "real error\n") is False
 
@@ -261,11 +263,14 @@ def test_agent_client_run_suppresses_codex_stdin_noise(renderer):
             result = client.run(["codex", "exec"], silent=False, agent="codex", show_status=False)
 
         assert "agent_message" in result
-        renderer.show_plain.assert_not_called()
+        # Verifica que a linha de ruído do codex não foi exibida (pode haver mensagens de summary)
+        noise = "Reading additional input from stdin..."
+        for call_args in renderer.show_plain.call_args_list:
+            assert noise not in str(call_args)
 
 
 def test_agent_client_run_spy_shows_stderr_lines(renderer):
-    client = AgentClient(renderer, spy=True)
+    client = AgentClient(renderer, visibility=Visibility.FULL)
     with patch("subprocess.Popen") as mock_popen:
         mock_proc = MagicMock()
         mock_proc.stdout = iter(['{"type":"item.completed","item":{"id":"1","type":"agent_message","text":"ok"}}\n'])
@@ -283,7 +288,7 @@ def test_agent_client_run_spy_shows_stderr_lines(renderer):
 
 
 def test_agent_client_run_spy_shows_codex_stdout_context(renderer):
-    client = AgentClient(renderer, spy=True)
+    client = AgentClient(renderer, visibility=Visibility.FULL)
     with patch("subprocess.Popen") as mock_popen:
         mock_proc = MagicMock()
         mock_proc.stdout = iter([
@@ -301,15 +306,110 @@ def test_agent_client_run_spy_shows_codex_stdout_context(renderer):
             result = client.run(["codex", "exec"], silent=False, agent="codex", show_status=False)
 
     assert "agent_message" in result
-    renderer.show_plain.assert_any_call("contexto: Vou checar o estado do repositório antes de editar", agent="codex")
-    renderer.show_plain.assert_any_call("contexto: checando repositório: git status", agent="codex")
-    renderer.show_plain.assert_any_call("contexto: checando repositório: git status [ok]", agent="codex")
-    renderer.show_plain.assert_any_call("resposta: Encontrei alterações locais e vou seguir sem revertê-las.",
+    renderer.show_plain.assert_any_call("Vou checar o estado do repositório antes de editar", agent="codex")
+    renderer.show_plain.assert_any_call("$ git status", agent="codex")
+    # exit_code=0 é silencioso — nenhum [ok] emitido
+    renderer.show_plain.assert_any_call("Encontrei alterações locais e vou seguir sem revertê-las.",
                                         agent="codex")
 
 
+def test_agent_client_run_summary_shows_formatted_codex_stdout(renderer):
+    client = AgentClient(renderer, visibility=Visibility.SUMMARY)
+    with patch("subprocess.Popen") as mock_popen:
+        mock_proc = MagicMock()
+        mock_proc.stdout = iter([
+            '{"type":"item.completed","item":{"type":"agent_message","text":"message 1\\nmessage 2\\nclear\\nmessage 3"}}\n',
+        ])
+        mock_proc.stderr = iter([])
+        mock_proc.returncode = 0
+        mock_proc.stdin = MagicMock()
+        mock_popen.return_value = mock_proc
+
+        with patch("time.sleep"):
+            client.run(["codex", "exec"], silent=False, agent="codex", show_status=False)
+
+    renderer.show_plain.assert_any_call("→ codex iniciando...", agent="codex")
+    renderer.show_plain.assert_any_call("message 1", agent="codex")
+    renderer.show_plain.assert_any_call("message 2", agent="codex")
+    renderer.show_plain.assert_any_call("message 3", agent="codex")
+    renderer.show_plain.assert_any_call("← codex concluído", agent="codex")
+
+
+def test_agent_client_run_summary_flushes_compacted_responses_before_context(renderer):
+    client = AgentClient(renderer, visibility=Visibility.SUMMARY)
+    status = MagicMock()
+    status_cm = MagicMock()
+    status_cm.__enter__.return_value = status
+    status_cm.__exit__.return_value = None
+    renderer.running_status.return_value = status_cm
+    with patch("subprocess.Popen") as mock_popen:
+        mock_proc = MagicMock()
+        mock_proc.stdout = iter([
+            '{"type":"item.completed","item":{"type":"agent_message","text":"linha 1\\nlinha 2"}}\n',
+            '{"type":"item.started","item":{"type":"command_execution","command":"git status"}}\n',
+        ])
+        mock_proc.stderr = iter([])
+        mock_proc.returncode = 0
+        mock_proc.stdin = MagicMock()
+        mock_popen.return_value = mock_proc
+
+        with patch("time.sleep"):
+            client.run(["codex", "exec"], silent=False, agent="codex", show_status=True)
+
+    renderer.show_plain.assert_any_call("linha 1", agent="codex")
+    renderer.show_plain.assert_any_call("linha 2", agent="codex")
+    status.update.assert_any_call("[dim]$ git status[/dim]")
+    assert ("$ git status",) not in [call.args for call in renderer.show_plain.call_args_list]
+
+
+def test_agent_client_run_summary_persists_only_completed_tool_line(renderer):
+    client = AgentClient(renderer, visibility=Visibility.SUMMARY)
+    status = MagicMock()
+    status_cm = MagicMock()
+    status_cm.__enter__.return_value = status
+    status_cm.__exit__.return_value = None
+    renderer.running_status.return_value = status_cm
+    with patch("subprocess.Popen") as mock_popen:
+        mock_proc = MagicMock()
+        mock_proc.stdout = iter([
+            '{"type":"item.started","item":{"type":"command_execution","command":"git diff -- quimera/agents.py"}}\n',
+            '{"type":"item.completed","item":{"type":"command_execution","command":"git diff -- quimera/agents.py","exit_code":0}}\n',
+        ])
+        mock_proc.stderr = iter([])
+        mock_proc.returncode = 0
+        mock_proc.stdin = MagicMock()
+        mock_popen.return_value = mock_proc
+
+        with patch("time.sleep"):
+            client.run(["codex", "exec"], silent=False, agent="codex", show_status=True)
+
+    status.update.assert_any_call("[dim]$ git diff -- quimera/agents.py[/dim]")
+    renderer.show_plain.assert_any_call("✓ git diff -- quimera/agents.py", agent="codex")
+    assert ("$ git diff -- quimera/agents.py",) not in [call.args for call in renderer.show_plain.call_args_list]
+
+
+def test_agent_client_run_summary_does_not_persist_started_tool_without_status(renderer):
+    client = AgentClient(renderer, visibility=Visibility.SUMMARY)
+    with patch("subprocess.Popen") as mock_popen:
+        mock_proc = MagicMock()
+        mock_proc.stdout = iter([
+            '{"type":"item.started","item":{"type":"command_execution","command":"git diff -- quimera/agents.py"}}\n',
+            '{"type":"item.completed","item":{"type":"command_execution","command":"git diff -- quimera/agents.py","exit_code":0}}\n',
+        ])
+        mock_proc.stderr = iter([])
+        mock_proc.returncode = 0
+        mock_proc.stdin = MagicMock()
+        mock_popen.return_value = mock_proc
+
+        with patch("time.sleep"):
+            client.run(["codex", "exec"], silent=False, agent="codex", show_status=False)
+
+    renderer.show_plain.assert_any_call("✓ git diff -- quimera/agents.py", agent="codex")
+    assert ("$ git diff -- quimera/agents.py",) not in [call.args for call in renderer.show_plain.call_args_list]
+
+
 def test_agent_client_run_spy_shows_claude_stdout_context(renderer):
-    client = AgentClient(renderer, spy=True)
+    client = AgentClient(renderer, visibility=Visibility.FULL)
     with patch("subprocess.Popen") as mock_popen:
         mock_proc = MagicMock()
         mock_proc.stdout = iter([
@@ -325,10 +425,10 @@ def test_agent_client_run_spy_shows_claude_stdout_context(renderer):
             result = client.run(["claude", "-p"], silent=False, agent="claude", show_status=False)
 
     assert result == '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read"},{"type":"text","text":"Vou inspecionar o arquivo antes de sugerir a mudança."}]}}\n{"type":"result","result":"ok","is_error":false}'
-    renderer.show_plain.assert_any_call("contexto: usando Read", agent="claude")
-    renderer.show_plain.assert_any_call("resposta: Vou inspecionar o arquivo antes de sugerir a mudança.",
+    renderer.show_plain.assert_any_call("usando Read", agent="claude")
+    renderer.show_plain.assert_any_call("Vou inspecionar o arquivo antes de sugerir a mudança.",
                                         agent="claude")
-    renderer.show_plain.assert_any_call("contexto: execução concluída", agent="claude")
+    renderer.show_plain.assert_any_call("execução concluída", agent="claude")
 
 
 def test_agent_client_run_post_drain(renderer):
@@ -466,8 +566,16 @@ def test_agent_client_run_stderr_truncation(renderer):
         with patch("time.sleep"):
             result = client.run(["cmd"], silent=False)
             assert "output" in result
-            # Check truncation message was shown once
-            assert renderer.show_plain.call_count == MAX_STDERR_LINES + 1
+            # Stderr truncado: exatamente MAX_STDERR_LINES linhas + 1 mensagem de truncamento
+            # (summary mode adiciona 2 calls extra de →/←, excluídos da contagem)
+            non_summary_calls = [
+                c for c in renderer.show_plain.call_args_list
+                if not any(
+                    str(c).startswith(f"call('{arrow}")
+                    for arrow in ("→", "←")
+                )
+            ]
+            assert len(non_summary_calls) == MAX_STDERR_LINES + 1
 
 
 def test_agent_client_run_no_output_with_error(renderer):
@@ -558,8 +666,8 @@ def test_format_codex_spy_event_command():
     started = _format_codex_spy_event('{"type":"item.started","item":{"type":"command_execution","command":"ls"}}')
     completed = _format_codex_spy_event(
         '{"type":"item.completed","item":{"type":"command_execution","command":"ls","exit_code":0}}')
-    assert started == ["contexto: inspecionando arquivos: ls"]
-    assert completed == ["contexto: inspecionando arquivos: ls [ok]"]
+    assert started == ["ferramenta: $ ls"]
+    assert completed == ["ferramenta: ✓ ls"]
 
 
 def test_format_codex_spy_event_reasoning_and_message():
@@ -573,11 +681,52 @@ def test_format_codex_spy_event_reasoning_and_message():
     assert message == ["resposta: Ajustei a saída para mostrar progresso útil ao usuário."]
 
 
+def test_format_codex_spy_event_splits_multiline_agent_messages():
+    message = _format_codex_spy_event(
+        '{"type":"item.completed","item":{"type":"agent_message","text":"message 1\\nmessage 2\\nclear\\nmessage 3"}}'
+    )
+    assert message == [
+        "resposta: message 1",
+        "resposta: message 2",
+        "clear",
+        "resposta: message 3",
+    ]
+
+
 def test_format_codex_spy_event_reports_failed_test_command():
     completed = _format_codex_spy_event(
         '{"type":"item.completed","item":{"type":"command_execution","command":"pytest -q tests/test_agents.py","exit_code":1}}'
     )
-    assert completed == ["contexto: rodando testes: pytest -q tests/test_agents.py [falhou (1)]"]
+    assert completed == ["ferramenta: ✗ pytest -q tests/test_agents.py (exit 1)"]
+
+
+def test_format_codex_spy_event_hides_successful_command_completion():
+    started = _format_codex_spy_event(
+        '{"type":"item.started","item":{"type":"command_execution","command":"git status --short"}}'
+    )
+    completed = _format_codex_spy_event(
+        '{"type":"item.completed","item":{"type":"command_execution","command":"git status --short","exit_code":0}}'
+    )
+    assert started == ["ferramenta: $ git status --short"]
+    assert completed == ["ferramenta: ✓ git status --short"]
+
+
+def test_format_codex_spy_event_reports_file_change_start_and_completion():
+    started = _format_codex_spy_event(
+        '{"type":"item.started","item":{"type":"file_change","path":"quimera/agents.py"}}'
+    )
+    completed = _format_codex_spy_event(
+        '{"type":"item.completed","item":{"type":"file_change","path":"quimera/agents.py"}}'
+    )
+    assert started == ["ferramenta: editar quimera/agents.py"]
+    assert completed == ["ferramenta: ✓ editar quimera/agents.py"]
+
+
+def test_format_codex_spy_event_reports_tool_calls_as_tool_messages():
+    message = _format_codex_spy_event(
+        '{"type":"item.started","item":{"type":"tool_call","name":"apply_patch"}}'
+    )
+    assert message == ["ferramenta: usando apply_patch"]
 
 
 def test_codex_plugin_exposes_spy_stdout_formatter():
@@ -592,16 +741,60 @@ def test_claude_plugin_exposes_spy_stdout_formatter():
     assert plugin.spy_stdout_formatter is _format_claude_spy_event
 
 
+def test_opencode_plugin_exposes_spy_stdout_formatter_and_json_output():
+    plugin = get_plugin("opencode-gpt")
+    assert plugin is not None
+    assert plugin.spy_stdout_formatter is _format_opencode_spy_event
+    assert plugin.output_format == "opencode-json"
+    assert "--format=json" in plugin.cmd
+
+
 def test_format_claude_spy_event_summarizes_assistant_and_result():
     assistant = _format_claude_spy_event(
         '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash"},{"type":"text","text":"Vou validar com um teste focado antes de concluir."}]}}'
     )
     result = _format_claude_spy_event('{"type":"result","result":"ok","is_error":false}')
     assert assistant == [
-        "contexto: usando Bash",
+        "ferramenta: usando Bash",
         "resposta: Vou validar com um teste focado antes de concluir.",
     ]
     assert result == ["contexto: execução concluída"]
+
+
+def test_format_opencode_spy_event_summarizes_text_and_result():
+    started = _format_opencode_spy_event('{"type":"step_start","part":{"type":"step-start"}}')
+    message = _format_opencode_spy_event(
+        '{"type":"text","part":{"type":"text","text":"message 1\\nclear\\nmessage 2"}}'
+    )
+    result = _format_opencode_spy_event(
+        '{"type":"step_finish","part":{"type":"step-finish","reason":"stop"}}'
+    )
+    assert started == ["contexto: iniciando execução"]
+    assert message == [
+        "resposta: message 1",
+        "clear",
+        "resposta: message 2",
+    ]
+    assert result == ["contexto: execução concluída"]
+
+
+def test_format_opencode_spy_event_reports_tool_calls_as_tool_messages():
+    tool = _format_opencode_spy_event(
+        '{"type":"tool_call","part":{"type":"tool-call","tool":"run_shell"}}'
+    )
+    assert tool == ["ferramenta: usando run_shell"]
+
+
+def test_parse_opencode_json_with_text(renderer):
+    client = AgentClient(renderer)
+    raw = "\n".join([
+        '{"type":"step_start","part":{"type":"step-start"}}',
+        '{"type":"text","part":{"type":"text","text":"primeira linha"}}',
+        '{"type":"text","part":{"type":"text","text":"segunda linha"}}',
+        '{"type":"step_finish","part":{"type":"step-finish","reason":"stop"}}',
+    ])
+    result = client._parse_opencode_json(raw, "opencode-gpt")
+    assert result == "primeira linha\nsegunda linha"
 
 
 def test_agent_client_call_stream_json_format(renderer):
@@ -632,6 +825,21 @@ def test_agent_client_call_codex_json_format(renderer):
 
         with patch.object(client, "run") as mock_run:
             mock_run.return_value = '{"type":"item.completed","item":{"type":"agent_message","text":"parsed"}}'
+            result = client.call("agent", "prompt")
+            assert result == "parsed"
+
+
+def test_agent_client_call_opencode_json_format(renderer):
+    client = AgentClient(renderer)
+    with patch("quimera.plugins.get") as mock_get:
+        mock_plugin = MagicMock()
+        mock_plugin.cmd = ["agent"]
+        mock_plugin.prompt_as_arg = False
+        mock_plugin.output_format = "opencode-json"
+        mock_get.return_value = mock_plugin
+
+        with patch.object(client, "run") as mock_run:
+            mock_run.return_value = '{"type":"text","part":{"type":"text","text":"parsed"}}'
             result = client.call("agent", "prompt")
             assert result == "parsed"
 

@@ -36,10 +36,10 @@ def _format_claude_spy_event(line: str) -> list[str]:
         if btype == "text":
             text = (block.get("text") or "").strip()
             if text:
-                messages.append(f"resposta: {_truncate_text(text.splitlines()[0])}")
+                messages.append(f"resposta: {text}")
         elif btype == "tool_use":
             tool_name = block.get("name") or "ferramenta"
-            messages.append(f"contexto: usando {tool_name}")
+            messages.append(f"ferramenta: usando {tool_name}")
     return messages
 
 

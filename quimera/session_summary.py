@@ -24,7 +24,7 @@ def build_chain_summarizer(agent_client, agents):
                 _call.last_outcome = "cancelled"
                 return None
             try:
-                result = agent_client.call(agent, prompt)
+                result = agent_client.call(agent, prompt, silent=True)
             except Exception:
                 result = None
             if result:

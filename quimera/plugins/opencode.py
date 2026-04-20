@@ -1,7 +1,65 @@
 """Componentes de `quimera.plugins.opencode`."""
+import json
 from pathlib import Path
 
 from quimera.plugins.base import AgentPlugin, register
+
+
+def _truncate_text(value: str, limit: int = 160) -> str:
+    value = " ".join((value or "").split())
+    if len(value) <= limit:
+        return value
+    return value[: limit - 3].rstrip() + "..."
+
+
+def _format_agent_message_lines(text: str) -> list[str]:
+    messages: list[str] = []
+    for raw_line in (text or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.lower() == "clear":
+            messages.append("clear")
+            continue
+        messages.append(f"resposta: {_truncate_text(line)}")
+    return messages
+
+
+def _format_opencode_spy_event(line: str) -> list[str]:
+    """Resume eventos JSON do OpenCode em mensagens curtas para o modo SUMMARY."""
+    try:
+        event = json.loads(line)
+    except json.JSONDecodeError:
+        return []
+
+    etype = event.get("type")
+    part = event.get("part", {}) or {}
+    ptype = part.get("type")
+
+    if etype == "step_start" or ptype == "step-start":
+        return ["contexto: iniciando execução"]
+    if etype == "step_finish" or ptype == "step-finish":
+        reason = (part.get("reason") or "").strip().lower()
+        if reason in {"error", "failed", "fail"}:
+            return ["contexto: execução falhou"]
+        return ["contexto: execução concluída"]
+
+    if etype == "text" or ptype == "text":
+        return _format_agent_message_lines(part.get("text") or "")
+
+    tool_name = (
+        part.get("tool")
+        or part.get("tool_name")
+        or part.get("name")
+        or event.get("tool")
+        or event.get("tool_name")
+        or event.get("name")
+    )
+    marker = " ".join(filter(None, [str(etype or ""), str(ptype or "")])).lower()
+    if tool_name and any(token in marker for token in {"tool", "call"}):
+        return [f"ferramenta: usando {tool_name}"]
+
+    return []
 
 _OPENCODE_RW_PATHS = [
     str(Path.home() / ".local" / "share" / "opencode"),
@@ -13,13 +71,15 @@ plugin = AgentPlugin(
     prefix="/opencode-pickle",
     icon="🥒",
     runtime_rw_paths=_OPENCODE_RW_PATHS,
-    cmd=["opencode", "--model=opencode/big-pickle", "run"],
+    cmd=["opencode", "--model=opencode/big-pickle", "run", "--format=json"],
+    output_format="opencode-json",
     style=("blue", "OpenCodePickle"),
     capabilities=["general_coding", "code_review", "code_editing"],
     preferred_task_types=["code_edit", "code_review"],
     avoid_task_types=[],
     supports_tools=True,
     supports_code_editing=True,
+    spy_stdout_formatter=_format_opencode_spy_event,
     supports_long_context=False, base_tier=2,
 )
 register(plugin)
@@ -29,13 +89,15 @@ plugin = AgentPlugin(
     prefix="/opencode-gpt",
     icon="✏️",
     runtime_rw_paths=_OPENCODE_RW_PATHS,
-    cmd=["opencode", "--model=opencode/gpt-5-nano", "run"],
+    cmd=["opencode", "--model=opencode/gpt-5-nano", "run", "--format=json"],
+    output_format="opencode-json",
     style=("blue", "OpenCodeGPT"),
     capabilities=["general_reasoning", "code_review", "documentation"],
     preferred_task_types=["documentation", "code_review"],
     avoid_task_types=[],
     supports_tools=True,
     supports_code_editing=False,
+    spy_stdout_formatter=_format_opencode_spy_event,
     supports_long_context=False, base_tier=2,
 )
 register(plugin)
@@ -45,13 +107,15 @@ plugin = AgentPlugin(
     prefix="/opencode-mimo-omni",
     icon="🧐",
     runtime_rw_paths=_OPENCODE_RW_PATHS,
-    cmd=["opencode", "--model=opencode/mimo-v2-omni-free", "run"],
+    cmd=["opencode", "--model=opencode/mimo-v2-omni-free", "run", "--format=json"],
+    output_format="opencode-json",
     style=("blue", "OpenCodeMimoOmni"),
     capabilities=["general_reasoning", "code_review"],
     preferred_task_types=["code_review"],
     avoid_task_types=[],
     supports_tools=True,
     supports_code_editing=True,
+    spy_stdout_formatter=_format_opencode_spy_event,
     supports_long_context=False, base_tier=2,
 )
 register(plugin)
@@ -61,13 +125,15 @@ plugin = AgentPlugin(
     prefix="/opencode-omni-pro",
     icon="🏛",
     runtime_rw_paths=_OPENCODE_RW_PATHS,
-    cmd=["opencode", "--model=opencode/mimo-v2-pro-free", "run"],
+    cmd=["opencode", "--model=opencode/mimo-v2-pro-free", "run", "--format=json"],
+    output_format="opencode-json",
     style=("blue", "OpenCodeOmniPro"),
     capabilities=["architecture", "code_review", "planning"],
     preferred_task_types=["architecture", "code_review"],
     avoid_task_types=[],
     supports_tools=True,
     supports_code_editing=True,
+    spy_stdout_formatter=_format_opencode_spy_event,
     supports_long_context=True, base_tier=2,
 )
 register(plugin)
@@ -77,13 +143,15 @@ plugin = AgentPlugin(
     prefix="/opencode-minimax",
     icon="📚",
     runtime_rw_paths=_OPENCODE_RW_PATHS,
-    cmd=["opencode", "--model=opencode/minimax-m2.5-free", "run"],
+    cmd=["opencode", "--model=opencode/minimax-m2.5-free", "run", "--format=json"],
+    output_format="opencode-json",
     style=("blue", "OpenCodeMiniMax"),
     capabilities=["documentation", "code_review", "general_reasoning"],
     preferred_task_types=["documentation", "code_review"],
     avoid_task_types=[],
     supports_tools=True,
     supports_code_editing=True,
+    spy_stdout_formatter=_format_opencode_spy_event,
     supports_long_context=False, base_tier=2,
 )
 register(plugin)
@@ -93,13 +161,15 @@ plugin = AgentPlugin(
     prefix="/opencode-nemotron",
     icon="🐞",
     runtime_rw_paths=_OPENCODE_RW_PATHS,
-    cmd=["opencode", "--model=opencode/nemotron-3-super-free", "run"],
+    cmd=["opencode", "--model=opencode/nemotron-3-super-free", "run", "--format=json"],
+    output_format="opencode-json",
     style=("blue", "OpenCodeNemotron"),
     capabilities=["bug_investigation", "code_review", "general_reasoning"],
     preferred_task_types=["bug_investigation", "code_review"],
     avoid_task_types=[],
     supports_tools=True,
     supports_code_editing=True,
+    spy_stdout_formatter=_format_opencode_spy_event,
     supports_long_context=False, base_tier=2,
 )
 register(plugin)
@@ -109,13 +179,15 @@ plugin = AgentPlugin(
     prefix="/opencode-qwen",
     icon="⚙",
     runtime_rw_paths=_OPENCODE_RW_PATHS,
-    cmd=["opencode", "--model=opencode/qwen3.6-plus-free", "run"],
+    cmd=["opencode", "--model=opencode/qwen3.6-plus-free", "run", "--format=json"],
+    output_format="opencode-json",
     style=("blue", "OpenCodeQwen"),
     capabilities=["code_editing", "code_review", "bug_investigation", "general_coding"],
     preferred_task_types=["code_edit", "code_review", "bug_investigation"],
     avoid_task_types=[],
     supports_tools=True,
     supports_code_editing=True,
+    spy_stdout_formatter=_format_opencode_spy_event,
     supports_long_context=False, base_tier=2,
 )
 register(plugin)

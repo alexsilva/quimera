@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 from typing import List
 
+from .constants import Visibility
 from . import plugins as _plugins
 from . import themes as _themes
 from .app import QuimeraApp
@@ -58,9 +59,9 @@ def main():
     parser.add_argument("--whoami", action="store_true")
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--history-window", type=int, default=None)
-    parser.add_argument("--spy", action="store_true",
-                        help="Permite ao agente humano inspecionar alterações do agent de IA",
-                        default=False)
+    parser.add_argument("--visibility", choices=[v.value for v in Visibility], default=Visibility.SUMMARY.value,
+                        help="Nível de visibilidade da execução do agente: quiet (stderr truncado), "
+                             "summary (início+fim), full (stdout+stderr completos). Padrão: summary")
     parser.add_argument(
         "--agents",
         metavar="AGENTE",
@@ -101,7 +102,10 @@ def main():
     parser.add_argument("--prompt", dest="repl_prompt", metavar="TEXTO", default=None,
                         help="Prompt one-shot para --driver-repl (não-interativo, útil para scripts)")
 
-    args, _ = parser.parse_known_args()
+    args, unknown = parser.parse_known_args()
+
+    if "--spy" in unknown:
+        parser.error("--spy foi removido; use --visibility quiet|summary|full")
 
     if args.history_window is not None and args.history_window <= 0:
         parser.error("--history-window deve ser maior que zero")
@@ -147,6 +151,7 @@ def main():
         print(f"Tema padrão definido: {t.name} — {t.description}")
         return
 
+    visibility = Visibility(args.visibility)
     app = QuimeraApp(cwd,
                      debug=args.debug,
                      history_window=args.history_window,
@@ -154,7 +159,7 @@ def main():
                      timeout=args.timeout,
                      idle_timeout_seconds=args.idle_timeout,
                      workspace=workspace,
-                     spy=args.spy,
+                     visibility=visibility,
                      theme=args.theme)
 
     if args.interactive_test:

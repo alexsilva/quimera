@@ -47,11 +47,32 @@ def _describe_command(command: str, phase: str, exit_code: int | None = None) ->
 
     summary = _truncate_text(command)
     if phase == "concluído":
-        if exit_code is None:
-            return f"contexto: {category}: {summary}"
-        status = "ok" if exit_code == 0 else f"falhou ({exit_code})"
-        return f"contexto: {category}: {summary} [{status}]"
-    return f"contexto: {category}: {summary}"
+        if exit_code == 0 or exit_code is None:
+            return f"ferramenta: ✓ {summary}"
+        return f"ferramenta: ✗ {summary} (exit {exit_code})"
+    return f"ferramenta: $ {summary}"
+
+
+def _describe_file_change(item: dict, phase: str) -> str:
+    target = item.get("path") or item.get("file_path") or item.get("target") or ""
+    subject = target or "arquivo"
+    if phase == "concluído":
+        return f"ferramenta: ✓ editar {subject}"
+    return f"ferramenta: editar {subject}"
+
+
+def _format_agent_message_lines(text: str) -> list[str]:
+    """Quebra mensagens do agente em eventos curtos e preserva marcadores simples."""
+    messages: list[str] = []
+    for raw_line in (text or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.lower() == "clear":
+            messages.append("clear")
+            continue
+        messages.append(f"resposta: {_truncate_text(line)}")
+    return messages
 
 
 def _format_codex_spy_event(line: str) -> list[str]:
@@ -77,7 +98,8 @@ def _format_codex_spy_event(line: str) -> list[str]:
 
     phase = "iniciado" if etype == "item.started" else "concluído"
     if itype == "command_execution":
-        return [_describe_command(item.get("command") or "", phase, item.get("exit_code"))]
+        message = _describe_command(item.get("command") or "", phase, item.get("exit_code"))
+        return [message] if message else []
 
     if itype == "reasoning":
         text = (item.get("text") or item.get("summary") or "").strip()
@@ -89,17 +111,14 @@ def _format_codex_spy_event(line: str) -> list[str]:
         text = (item.get("text") or "").strip()
         if not text:
             return []
-        return [f"resposta: {_truncate_text(text.splitlines()[0])}"]
+        return _format_agent_message_lines(text)
 
     if itype in {"file_change", "patch_application"}:
-        target = item.get("path") or item.get("file_path") or item.get("target") or ""
-        if target:
-            return [f"contexto: alterando {target}"]
-        return [f"contexto: alteração {phase}"]
+        return [_describe_file_change(item, phase)]
 
     if itype in {"tool_call", "function_call"}:
         name = item.get("name") or item.get("tool_name") or "ferramenta"
-        return [f"contexto: usando {name}"]
+        return [f"ferramenta: usando {name}"]
 
     return [f"contexto: {itype} {phase}"]
 
@@ -124,6 +143,10 @@ plugin = AgentPlugin(
     tool_use_reliability="high",
     supports_code_editing=True,
     spy_stdout_formatter=_format_codex_spy_event,
+    stderr_noise=frozenset({
+        "Reading additional input from stdin...",
+        "Reading prompt from stdin...",
+    }),
     supports_long_context=True, base_tier=2,
 )
 register(plugin)
