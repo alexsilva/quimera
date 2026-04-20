@@ -5,13 +5,14 @@ from pathlib import Path
 
 from quimera.agent_events import SpyEvent
 from quimera.plugins.base import AgentPlugin, register
-
+from quimera.plugins.spy_utils import (
+    format_agent_message_lines,
+    format_command_output_preview,
+    truncate_spy_text,
+)
 
 def _truncate_text(value: str, limit: int = 160) -> str:
-    value = " ".join((value or "").split())
-    if len(value) <= limit:
-        return value
-    return value[: limit - 3].rstrip() + "..."
+    return truncate_spy_text(value, limit=limit)
 
 
 def _describe_command(command: str, phase: str, exit_code: int | None = None) -> SpyEvent:
@@ -40,20 +41,6 @@ def _describe_file_change(item: dict, phase: str) -> SpyEvent:
     return SpyEvent(kind="tool", text=f"editar {subject}")
 
 
-def _format_agent_message_lines(text: str) -> list[SpyEvent]:
-    """Quebra mensagens do agente em eventos curtos e preserva marcadores simples."""
-    messages: list[SpyEvent] = []
-    for raw_line in (text or "").splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        if line.lower() == "clear":
-            messages.append(SpyEvent(kind="clear", text="", transient=True))
-            continue
-        messages.append(SpyEvent(kind="response", text=_truncate_text(line), final=True))
-    return messages
-
-
 def _format_codex_spy_event(line: str) -> list[SpyEvent]:
     """Resume eventos JSONL do Codex em mensagens curtas para o modo spy."""
     try:
@@ -77,7 +64,11 @@ def _format_codex_spy_event(line: str) -> list[SpyEvent]:
 
     phase = "iniciado" if etype == "item.started" else "concluído"
     if itype == "command_execution":
-        return [_describe_command(item.get("command") or "", phase, item.get("exit_code"))]
+        command = item.get("command") or ""
+        events = [_describe_command(command, phase, item.get("exit_code"))]
+        if etype == "item.completed":
+            events.extend(format_command_output_preview(command, item.get("aggregated_output") or ""))
+        return events
 
     if itype == "reasoning":
         text = (item.get("text") or item.get("summary") or "").strip()
@@ -89,7 +80,7 @@ def _format_codex_spy_event(line: str) -> list[SpyEvent]:
         text = (item.get("text") or "").strip()
         if not text:
             return []
-        return _format_agent_message_lines(text)
+        return format_agent_message_lines(text)
 
     if itype in {"file_change", "patch_application"}:
         return [_describe_file_change(item, phase)]

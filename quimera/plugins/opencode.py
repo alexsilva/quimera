@@ -4,26 +4,7 @@ from pathlib import Path
 
 from quimera.agent_events import SpyEvent
 from quimera.plugins.base import AgentPlugin, register
-
-
-def _truncate_text(value: str, limit: int = 160) -> str:
-    value = " ".join((value or "").split())
-    if len(value) <= limit:
-        return value
-    return value[: limit - 3].rstrip() + "..."
-
-
-def _format_agent_message_lines(text: str) -> list[SpyEvent]:
-    messages: list[SpyEvent] = []
-    for raw_line in (text or "").splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        if line.lower() == "clear":
-            messages.append(SpyEvent(kind="clear", text="", transient=True))
-            continue
-        messages.append(SpyEvent(kind="response", text=_truncate_text(line), final=True))
-    return messages
+from quimera.plugins.spy_utils import format_agent_message_lines
 
 
 def _format_opencode_spy_event(line: str) -> list[SpyEvent]:
@@ -46,7 +27,7 @@ def _format_opencode_spy_event(line: str) -> list[SpyEvent]:
         return [SpyEvent(kind="context", text="execução concluída", transient=True)]
 
     if etype == "text" or ptype == "text":
-        return _format_agent_message_lines(part.get("text") or "")
+        return format_agent_message_lines(part.get("text") or "")
 
     tool_name = (
         part.get("tool")

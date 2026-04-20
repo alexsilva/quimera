@@ -10,6 +10,8 @@ from quimera.plugins import get as get_plugin
 from quimera.plugins.claude import _format_claude_spy_event
 from quimera.plugins.codex import _format_codex_spy_event
 from quimera.plugins.opencode import _format_opencode_spy_event
+from quimera.plugins.spy_utils import format_command_output_preview
+from quimera.spy_output_presenter import SpyOutputPresenter
 
 
 @pytest.fixture
@@ -389,6 +391,54 @@ def test_agent_client_run_summary_persists_only_completed_tool_line(renderer):
     assert ("$ git diff -- quimera/agents.py",) not in [call.args for call in renderer.show_plain.call_args_list]
 
 
+def test_agent_client_run_summary_shows_diff_output_and_keeps_next_operation_clean(renderer):
+    client = AgentClient(renderer, visibility=Visibility.SUMMARY)
+    status = MagicMock()
+    status_cm = MagicMock()
+    status_cm.__enter__.return_value = status
+    status_cm.__exit__.return_value = None
+    renderer.running_status.return_value = status_cm
+    with patch("subprocess.Popen") as mock_popen:
+        mock_proc = MagicMock()
+        mock_proc.stdout = iter([
+            '{"type":"item.started","item":{"type":"command_execution","command":"git diff -- quimera/agents.py"}}\n',
+            '{"type":"item.completed","item":{"type":"command_execution","command":"git diff -- quimera/agents.py","exit_code":0,"aggregated_output":"diff --git a/quimera/agents.py b/quimera/agents.py\\n+nova linha"}}\n',
+            '{"type":"item.started","item":{"type":"command_execution","command":"git status --short"}}\n',
+        ])
+        mock_proc.stderr = iter([])
+        mock_proc.returncode = 0
+        mock_proc.stdin = MagicMock()
+        mock_popen.return_value = mock_proc
+
+        with patch("time.sleep"):
+            client.run(["codex", "exec"], silent=False, agent="codex", show_status=True)
+
+    renderer.show_plain.assert_any_call("✓ git diff -- quimera/agents.py", agent="codex")
+    renderer.show_plain.assert_any_call("diff --git a/quimera/agents.py b/quimera/agents.py", agent="codex")
+    renderer.show_plain.assert_any_call("+nova linha", agent="codex")
+    assert any("$ git status --short" in str(c) for c in status.update.call_args_list)
+    assert ("$ git status --short",) not in [call.args for call in renderer.show_plain.call_args_list]
+
+
+def test_spy_output_presenter_keeps_next_operation_clean_after_diff_preview(renderer):
+    presenter = SpyOutputPresenter(renderer, Visibility.SUMMARY)
+
+    presenter.emit("codex", SpyEvent(kind="tool", text="$ git diff -- quimera/agents.py"))
+    presenter.emit("codex", SpyEvent(kind="tool", text="✓ git diff -- quimera/agents.py"))
+    for event in format_command_output_preview(
+        "git diff -- quimera/agents.py",
+        "diff --git a/quimera/agents.py b/quimera/agents.py\n+nova linha",
+    ):
+        presenter.emit("codex", event)
+    presenter.emit("codex", SpyEvent(kind="tool", text="$ git status --short"))
+
+    renderer.show_plain.assert_any_call("✓ git diff -- quimera/agents.py", agent="codex")
+    renderer.show_plain.assert_any_call("diff --git a/quimera/agents.py b/quimera/agents.py", agent="codex")
+    renderer.show_plain.assert_any_call("+nova linha", agent="codex")
+    assert ("$ git status --short",) not in [call.args for call in renderer.show_plain.call_args_list]
+    assert presenter.current_status_label == "$ git status --short"
+
+
 def test_agent_client_run_summary_does_not_persist_started_tool_without_status(renderer):
     client = AgentClient(renderer, visibility=Visibility.SUMMARY)
     with patch("subprocess.Popen") as mock_popen:
@@ -710,6 +760,17 @@ def test_format_codex_spy_event_hides_successful_command_completion():
     )
     assert started == [SpyEvent(kind="tool", text="$ git status --short")]
     assert completed == [SpyEvent(kind="tool", text="✓ git status --short")]
+
+
+def test_format_codex_spy_event_includes_diff_output_from_aggregated_output():
+    completed = _format_codex_spy_event(
+        '{"type":"item.completed","item":{"type":"command_execution","command":"git diff -- quimera/agents.py","exit_code":0,"aggregated_output":"diff --git a/quimera/agents.py b/quimera/agents.py\\n+nova linha"}}'
+    )
+    assert completed == [
+        SpyEvent(kind="tool", text="✓ git diff -- quimera/agents.py"),
+        SpyEvent(kind="response", text="diff --git a/quimera/agents.py b/quimera/agents.py", final=True),
+        SpyEvent(kind="response", text="+nova linha", final=True),
+    ]
 
 
 def test_format_codex_spy_event_reports_file_change_start_and_completion():

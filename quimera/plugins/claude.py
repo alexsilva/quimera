@@ -4,13 +4,11 @@ from pathlib import Path
 
 from quimera.agent_events import SpyEvent
 from quimera.plugins.base import AgentPlugin, register
+from quimera.plugins.spy_utils import truncate_spy_text
 
 
 def _truncate_text(value: str, limit: int = 160) -> str:
-    value = " ".join((value or "").split())
-    if len(value) <= limit:
-        return value
-    return value[: limit - 3].rstrip() + "..."
+    return truncate_spy_text(value, limit=limit)
 
 
 def _format_claude_spy_event(line: str) -> list[SpyEvent]:
