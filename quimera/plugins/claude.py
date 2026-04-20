@@ -1,5 +1,6 @@
 """Componentes de `quimera.plugins.claude`."""
 import json
+from pathlib import Path
 
 from quimera.plugins.base import AgentPlugin, register
 
@@ -46,6 +47,7 @@ plugin = AgentPlugin(
     name="claude",
     prefix="/claude",
     icon="🔮",
+    runtime_rw_paths=[str(Path.home() / ".claude")],
     cmd=["claude", "--permission-mode=bypassPermissions", "--output-format=stream-json", "--verbose", "-p"],
     output_format="stream-json",
     style=("magenta", "Claude"),

@@ -83,6 +83,20 @@ class TestBuildBwrapCmd(unittest.TestCase):
             f"--bind {opencode_dir} {opencode_dir} não encontrado em: {result}",
         )
 
+    def test_claude_state_dir_keeps_rw_bind_inside_read_only_home(self):
+        from unittest.mock import patch
+        claude_dir = str(Path.home() / ".claude")
+        plugin = self._plugin_with_rw_paths(claude_dir)
+        with patch("quimera.sandbox.bwrap.is_bwrap_available", return_value=True), patch(
+                "quimera.sandbox.bwrap.os.path.exists", return_value=True
+        ):
+            result = build_bwrap_cmd(ANALYSIS, "/tmp", ["echo"], plugin=plugin)
+        pairs = list(zip(result, result[1:], result[2:]))
+        self.assertTrue(
+            any(a == "--bind" and b == claude_dir and c == claude_dir for a, b, c in pairs),
+            f"--bind {claude_dir} {claude_dir} não encontrado em: {result}",
+        )
+
     def test_execute_mode_uses_bind_rw(self):
         from unittest.mock import patch
         wd = "/home/user/project"
