@@ -233,11 +233,30 @@ class QuimeraApp:
     def _available_commands(self) -> list[str]:
         """Retorna todos os comandos disponíveis para autocomplete."""
         commands = set(self._available_internal_commands())
-        for plugin in plugins.all_plugins():
+        for plugin in self.get_available_plugins():
             if plugin.prefix:
                 commands.add(plugin.prefix)
             commands.update(alias for alias in (plugin.aliases or []) if alias)
         return sorted(commands)
+
+    def get_agent_plugin(self, agent_name: str):
+        """Resolve um plugin pelo nome canônico do agente."""
+        if not agent_name:
+            return None
+        return plugins.get(agent_name)
+
+    def get_available_plugins(self) -> list:
+        """Retorna a lista atual de plugins conhecidos pela aplicação."""
+        return list(plugins.all_plugins())
+
+    def get_active_agent_plugins(self) -> list:
+        """Retorna os plugins válidos dos agentes ativos na sessão."""
+        active_plugins = []
+        for agent_name in self.active_agents:
+            plugin = self.get_agent_plugin(agent_name)
+            if plugin is not None:
+                active_plugins.append(plugin)
+        return active_plugins
 
     def _configure_readline_completion(self, runtime_readline) -> None:
         """Registra autocomplete de comandos slash quando readline estiver disponível."""
@@ -407,11 +426,7 @@ class QuimeraApp:
                 self.active_agents = self.selected_agents
             return random.choice(self.active_agents), "", False
 
-        active_plugins = []
-        for n in self.active_agents:
-            plugin = plugins.get(n)
-            if plugin is not None:
-                active_plugins.append(plugin)
+        active_plugins = self.get_active_agent_plugins()
         for p in active_plugins:
             prefixes = [p.prefix, *(getattr(p, "aliases", None) or [])]
             agent = p.name

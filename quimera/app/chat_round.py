@@ -6,7 +6,6 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from .. import plugins
 from ..constants import HANDOFF_SYNTHESIS_MSG, MSG_EMPTY_INPUT, USER_ROLE
 from .config import logger
 
@@ -236,7 +235,7 @@ class ChatRoundOrchestrator:
             logger.info("parallel mode: %d threads, staging=%s", app.threads, staging_root)
             native_tool_agents = [
                 a for a in remaining
-                if getattr(plugins.get(a), "output_format", None) == "stream-json"
+                if getattr(app.get_agent_plugin(a), "output_format", None) == "stream-json"
             ]
             if native_tool_agents:
                 logger.warning(

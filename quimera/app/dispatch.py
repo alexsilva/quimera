@@ -2,7 +2,6 @@
 import time
 from contextlib import nullcontext
 
-from .. import plugins
 from ..runtime.parser import strip_tool_block
 from .config import logger
 
@@ -181,7 +180,7 @@ class AppDispatchServices:
         history = [] if handoff_only else app.history
         app.task_services.refresh_task_shared_state()
 
-        plugin = plugins.get(agent)
+        plugin = app.get_agent_plugin(agent)
         driver = getattr(plugin, "driver", "cli") if plugin else "cli"
         skip_tool_prompt = isinstance(driver, str) and driver != "cli"
         if app.debug_prompt_metrics:

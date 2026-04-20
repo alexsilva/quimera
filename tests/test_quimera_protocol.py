@@ -2550,7 +2550,7 @@ class PluginTests(unittest.TestCase):
         app.classify_task_execution_result = lambda response: (True, response)
 
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
-                "quimera.app.task.plugins.get",
+                "quimera.app.core.plugins.get",
                 side_effect=lambda agent: FakePlugin(agent == AGENT_CLAUDE),
         ), patch("quimera.runtime.tasks.submit_for_review") as submit_for_review, patch(
             "quimera.runtime.tasks.complete_task"
@@ -2761,7 +2761,7 @@ class PluginTests(unittest.TestCase):
         app.system_layer.show_system_message = lambda message: status_updates.append(message)
 
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
-                "quimera.app.task.plugins.get",
+                "quimera.app.core.plugins.get",
                 side_effect=lambda _agent: FakePlugin(True),
         ), patch("quimera.runtime.tasks.update_task") as update_task, patch(
             "quimera.runtime.tasks.fail_task"
@@ -2825,7 +2825,7 @@ class PluginTests(unittest.TestCase):
         app.system_layer.show_system_message = lambda message: status_updates.append(message)
 
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
-                "quimera.app.task.plugins.get",
+                "quimera.app.core.plugins.get",
                 side_effect=lambda agent: FakePlugin(agent == AGENT_GEMINI),
         ), patch("quimera.runtime.tasks.update_task") as update_task, patch(
             "quimera.runtime.tasks.fail_task"
@@ -2881,7 +2881,7 @@ class PluginTests(unittest.TestCase):
                 self.supports_task_execution = supports_task_execution
 
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
-                "quimera.app.task.plugins.get",
+                "quimera.app.core.plugins.get",
                 side_effect=lambda agent: FakePlugin(agent == AGENT_GEMINI),
         ):
             app._setup_task_executors()
@@ -2921,7 +2921,7 @@ class PluginTests(unittest.TestCase):
                 self.supports_task_execution = supports_task_execution
 
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
-                "quimera.app.task.plugins.get",
+                "quimera.app.core.plugins.get",
                 side_effect=lambda agent: FakePlugin(True),
         ):
             app._setup_task_executors()

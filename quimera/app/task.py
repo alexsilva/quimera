@@ -3,7 +3,6 @@ import json
 import re
 from pathlib import Path
 
-from .. import plugins
 from ..constants import CMD_TASK
 from ..constants import NEEDS_INPUT_MARKER, USER_ROLE
 from ..runtime import ToolRuntimeConfig, ConsoleApprovalHandler, create_executor
@@ -68,7 +67,7 @@ class AppTaskServices:
         def is_operational_review_agent(agent_name):
             if agent_name not in (getattr(app, "active_agents", []) or []):
                 return False
-            plugin = plugins.get(agent_name)
+            plugin = app.get_agent_plugin(agent_name)
             return plugin is not None and can_execute_task(plugin)
 
         def review_agents_for(executor_agent=None, exclude_agents=None):
@@ -412,10 +411,10 @@ class AppTaskServices:
         """Retorna os plugins elegíveis para roteamento de tasks."""
         app = self.app
         if not getattr(app, "active_agents", None) or "*" in app.active_agents:
-            return [plugin for plugin in plugins.all_plugins() if can_execute_task(plugin)]
+            return [plugin for plugin in app.get_available_plugins() if can_execute_task(plugin)]
         candidate_plugins = []
         for agent_name in app.active_agents:
-            plugin = plugins.get(agent_name)
+            plugin = app.get_agent_plugin(agent_name)
             if plugin is not None and can_execute_task(plugin):
                 candidate_plugins.append(plugin)
         return candidate_plugins

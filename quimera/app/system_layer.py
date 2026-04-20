@@ -1,7 +1,6 @@
 """Componentes de `quimera.app.system_layer`."""
 from __future__ import annotations
 
-from .. import plugins
 from ..constants import (
     CMD_AGENTS,
     CMD_ALIASES,
@@ -100,7 +99,7 @@ class AppSystemLayer:
         for agent_name in active_agents:
             if normalized == agent_name.lower():
                 return agent_name
-            plugin = plugins.get(agent_name)
+            plugin = self.app.get_agent_plugin(agent_name)
             if plugin is None:
                 continue
             candidates = {plugin.prefix.lower().lstrip("/")}
@@ -117,7 +116,7 @@ class AppSystemLayer:
         if prompt_builder is None:
             raise RuntimeError("prompt_builder indisponível")
 
-        plugin = plugins.get(agent)
+        plugin = self.app.get_agent_plugin(agent)
         driver = getattr(plugin, "driver", "cli") if plugin else "cli"
         skip_tool_prompt = isinstance(driver, str) and driver != "cli"
         prompt, metrics = prompt_builder.build(
