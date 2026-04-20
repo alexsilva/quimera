@@ -20,7 +20,7 @@ from quimera.app.dispatch import AppDispatchServices
 from quimera.app.inputs import AppInputServices
 from quimera.app.session import AppSessionServices
 from quimera.app.system_layer import AppSystemLayer
-from quimera.app.task import AppTaskServices
+from quimera.app.task import AppTaskServices, call_agent_for_parallel
 from quimera.app.protocol import AppProtocol
 from quimera.app.session_metrics import SessionMetricsService
 from quimera.cli import main as cli_main
@@ -1912,9 +1912,10 @@ class PluginTests(unittest.TestCase):
             self.assertIn(p.name, names)
 
     def test_agent_style_returns_plugin_style(self):
-        stub = AgentPlugin(name="stub", prefix="/stub", cmd=["stub"], style=("magenta", "Stub"))
-        with patch.dict(plugins._registry, {"stub": stub}):
-            self.assertEqual(_agent_style("stub"), ("magenta", "🤖 Stub"))
+        def get_style(agent):
+            return ("magenta", "🤖 Stub") if agent == "stub" else None
+
+        self.assertEqual(_agent_style("stub", get_plugin_style=get_style), ("magenta", "🤖 Stub"))
 
     def test_agent_style_fallback_for_unknown(self):
         with patch.dict(plugins._registry, {}, clear=True):
@@ -1960,7 +1961,7 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(app.threads, 3)
         self.assertIn("agent1", app.active_agents)
         self.assertIn("agent2", app.active_agents)
-        self.assertTrue(hasattr(app, "_call_agent_for_parallel"))
+        self.assertTrue(hasattr(app.task_services, "call_agent_for_parallel"))
 
     def test_parallel_threads_calls_agents_concurrently(self):
         # Testa que o método _call_agent_for_parallel retorna tupla correta
@@ -1998,9 +1999,9 @@ class PluginTests(unittest.TestCase):
         import tempfile
         staging_root = Path(self.enterContext(tempfile.TemporaryDirectory()))
 
-        agent, response, route_target, handoff, extend, needs_input = app._call_agent_for_parallel("agent1", None,
-                                                                                                   "standard",
-                                                                                                   staging_root, 0)
+        agent, response, route_target, handoff, extend, needs_input = call_agent_for_parallel(
+            app, "agent1", None, "standard", staging_root, 0
+        )
         self.assertEqual(agent, "agent1")
         self.assertEqual(response, "Resposta mock")
         self.assertIsNone(route_target)

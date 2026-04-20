@@ -38,17 +38,15 @@ try:
 except ImportError:
     _RICH_AVAILABLE = False
 
-import quimera.plugins as plugins
 import quimera.themes as themes
 
 
-def _agent_style(agent: str):
+def _agent_style(agent: str, get_plugin_style=None):
     """Retorna (color, label) para o agente; fallback para white/capitalize."""
-    plugin = plugins.get(agent.lower())
-    if plugin:
-        color, label = plugin.style
-        icon = getattr(plugin, "icon", "🤖")
-        return (color, f"{icon} {label}")
+    if get_plugin_style:
+        result = get_plugin_style(agent.lower())
+        if result:
+            return result
     return ("white", f"🤖 {agent.capitalize()}")
 
 
@@ -57,7 +55,7 @@ class TerminalRenderer:
 
     _MAX_WIDTH = 96
 
-    def __init__(self, theme: str | None = None):
+    def __init__(self, theme: str | None = None, get_plugin_style=None):
         """Inicializa uma instância de TerminalRenderer."""
         if _RICH_AVAILABLE:
             self._console = Console(
@@ -68,13 +66,18 @@ class TerminalRenderer:
         else:
             self._console = None
         self._theme = themes.get(theme or themes.DEFAULT_THEME)
+        self._get_plugin_style = get_plugin_style
         self._live = None
         self._statuses = {}
         self._lock = threading.RLock()
 
+    def _agent_style(self, agent: str):
+        """Retorna (color, label) para o agente."""
+        return _agent_style(agent, self._get_plugin_style)
+
     def show_message(self, agent, content):
         """Exibe message usando o tema ativo."""
-        style, label = _agent_style(agent)
+        style, label = self._agent_style(agent)
         clean_content = strip_ansi(str(content))
         if self._console:
             self._theme.render(self._console, label, style, Markdown(clean_content))
@@ -83,7 +86,7 @@ class TerminalRenderer:
 
     def show_no_response(self, agent):
         """Exibe no response."""
-        _, label = _agent_style(agent)
+        _, label = self._agent_style(agent)
         message = "sem resposta válida"
         if self._console:
             self._console.print(f"\n[dim]{label}: {message}[/dim]\n")
@@ -104,7 +107,7 @@ class TerminalRenderer:
         clean_message = strip_ansi(str(message))
         if self._console:
             if agent:
-                style, label = _agent_style(agent)
+                style, label = self._agent_style(agent)
                 prefix = f"[{style}]{label}:[/] "
                 self._console.print(f"{prefix}{markup_escape(clean_message)}")
             else:
@@ -131,8 +134,8 @@ class TerminalRenderer:
 
     def show_handoff(self, from_agent, to_agent, task=None):
         """Exibe handoff."""
-        _, from_label = _agent_style(from_agent)
-        _, to_label = _agent_style(to_agent)
+        _, from_label = self._agent_style(from_agent)
+        _, to_label = self._agent_style(to_agent)
         message = f"[handoff] {from_label} -> {to_label}"
         if task:
             message += f" | task: {task}"
@@ -156,7 +159,7 @@ class TerminalRenderer:
             sorted_agents = sorted(self._statuses.keys())
             for agent in sorted_agents:
                 status = self._statuses[agent]
-                style, label = _agent_style(agent)
+                style, label = self._agent_style(agent)
 
                 # Indicador de status para agentes ativos
                 is_active = "concluído" not in status.lower() and "erro" not in status.lower()

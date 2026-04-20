@@ -33,6 +33,12 @@ class AgentPlugin:
     api_key_env: Optional[str] = None  # nome da variável de ambiente com a API key
     spy_stdout_formatter: Optional[Callable[[str], List[str]]] = None
 
+    @property
+    def render_style(self) -> Tuple[str, str]:
+        """Retorna o estilo pronto para renderização na UI."""
+        color, label = self.style
+        return (color, f"{self.icon} {label}")
+
 
 _registry: dict[str, AgentPlugin] = {}
 

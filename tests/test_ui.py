@@ -68,20 +68,21 @@ class TestAgentStyle:
     """Test suite for _agent_style function."""
 
     def test_returns_plugin_style(self):
-        """Test returns style from registered plugin."""
-        from quimera.plugins import AgentPlugin
-        stub = AgentPlugin(name="testagent", prefix="/testagent", cmd=["testagent"], style=("cyan", "TestAgent"))
-        with patch.dict("quimera.plugins._registry", {"testagent": stub}):
-            color, label = _agent_style("testagent")
-            assert color == "cyan"
-            assert label == "🤖 TestAgent"
+        """Test returns style from injected get_plugin_style callable."""
+        def get_plugin_style(agent):
+            if agent == "testagent":
+                return ("cyan", "🤖 TestAgent")
+            return None
+
+        color, label = _agent_style("testagent", get_plugin_style=get_plugin_style)
+        assert color == "cyan"
+        assert label == "🤖 TestAgent"
 
     def test_fallback_for_unknown_agent(self):
-        """Test fallback for unknown agent names."""
-        with patch.dict("quimera.plugins._registry", {}, clear=True):
-            color, label = _agent_style("unknownagent")
-            assert color == "white"
-            assert label == "🤖 Unknownagent"
+        """Test fallback when get_plugin_style returns None."""
+        color, label = _agent_style("unknownagent")
+        assert color == "white"
+        assert label == "🤖 Unknownagent"
 
 
 class TestTerminalRenderer:
@@ -171,12 +172,12 @@ class TestTerminalRenderer:
 
     def test_show_handoff(self, mock_renderer):
         """Test show_handoff display."""
-        with patch("quimera.ui._agent_style", side_effect=lambda x: ("white", x.capitalize())):
+        with patch("quimera.ui._agent_style", side_effect=lambda x, *_: ("white", x.capitalize())):
             mock_renderer.show_handoff("agent1", "agent2", task=123)
 
     def test_show_handoff_without_task(self, mock_renderer):
         """Test show_handoff without task."""
-        with patch("quimera.ui._agent_style", side_effect=lambda x: ("white", x.capitalize())):
+        with patch("quimera.ui._agent_style", side_effect=lambda x, *_: ("white", x.capitalize())):
             mock_renderer.show_handoff("agent1", "agent2")
 
     def test_update_status_no_live(self, mock_renderer):
@@ -194,7 +195,7 @@ class TestTerminalRenderer:
     def test_render_status_panel(self, mock_renderer):
         """Test _render_status_panel."""
         mock_renderer._statuses = {"agent1": "running", "agent2": "done"}
-        with patch("quimera.ui._agent_style", side_effect=lambda x: ("blue", x.capitalize())), \
+        with patch("quimera.ui._agent_style", side_effect=lambda x, *_: ("blue", x.capitalize())), \
                 patch("quimera.ui.Panel") as mock_panel:
             result = mock_renderer._render_status_panel()
             assert mock_panel.called

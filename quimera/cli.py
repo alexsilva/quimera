@@ -109,7 +109,12 @@ def main():
     if args.driver_repl:
         working_dir = Path(args.working_dir).resolve() if args.working_dir else None
         try:
-            repl = DriverRepl(args.driver_repl, working_dir=working_dir)
+            repl = DriverRepl(
+                args.driver_repl,
+                working_dir=working_dir,
+                get_plugin=_plugins.get,
+                all_plugins=_plugins.all_plugins,
+            )
             repl.run(one_shot_prompt=args.repl_prompt)
         except (RuntimeError, ValueError) as exc:
             print(str(exc), file=sys.stderr)

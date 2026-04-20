@@ -443,10 +443,13 @@ def test_driver_repl_probe_backend_success():
     fake_response.__enter__.return_value.status = 200
     fake_response.__exit__.return_value = False
 
-    with patch("quimera.runtime.drivers.repl._plugin_registry.get", return_value=fake_plugin), \
-            patch("quimera.runtime.drivers.repl.urllib_request.urlopen", return_value=fake_response), \
+    with patch("quimera.runtime.drivers.repl.urllib_request.urlopen", return_value=fake_response), \
             patch("quimera.runtime.drivers.repl.OpenAICompatDriver"):
-        repl = DriverRepl("ollama-qwen")
+        repl = DriverRepl(
+            "ollama-qwen",
+            get_plugin=lambda name: fake_plugin if name == "ollama-qwen" else None,
+            all_plugins=lambda: [fake_plugin],
+        )
         repl.ensure_backend_available()
 
 
@@ -459,13 +462,16 @@ def test_driver_repl_probe_backend_unavailable_raises_clear_error():
         api_key_env=None,
     )
 
-    with patch("quimera.runtime.drivers.repl._plugin_registry.get", return_value=fake_plugin), \
-            patch("quimera.runtime.drivers.repl.OpenAICompatDriver"), \
+    with patch("quimera.runtime.drivers.repl.OpenAICompatDriver"), \
             patch(
                 "quimera.runtime.drivers.repl.urllib_request.urlopen",
                 side_effect=OSError("connection refused"),
             ):
-        repl = DriverRepl("ollama-qwen")
+        repl = DriverRepl(
+            "ollama-qwen",
+            get_plugin=lambda name: fake_plugin if name == "ollama-qwen" else None,
+            all_plugins=lambda: [fake_plugin],
+        )
         with pytest.raises(RuntimeError, match="indisponível"):
             repl.ensure_backend_available()
 

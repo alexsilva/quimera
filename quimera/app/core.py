@@ -21,7 +21,7 @@ from .session import AppSessionServices
 from .session_metrics import SessionMetricsService
 from .dispatch import AppDispatchServices
 from .inputs import AppInputServices
-from .task import AppTaskServices, call_agent_for_parallel, create_executor
+from .task import AppTaskServices, create_executor
 from .system_layer import AppSystemLayer
 from .turn import TurnManager
 from .. import plugins
@@ -71,7 +71,7 @@ class QuimeraApp:
         self.workspace = workspace if workspace is not None else Workspace(cwd)
         self.config = ConfigManager(self.workspace.config_file)
         _active_theme = theme if theme is not None else self.config.theme
-        self.renderer = TerminalRenderer(theme=_active_theme)
+        self.renderer = TerminalRenderer(theme=_active_theme, get_plugin_style=self._resolve_plugin_style)
         self.user_name = self.config.user_name
         self.spy = spy
         self.system_layer = AppSystemLayer(self)
@@ -238,6 +238,11 @@ class QuimeraApp:
                 commands.add(plugin.prefix)
             commands.update(alias for alias in (plugin.aliases or []) if alias)
         return sorted(commands)
+
+    def _resolve_plugin_style(self, agent: str):
+        """Resolve (color, label) para o agente; retorna None se não encontrado."""
+        plugin = self.get_agent_plugin(agent)
+        return plugin.render_style if plugin else None
 
     def get_agent_plugin(self, agent_name: str):
         """Resolve um plugin pelo nome canônico do agente."""
@@ -540,10 +545,6 @@ class QuimeraApp:
     def parse_response(self, response):
         """Interpreta response."""
         return self.protocol.parse_response(response)
-
-    def _call_agent_for_parallel(self, agent, handoff, protocol_mode, staging_root, index):
-        """Executa call_agent e retorna tupla (agent, response, route_target, handoff, extend, needs_input)."""
-        return call_agent_for_parallel(self, agent, handoff, protocol_mode, staging_root, index)
 
     def _merge_staging_to_workspace(self, staging_root: Path):
         """Mescla arquivos do staging para o workspace em ordem de índice."""

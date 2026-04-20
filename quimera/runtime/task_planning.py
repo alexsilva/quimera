@@ -2,9 +2,23 @@
 from __future__ import annotations
 
 import re
-from typing import Iterable
+from typing import Iterable, Protocol, Sequence, runtime_checkable
 
-from ..plugins.base import AgentPlugin
+
+@runtime_checkable
+class _TaskAgentProto(Protocol):
+    """Interface mínima de plugin usada pelo planejamento de tasks."""
+
+    name: str
+    base_tier: int
+    preferred_task_types: Sequence[str]
+    avoid_task_types: Sequence[str]
+    supports_code_editing: bool
+    supports_long_context: bool
+    supports_tools: bool
+    capabilities: Sequence[str]
+    supports_task_execution: bool
+    tool_use_reliability: str
 
 TASK_TYPE_TEST_EXECUTION = "test_execution"
 TASK_TYPE_CODE_REVIEW = "code_review"
@@ -71,17 +85,17 @@ TOOL_RELIABILITY_SCORES = {
 }
 
 
-def can_execute_task(plugin: AgentPlugin) -> bool:
+def can_execute_task(plugin: _TaskAgentProto) -> bool:
     """Indica se pode execute task."""
     return getattr(plugin, "supports_task_execution", True)
 
 
-def tool_reliability(plugin: AgentPlugin) -> str:
+def tool_reliability(plugin: _TaskAgentProto) -> str:
     """Retorna a confiabilidade declarada do agente para uso de ferramentas."""
     return str(getattr(plugin, "tool_use_reliability", "medium") or "medium").lower()
 
 
-def score_plugin_for_task(plugin: AgentPlugin, task_type: str) -> int:
+def score_plugin_for_task(plugin: _TaskAgentProto, task_type: str) -> int:
     """Executa score plugin for task."""
     score = 0
     score += (plugin.base_tier - 1) * 2
@@ -113,7 +127,7 @@ def score_plugin_for_task(plugin: AgentPlugin, task_type: str) -> int:
     return score
 
 
-def choose_best_agent(task_type: str, active_plugins: Iterable[AgentPlugin]) -> str | None:
+def choose_best_agent(task_type: str, active_plugins: Iterable[_TaskAgentProto]) -> str | None:
     """Seleciona best agent."""
     plugins = [plugin for plugin in active_plugins if plugin is not None and can_execute_task(plugin)]
     if not plugins:

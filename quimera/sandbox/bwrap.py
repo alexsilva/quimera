@@ -6,7 +6,11 @@ import shutil
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
-from quimera.plugins.base import AgentPlugin
+@runtime_checkable
+class _AgentPluginProto(Protocol):
+    """Interface mínima de plugin esperada pelo sandbox."""
+
+    runtime_rw_paths: list
 
 
 @runtime_checkable
@@ -26,7 +30,7 @@ def is_bwrap_available() -> bool:
 
 
 def build_bwrap_cmd(
-        mode: _ExecutionModeProto, working_dir: str, cmd: list[str], plugin: AgentPlugin | None = None
+        mode: _ExecutionModeProto, working_dir: str, cmd: list[str], plugin: _AgentPluginProto | None = None
 ) -> list[str]:
     """Envolve cmd com bwrap aplicando as restrições do ExecutionMode.
 

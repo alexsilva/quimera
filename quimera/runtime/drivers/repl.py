@@ -22,7 +22,6 @@ from ..approval import AutoApprovalHandler, ConsoleApprovalHandler
 from ..config import ToolRuntimeConfig
 from ..executor import ToolExecutor
 from ..models import ToolResult
-from ...plugins import base as _plugin_registry
 
 _SEP = "─" * 60
 
@@ -56,19 +55,21 @@ def _on_tool_result(result: ToolResult) -> None:
             print(f"    {line}")
 
 
-def _list_compat_plugins() -> list:
-    """Lista compat plugins."""
-    return [p for p in _plugin_registry.all_plugins() if p.driver == "openai_compat"]
-
-
 class DriverRepl:
     """Loop REPL para testar um plugin baseado em openai_compat."""
 
-    def __init__(self, plugin_name: str, working_dir: Optional[Path] = None) -> None:
+    def __init__(
+        self,
+        plugin_name: str,
+        working_dir: Optional[Path] = None,
+        *,
+        get_plugin,
+        all_plugins,
+    ) -> None:
         """Inicializa uma instância de DriverRepl."""
-        plugin = _plugin_registry.get(plugin_name)
+        plugin = get_plugin(plugin_name)
         if plugin is None:
-            compat = _list_compat_plugins()
+            compat = [p for p in all_plugins() if p.driver == "openai_compat"]
             names = ", ".join(p.name for p in compat) or "(nenhum)"
             raise ValueError(
                 f"Plugin '{plugin_name}' não encontrado. "

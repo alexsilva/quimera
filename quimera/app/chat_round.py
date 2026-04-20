@@ -248,7 +248,7 @@ class ChatRoundOrchestrator:
                     agent_handoff_pairs = [(agent, None, staging_root, i) for i, agent in enumerate(remaining)]
                     futures = [
                         executor.submit(
-                            app._call_agent_for_parallel,
+                            app.task_services.call_agent_for_parallel,
                             agent,
                             handoff,
                             protocol_mode,
