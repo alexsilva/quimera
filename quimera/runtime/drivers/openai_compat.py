@@ -11,6 +11,7 @@ import logging
 import re
 from typing import Optional
 
+from ..tool_hops import get_max_tool_hops
 from .tool_schemas import resolve_tool_schemas
 from ..models import ToolCall, ToolResult
 
@@ -20,13 +21,6 @@ except ImportError:
     OpenAI = None  # type: ignore[assignment,misc]
 
 _logger = logging.getLogger(__name__)
-
-MAX_TOOL_HOPS = 8
-MAX_TOOL_HOPS_BY_RELIABILITY = {
-    "low": 2,
-    "medium": MAX_TOOL_HOPS,
-    "high": MAX_TOOL_HOPS,
-}
 
 # Remove blocos <think>...</think> ou <thinking>...</thinking> que modelos Qwen3 emitem.
 _THINK_RE = re.compile(r"<think(?:ing)?>.*?</think(?:ing)?>", re.DOTALL)
@@ -187,7 +181,7 @@ class OpenAICompatDriver:
             })
         messages.append({"role": "user", "content": prompt})
 
-        max_tool_hops = MAX_TOOL_HOPS_BY_RELIABILITY.get(self.tool_use_reliability, MAX_TOOL_HOPS)
+        max_tool_hops = get_max_tool_hops(self.tool_use_reliability)
         last_invalid_tool_name: str | None = None
 
         for hop in range(max_tool_hops + 1):

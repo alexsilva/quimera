@@ -2,6 +2,7 @@
 import time
 from contextlib import nullcontext
 
+from ..runtime.tool_hops import get_max_tool_hops
 from ..runtime.parser import strip_tool_block
 from .config import logger
 
@@ -25,7 +26,8 @@ class AppDispatchServices:
         app = self.app
         task_services = app.task_services
         current_response = response
-        max_tool_hops = 16
+        plugin = app.get_agent_plugin(agent)
+        max_tool_hops = get_max_tool_hops(getattr(plugin, "tool_use_reliability", "medium"))
         tool_history = []
 
         for _ in range(max_tool_hops):
