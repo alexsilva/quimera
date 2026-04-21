@@ -12,7 +12,11 @@ import re
 from typing import Optional
 
 from ..streaming import apply_stream_diff, normalize_stream_diff
-from ..tool_hops import DEFAULT_MAX_TOOL_HOPS, get_max_tool_hops
+from ..tool_hops import (
+    DEFAULT_MAX_TOOL_HOPS,
+    MAX_TOOL_HOPS_BY_RELIABILITY,
+    get_max_tool_hops,
+)
 from .tool_schemas import resolve_tool_schemas
 from ..models import ToolCall, ToolResult
 
