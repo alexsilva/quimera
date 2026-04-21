@@ -460,13 +460,13 @@ class AgentClient:
     @staticmethod
     def _resolve_plugin_cli_attrs(plugin, connection) -> tuple[list[str], bool, str | None]:
         """Resolve atributos CLI com fallback para plugins simplificados em testes."""
+        if isinstance(connection, CliConnection):
+            return list(connection.cmd), connection.prompt_as_arg, connection.output_format
         cmd_resolver = getattr(plugin, "effective_cmd", None)
         prompt_resolver = getattr(plugin, "effective_prompt_as_arg", None)
         output_resolver = getattr(plugin, "effective_output_format", None)
         if callable(cmd_resolver) and callable(prompt_resolver) and callable(output_resolver):
             return cmd_resolver(), prompt_resolver(), output_resolver()
-        if isinstance(connection, CliConnection):
-            return list(connection.cmd), connection.prompt_as_arg, connection.output_format
         return (
             list(getattr(plugin, "cmd", None) or []),
             bool(getattr(plugin, "prompt_as_arg", False)),
@@ -496,12 +496,15 @@ class AgentClient:
         cmd, prompt_as_arg, output_format = self._resolve_plugin_cli_attrs(plugin, connection)
         extra_env = connection.env if isinstance(connection, CliConnection) else None
         cwd = connection.cwd if isinstance(connection, CliConnection) else None
+        run_kwargs = {"silent": silent, "agent": agent, "show_status": show_status}
+        if extra_env is not None:
+            run_kwargs["extra_env"] = extra_env
+        if cwd is not None:
+            run_kwargs["cwd"] = cwd
         if prompt_as_arg:
-            raw = self.run([*cmd, prompt], input_text=None, silent=silent, agent=agent, show_status=show_status,
-                           extra_env=extra_env, cwd=cwd)
+            raw = self.run([*cmd, prompt], input_text=None, **run_kwargs)
         else:
-            raw = self.run(cmd, input_text=prompt, silent=silent, agent=agent, show_status=show_status,
-                           extra_env=extra_env, cwd=cwd)
+            raw = self.run(cmd, input_text=prompt, **run_kwargs)
         fmt = output_format
         if fmt == "stream-json" and raw is not None:
             return self._parse_stream_json(raw, agent)
