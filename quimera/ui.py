@@ -224,7 +224,7 @@ class TerminalRenderer:
             if agent:
                 style, label = self._agent_style(agent)
                 table = Table.grid(expand=True, padding=(0, 1))
-                table.add_column(width=18)
+                table.add_column(no_wrap=True)
                 table.add_column(ratio=1)
                 table.add_row(
                     Text(label, style=f"bold {style}"),

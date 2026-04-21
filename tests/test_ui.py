@@ -2,6 +2,7 @@
 from unittest.mock import patch, MagicMock
 
 import pytest
+from rich.console import Console
 
 from quimera.ui import (
     TerminalRenderer,
@@ -143,6 +144,17 @@ class TestTerminalRenderer:
         """Test show_plain with agent."""
         with patch("quimera.ui._agent_style", return_value=("blue", "Test")):
             mock_renderer.show_plain("Message", agent="test")
+
+    def test_show_plain_with_agent_does_not_pad_label_column(self):
+        """Test agent label is rendered without fixed-width gap."""
+        renderer = TerminalRenderer()
+        renderer._console = Console(width=60, record=True, force_terminal=False)
+
+        with patch("quimera.ui._agent_style", return_value=("blue", "🔷 Codex")):
+            renderer.show_plain("execução concluída", agent="codex")
+
+        rendered = renderer._console.export_text()
+        assert "🔷 Codex execução concluída" in rendered
 
     def test_show_plain_without_agent(self, renderer_no_rich, capsys):
         """Test show_plain without agent."""
