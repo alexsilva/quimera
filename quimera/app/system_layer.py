@@ -274,10 +274,12 @@ class AppSystemLayer:
                 self.app.renderer.show_warning(str(exc))
                 return True
             set_connection_override(target, connection, persist=True)
-            if target not in (self.app.active_agents or []):
-                self.app.active_agents = list(self.app.active_agents or []) + [target]
-            if target not in (self.app.selected_agents or []):
-                self.app.selected_agents = list(self.app.selected_agents or []) + [target]
+            active_agents = list(getattr(self.app, "active_agents", None) or [])
+            selected_agents = list(getattr(self.app, "selected_agents", None) or [])
+            if target not in active_agents:
+                self.app.active_agents = active_agents + [target]
+            if target not in selected_agents:
+                self.app.selected_agents = selected_agents + [target]
             self.show_system_message(f"Conexão ativa para {target}: {format_connection_label(connection)}")
             return True
 
