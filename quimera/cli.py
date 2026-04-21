@@ -16,7 +16,9 @@ from .plugins.base import (
     _connection_from_dict,
     connection_to_dict,
     format_connection_label,
+    is_valid_agent_name,
     load_connections,
+    register_dynamic_plugin,
     save_connections,
     set_connection_override,
 )
@@ -230,10 +232,13 @@ def main():
         return
 
     if args.connect:
-        agent_name = args.connect
+        agent_name = args.connect.strip().lower()
         plugin = _plugins.get(agent_name)
         if plugin is None:
-            parser.error(f"Agente desconhecido em --connect: {agent_name}")
+            if not is_valid_agent_name(agent_name):
+                parser.error(f"Nome de agente inválido em --connect: {agent_name}")
+            plugin = register_dynamic_plugin(agent_name)
+            print(f"Agente registrado dinamicamente: {agent_name}")
 
         print(f"Configurando conexão para {agent_name}")
         print(f"Built-in atual: {format_connection_label(plugin.effective_connection())}")

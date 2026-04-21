@@ -17,7 +17,15 @@ from ..constants import (
     build_agents_help,
     build_help,
 )
-from ..plugins.base import CliConnection, OpenAIConnection, format_connection_label, reload_plugins, set_connection_override
+from ..plugins.base import (
+    CliConnection,
+    OpenAIConnection,
+    format_connection_label,
+    is_valid_agent_name,
+    register_dynamic_plugin,
+    reload_plugins,
+    set_connection_override,
+)
 from ..runtime.parser import strip_tool_block
 
 
@@ -126,7 +134,7 @@ class AppSystemLayer:
             candidates.update(alias.lower().lstrip("/") for alias in (getattr(plugin, "aliases", None) or []))
             if normalized in candidates:
                 return plugin.name
-        return None
+        return normalized if is_valid_agent_name(normalized) else None
 
     def _read_command_input(self, prompt: str) -> str | None:
         """Lê input síncrono para comandos interativos do chat."""
@@ -256,8 +264,8 @@ class AppSystemLayer:
                 return True
             plugin = self.app.get_agent_plugin(target)
             if plugin is None:
-                self.app.renderer.show_warning(f"Agente desconhecido: {target}")
-                return True
+                plugin = register_dynamic_plugin(target)
+                self.show_system_message(f"Agente registrado dinamicamente: {target}")
             self.show_system_message(f"Configurando conexão para {target}")
             self.show_system_message(f"Atual: {format_connection_label(plugin.effective_connection())}")
             try:
@@ -266,6 +274,10 @@ class AppSystemLayer:
                 self.app.renderer.show_warning(str(exc))
                 return True
             set_connection_override(target, connection, persist=True)
+            if target not in (self.app.active_agents or []):
+                self.app.active_agents = list(self.app.active_agents or []) + [target]
+            if target not in (self.app.selected_agents or []):
+                self.app.selected_agents = list(self.app.selected_agents or []) + [target]
             self.show_system_message(f"Conexão ativa para {target}: {format_connection_label(connection)}")
             return True
 

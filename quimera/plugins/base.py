@@ -1,5 +1,6 @@
 """Componentes de `quimera.plugins.base`."""
 import json
+import re
 import shlex
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -100,6 +101,11 @@ def apply_connection_overrides() -> None:
     """Aplica conexões persistidas aos plugins registrados."""
     overrides = get_connection_overrides()
     for name, conn_data in overrides.items():
+        if _registry.get(name) is None:
+            try:
+                register_dynamic_plugin(name, metadata=conn_data.get("plugin"))
+            except ValueError:
+                continue
         plugin = _registry.get(name)
         if plugin is None:
             continue
@@ -120,7 +126,23 @@ def set_connection_override(agent_name: str, connection: Connection, persist: bo
         object.__setattr__(plugin, "_connection_override", connection)
     if persist:
         connections = load_connections()
-        connections[agent_name] = connection_to_dict(connection)
+        payload = connection_to_dict(connection)
+        if plugin is not None and getattr(plugin, "dynamic", False):
+            payload["plugin"] = {
+                "dynamic": True,
+                "prefix": plugin.prefix,
+                "style": list(plugin.style),
+                "icon": plugin.icon,
+                "capabilities": list(plugin.capabilities),
+                "preferred_task_types": list(plugin.preferred_task_types),
+                "supports_tools": plugin.supports_tools,
+                "tool_use_reliability": plugin.tool_use_reliability,
+                "supports_code_editing": plugin.supports_code_editing,
+                "supports_long_context": plugin.supports_long_context,
+                "supports_task_execution": plugin.supports_task_execution,
+                "base_tier": plugin.base_tier,
+            }
+        connections[agent_name] = payload
         save_connections(connections)
 
 
@@ -154,6 +176,7 @@ class AgentPlugin:
     api_key_env: Optional[str] = None  # nome da variável de ambiente com a API key
     spy_stdout_formatter: Optional[Callable[[str], SpyFormatterOutput]] = None
     stderr_noise: FrozenSet[str] = field(default_factory=frozenset)
+    dynamic: bool = False
     # Connection override (carregado automaticamente do base_dir)
     _connection_override: Optional[Connection] = field(default=None, repr=False)
 
@@ -240,6 +263,56 @@ def format_connection_label(connection: Connection) -> str:
 
 
 _registry: dict[str, AgentPlugin] = {}
+
+
+_DYNAMIC_AGENT_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+
+
+def is_valid_agent_name(name: str) -> bool:
+    """Valida nomes canônicos de agentes dinâmicos."""
+    return bool(name and _DYNAMIC_AGENT_RE.fullmatch(name))
+
+
+def _humanize_agent_name(name: str) -> str:
+    """Gera um label legível a partir do nome canônico."""
+    parts = re.split(r"[-_]+", name)
+    return " ".join(part.capitalize() for part in parts if part) or name
+
+
+def _dynamic_plugin_metadata(name: str) -> dict:
+    """Retorna metadados padrão para agentes registrados via conexão."""
+    return {
+        "dynamic": True,
+        "prefix": f"/{name}",
+        "style": ("bright_cyan", _humanize_agent_name(name)),
+        "icon": "🧩",
+        "capabilities": ["general", "code_edit", "code_review", "bug_investigation", "test_execution", "tool_use"],
+        "preferred_task_types": ["general", "code_edit", "code_review", "bug_investigation", "test_execution"],
+        "supports_tools": True,
+        "tool_use_reliability": "medium",
+        "supports_code_editing": True,
+        "supports_long_context": True,
+        "supports_task_execution": True,
+        "base_tier": 2,
+    }
+
+
+def register_dynamic_plugin(name: str, connection: Connection | None = None, metadata: dict | None = None) -> AgentPlugin:
+    """Cria ou atualiza um plugin dinâmico e o registra no registry."""
+    normalized = (name or "").strip().lower()
+    if not is_valid_agent_name(normalized):
+        raise ValueError(f"Nome de agente inválido: {name}")
+
+    plugin_data = _dynamic_plugin_metadata(normalized)
+    if metadata:
+        plugin_data.update(metadata)
+    prefix = plugin_data.pop("prefix", f"/{normalized}")
+    style = tuple(plugin_data.pop("style", ("bright_cyan", _humanize_agent_name(normalized))))
+    plugin = AgentPlugin(name=normalized, prefix=prefix, style=style, **plugin_data)
+    if connection is not None:
+        object.__setattr__(plugin, "_connection_override", connection)
+    _registry[normalized] = plugin
+    return plugin
 
 
 def register(plugin: AgentPlugin) -> None:
