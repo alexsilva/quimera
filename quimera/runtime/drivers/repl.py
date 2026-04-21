@@ -17,6 +17,7 @@ from typing import Optional
 from urllib import error as urllib_error
 from urllib import request as urllib_request
 
+from ...plugins.base import OpenAIConnection
 from .openai_compat import OpenAICompatDriver
 from ..approval import AutoApprovalHandler, ConsoleApprovalHandler
 from ..config import ToolRuntimeConfig
@@ -69,46 +70,82 @@ class DriverRepl:
         """Inicializa uma instância de DriverRepl."""
         plugin = get_plugin(plugin_name)
         if plugin is None:
-            compat = [p for p in all_plugins() if p.driver == "openai_compat"]
+            compat = [p for p in all_plugins() if isinstance(p.effective_connection(), OpenAIConnection)]
             names = ", ".join(p.name for p in compat) or "(nenhum)"
             raise ValueError(
                 f"Plugin '{plugin_name}' não encontrado. "
                 f"Plugins openai_compat disponíveis: {names}"
             )
-        if plugin.driver != "openai_compat":
+        connection = plugin.effective_connection()
+        if not isinstance(connection, OpenAIConnection):
             raise ValueError(
-                f"Plugin '{plugin_name}' usa driver='{plugin.driver}', "
+                f"Plugin '{plugin_name}' usa driver='{plugin.effective_driver()}', "
                 "mas o REPL só suporta driver='openai_compat'."
             )
 
         self.plugin = plugin
         self.working_dir = (working_dir or Path.cwd()).resolve()
-
-        api_key = "ollama"
-        if plugin.api_key_env:
-            api_key = os.environ.get(plugin.api_key_env, "")
-            if not api_key:
-                print(
-                    f"[aviso] Variável de ambiente '{plugin.api_key_env}' não definida. "
-                    "Usando string vazia como api_key.",
-                    file=sys.stderr,
-                )
-
-        self.driver = OpenAICompatDriver(
-            model=plugin.model,
-            base_url=plugin.base_url,
-            api_key=api_key,
-            tool_use_reliability=getattr(plugin, "tool_use_reliability", "medium"),
-        )
+        self._last_connection_signature = None
+        self._update_driver()
 
         rt_config = ToolRuntimeConfig(workspace_root=self.working_dir)
         self._rt_config = rt_config
         self.tool_executor = ToolExecutor(rt_config, ConsoleApprovalHandler())
         self._auto_tool_executor = ToolExecutor(rt_config, AutoApprovalHandler(approve_all=True))
 
+    @property
+    def connection(self) -> OpenAIConnection:
+        """Obtém a conexão atual do plugin, considerando overrides."""
+        return self._get_current_connection()
+
+    def _get_current_connection(self) -> OpenAIConnection:
+        """Obtém a conexão atual do plugin, considerando overrides."""
+        connection = self.plugin.effective_connection()
+        if not isinstance(connection, OpenAIConnection):
+            raise ValueError(
+                f"Plugin '{self.plugin.name}' usa driver='{self.plugin.effective_driver()}', "
+                "mas o REPL só suporta driver='openai_compat'."
+            )
+        return connection
+
+    def _connection_has_changed(self) -> bool:
+        """Verifica se a conexão mudou desde a última verificação."""
+        current_conn = self._get_current_connection()
+        # Criar uma assinatura simples baseada nos campos que afetam o driver
+        signature = (
+            current_conn.model,
+            current_conn.base_url,
+            current_conn.api_key_env,
+            # Também considerar o valor real da api_key se api_key_env estiver definida
+            os.environ.get(current_conn.api_key_env, "") if current_conn.api_key_env else ""
+        )
+        changed = signature != self._last_connection_signature
+        self._last_connection_signature = signature
+        return changed
+
+    def _update_driver(self) -> None:
+        """Atualiza o driver com a conexão atual."""
+        connection = self._get_current_connection()
+        api_key = "ollama"
+        if connection.api_key_env:
+            api_key = os.environ.get(connection.api_key_env, "")
+            if not api_key:
+                print(
+                    f"[aviso] Variável de ambiente '{connection.api_key_env}' não definida. "
+                    "Usando string vazia como api_key.",
+                    file=sys.stderr,
+                )
+
+        self.driver = OpenAICompatDriver(
+            model=connection.model,
+            base_url=connection.base_url,
+            api_key=api_key,
+            tool_use_reliability=getattr(self.plugin, "tool_use_reliability", "medium"),
+        )
+
     def _probe_url(self) -> str:
         """Executa probe url."""
-        return self.plugin.base_url.rstrip("/") + "/models"
+        return self.connection.base_url.rstrip("/") + "/models"
 
     def ensure_backend_available(self, timeout: float = 2.0) -> None:
         """Executa ensure backend available."""
@@ -153,8 +190,8 @@ class DriverRepl:
         self.ensure_backend_available()
         print(f"\n{'=' * 60}")
         print(f"  Driver REPL  •  {self.plugin.name}")
-        print(f"  Modelo : {self.plugin.model}")
-        print(f"  URL    : {self.plugin.base_url}")
+        print(f"  Modelo : {self.connection.model}")
+        print(f"  URL    : {self.connection.base_url}")
         print(f"  Dir    : {self.working_dir}")
         print(f"{'=' * 60}")
 
@@ -200,11 +237,21 @@ class DriverRepl:
 
             if raw == "/info":
                 print(f"  plugin      : {self.plugin.name}")
-                print(f"  modelo      : {self.plugin.model}")
-                print(f"  base_url    : {self.plugin.base_url}")
+                print(f"  modelo      : {self._get_current_connection().model}")
+                print(f"  base_url    : {self._get_current_connection().base_url}")
                 print(f"  working_dir : {self.working_dir}")
                 print(f"  ferramentas : {'sim' if use_tools else 'não'}")
                 continue
+
+            if raw == "/reload":
+                self._update_driver()
+                print(f"  [driver recarregado: {self.plugin.name} -> {self.connection.base_url}]")
+                continue
+
+            if self._connection_has_changed():
+                self._update_driver()
+                print(f"  [conexão alterada detectada, driver atualizado]")
+                print(f"  [{self.connection.base_url}]")
 
             executor = self.tool_executor if use_tools else None
             use_tools = True  # reset após cada mensagem com /sem-tools

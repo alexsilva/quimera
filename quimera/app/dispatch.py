@@ -181,7 +181,7 @@ class AppDispatchServices:
         app.task_services.refresh_task_shared_state()
 
         plugin = app.get_agent_plugin(agent)
-        driver = getattr(plugin, "driver", "cli") if plugin else "cli"
+        driver = plugin.effective_driver() if plugin else "cli"
         skip_tool_prompt = isinstance(driver, str) and driver != "cli"
         if app.debug_prompt_metrics:
             prompt, metrics = app.prompt_builder.build(

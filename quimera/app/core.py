@@ -37,7 +37,7 @@ from ..workspace import Workspace
 from ..config import ConfigManager
 from ..metrics import BehaviorMetricsTracker
 from ..constants import (
-    CMD_AGENTS, CMD_ALIASES, CMD_CLEAR, CMD_CONTEXT, CMD_CONTEXT_EDIT, CMD_EDIT, CMD_EXIT,
+    CMD_AGENTS, CMD_ALIASES, CMD_CLEAR, CMD_CONNECT, CMD_CONTEXT, CMD_CONTEXT_EDIT, CMD_EDIT, CMD_EXIT,
     CMD_FILE_PREFIX, CMD_HELP,
     CMD_PROMPT, CMD_TASK,
     MSG_CHAT_STARTED, MSG_SESSION_LOG, MSG_SESSION_STATUS, MSG_MIGRATION,
@@ -213,6 +213,7 @@ class QuimeraApp:
         commands = {
             CMD_AGENTS,
             CMD_CLEAR,
+            CMD_CONNECT,
             CMD_CONTEXT,
             CMD_CONTEXT_EDIT,
             CMD_EDIT,
@@ -454,7 +455,12 @@ class QuimeraApp:
 
         if not self.active_agents:
             logger.warning("no active agents, resetting to default")
-            self.active_agents = self.selected_agents
+            logger.warning("DEBUG selected_agents=%r", self.selected_agents)
+            logger.warning("DEBUG available=%r", self.get_available_plugins())
+            self.active_agents = self.selected_agents or self.get_available_plugins()
+            logger.warning("DEBUG after fallback active_agents=%r", self.active_agents)
+            if not self.active_agents:
+                raise RuntimeError("No agents available")
         return random.choice(self.active_agents), user_input, False
 
     @staticmethod

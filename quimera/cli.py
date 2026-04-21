@@ -1,13 +1,25 @@
 """Componentes de `quimera.cli`."""
 import argparse
+import json
 import locale
 import os
+import shlex
 import sys
 from pathlib import Path
 from typing import List
 
 from .constants import Visibility
 from . import plugins as _plugins
+from .plugins.base import (
+    CliConnection,
+    OpenAIConnection,
+    _connection_from_dict,
+    connection_to_dict,
+    format_connection_label,
+    load_connections,
+    save_connections,
+    set_connection_override,
+)
 from . import themes as _themes
 from .app import QuimeraApp
 from .config import ConfigManager
@@ -40,6 +52,90 @@ def _expand_patterns(agents: List[str], available: List[str]) -> List[str]:
                 seen.add(a)
                 result.append(a)
     return result
+
+
+def _prompt_text(label: str, default: str | None = None) -> str:
+    """Lê um valor interativo com default opcional."""
+    suffix = f" [{default}]" if default not in {None, ""} else ""
+    value = input(f"{label}{suffix}: ").strip()
+    if value:
+        return value
+    return default or ""
+
+
+def _prompt_bool(label: str, default: bool = False) -> bool:
+    """Lê um booleano interativo."""
+    default_label = "s" if default else "n"
+    while True:
+        raw = input(f"{label} [s/n] [{default_label}]: ").strip().lower()
+        if not raw:
+            return default
+        if raw in {"s", "sim", "y", "yes"}:
+            return True
+        if raw in {"n", "nao", "não", "no"}:
+            return False
+        print("Valor inválido. Use 's' ou 'n'.")
+
+
+def _configure_connection_interactively(plugin, driver_hint: str | None = None):
+    """Coleta configuração de conexão de forma interativa."""
+    current = plugin.effective_connection()
+    current_driver = "cli" if isinstance(current, CliConnection) else "openai"
+    driver = (driver_hint or _prompt_text("Driver", current_driver)).strip().lower()
+    while driver not in {"cli", "openai"}:
+        print("Driver inválido. Use 'cli' ou 'openai'.")
+        driver = _prompt_text("Driver", current_driver).strip().lower()
+
+    if driver == "cli":
+        cli_defaults = current if isinstance(current, CliConnection) else CliConnection(cmd=list(plugin.cmd))
+        cmd_default = shlex.join(cli_defaults.cmd) if cli_defaults.cmd else ""
+        cmd_text = _prompt_text("Comando", cmd_default)
+        if not cmd_text:
+            raise SystemExit("Configuração cancelada: comando CLI vazio.")
+        return CliConnection(
+            cmd=shlex.split(cmd_text),
+            prompt_as_arg=_prompt_bool("Enviar prompt como argumento", cli_defaults.prompt_as_arg),
+            output_format=cli_defaults.output_format,
+        )
+
+    api_defaults = current if isinstance(current, OpenAIConnection) else OpenAIConnection(
+        model=plugin.model or "gpt-4o",
+        base_url=plugin.base_url or "https://api.openai.com/v1",
+        api_key_env=plugin.api_key_env or "OPENAI_API_KEY",
+        provider=plugin.driver if plugin.driver != "cli" else "openai_compat",
+        supports_native_tools=plugin.supports_tools,
+    )
+    provider_default = api_defaults.provider if api_defaults.provider != "openai" else "openai_compat"
+    return OpenAIConnection(
+        model=_prompt_text("Modelo", api_defaults.model) or api_defaults.model,
+        base_url=_prompt_text("Base URL", api_defaults.base_url) or api_defaults.base_url,
+        api_key_env=_prompt_text("Variável da API key", api_defaults.api_key_env) or api_defaults.api_key_env,
+        provider=provider_default,
+        supports_native_tools=api_defaults.supports_native_tools,
+    )
+
+
+def _build_connection_from_args(plugin, args):
+    """Monta conexão a partir das flags; se estiver incompleta, cai no modo interativo."""
+    if args.driver is None:
+        return _configure_connection_interactively(plugin)
+    if args.driver == "cli":
+        if args.cmd:
+            return CliConnection(
+                cmd=list(args.cmd),
+                prompt_as_arg=False,
+                output_format=None,
+            )
+        return _configure_connection_interactively(plugin, driver_hint="cli")
+    if args.model:
+        return OpenAIConnection(
+            model=args.model,
+            base_url=args.base_url or plugin.effective_base_url() or "https://api.openai.com/v1",
+            api_key_env=args.api_key_env or plugin.effective_api_key_env() or "OPENAI_API_KEY",
+            provider=plugin.effective_driver() if plugin.effective_driver() != "cli" else "openai_compat",
+            supports_native_tools=plugin.supports_tools,
+        )
+    return _configure_connection_interactively(plugin, driver_hint="openai")
 
 
 def main():
@@ -101,6 +197,20 @@ def main():
                         help="Diretório de trabalho para o REPL (padrão: cwd)")
     parser.add_argument("--prompt", dest="repl_prompt", metavar="TEXTO", default=None,
                         help="Prompt one-shot para --driver-repl (não-interativo, útil para scripts)")
+    parser.add_argument("--connect", dest="connect", metavar="AGENTE", default=None,
+                        help="Configura interativamente a conexão de um agente e persiste no base_dir")
+    parser.add_argument("--driver", dest="driver", choices=["cli", "openai"], default=None,
+                        help="Driver de conexão (cli ou openai)")
+    parser.add_argument("--cmd", dest="cmd", metavar="CMD", nargs=argparse.REMAINDER, default=None,
+                        help="Comando CLI (para driver=cli)")
+    parser.add_argument("--model", dest="model", metavar="MODELO", default=None,
+                        help="Modelo (para driver=openai)")
+    parser.add_argument("--base-url", dest="base_url", metavar="URL", default=None,
+                        help="Base URL (para driver=openai)")
+    parser.add_argument("--api-key-env", dest="api_key_env", metavar="VAR", default=None,
+                        help="Variável de ambiente com API key (para driver=openai)")
+    parser.add_argument("--list-connections", dest="list_connections", action="store_true",
+                        help="Lista conexões persistidas")
 
     args, unknown = parser.parse_known_args()
 
@@ -109,6 +219,28 @@ def main():
 
     if args.history_window is not None and args.history_window <= 0:
         parser.error("--history-window deve ser maior que zero")
+
+    if args.list_connections:
+        conns = load_connections()
+        if not conns:
+            print("Nenhuma conexão persistida.")
+        else:
+            for name, data in conns.items():
+                print(f"{name}: {format_connection_label(_connection_from_dict(data))}")
+        return
+
+    if args.connect:
+        agent_name = args.connect
+        plugin = _plugins.get(agent_name)
+        if plugin is None:
+            parser.error(f"Agente desconhecido em --connect: {agent_name}")
+
+        print(f"Configurando conexão para {agent_name}")
+        print(f"Built-in atual: {format_connection_label(plugin.effective_connection())}")
+        connection = _build_connection_from_args(plugin, args)
+        set_connection_override(agent_name, connection, persist=True)
+        print(f"Conexão salva em base_dir para {agent_name}: {format_connection_label(connection)}")
+        return
 
     if args.driver_repl:
         working_dir = Path(args.working_dir).resolve() if args.working_dir else None

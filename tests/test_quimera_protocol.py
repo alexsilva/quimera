@@ -25,8 +25,9 @@ from quimera.app.protocol import AppProtocol
 from quimera.app.session_metrics import SessionMetricsService
 from quimera.cli import main as cli_main
 from quimera.config import DEFAULT_HISTORY_WINDOW
-from quimera.constants import CMD_AGENTS, CMD_CLEAR, CMD_HELP, CMD_PROMPT, EXTEND_MARKER, Visibility, build_agents_help, build_help
+from quimera.constants import CMD_AGENTS, CMD_CLEAR, CMD_CONNECT, CMD_HELP, CMD_PROMPT, EXTEND_MARKER, Visibility, build_agents_help, build_help
 from quimera.plugins import AgentPlugin
+from quimera.plugins.base import OpenAIConnection
 from quimera.prompt import PromptBuilder
 from quimera.runtime.approval import ApprovalHandler
 from quimera.runtime.config import ToolRuntimeConfig
@@ -586,6 +587,57 @@ class ProtocolTests(unittest.TestCase):
 
     def test_available_internal_commands_include_prompt(self):
         self.assertIn(CMD_PROMPT, QuimeraApp._available_internal_commands())
+
+    def test_available_internal_commands_include_connect(self):
+        self.assertIn(CMD_CONNECT, QuimeraApp._available_internal_commands())
+
+    def test_handle_command_warns_when_connect_target_is_missing(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.renderer = DummyRenderer()
+        app.system_layer = AppSystemLayer(app)
+
+        handled = app.system_layer.handle_command(CMD_CONNECT)
+
+        self.assertTrue(handled)
+        self.assertEqual(app.renderer.warnings, ["Uso: /connect <agente>"])
+
+    def test_handle_command_connects_agent_interactively(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.renderer = DummyRenderer()
+        app._output_lock = threading.Lock()
+        app._clear_user_prompt_line_if_needed = Mock()
+        app._redisplay_user_prompt_if_needed = Mock()
+        app._nonblocking_input_status = "idle"
+        app._deferred_system_messages = []
+        plugin = AgentPlugin(
+            name="chatgpt",
+            prefix="/chatgpt",
+            style=("green", "ChatGPT"),
+            driver="openai_compat",
+            model="gpt-4o",
+            base_url="https://api.openai.com/v1",
+            api_key_env="OPENAI_API_KEY",
+            supports_tools=True,
+        )
+        app.get_available_plugins = Mock(return_value=[plugin])
+        app.get_agent_plugin = Mock(return_value=plugin)
+        answers = iter(["openai", "gpt-5.1", "http://localhost:1234/v1", "LM_STUDIO_KEY"])
+        app.read_user_input = Mock(side_effect=lambda prompt, timeout=-1: next(answers))
+        app.system_layer = AppSystemLayer(app)
+
+        with patch("quimera.app.system_layer.set_connection_override") as set_override:
+            handled = app.system_layer.handle_command("/connect chatgpt")
+
+        self.assertTrue(handled)
+        set_override.assert_called_once()
+        target, connection = set_override.call_args.args[:2]
+        self.assertEqual(target, "chatgpt")
+        self.assertIsInstance(connection, OpenAIConnection)
+        self.assertEqual(connection.model, "gpt-5.1")
+        self.assertEqual(connection.base_url, "http://localhost:1234/v1")
+        self.assertEqual(connection.api_key_env, "LM_STUDIO_KEY")
+        self.assertIn("Configurando conexão para chatgpt", app.renderer.system_messages[0])
+        self.assertIn("Conexão ativa para chatgpt", app.renderer.system_messages[-1])
 
     def test_clear_terminal_screen_clears_scrollback_and_repositions_cursor(self):
         app = QuimeraApp.__new__(QuimeraApp)

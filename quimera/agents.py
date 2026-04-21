@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 
 import quimera.plugins as plugins
 from quimera.constants import MAX_STDERR_LINES, Visibility
+from quimera.plugins.base import CliConnection, OpenAIConnection
 from quimera.sandbox.bwrap import build_bwrap_cmd
 from quimera.spy_output_presenter import SpyOutputPresenter
 from .runtime.drivers.openai_compat import OpenAICompatDriver
@@ -77,18 +78,21 @@ class AgentClient:
         """Exibe mensagens resumidas de stdout quando o plugin oferece formatter."""
         return self._spy_output_presenter.consume_stdout(agent, line)
 
-    def run(self, cmd, input_text=None, silent=False, agent=None, show_status=True):
+    def run(self, cmd, input_text=None, silent=False, agent=None, show_status=True, extra_env=None, cwd=None):
         """Executa run."""
         self._cancel_event.clear()
         self._agent_running = True
         self._start_esc_monitor()
         try:
             env = {**os.environ, "NO_COLOR": "1", "TERM": "dumb", "COLORTERM": ""}
+            if extra_env:
+                env.update(extra_env)
             effective_cmd = cmd
-            if self.execution_mode is not None and self.working_dir:
+            effective_cwd = cwd or self.working_dir
+            if self.execution_mode is not None and effective_cwd:
                 effective_cmd = build_bwrap_cmd(
                     self.execution_mode,
-                    self.working_dir,
+                    effective_cwd,
                     cmd,
                     plugin=plugins.get(agent) if agent else None,
                 )
@@ -100,7 +104,7 @@ class AgentClient:
                 text=True,
                 bufsize=1,
                 env=env,
-                cwd=self.working_dir,
+                cwd=effective_cwd,
                 start_new_session=True,
             )
             self._current_proc = proc
@@ -430,6 +434,27 @@ class AgentClient:
             return None
         return "\n".join(text_parts).strip() or None
 
+    @staticmethod
+    def _resolve_plugin_connection(plugin):
+        """Resolve a conexão efetiva com fallback para objetos plugin simplificados."""
+        resolver = getattr(plugin, "effective_connection", None)
+        if callable(resolver):
+            return resolver()
+        driver = getattr(plugin, "driver", "cli")
+        if isinstance(driver, str) and driver != "cli":
+            return OpenAIConnection(
+                model=getattr(plugin, "model", None) or "gpt-4o",
+                base_url=getattr(plugin, "base_url", None) or "https://api.openai.com/v1",
+                api_key_env=getattr(plugin, "api_key_env", None) or "OPENAI_API_KEY",
+                provider=driver,
+                supports_native_tools=getattr(plugin, "supports_tools", True),
+            )
+        return CliConnection(
+            cmd=list(getattr(plugin, "cmd", None) or []),
+            prompt_as_arg=getattr(plugin, "prompt_as_arg", False),
+            output_format=getattr(plugin, "output_format", None),
+        )
+
     def call(self, agent, prompt, silent=False, show_status=True, quiet=False):
         """Resolve o comando do agente e delega a execução."""
         self._user_cancelled = False
@@ -439,14 +464,21 @@ class AgentClient:
         if plugin is None:
             self.renderer.show_error(f"[erro] agente desconhecido: {agent}")
             return None
-        driver = getattr(plugin, "driver", "cli")
-        if isinstance(driver, str) and driver != "cli":
+        connection = self._resolve_plugin_connection(plugin)
+        if isinstance(connection, OpenAIConnection):
             return self._call_api(agent, plugin, prompt, silent=silent, show_status=show_status, quiet=quiet)
-        if plugin.prompt_as_arg:
-            raw = self.run([*plugin.cmd, prompt], input_text=None, silent=silent, agent=agent, show_status=show_status)
+        cmd = plugin.effective_cmd()
+        prompt_as_arg = plugin.effective_prompt_as_arg()
+        output_format = plugin.effective_output_format()
+        extra_env = connection.env if isinstance(connection, CliConnection) else None
+        cwd = connection.cwd if isinstance(connection, CliConnection) else None
+        if prompt_as_arg:
+            raw = self.run([*cmd, prompt], input_text=None, silent=silent, agent=agent, show_status=show_status,
+                           extra_env=extra_env, cwd=cwd)
         else:
-            raw = self.run(plugin.cmd, input_text=prompt, silent=silent, agent=agent, show_status=show_status)
-        fmt = getattr(plugin, "output_format", None)
+            raw = self.run(cmd, input_text=prompt, silent=silent, agent=agent, show_status=show_status,
+                           extra_env=extra_env, cwd=cwd)
+        fmt = output_format
         if fmt == "stream-json" and raw is not None:
             return self._parse_stream_json(raw, agent)
         if fmt == "codex-json" and raw is not None:
@@ -457,13 +489,17 @@ class AgentClient:
 
     def _call_api(self, agent, plugin, prompt, silent=False, show_status=True, quiet=False):
         """Executa agentes com driver de API (ex: openai_compat para Ollama)."""
+        connection = self._resolve_plugin_connection(plugin)
+        if not isinstance(connection, OpenAIConnection):
+            self.renderer.show_error(f"[erro] conexão inválida para driver de API: {agent}")
+            return None
         is_first_call = agent not in self._api_drivers
         if is_first_call:
-            api_key_env = getattr(plugin, "api_key_env", None)
+            api_key_env = connection.api_key_env
             api_key = os.environ.get(api_key_env, "ollama") if api_key_env else "ollama"
             self._api_drivers[agent] = OpenAICompatDriver(
-                model=plugin.model,
-                base_url=plugin.base_url,
+                model=connection.model,
+                base_url=connection.base_url,
                 api_key=api_key,
                 timeout=self.timeout,
                 tool_use_reliability=getattr(plugin, "tool_use_reliability", "medium"),
@@ -475,7 +511,7 @@ class AgentClient:
         self._start_esc_monitor()
         status_cm = self.renderer.running_status("", agent=agent) if (
                     show_status and not silent and not quiet) else nullcontext(None)
-        status_label = f"[dim]{'conectando' if is_first_call else 'aguardando'} {plugin.model}...[/dim]"
+        status_label = f"[dim]{'conectando' if is_first_call else 'aguardando'} {connection.model}...[/dim]"
 
         try:
             with status_cm as status:
@@ -516,8 +552,7 @@ class AgentClient:
 
                 if result_holder["error"]:
                     _cmd = getattr(plugin, "cmd", None)
-                    _name = (_cmd[0] if isinstance(_cmd, (list, tuple)) and _cmd else None) or getattr(plugin, "model",
-                                                                                                       "driver")
+                    _name = (_cmd[0] if isinstance(_cmd, (list, tuple)) and _cmd else None) or connection.model or "driver"
                     self.renderer.show_error(f"[erro] falha ao comunicar com {_name}: {result_holder['error']}")
                     return None
 

@@ -1,11 +1,127 @@
 """Componentes de `quimera.plugins.base`."""
-from dataclasses import dataclass, field
-from typing import Callable, FrozenSet, List, Optional, Tuple
+import json
+import shlex
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Callable, FrozenSet, List, Optional, Tuple, Union
 
+from ..paths import CANDIDATE_DIRS, find_base_writable
 from quimera.agent_events import SpyEvent
 
 
 SpyFormatterOutput = List[SpyEvent]
+
+
+@dataclass
+class CliConnection:
+    """Conexão via CLI local."""
+    cmd: List[str] = field(default_factory=list)
+    prompt_as_arg: bool = False
+    output_format: Optional[str] = None
+    env: Optional[dict] = None
+    cwd: Optional[str] = None
+
+
+@dataclass
+class OpenAIConnection:
+    """Conexão via API OpenAI-compatible."""
+    model: str = "gpt-4o"
+    base_url: str = "https://api.openai.com/v1"
+    api_key_env: str = "OPENAI_API_KEY"
+    provider: str = "openai"
+    supports_native_tools: bool = True
+
+
+Connection = Union[CliConnection, OpenAIConnection]
+
+
+def _get_connections_file() -> Path:
+    """Retorna o arquivo de conexões persistidas."""
+    base = find_base_writable(CANDIDATE_DIRS)
+    return base / "connections.json"
+
+
+def load_connections() -> dict:
+    """Carrega conexões persistidas."""
+    f = _get_connections_file()
+    if f.exists():
+        return json.loads(f.read_text(encoding="utf-8"))
+    return {}
+
+
+def save_connections(connections: dict) -> None:
+    """Salva conexões persistidas."""
+    f = _get_connections_file()
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps(connections, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def get_connection_overrides() -> dict[str, dict]:
+    """Retorna overrides de conexão persistidos por agente."""
+    return load_connections()
+
+
+def _connection_from_dict(data: dict) -> Connection:
+    """Converte dict em Connection."""
+    if data.get("type") == "cli":
+        raw_cmd = data.get("cmd", [])
+        if isinstance(raw_cmd, str):
+            raw_cmd = shlex.split(raw_cmd)
+        elif isinstance(raw_cmd, list) and len(raw_cmd) == 1 and isinstance(raw_cmd[0], str) and " " in raw_cmd[0]:
+            raw_cmd = shlex.split(raw_cmd[0])
+        return CliConnection(
+            cmd=raw_cmd,
+            prompt_as_arg=data.get("prompt_as_arg", False),
+            output_format=data.get("output_format"),
+            env=data.get("env"),
+            cwd=data.get("cwd"),
+        )
+    return OpenAIConnection(
+        model=data.get("model", "gpt-4o"),
+        base_url=data.get("base_url", "https://api.openai.com/v1"),
+        api_key_env=data.get("api_key_env", "OPENAI_API_KEY"),
+        provider=data.get("provider", "openai"),
+        supports_native_tools=data.get("supports_native_tools", True),
+    )
+
+
+def connection_to_dict(connection: Connection) -> dict:
+    """Serializa uma conexão para persistência."""
+    if isinstance(connection, CliConnection):
+        data = asdict(connection)
+        data["type"] = "cli"
+        return data
+    data = asdict(connection)
+    data["type"] = "openai"
+    return data
+
+
+def apply_connection_overrides() -> None:
+    """Aplica conexões persistidas aos plugins registrados."""
+    overrides = get_connection_overrides()
+    for name, conn_data in overrides.items():
+        plugin = _registry.get(name)
+        if plugin is None:
+            continue
+        conn = _connection_from_dict(conn_data)
+        object.__setattr__(plugin, "_connection_override", conn)
+
+
+def reload_plugins() -> list:
+    """Recarrega plugins e retorna nomes disponibles."""
+    apply_connection_overrides()
+    return all_names()
+
+
+def set_connection_override(agent_name: str, connection: Connection, persist: bool = True) -> None:
+    """Aplica um override de conexão em memória e opcionalmente persiste."""
+    plugin = _registry.get(agent_name)
+    if plugin is not None:
+        object.__setattr__(plugin, "_connection_override", connection)
+    if persist:
+        connections = load_connections()
+        connections[agent_name] = connection_to_dict(connection)
+        save_connections(connections)
 
 
 @dataclass
@@ -38,12 +154,89 @@ class AgentPlugin:
     api_key_env: Optional[str] = None  # nome da variável de ambiente com a API key
     spy_stdout_formatter: Optional[Callable[[str], SpyFormatterOutput]] = None
     stderr_noise: FrozenSet[str] = field(default_factory=frozenset)
+    # Connection override (carregado automaticamente do base_dir)
+    _connection_override: Optional[Connection] = field(default=None, repr=False)
 
     @property
     def render_style(self) -> Tuple[str, str]:
         """Retorna o estilo pronto para renderização na UI."""
         color, label = self.style
         return (color, f"{self.icon} {label}")
+
+    def effective_connection(self) -> Optional[Connection]:
+        """Retorna a conexão efetiva, priorizando override persistido."""
+        if self._connection_override is not None:
+            return self._connection_override
+        if isinstance(self.driver, str) and self.driver != "cli":
+            return OpenAIConnection(
+                model=self.model or "gpt-4o",
+                base_url=self.base_url or "https://api.openai.com/v1",
+                api_key_env=self.api_key_env or "OPENAI_API_KEY",
+                provider=self.driver,
+                supports_native_tools=self.supports_tools,
+            )
+        return CliConnection(
+            cmd=list(self.cmd),
+            prompt_as_arg=self.prompt_as_arg,
+            output_format=self.output_format,
+        )
+
+    def effective_driver(self) -> str:
+        """Retorna o driver da conexão efetiva."""
+        connection = self.effective_connection()
+        if isinstance(connection, OpenAIConnection):
+            return connection.provider or "openai_compat"
+        return "cli"
+
+    def effective_cmd(self) -> list[str]:
+        """Retorna o comando CLI efetivo."""
+        connection = self.effective_connection()
+        if isinstance(connection, CliConnection):
+            return list(connection.cmd)
+        return list(self.cmd)
+
+    def effective_prompt_as_arg(self) -> bool:
+        """Retorna se o prompt deve ser enviado como argumento."""
+        connection = self.effective_connection()
+        if isinstance(connection, CliConnection):
+            return connection.prompt_as_arg
+        return self.prompt_as_arg
+
+    def effective_output_format(self) -> Optional[str]:
+        """Retorna o formato de saída efetivo."""
+        connection = self.effective_connection()
+        if isinstance(connection, CliConnection):
+            return connection.output_format
+        return self.output_format
+
+    def effective_model(self) -> Optional[str]:
+        """Retorna o modelo efetivo de drivers compatíveis com OpenAI."""
+        connection = self.effective_connection()
+        if isinstance(connection, OpenAIConnection):
+            return connection.model
+        return self.model
+
+    def effective_base_url(self) -> Optional[str]:
+        """Retorna a base URL efetiva."""
+        connection = self.effective_connection()
+        if isinstance(connection, OpenAIConnection):
+            return connection.base_url
+        return self.base_url
+
+    def effective_api_key_env(self) -> Optional[str]:
+        """Retorna o nome da variável de ambiente efetiva."""
+        connection = self.effective_connection()
+        if isinstance(connection, OpenAIConnection):
+            return connection.api_key_env
+        return self.api_key_env
+
+
+def format_connection_label(connection: Connection) -> str:
+    """Retorna uma descrição curta para UI/CLI."""
+    if isinstance(connection, CliConnection):
+        cmd = shlex.join(connection.cmd) if connection.cmd else "(sem comando)"
+        return f"cli: {cmd}"
+    return f"{connection.provider}: model={connection.model} base_url={connection.base_url}"
 
 
 _registry: dict[str, AgentPlugin] = {}
