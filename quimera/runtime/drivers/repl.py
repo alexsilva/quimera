@@ -56,6 +56,33 @@ def _on_tool_result(result: ToolResult) -> None:
             print(f"    {line}")
 
 
+def _resolve_plugin_connection(plugin):
+    """Resolve a conexão do plugin com fallback para objetos simplificados."""
+    resolver = getattr(plugin, "effective_connection", None)
+    if callable(resolver):
+        connection = resolver()
+        if isinstance(connection, OpenAIConnection):
+            return connection
+    driver = getattr(plugin, "driver", "cli")
+    if isinstance(driver, str) and driver != "cli":
+        return OpenAIConnection(
+            model=getattr(plugin, "model", None) or "gpt-4o",
+            base_url=getattr(plugin, "base_url", None) or "https://api.openai.com/v1",
+            api_key_env=getattr(plugin, "api_key_env", None) or "OPENAI_API_KEY",
+            provider=driver,
+            supports_native_tools=getattr(plugin, "supports_tools", True),
+        )
+    return None
+
+
+def _resolve_plugin_driver(plugin) -> str:
+    """Resolve o driver efetivo com fallback para plugins simplificados."""
+    resolver = getattr(plugin, "effective_driver", None)
+    if callable(resolver):
+        return resolver()
+    return str(getattr(plugin, "driver", "cli"))
+
+
 class DriverRepl:
     """Loop REPL para testar um plugin baseado em openai_compat."""
 
@@ -70,16 +97,16 @@ class DriverRepl:
         """Inicializa uma instância de DriverRepl."""
         plugin = get_plugin(plugin_name)
         if plugin is None:
-            compat = [p for p in all_plugins() if isinstance(p.effective_connection(), OpenAIConnection)]
+            compat = [p for p in all_plugins() if isinstance(_resolve_plugin_connection(p), OpenAIConnection)]
             names = ", ".join(p.name for p in compat) or "(nenhum)"
             raise ValueError(
                 f"Plugin '{plugin_name}' não encontrado. "
                 f"Plugins openai_compat disponíveis: {names}"
             )
-        connection = plugin.effective_connection()
+        connection = _resolve_plugin_connection(plugin)
         if not isinstance(connection, OpenAIConnection):
             raise ValueError(
-                f"Plugin '{plugin_name}' usa driver='{plugin.effective_driver()}', "
+                f"Plugin '{plugin_name}' usa driver='{_resolve_plugin_driver(plugin)}', "
                 "mas o REPL só suporta driver='openai_compat'."
             )
 
@@ -100,10 +127,10 @@ class DriverRepl:
 
     def _get_current_connection(self) -> OpenAIConnection:
         """Obtém a conexão atual do plugin, considerando overrides."""
-        connection = self.plugin.effective_connection()
+        connection = _resolve_plugin_connection(self.plugin)
         if not isinstance(connection, OpenAIConnection):
             raise ValueError(
-                f"Plugin '{self.plugin.name}' usa driver='{self.plugin.effective_driver()}', "
+                f"Plugin '{self.plugin.name}' usa driver='{_resolve_plugin_driver(self.plugin)}', "
                 "mas o REPL só suporta driver='openai_compat'."
             )
         return connection

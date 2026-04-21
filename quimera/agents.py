@@ -439,7 +439,9 @@ class AgentClient:
         """Resolve a conexão efetiva com fallback para objetos plugin simplificados."""
         resolver = getattr(plugin, "effective_connection", None)
         if callable(resolver):
-            return resolver()
+            connection = resolver()
+            if isinstance(connection, (OpenAIConnection, CliConnection)):
+                return connection
         driver = getattr(plugin, "driver", "cli")
         if isinstance(driver, str) and driver != "cli":
             return OpenAIConnection(
@@ -453,6 +455,22 @@ class AgentClient:
             cmd=list(getattr(plugin, "cmd", None) or []),
             prompt_as_arg=getattr(plugin, "prompt_as_arg", False),
             output_format=getattr(plugin, "output_format", None),
+        )
+
+    @staticmethod
+    def _resolve_plugin_cli_attrs(plugin, connection) -> tuple[list[str], bool, str | None]:
+        """Resolve atributos CLI com fallback para plugins simplificados em testes."""
+        cmd_resolver = getattr(plugin, "effective_cmd", None)
+        prompt_resolver = getattr(plugin, "effective_prompt_as_arg", None)
+        output_resolver = getattr(plugin, "effective_output_format", None)
+        if callable(cmd_resolver) and callable(prompt_resolver) and callable(output_resolver):
+            return cmd_resolver(), prompt_resolver(), output_resolver()
+        if isinstance(connection, CliConnection):
+            return list(connection.cmd), connection.prompt_as_arg, connection.output_format
+        return (
+            list(getattr(plugin, "cmd", None) or []),
+            bool(getattr(plugin, "prompt_as_arg", False)),
+            getattr(plugin, "output_format", None),
         )
 
     def call(self, agent, prompt, silent=False, show_status=True, quiet=False, on_text_chunk=None):
@@ -475,9 +493,7 @@ class AgentClient:
                 quiet=quiet,
                 on_text_chunk=on_text_chunk,
             )
-        cmd = plugin.effective_cmd()
-        prompt_as_arg = plugin.effective_prompt_as_arg()
-        output_format = plugin.effective_output_format()
+        cmd, prompt_as_arg, output_format = self._resolve_plugin_cli_attrs(plugin, connection)
         extra_env = connection.env if isinstance(connection, CliConnection) else None
         cwd = connection.cwd if isinstance(connection, CliConnection) else None
         if prompt_as_arg:
