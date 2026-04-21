@@ -1,3 +1,4 @@
+from quimera.runtime.errors import ToolValidationError
 from quimera.runtime.models import ToolResult, ToolCall
 
 
@@ -24,3 +25,17 @@ def test_tool_call_init():
     assert call.name == "test"
     assert call.arguments == {"a": 1}
     assert call.metadata == {}
+
+
+def test_tool_result_to_model_payload_includes_error_metadata():
+    result = ToolResult(
+        ok=False,
+        tool_name="test",
+        error=ToolValidationError("Campo inválido", field="path", hint="use caminho absoluto"),
+    )
+
+    payload = result.to_model_payload()
+
+    assert payload["error"] == "Campo inválido"
+    assert payload["error_type"] == "validation"
+    assert payload["error_metadata"] == {"field": "path", "hint": "use caminho absoluto"}

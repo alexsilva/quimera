@@ -1,10 +1,34 @@
 """Componentes de `quimera.app.dispatch`."""
 import time
 from contextlib import nullcontext
-
+from quimera.runtime.errors import (
+    ToolError,
+    ToolValidationError,
+    ToolEnvironmentError,
+    ToolLogicError,
+    ToolRateLimitError,
+)
 from ..runtime.tool_hops import get_max_tool_hops
 from ..runtime.parser import strip_tool_block
 from .config import logger
+
+
+def _coerce_tool_error(error):
+    """Normaliza strings cruas em ToolError quando houver heurística compatível."""
+    if not error or isinstance(error, ToolError):
+        return error
+
+    error_msg = str(error)
+    lowered = error_msg.lower()
+    if "validação" in lowered or "campo" in lowered or "formato" in lowered:
+        return ToolValidationError(error_msg)
+    if "arquivo" in lowered or "permissão" in lowered or "não encontrado" in lowered:
+        return ToolEnvironmentError(error_msg)
+    if "regra" in lowered or "lógica" in lowered or "contradiz" in lowered:
+        return ToolLogicError(error_msg)
+    if "rate limit" in lowered or "throttling" in lowered:
+        return ToolRateLimitError(error_msg)
+    return error
 
 
 class AppDispatchServices:
@@ -41,6 +65,8 @@ class AppDispatchServices:
 
             is_invalid = bool(getattr(tool_result, "error", None)) and "Sem política para a ferramenta" in str(tool_result.error)
             ok = bool(getattr(tool_result, "ok", False))
+            if tool_result.error:
+                tool_result.error = _coerce_tool_error(tool_result.error)
             session_metrics = getattr(app, "session_metrics", None)
             if session_metrics is not None:
                 session_metrics.record_tool_event(app, agent, ok=ok, is_invalid=is_invalid)
@@ -187,7 +213,7 @@ class AppDispatchServices:
         skip_tool_prompt = isinstance(driver, str) and driver != "cli"
         stream_state = {"started": False}
 
-        def _on_text_chunk(chunk: str):
+        def _on_text_chunk(chunk):
             if silent or not show_output or not chunk:
                 return
             output_lock = getattr(app, "_output_lock", None)
