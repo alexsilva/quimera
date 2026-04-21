@@ -3,10 +3,12 @@ from dataclasses import dataclass
 from typing import Callable
 
 try:
+    from rich.console import Group
     from rich.markdown import Markdown
     from rich.padding import Padding
     from rich.panel import Panel
     from rich.rule import Rule
+    from rich.table import Table
     from rich.text import Text
 
     _RICH_AVAILABLE = True
@@ -24,7 +26,7 @@ def _render_panel(console, label, style, content_md):
     console.print(
         Panel(
             content_md,
-            title=f"[bold white on {style}] {label} [/bold white on {style}]",
+            title=f"[bold {style}]{label}[/bold {style}]",
             border_style=style,
             padding=(0, 1),
         )
@@ -32,10 +34,19 @@ def _render_panel(console, label, style, content_md):
 
 
 def _render_chat(console, label, style, content_md):
-    """Bullet ● colorido + conteúdo indentado (estilo Slack/Discord)."""
+    """Cabeçalho enxuto com trilho lateral para separar melhor o corpo."""
     console.print()
-    console.print(Text(f"● {label}", style=f"bold {style}"))
-    console.print(Padding(content_md, pad=(0, 0, 0, 2)))
+    table = Table.grid(expand=True, padding=(0, 1))
+    table.add_column(width=2)
+    table.add_column(ratio=1)
+    table.add_row(
+        Text("●", style=f"bold {style}"),
+        Group(
+            Text(label, style=f"bold {style}"),
+            Padding(content_md, pad=(0, 0, 0, 2)),
+        ),
+    )
+    console.print(table)
 
 
 def _render_rule(console, label, style, content_md):
@@ -92,7 +103,7 @@ THEMES: dict[str, Theme] = {
     ),
 }
 
-DEFAULT_THEME = "panel"
+DEFAULT_THEME = "chat"
 
 
 def get(name: str) -> Theme:

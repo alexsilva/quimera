@@ -33,6 +33,7 @@ try:
     from rich.panel import Panel
     from rich.live import Live
     from rich.table import Table
+    from rich.text import Text
 
     _RICH_AVAILABLE = True
 except ImportError:
@@ -108,10 +109,23 @@ class TerminalRenderer:
         if self._console:
             if agent:
                 style, label = self._agent_style(agent)
-                prefix = f"[{style}]{label}:[/] "
-                self._console.print(f"{prefix}{markup_escape(clean_message)}")
+                table = Table.grid(expand=True, padding=(0, 1))
+                table.add_column(width=18)
+                table.add_column(ratio=1)
+                table.add_row(
+                    Text(label, style=f"bold {style}"),
+                    Text(clean_message),
+                )
+                self._console.print(table, soft_wrap=True)
             else:
-                self._console.print(markup_escape(clean_message))
+                table = Table.grid(expand=True, padding=(0, 1))
+                table.add_column(width=2)
+                table.add_column(ratio=1)
+                table.add_row(
+                    Text("·", style="dim"),
+                    Text(clean_message, style="dim"),
+                )
+                self._console.print(table, soft_wrap=True)
         else:
             prefix = f"{agent}: " if agent else ""
             print(f"{prefix}{clean_message}")
