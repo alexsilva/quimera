@@ -11,9 +11,12 @@ import logging
 import re
 from typing import Optional
 
-from ..tool_hops import get_max_tool_hops
+from ..streaming import apply_stream_diff, normalize_stream_diff
+from ..tool_hops import DEFAULT_MAX_TOOL_HOPS, get_max_tool_hops
 from .tool_schemas import resolve_tool_schemas
 from ..models import ToolCall, ToolResult
+
+MAX_TOOL_HOPS = DEFAULT_MAX_TOOL_HOPS
 
 try:
     from openai import OpenAI
@@ -73,6 +76,7 @@ def _parse_text_tool_calls(text: str) -> list[dict]:
             "arguments": arguments,
         })
     return calls
+
 
 
 class OpenAICompatDriver:
@@ -323,18 +327,27 @@ class OpenAICompatDriver:
             messages=messages,
             stream=True,
         )
-        text_parts: list[str] = []
+        text = ""
         for chunk in stream:
             if cancel_event is not None and cancel_event.is_set():
                 break
             if not chunk.choices:
                 continue
-            content = chunk.choices[0].delta.content
+            delta = chunk.choices[0].delta
+            content = getattr(delta, "content", None)
+            diff = normalize_stream_diff(getattr(delta, "diff", None))
+
+            if diff:
+                text = apply_stream_diff(text, diff)
+                if on_text_chunk is not None:
+                    on_text_chunk({"text": content or "", "diff": diff})
+                continue
+
             if content:
-                text_parts.append(content)
+                text += content
                 if on_text_chunk is not None:
                     on_text_chunk(content)
-        return "".join(text_parts).strip(), []
+        return text.strip(), []
 
     def _execute_tool(self, tc: dict, tool_executor) -> ToolResult:
         """Executa um tool call via ToolExecutor do Quimera."""

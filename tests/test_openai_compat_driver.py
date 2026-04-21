@@ -25,9 +25,9 @@ from quimera.runtime.models import ToolCall, ToolResult
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_chunk(content=None):
+def _make_chunk(content=None, diff=None):
     """Chunk de streaming para respostas de texto (sem ferramentas)."""
-    delta = SimpleNamespace(content=content)
+    delta = SimpleNamespace(content=content, diff=diff)
     choice = SimpleNamespace(delta=delta)
     return SimpleNamespace(choices=[choice])
 
@@ -208,6 +208,29 @@ def test_chat_no_tools_uses_streaming():
     assert call_kwargs["stream"] is True
     assert "tools" not in call_kwargs
     assert "tool_choice" not in call_kwargs
+
+
+def test_chat_streaming_supports_structured_diff_chunks():
+    driver, mock_client = _make_driver()
+    chunks = [
+        _make_chunk(diff={"op": "replace", "text": "abc"}),
+        _make_chunk(diff={"op": "add", "text": "def"}),
+    ]
+    _setup_stream(mock_client, chunks)
+    received = []
+
+    text, tool_calls = driver._chat(
+        [{"role": "user", "content": "oi"}],
+        tools=[],
+        on_text_chunk=received.append,
+    )
+
+    assert text == "abcdef"
+    assert tool_calls == []
+    assert received == [
+        {"text": "", "diff": [{"op": "replace", "text": "abc"}]},
+        {"text": "", "diff": [{"op": "add", "text": "def"}]},
+    ]
 
 
 # ---------------------------------------------------------------------------

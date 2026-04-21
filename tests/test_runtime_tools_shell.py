@@ -45,6 +45,7 @@ def test_exec_command_completes_and_returns_payload(tmp_path):
     assert result.ok is True
     assert result.data["status"] == "completed"
     assert "hello" in result.data["stdout"]
+    assert result.data["diff"] == [{"op": "replace", "text": "hello\n"}]
     assert result.exit_code == 0
 
 
@@ -61,6 +62,7 @@ def test_exec_command_supports_polling_running_process(tmp_path):
     )
     assert started.ok is True
     assert started.data["status"] == "running"
+    assert started.data["diff"]
     session_id = started.data["session_id"]
 
     finished = tool.write_stdin(
@@ -71,7 +73,9 @@ def test_exec_command_supports_polling_running_process(tmp_path):
     )
     assert finished.ok is True
     assert finished.data["status"] == "completed"
+    assert "start" in finished.data["stdout"]
     assert "done" in finished.data["stdout"]
+    assert finished.data["diff"] == [{"op": "replace", "text": "start\ndone\n"}]
 
 
 def test_exec_command_supports_stdin_roundtrip(tmp_path):

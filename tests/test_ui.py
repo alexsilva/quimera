@@ -6,7 +6,9 @@ from rich.console import Console
 
 from quimera.ui import (
     TerminalRenderer,
+    _apply_stream_diff,
     _agent_style,
+    _normalize_stream_diff,
     strip_ansi,
     _is_interactive_terminal,
 )
@@ -239,3 +241,37 @@ class TestTerminalRenderer:
         mock_renderer._live = MagicMock()
         result = mock_renderer.running_status("Processing...", agent="test")
         assert hasattr(result, "update")
+
+    def test_update_message_stream_accepts_add_diff(self, mock_renderer):
+        mock_renderer._message_streams["codex"] = {
+            "content": "abc",
+            "label": "Codex",
+            "style": "blue",
+            "theme_name": "default",
+            "live": MagicMock(),
+        }
+
+        mock_renderer.update_message_stream("codex", {"diff": [{"op": "add", "text": "def"}]})
+
+        assert mock_renderer._message_streams["codex"]["content"] == "abcdef"
+
+    def test_update_message_stream_accepts_replace_diff(self, mock_renderer):
+        mock_renderer._message_streams["codex"] = {
+            "content": "abc",
+            "label": "Codex",
+            "style": "blue",
+            "theme_name": "default",
+            "live": MagicMock(),
+        }
+
+        mock_renderer.update_message_stream("codex", {"diff": [{"op": "replace", "text": "xyz"}]})
+
+        assert mock_renderer._message_streams["codex"]["content"] == "xyz"
+
+
+class TestStreamingDiffHelpers:
+    def test_normalize_stream_diff_accepts_dict(self):
+        assert _normalize_stream_diff({"op": "add", "content": "abc"}) == [{"op": "add", "text": "abc"}]
+
+    def test_apply_stream_diff_supports_replace_and_add(self):
+        assert _apply_stream_diff("old", [{"op": "replace", "text": "new"}, {"op": "add", "text": "!"}]) == "new!"

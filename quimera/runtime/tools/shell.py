@@ -74,6 +74,11 @@ class ShellTool:
                 "cwd": str(self.config.workspace_root),
                 "stdout": stdout[: self.config.max_output_chars],
                 "stderr": stderr[: self.config.max_output_chars],
+                "diff": self._build_output_diff(
+                    stdout[: self.config.max_output_chars],
+                    stderr[: self.config.max_output_chars],
+                    completed=True,
+                ),
             },
             ensure_ascii=False,
             indent=2,
@@ -120,6 +125,7 @@ class ShellTool:
             yield_time_ms=yield_time_ms,
             tool_name=call.name,
             include_session_id=True,
+            wait_for_completion=tty_enabled,
         )
 
     def write_stdin(self, call: ToolCall) -> ToolResult:
@@ -158,6 +164,7 @@ class ShellTool:
             yield_time_ms=yield_time_ms,
             tool_name=call.name,
             include_session_id=True,
+            wait_for_completion=close_stdin,
         )
 
     def close_command_session(self, call: ToolCall) -> ToolResult:
@@ -191,6 +198,11 @@ class ShellTool:
             "stdout": stdout[: self.config.max_output_chars],
             "stderr": stderr[: self.config.max_output_chars],
             "status": "closed",
+            "diff": self._build_output_diff(
+                stdout[: self.config.max_output_chars],
+                stderr[: self.config.max_output_chars],
+                completed=True,
+            ),
         }
         return ToolResult(
             ok=True,
@@ -330,29 +342,56 @@ class ShellTool:
             yield_time_ms: int,
             tool_name: str,
             include_session_id: bool,
+            wait_for_completion: bool = False,
     ) -> ToolResult:
         """Coleta a saída incremental de uma sessão e devolve o estado atual."""
-        deadline = time.perf_counter() + (yield_time_ms / 1000)
+        wait_budget_ms = yield_time_ms if wait_for_completion else max(yield_time_ms, 100)
+        deadline = time.perf_counter() + (wait_budget_ms / 1000)
         while session.process.poll() is None and time.perf_counter() < deadline:
-            time.sleep(0.05)
+            if not wait_for_completion and self._has_unread_output(session):
+                break
+            remaining = deadline - time.perf_counter()
+            if remaining <= 0:
+                break
+            time.sleep(min(0.01, remaining))
 
         stdout, stderr = self._drain_session_output(session)
         duration_ms = int((time.perf_counter() - session.started_at) * 1000)
         returncode = session.process.poll()
+        if returncode is None and (stdout or stderr):
+            grace_deadline = time.perf_counter() + 0.05
+            while time.perf_counter() < grace_deadline:
+                returncode = session.process.poll()
+                if returncode is not None:
+                    break
+                time.sleep(0.005)
         completed = returncode is not None
+        full_stdout, full_stderr = self._snapshot_session_output(session)
         payload = {
             "command": session.command,
             "cwd": str(session.cwd),
-            "stdout": stdout[: self.config.max_output_chars],
-            "stderr": stderr[: self.config.max_output_chars],
+            "stdout": (full_stdout if completed else stdout)[: self.config.max_output_chars],
+            "stderr": (full_stderr if completed else stderr)[: self.config.max_output_chars],
             "status": "completed" if completed else "running",
+            "diff": self._build_output_diff(
+                stdout[: self.config.max_output_chars],
+                stderr[: self.config.max_output_chars],
+                full_stdout=full_stdout[: self.config.max_output_chars],
+                full_stderr=full_stderr[: self.config.max_output_chars],
+                completed=completed,
+            ),
         }
         if include_session_id and not completed:
             payload["session_id"] = session.session_id
         elif include_session_id and completed:
             payload["session_id"] = session.session_id
 
-        truncated = len(stdout) > self.config.max_output_chars or len(stderr) > self.config.max_output_chars
+        visible_stdout = full_stdout if completed else stdout
+        visible_stderr = full_stderr if completed else stderr
+        truncated = (
+            len(visible_stdout) > self.config.max_output_chars
+            or len(visible_stderr) > self.config.max_output_chars
+        )
         result = ToolResult(
             ok=(returncode == 0) if completed else True,
             tool_name=tool_name,
@@ -374,6 +413,19 @@ class ShellTool:
             session.stdout_offset = len(session.stdout_chunks)
             session.stderr_offset = len(session.stderr_chunks)
         return stdout, stderr
+
+    def _snapshot_session_output(self, session: CommandSession) -> tuple[str, str]:
+        """Retorna toda a saída acumulada da sessão sem alterar offsets."""
+        with session.lock:
+            return "".join(session.stdout_chunks), "".join(session.stderr_chunks)
+
+    def _has_unread_output(self, session: CommandSession) -> bool:
+        """Indica se há saída ainda não entregue para o consumidor."""
+        with session.lock:
+            return (
+                session.stdout_offset < len(session.stdout_chunks)
+                or session.stderr_offset < len(session.stderr_chunks)
+            )
 
     def _cleanup_session(self, session_id: int) -> None:
         """Remove uma sessão concluída do registro interno."""
@@ -411,3 +463,19 @@ class ShellTool:
             return
         if session.process.stdin and not session.process.stdin.closed:
             session.process.stdin.close()
+
+    @staticmethod
+    def _build_output_diff(
+        stdout: str,
+        stderr: str,
+        *,
+        full_stdout: str | None = None,
+        full_stderr: str | None = None,
+        completed: bool,
+    ) -> list[dict[str, str]]:
+        """Representa saída incremental do shell em operações simples de UI."""
+        if completed:
+            combined = f"{full_stdout or ''}{full_stderr or ''}"
+            return [{"op": "replace", "text": combined}] if combined else []
+        combined = f"{stdout}{stderr}"
+        return [{"op": "add", "text": combined}] if combined else []

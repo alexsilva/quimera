@@ -5,6 +5,8 @@ import sys
 import threading
 from contextlib import contextmanager, nullcontext
 
+from quimera.runtime.streaming import apply_stream_diff, normalize_stream_diff
+
 
 def strip_ansi(text: str) -> str:
     """Remove ANSI escape sequences from text."""
@@ -19,6 +21,16 @@ def strip_ansi(text: str) -> str:
     text = ansi_orphaned.sub('', text)
 
     return text
+
+
+def _normalize_stream_diff(diff) -> list[dict[str, str]]:
+    """Normaliza o payload incremental aceito pelo renderer."""
+    return normalize_stream_diff(diff, transform_text=strip_ansi)
+
+
+def _apply_stream_diff(content: str, diff: list[dict[str, str]]) -> str:
+    """Aplica operações incrementais de texto no buffer atual."""
+    return apply_stream_diff(content, diff)
 
 
 def _is_interactive_terminal() -> bool:
@@ -149,7 +161,7 @@ class TerminalRenderer:
                 "live": live,
             }
 
-    def update_message_stream(self, agent, chunk: str):
+    def update_message_stream(self, agent, chunk):
         """Atualiza a resposta incremental com mais um chunk."""
         if not self._console or not chunk:
             return
@@ -157,7 +169,13 @@ class TerminalRenderer:
             state = self._message_streams.get(agent)
             if state is None:
                 return
-            state["content"] += strip_ansi(chunk)
+            if isinstance(chunk, dict):
+                state["content"] = _apply_stream_diff(state["content"], _normalize_stream_diff(chunk.get("diff")))
+                text = chunk.get("text")
+                if text and not chunk.get("diff"):
+                    state["content"] += strip_ansi(str(text))
+            else:
+                state["content"] += strip_ansi(str(chunk))
             renderable = self._build_stream_renderable(
                 state["theme_name"],
                 state["label"],
