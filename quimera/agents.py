@@ -455,7 +455,7 @@ class AgentClient:
             output_format=getattr(plugin, "output_format", None),
         )
 
-    def call(self, agent, prompt, silent=False, show_status=True, quiet=False):
+    def call(self, agent, prompt, silent=False, show_status=True, quiet=False, on_text_chunk=None):
         """Resolve o comando do agente e delega a execução."""
         self._user_cancelled = False
         if self.execution_mode and self.execution_mode.prompt_addon:
@@ -466,7 +466,15 @@ class AgentClient:
             return None
         connection = self._resolve_plugin_connection(plugin)
         if isinstance(connection, OpenAIConnection):
-            return self._call_api(agent, plugin, prompt, silent=silent, show_status=show_status, quiet=quiet)
+            return self._call_api(
+                agent,
+                plugin,
+                prompt,
+                silent=silent,
+                show_status=show_status,
+                quiet=quiet,
+                on_text_chunk=on_text_chunk,
+            )
         cmd = plugin.effective_cmd()
         prompt_as_arg = plugin.effective_prompt_as_arg()
         output_format = plugin.effective_output_format()
@@ -487,7 +495,7 @@ class AgentClient:
             return self._parse_opencode_json(raw, agent)
         return raw
 
-    def _call_api(self, agent, plugin, prompt, silent=False, show_status=True, quiet=False):
+    def _call_api(self, agent, plugin, prompt, silent=False, show_status=True, quiet=False, on_text_chunk=None):
         """Executa agentes com driver de API (ex: openai_compat para Ollama)."""
         connection = self._resolve_plugin_connection(plugin)
         if not isinstance(connection, OpenAIConnection):
@@ -532,6 +540,7 @@ class AgentClient:
                             on_tool_abort=(
                                 lambda reason: self.tool_event_callback(agent, loop_abort=True, reason=reason))
                             if self.tool_event_callback else None,
+                            on_text_chunk=on_text_chunk,
                         )
                     except Exception as exc:
                         result_holder["error"] = exc

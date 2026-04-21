@@ -185,6 +185,20 @@ class AppDispatchServices:
         plugin = app.get_agent_plugin(agent)
         driver = plugin.effective_driver() if plugin else "cli"
         skip_tool_prompt = isinstance(driver, str) and driver != "cli"
+        stream_state = {"started": False}
+
+        def _on_text_chunk(chunk: str):
+            if silent or not show_output or not chunk:
+                return
+            output_lock = getattr(app, "_output_lock", None)
+            if not stream_state["started"]:
+                with (output_lock if output_lock is not None else nullcontext()):
+                    if hasattr(app, "_clear_user_prompt_line_if_needed"):
+                        app._clear_user_prompt_line_if_needed()
+                    app.renderer.start_message_stream(agent)
+                    stream_state["started"] = True
+            app.renderer.update_message_stream(agent, chunk)
+
         if app.debug_prompt_metrics:
             prompt, metrics = app.prompt_builder.build(
                 agent,
@@ -220,7 +234,16 @@ class AppDispatchServices:
                 skip_tool_prompt=skip_tool_prompt,
             )
 
-        result = app.agent_client.call(agent, prompt, silent=silent)
+        result = app.agent_client.call(agent, prompt, silent=silent, on_text_chunk=_on_text_chunk)
+        if stream_state["started"]:
+            output_lock = getattr(app, "_output_lock", None)
+            with (output_lock if output_lock is not None else nullcontext()):
+                if result is not None:
+                    app.renderer.finish_message_stream(agent, result)
+                else:
+                    app.renderer.abort_message_stream(agent)
+                if hasattr(app, "_redisplay_user_prompt_if_needed"):
+                    app._redisplay_user_prompt_if_needed(clear_first=False)
         elapsed = time.time() - start
         if hasattr(app, "session_state") and app.session_state:
             with (counter_lock if counter_lock is not None else nullcontext()):

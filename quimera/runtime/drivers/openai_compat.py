@@ -122,6 +122,7 @@ class OpenAICompatDriver:
             on_tool_call=None,
             on_tool_result=None,
             on_tool_abort=None,
+            on_text_chunk=None,
             quiet=False,
             cancel_event=None,
     ) -> Optional[str]:
@@ -188,7 +189,12 @@ class OpenAICompatDriver:
             if cancel_event is not None and cancel_event.is_set():
                 return None
             try:
-                response_text, tool_calls = self._chat(messages, tools, cancel_event=cancel_event)
+                response_text, tool_calls = self._chat(
+                    messages,
+                    tools,
+                    cancel_event=cancel_event,
+                    on_text_chunk=on_text_chunk if not tools else None,
+                )
             except Exception as exc:
                 _logger.error("OpenAICompatDriver: API error on hop %d: %s", hop, exc)
                 return None
@@ -256,14 +262,14 @@ class OpenAICompatDriver:
         """Indica se o resultado representa uso de ferramenta fora do contrato conhecido."""
         return (not result.ok) and bool(result.error) and "Sem política para a ferramenta" in result.error
 
-    def _chat(self, messages: list[dict], tools: list[dict], cancel_event=None) -> tuple[str, list[dict]]:
+    def _chat(self, messages: list[dict], tools: list[dict], cancel_event=None, on_text_chunk=None) -> tuple[str, list[dict]]:
         """Despacha para o modo correto conforme presença de ferramentas."""
         # Cancelamento cooperativo: se já foi solicitado, não iniciar nova interação
         if cancel_event is not None and cancel_event.is_set():
             return "", []
         if tools:
             return self._chat_with_tools(messages, tools)
-        return self._chat_streaming(messages, cancel_event=cancel_event)
+        return self._chat_streaming(messages, cancel_event=cancel_event, on_text_chunk=on_text_chunk)
 
     def _chat_with_tools(self, messages: list[dict], tools: list[dict]) -> tuple[str, list[dict]]:
         """
@@ -307,7 +313,7 @@ class OpenAICompatDriver:
 
         return _sanitize_assistant_text(text), tool_calls
 
-    def _chat_streaming(self, messages: list[dict], cancel_event=None) -> tuple[str, list[dict]]:
+    def _chat_streaming(self, messages: list[dict], cancel_event=None, on_text_chunk=None) -> tuple[str, list[dict]]:
         """
         Chamada streaming para respostas de texto puro (sem ferramentas).
         Evita timeout em respostas longas sem bloquear a coleta.
@@ -326,6 +332,8 @@ class OpenAICompatDriver:
             content = chunk.choices[0].delta.content
             if content:
                 text_parts.append(content)
+                if on_text_chunk is not None:
+                    on_text_chunk(content)
         return "".join(text_parts).strip(), []
 
     def _execute_tool(self, tc: dict, tool_executor) -> ToolResult:

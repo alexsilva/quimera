@@ -32,6 +32,8 @@ try:
     from rich.markup import escape as markup_escape
     from rich.panel import Panel
     from rich.live import Live
+    from rich.padding import Padding
+    from rich.rule import Rule
     from rich.table import Table
     from rich.text import Text
 
@@ -70,6 +72,8 @@ class TerminalRenderer:
         self._get_plugin_style = get_plugin_style
         self._live = None
         self._statuses = {}
+        self._message_streams = {}
+        self._completed_streams = {}
         self._lock = threading.RLock()
 
     def _agent_style(self, agent: str):
@@ -80,10 +84,120 @@ class TerminalRenderer:
         """Exibe message usando o tema ativo."""
         style, label = self._agent_style(agent)
         clean_content = strip_ansi(str(content))
+        if self._consume_completed_stream(agent, clean_content):
+            return
         if self._console:
             self._theme.render(self._console, label, style, Markdown(clean_content))
         else:
             print(f"\n{label}: {clean_content}\n")
+
+    def _consume_completed_stream(self, agent, content: str) -> bool:
+        """Evita render final duplicado quando a resposta já foi exibida via streaming."""
+        normalized = content.strip()
+        with self._lock:
+            previous = self._completed_streams.get(agent)
+            if previous is None:
+                return False
+            del self._completed_streams[agent]
+        return previous.strip() == normalized
+
+    def _build_stream_renderable(self, theme_name: str, label: str, style: str, content: str):
+        """Monta o renderable dinâmico usado no streaming."""
+        content_md = Markdown(content or "")
+        if theme_name == "panel":
+            return Panel(
+                content_md,
+                title=f"[bold {style}]{label}[/bold {style}]",
+                border_style=style,
+                padding=(0, 1),
+            )
+        if theme_name == "chat":
+            return Padding(content_md, pad=(0, 0, 0, 4))
+        if theme_name == "minimal":
+            return Padding(content_md, pad=(0, 0, 0, 2))
+        return content_md
+
+    def start_message_stream(self, agent):
+        """Inicia a área de renderização incremental para uma resposta."""
+        if not self._console:
+            return
+        style, label = self._agent_style(agent)
+        with self._lock:
+            if agent in self._message_streams:
+                return
+            theme_name = self._theme.name
+            live = None
+            self._console.print()
+            if theme_name == "rule":
+                self._console.print(Rule(f"[bold {style}]{label}[/bold {style}]", style=f"dim {style}"))
+            elif theme_name == "chat":
+                header = Table.grid(expand=True, padding=(0, 1))
+                header.add_column(width=2)
+                header.add_column(ratio=1)
+                header.add_row(Text("●", style=f"bold {style}"), Text(label, style=f"bold {style}"))
+                self._console.print(header)
+            elif theme_name == "minimal":
+                self._console.print(Text(f"▶ {label}", style=f"bold {style}"))
+            initial = self._build_stream_renderable(theme_name, label, style, "")
+            live = Live(initial, console=self._console, refresh_per_second=20, transient=False, auto_refresh=False)
+            live.start()
+            self._message_streams[agent] = {
+                "content": "",
+                "label": label,
+                "style": style,
+                "theme_name": theme_name,
+                "live": live,
+            }
+
+    def update_message_stream(self, agent, chunk: str):
+        """Atualiza a resposta incremental com mais um chunk."""
+        if not self._console or not chunk:
+            return
+        with self._lock:
+            state = self._message_streams.get(agent)
+            if state is None:
+                return
+            state["content"] += strip_ansi(chunk)
+            renderable = self._build_stream_renderable(
+                state["theme_name"],
+                state["label"],
+                state["style"],
+                state["content"],
+            )
+            state["live"].update(renderable, refresh=True)
+
+    def finish_message_stream(self, agent, final_content: str):
+        """Fecha o streaming preservando o conteúdo já mostrado."""
+        if not self._console:
+            return
+        clean_content = strip_ansi(str(final_content or ""))
+        with self._lock:
+            state = self._message_streams.pop(agent, None)
+            if state is None:
+                return
+            renderable = self._build_stream_renderable(
+                state["theme_name"],
+                state["label"],
+                state["style"],
+                clean_content,
+            )
+            state["live"].update(renderable, refresh=True)
+            state["live"].stop()
+            if state["theme_name"] == "rule":
+                self._console.print(Rule(style="dim"))
+            self._console.print()
+            self._completed_streams[agent] = clean_content
+
+    def abort_message_stream(self, agent):
+        """Fecha o stream sem marcar a resposta como completa."""
+        if not self._console:
+            return
+        with self._lock:
+            state = self._message_streams.pop(agent, None)
+            if state is None:
+                return
+            state["live"].stop()
+            self._console.print()
 
     def show_no_response(self, agent):
         """Exibe no response."""
