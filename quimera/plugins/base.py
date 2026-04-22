@@ -163,6 +163,7 @@ class AgentPlugin:
     preferred_task_types: List[str] = field(default_factory=list)
     avoid_task_types: List[str] = field(default_factory=list)
     supports_tools: bool = True
+    has_builtin_tools: bool = False  # True = agente executa tools internamente (não precisa <tool ...> no chat)
     tool_use_reliability: str = "medium"
     supports_code_editing: bool = False
     supports_long_context: bool = False

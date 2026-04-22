@@ -54,6 +54,7 @@ plugin = AgentPlugin(
     preferred_task_types=["architecture", "code_review", "documentation", "code_edit", "general"],
     avoid_task_types=[],
     supports_tools=True,
+    has_builtin_tools=True,
     tool_use_reliability="high",
     supports_code_editing=True,
     spy_stdout_formatter=_format_claude_spy_event,

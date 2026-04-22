@@ -535,7 +535,7 @@ class ProtocolTests(unittest.TestCase):
             debug=True,
             primary=True,
             shared_state=app.shared_state,
-            skip_tool_prompt=False,
+            skip_tool_prompt=True,
         )
         message = app.renderer.system_messages[0]
         self.assertIn("PROMPT PREVIEW: claude", message)
@@ -573,6 +573,108 @@ class ProtocolTests(unittest.TestCase):
         self.assertTrue(handled)
         app.prompt_builder.build.assert_called_once()
         self.assertEqual(app.prompt_builder.build.call_args.args[0], AGENT_CODEX)
+
+    def test_prompt_preview_keeps_tool_prompt_for_cli_agent_without_builtin_tools(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.history = []
+        app.shared_state = {}
+        app.prompt_builder = Mock()
+        app.prompt_builder.build.return_value = ("PROMPT", {
+            "rules_chars": 1,
+            "session_state_chars": 1,
+            "persistent_chars": 1,
+            "request_chars": 1,
+            "facts_chars": 1,
+            "shared_state_chars": 1,
+            "history_chars": 1,
+            "handoff_chars": 0,
+            "history_messages": 0,
+            "total_chars": 7,
+            "primary": True,
+        })
+        app.get_agent_plugin = Mock(return_value=AgentPlugin(
+            name="pickle",
+            prefix="/opencode-pickle",
+            style=("green", "Pickle"),
+            cmd=["pickle"],
+            driver="cli",
+            supports_tools=True,
+            has_builtin_tools=False,
+        ))
+
+        message = AppSystemLayer(app)._build_prompt_preview_message("pickle")
+
+        self.assertIn("TOOLS NO TEXTO: sim", message)
+        self.assertFalse(app.prompt_builder.build.call_args.kwargs["skip_tool_prompt"])
+
+    def test_prompt_preview_skips_tool_prompt_for_cli_agent_with_builtin_tools(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.history = []
+        app.shared_state = {}
+        app.prompt_builder = Mock()
+        app.prompt_builder.build.return_value = ("PROMPT", {
+            "rules_chars": 1,
+            "session_state_chars": 1,
+            "persistent_chars": 1,
+            "request_chars": 1,
+            "facts_chars": 1,
+            "shared_state_chars": 1,
+            "history_chars": 1,
+            "handoff_chars": 0,
+            "history_messages": 0,
+            "total_chars": 7,
+            "primary": True,
+        })
+        app.get_agent_plugin = Mock(return_value=AgentPlugin(
+            name="codex-cli",
+            prefix="/codex-cli",
+            style=("blue", "Codex CLI"),
+            cmd=["codex"],
+            driver="cli",
+            supports_tools=True,
+            has_builtin_tools=True,
+        ))
+
+        message = AppSystemLayer(app)._build_prompt_preview_message("codex-cli")
+
+        self.assertIn("TOOLS NO TEXTO: não", message)
+        self.assertTrue(app.prompt_builder.build.call_args.kwargs["skip_tool_prompt"])
+
+    def test_prompt_preview_keeps_tool_prompt_for_openai_compat_even_with_builtin_tools(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.history = []
+        app.shared_state = {}
+        app.prompt_builder = Mock()
+        app.prompt_builder.build.return_value = ("PROMPT", {
+            "rules_chars": 1,
+            "session_state_chars": 1,
+            "persistent_chars": 1,
+            "request_chars": 1,
+            "facts_chars": 1,
+            "shared_state_chars": 1,
+            "history_chars": 1,
+            "handoff_chars": 0,
+            "history_messages": 0,
+            "total_chars": 7,
+            "primary": True,
+        })
+        app.get_agent_plugin = Mock(return_value=AgentPlugin(
+            name="chatgpt-api",
+            prefix="/chatgpt-api",
+            style=("yellow", "ChatGPT API"),
+            driver="openai_compat",
+            model="gpt-4o",
+            base_url="http://localhost:5532/v1",
+            api_key_env="OPENAI_API_KEY",
+            supports_tools=True,
+            has_builtin_tools=True,
+        ))
+
+        message = AppSystemLayer(app)._build_prompt_preview_message("chatgpt-api")
+
+        self.assertIn("DRIVER: openai_compat", message)
+        self.assertIn("TOOLS NO TEXTO: sim", message)
+        self.assertFalse(app.prompt_builder.build.call_args.kwargs["skip_tool_prompt"])
 
     def test_handle_command_warns_on_unknown_prompt_agent(self):
         app = QuimeraApp.__new__(QuimeraApp)
@@ -2523,6 +2625,70 @@ class PluginTests(unittest.TestCase):
         result = dispatch.call_agent("claude")
         self.assertEqual(result, "sucesso no retry")
         self.assertEqual(call_count[0], 2)
+
+    def test_call_agent_low_level_skips_tool_prompt_only_for_cli_builtin_tools(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.session_call_index = 0
+        app.history = [{"role": "human", "content": "Pedido atual"}]
+        app.shared_state = {}
+        app.round_index = 0
+        app.debug_prompt_metrics = False
+        app.task_services = Mock()
+        app.task_services.refresh_task_shared_state = Mock()
+        app.prompt_builder = Mock()
+        app.prompt_builder.build.return_value = "PROMPT"
+        app.agent_client = Mock()
+        app.agent_client.call.return_value = "resposta"
+        app.renderer = DummyRenderer()
+        app.session_state = {"session_id": "sessao-teste"}
+        app.get_agent_plugin = Mock(return_value=AgentPlugin(
+            name="codex-cli",
+            prefix="/codex-cli",
+            style=("blue", "Codex CLI"),
+            cmd=["codex"],
+            driver="cli",
+            supports_tools=True,
+            has_builtin_tools=True,
+        ))
+
+        dispatch = AppDispatchServices(app)
+        result = dispatch.call_agent_low_level("codex-cli")
+
+        self.assertEqual(result, "resposta")
+        self.assertTrue(app.prompt_builder.build.call_args.kwargs["skip_tool_prompt"])
+
+    def test_call_agent_low_level_keeps_tool_prompt_for_openai_compat(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.session_call_index = 0
+        app.history = [{"role": "human", "content": "Pedido atual"}]
+        app.shared_state = {}
+        app.round_index = 0
+        app.debug_prompt_metrics = False
+        app.task_services = Mock()
+        app.task_services.refresh_task_shared_state = Mock()
+        app.prompt_builder = Mock()
+        app.prompt_builder.build.return_value = "PROMPT"
+        app.agent_client = Mock()
+        app.agent_client.call.return_value = "resposta"
+        app.renderer = DummyRenderer()
+        app.session_state = {"session_id": "sessao-teste"}
+        app.get_agent_plugin = Mock(return_value=AgentPlugin(
+            name="chatgpt-api",
+            prefix="/chatgpt-api",
+            style=("yellow", "ChatGPT API"),
+            driver="openai_compat",
+            model="gpt-4o",
+            base_url="http://localhost:5532/v1",
+            api_key_env="OPENAI_API_KEY",
+            supports_tools=True,
+            has_builtin_tools=True,
+        ))
+
+        dispatch = AppDispatchServices(app)
+        result = dispatch.call_agent_low_level("chatgpt-api")
+
+        self.assertEqual(result, "resposta")
+        self.assertFalse(app.prompt_builder.build.call_args.kwargs["skip_tool_prompt"])
 
     def test_task_handler_prints_and_persists_agent_response(self):
         app = QuimeraApp.__new__(QuimeraApp)

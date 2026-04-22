@@ -213,7 +213,11 @@ class AppSystemLayer:
 
         plugin = self.app.get_agent_plugin(agent)
         driver = plugin.effective_driver() if plugin else "cli"
-        skip_tool_prompt = isinstance(driver, str) and driver != "cli"
+        skip_tool_prompt = (
+            driver == "cli"
+            and plugin
+            and getattr(plugin, "has_builtin_tools", False)
+        )
         prompt, metrics = prompt_builder.build(
             agent,
             history,

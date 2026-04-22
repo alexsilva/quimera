@@ -109,6 +109,7 @@ plugin = AgentPlugin(
     preferred_task_types=["code_edit", "code_review", "test_execution", "bug_investigation", "general"],
     avoid_task_types=[],
     supports_tools=True,
+    has_builtin_tools=True,
     tool_use_reliability="high",
     supports_code_editing=True,
     spy_stdout_formatter=_format_codex_spy_event,

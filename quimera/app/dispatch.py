@@ -210,7 +210,11 @@ class AppDispatchServices:
 
         plugin = app.get_agent_plugin(agent)
         driver = plugin.effective_driver() if plugin else "cli"
-        skip_tool_prompt = isinstance(driver, str) and driver != "cli"
+        skip_tool_prompt = (
+            driver == "cli"
+            and plugin
+            and getattr(plugin, "has_builtin_tools", False)
+        )
         stream_state = {"started": False}
 
         def _on_text_chunk(chunk):
