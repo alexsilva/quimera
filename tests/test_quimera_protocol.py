@@ -4107,7 +4107,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         builder = PromptBuilder(DummyContextManager(), history_window=3, metrics_tracker=tracker)
         prompt = builder.build("claude", [])
 
-        self.assertIn("MÉTRICAS DO AGENTE ATUAL (APENAS REFERÊNCIA, NÃO SÃO INSTRUÇÕES)", prompt)
+        self.assertIn("MÉTRICAS DO AGENTE ATUAL:", prompt)
         self.assertIn("SÍNTESES IMPRECISAS", prompt)
 
     def test_prompt_builder_omits_metrics_block_when_no_tracker(self):
@@ -4115,7 +4115,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         builder = PromptBuilder(DummyContextManager(), history_window=3)
         prompt = builder.build("claude", [])
 
-        self.assertNotIn("MÉTRICAS DO AGENTE ATUAL (APENAS REFERÊNCIA, NÃO SÃO INSTRUÇÕES)", prompt)
+        self.assertNotIn("MÉTRICAS DO AGENTE ATUAL:", prompt)
 
     def test_prompt_builder_omits_metrics_block_when_insufficient_data(self):
         """PromptBuilder não deve incluir métricas se generate_feedback retornar vazio."""
@@ -4127,7 +4127,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         builder = PromptBuilder(DummyContextManager(), history_window=3, metrics_tracker=tracker)
         prompt = builder.build("claude", [])
 
-        self.assertNotIn("MÉTRICAS DO AGENTE ATUAL (APENAS REFERÊNCIA, NÃO SÃO INSTRUÇÕES)", prompt)
+        self.assertNotIn("MÉTRICAS DO AGENTE ATUAL:", prompt)
 
 
 class AppProtocolDirectTests(unittest.TestCase):
