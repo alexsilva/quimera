@@ -202,7 +202,10 @@ class PromptBuilder:
             if message.get("role") == "human":
                 content = (message.get("content") or "").strip()
                 if content:
-                    return index, PROMPT_REQUEST.format(request=content)
+                    return index, PROMPT_REQUEST.format(
+                        user_name=self.user_name.upper(),
+                        request=content,
+                    )
         return None, ""
 
     def _build_facts_block(self, history, max_items=4, current_agent=None):

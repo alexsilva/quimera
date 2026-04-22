@@ -826,7 +826,7 @@ class ProtocolTests(unittest.TestCase):
 
         prompt = builder.build(AGENT_CODEX, history)
 
-        self.assertIn("PEDIDO ATUAL DO HUMANO", prompt)
+        self.assertIn("PEDIDO ATUAL DE VOCÊ", prompt)
         self.assertIn("Pedido atual", prompt)
 
     def test_prompt_does_not_repeat_current_human_request_in_conversation(self):

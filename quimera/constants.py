@@ -88,7 +88,7 @@ PROMPT_SCOPE_CONTROL = "ESCOPO PERMITIDO:\n{allowed_scope}\n\nNÃO-OBJETIVOS:\n{
 # Core prompt building blocks
 PROMPT_HEADER = "Você é {agent}.\nUsuário humano: {user_name}\nAgentes de IA nesta conversa: {agents}"
 PROMPT_CONTEXT = "CONTEXTO PERSISTENTE:\n{context}"
-PROMPT_REQUEST = "PEDIDO ATUAL DO HUMANO:\n{request}"
+PROMPT_REQUEST = "PEDIDO ATUAL DE {user_name}:\n{request}"
 PROMPT_FACTS = "MENSAGENS RECENTES DE OUTROS AGENTES:\n{facts}"
 PROMPT_CONVERSATION = "CONVERSA RECENTE RESIDUAL:\n{conversation}"
 PROMPT_SPEAKER = "[{agent}]:"
