@@ -90,7 +90,7 @@ PROMPT_HEADER = "Você é {agent}.\nUsuário humano: {user_name}\nAgentes de IA 
 PROMPT_CONTEXT = "CONTEXTO PERSISTENTE:\n{context}"
 PROMPT_REQUEST = "PEDIDO ATUAL DO HUMANO:\n{request}"
 PROMPT_FACTS = "MENSAGENS RECENTES DE OUTROS AGENTES:\n{facts}"
-PROMPT_CONVERSATION = "CONVERSA:\n{conversation}"
+PROMPT_CONVERSATION = "CONVERSA RECENTE RESIDUAL:\n{conversation}"
 PROMPT_SPEAKER = "[{agent}]:"
 PROMPT_DEBATE_RULE = (
     "- Se o tópico exigir debate mais aprofundado entre os agentes, "
