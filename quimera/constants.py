@@ -117,7 +117,7 @@ PROMPT_TOOL_RULE = (
     "- NUNCA escreva o conteúdo editado de um arquivo diretamente na resposta — use a ferramenta; texto sem tag é ignorado pelo sistema.\n"
     "- Use run_shell para inspeção ou validação objetiva; evite comandos longos, encadeados ou exploratórios sem necessidade.\n"
 )
-PROMPT_AGENT_METRICS = "MÉTRICAS DO AGENTE:\n{metrics}"
+PROMPT_AGENT_METRICS = "MÉTRICAS DO AGENTE ATUAL:\n{metrics}"
 
 # Protocol markers
 EXTEND_MARKER = "[DEBATE]"
