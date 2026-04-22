@@ -115,6 +115,14 @@ class TestTerminalRenderer:
                 patch("quimera.ui._agent_style", return_value=("blue", "Test")):
             mock_renderer.show_message("test", "Hello")
 
+    def test_renderer_uses_dynamic_console_width(self):
+        """Test renderer does not force a fixed console width."""
+        with patch("quimera.ui._RICH_AVAILABLE", True), \
+                patch("quimera.ui.Console") as mock_console:
+            TerminalRenderer()
+
+        assert "width" not in mock_console.call_args.kwargs
+
     def test_show_message_without_rich(self, renderer_no_rich, capsys):
         """Test show_message without Rich."""
         renderer_no_rich.show_message("test", "Hello")
@@ -267,6 +275,13 @@ class TestTerminalRenderer:
         mock_renderer.update_message_stream("codex", {"diff": [{"op": "replace", "text": "xyz"}]})
 
         assert mock_renderer._message_streams["codex"]["content"] == "xyz"
+
+    def test_start_message_stream_enables_auto_refresh(self, mock_renderer):
+        with patch("quimera.ui.Live") as mock_live:
+            mock_live.return_value = MagicMock()
+            mock_renderer.start_message_stream("codex")
+
+        assert mock_live.call_args.kwargs["auto_refresh"] is True
 
 
 class TestStreamingDiffHelpers:

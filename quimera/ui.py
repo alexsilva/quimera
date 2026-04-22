@@ -68,13 +68,10 @@ def _agent_style(agent: str, get_plugin_style=None):
 class TerminalRenderer:
     """Camada exclusiva de apresentação no terminal. Nunca toca em persistência."""
 
-    _MAX_WIDTH = 96
-
     def __init__(self, theme: str | None = None, get_plugin_style=None):
         """Inicializa uma instância de TerminalRenderer."""
         if _RICH_AVAILABLE:
             self._console = Console(
-                width=self._MAX_WIDTH,
                 force_terminal=_is_interactive_terminal(),
                 no_color=False
             )
@@ -151,7 +148,7 @@ class TerminalRenderer:
             elif theme_name == "minimal":
                 self._console.print(Text(f"▶ {label}", style=f"bold {style}"))
             initial = self._build_stream_renderable(theme_name, label, style, "")
-            live = Live(initial, console=self._console, refresh_per_second=20, transient=False, auto_refresh=False)
+            live = Live(initial, console=self._console, refresh_per_second=20, transient=False, auto_refresh=True)
             live.start()
             self._message_streams[agent] = {
                 "content": "",
