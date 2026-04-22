@@ -143,7 +143,7 @@ class PromptBuilder:
             execution_context,
             rules,
             tools_prompt, session_block, context_block, request_block, facts_block,
-            shared_state_block, metrics_block, handoff_block, conversation_block, speaker_block,
+            shared_state_block, handoff_block, conversation_block, metrics_block, speaker_block,
         ] if p]
 
         # Keep explicit section boundaries so prompt blocks do not collapse together.
