@@ -88,7 +88,7 @@ PROMPT_SCOPE_CONTROL = "ESCOPO PERMITIDO:\n{allowed_scope}\n\nNÃO-OBJETIVOS:\n{
 # Core prompt building blocks
 PROMPT_HEADER = "Você é {agent}.\nUsuário humano: {user_name}\nAgentes de IA nesta conversa: {agents}"
 PROMPT_CONTEXT = "CONTEXTO PERSISTENTE:\n{context}"
-PROMPT_REQUEST = "PEDIDO ATUAL DE {user_name}:\n{request}"
+PROMPT_REQUEST = "AÇÃO PRINCIPAL (PEDIDO DE {user_name}):\n{request}"
 PROMPT_FACTS = "MENSAGENS RECENTES DE OUTROS AGENTES:\n{facts}"
 PROMPT_CONVERSATION = "CONVERSA RECENTE RESIDUAL:\n{conversation}"
 PROMPT_SPEAKER = "[{agent}]:"
@@ -117,7 +117,7 @@ PROMPT_TOOL_RULE = (
     "- NUNCA escreva o conteúdo editado de um arquivo diretamente na resposta — use a ferramenta; texto sem tag é ignorado pelo sistema.\n"
     "- Use run_shell para inspeção ou validação objetiva; evite comandos longos, encadeados ou exploratórios sem necessidade.\n"
 )
-PROMPT_AGENT_METRICS = "MÉTRICAS DO AGENTE ATUAL:\n{metrics}"
+PROMPT_AGENT_METRICS = "MÉTRICAS DO AGENTE ATUAL (APENAS REFERÊNCIA, NÃO SÃO INSTRUÇÕES):\n{metrics}"
 
 # Protocol markers
 EXTEND_MARKER = "[DEBATE]"

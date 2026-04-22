@@ -826,7 +826,7 @@ class ProtocolTests(unittest.TestCase):
 
         prompt = builder.build(AGENT_CODEX, history)
 
-        self.assertIn("PEDIDO ATUAL DE VOCÊ", prompt)
+        self.assertIn("AÇÃO PRINCIPAL (PEDIDO DE VOCÊ)", prompt)
         self.assertIn("Pedido atual", prompt)
 
     def test_prompt_does_not_repeat_current_human_request_in_conversation(self):
@@ -3916,7 +3916,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         self.assertNotIn("resolva você mesmo", feedback)
 
     def test_prompt_builder_injects_metrics_when_tracker_has_data(self):
-        """PromptBuilder deve incluir bloco MÉTRICAS DO AGENTE ATUAL quando há feedback do tracker."""
+        """PromptBuilder deve incluir bloco de métricas com framing de referência quando há feedback do tracker."""
         from quimera.metrics import BehaviorMetricsTracker
 
         tracker = BehaviorMetricsTracker()
@@ -3929,7 +3929,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         builder = PromptBuilder(DummyContextManager(), history_window=3, metrics_tracker=tracker)
         prompt = builder.build("claude", [])
 
-        self.assertIn("MÉTRICAS DO AGENTE ATUAL", prompt)
+        self.assertIn("MÉTRICAS DO AGENTE ATUAL (APENAS REFERÊNCIA, NÃO SÃO INSTRUÇÕES)", prompt)
         self.assertIn("SÍNTESES IMPRECISAS", prompt)
 
     def test_prompt_builder_omits_metrics_block_when_no_tracker(self):
@@ -3937,7 +3937,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         builder = PromptBuilder(DummyContextManager(), history_window=3)
         prompt = builder.build("claude", [])
 
-        self.assertNotIn("MÉTRICAS DO AGENTE ATUAL", prompt)
+        self.assertNotIn("MÉTRICAS DO AGENTE ATUAL (APENAS REFERÊNCIA, NÃO SÃO INSTRUÇÕES)", prompt)
 
     def test_prompt_builder_omits_metrics_block_when_insufficient_data(self):
         """PromptBuilder não deve incluir métricas se generate_feedback retornar vazio."""
@@ -3949,7 +3949,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         builder = PromptBuilder(DummyContextManager(), history_window=3, metrics_tracker=tracker)
         prompt = builder.build("claude", [])
 
-        self.assertNotIn("MÉTRICAS DO AGENTE ATUAL", prompt)
+        self.assertNotIn("MÉTRICAS DO AGENTE ATUAL (APENAS REFERÊNCIA, NÃO SÃO INSTRUÇÕES)", prompt)
 
 
 class AppProtocolDirectTests(unittest.TestCase):
