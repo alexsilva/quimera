@@ -110,7 +110,16 @@ class PromptBuilder:
         if fallback_shared:
             rules += PROMPT_STATE_UPDATE_RULE
 
-        session_block = PROMPT_SESSION_STATE.format(**self.session_state) if (self.session_state and primary) else ""
+        if self.session_state and primary:
+            session_payload = {
+                "session_id": self.session_state.get("session_id", "desconhecida"),
+                "current_job_id": self.session_state.get("current_job_id", "desconhecido"),
+                "workspace_root": self.session_state.get("workspace_root", "desconhecido"),
+                "current_dir": self.session_state.get("current_dir", "."),
+            }
+            session_block = PROMPT_SESSION_STATE.format(**session_payload)
+        else:
+            session_block = ""
         context_block = PROMPT_CONTEXT.format(context=context) if context else ""
         handoff_block = PROMPT_HANDOFF.format(handoff=self._format_handoff(handoff, from_agent)) if handoff else ""
         request_index, request_block = self._build_request_block(history)

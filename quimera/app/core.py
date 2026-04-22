@@ -187,6 +187,8 @@ class QuimeraApp:
             "history_restored": self._format_yes_no(history_restored),
             "summary_loaded": self._format_yes_no(summary_loaded),
             "current_job_id": self.current_job_id,
+            "workspace_root": str(self.workspace.cwd),
+            "current_dir": ".",
         }
         self.prompt_builder = PromptBuilder(
             self.context_manager,

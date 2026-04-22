@@ -102,6 +102,8 @@ PROMPT_SESSION_STATE = (
     "ESTADO DA SESSÃO:\n"
     "- SESSÃO ATUAL: {session_id}\n"
     "- JOB_ID ATUAL: {current_job_id}\n"
+    "- WORKSPACE RAIZ: {workspace_root}\n"
+    "- DIRETÓRIO ATUAL: {current_dir}\n"
 )
 PROMPT_HANDOFF_RULE = (
     "- Você recebeu uma subtarefa delegada por outro agente. Continue do ponto já avançado e responda diretamente à tarefa.\n"
@@ -112,7 +114,10 @@ PROMPT_HANDOFF_RULE = (
 )
 PROMPT_TOOL_RULE = (
     "- Você tem acesso às ferramentas customizadas listadas abaixo em 'Ferramentas disponíveis'.\n"
+    "- REGRA CRÍTICA: NUNCA assuma caminhos. Sempre descubra com list_files/grep_search antes de ler, editar ou executar.\n"
     "- ANTES de responder sobre qualquer arquivo ou código, DEVE usar list_files/grep_search/read_file para verificar os fatos.\n"
+    "- Para a ferramenta executar no chat, sua resposta DEVE conter uma tag <tool ...> válida; sem essa tag, nada será executado.\n"
+    '- NÃO use sintaxe de função como read_file(...). Use APENAS tags <tool function="...">.\n'
     "- Para editar arquivo existente, DEVE usar apply_patch. Use write_file apenas para arquivo novo ou rewrite completa quando explícito.\n"
     "- NUNCA escreva o conteúdo editado de um arquivo diretamente na resposta — use a ferramenta; texto sem tag é ignorado pelo sistema.\n"
     "- Use run_shell para inspeção ou validação objetiva; evite comandos longos, encadeados ou exploratórios sem necessidade.\n"
@@ -173,7 +178,7 @@ TOOL_SCHEMA = {
         "parameters": {
             "path": {"type": "str", "description": "Caminho do diretório", "required": True}
         },
-        "example": 'list_files("/src")'
+        "example": '<tool function="list_files" path="." />'
     },
     "read_file": {
         "name": "read_file",
@@ -181,7 +186,7 @@ TOOL_SCHEMA = {
         "parameters": {
             "path": {"type": "str", "description": "Caminho absoluto do arquivo", "required": True}
         },
-        "example": 'read_file("/src/app.py")'
+        "example": '<tool function="read_file" path="/src/app.py" />'
     },
     "write_file": {
         "name": "write_file",
@@ -193,7 +198,7 @@ TOOL_SCHEMA = {
                                  "description": "Use true apenas para sobrescrever arquivo existente por completo",
                                  "required": False},
         },
-        "example": 'write_file(path="/src/new.py", content="print(\"hello\")")'
+        "example": '<tool function="write_file">{"path":"/src/new.py","content":"print(\\"hello\\")"}</tool>'
     },
     "apply_patch": {
         "name": "apply_patch",
@@ -202,7 +207,7 @@ TOOL_SCHEMA = {
             "patch": {"type": "str", "description": "Patch no formato *** Begin Patch ... *** End Patch",
                       "required": True}
         },
-        "example": 'apply_patch(patch="*** Begin Patch\\n*** Update File: /src/app.py\\n@@\\n-old\\n+new\\n*** End Patch")'
+        "example": '<tool function="apply_patch">{"patch":"*** Begin Patch\\n*** Update File: /src/app.py\\n@@\\n-old\\n+new\\n*** End Patch"}</tool>'
     },
     "grep_search": {
         "name": "grep_search",
@@ -211,7 +216,7 @@ TOOL_SCHEMA = {
             "pattern": {"type": "str", "description": "Regex a buscar", "required": True},
             "path": {"type": "str", "description": "Diretório base", "required": False},
         },
-        "example": 'grep_search("class User", path="/src")'
+        "example": '<tool function="grep_search" pattern="class User" path="/src" />'
     },
     "run_shell": {
         "name": "run_shell",
@@ -219,7 +224,7 @@ TOOL_SCHEMA = {
         "parameters": {
             "command": {"type": "str", "description": "Comando shell", "required": True}
         },
-        "example": 'run_shell("git status")'
+        "example": '<tool function="run_shell" command="git status" />'
     },
     "exec_command": {
         "name": "exec_command",
@@ -231,7 +236,7 @@ TOOL_SCHEMA = {
                               "required": False},
             "tty": {"type": "bool", "description": "Executa em PTY simplificado", "required": False},
         },
-        "example": 'exec_command(cmd="python -i", tty=True)'
+        "example": '<tool function="exec_command">{"cmd":"python -i","tty":true}</tool>'
     },
     "write_stdin": {
         "name": "write_stdin",
@@ -241,7 +246,7 @@ TOOL_SCHEMA = {
             "chars": {"type": "str", "description": "Texto a enviar; vazio faz apenas polling", "required": False},
             "yield_time_ms": {"type": "int", "description": "Espera por nova saída", "required": False},
         },
-        "example": 'write_stdin(session_id=7, chars="", yield_time_ms=1000)'
+        "example": '<tool function="write_stdin">{"session_id":7,"chars":"","yield_time_ms":1000}</tool>'
     },
     "close_command_session": {
         "name": "close_command_session",
@@ -249,7 +254,7 @@ TOOL_SCHEMA = {
         "parameters": {
             "session_id": {"type": "int", "description": "ID da sessão", "required": True},
         },
-        "example": 'close_command_session(session_id=7)'
+        "example": '<tool function="close_command_session" session_id="7" />'
     },
     "list_tasks": {
         "name": "list_tasks",
@@ -259,7 +264,7 @@ TOOL_SCHEMA = {
             "status": {"type": "str", "description": "pending|in_progress|completed|failed|proposed|approved|rejected",
                        "required": False},
         },
-        "example": 'list_tasks(job_id=1, status="approved")'
+        "example": '<tool function="list_tasks" job_id="1" status="approved" />'
     },
     "list_jobs": {
         "name": "list_jobs",
@@ -268,7 +273,7 @@ TOOL_SCHEMA = {
             "status": {"type": "str", "description": "planning|active|completed|failed", "required": False},
             "created_by": {"type": "str", "description": "Filtrar por criador", "required": False},
         },
-        "example": 'list_jobs(status="planning")'
+        "example": '<tool function="list_jobs" status="planning" />'
     },
     "get_job": {
         "name": "get_job",
@@ -277,7 +282,7 @@ TOOL_SCHEMA = {
             "job_id": {"type": "int", "description": "ID do job (opcional se QUIMERA_CURRENT_JOB_ID definida)",
                        "required": False}
         },
-        "example": 'get_job()'
+        "example": '<tool function="get_job" />'
     },
 }
 
@@ -285,9 +290,18 @@ TOOL_SCHEMA = {
 def build_tools_prompt() -> str:
     """Gera um bloco compacto de ferramentas disponíveis."""
     lines = [
-        "USE A TAG PARA EXECUTAR COMANDOS NO SISTEMA!\n"
-        "Exemplo: Usuário pergunta sobre 'onde está a função foo' → você usa list_files/grep_search para encontrar → responde com a localização real.\n"
+        "USE TAGS NO CHAT PARA EXECUTAR COMANDOS NO WORKSPACE\n"
+        "Se a resposta não contiver uma tag <tool ...> válida, a ferramenta não executa.\n"
+        "Use exatamente o formato aceito pelo parser; não escreva chamadas como list_files(...).\n"
+        "Exemplo: Usuário pergunta sobre 'onde está a função foo' → você usa list_files/grep_search via <tool ...> → retorna evidência real.\n"
         ' <tool function="run_shell" command="git status" />\n'
+        " Exemplos canônicos:\n"
+        ' <tool function="list_files" path="." />\n'
+        ' <tool function="read_file" path="/workspace/src/app.py" />\n'
+        ' <tool function="grep_search" pattern="class User" path="/workspace/src" />\n'
+        ' <tool function="run_shell" command="git status --short" />\n'
+        ' <tool function="exec_command">{"cmd":"python -i","tty":true}</tool>\n'
+        ' <tool function="write_stdin">{"session_id":7,"chars":"print(1)\\n","yield_time_ms":1000}</tool>\n'
         " - Para shell interativo, use exatamente exec_command / write_stdin / close_command_session.\n"
         " - Nunca invente nomes como run_shell_command ou execute_command.\n"
         " - Para payloads longos, use corpo JSON dentro da tag:\n"

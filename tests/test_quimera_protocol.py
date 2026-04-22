@@ -925,6 +925,8 @@ class ProtocolTests(unittest.TestCase):
                 "is_new_session": "não",
                 "history_restored": "sim",
                 "summary_loaded": "não",
+                "workspace_root": "/tmp/quimera",
+                "current_dir": ".",
             },
         )
         history = [{"role": "human", "content": "Pergunta"}]
@@ -934,6 +936,8 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn("ESTADO DA SESSÃO", prompt)
         self.assertIn("SESSÃO ATUAL: sessao-2026-03-27-123456", prompt)
         self.assertIn("JOB_ID ATUAL: 1", prompt)
+        self.assertIn("WORKSPACE RAIZ: /tmp/quimera", prompt)
+        self.assertIn("DIRETÓRIO ATUAL: .", prompt)
         self.assertNotIn("NOVA SESSÃO", prompt)
         self.assertNotIn("HISTÓRICO RESTAURADO", prompt)
         self.assertNotIn("RESUMO CARREGADO", prompt)
@@ -3613,7 +3617,7 @@ class MetricsFeedbackTests(unittest.TestCase):
 
         prompt = builder.build(AGENT_CLAUDE, history, is_first_speaker=True)
 
-        self.assertLess(len(prompt), 5000)
+        self.assertLess(len(prompt), 6200)
 
     def test_get_task_routing_plugins_respects_explicit_active_agents(self):
         app = QuimeraApp.__new__(QuimeraApp)
@@ -3742,11 +3746,14 @@ class MetricsFeedbackTests(unittest.TestCase):
     def test_tool_rule_guides_discovery_before_edits(self):
         from quimera.constants import PROMPT_TOOL_RULE
 
+        self.assertIn("NUNCA assuma caminhos", PROMPT_TOOL_RULE)
         self.assertIn("list_files", PROMPT_TOOL_RULE)
         self.assertIn("grep_search", PROMPT_TOOL_RULE)
         self.assertIn("read_file", PROMPT_TOOL_RULE)
         self.assertIn("apply_patch", PROMPT_TOOL_RULE)
         self.assertIn("run_shell", PROMPT_TOOL_RULE)
+        self.assertIn("tag <tool ...> válida", PROMPT_TOOL_RULE)
+        self.assertIn('NÃO use sintaxe de função como read_file(...)', PROMPT_TOOL_RULE)
 
     def test_build_tools_prompt_is_compact_but_preserves_essentials(self):
         from quimera.constants import build_tools_prompt
@@ -3754,13 +3761,18 @@ class MetricsFeedbackTests(unittest.TestCase):
         prompt = build_tools_prompt()
 
         self.assertIn('function="apply_patch"', prompt)
+        self.assertIn('function="list_files"', prompt)
+        self.assertIn('function="exec_command"', prompt)
         self.assertIn("Ferramentas disponíveis", prompt)
+        self.assertIn("a ferramenta não executa", prompt)
+        self.assertIn("não escreva chamadas como list_files(...)", prompt)
+        self.assertIn("via <tool ...>", prompt)
         self.assertIn("- list_files:", prompt)
         self.assertIn("- read_file:", prompt)
         self.assertIn("- apply_patch:", prompt)
         self.assertIn("- run_shell:", prompt)
         self.assertNotIn("  Exemplo:", prompt)
-        self.assertLess(len(prompt), 2600)
+        self.assertLess(len(prompt), 3400)
 
     def test_build_task_body_includes_operational_protocol(self):
         app = QuimeraApp.__new__(QuimeraApp)
