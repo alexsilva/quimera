@@ -48,6 +48,11 @@ def _should_ignore_stderr_line(agent: str | None, line: str) -> bool:
     return cleaned in plugin.stderr_noise
 
 
+def _filter_stderr_lines(agent: str | None, lines: list[str]) -> list[str]:
+    """Remove linhas de stderr conhecidas como ruído para o agente."""
+    return [line for line in lines if not _should_ignore_stderr_line(agent, line)]
+
+
 class AgentClient:
     """Executa os agentes externos no diretório de trabalho do projeto."""
 
@@ -168,8 +173,9 @@ class AgentClient:
                 stderr_thread.join()
                 if result_holder["stdout"]:
                     _logger.debug("".join(result_holder["stdout"]))
-                if result_holder["stderr"]:
-                    _logger.warning("".join(result_holder["stderr"]))
+                filtered_stderr = _filter_stderr_lines(agent, result_holder["stderr"])
+                if filtered_stderr:
+                    _logger.warning("".join(filtered_stderr))
             else:
                 start_time = time.time()
                 elapsed = 0
@@ -281,7 +287,7 @@ class AgentClient:
                 return None
 
             output = "".join(result_holder["stdout"]).strip()
-            error = "".join(result_holder["stderr"]).strip()
+            error = "".join(_filter_stderr_lines(agent, result_holder["stderr"])).strip()
 
         finally:
             self._agent_running = False

@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch, ANY
 import pytest
 
 from quimera.agent_events import SpyEvent
-from quimera.agents import AgentClient, _strip_spinner, _should_ignore_stderr_line
+from quimera.agents import AgentClient, _filter_stderr_lines, _strip_spinner, _should_ignore_stderr_line
 from quimera.constants import MAX_STDERR_LINES, Visibility
 from quimera.plugins import get as get_plugin
 from quimera.plugins.claude import _format_claude_spy_event
@@ -32,6 +32,13 @@ def test_should_ignore_codex_stdin_noise():
     assert _should_ignore_stderr_line("codex", "real error\n") is False
 
 
+def test_filter_stderr_lines_removes_codex_stdin_noise():
+    assert _filter_stderr_lines(
+        "codex",
+        ["Reading prompt from stdin...\n", "real error\n"],
+    ) == ["real error\n"]
+
+
 def test_codex_plugin_reads_prompt_from_stdin():
     plugin = get_plugin("codex")
     assert plugin is not None
@@ -50,6 +57,21 @@ def test_agent_client_run_success(renderer):
 
         result = client.run(["echo", "hi"], silent=True)
         assert result == "Success"
+
+
+def test_agent_client_run_silent_does_not_log_codex_stdin_noise(renderer):
+    client = AgentClient(renderer)
+    with patch("subprocess.Popen") as mock_popen, patch("quimera.agents._logger") as mock_logger:
+        mock_proc = MagicMock()
+        mock_proc.stdout = ["Success\n"]
+        mock_proc.stderr = ["Reading prompt from stdin...\n"]
+        mock_proc.returncode = 0
+        mock_popen.return_value = mock_proc
+
+        result = client.run(["codex", "exec"], silent=True, agent="codex")
+
+        assert result == "Success"
+        mock_logger.warning.assert_not_called()
 
 
 def test_agent_client_run_os_error(renderer):
