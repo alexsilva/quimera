@@ -361,11 +361,11 @@ def test_agent_client_run_summary_flushes_compacted_responses_before_context(ren
 
     renderer.show_plain.assert_any_call("linha 1", agent="codex")
     renderer.show_plain.assert_any_call("linha 2", agent="codex")
-    assert any("$ git status" in str(c) for c in status.update.call_args_list)
+    assert any("codex | $ git status" in str(c) for c in status.update.call_args_list)
     assert ("$ git status",) not in [call.args for call in renderer.show_plain.call_args_list]
 
 
-def test_agent_client_run_summary_persists_only_completed_tool_line(renderer):
+def test_agent_client_run_summary_keeps_completed_tool_line_transient(renderer):
     client = AgentClient(renderer, visibility=Visibility.SUMMARY)
     status = MagicMock()
     status_cm = MagicMock()
@@ -386,8 +386,8 @@ def test_agent_client_run_summary_persists_only_completed_tool_line(renderer):
         with patch("time.sleep"):
             client.run(["codex", "exec"], silent=False, agent="codex", show_status=True)
 
-    assert any("$ git diff -- quimera/agents.py" in str(c) for c in status.update.call_args_list)
-    renderer.show_plain.assert_any_call("✓ git diff -- quimera/agents.py", agent="codex")
+    assert any("codex | $ git diff -- quimera/agents.py" in str(c) for c in status.update.call_args_list)
+    assert ("✓ git diff -- quimera/agents.py",) not in [call.args for call in renderer.show_plain.call_args_list]
     assert ("$ git diff -- quimera/agents.py",) not in [call.args for call in renderer.show_plain.call_args_list]
 
 
@@ -413,11 +413,11 @@ def test_agent_client_run_summary_shows_diff_output_and_keeps_next_operation_cle
         with patch("time.sleep"):
             client.run(["codex", "exec"], silent=False, agent="codex", show_status=True)
 
-    renderer.show_plain.assert_any_call("✓ git diff -- quimera/agents.py", agent="codex")
+    assert any("codex | $ git status --short" in str(c) for c in status.update.call_args_list)
+    assert ("$ git status --short",) not in [call.args for call in renderer.show_plain.call_args_list]
+    assert ("✓ git diff -- quimera/agents.py",) not in [call.args for call in renderer.show_plain.call_args_list]
     renderer.show_plain.assert_any_call("diff --git a/quimera/agents.py b/quimera/agents.py", agent="codex")
     renderer.show_plain.assert_any_call("+nova linha", agent="codex")
-    assert any("$ git status --short" in str(c) for c in status.update.call_args_list)
-    assert ("$ git status --short",) not in [call.args for call in renderer.show_plain.call_args_list]
 
 
 def test_spy_output_presenter_keeps_next_operation_clean_after_diff_preview(renderer):
@@ -432,11 +432,19 @@ def test_spy_output_presenter_keeps_next_operation_clean_after_diff_preview(rend
         presenter.emit("codex", event)
     presenter.emit("codex", SpyEvent(kind="tool", text="$ git status --short"))
 
-    renderer.show_plain.assert_any_call("✓ git diff -- quimera/agents.py", agent="codex")
     renderer.show_plain.assert_any_call("diff --git a/quimera/agents.py b/quimera/agents.py", agent="codex")
     renderer.show_plain.assert_any_call("+nova linha", agent="codex")
+    assert ("✓ git diff -- quimera/agents.py",) not in [call.args for call in renderer.show_plain.call_args_list]
     assert ("$ git status --short",) not in [call.args for call in renderer.show_plain.call_args_list]
     assert presenter.current_status_label == "$ git status --short"
+
+
+def test_spy_output_presenter_compose_status_label_keeps_base_and_tool(renderer):
+    presenter = SpyOutputPresenter(renderer, Visibility.SUMMARY)
+
+    presenter.emit("codex", SpyEvent(kind="tool", text="$ git status --short"))
+
+    assert presenter.compose_status_label("codex") == "codex | $ git status --short"
 
 
 def test_agent_client_run_summary_does_not_persist_started_tool_without_status(renderer):
@@ -455,8 +463,28 @@ def test_agent_client_run_summary_does_not_persist_started_tool_without_status(r
         with patch("time.sleep"):
             client.run(["codex", "exec"], silent=False, agent="codex", show_status=False)
 
-    renderer.show_plain.assert_any_call("✓ git diff -- quimera/agents.py", agent="codex")
+    assert ("✓ git diff -- quimera/agents.py",) not in [call.args for call in renderer.show_plain.call_args_list]
     assert ("$ git diff -- quimera/agents.py",) not in [call.args for call in renderer.show_plain.call_args_list]
+
+
+def test_spy_output_presenter_summary_keeps_tool_progress_transient(renderer):
+    presenter = SpyOutputPresenter(renderer, Visibility.SUMMARY)
+
+    presenter.emit("codex", SpyEvent(kind="tool", text="usando apply_patch"))
+    presenter.emit("codex", SpyEvent(kind="tool", text="✓ editar quimera/agents.py"))
+
+    assert presenter.current_status_label == ""
+    assert renderer.show_plain.call_count == 0
+
+
+def test_spy_output_presenter_summary_keeps_tool_failure_persistent(renderer):
+    presenter = SpyOutputPresenter(renderer, Visibility.SUMMARY)
+
+    presenter.emit("codex", SpyEvent(kind="tool", text="$ pytest -q"))
+    presenter.emit("codex", SpyEvent(kind="tool", text="✗ pytest -q (exit 1)"))
+
+    renderer.show_plain.assert_called_once_with("✗ pytest -q (exit 1)", agent="codex")
+    assert presenter.current_status_label == ""
 
 
 def test_agent_client_run_spy_shows_claude_stdout_context(renderer):
@@ -768,8 +796,8 @@ def test_format_codex_spy_event_includes_diff_output_from_aggregated_output():
     )
     assert completed == [
         SpyEvent(kind="tool", text="✓ git diff -- quimera/agents.py"),
-        SpyEvent(kind="response", text="diff --git a/quimera/agents.py b/quimera/agents.py", final=True),
-        SpyEvent(kind="response", text="+nova linha", final=True),
+        SpyEvent(kind="diff", text="diff --git a/quimera/agents.py b/quimera/agents.py", final=True),
+        SpyEvent(kind="diff", text="+nova linha", final=True),
     ]
 
 

@@ -39,9 +39,9 @@ def format_command_output_preview(command: str, output: str, limit: int = 20) ->
     events: list[SpyEvent] = []
     lines = [line.rstrip() for line in (output or "").splitlines() if line.strip()]
     for line in lines[:limit]:
-        events.append(SpyEvent(kind="response", text=truncate_spy_text(line, limit=240), final=True))
+        events.append(SpyEvent(kind="diff", text=truncate_spy_text(line, limit=240), final=True))
     if len(lines) > limit:
         events.append(
-            SpyEvent(kind="response", text=f"... diff truncado ({len(lines) - limit} linhas omitidas)", final=True)
+            SpyEvent(kind="diff", text=f"... diff truncado ({len(lines) - limit} linhas omitidas)", final=True)
         )
     return events

@@ -14,6 +14,16 @@ class SpyOutputPresenter:
         self.pending_event: SpyEvent | None = None
         self.current_status_label = ""
 
+    def compose_status_label(self, base_label: str) -> str:
+        """Combina o rótulo base com o status transitório atual, sem perder contexto."""
+        base = (base_label or "").strip()
+        current = (self.current_status_label or "").strip()
+        if not current:
+            return base
+        if not base or current == base:
+            return current
+        return f"{base} | {current}"
+
     def format_stdout(self, agent: str | None, line: str) -> list[SpyEvent]:
         """Converte stdout cru em eventos estruturados via plugin ou fallback."""
         if not agent:
@@ -50,8 +60,12 @@ class SpyOutputPresenter:
         if event.kind == "tool":
             self.flush(agent)
             payload = event.text.strip()
-            if payload.startswith(("✓ ", "✗ ")):
+            if payload.startswith("✗ "):
                 self._show(agent, event)
+                self.current_status_label = ""
+                return
+
+            if payload.startswith("✓ "):
                 self.current_status_label = ""
                 return
 
@@ -59,8 +73,11 @@ class SpyOutputPresenter:
             return
 
         if event.kind == "context":
-            self.flush(agent)
             self.current_status_label = event.text
+            return
+
+        if event.kind == "diff":
+            self.flush(agent)
             self._show(agent, event)
             return
 

@@ -187,7 +187,7 @@ class AgentClient:
                             try:
                                 stream_type, line = log_queue.get_nowait()
                                 if status is not None:
-                                    _lbl = self._spy_output_presenter.current_status_label or cmd[0]
+                                    _lbl = self._spy_output_presenter.compose_status_label(cmd[0])
                                     status.update(f"[dim]{_lbl}... {elapsed}s[/dim]")
                                 # Limita o número de linhas de stderr exibidas
                                 cleaned = _strip_spinner(line.rstrip("\n"))
@@ -213,7 +213,7 @@ class AgentClient:
                             except queue.Empty:
                                 break
                         if status is not None:
-                            _lbl = self._spy_output_presenter.current_status_label or cmd[0]
+                            _lbl = self._spy_output_presenter.compose_status_label(cmd[0])
                             status.update(f"[dim]{_lbl}... {elapsed}s[/dim]")
                         if self._cancel_event.is_set():
                             self._terminate_process_group(proc)
