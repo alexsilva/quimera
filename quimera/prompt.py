@@ -114,7 +114,7 @@ class PromptBuilder:
         context_block = PROMPT_CONTEXT.format(context=context) if context else ""
         handoff_block = PROMPT_HANDOFF.format(handoff=self._format_handoff(handoff, from_agent)) if handoff else ""
         request_index, request_block = self._build_request_block(history)
-        fact_indexes, facts_block = self._build_facts_block(history)
+        fact_indexes, facts_block = self._build_facts_block(history, current_agent=agent)
         shared_state_block = ""
         if shared_state and not has_goal:
             if fallback_shared:
@@ -205,15 +205,18 @@ class PromptBuilder:
                     return index, PROMPT_REQUEST.format(request=content)
         return None, ""
 
-    def _build_facts_block(self, history, max_items=4):
+    def _build_facts_block(self, history, max_items=4, current_agent=None):
         """Monta facts block."""
         facts = []
         fact_indexes = []
         window_start = max(0, len(history) - self.history_window)
+        current_agent_lower = (current_agent or "").strip().lower()
         for index in range(len(history) - 1, window_start - 1, -1):
             message = history[index]
             role = message.get("role")
             if role == "human":
+                continue
+            if current_agent_lower and str(role).strip().lower() == current_agent_lower:
                 continue
             content = (message.get("content") or "").strip()
             if not content:

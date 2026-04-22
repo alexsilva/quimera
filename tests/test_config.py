@@ -19,7 +19,7 @@ class TestConfigManagerBasics:
         )
 
         assert DEFAULT_USER_NAME == "Você"
-        assert DEFAULT_HISTORY_WINDOW == 8
+        assert DEFAULT_HISTORY_WINDOW == 12
         assert DEFAULT_AUTO_SUMMARIZE_THRESHOLD == 30
         assert DEFAULT_IDLE_TIMEOUT_SECONDS == 60
 

@@ -854,8 +854,8 @@ class ProtocolTests(unittest.TestCase):
         prompt = builder.build(AGENT_CLAUDE, history)
 
         self.assertIn("MENSAGENS RECENTES DE OUTROS AGENTES", prompt)
-        self.assertIn("[CLAUDE] Arquivo alterado: app.py", prompt)
         self.assertIn("[CODEX] Teste falhou em test_x", prompt)
+        self.assertNotIn("[CLAUDE] Arquivo alterado: app.py", prompt)
 
     def test_prompt_skips_meta_lock_messages_from_facts_block(self):
         builder = PromptBuilder(DummyContextManager(), history_window=5)
@@ -867,10 +867,25 @@ class ProtocolTests(unittest.TestCase):
 
         prompt = builder.build(AGENT_CLAUDE, history)
 
-        self.assertIn("MENSAGENS RECENTES DE OUTROS AGENTES", prompt)
-        self.assertIn("[CLAUDE] Arquivo alterado: app.py", prompt)
+        self.assertNotIn("MENSAGENS RECENTES DE OUTROS AGENTES", prompt)
+        self.assertNotIn("[CLAUDE] Arquivo alterado: app.py", prompt)
         self.assertNotIn("goal_canonical continua ativo", prompt)
         self.assertNotIn("não redefina o objetivo", prompt)
+        conversation = prompt.split("CONVERSA:\n", 1)[1]
+        self.assertIn("[CLAUDE]: Arquivo alterado: app.py", conversation)
+
+    def test_prompt_keeps_same_agent_history_in_conversation_not_other_agents_block(self):
+        builder = PromptBuilder(DummyContextManager(), history_window=5)
+        history = [
+            {"role": "claude", "content": "Eu estava investigando o parser"},
+            {"role": "human", "content": "Continue dessa linha"},
+        ]
+
+        prompt = builder.build(AGENT_CLAUDE, history)
+
+        self.assertNotIn("MENSAGENS RECENTES DE OUTROS AGENTES", prompt)
+        conversation = prompt.split("CONVERSA:\n", 1)[1]
+        self.assertIn("[CLAUDE]: Eu estava investigando o parser", conversation)
 
     def test_prompt_does_not_repeat_recent_facts_in_conversation(self):
         builder = PromptBuilder(DummyContextManager(), history_window=5)
@@ -883,9 +898,8 @@ class ProtocolTests(unittest.TestCase):
         prompt = builder.build(AGENT_CLAUDE, history)
 
         conversation = prompt.split("CONVERSA:\n", 1)[1]
-        self.assertNotIn("[CLAUDE]: Arquivo alterado: app.py", conversation)
         self.assertNotIn("[CODEX]: Teste falhou em test_x", conversation)
-        self.assertIn("[sem itens residuais na conversa recente]", conversation)
+        self.assertIn("[CLAUDE]: Arquivo alterado: app.py", conversation)
 
     def test_prompt_lists_only_active_agents(self):
         builder = PromptBuilder(
