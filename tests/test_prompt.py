@@ -61,7 +61,6 @@ def test_final_prompt_contract_has_sections_once_in_order_and_without_duplicatio
         '<shared_state title="ESTADO COMPARTILHADO">',
         '<handoff title="MENSAGEM DIRETA DO OUTRO AGENTE">',
         '<recent_conversation title="CONVERSA RECENTE">',
-        '<response_prefix title="PREFIXO DE RESPOSTA">',
     ]
 
     last_position = -1
@@ -90,7 +89,6 @@ def test_final_prompt_contract_has_sections_once_in_order_and_without_duplicatio
     assert "[ALEX]: Revise os testes finais" not in conversation_block
     assert "[CLAUDE]: Resposta anterior" not in conversation_block
     assert "[GEMINI]: Outro ponto relevante" not in conversation_block
-    assert "[CODEX]:" in _extract_block(prompt, "response_prefix")
 
 
 def test_prompt_no_tools():
@@ -103,7 +101,7 @@ def test_prompt_no_tools():
     assert 'FERRAMENTAS DISPONÍVEIS' not in prompt
     assert '<current_turn title="PEDIDO ATUAL DE VOCÊ">' in prompt
     assert '<recent_conversation title="CONVERSA RECENTE">' in prompt
-    assert '<response_prefix title="PREFIXO DE RESPOSTA">' in prompt
+    assert '<response_prefix title="PREFIXO DE RESPOSTA">' not in prompt
 
 
 def test_prompt_primary_false_omits_only_session_state():

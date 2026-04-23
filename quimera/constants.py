@@ -141,11 +141,6 @@ PROMPT_CONVERSATION = (
     "{conversation}\n"
     "</recent_conversation>"
 )
-PROMPT_SPEAKER = (
-    '<response_prefix title="PREFIXO DE RESPOSTA">\n'
-    "[{agent}]:\n"
-    "</response_prefix>"
-)
 PROMPT_DEBATE_RULE = (
     "- Se o tópico exigir debate mais aprofundado entre os agentes, "
     "inclua {marker} ao final da sua resposta (sem explicação). "

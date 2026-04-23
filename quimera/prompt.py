@@ -19,7 +19,6 @@ from .constants import (
     PROMPT_RULES,
     PROMPT_SESSION_STATE,
     PROMPT_SHARED_STATE,
-    PROMPT_SPEAKER,
     PROMPT_STATE_UPDATE_RULE,
     PROMPT_TOOL_RULE,
     PROMPT_TOOLS,
@@ -160,7 +159,6 @@ class PromptBuilder:
             skip_indexes={idx for idx in [request_index, *fact_indexes] if idx is not None},
         )
         conversation_block = PROMPT_CONVERSATION.format(conversation=conversation)
-        speaker_block = PROMPT_SPEAKER.format(agent=agent.upper())
 
         parts = [p for p in [
             header_block,
@@ -168,7 +166,7 @@ class PromptBuilder:
             rules_block,
             tools_prompt,
             session_block, context_block, request_block, facts_block,
-            shared_state_block, handoff_block, conversation_block, metrics_block, speaker_block,
+            shared_state_block, handoff_block, conversation_block, metrics_block,
         ] if p]
 
         # Keep explicit section boundaries so prompt blocks do not collapse together.

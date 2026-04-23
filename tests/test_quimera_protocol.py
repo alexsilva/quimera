@@ -4092,8 +4092,8 @@ class MetricsFeedbackTests(unittest.TestCase):
         self.assertIn('<current_turn title="PEDIDO ATUAL DE VOCÊ">', prompt)
         self.assertIn('<handoff title="MENSAGEM DIRETA DO OUTRO AGENTE">', prompt)
         self.assertIn('<recent_conversation title="CONVERSA RECENTE">', prompt)
-        self.assertIn('<response_prefix title="PREFIXO DE RESPOSTA">', prompt)
-        self.assertIn("</response_prefix>", prompt)
+        self.assertNotIn('<response_prefix title="PREFIXO DE RESPOSTA">', prompt)
+        self.assertNotIn("</response_prefix>", prompt)
 
     def test_behavior_metrics_generate_feedback_empty_when_few_responses(self):
         """generate_feedback deve retornar vazio com menos de 3 respostas."""
