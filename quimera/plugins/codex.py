@@ -4,7 +4,7 @@ import shlex
 from pathlib import Path
 
 from quimera.agent_events import SpyEvent
-from quimera.plugins.base import AgentPlugin, register
+from quimera.plugins.base import AgentPlugin, CliConnection, register
 from quimera.plugins.spy_utils import (
     format_agent_message_lines,
     format_command_output_preview,
@@ -92,7 +92,29 @@ def _format_codex_spy_event(line: str) -> list[SpyEvent]:
     return [SpyEvent(kind="context", text=f"{itype} {phase}", transient=True)]
 
 
-plugin = AgentPlugin(
+class CodexPlugin(AgentPlugin):
+    """Plugin do Codex com retomada automática da última sessão por workspace."""
+
+    def effective_cmd(self) -> list[str]:
+        """Prefere `codex exec resume --last` sem mover a lógica para fora do plugin."""
+        connection = self.effective_connection()
+        if isinstance(connection, CliConnection):
+            cmd = list(connection.cmd)
+            prompt_as_arg = connection.prompt_as_arg
+        else:
+            cmd = list(self.cmd)
+            prompt_as_arg = self.prompt_as_arg
+
+        if cmd[:2] != ["codex", "exec"] or (len(cmd) >= 3 and cmd[2] == "resume"):
+            return cmd
+
+        resumed = ["codex", "exec", "resume", "--last", *cmd[2:]]
+        if not prompt_as_arg:
+            resumed.append("-")
+        return resumed
+
+
+register(CodexPlugin(
     name="codex",
     prefix="/codex",
     aliases=["/code"],
@@ -100,23 +122,19 @@ plugin = AgentPlugin(
     runtime_rw_paths=[str(Path.home() / ".codex")],
     cmd=["codex", "exec", "--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check", "--json"],
     output_format="codex-json",
-    # O `codex exec` tenta ler stdin adicional quando recebe prompt por argv
-    # e detecta stdin redirecionado. No Quimera, usar stdin como canal único
-    # evita esse modo ambíguo e garante EOF explícito após o prompt.
     prompt_as_arg=False,
     style=("blue", "Codex"),
     capabilities=["code_editing", "code_review", "test_execution", "bug_investigation", "tool_use"],
     preferred_task_types=["code_edit", "code_review", "test_execution", "bug_investigation", "general"],
-    avoid_task_types=[],
     supports_tools=True,
     has_builtin_tools=True,
     tool_use_reliability="high",
     supports_code_editing=True,
+    supports_long_context=True,
+    base_tier=2,
     spy_stdout_formatter=_format_codex_spy_event,
     stderr_noise=frozenset({
         "Reading additional input from stdin...",
         "Reading prompt from stdin...",
     }),
-    supports_long_context=True, base_tier=2,
-)
-register(plugin)
+))

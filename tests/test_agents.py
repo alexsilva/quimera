@@ -7,6 +7,7 @@ from quimera.agent_events import SpyEvent
 from quimera.agents import AgentClient, _filter_stderr_lines, _strip_spinner, _should_ignore_stderr_line
 from quimera.constants import MAX_STDERR_LINES, Visibility
 from quimera.plugins import get as get_plugin
+from quimera.plugins.base import CliConnection
 from quimera.plugins.claude import _format_claude_spy_event
 from quimera.plugins.codex import _format_codex_spy_event
 from quimera.plugins.opencode import _format_opencode_spy_event
@@ -44,6 +45,36 @@ def test_codex_plugin_reads_prompt_from_stdin():
     assert plugin is not None
     assert plugin.prompt_as_arg is False
     assert "/code" in plugin.aliases
+
+
+def test_codex_plugin_resumes_last_session_in_workspace():
+    plugin = get_plugin("codex")
+    assert plugin is not None
+    assert plugin.effective_cmd() == [
+        "codex",
+        "exec",
+        "resume",
+        "--last",
+        "--dangerously-bypass-approvals-and-sandbox",
+        "--skip-git-repo-check",
+        "--json",
+        "-",
+    ]
+
+
+def test_codex_plugin_applies_resume_to_cli_override():
+    plugin = get_plugin("codex")
+    assert plugin is not None
+    original_override = plugin._connection_override
+    try:
+        plugin._connection_override = CliConnection(
+            cmd=["codex", "exec", "--json"],
+            prompt_as_arg=False,
+            output_format="codex-json",
+        )
+        assert plugin.effective_cmd() == ["codex", "exec", "resume", "--last", "--json", "-"]
+    finally:
+        plugin._connection_override = original_override
 
 
 def test_agent_client_run_success(renderer):
