@@ -2,6 +2,7 @@
 import unittest
 
 from quimera.metrics import AgentBehaviorMetrics, BehaviorMetricsTracker
+from quimera.prompt_templates import prompt_template
 
 
 class TestAgentBehaviorMetrics(unittest.TestCase):
@@ -361,10 +362,8 @@ class TestPromptMetricsFeedback(unittest.TestCase):
 
     def test_prompt_base_rules_are_concise(self):
         """Verifica que as regras base são concisas."""
-        from quimera.constants import PROMPT_BASE_RULES
-
-        self.assertLess(len(PROMPT_BASE_RULES), 1600)
-        self.assertIn("humano", PROMPT_BASE_RULES.lower())
+        self.assertLess(len(prompt_template.base_rules), 1600)
+        self.assertIn("humano", prompt_template.base_rules.lower())
 
     def test_prompt_without_metrics_feedback(self):
         """Verifica que prompt funciona sem feedback."""

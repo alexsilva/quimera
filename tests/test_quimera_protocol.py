@@ -29,6 +29,7 @@ from quimera.constants import CMD_AGENTS, CMD_CLEAR, CMD_CONNECT, CMD_HELP, CMD_
 from quimera.plugins import AgentPlugin
 from quimera.plugins.base import OpenAIConnection
 from quimera.prompt import PromptBuilder
+from quimera.prompt_templates import prompt_template
 from quimera.runtime.approval import ApprovalHandler
 from quimera.runtime.config import ToolRuntimeConfig
 from quimera.runtime.executor import ToolExecutor
@@ -3813,11 +3814,9 @@ class MetricsFeedbackTests(unittest.TestCase):
 
     def test_handoff_rule_mentions_ack(self):
         """PROMPT_HANDOFF_RULE deve mencionar ACK."""
-        from quimera.constants import PROMPT_HANDOFF_RULE
-
-        self.assertIn("ACK", PROMPT_HANDOFF_RULE)
-        self.assertIn("delegue de volta", PROMPT_HANDOFF_RULE)
-        self.assertIn("arquivos", PROMPT_HANDOFF_RULE)
+        self.assertIn("ACK", prompt_template.handoff_rule)
+        self.assertIn("delegue de volta", prompt_template.handoff_rule)
+        self.assertIn("arquivos", prompt_template.handoff_rule)
 
     def test_behavior_metrics_tracker_integrated_with_app(self):
         """BehaviorMetricsTracker deve ser alimentado pelo app."""
@@ -3889,44 +3888,35 @@ class MetricsFeedbackTests(unittest.TestCase):
 
     def test_reviewer_rule_is_concise(self):
         """PROMPT_REVIEWER_RULE deve ser conciso."""
-        from quimera.constants import PROMPT_REVIEWER_RULE
-
-        self.assertIn("veredicto", PROMPT_REVIEWER_RULE.lower())
-        self.assertIn("aceite", PROMPT_REVIEWER_RULE.lower())
-        self.assertLess(len(PROMPT_REVIEWER_RULE), 550)
+        self.assertIn("veredicto", prompt_template.reviewer_rule.lower())
+        self.assertIn("aceite", prompt_template.reviewer_rule.lower())
+        self.assertLess(len(prompt_template.reviewer_rule), 550)
 
     def test_handoff_rule_is_concise(self):
         """PROMPT_HANDOFF_RULE deve ser conciso."""
-        from quimera.constants import PROMPT_HANDOFF_RULE
-
-        self.assertIn("ACK", PROMPT_HANDOFF_RULE)
-        self.assertIn("continue do ponto já avançado", PROMPT_HANDOFF_RULE.lower())
-        self.assertLess(len(PROMPT_HANDOFF_RULE), 400)
+        self.assertIn("ACK", prompt_template.handoff_rule)
+        self.assertIn("continue do ponto já avançado", prompt_template.handoff_rule.lower())
+        self.assertLess(len(prompt_template.handoff_rule), 400)
 
     def test_base_rules_are_concise(self):
         """PROMPT_BASE_RULES deve ser conciso e cobrir prioridades."""
-        from quimera.constants import PROMPT_BASE_RULES
-
-        self.assertIn("humano", PROMPT_BASE_RULES.lower())
-        self.assertIn("prioridade", PROMPT_BASE_RULES.lower())
-        self.assertIn("foco", PROMPT_BASE_RULES.lower())
-        self.assertIn("continuação direta do mesmo chat", PROMPT_BASE_RULES.lower())
-        self.assertIn("colaboração é parte do trabalho", PROMPT_BASE_RULES.lower())
-        self.assertIn("editar arquivos", PROMPT_BASE_RULES.lower())
-        self.assertIn("mude o mínimo necessário", PROMPT_BASE_RULES.lower())
-        self.assertLess(len(PROMPT_BASE_RULES), 1600)
+        self.assertIn("humano", prompt_template.base_rules.lower())
+        self.assertIn("prioridade", prompt_template.base_rules.lower())
+        self.assertIn("foco", prompt_template.base_rules.lower())
+        self.assertIn("continuação direta do mesmo chat", prompt_template.base_rules.lower())
+        self.assertIn("colaboração é parte do trabalho", prompt_template.base_rules.lower())
+        self.assertIn("editar arquivos", prompt_template.base_rules.lower())
+        self.assertIn("mude o mínimo necessário", prompt_template.base_rules.lower())
+        self.assertLess(len(prompt_template.base_rules), 1600)
 
     def test_tool_rule_guides_discovery_before_edits(self):
-        from quimera.constants import PROMPT_TOOL_RULE
-
-        self.assertIn("NUNCA assuma caminhos", PROMPT_TOOL_RULE)
-        self.assertIn("list_files", PROMPT_TOOL_RULE)
-        self.assertIn("grep_search", PROMPT_TOOL_RULE)
-        self.assertIn("read_file", PROMPT_TOOL_RULE)
-        self.assertIn("apply_patch", PROMPT_TOOL_RULE)
-        self.assertIn("run_shell", PROMPT_TOOL_RULE)
-        self.assertIn("tag <tool ...> válida", PROMPT_TOOL_RULE)
-        self.assertIn('NÃO use sintaxe de função como read_file(...)', PROMPT_TOOL_RULE)
+        self.assertIn("ferramentas customizadas", prompt_template.tool_rule)
+        self.assertIn("list_files", prompt_template.tool_rule)
+        self.assertIn("grep_search", prompt_template.tool_rule)
+        self.assertIn("read_file", prompt_template.tool_rule)
+        self.assertIn("apply_patch", prompt_template.tool_rule)
+        self.assertIn("run_shell", prompt_template.tool_rule)
+        self.assertIn("texto sem tag é ignorado pelo sistema", prompt_template.tool_rule)
 
     def test_build_tools_prompt_is_compact_but_preserves_essentials(self):
         from quimera.constants import build_tools_prompt

@@ -5,27 +5,10 @@ from . import plugins
 from .config import DEFAULT_HISTORY_WINDOW
 from .constants import (
     EXTEND_MARKER,
-    PROMPT_AGENT_METRICS,
-    PROMPT_BASE_RULES,
-    PROMPT_COMPLETED_TASKS,
-    PROMPT_CONTEXT,
-    PROMPT_CONVERSATION,
-    PROMPT_FACTS,
-    PROMPT_HANDOFF,
-    PROMPT_HANDOFF_RULE,
-    PROMPT_HEADER,
-    PROMPT_REVIEWER_RULE,
-    PROMPT_REQUEST,
-    PROMPT_RULES,
-    PROMPT_SESSION_STATE,
-    PROMPT_SHARED_STATE,
-    PROMPT_STATE_UPDATE_RULE,
-    PROMPT_TOOL_RULE,
-    PROMPT_TOOLS,
-    PROMPT_DEBATE_RULE,
     build_route_rule,
     build_tools_prompt,
 )
+from .prompt_templates import prompt_template
 
 
 class PromptBuilder:
@@ -72,30 +55,27 @@ class PromptBuilder:
         """
         context = self.context_manager.load()
 
-        rules = PROMPT_BASE_RULES
         if handoff_only:
-            rules += PROMPT_HANDOFF_RULE
+            route_rule = ""
+            tool_rule = ""
+            mode_rule = prompt_template.handoff_rule
         else:
-            rules += build_route_rule(self.active_agents)
-            if not skip_tool_prompt:
-                rules += PROMPT_TOOL_RULE
+            route_rule = build_route_rule(self.active_agents)
+            tool_rule = prompt_template.tool_rule if not skip_tool_prompt else ""
             if is_first_speaker:
-                rules += PROMPT_DEBATE_RULE.format(marker=EXTEND_MARKER)
+                mode_rule = prompt_template.debate_rule.format(marker=EXTEND_MARKER)
             else:
-                rules += PROMPT_REVIEWER_RULE
+                mode_rule = prompt_template.reviewer_rule
 
         tools_prompt = (
-            PROMPT_TOOLS.format(tools=build_tools_prompt())
+            '<tools title="Ferramentas disponíveis">\n'
+            f"{build_tools_prompt()}\n"
+            "</tools>"
             if not skip_tool_prompt else ""
         )
 
         other_agents = [n for n in self.active_agents if n.lower() != agent.lower()]
         agents_list = ", ".join(n.upper() for n in other_agents) if other_agents else "nenhum"
-        header_block = PROMPT_HEADER.format(
-            agent=agent.upper(),
-            user_name=self.user_name.upper(),
-            agents=agents_list,
-        )
         shared = shared_state or {}
         has_goal = "goal_canonical" in shared
         fallback_shared = {}
@@ -111,28 +91,30 @@ class PromptBuilder:
                 if k not in execution_keys
             }
 
-        execution_context = ""
-        if fallback_shared:
-            rules += PROMPT_STATE_UPDATE_RULE
-        rules_block = PROMPT_RULES.format(rules=rules)
+        state_update_rule = prompt_template.state_update_rule if fallback_shared else ""
 
         if self.session_state and primary:
-            session_payload = {
-                "session_id": self.session_state.get("session_id", "desconhecida"),
-                "current_job_id": self.session_state.get("current_job_id", "desconhecido"),
-                "workspace_root": self.session_state.get("workspace_root", "desconhecido"),
-                "current_dir": self.session_state.get("current_dir", "."),
-            }
-            session_block = PROMPT_SESSION_STATE.format(**session_payload)
+            session_block = (
+                '<session_state title="Estado da sessão">\n'
+                f"- SESSÃO ATUAL: {self.session_state.get('session_id', 'desconhecida')}\n"
+                f"- JOB_ID ATUAL: {self.session_state.get('current_job_id', 'desconhecido')}\n"
+                f"- WORKSPACE RAIZ: {self.session_state.get('workspace_root', 'desconhecido')}\n"
+                f"- DIRETÓRIO ATUAL: {self.session_state.get('current_dir', '.')}\n"
+                "</session_state>"
+            )
         else:
             session_block = ""
         context_block = (
-            PROMPT_CONTEXT.format(context=context)
+            '<persistent_context title="Contexto persistente do workspace">\n'
+            f"{context}\n"
+            "</persistent_context>"
             if context
             else ""
         )
         handoff_block = (
-            PROMPT_HANDOFF.format(handoff=self._format_handoff(handoff, from_agent))
+            '<handoff title="Mensagem direta do outro agente">\n'
+            f"{self._format_handoff(handoff, from_agent)}\n"
+            "</handoff>"
             if handoff
             else ""
         )
@@ -142,39 +124,67 @@ class PromptBuilder:
         if shared_state and not has_goal:
             if fallback_shared:
                 state_lines = json.dumps(fallback_shared, ensure_ascii=False, indent=2)
-                shared_state_block = PROMPT_SHARED_STATE.format(shared_state_json=state_lines)
+                shared_state_block = prompt_template.shared_state.format(shared_state_json=state_lines)
         elif shared_state and has_goal and "completed_task_results" in shared_state:
             results = shared_state["completed_task_results"]
             if results:
-                shared_state_block = PROMPT_COMPLETED_TASKS.format(results=results)
+                shared_state_block = (
+                    '<completed_tasks title="Tarefas concluídas">\n'
+                    f"{results}\n"
+                    "</completed_tasks>"
+                )
 
         metrics_block = ""
         if self.metrics_tracker:
             feedback = self.metrics_tracker.generate_feedback(agent)
             if feedback:
-                metrics_block = PROMPT_AGENT_METRICS.format(metrics=feedback)
+                metrics_block = (
+                    '<agent_metrics title="Métricas do agente atual (apenas referência)">\n'
+                    f"{feedback}\n"
+                    "</agent_metrics>"
+                )
 
         conversation = self._build_conversation_block(
             history,
             skip_indexes={idx for idx in [request_index, *fact_indexes] if idx is not None},
         )
-        conversation_block = PROMPT_CONVERSATION.format(conversation=conversation)
-
-        parts = [p for p in [
-            header_block,
-            execution_context,
-            rules_block,
+        conversation_block = (
+            '<recent_conversation title="Conversa recente">\n'
+            f"{conversation}\n"
+            "</recent_conversation>"
+        )
+        rules_suffix = self._join_prompt_blocks(
+            route_rule,
+            tool_rule,
+            mode_rule,
+            state_update_rule,
+        )
+        rules_body = self._join_prompt_blocks(
+            prompt_template.base_rules,
+            rules_suffix,
+        )
+        body_blocks = self._join_prompt_blocks(
             tools_prompt,
-            session_block, context_block, request_block, facts_block,
-            shared_state_block, handoff_block, conversation_block, metrics_block,
-        ] if p]
-
-        # Keep explicit section boundaries so prompt blocks do not collapse together.
-        full_prompt = "\n\n".join(parts)
+            session_block,
+            context_block,
+            request_block,
+            facts_block,
+            shared_state_block,
+            handoff_block,
+        )
+        full_prompt = prompt_template.render(
+            agent=agent.upper(),
+            user_name=self.user_name.upper(),
+            agents=agents_list,
+            rules_body=rules_body,
+            body_blocks=body_blocks,
+            conversation=conversation,
+            metrics_block=metrics_block,
+        )
 
         if debug:
             metrics = {
-                "rules_chars": len(rules),
+                "rules_chars": len(route_rule) + len(tool_rule) + len(mode_rule) + len(state_update_rule),
                 "session_state_chars": len(session_block),
                 "persistent_chars": len(context_block),
                 "request_chars": len(request_block),
@@ -189,6 +199,12 @@ class PromptBuilder:
             return full_prompt, metrics
 
         return full_prompt
+
+    @staticmethod
+    def _join_prompt_blocks(*blocks):
+        """Junta blocos não vazios com uma única linha em branco entre eles."""
+        normalized = [block.strip() for block in blocks if block and block.strip()]
+        return "\n\n".join(normalized)
 
     @staticmethod
     def _trim_shared_state(state, decisions_tail=5):
@@ -225,7 +241,7 @@ class PromptBuilder:
             if message.get("role") == "human":
                 content = (message.get("content") or "").strip()
                 if content:
-                    return index, PROMPT_REQUEST.format(
+                    return index, prompt_template.request.format(
                         user_name=self.user_name.upper(),
                         request=content,
                     )
@@ -257,7 +273,7 @@ class PromptBuilder:
             return [], ""
         facts.reverse()
         fact_indexes.reverse()
-        return fact_indexes, PROMPT_FACTS.format(facts="\n".join(facts))
+        return fact_indexes, prompt_template.facts.format(facts="\n".join(facts))
 
     @staticmethod
     def _should_skip_fact(content):
