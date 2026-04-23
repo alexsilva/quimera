@@ -61,7 +61,11 @@ Critério faltando → RETENTATIVA ou REPLANEJAR.
 Só ACEITE com prova concreta de conclusão.
 """
 
-PROMPT_SHARED_STATE = "ESTADO COMPARTILHADO:\n{shared_state_json}"
+PROMPT_SHARED_STATE = (
+    '<shared_state title="ESTADO COMPARTILHADO">\n'
+    "{shared_state_json}\n"
+    "</shared_state>"
+)
 
 PROMPT_STATE_UPDATE_RULE = """Você pode atualizar o estado compartilhado usando:
 [STATE_UPDATE]
@@ -81,29 +85,84 @@ Sempre mescle com o estado existente, nunca substitua completamente.
 """
 
 # Execution governance prompt fragments
-PROMPT_GOAL_LOCK = "OBJETIVO FIXO (imutável):\n{goal_canonical}"
-PROMPT_STEP_LOCK = "PASSO ATUAL:\n{current_step}"
-PROMPT_ACCEPTANCE_CRITERIA = "CRITÉRIOS DE ACEITAÇÃO:\n{acceptance_criteria}"
-PROMPT_SCOPE_CONTROL = "ESCOPO PERMITIDO:\n{allowed_scope}\n\nNÃO-OBJETIVOS:\n{non_goals}"
+PROMPT_GOAL_LOCK = (
+    '<goal_lock title="OBJETIVO FIXO (imutável)">\n'
+    "{goal_canonical}\n"
+    "</goal_lock>"
+)
+PROMPT_STEP_LOCK = (
+    '<current_step title="PASSO ATUAL">\n'
+    "{current_step}\n"
+    "</current_step>"
+)
+PROMPT_ACCEPTANCE_CRITERIA = (
+    '<acceptance_criteria title="CRITÉRIOS DE ACEITAÇÃO">\n'
+    "{acceptance_criteria}\n"
+    "</acceptance_criteria>"
+)
+PROMPT_SCOPE_CONTROL = (
+    '<scope_control title="ESCOPO E NÃO-OBJETIVOS">\n'
+    "ESCOPO PERMITIDO:\n"
+    "{allowed_scope}\n\n"
+    "NÃO-OBJETIVOS:\n"
+    "{non_goals}\n"
+    "</scope_control>"
+)
 # Core prompt building blocks
-PROMPT_HEADER = "Você é {agent}.\nUsuário humano: {user_name}\nAgentes de IA nesta conversa: {agents}"
-PROMPT_CONTEXT = "CONTEXTO PERSISTENTE:\n{context}"
-PROMPT_REQUEST = "AÇÃO PRINCIPAL (PEDIDO DE {user_name}):\n{request}"
-PROMPT_FACTS = "MENSAGENS RECENTES DE OUTROS AGENTES:\n{facts}"
-PROMPT_CONVERSATION = "CONVERSA RECENTE RESIDUAL:\n{conversation}"
-PROMPT_SPEAKER = "[{agent}]:"
+PROMPT_HEADER = (
+    '<header title="IDENTIFICAÇÃO">\n'
+    "Você é {agent}.\n"
+    "Usuário humano: {user_name}\n"
+    "Agentes de IA nesta conversa: {agents}\n"
+    "</header>"
+)
+PROMPT_RULES = (
+    '<rules title="REGRAS">\n'
+    "{rules}\n"
+    "</rules>"
+)
+PROMPT_CONTEXT = (
+    '<persistent_context title="CONTEXTO PERSISTENTE">\n'
+    "{context}\n"
+    "</persistent_context>"
+)
+PROMPT_REQUEST = (
+    '<current_turn title="AÇÃO PRINCIPAL (PEDIDO DE {user_name})">\n'
+    "{request}\n"
+    "</current_turn>"
+)
+PROMPT_FACTS = (
+    '<recent_agent_messages title="MENSAGENS RECENTES DE OUTROS AGENTES">\n'
+    "{facts}\n"
+    "</recent_agent_messages>"
+)
+PROMPT_CONVERSATION = (
+    '<recent_conversation title="CONVERSA RECENTE RESIDUAL">\n'
+    "{conversation}\n"
+    "</recent_conversation>"
+)
+PROMPT_SPEAKER = (
+    '<response_prefix title="PREFIXO DE RESPOSTA">\n'
+    "[{agent}]:\n"
+    "</response_prefix>"
+)
 PROMPT_DEBATE_RULE = (
     "- Se o tópico exigir debate mais aprofundado entre os agentes, "
     "inclua {marker} ao final da sua resposta (sem explicação). "
     "Caso contrário, não inclua nada.\n"
 )
-PROMPT_HANDOFF = "MENSAGEM DIRETA DO OUTRO AGENTE:\n{handoff}"
+PROMPT_HANDOFF = (
+    '<handoff title="MENSAGEM DIRETA DO OUTRO AGENTE">\n'
+    "{handoff}\n"
+    "</handoff>"
+)
 PROMPT_SESSION_STATE = (
-    "ESTADO DA SESSÃO:\n"
+    '<session_state title="ESTADO DA SESSÃO">\n'
     "- SESSÃO ATUAL: {session_id}\n"
     "- JOB_ID ATUAL: {current_job_id}\n"
     "- WORKSPACE RAIZ: {workspace_root}\n"
     "- DIRETÓRIO ATUAL: {current_dir}\n"
+    "</session_state>"
 )
 PROMPT_HANDOFF_RULE = (
     "- Você recebeu uma subtarefa delegada por outro agente. Continue do ponto já avançado e responda diretamente à tarefa.\n"
@@ -122,7 +181,16 @@ PROMPT_TOOL_RULE = (
     "- NUNCA escreva o conteúdo editado de um arquivo diretamente na resposta — use a ferramenta; texto sem tag é ignorado pelo sistema.\n"
     "- Use run_shell para inspeção ou validação objetiva; evite comandos longos, encadeados ou exploratórios sem necessidade.\n"
 )
-PROMPT_AGENT_METRICS = "MÉTRICAS DO AGENTE ATUAL (APENAS REFERÊNCIA)\n{metrics}"
+PROMPT_AGENT_METRICS = (
+    '<agent_metrics title="MÉTRICAS DO AGENTE ATUAL (APENAS REFERÊNCIA)">\n'
+    "{metrics}\n"
+    "</agent_metrics>"
+)
+PROMPT_COMPLETED_TASKS = (
+    '<completed_tasks title="TAREFAS CONCLUÍDAS">\n'
+    "{results}\n"
+    "</completed_tasks>"
+)
 
 # Protocol markers
 EXTEND_MARKER = "[DEBATE]"
@@ -290,22 +358,22 @@ TOOL_SCHEMA = {
 def build_tools_prompt() -> str:
     """Gera um bloco compacto de ferramentas disponíveis."""
     lines = [
-        "USE TAGS NO CHAT PARA EXECUTAR COMANDOS NO WORKSPACE\n"
+        "USE TAGS <tool ...> NO WORKSPACE\n"
         "Se a resposta não contiver uma tag <tool ...> válida, a ferramenta não executa.\n"
         "Use exatamente o formato aceito pelo parser; não escreva chamadas como list_files(...).\n"
         "Exemplo: Usuário pergunta sobre 'onde está a função foo' → você usa list_files/grep_search via <tool ...> → retorna evidência real.\n"
-        ' <tool function="run_shell" command="git status" />\n'
+        '<tool function="run_shell" command="git status" />\n'
         " Exemplos canônicos:\n"
-        ' <tool function="list_files" path="." />\n'
-        ' <tool function="read_file" path="/workspace/src/app.py" />\n'
-        ' <tool function="grep_search" pattern="class User" path="/workspace/src" />\n'
-        ' <tool function="run_shell" command="git status --short" />\n'
-        ' <tool function="exec_command">{"cmd":"python -i","tty":true}</tool>\n'
-        ' <tool function="write_stdin">{"session_id":7,"chars":"print(1)\\n","yield_time_ms":1000}</tool>\n'
+        '<tool function="list_files" path="." />\n'
+        '<tool function="read_file" path="/workspace/src/app.py" />\n'
+        '<tool function="grep_search" pattern="class User" path="/workspace/src" />\n'
+        '<tool function="run_shell" command="git status --short" />\n'
+        '<tool function="exec_command">{"cmd":"python -i","tty":true}</tool>\n'
+        '<tool function="write_stdin">{"session_id":7,"chars":"print(1)\\n","yield_time_ms":1000}</tool>\n'
         " - Para shell interativo, use exatamente exec_command / write_stdin / close_command_session.\n"
         " - Nunca invente nomes como run_shell_command ou execute_command.\n"
         " - Para payloads longos, use corpo JSON dentro da tag:\n"
-        ' <tool function="apply_patch">{"patch": "*** Begin Patch\\n...\\n*** End Patch"}</tool>\n'
+        '<tool function="apply_patch">{"patch": "*** Begin Patch\\n...\\n*** End Patch"}</tool>\n'
         "\nFerramentas disponíveis:\n"
     ]
     for tool in TOOL_SCHEMA.values():

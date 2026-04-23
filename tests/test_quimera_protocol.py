@@ -915,7 +915,8 @@ class ProtocolTests(unittest.TestCase):
 
         prompt = builder.build(AGENT_CODEX, history, handoff="Revise este ponto.")
 
-        self.assertIn("MENSAGEM DIRETA DO OUTRO AGENTE", prompt)
+        self.assertIn('<handoff title="MENSAGEM DIRETA DO OUTRO AGENTE">', prompt)
+        self.assertIn("</handoff>", prompt)
         self.assertIn("Revise este ponto.", prompt)
 
     def test_prompt_includes_current_human_request_block(self):
@@ -928,7 +929,8 @@ class ProtocolTests(unittest.TestCase):
 
         prompt = builder.build(AGENT_CODEX, history)
 
-        self.assertIn("AÇÃO PRINCIPAL (PEDIDO DE VOCÊ)", prompt)
+        self.assertIn('<current_turn title="AÇÃO PRINCIPAL (PEDIDO DE VOCÊ)">', prompt)
+        self.assertIn("</current_turn>", prompt)
         self.assertIn("Pedido atual", prompt)
 
     def test_prompt_does_not_repeat_current_human_request_in_conversation(self):
@@ -941,9 +943,10 @@ class ProtocolTests(unittest.TestCase):
 
         prompt = builder.build(AGENT_CODEX, history)
 
-        conversation = prompt.split("CONVERSA RECENTE RESIDUAL:\n", 1)[1]
+        conversation = prompt.split('<recent_conversation title="CONVERSA RECENTE RESIDUAL">\n', 1)[1]
         self.assertNotIn("[VOCÊ]: Pedido atual", conversation)
         self.assertIn("[VOCÊ]: Primeiro pedido", conversation)
+        self.assertIn("</recent_conversation>", conversation)
 
     def test_prompt_includes_recent_facts_block(self):
         builder = PromptBuilder(DummyContextManager(), history_window=5)
@@ -955,7 +958,8 @@ class ProtocolTests(unittest.TestCase):
 
         prompt = builder.build(AGENT_CLAUDE, history)
 
-        self.assertIn("MENSAGENS RECENTES DE OUTROS AGENTES", prompt)
+        self.assertIn('<recent_agent_messages title="MENSAGENS RECENTES DE OUTROS AGENTES">', prompt)
+        self.assertIn("</recent_agent_messages>", prompt)
         self.assertIn("[CODEX] Teste falhou em test_x", prompt)
         self.assertNotIn("[CLAUDE] Arquivo alterado: app.py", prompt)
 
@@ -969,11 +973,11 @@ class ProtocolTests(unittest.TestCase):
 
         prompt = builder.build(AGENT_CLAUDE, history)
 
-        self.assertNotIn("MENSAGENS RECENTES DE OUTROS AGENTES", prompt)
+        self.assertNotIn('title="MENSAGENS RECENTES DE OUTROS AGENTES"', prompt)
         self.assertNotIn("[CLAUDE] Arquivo alterado: app.py", prompt)
         self.assertNotIn("goal_canonical continua ativo", prompt)
         self.assertNotIn("não redefina o objetivo", prompt)
-        conversation = prompt.split("CONVERSA RECENTE RESIDUAL:\n", 1)[1]
+        conversation = prompt.split('<recent_conversation title="CONVERSA RECENTE RESIDUAL">\n', 1)[1]
         self.assertIn("[CLAUDE]: Arquivo alterado: app.py", conversation)
 
     def test_prompt_keeps_same_agent_history_in_conversation_not_other_agents_block(self):
@@ -985,8 +989,8 @@ class ProtocolTests(unittest.TestCase):
 
         prompt = builder.build(AGENT_CLAUDE, history)
 
-        self.assertNotIn("MENSAGENS RECENTES DE OUTROS AGENTES", prompt)
-        conversation = prompt.split("CONVERSA RECENTE RESIDUAL:\n", 1)[1]
+        self.assertNotIn('title="MENSAGENS RECENTES DE OUTROS AGENTES"', prompt)
+        conversation = prompt.split('<recent_conversation title="CONVERSA RECENTE RESIDUAL">\n', 1)[1]
         self.assertIn("[CLAUDE]: Eu estava investigando o parser", conversation)
 
     def test_prompt_does_not_repeat_recent_facts_in_conversation(self):
@@ -999,7 +1003,7 @@ class ProtocolTests(unittest.TestCase):
 
         prompt = builder.build(AGENT_CLAUDE, history)
 
-        conversation = prompt.split("CONVERSA RECENTE RESIDUAL:\n", 1)[1]
+        conversation = prompt.split('<recent_conversation title="CONVERSA RECENTE RESIDUAL">\n', 1)[1]
         self.assertNotIn("[CODEX]: Teste falhou em test_x", conversation)
         self.assertIn("[CLAUDE]: Arquivo alterado: app.py", conversation)
 
@@ -1035,7 +1039,8 @@ class ProtocolTests(unittest.TestCase):
 
         prompt = builder.build(AGENT_CLAUDE, history)
 
-        self.assertIn("ESTADO DA SESSÃO", prompt)
+        self.assertIn('<session_state title="ESTADO DA SESSÃO">', prompt)
+        self.assertIn("</session_state>", prompt)
         self.assertIn("SESSÃO ATUAL: sessao-2026-03-27-123456", prompt)
         self.assertIn("JOB_ID ATUAL: 1", prompt)
         self.assertIn("WORKSPACE RAIZ: /tmp/quimera", prompt)
@@ -1055,7 +1060,7 @@ class ProtocolTests(unittest.TestCase):
             shared_state={"goal": "corrigir", "decisions": ["usar json"]},
         )
 
-        self.assertNotIn("ESTADO COMPARTILHADO", prompt)
+        self.assertNotIn('title="ESTADO COMPARTILHADO"', prompt)
         self.assertNotIn('"goal": "corrigir"', prompt)
         self.assertNotIn('"decisions": [', prompt)
 
@@ -1065,7 +1070,7 @@ class ProtocolTests(unittest.TestCase):
             history,
             shared_state={"next_step": "continuar", "goal": "ignorado"},
         )
-        self.assertNotIn("ESTADO COMPARTILHADO", prompt2)
+        self.assertNotIn('title="ESTADO COMPARTILHADO"', prompt2)
 
         # task_overview é campo de infra (não execução) e deve aparecer normalmente
         prompt3 = builder.build(
@@ -1073,7 +1078,8 @@ class ProtocolTests(unittest.TestCase):
             history,
             shared_state={"task_overview": {"job_id": 1}, "goal": "ignorado"},
         )
-        self.assertIn("ESTADO COMPARTILHADO", prompt3)
+        self.assertIn('<shared_state title="ESTADO COMPARTILHADO">', prompt3)
+        self.assertIn("</shared_state>", prompt3)
         self.assertIn('"task_overview"', prompt3)
         self.assertNotIn('"goal":', prompt3)
 
@@ -1090,7 +1096,7 @@ class ProtocolTests(unittest.TestCase):
         prompt = builder.build(AGENT_CLAUDE, history, shared_state=big_state)
 
         # Sem goal_canonical, todos os campos de execução (goal, decisions, next_step) são filtrados
-        self.assertNotIn("ESTADO COMPARTILHADO", prompt)
+        self.assertNotIn('title="ESTADO COMPARTILHADO"', prompt)
         self.assertNotIn('"goal":', prompt)
         self.assertNotIn('"decisions":', prompt)
         self.assertNotIn('"next_step":', prompt)
@@ -1099,8 +1105,9 @@ class ProtocolTests(unittest.TestCase):
         # Com task_overview (campo de infra), o bloco aparece normalmente
         state_with_overview = {**big_state, "task_overview": {"job_id": 42}}
         prompt2 = builder.build(AGENT_CLAUDE, history, shared_state=state_with_overview)
-        state_start = prompt2.index("ESTADO COMPARTILHADO:")
+        state_start = prompt2.index('<shared_state title="ESTADO COMPARTILHADO">')
         state_block = prompt2[state_start:]
+        self.assertIn("</shared_state>", state_block)
         self.assertIn('"task_overview"', state_block)
         self.assertNotIn('"goal":', state_block)
         self.assertNotIn('"next_step":', state_block)
@@ -1136,7 +1143,7 @@ class ProtocolTests(unittest.TestCase):
             history,
             shared_state={"next_step": "continuar"},
         )
-        self.assertNotIn("ESTADO COMPARTILHADO", prompt)
+        self.assertNotIn('title="ESTADO COMPARTILHADO"', prompt)
         self.assertNotIn("Você pode atualizar o estado compartilhado usando:", prompt)
 
         # task_overview (campo de infra) deve acionar o bloco e incluir a regra STATE_UPDATE
@@ -1145,7 +1152,7 @@ class ProtocolTests(unittest.TestCase):
             history,
             shared_state={"task_overview": {"job_id": 1}},
         )
-        self.assertIn("ESTADO COMPARTILHADO", prompt2)
+        self.assertIn('<shared_state title="ESTADO COMPARTILHADO">', prompt2)
         self.assertIn("Você pode atualizar o estado compartilhado usando:", prompt2)
         self.assertIn("[STATE_UPDATE]", prompt2)
         self.assertEqual(prompt2.count("Você pode atualizar o estado compartilhado usando:"), 1)
@@ -3783,7 +3790,7 @@ class MetricsFeedbackTests(unittest.TestCase):
 
         prompt = builder.build(AGENT_CLAUDE, history, is_first_speaker=True)
 
-        self.assertLess(len(prompt), 6200)
+        self.assertLess(len(prompt), 6250)
 
     def test_get_task_routing_plugins_respects_explicit_active_agents(self):
         app = QuimeraApp.__new__(QuimeraApp)
@@ -4034,7 +4041,8 @@ class MetricsFeedbackTests(unittest.TestCase):
             },
         )
 
-        self.assertIn("TAREFAS CONCLUÍDAS:", prompt)
+        self.assertIn('<completed_tasks title="TAREFAS CONCLUÍDAS">', prompt)
+        self.assertIn("</completed_tasks>", prompt)
         self.assertIn("[task 1] testes: ok", prompt)
 
     def test_prompt_debug_metrics_include_prompt_sizes(self):
@@ -4046,10 +4054,46 @@ class MetricsFeedbackTests(unittest.TestCase):
 
         prompt, metrics = builder.build(AGENT_CLAUDE, history, debug=True)
 
-        self.assertIn("CONVERSA RECENTE RESIDUAL:", prompt)
+        self.assertIn('<recent_conversation title="CONVERSA RECENTE RESIDUAL">', prompt)
+        self.assertIn("</recent_conversation>", prompt)
         self.assertTrue(metrics["primary"])
         self.assertGreater(metrics["total_chars"], 0)
         self.assertIn("facts_chars", metrics)
+
+    def test_prompt_wraps_core_sections_with_consistent_boundaries(self):
+        class ContextManagerWithData(DummyContextManager):
+            def load(self):
+                return "Contexto persistente ativo"
+
+        builder = PromptBuilder(
+            ContextManagerWithData(),
+            history_window=5,
+            session_state={
+                "session_id": "sessao-2026-03-27-123456",
+                "current_job_id": 1,
+                "workspace_root": "/tmp/quimera",
+                "current_dir": ".",
+            },
+        )
+        history = [
+            {"role": "human", "content": "Pedido atual"},
+            {"role": "claude", "content": "Contexto de agente"},
+        ]
+
+        prompt = builder.build(AGENT_CODEX, history, handoff="Revise este ponto.")
+
+        self.assertIn('<header title="IDENTIFICAÇÃO">', prompt)
+        self.assertIn("</header>", prompt)
+        self.assertIn('<rules title="REGRAS">', prompt)
+        self.assertIn("</rules>", prompt)
+        self.assertIn('<session_state title="ESTADO DA SESSÃO">', prompt)
+        self.assertIn('<persistent_context title="CONTEXTO PERSISTENTE">', prompt)
+        self.assertIn("</persistent_context>", prompt)
+        self.assertIn('<current_turn title="AÇÃO PRINCIPAL (PEDIDO DE VOCÊ)">', prompt)
+        self.assertIn('<handoff title="MENSAGEM DIRETA DO OUTRO AGENTE">', prompt)
+        self.assertIn('<recent_conversation title="CONVERSA RECENTE RESIDUAL">', prompt)
+        self.assertIn('<response_prefix title="PREFIXO DE RESPOSTA">', prompt)
+        self.assertIn("</response_prefix>", prompt)
 
     def test_behavior_metrics_generate_feedback_empty_when_few_responses(self):
         """generate_feedback deve retornar vazio com menos de 3 respostas."""
@@ -4107,7 +4151,8 @@ class MetricsFeedbackTests(unittest.TestCase):
         builder = PromptBuilder(DummyContextManager(), history_window=3, metrics_tracker=tracker)
         prompt = builder.build("claude", [])
 
-        self.assertIn("MÉTRICAS DO AGENTE ATUAL (APENAS REFERÊNCIA)", prompt)
+        self.assertIn('<agent_metrics title="MÉTRICAS DO AGENTE ATUAL (APENAS REFERÊNCIA)">', prompt)
+        self.assertIn("</agent_metrics>", prompt)
         self.assertIn("SÍNTESES IMPRECISAS", prompt)
 
     def test_prompt_builder_omits_metrics_block_when_no_tracker(self):
@@ -4115,7 +4160,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         builder = PromptBuilder(DummyContextManager(), history_window=3)
         prompt = builder.build("claude", [])
 
-        self.assertNotIn("MÉTRICAS DO AGENTE ATUAL (APENAS REFERÊNCIA)", prompt)
+        self.assertNotIn('title="MÉTRICAS DO AGENTE ATUAL (APENAS REFERÊNCIA)"', prompt)
 
     def test_prompt_builder_omits_metrics_block_when_insufficient_data(self):
         """PromptBuilder não deve incluir métricas se generate_feedback retornar vazio."""
@@ -4127,7 +4172,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         builder = PromptBuilder(DummyContextManager(), history_window=3, metrics_tracker=tracker)
         prompt = builder.build("claude", [])
 
-        self.assertNotIn("MÉTRICAS DO AGENTE ATUAL (APENAS REFERÊNCIA)", prompt)
+        self.assertNotIn('title="MÉTRICAS DO AGENTE ATUAL (APENAS REFERÊNCIA)"', prompt)
 
 
 class AppProtocolDirectTests(unittest.TestCase):

@@ -5,24 +5,26 @@ from . import plugins
 from .config import DEFAULT_HISTORY_WINDOW
 from .constants import (
     EXTEND_MARKER,
-    PROMPT_HEADER,
-    PROMPT_CONTEXT,
-    PROMPT_REQUEST,
-    PROMPT_FACTS,
-    PROMPT_CONVERSATION,
-    PROMPT_SPEAKER,
+    PROMPT_AGENT_METRICS,
     PROMPT_BASE_RULES,
+    PROMPT_COMPLETED_TASKS,
+    PROMPT_CONTEXT,
+    PROMPT_CONVERSATION,
+    PROMPT_FACTS,
+    PROMPT_HANDOFF,
+    PROMPT_HANDOFF_RULE,
+    PROMPT_HEADER,
+    PROMPT_REVIEWER_RULE,
+    PROMPT_REQUEST,
+    PROMPT_RULES,
+    PROMPT_SESSION_STATE,
+    PROMPT_SHARED_STATE,
+    PROMPT_SPEAKER,
+    PROMPT_STATE_UPDATE_RULE,
+    PROMPT_TOOL_RULE,
     PROMPT_DEBATE_RULE,
     build_route_rule,
     build_tools_prompt,
-    PROMPT_SESSION_STATE,
-    PROMPT_HANDOFF,
-    PROMPT_SHARED_STATE,
-    PROMPT_STATE_UPDATE_RULE,
-    PROMPT_REVIEWER_RULE,
-    PROMPT_HANDOFF_RULE,
-    PROMPT_TOOL_RULE,
-    PROMPT_AGENT_METRICS,
 )
 
 
@@ -109,6 +111,7 @@ class PromptBuilder:
         execution_context = ""
         if fallback_shared:
             rules += PROMPT_STATE_UPDATE_RULE
+        rules_block = PROMPT_RULES.format(rules=rules)
 
         if self.session_state and primary:
             session_payload = {
@@ -120,8 +123,16 @@ class PromptBuilder:
             session_block = PROMPT_SESSION_STATE.format(**session_payload)
         else:
             session_block = ""
-        context_block = PROMPT_CONTEXT.format(context=context) if context else ""
-        handoff_block = PROMPT_HANDOFF.format(handoff=self._format_handoff(handoff, from_agent)) if handoff else ""
+        context_block = (
+            PROMPT_CONTEXT.format(context=context)
+            if context
+            else ""
+        )
+        handoff_block = (
+            PROMPT_HANDOFF.format(handoff=self._format_handoff(handoff, from_agent))
+            if handoff
+            else ""
+        )
         request_index, request_block = self._build_request_block(history)
         fact_indexes, facts_block = self._build_facts_block(history, current_agent=agent)
         shared_state_block = ""
@@ -132,7 +143,7 @@ class PromptBuilder:
         elif shared_state and has_goal and "completed_task_results" in shared_state:
             results = shared_state["completed_task_results"]
             if results:
-                shared_state_block = f"TAREFAS CONCLUÍDAS:\n{results}"
+                shared_state_block = PROMPT_COMPLETED_TASKS.format(results=results)
 
         metrics_block = ""
         if self.metrics_tracker:
@@ -150,8 +161,9 @@ class PromptBuilder:
         parts = [p for p in [
             header_block,
             execution_context,
-            rules,
-            tools_prompt, session_block, context_block, request_block, facts_block,
+            rules_block,
+            tools_prompt,
+            session_block, context_block, request_block, facts_block,
             shared_state_block, handoff_block, conversation_block, metrics_block, speaker_block,
         ] if p]
 
@@ -264,7 +276,7 @@ class PromptBuilder:
         return any(marker in lowered for marker in blocked_markers)
 
     def _build_conversation_block(self, history, skip_indexes=None):
-        """Monta conversa residual sem repetir blocos destacados acima."""
+        """Monta o conteúdo residual da conversa, sem um segundo envelope interno."""
         skip_indexes = skip_indexes or set()
         window_start = max(0, len(history) - self.history_window)
         lines = []
@@ -276,8 +288,18 @@ class PromptBuilder:
                 continue
             if message.get("role") != "human" and self._should_skip_fact(content):
                 continue
-            lines.append(f"[{self._display_role(message['role'])}]: {content}")
+            lines.append(
+                self._format_conversation_entry(
+                    role=self._display_role(message["role"]),
+                    content=content,
+                )
+            )
         return "\n".join(lines) if lines else "[sem itens residuais na conversa recente]"
+
+    @staticmethod
+    def _format_conversation_entry(role, content):
+        """Formata uma entrada residual da conversa dentro do bloco único."""
+        return f"[{role}]: {content}"
 
     def _format_handoff(self, handoff, from_agent=None):
         """Formata handoff."""
