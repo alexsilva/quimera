@@ -171,6 +171,12 @@ PROMPT_HANDOFF_RULE = (
     "- Não delegue de volta. Não expanda o escopo nem repita análise já feita.\n"
     "- Ao final, diga o que mudou, a evidência e o próximo passo.\n"
 )
+PROMPT_TOOLS = (
+    '<tools title="FERRAMENTAS DISPONÍVEIS">\n'
+    "{tools}\n"
+    "</tools>"
+)
+
 PROMPT_TOOL_RULE = (
     "- Você tem acesso às ferramentas customizadas listadas abaixo em 'Ferramentas disponíveis'.\n"
     "- REGRA CRÍTICA: NUNCA assuma caminhos. Sempre descubra com list_files/grep_search antes de ler, editar ou executar.\n"

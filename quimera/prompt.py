@@ -22,6 +22,7 @@ from .constants import (
     PROMPT_SPEAKER,
     PROMPT_STATE_UPDATE_RULE,
     PROMPT_TOOL_RULE,
+    PROMPT_TOOLS,
     PROMPT_DEBATE_RULE,
     build_route_rule,
     build_tools_prompt,
@@ -84,7 +85,10 @@ class PromptBuilder:
             else:
                 rules += PROMPT_REVIEWER_RULE
 
-        tools_prompt = build_tools_prompt() if not skip_tool_prompt else ""
+        tools_prompt = (
+            PROMPT_TOOLS.format(tools=build_tools_prompt())
+            if not skip_tool_prompt else ""
+        )
 
         other_agents = [n for n in self.active_agents if n.lower() != agent.lower()]
         agents_list = ", ".join(n.upper() for n in other_agents) if other_agents else "nenhum"
