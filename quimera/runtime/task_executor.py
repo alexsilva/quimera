@@ -26,6 +26,7 @@ class TaskExecutor:
         self.max_workers = max_workers
         self.poll_interval = poll_interval
         self._running = False
+        self._wake_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._executor: Optional[ThreadPoolExecutor] = None
         self._task_queue: queue.Queue = queue.Queue()
@@ -50,12 +51,14 @@ class TaskExecutor:
         if self._running:
             return
         self._running = True
+        self._wake_event.clear()
         self._thread = threading.Thread(target=self._poll_loop, daemon=True)
         self._thread.start()
 
     def stop(self):
         """Executa stop."""
         self._running = False
+        self._wake_event.set()
         if self._thread:
             try:
                 self._thread.join(timeout=5)
@@ -77,7 +80,8 @@ class TaskExecutor:
                         _logger.warning("task %s claimed by %s but could not be dispatched", task_id, self.agent_name)
                     task_id = None
                     # Brief pause after execution so other agents can pick up requeued tasks
-                    time.sleep(1)
+                    if self._wait_or_stop(1):
+                        break
                     continue
                 # No regular task — check for review tasks from other agents
                 can_review = self._review_eligibility() if self._review_eligibility else True
@@ -94,9 +98,11 @@ class TaskExecutor:
                                 review_id,
                                 self.agent_name,
                             )
-                        time.sleep(1)
+                        if self._wait_or_stop(1):
+                            break
                         continue
-                time.sleep(self.poll_interval)
+                if self._wait_or_stop(self.poll_interval):
+                    break
             except Exception as exc:
                 _logger.exception("poll loop error agent=%s task_id=%s: %s", self.agent_name, task_id, exc)
                 if task_id:
@@ -104,7 +110,15 @@ class TaskExecutor:
                         fail_task(task_id, reason=str(exc), db_path=self.db_path)
                     except Exception:
                         pass
-                time.sleep(self.poll_interval)
+                if self._wait_or_stop(self.poll_interval):
+                    break
+
+    def _wait_or_stop(self, timeout: float) -> bool:
+        """Wait for timeout unless stop() wakes the poll loop."""
+        self._wake_event.wait(timeout)
+        if self._wake_event.is_set():
+            self._wake_event.clear()
+        return not self._running
 
     def process_pending(self):
         """Process one iteration of pending tasks (for manual/batch execution)."""

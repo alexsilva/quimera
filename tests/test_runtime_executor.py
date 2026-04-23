@@ -97,10 +97,11 @@ def test_task_executor_skips_review_claim_when_agent_is_not_operational(tmp_path
 
     def stop_loop(*_args, **_kwargs):
         executor._running = False
+        return True
 
     with patch("quimera.runtime.task_executor.claim_task", return_value=None), patch(
             "quimera.runtime.task_executor.claim_review_task"
-    ) as claim_review_task, patch("quimera.runtime.task_executor.time.sleep", side_effect=stop_loop):
+    ) as claim_review_task, patch.object(executor, "_wait_or_stop", side_effect=stop_loop):
         executor._poll_loop()
 
     claim_review_task.assert_not_called()

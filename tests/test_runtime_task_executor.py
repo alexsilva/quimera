@@ -80,3 +80,16 @@ def test_task_executor_stop_ignores_keyboard_interrupt(db_path):
 
     assert executor._running is False
     mock_thread.join.assert_called_once_with(timeout=5)
+
+
+@patch("quimera.runtime.task_executor.claim_task", return_value=None)
+def test_task_executor_stop_interrupts_long_poll_interval(_mock_claim, db_path):
+    executor = TaskExecutor("agent", db_path, poll_interval=60)
+
+    executor.start()
+    time.sleep(0.05)
+
+    started_at = time.monotonic()
+    executor.stop()
+
+    assert time.monotonic() - started_at < 1
