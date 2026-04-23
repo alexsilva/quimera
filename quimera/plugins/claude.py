@@ -7,6 +7,16 @@ from quimera.plugins.base import AgentPlugin, register
 from quimera.plugins.spy_utils import truncate_spy_text
 
 
+def _claude_runtime_rw_paths() -> list[str]:
+    """Retorna paths de estado do Claude que precisam permanecer graváveis."""
+    home = Path.home()
+    return [
+        str(home / ".claude"),
+        str(home / ".claude.json"),
+        str(home / ".local" / "share" / "claude"),
+    ]
+
+
 def _truncate_text(value: str, limit: int = 160) -> str:
     return truncate_spy_text(value, limit=limit)
 
@@ -46,7 +56,7 @@ plugin = AgentPlugin(
     name="claude",
     prefix="/claude",
     icon="🔮",
-    runtime_rw_paths=[str(Path.home() / ".claude")],
+    runtime_rw_paths=_claude_runtime_rw_paths(),
     cmd=["claude", "--permission-mode=bypassPermissions", "--output-format=stream-json", "--verbose", "-p"],
     output_format="stream-json",
     style=("magenta", "Claude"),

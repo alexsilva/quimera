@@ -97,6 +97,34 @@ class TestBuildBwrapCmd(unittest.TestCase):
             f"--bind {claude_dir} {claude_dir} não encontrado em: {result}",
         )
 
+    def test_claude_auth_file_keeps_rw_bind_inside_read_only_home(self):
+        from unittest.mock import patch
+        claude_auth_file = str(Path.home() / ".claude.json")
+        plugin = self._plugin_with_rw_paths(claude_auth_file)
+        with patch("quimera.sandbox.bwrap.is_bwrap_available", return_value=True), patch(
+                "quimera.sandbox.bwrap.os.path.exists", return_value=True
+        ):
+            result = build_bwrap_cmd(ANALYSIS, "/tmp", ["echo"], plugin=plugin)
+        pairs = list(zip(result, result[1:], result[2:]))
+        self.assertTrue(
+            any(a == "--bind" and b == claude_auth_file and c == claude_auth_file for a, b, c in pairs),
+            f"--bind {claude_auth_file} {claude_auth_file} não encontrado em: {result}",
+        )
+
+    def test_claude_share_dir_keeps_rw_bind_inside_read_only_home(self):
+        from unittest.mock import patch
+        claude_share_dir = str(Path.home() / ".local" / "share" / "claude")
+        plugin = self._plugin_with_rw_paths(claude_share_dir)
+        with patch("quimera.sandbox.bwrap.is_bwrap_available", return_value=True), patch(
+                "quimera.sandbox.bwrap.os.path.exists", return_value=True
+        ):
+            result = build_bwrap_cmd(ANALYSIS, "/tmp", ["echo"], plugin=plugin)
+        pairs = list(zip(result, result[1:], result[2:]))
+        self.assertTrue(
+            any(a == "--bind" and b == claude_share_dir and c == claude_share_dir for a, b, c in pairs),
+            f"--bind {claude_share_dir} {claude_share_dir} não encontrado em: {result}",
+        )
+
     def test_execute_mode_uses_bind_rw(self):
         from unittest.mock import patch
         wd = "/home/user/project"
