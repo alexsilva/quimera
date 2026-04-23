@@ -929,7 +929,7 @@ class ProtocolTests(unittest.TestCase):
 
         prompt = builder.build(AGENT_CODEX, history)
 
-        self.assertIn('<current_turn title="AÇÃO PRINCIPAL (PEDIDO DE VOCÊ)">', prompt)
+        self.assertIn('<current_turn title="PEDIDO ATUAL DE VOCÊ">', prompt)
         self.assertIn("</current_turn>", prompt)
         self.assertIn("Pedido atual", prompt)
 
@@ -943,7 +943,7 @@ class ProtocolTests(unittest.TestCase):
 
         prompt = builder.build(AGENT_CODEX, history)
 
-        conversation = prompt.split('<recent_conversation title="CONVERSA RECENTE RESIDUAL">\n', 1)[1]
+        conversation = prompt.split('<recent_conversation title="CONVERSA RECENTE">\n', 1)[1]
         self.assertNotIn("[VOCÊ]: Pedido atual", conversation)
         self.assertIn("[VOCÊ]: Primeiro pedido", conversation)
         self.assertIn("</recent_conversation>", conversation)
@@ -977,7 +977,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertNotIn("[CLAUDE] Arquivo alterado: app.py", prompt)
         self.assertNotIn("goal_canonical continua ativo", prompt)
         self.assertNotIn("não redefina o objetivo", prompt)
-        conversation = prompt.split('<recent_conversation title="CONVERSA RECENTE RESIDUAL">\n', 1)[1]
+        conversation = prompt.split('<recent_conversation title="CONVERSA RECENTE">\n', 1)[1]
         self.assertIn("[CLAUDE]: Arquivo alterado: app.py", conversation)
 
     def test_prompt_keeps_same_agent_history_in_conversation_not_other_agents_block(self):
@@ -990,7 +990,7 @@ class ProtocolTests(unittest.TestCase):
         prompt = builder.build(AGENT_CLAUDE, history)
 
         self.assertNotIn('title="MENSAGENS RECENTES DE OUTROS AGENTES"', prompt)
-        conversation = prompt.split('<recent_conversation title="CONVERSA RECENTE RESIDUAL">\n', 1)[1]
+        conversation = prompt.split('<recent_conversation title="CONVERSA RECENTE">\n', 1)[1]
         self.assertIn("[CLAUDE]: Eu estava investigando o parser", conversation)
 
     def test_prompt_does_not_repeat_recent_facts_in_conversation(self):
@@ -1003,7 +1003,7 @@ class ProtocolTests(unittest.TestCase):
 
         prompt = builder.build(AGENT_CLAUDE, history)
 
-        conversation = prompt.split('<recent_conversation title="CONVERSA RECENTE RESIDUAL">\n', 1)[1]
+        conversation = prompt.split('<recent_conversation title="CONVERSA RECENTE">\n', 1)[1]
         self.assertNotIn("[CODEX]: Teste falhou em test_x", conversation)
         self.assertIn("[CLAUDE]: Arquivo alterado: app.py", conversation)
 
@@ -4054,7 +4054,7 @@ class MetricsFeedbackTests(unittest.TestCase):
 
         prompt, metrics = builder.build(AGENT_CLAUDE, history, debug=True)
 
-        self.assertIn('<recent_conversation title="CONVERSA RECENTE RESIDUAL">', prompt)
+        self.assertIn('<recent_conversation title="CONVERSA RECENTE">', prompt)
         self.assertIn("</recent_conversation>", prompt)
         self.assertTrue(metrics["primary"])
         self.assertGreater(metrics["total_chars"], 0)
@@ -4087,11 +4087,11 @@ class MetricsFeedbackTests(unittest.TestCase):
         self.assertIn('<rules title="REGRAS">', prompt)
         self.assertIn("</rules>", prompt)
         self.assertIn('<session_state title="ESTADO DA SESSÃO">', prompt)
-        self.assertIn('<persistent_context title="CONTEXTO PERSISTENTE">', prompt)
+        self.assertIn('<persistent_context title="CONTEXTO PERSISTENTE DO WORKSPACE">', prompt)
         self.assertIn("</persistent_context>", prompt)
-        self.assertIn('<current_turn title="AÇÃO PRINCIPAL (PEDIDO DE VOCÊ)">', prompt)
+        self.assertIn('<current_turn title="PEDIDO ATUAL DE VOCÊ">', prompt)
         self.assertIn('<handoff title="MENSAGEM DIRETA DO OUTRO AGENTE">', prompt)
-        self.assertIn('<recent_conversation title="CONVERSA RECENTE RESIDUAL">', prompt)
+        self.assertIn('<recent_conversation title="CONVERSA RECENTE">', prompt)
         self.assertIn('<response_prefix title="PREFIXO DE RESPOSTA">', prompt)
         self.assertIn("</response_prefix>", prompt)
 
