@@ -131,7 +131,12 @@ class AppDispatchServices:
             if agent_client:
                 agent_client._user_cancelled = False
             try:
-                response = self.call_agent_low_level(agent, silent=silent, **dispatch_options)
+                response = self.call_agent_low_level(
+                    agent,
+                    silent=silent,
+                    show_output=show_output,
+                    **dispatch_options,
+                )
                 if response is None:
                     if agent_client and agent_client._user_cancelled:
                         logger.info("[DISPATCH] agent=%s cancelled by user, aborting", agent)
@@ -196,6 +201,7 @@ class AppDispatchServices:
             protocol_mode="standard",
             handoff_only=False,
             silent=False,
+            show_output=True,
             from_agent=None,
     ):
         """Monta o prompt final e executa a chamada ao backend do agente."""

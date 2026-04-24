@@ -2705,6 +2705,47 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(result, "resposta")
         self.assertTrue(app.prompt_builder.build.call_args.kwargs["skip_tool_prompt"])
 
+    def test_call_agent_low_level_streaming_respects_show_output_false(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.session_call_index = 0
+        app.history = [{"role": "human", "content": "Pedido atual"}]
+        app.shared_state = {}
+        app.round_index = 0
+        app.debug_prompt_metrics = False
+        app.task_services = Mock()
+        app.task_services.refresh_task_shared_state = Mock()
+        app.prompt_builder = Mock()
+        app.prompt_builder.build.return_value = "PROMPT"
+        app.renderer = Mock()
+        app.session_state = {"session_id": "sessao-teste"}
+        app.get_agent_plugin = Mock(return_value=AgentPlugin(
+            name="chatgpt-api",
+            prefix="/chatgpt-api",
+            style=("yellow", "ChatGPT API"),
+            driver="openai_compat",
+            model="gpt-4o",
+            base_url="http://localhost:5532/v1",
+            api_key_env="OPENAI_API_KEY",
+            supports_tools=True,
+            has_builtin_tools=True,
+        ))
+
+        def fake_call(agent, prompt, silent=False, on_text_chunk=None):
+            self.assertIsNotNone(on_text_chunk)
+            on_text_chunk("parcial")
+            return "resposta final"
+
+        app.agent_client = Mock()
+        app.agent_client.call.side_effect = fake_call
+
+        dispatch = AppDispatchServices(app)
+        result = dispatch.call_agent_low_level("chatgpt-api", show_output=False)
+
+        self.assertEqual(result, "resposta final")
+        app.renderer.start_message_stream.assert_not_called()
+        app.renderer.update_message_stream.assert_not_called()
+        app.renderer.finish_message_stream.assert_not_called()
+
     def test_task_handler_prints_and_persists_agent_response(self):
         app = QuimeraApp.__new__(QuimeraApp)
         materialize_internal_services(app)
