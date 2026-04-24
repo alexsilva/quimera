@@ -224,14 +224,11 @@ class PromptBuilder:
         blocked_markers = (
             "goal_canonical",
             "prompt_state",
-            "shared_state",
-            "estado compartilhado",
             "objetivo fixo",
             "não redefina o objetivo",
             "nao redefina o objetivo",
             "[state_update]",
             "fatos observados recentes",
-            "contexto persistente",
         )
         return any(marker in lowered for marker in blocked_markers)
 
@@ -266,8 +263,10 @@ class PromptBuilder:
                 if index in skip_indexes or index in included_indexes:
                     break
                 content = (message.get("content") or "").strip()
-                if not content or self._should_skip_fact(content):
+                if not content:
                     break
+                if self._should_skip_fact(content):
+                    continue
                 lines.insert(
                     0,
                     self._format_conversation_entry(
