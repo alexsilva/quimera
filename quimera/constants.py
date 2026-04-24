@@ -52,7 +52,7 @@ MSG_SESSION_STATUS = (
     "resumo carregado: {summary_loaded}\n"
 )
 MSG_MIGRATION = "[migração] {}\n"
-MSG_MEMORY_SAVING = "\n[memória] histórico salvo. Gerando resumo da sessão...\n"
+MSG_MEMORY_SAVING = "\n[memória] histórico salvo. Gerando resumo da sessão..."
 MSG_MEMORY_FAILED = "[memória] não foi possível gerar o resumo.\n"
 MSG_SHUTDOWN = "\nEncerrando chat."
 MSG_DOUBLE_PREFIX = "\nUse apenas um prefixo por vez: /claude ou /codex\n"

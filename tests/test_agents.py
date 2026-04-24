@@ -4,7 +4,13 @@ from unittest.mock import MagicMock, patch, ANY
 import pytest
 
 from quimera.agent_events import SpyEvent
-from quimera.agents import AgentClient, _filter_stderr_lines, _strip_spinner, _should_ignore_stderr_line
+from quimera.agents import (
+    AgentClient,
+    _filter_stderr_lines,
+    _is_rate_limit_signal,
+    _strip_spinner,
+    _should_ignore_stderr_line,
+)
 from quimera.constants import MAX_STDERR_LINES, Visibility
 from quimera.plugins import get as get_plugin
 from quimera.plugins.base import CliConnection
@@ -38,6 +44,21 @@ def test_filter_stderr_lines_removes_codex_stdin_noise():
         "codex",
         ["Reading prompt from stdin...\n", "real error\n"],
     ) == ["real error\n"]
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("HTTP 429 Too Many Requests", True),
+        ("rate limit exceeded", True),
+        ("request was throttled by upstream", True),
+        ("tool finished 429 items successfully", False),
+        ("progress: 429/1000 tokens", False),
+        ("error id=429", False),
+    ],
+)
+def test_is_rate_limit_signal(text, expected):
+    assert _is_rate_limit_signal(text) is expected
 
 
 def test_codex_plugin_reads_prompt_from_stdin():
@@ -201,21 +222,22 @@ def test_agent_client_run_timeout(renderer):
         mock_proc.stdin = MagicMock()
         mock_popen.return_value = mock_proc
 
+        mock_proc.pid = 99999  # real int so os.getpgid raises OSError (process not found)
         with patch("threading.Thread") as mock_thread_cls:
             mock_stdout_thread = MagicMock()
             mock_stderr_thread = MagicMock()
-            # Loop stays alive while threads are alive
-            mock_stdout_thread.is_alive.side_effect = [True, True, False]
+            # Loop stays alive for first iteration; wall-clock fires before second check
+            mock_stdout_thread.is_alive.side_effect = [True]
             mock_stderr_thread.is_alive.return_value = False
-            # side_effect needs 3 values: 2 for run() + 1 extra from duplicate code in agents.py
-            mock_thread_cls.side_effect = [mock_stdout_thread, mock_stderr_thread, mock_stdout_thread]
+            mock_thread_cls.side_effect = [mock_stdout_thread, mock_stderr_thread]
 
             with patch("time.time") as mock_time:
                 # 1. last_activity_time = time.time() -> 100.0
-                # 2. start_time = time.time() -> 100.0
-                # 3. time.time() in loop (elapsed) -> 100.0
-                # 4. time.time() in loop (timeout check) -> 100.2
-                mock_time.side_effect = [100.0, 100.0, 100.0, 100.2, 100.2, 100.2]
+                # 2. start_time = time.time() -> 100.0 (non-silent path)
+                # 3. elapsed = int(time.time() - start_time) -> 101.0 => elapsed=1
+                # 4. now = time.time() -> 101.0 (rate-limit timestamp check)
+                # wall_limit = 0.1 * 5 = 0.5; elapsed=1 > 0.5 => wall timeout fires
+                mock_time.side_effect = [100.0, 100.0, 101.0, 101.0]
                 with patch("time.sleep"):
                     result = client.run(["slow"], silent=False)
                     assert result is None
@@ -281,6 +303,52 @@ def test_agent_client_run_failure_with_tail(renderer):
         assert result is None
         # Should show error message AND tail (last 5 lines)
         assert renderer.show_error.call_count >= 2
+
+
+def test_agent_client_run_marks_rate_limit_from_stderr(renderer):
+    client = AgentClient(renderer, timeout=1)
+
+    class SlowLines:
+        def __init__(self, lines, delay=0.05):
+            self._lines = list(lines)
+            self._delay = delay
+
+        def __iter__(self):
+            for line in self._lines:
+                threading.Event().wait(self._delay)
+                yield line
+
+    with patch("subprocess.Popen") as mock_popen, patch("time.sleep"):
+        mock_proc = MagicMock()
+        mock_proc.stdout = SlowLines(["output\n"])
+        mock_proc.stderr = SlowLines(["HTTP 429 Too Many Requests\n"])
+        mock_proc.returncode = 0
+        mock_proc.stdin = MagicMock()
+        mock_popen.return_value = mock_proc
+
+        result = client.run(["cmd"], silent=False, show_status=False)
+
+    assert "output" in result
+    assert client.rate_limit_detected is True
+    assert client.rate_limit_detected_at is not None
+
+
+def test_agent_client_run_does_not_mark_rate_limit_from_stdout(renderer):
+    client = AgentClient(renderer, timeout=1)
+
+    with patch("subprocess.Popen") as mock_popen, patch("time.sleep"):
+        mock_proc = MagicMock()
+        mock_proc.stdout = iter(["the tool printed: rate limit\n"])
+        mock_proc.stderr = iter([])
+        mock_proc.returncode = 0
+        mock_proc.stdin = MagicMock()
+        mock_popen.return_value = mock_proc
+
+        result = client.run(["cmd"], silent=False, show_status=False)
+
+    assert "rate limit" in result
+    assert client.rate_limit_detected is False
+    assert client.rate_limit_detected_at is None
 
 
 def test_agent_client_run_streaming_with_status_and_stderr(renderer):

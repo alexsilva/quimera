@@ -1841,6 +1841,10 @@ class ProtocolTests(unittest.TestCase):
             ],
         )
         self.assertEqual(app.context_manager.saved_summary, "## Resumo da Conversa\n\n- Memória consolidada")
+        self.assertEqual(
+            app.renderer.system_messages,
+            ["\n[memória] histórico salvo. Gerando resumo da sessão..."],
+        )
 
     def test_shutdown_cancels_agent_summary_when_join_is_interrupted(self):
         class FakeThread:

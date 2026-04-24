@@ -22,7 +22,16 @@ _logger = logging.getLogger(__name__)
 
 _BRALLE_RANGE = re.compile(r'[\u2800-\u28FF]')
 _ANSI_ESCAPE = re.compile(r'\x1B\[[0-?]*[ -/]*[@-~]')
-_RATE_LIMIT_RE = re.compile(r'rate.?limit|throttl|429|too many requests', re.IGNORECASE)
+_RATE_LIMIT_RE = re.compile(
+    r"""
+    \brate[\s-]?limit(?:ed|ing)?\b
+    | \btoo\ many\ requests\b
+    | \bthrottl(?:e|ed|ing)?\b
+    | \b(?:http|status|status code|code)\b[^\n]{0,20}\b429\b
+    | \b429\b[^\n]{0,20}\btoo\ many\ requests\b
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
 _RATE_LIMIT_YIELD_SECONDS = 5  # grace period after rate limit detection before yielding to other agents
 
 
@@ -53,6 +62,13 @@ def _should_ignore_stderr_line(agent: str | None, line: str) -> bool:
 def _filter_stderr_lines(agent: str | None, lines: list[str]) -> list[str]:
     """Remove linhas de stderr conhecidas como ruído para o agente."""
     return [line for line in lines if not _should_ignore_stderr_line(agent, line)]
+
+
+def _is_rate_limit_signal(text: str | None) -> bool:
+    """Detecta sinais explícitos de rate limit sem tratar qualquer `429` isolado como limite."""
+    if not text:
+        return False
+    return bool(_RATE_LIMIT_RE.search(text))
 
 
 class AgentClient:
@@ -175,6 +191,53 @@ class AgentClient:
 
         try:
             if silent:
+                start_time = time.time()
+                elapsed = 0
+                _rate_checked = 0
+                while stdout_thread.is_alive() or stderr_thread.is_alive():
+                    # Check cancel
+                    if self._cancel_event.is_set():
+                        self._terminate_process_group(proc)
+                        stdout_thread.join(2)
+                        stderr_thread.join(2)
+                        self._user_cancelled = True
+                        self._agent_running = False
+                        self._current_proc = None
+                        self._stop_esc_monitor()
+                        return None
+                    # Detect rate limit from accumulated stderr
+                    current_stderr = result_holder["stderr"]
+                    for line in current_stderr[_rate_checked:]:
+                        if _is_rate_limit_signal(line):
+                            self.rate_limit_detected = True
+                            if self.rate_limit_detected_at is None:
+                                self.rate_limit_detected_at = time.time()
+                    _rate_checked = len(current_stderr)
+                    time.sleep(0.2)
+                    elapsed = int(time.time() - start_time)
+                    if self.timeout is not None and self.timeout > 0:
+                        now = time.time()
+                        if self.rate_limit_detected and self.rate_limit_detected_at is not None:
+                            if now - self.rate_limit_detected_at > _RATE_LIMIT_YIELD_SECONDS:
+                                self._terminate_process_group(proc)
+                                stdout_thread.join(2)
+                                stderr_thread.join(2)
+                                self._agent_running = False
+                                self._current_proc = None
+                                self._stop_esc_monitor()
+                                _logger.warning("[rate limit] %s em espera; cedendo para outros agentes", cmd[0])
+                                return None
+                        else:
+                            wall_limit = self.timeout * 5
+                            if elapsed > wall_limit:
+                                self._terminate_process_group(proc)
+                                stdout_thread.join(2)
+                                stderr_thread.join(2)
+                                self._agent_running = False
+                                self._current_proc = None
+                                self._stop_esc_monitor()
+                                _logger.warning("[erro] wall-clock timeout after %ds for %s", wall_limit, cmd[0])
+                                return None
                 stdout_thread.join()
                 stderr_thread.join()
                 if result_holder["stdout"]:
@@ -198,7 +261,7 @@ class AgentClient:
                         while not log_queue.empty():
                             try:
                                 stream_type, line = log_queue.get_nowait()
-                                if _RATE_LIMIT_RE.search(line):
+                                if stream_type == "stderr" and _is_rate_limit_signal(line):
                                     self.rate_limit_detected = True
                                     if self.rate_limit_detected_at is None:
                                         self.rate_limit_detected_at = time.time()
@@ -248,7 +311,7 @@ class AgentClient:
                             if self.rate_limit_detected and self.rate_limit_detected_at is not None:
                                 # Rate limited: yield to other agents quickly after grace period
                                 if now - self.rate_limit_detected_at > _RATE_LIMIT_YIELD_SECONDS:
-                                    proc.terminate()
+                                    self._terminate_process_group(proc)
                                     stdout_thread.join(2)
                                     stderr_thread.join(2)
                                     self._agent_running = False
@@ -262,7 +325,7 @@ class AgentClient:
                                 # Wall-clock safety to prevent infinite hang on crashed process.
                                 wall_limit = self.timeout * 5
                                 if elapsed > wall_limit:
-                                    proc.terminate()
+                                    self._terminate_process_group(proc)
                                     stdout_thread.join(2)
                                     stderr_thread.join(2)
                                     self._agent_running = False
@@ -602,19 +665,28 @@ class AgentClient:
                 t = threading.Thread(target=_run_driver, daemon=True)
                 t.start()
 
+                _api_start = time.time()
                 while t.is_alive():
                     if self._cancel_event.is_set():
                         self._user_cancelled = True
                         self.renderer.show_error("[cancelado] pelo usuário")
                         return None
                     time.sleep(0.25)
+                    if self.timeout is not None and self.timeout > 0:
+                        _api_elapsed = time.time() - _api_start
+                        wall_limit = self.timeout * 5
+                        if _api_elapsed > wall_limit:
+                            self._cancel_event.set()
+                            self.renderer.show_error(
+                                f"[erro] wall-clock timeout after {int(wall_limit)}s em driver API")
+                            return None
 
                 if self._cancel_event.is_set() and result_holder["result"] is None:
                     self._user_cancelled = True
                     return None
 
                 if result_holder["error"]:
-                    if _RATE_LIMIT_RE.search(str(result_holder["error"])):
+                    if _is_rate_limit_signal(str(result_holder["error"])):
                         self.rate_limit_detected = True
                         if self.rate_limit_detected_at is None:
                             self.rate_limit_detected_at = time.time()
