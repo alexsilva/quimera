@@ -211,7 +211,7 @@ class AppDispatchServices:
             app.session_call_index += 1
             call_index_snapshot = app.session_call_index
         start = time.time()
-        history = [] if handoff_only else app.history
+        history = app.history
         app.task_services.refresh_task_shared_state()
 
         plugin = app.get_agent_plugin(agent)

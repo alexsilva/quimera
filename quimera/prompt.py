@@ -1,6 +1,7 @@
 """Componentes de `quimera.prompt`."""
 import json
 
+from . import plugins
 from .config import DEFAULT_HISTORY_WINDOW
 from .constants import EXTEND_MARKER
 from .prompt_templates import prompt_template

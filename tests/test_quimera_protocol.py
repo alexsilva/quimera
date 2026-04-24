@@ -2705,6 +2705,46 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(result, "resposta")
         self.assertTrue(app.prompt_builder.build.call_args.kwargs["skip_tool_prompt"])
 
+    def test_call_agent_low_level_keeps_history_in_handoff_only_mode(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.session_call_index = 0
+        app.history = [
+            {"role": "codex", "content": "Eu já estava investigando esse ponto."},
+            {"role": "human", "content": "Continue daí."},
+        ]
+        app.shared_state = {}
+        app.round_index = 0
+        app.debug_prompt_metrics = False
+        app.task_services = Mock()
+        app.task_services.refresh_task_shared_state = Mock()
+        app.prompt_builder = Mock()
+        app.prompt_builder.build.return_value = "PROMPT"
+        app.agent_client = Mock()
+        app.agent_client.call.return_value = "resposta"
+        app.renderer = DummyRenderer()
+        app.session_state = {"session_id": "sessao-teste"}
+        app.get_agent_plugin = Mock(return_value=AgentPlugin(
+            name="codex",
+            prefix="/codex",
+            style=("blue", "Codex"),
+            cmd=["codex"],
+            driver="cli",
+            supports_tools=True,
+            has_builtin_tools=True,
+        ))
+
+        dispatch = AppDispatchServices(app)
+        result = dispatch.call_agent_low_level(
+            "codex",
+            handoff={"task": "Continue a investigação"},
+            handoff_only=True,
+            primary=False,
+        )
+
+        self.assertEqual(result, "resposta")
+        self.assertEqual(app.prompt_builder.build.call_args.args[1], app.history)
+        self.assertTrue(app.prompt_builder.build.call_args.kwargs["handoff_only"])
+
     def test_call_agent_low_level_streaming_respects_show_output_false(self):
         app = QuimeraApp.__new__(QuimeraApp)
         app.session_call_index = 0
