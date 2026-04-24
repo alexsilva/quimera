@@ -23,6 +23,7 @@ _logger = logging.getLogger(__name__)
 _BRALLE_RANGE = re.compile(r'[\u2800-\u28FF]')
 _ANSI_ESCAPE = re.compile(r'\x1B\[[0-?]*[ -/]*[@-~]')
 _RATE_LIMIT_RE = re.compile(r'rate.?limit|throttl|429|too many requests', re.IGNORECASE)
+_RATE_LIMIT_YIELD_SECONDS = 5  # grace period after rate limit detection before yielding to other agents
 
 
 class _SyntheticToolResult:
@@ -80,6 +81,7 @@ class AgentClient:
         self._current_proc = None
         self._spy_output_presenter = SpyOutputPresenter(self.renderer, self.visibility)
         self.rate_limit_detected = False
+        self.rate_limit_detected_at: float | None = None
 
     def _show_formatted_stdout(self, agent: str | None, line: str) -> bool:
         """Exibe mensagens resumidas de stdout quando o plugin oferece formatter."""
@@ -89,6 +91,7 @@ class AgentClient:
         """Executa run."""
         self._cancel_event.clear()
         self.rate_limit_detected = False
+        self.rate_limit_detected_at = None
         self._agent_running = True
         self._start_esc_monitor()
         try:
@@ -197,6 +200,8 @@ class AgentClient:
                                 stream_type, line = log_queue.get_nowait()
                                 if _RATE_LIMIT_RE.search(line):
                                     self.rate_limit_detected = True
+                                    if self.rate_limit_detected_at is None:
+                                        self.rate_limit_detected_at = time.time()
                                 if status is not None:
                                     _lbl = self._spy_output_presenter.compose_status_label(cmd[0])
                                     status.update(f"[dim]{_lbl}... {elapsed}s[/dim]")
@@ -239,16 +244,33 @@ class AgentClient:
                         time.sleep(0.2)
                         elapsed = int(time.time() - start_time)
                         if self.timeout is not None and self.timeout > 0:
-                            if time.time() - last_activity_time > self.timeout:
-                                proc.terminate()
-                                stdout_thread.join(2)
-                                stderr_thread.join(2)
-                                self._agent_running = False
-                                self._current_proc = None
-                                self._stop_esc_monitor()
-                                self.renderer.show_error(
-                                    f"[erro] timeout after {self.timeout}s without output from {cmd[0]}")
-                                return None
+                            now = time.time()
+                            if self.rate_limit_detected and self.rate_limit_detected_at is not None:
+                                # Rate limited: yield to other agents quickly after grace period
+                                if now - self.rate_limit_detected_at > _RATE_LIMIT_YIELD_SECONDS:
+                                    proc.terminate()
+                                    stdout_thread.join(2)
+                                    stderr_thread.join(2)
+                                    self._agent_running = False
+                                    self._current_proc = None
+                                    self._stop_esc_monitor()
+                                    self.renderer.show_error(
+                                        f"[rate limit] {cmd[0]} em espera; cedendo para outros agentes")
+                                    return None
+                            else:
+                                # No rate limit: don't kill on idle (agent may be processing).
+                                # Wall-clock safety to prevent infinite hang on crashed process.
+                                wall_limit = self.timeout * 5
+                                if elapsed > wall_limit:
+                                    proc.terminate()
+                                    stdout_thread.join(2)
+                                    stderr_thread.join(2)
+                                    self._agent_running = False
+                                    self._current_proc = None
+                                    self._stop_esc_monitor()
+                                    self.renderer.show_error(
+                                        f"[erro] wall-clock timeout after {wall_limit}s for {cmd[0]}")
+                                    return None
                 stdout_thread.join()
                 stderr_thread.join()
                 # Drain remaining queue
@@ -546,6 +568,7 @@ class AgentClient:
         driver_instance = self._api_drivers[agent]
         self._cancel_event.clear()
         self.rate_limit_detected = False
+        self.rate_limit_detected_at = None
         self._agent_running = True
         self._start_esc_monitor()
         status_cm = self.renderer.running_status("", agent=agent) if (
@@ -593,6 +616,8 @@ class AgentClient:
                 if result_holder["error"]:
                     if _RATE_LIMIT_RE.search(str(result_holder["error"])):
                         self.rate_limit_detected = True
+                        if self.rate_limit_detected_at is None:
+                            self.rate_limit_detected_at = time.time()
                     _cmd = getattr(plugin, "cmd", None)
                     _name = (_cmd[0] if isinstance(_cmd, (list, tuple)) and _cmd else None) or connection.model or "driver"
                     self.renderer.show_error(f"[erro] falha ao comunicar com {_name}: {result_holder['error']}")
