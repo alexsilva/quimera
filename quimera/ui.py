@@ -238,23 +238,19 @@ class TerminalRenderer:
         if self._console:
             if agent:
                 style, label = self._agent_style(agent)
-                table = Table.grid(expand=True, padding=(0, 1))
-                table.add_column(no_wrap=True)
-                table.add_column(ratio=1)
-                table.add_row(
-                    Text(label, style=f"bold {style}"),
-                    Text(clean_message),
+                line = Text.assemble(
+                    (label, f"bold {style}"),
+                    (" "),
+                    (clean_message,),
                 )
-                self._console.print(table, soft_wrap=True)
+                self._console.print(line, soft_wrap=True)
             else:
-                table = Table.grid(expand=True, padding=(0, 1))
-                table.add_column(width=2)
-                table.add_column(ratio=1)
-                table.add_row(
-                    Text("·", style="dim"),
-                    Text(clean_message, style="dim"),
+                line = Text.assemble(
+                    ("·", "dim"),
+                    (" "),
+                    (clean_message, "dim"),
                 )
-                self._console.print(table, soft_wrap=True)
+                self._console.print(line, soft_wrap=True)
         else:
             prefix = f"{agent}: " if agent else ""
             print(f"{prefix}{clean_message}")
