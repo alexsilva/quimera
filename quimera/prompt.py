@@ -5,7 +5,6 @@ from . import plugins
 from .config import DEFAULT_HISTORY_WINDOW
 from .constants import (
     EXTEND_MARKER,
-    build_route_rule,
     build_tools_prompt,
 )
 from .prompt_templates import prompt_template
@@ -49,30 +48,23 @@ class PromptBuilder:
         primary=False omite session_state — adequado para agentes secundários que já
         têm o contexto da conversa e não precisam do estado de bootstrap da sessão.
 
-        skip_tool_prompt=True omite PROMPT_TOOL_RULE e build_tools_prompt() — usado
-        por agentes com driver de API onde as ferramentas são declaradas via schema
-        OpenAI e as instruções text-based conflitariam com o protocolo da API.
+        skip_tool_prompt=True omite build_tools_prompt() — usado por agentes com
+        driver de API onde as ferramentas são declaradas via schema OpenAI.
         """
         context = self.context_manager.load()
 
         if handoff_only:
-            route_rule = ""
-            tool_rule = ""
-            mode_rule = prompt_template.handoff_rule
+            route_agents = ""
+            is_first_speaker_flag = False
+            is_reviewer = False
         else:
-            route_rule = build_route_rule(self.active_agents)
-            tool_rule = prompt_template.tool_rule if not skip_tool_prompt else ""
-            if is_first_speaker:
-                mode_rule = prompt_template.debate_rule.format(marker=EXTEND_MARKER)
-            else:
-                mode_rule = prompt_template.reviewer_rule
+            route_agents = ", ".join(self.active_agents) if self.active_agents else "nenhum"
+            is_first_speaker_flag = is_first_speaker
+            is_reviewer = not is_first_speaker
 
-        tools_prompt = (
-            '<tools title="Ferramentas disponíveis">\n'
-            f"{build_tools_prompt()}\n"
-            "</tools>"
-            if not skip_tool_prompt else ""
-        )
+        tools_prompt = ""
+        if not skip_tool_prompt:
+            tools_prompt = build_tools_prompt()
 
         other_agents = [n for n in self.active_agents if n.lower() != agent.lower()]
         agents_list = ", ".join(n.upper() for n in other_agents) if other_agents else "nenhum"
@@ -91,107 +83,90 @@ class PromptBuilder:
                 if k not in execution_keys
             }
 
-        state_update_rule = prompt_template.state_update_rule if fallback_shared else ""
+        goal_canonical = shared.get("goal_canonical", "") if has_goal else ""
+        current_step_val = shared.get("current_step", "") if has_goal else ""
+        acceptance_criteria_val = shared.get("acceptance_criteria", "") if has_goal else ""
+        allowed_scope_val = shared.get("allowed_scope", "") if has_goal else ""
+        non_goals_val = shared.get("non_goals", "") if has_goal else ""
 
+        session_id = ""
+        current_job_id = ""
+        workspace_root = ""
+        current_dir = ""
         if self.session_state and primary:
-            session_block = (
-                '<session_state title="Estado da sessão">\n'
-                f"- SESSÃO ATUAL: {self.session_state.get('session_id', 'desconhecida')}\n"
-                f"- JOB_ID ATUAL: {self.session_state.get('current_job_id', 'desconhecido')}\n"
-                f"- WORKSPACE RAIZ: {self.session_state.get('workspace_root', 'desconhecido')}\n"
-                f"- DIRETÓRIO ATUAL: {self.session_state.get('current_dir', '.')}\n"
-                "</session_state>"
-            )
-        else:
-            session_block = ""
-        context_block = (
-            '<persistent_context title="Contexto persistente do workspace">\n'
-            f"{context}\n"
-            "</persistent_context>"
-            if context
-            else ""
-        )
-        handoff_block = (
-            '<handoff title="Mensagem direta do outro agente">\n'
-            f"{self._format_handoff(handoff, from_agent)}\n"
-            "</handoff>"
-            if handoff
-            else ""
-        )
-        request_index, request_block = self._build_request_block(history)
-        fact_indexes, facts_block = self._build_facts_block(history, current_agent=agent)
-        shared_state_block = ""
+            session_id = self.session_state.get("session_id", "desconhecida")
+            current_job_id = self.session_state.get("current_job_id", "desconhecido")
+            workspace_root = self.session_state.get("workspace_root", "desconhecido")
+            current_dir = self.session_state.get("current_dir", ".")
+        handoff_fields = self._build_handoff_fields(handoff, from_agent)
+        request_index, request = self._build_request_content(history)
+        fact_indexes, facts = self._build_facts_content(history, current_agent=agent)
+        shared_state_json = ""
+        completed_task_results = ""
         if shared_state and not has_goal:
             if fallback_shared:
-                state_lines = json.dumps(fallback_shared, ensure_ascii=False, indent=2)
-                shared_state_block = prompt_template.shared_state.format(shared_state_json=state_lines)
+                shared_state_json = json.dumps(fallback_shared, ensure_ascii=False, indent=2)
         elif shared_state and has_goal and "completed_task_results" in shared_state:
             results = shared_state["completed_task_results"]
             if results:
-                shared_state_block = (
-                    '<completed_tasks title="Tarefas concluídas">\n'
-                    f"{results}\n"
-                    "</completed_tasks>"
-                )
+                completed_task_results = results
 
-        metrics_block = ""
+        metrics = ""
         if self.metrics_tracker:
             feedback = self.metrics_tracker.generate_feedback(agent)
             if feedback:
-                metrics_block = (
-                    '<agent_metrics title="Métricas do agente atual (apenas referência)">\n'
-                    f"{feedback}\n"
-                    "</agent_metrics>"
-                )
-
-        conversation = self._build_conversation_block(
+                metrics = feedback
+        recent_conversation = self._build_conversation_block(
             history,
             skip_indexes={idx for idx in [request_index, *fact_indexes] if idx is not None},
-        )
-        conversation_block = (
-            '<recent_conversation title="Conversa recente">\n'
-            f"{conversation}\n"
-            "</recent_conversation>"
-        )
-        rules_suffix = self._join_prompt_blocks(
-            route_rule,
-            tool_rule,
-            mode_rule,
-            state_update_rule,
-        )
-        rules_body = self._join_prompt_blocks(
-            prompt_template.base_rules,
-            rules_suffix,
-        )
-        body_blocks = self._join_prompt_blocks(
-            tools_prompt,
-            session_block,
-            context_block,
-            request_block,
-            facts_block,
-            shared_state_block,
-            handoff_block,
         )
         full_prompt = prompt_template.render(
             agent=agent.upper(),
             user_name=self.user_name.upper(),
             agents=agents_list,
-            rules_body=rules_body,
-            body_blocks=body_blocks,
-            conversation=conversation,
-            metrics_block=metrics_block,
+            route_agents=route_agents,
+            handoff_only=handoff_only,
+            is_first_speaker=is_first_speaker_flag,
+            is_reviewer=is_reviewer,
+            marker=EXTEND_MARKER,
+            goal_canonical=goal_canonical,
+            current_step=current_step_val,
+            acceptance_criteria=acceptance_criteria_val,
+            allowed_scope=allowed_scope_val,
+            non_goals=non_goals_val,
+            tools=tools_prompt,
+            session_id=session_id,
+            current_job_id=current_job_id,
+            workspace_root=workspace_root,
+            current_dir=current_dir,
+            context=context,
+            request=request,
+            facts=facts,
+            shared_state_json=shared_state_json,
+            completed_task_results=completed_task_results,
+            handoff_present=handoff_fields["handoff_present"],
+            handoff_id=handoff_fields["handoff_id"],
+            handoff_task=handoff_fields["handoff_task"],
+            handoff_from=handoff_fields["handoff_from"],
+            handoff_context=handoff_fields["handoff_context"],
+            handoff_expected=handoff_fields["handoff_expected"],
+            handoff_priority=handoff_fields["handoff_priority"],
+            handoff_chain=handoff_fields["handoff_chain"],
+            handoff_raw=handoff_fields["handoff_raw"],
+            recent_conversation=recent_conversation,
+            metrics=metrics,
         )
 
         if debug:
             metrics = {
-                "rules_chars": len(route_rule) + len(tool_rule) + len(mode_rule) + len(state_update_rule),
-                "session_state_chars": len(session_block),
-                "persistent_chars": len(context_block),
-                "request_chars": len(request_block),
-                "facts_chars": len(facts_block),
-                "shared_state_chars": len(shared_state_block),
-                "history_chars": len(conversation_block),
-                "handoff_chars": len(handoff_block),
+                "rules_chars": len(route_agents),
+                "session_state_chars": len(session_id) + len(str(current_job_id)) + len(workspace_root) + len(current_dir),
+                "persistent_chars": len(context),
+                "request_chars": len(request),
+                "facts_chars": len(facts),
+                "shared_state_chars": len(shared_state_json) + len(completed_task_results),
+                "history_chars": len(recent_conversation),
+                "handoff_chars": sum(len(str(v)) for v in handoff_fields.values()),
                 "total_chars": len(full_prompt),
                 "history_messages": len(history[-self.history_window:]),
                 "primary": primary,
@@ -199,12 +174,6 @@ class PromptBuilder:
             return full_prompt, metrics
 
         return full_prompt
-
-    @staticmethod
-    def _join_prompt_blocks(*blocks):
-        """Junta blocos não vazios com uma única linha em branco entre eles."""
-        normalized = [block.strip() for block in blocks if block and block.strip()]
-        return "\n\n".join(normalized)
 
     @staticmethod
     def _trim_shared_state(state, decisions_tail=5):
@@ -233,22 +202,19 @@ class PromptBuilder:
             trimmed["decisions"] = state["decisions"][-decisions_tail:]
         return trimmed
 
-    def _build_request_block(self, history):
-        """Monta request block."""
+    def _build_request_content(self, history):
+        """Retorna o conteúdo do bloco de request."""
         window_start = max(0, len(history) - self.history_window)
         for index in range(len(history) - 1, window_start - 1, -1):
             message = history[index]
             if message.get("role") == "human":
                 content = (message.get("content") or "").strip()
                 if content:
-                    return index, prompt_template.request.format(
-                        user_name=self.user_name.upper(),
-                        request=content,
-                    )
+                    return index, content
         return None, ""
 
-    def _build_facts_block(self, history, max_items=4, current_agent=None):
-        """Monta facts block."""
+    def _build_facts_content(self, history, max_items=4, current_agent=None):
+        """Retorna o conteúdo do bloco de fatos."""
         facts = []
         fact_indexes = []
         window_start = max(0, len(history) - self.history_window)
@@ -273,7 +239,7 @@ class PromptBuilder:
             return [], ""
         facts.reverse()
         fact_indexes.reverse()
-        return fact_indexes, prompt_template.facts.format(facts="\n".join(facts))
+        return fact_indexes, "\n".join(facts)
 
     @staticmethod
     def _should_skip_fact(content):
@@ -319,33 +285,44 @@ class PromptBuilder:
         """Formata uma entrada residual da conversa dentro do bloco único."""
         return f"[{role}]: {content}"
 
-    def _format_handoff(self, handoff, from_agent=None):
-        """Formata handoff."""
+    def _build_handoff_fields(self, handoff, from_agent=None):
+        """Extrai apenas os dados dinâmicos do handoff para o template."""
+        empty = {
+            "handoff_present": "",
+            "handoff_id": "",
+            "handoff_task": "",
+            "handoff_from": "",
+            "handoff_context": "",
+            "handoff_expected": "",
+            "handoff_priority": "",
+            "handoff_chain": "",
+            "handoff_raw": "",
+        }
+        if not handoff:
+            return empty
         if isinstance(handoff, dict):
-            task = (handoff.get("task") or "").strip()
-            context = (handoff.get("context") or "").strip()
-            expected = (handoff.get("expected") or "").strip()
-            handoff_id = handoff.get("handoff_id")
-            priority = handoff.get("priority", "normal")
             chain = handoff.get("chain", [])
-
-            parts = []
-            if handoff_id:
-                parts.append(f"HANDOFF_ID:\n{handoff_id}")
-            parts.append(f"TASK:\n{task}")
-            if from_agent:
-                parts.append(f"FROM:\n{from_agent}")
-            if context:
-                parts.append(f"CONTEXT:\n{context}")
-            if expected:
-                parts.append(f"EXPECTED:\n{expected}")
-            if priority and priority != "normal":
-                parts.append(f"PRIORITY:\n{priority.upper()}")
-            if chain:
-                parts.append(f"CHAIN:\n{' -> '.join(chain)}")
-
-            return "\n\n".join(parts).strip()
-        return str(handoff).strip()
+            priority = handoff.get("priority", "normal")
+            return {
+                "handoff_present": "1",
+                "handoff_id": str(handoff.get("handoff_id") or "").strip(),
+                "handoff_task": (handoff.get("task") or "").strip(),
+                "handoff_from": (from_agent or "").strip(),
+                "handoff_context": (handoff.get("context") or "").strip(),
+                "handoff_expected": (handoff.get("expected") or "").strip(),
+                "handoff_priority": (
+                    str(priority).strip().upper()
+                    if priority and str(priority).strip().lower() != "normal"
+                    else ""
+                ),
+                "handoff_chain": " -> ".join(chain) if chain else "",
+                "handoff_raw": "",
+            }
+        return {
+            **empty,
+            "handoff_present": "1",
+            "handoff_raw": str(handoff).strip(),
+        }
 
     def _display_role(self, role):
         """Executa display role."""

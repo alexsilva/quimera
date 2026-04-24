@@ -184,26 +184,8 @@ TOOL_SCHEMA = {
 
 
 def build_tools_prompt() -> str:
-    """Gera um bloco compacto de ferramentas disponíveis."""
-    lines = [
-        "USE TAGS <tool ...> NO WORKSPACE\n"
-        "Se a resposta não contiver uma tag <tool ...> válida, a ferramenta não executa.\n"
-        "Use exatamente o formato aceito pelo parser; não escreva chamadas como list_files(...).\n"
-        "Exemplo: Usuário pergunta sobre 'onde está a função foo' → você usa list_files/grep_search via <tool ...> → retorna evidência real.\n"
-        '<tool function="run_shell" command="git status" />\n'
-        " Exemplos canônicos:\n"
-        '<tool function="list_files" path="." />\n'
-        '<tool function="read_file" path="/workspace/src/app.py" />\n'
-        '<tool function="grep_search" pattern="class User" path="/workspace/src" />\n'
-        '<tool function="run_shell" command="git status --short" />\n'
-        '<tool function="exec_command">{"cmd":"python -i","tty":true}</tool>\n'
-        '<tool function="write_stdin">{"session_id":7,"chars":"print(1)\\n","yield_time_ms":1000}</tool>\n'
-        " - Para shell interativo, use exatamente exec_command / write_stdin / close_command_session.\n"
-        " - Nunca invente nomes como run_shell_command ou execute_command.\n"
-        " - Para payloads longos, use corpo JSON dentro da tag:\n"
-        '<tool function="apply_patch">{"patch": "*** Begin Patch\\n...\\n*** End Patch"}</tool>\n'
-        "\nFerramentas disponíveis:\n"
-    ]
+    """Renderiza apenas dados dinâmicos das ferramentas disponíveis."""
+    lines = []
     for tool in TOOL_SCHEMA.values():
         params = ", ".join(f"{k}: {v['type']}" for k, v in tool["parameters"].items())
         line = f"- {tool['name']}"
@@ -211,22 +193,10 @@ def build_tools_prompt() -> str:
             line += f": {params}"
         if tool.get("description"):
             line += f" — {tool['description']}"
+        if tool.get("example"):
+            line += f" | exemplo: {tool['example']}"
         lines.append(line)
-    return "\n".join(lines) + "\n"
-
-
-def build_route_rule(agent_names):
-    """Monta route rule."""
-    agents_list = ", ".join(agent_names) if agent_names else "nenhum"
-    return (
-        f"- Agentes: {agents_list}\n"
-        "- Formato: [ROUTE:agente] task: <tarefa> | context: <contexto> | expected: <formato>\n"
-        "- 'task' é obrigatório; inclua contexto suficiente e paths/comandos quando existirem.\n"
-        "- Só delegue com ganho real: paralelizar, destravar a próxima etapa ou usar especialidade clara.\n"
-        "- Se faltar contexto, não improvise: delegue; se faltar dado humano, use [NEEDS_INPUT].\n"
-        "- Se consegue fazer sozinho sem perder eficiência, faça; delegue subtarefas.\n"
-        "- Nunca roteie para o humano.\n"
-    )
+    return "\n".join(lines)
 
 
 def build_help(agent_names):

@@ -42,6 +42,13 @@ AGENT_CODEX = "codex"
 AGENT_GEMINI = "gemini"
 
 
+def _extract_block(prompt: str, tag: str) -> str:
+    match = re.search(rf"<{tag}\b[^>]*>\n?(.*?)\n?</{tag}>", prompt, re.DOTALL)
+    if not match:
+        raise AssertionError(f"Bloco <{tag}> não encontrado no prompt")
+    return match.group(1)
+
+
 class DummyRenderer:
     def __init__(self):
         self.warnings = []
@@ -916,7 +923,7 @@ class ProtocolTests(unittest.TestCase):
 
         prompt = builder.build(AGENT_CODEX, history, handoff="Revise este ponto.")
 
-        self.assertIn('<handoff title="MENSAGEM DIRETA DO OUTRO AGENTE">', prompt)
+        self.assertIn('<handoff title="Mensagem direta do outro agente">', prompt)
         self.assertIn("</handoff>", prompt)
         self.assertIn("Revise este ponto.", prompt)
 
@@ -930,7 +937,7 @@ class ProtocolTests(unittest.TestCase):
 
         prompt = builder.build(AGENT_CODEX, history)
 
-        self.assertIn('<current_turn title="PEDIDO ATUAL DE VOCÊ">', prompt)
+        self.assertIn('<current_turn title="Pedido atual de VOCÊ">', prompt)
         self.assertIn("</current_turn>", prompt)
         self.assertIn("Pedido atual", prompt)
 
@@ -944,7 +951,7 @@ class ProtocolTests(unittest.TestCase):
 
         prompt = builder.build(AGENT_CODEX, history)
 
-        conversation = prompt.split('<recent_conversation title="CONVERSA RECENTE">\n', 1)[1]
+        conversation = prompt.split('<recent_conversation title="Conversa recente">\n', 1)[1]
         self.assertNotIn("[VOCÊ]: Pedido atual", conversation)
         self.assertIn("[VOCÊ]: Primeiro pedido", conversation)
         self.assertIn("</recent_conversation>", conversation)
@@ -959,7 +966,7 @@ class ProtocolTests(unittest.TestCase):
 
         prompt = builder.build(AGENT_CLAUDE, history)
 
-        self.assertIn('<recent_agent_messages title="MENSAGENS RECENTES DE OUTROS AGENTES">', prompt)
+        self.assertIn('<recent_agent_messages title="Mensagens recentes de outros agentes">', prompt)
         self.assertIn("</recent_agent_messages>", prompt)
         self.assertIn("[CODEX] Teste falhou em test_x", prompt)
         self.assertNotIn("[CLAUDE] Arquivo alterado: app.py", prompt)
@@ -974,11 +981,11 @@ class ProtocolTests(unittest.TestCase):
 
         prompt = builder.build(AGENT_CLAUDE, history)
 
-        self.assertNotIn('title="MENSAGENS RECENTES DE OUTROS AGENTES"', prompt)
+        self.assertNotIn('<recent_agent_messages title="Mensagens recentes de outros agentes">', prompt)
         self.assertNotIn("[CLAUDE] Arquivo alterado: app.py", prompt)
         self.assertNotIn("goal_canonical continua ativo", prompt)
         self.assertNotIn("não redefina o objetivo", prompt)
-        conversation = prompt.split('<recent_conversation title="CONVERSA RECENTE">\n', 1)[1]
+        conversation = prompt.split('<recent_conversation title="Conversa recente">\n', 1)[1]
         self.assertIn("[CLAUDE]: Arquivo alterado: app.py", conversation)
 
     def test_prompt_keeps_same_agent_history_in_conversation_not_other_agents_block(self):
@@ -990,8 +997,8 @@ class ProtocolTests(unittest.TestCase):
 
         prompt = builder.build(AGENT_CLAUDE, history)
 
-        self.assertNotIn('title="MENSAGENS RECENTES DE OUTROS AGENTES"', prompt)
-        conversation = prompt.split('<recent_conversation title="CONVERSA RECENTE">\n', 1)[1]
+        self.assertNotIn('<recent_agent_messages title="Mensagens recentes de outros agentes">', prompt)
+        conversation = prompt.split('<recent_conversation title="Conversa recente">\n', 1)[1]
         self.assertIn("[CLAUDE]: Eu estava investigando o parser", conversation)
 
     def test_prompt_does_not_repeat_recent_facts_in_conversation(self):
@@ -1004,7 +1011,7 @@ class ProtocolTests(unittest.TestCase):
 
         prompt = builder.build(AGENT_CLAUDE, history)
 
-        conversation = prompt.split('<recent_conversation title="CONVERSA RECENTE">\n', 1)[1]
+        conversation = prompt.split('<recent_conversation title="Conversa recente">\n', 1)[1]
         self.assertNotIn("[CODEX]: Teste falhou em test_x", conversation)
         self.assertIn("[CLAUDE]: Arquivo alterado: app.py", conversation)
 
@@ -1040,7 +1047,7 @@ class ProtocolTests(unittest.TestCase):
 
         prompt = builder.build(AGENT_CLAUDE, history)
 
-        self.assertIn('<session_state title="ESTADO DA SESSÃO">', prompt)
+        self.assertIn('<session_state title="Estado da sessão">', prompt)
         self.assertIn("</session_state>", prompt)
         self.assertIn("SESSÃO ATUAL: sessao-2026-03-27-123456", prompt)
         self.assertIn("JOB_ID ATUAL: 1", prompt)
@@ -1061,7 +1068,7 @@ class ProtocolTests(unittest.TestCase):
             shared_state={"goal": "corrigir", "decisions": ["usar json"]},
         )
 
-        self.assertNotIn('title="ESTADO COMPARTILHADO"', prompt)
+        self.assertNotIn('<shared_state title="Estado compartilhado">', prompt)
         self.assertNotIn('"goal": "corrigir"', prompt)
         self.assertNotIn('"decisions": [', prompt)
 
@@ -1071,7 +1078,7 @@ class ProtocolTests(unittest.TestCase):
             history,
             shared_state={"next_step": "continuar", "goal": "ignorado"},
         )
-        self.assertNotIn('title="ESTADO COMPARTILHADO"', prompt2)
+        self.assertNotIn('<shared_state title="Estado compartilhado">', prompt2)
 
         # task_overview é campo de infra (não execução) e deve aparecer normalmente
         prompt3 = builder.build(
@@ -1079,7 +1086,7 @@ class ProtocolTests(unittest.TestCase):
             history,
             shared_state={"task_overview": {"job_id": 1}, "goal": "ignorado"},
         )
-        self.assertIn('<shared_state title="ESTADO COMPARTILHADO">', prompt3)
+        self.assertIn('<shared_state title="Estado compartilhado">', prompt3)
         self.assertIn("</shared_state>", prompt3)
         self.assertIn('"task_overview"', prompt3)
         self.assertNotIn('"goal":', prompt3)
@@ -1097,7 +1104,7 @@ class ProtocolTests(unittest.TestCase):
         prompt = builder.build(AGENT_CLAUDE, history, shared_state=big_state)
 
         # Sem goal_canonical, todos os campos de execução (goal, decisions, next_step) são filtrados
-        self.assertNotIn('title="ESTADO COMPARTILHADO"', prompt)
+        self.assertNotIn('<shared_state title="Estado compartilhado">', prompt)
         self.assertNotIn('"goal":', prompt)
         self.assertNotIn('"decisions":', prompt)
         self.assertNotIn('"next_step":', prompt)
@@ -1106,7 +1113,7 @@ class ProtocolTests(unittest.TestCase):
         # Com task_overview (campo de infra), o bloco aparece normalmente
         state_with_overview = {**big_state, "task_overview": {"job_id": 42}}
         prompt2 = builder.build(AGENT_CLAUDE, history, shared_state=state_with_overview)
-        state_start = prompt2.index('<shared_state title="ESTADO COMPARTILHADO">')
+        state_start = prompt2.index('<shared_state title="Estado compartilhado">')
         state_block = prompt2[state_start:]
         self.assertIn("</shared_state>", state_block)
         self.assertIn('"task_overview"', state_block)
@@ -1144,7 +1151,7 @@ class ProtocolTests(unittest.TestCase):
             history,
             shared_state={"next_step": "continuar"},
         )
-        self.assertNotIn('title="ESTADO COMPARTILHADO"', prompt)
+        self.assertNotIn('<shared_state title="Estado compartilhado">', prompt)
         self.assertNotIn("Você pode atualizar o estado compartilhado usando:", prompt)
 
         # task_overview (campo de infra) deve acionar o bloco e incluir a regra STATE_UPDATE
@@ -1153,7 +1160,7 @@ class ProtocolTests(unittest.TestCase):
             history,
             shared_state={"task_overview": {"job_id": 1}},
         )
-        self.assertIn('<shared_state title="ESTADO COMPARTILHADO">', prompt2)
+        self.assertIn('<shared_state title="Estado compartilhado">', prompt2)
         self.assertIn("Você pode atualizar o estado compartilhado usando:", prompt2)
         self.assertIn("[STATE_UPDATE]", prompt2)
         self.assertEqual(prompt2.count("Você pode atualizar o estado compartilhado usando:"), 1)
@@ -2596,9 +2603,9 @@ class PluginTests(unittest.TestCase):
             "priority": "urgent",
             "handoff_id": "abc123",
         }
-        formatted = builder._format_handoff(handoff, from_agent="claude")
-        self.assertIn("PRIORITY:\nURGENT", formatted)
-        self.assertIn("HANDOFF_ID:\nabc123", formatted)
+        fields = builder._build_handoff_fields(handoff, from_agent="claude")
+        self.assertEqual(fields["handoff_priority"], "URGENT")
+        self.assertEqual(fields["handoff_id"], "abc123")
 
     def test_handoff_format_omits_priority_when_normal(self):
         builder = PromptBuilder(DummyContextManager(), history_window=3)
@@ -2607,9 +2614,9 @@ class PluginTests(unittest.TestCase):
             "priority": "normal",
             "handoff_id": "xyz789",
         }
-        formatted = builder._format_handoff(handoff, from_agent="codex")
-        self.assertIn("HANDOFF_ID:\nxyz789", formatted)
-        self.assertNotIn("PRIORITY", formatted)
+        fields = builder._build_handoff_fields(handoff, from_agent="codex")
+        self.assertEqual(fields["handoff_id"], "xyz789")
+        self.assertEqual(fields["handoff_priority"], "")
 
     def test_retry_on_none_response(self):
         app = QuimeraApp.__new__(QuimeraApp)
@@ -3519,16 +3526,14 @@ class PluginTests(unittest.TestCase):
         self.assertIn("humano", prompt.lower())
 
     def test_route_rule_includes_format_specification(self):
-        """build_route_rule deve incluir instrução de formato do payload."""
-        from quimera.constants import build_route_rule
+        """Route rule deve estar inline no template principal."""
+        main = prompt_template._load()
 
-        rule = build_route_rule(["claude", "codex"])
-
-        self.assertIn("[ROUTE:agente]", rule)
-        self.assertIn("task", rule)
-        self.assertIn("obrigatório", rule)
-        self.assertIn("não improvise", rule)
-        self.assertIn("NEEDS_INPUT", rule)
+        self.assertIn("[ROUTE:agente]", main)
+        self.assertIn("task", main)
+        self.assertIn("obrigatório", main)
+        self.assertIn("não improvise", main)
+        self.assertIn("NEEDS_INPUT", main)
 
 
 class FallbackChainTests(unittest.TestCase):
@@ -3757,10 +3762,10 @@ class MetricsFeedbackTests(unittest.TestCase):
             "chain": ["claude", "codex"],
             "handoff_id": "abc123",
         }
-        formatted = builder._format_handoff(handoff, from_agent="qwen")
-        self.assertIn("CHAIN:\nclaude -> codex", formatted)
-        self.assertIn("HANDOFF_ID:\nabc123", formatted)
-        self.assertIn("FROM:\nqwen", formatted)
+        fields = builder._build_handoff_fields(handoff, from_agent="qwen")
+        self.assertEqual(fields["handoff_chain"], "claude -> codex")
+        self.assertEqual(fields["handoff_id"], "abc123")
+        self.assertEqual(fields["handoff_from"], "qwen")
 
     def test_handoff_format_omits_chain_when_empty(self):
         """Handoff format não deve incluir CHAIN quando vazio."""
@@ -3770,8 +3775,8 @@ class MetricsFeedbackTests(unittest.TestCase):
             "chain": [],
             "handoff_id": "xyz",
         }
-        formatted = builder._format_handoff(handoff, from_agent="claude")
-        self.assertNotIn("CHAIN", formatted)
+        fields = builder._build_handoff_fields(handoff, from_agent="claude")
+        self.assertEqual(fields["handoff_chain"], "")
 
     def test_prompt_includes_collaboration_rules(self):
         """Prompt deve incluir regras de colaboração."""
@@ -3813,10 +3818,11 @@ class MetricsFeedbackTests(unittest.TestCase):
         )
 
     def test_handoff_rule_mentions_ack(self):
-        """PROMPT_HANDOFF_RULE deve mencionar ACK."""
-        self.assertIn("ACK", prompt_template.handoff_rule)
-        self.assertIn("delegue de volta", prompt_template.handoff_rule)
-        self.assertIn("arquivos", prompt_template.handoff_rule)
+        """HANDOFF_RULE deve estar inline no template e mencionar ACK."""
+        main = prompt_template._load()
+        self.assertIn("ACK", main)
+        self.assertIn("delegue de volta", main)
+        self.assertIn("arquivos", main)
 
     def test_behavior_metrics_tracker_integrated_with_app(self):
         """BehaviorMetricsTracker deve ser alimentado pelo app."""
@@ -3870,53 +3876,52 @@ class MetricsFeedbackTests(unittest.TestCase):
         self.assertGreaterEqual(claude_summary["handoffs_sent"], 0)
 
     def test_route_rule_is_concise(self):
-        """build_route_rule deve ser conciso e incluir task como obrigatório."""
-        from quimera.constants import build_route_rule
+        """Route rule deve estar inline no template e ser conciso."""
+        main = prompt_template._load()
 
-        rule = build_route_rule(["claude", "codex"])
-
-        self.assertIn("task", rule)
-        self.assertIn("obrigatório", rule)
-        self.assertIn("claude", rule)
-        self.assertIn("codex", rule)
-        self.assertIn("NEEDS_INPUT", rule)
-        self.assertIn("paths", rule)
-        self.assertIn("paralelizar", rule)
-        self.assertIn("especialidade", rule)
-        self.assertIn("não improvise", rule)
-        self.assertLess(len(rule), 500)
+        self.assertIn("task", main)
+        self.assertIn("obrigatório", main)
+        self.assertIn("Agentes: {route_agents}", main)
+        self.assertIn("NEEDS_INPUT", main)
+        self.assertIn("paths", main)
+        self.assertIn("paralelizar", main)
+        self.assertIn("especialidade", main)
+        self.assertIn("não improvise", main)
+        route_start = main.index("- Agentes: {route_agents}")
+        route_end = main.index("<!-- ENDIF:route_agents -->", route_start)
+        route_rule = main[route_start:route_end]
+        self.assertLess(len(route_rule), 500)
 
     def test_reviewer_rule_is_concise(self):
-        """PROMPT_REVIEWER_RULE deve ser conciso."""
-        self.assertIn("veredicto", prompt_template.reviewer_rule.lower())
-        self.assertIn("aceite", prompt_template.reviewer_rule.lower())
-        self.assertLess(len(prompt_template.reviewer_rule), 550)
+        """REVIEWER_RULE deve estar inline no template e ser conciso."""
+        main = prompt_template._load()
+        self.assertIn("veredicto", main.lower())
+        self.assertIn("ACEITE", main)
 
     def test_handoff_rule_is_concise(self):
-        """PROMPT_HANDOFF_RULE deve ser conciso."""
-        self.assertIn("ACK", prompt_template.handoff_rule)
-        self.assertIn("continue do ponto já avançado", prompt_template.handoff_rule.lower())
-        self.assertLess(len(prompt_template.handoff_rule), 400)
+        """HANDOFF_RULE deve estar inline no template e ser conciso."""
+        main = prompt_template._load()
+        self.assertIn("ACK", main)
+        self.assertIn("continue do ponto já avançado", main.lower())
 
     def test_base_rules_are_concise(self):
-        """PROMPT_BASE_RULES deve ser conciso e cobrir prioridades."""
-        self.assertIn("humano", prompt_template.base_rules.lower())
-        self.assertIn("prioridade", prompt_template.base_rules.lower())
-        self.assertIn("foco", prompt_template.base_rules.lower())
-        self.assertIn("continuação direta do mesmo chat", prompt_template.base_rules.lower())
-        self.assertIn("colaboração é parte do trabalho", prompt_template.base_rules.lower())
-        self.assertIn("editar arquivos", prompt_template.base_rules.lower())
-        self.assertIn("mude o mínimo necessário", prompt_template.base_rules.lower())
-        self.assertLess(len(prompt_template.base_rules), 1600)
+        """Regras base devem estar inline no template principal."""
+        main = prompt_template._load().lower()
+        self.assertIn("humano", main)
+        self.assertIn("prioridade", main)
+        self.assertIn("foco", main)
+        self.assertIn("continuação direta do mesmo chat", main)
+        self.assertIn("colaboração é parte do trabalho", main)
+        self.assertIn("editar arquivos", main)
+        self.assertIn("mude o mínimo necessário", main)
 
-    def test_tool_rule_guides_discovery_before_edits(self):
-        self.assertIn("ferramentas customizadas", prompt_template.tool_rule)
-        self.assertIn("list_files", prompt_template.tool_rule)
-        self.assertIn("grep_search", prompt_template.tool_rule)
-        self.assertIn("read_file", prompt_template.tool_rule)
-        self.assertIn("apply_patch", prompt_template.tool_rule)
-        self.assertIn("run_shell", prompt_template.tool_rule)
-        self.assertIn("texto sem tag é ignorado pelo sistema", prompt_template.tool_rule)
+    def test_main_template_embeds_static_tool_instructions_in_tools_block(self):
+        main = prompt_template._load()
+        self.assertIn('<tools title="Ferramentas disponíveis">', main)
+        self.assertIn("a ferramenta não executa", main)
+        self.assertIn("não escreva chamadas como list_files(...)", main)
+        self.assertIn('function="apply_patch"', main)
+        self.assertIn("exec_command / write_stdin / close_command_session", main)
 
     def test_build_tools_prompt_is_compact_but_preserves_essentials(self):
         from quimera.constants import build_tools_prompt
@@ -3926,15 +3931,14 @@ class MetricsFeedbackTests(unittest.TestCase):
         self.assertIn('function="apply_patch"', prompt)
         self.assertIn('function="list_files"', prompt)
         self.assertIn('function="exec_command"', prompt)
-        self.assertIn("Ferramentas disponíveis", prompt)
-        self.assertIn("a ferramenta não executa", prompt)
-        self.assertIn("não escreva chamadas como list_files(...)", prompt)
-        self.assertIn("via <tool ...>", prompt)
         self.assertIn("- list_files:", prompt)
         self.assertIn("- read_file:", prompt)
         self.assertIn("- apply_patch:", prompt)
         self.assertIn("- run_shell:", prompt)
-        self.assertNotIn("  Exemplo:", prompt)
+        self.assertIn("| exemplo:", prompt)
+        self.assertNotIn("Ferramentas disponíveis", prompt)
+        self.assertNotIn("a ferramenta não executa", prompt)
+        self.assertNotIn("não escreva chamadas como list_files(...)", prompt)
         self.assertLess(len(prompt), 3400)
 
     def test_build_task_body_includes_operational_protocol(self):
@@ -4031,7 +4035,7 @@ class MetricsFeedbackTests(unittest.TestCase):
             },
         )
 
-        self.assertIn('<completed_tasks title="TAREFAS CONCLUÍDAS">', prompt)
+        self.assertIn('<completed_tasks title="Tarefas concluídas">', prompt)
         self.assertIn("</completed_tasks>", prompt)
         self.assertIn("[task 1] testes: ok", prompt)
 
@@ -4044,7 +4048,7 @@ class MetricsFeedbackTests(unittest.TestCase):
 
         prompt, metrics = builder.build(AGENT_CLAUDE, history, debug=True)
 
-        self.assertIn('<recent_conversation title="CONVERSA RECENTE">', prompt)
+        self.assertIn('<recent_conversation title="Conversa recente">', prompt)
         self.assertIn("</recent_conversation>", prompt)
         self.assertTrue(metrics["primary"])
         self.assertGreater(metrics["total_chars"], 0)
@@ -4072,16 +4076,16 @@ class MetricsFeedbackTests(unittest.TestCase):
 
         prompt = builder.build(AGENT_CODEX, history, handoff="Revise este ponto.")
 
-        self.assertIn('<header title="IDENTIFICAÇÃO">', prompt)
+        self.assertIn('<header title="Identificação">', prompt)
         self.assertIn("</header>", prompt)
-        self.assertIn('<rules title="REGRAS">', prompt)
+        self.assertIn('<rules title="Regras">', prompt)
         self.assertIn("</rules>", prompt)
-        self.assertIn('<session_state title="ESTADO DA SESSÃO">', prompt)
-        self.assertIn('<persistent_context title="CONTEXTO PERSISTENTE DO WORKSPACE">', prompt)
+        self.assertIn('<session_state title="Estado da sessão">', prompt)
+        self.assertIn('<persistent_context title="Contexto persistente do workspace">', prompt)
         self.assertIn("</persistent_context>", prompt)
-        self.assertIn('<current_turn title="PEDIDO ATUAL DE VOCÊ">', prompt)
-        self.assertIn('<handoff title="MENSAGEM DIRETA DO OUTRO AGENTE">', prompt)
-        self.assertIn('<recent_conversation title="CONVERSA RECENTE">', prompt)
+        self.assertIn('<current_turn title="Pedido atual de VOCÊ">', prompt)
+        self.assertIn('<handoff title="Mensagem direta do outro agente">', prompt)
+        self.assertIn('<recent_conversation title="Conversa recente">', prompt)
         self.assertNotIn('<response_prefix title="PREFIXO DE RESPOSTA">', prompt)
         self.assertNotIn("</response_prefix>", prompt)
 
@@ -4141,18 +4145,18 @@ class MetricsFeedbackTests(unittest.TestCase):
         builder = PromptBuilder(DummyContextManager(), history_window=3, metrics_tracker=tracker)
         prompt = builder.build("claude", [])
 
-        self.assertIn('<agent_metrics title="MÉTRICAS DO AGENTE ATUAL (APENAS REFERÊNCIA)">', prompt)
+        self.assertIn('<agent_metrics title="Métricas do agente atual (apenas referência)">', prompt)
         self.assertIn("</agent_metrics>", prompt)
         self.assertIn("SÍNTESES IMPRECISAS", prompt)
 
-    def test_prompt_builder_omits_metrics_block_when_no_tracker(self):
+    def test_prompt_builder_omits_metrics_when_no_tracker(self):
         """PromptBuilder sem metrics_tracker não deve incluir bloco de métricas."""
         builder = PromptBuilder(DummyContextManager(), history_window=3)
         prompt = builder.build("claude", [])
 
-        self.assertNotIn('title="MÉTRICAS DO AGENTE ATUAL (APENAS REFERÊNCIA)"', prompt)
+        self.assertNotIn('<agent_metrics title="Métricas do agente atual (apenas referência)">', prompt)
 
-    def test_prompt_builder_omits_metrics_block_when_insufficient_data(self):
+    def test_prompt_builder_omits_metrics_when_insufficient_data(self):
         """PromptBuilder não deve incluir métricas se generate_feedback retornar vazio."""
         from quimera.metrics import BehaviorMetricsTracker
 
@@ -4162,7 +4166,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         builder = PromptBuilder(DummyContextManager(), history_window=3, metrics_tracker=tracker)
         prompt = builder.build("claude", [])
 
-        self.assertNotIn('title="MÉTRICAS DO AGENTE ATUAL (APENAS REFERÊNCIA)"', prompt)
+        self.assertNotIn('<agent_metrics title="Métricas do agente atual (apenas referência)">', prompt)
 
 
 class AppProtocolDirectTests(unittest.TestCase):

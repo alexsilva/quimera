@@ -466,24 +466,26 @@ class TaskExecutorCoverageTests(unittest.TestCase):
                     raise value
                 return value
 
-            sleep_calls = []
+            wait_calls = []
 
-            def fake_sleep(_seconds):
-                sleep_calls.append(_seconds)
-                # Stop only after both task and review have been processed (2 sleeps)
-                if len(sleep_calls) >= 2:
+            def fake_wait(_seconds):
+                wait_calls.append(_seconds)
+                # Stop only after both task and review have been processed (2 waits)
+                if len(wait_calls) >= 2:
                     executor._running = False
+                    return True
+                return False
 
             executor._running = True
             with patch("quimera.runtime.task_executor.claim_task", side_effect=claim_task_side_effect), patch(
                     "quimera.runtime.task_executor.claim_review_task", return_value=2
-            ), patch("quimera.runtime.task_executor.list_tasks", side_effect=[[{"id": 1}], [{"id": 2}]]), patch(
-                "quimera.runtime.task_executor.time.sleep", side_effect=fake_sleep
+            ), patch("quimera.runtime.task_executor.list_tasks", side_effect=[[{"id": 1}], [{"id": 2}]]), patch.object(
+                executor, "_wait_or_stop", side_effect=fake_wait
             ):
                 executor._poll_loop()
             handler.assert_called_with({"id": 1})
             review_handler.assert_called_with({"id": 2})
-            self.assertTrue(sleep_calls)
+            self.assertTrue(wait_calls)
 
 
 class FileToolsCoverageTests(unittest.TestCase):

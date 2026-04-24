@@ -19,25 +19,11 @@ def _make_context_manager(content: str) -> MagicMock:
 
 
 def _build_prompt_template_fixture() -> str:
-    sections = {
-        "BASE_RULES": "Base rules",
-        "GOAL_EXECUTION_RULES": "Goal execution rules",
-        "REVIEWER_RULE": "Reviewer rule",
-        "STATE_UPDATE_RULE": "State update rule",
-        "HANDOFF_RULE": "Handoff rule",
-        "TOOL_RULE": "Tool rule",
-        "DEBATE_RULE": "Debate rule {marker}",
-        "SHARED_STATE": "<shared_state>{shared_state_json}</shared_state>",
-        "GOAL_LOCK": "Goal lock",
-        "STEP_LOCK": "Step lock",
-        "ACCEPTANCE_CRITERIA": "Acceptance criteria",
-        "SCOPE_CONTROL": "Scope control",
-        "REQUEST": "<request>{request_text}</request>",
-        "FACTS": "<facts>{facts}</facts>",
-    }
-    blocks = ["<full>{base_rules}|{agent}|{user_name}</full>"]
-    for name, content in sections.items():
-        blocks.append(f"<!-- {name}:START -->\n{content}\n<!-- {name}:END -->")
+    blocks = [
+        "base rules inline|{agent}|{user_name}"
+        "<!-- IF:tools -->|{tools}<!-- ENDIF:tools -->"
+        "<!-- NOT_IF:tools -->|no-tools<!-- ENDNOT_IF:tools -->",
+    ]
     return "\n\n".join(blocks)
 
 
@@ -122,8 +108,8 @@ def test_prompt_template_loads_file_lazily(tmp_path):
 
     template_path.write_text(_build_prompt_template_fixture(), encoding="utf-8")
 
-    assert template.base_rules == "Base rules"
-    assert template.render(agent="CODEX", user_name="ALEX") == "Base rules|CODEX|ALEX"
+    assert template.render(agent="CODEX", user_name="ALEX") == "base rules inline|CODEX|ALEX|no-tools"
+    assert template.render(agent="CODEX", user_name="ALEX", tools="TOOLS") == "base rules inline|CODEX|ALEX|TOOLS"
 
 
 def test_prompt_no_tools():
@@ -133,7 +119,7 @@ def test_prompt_no_tools():
     prompt = builder.build(agent="claude", history=history, skip_tool_prompt=True)
 
     assert '<tools title="Ferramentas disponíveis">' not in prompt
-    assert 'Ferramentas disponíveis' not in prompt
+    assert "</tools>" not in prompt
     assert '<current_turn title="Pedido atual de VOCÊ">' in prompt
     assert '<recent_conversation title="Conversa recente">' in prompt
     assert '<response_prefix title="Prefixo de resposta">' not in prompt
@@ -149,7 +135,7 @@ def test_prompt_primary_false_omits_only_session_state():
     assert '<session_state' in prompt_primary
 
     prompt_secondary = builder.build(agent="claude", history=history, primary=False)
-    assert '<session_state' not in prompt_secondary
+    assert '<session_state title="Estado da sessão">' not in prompt_secondary
     assert '<persistent_context title="Contexto persistente do workspace">' in prompt_secondary
     assert '<current_turn title="Pedido atual de VOCÊ">' in prompt_secondary
 
@@ -169,6 +155,20 @@ def test_prompt_shared_state():
     assert '"workspace_root": "/home/user/project"' in prompt
 
 
+def test_prompt_keeps_empty_optional_blocks_in_output():
+    builder = PromptBuilder(context_manager=_make_context_manager(""))
+
+    prompt = builder.build(agent="claude", history=[])
+
+    assert '<current_turn title="Pedido atual de VOCÊ">' in prompt
+    assert "[sem pedido atual]" in prompt
+    assert '<recent_agent_messages title="Mensagens recentes de outros agentes">' not in prompt
+    assert '<shared_state title="Estado compartilhado">' not in prompt
+    assert '<completed_tasks title="Tarefas concluídas">' not in prompt
+    assert '<handoff title="Mensagem direta do outro agente">' not in prompt
+    assert '<agent_metrics title="Métricas do agente atual (apenas referência)">' not in prompt
+
+
 def test_prompt_completed_tasks():
     builder = PromptBuilder(context_manager=_make_context_manager(""))
     history = [{"role": "human", "content": "test"}]
@@ -181,3 +181,67 @@ def test_prompt_completed_tasks():
 
     assert '<completed_tasks title="Tarefas concluídas">' in prompt
     assert 'Task 1: Success' in prompt
+
+
+def test_safe_format_replaces_missing_keys_with_empty_string(tmp_path):
+    """_SafeDict.__missing__ deve retornar '' para chaves não fornecidas."""
+    template_path = tmp_path / "prompt.md"
+    template_path.write_text("hello {name} and {missing_key}", encoding="utf-8")
+    template = PromptTemplate(template_path)
+
+    result = template.render(name="world")
+
+    assert "world" in result
+    assert "{missing_key}" not in result
+    assert result == "hello world and"
+
+
+def test_collect_recent_facts_skips_empty_content():
+    """Mensagens com content vazio não devem aparecer no bloco de fatos recentes."""
+    builder = PromptBuilder(context_manager=_make_context_manager(""))
+    history = [
+        {"role": "claude", "content": ""},
+        {"role": "claude", "content": "  "},
+        {"role": "human", "content": "pergunta"},
+        {"role": "codex", "content": "resposta válida"},
+    ]
+
+    prompt = builder.build(agent="outro", history=history)
+
+    facts_block = _extract_block(prompt, "recent_agent_messages")
+    assert "resposta válida" in facts_block
+    assert "[CLAUDE]" not in facts_block
+
+
+def test_collect_recent_facts_respects_max_items():
+    """Bloco de fatos recentes deve ser limitado a max_items (padrão 4)."""
+    builder = PromptBuilder(context_manager=_make_context_manager(""))
+    history = [
+        {"role": "agent1", "content": f"mensagem {i}"}
+        for i in range(10)
+    ] + [{"role": "human", "content": "última pergunta"}]
+
+    prompt = builder.build(agent="claude", history=history)
+
+    facts_block = _extract_block(prompt, "recent_agent_messages")
+    count = facts_block.count("[AGENT1]")
+    assert count <= 4
+
+
+def test_build_conversation_block_skips_empty_content():
+    """Mensagens com content vazio não devem aparecer na conversa recente."""
+    builder = PromptBuilder(context_manager=_make_context_manager(""), user_name="ALEX")
+    history = [
+        {"role": "human", "content": ""},
+        {"role": "human", "content": "  "},
+        {"role": "human", "content": "pergunta anterior válida"},
+        {"role": "claude", "content": "resposta"},
+        {"role": "human", "content": "pergunta atual"},
+    ]
+
+    prompt = builder.build(agent="codex", history=history)
+
+    conversation_block = _extract_block(prompt, "recent_conversation")
+    lines = [l for l in conversation_block.splitlines() if "[ALEX]" in l]
+    assert len(lines) == 1
+    assert "pergunta anterior válida" in lines[0]
