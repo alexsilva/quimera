@@ -12,6 +12,7 @@ from ..constants import (
     CMD_HELP,
     CMD_PROMPT,
     CMD_RELOAD,
+    CMD_RESET_STATE,
     CMD_TASK,
     DEFAULT_FIRST_AGENT,
     build_agents_help,
@@ -308,6 +309,11 @@ class AppSystemLayer:
 
         if command.startswith(CMD_TASK):
             self.app.task_services.handle_task_command(command)
+            return True
+
+        if command == CMD_RESET_STATE:
+            self.app.reset_shared_state()
+            self.app.renderer.show_system("shared_state limpo.")
             return True
 
         if command == CMD_CONTEXT:

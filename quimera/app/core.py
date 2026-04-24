@@ -39,7 +39,7 @@ from ..metrics import BehaviorMetricsTracker
 from ..constants import (
     CMD_AGENTS, CMD_ALIASES, CMD_CLEAR, CMD_CONNECT, CMD_CONTEXT, CMD_CONTEXT_EDIT, CMD_EDIT, CMD_EXIT,
     CMD_FILE_PREFIX, CMD_HELP,
-    CMD_PROMPT, CMD_TASK,
+    CMD_PROMPT, CMD_RESET_STATE, CMD_TASK,
     MSG_CHAT_STARTED, MSG_SESSION_LOG, MSG_SESSION_STATUS, MSG_MIGRATION,
     MSG_SHUTDOWN, MSG_DOUBLE_PREFIX,
     Visibility,
@@ -223,6 +223,7 @@ class QuimeraApp:
             CMD_FILE_PREFIX,
             CMD_HELP,
             CMD_PROMPT,
+            CMD_RESET_STATE,
             CMD_TASK,
             *CMD_ALIASES,
             *MODES.keys(),
@@ -561,6 +562,12 @@ class QuimeraApp:
     def parse_response(self, response):
         """Interpreta response."""
         return self.protocol.parse_response(response)
+
+    def reset_shared_state(self) -> None:
+        """Limpa o shared_state em memória e persiste o snapshot atualizado."""
+        with self._lock:
+            self.shared_state.clear()
+            self.storage.save_history(self.history, shared_state=self.shared_state)
 
     def _merge_staging_to_workspace(self, staging_root: Path):
         """Mescla arquivos do staging para o workspace em ordem de índice."""

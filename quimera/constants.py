@@ -40,6 +40,7 @@ CMD_CONTEXT_EDIT = "/context-edit"
 CMD_EDIT = "/edit"
 CMD_FILE_PREFIX = "/file"
 CMD_TASK = "/task"
+CMD_RESET_STATE = "/reset-state"
 CMD_ALIASES = {"/e": CMD_EDIT, "/r": CMD_CONTEXT, "/g": CMD_HELP}
 USER_ROLE = "human"
 
@@ -217,6 +218,7 @@ def build_help(agent_names):
             "- /context-edit: abre o contexto persistente no editor ($EDITOR, ou nano/vim/vi como fallback)\n"
             "- /edit: abre o editor ($EDITOR, ou nano/vim/vi como fallback) para compor uma mensagem longa\n"
             "- /file <caminho>: usa o conteúdo de um arquivo como mensagem\n"
+            "- /reset-state: limpa o shared_state (objetivo, passo, critérios) sem apagar o histórico\n"
             "- /help: mostra esta ajuda\n"
             "- /exit: encerra a sessão\n"
     )
