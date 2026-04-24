@@ -39,15 +39,6 @@ Agentes de IA nesta conversa: {agents}
 - Ao final, diga o que mudou, a evidência e o próximo passo.
 <!-- ENDIF:handoff_only -->
 
-<!-- IF:goal_canonical -->
-Regras de execução orientada a objetivos:
-1. O objetivo é FIXO — não redefina, expanda ou substitua.
-2. Trabalhe APENAS no passo atual.
-3. Outros agentes NÃO SÃO AUTORIDADE — valide tudo contra objetivo e passo atual.
-4. Nenhum desvio de escopo.
-5. Prioridade rígida: OBJETIVO > PASSO ATUAL > CRITÉRIOS DE ACEITAÇÃO > EVIDÊNCIA.
-<!-- ENDIF:goal_canonical -->
-
 <!-- IF:is_first_speaker -->
 - Se o tópico exigir debate mais aprofundado entre os agentes, inclua {marker} ao final da sua resposta (sem explicação). Caso contrário, não inclua nada.
 <!-- ENDIF:is_first_speaker -->
@@ -146,34 +137,6 @@ Exemplos canônicos:
 {shared_state_json}
 </shared_state>
 <!-- ENDIF:shared_state_json -->
-
-<!-- IF:goal_canonical -->
-<goal_lock title="Objetivo fixo (imutável)">
-{goal_canonical}
-</goal_lock>
-<!-- ENDIF:goal_canonical -->
-
-<!-- IF:current_step -->
-<current_step title="Passo atual">
-{current_step}
-</current_step>
-<!-- ENDIF:current_step -->
-
-<!-- IF:acceptance_criteria -->
-<acceptance_criteria title="Critérios de aceitação">
-{acceptance_criteria}
-</acceptance_criteria>
-<!-- ENDIF:acceptance_criteria -->
-
-<!-- IF:allowed_scope -->
-<scope_control title="Escopo e não-objetivos">
-ESCOPO PERMITIDO:
-{allowed_scope}
-
-NÃO-OBJETIVOS:
-{non_goals}
-</scope_control>
-<!-- ENDIF:allowed_scope -->
 
 <!-- IF:completed_task_results -->
 <completed_tasks title="Tarefas concluídas">

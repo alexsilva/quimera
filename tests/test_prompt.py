@@ -62,9 +62,9 @@ def test_final_prompt_contract_has_sections_once_in_order_and_without_duplicatio
 
     ordered_sections = [
         '<header title="Identificação">',
-        '<rules title="Regras">',
-        '<tools title="Ferramentas disponíveis">',
         '<session_state title="Estado da sessão">',
+        '<rules title="Suas regras">',
+        '<tools title="Ferramentas disponíveis">',
         '<persistent_context title="Contexto persistente do workspace">',
         '<current_turn title="Pedido atual de ALEX">',
         '<recent_agent_messages title="Mensagens recentes de outros agentes">',
@@ -166,14 +166,14 @@ def test_prompt_keeps_empty_optional_blocks_in_output():
     assert '<shared_state title="Estado compartilhado">' not in prompt
     assert '<completed_tasks title="Tarefas concluídas">' not in prompt
     assert '<handoff title="Mensagem direta do outro agente">' not in prompt
-    assert '<agent_metrics title="Métricas do agente atual (apenas referência)">' not in prompt
+    assert '<agent_metrics title="Suas métricas (apenas referência)">' not in prompt
 
 
 def test_prompt_completed_tasks():
     builder = PromptBuilder(context_manager=_make_context_manager(""))
     history = [{"role": "human", "content": "test"}]
     shared_state = {
-        "goal_canonical": "Complete task",
+        "task_overview": {"job_id": 1},
         "completed_task_results": "Task 1: Success\nTask 2: Success",
     }
 
@@ -181,6 +181,25 @@ def test_prompt_completed_tasks():
 
     assert '<completed_tasks title="Tarefas concluídas">' in prompt
     assert 'Task 1: Success' in prompt
+
+
+def test_prompt_keeps_infra_shared_state_visible_even_with_goal_canonical():
+    builder = PromptBuilder(context_manager=_make_context_manager(""))
+    history = [{"role": "human", "content": "test"}]
+
+    prompt = builder.build(
+        agent="claude",
+        history=history,
+        shared_state={
+            "goal_canonical": "Objetivo legado",
+            "task_overview": {"job_id": 7},
+        },
+    )
+
+    assert '<shared_state title="Estado compartilhado">' in prompt
+    assert '"task_overview": {' in prompt
+    assert '"job_id": 7' in prompt
+    assert '<goal_lock title="Objetivo fixo (imutável)">' not in prompt
 
 
 def test_safe_format_replaces_missing_keys_with_empty_string(tmp_path):

@@ -1145,16 +1145,16 @@ class ProtocolTests(unittest.TestCase):
         builder = PromptBuilder(DummyContextManager(), history_window=3)
         history = [{"role": "human", "content": "Pergunta"}]
 
-        # next_step sem goal_canonical é campo de execução e não aciona o bloco
+        # next_step é campo de execução legado e não deve acionar o bloco
         prompt = builder.build(
             AGENT_CLAUDE,
             history,
             shared_state={"next_step": "continuar"},
         )
         self.assertNotIn('<shared_state title="Estado compartilhado">', prompt)
-        self.assertNotIn("Você pode atualizar o estado compartilhado usando:", prompt)
+        self.assertNotIn("[STATE_UPDATE]", prompt)
 
-        # task_overview (campo de infra) deve acionar o bloco e incluir a regra STATE_UPDATE
+        # task_overview (campo de infra) deve acionar o bloco e manter o contrato de escrita
         prompt2 = builder.build(
             AGENT_CLAUDE,
             history,
@@ -4022,7 +4022,7 @@ class MetricsFeedbackTests(unittest.TestCase):
 
         self.assertIsNone(app.shared_state)
 
-    def test_prompt_includes_completed_task_results_when_goal_is_locked(self):
+    def test_prompt_includes_completed_task_results_without_goal_lock(self):
         builder = PromptBuilder(DummyContextManager(), history_window=3)
         history = [{"role": "human", "content": "Pergunta"}]
 
@@ -4030,7 +4030,7 @@ class MetricsFeedbackTests(unittest.TestCase):
             AGENT_CLAUDE,
             history,
             shared_state={
-                "goal_canonical": "Fechar cobertura",
+                "task_overview": {"job_id": 1},
                 "completed_task_results": "[task 1] testes: ok",
             },
         )
@@ -4078,9 +4078,9 @@ class MetricsFeedbackTests(unittest.TestCase):
 
         self.assertIn('<header title="Identificação">', prompt)
         self.assertIn("</header>", prompt)
-        self.assertIn('<rules title="Regras">', prompt)
-        self.assertIn("</rules>", prompt)
         self.assertIn('<session_state title="Estado da sessão">', prompt)
+        self.assertIn('<rules title="Suas regras">', prompt)
+        self.assertIn("</rules>", prompt)
         self.assertIn('<persistent_context title="Contexto persistente do workspace">', prompt)
         self.assertIn("</persistent_context>", prompt)
         self.assertIn('<current_turn title="Pedido atual de VOCÊ">', prompt)
@@ -4145,7 +4145,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         builder = PromptBuilder(DummyContextManager(), history_window=3, metrics_tracker=tracker)
         prompt = builder.build("claude", [])
 
-        self.assertIn('<agent_metrics title="Métricas do agente atual (apenas referência)">', prompt)
+        self.assertIn('<agent_metrics title="Suas métricas (apenas referência)">', prompt)
         self.assertIn("</agent_metrics>", prompt)
         self.assertIn("SÍNTESES IMPRECISAS", prompt)
 
@@ -4154,7 +4154,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         builder = PromptBuilder(DummyContextManager(), history_window=3)
         prompt = builder.build("claude", [])
 
-        self.assertNotIn('<agent_metrics title="Métricas do agente atual (apenas referência)">', prompt)
+        self.assertNotIn('<agent_metrics title="Suas métricas (apenas referência)">', prompt)
 
     def test_prompt_builder_omits_metrics_when_insufficient_data(self):
         """PromptBuilder não deve incluir métricas se generate_feedback retornar vazio."""
@@ -4166,7 +4166,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         builder = PromptBuilder(DummyContextManager(), history_window=3, metrics_tracker=tracker)
         prompt = builder.build("claude", [])
 
-        self.assertNotIn('<agent_metrics title="Métricas do agente atual (apenas referência)">', prompt)
+        self.assertNotIn('<agent_metrics title="Suas métricas (apenas referência)">', prompt)
 
 
 class AppProtocolDirectTests(unittest.TestCase):

@@ -69,25 +69,18 @@ class PromptBuilder:
         other_agents = [n for n in self.active_agents if n.lower() != agent.lower()]
         agents_list = ", ".join(n.upper() for n in other_agents) if other_agents else "nenhum"
         shared = shared_state or {}
-        has_goal = "goal_canonical" in shared
+        execution_keys = {
+            "goal", "goal_canonical", "decisions", "current_step",
+            "acceptance_criteria", "allowed_scope", "non_goals",
+            "out_of_scope_notes", "evidence", "next_step",
+        }
         fallback_shared = {}
-        if shared and not has_goal:
-            execution_keys = {
-                "goal", "goal_canonical", "decisions", "current_step",
-                "acceptance_criteria", "allowed_scope", "non_goals",
-                "out_of_scope_notes", "evidence", "next_step",
-            }
+        if shared:
             fallback_shared = {
                 k: v
                 for k, v in self._trim_shared_state(shared).items()
                 if k not in execution_keys
             }
-
-        goal_canonical = shared.get("goal_canonical", "") if has_goal else ""
-        current_step_val = shared.get("current_step", "") if has_goal else ""
-        acceptance_criteria_val = shared.get("acceptance_criteria", "") if has_goal else ""
-        allowed_scope_val = shared.get("allowed_scope", "") if has_goal else ""
-        non_goals_val = shared.get("non_goals", "") if has_goal else ""
 
         session_id = ""
         current_job_id = ""
@@ -102,14 +95,9 @@ class PromptBuilder:
         request_index, request = self._build_request_content(history)
         fact_indexes, facts = self._build_facts_content(history, current_agent=agent)
         shared_state_json = ""
-        completed_task_results = ""
-        if shared_state and not has_goal:
-            if fallback_shared:
-                shared_state_json = json.dumps(fallback_shared, ensure_ascii=False, indent=2)
-        elif shared_state and has_goal and "completed_task_results" in shared_state:
-            results = shared_state["completed_task_results"]
-            if results:
-                completed_task_results = results
+        completed_task_results = shared.get("completed_task_results", "") or ""
+        if fallback_shared:
+            shared_state_json = json.dumps(fallback_shared, ensure_ascii=False, indent=2)
 
         metrics = ""
         if self.metrics_tracker:
@@ -129,11 +117,6 @@ class PromptBuilder:
             is_first_speaker=is_first_speaker_flag,
             is_reviewer=is_reviewer,
             marker=EXTEND_MARKER,
-            goal_canonical=goal_canonical,
-            current_step=current_step_val,
-            acceptance_criteria=acceptance_criteria_val,
-            allowed_scope=allowed_scope_val,
-            non_goals=non_goals_val,
             tools=tools_prompt,
             session_id=session_id,
             current_job_id=current_job_id,
