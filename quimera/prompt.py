@@ -79,11 +79,13 @@ class PromptBuilder:
         current_job_id = ""
         workspace_root = ""
         current_dir = ""
+        os_info = ""
         if self.session_state and primary:
             session_id = self.session_state.get("session_id", "desconhecida")
             current_job_id = self.session_state.get("current_job_id", "desconhecido")
             workspace_root = self.session_state.get("workspace_root", "desconhecido")
             current_dir = self.session_state.get("current_dir", ".")
+            os_info = self.session_state.get("os_info", "")
         handoff_fields = self._build_handoff_fields(handoff, from_agent)
         request_index, request = self._build_request_content(history)
         fact_indexes, facts = self._build_facts_content(history, current_agent=agent)
@@ -115,6 +117,7 @@ class PromptBuilder:
             current_job_id=current_job_id,
             workspace_root=workspace_root,
             current_dir=current_dir,
+            os_info=os_info,
             context=context,
             request=request,
             facts=facts,

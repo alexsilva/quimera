@@ -1,5 +1,6 @@
 """Componentes de `quimera.app.core`."""
 import os
+import platform
 import queue
 import random
 import shutil
@@ -189,6 +190,7 @@ class QuimeraApp:
             "current_job_id": self.current_job_id,
             "workspace_root": str(self.workspace.cwd),
             "current_dir": ".",
+            "os_info": f"{platform.system()} {platform.release()}",
         }
         self.prompt_builder = PromptBuilder(
             self.context_manager,

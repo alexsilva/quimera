@@ -1056,6 +1056,7 @@ class ProtocolTests(unittest.TestCase):
                 "summary_loaded": "não",
                 "workspace_root": "/tmp/quimera",
                 "current_dir": ".",
+                "os_info": "Linux 6.17.0-22-generic",
             },
         )
         history = [{"role": "human", "content": "Pergunta"}]
@@ -1068,6 +1069,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn("JOB_ID ATUAL: 1", prompt)
         self.assertIn("WORKSPACE RAIZ: /tmp/quimera", prompt)
         self.assertIn("DIRETÓRIO ATUAL: .", prompt)
+        self.assertIn("SISTEMA OPERACIONAL: Linux 6.17.0-22-generic", prompt)
         self.assertNotIn("NOVA SESSÃO", prompt)
         self.assertNotIn("HISTÓRICO RESTAURADO", prompt)
         self.assertNotIn("RESUMO CARREGADO", prompt)
@@ -1234,6 +1236,7 @@ class ProtocolTests(unittest.TestCase):
             self.assertEqual(session_state.get("history_restored"), "sim")
             self.assertEqual(session_state.get("summary_loaded"), "sim")
             self.assertIn("current_job_id", session_state)
+            self.assertRegex(session_state.get("os_info", ""), r"^\S.+\S$")
         finally:
             app._stop_task_executors()
         self.assertIsInstance(session_state["current_job_id"], int)

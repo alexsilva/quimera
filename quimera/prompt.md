@@ -10,6 +10,7 @@ Agentes de IA nesta conversa: {agents}
 - JOB_ID ATUAL: {current_job_id}
 - WORKSPACE RAIZ: {workspace_root}
 - DIRETÓRIO ATUAL: {current_dir}
+- SISTEMA OPERACIONAL: {os_info}
 </session_state>
 <!-- ENDIF:session_id -->
 
