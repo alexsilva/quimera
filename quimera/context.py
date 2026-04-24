@@ -154,4 +154,4 @@ class ContextManager:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
         new_section = f"{self.SUMMARY_MARKER}\n\n_Gerado em {timestamp}_\n{summary}"
         self.session_context_file.write_text(new_section.strip() + "\n", encoding="utf-8")
-        self.renderer.show_system(f"[memória] resumo salvo em {self.session_context_file.name}\n")
+        self.renderer.show_system(f"[memória] resumo salvo em {self.session_context_file.name}")
