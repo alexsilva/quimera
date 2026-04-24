@@ -582,7 +582,7 @@ class ProtocolTests(unittest.TestCase):
         app.prompt_builder.build.assert_called_once()
         self.assertEqual(app.prompt_builder.build.call_args.args[0], AGENT_CODEX)
 
-    def test_prompt_preview_keeps_tool_prompt_for_cli_agent_without_builtin_tools(self):
+    def test_prompt_preview_omits_tool_prompt_for_cli_agent_without_builtin_tools(self):
         app = QuimeraApp.__new__(QuimeraApp)
         app.history = []
         app.shared_state = {}
@@ -612,8 +612,8 @@ class ProtocolTests(unittest.TestCase):
 
         message = AppSystemLayer(app)._build_prompt_preview_message("pickle")
 
-        self.assertIn("TOOLS NO TEXTO: sim", message)
-        self.assertFalse(app.prompt_builder.build.call_args.kwargs["skip_tool_prompt"])
+        self.assertIn("TOOLS NO TEXTO: não", message)
+        self.assertTrue(app.prompt_builder.build.call_args.kwargs["skip_tool_prompt"])
 
     def test_prompt_preview_skips_tool_prompt_for_cli_agent_with_builtin_tools(self):
         app = QuimeraApp.__new__(QuimeraApp)
@@ -648,7 +648,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn("TOOLS NO TEXTO: não", message)
         self.assertTrue(app.prompt_builder.build.call_args.kwargs["skip_tool_prompt"])
 
-    def test_prompt_preview_keeps_tool_prompt_for_openai_compat_even_with_builtin_tools(self):
+    def test_prompt_preview_omits_tool_prompt_for_openai_compat_even_with_builtin_tools(self):
         app = QuimeraApp.__new__(QuimeraApp)
         app.history = []
         app.shared_state = {}
@@ -681,8 +681,8 @@ class ProtocolTests(unittest.TestCase):
         message = AppSystemLayer(app)._build_prompt_preview_message("chatgpt-api")
 
         self.assertIn("DRIVER: openai_compat", message)
-        self.assertIn("TOOLS NO TEXTO: sim", message)
-        self.assertFalse(app.prompt_builder.build.call_args.kwargs["skip_tool_prompt"])
+        self.assertIn("TOOLS NO TEXTO: não", message)
+        self.assertTrue(app.prompt_builder.build.call_args.kwargs["skip_tool_prompt"])
 
     def test_handle_command_warns_on_unknown_prompt_agent(self):
         app = QuimeraApp.__new__(QuimeraApp)
@@ -2641,7 +2641,7 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(result, "sucesso no retry")
         self.assertEqual(call_count[0], 2)
 
-    def test_call_agent_low_level_skips_tool_prompt_only_for_cli_builtin_tools(self):
+    def test_call_agent_low_level_always_skips_tool_prompt_for_cli_builtin_tools(self):
         app = QuimeraApp.__new__(QuimeraApp)
         app.session_call_index = 0
         app.history = [{"role": "human", "content": "Pedido atual"}]
@@ -2672,7 +2672,7 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(result, "resposta")
         self.assertTrue(app.prompt_builder.build.call_args.kwargs["skip_tool_prompt"])
 
-    def test_call_agent_low_level_keeps_tool_prompt_for_openai_compat(self):
+    def test_call_agent_low_level_always_skips_tool_prompt_for_openai_compat(self):
         app = QuimeraApp.__new__(QuimeraApp)
         app.session_call_index = 0
         app.history = [{"role": "human", "content": "Pedido atual"}]
@@ -2703,7 +2703,7 @@ class PluginTests(unittest.TestCase):
         result = dispatch.call_agent_low_level("chatgpt-api")
 
         self.assertEqual(result, "resposta")
-        self.assertFalse(app.prompt_builder.build.call_args.kwargs["skip_tool_prompt"])
+        self.assertTrue(app.prompt_builder.build.call_args.kwargs["skip_tool_prompt"])
 
     def test_task_handler_prints_and_persists_agent_response(self):
         app = QuimeraApp.__new__(QuimeraApp)
@@ -3915,13 +3915,13 @@ class MetricsFeedbackTests(unittest.TestCase):
         self.assertIn("editar arquivos", main)
         self.assertIn("mude o mínimo necessário", main)
 
-    def test_main_template_embeds_static_tool_instructions_in_tools_block(self):
+    def test_main_template_does_not_embed_static_tool_instructions_block(self):
         main = prompt_template._load()
-        self.assertIn('<tools title="Ferramentas disponíveis">', main)
-        self.assertIn("a ferramenta não executa", main)
-        self.assertIn("não escreva chamadas como list_files(...)", main)
-        self.assertIn('function="apply_patch"', main)
-        self.assertIn("exec_command / write_stdin / close_command_session", main)
+        self.assertNotIn('<tools title="Ferramentas disponíveis">', main)
+        self.assertNotIn("a ferramenta não executa", main)
+        self.assertNotIn("não escreva chamadas como list_files(...)", main)
+        self.assertNotIn('function="apply_patch"', main)
+        self.assertNotIn("exec_command / write_stdin / close_command_session", main)
 
     def test_build_tools_prompt_is_compact_but_preserves_essentials(self):
         from quimera.constants import build_tools_prompt

@@ -1,12 +1,8 @@
 """Componentes de `quimera.prompt`."""
 import json
 
-from . import plugins
 from .config import DEFAULT_HISTORY_WINDOW
-from .constants import (
-    EXTEND_MARKER,
-    build_tools_prompt,
-)
+from .constants import EXTEND_MARKER
 from .prompt_templates import prompt_template
 
 
@@ -48,8 +44,8 @@ class PromptBuilder:
         primary=False omite session_state — adequado para agentes secundários que já
         têm o contexto da conversa e não precisam do estado de bootstrap da sessão.
 
-        skip_tool_prompt=True omite build_tools_prompt() — usado por agentes com
-        driver de API onde as ferramentas são declaradas via schema OpenAI.
+        O parâmetro skip_tool_prompt é mantido por compatibilidade, mas o prompt
+        não descreve mais ferramentas em texto.
         """
         context = self.context_manager.load()
 
@@ -61,10 +57,6 @@ class PromptBuilder:
             route_agents = ", ".join(self.active_agents) if self.active_agents else "nenhum"
             is_first_speaker_flag = is_first_speaker
             is_reviewer = not is_first_speaker
-
-        tools_prompt = ""
-        if not skip_tool_prompt:
-            tools_prompt = build_tools_prompt()
 
         other_agents = [n for n in self.active_agents if n.lower() != agent.lower()]
         agents_list = ", ".join(n.upper() for n in other_agents) if other_agents else "nenhum"
@@ -117,7 +109,6 @@ class PromptBuilder:
             is_first_speaker=is_first_speaker_flag,
             is_reviewer=is_reviewer,
             marker=EXTEND_MARKER,
-            tools=tools_prompt,
             session_id=session_id,
             current_job_id=current_job_id,
             workspace_root=workspace_root,

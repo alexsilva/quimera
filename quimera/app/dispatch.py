@@ -210,11 +210,6 @@ class AppDispatchServices:
 
         plugin = app.get_agent_plugin(agent)
         driver = plugin.effective_driver() if plugin else "cli"
-        skip_tool_prompt = (
-            driver == "cli"
-            and plugin
-            and getattr(plugin, "has_builtin_tools", False)
-        )
         stream_state = {"started": False}
 
         def _on_text_chunk(chunk):
@@ -240,7 +235,7 @@ class AppDispatchServices:
                 shared_state=app.shared_state,
                 handoff_only=handoff_only,
                 from_agent=from_agent,
-                skip_tool_prompt=skip_tool_prompt,
+                skip_tool_prompt=True,
             )
             app.agent_client.log_prompt_metrics(
                 agent,
@@ -261,7 +256,7 @@ class AppDispatchServices:
                 shared_state=app.shared_state,
                 handoff_only=handoff_only,
                 from_agent=from_agent,
-                skip_tool_prompt=skip_tool_prompt,
+                skip_tool_prompt=True,
             )
 
         result = app.agent_client.call(agent, prompt, silent=silent, on_text_chunk=_on_text_chunk)

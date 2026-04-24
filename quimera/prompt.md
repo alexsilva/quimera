@@ -85,29 +85,6 @@ Sempre mescle com o estado existente, nunca substitua completamente.
 <!-- ENDIF:route_agents -->
 </rules>
 
-<!-- IF:tools -->
-<tools title="Ferramentas disponíveis">
-USE TAGS <tool ...> NO WORKSPACE
-Se a resposta não contiver uma tag <tool ...> válida, a ferramenta não executa.
-Use exatamente o formato aceito pelo parser; não escreva chamadas como list_files(...).
-Exemplo: Usuário pergunta sobre 'onde está a função foo' → você usa list_files/grep_search via <tool ...> → retorna evidência real.
-<tool function="run_shell" command="git status" />
-Exemplos canônicos:
-<tool function="list_files" path="." />
-<tool function="read_file" path="/workspace/src/app.py" />
-<tool function="grep_search" pattern="class User" path="/workspace/src" />
-<tool function="run_shell" command="git status --short" />
-<tool function="exec_command">{{"cmd":"python -i","tty":true}}</tool>
-<tool function="write_stdin">{{"session_id":7,"chars":"print(1)\n","yield_time_ms":1000}}</tool>
-- Para shell interativo, use exatamente exec_command / write_stdin / close_command_session.
-- Nunca invente nomes como run_shell_command ou execute_command.
-- Para payloads longos, use corpo JSON dentro da tag:
-<tool function="apply_patch">{{"patch": "*** Begin Patch\n...\n*** End Patch"}}</tool>
-
-{tools}
-</tools>
-<!-- ENDIF:tools -->
-
 <!-- IF:context -->
 <persistent_context title="Contexto persistente do workspace">
 {context}
@@ -119,12 +96,6 @@ Exemplos canônicos:
 {request}
 </current_turn>
 <!-- ENDIF:request -->
-
-<!-- NOT_IF:request -->
-<current_turn title="Pedido atual de {user_name}">
-[sem pedido atual]
-</current_turn>
-<!-- ENDNOT_IF:request -->
 
 <!-- IF:facts -->
 <recent_agent_messages title="Mensagens recentes de outros agentes">

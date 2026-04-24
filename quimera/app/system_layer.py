@@ -214,11 +214,6 @@ class AppSystemLayer:
 
         plugin = self.app.get_agent_plugin(agent)
         driver = plugin.effective_driver() if plugin else "cli"
-        skip_tool_prompt = (
-            driver == "cli"
-            and plugin
-            and getattr(plugin, "has_builtin_tools", False)
-        )
         prompt, metrics = prompt_builder.build(
             agent,
             history,
@@ -226,12 +221,12 @@ class AppSystemLayer:
             debug=True,
             primary=True,
             shared_state=shared_state,
-            skip_tool_prompt=skip_tool_prompt,
+            skip_tool_prompt=True,
         )
         analysis_lines = [
             f"PROMPT PREVIEW: {agent}",
             f"DRIVER: {driver}",
-            f"TOOLS NO TEXTO: {'não' if skip_tool_prompt else 'sim'}",
+            "TOOLS NO TEXTO: não",
             "ANÁLISE DOS BLOCOS:",
             f"- regras_chars: {metrics['rules_chars']}",
             f"- session_state_chars: {metrics['session_state_chars']}",
