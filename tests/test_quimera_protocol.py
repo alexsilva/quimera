@@ -1001,6 +1001,21 @@ class ProtocolTests(unittest.TestCase):
         conversation = prompt.split('<recent_conversation title="Conversa recente">\n', 1)[1]
         self.assertIn("[CLAUDE]: Eu estava investigando o parser", conversation)
 
+    def test_prompt_keeps_latest_same_agent_message_even_if_just_outside_window(self):
+        builder = PromptBuilder(DummyContextManager(), history_window=4)
+        history = [
+            {"role": "claude", "content": "Eu já tinha isolado a causa no parser."},
+            {"role": "human", "content": "Pedido antigo"},
+            {"role": "codex", "content": "Fato 1"},
+            {"role": "chatgpt", "content": "Fato 2"},
+            {"role": "human", "content": "Continue dessa linha"},
+        ]
+
+        prompt = builder.build(AGENT_CLAUDE, history)
+
+        conversation = prompt.split('<recent_conversation title="Conversa recente">\n', 1)[1]
+        self.assertIn("[CLAUDE]: Eu já tinha isolado a causa no parser.", conversation)
+
     def test_prompt_does_not_repeat_recent_facts_in_conversation(self):
         builder = PromptBuilder(DummyContextManager(), history_window=5)
         history = [

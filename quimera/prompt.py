@@ -100,6 +100,7 @@ class PromptBuilder:
         recent_conversation = self._build_conversation_block(
             history,
             skip_indexes={idx for idx in [request_index, *fact_indexes] if idx is not None},
+            current_agent=agent,
         )
         full_prompt = prompt_template.render(
             agent=agent.upper(),
@@ -234,11 +235,12 @@ class PromptBuilder:
         )
         return any(marker in lowered for marker in blocked_markers)
 
-    def _build_conversation_block(self, history, skip_indexes=None):
+    def _build_conversation_block(self, history, skip_indexes=None, current_agent=None):
         """Monta o conteúdo residual da conversa, sem um segundo envelope interno."""
         skip_indexes = skip_indexes or set()
         window_start = max(0, len(history) - self.history_window)
         lines = []
+        included_indexes = set()
         for index, message in enumerate(history[window_start:], start=window_start):
             if index in skip_indexes:
                 continue
@@ -247,12 +249,33 @@ class PromptBuilder:
                 continue
             if message.get("role") != "human" and self._should_skip_fact(content):
                 continue
+            included_indexes.add(index)
             lines.append(
                 self._format_conversation_entry(
                     role=self._display_role(message["role"]),
                     content=content,
                 )
             )
+
+        current_agent_lower = (current_agent or "").strip().lower()
+        if current_agent_lower:
+            for index in range(window_start - 1, -1, -1):
+                message = history[index]
+                if str(message.get("role") or "").strip().lower() != current_agent_lower:
+                    continue
+                if index in skip_indexes or index in included_indexes:
+                    break
+                content = (message.get("content") or "").strip()
+                if not content or self._should_skip_fact(content):
+                    break
+                lines.insert(
+                    0,
+                    self._format_conversation_entry(
+                        role=self._display_role(message["role"]),
+                        content=content,
+                    ),
+                )
+                break
         return "\n".join(lines) if lines else "[sem itens residuais na conversa recente]"
 
     @staticmethod
