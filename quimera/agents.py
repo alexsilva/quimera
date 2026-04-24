@@ -22,6 +22,7 @@ _logger = logging.getLogger(__name__)
 
 _BRALLE_RANGE = re.compile(r'[\u2800-\u28FF]')
 _ANSI_ESCAPE = re.compile(r'\x1B\[[0-?]*[ -/]*[@-~]')
+_RATE_LIMIT_RE = re.compile(r'rate.?limit|throttl|429|too many requests', re.IGNORECASE)
 
 
 class _SyntheticToolResult:
@@ -78,6 +79,7 @@ class AgentClient:
         self._agent_running = False
         self._current_proc = None
         self._spy_output_presenter = SpyOutputPresenter(self.renderer, self.visibility)
+        self.rate_limit_detected = False
 
     def _show_formatted_stdout(self, agent: str | None, line: str) -> bool:
         """Exibe mensagens resumidas de stdout quando o plugin oferece formatter."""
@@ -86,6 +88,7 @@ class AgentClient:
     def run(self, cmd, input_text=None, silent=False, agent=None, show_status=True, extra_env=None, cwd=None):
         """Executa run."""
         self._cancel_event.clear()
+        self.rate_limit_detected = False
         self._agent_running = True
         self._start_esc_monitor()
         try:
@@ -192,6 +195,8 @@ class AgentClient:
                         while not log_queue.empty():
                             try:
                                 stream_type, line = log_queue.get_nowait()
+                                if _RATE_LIMIT_RE.search(line):
+                                    self.rate_limit_detected = True
                                 if status is not None:
                                     _lbl = self._spy_output_presenter.compose_status_label(cmd[0])
                                     status.update(f"[dim]{_lbl}... {elapsed}s[/dim]")
@@ -540,6 +545,7 @@ class AgentClient:
 
         driver_instance = self._api_drivers[agent]
         self._cancel_event.clear()
+        self.rate_limit_detected = False
         self._agent_running = True
         self._start_esc_monitor()
         status_cm = self.renderer.running_status("", agent=agent) if (
@@ -585,6 +591,8 @@ class AgentClient:
                     return None
 
                 if result_holder["error"]:
+                    if _RATE_LIMIT_RE.search(str(result_holder["error"])):
+                        self.rate_limit_detected = True
                     _cmd = getattr(plugin, "cmd", None)
                     _name = (_cmd[0] if isinstance(_cmd, (list, tuple)) and _cmd else None) or connection.model or "driver"
                     self.renderer.show_error(f"[erro] falha ao comunicar com {_name}: {result_holder['error']}")

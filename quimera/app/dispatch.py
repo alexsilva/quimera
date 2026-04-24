@@ -142,8 +142,13 @@ class AppDispatchServices:
                         logger.info("[DISPATCH] agent=%s cancelled by user, aborting", agent)
                         return None
                     if attempt < max_retries:
-                        logger.warning("[DISPATCH] retry %d/%d for agent=%s", attempt, max_retries, agent)
-                        time.sleep(retry_backoff * attempt)
+                        if agent_client and getattr(agent_client, 'rate_limit_detected', False):
+                            backoff = getattr(app, 'RATE_LIMIT_BACKOFF_SECONDS', 30)
+                            logger.warning("[DISPATCH] rate limit for agent=%s, waiting %ds before retry", agent, backoff)
+                        else:
+                            backoff = retry_backoff * attempt
+                            logger.warning("[DISPATCH] retry %d/%d for agent=%s", attempt, max_retries, agent)
+                        time.sleep(backoff)
                         continue
                     app.record_failure(agent)
                     return None
@@ -160,13 +165,18 @@ class AppDispatchServices:
                         logger.info("[DISPATCH] agent=%s cancelled by user, aborting", agent)
                         return None
                     if attempt < max_retries:
-                        logger.warning(
-                            "[DISPATCH] retry %d/%d for agent=%s (resolve failed)",
-                            attempt,
-                            max_retries,
-                            agent,
-                        )
-                        time.sleep(retry_backoff * attempt)
+                        if agent_client and getattr(agent_client, 'rate_limit_detected', False):
+                            backoff = getattr(app, 'RATE_LIMIT_BACKOFF_SECONDS', 30)
+                            logger.warning("[DISPATCH] rate limit for agent=%s, waiting %ds before retry", agent, backoff)
+                        else:
+                            backoff = retry_backoff * attempt
+                            logger.warning(
+                                "[DISPATCH] retry %d/%d for agent=%s (resolve failed)",
+                                attempt,
+                                max_retries,
+                                agent,
+                            )
+                        time.sleep(backoff)
                         continue
                     app.record_failure(agent)
                 return result
