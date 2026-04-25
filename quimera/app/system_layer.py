@@ -18,6 +18,7 @@ from ..constants import (
     build_agents_help,
     build_help,
 )
+from .. import plugins as _plugins
 from ..plugins.base import (
     CliConnection,
     OpenAIConnection,
@@ -167,8 +168,36 @@ class AppSystemLayer:
                 return False
             self.app.renderer.show_warning("Valor inválido. Use 's' ou 'n'.")
 
+    def _connection_from_base(self, base_plugin, model_id: str) -> CliConnection:
+        """Clona o cmd do plugin base substituindo --model=... pelo model_id informado."""
+        base_conn = base_plugin.effective_connection()
+        if not isinstance(base_conn, CliConnection):
+            raise ValueError(f"Plugin base '{base_plugin.name}' não usa driver CLI.")
+        new_cmd = [
+            f"--model={model_id}" if arg.startswith("--model=") else arg
+            for arg in base_conn.cmd
+        ]
+        return CliConnection(
+            cmd=new_cmd,
+            prompt_as_arg=base_conn.prompt_as_arg,
+            output_format=base_conn.output_format,
+        )
+
     def _configure_connection_interactively(self, plugin):
-        """Coleta configuração de conexão de forma interativa no chat."""
+        """Coleta configuração de conexão de forma interativa no chat.
+
+        Retorna (connection, base_plugin_name | None).
+        """
+        base_name = self._prompt_text("Plugin base (enter para ignorar)", "").strip().lower()
+        if base_name:
+            base_plugin = _plugins.get(base_name)
+            if base_plugin is None:
+                raise ValueError(f"Plugin base '{base_name}' não encontrado.")
+            model_id = self._prompt_text("Modelo", "").strip()
+            if not model_id:
+                raise ValueError("Configuração cancelada: modelo vazio.")
+            return self._connection_from_base(base_plugin, model_id), base_plugin.name
+
         current = plugin.effective_connection()
         current_driver = "cli" if isinstance(current, CliConnection) else "openai"
         driver = self._prompt_text("Driver", current_driver).strip().lower()
@@ -186,7 +215,7 @@ class AppSystemLayer:
                 cmd=shlex.split(cmd_text),
                 prompt_as_arg=self._prompt_bool("Enviar prompt como argumento", cli_defaults.prompt_as_arg),
                 output_format=cli_defaults.output_format,
-            )
+            ), None
 
         api_defaults = current if isinstance(current, OpenAIConnection) else OpenAIConnection(
             model=plugin.model or "gpt-4o",
@@ -202,7 +231,7 @@ class AppSystemLayer:
             api_key_env=self._prompt_text("Variável da API key", api_defaults.api_key_env) or api_defaults.api_key_env,
             provider=provider_default,
             supports_native_tools=api_defaults.supports_native_tools,
-        )
+        ), None
 
     def _build_prompt_preview_message(self, agent: str) -> str:
         """Monta a saída textual do comando /prompt."""
@@ -269,10 +298,18 @@ class AppSystemLayer:
             self.show_system_message(f"Configurando conexão para {target}")
             self.show_system_message(f"Atual: {format_connection_label(plugin.effective_connection())}")
             try:
-                connection = self._configure_connection_interactively(plugin)
+                connection, base_name = self._configure_connection_interactively(plugin)
             except ValueError as exc:
                 self.app.renderer.show_warning(str(exc))
                 return True
+            if base_name:
+                base_plugin = _plugins.get(base_name)
+                if base_plugin is not None:
+                    object.__setattr__(plugin, "_base_plugin_name", base_plugin.name)
+                    if base_plugin.spy_stdout_formatter is not None:
+                        plugin.spy_stdout_formatter = base_plugin.spy_stdout_formatter
+                    if base_plugin.runtime_rw_paths:
+                        plugin.runtime_rw_paths = list(base_plugin.runtime_rw_paths)
             set_connection_override(target, connection, persist=True)
             active_agents = list(getattr(self.app, "active_agents", None) or [])
             selected_agents = list(getattr(self.app, "selected_agents", None) or [])
