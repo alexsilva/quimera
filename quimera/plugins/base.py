@@ -128,7 +128,7 @@ def set_connection_override(agent_name: str, connection: Connection, persist: bo
         connections = load_connections()
         payload = connection_to_dict(connection)
         if plugin is not None and getattr(plugin, "dynamic", False):
-            payload["plugin"] = {
+            plugin_meta: dict = {
                 "dynamic": True,
                 "prefix": plugin.prefix,
                 "style": list(plugin.style),
@@ -136,12 +136,22 @@ def set_connection_override(agent_name: str, connection: Connection, persist: bo
                 "capabilities": list(plugin.capabilities),
                 "preferred_task_types": list(plugin.preferred_task_types),
                 "supports_tools": plugin.supports_tools,
+                "has_builtin_tools": plugin.has_builtin_tools,
                 "tool_use_reliability": plugin.tool_use_reliability,
                 "supports_code_editing": plugin.supports_code_editing,
                 "supports_long_context": plugin.supports_long_context,
                 "supports_task_execution": plugin.supports_task_execution,
                 "base_tier": plugin.base_tier,
+                "runtime_rw_paths": list(plugin.runtime_rw_paths),
             }
+            # Preserve base plugin reference for formatter inheritance on reload
+            base_ref = (
+                getattr(plugin, "_base_plugin_name", None)
+                or connections.get(agent_name, {}).get("plugin", {}).get("base")
+            )
+            if base_ref:
+                plugin_meta["base"] = base_ref
+            payload["plugin"] = plugin_meta
         connections[agent_name] = payload
         save_connections(connections)
 
@@ -180,6 +190,8 @@ class AgentPlugin:
     dynamic: bool = False
     # Connection override (carregado automaticamente do base_dir)
     _connection_override: Optional[Connection] = field(default=None, repr=False)
+    # Base plugin name (usado para herança de formatter/rw_paths em plugins dinâmicos)
+    _base_plugin_name: Optional[str] = field(default=None, repr=False)
 
     @property
     def render_style(self) -> Tuple[str, str]:
@@ -307,9 +319,24 @@ def register_dynamic_plugin(name: str, connection: Connection | None = None, met
     plugin_data = _dynamic_plugin_metadata(normalized)
     if metadata:
         plugin_data.update(metadata)
+
+    # Inherit non-serializable fields (spy formatter) from a named base plugin
+    base_name = plugin_data.pop("base", None)
+    if base_name:
+        base = _registry.get(base_name)
+        if base is not None:
+            plugin_data.setdefault("spy_stdout_formatter", base.spy_stdout_formatter)
+            plugin_data.setdefault("has_builtin_tools", base.has_builtin_tools)
+            plugin_data.setdefault("runtime_rw_paths", list(base.runtime_rw_paths))
+
     prefix = plugin_data.pop("prefix", f"/{normalized}")
     style = tuple(plugin_data.pop("style", ("bright_cyan", _humanize_agent_name(normalized))))
     plugin = AgentPlugin(name=normalized, prefix=prefix, style=style, **plugin_data)
+
+    # Re-attach base reference so set_connection_override can persist it
+    if base_name:
+        object.__setattr__(plugin, "_base_plugin_name", base_name)
+
     if connection is not None:
         object.__setattr__(plugin, "_connection_override", connection)
     _registry[normalized] = plugin

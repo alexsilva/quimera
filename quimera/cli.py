@@ -117,8 +117,30 @@ def _configure_connection_interactively(plugin, driver_hint: str | None = None):
     )
 
 
+def _connection_from_base(base_plugin, model_id: str) -> CliConnection:
+    """Clona o cmd do plugin base substituindo --model=... pelo model_id informado."""
+    base_conn = base_plugin.effective_connection()
+    if not isinstance(base_conn, CliConnection):
+        raise SystemExit(f"Plugin base '{base_plugin.name}' não usa driver CLI.")
+    new_cmd = [
+        f"--model={model_id}" if arg.startswith("--model=") else arg
+        for arg in base_conn.cmd
+    ]
+    return CliConnection(
+        cmd=new_cmd,
+        prompt_as_arg=base_conn.prompt_as_arg,
+        output_format=base_conn.output_format,
+    )
+
+
 def _build_connection_from_args(plugin, args):
     """Monta conexão a partir das flags; se estiver incompleta, cai no modo interativo."""
+    base_name = getattr(args, "base", None)
+    if base_name and args.model:
+        base_plugin = _plugins.get(base_name.strip().lower())
+        if base_plugin is None:
+            raise SystemExit(f"Plugin base '{base_name}' não encontrado.")
+        return _connection_from_base(base_plugin, args.model)
     if args.driver is None:
         return _configure_connection_interactively(plugin)
     if args.driver == "cli":
@@ -201,6 +223,8 @@ def main():
                         help="Prompt one-shot para --driver-repl (não-interativo, útil para scripts)")
     parser.add_argument("--connect", dest="connect", metavar="AGENTE", default=None,
                         help="Configura interativamente a conexão de um agente e persiste no base_dir")
+    parser.add_argument("--base", dest="base", metavar="PLUGIN", default=None,
+                        help="Plugin base para herdar cmd/output_format (ex: opencode-pickle)")
     parser.add_argument("--driver", dest="driver", choices=["cli", "openai"], default=None,
                         help="Driver de conexão (cli ou openai)")
     parser.add_argument("--cmd", dest="cmd", metavar="CMD", nargs=argparse.REMAINDER, default=None,
@@ -237,8 +261,27 @@ def main():
         if plugin is None:
             if not is_valid_agent_name(agent_name):
                 parser.error(f"Nome de agente inválido em --connect: {agent_name}")
-            plugin = register_dynamic_plugin(agent_name)
+            base_name = getattr(args, "base", None)
+            base_metadata = None
+            if base_name:
+                base_plugin = _plugins.get(base_name.strip().lower())
+                if base_plugin is None:
+                    parser.error(f"Plugin base '{base_name}' não encontrado em --base.")
+                base_metadata = {"base": base_plugin.name}
+            plugin = register_dynamic_plugin(agent_name, metadata=base_metadata)
             print(f"Agente registrado dinamicamente: {agent_name}")
+        else:
+            # Plugin já existe — atualiza referência de base se --base foi fornecido
+            base_name = getattr(args, "base", None)
+            if base_name:
+                base_plugin = _plugins.get(base_name.strip().lower())
+                if base_plugin is None:
+                    parser.error(f"Plugin base '{base_name}' não encontrado em --base.")
+                object.__setattr__(plugin, "_base_plugin_name", base_plugin.name)
+                if base_plugin.spy_stdout_formatter is not None:
+                    plugin.spy_stdout_formatter = base_plugin.spy_stdout_formatter
+                if base_plugin.runtime_rw_paths:
+                    plugin.runtime_rw_paths = list(base_plugin.runtime_rw_paths)
 
         print(f"Configurando conexão para {agent_name}")
         print(f"Built-in atual: {format_connection_label(plugin.effective_connection())}")
