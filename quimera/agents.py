@@ -111,7 +111,10 @@ class AgentClient:
         self._agent_running = True
         self._start_esc_monitor()
         try:
-            env = {**os.environ, "NO_COLOR": "1", "TERM": "dumb", "COLORTERM": ""}
+            _GUI_VARS = {"DISPLAY", "WAYLAND_DISPLAY", "DBUS_SESSION_BUS_ADDRESS",
+                         "DBUS_SYSTEM_BUS_ADDRESS", "XAUTHORITY", "XDG_RUNTIME_DIR"}
+            env = {k: v for k, v in os.environ.items() if k not in _GUI_VARS}
+            env.update({"NO_COLOR": "1", "TERM": "dumb", "COLORTERM": ""})
             if extra_env:
                 env.update(extra_env)
             effective_cmd = cmd
