@@ -199,6 +199,21 @@ class AgentPlugin:
         color, label = self.style
         return (color, f"{self.icon} {label}")
 
+    def configure_with_model(self, model_id: str) -> "CliConnection":
+        """Retorna nova CliConnection com model_id substituído no placeholder --model=."""
+        conn = self.effective_connection()
+        if not isinstance(conn, CliConnection):
+            raise ValueError(f"Plugin '{self.name}' não usa driver CLI.")
+        if not (model_id or "").strip():
+            raise ValueError("model_id não pode ser vazio.")
+        if not any(arg.startswith("--model=") for arg in conn.cmd):
+            raise ValueError(f"Plugin '{self.name}' não tem placeholder --model= no cmd.")
+        new_cmd = [
+            f"--model={model_id}" if arg.startswith("--model=") else arg
+            for arg in conn.cmd
+        ]
+        return CliConnection(cmd=new_cmd, prompt_as_arg=conn.prompt_as_arg, output_format=conn.output_format)
+
     def effective_connection(self) -> Optional[Connection]:
         """Retorna a conexão efetiva, priorizando override persistido."""
         if self._connection_override is not None:

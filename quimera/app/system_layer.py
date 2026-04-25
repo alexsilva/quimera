@@ -168,21 +168,6 @@ class AppSystemLayer:
                 return False
             self.app.renderer.show_warning("Valor inválido. Use 's' ou 'n'.")
 
-    def _connection_from_base(self, base_plugin, model_id: str) -> CliConnection:
-        """Clona o cmd do plugin base substituindo --model=... pelo model_id informado."""
-        base_conn = base_plugin.effective_connection()
-        if not isinstance(base_conn, CliConnection):
-            raise ValueError(f"Plugin base '{base_plugin.name}' não usa driver CLI.")
-        new_cmd = [
-            f"--model={model_id}" if arg.startswith("--model=") else arg
-            for arg in base_conn.cmd
-        ]
-        return CliConnection(
-            cmd=new_cmd,
-            prompt_as_arg=base_conn.prompt_as_arg,
-            output_format=base_conn.output_format,
-        )
-
     def _configure_connection_interactively(self, plugin):
         """Coleta configuração de conexão de forma interativa no chat.
 
@@ -196,7 +181,7 @@ class AppSystemLayer:
             model_id = self._prompt_text("Modelo", "").strip()
             if not model_id:
                 raise ValueError("Configuração cancelada: modelo vazio.")
-            return self._connection_from_base(base_plugin, model_id), base_plugin.name
+            return base_plugin.configure_with_model(model_id), base_plugin.name
 
         current = plugin.effective_connection()
         current_driver = "cli" if isinstance(current, CliConnection) else "openai"

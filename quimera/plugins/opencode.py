@@ -43,26 +43,55 @@ def _format_opencode_spy_event(line: str) -> list[SpyEvent]:
 
     return []
 
+
 _OPENCODE_RW_PATHS = [
     str(Path.home() / ".local" / "share" / "opencode"),
     str(Path.home() / ".local" / "state" / "opencode"),
 ]
 
-plugin = AgentPlugin(
-    name="opencode-pickle",
-    prefix="/opencode-pickle",
-    icon="🥒",
+# Campos fixos compartilhados por todos os plugins opencode.
+_OPENCODE_DEFAULTS = dict(
     runtime_rw_paths=_OPENCODE_RW_PATHS,
-    cmd=["opencode", "--model=opencode/big-pickle", "run", "--format=json"],
     output_format="opencode-json",
-    style=("blue", "OpenCodePickle"),
-    capabilities=["general_coding", "code_review", "code_editing"],
-    preferred_task_types=["code_edit", "code_review"],
-    avoid_task_types=[],
+    spy_stdout_formatter=_format_opencode_spy_event,
     supports_tools=True,
     has_builtin_tools=True,
     supports_code_editing=True,
-    spy_stdout_formatter=_format_opencode_spy_event,
-    supports_long_context=False, base_tier=2,
+    supports_long_context=False,
+    base_tier=2,
 )
-register(plugin)
+
+# Plugin base genérico: cmd sem modelo fixo — usado como template para --base.
+register(AgentPlugin(
+    name="opencode",
+    prefix="/opencode",
+    icon="⚙️",
+    style=("blue", "OpenCode"),
+    cmd=["opencode", "--model=", "run", "--format=json"],
+    capabilities=["general_coding", "code_review", "code_editing"],
+    preferred_task_types=["code_edit", "code_review"],
+    **_OPENCODE_DEFAULTS,
+))
+
+# Variantes concretas — só diferem em nome, modelo, ícone e estilo visual.
+_PLUGIN_SPECS = [
+    dict(
+        name="opencode-pickle",
+        model="opencode/big-pickle",
+        icon="🥒",
+        style=("blue", "OpenCodePickle"),
+    ),
+]
+
+for _spec in _PLUGIN_SPECS:
+    _name = _spec["name"]
+    register(AgentPlugin(
+        name=_name,
+        prefix=f"/{_name}",
+        icon=_spec.get("icon", "⚙️"),
+        style=_spec["style"],
+        cmd=["opencode", f"--model={_spec['model']}", "run", "--format=json"],
+        capabilities=["general_coding", "code_review", "code_editing"],
+        preferred_task_types=["code_edit", "code_review"],
+        **_OPENCODE_DEFAULTS,
+    ))

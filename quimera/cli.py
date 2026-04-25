@@ -117,22 +117,6 @@ def _configure_connection_interactively(plugin, driver_hint: str | None = None):
     )
 
 
-def _connection_from_base(base_plugin, model_id: str) -> CliConnection:
-    """Clona o cmd do plugin base substituindo --model=... pelo model_id informado."""
-    base_conn = base_plugin.effective_connection()
-    if not isinstance(base_conn, CliConnection):
-        raise SystemExit(f"Plugin base '{base_plugin.name}' não usa driver CLI.")
-    new_cmd = [
-        f"--model={model_id}" if arg.startswith("--model=") else arg
-        for arg in base_conn.cmd
-    ]
-    return CliConnection(
-        cmd=new_cmd,
-        prompt_as_arg=base_conn.prompt_as_arg,
-        output_format=base_conn.output_format,
-    )
-
-
 def _build_connection_from_args(plugin, args):
     """Monta conexão a partir das flags; se estiver incompleta, cai no modo interativo."""
     base_name = getattr(args, "base", None)
@@ -140,7 +124,10 @@ def _build_connection_from_args(plugin, args):
         base_plugin = _plugins.get(base_name.strip().lower())
         if base_plugin is None:
             raise SystemExit(f"Plugin base '{base_name}' não encontrado.")
-        return _connection_from_base(base_plugin, args.model)
+        try:
+            return base_plugin.configure_with_model(args.model)
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
     if args.driver is None:
         return _configure_connection_interactively(plugin)
     if args.driver == "cli":
