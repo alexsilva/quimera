@@ -731,7 +731,7 @@ class ProtocolTests(unittest.TestCase):
         )
         app.get_available_plugins = Mock(return_value=[plugin])
         app.get_agent_plugin = Mock(return_value=plugin)
-        answers = iter(["openai", "gpt-5.1", "http://localhost:1234/v1", "LM_STUDIO_KEY"])
+        answers = iter(["", "openai", "gpt-5.1", "http://localhost:1234/v1", "LM_STUDIO_KEY"])
         app.read_user_input = Mock(side_effect=lambda prompt, timeout=-1: next(answers))
         app.system_layer = AppSystemLayer(app)
 

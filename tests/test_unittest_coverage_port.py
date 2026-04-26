@@ -65,7 +65,7 @@ class AgentsCoverageTests(unittest.TestCase):
         proc.stdout = ["ok\n"]
         proc.stderr = ["warn\n"]
         proc.returncode = 0
-        with patch("subprocess.Popen", return_value=proc), patch("quimera.agents._logger") as logger:
+        with patch("subprocess.Popen", return_value=proc), patch("quimera.agents.client._logger") as logger:
             self.assertEqual(client.run(["cmd"], silent=True), "ok")
         logger.debug.assert_called_once()
         logger.warning.assert_called_once()
@@ -94,7 +94,7 @@ class AgentsCoverageTests(unittest.TestCase):
         with patch("subprocess.Popen", return_value=proc), patch(
                 "threading.Thread", side_effect=[stdout_thread, stderr_thread]
         ), patch("time.sleep"), patch(
-            "time.time", side_effect=[100.0, 100.0, 101.0, 101.0]
+            "time.time", side_effect=[100.0, 101.0, 101.0]
         ):
             self.assertIsNone(client.run(["slow"], silent=False))
         proc.terminate.assert_called_once()

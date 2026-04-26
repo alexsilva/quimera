@@ -11,3 +11,11 @@ class SpyEvent:
     text: str
     transient: bool = False
     final: bool = False
+
+
+class _SyntheticToolResult:
+    """Representa uma tool call executada internamente pelo agente CLI."""
+
+    def __init__(self, ok: bool = True, error: str | None = None):
+        self.ok = ok
+        self.error = error

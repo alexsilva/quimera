@@ -1,10 +1,8 @@
-"""Componentes de `quimera.agents`."""
+"""AgentClient: orquestra chamadas a agentes externos (CLI e API)."""
 import json
 import logging
 import os
 import queue
-import re
-import signal
 import subprocess
 import threading
 import time
@@ -16,59 +14,24 @@ from quimera.constants import MAX_STDERR_LINES, Visibility
 from quimera.plugins.base import CliConnection, OpenAIConnection
 from quimera.sandbox.bwrap import build_bwrap_cmd
 from quimera.spy_output_presenter import SpyOutputPresenter
-from .runtime.drivers.openai_compat import OpenAICompatDriver
+from quimera.runtime.drivers.openai_compat import OpenAICompatDriver
+
+from quimera.agents.parsers import parse_stream_json, parse_codex_json, parse_opencode_json
+from quimera.agents.process_runner import ProcessRunner
+from quimera.agents.signal_guard import EscMonitor, terminate_process_group
+from quimera.agents.text_filters import (
+    _strip_spinner,
+    _should_ignore_stderr_line,
+    _filter_stderr_lines,
+    _is_rate_limit_signal,
+)
 
 _logger = logging.getLogger(__name__)
 
-_BRALLE_RANGE = re.compile(r'[\u2800-\u28FF]')
-_ANSI_ESCAPE = re.compile(r'\x1B\[[0-?]*[ -/]*[@-~]')
-_RATE_LIMIT_RE = re.compile(
-    r"""
-    \brate[\s-]?limit(?:ed|ing)?\b
-    | \btoo\ many\ requests\b
-    | \bthrottl(?:e|ed|ing)?\b
-    | \b(?:http|status|status code|code)\b[^\n]{0,20}\b429\b
-    | \b429\b[^\n]{0,20}\btoo\ many\ requests\b
-    """,
-    re.IGNORECASE | re.VERBOSE,
-)
-_RATE_LIMIT_YIELD_SECONDS = 5  # grace period after rate limit detection before yielding to other agents
-
-
-class _SyntheticToolResult:
-    """Representa uma tool call executada internamente pelo agente CLI."""
-
-    def __init__(self, ok: bool = True, error: str | None = None):
-        self.ok = ok
-        self.error = error
-
-
-def _strip_spinner(text: str) -> str:
-    """Remove caracteres Braille de spinner do texto."""
-    return _BRALLE_RANGE.sub('', text)
-
-
-def _should_ignore_stderr_line(agent: str | None, line: str) -> bool:
-    """Filtra ruído conhecido de stderr que não representa erro real."""
-    if not agent:
-        return False
-    plugin = plugins.get(agent)
-    if not plugin or not plugin.stderr_noise:
-        return False
-    cleaned = _ANSI_ESCAPE.sub("", _strip_spinner(line)).replace("\r", "").strip()
-    return cleaned in plugin.stderr_noise
-
-
-def _filter_stderr_lines(agent: str | None, lines: list[str]) -> list[str]:
-    """Remove linhas de stderr conhecidas como ruído para o agente."""
-    return [line for line in lines if not _should_ignore_stderr_line(agent, line)]
-
-
-def _is_rate_limit_signal(text: str | None) -> bool:
-    """Detecta sinais explícitos de rate limit sem tratar qualquer `429` isolado como limite."""
-    if not text:
-        return False
-    return bool(_RATE_LIMIT_RE.search(text))
+_GUI_VARS = frozenset({
+    "DISPLAY", "WAYLAND_DISPLAY", "DBUS_SESSION_BUS_ADDRESS",
+    "DBUS_SYSTEM_BUS_ADDRESS", "XAUTHORITY", "XDG_RUNTIME_DIR",
+})
 
 
 class AgentClient:
@@ -92,6 +55,7 @@ class AgentClient:
         # Modo de execução ativo; quando definido, subprocessos são envolvidos com bwrap.
         self.execution_mode = None
         self._cancel_event = threading.Event()
+        self._esc_monitor = EscMonitor(self._cancel_event)
         self._user_cancelled = False
         self._agent_running = False
         self._current_proc = None
@@ -99,9 +63,31 @@ class AgentClient:
         self.rate_limit_detected = False
         self.rate_limit_detected_at: float | None = None
 
+    # ------------------------------------------------------------------
+    # Helpers de sinal (delegam para EscMonitor para retrocompatibilidade)
+    # ------------------------------------------------------------------
+
+    def _start_esc_monitor(self) -> None:
+        self._esc_monitor.start()
+
+    def _stop_esc_monitor(self) -> None:
+        self._agent_running = False
+        self._esc_monitor.stop()
+
+    def _terminate_process_group(self, proc) -> None:
+        terminate_process_group(proc)
+
+    # ------------------------------------------------------------------
+    # Formatação de stdout ao vivo
+    # ------------------------------------------------------------------
+
     def _show_formatted_stdout(self, agent: str | None, line: str) -> bool:
         """Exibe mensagens resumidas de stdout quando o plugin oferece formatter."""
         return self._spy_output_presenter.consume_stdout(agent, line)
+
+    # ------------------------------------------------------------------
+    # run() — execução de subprocess
+    # ------------------------------------------------------------------
 
     def run(self, cmd, input_text=None, silent=False, agent=None, show_status=True, extra_env=None, cwd=None):
         """Executa run."""
@@ -111,8 +97,6 @@ class AgentClient:
         self._agent_running = True
         self._start_esc_monitor()
         try:
-            _GUI_VARS = {"DISPLAY", "WAYLAND_DISPLAY", "DBUS_SESSION_BUS_ADDRESS",
-                         "DBUS_SYSTEM_BUS_ADDRESS", "XAUTHORITY", "XDG_RUNTIME_DIR"}
             env = {k: v for k, v in os.environ.items() if k not in _GUI_VARS}
             env.update({"NO_COLOR": "1", "TERM": "dumb", "COLORTERM": ""})
             if extra_env:
@@ -145,9 +129,8 @@ class AgentClient:
             return None
 
         result_holder = {"stdout": [], "stderr": [], "error": None}
-        last_activity_time = time.time()
         log_queue = queue.Queue() if not silent else None
-        stderr_lines_shown = 0  # Contador de linhas de stderr exibidas
+        stderr_lines_shown = 0
         self._spy_output_presenter.reset()
 
         def _read_stdout():
@@ -157,8 +140,6 @@ class AgentClient:
                         result_holder["stdout"].append(line)
                         if log_queue is not None and self.visibility in {Visibility.SUMMARY, Visibility.FULL}:
                             log_queue.put(("stdout", line))
-                        nonlocal last_activity_time
-                        last_activity_time = time.time()
             except Exception as exc:
                 result_holder["error"] = exc
 
@@ -169,8 +150,6 @@ class AgentClient:
                         result_holder["stderr"].append(line)
                         if log_queue is not None:
                             log_queue.put(("stderr", line))
-                        nonlocal last_activity_time
-                        last_activity_time = time.time()
             except Exception as exc:
                 result_holder["error"] = exc
 
@@ -192,179 +171,112 @@ class AgentClient:
             proc.kill()
             return None
 
+        runner = ProcessRunner(
+            proc, stdout_thread, stderr_thread, result_holder,
+            self._cancel_event, self.timeout,
+        )
+
         try:
             if silent:
-                start_time = time.time()
-                elapsed = 0
-                _rate_checked = 0
-                while stdout_thread.is_alive() or stderr_thread.is_alive():
-                    # Check cancel
-                    if self._cancel_event.is_set():
-                        self._terminate_process_group(proc)
-                        stdout_thread.join(2)
-                        stderr_thread.join(2)
-                        self._user_cancelled = True
-                        self._agent_running = False
-                        self._current_proc = None
-                        self._stop_esc_monitor()
-                        return None
-                    # Detect rate limit from accumulated stderr
-                    current_stderr = result_holder["stderr"]
-                    for line in current_stderr[_rate_checked:]:
-                        if _is_rate_limit_signal(line):
-                            self.rate_limit_detected = True
-                            if self.rate_limit_detected_at is None:
-                                self.rate_limit_detected_at = time.time()
-                    _rate_checked = len(current_stderr)
-                    time.sleep(0.2)
-                    elapsed = int(time.time() - start_time)
-                    if self.timeout is not None and self.timeout > 0:
-                        now = time.time()
-                        if self.rate_limit_detected and self.rate_limit_detected_at is not None:
-                            if now - self.rate_limit_detected_at > _RATE_LIMIT_YIELD_SECONDS:
-                                self._terminate_process_group(proc)
-                                stdout_thread.join(2)
-                                stderr_thread.join(2)
-                                self._agent_running = False
-                                self._current_proc = None
-                                self._stop_esc_monitor()
-                                _logger.warning("[rate limit] %s em espera; cedendo para outros agentes", cmd[0])
-                                return None
-                        else:
-                            wall_limit = self.timeout * 5
-                            if elapsed > wall_limit:
-                                self._terminate_process_group(proc)
-                                stdout_thread.join(2)
-                                stderr_thread.join(2)
-                                self._agent_running = False
-                                self._current_proc = None
-                                self._stop_esc_monitor()
-                                _logger.warning("[erro] wall-clock timeout after %ds for %s", wall_limit, cmd[0])
-                                return None
-                stdout_thread.join()
-                stderr_thread.join()
+                termination = runner.watch()
+                self.rate_limit_detected = runner.rate_limit_detected
+                self.rate_limit_detected_at = runner.rate_limit_detected_at
+
+                if termination == ProcessRunner.CANCELLED:
+                    self._user_cancelled = True
+                    self._agent_running = False
+                    self._current_proc = None
+                    self._stop_esc_monitor()
+                    return None
+                if termination == ProcessRunner.RATE_LIMIT:
+                    self._agent_running = False
+                    self._current_proc = None
+                    self._stop_esc_monitor()
+                    _logger.warning("[rate limit] %s em espera; cedendo para outros agentes", cmd[0])
+                    return None
+                if termination == ProcessRunner.TIMEOUT:
+                    self._agent_running = False
+                    self._current_proc = None
+                    self._stop_esc_monitor()
+                    _logger.warning("[erro] wall-clock timeout after %ds for %s", self.timeout * 5, cmd[0])
+                    return None
+
                 if result_holder["stdout"]:
                     _logger.debug("".join(result_holder["stdout"]))
                 filtered_stderr = _filter_stderr_lines(agent, result_holder["stderr"])
                 if filtered_stderr:
                     _logger.warning("".join(filtered_stderr))
-            else:
-                start_time = time.time()
-                elapsed = 0
-                assert log_queue is not None
 
+            else:
+                assert log_queue is not None
                 status_cm = self.renderer.running_status("", agent=agent) if show_status else nullcontext(None)
 
                 if self.visibility == Visibility.SUMMARY:
                     self.renderer.show_plain(f"→ {cmd[0]} iniciando...", agent=agent)
 
                 with status_cm as status:
-                    while stdout_thread.is_alive() or stderr_thread.is_alive() or not log_queue.empty():
-                        # Consume log queue in main thread (thread-safe)
-                        while not log_queue.empty():
-                            try:
-                                stream_type, line = log_queue.get_nowait()
-                                if stream_type == "stderr" and _is_rate_limit_signal(line):
-                                    self.rate_limit_detected = True
-                                    if self.rate_limit_detected_at is None:
-                                        self.rate_limit_detected_at = time.time()
-                                if status is not None:
-                                    _lbl = self._spy_output_presenter.compose_status_label(cmd[0])
-                                    status.update(f"[dim]{_lbl}... {elapsed}s[/dim]")
-                                # Limita o número de linhas de stderr exibidas
-                                cleaned = _strip_spinner(line.rstrip("\n"))
-                                if not cleaned.strip():
-                                    continue
-                                if stream_type == "stdout":
-                                    if self.visibility in {Visibility.SUMMARY, Visibility.FULL}:
-                                        self._show_formatted_stdout(agent, cleaned)
-                                    continue
-                                self._spy_output_presenter.flush(agent)
-                                if stream_type == "stderr" and _should_ignore_stderr_line(agent, line):
-                                    continue
-                                if stream_type == "stderr" and self.visibility != Visibility.FULL:
-                                    if stderr_lines_shown < MAX_STDERR_LINES:
-                                        self.renderer.show_plain(cleaned, agent=agent)
-                                        stderr_lines_shown += 1
-                                    elif stderr_lines_shown == MAX_STDERR_LINES:
-                                        self.renderer.show_plain(
-                                            f"... (stderr truncado, máximo {MAX_STDERR_LINES} linhas)", agent=agent)
-                                        stderr_lines_shown += 1
-                                else:
-                                    self.renderer.show_plain(cleaned, agent=agent)
-                            except queue.Empty:
-                                break
+                    def _on_item(stream_type, line):
+                        nonlocal stderr_lines_shown
+                        if stream_type == "stderr" and _is_rate_limit_signal(line):
+                            runner.notify_rate_limit()
                         if status is not None:
                             _lbl = self._spy_output_presenter.compose_status_label(cmd[0])
-                            status.update(f"[dim]{_lbl}... {elapsed}s[/dim]")
-                        if self._cancel_event.is_set():
-                            self._terminate_process_group(proc)
-                            stdout_thread.join(2)
-                            stderr_thread.join(2)
-                            self._user_cancelled = True
-                            self._agent_running = False
-                            self._current_proc = None
-                            self._stop_esc_monitor()
-                            self.renderer.show_error("[cancelado] pelo usuário")
-                            return None
-                        time.sleep(0.2)
-                        elapsed = int(time.time() - start_time)
-                        if self.timeout is not None and self.timeout > 0:
-                            now = time.time()
-                            if self.rate_limit_detected and self.rate_limit_detected_at is not None:
-                                # Rate limited: yield to other agents quickly after grace period
-                                if now - self.rate_limit_detected_at > _RATE_LIMIT_YIELD_SECONDS:
-                                    self._terminate_process_group(proc)
-                                    stdout_thread.join(2)
-                                    stderr_thread.join(2)
-                                    self._agent_running = False
-                                    self._current_proc = None
-                                    self._stop_esc_monitor()
-                                    self.renderer.show_error(
-                                        f"[rate limit] {cmd[0]} em espera; cedendo para outros agentes")
-                                    return None
-                            else:
-                                # No rate limit: don't kill on idle (agent may be processing).
-                                # Wall-clock safety to prevent infinite hang on crashed process.
-                                wall_limit = self.timeout * 5
-                                if elapsed > wall_limit:
-                                    self._terminate_process_group(proc)
-                                    stdout_thread.join(2)
-                                    stderr_thread.join(2)
-                                    self._agent_running = False
-                                    self._current_proc = None
-                                    self._stop_esc_monitor()
-                                    self.renderer.show_error(
-                                        f"[erro] wall-clock timeout after {wall_limit}s for {cmd[0]}")
-                                    return None
-                stdout_thread.join()
-                stderr_thread.join()
-                # Drain remaining queue
-                while not log_queue.empty():
-                    try:
-                        stream_type, line = log_queue.get_nowait()
+                            status.update(f"[dim]{_lbl}... {_elapsed[0]}s[/dim]")
                         cleaned = _strip_spinner(line.rstrip("\n"))
                         if not cleaned.strip():
-                            continue
+                            return
                         if stream_type == "stdout":
                             if self.visibility in {Visibility.SUMMARY, Visibility.FULL}:
                                 self._show_formatted_stdout(agent, cleaned)
-                            continue
+                            return
                         self._spy_output_presenter.flush(agent)
                         if stream_type == "stderr" and _should_ignore_stderr_line(agent, line):
-                            continue
-                        # Limita o número de linhas de stderr exibidas
+                            return
                         if stream_type == "stderr" and self.visibility != Visibility.FULL:
                             if stderr_lines_shown < MAX_STDERR_LINES:
                                 self.renderer.show_plain(cleaned, agent=agent)
                                 stderr_lines_shown += 1
                             elif stderr_lines_shown == MAX_STDERR_LINES:
-                                self.renderer.show_plain(f"... (stderr truncado, máximo {MAX_STDERR_LINES} linhas)")
+                                self.renderer.show_plain(
+                                    f"... (stderr truncado, máximo {MAX_STDERR_LINES} linhas)", agent=agent)
                                 stderr_lines_shown += 1
                         else:
                             self.renderer.show_plain(cleaned, agent=agent)
-                    except queue.Empty:
-                        break
+
+                    _elapsed = [0]  # mutable cell for on_item closure
+
+                    def _on_tick(elapsed):
+                        _elapsed[0] = elapsed
+                        if status is not None:
+                            _lbl = self._spy_output_presenter.compose_status_label(cmd[0])
+                            status.update(f"[dim]{_lbl}... {elapsed}s[/dim]")
+
+                    termination = runner.watch(log_queue=log_queue, on_item=_on_item, on_tick=_on_tick)
+                    self.rate_limit_detected = runner.rate_limit_detected
+                    self.rate_limit_detected_at = runner.rate_limit_detected_at
+
+                    if termination == ProcessRunner.CANCELLED:
+                        self._user_cancelled = True
+                        self._agent_running = False
+                        self._current_proc = None
+                        self._stop_esc_monitor()
+                        self.renderer.show_error("[cancelado] pelo usuário")
+                        return None
+                    if termination == ProcessRunner.RATE_LIMIT:
+                        self._agent_running = False
+                        self._current_proc = None
+                        self._stop_esc_monitor()
+                        self.renderer.show_error(
+                            f"[rate limit] {cmd[0]} em espera; cedendo para outros agentes")
+                        return None
+                    if termination == ProcessRunner.TIMEOUT:
+                        self._agent_running = False
+                        self._current_proc = None
+                        self._stop_esc_monitor()
+                        wall_limit = self.timeout * 5
+                        self.renderer.show_error(
+                            f"[erro] wall-clock timeout after {wall_limit}s for {cmd[0]}")
+                        return None
 
             self._spy_output_presenter.flush(agent)
             proc.wait()
@@ -389,149 +301,37 @@ class AgentClient:
 
         if proc.returncode != 0:
             self.renderer.show_error(f"[erro] agente {cmd[0]} retornou código {proc.returncode}")
-            # Só mostra o tail se já não excedemos o limite durante o streaming
             if error and stderr_lines_shown <= MAX_STDERR_LINES:
-                tail_lines = error.splitlines()[-5:]  # Últimas 5 linhas
-                tail = "\n".join(tail_lines)
+                tail = "\n".join(error.splitlines()[-5:])
                 self.renderer.show_error(tail)
             return None
 
         if not output:
             if error:
                 self.renderer.show_error(f"[erro] agente {cmd[0]} não retornou saída válida")
-                # Só mostra o tail se já não excedemos o limite durante o streaming
                 if stderr_lines_shown <= MAX_STDERR_LINES:
-                    tail_lines = error.splitlines()[-5:]  # Últimas 5 linhas
-                    tail = "\n".join(tail_lines)
+                    tail = "\n".join(error.splitlines()[-5:])
                     self.renderer.show_error(tail)
             return None
 
         return output
 
-    def _terminate_process_group(self, proc):
-        """Termina o processo e todo seu grupo (filhos)."""
-        try:
-            os.killpg(os.getpgid(proc.pid), 15)
-        except OSError:
-            try:
-                proc.terminate()
-            except OSError:
-                pass
-
-    def _start_esc_monitor(self):
-        """Inicia monitoramento de cancel via signal handler (Ctrl+C)."""
-        self._cancel_event.clear()
-        if threading.current_thread() is not threading.main_thread():
-            self._old_signal_handler = None
-            return
-
-        def _signal_handler(signum, frame):
-            if signum == signal.SIGINT:
-                self._cancel_event.set()
-
-        self._old_signal_handler = signal.signal(signal.SIGINT, _signal_handler)
-
-    def _stop_esc_monitor(self):
-        """Para o monitoramento e restaura o signal handler."""
-        self._agent_running = False
-        if hasattr(self, '_old_signal_handler') and self._old_signal_handler is not None:
-            try:
-                signal.signal(signal.SIGINT, self._old_signal_handler)
-            except Exception:
-                pass
-            self._old_signal_handler = None
+    # ------------------------------------------------------------------
+    # Parser wrappers (mantidos para retrocompatibilidade e testes)
+    # ------------------------------------------------------------------
 
     def _parse_stream_json(self, raw: str, agent: str) -> str | None:
-        """Parseia output em stream-json do CLI, extrai texto final e dispara callbacks de tool."""
-        result_text = None
-        for line in raw.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            etype = event.get("type")
-            if etype == "result":
-                if event.get("is_error"):
-                    _logger.warning("[stream-json] agent=%s reported error: %s", agent, event.get("result"))
-                    return None
-                result_text = event.get("result") or ""
-            elif etype == "assistant":
-                content = event.get("message", {}).get("content", [])
-                for block in content:
-                    if block.get("type") == "tool_use" and self.tool_event_callback:
-                        tool_name = block.get("name", "unknown")
-                        _logger.debug("[stream-json] agent=%s used tool=%s", agent, tool_name)
-                        self.tool_event_callback(agent, result=_SyntheticToolResult(ok=True))
-        return result_text
+        return parse_stream_json(raw, agent, self.tool_event_callback)
 
     def _parse_codex_json(self, raw: str, agent: str) -> str | None:
-        """Parseia output JSONL do `codex exec --json`, extrai último agent_message e registra tool calls."""
-        result_text = None
-        for line in raw.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            etype = event.get("type")
-            if etype == "item.completed":
-                item = event.get("item", {})
-                itype = item.get("type")
-                if itype == "agent_message":
-                    result_text = item.get("text") or ""
-                elif itype == "command_execution" and self.tool_event_callback:
-                    cmd = item.get("command", "unknown")
-                    ok = item.get("exit_code") == 0
-                    _logger.debug("[codex-json] agent=%s ran command=%s ok=%s", agent, cmd, ok)
-                    self.tool_event_callback(agent, result=_SyntheticToolResult(ok=ok))
-        return result_text
+        return parse_codex_json(raw, agent, self.tool_event_callback)
 
     def _parse_opencode_json(self, raw: str, agent: str) -> str | None:
-        """Parseia eventos JSON do `opencode run --format=json` e recompõe o texto final."""
-        text_parts: list[str] = []
-        for line in raw.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                continue
+        return parse_opencode_json(raw, agent, self.tool_event_callback)
 
-            etype = event.get("type")
-            part = event.get("part", {}) or {}
-            ptype = part.get("type")
-
-            if etype == "text" or ptype == "text":
-                text = part.get("text") or ""
-                if text:
-                    text_parts.append(text)
-                continue
-
-            if not self.tool_event_callback:
-                continue
-
-            tool_name = (
-                part.get("tool")
-                or part.get("tool_name")
-                or part.get("name")
-                or event.get("tool")
-                or event.get("tool_name")
-                or event.get("name")
-            )
-            marker = " ".join(filter(None, [str(etype or ""), str(ptype or "")])).lower()
-            if tool_name and any(token in marker for token in {"tool", "call"}):
-                _logger.debug("[opencode-json] agent=%s used tool=%s", agent, tool_name)
-                self.tool_event_callback(agent, result=_SyntheticToolResult(ok=True))
-
-        if not text_parts:
-            return None
-        return "\n".join(text_parts).strip() or None
+    # ------------------------------------------------------------------
+    # Plugin resolution
+    # ------------------------------------------------------------------
 
     @staticmethod
     def _resolve_plugin_connection(plugin):
@@ -572,6 +372,10 @@ class AgentClient:
             getattr(plugin, "output_format", None),
         )
 
+    # ------------------------------------------------------------------
+    # call() — ponto de entrada principal
+    # ------------------------------------------------------------------
+
     def call(self, agent, prompt, silent=False, show_status=True, quiet=False, on_text_chunk=None):
         """Resolve o comando do agente e delega a execução."""
         self._user_cancelled = False
@@ -584,13 +388,8 @@ class AgentClient:
         connection = self._resolve_plugin_connection(plugin)
         if isinstance(connection, OpenAIConnection):
             return self._call_api(
-                agent,
-                plugin,
-                prompt,
-                silent=silent,
-                show_status=show_status,
-                quiet=quiet,
-                on_text_chunk=on_text_chunk,
+                agent, plugin, prompt,
+                silent=silent, show_status=show_status, quiet=quiet, on_text_chunk=on_text_chunk,
             )
         cmd, prompt_as_arg, output_format = self._resolve_plugin_cli_attrs(plugin, connection)
         extra_env = connection.env if isinstance(connection, CliConnection) else None
@@ -606,12 +405,16 @@ class AgentClient:
             raw = self.run(cmd, input_text=prompt, **run_kwargs)
         fmt = output_format
         if fmt == "stream-json" and raw is not None:
-            return self._parse_stream_json(raw, agent)
+            return parse_stream_json(raw, agent, self.tool_event_callback)
         if fmt == "codex-json" and raw is not None:
-            return self._parse_codex_json(raw, agent)
+            return parse_codex_json(raw, agent, self.tool_event_callback)
         if fmt == "opencode-json" and raw is not None:
-            return self._parse_opencode_json(raw, agent)
+            return parse_opencode_json(raw, agent, self.tool_event_callback)
         return raw
+
+    # ------------------------------------------------------------------
+    # _call_api() — driver de API (OpenAI compat / Ollama)
+    # ------------------------------------------------------------------
 
     def _call_api(self, agent, plugin, prompt, silent=False, show_status=True, quiet=False, on_text_chunk=None):
         """Executa agentes com driver de API (ex: openai_compat para Ollama)."""
@@ -638,7 +441,7 @@ class AgentClient:
         self._agent_running = True
         self._start_esc_monitor()
         status_cm = self.renderer.running_status("", agent=agent) if (
-                    show_status and not silent and not quiet) else nullcontext(None)
+                show_status and not silent and not quiet) else nullcontext(None)
         status_label = f"[dim]{'conectando' if is_first_call else 'aguardando'} {connection.model}...[/dim]"
 
         try:
@@ -694,7 +497,10 @@ class AgentClient:
                         if self.rate_limit_detected_at is None:
                             self.rate_limit_detected_at = time.time()
                     _cmd = getattr(plugin, "cmd", None)
-                    _name = (_cmd[0] if isinstance(_cmd, (list, tuple)) and _cmd else None) or connection.model or "driver"
+                    _name = (
+                        (_cmd[0] if isinstance(_cmd, (list, tuple)) and _cmd else None)
+                        or connection.model or "driver"
+                    )
                     self.renderer.show_error(f"[erro] falha ao comunicar com {_name}: {result_holder['error']}")
                     return None
 
@@ -702,6 +508,10 @@ class AgentClient:
         finally:
             self._agent_running = False
             self._stop_esc_monitor()
+
+    # ------------------------------------------------------------------
+    # Métricas
+    # ------------------------------------------------------------------
 
     def log_prompt_metrics(
             self, agent, metrics, session_id=None,

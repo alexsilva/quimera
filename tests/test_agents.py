@@ -113,7 +113,7 @@ def test_agent_client_run_success(renderer):
 
 def test_agent_client_run_silent_does_not_log_codex_stdin_noise(renderer):
     client = AgentClient(renderer)
-    with patch("subprocess.Popen") as mock_popen, patch("quimera.agents._logger") as mock_logger:
+    with patch("subprocess.Popen") as mock_popen, patch("quimera.agents.client._logger") as mock_logger:
         mock_proc = MagicMock()
         mock_proc.stdout = ["Success\n"]
         mock_proc.stderr = ["Reading prompt from stdin...\n"]
@@ -232,12 +232,11 @@ def test_agent_client_run_timeout(renderer):
             mock_thread_cls.side_effect = [mock_stdout_thread, mock_stderr_thread]
 
             with patch("time.time") as mock_time:
-                # 1. last_activity_time = time.time() -> 100.0
-                # 2. start_time = time.time() -> 100.0 (non-silent path)
-                # 3. elapsed = int(time.time() - start_time) -> 101.0 => elapsed=1
-                # 4. now = time.time() -> 101.0 (rate-limit timestamp check)
+                # 1. start_time = time.time() -> 100.0 (ProcessRunner.watch)
+                # 2. elapsed = int(time.time() - start_time) -> 101.0 => elapsed=1
+                # 3. now = time.time() -> 101.0 (_check_timeout)
                 # wall_limit = 0.1 * 5 = 0.5; elapsed=1 > 0.5 => wall timeout fires
-                mock_time.side_effect = [100.0, 100.0, 101.0, 101.0]
+                mock_time.side_effect = [100.0, 101.0, 101.0]
                 with patch("time.sleep"):
                     result = client.run(["slow"], silent=False)
                     assert result is None
@@ -283,7 +282,7 @@ def test_agent_client_run_silent_logs(renderer):
         mock_proc.returncode = 0
         mock_popen.return_value = mock_proc
 
-        with patch("quimera.agents._logger") as mock_logger:
+        with patch("quimera.agents.client._logger") as mock_logger:
             result = client.run(["cmd"], silent=True)
             assert result == "Out"
             mock_logger.debug.assert_called()
@@ -814,7 +813,7 @@ def test_agent_client_call_api_driver(renderer):
         mock_plugin.tool_use_reliability = "medium"
         mock_get.return_value = mock_plugin
 
-        with patch("quimera.agents.OpenAICompatDriver") as mock_driver_cls:
+        with patch("quimera.agents.client.OpenAICompatDriver") as mock_driver_cls:
             mock_driver = MagicMock()
             mock_driver.run.return_value = "api response"
             mock_driver_cls.return_value = mock_driver
@@ -953,7 +952,7 @@ def test_claude_plugin_exposes_spy_stdout_formatter():
 
 
 def test_opencode_plugin_exposes_spy_stdout_formatter_and_json_output():
-    plugin = get_plugin("opencode-gpt")
+    plugin = get_plugin("opencode-pickle")
     assert plugin is not None
     assert plugin.spy_stdout_formatter is _format_opencode_spy_event
     assert plugin.output_format == "opencode-json"
@@ -1072,7 +1071,7 @@ def test_call_api_starts_and_stops_esc_monitor(renderer):
         supports_tools=True,
     )
 
-    with patch("quimera.agents.OpenAICompatDriver") as mock_driver_cls, \
+    with patch("quimera.agents.client.OpenAICompatDriver") as mock_driver_cls, \
             patch.object(client, "_start_esc_monitor") as mock_start, \
             patch.object(client, "_stop_esc_monitor") as mock_stop:
         mock_driver = MagicMock()
@@ -1099,7 +1098,7 @@ def test_call_api_passes_cancel_event_to_driver(renderer):
         supports_tools=True,
     )
 
-    with patch("quimera.agents.OpenAICompatDriver") as mock_driver_cls, \
+    with patch("quimera.agents.client.OpenAICompatDriver") as mock_driver_cls, \
             patch.object(client, "_start_esc_monitor"), \
             patch.object(client, "_stop_esc_monitor"):
         mock_driver = MagicMock()
@@ -1130,7 +1129,7 @@ def test_call_api_cancel_event_detection(renderer):
 
     driver_started = _threading.Event()
 
-    with patch("quimera.agents.OpenAICompatDriver") as mock_driver_cls, \
+    with patch("quimera.agents.client.OpenAICompatDriver") as mock_driver_cls, \
             patch.object(client, "_start_esc_monitor"), \
             patch.object(client, "_stop_esc_monitor"):
         mock_driver = MagicMock()
@@ -1171,7 +1170,7 @@ def test_call_api_stop_monitor_called_on_error(renderer):
         supports_tools=True,
     )
 
-    with patch("quimera.agents.OpenAICompatDriver") as mock_driver_cls, \
+    with patch("quimera.agents.client.OpenAICompatDriver") as mock_driver_cls, \
             patch.object(client, "_start_esc_monitor"), \
             patch.object(client, "_stop_esc_monitor") as mock_stop:
         mock_driver = MagicMock()
@@ -1208,13 +1207,13 @@ def test_stop_esc_monitor_restores_signal_handler(renderer):
     import signal
     client = AgentClient(renderer)
 
-    with patch("quimera.agents.signal") as mock_signal:
+    with patch("quimera.agents.signal_guard.signal") as mock_signal:
         mock_signal.SIGINT = signal.SIGINT
         mock_signal.getsignal.return_value = signal.SIG_DFL
 
         with patch.object(client, "_start_esc_monitor"):
             client._start_esc_monitor()
-            client._old_signal_handler = signal.SIG_DFL
+            client._esc_monitor._old_handler = signal.SIG_DFL
 
         client._stop_esc_monitor()
 
@@ -1247,7 +1246,7 @@ def test_start_esc_monitor_is_noop_outside_main_thread(renderer):
     thread.join()
 
     assert result == {"ok": True}
-    assert client._old_signal_handler is None
+    assert client._esc_monitor._old_handler is None
 
 
 def test_terminate_process_group_uses_killpg(renderer):
@@ -1256,7 +1255,7 @@ def test_terminate_process_group_uses_killpg(renderer):
     proc = MagicMock()
     proc.pid = 12345
 
-    with patch("quimera.agents.os") as mock_os:
+    with patch("quimera.agents.signal_guard.os") as mock_os:
         mock_os.getpgid.return_value = 12345
         mock_os.killpg.return_value = None
         mock_os.killpg.side_effect = OSError(" ESRCH")

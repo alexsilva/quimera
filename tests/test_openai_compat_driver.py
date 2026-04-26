@@ -624,7 +624,7 @@ def test_agent_client_passes_tool_use_reliability_to_api_driver():
     )
 
     with patch("quimera.plugins.get", return_value=plugin), \
-            patch("quimera.agents.OpenAICompatDriver") as mock_driver_cls:
+            patch("quimera.agents.client.OpenAICompatDriver") as mock_driver_cls:
         mock_driver = MagicMock()
         mock_driver.run.return_value = "ok"
         mock_driver_cls.return_value = mock_driver
