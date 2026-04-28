@@ -42,7 +42,8 @@ CMD_FILE_PREFIX = "/file"
 CMD_TASK = "/task"
 CMD_RESET_STATE = "/reset-state"
 CMD_APPROVE = "/approve"
-CMD_ALIASES = {"/e": CMD_EDIT, "/r": CMD_CONTEXT, "/g": CMD_HELP, "/y": CMD_APPROVE, "/a": CMD_APPROVE}
+CMD_APPROVE_ALL = "/approve-all"
+CMD_ALIASES = {"/e": CMD_EDIT, "/r": CMD_CONTEXT, "/g": CMD_HELP, "/y": CMD_APPROVE, "/a": CMD_APPROVE, "/aa": CMD_APPROVE_ALL}
 USER_ROLE = "human"
 
 # Messages
@@ -220,6 +221,8 @@ def build_help(agent_names):
             "- /edit: abre o editor ($EDITOR, ou nano/vim/vi como fallback) para compor uma mensagem longa\n"
             "- /file <caminho>: usa o conteúdo de um arquivo como mensagem\n"
             "- /reset-state: limpa o shared_state (objetivo, passo, critérios) sem apagar o histórico\n"
+            "- /approve: pré-aprova a próxima chamada de ferramenta\n"
+            "- /approve-all: aprova automaticamente todas as chamadas de ferramenta seguintes\n"
             "- /help: mostra esta ajuda\n"
             "- /exit: encerra a sessão\n"
     )

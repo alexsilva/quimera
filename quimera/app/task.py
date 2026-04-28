@@ -254,8 +254,14 @@ class AppTaskServices:
             executor.start()
             app.task_executors.append(executor)
 
-    def build_tool_executor(self) -> ToolExecutor:
-        """Cria o executor de ferramentas do app com a configuração padrão."""
+    def build_tool_executor(self, require_approval_for_mutations: bool = True) -> ToolExecutor:
+        """Cria o executor de ferramentas do app com a configuração padrão.
+
+        Args:
+            require_approval_for_mutations: Se False, ferramentas de mutação
+                (write_file, apply_patch, run_shell, etc.) são executadas
+                sem pedir confirmação ao usuário.
+        """
         app = self.app
         renderer = getattr(app, "renderer", None)
         input_services = getattr(app, "input_services", None)
@@ -265,13 +271,16 @@ class AppTaskServices:
             resume_fn=input_services.resume_nonblocking if input_services else None,
         )
         approval_handler = PreApprovalHandler(base_handler)
+        # Conecta o callback de 'approve all' do ConsoleApprovalHandler
+        # ao modo approve-all do PreApprovalHandler.
+        base_handler.set_approve_all_callback(approval_handler.set_approve_all)
         # Armazena referência no app para permitir pré-aprovação via /approve
         app._approval_handler = approval_handler
         return ToolExecutor(
             config=ToolRuntimeConfig(
                 workspace_root=app.workspace.cwd,
                 db_path=Path(app.tasks_db_path) if app.tasks_db_path else None,
-                require_approval_for_mutations=True,
+                require_approval_for_mutations=require_approval_for_mutations,
             ),
             approval_handler=approval_handler,
         )

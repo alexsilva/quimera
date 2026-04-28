@@ -7,6 +7,7 @@ from ..constants import (
     CMD_AGENTS,
     CMD_ALIASES,
     CMD_APPROVE,
+    CMD_APPROVE_ALL,
     CMD_CLEAR,
     CMD_CONNECT,
     CMD_CONTEXT,
@@ -350,6 +351,15 @@ class AppSystemLayer:
         if command == CMD_RESET_STATE:
             self.app.reset_shared_state()
             self.app.renderer.show_system("shared_state limpo.")
+            return True
+
+        if command == CMD_APPROVE_ALL:
+            approval_handler = getattr(self.app, "_approval_handler", None)
+            if approval_handler is not None and hasattr(approval_handler, "set_approve_all"):
+                approval_handler.set_approve_all(True)
+                self.app.renderer.show_system("[aprovação] modo approve-all ativado — todas as ferramentas serão aprovadas automaticamente.")
+            else:
+                self.app.renderer.show_warning("[aprovação] mecanismo de aprovação não disponível.")
             return True
 
         if command == CMD_APPROVE:

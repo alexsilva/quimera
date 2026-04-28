@@ -37,6 +37,7 @@ class ConsoleApprovalHandler(ApprovalHandler):
         self._resume_fn = resume_fn
         self._suspend_spinner_fn = None
         self._resume_spinner_fn = None
+        self._approve_all_callback = None
 
     def set_spinner_callbacks(self, suspend_spinner_fn, resume_spinner_fn):
         """Define callbacks para pausar/retomar o spinner do Rich.
@@ -47,6 +48,14 @@ class ConsoleApprovalHandler(ApprovalHandler):
         """
         self._suspend_spinner_fn = suspend_spinner_fn
         self._resume_spinner_fn = resume_spinner_fn
+
+    def set_approve_all_callback(self, callback):
+        """Define callback chamado quando o usuário digita 'a' (approve all).
+
+        O callback recebe zero argumentos e deve ativar o modo
+        'approve all' no handler de aprovação (ex: PreApprovalHandler).
+        """
+        self._approve_all_callback = callback
 
     def approve(self, *, tool_name: str, summary: str) -> bool:
         """Tenta aprovação rápida; retorna False se precisar de interação.
@@ -74,7 +83,7 @@ class ConsoleApprovalHandler(ApprovalHandler):
             self._suspend_spinner_fn()
         self._show(f"\n[aprovação] {tool_name} :: {summary}")
         try:
-            answer = input_fn("  Executar? [y/N]: ").strip().lower()
+            answer = input_fn("  Executar? [y/N/a=todas]: ").strip().lower()
         except EOFError:
             self._show("  [aprovação] stdin não disponível — negando automaticamente")
             return False
@@ -83,6 +92,10 @@ class ConsoleApprovalHandler(ApprovalHandler):
                 self._resume_spinner_fn()
             if self._resume_fn:
                 self._resume_fn()
+        if answer in {"a", "all", "todas"}:
+            if self._approve_all_callback:
+                self._approve_all_callback()
+            return True
         return answer in {"y", "yes", "s", "sim"}
 
     def _show(self, message: str) -> None:
@@ -184,6 +197,7 @@ class PreApprovalHandler(ApprovalHandler):
         """Inicializa com um handler base para fallback."""
         self._base = base_handler
         self._pre_approved = False
+        self._approve_all = False
         self._lock = threading.Lock()
 
     def pre_approve(self) -> None:
@@ -196,9 +210,19 @@ class PreApprovalHandler(ApprovalHandler):
         with self._lock:
             self._pre_approved = False
 
-    def approve(self, *, tool_name: str, summary: str) -> bool:
-        """Aprova automaticamente se pré-aprovado, senão delega ao handler base."""
+    def set_approve_all(self, enabled: bool = True) -> None:
+        """Ativa/desativa modo 'approve all' — aprova todas as ferramentas sem perguntar."""
         with self._lock:
+            self._approve_all = enabled
+            if enabled:
+                self._pre_approved = False
+
+    def approve(self, *, tool_name: str, summary: str) -> bool:
+        """Aprova automaticamente se pré-aprovado ou em modo approve-all, senão delega ao handler base."""
+        with self._lock:
+            if self._approve_all:
+                print(f"  [approve-all] {tool_name}")
+                return True
             if self._pre_approved:
                 self._pre_approved = False
                 print(f"  [pré-aprovado] {tool_name}")

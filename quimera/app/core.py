@@ -39,7 +39,7 @@ from ..config import ConfigManager
 from ..metrics import BehaviorMetricsTracker
 from ..constants import (
     CMD_AGENTS, CMD_ALIASES, CMD_CLEAR, CMD_CONNECT, CMD_CONTEXT, CMD_CONTEXT_EDIT, CMD_EDIT, CMD_EXIT,
-    CMD_APPROVE, CMD_FILE_PREFIX, CMD_HELP,
+    CMD_APPROVE, CMD_APPROVE_ALL, CMD_FILE_PREFIX, CMD_HELP,
     CMD_PROMPT, CMD_RESET_STATE, CMD_TASK,
     MSG_CHAT_STARTED, MSG_SESSION_LOG, MSG_SESSION_STATUS, MSG_MIGRATION,
     MSG_SHUTDOWN, MSG_DOUBLE_PREFIX,
@@ -63,6 +63,7 @@ class QuimeraApp:
                  visibility: Visibility = Visibility.SUMMARY,
                  theme: str | None = None,
                  workspace: Workspace | None = None,
+                 auto_approve_mutations: bool = False,
                  ):
         """Inicializa uma instância de QuimeraApp."""
         self.selected_agents = list(agents) if agents else []
@@ -71,6 +72,7 @@ class QuimeraApp:
         self.agent_failures = defaultdict(int)
         self._agent_failures_lock = threading.Lock()
         self.workspace = workspace if workspace is not None else Workspace(cwd)
+        self.auto_approve_mutations = auto_approve_mutations
         self.config = ConfigManager(self.workspace.config_file)
         _active_theme = theme if theme is not None else self.config.theme
         self.renderer = TerminalRenderer(theme=_active_theme, get_plugin_style=self._resolve_plugin_style)
@@ -203,7 +205,7 @@ class QuimeraApp:
         self.auto_summarize_threshold = self.config.auto_summarize_threshold
         self.idle_timeout_seconds = idle_timeout_seconds if idle_timeout_seconds is not None else self.config.idle_timeout_seconds
 
-        self.tool_executor = self.task_services.build_tool_executor()
+        self.tool_executor = self.task_services.build_tool_executor(require_approval_for_mutations=not self.auto_approve_mutations)
         # Injeta o executor nos drivers de API do agent_client.
         self.agent_client.tool_executor = self.tool_executor
         # Modo de execução ativo (definido via /planning, /analysis, etc.)
@@ -217,6 +219,7 @@ class QuimeraApp:
         commands = {
             CMD_AGENTS,
             CMD_APPROVE,
+            CMD_APPROVE_ALL,
             CMD_CLEAR,
             CMD_CONNECT,
             CMD_CONTEXT,
