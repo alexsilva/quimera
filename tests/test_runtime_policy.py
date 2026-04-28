@@ -233,3 +233,185 @@ def test_policy_check_path_permission_outside_for_remove_file(policy):
     result = policy.check_path_permission(call)
     assert result is not None
     assert "etc" in str(result.resolved_path)
+
+
+# ── requires_approval expansão ─────────────────────────────
+
+def test_policy_requires_approval_for_all_mutational_tools(policy):
+    """Todas as ferramentas mutacionais requerem aprovação."""
+    mutational = [
+        "write_file",
+        "apply_patch",
+        "run_shell",
+        "run_shell_command",
+        "exec_command",
+        "close_command_session",
+        "remove_file",
+        "write_stdin",
+    ]
+    for tool_name in mutational:
+        assert policy.requires_approval(ToolCall(name=tool_name, arguments={})) is True, \
+            f"{tool_name} deveria requerer aprovação"
+
+
+def test_policy_does_not_require_approval_for_read_tools(policy):
+    """Ferramentas de leitura não requerem aprovação."""
+    readonly = ["read_file", "list_files", "grep_search", "list_tasks", "list_jobs", "get_job"]
+    for tool_name in readonly:
+        assert policy.requires_approval(ToolCall(name=tool_name, arguments={})) is False, \
+            f"{tool_name} NÃO deveria requerer aprovação"
+
+
+def test_policy_check_path_permission_none_for_non_path_tools(policy):
+    """check_path_permission retorna None para ferramentas que não operam em paths."""
+    non_path_tools = ["run_shell", "write_file", "apply_patch", "write_stdin"]
+    for tool_name in non_path_tools:
+        call = ToolCall(name=tool_name, arguments={})
+        assert policy.check_path_permission(call) is None
+
+
+# ── write_stdin policy ──────────────────────────────────────
+
+def test_policy_write_stdin_requires_yield_time_ms_integer(policy):
+    """write_stdin com yield_time_ms não inteiro é rejeitado."""
+    call = ToolCall(name="write_stdin", arguments={
+        "session_id": 1,
+        "yield_time_ms": "abc",
+    })
+    with pytest.raises(ToolPolicyError, match="yield_time_ms inteiro"):
+        policy.validate(call)
+
+
+def test_policy_write_stdin_valid(policy):
+    """write_stdin com session_id inteiro válido passa."""
+    call = ToolCall(name="write_stdin", arguments={"session_id": 1})
+    policy.validate(call)  # não deve lançar
+
+
+def test_policy_write_stdin_valid_with_yield_time_ms(policy):
+    """write_stdin com yield_time_ms inteiro passa."""
+    call = ToolCall(name="write_stdin", arguments={
+        "session_id": 1,
+        "yield_time_ms": 100,
+    })
+    policy.validate(call)
+
+
+# ── close_command_session policy ────────────────────────────
+
+def test_policy_close_command_session_requires_integer_session_id(policy):
+    """close_command_session com session_id não inteiro é rejeitado."""
+    call = ToolCall(name="close_command_session", arguments={"session_id": "abc"})
+    with pytest.raises(ToolPolicyError, match="session_id inteiro"):
+        policy.validate(call)
+
+
+def test_policy_close_command_session_valid(policy):
+    """close_command_session com session_id inteiro passa."""
+    call = ToolCall(name="close_command_session", arguments={"session_id": 1})
+    policy.validate(call)
+
+
+# ── exec_command policy ─────────────────────────────────────
+
+def test_policy_exec_command_with_workdir(policy):
+    """exec_command com workdir dentro do workspace passa."""
+    call = ToolCall(name="exec_command", arguments={
+        "cmd": "echo hello",
+        "workdir": ".",
+    })
+    policy.validate(call)
+
+
+def test_policy_exec_command_with_workdir_outside_workspace(policy):
+    """exec_command com workdir fora do workspace é rejeitado."""
+    call = ToolCall(name="exec_command", arguments={
+        "cmd": "echo hello",
+        "workdir": "../../etc",
+    })
+    with pytest.raises(ToolPolicyError, match="Path fora da workspace"):
+        policy.validate(call)
+
+
+# ── shell policy ────────────────────────────────────────────
+
+def test_policy_shell_chain_operators_all(policy):
+    """Todos os operadores de encadeamento são bloqueados."""
+    for op in [";", "&&", "||", "`", "$("]:
+        call = ToolCall(name="run_shell", arguments={"command": f"ls {op} cat"})
+        with pytest.raises(ToolPolicyError, match="operador de encadeamento proibido"):
+            policy.validate(call)
+
+
+def test_policy_shell_allowlist_validation(policy):
+    """Comandos na allowlist passam na validação."""
+    # 'ls', 'echo', 'cat', etc. estão na allowlist padrão
+    call = ToolCall(name="run_shell", arguments={"command": "ls -la"})
+    policy.validate(call)  # não deve lançar
+
+
+# ── blocked_tools ───────────────────────────────────────────
+
+def test_policy_blocked_tools(policy):
+    """Ferramentas na lista blocked_tools são rejeitadas."""
+    policy.blocked_tools = ["list_files"]
+    call = ToolCall(name="list_files", arguments={})
+    with pytest.raises(ToolPolicyError, match="bloqueada pelo modo de execução ativo"):
+        policy.validate(call)
+
+
+# ── _resolve_workspace_path ─────────────────────────────────
+
+def test_policy_resolve_workspace_path_empty_becomes_current(tmp_path):
+    """Path vazio resolve para '.' (diretório corrente)."""
+    config = ToolRuntimeConfig(workspace_root=tmp_path)
+    policy = ToolPolicy(config)
+    # _resolve_workspace_path é chamada via validate
+    call = ToolCall(name="list_files", arguments={"path": ""})
+    policy.validate(call)  # path vazio → "." → resolve para workspace_root
+
+
+# ── PathPermissionError ─────────────────────────────────────
+
+def test_path_permission_error_attributes():
+    """PathPermissionError guarda raw_path e resolved_path."""
+    from quimera.runtime.policy import PathPermissionError
+    raw = "/etc/shadow"
+    resolved = Path("/etc/shadow")
+    exc = PathPermissionError(raw, resolved)
+    assert exc.raw_path == raw
+    assert exc.resolved_path == resolved
+    assert "Permissão necessária" in str(exc)
+
+
+# ── check_path_permission para list_files e grep_search ─────
+
+def test_policy_check_path_permission_for_list_files(policy):
+    """check_path_permission cobre list_files."""
+    call = ToolCall(name="list_files", arguments={"path": "."})
+    result = policy.check_path_permission(call)
+    assert result is None
+
+
+def test_policy_check_path_permission_for_grep_search(policy):
+    """check_path_permission cobre grep_search."""
+    call = ToolCall(name="grep_search", arguments={"pattern": "test"})
+    result = policy.check_path_permission(call)
+    assert result is None
+
+
+def test_policy_check_path_permission_for_grep_search_outside(policy):
+    """check_path_permission retorna erro para grep_search fora dos roots."""
+    call = ToolCall(name="grep_search", arguments={
+        "pattern": "test",
+        "path": "../../etc/passwd",
+    })
+    result = policy.check_path_permission(call)
+    assert result is not None
+
+
+def test_policy_check_path_permission_for_list_files_outside(policy):
+    """check_path_permission retorna erro para list_files fora dos roots."""
+    call = ToolCall(name="list_files", arguments={"path": "../../etc"})
+    result = policy.check_path_permission(call)
+    assert result is not None

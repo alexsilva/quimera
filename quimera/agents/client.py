@@ -450,6 +450,16 @@ class AgentClient:
                 if status is not None:
                     status.update(status_label)
                 effective_tool_executor = self.tool_executor if getattr(plugin, "supports_tools", True) else None
+                # Injeta callbacks de spinner no executor para que o approval handler
+                # possa pausar o Live do Rich antes de input() bloqueante, evitando
+                # race condition entre o refresh do spinner e a leitura do stdin.
+                if effective_tool_executor is not None and status is not None:
+                    _live = getattr(status, '_live', None)
+                    if _live is not None:
+                        effective_tool_executor.set_spinner_callbacks(
+                            suspend_spinner_fn=lambda: _live.stop(),
+                            resume_spinner_fn=lambda: _live.start(),
+                        )
                 result_holder = {"result": None, "error": None}
 
                 def _run_driver():

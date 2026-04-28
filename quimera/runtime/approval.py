@@ -2,11 +2,9 @@
 from __future__ import annotations
 
 import select
-import sys
 import threading
-import time
+import sys
 from abc import ABC, abstractmethod
-
 
 class ApprovalHandler(ABC):
     """Define o contrato de aprovação usado pelo runtime de ferramentas."""
@@ -18,55 +16,81 @@ class ApprovalHandler(ABC):
 
 
 class ConsoleApprovalHandler(ApprovalHandler):
-    """Confirmação simples no terminal.
+    """Confirmação simples no terminal via input() bloqueante."""
 
-    Se `renderer` for fornecido, usa-o para exibir o prompt (em vez de `print()`).
-    Se `read_user_input_fn` for fornecida, usa-a para ler a resposta (em vez de `input_fn`/`input()`).
-    Isso permite integração com o sistema de input do app.core, evitando
-    conflitos com o leitor não-bloqueante.
-    """
-
-    def __init__(self, input_fn=None, renderer=None, read_user_input_fn=None):
-        """Inicializa com dependências injetáveis do app.core.
+    def __init__(self, input_fn=None, renderer=None, suspend_fn=None, resume_fn=None):
+        """Inicializa com dependências injetáveis.
 
         Args:
-            input_fn: Função de input compatível com app.core (ex: input_resolver()).
-            renderer: TerminalRenderer para exibir prompts (evita print cru).
-            read_user_input_fn: Função (prompt, timeout) -> str | None do app.core.
-                Quando fornecida, substitui input_fn para leitura.
+            input_fn: Função de input (fallback: builtins.input).
+                      Se None, usa input() dinamicamente para
+                      compatibilidade com @patch('builtins.input').
+            renderer: TerminalRenderer opcional para exibir prompts.
+            suspend_fn: Callback chamado antes de input() bloqueante
+                        para suspender estado não-bloqueante do app.
+            resume_fn: Callback chamado após input() bloqueante
+                       para restaurar estado não-bloqueante do app.
         """
         self._input_fn = input_fn
         self._renderer = renderer
-        self._read_user_input_fn = read_user_input_fn
+        self._suspend_fn = suspend_fn
+        self._resume_fn = resume_fn
+        self._suspend_spinner_fn = None
+        self._resume_spinner_fn = None
+
+    def set_spinner_callbacks(self, suspend_spinner_fn, resume_spinner_fn):
+        """Define callbacks para pausar/retomar o spinner do Rich.
+
+        Esses callbacks são injetados por _call_api (client.py) para evitar
+        que o refresh do Rich Console.status() compita com input() bloqueante
+        durante a aprovação. Chamados em _approve_interactive.
+        """
+        self._suspend_spinner_fn = suspend_spinner_fn
+        self._resume_spinner_fn = resume_spinner_fn
 
     def approve(self, *, tool_name: str, summary: str) -> bool:
-        """Solicita aprovação interativa ao usuário no terminal."""
+        """Tenta aprovação rápida; retorna False se precisar de interação.
+
+        Sempre tenta aprovação interativa via input_fn.
+        Se input_fn for o builtin input(), usa input() bloqueante padrão.
+        Em contextos controlados (testes), input_fn injetada responde
+        diretamente sem bloqueio.
+        """
+        return self._approve_interactive(tool_name, summary)
+
+    def _approve_interactive(self, tool_name: str, summary: str) -> bool:
+        """Aprovação interativa via input_fn (usado em testes/REPL).
+
+        Suspende o estado não-bloqueante do app (via suspend_fn) antes de
+        chamar input() bloqueante para evitar conflito com a thread de
+        input não-bloqueante competindo pelo mesmo stdin.
+        Também suspende o spinner do Rich (via suspend_spinner_fn) para
+        evitar que o refresh periódico do Live compita com input().
+        """
+        input_fn = self._input_fn if self._input_fn is not None else input
+        if self._suspend_fn:
+            self._suspend_fn()
+        if self._suspend_spinner_fn:
+            self._suspend_spinner_fn()
         self._show(f"\n[aprovação] {tool_name} :: {summary}")
         try:
-            answer = self._read_line("  Executar? [y/N]: ").strip().lower()
+            answer = input_fn("  Executar? [y/N]: ").strip().lower()
         except EOFError:
             self._show("  [aprovação] stdin não disponível — negando automaticamente")
             return False
+        finally:
+            if self._resume_spinner_fn:
+                self._resume_spinner_fn()
+            if self._resume_fn:
+                self._resume_fn()
         return answer in {"y", "yes", "s", "sim"}
 
     def _show(self, message: str) -> None:
-        """Exibe mensagem via renderer (se disponível) ou fallback print."""
         renderer = self._renderer
         if renderer is not None:
             renderer.show_system(message)
         else:
             print(message)
-
-    def _read_line(self, prompt: str) -> str:
-        """Lê uma linha, usando a input_fn injetada quando disponível."""
-        read_user_input_fn = self._read_user_input_fn
-        if read_user_input_fn is not None:
-            result = read_user_input_fn(prompt, timeout=0)
-            return result if result is not None else ""
-        input_fn = self._input_fn
-        if input_fn is None:
-            return input(prompt)
-        return input_fn(prompt)
 
 
 class AutoApprovalHandler(ApprovalHandler):

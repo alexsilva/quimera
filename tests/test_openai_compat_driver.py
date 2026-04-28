@@ -74,7 +74,7 @@ def test_all_schemas_have_required_fields():
 
 def test_schema_names_match_registered_tools():
     expected = {"list_files", "read_file", "write_file", "apply_patch", "grep_search", "run_shell",
-                "exec_command", "write_stdin", "close_command_session", "list_tasks", "list_jobs", "get_job"}
+                "exec_command", "write_stdin", "close_command_session", "list_tasks", "list_jobs", "get_job", "remove_file"}
     actual = {s["function"]["name"] for s in TOOL_SCHEMAS}
     assert actual == expected
 
@@ -86,7 +86,7 @@ def test_resolve_tool_schemas_hides_task_tools_without_db():
     mock_executor.registry.names.return_value = [
         "list_files", "read_file", "write_file", "apply_patch", "grep_search", "run_shell",
         "exec_command", "write_stdin", "close_command_session",
-        "list_tasks", "list_jobs", "get_job",
+        "list_tasks", "list_jobs", "get_job", "remove_file",
     ]
 
     actual = {s["function"]["name"] for s in resolve_tool_schemas(mock_executor)}
@@ -100,6 +100,7 @@ def test_resolve_tool_schemas_hides_task_tools_without_db():
         "exec_command",
         "write_stdin",
         "close_command_session",
+        "remove_file",
     }
 
 
@@ -385,6 +386,7 @@ def test_run_tools_system_prompt_guides_tool_usage():
         "exec_command",
         "write_stdin",
         "close_command_session",
+        "remove_file",
     }
 
 

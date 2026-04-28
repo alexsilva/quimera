@@ -258,10 +258,11 @@ class AppTaskServices:
         """Cria o executor de ferramentas do app com a configuração padrão."""
         app = self.app
         renderer = getattr(app, "renderer", None)
-        read_user_input = getattr(app, "read_user_input", None)
+        input_services = getattr(app, "input_services", None)
         base_handler = ConsoleApprovalHandler(
             renderer=renderer,
-            read_user_input_fn=read_user_input,
+            suspend_fn=input_services.suspend_nonblocking if input_services else None,
+            resume_fn=input_services.resume_nonblocking if input_services else None,
         )
         approval_handler = PreApprovalHandler(base_handler)
         # Armazena referência no app para permitir pré-aprovação via /approve
@@ -270,7 +271,7 @@ class AppTaskServices:
             config=ToolRuntimeConfig(
                 workspace_root=app.workspace.cwd,
                 db_path=Path(app.tasks_db_path) if app.tasks_db_path else None,
-                require_approval_for_mutations=False,
+                require_approval_for_mutations=True,
             ),
             approval_handler=approval_handler,
         )

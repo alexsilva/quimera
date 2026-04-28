@@ -19,6 +19,7 @@ class AppInputServices:
         """Inicializa uma instância de AppInputServices."""
         self.app = app
         self.input_resolver = input_resolver
+        self._suspended = False
 
     def read_user_input(self, prompt, timeout: int) -> str | None:
         """Lê entrada do usuário com a política de timeout configurada."""
@@ -31,6 +32,23 @@ class AppInputServices:
     def read_from_file(self, path_str):
         """Lê conteúdo de um arquivo fornecido pelo usuário."""
         return read_from_file(self.app, path_str)
+
+    def suspend_nonblocking(self):
+        """Pausa o estado não-bloqueante para permitir input bloqueante limpo."""
+        app = self.app
+        was_reading = app._nonblocking_input_status == "reading"
+        self._suspended = was_reading
+        if was_reading:
+            app._nonblocking_input_status = "idle"
+            # Limpa qualquer resíduo visual da linha de prompt
+            sys.stdout.write("\r\x1b[2K")
+            sys.stdout.flush()
+
+    def resume_nonblocking(self):
+        """Restaura o estado não-bloqueante após input bloqueante."""
+        if self._suspended:
+            self.app._nonblocking_input_status = "reading"
+            self._suspended = False
 
 
 def read_user_input(app, prompt, timeout: int, input_fn=input) -> str | None:

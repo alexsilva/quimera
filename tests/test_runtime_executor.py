@@ -1,4 +1,5 @@
 from pathlib import Path
+import tempfile
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -6,6 +7,13 @@ import pytest
 from quimera.runtime.config import ToolRuntimeConfig
 from quimera.runtime.executor import ToolExecutor
 from quimera.runtime.models import ToolCall
+from quimera.runtime.policy import PathPermissionError
+from quimera.runtime.approval import (
+    ConsoleApprovalHandler,
+    PreApprovalHandler,
+    AutoApprovalHandler,
+)
+from quimera.runtime.policy import ToolPolicy
 from quimera.runtime.task_executor import TaskExecutor
 
 
@@ -161,3 +169,241 @@ def test_executor_remove_file_policy_blocks_missing_dry_run(tmp_path):
 
     assert result.ok is False
     assert "dry_run=False" in result.error
+
+
+# ── set_spinner_callbacks ───────────────────────────────────
+
+def test_set_spinner_callbacks_injects_into_console_handler():
+    """set_spinner_callbacks injeta no ConsoleApprovalHandler diretamente."""
+    handler = ConsoleApprovalHandler()
+    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=Path("/tmp")), handler)
+
+    suspend = MagicMock()
+    resume = MagicMock()
+    executor.set_spinner_callbacks(suspend, resume)
+
+    assert handler._suspend_spinner_fn is suspend
+    assert handler._resume_spinner_fn is resume
+
+
+def test_set_spinner_callbacks_traverses_pre_approval_wrapper():
+    """set_spinner_callbacks atravessa PreApprovalHandler e injeta no base."""
+    base = ConsoleApprovalHandler()
+    pre = PreApprovalHandler(base)
+    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=Path("/tmp")), pre)
+
+    suspend = MagicMock()
+    resume = MagicMock()
+    executor.set_spinner_callbacks(suspend, resume)
+
+    # O base (ConsoleApprovalHandler) recebeu os callbacks
+    assert base._suspend_spinner_fn is suspend
+    assert base._resume_spinner_fn is resume
+    # O PreApprovalHandler não tem os callbacks diretamente
+    assert not hasattr(pre, '_suspend_spinner_fn')
+
+
+def test_set_spinner_callbacks_ignores_non_console_handler():
+    """set_spinner_callbacks não quebra com handler que não tem set_spinner_callbacks."""
+    handler = AutoApprovalHandler(approve_all=True)
+    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=Path("/tmp")), handler)
+
+    suspend = MagicMock()
+    resume = MagicMock()
+    # Não deve lançar exceção
+    executor.set_spinner_callbacks(suspend, resume)
+
+
+# ── Fluxo unificado de aprovação ────────────────────────────
+
+def test_executor_permission_error_triggers_approval(config, approval_handler):
+    """Quando há permission_error, o handler de aprovação é chamado com
+    summary contendo 'Permissão necessária'."""
+    executor = ToolExecutor(config, approval_handler)
+    approval_handler.approve.return_value = False
+
+    permission_error = PathPermissionError("/etc/passwd", Path("/etc/passwd"))
+
+    call = ToolCall(name="list_files", arguments={"path": "."})
+    with patch.object(executor.policy, "validate"), \
+         patch.object(executor.policy, "check_path_permission", return_value=permission_error):
+        result = executor.execute(call)
+
+    assert result.ok is False
+    assert "Execução negada" in result.error
+    approval_handler.approve.assert_called_once()
+    call_kwargs = approval_handler.approve.call_args.kwargs
+    assert "Permissão necessária" in call_kwargs["summary"]
+
+
+def test_executor_permission_error_approved_executes(config, approval_handler):
+    """Quando permission_error é aprovado, a ferramenta executa normalmente."""
+    executor = ToolExecutor(config, approval_handler)
+    approval_handler.approve.return_value = True
+
+    permission_error = PathPermissionError("/etc/passwd", Path("/etc/passwd"))
+
+    call = ToolCall(name="list_files", arguments={"path": "."})
+    with patch.object(executor.policy, "validate"), \
+         patch.object(executor.policy, "check_path_permission", return_value=permission_error):
+        result = executor.execute(call)
+
+    assert result.ok is True
+
+
+def test_executor_needs_approval_and_permission_error_unified(tmp_path):
+    """Quando uma ferramenta tem ambos needs_approval e permission_error,
+    o approve é chamado uma única vez com summary de permissão (priority)."""
+    config = ToolRuntimeConfig(
+        workspace_root=tmp_path,
+        require_approval_for_mutations=True,
+    )
+    approval_handler = MagicMock()
+    approval_handler.approve.return_value = False
+    executor = ToolExecutor(config, approval_handler)
+
+    (tmp_path / "x.txt").write_text("x")
+    call = ToolCall(name="remove_file", arguments={"path": "x.txt", "dry_run": False})
+
+    permission_error = PathPermissionError("x.txt", (tmp_path / "x.txt").resolve())
+    with patch.object(executor.policy, "check_path_permission", return_value=permission_error):
+        result = executor.execute(call)
+
+    assert result.ok is False
+    assert approval_handler.approve.call_count == 1
+    call_kwargs = approval_handler.approve.call_args.kwargs
+    assert "Permissão necessária" in call_kwargs["summary"]
+
+
+# ── write_stdin na lista de aprovação ──────────────────────
+
+def test_executor_write_stdin_requires_approval_when_mutations_enabled():
+    """write_stdin requer aprovação quando require_approval_for_mutations=True."""
+    config = ToolRuntimeConfig(
+        workspace_root=Path("/tmp"),
+        require_approval_for_mutations=True,
+    )
+    approval_handler = MagicMock()
+    approval_handler.approve.return_value = False
+    executor = ToolExecutor(config, approval_handler)
+
+    call = ToolCall(name="write_stdin", arguments={"session_id": 1, "chars": "y"})
+    result = executor.execute(call)
+
+    assert result.ok is False
+    assert "Execução negada" in result.error
+    approval_handler.approve.assert_called_once()
+
+
+def test_executor_write_stdin_no_approval_when_mutations_disabled():
+    """write_stdin NÃO requer aprovação quando require_approval_for_mutations=False."""
+    config = ToolRuntimeConfig(
+        workspace_root=Path("/tmp"),
+        require_approval_for_mutations=False,
+    )
+    approval_handler = MagicMock()
+    executor = ToolExecutor(config, approval_handler)
+
+    call = ToolCall(name="write_stdin", arguments={"session_id": 1, "chars": ""})
+    result = executor.execute(call)
+
+    # Não deve chamar approve (mas a ferramenta pode falhar por sessão inexistente)
+    approval_handler.approve.assert_not_called()
+
+
+# ── approval_handler property ───────────────────────────────
+
+def test_executor_approval_handler_property():
+    """A property approval_handler retorna o handler configurado."""
+    handler = ConsoleApprovalHandler()
+    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=Path("/tmp")), handler)
+    assert executor.approval_handler is handler
+
+
+# ── maybe_execute_from_response (linhas 128-129) ────────────
+
+
+def test_maybe_execute_from_response_with_tool_call(config, approval_handler):
+    """maybe_execute_from_response com tool call válido executa e retorna (response, result)."""
+    executor = ToolExecutor(config, approval_handler)
+    response = '<tool function="list_files" arguments="{&quot;path&quot;: &quot;/tmp&quot;}" />'
+    text, result = executor.maybe_execute_from_response(response)
+    assert text == response
+    assert result is not None
+    assert result.ok is True
+    assert result.tool_name == "list_files"
+
+
+def test_maybe_execute_from_response_with_tool_call_needs_approval_denied(config, approval_handler):
+    """maybe_execute_from_response com tool que requer aprovação negada retorna erro."""
+    executor = ToolExecutor(
+        ToolRuntimeConfig(workspace_root=Path("/tmp"), require_approval_for_mutations=True),
+        approval_handler,
+    )
+    approval_handler.approve.return_value = False
+    response = '<tool function="write_file" arguments="{&quot;path&quot;: &quot;test.txt&quot;, &quot;content&quot;: &quot;x&quot;}" />'
+    text, result = executor.maybe_execute_from_response(response)
+    assert text == response
+    assert result is not None
+    assert result.ok is False
+    assert "Execução negada" in result.error
+
+
+def test_maybe_execute_from_response_with_tool_call_approved(config, approval_handler):
+    """maybe_execute_from_response com tool aprovada executa com sucesso."""
+    executor = ToolExecutor(
+        ToolRuntimeConfig(workspace_root=Path("/tmp"), require_approval_for_mutations=True),
+        approval_handler,
+    )
+    approval_handler.approve.return_value = True
+    response = '<tool function="list_files" arguments="{&quot;path&quot;: &quot;/tmp&quot;}" />'
+    text, result = executor.maybe_execute_from_response(response)
+    assert text == response
+    assert result is not None
+    assert result.ok is True
+
+
+# ── set_spinner_callbacks edge cases ────────────────────────
+
+
+def test_set_spinner_callbacks_on_pre_approval_with_mock_base():
+    """set_spinner_callbacks atravessa PreApprovalHandler com base que
+    tem set_spinner_callbacks mas não é ConsoleApprovalHandler."""
+    base = MagicMock()
+    base.set_spinner_callbacks = MagicMock()
+    pre = PreApprovalHandler(base)
+    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=Path("/tmp")), pre)
+
+    suspend = MagicMock()
+    resume = MagicMock()
+    executor.set_spinner_callbacks(suspend, resume)
+
+    # O loop while deve parar no base (que tem set_spinner_callbacks)
+    base.set_spinner_callbacks.assert_called_once_with(suspend, resume)
+
+
+def test_set_spinner_callbacks_double_wrapped_pre_approval():
+    """set_spinner_callbacks atravessa dois PreApprovalHandlers."""
+    inner_base = ConsoleApprovalHandler()
+    middle = PreApprovalHandler(inner_base)
+    outer = PreApprovalHandler(middle)
+    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=Path("/tmp")), outer)
+
+    suspend = MagicMock()
+    resume = MagicMock()
+    executor.set_spinner_callbacks(suspend, resume)
+
+    # inner_base (ConsoleApprovalHandler) deve receber os callbacks
+    assert inner_base._suspend_spinner_fn is suspend
+    assert inner_base._resume_spinner_fn is resume
+    # Camadas intermediárias não recebem
+    assert not hasattr(middle, "_suspend_spinner_fn")
+    assert not hasattr(outer, "_suspend_spinner_fn")
+
+
+def test_set_spinner_callbacks_no_op_when_handler_is_none_like():
+    """set_spinner_callbacks não quebra com handler sem atributo _base."""
+    handler = AutoApprovalHandler(approve_all=True)
+    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=Path("/tmp")), handler)
+    # Já testado, mas reforçando: não deve lançar exceção
+    executor.set_spinner_callbacks(MagicMock(), MagicMock())

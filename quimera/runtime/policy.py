@@ -54,6 +54,7 @@ class ToolPolicy:
             "exec_command",
             "close_command_session",
             "remove_file",
+            "write_stdin",
         }:
             return self.config.require_approval_for_mutations
         return False

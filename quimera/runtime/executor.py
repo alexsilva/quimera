@@ -1,7 +1,6 @@
 """Componentes de `quimera.runtime.executor`."""
 from __future__ import annotations
 
-from .approval import ApprovalHandler
 from .config import ToolRuntimeConfig
 from .models import ToolCall, ToolResult
 from .parser import ToolCallParseError, extract_tool_call
@@ -25,13 +24,13 @@ class ToolExecutor:
     def __init__(
             self,
             config: ToolRuntimeConfig,
-            approval_handler: ApprovalHandler,
+            approval_handler,
             registry: ToolRegistry | None = None,
             policy: ToolPolicy | None = None,
     ) -> None:
         """Inicializa uma instância de ToolExecutor."""
         self.config = config
-        self.approval_handler = approval_handler
+        self._approval_handler = approval_handler
         self.registry = registry or ToolRegistry()
         self.policy = policy or ToolPolicy(config)
         self._register_builtin_tools()
@@ -58,28 +57,59 @@ class ToolExecutor:
         self.registry.register("list_jobs", task_tools.list_jobs)
         self.registry.register("get_job", task_tools.get_job)
 
+    @property
+    def approval_handler(self):
+        """Acesso ao handler de aprovação (para pré-aprovação externa)."""
+        return self._approval_handler
+
+    def set_spinner_callbacks(self, suspend_spinner_fn, resume_spinner_fn):
+        """Injeta callbacks de spinner no approval handler.
+
+        Encadeia até o handler base (ConsoleApprovalHandler) atravessando
+        possíveis wrappers como PreApprovalHandler.
+        """
+        handler = self._approval_handler
+        # Atravessa wrappers (ex: PreApprovalHandler) até chegar no base
+        while hasattr(handler, '_base') and hasattr(handler._base, 'set_spinner_callbacks'):
+            handler = handler._base
+        setter = getattr(handler, 'set_spinner_callbacks', None)
+        if callable(setter):
+            setter(suspend_spinner_fn, resume_spinner_fn)
+
     def execute(self, call: ToolCall) -> ToolResult:
-        """Executa execute."""
+        """Executa um ToolCall com política de aprovação.
+
+        Se aprovação for necessária, bloqueia no approval_handler
+        até obter decisão do humano. O handler pode ser interativo
+        (ConsoleApprovalHandler com input()) ou automático
+        (AutoApprovalHandler para testes).
+        """
         normalized_call = self._normalize_call(call)
         try:
             self.policy.validate(normalized_call)
 
+            # Verifica se precisa de aprovação (mutação ou permissão)
             permission_error = self.policy.check_path_permission(normalized_call)
-            if permission_error:
-                approved = self.approval_handler.approve(
-                    tool_name=normalized_call.name,
-                    summary=f"Permissão necessária para acessar: {permission_error.resolved_path}",
-                )
-                if not approved:
-                    return ToolResult(ok=False, tool_name=normalized_call.name, error="Acesso negado pelo usuário")
+            needs_approval = self.policy.requires_approval(normalized_call)
+            has_permission_issue = permission_error is not None
 
-            if self.policy.requires_approval(normalized_call):
-                approved = self.approval_handler.approve(
+            if has_permission_issue or needs_approval:
+                # Bloqueia no handler de aprovação (pode ser interativo)
+                approved = self._approval_handler.approve(
                     tool_name=normalized_call.name,
-                    summary=str(normalized_call.arguments),
+                    summary=(
+                        f"Permissão necessária para acessar: {permission_error.resolved_path}"
+                        if has_permission_issue
+                        else str(normalized_call.arguments)
+                    ),
                 )
                 if not approved:
-                    return ToolResult(ok=False, tool_name=normalized_call.name, error="Execução negada pelo usuário")
+                    return ToolResult(
+                        ok=False,
+                        tool_name=normalized_call.name,
+                        error="Execução negada pelo usuário",
+                    )
+
             handler = self.registry.get(normalized_call.name)
             return handler(normalized_call)
         except ToolPolicyError as exc:
