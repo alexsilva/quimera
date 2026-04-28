@@ -53,6 +53,8 @@ class AppDispatchServices:
         plugin = app.get_agent_plugin(agent)
         max_tool_hops = get_max_tool_hops(getattr(plugin, "tool_use_reliability", "medium"))
         tool_history = []
+        _MAX_TOOL_HISTORY_ENTRIES = 3
+        _MAX_HANDOFF_CHARS = 8000
 
         try:
             for _ in range(max_tool_hops):
@@ -77,6 +79,9 @@ class AppDispatchServices:
                     f"Sua resposta anterior:\n{current_response.strip()}\n\n"
                     f"Resultado da ferramenta:\n{tool_payload}"
                 )
+                # Mantém apenas as últimas N entradas para evitar crescimento ilimitado
+                if len(tool_history) > _MAX_TOOL_HISTORY_ENTRIES:
+                    tool_history = tool_history[-_MAX_TOOL_HISTORY_ENTRIES:]
 
                 visible_text = strip_tool_block(raw_response or "")
                 if visible_text:
@@ -90,6 +95,10 @@ class AppDispatchServices:
                     + "\n\n---\n\n".join(tool_history)
                 )
 
+                # Trunca o handoff para evitar prompts gigantes
+                if len(followup_handoff) > _MAX_HANDOFF_CHARS:
+                    followup_handoff = followup_handoff[-_MAX_HANDOFF_CHARS:]
+                    followup_handoff = "(histórico truncado)...\n\n" + followup_handoff
                 if hasattr(app, "_call_agent"):
                     current_response = app._call_agent(
                         agent,
