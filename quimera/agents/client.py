@@ -1,11 +1,13 @@
 """AgentClient: orquestra chamadas a agentes externos (CLI e API)."""
 import json
+import io
 import logging
 import os
 import queue
 import subprocess
 import threading
 import time
+from collections import deque
 from contextlib import nullcontext
 from datetime import datetime, timezone
 
@@ -128,7 +130,11 @@ class AgentClient:
             self.renderer.show_error(f"[erro] não foi possível iniciar {cmd[0]}: {exc}")
             return None
 
-        result_holder = {"stdout": [], "stderr": [], "error": None}
+        result_holder = {  # io.StringIO evita lista crescente; deque limita stderr
+            "stdout": io.StringIO(),
+            "stderr": deque(maxlen=MAX_STDERR_LINES * 2),
+            "error": None,
+        }
         log_queue = queue.Queue() if not silent else None
         stderr_lines_shown = 0
         self._spy_output_presenter.reset()
@@ -137,7 +143,7 @@ class AgentClient:
             try:
                 if proc.stdout:
                     for line in proc.stdout:
-                        result_holder["stdout"].append(line)
+                        result_holder["stdout"].write(line)
                         if log_queue is not None and self.visibility in {Visibility.SUMMARY, Visibility.FULL}:
                             log_queue.put(("stdout", line))
             except Exception as exc:
@@ -202,8 +208,8 @@ class AgentClient:
                     return None
 
                 if result_holder["stdout"]:
-                    _logger.debug("".join(result_holder["stdout"]))
-                filtered_stderr = _filter_stderr_lines(agent, result_holder["stderr"])
+                    _logger.debug(result_holder["stdout"].getvalue())
+                filtered_stderr = _filter_stderr_lines(agent, list(result_holder["stderr"]))
                 if filtered_stderr:
                     _logger.warning("".join(filtered_stderr))
 
@@ -291,9 +297,8 @@ class AgentClient:
                 self.renderer.show_error(f"[erro] falha ao comunicar com {cmd[0]}: {result_holder['error']}")
                 return None
 
-            output = "".join(result_holder["stdout"]).strip()
-            error = "".join(_filter_stderr_lines(agent, result_holder["stderr"])).strip()
-
+            output = result_holder["stdout"].getvalue().strip()
+            error = "".join(_filter_stderr_lines(agent, list(result_holder["stderr"]))).strip()
         finally:
             self._agent_running = False
             self._stop_esc_monitor()

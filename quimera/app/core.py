@@ -695,3 +695,5 @@ class QuimeraApp:
             except KeyboardInterrupt:
                 pass
             self.session_services.shutdown()
+            if hasattr(self, "behavior_metrics"):
+                self.behavior_metrics._flush_if_dirty()

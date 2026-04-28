@@ -10,9 +10,15 @@ Rastreia métricas de eficiência colaborativa:
  - Em caso de falta de contexto suficiente, o roteamento deve delegar a tarefa a outro agente, não improvisar.
 """
 import json
+import atexit
+import threading
 import sys
+import time
 from dataclasses import dataclass, asdict
 from pathlib import Path
+
+# Debounce para save: evita I/O síncrono + serialização JSON a cada métrica.
+_SAVE_DEBOUNCE_SECONDS = 5.0
 
 
 @dataclass
@@ -192,8 +198,12 @@ class BehaviorMetricsTracker:
         """Inicializa uma instância de BehaviorMetricsTracker."""
         self._metrics: dict[str, AgentBehaviorMetrics] = {}
         self._storage_path = Path(storage_path) if storage_path else None
+        self._last_save_time: float = 0.0
+        self._save_dirty = False
+        self._save_timer: threading.Timer | None = None
         if self._storage_path:
             self.load()
+        atexit.register(self._flush_if_dirty)
 
     def load(self):
         """Carrega métricas do armazenamento persistente."""
@@ -209,10 +219,16 @@ class BehaviorMetricsTracker:
             # Se falhar ao carregar, ignora e começa do zero
             return 0
 
-    def save(self):
-        """Grava métricas no armazenamento persistente."""
+    def save(self, force: bool = False):
+        """Grava métricas no armazenamento persistente com debounce."""
         if not self._storage_path:
             return
+        now = time.monotonic()
+        if not force and self._last_save_time > 0.0 and (now - self._last_save_time) < _SAVE_DEBOUNCE_SECONDS:
+            self._schedule_flush()
+            return
+        self._save_dirty = False
+        self._last_save_time = now
 
         try:
             self._storage_path.parent.mkdir(parents=True, exist_ok=True)
@@ -223,6 +239,32 @@ class BehaviorMetricsTracker:
             )
         except Exception as e:
             print(f"[metrics] Falha ao salvar métricas: {e}", file=sys.stderr)
+
+    def _mark_dirty(self):
+        """Marca dados como pendentes de persistência e agenda flush."""
+        if not self._storage_path:
+            return
+        if not self._save_dirty:
+            self._save_dirty = True
+            self._last_save_time = 0.0  # força próximo save() a gravar imediatamente
+        self.save()
+        self._schedule_flush()
+
+    def _schedule_flush(self):
+        """Agenda um flush para daqui a _SAVE_DEBOUNCE_SECONDS, cancelando timer anterior."""
+        if self._save_timer:
+            self._save_timer.cancel()
+        self._save_timer = threading.Timer(_SAVE_DEBOUNCE_SECONDS, self._flush_if_dirty)
+        self._save_timer.daemon = True
+        self._save_timer.start()
+
+    def _flush_if_dirty(self):
+        """Salva se houver alterações pendentes (chamado em shutdown)."""
+        if self._save_timer:
+            self._save_timer.cancel()
+            self._save_timer = None
+        if self._save_dirty:
+            self.save(force=True)
 
     def get_agent(self, agent_name: str) -> AgentBehaviorMetrics:
         """Obtém ou cria métricas para um agente."""
@@ -242,37 +284,37 @@ class BehaviorMetricsTracker:
             is_redundant,
             response_text=response_text,
         )
-        self.save()
+        self._mark_dirty()
 
     def record_handoff_sent(self, agent_name: str, is_invalid: bool = False):
         """Registra um handoff enviado."""
         metrics = self.get_agent(agent_name)
         metrics.record_handoff_sent(is_invalid)
-        self.save()
+        self._mark_dirty()
 
     def record_handoff_received(self, agent_name: str, is_circular: bool = False):
         """Registra um handoff recebido."""
         metrics = self.get_agent(agent_name)
         metrics.record_handoff_received(is_circular)
-        self.save()
+        self._mark_dirty()
 
     def record_synthesis(self, agent_name: str, needed_correction: bool = False):
         """Registra uma operação de síntese."""
         metrics = self.get_agent(agent_name)
         metrics.record_synthesis(needed_correction)
-        self.save()
+        self._mark_dirty()
 
     def record_tool_call(self, agent_name: str, ok: bool, is_invalid: bool = False):
         """Registra uma chamada de ferramenta associada a um agente."""
         metrics = self.get_agent(agent_name)
         metrics.record_tool_call(ok=ok, is_invalid=is_invalid)
-        self.save()
+        self._mark_dirty()
 
     def record_tool_loop_abort(self, agent_name: str):
         """Registra um aborto de loop de ferramentas para um agente."""
         metrics = self.get_agent(agent_name)
         metrics.record_tool_loop_abort()
-        self.save()
+        self._mark_dirty()
 
     def get_agent_summary(self, agent_name: str) -> dict:
         """Retorna resumo das métricas de um agente."""

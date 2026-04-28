@@ -1,7 +1,12 @@
 """Serviços de sessão, persistência e sumarização."""
 import threading
+import time
 
 from ..constants import MSG_MEMORY_FAILED, MSG_MEMORY_SAVING
+
+# Debounce para save_history: evita serializar JSON inteiro a cada mensagem.
+_SAVE_DEBOUNCE_SECONDS = 5.0
+_SAVE_DEBOUNCE_MESSAGES = 5
 
 
 class AppSessionServices:
@@ -9,6 +14,8 @@ class AppSessionServices:
 
     def __init__(self, app):
         self.app = app
+        self._last_save_time: float = 0.0
+        self._unsaved_messages: int = 0
 
     def persist_message(self, role, content):
         """Persiste mensagem no histórico, log e snapshot."""
@@ -16,7 +23,12 @@ class AppSessionServices:
         with app._lock:
             app.history.append({"role": role, "content": content})
             app.storage.append_log(role, content)
-            app.storage.save_history(app.history, shared_state=app.shared_state)
+            self._unsaved_messages += 1
+            now = time.monotonic()
+            if self._unsaved_messages >= _SAVE_DEBOUNCE_MESSAGES or (now - self._last_save_time) >= _SAVE_DEBOUNCE_SECONDS:
+                app.storage.save_history(app.history, shared_state=app.shared_state)
+                self._last_save_time = now
+                self._unsaved_messages = 0
             session_metrics = getattr(app, "session_metrics", None)
             if session_metrics is not None:
                 session_metrics.update_persisted_message_metrics(app, role, content)
