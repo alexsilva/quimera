@@ -198,6 +198,7 @@ class PreApprovalHandler(ApprovalHandler):
         self._base = base_handler
         self._pre_approved = False
         self._approve_all = False
+        self._approve_all_permanent = False
         self._lock = threading.Lock()
 
     def pre_approve(self) -> None:
@@ -210,10 +211,17 @@ class PreApprovalHandler(ApprovalHandler):
         with self._lock:
             self._pre_approved = False
 
-    def set_approve_all(self, enabled: bool = True) -> None:
-        """Ativa/desativa modo 'approve all' — aprova todas as ferramentas sem perguntar."""
+    def set_approve_all(self, enabled: bool = True, permanent: bool = False) -> None:
+        """Ativa/desativa modo 'approve all' — aprova todas as ferramentas sem perguntar.
+
+        Args:
+            enabled: True para ativar, False para desativar.
+            permanent: Se True, o modo sobrevive ao fim do ciclo de tool hops.
+                       Se False (padrão), é resetado automaticamente ao fim do ciclo.
+        """
         with self._lock:
             self._approve_all = enabled
+            self._approve_all_permanent = permanent if enabled else False
             if enabled:
                 self._pre_approved = False
 
@@ -228,3 +236,8 @@ class PreApprovalHandler(ApprovalHandler):
                 print(f"  [pré-aprovado] {tool_name}")
                 return True
         return self._base.approve(tool_name=tool_name, summary=summary)
+\n    def reset_approve_all_after_cycle(self) -> None:
+        """Reseta approve-all ao final do ciclo de tool hops, a menos que seja permanente."""
+        with self._lock:
+            if self._approve_all and not self._approve_all_permanent:
+                self._approve_all = False

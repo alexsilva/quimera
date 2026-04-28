@@ -54,59 +54,67 @@ class AppDispatchServices:
         max_tool_hops = get_max_tool_hops(getattr(plugin, "tool_use_reliability", "medium"))
         tool_history = []
 
-        for _ in range(max_tool_hops):
-            if not current_response:
-                return current_response
+        try:
+            for _ in range(max_tool_hops):
+                if not current_response:
+                    return current_response
 
-            raw_response, tool_result = app.tool_executor.maybe_execute_from_response(current_response)
+                raw_response, tool_result = app.tool_executor.maybe_execute_from_response(current_response)
 
-            if tool_result is None:
-                return current_response
+                if tool_result is None:
+                    return current_response
 
-            is_invalid = bool(getattr(tool_result, "error", None)) and "Sem política para a ferramenta" in str(tool_result.error)
-            ok = bool(getattr(tool_result, "ok", False))
-            if tool_result.error:
-                tool_result.error = _coerce_tool_error(tool_result.error)
-            session_metrics = getattr(app, "session_metrics", None)
-            if session_metrics is not None:
-                session_metrics.record_tool_event(app, agent, ok=ok, is_invalid=is_invalid)
+                is_invalid = bool(getattr(tool_result, "error", None)) and "Sem política para a ferramenta" in str(tool_result.error)
+                ok = bool(getattr(tool_result, "ok", False))
+                if tool_result.error:
+                    tool_result.error = _coerce_tool_error(tool_result.error)
+                session_metrics = getattr(app, "session_metrics", None)
+                if session_metrics is not None:
+                    session_metrics.record_tool_event(app, agent, ok=ok, is_invalid=is_invalid)
 
-            tool_payload = task_services.truncate_payload(tool_result.to_model_payload())
-            tool_history.append(
-                f"Sua resposta anterior:\n{current_response.strip()}\n\n"
-                f"Resultado da ferramenta:\n{tool_payload}"
-            )
-
-            visible_text = strip_tool_block(raw_response or "")
-            if visible_text:
-                if show_output:
-                    app.print_response(agent, visible_text)
-                if persist_history:
-                    app.session_services.persist_message(agent, visible_text)
-
-            followup_handoff = (
-                "Histórico de ferramentas desta rodada:\n\n"
-                + "\n\n---\n\n".join(tool_history)
-            )
-
-            if hasattr(app, "_call_agent"):
-                current_response = app._call_agent(
-                    agent,
-                    handoff=followup_handoff,
-                    primary=False,
-                    protocol_mode="tool_loop",
-                    silent=silent,
-                )
-            else:
-                current_response = self.call_agent_low_level(
-                    agent,
-                    handoff=followup_handoff,
-                    primary=False,
-                    protocol_mode="tool_loop",
-                    silent=silent,
+                tool_payload = task_services.truncate_payload(tool_result.to_model_payload())
+                tool_history.append(
+                    f"Sua resposta anterior:\n{current_response.strip()}\n\n"
+                    f"Resultado da ferramenta:\n{tool_payload}"
                 )
 
-        return "Falha: limite de execuções de ferramenta atingido."
+                visible_text = strip_tool_block(raw_response or "")
+                if visible_text:
+                    if show_output:
+                        app.print_response(agent, visible_text)
+                    if persist_history:
+                        app.session_services.persist_message(agent, visible_text)
+
+                followup_handoff = (
+                    "Histórico de ferramentas desta rodada:\n\n"
+                    + "\n\n---\n\n".join(tool_history)
+                )
+
+                if hasattr(app, "_call_agent"):
+                    current_response = app._call_agent(
+                        agent,
+                        handoff=followup_handoff,
+                        primary=False,
+                        protocol_mode="tool_loop",
+                        silent=silent,
+                    )
+                else:
+                    current_response = self.call_agent_low_level(
+                        agent,
+                        handoff=followup_handoff,
+                        primary=False,
+                        protocol_mode="tool_loop",
+                        silent=silent,
+                    )
+
+            return "Falha: limite de execuções de ferramenta atingido."
+        finally:
+            # Reseta approve-all (não-permanente) ao fim do ciclo de tool hops.
+            tool_executor = getattr(app, "tool_executor", None)
+            if tool_executor is not None:
+                approval_handler = getattr(tool_executor, "approval_handler", None)
+                if approval_handler is not None and hasattr(approval_handler, "reset_approve_all_after_cycle"):
+                    approval_handler.reset_approve_all_after_cycle()
 
     def call_agent(self, agent, **options):
         """Executa despacho com retry e resolução de ferramentas."""
