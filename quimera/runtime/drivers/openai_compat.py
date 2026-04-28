@@ -209,80 +209,87 @@ class OpenAICompatDriver:
         max_tool_hops = get_max_tool_hops(self.tool_use_reliability)
         last_invalid_tool_name: str | None = None
 
-        for hop in range(max_tool_hops + 1):
-            if cancel_event is not None and cancel_event.is_set():
-                return None
-            try:
-                response_text, tool_calls = self._chat(
-                    messages,
-                    tools,
-                    cancel_event=cancel_event,
-                    on_text_chunk=on_text_chunk if not tools else None,
-                )
-            except Exception as exc:
-                _logger.error("OpenAICompatDriver: API error on hop %d: %s", hop, exc)
-                return None
+        try:
+            for hop in range(max_tool_hops + 1):
+                if cancel_event is not None and cancel_event.is_set():
+                    return None
+                try:
+                    response_text, tool_calls = self._chat(
+                        messages,
+                        tools,
+                        cancel_event=cancel_event,
+                        on_text_chunk=on_text_chunk if not tools else None,
+                    )
+                except Exception as exc:
+                    _logger.error("OpenAICompatDriver: API error on hop %d: %s", hop, exc)
+                    return None
 
-            if not tool_calls:
-                return _sanitize_assistant_text(response_text) if response_text else None
+                if not tool_calls:
+                    return _sanitize_assistant_text(response_text) if response_text else None
 
-            if hop == max_tool_hops:
-                _logger.warning("OpenAICompatDriver: max tool hops (%d) reached", max_tool_hops)
-                if on_tool_abort is not None:
-                    on_tool_abort("max_tool_hops")
-                return _sanitize_assistant_text(
-                    response_text) if response_text else "Limite de chamadas de ferramenta atingido."
+                if hop == max_tool_hops:
+                    _logger.warning("OpenAICompatDriver: max tool hops (%d) reached", max_tool_hops)
+                    if on_tool_abort is not None:
+                        on_tool_abort("max_tool_hops")
+                    return _sanitize_assistant_text(
+                        response_text) if response_text else "Limite de chamadas de ferramenta atingido."
 
-            # Adiciona turno do assistente com os tool calls
-            assistant_msg: dict = {
-                "role": "assistant",
-                "content": response_text or "",
-                "tool_calls": [
-                    {
-                        "id": tc["id"],
-                        "type": "function",
-                        "function": {
-                            "name": tc["name"],
-                            "arguments": json.dumps(tc["arguments"], ensure_ascii=False),
-                        },
-                    }
-                    for tc in tool_calls
-                ],
-            }
-            messages.append(assistant_msg)
+                # Adiciona turno do assistente com os tool calls
+                assistant_msg: dict = {
+                    "role": "assistant",
+                    "content": response_text or "",
+                    "tool_calls": [
+                        {
+                            "id": tc["id"],
+                            "type": "function",
+                            "function": {
+                                "name": tc["name"],
+                                "arguments": json.dumps(tc["arguments"], ensure_ascii=False),
+                            },
+                        }
+                        for tc in tool_calls
+                    ],
+                }
+                messages.append(assistant_msg)
 
-            # Executa cada ferramenta e adiciona os resultados
-            for tc in tool_calls:
-                if on_tool_call is not None:
-                    on_tool_call(tc["name"], tc["arguments"])
-                result = self._execute_tool(tc, tool_executor)
-                _logger.info(
-                    "OpenAICompatDriver: tool=%s ok=%s hop=%d",
-                    tc["name"], result.ok, hop,
-                )
-                if on_tool_result is not None:
-                    on_tool_result(result)
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc["id"],
-                    "content": _truncate_tool_content(
-                        json.dumps(result.to_model_payload(), ensure_ascii=False)
-                    ),
-                })
-                if self._is_invalid_tool_result(result):
-                    if self.tool_use_reliability == "low" and last_invalid_tool_name == tc["name"]:
-                        _logger.warning(
-                            "OpenAICompatDriver: repeated invalid tool for low-reliability model: %s",
-                            tc["name"],
-                        )
-                        if on_tool_abort is not None:
-                            on_tool_abort("invalid_tool_loop")
-                        return "Falha: loop de ferramenta inválida detectado."
-                    last_invalid_tool_name = tc["name"]
-                else:
-                    last_invalid_tool_name = None
+                # Executa cada ferramenta e adiciona os resultados
+                for tc in tool_calls:
+                    if on_tool_call is not None:
+                        on_tool_call(tc["name"], tc["arguments"])
+                    result = self._execute_tool(tc, tool_executor)
+                    _logger.info(
+                        "OpenAICompatDriver: tool=%s ok=%s hop=%d",
+                        tc["name"], result.ok, hop,
+                    )
+                    if on_tool_result is not None:
+                        on_tool_result(result)
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc["id"],
+                        "content": _truncate_tool_content(
+                            json.dumps(result.to_model_payload(), ensure_ascii=False)
+                        ),
+                    })
+                    if self._is_invalid_tool_result(result):
+                        if self.tool_use_reliability == "low" and last_invalid_tool_name == tc["name"]:
+                            _logger.warning(
+                                "OpenAICompatDriver: repeated invalid tool for low-reliability model: %s",
+                                tc["name"],
+                            )
+                            if on_tool_abort is not None:
+                                on_tool_abort("invalid_tool_loop")
+                            return "Falha: loop de ferramenta inválida detectado."
+                        last_invalid_tool_name = tc["name"]
+                    else:
+                        last_invalid_tool_name = None
 
-        return None
+            return None
+        finally:
+            # Reseta approve-all (não-permanente) ao fim do ciclo de tool hops.
+            if tool_executor is not None:
+                approval_handler = getattr(tool_executor, "approval_handler", None)
+                if approval_handler is not None and hasattr(approval_handler, "reset_approve_all_after_cycle"):
+                    approval_handler.reset_approve_all_after_cycle()
 
     def _is_invalid_tool_result(self, result: ToolResult) -> bool:
         """Indica se o resultado representa uso de ferramenta fora do contrato conhecido."""

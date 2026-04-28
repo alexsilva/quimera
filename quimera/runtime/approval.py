@@ -236,7 +236,8 @@ class PreApprovalHandler(ApprovalHandler):
                 print(f"  [pré-aprovado] {tool_name}")
                 return True
         return self._base.approve(tool_name=tool_name, summary=summary)
-\n    def reset_approve_all_after_cycle(self) -> None:
+
+    def reset_approve_all_after_cycle(self) -> None:
         """Reseta approve-all ao final do ciclo de tool hops, a menos que seja permanente."""
         with self._lock:
             if self._approve_all and not self._approve_all_permanent:
