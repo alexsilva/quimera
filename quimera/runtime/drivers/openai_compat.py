@@ -108,8 +108,10 @@ class OpenAICompatDriver:
             api_key: str = "ollama",
             timeout: Optional[int] = None,
             tool_use_reliability: str = "medium",
+            extra_body: Optional[dict] = None,
     ) -> None:
-        """Inicializa uma instância de OpenAICompatDriver."""
+        """Inicializa uma instância de OpenAICompatDriver.
+        extra_body: dicionário opcional mesclado no corpo da requisição (ex: {"thinking": {"type": "enabled"}})."""
         if OpenAI is None:
             raise ImportError(
                 "O pacote 'openai' é necessário para usar o driver openai_compat. "
@@ -122,6 +124,7 @@ class OpenAICompatDriver:
             timeout=float(timeout) if timeout else 120.0,
         )
         self.tool_use_reliability = str(tool_use_reliability or "medium").lower()
+        self.extra_body = dict(extra_body) if extra_body else None
 
     def run(
             self,
@@ -271,7 +274,8 @@ class OpenAICompatDriver:
         return (not result.ok) and bool(result.error) and "Sem política para a ferramenta" in result.error
 
     def _chat(self, messages: list[dict], tools: list[dict], cancel_event=None, on_text_chunk=None) -> tuple[str, list[dict]]:
-        """Despacha para o modo correto conforme presença de ferramentas."""
+        """Despacha para o modo correto conforme presença de ferramentas.
+        extra_body é repassado para permitir que o plugin controle parâmetros como 'thinking'."""
         # Cancelamento cooperativo: se já foi solicitado, não iniciar nova interação
         if cancel_event is not None and cancel_event.is_set():
             return "", []
@@ -292,6 +296,7 @@ class OpenAICompatDriver:
             messages=messages,
             tools=tools,
             tool_choice="auto",
+            **( {"extra_body": self.extra_body} if self.extra_body else {} ),
             stream=False,
         )
         choice = response.choices[0]

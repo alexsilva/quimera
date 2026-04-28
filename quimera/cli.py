@@ -106,15 +106,45 @@ def _configure_connection_interactively(plugin, driver_hint: str | None = None):
         api_key_env=plugin.api_key_env or "OPENAI_API_KEY",
         provider=plugin.driver if plugin.driver != "cli" else "openai_compat",
         supports_native_tools=plugin.supports_tools,
+        extra_body=getattr(current, "extra_body", None),
     )
     provider_default = api_defaults.provider if api_defaults.provider != "openai" else "openai_compat"
-    return OpenAIConnection(
+    extra_body_raw = _prompt_text("extra_body (JSON, enter para ignorar)", "").strip()
+    extra_body = None
+    if extra_body_raw:
+        try:
+            extra_body = json.loads(extra_body_raw)
+            # Se o JSON for vazio ({}), trata como "limpar extra_body"
+            if extra_body == {}:
+                extra_body = None
+        except json.JSONDecodeError as exc:
+            print(f"JSON inválido: {exc}. extra_body será ignorado.")
+            extra_body = api_defaults.extra_body
+    else:
+        # Enter vazio = preserva o valor anterior
+        extra_body = api_defaults.extra_body
+    conn = OpenAIConnection(
         model=_prompt_text("Modelo", api_defaults.model) or api_defaults.model,
         base_url=_prompt_text("Base URL", api_defaults.base_url) or api_defaults.base_url,
         api_key_env=_prompt_text("Variável da API key", api_defaults.api_key_env) or api_defaults.api_key_env,
         provider=provider_default,
         supports_native_tools=api_defaults.supports_native_tools,
+        extra_body=extra_body,
     )
+    return conn
+
+
+def _parse_extra_body_arg(raw: str | None) -> dict | None:
+    """Converte --extra-body de string JSON para dict, com mensagem de erro."""
+    if raw is None:
+        return None
+    raw = raw.strip()
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"--extra-body: JSON inválido: {exc}") from exc
 
 
 def _build_connection_from_args(plugin, args):
@@ -139,12 +169,14 @@ def _build_connection_from_args(plugin, args):
             )
         return _configure_connection_interactively(plugin, driver_hint="cli")
     if args.model:
+        extra_body = _parse_extra_body_arg(getattr(args, "extra_body", None))
         return OpenAIConnection(
             model=args.model,
             base_url=args.base_url or plugin.effective_base_url() or "https://api.openai.com/v1",
             api_key_env=args.api_key_env or plugin.effective_api_key_env() or "OPENAI_API_KEY",
             provider=plugin.effective_driver() if plugin.effective_driver() != "cli" else "openai_compat",
             supports_native_tools=plugin.supports_tools,
+            extra_body=extra_body,
         )
     return _configure_connection_interactively(plugin, driver_hint="openai")
 
@@ -222,6 +254,8 @@ def main():
                         help="Base URL (para driver=openai)")
     parser.add_argument("--api-key-env", dest="api_key_env", metavar="VAR", default=None,
                         help="Variável de ambiente com API key (para driver=openai)")
+    parser.add_argument("--extra-body", dest="extra_body", metavar="JSON", default=None,
+                        help="JSON com parâmetros extras para o corpo da requisição (ex: '{\"thinking\":{\"type\":\"disabled\"}}')")
     parser.add_argument("--list-connections", dest="list_connections", action="store_true",
                         help="Lista conexões persistidas")
 

@@ -432,6 +432,7 @@ class AgentClient:
                 api_key=api_key,
                 timeout=self.timeout,
                 tool_use_reliability=getattr(plugin, "tool_use_reliability", "medium"),
+                extra_body=connection.extra_body,
             )
 
         driver_instance = self._api_drivers[agent]

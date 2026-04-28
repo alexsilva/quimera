@@ -1,5 +1,6 @@
 """Componentes de `quimera.app.system_layer`."""
 from __future__ import annotations
+import json
 import shlex
 
 from ..constants import (
@@ -208,15 +209,32 @@ class AppSystemLayer:
             api_key_env=plugin.api_key_env or "OPENAI_API_KEY",
             provider=plugin.driver if plugin.driver != "cli" else "openai_compat",
             supports_native_tools=plugin.supports_tools,
+            extra_body=getattr(current, "extra_body", None),
         )
         provider_default = api_defaults.provider if api_defaults.provider != "openai" else "openai_compat"
-        return OpenAIConnection(
+        extra_body_raw = self._prompt_text("extra_body (JSON, enter para ignorar)", "").strip()
+        extra_body = None
+        if extra_body_raw:
+            try:
+                extra_body = json.loads(extra_body_raw)
+                # Se o JSON for vazio ({}), trata como "limpar extra_body"
+                if extra_body == {}:
+                    extra_body = None
+            except json.JSONDecodeError as exc:
+                self.app.renderer.show_warning(f"JSON inválido: {exc}. extra_body será ignorado.")
+                extra_body = api_defaults.extra_body
+        else:
+            # Enter vazio = preserva o valor anterior
+            extra_body = api_defaults.extra_body
+        conn = OpenAIConnection(
             model=self._prompt_text("Modelo", api_defaults.model) or api_defaults.model,
             base_url=self._prompt_text("Base URL", api_defaults.base_url) or api_defaults.base_url,
             api_key_env=self._prompt_text("Variável da API key", api_defaults.api_key_env) or api_defaults.api_key_env,
             provider=provider_default,
             supports_native_tools=api_defaults.supports_native_tools,
+            extra_body=extra_body,
         ), None
+        return conn, None
 
     def _build_prompt_preview_message(self, agent: str) -> str:
         """Monta a saída textual do comando /prompt."""

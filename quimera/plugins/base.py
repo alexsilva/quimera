@@ -31,6 +31,10 @@ class OpenAIConnection:
     api_key_env: str = "OPENAI_API_KEY"
     provider: str = "openai"
     supports_native_tools: bool = True
+    extra_body: Optional[dict] = None
+    """Parâmetros extras mesclados no corpo da requisição à API.
+    Exemplo para DeepSeek: {"thinking": {"type": "enabled"}}.
+    None significa não enviar extra_body (comportamento padrão da API)."""
 
 
 Connection = Union[CliConnection, OpenAIConnection]
@@ -83,6 +87,7 @@ def _connection_from_dict(data: dict) -> Connection:
         api_key_env=data.get("api_key_env", "OPENAI_API_KEY"),
         provider=data.get("provider", "openai"),
         supports_native_tools=data.get("supports_native_tools", True),
+        extra_body=data.get("extra_body"),
     )
 
 
@@ -287,7 +292,10 @@ def format_connection_label(connection: Connection) -> str:
     if isinstance(connection, CliConnection):
         cmd = shlex.join(connection.cmd) if connection.cmd else "(sem comando)"
         return f"cli: {cmd}"
-    return f"{connection.provider}: model={connection.model} base_url={connection.base_url}"
+    label = f"{connection.provider}: model={connection.model} base_url={connection.base_url}"
+    if connection.extra_body:
+        label += f" extra_body={json.dumps(connection.extra_body, ensure_ascii=False)}"
+    return label
 
 
 _registry: dict[str, AgentPlugin] = {}

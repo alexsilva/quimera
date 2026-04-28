@@ -168,6 +168,7 @@ class DriverRepl:
             base_url=connection.base_url,
             api_key=api_key,
             tool_use_reliability=getattr(self.plugin, "tool_use_reliability", "medium"),
+            extra_body=connection.extra_body,
         )
 
     def _probe_url(self) -> str:
