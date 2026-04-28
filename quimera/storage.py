@@ -42,6 +42,7 @@ class SessionStorage:
         payload = {
             "session_id": self.history_file.stem,
             "saved_at": datetime.now().isoformat(timespec="seconds"),
+            "cwd": str(Path.cwd()),
             "messages": history,
             "shared_state": shared_state or {},
         }
@@ -81,45 +82,55 @@ class SessionStorage:
         if not json_files:
             return {"messages": [], "shared_state": {}}
 
-        latest = json_files[0]
-        try:
-            with latest.open(encoding="utf-8") as file:
-                data = json.load(file)
-        except (json.JSONDecodeError, OSError):
-            return {"messages": [], "shared_state": {}}
-
-        if isinstance(data, list):
-            messages = data
-            shared_state = {}
-        elif isinstance(data, dict):
-            messages = data.get("messages", [])
-            shared_state = data.get("shared_state", {})
-        else:
-            messages = []
-            shared_state = {}
-
-        if messages:
-            self.renderer.show_system(
-                f"[memória] histórico restaurado de {latest.parent.name}/{latest.name} ({len(messages)} mensagens)\n"
-            )
-        if not isinstance(shared_state, dict):
-            shared_state = {}
-
-        # Descarta shared_state se o snapshot for mais antigo que o TTL
-        # Snapshots sem saved_at são considerados expirados por segurança
-        saved_at_raw = data.get("saved_at") if isinstance(data, dict) else None
-        if shared_state and not saved_at_raw:
-            shared_state = {}
-        elif shared_state and saved_at_raw:
+        current_cwd = str(Path.cwd())
+        for json_file in json_files:
             try:
-                saved_at = datetime.fromisoformat(saved_at_raw)
-                saved_at = self._normalize_sort_datetime(saved_at)
-                if datetime.now() - saved_at > timedelta(hours=SHARED_STATE_TTL_HOURS):
-                    shared_state = {}
-            except (ValueError, TypeError):
+                with json_file.open(encoding="utf-8") as file:
+                    data = json.load(file)
+            except (json.JSONDecodeError, OSError):
+                continue
+
+            # Process this session
+            if isinstance(data, list):
+                # Old format (list) - always include
+                messages = data
+                shared_state = {}
+            elif isinstance(data, dict):
+                # New format (dict) - check cwd for workspace isolation
+                saved_cwd = data.get("cwd")
+                if saved_cwd is not None and saved_cwd != current_cwd:
+                    # Session from different workspace, skip
+                    continue
+                messages = data.get("messages", [])
+                shared_state = data.get("shared_state", {})
+            else:
+                continue
+
+            if messages:
+                self.renderer.show_system(
+                    f"[memória] histórico restaurado de {json_file.parent.name}/{json_file.name} ({len(messages)} mensagens)\n"
+                )
+            if not isinstance(shared_state, dict):
                 shared_state = {}
 
-        return {"messages": messages, "shared_state": shared_state}
+            # Descarta shared_state se o snapshot for mais antigo que o TTL
+            # Snapshots sem saved_at são considerados expirados por segurança
+            saved_at_raw = data.get("saved_at") if isinstance(data, dict) else None
+            if shared_state and not saved_at_raw:
+                shared_state = {}
+            elif shared_state and saved_at_raw:
+                try:
+                    saved_at = datetime.fromisoformat(saved_at_raw)
+                    saved_at = self._normalize_sort_datetime(saved_at)
+                    if datetime.now() - saved_at > timedelta(hours=SHARED_STATE_TTL_HOURS):
+                        shared_state = {}
+                except (ValueError, TypeError):
+                    shared_state = {}
+
+            return {"messages": messages, "shared_state": shared_state}
+
+        # No matching session found
+        return {"messages": [], "shared_state": {}}
 
     def load_last_history(self):
         """Compatibilidade: retorna apenas as mensagens do snapshot mais recente."""
