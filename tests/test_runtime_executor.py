@@ -105,3 +105,59 @@ def test_task_executor_skips_review_claim_when_agent_is_not_operational(tmp_path
         executor._poll_loop()
 
     claim_review_task.assert_not_called()
+
+
+# ── remove_file executor ─────────────────────────────────────
+
+def test_executor_remove_file_is_registered(config, approval_handler):
+    """remove_file está registrado no executor."""
+    executor = ToolExecutor(config, approval_handler)
+    assert "remove_file" in executor.registry.names()
+
+
+def test_executor_remove_file_denied_by_approval(tmp_path):
+    """remove_file com aprovação negada retorna erro."""
+    executor = ToolExecutor(
+        ToolRuntimeConfig(workspace_root=tmp_path),
+        MagicMock(),
+    )
+    executor.approval_handler.approve.return_value = False
+
+    (tmp_path / "x.txt").write_text("x")
+    call = ToolCall(name="remove_file", arguments={"path": "x.txt", "dry_run": False})
+    result = executor.execute(call)
+
+    assert result.ok is False
+    assert "Execução negada" in result.error
+
+
+def test_executor_remove_file_allowed_and_executes(tmp_path):
+    """remove_file com aprovação concedida executa e remove o arquivo."""
+    executor = ToolExecutor(
+        ToolRuntimeConfig(workspace_root=tmp_path),
+        MagicMock(),
+    )
+    executor.approval_handler.approve.return_value = True
+
+    (tmp_path / "x.txt").write_text("x")
+    call = ToolCall(name="remove_file", arguments={"path": "x.txt", "dry_run": False})
+    result = executor.execute(call)
+
+    assert result.ok is True
+    assert "removido" in result.content.lower()
+    assert not (tmp_path / "x.txt").exists()
+
+
+def test_executor_remove_file_policy_blocks_missing_dry_run(tmp_path):
+    """Política bloqueia remove_file sem dry_run=False explícito."""
+    executor = ToolExecutor(
+        ToolRuntimeConfig(workspace_root=tmp_path),
+        MagicMock(),
+    )
+    (tmp_path / "x.txt").write_text("x")
+
+    call = ToolCall(name="remove_file", arguments={"path": "x.txt"})
+    result = executor.execute(call)
+
+    assert result.ok is False
+    assert "dry_run=False" in result.error

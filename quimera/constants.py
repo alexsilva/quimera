@@ -41,7 +41,8 @@ CMD_EDIT = "/edit"
 CMD_FILE_PREFIX = "/file"
 CMD_TASK = "/task"
 CMD_RESET_STATE = "/reset-state"
-CMD_ALIASES = {"/e": CMD_EDIT, "/r": CMD_CONTEXT, "/g": CMD_HELP}
+CMD_APPROVE = "/approve"
+CMD_ALIASES = {"/e": CMD_EDIT, "/r": CMD_CONTEXT, "/g": CMD_HELP, "/y": CMD_APPROVE, "/a": CMD_APPROVE}
 USER_ROLE = "human"
 
 # Messages

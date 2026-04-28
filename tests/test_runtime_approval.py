@@ -36,3 +36,20 @@ def test_console_approval_handler_empty(mock_input):
     handler = ConsoleApprovalHandler()
     mock_input.return_value = ""
     assert handler.approve(tool_name="shell", summary="echo") is False
+
+
+def test_console_approval_handler_with_custom_input_fn():
+    """Quando input_fn é injetada, deve usá-la em vez de input() builtin."""
+    calls = []
+
+    def fake_input(prompt):
+        calls.append(prompt)
+        return "yes"
+
+    handler = ConsoleApprovalHandler(input_fn=fake_input)
+    result = handler.approve(tool_name="shell", summary="ls")
+
+    assert result is True
+    assert len(calls) == 1
+    assert "Executar?" in calls[0]
+    assert "y/N" in calls[0]

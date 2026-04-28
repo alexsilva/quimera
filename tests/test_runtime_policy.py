@@ -161,3 +161,75 @@ def test_policy_disabled_tool_exceptions(policy):
     for tool in ["approve_task", "complete_task", "fail_task"]:
         with pytest.raises(ToolPolicyError):
             policy.validate(ToolCall(name=tool, arguments={}))
+
+
+# ── remove_file policy ───────────────────────────────────────
+
+def test_policy_remove_file_requires_path(policy):
+    """remove_file sem 'path' é rejeitado."""
+    call = ToolCall(name="remove_file", arguments={})
+    with pytest.raises(ToolPolicyError, match="requer 'path'"):
+        policy.validate(call)
+
+
+def test_policy_remove_file_requires_explicit_dry_run_false(tmp_path):
+    """dry_run deve ser explicitamente False; True (padrão) é rejeitado."""
+    config = ToolRuntimeConfig(workspace_root=tmp_path)
+    policy = ToolPolicy(config)
+    (tmp_path / "x.txt").write_text("x")
+
+    call = ToolCall(name="remove_file", arguments={"path": "x.txt"})
+    with pytest.raises(ToolPolicyError, match="dry_run=False explícito"):
+        policy.validate(call)
+
+
+def test_policy_remove_file_allows_explicit_false(tmp_path):
+    """dry_run=False explícito passa na validação."""
+    config = ToolRuntimeConfig(workspace_root=tmp_path)
+    policy = ToolPolicy(config)
+    (tmp_path / "x.txt").write_text("x")
+
+    call = ToolCall(name="remove_file", arguments={"path": "x.txt", "dry_run": False})
+    policy.validate(call)  # não deve lançar
+
+
+def test_policy_remove_file_rejects_dry_run_true(tmp_path):
+    """dry_run=True também é rejeitado (só False passa)."""
+    config = ToolRuntimeConfig(workspace_root=tmp_path)
+    policy = ToolPolicy(config)
+    (tmp_path / "x.txt").write_text("x")
+
+    call = ToolCall(name="remove_file", arguments={"path": "x.txt", "dry_run": True})
+    with pytest.raises(ToolPolicyError, match="dry_run=False explícito"):
+        policy.validate(call)
+
+
+def test_policy_remove_file_outside_workspace(tmp_path):
+    """remove_file com path fora do workspace é rejeitado."""
+    config = ToolRuntimeConfig(workspace_root=tmp_path)
+    policy = ToolPolicy(config)
+
+    call = ToolCall(name="remove_file", arguments={"path": "../../etc/passwd", "dry_run": False})
+    with pytest.raises(ToolPolicyError, match="Path fora da workspace"):
+        policy.validate(call)
+
+
+def test_policy_remove_file_requires_approval(policy):
+    """remove_file requer aprovação quando require_approval_for_mutations=True."""
+    assert policy.requires_approval(ToolCall(name="remove_file", arguments={})) is True
+
+
+def test_policy_check_path_permission_for_remove_file(policy):
+    """check_path_permission cobre remove_file."""
+    call = ToolCall(name="remove_file", arguments={"path": ".", "dry_run": False})
+    result = policy.check_path_permission(call)
+    # path '.' resolve para /tmp (workspace_root), que está nos allowed_read_roots
+    assert result is None
+
+
+def test_policy_check_path_permission_outside_for_remove_file(policy):
+    """check_path_permission retorna erro para path fora dos roots."""
+    call = ToolCall(name="remove_file", arguments={"path": "../../etc/passwd", "dry_run": False})
+    result = policy.check_path_permission(call)
+    assert result is not None
+    assert "etc" in str(result.resolved_path)

@@ -6,6 +6,7 @@ import shlex
 from ..constants import (
     CMD_AGENTS,
     CMD_ALIASES,
+    CMD_APPROVE,
     CMD_CLEAR,
     CMD_CONNECT,
     CMD_CONTEXT,
@@ -349,6 +350,15 @@ class AppSystemLayer:
         if command == CMD_RESET_STATE:
             self.app.reset_shared_state()
             self.app.renderer.show_system("shared_state limpo.")
+            return True
+
+        if command == CMD_APPROVE:
+            approval_handler = getattr(self.app, "_approval_handler", None)
+            if approval_handler is not None and hasattr(approval_handler, "pre_approve"):
+                approval_handler.pre_approve()
+                self.app.renderer.show_system("[aprovação] próxima ferramenta será pré-aprovada.")
+            else:
+                self.app.renderer.show_warning("[aprovação] mecanismo de aprovação não disponível.")
             return True
 
         if command == CMD_CONTEXT:

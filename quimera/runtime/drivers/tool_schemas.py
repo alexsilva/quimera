@@ -129,6 +129,27 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "remove_file",
+            "description": "Remove um arquivo dentro do workspace. Exige dry_run=False para confirmar.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Caminho relativo do arquivo a ser removido.",
+                    },
+                    "dry_run": {
+                        "type": "boolean",
+                        "description": "Padrão true (seguro). Passe false explicitamente para realmente remover.",
+                    },
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "run_shell",
             "description": (
                 "Executa um comando shell no diretório do workspace. "

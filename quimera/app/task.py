@@ -6,6 +6,7 @@ from pathlib import Path
 from ..constants import CMD_TASK
 from ..constants import NEEDS_INPUT_MARKER, USER_ROLE
 from ..runtime import ToolRuntimeConfig, ConsoleApprovalHandler, create_executor
+from ..runtime import PreApprovalHandler
 from ..runtime.executor import ToolExecutor
 from ..runtime import tasks as runtime_tasks
 from ..runtime.parser import strip_tool_block
@@ -256,13 +257,22 @@ class AppTaskServices:
     def build_tool_executor(self) -> ToolExecutor:
         """Cria o executor de ferramentas do app com a configuração padrão."""
         app = self.app
+        renderer = getattr(app, "renderer", None)
+        read_user_input = getattr(app, "read_user_input", None)
+        base_handler = ConsoleApprovalHandler(
+            renderer=renderer,
+            read_user_input_fn=read_user_input,
+        )
+        approval_handler = PreApprovalHandler(base_handler)
+        # Armazena referência no app para permitir pré-aprovação via /approve
+        app._approval_handler = approval_handler
         return ToolExecutor(
             config=ToolRuntimeConfig(
                 workspace_root=app.workspace.cwd,
                 db_path=Path(app.tasks_db_path) if app.tasks_db_path else None,
                 require_approval_for_mutations=False,
             ),
-            approval_handler=ConsoleApprovalHandler(),
+            approval_handler=approval_handler,
         )
 
     def call_agent_for_parallel(self, agent, handoff, protocol_mode, staging_root: Path, index: int):

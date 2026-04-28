@@ -136,3 +136,85 @@ def test_file_tools_grep_search_error(tools, config):
         result = tools.grep_search(call)
         assert result.ok is True
         assert result.content == ""
+
+
+# ── remove_file ──────────────────────────────────────────────
+
+def test_remove_file_dry_run_default(tools, config):
+    """dry_run=True por padrão: não remove, apenas reporta."""
+    workspace = config.workspace_root
+    (workspace / "to_delete.txt").write_text("bye")
+
+    call = ToolCall(name="remove_file", arguments={"path": "to_delete.txt"})
+    result = tools.remove_file(call)
+
+    assert result.ok is True
+    assert "[dry-run]" in result.content
+    assert (workspace / "to_delete.txt").exists()
+
+
+def test_remove_file_actual_deletion(tools, config):
+    """Com dry_run=False, o arquivo é removido de fato."""
+    workspace = config.workspace_root
+    (workspace / "to_delete.txt").write_text("bye")
+
+    call = ToolCall(name="remove_file", arguments={"path": "to_delete.txt", "dry_run": False})
+    result = tools.remove_file(call)
+
+    assert result.ok is True
+    assert "removido" in result.content.lower()
+    assert not (workspace / "to_delete.txt").exists()
+
+
+def test_remove_file_not_found(tools, config):
+    """Arquivo inexistente retorna erro."""
+    call = ToolCall(name="remove_file", arguments={"path": "nao_existe.txt"})
+    result = tools.remove_file(call)
+
+    assert result.ok is False
+    assert "não encontrado" in result.error.lower()
+
+
+def test_remove_file_refuses_directory(tools, config):
+    """remove_file não remove diretórios."""
+    workspace = config.workspace_root
+    (workspace / "subdir").mkdir()
+
+    call = ToolCall(name="remove_file", arguments={"path": "subdir", "dry_run": False})
+    result = tools.remove_file(call)
+
+    assert result.ok is False
+    assert "não remove diretórios" in result.error.lower()
+
+
+def test_remove_file_refuses_non_regular(tools, config):
+    """remove_file recusa algo que não é arquivo regular."""
+    workspace = config.workspace_root
+    (workspace / "fifo").touch()
+
+    call = ToolCall(name="remove_file", arguments={"path": "fifo", "dry_run": False})
+    with patch("pathlib.Path.is_file", return_value=False):
+        result = tools.remove_file(call)
+
+    assert result.ok is False
+    assert "não é um arquivo regular" in result.error.lower()
+
+
+def test_remove_file_os_error(tools, config):
+    """Erro de sistema (ex: permissão) retorna erro."""
+    workspace = config.workspace_root
+    (workspace / "protected.txt").write_text("x")
+
+    call = ToolCall(name="remove_file", arguments={"path": "protected.txt", "dry_run": False})
+    with patch("pathlib.Path.unlink", side_effect=OSError("Permission denied")):
+        result = tools.remove_file(call)
+
+    assert result.ok is False
+    assert "Permission denied" in result.error
+
+
+def test_remove_file_outside_workspace(tools, config):
+    """Path fora do workspace é rejeitado por _resolve."""
+    call = ToolCall(name="remove_file", arguments={"path": "../../etc/passwd", "dry_run": False})
+    with pytest.raises(ValueError, match="Path fora da workspace"):
+        tools.remove_file(call)

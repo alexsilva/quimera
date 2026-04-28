@@ -1,6 +1,12 @@
 """Runtime seguro de ferramentas para agentes locais."""
 
-from .approval import ApprovalHandler, ConsoleApprovalHandler
+from .approval import (
+    ApprovalHandler,
+    AutoApprovalHandler,
+    ConsoleApprovalHandler,
+    NonBlockingConsoleApprovalHandler,
+    PreApprovalHandler,
+)
 from .config import ToolRuntimeConfig
 from .executor import ToolExecutor
 from .models import ToolCall, ToolResult
@@ -10,7 +16,10 @@ from .task_executor import TaskExecutor, create_executor
 
 __all__ = [
     "ApprovalHandler",
+    "AutoApprovalHandler",
     "ConsoleApprovalHandler",
+    "NonBlockingConsoleApprovalHandler",
+    "PreApprovalHandler",
     "ToolRuntimeConfig",
     "ToolExecutor",
     "ToolCall",

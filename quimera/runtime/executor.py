@@ -45,6 +45,7 @@ class ToolExecutor:
         self.registry.register("list_files", file_tools.list_files)
         self.registry.register("read_file", file_tools.read_file)
         self.registry.register("write_file", file_tools.write_file)
+        self.registry.register("remove_file", file_tools.remove_file)
         self.registry.register("apply_patch", patch_tool.apply_patch)
         self.registry.register("grep_search", file_tools.grep_search)
         self.registry.register("run_shell", shell_tool.run_shell)

@@ -53,13 +53,14 @@ class ToolPolicy:
             "run_shell_command",
             "exec_command",
             "close_command_session",
+            "remove_file",
         }:
             return self.config.require_approval_for_mutations
         return False
 
     def check_path_permission(self, call: ToolCall) -> PathPermissionError | None:
         """Check if the tool needs user permission to access a path outside allowed roots."""
-        if call.name not in {"read_file", "list_files", "grep_search"}:
+        if call.name not in {"read_file", "list_files", "grep_search", "remove_file"}:
             return None
 
         raw = call.arguments.get("path", ".")
@@ -113,6 +114,18 @@ class ToolPolicy:
         pattern = str(call.arguments.get("pattern", "")).strip()
         if not pattern:
             raise ToolPolicyError("grep_search requer um padrão não vazio")
+
+    def _validate_remove_file(self, call: ToolCall) -> None:
+        """Valida uma chamada de remoção de arquivo."""
+        raw = call.arguments.get("path")
+        if not raw:
+            raise ToolPolicyError("remove_file requer 'path'")
+        path = self._resolve_workspace_path(raw)
+        dry_run = call.arguments.get("dry_run", True)
+        if dry_run is not False:
+            raise ToolPolicyError(
+                "remove_file requer dry_run=False explícito para confirmar a remoção"
+            )
 
     def _validate_propose_task(self, call: ToolCall) -> None:
         """Executa validate propose task."""

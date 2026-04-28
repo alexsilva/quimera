@@ -39,7 +39,7 @@ from ..config import ConfigManager
 from ..metrics import BehaviorMetricsTracker
 from ..constants import (
     CMD_AGENTS, CMD_ALIASES, CMD_CLEAR, CMD_CONNECT, CMD_CONTEXT, CMD_CONTEXT_EDIT, CMD_EDIT, CMD_EXIT,
-    CMD_FILE_PREFIX, CMD_HELP,
+    CMD_APPROVE, CMD_FILE_PREFIX, CMD_HELP,
     CMD_PROMPT, CMD_RESET_STATE, CMD_TASK,
     MSG_CHAT_STARTED, MSG_SESSION_LOG, MSG_SESSION_STATUS, MSG_MIGRATION,
     MSG_SHUTDOWN, MSG_DOUBLE_PREFIX,
@@ -216,6 +216,7 @@ class QuimeraApp:
         """Retorna os comandos internos e aliases aceitos pela aplicação."""
         commands = {
             CMD_AGENTS,
+            CMD_APPROVE,
             CMD_CLEAR,
             CMD_CONNECT,
             CMD_CONTEXT,

@@ -135,6 +135,40 @@ class FileTools:
             path.write_text(content, encoding="utf-8")
         return ToolResult(ok=True, tool_name=call.name, content=f"Arquivo salvo: {path}")
 
+    def remove_file(self, call: ToolCall) -> ToolResult:
+        """Remove um arquivo dentro do workspace.
+
+        Por segurança, apenas remove arquivos (não diretórios) e exige
+        confirmação explícita via dry_run=False.
+        """
+        raw_path = call.arguments["path"]
+        path = self._resolve(raw_path)
+
+        dry_run = bool(call.arguments.get("dry_run", True))
+
+        if not path.exists():
+            return ToolResult(ok=False, tool_name=call.name,
+                              error=f"Arquivo não encontrado: {raw_path}")
+
+        if path.is_dir():
+            return ToolResult(ok=False, tool_name=call.name,
+                              error=f"remove_file não remove diretórios: {raw_path}")
+
+        if not path.is_file():
+            return ToolResult(ok=False, tool_name=call.name,
+                              error=f"Caminho não é um arquivo regular: {raw_path}")
+
+        if dry_run:
+            return ToolResult(ok=True, tool_name=call.name,
+                              content=f"[dry-run] Removeria: {path}")
+
+        try:
+            path.unlink()
+            return ToolResult(ok=True, tool_name=call.name,
+                              content=f"Arquivo removido: {path}")
+        except OSError as exc:
+            return ToolResult(ok=False, tool_name=call.name, error=str(exc))
+
     def grep_search(self, call: ToolCall) -> ToolResult:
         """Executa grep search."""
         staging = get_staging_root()
