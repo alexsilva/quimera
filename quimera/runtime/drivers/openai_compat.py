@@ -120,7 +120,27 @@ def _prune_tool_loop_messages(messages: list[dict]) -> list[dict]:
         return messages
     head = messages[:2]
     tail_size = max(_MAX_TOOL_LOOP_MESSAGES - len(head), 0)
-    tail = messages[-tail_size:] if tail_size else []
+    # Encontra o primeiro assistant com tool_calls dentro da janela da cauda,
+    # garantindo que nenhum tool fique sem seu assistant precedente.
+    start = len(messages) - tail_size
+    # Recua até encontrar um assistant com tool_calls (ou system/user).
+    while start > 0:
+        msg = messages[start]
+        if msg.get("role") == "assistant" and msg.get("tool_calls"):
+            break
+        if msg.get("role") in ("system", "user"):
+            break
+        start -= 1
+    # Se recuamos demais e a cauda ficaria maior que o limite, ajusta.
+    # Mas sempre garante que head + tail não ultrapassa _MAX_TOOL_LOOP_MESSAGES.
+    # O importante é nunca começar tail com role=tool.
+    if start < len(messages) - tail_size:
+        # Recuou para antes da janela original — a cauda ficou maior.
+        # Recalcula tail como messages[start:], limitando ao máximo permitido.
+        available = _MAX_TOOL_LOOP_MESSAGES - len(head)
+        tail = messages[start:][-available:] if available > 0 else []
+    else:
+        tail = messages[-tail_size:] if tail_size else []
     return head + tail
 
 
