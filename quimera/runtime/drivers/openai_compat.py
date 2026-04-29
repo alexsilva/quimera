@@ -35,6 +35,7 @@ _FUNCTION_RESIDUE_RE = re.compile(r"</?(?:function|tool_call)\b[^>]*>")
 
 # Trunca tool results para evitar explosão de memória no array messages.
 _MAX_TOOL_RESULT_CHARS = 4000
+_MAX_TOOL_LOOP_MESSAGES = 16
 
 
 # Formato XML de text-tool-calls que alguns modelos emitem quando a API não suporta tool_calls:
@@ -84,6 +85,43 @@ def _parse_text_tool_calls(text: str) -> list[dict]:
             "arguments": arguments,
         })
     return calls
+
+
+def _build_tool_system_prompt(tool_names: str, workspace_root: str | None) -> str:
+    """Monta o system prompt usado no modo com ferramentas."""
+    workspace_hint = f"Workspace raiz: {workspace_root}. " if workspace_root is not None else ""
+    return (
+        f"Você tem acesso às seguintes ferramentas: {tool_names}. "
+        f"{workspace_hint}"
+        "Quando decidir usar uma ferramenta, use o mecanismo de tool calling da API compatível ou o fallback textual já suportado; "
+        "não invente envelopes JSON intermediários como "
+        "{\"action\":\"execute\",\"tool_name\":\"...\",\"params\":{...}}. "
+        "Não escreva chamadas de ferramenta como texto visível ao usuário; "
+        "Protocolo de ferramentas: descubra o alvo antes de editar usando list_files, grep_search e read_file; "
+        "prefira apply_patch para mudanças parciais em arquivos existentes; "
+        "write_file só deve sobrescrever arquivo existente com replace_existing=true e quando a reescrita total for realmente necessária; "
+        "o patch de apply_patch deve usar o formato nativo do Quimera e começar exatamente com '*** Begin Patch' e terminar exatamente com '*** End Patch'; "
+        "não use cabeçalhos de diff como '---', '+++' ou 'diff --git' dentro do patch; "
+        "use exatamente os nomes de argumentos definidos nos schemas das ferramentas; "
+        "por exemplo, read_file usa 'path', não 'file_path'; "
+        "para shell, use exatamente 'run_shell' para uma execução simples ou 'exec_command' para sessão interativa; "
+        "nunca invente nomes como 'run', 'run_shell_command' ou 'execute_command'; "
+        "se uma ferramenta retornar erro, ajuste a próxima chamada com base no erro e não repita o mesmo payload inválido; "
+        "use run_shell para inspeção ou validação objetiva e exec_command apenas quando precisar de stdin, polling ou sessão persistente; "
+        "não peça ao usuário para executar comandos manualmente se você pode fazer isso diretamente; "
+        "na resposta final, resuma arquivos alterados, evidência de validação e próximo passo; "
+        "nunca exponha tags de tool calling como <function>, </function> ou </tool_call> na resposta final."
+    )
+
+
+def _prune_tool_loop_messages(messages: list[dict]) -> list[dict]:
+    """Limita o histórico do loop de tools preservando system/user e a cauda recente."""
+    if len(messages) <= _MAX_TOOL_LOOP_MESSAGES:
+        return messages
+    head = messages[:2]
+    tail_size = max(_MAX_TOOL_LOOP_MESSAGES - len(head), 0)
+    tail = messages[-tail_size:] if tail_size else []
+    return head + tail
 
 
 
@@ -165,35 +203,9 @@ class OpenAICompatDriver:
         if tools:
             tool_names = ", ".join(t["function"]["name"] for t in tools)
             workspace_root = getattr(getattr(tool_executor, "config", None), "workspace_root", None)
-            workspace_hint = (
-                f"Workspace raiz: {workspace_root}. "
-                if workspace_root is not None else
-                ""
-            )
             messages.append({
                 "role": "system",
-                "content": (
-                    f"Você tem acesso às seguintes ferramentas: {tool_names}. "
-                    f"{workspace_hint}"
-                    "Quando decidir usar uma ferramenta, use o mecanismo de tool calling da API compatível ou o fallback textual já suportado; "
-                    "não invente envelopes JSON intermediários como "
-                    "{\"action\":\"execute\",\"tool_name\":\"...\",\"params\":{...}}. "
-                    "Não escreva chamadas de ferramenta como texto visível ao usuário; "
-                    "Protocolo de ferramentas: descubra o alvo antes de editar usando list_files, grep_search e read_file; "
-                    "prefira apply_patch para mudanças parciais em arquivos existentes; "
-                    "write_file só deve sobrescrever arquivo existente com replace_existing=true e quando a reescrita total for realmente necessária; "
-                    "o patch de apply_patch deve usar o formato nativo do Quimera e começar exatamente com '*** Begin Patch' e terminar exatamente com '*** End Patch'; "
-                    "não use cabeçalhos de diff como '---', '+++' ou 'diff --git' dentro do patch; "
-                    "use exatamente os nomes de argumentos definidos nos schemas das ferramentas; "
-                    "por exemplo, read_file usa 'path', não 'file_path'; "
-                    "para shell, use exatamente 'run_shell' para uma execução simples ou 'exec_command' para sessão interativa; "
-                    "nunca invente nomes como 'run', 'run_shell_command' ou 'execute_command'; "
-                    "se uma ferramenta retornar erro, ajuste a próxima chamada com base no erro e não repita o mesmo payload inválido; "
-                    "use run_shell para inspeção ou validação objetiva e exec_command apenas quando precisar de stdin, polling ou sessão persistente; "
-                    "não peça ao usuário para executar comandos manualmente se você pode fazer isso diretamente; "
-                    "na resposta final, resuma arquivos alterados, evidência de validação e próximo passo; "
-                    "nunca exponha tags de tool calling como <function>, </function> ou </tool_call> na resposta final."
-                ),
+                "content": _build_tool_system_prompt(tool_names, workspace_root),
             })
         messages.append({"role": "user", "content": prompt})
 
@@ -274,6 +286,7 @@ class OpenAICompatDriver:
                         last_invalid_tool_name = tc["name"]
                     else:
                         last_invalid_tool_name = None
+                messages = _prune_tool_loop_messages(messages)
 
             return None
         finally:

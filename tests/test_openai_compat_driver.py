@@ -11,8 +11,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from quimera.runtime.drivers.openai_compat import (
+    _MAX_TOOL_LOOP_MESSAGES,
     MAX_TOOL_HOPS_BY_RELIABILITY,
     OpenAICompatDriver,
+    _build_tool_system_prompt,
+    _prune_tool_loop_messages,
     _sanitize_assistant_text,
     _strip_thinking,
 )
@@ -153,6 +156,30 @@ def test_strip_thinking_multiple_blocks():
 def test_sanitize_assistant_text_removes_function_residue():
     text = "<think>x</think></function>\nResposta final\n</tool_call>"
     assert _sanitize_assistant_text(text) == "Resposta final"
+
+
+def test_build_tool_system_prompt_includes_workspace_hint():
+    prompt = _build_tool_system_prompt("read_file, apply_patch", "/tmp/workspace")
+
+    assert "read_file, apply_patch" in prompt
+    assert "Workspace raiz: /tmp/workspace." in prompt
+    assert "não invente envelopes JSON intermediários" in prompt
+
+
+def test_prune_tool_loop_messages_keeps_head_and_recent_tail():
+    messages = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "user"},
+    ] + [
+        {"role": "tool" if i % 2 else "assistant", "content": f"m{i}"}
+        for i in range(20)
+    ]
+
+    pruned = _prune_tool_loop_messages(messages)
+
+    assert len(pruned) == _MAX_TOOL_LOOP_MESSAGES
+    assert pruned[:2] == messages[:2]
+    assert pruned[2:] == messages[-(_MAX_TOOL_LOOP_MESSAGES - 2):]
 
 
 # ---------------------------------------------------------------------------
@@ -482,6 +509,37 @@ def test_run_tool_loop_uses_minimal_prompt_payload_and_valid_json():
     assert payload["truncated"] is True
     assert "resultado com 6000 caracteres" in payload["content"]
     assert "resultado com 6000 caracteres" in payload["error"]
+
+
+def test_run_tool_loop_prunes_messages_between_hops():
+    driver, mock_client = _make_driver()
+
+    def side_effect(*args, **kwargs):
+        messages = kwargs["messages"]
+        if len(mock_client.chat.completions.create.call_args_list) < 4:
+            tc_id = f"call_{len(mock_client.chat.completions.create.call_args_list)}"
+            return _make_non_streaming_response(
+                content="",
+                tool_calls=[_make_tool_call(tc_id, "run_shell", '{"command":"ls"}')],
+            )
+        return _make_non_streaming_response(content="Done.", tool_calls=None)
+
+    mock_client.chat.completions.create.side_effect = side_effect
+
+    mock_executor = MagicMock()
+    mock_executor.config = SimpleNamespace(db_path="/tmp/tasks.db", workspace_root="/tmp/workspace")
+    mock_executor.registry.names.return_value = [s["function"]["name"] for s in TOOL_SCHEMAS]
+    mock_executor.execute.return_value = ToolResult(ok=True, tool_name="run_shell", content="file.py")
+
+    driver.run("liste arquivos", tool_executor=mock_executor)
+
+    observed_lengths = [
+        call.kwargs["messages"]
+        for call in mock_client.chat.completions.create.call_args_list
+    ]
+    assert len(observed_lengths[-1]) <= _MAX_TOOL_LOOP_MESSAGES
+    assert observed_lengths[-1][0]["role"] == "system"
+    assert observed_lengths[-1][1]["role"] == "user"
 
 
 def test_run_api_error_returns_none():
