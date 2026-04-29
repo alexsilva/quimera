@@ -182,6 +182,36 @@ def test_prune_tool_loop_messages_keeps_head_and_recent_tail():
     assert pruned[2:] == messages[-(_MAX_TOOL_LOOP_MESSAGES - 2):]
 
 
+def test_prune_tool_loop_messages_preserves_assistant_for_multi_tool_results():
+    messages = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "user"},
+    ]
+    for i in range(6):
+        messages.append({
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{"id": f"call_{i}_a"}, {"id": f"call_{i}_b"}],
+        })
+        messages.append({"role": "tool", "tool_call_id": f"call_{i}_a", "content": '{"ok": true}'})
+        messages.append({"role": "tool", "tool_call_id": f"call_{i}_b", "content": '{"ok": true}'})
+
+    pruned = _prune_tool_loop_messages(messages)
+
+    assert pruned[:2] == messages[:2]
+    assert len(pruned) <= len(messages)
+
+    for index, msg in enumerate(pruned):
+        if msg.get("role") != "tool":
+            continue
+        assert index > 0
+        previous = pruned[index - 1]
+        if previous.get("role") == "tool":
+            previous = pruned[index - 2]
+        assert previous.get("role") == "assistant"
+        assert previous.get("tool_calls")
+
+
 # ---------------------------------------------------------------------------
 # Testes de OpenAICompatDriver.__init__
 # ---------------------------------------------------------------------------

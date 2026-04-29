@@ -119,28 +119,38 @@ def _prune_tool_loop_messages(messages: list[dict]) -> list[dict]:
     if len(messages) <= _MAX_TOOL_LOOP_MESSAGES:
         return messages
     head = messages[:2]
-    tail_size = max(_MAX_TOOL_LOOP_MESSAGES - len(head), 0)
-    # Encontra o primeiro assistant com tool_calls dentro da janela da cauda,
-    # garantindo que nenhum tool fique sem seu assistant precedente.
-    start = len(messages) - tail_size
-    # Recua até encontrar um assistant com tool_calls (ou system/user).
-    while start > 0:
-        msg = messages[start]
+    available = max(_MAX_TOOL_LOOP_MESSAGES - len(head), 0)
+    tail = messages[len(head):]
+    segments: list[list[dict]] = []
+    index = 0
+
+    while index < len(tail):
+        msg = tail[index]
         if msg.get("role") == "assistant" and msg.get("tool_calls"):
+            segment = [msg]
+            index += 1
+            while index < len(tail) and tail[index].get("role") == "tool":
+                segment.append(tail[index])
+                index += 1
+            segments.append(segment)
+            continue
+        segments.append([msg])
+        index += 1
+
+    kept_segments: list[list[dict]] = []
+    used = 0
+    for segment in reversed(segments):
+        seg_len = len(segment)
+        if kept_segments and used + seg_len > available:
             break
-        if msg.get("role") in ("system", "user"):
+        if not kept_segments and seg_len > available:
+            kept_segments.append(segment)
             break
-        start -= 1
-    # Se recuamos demais e a cauda ficaria maior que o limite, ajusta.
-    # Mas sempre garante que head + tail não ultrapassa _MAX_TOOL_LOOP_MESSAGES.
-    # O importante é nunca começar tail com role=tool.
-    if start < len(messages) - tail_size:
-        # Recuou para antes da janela original — a cauda ficou maior.
-        # Recalcula tail como messages[start:], limitando ao máximo permitido.
-        available = _MAX_TOOL_LOOP_MESSAGES - len(head)
-        tail = messages[start:][-available:] if available > 0 else []
-    else:
-        tail = messages[-tail_size:] if tail_size else []
+        kept_segments.append(segment)
+        used += seg_len
+
+    pruned_tail = [msg for segment in reversed(kept_segments) for msg in segment]
+    tail = pruned_tail if pruned_tail else tail[-available:] if available else []
     return head + tail
 
 
