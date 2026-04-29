@@ -381,7 +381,16 @@ class AgentClient:
     # call() — ponto de entrada principal
     # ------------------------------------------------------------------
 
-    def call(self, agent, prompt, silent=False, show_status=True, quiet=False, on_text_chunk=None):
+    def call(
+        self,
+        agent,
+        prompt,
+        silent=False,
+        show_status=True,
+        quiet=False,
+        on_text_chunk=None,
+        allow_tools=True,
+    ):
         """Resolve o comando do agente e delega a execução."""
         self._user_cancelled = False
         if self.execution_mode and self.execution_mode.prompt_addon:
@@ -394,7 +403,11 @@ class AgentClient:
         if isinstance(connection, OpenAIConnection):
             return self._call_api(
                 agent, plugin, prompt,
-                silent=silent, show_status=show_status, quiet=quiet, on_text_chunk=on_text_chunk,
+                silent=silent,
+                show_status=show_status,
+                quiet=quiet,
+                on_text_chunk=on_text_chunk,
+                allow_tools=allow_tools,
             )
         cmd, prompt_as_arg, output_format = self._resolve_plugin_cli_attrs(plugin, connection)
         extra_env = connection.env if isinstance(connection, CliConnection) else None
@@ -421,7 +434,17 @@ class AgentClient:
     # _call_api() — driver de API (OpenAI compat / Ollama)
     # ------------------------------------------------------------------
 
-    def _call_api(self, agent, plugin, prompt, silent=False, show_status=True, quiet=False, on_text_chunk=None):
+    def _call_api(
+        self,
+        agent,
+        plugin,
+        prompt,
+        silent=False,
+        show_status=True,
+        quiet=False,
+        on_text_chunk=None,
+        allow_tools=True,
+    ):
         """Executa agentes com driver de API (ex: openai_compat para Ollama)."""
         connection = self._resolve_plugin_connection(plugin)
         if not isinstance(connection, OpenAIConnection):
@@ -454,7 +477,9 @@ class AgentClient:
             with status_cm as status:
                 if status is not None:
                     status.update(status_label)
-                effective_tool_executor = self.tool_executor if getattr(plugin, "supports_tools", True) else None
+                effective_tool_executor = None
+                if allow_tools and getattr(plugin, "supports_tools", True):
+                    effective_tool_executor = self.tool_executor
                 # Injeta callbacks de spinner no executor para que o approval handler
                 # possa pausar o Live do Rich antes de input() bloqueante, evitando
                 # race condition entre o refresh do spinner e a leitura do stdin.

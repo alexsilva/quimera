@@ -1935,8 +1935,8 @@ class ProtocolTests(unittest.TestCase):
                 self._user_cancelled = False
                 self.calls = []
 
-            def call(self, agent, prompt, silent=False):
-                self.calls.append((agent, prompt, silent))
+            def call(self, agent, prompt, silent=False, allow_tools=True):
+                self.calls.append((agent, prompt, silent, allow_tools))
                 self._user_cancelled = True
                 return None
 
@@ -1947,7 +1947,7 @@ class ProtocolTests(unittest.TestCase):
         result = summarizer_call("resuma", preferred_agent="chatgpt")
 
         self.assertIsNone(result)
-        self.assertEqual(agent_client.calls, [("chatgpt", "resuma", True)])
+        self.assertEqual(agent_client.calls, [("chatgpt", "resuma", True, False)])
         self.assertEqual(renderer.system_messages, [])
         self.assertEqual(summarizer_call.last_outcome, "cancelled")
 
@@ -1957,7 +1957,7 @@ class ProtocolTests(unittest.TestCase):
                 self.renderer = renderer
                 self._user_cancelled = False
 
-            def call(self, agent, prompt, silent=False):
+            def call(self, agent, prompt, silent=False, allow_tools=True):
                 self._user_cancelled = True
                 return None
 
@@ -1981,8 +1981,8 @@ class ProtocolTests(unittest.TestCase):
                 self._cancel_event = threading.Event()
                 self.calls = []
 
-            def call(self, agent, prompt, silent=False):
-                self.calls.append((agent, prompt, silent))
+            def call(self, agent, prompt, silent=False, allow_tools=True):
+                self.calls.append((agent, prompt, silent, allow_tools))
                 self._cancel_event.set()
                 return None
 
@@ -1993,7 +1993,7 @@ class ProtocolTests(unittest.TestCase):
         result = summarizer_call("resuma", preferred_agent="chatgpt")
 
         self.assertIsNone(result)
-        self.assertEqual(agent_client.calls, [("chatgpt", "resuma", True)])
+        self.assertEqual(agent_client.calls, [("chatgpt", "resuma", True, False)])
         self.assertEqual(renderer.system_messages, [])
         self.assertEqual(summarizer_call.last_outcome, "cancelled")
 
@@ -2005,8 +2005,8 @@ class ProtocolTests(unittest.TestCase):
                 self._cancel_event = threading.Event()
                 self.calls = []
 
-            def call(self, agent, prompt, silent=False):
-                self.calls.append((agent, prompt, silent))
+            def call(self, agent, prompt, silent=False, allow_tools=True):
+                self.calls.append((agent, prompt, silent, allow_tools))
                 return None
 
         renderer = DummyRenderer()
@@ -2022,9 +2022,18 @@ class ProtocolTests(unittest.TestCase):
         self.assertIsNone(summary)
         self.assertEqual(
             agent_client.calls,
-            [("chatgpt", unittest.mock.ANY, True), ("codex", unittest.mock.ANY, True)],
+            [("chatgpt", unittest.mock.ANY, True, False), ("codex", unittest.mock.ANY, True, False)],
         )
         self.assertEqual(renderer.system_messages, ["[memória] resumidores indisponíveis"])
+
+    def test_session_summary_prompt_explicitly_restricts_scope_to_provided_messages(self):
+        prompt = SessionSummarizer._build_prompt(
+            [{"role": "human", "content": "Mensagem relevante"}],
+            existing_summary="## Resumo anterior",
+        )
+
+        self.assertIn("Baseie-se exclusivamente no material abaixo", prompt)
+        self.assertIn("Não use ferramentas, arquivos, shell, web ou memória externa", prompt)
 
     def test_shutdown_summary_thread_does_not_mark_agents_unavailable_due_to_signal_registration(self):
         class DummyStatusContext:
@@ -2110,6 +2119,47 @@ class ProtocolTests(unittest.TestCase):
         self.assertIsNone(result)
         self.assertTrue(agent_client._user_cancelled)
         renderer.show_error.assert_not_called()
+
+    def test_call_api_disables_tool_executor_when_allow_tools_is_false(self):
+        class DummyStatusContext:
+            def __init__(self, status):
+                self._status = status
+
+            def __enter__(self):
+                return self._status
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        renderer = Mock()
+        status = Mock()
+        renderer.running_status.return_value = DummyStatusContext(status)
+        agent_client = AgentClient(renderer)
+        agent_client.tool_executor = Mock()
+
+        plugin = SimpleNamespace(
+            driver="openai_compat",
+            model="qwen3-coder:30b",
+            base_url="http://localhost:11434/v1",
+            api_key_env=None,
+            tool_use_reliability="medium",
+            supports_tools=True,
+            cmd=None,
+        )
+
+        driver_mock = Mock()
+        with patch.object(agent_client, "_api_drivers", {"ollama-qwen": driver_mock}):
+            driver_mock.run.return_value = "Resumo final"
+            result = agent_client._call_api(
+                "ollama-qwen",
+                plugin,
+                "resuma",
+                quiet=True,
+                allow_tools=False,
+            )
+
+        self.assertEqual(result, "Resumo final")
+        self.assertIsNone(driver_mock.run.call_args.kwargs["tool_executor"])
 
 
 class PluginTests(unittest.TestCase):

@@ -24,7 +24,7 @@ def build_chain_summarizer(agent_client, agents):
                 _call.last_outcome = "cancelled"
                 return None
             try:
-                result = agent_client.call(agent, prompt, silent=True)
+                result = agent_client.call(agent, prompt, silent=True, allow_tools=False)
             except Exception:
                 result = None
             if result:
@@ -84,6 +84,8 @@ Regras:
 - Preserve informações relevantes do resumo anterior, se houver
 - Incorpore apenas novidades importantes do novo trecho
 - Entregue um resumo acumulado único, pronto para substituir o anterior
+- Baseie-se exclusivamente no material abaixo
+- Não use ferramentas, arquivos, shell, web ou memória externa
 
 Seja conciso. Máximo 20 linhas. Não use emojis. Escreva em português.
 
