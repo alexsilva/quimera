@@ -4,7 +4,7 @@ import tempfile
 import threading
 import time
 import unittest
-from collections import defaultdict
+from collections import defaultdict, deque
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, call, patch
@@ -4076,6 +4076,34 @@ class MetricsFeedbackTests(unittest.TestCase):
         self.assertNotIn("CONTEXTO DE EXECUÇÃO:", body)
         self.assertNotIn("GOAL_CANONICAL:", body)
         self.assertIn("Use o estado compartilhado apenas como referência auxiliar", body)
+
+    def test_build_task_body_accepts_deque_history(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.user_name = "Alex"
+        app.history = deque([
+            {"role": "human", "content": "Corrija o parser atual"},
+            {"role": "codex", "content": "Vou inspecionar o arquivo antes de editar."},
+        ])
+        app.shared_state = {}
+        app.prompt_builder = type("PromptBuilderStub", (), {"history_window": 4})()
+
+        body = AppTaskServices(app).build_task_body("corrigir parser")
+
+        self.assertIn("ALEX]: Corrija o parser atual", body)
+        self.assertIn("CODEX]: Vou inspecionar o arquivo antes de editar.", body)
+
+    def test_prompt_builder_accepts_deque_history(self):
+        builder = PromptBuilder(DummyContextManager(), history_window=4, user_name="Alex")
+        history = deque([
+            {"role": "human", "content": "Primeiro pedido"},
+            {"role": "claude", "content": "Resposta anterior"},
+            {"role": "human", "content": "Pedido atual"},
+        ])
+
+        prompt = builder.build(AGENT_CODEX, history)
+
+        self.assertIn('<current_turn title="Pedido atual de ALEX">', prompt)
+        self.assertIn("[CLAUDE] Resposta anterior", prompt)
 
     def test_refresh_task_shared_state_adds_completed_task_results(self):
         app = QuimeraApp.__new__(QuimeraApp)

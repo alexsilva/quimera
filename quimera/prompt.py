@@ -48,6 +48,10 @@ class PromptBuilder:
         O parâmetro skip_tool_prompt é mantido por compatibilidade, mas o prompt
         não descreve mais ferramentas em texto.
         """
+        if history is None:
+            history = []
+        elif not isinstance(history, list):
+            history = list(history)
         context = self.context_manager.load()
 
         if handoff_only:

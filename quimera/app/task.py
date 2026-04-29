@@ -353,6 +353,8 @@ class AppTaskServices:
         """Serializa o histórico recente para uso em prompts de task."""
         app = self.app
         history = getattr(app, "history", None) or []
+        if not isinstance(history, list):
+            history = list(history)
         if not history:
             return "[sem contexto recente do chat]"
 
