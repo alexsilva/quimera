@@ -297,8 +297,8 @@ class ExecutorTests(unittest.TestCase):
         ex = self._executor(approve=True)
         result = ex.execute(ToolCall(name="run_shell", arguments={"command": "echo hello"}))
         self.assertTrue(result.ok)
-        payload = json.loads(result.content)
-        self.assertIn("hello", payload["stdout"])
+        self.assertIn("hello", result.content)
+        self.assertEqual(result.data["stdout"], "hello\n")
 
     def test_run_shell_denied_by_policy(self):
         ex = self._executor()

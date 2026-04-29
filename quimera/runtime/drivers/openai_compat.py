@@ -37,15 +37,6 @@ _FUNCTION_RESIDUE_RE = re.compile(r"</?(?:function|tool_call)\b[^>]*>")
 _MAX_TOOL_RESULT_CHARS = 4000
 
 
-def _truncate_tool_content(content: str, max_chars: int = _MAX_TOOL_RESULT_CHARS) -> str:
-    """Corta tool result que excede max_chars, preservando início e fim."""
-    if len(content) <= max_chars:
-        return content
-    head = content[: max_chars // 2]
-    tail = content[-(max_chars // 4):]
-    return f"{head}\n...[truncado, resultado com {len(content)} caracteres]...\n{tail}"
-
-
 # Formato XML de text-tool-calls que alguns modelos emitem quando a API não suporta tool_calls:
 # <function=NAME><parameter=KEY>VALUE</tool_call>
 _TEXT_FUNC_CALL_RE = re.compile(r"<function=(\w+)>(.*?)</tool_call>", re.DOTALL)
@@ -266,8 +257,9 @@ class OpenAICompatDriver:
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tc["id"],
-                        "content": _truncate_tool_content(
-                            json.dumps(result.to_model_payload(), ensure_ascii=False)
+                        "content": json.dumps(
+                            result.to_prompt_payload(_MAX_TOOL_RESULT_CHARS),
+                            ensure_ascii=False,
                         ),
                     })
                     if self._is_invalid_tool_result(result):

@@ -448,6 +448,42 @@ def test_run_tool_loop_sends_tool_result_message():
     assert payload["content"] == "file.py"
 
 
+def test_run_tool_loop_uses_minimal_prompt_payload_and_valid_json():
+    driver, mock_client = _make_driver()
+
+    tc_id = "call_minimal"
+    tc = _make_tool_call(tc_id, "run_shell", '{"command":"ls"}')
+    resp_1 = _make_non_streaming_response(content="", tool_calls=[tc])
+    resp_2 = _make_non_streaming_response(content="Done.", tool_calls=None)
+    mock_client.chat.completions.create.side_effect = [resp_1, resp_2]
+
+    mock_executor = MagicMock()
+    mock_executor.config = SimpleNamespace(db_path="/tmp/tasks.db", workspace_root="/tmp/workspace")
+    mock_executor.registry.names.return_value = [s["function"]["name"] for s in TOOL_SCHEMAS]
+    mock_executor.execute.return_value = ToolResult(
+        ok=False,
+        tool_name="run_shell",
+        content="x" * 6000,
+        error="y" * 6000,
+        exit_code=9,
+        duration_ms=12,
+        data={"cwd": "/tmp/workspace"},
+    )
+
+    driver.run("liste arquivos", tool_executor=mock_executor)
+
+    second_call_messages = mock_client.chat.completions.create.call_args_list[1][1]["messages"]
+    tool_result_msg = next(m for m in second_call_messages if m.get("role") == "tool")
+    payload = json.loads(tool_result_msg["content"])
+
+    assert set(payload) == {"ok", "content", "error", "truncated", "exit_code"}
+    assert payload["ok"] is False
+    assert payload["exit_code"] == 9
+    assert payload["truncated"] is True
+    assert "resultado com 6000 caracteres" in payload["content"]
+    assert "resultado com 6000 caracteres" in payload["error"]
+
+
 def test_run_api_error_returns_none():
     driver, mock_client = _make_driver()
     mock_client.chat.completions.create.side_effect = RuntimeError("connection refused")

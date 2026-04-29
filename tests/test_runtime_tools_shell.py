@@ -20,7 +20,9 @@ def test_shell_tool_run_basic(config):
         mock_run.return_value = MagicMock(stdout="hello\n", stderr="", returncode=0)
         result = tool.run_shell(call)
         assert result.ok is True
-        assert "hello" in result.content
+        assert result.content == "stdout:\nhello\n"
+        assert result.data["command"] == "echo hello"
+        assert result.data["stdout"] == "hello\n"
 
 
 def test_shell_tool_with_staging_warning(config):
@@ -47,6 +49,8 @@ def test_exec_command_completes_and_returns_payload(tmp_path):
     assert "hello" in result.data["stdout"]
     assert result.data["diff"] == [{"op": "replace", "text": "hello\n"}]
     assert result.exit_code == 0
+    assert "status: completed" in result.content
+    assert "stdout:\nhello\n" in result.content
 
 
 def test_exec_command_supports_polling_running_process(tmp_path):
@@ -64,6 +68,8 @@ def test_exec_command_supports_polling_running_process(tmp_path):
     assert started.data["status"] == "running"
     assert started.data["diff"]
     session_id = started.data["session_id"]
+    assert f"session_id: {session_id}" in started.content
+    assert "status: running" in started.content
 
     finished = tool.write_stdin(
         ToolCall(
@@ -76,6 +82,8 @@ def test_exec_command_supports_polling_running_process(tmp_path):
     assert "start" in finished.data["stdout"]
     assert "done" in finished.data["stdout"]
     assert finished.data["diff"] == [{"op": "replace", "text": "start\ndone\n"}]
+    assert f"session_id: {session_id}" in finished.content
+    assert "status: completed" in finished.content
 
 
 def test_exec_command_supports_stdin_roundtrip(tmp_path):
@@ -128,6 +136,8 @@ def test_close_command_session_terminates_running_process(tmp_path):
     )
     assert closed.ok is True
     assert closed.data["status"] == "closed"
+    assert f"session_id: {session_id}" in closed.content
+    assert "status: closed" in closed.content
     assert session_id not in tool._sessions
 
 

@@ -35,6 +35,16 @@ class ToolResult:
     truncated: bool = False
     data: dict[str, Any] = field(default_factory=dict)
 
+    @staticmethod
+    def _truncate_text(value: str, max_chars: int) -> tuple[str, bool]:
+        """Trunca texto longo preservando início e fim."""
+        if len(value) <= max_chars:
+            return value, False
+        head = value[: max_chars // 2]
+        tail = value[-(max_chars // 4):]
+        truncated = f"{head}\n...[truncado, resultado com {len(value)} caracteres]...\n{tail}"
+        return truncated, True
+
     @property
     def error_type(self) -> str:
         """Classificação do tipo de erro (validation, environment, logic, rate_limit, generic)."""
@@ -65,4 +75,19 @@ class ToolResult:
             "duration_ms": self.duration_ms,
             "truncated": self.truncated,
             "data": self.data,
+        }
+
+    def to_prompt_payload(self, max_chars: int) -> dict[str, Any]:
+        """Retorna payload mínimo e seguro para envio ao modelo."""
+        content, content_truncated = self._truncate_text(self.content, max_chars)
+        error_value = str(self.error) if isinstance(self.error, ToolError) else self.error
+        error_text = error_value or ""
+        error, error_truncated = self._truncate_text(error_text, max_chars)
+
+        return {
+            "ok": self.ok,
+            "content": content,
+            "error": error or None,
+            "truncated": self.truncated or content_truncated or error_truncated,
+            "exit_code": self.exit_code,
         }

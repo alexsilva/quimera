@@ -1,8 +1,8 @@
 """Componentes de `quimera.runtime.tools.shell`."""
 from __future__ import annotations
 from collections import deque
+from itertools import islice
 
-import json
 import os
 import pty
 import subprocess
@@ -82,29 +82,28 @@ class ShellTool:
         duration_ms = int((time.perf_counter() - started) * 1000)
         stdout = proc.stdout or ""
         stderr = proc.stderr or ""
-        payload = json.dumps(
-            {
-                "command": command,
-                "cwd": str(self.config.workspace_root),
-                "stdout": stdout[: self.config.max_output_chars],
-                "stderr": stderr[: self.config.max_output_chars],
-                "diff": self._build_output_diff(
-                    stdout[: self.config.max_output_chars],
-                    stderr[: self.config.max_output_chars],
-                    completed=True,
-                ),
-            },
-            ensure_ascii=False,
-            indent=2,
-        )
+        visible_stdout = stdout[: self.config.max_output_chars]
+        visible_stderr = stderr[: self.config.max_output_chars]
+        payload = {
+            "command": command,
+            "cwd": str(self.config.workspace_root),
+            "stdout": visible_stdout,
+            "stderr": visible_stderr,
+            "diff": self._build_output_diff(
+                visible_stdout,
+                visible_stderr,
+                completed=True,
+            ),
+        }
         truncated = len(stdout) > self.config.max_output_chars or len(stderr) > self.config.max_output_chars
         return ToolResult(
             ok=proc.returncode == 0,
             tool_name=call.name,
-            content=payload,
+            content=self._format_shell_content(stdout=visible_stdout, stderr=visible_stderr),
             exit_code=proc.returncode,
             duration_ms=duration_ms,
             truncated=truncated,
+            data=payload,
         )
 
     def exec_command(self, call: ToolCall) -> ToolResult:
@@ -221,7 +220,12 @@ class ShellTool:
         return ToolResult(
             ok=True,
             tool_name=call.name,
-            content=json.dumps(payload, ensure_ascii=False, indent=2),
+            content=self._format_shell_content(
+                stdout=payload["stdout"],
+                stderr=payload["stderr"],
+                session_id=session_id,
+                status="closed",
+            ),
             exit_code=session.process.poll(),
             duration_ms=int((time.perf_counter() - session.started_at) * 1000),
             truncated=len(stdout) > self.config.max_output_chars or len(stderr) > self.config.max_output_chars,
@@ -430,7 +434,12 @@ class ShellTool:
         result = ToolResult(
             ok=(returncode == 0) if completed else True,
             tool_name=tool_name,
-            content=json.dumps(payload, ensure_ascii=False, indent=2),
+            content=self._format_shell_content(
+                stdout=payload["stdout"],
+                stderr=payload["stderr"],
+                session_id=session.session_id if include_session_id else None,
+                status=payload["status"],
+            ),
             exit_code=returncode,
             duration_ms=duration_ms,
             truncated=truncated,
@@ -458,8 +467,8 @@ class ShellTool:
         """Retorna apenas a saída nova desde a última leitura da sessão."""
         with session.lock:
             self._truncate_consumed_chunks(session)
-            stdout = "".join(session.stdout_chunks[session.stdout_offset:])
-            stderr = "".join(session.stderr_chunks[session.stderr_offset:])
+            stdout = "".join(islice(session.stdout_chunks, session.stdout_offset, None))
+            stderr = "".join(islice(session.stderr_chunks, session.stderr_offset, None))
             session.stdout_offset = len(session.stdout_chunks)
             session.stderr_offset = len(session.stderr_chunks)
         return stdout, stderr
@@ -530,3 +539,23 @@ class ShellTool:
             return [{"op": "replace", "text": combined}] if combined else []
         combined = f"{stdout}{stderr}"
         return [{"op": "add", "text": combined}] if combined else []
+
+    @staticmethod
+    def _format_shell_content(
+        *,
+        stdout: str,
+        stderr: str,
+        session_id: int | None = None,
+        status: str | None = None,
+    ) -> str:
+        """Monta conteúdo textual enxuto para o modelo."""
+        parts: list[str] = []
+        if session_id is not None:
+            parts.append(f"session_id: {session_id}")
+        if status:
+            parts.append(f"status: {status}")
+        if stdout:
+            parts.append(f"stdout:\n{stdout}")
+        if stderr:
+            parts.append(f"stderr:\n{stderr}")
+        return "\n\n".join(parts)
