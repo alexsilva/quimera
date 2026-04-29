@@ -144,7 +144,23 @@ def _prune_tool_loop_messages(messages: list[dict]) -> list[dict]:
         if kept_segments and used + seg_len > available:
             break
         if not kept_segments and seg_len > available:
-            kept_segments.append(segment)
+            if (
+                available >= 2
+                and segment[0].get("role") == "assistant"
+                and segment[0].get("tool_calls")
+            ):
+                kept_tools = segment[-(available - 1):]
+                kept_ids = {
+                    msg.get("tool_call_id")
+                    for msg in kept_tools
+                    if msg.get("role") == "tool"
+                }
+                assistant = dict(segment[0])
+                assistant["tool_calls"] = [
+                    call for call in assistant.get("tool_calls", [])
+                    if call.get("id") in kept_ids
+                ]
+                kept_segments.append([assistant, *kept_tools])
             break
         kept_segments.append(segment)
         used += seg_len

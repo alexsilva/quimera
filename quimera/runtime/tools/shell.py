@@ -1,7 +1,5 @@
 """Componentes de `quimera.runtime.tools.shell`."""
 from __future__ import annotations
-from collections import deque
-from itertools import islice
 
 import os
 import pty
@@ -30,8 +28,10 @@ class CommandSession:
     command: str
     cwd: Path
     started_at: float
-    stdout_chunks: deque[str] = field(default_factory=deque)
-    stderr_chunks: deque[str] = field(default_factory=deque)
+    stdout_buffer: str = ""
+    stderr_buffer: str = ""
+    stdout_history: str = ""
+    stderr_history: str = ""
     stdout_offset: int = 0
     stderr_offset: int = 0
     tty: bool = False
@@ -53,10 +53,14 @@ class ShellTool:
 
     def _enforce_session_limit(self) -> None:
         """Remove a sessão mais antiga se o limite for excedido."""
-        with self._sessions_lock:
-            while len(self._sessions) > _MAX_SESSIONS:
+        while True:
+            with self._sessions_lock:
+                if len(self._sessions) <= _MAX_SESSIONS:
+                    return
                 oldest_id = min(self._sessions.keys())
-                self._cleanup_session(oldest_id)
+                session = self._sessions.pop(oldest_id, None)
+            if session is not None:
+                self._cleanup_session_resources(session, terminate=True)
 
     def run_shell(self, call: ToolCall) -> ToolResult:
         """Executa shell."""
@@ -291,23 +295,31 @@ class ShellTool:
             tty_master_fd: int | None,
     ) -> CommandSession:
         """Registra uma nova sessão interativa e devolve seu estado."""
+        session: CommandSession
         with self._sessions_lock:
             session_id = self._next_session_id
             self._next_session_id += 1
-        session = CommandSession(
-            session_id=session_id,
-            process=process,
-            command=command,
-            cwd=cwd,
-            started_at=time.perf_counter(),
-            tty=tty,
-            tty_master_fd=tty_master_fd,
-        )
-        self._sessions[session_id] = session
+            session = CommandSession(
+                session_id=session_id,
+                process=process,
+                command=command,
+                cwd=cwd,
+                started_at=time.perf_counter(),
+                tty=tty,
+                tty_master_fd=tty_master_fd,
+            )
+            self._sessions[session_id] = session
+        self._enforce_session_limit()
         return session
 
     @staticmethod
-    def _append_chunk(session: CommandSession, target: deque, counter_attr: str, chunk: str) -> None:
+    def _append_chunk(
+        session: CommandSession,
+        buffer_attr: str,
+        history_attr: str,
+        counter_attr: str,
+        chunk: str,
+    ) -> None:
         """Append com limite de caracteres total por stream."""
         current_total = getattr(session, counter_attr)
         if current_total >= _MAX_CHUNK_CHARS:
@@ -315,14 +327,15 @@ class ShellTool:
         remaining = _MAX_CHUNK_CHARS - current_total
         if len(chunk) > remaining:
             chunk = chunk[:remaining]
-        target.append(chunk)
+        setattr(session, buffer_attr, getattr(session, buffer_attr) + chunk)
+        setattr(session, history_attr, getattr(session, history_attr) + chunk)
         setattr(session, counter_attr, current_total + len(chunk))
 
     @staticmethod
     def _reset_stream_counter(session: CommandSession) -> None:
         """Recalcula contadores a partir dos chunks atuais."""
-        session._stdout_total = sum(len(c) for c in session.stdout_chunks)
-        session._stderr_total = sum(len(c) for c in session.stderr_chunks)
+        session._stdout_total = len(session.stdout_history)
+        session._stderr_total = len(session.stderr_history)
 
     def _start_reader_threads(self, session: CommandSession) -> None:
         """Inicia leitores assíncronos de stdout e stderr da sessão."""
@@ -338,7 +351,13 @@ class ShellTool:
                             break
                         with session.lock:
                             decoded = chunk.decode(errors="replace")
-                            self._append_chunk(session, session.stdout_chunks, "_stdout_total", decoded)
+                            self._append_chunk(
+                                session,
+                                "stdout_buffer",
+                                "stdout_history",
+                                "_stdout_total",
+                                decoded,
+                            )
                             self._reset_stream_counter(session)
                 finally:
                     if session.tty_master_fd is not None:
@@ -351,13 +370,14 @@ class ShellTool:
             threading.Thread(target=_tty_reader, daemon=True).start()
             return
 
-        def _reader(stream, target: deque, counter_attr: str) -> None:
+        def _reader(stream, buffer_attr: str, counter_attr: str) -> None:
             try:
                 if stream is None:
                     return
                 for raw in iter(stream.readline, ""):
                     with session.lock:
-                        self._append_chunk(session, target, counter_attr, raw)
+                        history_attr = "stdout_history" if buffer_attr == "stdout_buffer" else "stderr_history"
+                        self._append_chunk(session, buffer_attr, history_attr, counter_attr, raw)
                         self._reset_stream_counter(session)
             finally:
                 if stream is not None:
@@ -365,12 +385,12 @@ class ShellTool:
 
         threading.Thread(
             target=_reader,
-            args=(session.process.stdout, session.stdout_chunks, "_stdout_total"),
+            args=(session.process.stdout, "stdout_buffer", "_stdout_total"),
             daemon=True,
         ).start()
         threading.Thread(
             target=_reader,
-            args=(session.process.stderr, session.stderr_chunks, "_stderr_total"),
+            args=(session.process.stderr, "stderr_buffer", "_stderr_total"),
             daemon=True,
         ).start()
 
@@ -451,47 +471,57 @@ class ShellTool:
 
     def _truncate_consumed_chunks(self, session: CommandSession) -> None:
         """Remove chunks já consumidos para liberar memória."""
-        min_offset = min(session.stdout_offset, session.stderr_offset)
-        if min_offset > 0:
-            for _ in range(min_offset):
-                if session.stdout_chunks:
-                    session.stdout_chunks.popleft()
-                if session.stderr_chunks:
-                    session.stderr_chunks.popleft()
-            session.stdout_offset -= min_offset
-            session.stderr_offset -= min_offset
-            session._stdout_total = sum(len(c) for c in session.stdout_chunks)
-            session._stderr_total = sum(len(c) for c in session.stderr_chunks)
+        # Trunca cada stream independentemente, não pelo min comum.
+        # Se só stdout avança e stderr nunca recebe dados (offset=0),
+        # o min() seria 0 e stdout acumularia sem limite.
+        if session.stdout_offset > 0:
+            session.stdout_buffer = session.stdout_buffer[session.stdout_offset:]
+            session.stdout_offset = 0
+        if session.stderr_offset > 0:
+            session.stderr_buffer = session.stderr_buffer[session.stderr_offset:]
+            session.stderr_offset = 0
 
     def _drain_session_output(self, session: CommandSession) -> tuple[str, str]:
         """Retorna apenas a saída nova desde a última leitura da sessão."""
         with session.lock:
             self._truncate_consumed_chunks(session)
-            stdout = "".join(islice(session.stdout_chunks, session.stdout_offset, None))
-            stderr = "".join(islice(session.stderr_chunks, session.stderr_offset, None))
-            session.stdout_offset = len(session.stdout_chunks)
-            session.stderr_offset = len(session.stderr_chunks)
+            stdout = session.stdout_buffer[session.stdout_offset:]
+            stderr = session.stderr_buffer[session.stderr_offset:]
+            session.stdout_offset = len(session.stdout_buffer)
+            session.stderr_offset = len(session.stderr_buffer)
         return stdout, stderr
 
     def _snapshot_session_output(self, session: CommandSession) -> tuple[str, str]:
         """Retorna toda a saída acumulada da sessão sem alterar offsets."""
         with session.lock:
             self._truncate_consumed_chunks(session)
-            return "".join(session.stdout_chunks), "".join(session.stderr_chunks)
+            return session.stdout_history, session.stderr_history
 
     def _has_unread_output(self, session: CommandSession) -> bool:
         """Indica se há saída ainda não entregue para o consumidor."""
         with session.lock:
             return (
-                session.stdout_offset < len(session.stdout_chunks)
-                or session.stderr_offset < len(session.stderr_chunks)
+                session.stdout_offset < len(session.stdout_buffer)
+                or session.stderr_offset < len(session.stderr_buffer)
             )
 
     def _cleanup_session(self, session_id: int) -> None:
         """Remove uma sessão concluída do registro interno."""
-        session = self._sessions.pop(session_id, None)
+        with self._sessions_lock:
+            session = self._sessions.pop(session_id, None)
         if session is None:
             return
+        self._cleanup_session_resources(session)
+
+    @staticmethod
+    def _cleanup_session_resources(session: CommandSession, *, terminate: bool = False) -> None:
+        """Libera recursos associados a uma sessão já removida do registro."""
+        if terminate and session.process.poll() is None:
+            session.process.terminate()
+            try:
+                session.process.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                session.process.kill()
         if session.tty_master_fd is not None:
             try:
                 os.close(session.tty_master_fd)

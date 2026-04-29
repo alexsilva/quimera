@@ -212,6 +212,32 @@ def test_prune_tool_loop_messages_preserves_assistant_for_multi_tool_results():
         assert previous.get("tool_calls")
 
 
+def test_prune_tool_loop_messages_caps_oversized_final_tool_segment():
+    messages = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "user"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{"id": f"call_{i}"} for i in range(20)],
+        },
+    ]
+    messages.extend(
+        {"role": "tool", "tool_call_id": f"call_{i}", "content": '{"ok": true}'}
+        for i in range(20)
+    )
+
+    pruned = _prune_tool_loop_messages(messages)
+
+    assert len(pruned) == _MAX_TOOL_LOOP_MESSAGES
+    assert pruned[:2] == messages[:2]
+    assert pruned[2]["role"] == "assistant"
+
+    retained_tool_ids = [msg["tool_call_id"] for msg in pruned[3:]]
+    assert retained_tool_ids == [f"call_{i}" for i in range(7, 20)]
+    assert [call["id"] for call in pruned[2]["tool_calls"]] == retained_tool_ids
+
+
 # ---------------------------------------------------------------------------
 # Testes de OpenAICompatDriver.__init__
 # ---------------------------------------------------------------------------
