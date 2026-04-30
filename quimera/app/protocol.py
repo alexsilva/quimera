@@ -38,11 +38,13 @@ class AppProtocol:
         self._decisions_logger = DecisionsLogger(self._decisions_log_path)
         return self._decisions_logger
 
+    _MAX_LIST_LENGTH = 50
+
     @staticmethod
     def merge_state_value(current, incoming):
         """Mescla state value."""
         if incoming is None:
-            return current
+            return current if not isinstance(current, list) or len(current) <= AppProtocol._MAX_LIST_LENGTH else current[-AppProtocol._MAX_LIST_LENGTH:]
         if incoming == "":
             return None
         if isinstance(current, list) and isinstance(incoming, list):
@@ -50,6 +52,8 @@ class AppProtocol:
             for item in incoming:
                 if item not in merged:
                     merged.append(item)
+            if len(merged) > AppProtocol._MAX_LIST_LENGTH:
+                merged = merged[-AppProtocol._MAX_LIST_LENGTH:]
             return merged
         return incoming
 
