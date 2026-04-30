@@ -18,7 +18,7 @@ except ImportError:
 from .handlers import PromptAwareStderrHandler
 from .chat_round import ChatRoundOrchestrator
 from .protocol import AppProtocol
-from .session import AppSessionServices
+from .session import AppSessionServices, compute_history_hard_limit, trim_history_messages
 from .session_metrics import SessionMetricsService
 from .dispatch import AppDispatchServices
 from .inputs import AppInputServices
@@ -132,8 +132,21 @@ class QuimeraApp:
         )
         self.summary_agent_preference = "ollama-qwen"
         self._pending_input_for: str | None = None
+        configured_history_window = history_window or self.config.history_window
+        configured_auto_summarize_threshold = self.config.auto_summarize_threshold
+        history_hard_limit = compute_history_hard_limit(
+            configured_history_window,
+            configured_auto_summarize_threshold,
+        )
         last_session = self.storage.load_last_session()
-        self.history = last_session["messages"]
+        self.history, restored_drop_count = trim_history_messages(
+            last_session["messages"],
+            history_hard_limit,
+        )
+        if restored_drop_count:
+            self.renderer.show_system(
+                f"[memória] histórico restaurado truncado para {len(self.history)} mensagens recentes\n"
+            )
         session_context = self.context_manager.load_session()
         history_restored = bool(self.history)
         summary_loaded = self.context_manager.SUMMARY_MARKER in session_context
@@ -168,6 +181,7 @@ class QuimeraApp:
         self._nonblocking_prompt_visible = False
         self._nonblocking_prompt_text = ""
         self._deferred_system_messages: list[str] = []
+        self._MAX_DEFERRED_SYSTEM_MESSAGES = 20
         self._nonblocking_input_thread: threading.Thread | None = None
         self._nonblocking_input_queue: "queue.Queue | None" = None
         self._nonblocking_input_status = "idle"
@@ -196,13 +210,13 @@ class QuimeraApp:
         }
         self.prompt_builder = PromptBuilder(
             self.context_manager,
-            history_window=history_window or self.config.history_window,
+            history_window=configured_history_window,
             session_state=session_state,
             user_name=self.user_name,
             active_agents=self.active_agents,
             metrics_tracker=self.behavior_metrics,
         )
-        self.auto_summarize_threshold = self.config.auto_summarize_threshold
+        self.auto_summarize_threshold = configured_auto_summarize_threshold
         self.idle_timeout_seconds = idle_timeout_seconds if idle_timeout_seconds is not None else self.config.idle_timeout_seconds
 
         self.tool_executor = self.task_services.build_tool_executor(require_approval_for_mutations=not self.auto_approve_mutations)
