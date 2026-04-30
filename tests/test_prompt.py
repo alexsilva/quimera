@@ -64,12 +64,12 @@ def test_final_prompt_contract_has_sections_once_in_order_and_without_duplicatio
         '<header title="Identificação">',
         '<session_state title="Estado da sessão">',
         '<rules title="Suas regras">',
-        '<persistent_context title="Contexto persistente do workspace">',
-        '<current_turn title="Pedido atual de ALEX">',
-        '<recent_agent_messages title="Mensagens recentes de outros agentes">',
         '<shared_state title="Estado compartilhado">',
         '<handoff title="Mensagem direta do outro agente">',
+        '<persistent_context title="Contexto persistente do workspace">',
+        '<recent_agent_messages title="Mensagens recentes de outros agentes">',
         '<recent_conversation title="Conversa recente">',
+        '<current_turn title="Pedido atual de ALEX">',
     ]
 
     last_position = -1
@@ -159,8 +159,8 @@ def test_prompt_keeps_empty_optional_blocks_in_output():
 
     prompt = builder.build(agent="claude", history=[])
 
-    assert '<current_turn title="Pedido atual de VOCÊ">' in prompt
-    assert "[sem pedido atual]" in prompt
+    assert '<current_turn title="Pedido atual de VOCÊ">' not in prompt
+    assert "[sem pedido atual]" not in prompt
     assert '<recent_agent_messages title="Mensagens recentes de outros agentes">' not in prompt
     assert '<shared_state title="Estado compartilhado">' not in prompt
     assert '<completed_tasks title="Tarefas concluídas">' not in prompt

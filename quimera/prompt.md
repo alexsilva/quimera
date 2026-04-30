@@ -86,24 +86,6 @@ Sempre mescle com o estado existente, nunca substitua completamente.
 <!-- ENDIF:route_agents -->
 </rules>
 
-<!-- IF:context -->
-<persistent_context title="Contexto persistente do workspace">
-{context}
-</persistent_context>
-<!-- ENDIF:context -->
-
-<!-- IF:request -->
-<current_turn title="Pedido atual de {user_name}">
-{request}
-</current_turn>
-<!-- ENDIF:request -->
-
-<!-- IF:facts -->
-<recent_agent_messages title="Mensagens recentes de outros agentes">
-{facts}
-</recent_agent_messages>
-<!-- ENDIF:facts -->
-
 <!-- IF:shared_state_json -->
 <shared_state title="Estado compartilhado">
 {shared_state_json}
@@ -159,12 +141,30 @@ CHAIN:
 </handoff>
 <!-- ENDIF:handoff_present -->
 
-<recent_conversation title="Conversa recente">
-{recent_conversation}
-</recent_conversation>
-
 <!-- IF:metrics -->
 <agent_metrics title="Suas métricas (apenas referência)">
 {metrics}
 </agent_metrics>
 <!-- ENDIF:metrics -->
+
+<!-- IF:context -->
+<persistent_context title="Contexto persistente do workspace">
+{context}
+</persistent_context>
+<!-- ENDIF:context -->
+
+<!-- IF:facts -->
+<recent_agent_messages title="Mensagens recentes de outros agentes">
+{facts}
+</recent_agent_messages>
+<!-- ENDIF:facts -->
+
+<recent_conversation title="Conversa recente">
+{recent_conversation}
+</recent_conversation>
+
+<!-- IF:request -->
+<current_turn title="Pedido atual de {user_name}">
+{request}
+</current_turn>
+<!-- ENDIF:request -->
