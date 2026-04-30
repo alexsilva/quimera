@@ -89,7 +89,15 @@ class AppSystemLayer:
         if self._should_suppress_active_prompt_message(message):
             return
         if self._should_defer_active_prompt_message(message):
-            self.app._deferred_system_messages.append(message)
+            deferred_list = getattr(self.app, "_deferred_system_messages", None)
+            if deferred_list is None:
+                return
+            max_deferred = getattr(self.app, "_MAX_DEFERRED_SYSTEM_MESSAGES", 20)
+            if len(deferred_list) >= max_deferred:
+                # Descarta as mais antigas para não crescer sem limite
+                overflow = len(deferred_list) - max_deferred + 1
+                del deferred_list[:overflow]
+            deferred_list.append(message)
             return
         with self.app._output_lock:
             self.app._clear_user_prompt_line_if_needed()

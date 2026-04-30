@@ -7,6 +7,25 @@ from ..constants import MSG_MEMORY_FAILED, MSG_MEMORY_SAVING
 # Debounce para save_history: evita serializar JSON inteiro a cada mensagem.
 _SAVE_DEBOUNCE_SECONDS = 5.0
 _SAVE_DEBOUNCE_MESSAGES = 5
+_MIN_HISTORY_HARD_LIMIT = 24
+
+
+def compute_history_hard_limit(history_window, auto_summarize_threshold) -> int:
+    """Calcula um teto defensivo para o histórico em memória."""
+    limits = [_MIN_HISTORY_HARD_LIMIT]
+    if isinstance(history_window, int) and history_window > 0:
+        limits.append(history_window * 4)
+    if isinstance(auto_summarize_threshold, int) and auto_summarize_threshold > 0:
+        limits.append(auto_summarize_threshold * 2)
+    return max(limits)
+
+
+def trim_history_messages(history, limit):
+    """Mantém apenas a cauda mais recente do histórico."""
+    if not isinstance(limit, int) or limit <= 0 or len(history) <= limit:
+        return history, 0
+    dropped = len(history) - limit
+    return history[-limit:], dropped
 
 
 class AppSessionServices:
@@ -17,12 +36,25 @@ class AppSessionServices:
         self._last_save_time: float = 0.0
         self._unsaved_messages: int = 0
 
+    def _enforce_history_limit(self) -> int:
+        """Aplica o teto do histórico mesmo quando o resumo automático não roda."""
+        app = self.app
+        limit = compute_history_hard_limit(
+            getattr(getattr(app, "prompt_builder", None), "history_window", None),
+            getattr(app, "auto_summarize_threshold", None),
+        )
+        trimmed_history, dropped = trim_history_messages(app.history, limit)
+        if dropped:
+            app.history = trimmed_history
+        return dropped
+
     def persist_message(self, role, content):
         """Persiste mensagem no histórico, log e snapshot."""
         app = self.app
         with app._lock:
             app.history.append({"role": role, "content": content})
             app.storage.append_log(role, content)
+            self._enforce_history_limit()
             self._unsaved_messages += 1
             now = time.monotonic()
             if self._unsaved_messages >= _SAVE_DEBOUNCE_MESSAGES or (now - self._last_save_time) >= _SAVE_DEBOUNCE_SECONDS:
