@@ -127,10 +127,10 @@ class QuimeraApp:
             self.renderer,
             summarizer_call=build_chain_summarizer(
                 self.agent_client,
-                list(dict.fromkeys(["ollama-qwen"] + (self.active_agents or []))),
+                list(dict.fromkeys(["ollama-granite4"] + (self.active_agents or []))),
             ),
         )
-        self.summary_agent_preference = "ollama-qwen"
+        self.summary_agent_preference = "ollama-granite4"
         self._pending_input_for: str | None = None
         configured_history_window = history_window or self.config.history_window
         configured_auto_summarize_threshold = self.config.auto_summarize_threshold

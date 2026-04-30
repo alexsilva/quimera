@@ -2,12 +2,12 @@
 from quimera.plugins.base import AgentPlugin, register
 
 plugin = AgentPlugin(
-    name="ollama-qwen",
-    prefix="/ollama-qwen",
+    name="ollama-granite4",
+    prefix="/ollama-granite4",
     icon="⚡",
-    style=("green", "OllamaQwen"),
+    style=("granite4", "OllamaGranite"),
     driver="openai_compat",
-    model="qwen3-coder:30b",
+    model="granite4.1:30b",
     base_url="http://localhost:11434/v1",
     # api_key_env não necessário para Ollama local
     capabilities=["code_review", "code_editing"],
