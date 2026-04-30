@@ -68,10 +68,10 @@ class SessionSummarizer:
         if existing_summary:
             sections.append(f"RESUMO ANTERIOR:\n{existing_summary}")
         if history:
-            conversation = "\n".join(
+            sections.append("NOVO TRECHO DA CONVERSA:")
+            sections.extend(
                 f"[{message['role'].upper()}]: {message['content']}" for message in history
             )
-            sections.append(f"NOVO TRECHO DA CONVERSA:\n{conversation}")
 
         return f"""Você é um assistente de memória. Consolide o material abaixo em um resumo estruturado em markdown.
 

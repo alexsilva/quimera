@@ -1,3 +1,4 @@
+import queue
 import threading
 from unittest.mock import MagicMock, patch, ANY
 
@@ -302,6 +303,32 @@ def test_agent_client_run_failure_with_tail(renderer):
         assert result is None
         # Should show error message AND tail (last 5 lines)
         assert renderer.show_error.call_count >= 2
+
+
+def test_agent_client_run_caps_stdout_buffer_to_recent_output(renderer):
+    client = AgentClient(renderer)
+    with patch.object(AgentClient, "_MAX_STDOUT_CHARS", 12), patch("subprocess.Popen") as mock_popen:
+        mock_proc = MagicMock()
+        mock_proc.stdout = ["12345\n", "67890\n", "tail\n"]
+        mock_proc.stderr = []
+        mock_proc.returncode = 0
+        mock_popen.return_value = mock_proc
+
+        result = client.run(["cmd"], silent=True)
+
+    assert result == "[...stdout truncado...]\n67890\ntail"
+
+
+def test_agent_client_log_queue_drops_oldest_item_when_full(renderer):
+    client = AgentClient(renderer)
+    q = queue.Queue(maxsize=2)
+
+    client._enqueue_log_item(q, ("stdout", "one"))
+    client._enqueue_log_item(q, ("stdout", "two"))
+    client._enqueue_log_item(q, ("stdout", "three"))
+
+    assert q.get_nowait() == ("stdout", "two")
+    assert q.get_nowait() == ("stdout", "three")
 
 
 def test_agent_client_run_marks_rate_limit_from_stderr(renderer):

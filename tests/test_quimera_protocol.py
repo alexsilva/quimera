@@ -17,7 +17,7 @@ from quimera.app import QuimeraApp
 from quimera.app.chat_round import ChatRoundOrchestrator
 from quimera.app.core import TurnManager
 from quimera.app.dispatch import AppDispatchServices
-from quimera.app.inputs import AppInputServices
+from quimera.app.inputs import AppInputServices, read_user_input_with_timeout
 from quimera.app.session import AppSessionServices
 from quimera.app.system_layer import AppSystemLayer
 from quimera.app.task import AppTaskServices, call_agent_for_parallel
@@ -1340,6 +1340,61 @@ class ProtocolTests(unittest.TestCase):
         finally:
             app._stop_task_executors()
 
+    def test_app_truncates_restored_history_to_hard_limit(self):
+        temp_root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+
+        class FakeWorkspace:
+            def __init__(self, cwd):
+                self.root = temp_root
+                self.cwd = cwd
+                self.config_file = temp_root / "config.json"
+                self.context_persistent = temp_root / "quimera_context.md"
+                self.context_session = temp_root / "quimera_session_context.md"
+                self.logs_dir = temp_root / "quimera_logs"
+                self.history_file = temp_root / "quimera_history"
+                self.state_dir = temp_root / "quimera_state"
+                self.tasks_db = temp_root / "quimera_tasks.db"
+                self.decisions_log = temp_root / "decisions.jsonl"
+
+            def migrate_from_legacy(self, cwd):
+                return []
+
+        class FakeContextManager:
+            SUMMARY_MARKER = "## Resumo da última sessão"
+
+            def __init__(self, *_args):
+                pass
+
+            def load_session(self):
+                return ""
+
+        class FakeSessionStorage:
+            def __init__(self, *_args):
+                pass
+
+            def load_last_session(self):
+                return {
+                    "messages": [{"role": "human", "content": f"m{i}"} for i in range(80)],
+                    "shared_state": {},
+                }
+
+            def get_history_file(self):
+                return Path("/tmp/sessao-2026-03-27-123456.json")
+
+        with patch("quimera.app.core.ConfigManager", DummyConfigManager), patch("quimera.app.core.Workspace",
+                                                                                FakeWorkspace), patch(
+                "quimera.app.core.ContextManager", FakeContextManager
+        ), patch("quimera.app.core.SessionStorage", FakeSessionStorage):
+            app = QuimeraApp(Path("/tmp/projeto"))
+
+        try:
+            self.assertEqual(len(app.history), 60)
+            self.assertEqual(app.history[0]["content"], "m20")
+            self.assertEqual(app.history[-1]["content"], "m79")
+            self.assertEqual(app.session_state["history_count"], 60)
+        finally:
+            app._stop_task_executors()
+
     def test_run_uses_single_turn_by_default(self):
         """No fluxo padrão (sem prefixo explícito, sem EXTEND), apenas um agente responde."""
         app = QuimeraApp.__new__(QuimeraApp)
@@ -1738,6 +1793,23 @@ class ProtocolTests(unittest.TestCase):
         app.session_services.persist_message("human", "oi")
 
         self.assertEqual(app.storage.saved_shared_state, {"goal": "corrigir protocolo"})
+
+    def test_persist_message_caps_history_when_auto_summarize_is_disabled(self):
+        import threading
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.history = [{"role": "human", "content": f"m{i}"} for i in range(24)]
+        app.shared_state = {}
+        app.storage = DummyStorage()
+        app._lock = threading.Lock()
+        app.prompt_builder = type("PromptBuilderStub", (), {"history_window": 2})()
+        app.auto_summarize_threshold = 0
+
+        app.session_services = AppSessionServices(app)
+        app.session_services.persist_message("human", "m24")
+
+        self.assertEqual(len(app.history), 24)
+        self.assertEqual(app.history[0]["content"], "m1")
+        self.assertEqual(app.history[-1]["content"], "m24")
 
     def test_auto_summarize_merges_with_existing_session_summary(self):
         class FakeContextManager:
@@ -2393,6 +2465,33 @@ class PluginTests(unittest.TestCase):
 
         self.assertEqual(result, "mensagem")
         mock_input.assert_called_once_with("Você: ")
+
+    def test_read_user_input_with_timeout_polls_stdin_without_spawning_thread(self):
+        stdin = Mock()
+        stdin.isatty.return_value = False
+        stdin.readline.return_value = "mensagem\n"
+
+        with patch("quimera.app.inputs._stdin", return_value=stdin), patch(
+            "quimera.app.inputs.select.select",
+            return_value=([stdin], [], []),
+        ), patch("quimera.app.inputs.threading.Thread") as mock_thread:
+            result = read_user_input_with_timeout("Você: ", timeout=1)
+
+        self.assertEqual(result, "mensagem")
+        mock_thread.assert_not_called()
+
+    def test_read_user_input_with_timeout_returns_none_without_spawning_thread_when_idle(self):
+        stdin = Mock()
+        stdin.isatty.return_value = False
+
+        with patch("quimera.app.inputs._stdin", return_value=stdin), patch(
+            "quimera.app.inputs.select.select",
+            return_value=([], [], []),
+        ), patch("quimera.app.inputs.threading.Thread") as mock_thread:
+            result = read_user_input_with_timeout("Você: ", timeout=1)
+
+        self.assertIsNone(result)
+        mock_thread.assert_not_called()
 
     def test_read_user_input_zero_timeout_tty_flushes_deferred_messages_before_prompt(self):
         app = QuimeraApp.__new__(QuimeraApp)
@@ -4178,6 +4277,42 @@ class MetricsFeedbackTests(unittest.TestCase):
         self.assertIn("[task ", results)
         self.assertIn("validar cobertura dos testes", results)
         self.assertLessEqual(len(results.split(": ", 1)[1]), 200)
+
+    def test_refresh_task_shared_state_caps_completed_task_results_budget(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.shared_state = {}
+        app.current_job_id = 1
+        tmp_dir = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        db_path = tmp_dir / "tasks.db"
+        init_db(str(db_path))
+        add_job("Session", db_path=str(db_path), job_id=1)
+        original_budget = AppTaskServices._MAX_COMPLETED_TASK_RESULTS_CHARS
+        self.addCleanup(
+            setattr,
+            AppTaskServices,
+            "_MAX_COMPLETED_TASK_RESULTS_CHARS",
+            original_budget,
+        )
+        AppTaskServices._MAX_COMPLETED_TASK_RESULTS_CHARS = 700
+
+        for label in ("primeira", "segunda", "terceira"):
+            task_id = create_task(
+                1,
+                f"{label} task com descricao longa para ocupar espaco",
+                db_path=str(db_path),
+                status="completed",
+            )
+            complete_task(task_id, result="resultado " * 30, db_path=str(db_path))
+
+        app.tasks_db_path = str(db_path)
+        AppTaskServices(app).refresh_task_shared_state()
+
+        results = app.shared_state.get("completed_task_results", "")
+        self.assertLessEqual(len(results), AppTaskServices._MAX_COMPLETED_TASK_RESULTS_CHARS)
+        self.assertIn("omitida", results)
+        self.assertNotIn("primeira task", results)
+        self.assertIn("segunda task", results)
+        self.assertIn("terceira task", results)
 
     def test_refresh_task_shared_state_removes_completed_task_results_when_none_exist(self):
         app = QuimeraApp.__new__(QuimeraApp)

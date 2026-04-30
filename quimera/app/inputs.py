@@ -146,6 +146,19 @@ def start_nonblocking_input_reader(app, prompt: str, input_fn=input) -> None:
 
 def read_user_input_with_timeout(prompt: str, timeout: int, input_fn=input):
     """Lê user input with timeout."""
+    stdin = _stdin()
+    if stdin is not None and not stdin.isatty():
+        try:
+            ready, _, _ = select.select([stdin], [], [], timeout)
+        except Exception:
+            return None
+        if not ready:
+            return None
+        line = stdin.readline()
+        if line == "":
+            return None
+        return line.rstrip("\r\n")
+
     result_queue = queue.Queue()
 
     def _reader():

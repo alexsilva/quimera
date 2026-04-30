@@ -1,6 +1,5 @@
 """AgentClient: orquestra chamadas a agentes externos (CLI e API)."""
 import json
-import io
 import logging
 import os
 import queue
@@ -38,6 +37,9 @@ _GUI_VARS = frozenset({
 
 class AgentClient:
     """Executa os agentes externos no diretório de trabalho do projeto."""
+
+    _MAX_STDOUT_CHARS = 128_000
+    _MAX_LOG_QUEUE_ITEMS = 512
 
     def __init__(self, renderer, metrics_file=None, timeout=None, visibility=Visibility.SUMMARY,
                  working_dir=None, workspace_root=None, tool_executor=None):
@@ -87,6 +89,47 @@ class AgentClient:
         """Exibe mensagens resumidas de stdout quando o plugin oferece formatter."""
         return self._spy_output_presenter.consume_stdout(agent, line)
 
+    @classmethod
+    def _append_capped_stdout(cls, result_holder: dict, chunk: str) -> None:
+        """Mantém apenas a cauda recente de stdout para evitar retenção ilimitada."""
+        chunks = result_holder["stdout_chunks"]
+        chunks.append(chunk)
+        result_holder["stdout_total"] += len(chunk)
+
+        while chunks and result_holder["stdout_total"] > cls._MAX_STDOUT_CHARS:
+            removed = chunks.popleft()
+            result_holder["stdout_total"] -= len(removed)
+            result_holder["stdout_truncated"] = True
+
+    @staticmethod
+    def _get_capped_stdout(result_holder: dict) -> str:
+        """Retorna stdout concatenado com marcador quando houve descarte de prefixo."""
+        output = "".join(result_holder["stdout_chunks"])
+        if result_holder["stdout_truncated"]:
+            return "[...stdout truncado...]\n" + output
+        return output
+
+    @classmethod
+    def _enqueue_log_item(cls, log_queue, item) -> None:
+        """Enfileira saída ao vivo com descarte do item mais antigo sob pressão."""
+        if log_queue is None:
+            return
+        try:
+            log_queue.put_nowait(item)
+            return
+        except queue.Full:
+            pass
+
+        try:
+            log_queue.get_nowait()
+        except queue.Empty:
+            return
+
+        try:
+            log_queue.put_nowait(item)
+        except queue.Full:
+            return
+
     # ------------------------------------------------------------------
     # run() — execução de subprocess
     # ------------------------------------------------------------------
@@ -130,12 +173,14 @@ class AgentClient:
             self.renderer.show_error(f"[erro] não foi possível iniciar {cmd[0]}: {exc}")
             return None
 
-        result_holder = {  # io.StringIO evita lista crescente; deque limita stderr
-            "stdout": io.StringIO(),
+        result_holder = {
+            "stdout_chunks": deque(),
+            "stdout_total": 0,
+            "stdout_truncated": False,
             "stderr": deque(maxlen=MAX_STDERR_LINES * 2),
             "error": None,
         }
-        log_queue = queue.Queue() if not silent else None
+        log_queue = queue.Queue(maxsize=self._MAX_LOG_QUEUE_ITEMS) if not silent else None
         stderr_lines_shown = 0
         self._spy_output_presenter.reset()
 
@@ -143,9 +188,9 @@ class AgentClient:
             try:
                 if proc.stdout:
                     for line in proc.stdout:
-                        result_holder["stdout"].write(line)
+                        self._append_capped_stdout(result_holder, line)
                         if log_queue is not None and self.visibility in {Visibility.SUMMARY, Visibility.FULL}:
-                            log_queue.put(("stdout", line))
+                            self._enqueue_log_item(log_queue, ("stdout", line))
             except Exception as exc:
                 result_holder["error"] = exc
 
@@ -155,7 +200,7 @@ class AgentClient:
                     for line in proc.stderr:
                         result_holder["stderr"].append(line)
                         if log_queue is not None:
-                            log_queue.put(("stderr", line))
+                            self._enqueue_log_item(log_queue, ("stderr", line))
             except Exception as exc:
                 result_holder["error"] = exc
 
@@ -207,8 +252,9 @@ class AgentClient:
                     _logger.warning("[erro] wall-clock timeout after %ds for %s", self.timeout * 5, cmd[0])
                     return None
 
-                if result_holder["stdout"]:
-                    _logger.debug(result_holder["stdout"].getvalue())
+                debug_output = self._get_capped_stdout(result_holder)
+                if debug_output:
+                    _logger.debug(debug_output)
                 filtered_stderr = _filter_stderr_lines(agent, list(result_holder["stderr"]))
                 if filtered_stderr:
                     _logger.warning("".join(filtered_stderr))
@@ -297,7 +343,7 @@ class AgentClient:
                 self.renderer.show_error(f"[erro] falha ao comunicar com {cmd[0]}: {result_holder['error']}")
                 return None
 
-            output = result_holder["stdout"].getvalue().strip()
+            output = self._get_capped_stdout(result_holder).strip()
             error = "".join(_filter_stderr_lines(agent, list(result_holder["stderr"]))).strip()
         finally:
             self._agent_running = False
