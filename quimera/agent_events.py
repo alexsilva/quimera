@@ -1,6 +1,7 @@
 """Eventos estruturados emitidos pelo pipeline de visibilidade dos agentes."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -11,6 +12,9 @@ class SpyEvent:
     text: str
     transient: bool = False
     final: bool = False
+    # Campo opcional para payload estruturado (telemetria/UI).
+    # compare=False mantém retrocompatibilidade com testes que comparam SpyEvent por igualdade.
+    data: dict[str, Any] | None = field(default=None, compare=False)
 
 
 class _SyntheticToolResult:

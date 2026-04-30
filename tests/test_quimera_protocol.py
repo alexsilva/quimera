@@ -2957,6 +2957,88 @@ class PluginTests(unittest.TestCase):
         app.renderer.update_message_stream.assert_not_called()
         app.renderer.finish_message_stream.assert_not_called()
 
+    def test_call_agent_low_level_exports_last_spy_turn_detail_to_state(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.session_call_index = 0
+        app.history = [{"role": "human", "content": "Pedido atual"}]
+        app.shared_state = {}
+        app.round_index = 0
+        app.debug_prompt_metrics = False
+        app.task_services = Mock()
+        app.task_services.refresh_task_shared_state = Mock()
+        app.prompt_builder = Mock()
+        app.prompt_builder.build.return_value = "PROMPT"
+        app.renderer = Mock()
+        app.session_state = {"session_id": "sessao-teste"}
+        app.get_agent_plugin = Mock(return_value=AgentPlugin(
+            name="codex-cli",
+            prefix="/codex-cli",
+            style=("blue", "Codex CLI"),
+            cmd=["codex"],
+            driver="cli",
+            supports_tools=True,
+            has_builtin_tools=True,
+        ))
+
+        app.agent_client = Mock()
+        app.agent_client.call.return_value = "resposta final"
+        app.agent_client.last_spy_turn_detail = {
+            "turn_id": "turn_0001",
+            "tools": [
+                {
+                    "tool_call_id": "t_0001",
+                    "tool": "exec_command",
+                    "status": "ok",
+                    "started_at": "2026-04-30T10:21:03+00:00",
+                    "ended_at": "2026-04-30T10:21:05+00:00",
+                    "duration_ms": 1820,
+                    "input": {"cmd": "pytest -q"},
+                }
+            ],
+        }
+
+        dispatch = AppDispatchServices(app)
+        result = dispatch.call_agent_low_level("codex-cli")
+
+        self.assertEqual(result, "resposta final")
+        self.assertIn("spy_last_turn_detail", app.shared_state)
+        exported = app.shared_state["spy_last_turn_detail"]
+        self.assertEqual(exported["agent"], "codex-cli")
+        self.assertEqual(exported["turn_detail"]["turn_id"], "turn_0001")
+        self.assertEqual(
+            app.session_state["last_spy_turn_detail"]["turn_detail"]["tools"][0]["tool"],
+            "exec_command",
+        )
+
+    def test_sanitize_spy_turn_detail_caps_payload_size(self):
+        long_text = "x" * 500
+        detail = {
+            "turn_id": "turn_1234",
+            "tools": [
+                {
+                    "tool_call_id": f"tool_{i}",
+                    "tool": "exec_command",
+                    "status": "ok",
+                    "started_at": "2026-04-30T10:21:03+00:00",
+                    "ended_at": "2026-04-30T10:21:05+00:00",
+                    "duration_ms": 2000,
+                    "input": {"cmd": long_text, "path": "/tmp/example"},
+                    "output_meta": {"preview": long_text},
+                    "error": {"type": "ToolError", "message": long_text, "stack": long_text},
+                }
+                for i in range(20)
+            ],
+        }
+        sanitized = AppDispatchServices._sanitize_spy_turn_detail(detail)
+
+        self.assertIsNotNone(sanitized)
+        self.assertEqual(len(sanitized["tools"]), AppDispatchServices._MAX_SPY_TOOLS)
+        self.assertTrue(sanitized["truncated_tools"])
+        cmd = sanitized["tools"][0]["input"]["cmd"]
+        self.assertLessEqual(len(cmd), AppDispatchServices._MAX_SPY_TEXT_CHARS)
+        self.assertTrue(cmd.endswith("..."))
+        self.assertEqual(set(sanitized["tools"][0]["error"].keys()), {"type", "message"})
+
     def test_task_handler_prints_and_persists_agent_response(self):
         app = QuimeraApp.__new__(QuimeraApp)
         materialize_internal_services(app)

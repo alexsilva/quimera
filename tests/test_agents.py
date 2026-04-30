@@ -565,6 +565,12 @@ def test_agent_client_run_summary_shows_diff_output_and_keeps_next_operation_cle
     assert ("✓ git diff -- quimera/agents.py",) not in [call.args for call in renderer.show_plain.call_args_list]
     renderer.show_plain.assert_any_call("diff --git a/quimera/agents.py b/quimera/agents.py", agent="codex")
     renderer.show_plain.assert_any_call("+nova linha", agent="codex")
+    assert any(
+        call.args and str(call.args[0]).startswith("Ferramentas executadas neste turno (")
+        for call in renderer.show_plain.call_args_list
+    )
+    assert client.last_spy_turn_detail is not None
+    assert client.last_spy_turn_detail["tools"]
 
 
 def test_spy_output_presenter_keeps_next_operation_clean_after_diff_preview(renderer):
@@ -592,6 +598,65 @@ def test_spy_output_presenter_compose_status_label_keeps_base_and_tool(renderer)
     presenter.emit("codex", SpyEvent(kind="tool", text="$ git status --short"))
 
     assert presenter.compose_status_label("codex") == "codex | $ git status --short"
+
+
+def test_spy_output_presenter_collects_structured_turn_detail(renderer):
+    presenter = SpyOutputPresenter(renderer, Visibility.SUMMARY)
+
+    for event in _format_codex_spy_event(
+        '{"type":"item.started","item":{"type":"command_execution","command":"ls","id":"t_17"}}'
+    ):
+        presenter.emit("codex", event)
+    for event in _format_codex_spy_event(
+        '{"type":"item.completed","item":{"type":"command_execution","command":"ls","exit_code":0,"id":"t_17"}}'
+    ):
+        presenter.emit("codex", event)
+
+    detail = presenter.finalize_turn("codex")
+
+    assert detail["turn_id"].startswith("turn_")
+    assert len(detail["tools"]) == 1
+    assert detail["tools"][0]["tool_call_id"] == "t_17"
+    assert detail["tools"][0]["tool"] == "exec_command"
+    assert detail["tools"][0]["status"] == "ok"
+    assert detail["tools"][0]["input"] == {"cmd": "ls"}
+    assert isinstance(detail["tools"][0]["duration_ms"], int)
+
+
+def test_spy_output_presenter_finalize_turn_renders_human_summary(renderer):
+    presenter = SpyOutputPresenter(renderer, Visibility.SUMMARY)
+
+    for event in _format_codex_spy_event(
+        '{"type":"item.started","item":{"type":"command_execution","command":"ls","id":"t_17"}}'
+    ):
+        presenter.emit("codex", event)
+    for event in _format_codex_spy_event(
+        '{"type":"item.completed","item":{"type":"command_execution","command":"ls","exit_code":0,"id":"t_17"}}'
+    ):
+        presenter.emit("codex", event)
+
+    presenter.finalize_turn("codex", render_summary=True)
+
+    rendered_lines = [call.args[0] for call in renderer.show_plain.call_args_list]
+    assert any(line.startswith("Ferramentas executadas neste turno (") for line in rendered_lines)
+    assert any("- exec_command (t_17) — ok —" in line and "| cmd: ls" in line for line in rendered_lines)
+
+
+def test_spy_output_presenter_full_mode_renders_tool_timeline(renderer):
+    presenter = SpyOutputPresenter(renderer, Visibility.FULL)
+
+    for event in _format_codex_spy_event(
+        '{"type":"item.started","item":{"type":"command_execution","command":"ls","id":"t_17"}}'
+    ):
+        presenter.emit("codex", event)
+    for event in _format_codex_spy_event(
+        '{"type":"item.completed","item":{"type":"command_execution","command":"ls","exit_code":0,"id":"t_17"}}'
+    ):
+        presenter.emit("codex", event)
+
+    rendered_lines = [call.args[0] for call in renderer.show_plain.call_args_list]
+    assert any("TOOL_START id=t_17 tool=exec_command cmd=ls" in line for line in rendered_lines)
+    assert any("TOOL_END id=t_17 status=ok" in line for line in rendered_lines)
 
 
 def test_agent_client_run_summary_does_not_persist_started_tool_without_status(renderer):

@@ -34,9 +34,91 @@ def _coerce_tool_error(error):
 class AppDispatchServices:
     """Agrupa despacho de agentes e persistência de mensagens."""
 
+    _MAX_SPY_TOOLS = 12
+    _MAX_SPY_TEXT_CHARS = 280
+    _MAX_SPY_MAP_ITEMS = 6
+
     def __init__(self, app):
         """Inicializa uma instância de AppDispatchServices."""
         self.app = app
+
+    @classmethod
+    def _truncate_spy_text(cls, value):
+        if not isinstance(value, str):
+            return value
+        if len(value) <= cls._MAX_SPY_TEXT_CHARS:
+            return value
+        return value[: cls._MAX_SPY_TEXT_CHARS - 3] + "..."
+
+    @classmethod
+    def _sanitize_spy_map(cls, payload, max_items=None):
+        if not isinstance(payload, dict):
+            return None
+        item_limit = max_items if isinstance(max_items, int) and max_items > 0 else cls._MAX_SPY_MAP_ITEMS
+        sanitized = {}
+        for index, (key, value) in enumerate(payload.items()):
+            if index >= item_limit:
+                break
+            normalized_key = cls._truncate_spy_text(str(key))
+            if isinstance(value, str):
+                sanitized[normalized_key] = cls._truncate_spy_text(value)
+            elif isinstance(value, (int, float, bool)) or value is None:
+                sanitized[normalized_key] = value
+            else:
+                sanitized[normalized_key] = cls._truncate_spy_text(str(value))
+        return sanitized or None
+
+    @classmethod
+    def _sanitize_spy_turn_detail(cls, detail):
+        if not isinstance(detail, dict):
+            return None
+
+        tools = detail.get("tools")
+        if not isinstance(tools, list):
+            tools = []
+
+        sanitized_tools = []
+        for tool in tools[: cls._MAX_SPY_TOOLS]:
+            if not isinstance(tool, dict):
+                continue
+            sanitized = {
+                "tool_call_id": cls._truncate_spy_text(tool.get("tool_call_id")),
+                "tool": cls._truncate_spy_text(tool.get("tool")),
+                "status": cls._truncate_spy_text(tool.get("status")),
+                "started_at": cls._truncate_spy_text(tool.get("started_at")),
+                "ended_at": cls._truncate_spy_text(tool.get("ended_at")),
+                "duration_ms": tool.get("duration_ms"),
+                "input": cls._sanitize_spy_map(tool.get("input"), max_items=4),
+                "output_meta": cls._sanitize_spy_map(tool.get("output_meta"), max_items=4),
+                "error": cls._sanitize_spy_map(tool.get("error"), max_items=2),
+            }
+            sanitized_tools.append(sanitized)
+
+        return {
+            "turn_id": cls._truncate_spy_text(detail.get("turn_id")),
+            "tools": sanitized_tools,
+            "truncated_tools": len(tools) > cls._MAX_SPY_TOOLS,
+        }
+
+    def _update_spy_telemetry(self, agent: str) -> None:
+        app = self.app
+        agent_client = getattr(app, "agent_client", None)
+        if agent_client is None:
+            return
+        detail = self._sanitize_spy_turn_detail(getattr(agent_client, "last_spy_turn_detail", None))
+        if detail is None:
+            return
+        snapshot = {
+            "agent": agent,
+            "captured_at": int(time.time()),
+            "turn_detail": detail,
+        }
+        shared_state = getattr(app, "shared_state", None)
+        if isinstance(shared_state, dict):
+            shared_state["spy_last_turn_detail"] = snapshot
+        session_state = getattr(app, "session_state", None)
+        if isinstance(session_state, dict):
+            session_state["last_spy_turn_detail"] = snapshot
 
     def resolve_agent_response(
             self,
@@ -293,6 +375,7 @@ class AppDispatchServices:
             )
 
         result = app.agent_client.call(agent, prompt, silent=silent, on_text_chunk=_on_text_chunk)
+        self._update_spy_telemetry(agent)
         if stream_state["started"]:
             output_lock = getattr(app, "_output_lock", None)
             with (output_lock if output_lock is not None else nullcontext()):

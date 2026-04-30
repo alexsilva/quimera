@@ -31,17 +31,44 @@ def is_diff_command(command: str) -> bool:
     return command.startswith(("git diff", "git show", "diff "))
 
 
-def format_command_output_preview(command: str, output: str, limit: int = 20) -> list[SpyEvent]:
+def format_command_output_preview(
+    command: str,
+    output: str,
+    limit: int = 20,
+    tool_call_id: str | None = None,
+) -> list[SpyEvent]:
     """Renderiza preview truncado de comandos de diff."""
     if not is_diff_command(command):
         return []
 
     events: list[SpyEvent] = []
     lines = [line.rstrip() for line in (output or "").splitlines() if line.strip()]
-    for line in lines[:limit]:
-        events.append(SpyEvent(kind="diff", text=truncate_spy_text(line, limit=240), final=True))
+    for idx, line in enumerate(lines[:limit]):
+        events.append(
+            SpyEvent(
+                kind="diff",
+                text=truncate_spy_text(line, limit=240),
+                final=True,
+                data={
+                    "tool": "exec_command",
+                    "tool_call_id": tool_call_id,
+                    "operation": "preview",
+                    "line_index": idx,
+                },
+            )
+        )
     if len(lines) > limit:
         events.append(
-            SpyEvent(kind="diff", text=f"... diff truncado ({len(lines) - limit} linhas omitidas)", final=True)
+            SpyEvent(
+                kind="diff",
+                text=f"... diff truncado ({len(lines) - limit} linhas omitidas)",
+                final=True,
+                data={
+                    "tool": "exec_command",
+                    "tool_call_id": tool_call_id,
+                    "operation": "preview_truncated",
+                    "omitted_lines": len(lines) - limit,
+                },
+            )
         )
     return events

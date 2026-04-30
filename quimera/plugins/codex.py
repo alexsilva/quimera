@@ -15,10 +15,25 @@ def _truncate_text(value: str, limit: int = 160) -> str:
     return truncate_spy_text(value, limit=limit)
 
 
-def _describe_command(command: str, phase: str, exit_code: int | None = None) -> SpyEvent:
+def _tool_call_id(item: dict) -> str | None:
+    return (
+        item.get("id")
+        or item.get("tool_call_id")
+        or item.get("call_id")
+        or item.get("invocation_id")
+    )
+
+
+def _describe_command(command: str, phase: str, exit_code: int | None = None, item: dict | None = None) -> SpyEvent:
     command = (command or "").strip()
+    item = item or {}
+    data_base = {
+        "tool": "exec_command",
+        "tool_call_id": _tool_call_id(item),
+        "input": {"cmd": command},
+    }
     if not command:
-        return SpyEvent(kind="context", text=f"comando {phase}", transient=True)
+        return SpyEvent(kind="context", text=f"comando {phase}", transient=True, data=data_base)
 
     try:
         parts = shlex.split(command)
@@ -28,17 +43,44 @@ def _describe_command(command: str, phase: str, exit_code: int | None = None) ->
     summary = _truncate_text(command)
     if phase == "concluído":
         if exit_code == 0 or exit_code is None:
-            return SpyEvent(kind="tool", text=f"✓ {summary}")
-        return SpyEvent(kind="tool", text=f"✗ {summary} (exit {exit_code})")
-    return SpyEvent(kind="tool", text=f"$ {summary}")
+            return SpyEvent(
+                kind="tool",
+                text=f"✓ {summary}",
+                data={**data_base, "operation": "end", "status": "ok", "output_meta": {"exit_code": exit_code}},
+            )
+        return SpyEvent(
+            kind="tool",
+            text=f"✗ {summary} (exit {exit_code})",
+            data={
+                **data_base,
+                "operation": "end",
+                "status": "error",
+                "output_meta": {"exit_code": exit_code},
+                "error": {"type": "CommandExitCode", "message": f"exit {exit_code}"},
+            },
+        )
+    return SpyEvent(kind="tool", text=f"$ {summary}", data={**data_base, "operation": "start", "status": "running"})
 
 
 def _describe_file_change(item: dict, phase: str) -> SpyEvent:
     target = item.get("path") or item.get("file_path") or item.get("target") or ""
     subject = target or "arquivo"
+    data_base = {
+        "tool": "apply_patch",
+        "tool_call_id": _tool_call_id(item),
+        "input": {"path": target},
+    }
     if phase == "concluído":
-        return SpyEvent(kind="tool", text=f"✓ editar {subject}")
-    return SpyEvent(kind="tool", text=f"editar {subject}")
+        return SpyEvent(
+            kind="tool",
+            text=f"✓ editar {subject}",
+            data={**data_base, "operation": "end", "status": "ok"},
+        )
+    return SpyEvent(
+        kind="tool",
+        text=f"editar {subject}",
+        data={**data_base, "operation": "start", "status": "running"},
+    )
 
 
 def _format_codex_spy_event(line: str) -> list[SpyEvent]:
@@ -65,9 +107,16 @@ def _format_codex_spy_event(line: str) -> list[SpyEvent]:
     phase = "iniciado" if etype == "item.started" else "concluído"
     if itype == "command_execution":
         command = item.get("command") or ""
-        events = [_describe_command(command, phase, item.get("exit_code"))]
+        tool_id = _tool_call_id(item)
+        events = [_describe_command(command, phase, item.get("exit_code"), item=item)]
         if etype == "item.completed":
-            events.extend(format_command_output_preview(command, item.get("aggregated_output") or ""))
+            events.extend(
+                format_command_output_preview(
+                    command,
+                    item.get("aggregated_output") or "",
+                    tool_call_id=tool_id,
+                )
+            )
         return events
 
     if itype == "reasoning":
@@ -87,7 +136,18 @@ def _format_codex_spy_event(line: str) -> list[SpyEvent]:
 
     if itype in {"tool_call", "function_call"}:
         name = item.get("name") or item.get("tool_name") or "ferramenta"
-        return [SpyEvent(kind="tool", text=f"usando {name}")]
+        return [
+            SpyEvent(
+                kind="tool",
+                text=f"usando {name}",
+                data={
+                    "tool": name,
+                    "tool_call_id": _tool_call_id(item),
+                    "operation": "start",
+                    "status": "running",
+                },
+            )
+        ]
 
     return [SpyEvent(kind="context", text=f"{itype} {phase}", transient=True)]
 

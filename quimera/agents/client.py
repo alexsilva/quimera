@@ -64,6 +64,7 @@ class AgentClient:
         self._agent_running = False
         self._current_proc = None
         self._spy_output_presenter = SpyOutputPresenter(self.renderer, self.visibility)
+        self.last_spy_turn_detail: dict | None = None
         self.rate_limit_detected = False
         self.rate_limit_detected_at: float | None = None
 
@@ -346,6 +347,11 @@ class AgentClient:
             output = self._get_capped_stdout(result_holder).strip()
             error = "".join(_filter_stderr_lines(agent, list(result_holder["stderr"]))).strip()
         finally:
+            should_render_turn_summary = not silent and self.visibility in {Visibility.SUMMARY, Visibility.FULL}
+            self.last_spy_turn_detail = self._spy_output_presenter.finalize_turn(
+                agent,
+                render_summary=should_render_turn_summary,
+            )
             self._agent_running = False
             self._stop_esc_monitor()
             self._spy_output_presenter.reset()
