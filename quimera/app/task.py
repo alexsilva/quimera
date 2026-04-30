@@ -23,6 +23,10 @@ from ..runtime.task_planning import (
 class AppTaskServices:
     """Agrupa operações de task e roteamento usadas pela aplicação."""
 
+    _MAX_COMPLETED_TASK_RESULTS_CHARS = 2000
+    _MAX_COMPLETED_TASK_RESULT_DESC_CHARS = 80
+    _MAX_COMPLETED_TASK_RESULT_VALUE_CHARS = 200
+
     def __init__(self, app):
         """Inicializa uma instância de AppTaskServices."""
         self.app = app
@@ -416,18 +420,64 @@ class AppTaskServices:
             db_path=app.tasks_db_path
         )
         if completed_tasks:
-            results = []
-            for task in completed_tasks:
-                desc = task.get("description", "")[:80]
-                result = task.get("result", "")[:200] if task.get("result") else ""
-                if result:
-                    results.append(f"[task {task['id']}] {desc}: {result}")
-                else:
-                    results.append(f"[task {task['id']}] {desc}: concluído")
-            if results:
-                app.shared_state["completed_task_results"] = "\n".join(results)
+            completed_summary = self._build_completed_task_results(completed_tasks)
+            if completed_summary:
+                app.shared_state["completed_task_results"] = completed_summary
+            else:
+                app.shared_state.pop("completed_task_results", None)
         else:
             app.shared_state.pop("completed_task_results", None)
+
+    @classmethod
+    def _build_completed_task_results(cls, completed_tasks) -> str:
+        """Resume tasks concluídas com orçamento global fixo."""
+        if not completed_tasks:
+            return ""
+
+        max_chars = cls._MAX_COMPLETED_TASK_RESULTS_CHARS
+        kept_lines = []
+        total_chars = 0
+        omitted_count = 0
+
+        for task in reversed(completed_tasks):
+            line = cls._format_completed_task_result(task)
+            separator = 1 if kept_lines else 0
+            if total_chars + separator + len(line) > max_chars:
+                omitted_count += 1
+                continue
+            kept_lines.append(line)
+            total_chars += separator + len(line)
+
+        if not kept_lines:
+            return cls._format_completed_task_result(completed_tasks[-1])[:max_chars]
+
+        kept_lines.reverse()
+        if omitted_count:
+            omitted_line = f"... ({omitted_count} task(s) concluída(s) anterior(es) omitida(s))"
+            candidate = "\n".join([omitted_line, *kept_lines])
+            if len(candidate) <= max_chars:
+                return candidate
+            while kept_lines and len("\n".join([omitted_line, *kept_lines])) > max_chars:
+                kept_lines.pop(0)
+            if not kept_lines:
+                return omitted_line[:max_chars]
+            candidate = "\n".join([omitted_line, *kept_lines])
+            if len(candidate) > max_chars:
+                available_chars = max_chars - len(omitted_line) - 1
+                if available_chars <= 0:
+                    return cls._format_completed_task_result(completed_tasks[-1])[:max_chars]
+                kept_lines[0] = kept_lines[0][:available_chars]
+            return "\n".join([omitted_line, *kept_lines])
+        return "\n".join(kept_lines)
+
+    @classmethod
+    def _format_completed_task_result(cls, task: dict) -> str:
+        """Formata uma linha compacta para o resumo de tasks concluídas."""
+        desc = str(task.get("description", "") or "")[:cls._MAX_COMPLETED_TASK_RESULT_DESC_CHARS]
+        result = task.get("result", "")
+        if result:
+            return f"[task {task['id']}] {desc}: {str(result)[:cls._MAX_COMPLETED_TASK_RESULT_VALUE_CHARS]}"
+        return f"[task {task['id']}] {desc}: concluído"
 
     def get_task_routing_plugins(self):
         """Retorna os plugins elegíveis para roteamento de tasks."""
