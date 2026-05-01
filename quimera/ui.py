@@ -479,7 +479,7 @@ class TerminalRenderer:
         if self._console:
             style, icon = ROLE_STYLES["system"]
             line = Text.assemble((f"{icon} ", f"dim {style}"), (clean_message, "dim"))
-            self._print(line)
+            self._print(line, soft_wrap=True)
         else:
             print(clean_message)
 

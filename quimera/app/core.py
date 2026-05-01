@@ -51,6 +51,7 @@ from .config import logger
 
 class QuimeraApp:
     """Orquestra comandos locais, roteamento entre agentes e ciclo da sessão."""
+    _SESSION_LOG_DISPLAY_MAX_CHARS = 96
 
     def __init__(self,
                  cwd: Path,
@@ -347,6 +348,27 @@ class QuimeraApp:
             seen.add(key)
             result.append(normalized)
         return result
+
+    @staticmethod
+    def _shorten_middle(value: str, max_chars: int) -> str:
+        """Trunca string no meio para manter cabeçalho e sufixo visíveis."""
+        if max_chars <= 0 or len(value) <= max_chars:
+            return value
+        if max_chars <= 7:
+            return value[:max_chars]
+        head_len = (max_chars - 3) // 2
+        tail_len = max_chars - 3 - head_len
+        return f"{value[:head_len]}...{value[-tail_len:]}"
+
+    def _format_session_log_message(self, log_file: str | Path) -> str:
+        """Monta mensagem de log com path compactado para evitar quebra feia no terminal."""
+        path_text = str(log_file)
+        home_dir = str(Path.home())
+        home_prefix = f"{home_dir}{os.sep}"
+        if path_text.startswith(home_prefix):
+            path_text = f"~{path_text[len(home_dir):]}"
+        path_text = self._shorten_middle(path_text, self._SESSION_LOG_DISPLAY_MAX_CHARS)
+        return MSG_SESSION_LOG.format(path_text)
 
     def _setup_task_executors(self):
         """Set up task executors for explicit human-created task execution."""
@@ -646,7 +668,10 @@ class QuimeraApp:
                 summary_loaded=self._format_yes_no(self.session_state["summary_loaded"]),
             )
         )
-        self.renderer.show_system(MSG_SESSION_LOG.format(self.storage.get_log_file()))
+        self.renderer.show_system(self._format_session_log_message(self.storage.get_log_file()))
+        flush = getattr(self.renderer, "flush", None)
+        if callable(flush):
+            flush()
 
         threaded_chat = self.threads > 1
         chat_queue = None

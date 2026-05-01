@@ -143,6 +143,9 @@ class TestTerminalRenderer:
     def test_show_system_with_rich(self, mock_renderer):
         """Test show_system with Rich."""
         mock_renderer.show_system("System message")
+        mock_renderer.flush()
+        assert mock_renderer._console.print.called
+        assert mock_renderer._console.print.call_args.kwargs.get("soft_wrap") is True
 
     def test_show_system_without_rich(self, renderer_no_rich, capsys):
         """Test show_system without Rich."""

@@ -1444,6 +1444,53 @@ class ProtocolTests(unittest.TestCase):
         )
         app.dispatch_services.call_agent.assert_called_once()
 
+    def test_run_flushes_startup_system_messages_before_first_prompt(self):
+        class RecordingRenderer(DummyRenderer):
+            def __init__(self):
+                super().__init__()
+                self.events = []
+
+            def show_system(self, message):
+                self.events.append(("show_system", message))
+
+            def flush(self):
+                self.events.append(("flush", None))
+
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.history = []
+        app.user_name = "Alex"
+        app.execution_mode = None
+        app.renderer = RecordingRenderer()
+        app.storage = DummyStorage()
+        app.session_state = {
+            "session_id": "sessao-2026-03-27-123456",
+            "history_count": 0,
+            "summary_loaded": False,
+        }
+        app.threads = 1
+        app.read_user_input = Mock(side_effect=["/exit"])
+        app.session_services = Mock()
+
+        app.run()
+
+        self.assertEqual(app.renderer.events[0][0], "show_system")
+        self.assertEqual(app.renderer.events[1][0], "show_system")
+        self.assertEqual(app.renderer.events[2][0], "show_system")
+        self.assertEqual(app.renderer.events[3], ("flush", None))
+
+    def test_format_session_log_message_compacts_home_path(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        long_path = Path.home() / "um" / "caminho" / ("muito-longo-" * 12) / "sessao-2026-04-30.txt"
+
+        message = app._format_session_log_message(long_path)
+        lines = message.splitlines()
+
+        self.assertGreaterEqual(len(lines), 2)
+        self.assertEqual(lines[0], "Log da sessão:")
+        self.assertTrue(lines[1].startswith("  ~"))
+        self.assertIn("...", lines[1])
+        self.assertLessEqual(len(lines[1].strip()), app._SESSION_LOG_DISPLAY_MAX_CHARS)
+
     def test_run_uses_four_turns_when_extended(self):
         app = QuimeraApp.__new__(QuimeraApp)
         materialize_internal_services(app)
