@@ -66,10 +66,14 @@ def read_user_input(app, prompt, timeout: int, input_fn=input) -> str | None:
             if stdin is None:
                 return None
             if stdin.isatty():
-                app._nonblocking_input_status = "idle"
-                app._nonblocking_prompt_text = ""
+                app._nonblocking_input_status = "reading"
+                app._nonblocking_prompt_text = prompt
                 app.system_layer.flush_deferred_messages()
-                return input_fn(prompt)
+                try:
+                    return input_fn(prompt)
+                finally:
+                    app._nonblocking_input_status = "idle"
+                    app._nonblocking_prompt_text = ""
             if select.select([stdin], [], [], 0)[0]:
                 line = stdin.readline()
                 if line == "":

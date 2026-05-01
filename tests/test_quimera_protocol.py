@@ -2466,6 +2466,33 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(result, "mensagem")
         mock_input.assert_called_once_with("Você: ")
 
+    def test_read_user_input_zero_timeout_tty_marks_prompt_as_reading_during_blocking_input(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        materialize_internal_services(app)
+        app.renderer = DummyRenderer()
+        app._deferred_system_messages = []
+        app._nonblocking_prompt_visible = False
+        app._nonblocking_input_queue = None
+        app._nonblocking_input_thread = None
+        app._nonblocking_input_status = "idle"
+        app._nonblocking_prompt_text = ""
+
+        stdin = io.StringIO("")
+        stdin.isatty = lambda: True
+
+        def _input_with_assertions(prompt):
+            self.assertEqual(prompt, "Alex: ")
+            self.assertEqual(app._nonblocking_input_status, "reading")
+            self.assertEqual(app._nonblocking_prompt_text, "Alex: ")
+            return "mensagem"
+
+        with patch("sys.stdin", stdin), patch("builtins.input", side_effect=_input_with_assertions):
+            result = app.read_user_input("Alex: ", timeout=0)
+
+        self.assertEqual(result, "mensagem")
+        self.assertEqual(app._nonblocking_input_status, "idle")
+        self.assertEqual(app._nonblocking_prompt_text, "")
+
     def test_read_user_input_with_timeout_polls_stdin_without_spawning_thread(self):
         stdin = Mock()
         stdin.isatty.return_value = False
