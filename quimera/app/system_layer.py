@@ -249,7 +249,7 @@ class AppSystemLayer:
             provider=provider_default,
             supports_native_tools=api_defaults.supports_native_tools,
             extra_body=extra_body,
-        ), None
+        )
         return conn, None
 
     def _build_prompt_preview_message(self, agent: str) -> str:

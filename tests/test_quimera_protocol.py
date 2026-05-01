@@ -731,7 +731,7 @@ class ProtocolTests(unittest.TestCase):
         )
         app.get_available_plugins = Mock(return_value=[plugin])
         app.get_agent_plugin = Mock(return_value=plugin)
-        answers = iter(["", "openai", "gpt-5.1", "http://localhost:1234/v1", "LM_STUDIO_KEY"])
+        answers = iter(["", "openai", "", "gpt-5.1", "http://localhost:1234/v1", "LM_STUDIO_KEY"])
         app.read_user_input = Mock(side_effect=lambda prompt, timeout=-1: next(answers))
         app.system_layer = AppSystemLayer(app)
 
@@ -748,6 +748,32 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(connection.api_key_env, "LM_STUDIO_KEY")
         self.assertIn("Configurando conexão para chatgpt", app.renderer.system_messages[0])
         self.assertIn("Conexão ativa para chatgpt", app.renderer.system_messages[-1])
+
+    def test_configure_connection_interactively_openai_returns_dataclass_connection(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.renderer = DummyRenderer()
+        plugin = AgentPlugin(
+            name="qwen2-5",
+            prefix="/qwen2-5",
+            style=("cyan", "Qwen"),
+            driver="openai_compat",
+            model="gpt-4o",
+            base_url="https://api.openai.com/v1",
+            api_key_env="OPENAI_API_KEY",
+            supports_tools=True,
+        )
+        answers = iter(["", "openai", "", "qwen2.5:14b-instruct-q4_K_M", "http://localhost:11434/v1", ""])
+        app.read_user_input = Mock(side_effect=lambda prompt, timeout=-1: next(answers))
+        layer = AppSystemLayer(app)
+
+        connection, base_name = layer._configure_connection_interactively(plugin)
+
+        self.assertIsNone(base_name)
+        self.assertIsInstance(connection, OpenAIConnection)
+        self.assertEqual(connection.model, "qwen2.5:14b-instruct-q4_K_M")
+        self.assertEqual(connection.base_url, "http://localhost:11434/v1")
+        self.assertEqual(connection.api_key_env, "OPENAI_API_KEY")
+        self.assertEqual(connection.provider, "openai_compat")
 
     def test_clear_terminal_screen_clears_scrollback_and_repositions_cursor(self):
         app = QuimeraApp.__new__(QuimeraApp)
