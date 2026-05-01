@@ -39,6 +39,7 @@ def _is_interactive_terminal() -> bool:
 
 
 try:
+    from rich import box as rich_box
     from rich.console import Console, Group
     from rich.markdown import Markdown
     from rich.markup import escape as markup_escape
@@ -89,6 +90,12 @@ class TerminalRenderer:
         """Retorna (color, label) para o agente."""
         return _agent_style(agent, self._get_plugin_style)
 
+    def _print(self, renderable, **kwargs):
+        """Ponto único de saída. Thread-safe via RLock."""
+        with self._lock:
+            if self._console:
+                self._console.print(renderable, **kwargs)
+
     def show_message(self, agent, content):
         """Exibe message usando o tema ativo."""
         style, label = self._agent_style(agent)
@@ -96,7 +103,8 @@ class TerminalRenderer:
         if self._consume_completed_stream(agent, clean_content):
             return
         if self._console:
-            self._theme.render(self._console, label, style, Markdown(clean_content))
+            with self._lock:
+                self._theme.render(self._console, label, style, Markdown(clean_content))
         else:
             print(f"\n{label}: {clean_content}\n")
 
@@ -136,17 +144,17 @@ class TerminalRenderer:
                 return
             theme_name = self._theme.name
             live = None
-            self._console.print()
+            self._print("")
             if theme_name == "rule":
-                self._console.print(Rule(f"[bold {style}]{label}[/bold {style}]", style=f"dim {style}"))
+                self._print(Rule(f"[bold {style}]{label}[/bold {style}]", style=f"dim {style}"))
             elif theme_name == "chat":
                 header = Table.grid(expand=True, padding=(0, 1))
                 header.add_column(width=2)
                 header.add_column(ratio=1)
                 header.add_row(Text("●", style=f"bold {style}"), Text(label, style=f"bold {style}"))
-                self._console.print(header)
+                self._print(header)
             elif theme_name == "minimal":
-                self._console.print(Text(f"▶ {label}", style=f"bold {style}"))
+                self._print(Text(f"▶ {label}", style=f"bold {style}"))
             initial = self._build_stream_renderable(theme_name, label, style, "")
             live = Live(initial, console=self._console, refresh_per_second=20, transient=False, auto_refresh=True)
             live.start()
@@ -219,7 +227,7 @@ class TerminalRenderer:
         _, label = self._agent_style(agent)
         message = "sem resposta válida"
         if self._console:
-            self._console.print(f"\n[dim]{label}: {message}[/dim]\n")
+            self._print(f"\n[dim]{label}: {message}[/dim]\n")
         else:
             print(f"\n{label}: {message}\n")
 
@@ -227,12 +235,11 @@ class TerminalRenderer:
         """Exibe system."""
         clean_message = strip_ansi(str(message))
         if self._console:
-            self._console.print(f"[dim]{markup_escape(clean_message)}[/dim]")
+            self._print(f"[dim]{markup_escape(clean_message)}[/dim]")
         else:
             print(clean_message)
 
     def show_plain(self, message, agent=None):
-        # Remove ANSI escape sequences to prevent display issues
         """Exibe plain."""
         clean_message = strip_ansi(str(message))
         if self._console:
@@ -243,14 +250,13 @@ class TerminalRenderer:
                     (" "),
                     (clean_message,),
                 )
-                self._console.print(line, soft_wrap=True)
             else:
                 line = Text.assemble(
                     ("·", "dim"),
                     (" "),
                     (clean_message, "dim"),
                 )
-                self._console.print(line, soft_wrap=True)
+            self._print(line, soft_wrap=True)
         else:
             prefix = f"{agent}: " if agent else ""
             print(f"{prefix}{clean_message}")
@@ -259,7 +265,7 @@ class TerminalRenderer:
         """Exibe error."""
         clean_message = strip_ansi(str(message))
         if self._console:
-            self._console.print(f"[bold red]{markup_escape(clean_message)}[/bold red]")
+            self._print(f"[bold red]{markup_escape(clean_message)}[/bold red]")
         else:
             print(clean_message)
 
@@ -267,9 +273,65 @@ class TerminalRenderer:
         """Exibe warning."""
         clean_message = strip_ansi(str(message))
         if self._console:
-            self._console.print(f"[yellow]{markup_escape(clean_message)}[/yellow]")
+            self._print(f"[yellow]{markup_escape(clean_message)}[/yellow]")
         else:
             print(clean_message)
+
+    def show_turn_summary(self, agent: str | None, detail: dict) -> None:
+        """Exibe resumo do turno como tabela Rich compacta."""
+        if not self._console or not _RICH_AVAILABLE:
+            return
+        tools = detail.get("tools", []) if isinstance(detail, dict) else []
+        if not tools:
+            return
+        style, label = self._agent_style(agent) if agent else ("dim", "sistema")
+        turn_id = detail.get("turn_id", "")
+        table = Table(
+            box=rich_box.SIMPLE_HEAD,
+            show_header=True,
+            header_style="bold dim",
+            padding=(0, 1),
+            title=f"[dim]{turn_id}[/dim]" if turn_id else None,
+            title_justify="left",
+        )
+        table.add_column("Ferramenta", style="cyan", no_wrap=True)
+        table.add_column("Status", width=6, justify="center")
+        table.add_column("Duração", width=7, justify="right", style="dim")
+        table.add_column("Detalhes", style="dim", overflow="fold")
+        for tool in tools:
+            if not isinstance(tool, dict):
+                continue
+            tool_name = tool.get("tool") or "ferramenta"
+            status = tool.get("status") or "unknown"
+            dur_ms = tool.get("duration_ms")
+            if isinstance(dur_ms, int) and dur_ms >= 0:
+                dur_str = f"{dur_ms}ms" if dur_ms < 1000 else f"{dur_ms / 1000:.1f}s"
+            else:
+                dur_str = "—"
+            if status in ("ok", "success"):
+                status_cell = Text("✓", style="green")
+            elif status == "error":
+                status_cell = Text("✗", style="bold red")
+            elif status in ("running", "unknown"):
+                status_cell = Text("…", style="yellow")
+            else:
+                status_cell = Text(status[:5], style="dim")
+            inp = tool.get("input")
+            if isinstance(inp, dict):
+                if inp.get("cmd"):
+                    details = f"cmd: {inp['cmd']}"
+                elif inp.get("path"):
+                    details = f"path: {inp['path']}"
+                else:
+                    parts = [f"{k}={v}" for k, v in inp.items() if v is not None][:2]
+                    details = ", ".join(parts)
+            else:
+                details = ""
+            err = tool.get("error")
+            if isinstance(err, dict) and err.get("message"):
+                details = f"erro: {err['message']}"
+            table.add_row(tool_name, status_cell, dur_str, details)
+        self._print(Panel(table, border_style=f"dim {style}", padding=(0, 0)))
 
     def show_handoff(self, from_agent, to_agent, task=None):
         """Exibe handoff."""

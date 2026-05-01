@@ -385,6 +385,7 @@ class AppDispatchServices:
                     app.renderer.abort_message_stream(agent)
                 if hasattr(app, "_redisplay_user_prompt_if_needed"):
                     app._redisplay_user_prompt_if_needed(clear_first=False)
+        app.agent_client.flush_pending_summary()
         elapsed = time.time() - start
         if hasattr(app, "session_state") and app.session_state:
             with (counter_lock if counter_lock is not None else nullcontext()):

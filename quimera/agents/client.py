@@ -65,6 +65,7 @@ class AgentClient:
         self._current_proc = None
         self._spy_output_presenter = SpyOutputPresenter(self.renderer, self.visibility)
         self.last_spy_turn_detail: dict | None = None
+        self._pending_summary_render: tuple | None = None
         self.rate_limit_detected = False
         self.rate_limit_detected_at: float | None = None
 
@@ -350,8 +351,9 @@ class AgentClient:
             should_render_turn_summary = not silent and self.visibility in {Visibility.SUMMARY, Visibility.FULL}
             self.last_spy_turn_detail = self._spy_output_presenter.finalize_turn(
                 agent,
-                render_summary=should_render_turn_summary,
+                render_summary=False,
             )
+            self._pending_summary_render = (agent, self.last_spy_turn_detail, should_render_turn_summary)
             self._agent_running = False
             self._stop_esc_monitor()
             self._spy_output_presenter.reset()
@@ -601,6 +603,16 @@ class AgentClient:
         finally:
             self._agent_running = False
             self._stop_esc_monitor()
+
+    def flush_pending_summary(self) -> None:
+        """Renderiza o resumo de turno pendente; deve ser chamado após fechar o stream."""
+        pending = self._pending_summary_render
+        self._pending_summary_render = None
+        if pending is None:
+            return
+        agent, detail, should_render = pending
+        if should_render:
+            self._spy_output_presenter._render_turn_summary(agent, detail)
 
     # ------------------------------------------------------------------
     # Métricas

@@ -269,6 +269,9 @@ class SpyOutputPresenter:
     def _render_turn_summary(self, agent: str | None, detail: dict) -> None:
         if self.visibility == Visibility.QUIET:
             return
+        if hasattr(self.renderer, "show_turn_summary"):
+            self.renderer.show_turn_summary(agent, detail)
+            return
         lines = self._build_turn_summary_lines(detail)
         for line in lines:
             self._show(agent, SpyEvent(kind="response", text=line, final=True))
