@@ -307,7 +307,7 @@ class TerminalRenderer:
             return Panel(
                 tools_table,
                 title=f"[bold {style}]{label} · {title}[/bold {style}]",
-                border_style=f"dim {style}",
+                border_style=style,
                 padding=(0, 0),
             )
         if theme_name == "chat":
@@ -317,15 +317,15 @@ class TerminalRenderer:
             row.add_row(
                 Text("◦", style=f"dim {style}"),
                 Group(
-                    Text(title, style=f"bold dim {style}"),
+                    Text(title, style=f"bold {style}"),
                     Padding(tools_table, pad=(0, 0, 0, 2)),
                 ),
             )
             return row
         if theme_name == "rule":
-            return Group(Text(title, style=f"bold dim {style}"), tools_table)
+            return Group(Text(title, style=f"bold {style}"), tools_table)
         if theme_name == "minimal":
-            return Group(Text(f"◦ {title}", style=f"dim {style}"), Padding(tools_table, pad=(0, 0, 0, 2)))
+            return Group(Text(f"◦ {title}", style=f"bold {style}"), Padding(tools_table, pad=(0, 0, 0, 2)))
         return tools_table
 
     def _render_turn_block(
@@ -478,8 +478,10 @@ class TerminalRenderer:
         clean_message = strip_ansi(str(message))
         if self._console:
             style, icon = ROLE_STYLES["system"]
-            line = Text.assemble((f"{icon} ", f"dim {style}"), (clean_message, "dim"))
-            self._print(line, soft_wrap=True)
+            line = Text.assemble((f"{icon} ", f"dim {style}"), (clean_message, style))
+            line.no_wrap = False
+            line.overflow = "fold"
+            self._print(line)
         else:
             print(clean_message)
 
@@ -500,7 +502,9 @@ class TerminalRenderer:
                     (" "),
                     (clean_message, "dim"),
                 )
-            self._print(line, soft_wrap=True)
+            line.no_wrap = False
+            line.overflow = "fold"
+            self._print(line)
         else:
             prefix = f"{agent}: " if agent else ""
             print(f"{prefix}{clean_message}")
@@ -536,15 +540,20 @@ class TerminalRenderer:
         turn_id = detail.get("turn_id", "")
         width = getattr(self._console, "width", 80)
         compact_tools_layout = width < 72
+        table_padding = (0, 0) if compact_tools_layout else (0, 1)
         table = Table(
             box=rich_box.SIMPLE_HEAD,
             show_header=True,
-            header_style="bold dim",
-            padding=(0, 1),
+            header_style="bold",
+            padding=table_padding,
         )
-        table.add_column("Ferramenta", style="cyan", no_wrap=not compact_tools_layout)
-        table.add_column("Status", width=6, justify="center")
-        table.add_column("Duração", width=7, justify="right", style="dim")
+        table.add_column("Ferramenta", style="cyan", no_wrap=False, overflow="fold")
+        if compact_tools_layout:
+            table.add_column("St", width=2, justify="center")
+            table.add_column("Dur", width=5, justify="right", style="dim")
+        else:
+            table.add_column("Status", width=6, justify="center")
+            table.add_column("Duração", width=7, justify="right", style="dim")
         if not compact_tools_layout:
             table.add_column("Detalhes", style="dim", overflow="fold")
         for tool in tools:
@@ -564,7 +573,8 @@ class TerminalRenderer:
             elif status in ("running", "unknown"):
                 status_cell = Text("…", style="yellow")
             else:
-                status_cell = Text(status[:5], style="dim")
+                status_max = 2 if compact_tools_layout else 5
+                status_cell = Text(status[:status_max], style="dim")
             inp = tool.get("input")
             if isinstance(inp, dict):
                 if inp.get("cmd"):
