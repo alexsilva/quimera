@@ -534,16 +534,19 @@ class TerminalRenderer:
             return
         style, label = self._agent_style(agent) if agent else ("dim", "sistema")
         turn_id = detail.get("turn_id", "")
+        width = getattr(self._console, "width", 80)
+        compact_tools_layout = width < 72
         table = Table(
             box=rich_box.SIMPLE_HEAD,
             show_header=True,
             header_style="bold dim",
             padding=(0, 1),
         )
-        table.add_column("Ferramenta", style="cyan", no_wrap=True)
+        table.add_column("Ferramenta", style="cyan", no_wrap=not compact_tools_layout)
         table.add_column("Status", width=6, justify="center")
         table.add_column("Duração", width=7, justify="right", style="dim")
-        table.add_column("Detalhes", style="dim", overflow="fold")
+        if not compact_tools_layout:
+            table.add_column("Detalhes", style="dim", overflow="fold")
         for tool in tools:
             if not isinstance(tool, dict):
                 continue
@@ -576,7 +579,13 @@ class TerminalRenderer:
             err = tool.get("error")
             if isinstance(err, dict) and err.get("message"):
                 details = markup_escape(f"erro: {err['message']}")
-            table.add_row(tool_name, status_cell, dur_str, details)
+            if compact_tools_layout:
+                tool_cell = Text(tool_name, style="cyan")
+                if details:
+                    tool_cell.append(f"\n{details}", style="dim")
+                table.add_row(tool_cell, status_cell, dur_str)
+            else:
+                table.add_row(tool_name, status_cell, dur_str, details)
         block = self._render_turn_block(
             self._theme.name,
             label,
