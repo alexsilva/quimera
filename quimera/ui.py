@@ -265,21 +265,101 @@ class TerminalRenderer:
         """Enfileira um evento de print para o writer thread."""
         self._queue.put(PrintEvent(renderable, kwargs))
 
-    def _build_stream_renderable(self, theme_name: str, label: str, style: str, content: str):
-        """Monta o renderable dinâmico usado no streaming."""
+    def _build_turn_header(self, theme_name: str, label: str, style: str):
+        """Monta cabeçalho de turno por tema."""
+        if theme_name == "chat":
+            header = Table.grid(expand=True, padding=(0, 1))
+            header.add_column(width=2)
+            header.add_column(ratio=1)
+            header.add_row(Text("●", style=f"bold {style}"), Text(label, style=f"bold {style}"))
+            return header
+        if theme_name == "rule":
+            return Rule(f"[bold {style}]{label}[/bold {style}]", style=f"dim {style}")
+        if theme_name == "minimal":
+            return Text(f"▶ {label}", style=f"bold {style}")
+        return Text(label, style=f"bold {style}")
+
+    def _build_turn_body(self, theme_name: str, label: str, style: str, content: str, streaming: bool = False):
+        """Monta corpo textual do turno."""
         content_md = Markdown(content or "")
         if theme_name == "panel":
-            return Panel(
-                content_md,
-                title=f"[bold {style}]{label}[/bold {style}]",
-                border_style=style,
-                padding=(0, 1),
-            )
+            title = f"[bold {style}]{label}[/bold {style}]" if streaming else None
+            return Panel(content_md, title=title, border_style=style, padding=(0, 1))
         if theme_name == "chat":
             return Padding(content_md, pad=(0, 0, 0, 4))
         if theme_name == "minimal":
             return Padding(content_md, pad=(0, 0, 0, 2))
         return content_md
+
+    def _build_turn_tools(self, theme_name: str, label: str, style: str, tools_table, turn_id: str):
+        """Monta seção de ferramentas mantendo vínculo visual com o turno."""
+        title = "tools"
+        if turn_id:
+            title = f"tools · {turn_id}"
+        if theme_name == "panel":
+            return Panel(
+                tools_table,
+                title=f"[bold {style}]{label} · {title}[/bold {style}]",
+                border_style=f"dim {style}",
+                padding=(0, 0),
+            )
+        if theme_name == "chat":
+            row = Table.grid(expand=True, padding=(0, 1))
+            row.add_column(width=2)
+            row.add_column(ratio=1)
+            row.add_row(
+                Text("◦", style=f"dim {style}"),
+                Group(
+                    Text(title, style=f"bold dim {style}"),
+                    Padding(tools_table, pad=(0, 0, 0, 2)),
+                ),
+            )
+            return row
+        if theme_name == "rule":
+            return Group(Text(title, style=f"bold dim {style}"), tools_table)
+        if theme_name == "minimal":
+            return Group(Text(f"◦ {title}", style=f"dim {style}"), Padding(tools_table, pad=(0, 0, 0, 2)))
+        return tools_table
+
+    def _render_turn_block(
+        self,
+        theme_name: str,
+        label: str,
+        style: str,
+        *,
+        content: str | None = None,
+        tools_table=None,
+        turn_id: str = "",
+        include_header: bool = True,
+        include_footer_rule: bool = False,
+        streaming: bool = False,
+    ):
+        """Monta bloco estruturado de turno: header -> corpo -> tools."""
+        parts = []
+        if include_header:
+            parts.append(self._build_turn_header(theme_name, label, style))
+        if content is not None:
+            parts.append(self._build_turn_body(theme_name, label, style, content, streaming=streaming))
+        if tools_table is not None:
+            parts.append(self._build_turn_tools(theme_name, label, style, tools_table, turn_id))
+        if include_footer_rule and theme_name == "rule":
+            parts.append(Rule(style="dim"))
+        if not parts:
+            return ""
+        if len(parts) == 1:
+            return parts[0]
+        return Group(*parts)
+
+    def _build_stream_renderable(self, theme_name: str, label: str, style: str, content: str):
+        """Monta o renderable dinâmico usado no streaming."""
+        return self._render_turn_block(
+            theme_name,
+            label,
+            style,
+            content=content,
+            include_header=False,
+            streaming=True,
+        )
 
     # ------------------------------------------------------------------
     # API pública de exibição de mensagens
@@ -292,37 +372,17 @@ class TerminalRenderer:
         if self._consume_completed_stream(agent, clean_content):
             return
         if self._console:
-            content_md = Markdown(clean_content)
             theme_name = self._theme.name
             self._print("")
-            if theme_name == "panel":
-                self._print(Panel(
-                    content_md,
-                    title=f"[bold {style}]{label}[/bold {style}]",
-                    border_style=style,
-                    padding=(0, 1),
-                ))
-            elif theme_name == "chat":
-                table = Table.grid(expand=True, padding=(0, 1))
-                table.add_column(width=2)
-                table.add_column(ratio=1)
-                table.add_row(
-                    Text("●", style=f"bold {style}"),
-                    Group(
-                        Text(label, style=f"bold {style}"),
-                        Padding(content_md, pad=(0, 0, 0, 2)),
-                    ),
-                )
-                self._print(table)
-            elif theme_name == "rule":
-                self._print(Rule(f"[bold {style}]{label}[/bold {style}]", style=f"dim {style}"))
-                self._print(content_md)
-                self._print(Rule(style="dim"))
-            elif theme_name == "minimal":
-                self._print(Text(f"▶ {label}", style=f"bold {style}"))
-                self._print(content_md)
-            else:
-                self._print(content_md)
+            block = self._render_turn_block(
+                theme_name,
+                label,
+                style,
+                content=clean_content,
+                include_header=True,
+                include_footer_rule=True,
+            )
+            self._print(block)
         else:
             print(f"\n{label}: {clean_content}\n")
 
@@ -352,16 +412,7 @@ class TerminalRenderer:
             theme_name = self._theme.name
 
         self._print("")
-        if theme_name == "rule":
-            self._print(Rule(f"[bold {style}]{label}[/bold {style}]", style=f"dim {style}"))
-        elif theme_name == "chat":
-            header = Table.grid(expand=True, padding=(0, 1))
-            header.add_column(width=2)
-            header.add_column(ratio=1)
-            header.add_row(Text("●", style=f"bold {style}"), Text(label, style=f"bold {style}"))
-            self._print(header)
-        elif theme_name == "minimal":
-            self._print(Text(f"▶ {label}", style=f"bold {style}"))
+        self._print(self._render_turn_block(theme_name, label, style, content=None, include_header=True))
 
         initial = self._build_stream_renderable(theme_name, label, style, "")
         live = Live(initial, console=self._console, refresh_per_second=20, transient=False, auto_refresh=True)
@@ -473,8 +524,6 @@ class TerminalRenderer:
             show_header=True,
             header_style="bold dim",
             padding=(0, 1),
-            title=f"[dim]{markup_escape(str(turn_id))}[/dim]" if turn_id else None,
-            title_justify="left",
         )
         table.add_column("Ferramenta", style="cyan", no_wrap=True)
         table.add_column("Status", width=6, justify="center")
@@ -513,7 +562,16 @@ class TerminalRenderer:
             if isinstance(err, dict) and err.get("message"):
                 details = markup_escape(f"erro: {err['message']}")
             table.add_row(tool_name, status_cell, dur_str, details)
-        self._print(Panel(table, border_style=f"dim {style}", padding=(0, 0)))
+        block = self._render_turn_block(
+            self._theme.name,
+            label,
+            style,
+            tools_table=table,
+            turn_id=str(turn_id),
+            include_header=False,
+            include_footer_rule=True,
+        )
+        self._print(block)
 
     def show_handoff(self, from_agent, to_agent, task=None):
         """Exibe handoff."""
