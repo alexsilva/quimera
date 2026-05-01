@@ -75,7 +75,8 @@ def test_maybe_execute_from_response_none(config, approval_handler):
 def test_executor_registers_interactive_command_tools(config, approval_handler):
     executor = ToolExecutor(config, approval_handler)
     names = executor.registry.names()
-    assert "run_shell_command" in names
+    assert "run_shell_command" not in names
+    assert "run_shell" in names
     assert "exec_command" in names
     assert "write_stdin" in names
     assert "close_command_session" in names

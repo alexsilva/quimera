@@ -87,31 +87,70 @@ def _parse_text_tool_calls(text: str) -> list[dict]:
     return calls
 
 
-def _build_tool_system_prompt(tool_names: str, workspace_root: str | None) -> str:
+def _build_tool_system_prompt(tool_names: list[str], workspace_root: str | None) -> str:
     """Monta o system prompt usado no modo com ferramentas."""
+    names_csv = ", ".join(tool_names)
+    available = set(tool_names)
     workspace_hint = f"Workspace raiz: {workspace_root}. " if workspace_root is not None else ""
-    return (
-        f"Você tem acesso às seguintes ferramentas: {tool_names}. "
-        f"{workspace_hint}"
-        "Quando decidir usar uma ferramenta, use o mecanismo de tool calling da API compatível ou o fallback textual já suportado; "
-        "não invente envelopes JSON intermediários como "
-        "{\"action\":\"execute\",\"tool_name\":\"...\",\"params\":{...}}. "
-        "Não escreva chamadas de ferramenta como texto visível ao usuário; "
-        "Protocolo de ferramentas: descubra o alvo antes de editar usando list_files, grep_search e read_file; "
-        "prefira apply_patch para mudanças parciais em arquivos existentes; "
-        "write_file só deve sobrescrever arquivo existente com replace_existing=true e quando a reescrita total for realmente necessária; "
-        "o patch de apply_patch deve usar o formato nativo do Quimera e começar exatamente com '*** Begin Patch' e terminar exatamente com '*** End Patch'; "
-        "não use cabeçalhos de diff como '---', '+++' ou 'diff --git' dentro do patch; "
-        "use exatamente os nomes de argumentos definidos nos schemas das ferramentas; "
-        "por exemplo, read_file usa 'path', não 'file_path'; "
-        "para shell, use exatamente 'run_shell' para uma execução simples ou 'exec_command' para sessão interativa; "
-        "nunca invente nomes como 'run', 'run_shell_command' ou 'execute_command'; "
-        "se uma ferramenta retornar erro, ajuste a próxima chamada com base no erro e não repita o mesmo payload inválido; "
-        "use run_shell para inspeção ou validação objetiva e exec_command apenas quando precisar de stdin, polling ou sessão persistente; "
-        "não peça ao usuário para executar comandos manualmente se você pode fazer isso diretamente; "
-        "na resposta final, resuma arquivos alterados, evidência de validação e próximo passo; "
-        "nunca exponha tags de tool calling como <function>, </function> ou </tool_call> na resposta final."
-    )
+
+    instructions = [
+        f"Você tem acesso às seguintes ferramentas: {names_csv}. ",
+        workspace_hint,
+        "Use apenas ferramentas listadas e disponíveis nesta requisição. ",
+        "Quando decidir usar uma ferramenta, use o mecanismo de tool calling da API compatível ou o fallback textual já suportado; ",
+        "não invente envelopes JSON intermediários como ",
+        "{\"action\":\"execute\",\"tool_name\":\"...\",\"params\":{...}}. ",
+        "Não escreva chamadas de ferramenta como texto visível ao usuário; ",
+        "use exatamente os nomes de argumentos definidos nos schemas das ferramentas; ",
+        "se uma ferramenta retornar erro, ajuste a próxima chamada com base no erro e não repita o mesmo payload inválido; ",
+        "não peça ao usuário para executar comandos manualmente se você pode fazer isso diretamente; ",
+        "na resposta final, resuma arquivos alterados, evidência de validação e próximo passo; ",
+        "nunca exponha tags de tool calling como <function>, </function> ou </tool_call> na resposta final.",
+    ]
+
+    discovery_tools = [name for name in ("list_files", "grep_search", "read_file") if name in available]
+    if discovery_tools:
+        instructions.append(
+            f" Protocolo de ferramentas: descubra o alvo antes de editar usando {', '.join(discovery_tools)}; "
+        )
+
+    if "apply_patch" in available:
+        instructions.append("prefira apply_patch para mudanças parciais em arquivos existentes; ")
+        instructions.append(
+            "o patch de apply_patch deve usar o formato nativo do Quimera e começar exatamente com "
+            "'*** Begin Patch' e terminar exatamente com '*** End Patch'; "
+        )
+        instructions.append("não use cabeçalhos de diff como '---', '+++' ou 'diff --git' dentro do patch; ")
+
+    if "write_file" in available:
+        instructions.append(
+            "write_file só deve sobrescrever arquivo existente com replace_existing=true e quando a "
+            "reescrita total for realmente necessária; "
+        )
+
+    if "read_file" in available:
+        instructions.append("por exemplo, read_file usa 'path', não 'file_path'; ")
+
+    has_run_shell = "run_shell" in available
+    has_exec_command = "exec_command" in available
+    if has_run_shell and has_exec_command:
+        instructions.append(
+            "para shell, use exatamente 'run_shell' para uma execução simples ou 'exec_command' para sessão "
+            "interativa; "
+        )
+        instructions.append("nunca invente nomes como 'run', 'run_shell_command' ou 'execute_command'; ")
+        instructions.append(
+            "use run_shell para inspeção ou validação objetiva e exec_command apenas quando precisar de stdin, "
+            "polling ou sessão persistente; "
+        )
+    elif has_run_shell:
+        instructions.append("para shell, use exatamente 'run_shell' com argumento 'command'; ")
+    elif has_exec_command:
+        instructions.append(
+            "para shell interativo, use exatamente 'exec_command' com argumento 'cmd' e write_stdin para polling; "
+        )
+
+    return "".join(instructions)
 
 
 def _prune_tool_loop_messages(messages: list[dict]) -> list[dict]:
@@ -247,7 +286,7 @@ class OpenAICompatDriver:
 
         messages: list[dict] = []
         if tools:
-            tool_names = ", ".join(t["function"]["name"] for t in tools)
+            tool_names = [t["function"]["name"] for t in tools]
             workspace_root = getattr(getattr(tool_executor, "config", None), "workspace_root", None)
             messages.append({
                 "role": "system",

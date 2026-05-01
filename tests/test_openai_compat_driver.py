@@ -159,11 +159,20 @@ def test_sanitize_assistant_text_removes_function_residue():
 
 
 def test_build_tool_system_prompt_includes_workspace_hint():
-    prompt = _build_tool_system_prompt("read_file, apply_patch", "/tmp/workspace")
+    prompt = _build_tool_system_prompt(["read_file", "apply_patch"], "/tmp/workspace")
 
     assert "read_file, apply_patch" in prompt
     assert "Workspace raiz: /tmp/workspace." in prompt
     assert "não invente envelopes JSON intermediários" in prompt
+
+
+def test_build_tool_system_prompt_avoids_unavailable_tool_guidance():
+    prompt = _build_tool_system_prompt(["read_file"], "/tmp/workspace")
+
+    assert "read_file usa 'path', não 'file_path'" in prompt
+    assert "run_shell" not in prompt
+    assert "exec_command" not in prompt
+    assert "começar exatamente com '*** Begin Patch'" not in prompt
 
 
 def test_prune_tool_loop_messages_keeps_head_and_recent_tail():

@@ -48,7 +48,6 @@ class ToolExecutor:
         self.registry.register("apply_patch", patch_tool.apply_patch)
         self.registry.register("grep_search", file_tools.grep_search)
         self.registry.register("run_shell", shell_tool.run_shell)
-        self.registry.register("run_shell_command", shell_tool.run_shell)
         self.registry.register("exec_command", shell_tool.exec_command)
         self.registry.register("write_stdin", shell_tool.write_stdin)
         self.registry.register("close_command_session", shell_tool.close_command_session)
