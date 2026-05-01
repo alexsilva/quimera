@@ -17,6 +17,22 @@ except ImportError:
 
 
 # ---------------------------------------------------------------------------
+# Role-based palette: role -> (rich_style, icon)
+# ---------------------------------------------------------------------------
+ROLE_STYLES: dict[str, tuple[str, str]] = {
+    "system":  ("blue",        "⚙"),
+    "error":   ("bold red",    "✗"),
+    "warning": ("yellow",      "⚠"),
+    "info":    ("cyan",        "ℹ"),
+    "tool":    ("dim cyan",    "⚒"),
+    "human":   ("bold green",  "❯"),
+}
+
+DEFAULT_DENSITY = "normal"
+DENSITY_OPTIONS = ("normal", "compact")
+
+
+# ---------------------------------------------------------------------------
 # Funções de renderização por tema
 # ---------------------------------------------------------------------------
 

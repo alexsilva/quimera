@@ -1,7 +1,7 @@
 """Componentes de `quimera.config`."""
 import json
 
-from .themes import DEFAULT_THEME, names as theme_names
+from .themes import DEFAULT_THEME, DEFAULT_DENSITY, DENSITY_OPTIONS, names as theme_names
 
 DEFAULT_USER_NAME = "Você"
 DEFAULT_HISTORY_WINDOW = 12
@@ -103,4 +103,21 @@ class ConfigManager:
             data["theme"] = name
         else:
             data.pop("theme", None)
+        self._save(data)
+
+    @property
+    def density(self) -> str:
+        """Retorna a densidade de layout ativa; fallback para o padrão."""
+        value = self._load().get("density")
+        if value and value in DENSITY_OPTIONS:
+            return value
+        return DEFAULT_DENSITY
+
+    def set_density(self, value: str):
+        """Persiste a densidade de layout."""
+        data = self._load()
+        if value and value in DENSITY_OPTIONS:
+            data["density"] = value
+        else:
+            data.pop("density", None)
         self._save(data)

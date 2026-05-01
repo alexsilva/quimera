@@ -75,7 +75,7 @@ class QuimeraApp:
         self.auto_approve_mutations = auto_approve_mutations
         self.config = ConfigManager(self.workspace.config_file)
         _active_theme = theme if theme is not None else self.config.theme
-        self.renderer = TerminalRenderer(theme=_active_theme, get_plugin_style=self._resolve_plugin_style)
+        self.renderer = TerminalRenderer(theme=_active_theme, get_plugin_style=self._resolve_plugin_style, density=self.config.density)
         self.user_name = self.config.user_name
         self.visibility = Visibility(visibility)
         self.system_layer = AppSystemLayer(self)

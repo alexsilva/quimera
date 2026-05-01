@@ -58,6 +58,7 @@ except ImportError:
     _RICH_AVAILABLE = False
 
 import quimera.themes as themes
+from quimera.themes import ROLE_STYLES, DEFAULT_DENSITY
 
 # Sentinela para parar o writer thread
 _STOP = object()
@@ -113,7 +114,7 @@ def _agent_style(agent: str, get_plugin_style=None):
 class TerminalRenderer:
     """Camada exclusiva de apresentação no terminal. Nunca toca em persistência."""
 
-    def __init__(self, theme: str | None = None, get_plugin_style=None):
+    def __init__(self, theme: str | None = None, get_plugin_style=None, density: str | None = None):
         """Inicializa uma instância de TerminalRenderer."""
         if _RICH_AVAILABLE:
             self._console = Console(
@@ -123,6 +124,7 @@ class TerminalRenderer:
         else:
             self._console = None
         self._theme = themes.get(theme or themes.DEFAULT_THEME)
+        self._density = density if density in themes.DENSITY_OPTIONS else DEFAULT_DENSITY
         self._get_plugin_style = get_plugin_style
         self._live = None
         self._statuses = {}
@@ -265,6 +267,11 @@ class TerminalRenderer:
         """Enfileira um evento de print para o writer thread."""
         self._queue.put(PrintEvent(renderable, kwargs))
 
+    def _spacing(self):
+        """Imprime linha em branco entre turnos; no-op em modo compact."""
+        if self._density != "compact":
+            self._print("")
+
     def _build_turn_header(self, theme_name: str, label: str, style: str):
         """Monta cabeçalho de turno por tema."""
         if theme_name == "chat":
@@ -373,7 +380,7 @@ class TerminalRenderer:
             return
         if self._console:
             theme_name = self._theme.name
-            self._print("")
+            self._spacing()
             block = self._render_turn_block(
                 theme_name,
                 label,
@@ -411,7 +418,7 @@ class TerminalRenderer:
             self._active_stream_agents.add(agent)
             theme_name = self._theme.name
 
-        self._print("")
+        self._spacing()
         self._print(self._render_turn_block(theme_name, label, style, content=None, include_header=True))
 
         initial = self._build_stream_renderable(theme_name, label, style, "")
@@ -460,15 +467,19 @@ class TerminalRenderer:
         _, label = self._agent_style(agent)
         message = "sem resposta válida"
         if self._console:
-            self._print(f"\n[dim]{label}: {message}[/dim]\n")
+            style, icon = ROLE_STYLES["info"]
+            line = Text.assemble((f"{icon} ", f"dim {style}"), (f"{label}: {message}", "dim"))
+            self._print(line)
         else:
-            print(f"\n{label}: {message}\n")
+            print(f"{label}: {message}")
 
     def show_system(self, message):
         """Exibe system."""
         clean_message = strip_ansi(str(message))
         if self._console:
-            self._print(f"[dim]{markup_escape(clean_message)}[/dim]")
+            style, icon = ROLE_STYLES["system"]
+            line = Text.assemble((f"{icon} ", f"dim {style}"), (clean_message, "dim"))
+            self._print(line)
         else:
             print(clean_message)
 
@@ -498,7 +509,9 @@ class TerminalRenderer:
         """Exibe error."""
         clean_message = strip_ansi(str(message))
         if self._console:
-            self._print(f"[bold red]{markup_escape(clean_message)}[/bold red]")
+            style, icon = ROLE_STYLES["error"]
+            line = Text.assemble((f"{icon} ", style), (clean_message, "red"))
+            self._print(line)
         else:
             print(clean_message)
 
@@ -506,7 +519,9 @@ class TerminalRenderer:
         """Exibe warning."""
         clean_message = strip_ansi(str(message))
         if self._console:
-            self._print(f"[yellow]{markup_escape(clean_message)}[/yellow]")
+            style, icon = ROLE_STYLES["warning"]
+            line = Text.assemble((f"{icon} ", style), (clean_message, "yellow"))
+            self._print(line)
         else:
             print(clean_message)
 
@@ -577,10 +592,15 @@ class TerminalRenderer:
         """Exibe handoff."""
         _, from_label = self._agent_style(from_agent)
         _, to_label = self._agent_style(to_agent)
-        message = f"[handoff] {from_label} -> {to_label}"
+        arrow = f"{from_label} → {to_label}"
         if task:
-            message += f" | task: {task}"
-        self.show_system(message)
+            arrow += f"  ·  {task}"
+        if self._console:
+            style, icon = ROLE_STYLES["info"]
+            line = Text.assemble((f"{icon} ", f"dim {style}"), (arrow, "dim"))
+            self._print(line)
+        else:
+            print(arrow)
 
     # ------------------------------------------------------------------
     # Status dinâmico (agentes paralelos)
