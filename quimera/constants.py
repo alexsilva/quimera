@@ -48,7 +48,7 @@ USER_ROLE = "human"
 
 # Messages
 MSG_CHAT_STARTED = "Chat multi-agente iniciado (/exit para sair)\n"
-MSG_SESSION_LOG = "Log da sessão: {}\n"
+MSG_SESSION_LOG = "Log da sessão:\n  {}\n"
 MSG_SESSION_STATUS = (
     "Sessão {session_id} | histórico restaurado: {history_count} mensagem(ns) | "
     "resumo carregado: {summary_loaded}\n"

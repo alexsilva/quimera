@@ -383,6 +383,9 @@ class AppDispatchServices:
                     app.renderer.finish_message_stream(agent, result)
                 else:
                     app.renderer.abort_message_stream(agent)
+                flush = getattr(app.renderer, "flush", None)
+                if callable(flush):
+                    flush()
                 if hasattr(app, "_redisplay_user_prompt_if_needed"):
                     app._redisplay_user_prompt_if_needed(clear_first=False)
         app.agent_client.flush_pending_summary()
@@ -415,5 +418,8 @@ class AppDispatchServices:
                 app.renderer.show_message(agent, response)
             else:
                 app.renderer.show_no_response(agent)
+            flush = getattr(app.renderer, "flush", None)
+            if callable(flush):
+                flush()
             if hasattr(app, "_redisplay_user_prompt_if_needed"):
                 app._redisplay_user_prompt_if_needed(clear_first=False)

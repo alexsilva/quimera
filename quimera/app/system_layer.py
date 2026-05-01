@@ -79,6 +79,9 @@ class AppSystemLayer:
         with self.app._output_lock:
             for message in deferred:
                 renderer.show_system(message)
+            flush = getattr(renderer, "flush", None)
+            if callable(flush):
+                flush()
             deferred.clear()
 
     def show_system_message(self, message: str) -> None:
@@ -102,6 +105,9 @@ class AppSystemLayer:
         with self.app._output_lock:
             self.app._clear_user_prompt_line_if_needed()
             renderer.show_system(message)
+            flush = getattr(renderer, "flush", None)
+            if callable(flush):
+                flush()
             self.app._redisplay_user_prompt_if_needed(clear_first=False)
 
     def show_task_response(self, task_id: int, agent: str, response: str) -> None:
