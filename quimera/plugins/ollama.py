@@ -7,7 +7,7 @@ plugin = AgentPlugin(
     icon="⚡",
     style=("granite4", "OllamaGranite"),
     driver="openai_compat",
-    model="granite4.1:30b",
+    model="granite4.1:8b",
     base_url="http://localhost:11434/v1",
     # api_key_env não necessário para Ollama local
     capabilities=["code_review", "code_editing"],
