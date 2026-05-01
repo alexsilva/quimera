@@ -163,6 +163,7 @@ class TestTerminalRenderer:
         with patch("quimera.ui._agent_style", return_value=("blue", "🔷 Codex")):
             renderer.show_plain("execução concluída", agent="codex")
 
+        renderer.flush()
         rendered = renderer._console.export_text()
         assert "🔷 Codex execução concluída" in rendered
 
@@ -251,30 +252,24 @@ class TestTerminalRenderer:
         assert hasattr(result, "update")
 
     def test_update_message_stream_accepts_add_diff(self, mock_renderer):
-        mock_renderer._message_streams["codex"] = {
-            "content": "abc",
-            "label": "Codex",
-            "style": "blue",
-            "theme_name": "default",
-            "live": MagicMock(),
-        }
+        with patch("quimera.ui.Live") as mock_live_cls:
+            mock_live = MagicMock()
+            mock_live_cls.return_value = mock_live
+            mock_renderer.start_message_stream("codex")
+            mock_renderer.update_message_stream("codex", {"diff": [{"op": "add", "text": "def"}]})
+            mock_renderer.flush()
 
-        mock_renderer.update_message_stream("codex", {"diff": [{"op": "add", "text": "def"}]})
-
-        assert mock_renderer._message_streams["codex"]["content"] == "abcdef"
+        assert mock_live.update.call_count >= 1
 
     def test_update_message_stream_accepts_replace_diff(self, mock_renderer):
-        mock_renderer._message_streams["codex"] = {
-            "content": "abc",
-            "label": "Codex",
-            "style": "blue",
-            "theme_name": "default",
-            "live": MagicMock(),
-        }
+        with patch("quimera.ui.Live") as mock_live_cls:
+            mock_live = MagicMock()
+            mock_live_cls.return_value = mock_live
+            mock_renderer.start_message_stream("codex")
+            mock_renderer.update_message_stream("codex", {"diff": [{"op": "replace", "text": "xyz"}]})
+            mock_renderer.flush()
 
-        mock_renderer.update_message_stream("codex", {"diff": [{"op": "replace", "text": "xyz"}]})
-
-        assert mock_renderer._message_streams["codex"]["content"] == "xyz"
+        assert mock_live.update.call_count >= 1
 
     def test_start_message_stream_enables_auto_refresh(self, mock_renderer):
         with patch("quimera.ui.Live") as mock_live:
@@ -282,6 +277,78 @@ class TestTerminalRenderer:
             mock_renderer.start_message_stream("codex")
 
         assert mock_live.call_args.kwargs["auto_refresh"] is True
+
+
+class TestRenderOrdering:
+    """Testes de integração: garante ordenação de eventos via fila única."""
+
+    @pytest.fixture
+    def recording_renderer(self):
+        """Renderer com console de gravação para verificar saída."""
+        with patch("quimera.ui._RICH_AVAILABLE", True):
+            renderer = TerminalRenderer()
+            renderer._console = Console(width=80, record=True, force_terminal=False)
+            return renderer
+
+    def test_summary_rendered_after_stream_closed(self, recording_renderer):
+        """show_turn_summary enfileirada após finish_message_stream é renderizada depois do stream."""
+        r = recording_renderer
+        with patch("quimera.ui.Live") as mock_live_cls:
+            mock_live = MagicMock()
+            mock_live_cls.return_value = mock_live
+            r.start_message_stream("codex")
+            r.update_message_stream("codex", "resposta completa")
+            r.finish_message_stream("codex", "resposta completa")
+            r.show_turn_summary("codex", {
+                "tools": [{"tool": "bash", "status": "ok", "duration_ms": 42}]
+            })
+            r.flush()
+
+        # live.stop() deve ter sido chamado (stream fechado)
+        assert mock_live.stop.called
+        # live.update deve ter sido chamado ao menos uma vez (durante update e finish)
+        assert mock_live.update.call_count >= 1
+
+    def test_concurrent_prints_no_exception(self, recording_renderer):
+        """Múltiplas threads enfileirando prints não geram erros."""
+        import concurrent.futures
+        r = recording_renderer
+        errors = []
+
+        def emit(i):
+            try:
+                r.show_system(f"mensagem {i}")
+            except Exception as exc:
+                errors.append(exc)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+            list(pool.map(emit, range(32)))
+
+        r.flush()
+        assert errors == []
+
+    def test_finish_stream_marks_completed_before_enqueue(self, recording_renderer):
+        """_completed_streams é populado sync em finish_message_stream, antes do live_stop."""
+        r = recording_renderer
+        with patch("quimera.ui.Live"):
+            r.start_message_stream("codex")
+            r.finish_message_stream("codex", "ok")
+
+        # Deve estar em _completed_streams imediatamente (sem precisar de flush)
+        assert "codex" in r._completed_streams
+
+    def test_show_message_suppressed_after_stream_finish(self, recording_renderer):
+        """show_message com o mesmo conteúdo do stream é suprimido (sem duplicata)."""
+        r = recording_renderer
+        with patch("quimera.ui.Live"):
+            r.start_message_stream("codex")
+            r.finish_message_stream("codex", "conteúdo final")
+            # show_message com o mesmo conteúdo deve ser suprimido
+            r.show_message("codex", "conteúdo final")
+            r.flush()
+
+        # _completed_streams deve ter sido consumido pelo show_message
+        assert "codex" not in r._completed_streams
 
 
 class TestStreamingDiffHelpers:

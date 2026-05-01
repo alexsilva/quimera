@@ -1,9 +1,12 @@
 """Componentes de `quimera.ui`."""
 import os
+import queue as _queue_module
 import re
 import sys
 import threading
 from contextlib import contextmanager, nullcontext
+from dataclasses import dataclass, field
+from typing import Any
 
 from quimera.runtime.streaming import apply_stream_diff, normalize_stream_diff
 
@@ -56,6 +59,47 @@ except ImportError:
 
 import quimera.themes as themes
 
+# Sentinela para parar o writer thread
+_STOP = object()
+
+
+# ---------------------------------------------------------------------------
+# Eventos tipados (item 4: Enum + dataclass)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class PrintEvent:
+    renderable: Any
+    kwargs: dict = field(default_factory=dict)
+
+
+@dataclass
+class LiveStartEvent:
+    agent: str
+    state: dict
+
+
+@dataclass
+class LiveUpdateChunkEvent:
+    agent: str
+    chunk: Any
+
+
+@dataclass
+class LiveStopEvent:
+    agent: str
+    final_content: str
+
+
+@dataclass
+class LiveAbortEvent:
+    agent: str
+
+
+@dataclass
+class NoopEvent:
+    done: threading.Event
+
 
 def _agent_style(agent: str, get_plugin_style=None):
     """Retorna (color, label) para o agente; fallback para white/capitalize."""
@@ -82,41 +126,144 @@ class TerminalRenderer:
         self._get_plugin_style = get_plugin_style
         self._live = None
         self._statuses = {}
-        self._message_streams = {}
+
+        # Streams completados: agent -> final_content (atualizado sync antes de live_stop)
         self._completed_streams = {}
+        # Agents com stream ativo (atualizado sync, protegido por _lock)
+        self._active_stream_agents = set()
+        # Lock protege _completed_streams, _active_stream_agents e _statuses
         self._lock = threading.RLock()
+
+        # Fila com backpressure (item 3): produtor bloqueia se fila cheia
+        self._queue: _queue_module.Queue = _queue_module.Queue(maxsize=512)
+        self._writer_thread = threading.Thread(target=self._writer_loop, daemon=True)
+        self._writer_thread.start()
+
+    # ------------------------------------------------------------------
+    # Ciclo de vida (item 1)
+    # ------------------------------------------------------------------
+
+    def close(self, timeout: float = 5.0) -> None:
+        """Encerra o writer thread graciosamente, aguardando eventos pendentes."""
+        self._queue.put(_STOP)
+        self._writer_thread.join(timeout=timeout)
+
+    def __del__(self):
+        try:
+            if self._writer_thread.is_alive():
+                self._queue.put_nowait(_STOP)
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
+    # Writer thread
+    # ------------------------------------------------------------------
+
+    def _writer_loop(self):
+        """Single writer: processa todos os eventos de UI sequencialmente."""
+        _stream_states: dict[str, dict] = {}  # agent -> {live, content, label, style, theme_name}
+
+        while True:
+            event = self._queue.get()
+            if event is _STOP:
+                for state in _stream_states.values():
+                    try:
+                        state["live"].stop()
+                    except Exception:
+                        pass
+                break
+
+            # Resiliência (item 2): exceção em qualquer evento não mata o writer
+            try:
+                self._handle_event(event, _stream_states)
+            except Exception:
+                pass  # silencia para manter o loop vivo; erros visuais não devem travar o app
+
+    def _handle_event(self, event, _stream_states: dict) -> None:
+        """Despacha e processa um único evento de UI."""
+        if isinstance(event, PrintEvent):
+            if self._console:
+                self._console.print(event.renderable, **event.kwargs)
+
+        elif isinstance(event, LiveStartEvent):
+            _stream_states[event.agent] = event.state
+            event.state["live"].start()
+
+        elif isinstance(event, LiveUpdateChunkEvent):
+            # Coalescing (item 3): drena chunks consecutivos do mesmo agente antes de renderizar
+            agent = event.agent
+            chunks = [event.chunk]
+            while True:
+                try:
+                    next_ev = self._queue.get_nowait()
+                except _queue_module.Empty:
+                    break
+                if isinstance(next_ev, LiveUpdateChunkEvent) and next_ev.agent == agent:
+                    chunks.append(next_ev.chunk)
+                else:
+                    # Devolve o evento não relacionado para reprocessamento
+                    # Não há "unget" em Queue; processamos inline imediatamente
+                    self._handle_event(next_ev, _stream_states)
+                    break
+
+            state = _stream_states.get(agent)
+            if not state:
+                return
+            for chunk in chunks:
+                if isinstance(chunk, dict):
+                    state["content"] = _apply_stream_diff(
+                        state["content"],
+                        _normalize_stream_diff(chunk.get("diff"))
+                    )
+                    text = chunk.get("text")
+                    if text and not chunk.get("diff"):
+                        state["content"] += strip_ansi(str(text))
+                else:
+                    state["content"] += strip_ansi(str(chunk))
+            renderable = self._build_stream_renderable(
+                state["theme_name"], state["label"], state["style"], state["content"]
+            )
+            state["live"].update(renderable, refresh=True)
+
+        elif isinstance(event, LiveStopEvent):
+            state = _stream_states.pop(event.agent, None)
+            if state and self._console:
+                renderable = self._build_stream_renderable(
+                    state["theme_name"], state["label"], state["style"], event.final_content
+                )
+                state["live"].update(renderable, refresh=True)
+                state["live"].stop()
+                if state["theme_name"] == "rule":
+                    self._console.print(Rule(style="dim"))
+                self._console.print()
+
+        elif isinstance(event, LiveAbortEvent):
+            state = _stream_states.pop(event.agent, None)
+            if state:
+                state["live"].stop()
+            if self._console:
+                self._console.print()
+
+        elif isinstance(event, NoopEvent):
+            event.done.set()
+
+    def flush(self):
+        """Aguarda o writer thread processar todos os eventos pendentes."""
+        done = threading.Event()
+        self._queue.put(NoopEvent(done))
+        done.wait(timeout=5)
+
+    # ------------------------------------------------------------------
+    # Helpers internos
+    # ------------------------------------------------------------------
 
     def _agent_style(self, agent: str):
         """Retorna (color, label) para o agente."""
         return _agent_style(agent, self._get_plugin_style)
 
     def _print(self, renderable, **kwargs):
-        """Ponto único de saída. Thread-safe via RLock."""
-        with self._lock:
-            if self._console:
-                self._console.print(renderable, **kwargs)
-
-    def show_message(self, agent, content):
-        """Exibe message usando o tema ativo."""
-        style, label = self._agent_style(agent)
-        clean_content = strip_ansi(str(content))
-        if self._consume_completed_stream(agent, clean_content):
-            return
-        if self._console:
-            with self._lock:
-                self._theme.render(self._console, label, style, Markdown(clean_content))
-        else:
-            print(f"\n{label}: {clean_content}\n")
-
-    def _consume_completed_stream(self, agent, content: str) -> bool:
-        """Evita render final duplicado quando a resposta já foi exibida via streaming."""
-        normalized = content.strip()
-        with self._lock:
-            previous = self._completed_streams.get(agent)
-            if previous is None:
-                return False
-            del self._completed_streams[agent]
-        return previous.strip() == normalized
+        """Enfileira um evento de print para o writer thread."""
+        self._queue.put(PrintEvent(renderable, kwargs))
 
     def _build_stream_renderable(self, theme_name: str, label: str, style: str, content: str):
         """Monta o renderable dinâmico usado no streaming."""
@@ -134,93 +281,128 @@ class TerminalRenderer:
             return Padding(content_md, pad=(0, 0, 0, 2))
         return content_md
 
+    # ------------------------------------------------------------------
+    # API pública de exibição de mensagens
+    # ------------------------------------------------------------------
+
+    def show_message(self, agent, content):
+        """Exibe mensagem usando o tema ativo."""
+        style, label = self._agent_style(agent)
+        clean_content = strip_ansi(str(content))
+        if self._consume_completed_stream(agent, clean_content):
+            return
+        if self._console:
+            content_md = Markdown(clean_content)
+            theme_name = self._theme.name
+            self._print("")
+            if theme_name == "panel":
+                self._print(Panel(
+                    content_md,
+                    title=f"[bold {style}]{label}[/bold {style}]",
+                    border_style=style,
+                    padding=(0, 1),
+                ))
+            elif theme_name == "chat":
+                table = Table.grid(expand=True, padding=(0, 1))
+                table.add_column(width=2)
+                table.add_column(ratio=1)
+                table.add_row(
+                    Text("●", style=f"bold {style}"),
+                    Group(
+                        Text(label, style=f"bold {style}"),
+                        Padding(content_md, pad=(0, 0, 0, 2)),
+                    ),
+                )
+                self._print(table)
+            elif theme_name == "rule":
+                self._print(Rule(f"[bold {style}]{label}[/bold {style}]", style=f"dim {style}"))
+                self._print(content_md)
+                self._print(Rule(style="dim"))
+            elif theme_name == "minimal":
+                self._print(Text(f"▶ {label}", style=f"bold {style}"))
+                self._print(content_md)
+            else:
+                self._print(content_md)
+        else:
+            print(f"\n{label}: {clean_content}\n")
+
+    def _consume_completed_stream(self, agent, content: str) -> bool:
+        """Evita render final duplicado quando a resposta já foi exibida via streaming."""
+        normalized = content.strip()
+        with self._lock:
+            previous = self._completed_streams.get(agent)
+            if previous is None:
+                return False
+            del self._completed_streams[agent]
+        return previous.strip() == normalized
+
+    # ------------------------------------------------------------------
+    # API pública de streaming
+    # ------------------------------------------------------------------
+
     def start_message_stream(self, agent):
         """Inicia a área de renderização incremental para uma resposta."""
         if not self._console:
             return
         style, label = self._agent_style(agent)
         with self._lock:
-            if agent in self._message_streams:
+            if agent in self._active_stream_agents:
                 return
+            self._active_stream_agents.add(agent)
             theme_name = self._theme.name
-            live = None
-            self._print("")
-            if theme_name == "rule":
-                self._print(Rule(f"[bold {style}]{label}[/bold {style}]", style=f"dim {style}"))
-            elif theme_name == "chat":
-                header = Table.grid(expand=True, padding=(0, 1))
-                header.add_column(width=2)
-                header.add_column(ratio=1)
-                header.add_row(Text("●", style=f"bold {style}"), Text(label, style=f"bold {style}"))
-                self._print(header)
-            elif theme_name == "minimal":
-                self._print(Text(f"▶ {label}", style=f"bold {style}"))
-            initial = self._build_stream_renderable(theme_name, label, style, "")
-            live = Live(initial, console=self._console, refresh_per_second=20, transient=False, auto_refresh=True)
-            live.start()
-            self._message_streams[agent] = {
-                "content": "",
-                "label": label,
-                "style": style,
-                "theme_name": theme_name,
-                "live": live,
-            }
+
+        self._print("")
+        if theme_name == "rule":
+            self._print(Rule(f"[bold {style}]{label}[/bold {style}]", style=f"dim {style}"))
+        elif theme_name == "chat":
+            header = Table.grid(expand=True, padding=(0, 1))
+            header.add_column(width=2)
+            header.add_column(ratio=1)
+            header.add_row(Text("●", style=f"bold {style}"), Text(label, style=f"bold {style}"))
+            self._print(header)
+        elif theme_name == "minimal":
+            self._print(Text(f"▶ {label}", style=f"bold {style}"))
+
+        initial = self._build_stream_renderable(theme_name, label, style, "")
+        live = Live(initial, console=self._console, refresh_per_second=20, transient=False, auto_refresh=True)
+        state = {
+            "content": "",
+            "label": label,
+            "style": style,
+            "theme_name": theme_name,
+            "live": live,
+        }
+        self._queue.put(LiveStartEvent(agent, state))
 
     def update_message_stream(self, agent, chunk):
         """Atualiza a resposta incremental com mais um chunk."""
         if not self._console or not chunk:
             return
-        with self._lock:
-            state = self._message_streams.get(agent)
-            if state is None:
-                return
-            if isinstance(chunk, dict):
-                state["content"] = _apply_stream_diff(state["content"], _normalize_stream_diff(chunk.get("diff")))
-                text = chunk.get("text")
-                if text and not chunk.get("diff"):
-                    state["content"] += strip_ansi(str(text))
-            else:
-                state["content"] += strip_ansi(str(chunk))
-            renderable = self._build_stream_renderable(
-                state["theme_name"],
-                state["label"],
-                state["style"],
-                state["content"],
-            )
-            state["live"].update(renderable, refresh=True)
+        self._queue.put(LiveUpdateChunkEvent(agent, chunk))
 
     def finish_message_stream(self, agent, final_content: str):
         """Fecha o streaming preservando o conteúdo já mostrado."""
         if not self._console:
             return
         clean_content = strip_ansi(str(final_content or ""))
+        # Atualiza _completed_streams de forma síncrona, antes de enfileirar live_stop,
+        # para que _consume_completed_stream em show_message funcione corretamente.
         with self._lock:
-            state = self._message_streams.pop(agent, None)
-            if state is None:
-                return
-            renderable = self._build_stream_renderable(
-                state["theme_name"],
-                state["label"],
-                state["style"],
-                clean_content,
-            )
-            state["live"].update(renderable, refresh=True)
-            state["live"].stop()
-            if state["theme_name"] == "rule":
-                self._console.print(Rule(style="dim"))
-            self._console.print()
             self._completed_streams[agent] = clean_content
+            self._active_stream_agents.discard(agent)
+        self._queue.put(LiveStopEvent(agent, clean_content))
 
     def abort_message_stream(self, agent):
         """Fecha o stream sem marcar a resposta como completa."""
         if not self._console:
             return
         with self._lock:
-            state = self._message_streams.pop(agent, None)
-            if state is None:
-                return
-            state["live"].stop()
-            self._console.print()
+            self._active_stream_agents.discard(agent)
+        self._queue.put(LiveAbortEvent(agent))
+
+    # ------------------------------------------------------------------
+    # Exibição de tipos especiais
+    # ------------------------------------------------------------------
 
     def show_no_response(self, agent):
         """Exibe no response."""
@@ -291,7 +473,7 @@ class TerminalRenderer:
             show_header=True,
             header_style="bold dim",
             padding=(0, 1),
-            title=f"[dim]{turn_id}[/dim]" if turn_id else None,
+            title=f"[dim]{markup_escape(str(turn_id))}[/dim]" if turn_id else None,
             title_justify="left",
         )
         table.add_column("Ferramenta", style="cyan", no_wrap=True)
@@ -301,7 +483,7 @@ class TerminalRenderer:
         for tool in tools:
             if not isinstance(tool, dict):
                 continue
-            tool_name = tool.get("tool") or "ferramenta"
+            tool_name = markup_escape(str(tool.get("tool") or "ferramenta"))
             status = tool.get("status") or "unknown"
             dur_ms = tool.get("duration_ms")
             if isinstance(dur_ms, int) and dur_ms >= 0:
@@ -319,17 +501,17 @@ class TerminalRenderer:
             inp = tool.get("input")
             if isinstance(inp, dict):
                 if inp.get("cmd"):
-                    details = f"cmd: {inp['cmd']}"
+                    details = markup_escape(f"cmd: {inp['cmd']}")
                 elif inp.get("path"):
-                    details = f"path: {inp['path']}"
+                    details = markup_escape(f"path: {inp['path']}")
                 else:
                     parts = [f"{k}={v}" for k, v in inp.items() if v is not None][:2]
-                    details = ", ".join(parts)
+                    details = markup_escape(", ".join(parts))
             else:
                 details = ""
             err = tool.get("error")
             if isinstance(err, dict) and err.get("message"):
-                details = f"erro: {err['message']}"
+                details = markup_escape(f"erro: {err['message']}")
             table.add_row(tool_name, status_cell, dur_str, details)
         self._print(Panel(table, border_style=f"dim {style}", padding=(0, 0)))
 
@@ -341,6 +523,10 @@ class TerminalRenderer:
         if task:
             message += f" | task: {task}"
         self.show_system(message)
+
+    # ------------------------------------------------------------------
+    # Status dinâmico (agentes paralelos)
+    # ------------------------------------------------------------------
 
     def update_status(self, agent, message):
         """Atualiza o status de um agente no painel dinâmico."""
