@@ -11,13 +11,6 @@ from typing import Any
 from quimera.runtime.streaming import apply_stream_diff, normalize_stream_diff
 
 
-def _truncate(text: str, max_len: int) -> str:
-    """Trunca text para max_len chars, adicionando '…' se necessário."""
-    if max_len < 4 or len(text) <= max_len:
-        return text
-    return text[:max_len - 1] + "…"
-
-
 def strip_ansi(text: str) -> str:
     """Remove ANSI escape sequences from text."""
     # Remove real ANSI escape sequences (starting with \x1b[)
@@ -543,19 +536,6 @@ class TerminalRenderer:
         turn_id = detail.get("turn_id", "")
         width = getattr(self._console, "width", 80)
         compact_tools_layout = width < 72
-
-        # Limites de truncamento para prevenir células muito altas em terminais estreitos.
-        # No layout wide, overflow="fold" do Rich já gerencia o wrapping.
-        if compact_tools_layout:
-            # Tool name + detalhe embutido ficam na mesma célula; limitar evita linhas excessivas.
-            name_max = max(15, min(25, width - 20))
-            detail_max = max(65, width - 5)
-        else:
-            # No wide layout limitamos apenas nomes de tool muito longos para preservar
-            # a proporção das colunas; detalhes usam overflow="fold" do Rich.
-            name_max = max(20, min(40, width // 3))
-            detail_max = 0  # 0 = sem truncamento
-
         table = Table(
             box=rich_box.SIMPLE_HEAD,
             show_header=True,
@@ -570,8 +550,7 @@ class TerminalRenderer:
         for tool in tools:
             if not isinstance(tool, dict):
                 continue
-            raw_name = str(tool.get("tool") or "ferramenta")
-            tool_name = markup_escape(_truncate(raw_name, name_max))
+            tool_name = markup_escape(str(tool.get("tool") or "ferramenta"))
             status = tool.get("status") or "unknown"
             dur_ms = tool.get("duration_ms")
             if isinstance(dur_ms, int) and dur_ms >= 0:
@@ -589,21 +568,17 @@ class TerminalRenderer:
             inp = tool.get("input")
             if isinstance(inp, dict):
                 if inp.get("cmd"):
-                    raw_detail = f"cmd: {inp['cmd']}"
+                    details = markup_escape(f"cmd: {inp['cmd']}")
                 elif inp.get("path"):
-                    raw_detail = f"path: {inp['path']}"
+                    details = markup_escape(f"path: {inp['path']}")
                 else:
                     parts = [f"{k}={v}" for k, v in inp.items() if v is not None][:2]
-                    raw_detail = ", ".join(parts)
+                    details = markup_escape(", ".join(parts))
             else:
-                raw_detail = ""
+                details = ""
             err = tool.get("error")
             if isinstance(err, dict) and err.get("message"):
-                raw_detail = f"erro: {err['message']}"
-            if compact_tools_layout:
-                details = markup_escape(_truncate(raw_detail, detail_max))
-            else:
-                details = markup_escape(raw_detail)
+                details = markup_escape(f"erro: {err['message']}")
             if compact_tools_layout:
                 tool_cell = Text(tool_name, style="cyan")
                 if details:
