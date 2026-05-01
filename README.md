@@ -1,22 +1,36 @@
 # Quimera
 
-Chat multi-agente no terminal que orquestra uma equipe de agentes de IA (**Claude**, **Codex**, **Gemini**, **Qwen** e a família **OpenCode**) para resolver tarefas complexas de engenharia de software. Os agentes colaboram, delegam subtarefas e mantêm um estado compartilhado.
+Orquestrador multiagente para engenharia de software no terminal.
 
-## Como funciona
+O Quimera coordena agentes (CLI e OpenAI-compatible), mantém estado compartilhado por workspace, roteia tarefas com balanceamento de carga e executa tools com política de segurança.
 
-O Quimera utiliza um protocolo de comunicação entre agentes que permite:
-- **Roteamento Inteligente**: As mensagens são direcionadas aos agentes com base em suas especialidades e capacidades.
-- **Sistema de Tarefas**: Decomposição de objetivos em tarefas menores via `/task`, que são executadas autonomamente.
-- **Estado Compartilhado**: Todos os agentes têm acesso ao contexto do workspace, decisões tomadas e progresso das tarefas.
-- **Balanceamento de Carga**: Distribuição automática de tarefas baseada no `effective_score`, combinando competência do agente com penalidade por tarefas abertas.
+## Objetivo
 
-## Pré-requisitos
+- Conversar com agentes especializados no mesmo fluxo de trabalho.
+- Criar tarefas explícitas via `/task` e processá-las em background com review cruzado.
+- Persistir contexto operacional entre sessões sem depender de histórico infinito.
 
-Os agentes dependem de suas respectivas CLIs instaladas e autenticadas:
-- `claude` (Anthropic)
-- `codex` (OpenAI/Codex)
-- `gemini` (Google)
-- `opencode` (OpenCode family)
+## Arquitetura em alto nível
+
+- `quimera/cli.py`: entrada principal da aplicação e flags de execução.
+- `quimera/app/`: loop interativo, protocolo de handoff, comandos slash e orquestração de rodada.
+- `quimera/runtime/`: drivers, parser de tool calls, políticas e execução de ferramentas.
+- `quimera/runtime/task_planning.py`: classificação de task e scoring de roteamento.
+- `quimera/runtime/tasks.py`: persistência de jobs/tasks em SQLite.
+- `quimera/plugins/`: catálogo de agentes e metadados de capacidade.
+- `quimera/ui.py`: renderização terminal (temas, densidade, stream e resumo).
+
+## Requisitos
+
+- Python `>=3.10`.
+- Dependência base: `rich`.
+- CLIs/API dos agentes que você pretende usar.
+
+Exemplos comuns:
+- `claude` CLI
+- `codex` CLI
+- `gemini` CLI
+- backend OpenAI-compatible local/remoto (ex.: Ollama)
 
 ## Instalação
 
@@ -26,107 +40,196 @@ cd quimera
 pip install -e .
 ```
 
-## Uso
+Opcional (drivers via API compatível):
 
-Inicie o chat no diretório do seu projeto:
+```bash
+pip install -e ".[api,ollama]"
+```
+
+## Execução
+
+Se o script `quimera` estiver no `PATH`:
 
 ```bash
 quimera
 ```
 
-### Comandos principais
+Alternativa equivalente:
 
-| Comando | Descrição |
-|---|---|
-| `/task <descrição>` | Cria uma nova tarefa. O Quimera escolherá o melhor agente disponível para executá-la. A execução é exibida em tempo real no terminal. |
-| `/claude`, `/codex`, `/gemini`... | Direciona a mensagem especificamente para um agente. |
-| `/context` | Exibe ou edita (`/context edit`) o contexto persistente do projeto. |
-| `/history` | Exibe o histórico recente da sessão. |
-| `/exit` | Encerra a sessão e gera um resumo automático para a próxima execução. |
-
-### Orquestração e Balanceamento
-
-O Quimera avalia cada tarefa e agente usando critérios de:
-- **Tier Base**: Cada plugin possui um `base_tier` que representa sua força relativa para roteamento.
-- **Especialidade**: O score sobe quando o tipo da tarefa aparece em `preferred_task_types` e cai quando aparece em `avoid_task_types`.
-- **Capacidade**: O roteador considera `supports_code_editing`, `supports_long_context` e `supports_tools` conforme o tipo da tarefa.
-- **Disponibilidade**: O `effective_score` final é calculado como `base_score - open_tasks`, reduzindo a chance de um único agente monopolizar a fila.
-- **Transparência**: O progresso das tarefas é reportado ao vivo para que o usuário acompanhe a "conversa" interna e as ações tomadas.
-
-Na prática, isso permite diferenciar:
-- **Gemini / Claude**: Tier base 3, favorecidos em tarefas com mais contexto, revisão e arquitetura.
-- **Codex**: Tier base 2, forte em `code_edit`, `test_execution` e `bug_investigation`.
-- **Qwen / OpenCode**: Tier base 1, usados principalmente quando a especialidade combina e a carga dos agentes mais fortes está maior.
-
-### Validação de Conclusão
-
-As tarefas são monitoradas por um sistema de sinalização rigoroso:
-- **Resposta Obrigatória**: `None`, texto vazio ou resposta sem conteúdo útil após remover blocos de ferramenta são tratados como falha.
-- **Blocked Markers**: Identifica incapacidade explícita do agente, com marcadores como "não consigo", "não posso", "unable to", "cannot" e similares.
-- **Needs Input**: Detecta quando a intervenção humana é necessária via `[NEEDS_INPUT]`; nesse caso a task não é marcada como concluída.
-- **Failover Antes do Fail**: Se a execução falha, a task volta para `pending` e outro agente pode assumi-la; ela só deve parar em `failed` quando não houver rota alternativa viável.
-
-### Isolamento de Execução
-
-Tasks criadas via `/task` são executadas em background sem interferir com o fluxo do chat:
-- A resposta do agente **não é adicionada ao histórico principal** da sessão.
-- **Sem streaming concorrente** no terminal durante o chat — a saída da task aparece como status dedicado.
-- O agente executor recebe apenas o contexto da task, sem o histórico completo da conversa.
-
-### Observabilidade
-
-Além da saída em tempo real no terminal, o runtime mantém métricas básicas por sessão e por agente:
-- contagem de handoffs enviados e recebidos
-- sucesso ou falha por execução
-- latência acumulada
-- métricas comportamentais persistidas em estado local para reaproveitar sinais entre sessões
-
-Essa observabilidade hoje é usada principalmente para depuração, análise de comportamento e continuidade do contexto operacional.
-
-### Continuidade Sob Limites de API
-
-Para aumentar o "tempo útil" de sessão dos agentes mesmo quando a API externa impõe limites de contexto, throughput ou disponibilidade, a estratégia mais segura no Quimera é reduzir dependência de contexto bruto e tornar cada rodada retomável:
-- usar resumo incremental de sessão como memória canônica, truncando histórico antigo antes de estourar janela de contexto
-- persistir estado operacional mínimo em disco (`shared_state`, resumo, histórico recente e tasks) para permitir retomada após falha, timeout ou troca de agente
-- decompor trabalho longo em tasks menores com checkpoint explícito, evitando uma única execução grande e frágil
-- aplicar failover entre agentes compatíveis quando um backend ficar indisponível ou degradado
-- registrar métricas de falha, latência e resposta vazia para detectar quando um provedor externo está reduzindo a qualidade da sessão
-
-Na prática, isso não "remove" o limite da API; isso faz o sistema sobreviver melhor a ele e manter continuidade operacional entre chamadas e entre sessões.
-
-### Ferramentas de Runtime
-
-Quando um agente usa o driver `openai_compat`, o Quimera pode expor ferramentas nativas do runtime para operar direto no workspace:
-- `list_files`, `read_file`, `grep_search` para inspeção
-- `apply_patch` para alterações parciais e seguras em arquivos existentes
-- `write_file` para criação de arquivos e reescrita completa apenas quando isso for explícito
-- `run_shell` para comandos permitidos e aprovados
-
-Na prática, `apply_patch` é a primitive preferida para edição, porque evita sobrescrever arquivos inteiros quando só alguns trechos precisam mudar. `write_file` não deve sobrescrever arquivo existente por padrão; para isso, o agente precisa usar `replace_existing=true`.
-
-## Agentes Disponíveis
-
-| Agente | Especialidade Principal | Tier |
-|---|---|---|
-| **Gemini** | Arquitetura, Refatoração Complexa, Design de Sistemas | 3 |
-| **Claude** | Arquitetura, Revisão, Documentação, Codificação Geral | 3 |
-| **Codex** | Geração de Código, Testes, Bug Investigation | 2 |
-| **OpenCode Family** | Tarefas específicas (Pickle para edição, Omni para review, etc) | 1 |
-
-Veja [AGENTS.md](./AGENTS.md) para detalhes completos de cada plugin.
-
-## Estrutura do Projeto
-
-```
-quimera/
-  runtime/
-    task_planning.py  — lógica de classificação e roteamento
-    task_executor.py  — motor de execução autônoma
-    tasks.py          — persistência e estado das tarefas
-  plugins/            — implementações dos agentes (Claude, Gemini, etc)
-  app.py              — orquestrador central e interface
+```bash
+python quimera.py
 ```
 
-## Licença
+## CLI (flags)
 
-Uso pessoal e experimental.
+Principais flags:
+
+- `--agents <a1> <a2>`: define agentes ativos na sessão.
+- `--threads N`: paralelismo de rodadas de chat.
+- `--timeout N`: timeout de execução de agente (s).
+- `--idle-timeout N`: timeout de inatividade de input (s).
+- `--visibility quiet|summary|full`: nível de detalhe da execução.
+- `--theme panel|chat|rule|minimal`: tema visual da sessão.
+- `--set-theme <tema>`: persiste tema e encerra.
+- `--connect <agente>`: cria/edita conexão persistida do agente.
+- `--list-connections`: lista conexões persistidas.
+- `--driver-repl <plugin>`: REPL para testar driver `openai_compat`.
+
+Ajuda completa:
+
+```bash
+python quimera.py --help
+```
+
+## Comandos no chat
+
+- `/task <descrição>`: cria task humana explícita e roteia para o melhor agente.
+- `/planning <msg>`: modo leitura para planejamento.
+- `/analysis <msg>`: modo leitura para análise.
+- `/design <msg>`: modo design sem execução de código.
+- `/review <msg>`: modo revisão sem edição.
+- `/execute <msg>`: remove restrições de modo e libera execução.
+- `/agents`: lista agentes ativos.
+- `/connect <agente>`: configura conexão no próprio chat.
+- `/prompt [agente]`: preview do prompt final (debug operacional).
+- `/context`: mostra contexto persistente/sessão.
+- `/context-edit`: edita contexto persistente no editor.
+- `/edit`: abre editor para compor mensagem longa.
+- `/file <caminho>`: envia conteúdo de arquivo como mensagem.
+- `/approve`: pré-aprova a próxima tool mutation.
+- `/approve-all`: aprova automaticamente mutações subsequentes.
+- `/reset-state`: limpa `shared_state` sem apagar histórico.
+- `/clear`, `/help`, `/exit`.
+
+## Agentes e plugins
+
+O projeto registra plugins para:
+
+- `claude`
+- `codex`
+- `gemini`
+- `chatgpt` (driver `openai_compat`)
+- família `ollama-*` (driver `openai_compat`)
+- família `opencode*`
+
+Também é possível registrar agentes dinâmicos via `--connect` ou `/connect`.
+
+Detalhes de capacidades por tier/especialidade: [AGENTS.md](./AGENTS.md).
+
+## Roteamento de tasks
+
+Classificação automática de tipo:
+
+- `code_edit`
+- `architecture`
+- `code_review`
+- `bug_investigation`
+- `test_execution`
+- `documentation`
+- `general`
+
+Score base por agente considera:
+
+- `base_tier`
+- `preferred_task_types` e `avoid_task_types`
+- capacidades (`supports_code_editing`, `supports_long_context`, `supports_tools`)
+- confiabilidade de tools (`tool_use_reliability`) para `test_execution`/`bug_investigation`
+
+Balanceamento de carga:
+
+- `effective_score = base_score - open_tasks_do_agente`
+
+Comportamento de resiliência:
+
+- failover automático quando execução falha
+- tracking de agentes que já falharam na task
+- fallback para review por outro agente quando possível
+
+## Ciclo de vida de task
+
+Estado típico:
+
+`pending -> in_progress -> pending_review -> completed`
+
+Estados auxiliares:
+
+- `failed`
+- `proposed` / `approved` / `rejected` (fluxos legados)
+
+Observações importantes:
+
+- Apenas o humano cria task no chat (`/task`).
+- `propose_task/approve_task` não são expostas para uso normal no chat.
+- Resultado vazio, bloqueio explícito ou `[NEEDS_INPUT]` não conclui task.
+
+## Ferramentas de runtime
+
+Ferramentas suportadas pelo runtime:
+
+- leitura/inspeção: `list_files`, `read_file`, `grep_search`
+- edição: `apply_patch`, `write_file`, `remove_file`
+- shell: `run_shell`, `exec_command`, `write_stdin`, `close_command_session`
+- tasks/jobs: `list_tasks`, `list_jobs`, `get_job`
+
+Política de segurança:
+
+- allowlist de comandos shell (ex.: `git`, `pytest`, `python`, `ls`, `cat`, `sed`).
+- denylist de padrões destrutivos.
+- bloqueio de operadores de encadeamento (`;`, `&&`, `||`, `` ` ``, `$(`).
+- caminhos restringidos ao workspace.
+- mutações exigem aprovação por padrão.
+
+## Persistência e diretórios
+
+Base global:
+
+- `~/.local/share/quimera` (fallback: `/tmp/quimera`)
+
+Por workspace (hash do `cwd`):
+
+- `workspaces/<hash>/workspace.json`
+- `workspaces/<hash>/data/tasks.db`
+- `workspaces/<hash>/data/context/persistent.md`
+- `workspaces/<hash>/data/context/session.md`
+- `workspaces/<hash>/data/logs/sessions/`
+- `workspaces/<hash>/data/logs/metrics/`
+- `workspaces/<hash>/state/metrics_state.json`
+- `workspaces/<hash>/history`
+
+Config global:
+
+- `~/.local/share/quimera/config.json`
+- `~/.local/share/quimera/connections.json`
+
+## Fluxo recomendado de uso
+
+1. Inicie no diretório do projeto.
+2. Ajuste agentes ativos com `--agents` ou `/connect`.
+3. Use chat direto para ciclos curtos.
+4. Abra `/task` para trabalho paralelo e auditável.
+5. Use `/context` e `/prompt` para depuração de contexto/prompts.
+6. Feche com `/exit` para persistir histórico e resumo.
+
+## Testes
+
+Execução rápida (núcleo):
+
+```bash
+pytest -q tests/test_public_api.py tests/test_runtime_task_planning.py tests/test_runtime_tools_tasks.py tests/test_ui.py
+```
+
+Execução completa:
+
+```bash
+pytest -q
+```
+
+## Limitações conhecidas
+
+- A qualidade final depende das CLIs/backends configurados para cada agente.
+- Ambiente com poucas CLIs disponíveis reduz o ganho de roteamento multiagente.
+- `pytest -q` completo pode incluir cenários dependentes de ambiente local.
+
+## Status do projeto
+
+Uso pessoal/experimental com foco em produtividade de engenharia no terminal.
