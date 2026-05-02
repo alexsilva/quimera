@@ -1,4 +1,5 @@
 """Serviços de sessão, persistência e sumarização."""
+import sys
 import threading
 import time
 
@@ -138,7 +139,9 @@ class AppSessionServices:
             if app.agent_client:
                 app.agent_client._user_cancelled = True
                 app.agent_client._cancel_event.set()
-            app.show_muted_message(MSG_MEMORY_FAILED.strip())
+            sys.stdout.write('\r\033[K')
+            sys.stdout.flush()
+            app.show_muted_message(MSG_MEMORY_FAILED)
             try:
                 worker.join(timeout=1)
             except KeyboardInterrupt:
