@@ -4506,7 +4506,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         self.assertIn("continuação direta do mesmo chat", main)
         self.assertIn("ao colaborar e editar", main)
         self.assertIn("preserve o que não foi pedido", main)
-        self.assertIn("menor alteração possível", main)
+        self.assertIn("valide com evidência concreta", main)
 
     def test_main_template_does_not_embed_static_tool_instructions_block(self):
         main = prompt_template._load()
