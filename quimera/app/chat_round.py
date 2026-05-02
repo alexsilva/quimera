@@ -16,6 +16,19 @@ class ChatRoundOrchestrator:
     def __init__(self, app):
         self.app = app
 
+    def _show_system(self, message: str) -> None:
+        """Exibe mensagem de sistema via camada que preserva prompt quando disponível."""
+        app = self.app
+        show_system_message = getattr(app, "show_system_message", None)
+        if callable(show_system_message):
+            try:
+                show_system_message(message)
+                return
+            except AttributeError:
+                # Stubs de teste podem expor o método sem inicializar system_layer.
+                pass
+        app.renderer.show_system(message)
+
     def process(self, user):
         """Implementação real do processamento de mensagens do chat."""
         app = self.app
@@ -43,7 +56,7 @@ class ChatRoundOrchestrator:
 
         agent_client = getattr(app, "agent_client", None)
         if agent_client and agent_client._user_cancelled:
-            app.renderer.show_system("[cancelado] fluxo interrompido.")
+            self._show_system("[cancelado] fluxo interrompido.")
             app.turn_manager.reset()
             return
 
@@ -56,7 +69,7 @@ class ChatRoundOrchestrator:
                     fallback_agent,
                     failed_agent,
                 )
-                app.renderer.show_system(
+                self._show_system(
                     f"[fallback] {failed_agent} não respondeu; {fallback_agent} assumiu"
                 )
                 fallback_response = dispatch_services.call_agent(
@@ -79,7 +92,7 @@ class ChatRoundOrchestrator:
             if response:
                 app.renderer.show_message(first_agent, response)
             app._pending_input_for = first_agent
-            app.renderer.show_system(f"\nResponda para {first_agent.upper()}:\n")
+            self._show_system(f"\nResponda para {first_agent.upper()}:\n")
             return
         dispatch_services.print_response(first_agent, response)
         if response is not None:
@@ -135,7 +148,7 @@ class ChatRoundOrchestrator:
         )
         agent_client = getattr(app, "agent_client", None)
         if agent_client and agent_client._user_cancelled:
-            app.renderer.show_system("[cancelado] fluxo interrompido.")
+            self._show_system("[cancelado] fluxo interrompido.")
             app.turn_manager.reset()
             return
         expected_ack = handoff.get("handoff_id")
@@ -159,7 +172,7 @@ class ChatRoundOrchestrator:
                     "[HANDOFF] id=%s fallback: trying %s after %s failed",
                     handoff_id, fallback_agent, route_target,
                 )
-                app.renderer.show_system(
+                self._show_system(
                     f"[handoff] tentando fallback: {fallback_agent} (após {route_target} falhar)"
                 )
                 fallback_handoff = dict(handoff) if isinstance(handoff, dict) else handoff
@@ -175,7 +188,7 @@ class ChatRoundOrchestrator:
                 )
                 agent_client = getattr(app, "agent_client", None)
                 if agent_client and agent_client._user_cancelled:
-                    app.renderer.show_system("[cancelado] fluxo interrompido.")
+                    self._show_system("[cancelado] fluxo interrompido.")
                     app.turn_manager.reset()
                     return
                 secondary_response, _, _, _, _, ack_id = app.parse_response(secondary_response)
@@ -201,7 +214,7 @@ class ChatRoundOrchestrator:
             )
             agent_client = getattr(app, "agent_client", None)
             if agent_client and agent_client._user_cancelled:
-                app.renderer.show_system("[cancelado] fluxo interrompido.")
+                self._show_system("[cancelado] fluxo interrompido.")
                 app.turn_manager.reset()
                 return
             final_response, _, _, _, _, _ = app.parse_response(final_response)
@@ -213,7 +226,7 @@ class ChatRoundOrchestrator:
                 "[HANDOFF] id=%s failed: secondary agent %s returned no response",
                 handoff_id, route_target,
             )
-            app.renderer.show_system(
+            self._show_system(
                 f"[handoff] {route_target} não respondeu — delegação falhou"
             )
 
@@ -261,7 +274,7 @@ class ChatRoundOrchestrator:
                 app._merge_staging_to_workspace(staging_root)
                 agent_client = getattr(app, "agent_client", None)
                 if agent_client and agent_client._user_cancelled:
-                    app.renderer.show_system("[cancelado] fluxo interrompido.")
+                    self._show_system("[cancelado] fluxo interrompido.")
                     app.turn_manager.reset()
                     return
                 needs_input_any = False
@@ -276,7 +289,7 @@ class ChatRoundOrchestrator:
                     if needing:
                         current_agent = needing[0]
                         app._pending_input_for = current_agent
-                        app.renderer.show_system(f"\nResponda para {current_agent.upper()}:\n")
+                        self._show_system(f"\nResponda para {current_agent.upper()}:\n")
             finally:
                 if staging_root.exists():
                     shutil.rmtree(staging_root)
@@ -287,7 +300,7 @@ class ChatRoundOrchestrator:
             response = dispatch_services.call_agent(agent, handoff=next_handoff, primary=False, protocol_mode=protocol_mode)
             agent_client = getattr(app, "agent_client", None)
             if agent_client and agent_client._user_cancelled:
-                app.renderer.show_system("[cancelado] fluxo interrompido.")
+                self._show_system("[cancelado] fluxo interrompido.")
                 app.turn_manager.reset()
                 return
             next_handoff = None
@@ -297,7 +310,7 @@ class ChatRoundOrchestrator:
                 app.session_services.persist_message(agent, response)
             if needs_human_input:
                 app._pending_input_for = agent
-                app.renderer.show_system(f"\nResponda para {agent.upper()}:\n")
+                self._show_system(f"\nResponda para {agent.upper()}:\n")
                 break
             if route_target and index + 1 < len(remaining):
                 remaining[index + 1] = route_target

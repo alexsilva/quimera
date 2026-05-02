@@ -346,6 +346,17 @@ class TestSingleAgentPerTurn(unittest.TestCase):
         # Turno suspenso: próxima fala do humano vai para claude
         self.assertEqual(app._pending_input_for, "claude")
 
+    def test_needs_human_input_uses_prompt_aware_system_message_when_available(self):
+        """Quando disponível, usa show_system_message para evitar saída inline com o prompt."""
+        app = _make_app(active_agents=["claude", "codex"])
+        app.parse_routing = Mock(return_value=("claude", "pergunta", False))
+        app.parse_response = Mock(return_value=("Você quer continuar?", None, None, False, True, None))
+        app.show_system_message = Mock()
+
+        QuimeraApp._do_process_chat_message(app, "pergunta")
+
+        app.show_system_message.assert_called_once_with("\nResponda para CLAUDE:\n")
+
     def test_consecutive_turns_route_to_different_agents(self):
         """Duas falas seguidas do humano podem ir para agentes diferentes (roteamento aleatório)."""
         app = _make_app(active_agents=["claude", "codex"])
