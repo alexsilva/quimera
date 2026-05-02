@@ -72,6 +72,9 @@ def read_user_input(app, prompt, timeout: int, input_fn=input) -> str | None:
                 app.system_layer.flush_deferred_messages()
                 try:
                     return input_fn(prompt)
+                except KeyboardInterrupt:
+                    print()
+                    raise
                 finally:
                     app._nonblocking_input_status = "idle"
                     app._nonblocking_prompt_text = ""

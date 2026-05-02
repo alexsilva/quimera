@@ -597,13 +597,18 @@ class QuimeraApp:
         renderer = getattr(self, "renderer", None)
         if renderer is None:
             return
-        show_plain = getattr(renderer, "show_plain", None)
-        if callable(show_plain):
-            show_plain(message)
+        show_system_neutral = getattr(renderer, "show_system_neutral", None)
+        if callable(show_system_neutral):
+            show_system_neutral(message)
             return
         show_system = getattr(renderer, "show_system", None)
         if callable(show_system):
             show_system(message)
+            return
+        show_plain = getattr(renderer, "show_plain", None)
+        if callable(show_plain):
+            show_plain(message)
+            return
 
     def _do_process_chat_message(self, user):
         """Fachada compatível para a implementação da rodada de chat."""

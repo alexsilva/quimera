@@ -117,7 +117,11 @@ class AppSystemLayer:
             return
         with self.app._output_lock:
             self.app._clear_user_prompt_line_if_needed()
-            renderer.show_plain(message)
+            show_system_neutral = getattr(renderer, "show_system_neutral", None)
+            if callable(show_system_neutral):
+                show_system_neutral(message)
+            else:
+                renderer.show_system(message)
             flush = getattr(renderer, "flush", None)
             if callable(flush):
                 flush()

@@ -485,6 +485,18 @@ class TerminalRenderer:
         else:
             print(clean_message)
 
+    def show_system_neutral(self, message):
+        """Exibe mensagem de sistema com ícone padrão e texto em estilo neutro (dim)."""
+        clean_message = strip_ansi(str(message)).strip("\r\n")
+        _, icon = ROLE_STYLES["system"]
+        if self._console:
+            line = Text.assemble((f"{icon} ", "dim"), (clean_message, "dim"))
+            line.no_wrap = False
+            line.overflow = "fold"
+            self._print(line)
+        else:
+            print(f"{icon} {clean_message}")
+
     def show_plain(self, message, agent=None):
         """Exibe plain."""
         clean_message = strip_ansi(str(message))

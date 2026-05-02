@@ -156,6 +156,14 @@ class TestTerminalRenderer:
         assert rendered_line.plain.startswith("⚙ System message")
         assert not rendered_line.plain.startswith("⚙ \r")
 
+    def test_show_system_neutral_with_rich_keeps_text_dimmed(self, mock_renderer):
+        """Test neutral system output keeps icon and text in dim style."""
+        mock_renderer.show_system_neutral("\r\nSystem message\r\n")
+        mock_renderer.flush()
+        rendered_line = mock_renderer._console.print.call_args.args[0]
+        assert rendered_line.plain.startswith("⚙ System message")
+        assert any(span.start == 2 and span.style == "dim" for span in rendered_line.spans)
+
     def test_show_system_without_rich(self, renderer_no_rich, capsys):
         """Test show_system without Rich."""
         renderer_no_rich.show_system("System message")

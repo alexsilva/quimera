@@ -1536,7 +1536,7 @@ class ProtocolTests(unittest.TestCase):
 
         app.run()
 
-        self.assertEqual(app.renderer.plain_messages[-1], MSG_SHUTDOWN)
+        self.assertEqual(app.renderer.system_messages[-1], MSG_SHUTDOWN)
 
     def test_format_session_log_message_compacts_home_path(self):
         app = QuimeraApp.__new__(QuimeraApp)
@@ -2021,8 +2021,8 @@ class ProtocolTests(unittest.TestCase):
         )
         self.assertEqual(app.context_manager.saved_summary, "## Resumo da Conversa\n\n- Memória consolidada")
         self.assertEqual(
-            app.renderer.plain_messages,
-            ["\n[memória] histórico salvo. Gerando resumo da sessão..."],
+            app.renderer.system_messages,
+            ["[memória] histórico salvo. Gerando resumo da sessão..."],
         )
 
     def test_shutdown_cancels_agent_summary_when_join_is_interrupted(self):
@@ -2056,7 +2056,7 @@ class ProtocolTests(unittest.TestCase):
 
         self.assertTrue(app.agent_client._user_cancelled)
         self.assertTrue(app.agent_client._cancel_event.is_set())
-        self.assertEqual(app.renderer.plain_messages[-1], "[memória] não foi possível gerar o resumo.")
+        self.assertEqual(app.renderer.system_messages[-1], "[memória] não foi possível gerar o resumo.")
 
     def test_summarize_session_returns_none_when_all_backends_unavailable(self):
         class DummyRendererWithSystem(DummyRenderer):
@@ -2664,9 +2664,13 @@ class PluginTests(unittest.TestCase):
 
         stdin = io.StringIO("")
         stdin.isatty = lambda: True
-        with patch("sys.stdin", stdin), patch("builtins.input", side_effect=KeyboardInterrupt):
+        with patch("sys.stdin", stdin), patch("builtins.input", side_effect=KeyboardInterrupt), patch(
+            "builtins.print"
+        ) as mock_print:
             with self.assertRaises(KeyboardInterrupt):
                 app.read_user_input("Você: ", timeout=0)
+
+        mock_print.assert_called_once_with()
 
     def test_read_from_editor_holds_output_lock_during_editor_session(self):
         app = QuimeraApp.__new__(QuimeraApp)
