@@ -963,7 +963,7 @@ class ProtocolTests(unittest.TestCase):
 
         prompt = builder.build(AGENT_CODEX, history)
 
-        self.assertIn('<current_turn title="Pedido atual de VOCÊ">', prompt)
+        self.assertIn('<current_turn title="Pedido atual de >>>">', prompt)
         self.assertIn("</current_turn>", prompt)
         self.assertIn("Pedido atual", prompt)
 
@@ -978,8 +978,8 @@ class ProtocolTests(unittest.TestCase):
         prompt = builder.build(AGENT_CODEX, history)
 
         conversation = prompt.split('<recent_conversation title="Conversa recente">\n', 1)[1]
-        self.assertNotIn("[VOCÊ]: Pedido atual", conversation)
-        self.assertIn("[VOCÊ]: Primeiro pedido", conversation)
+        self.assertNotIn("[>>>]: Pedido atual", conversation)
+        self.assertIn("[>>>]: Primeiro pedido", conversation)
         self.assertIn("</recent_conversation>", conversation)
 
     def test_prompt_includes_recent_facts_block(self):
@@ -4345,9 +4345,9 @@ class MetricsFeedbackTests(unittest.TestCase):
         self.assertIn("prioridade", main)
         self.assertIn("foco", main)
         self.assertIn("continuação direta do mesmo chat", main)
-        self.assertIn("colaboração é parte do trabalho", main)
-        self.assertIn("editar arquivos", main)
-        self.assertIn("mude o mínimo necessário", main)
+        self.assertIn("ao colaborar e editar", main)
+        self.assertIn("preserve o que não foi pedido", main)
+        self.assertIn("menor alteração possível", main)
 
     def test_main_template_does_not_embed_static_tool_instructions_block(self):
         main = prompt_template._load()
@@ -4581,7 +4581,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         self.assertIn("</rules>", prompt)
         self.assertIn('<persistent_context title="Contexto persistente do workspace">', prompt)
         self.assertIn("</persistent_context>", prompt)
-        self.assertIn('<current_turn title="Pedido atual de VOCÊ">', prompt)
+        self.assertIn('<current_turn title="Pedido atual de >>>">', prompt)
         self.assertIn('<handoff title="Mensagem direta do outro agente">', prompt)
         self.assertIn('<recent_conversation title="Conversa recente">', prompt)
         self.assertNotIn('<response_prefix title="PREFIXO DE RESPOSTA">', prompt)

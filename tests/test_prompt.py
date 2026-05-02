@@ -119,7 +119,7 @@ def test_prompt_no_tools():
 
     assert '<tools title="Ferramentas disponíveis">' not in prompt
     assert "</tools>" not in prompt
-    assert '<current_turn title="Pedido atual de VOCÊ">' in prompt
+    assert '<current_turn title="Pedido atual de >>>">' in prompt
     assert '<recent_conversation title="Conversa recente">' in prompt
     assert '<response_prefix title="Prefixo de resposta">' not in prompt
     assert "\n\n\n" not in prompt
@@ -136,7 +136,7 @@ def test_prompt_primary_false_omits_only_session_state():
     prompt_secondary = builder.build(agent="claude", history=history, primary=False)
     assert '<session_state title="Estado da sessão">' not in prompt_secondary
     assert '<persistent_context title="Contexto persistente do workspace">' in prompt_secondary
-    assert '<current_turn title="Pedido atual de VOCÊ">' in prompt_secondary
+    assert '<current_turn title="Pedido atual de >>>">' in prompt_secondary
 
 
 def test_prompt_shared_state():

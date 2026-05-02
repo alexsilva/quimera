@@ -2,7 +2,7 @@
 import json
 
 from . import plugins
-from .config import DEFAULT_HISTORY_WINDOW
+from .config import DEFAULT_HISTORY_WINDOW, DEFAULT_USER_NAME
 from .constants import EXTEND_MARKER
 from .prompt_templates import prompt_template
 
@@ -23,7 +23,7 @@ class PromptBuilder:
         self.context_manager = context_manager
         self.history_window = history_window
         self.session_state = session_state or {}
-        self.user_name = user_name or "Você"
+        self.user_name = user_name or DEFAULT_USER_NAME
         self.active_agents = list(active_agents) if active_agents is not None else plugins.all_names()
         self.metrics_tracker = metrics_tracker
 
