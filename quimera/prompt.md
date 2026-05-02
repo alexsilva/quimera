@@ -37,7 +37,7 @@ Agentes de IA nesta conversa: {agents}
 <!-- ENDIF:handoff_only -->
 
 <!-- IF:is_first_speaker -->
-- Se o tópico exigir debate mais aprofundado entre os agentes, inclua {marker} ao final da sua resposta (sem explicação). Caso contrário, não inclua nada.
+- Se o tópico exigir debate mais aprofundado entre os agentes, inclua {marker} ao final da sua resposta (sem explicação).
 <!-- ENDIF:is_first_speaker -->
 
 <!-- IF:is_reviewer -->
