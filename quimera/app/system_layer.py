@@ -110,6 +110,19 @@ class AppSystemLayer:
                 flush()
             self.app._redisplay_user_prompt_if_needed(clear_first=False)
 
+    def show_muted_message(self, message: str) -> None:
+        """Exibe mensagem em estilo neutro (dim), preservando clear/redraw do prompt."""
+        renderer = getattr(self.app, "renderer", None)
+        if renderer is None:
+            return
+        with self.app._output_lock:
+            self.app._clear_user_prompt_line_if_needed()
+            renderer.show_plain(message)
+            flush = getattr(renderer, "flush", None)
+            if callable(flush):
+                flush()
+            self.app._redisplay_user_prompt_if_needed(clear_first=False)
+
     def show_task_response(self, task_id: int, agent: str, response: str) -> None:
         """Exibe task response."""
         text = strip_tool_block(response).strip()
@@ -355,7 +368,7 @@ class AppSystemLayer:
             if target is None:
                 self.app.renderer.show_warning("Uso: /prompt [agente]")
                 return True
-            self.app.renderer.show_system(self._build_prompt_preview_message(target))
+            self.show_muted_message(self._build_prompt_preview_message(target))
             return True
 
         if command.startswith(CMD_TASK):

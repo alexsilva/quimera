@@ -17,7 +17,7 @@ from quimera.app import QuimeraApp
 from quimera.app.chat_round import ChatRoundOrchestrator
 from quimera.app.core import TurnManager
 from quimera.app.dispatch import AppDispatchServices
-from quimera.app.inputs import AppInputServices, read_user_input_with_timeout
+from quimera.app.inputs import AppInputServices, read_from_editor, read_user_input_with_timeout
 from quimera.app.session import AppSessionServices
 from quimera.app.system_layer import AppSystemLayer
 from quimera.app.task import AppTaskServices, call_agent_for_parallel
@@ -25,7 +25,7 @@ from quimera.app.protocol import AppProtocol
 from quimera.app.session_metrics import SessionMetricsService
 from quimera.cli import main as cli_main
 from quimera.config import DEFAULT_HISTORY_WINDOW
-from quimera.constants import CMD_AGENTS, CMD_CLEAR, CMD_CONNECT, CMD_HELP, CMD_PROMPT, EXTEND_MARKER, Visibility, build_agents_help, build_help
+from quimera.constants import CMD_AGENTS, CMD_CLEAR, CMD_CONNECT, CMD_HELP, CMD_PROMPT, EXTEND_MARKER, MSG_SHUTDOWN, Visibility, build_agents_help, build_help
 from quimera.plugins import AgentPlugin
 from quimera.plugins.base import OpenAIConnection
 from quimera.prompt import PromptBuilder
@@ -53,6 +53,7 @@ class DummyRenderer:
     def __init__(self):
         self.warnings = []
         self.system_messages = []
+        self.plain_messages = []
         self.handoffs = []
         self._output_lock = threading.Lock()
         self.task_services = None
@@ -62,6 +63,9 @@ class DummyRenderer:
 
     def show_system(self, message):
         self.system_messages.append(message)
+
+    def show_plain(self, message):
+        self.plain_messages.append(message)
 
     def show_handoff(self, from_agent, to_agent, task=None):
         self.handoffs.append((from_agent, to_agent, task))
@@ -511,6 +515,11 @@ class ProtocolTests(unittest.TestCase):
     def test_handle_command_shows_prompt_preview_for_default_agent(self):
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
+        app._output_lock = threading.Lock()
+        app._clear_user_prompt_line_if_needed = Mock()
+        app._redisplay_user_prompt_if_needed = Mock()
+        app._nonblocking_input_status = "idle"
+        app._deferred_system_messages = []
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
         app.history = [{"role": "human", "content": "Pedido atual"}]
         app.shared_state = {"goal": "corrigir prompt"}
@@ -545,7 +554,7 @@ class ProtocolTests(unittest.TestCase):
             shared_state=app.shared_state,
             skip_tool_prompt=True,
         )
-        message = app.renderer.system_messages[0]
+        message = app.renderer.plain_messages[0]
         self.assertIn("PROMPT PREVIEW: claude", message)
         self.assertIn("ANÁLISE DOS BLOCOS:", message)
         self.assertIn("- total_chars: 280", message)
@@ -554,6 +563,11 @@ class ProtocolTests(unittest.TestCase):
     def test_handle_command_shows_prompt_preview_for_agent_alias(self):
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
+        app._output_lock = threading.Lock()
+        app._clear_user_prompt_line_if_needed = Mock()
+        app._redisplay_user_prompt_if_needed = Mock()
+        app._nonblocking_input_status = "idle"
+        app._deferred_system_messages = []
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
         app.history = []
         app.shared_state = {}
@@ -1504,6 +1518,26 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(app.renderer.events[2][0], "show_system")
         self.assertEqual(app.renderer.events[3], ("flush", None))
 
+    def test_run_keyboard_interrupt_renders_shutdown_with_muted_style(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.history = []
+        app.user_name = "Alex"
+        app.execution_mode = None
+        app.renderer = DummyRenderer()
+        app.storage = DummyStorage()
+        app.session_state = {
+            "session_id": "sessao-2026-03-27-123456",
+            "history_count": 0,
+            "summary_loaded": False,
+        }
+        app.threads = 1
+        app.read_user_input = Mock(side_effect=KeyboardInterrupt)
+        app.session_services = Mock()
+
+        app.run()
+
+        self.assertEqual(app.renderer.plain_messages[-1], MSG_SHUTDOWN)
+
     def test_format_session_log_message_compacts_home_path(self):
         app = QuimeraApp.__new__(QuimeraApp)
         long_path = Path.home() / "um" / "caminho" / ("muito-longo-" * 12) / "sessao-2026-04-30.txt"
@@ -1987,7 +2021,7 @@ class ProtocolTests(unittest.TestCase):
         )
         self.assertEqual(app.context_manager.saved_summary, "## Resumo da Conversa\n\n- Memória consolidada")
         self.assertEqual(
-            app.renderer.system_messages,
+            app.renderer.plain_messages,
             ["\n[memória] histórico salvo. Gerando resumo da sessão..."],
         )
 
@@ -2022,7 +2056,7 @@ class ProtocolTests(unittest.TestCase):
 
         self.assertTrue(app.agent_client._user_cancelled)
         self.assertTrue(app.agent_client._cancel_event.is_set())
-        self.assertEqual(app.renderer.system_messages[-1], "[memória] não foi possível gerar o resumo.")
+        self.assertEqual(app.renderer.plain_messages[-1], "[memória] não foi possível gerar o resumo.")
 
     def test_summarize_session_returns_none_when_all_backends_unavailable(self):
         class DummyRendererWithSystem(DummyRenderer):
@@ -2633,6 +2667,25 @@ class PluginTests(unittest.TestCase):
         with patch("sys.stdin", stdin), patch("builtins.input", side_effect=KeyboardInterrupt):
             with self.assertRaises(KeyboardInterrupt):
                 app.read_user_input("Você: ", timeout=0)
+
+    def test_read_from_editor_holds_output_lock_during_editor_session(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.renderer = DummyRenderer()
+        app._output_lock = threading.Lock()
+
+        def _fake_editor_run(cmd, check):
+            self.assertTrue(app._output_lock.locked())
+            Path(cmd[-1]).write_text("texto do editor", encoding="utf-8")
+            return None
+
+        with patch.dict("os.environ", {"EDITOR": "fake-editor"}), patch(
+            "quimera.app.inputs.subprocess.run",
+            side_effect=_fake_editor_run,
+        ):
+            content = read_from_editor(app)
+
+        self.assertEqual(content, "texto do editor")
+        self.assertFalse(app._output_lock.locked())
 
     def test_show_system_message_suppresses_transient_task_status_while_tty_reader_is_active(self):
         app = QuimeraApp.__new__(QuimeraApp)

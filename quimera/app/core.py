@@ -588,6 +588,23 @@ class QuimeraApp:
         """Fachada compatível para mensagens de sistema."""
         self.system_layer.show_system_message(message)
 
+    def show_muted_message(self, message: str) -> None:
+        """Fachada compatível para mensagens neutras (dim)."""
+        system_layer = getattr(self, "system_layer", None)
+        if system_layer is not None and hasattr(system_layer, "show_muted_message"):
+            system_layer.show_muted_message(message)
+            return
+        renderer = getattr(self, "renderer", None)
+        if renderer is None:
+            return
+        show_plain = getattr(renderer, "show_plain", None)
+        if callable(show_plain):
+            show_plain(message)
+            return
+        show_system = getattr(renderer, "show_system", None)
+        if callable(show_system):
+            show_system(message)
+
     def _do_process_chat_message(self, user):
         """Fachada compatível para a implementação da rodada de chat."""
         self.chat_round_orchestrator.process(user)
@@ -727,7 +744,7 @@ class QuimeraApp:
                 else:
                     self._process_chat_message(user)
         except KeyboardInterrupt:
-            self.renderer.show_system(MSG_SHUTDOWN)
+            self.show_muted_message(MSG_SHUTDOWN)
         finally:
             try:
                 if threaded_chat and chat_queue is not None:

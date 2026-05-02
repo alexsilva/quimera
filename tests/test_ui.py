@@ -148,6 +148,14 @@ class TestTerminalRenderer:
         rendered_line = mock_renderer._console.print.call_args.args[0]
         assert getattr(rendered_line, "overflow", None) == "fold"
 
+    def test_show_system_with_rich_strips_crlf_edges(self, mock_renderer):
+        """Test show_system strips CRLF-only edges to avoid visual line breaks."""
+        mock_renderer.show_system("\r\nSystem message\r\n")
+        mock_renderer.flush()
+        rendered_line = mock_renderer._console.print.call_args.args[0]
+        assert rendered_line.plain.startswith("⚙ System message")
+        assert not rendered_line.plain.startswith("⚙ \r")
+
     def test_show_system_without_rich(self, renderer_no_rich, capsys):
         """Test show_system without Rich."""
         renderer_no_rich.show_system("System message")
@@ -166,6 +174,18 @@ class TestTerminalRenderer:
 
         with patch("quimera.ui._agent_style", return_value=("blue", "🔷 Codex")):
             renderer.show_plain("execução concluída", agent="codex")
+
+        renderer.flush()
+        rendered = renderer._console.export_text()
+        assert "🔷 Codex execução concluída" in rendered
+
+    def test_show_plain_with_agent_strips_crlf_edges(self):
+        """Test show_plain keeps agent label inline when message has CRLF edges."""
+        renderer = TerminalRenderer()
+        renderer._console = Console(width=60, record=True, force_terminal=False)
+
+        with patch("quimera.ui._agent_style", return_value=("blue", "🔷 Codex")):
+            renderer.show_plain("\r\nexecução concluída\r\n", agent="codex")
 
         renderer.flush()
         rendered = renderer._console.export_text()

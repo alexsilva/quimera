@@ -116,7 +116,7 @@ class AppSessionServices:
         if not app.history:
             return
 
-        app.renderer.show_system(MSG_MEMORY_SAVING)
+        app.show_muted_message(MSG_MEMORY_SAVING)
 
         result = [None]
 
@@ -138,7 +138,7 @@ class AppSessionServices:
             if app.agent_client:
                 app.agent_client._user_cancelled = True
                 app.agent_client._cancel_event.set()
-            app.renderer.show_system(MSG_MEMORY_FAILED.strip())
+            app.show_muted_message(MSG_MEMORY_FAILED.strip())
             try:
                 worker.join(timeout=1)
             except KeyboardInterrupt:
@@ -148,4 +148,4 @@ class AppSessionServices:
         if summary:
             app.context_manager.update_with_summary(summary)
         else:
-            app.renderer.show_system(MSG_MEMORY_FAILED)
+            app.show_muted_message(MSG_MEMORY_FAILED)

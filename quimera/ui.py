@@ -475,7 +475,7 @@ class TerminalRenderer:
 
     def show_system(self, message):
         """Exibe system."""
-        clean_message = strip_ansi(str(message))
+        clean_message = strip_ansi(str(message)).strip("\r\n")
         if self._console:
             style, icon = ROLE_STYLES["system"]
             line = Text.assemble((f"{icon} ", f"dim {style}"), (clean_message, style))
@@ -488,6 +488,8 @@ class TerminalRenderer:
     def show_plain(self, message, agent=None):
         """Exibe plain."""
         clean_message = strip_ansi(str(message))
+        if agent:
+            clean_message = clean_message.strip("\r\n")
         if self._console:
             if agent:
                 style, label = self._agent_style(agent)

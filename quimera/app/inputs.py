@@ -9,6 +9,7 @@ import sys
 import tempfile
 import threading
 import time
+from contextlib import nullcontext
 from pathlib import Path
 
 
@@ -194,17 +195,19 @@ def read_from_editor(app):
     with tempfile.NamedTemporaryFile(suffix=".md", delete=False) as tmp:
         tmp_path = tmp.name
 
-    try:
-        subprocess.run([*editor_parts, tmp_path], check=True)
-        content = Path(tmp_path).read_text(encoding="utf-8").strip()
-    except FileNotFoundError:
-        app.renderer.show_error(f"\nEditor não encontrado: {editor_parts[0]}\n")
-        return None
-    except subprocess.CalledProcessError as exc:
-        app.renderer.show_error(f"\nEditor encerrou com erro (código {exc.returncode}).\n")
-        return None
-    finally:
-        Path(tmp_path).unlink(missing_ok=True)
+    output_lock = getattr(app, "_output_lock", None)
+    with (output_lock if output_lock is not None else nullcontext()):
+        try:
+            subprocess.run([*editor_parts, tmp_path], check=True)
+            content = Path(tmp_path).read_text(encoding="utf-8").strip()
+        except FileNotFoundError:
+            app.renderer.show_error(f"\nEditor não encontrado: {editor_parts[0]}\n")
+            return None
+        except subprocess.CalledProcessError as exc:
+            app.renderer.show_error(f"\nEditor encerrou com erro (código {exc.returncode}).\n")
+            return None
+        finally:
+            Path(tmp_path).unlink(missing_ok=True)
     return content or None
 
 
