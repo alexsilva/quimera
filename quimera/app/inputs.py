@@ -202,7 +202,9 @@ def read_from_editor(app):
     with (output_lock if output_lock is not None else nullcontext()):
         try:
             subprocess.run([*editor_parts, tmp_path], check=True)
-            content = Path(tmp_path).read_text(encoding="utf-8").strip()
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+            content = Path(tmp_path).read_text(encoding="utf-8")
         except FileNotFoundError:
             app.renderer.show_error(f"\nEditor não encontrado: {editor_parts[0]}\n")
             return None
@@ -211,7 +213,7 @@ def read_from_editor(app):
             return None
         finally:
             Path(tmp_path).unlink(missing_ok=True)
-    return content or None
+    return _normalize_loaded_content(content)
 
 
 def read_from_file(app, path_str):
@@ -220,8 +222,16 @@ def read_from_file(app, path_str):
     if not path.exists():
         app.renderer.show_error(f"\nArquivo não encontrado: {path}\n")
         return None
-    content = path.read_text(encoding="utf-8").strip()
-    return content or None
+    content = path.read_text(encoding="utf-8")
+    return _normalize_loaded_content(content)
+
+
+def _normalize_loaded_content(content: str) -> str | None:
+    """Normaliza conteúdo de /edit e /file sem perder linhas úteis."""
+    normalized = (content or "").replace("\r\n", "\n").replace("\r", "\n").rstrip("\n")
+    if not normalized.strip():
+        return None
+    return normalized
 
 
 def _stdin():

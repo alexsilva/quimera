@@ -1538,6 +1538,37 @@ class ProtocolTests(unittest.TestCase):
 
         self.assertEqual(app.renderer.system_messages[-1], MSG_SHUTDOWN)
 
+    def test_run_forwards_full_multiline_editor_content_without_truncation(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.history = []
+        app.user_name = "Alex"
+        app.execution_mode = None
+        app.renderer = DummyRenderer()
+        app.storage = DummyStorage()
+        app.session_state = {
+            "session_id": "sessao-2026-03-27-123456",
+            "history_count": 0,
+            "summary_loaded": False,
+        }
+        app.threads = 1
+        app.read_user_input = Mock(side_effect=["/edit", "/exit"])
+        app.input_services = Mock()
+        edited_message = (
+            "\"\"\"Serviços de sessão, persistência e sumarização.\"\"\"\n"
+            "import sys\n"
+            "import threading\n"
+            "import time"
+        )
+        app.input_services.read_from_editor = Mock(return_value=edited_message)
+        app.session_services = Mock()
+        app.handle_command = Mock(return_value=False)
+        captured_messages = []
+        app._process_chat_message = lambda message: captured_messages.append(message)
+
+        app.run()
+
+        self.assertEqual(captured_messages, [edited_message])
+
     def test_format_session_log_message_compacts_home_path(self):
         app = QuimeraApp.__new__(QuimeraApp)
         long_path = Path.home() / "um" / "caminho" / ("muito-longo-" * 12) / "sessao-2026-04-30.txt"
@@ -2690,6 +2721,77 @@ class PluginTests(unittest.TestCase):
 
         self.assertEqual(content, "texto do editor")
         self.assertFalse(app._output_lock.locked())
+
+    def test_read_from_editor_preserves_multiline_content(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.renderer = DummyRenderer()
+        app._output_lock = threading.Lock()
+        expected = (
+            "\"\"\"Serviços de sessão, persistência e sumarização.\"\"\"\n"
+            "import sys\n"
+            "import threading\n"
+            "import time"
+        )
+
+        def _fake_editor_run(cmd, check):
+            Path(cmd[-1]).write_text(expected + "\n", encoding="utf-8")
+            return None
+
+        with patch.dict("os.environ", {"EDITOR": "fake-editor"}), patch(
+            "quimera.app.inputs.subprocess.run",
+            side_effect=_fake_editor_run,
+        ):
+            content = read_from_editor(app)
+
+        self.assertEqual(content, expected)
+
+    def test_read_from_editor_writes_newline_to_stdout_after_editor_exits(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.renderer = DummyRenderer()
+        app._output_lock = threading.Lock()
+
+        def _fake_editor_run(cmd, check):
+            Path(cmd[-1]).write_text("mensagem", encoding="utf-8")
+            return None
+
+        with patch.dict("os.environ", {"EDITOR": "fake-editor"}), patch(
+            "quimera.app.inputs.subprocess.run",
+            side_effect=_fake_editor_run,
+        ), patch("quimera.app.inputs.sys.stdout") as mock_stdout:
+            read_from_editor(app)
+
+        writes = [c.args[0] for c in mock_stdout.write.call_args_list]
+        self.assertIn("\n", writes)
+
+    def test_read_from_editor_preserves_content_with_special_chars(self):
+        """Conteúdo com triple-quotes, chaves e caracteres especiais não é truncado."""
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.renderer = DummyRenderer()
+        app._output_lock = threading.Lock()
+        expected = (
+            '"""Serviços de sessão, persistência e sumarização."""\n'
+            "import sys\n"
+            "import threading\n"
+            "import time\n"
+            "\n"
+            "class AppSessionServices:\n"
+            '    def __init__(self, app):\n'
+            "        self.app = app\n"
+            '        app.history.append({"role": role, "content": content})\n'
+            "        app.storage.save_history(app.history, shared_state=app.shared_state)"
+        )
+
+        def _fake_editor_run(cmd, check):
+            Path(cmd[-1]).write_text(expected + "\n", encoding="utf-8")
+            return None
+
+        with patch.dict("os.environ", {"EDITOR": "fake-editor"}), patch(
+            "quimera.app.inputs.subprocess.run",
+            side_effect=_fake_editor_run,
+        ), patch("quimera.app.inputs.sys.stdout"):
+            content = read_from_editor(app)
+
+        self.assertEqual(content, expected)
 
     def test_show_system_message_suppresses_transient_task_status_while_tty_reader_is_active(self):
         app = QuimeraApp.__new__(QuimeraApp)
