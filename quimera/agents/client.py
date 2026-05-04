@@ -20,6 +20,7 @@ from quimera.runtime.drivers.openai_compat import OpenAICompatDriver
 from quimera.agents.parsers import parse_stream_json, parse_codex_json, parse_opencode_json
 from quimera.agents.process_runner import ProcessRunner
 from quimera.agents.signal_guard import EscMonitor, terminate_process_group
+from quimera.agents.warm_pool import WarmPool
 from quimera.agents.text_filters import (
     _strip_spinner,
     _should_ignore_stderr_line,
@@ -68,6 +69,7 @@ class AgentClient:
         self._pending_summary_render: tuple | None = None
         self.rate_limit_detected = False
         self.rate_limit_detected_at: float | None = None
+        self._warm_pool = WarmPool()
 
     # ------------------------------------------------------------------
     # Helpers de sinal (delegam para EscMonitor para retrocompatibilidade)
@@ -133,47 +135,68 @@ class AgentClient:
             return
 
     # ------------------------------------------------------------------
+    # Helpers de ambiente e comando
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _build_run_env(extra_env=None) -> dict:
+        """Constrói o ambiente de execução, filtrando variáveis de GUI."""
+        env = {k: v for k, v in os.environ.items() if k not in _GUI_VARS}
+        env.update({"NO_COLOR": "1", "TERM": "dumb", "COLORTERM": ""})
+        if extra_env:
+            env.update(extra_env)
+        return env
+
+    def _build_effective_cmd(self, cmd: list, agent: str | None, cwd: str | None) -> tuple[list, str | None]:
+        """Resolve o comando efetivo, aplicando bwrap se necessário."""
+        effective_cwd = cwd or self.working_dir
+        if self.execution_mode is not None and effective_cwd:
+            effective_cmd = build_bwrap_cmd(
+                self.execution_mode,
+                effective_cwd,
+                cmd,
+                plugin=plugins.get(agent) if agent else None,
+            )
+            return effective_cmd, effective_cwd
+        return list(cmd), effective_cwd
+
+    # ------------------------------------------------------------------
     # run() — execução de subprocess
     # ------------------------------------------------------------------
 
-    def run(self, cmd, input_text=None, silent=False, agent=None, show_status=True, extra_env=None, cwd=None):
+    def run(self, cmd, input_text=None, silent=False, agent=None, show_status=True, extra_env=None, cwd=None, _primed_proc=None):
         """Executa run."""
         self._cancel_event.clear()
         self.rate_limit_detected = False
         self.rate_limit_detected_at = None
         self._agent_running = True
         self._start_esc_monitor()
-        try:
-            env = {k: v for k, v in os.environ.items() if k not in _GUI_VARS}
-            env.update({"NO_COLOR": "1", "TERM": "dumb", "COLORTERM": ""})
-            if extra_env:
-                env.update(extra_env)
-            effective_cmd = cmd
-            effective_cwd = cwd or self.working_dir
-            if self.execution_mode is not None and effective_cwd:
-                effective_cmd = build_bwrap_cmd(
-                    self.execution_mode,
-                    effective_cwd,
-                    cmd,
-                    plugin=plugins.get(agent) if agent else None,
+        env = self._build_run_env(extra_env)
+        effective_cmd, effective_cwd = self._build_effective_cmd(cmd, agent, cwd)
+        if _primed_proc is not None and _primed_proc.poll() is None:
+            proc = _primed_proc
+            _logger.debug("[warm-pool] reutilizando processo pré-aquecido: %s", cmd[0])
+        else:
+            if _primed_proc is not None:
+                _logger.debug("[warm-pool] processo pré-aquecido expirou: %s", cmd[0])
+            try:
+                proc = subprocess.Popen(
+                    effective_cmd,
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    bufsize=1,
+                    env=env,
+                    cwd=effective_cwd,
+                    start_new_session=True,
                 )
-            proc = subprocess.Popen(
-                effective_cmd,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                bufsize=1,
-                env=env,
-                cwd=effective_cwd,
-                start_new_session=True,
-            )
-            self._current_proc = proc
-        except OSError as exc:
-            self._agent_running = False
-            self._stop_esc_monitor()
-            self.renderer.show_error(f"[erro] não foi possível iniciar {cmd[0]}: {exc}")
-            return None
+            except OSError as exc:
+                self._agent_running = False
+                self._stop_esc_monitor()
+                self.renderer.show_error(f"[erro] não foi possível iniciar {cmd[0]}: {exc}")
+                return None
+        self._current_proc = proc
 
         result_holder = {
             "stdout_chunks": deque(),
@@ -474,7 +497,11 @@ class AgentClient:
         if prompt_as_arg:
             raw = self.run([*cmd, prompt], input_text=None, **run_kwargs)
         else:
-            raw = self.run(cmd, input_text=prompt, **run_kwargs)
+            _extra_env = run_kwargs.get("extra_env")
+            _effective_cmd, _effective_cwd = self._build_effective_cmd(cmd, agent, run_kwargs.get("cwd"))
+            _slot = self._warm_pool.take(_effective_cmd, _effective_cwd, _extra_env)
+            raw = self.run(cmd, input_text=prompt, _primed_proc=_slot.proc if _slot else None, **run_kwargs)
+            self._warm_pool.schedule_warm(_effective_cmd, self._build_run_env(_extra_env), _effective_cwd, _extra_env)
         fmt = output_format
         if fmt == "stream-json" and raw is not None:
             return parse_stream_json(raw, agent, self.tool_event_callback)
@@ -613,6 +640,10 @@ class AgentClient:
         agent, detail, should_render = pending
         if should_render:
             self._spy_output_presenter._render_turn_summary(agent, detail)
+
+    def close(self) -> None:
+        """Encerra o cliente, liberando processos pré-aquecidos pendentes."""
+        self._warm_pool.shutdown()
 
     # ------------------------------------------------------------------
     # Métricas

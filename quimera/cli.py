@@ -382,7 +382,10 @@ def main():
 
         renderer = TerminalRenderer()
         client = AgentClient(renderer)
-        result = client.call(agent_name, prompt)
+        try:
+            result = client.call(agent_name, prompt)
+        finally:
+            client.close()
 
         renderer.show_system(prompt)
         renderer.show_plain("\n--- RESULTADO LIMPO ---\n")

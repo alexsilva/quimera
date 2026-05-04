@@ -162,8 +162,8 @@ def test_agent_client_call(renderer):
             mock_run.return_value = "output"
             result = client.call("mock", "prompt")
             assert result == "output"
-            mock_run.assert_called_with(["mock-agent"], input_text="prompt", silent=False, agent="mock",
-                                        show_status=True)
+            mock_run.assert_called_with(["mock-agent"], input_text="prompt", _primed_proc=None,
+                                        silent=False, agent="mock", show_status=True)
 
 
 def test_agent_client_call_prompt_as_arg(renderer):
@@ -560,17 +560,19 @@ def test_agent_client_run_summary_shows_diff_output_and_keeps_next_operation_cle
         with patch("time.sleep"):
             client.run(["codex", "exec"], silent=False, agent="codex", show_status=True)
 
+    client.flush_pending_summary()
+
     assert any("codex | $ git status --short" in str(c) for c in status.update.call_args_list)
     assert ("$ git status --short",) not in [call.args for call in renderer.show_plain.call_args_list]
     assert ("✓ git diff -- quimera/agents.py",) not in [call.args for call in renderer.show_plain.call_args_list]
     renderer.show_plain.assert_any_call("diff --git a/quimera/agents.py b/quimera/agents.py", agent="codex")
     renderer.show_plain.assert_any_call("+nova linha", agent="codex")
-    assert any(
-        call.args and str(call.args[0]).startswith("Ferramentas executadas neste turno (")
-        for call in renderer.show_plain.call_args_list
-    )
     assert client.last_spy_turn_detail is not None
     assert client.last_spy_turn_detail["tools"]
+    # summary delegada ao renderer via show_turn_summary (MagicMock tem o método)
+    renderer.show_turn_summary.assert_called_once()
+    _, detail_arg = renderer.show_turn_summary.call_args.args
+    assert detail_arg["tools"]
 
 
 def test_spy_output_presenter_keeps_next_operation_clean_after_diff_preview(renderer):
@@ -635,11 +637,14 @@ def test_spy_output_presenter_finalize_turn_renders_human_summary(renderer):
     ):
         presenter.emit("codex", event)
 
-    presenter.finalize_turn("codex", render_summary=True)
+    detail = presenter.finalize_turn("codex", render_summary=True)
 
-    rendered_lines = [call.args[0] for call in renderer.show_plain.call_args_list]
-    assert any(line.startswith("Ferramentas executadas neste turno (") for line in rendered_lines)
-    assert any("- exec_command (t_17) — ok —" in line and "| cmd: ls" in line for line in rendered_lines)
+    # renderer tem show_turn_summary (MagicMock), então a summary é delegada a ele
+    renderer.show_turn_summary.assert_called_once_with("codex", detail)
+    assert detail["tools"]
+    assert detail["tools"][0]["tool"] == "exec_command"
+    assert detail["tools"][0]["tool_call_id"] == "t_17"
+    assert detail["tools"][0]["status"] == "ok"
 
 
 def test_spy_output_presenter_full_mode_renders_tool_timeline(renderer):
