@@ -69,7 +69,7 @@ class ToolExecutor:
         """
         handler = self._approval_handler
         # Atravessa wrappers (ex: PreApprovalHandler) até chegar no base
-        while hasattr(handler, '_base') and hasattr(handler._base, 'set_spinner_callbacks'):
+        while hasattr(handler, '_base'):
             handler = handler._base
         setter = getattr(handler, 'set_spinner_callbacks', None)
         if callable(setter):

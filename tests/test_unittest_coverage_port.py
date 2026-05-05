@@ -165,7 +165,6 @@ class AgentsCoverageTests(unittest.TestCase):
         run.assert_called_once_with(
             ["mock-agent", "hello"],
             input_text=None,
-            _primed_proc=None,
             silent=False,
             agent="mock",
             show_status=True,

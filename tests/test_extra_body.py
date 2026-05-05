@@ -356,6 +356,7 @@ class TestExtraBodyPersistence:
         # Redireciona o arquivo de conexões para tmp_path
         conn_file = tmp_path / "connections.json"
         monkeypatch.setattr(base_mod, "_get_connections_file", lambda: conn_file)
+        old_registry = dict(base_mod._registry)
         base_mod._registry.clear()
         try:
             plugin = AgentPlugin(
@@ -383,6 +384,7 @@ class TestExtraBodyPersistence:
             assert saved["deepseek"]["model"] == "deepseek-chat"
         finally:
             base_mod._registry.clear()
+            base_mod._registry.update(old_registry)
 
     def test_set_connection_override_extra_body_none(self, tmp_path, monkeypatch):
         """extra_body=None deve ser persistido como None."""
@@ -395,6 +397,7 @@ class TestExtraBodyPersistence:
 
         conn_file = tmp_path / "connections.json"
         monkeypatch.setattr(base_mod, "_get_connections_file", lambda: conn_file)
+        old_registry = dict(base_mod._registry)
         base_mod._registry.clear()
         try:
             plugin = AgentPlugin(
@@ -412,6 +415,7 @@ class TestExtraBodyPersistence:
             assert saved["gpt"]["extra_body"] is None
         finally:
             base_mod._registry.clear()
+            base_mod._registry.update(old_registry)
 
     def test_load_connections_roundtrip_extra_body(self, tmp_path, monkeypatch):
         """Salva e recarrega conexão com extra_body via JSON."""

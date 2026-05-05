@@ -181,6 +181,9 @@ class ProtocolTests(unittest.TestCase):
                 calls.append((agent, prompt))
                 return "saida limpa"
 
+            def close(self):
+                pass
+
         with patch("quimera.cli.TerminalRenderer", FakeRenderer), patch(
                 "quimera.cli.AgentClient", FakeAgentClient
         ), patch("sys.argv", ["quimera", "--interactive-test"]):
@@ -220,6 +223,9 @@ class ProtocolTests(unittest.TestCase):
             def call(self, agent, prompt):
                 calls.append((agent, prompt))
                 return None
+
+            def close(self):
+                pass
 
         with patch("quimera.cli.ConfigManager", DummyConfigManager), patch(
                 "quimera.cli.TerminalRenderer", FakeRenderer
@@ -569,7 +575,7 @@ class ProtocolTests(unittest.TestCase):
             shared_state=app.shared_state,
             skip_tool_prompt=True,
         )
-        message = app.renderer.plain_messages[0]
+        message = app.renderer.system_messages[0]
         self.assertIn("PROMPT PREVIEW: claude", message)
         self.assertIn("ANÁLISE DOS BLOCOS:", message)
         self.assertIn("- total_chars: 280", message)
