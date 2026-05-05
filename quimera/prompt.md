@@ -147,17 +147,17 @@ CHAIN:
 </handoff>
 <!-- ENDIF:handoff_present -->
 
-<!-- IF:context -->
-<persistent_context title="Contexto persistente do workspace">
-{context}
-</persistent_context>
-<!-- ENDIF:context -->
-
 <!-- IF:facts -->
 <recent_agent_messages title="Mensagens recentes de outros agentes (referência auxiliar — não canônico sem evidência)">
 {facts}
 </recent_agent_messages>
 <!-- ENDIF:facts -->
+
+<!-- IF:context -->
+<persistent_context title="Contexto persistente do workspace">
+{context}
+</persistent_context>
+<!-- ENDIF:context -->
 
 <!-- IF:metrics -->
 <agent_metrics title="Suas métricas (apenas referência)">
