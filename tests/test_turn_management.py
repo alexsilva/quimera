@@ -167,6 +167,7 @@ class TestTurnCycle(unittest.TestCase):
         app.handle_command = Mock(return_value=False)
         app._process_chat_message = Mock()
         app.session_services = Mock()
+        app.agent_client = Mock()
 
         # Libera o turno para o humano depois de 0,25 s
         def release_turn():
@@ -201,6 +202,7 @@ class TestTurnCycle(unittest.TestCase):
         app.storage = storage
         app.handle_command = Mock(return_value=False)
         app.session_services = Mock()
+        app.agent_client = Mock()
 
         reads = iter(["mensagem", KeyboardInterrupt()])
 

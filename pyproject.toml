@@ -16,3 +16,8 @@ api = ["openai>=1.0"]
 
 [project.scripts]
 quimera = "quimera.cli:main"
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    "ignore::UserWarning:rich",
+]
