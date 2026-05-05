@@ -1006,7 +1006,7 @@ class ProtocolTests(unittest.TestCase):
 
         prompt = builder.build(AGENT_CLAUDE, history)
 
-        self.assertIn('<recent_agent_messages title="Mensagens recentes de outros agentes">', prompt)
+        self.assertIn('<recent_agent_messages title="Mensagens recentes de outros agentes (referência auxiliar — não canônico sem evidência)">', prompt)
         self.assertIn("</recent_agent_messages>", prompt)
         self.assertIn("[CODEX] Teste falhou em test_x", prompt)
         self.assertNotIn("[CLAUDE] Arquivo alterado: app.py", prompt)
@@ -1021,7 +1021,7 @@ class ProtocolTests(unittest.TestCase):
 
         prompt = builder.build(AGENT_CLAUDE, history)
 
-        self.assertNotIn('<recent_agent_messages title="Mensagens recentes de outros agentes">', prompt)
+        self.assertNotIn('<recent_agent_messages title=', prompt)
         self.assertNotIn("[CLAUDE] Arquivo alterado: app.py", prompt)
         self.assertNotIn("goal_canonical continua ativo", prompt)
         self.assertNotIn("não redefina o objetivo", prompt)
@@ -1037,7 +1037,7 @@ class ProtocolTests(unittest.TestCase):
 
         prompt = builder.build(AGENT_CLAUDE, history)
 
-        self.assertNotIn('<recent_agent_messages title="Mensagens recentes de outros agentes">', prompt)
+        self.assertNotIn('<recent_agent_messages title=', prompt)
         conversation = prompt.split('<recent_conversation title="Conversa recente">\n', 1)[1]
         self.assertIn("[CLAUDE]: Eu estava investigando o parser", conversation)
 
