@@ -1,15 +1,23 @@
 """Componentes de `quimera.ui`."""
 import collections
+import logging
 import os
 import queue as _queue_module
 import re
 import sys
 import threading
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
+_log = logging.getLogger(__name__)
+
 from quimera.runtime.streaming import apply_stream_diff, normalize_stream_diff
+
+_UNICODE_CONTROL_RE = re.compile(
+    r"[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u061C\u200B-\u200F\u202A-\u202E\u2060-\u2069\uFEFF]"
+)
+_RENDER_MODES = {"plain", "markdown", "auto"}
 
 
 def strip_ansi(text: str) -> str:
@@ -24,7 +32,22 @@ def strip_ansi(text: str) -> str:
     ansi_orphaned = re.compile(r'\[[0-9;?]+[A-Za-z]')
     text = ansi_orphaned.sub('', text)
 
+    # Remove caracteres Unicode de controle/invisíveis (bidi, zero-width, C0/C1).
+    text = _UNICODE_CONTROL_RE.sub('', text)
+
     return text
+
+
+def _normalize_render_mode(render_mode: str | None) -> str:
+    mode = str(render_mode or "auto").strip().lower()
+    if mode in _RENDER_MODES:
+        return mode
+    return "auto"
+
+
+def _normalize_completed_content(text: str) -> str:
+    normalized = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
+    return "\n".join(line.rstrip() for line in normalized.split("\n")).strip()
 
 
 def _normalize_stream_diff(diff) -> list[dict[str, str]]:
@@ -91,6 +114,7 @@ class LiveUpdateChunkEvent:
 class LiveStopEvent:
     agent: str
     final_content: str
+    render_mode: str = "auto"
 
 
 @dataclass
@@ -110,6 +134,22 @@ def _agent_style(agent: str, get_plugin_style=None):
         if result:
             return result
     return ("white", f"🤖 {agent.capitalize()}")
+
+
+class _NullStatus:
+    """Proxy seguro que substitui nullcontext(None) quando não há spinner ativo.
+
+    C2: callers que fazem `.update(text)` dentro do bloco não recebem AttributeError.
+    """
+
+    def update(self, text: str = "") -> None:  # noqa: ARG002
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        pass
 
 
 class TerminalRenderer:
@@ -278,6 +318,7 @@ class TerminalRenderer:
                             content=event.final_content,
                             include_header=True,
                             include_footer_rule=True,
+                            render_mode=event.render_mode,
                         )
                         _cprint(final_block)
                         if state["theme_name"] == "rule":
@@ -294,13 +335,14 @@ class TerminalRenderer:
                     event.done.set()
 
             except Exception:
-                pass  # silencia para manter o loop vivo; erros visuais não devem travar o app
+                _log.exception("writer thread: erro ao processar evento %r", event)
 
     def flush(self):
         """Aguarda o writer thread processar todos os eventos pendentes."""
         done = threading.Event()
         self._queue.put(NoopEvent(done))
-        done.wait(timeout=5)
+        if not done.wait(timeout=5):
+            raise TimeoutError("TerminalRenderer.flush timed out after 5 seconds")
 
     # ------------------------------------------------------------------
     # Helpers internos
@@ -333,13 +375,23 @@ class TerminalRenderer:
             return Text(f"▶ {label}", style=f"bold {style}")
         return Text(label, style=f"bold {style}")
 
-    def _build_turn_body(self, theme_name: str, label: str, style: str, content: str, streaming: bool = False):
+    def _build_turn_body(
+        self,
+        theme_name: str,
+        label: str,
+        style: str,
+        content: str,
+        streaming: bool = False,
+        render_mode: str = "auto",
+    ):
         """Monta corpo textual do turno."""
-        body_content = (
-            Text(content or "", no_wrap=False, overflow="fold")
-            if streaming
-            else Markdown(content or "")
-        )
+        mode = _normalize_render_mode(render_mode)
+        if mode == "auto":
+            mode = "markdown"
+        if streaming or mode == "plain":
+            body_content = Text(content or "", no_wrap=False, overflow="fold")
+        else:
+            body_content = Markdown(content or "")
         if theme_name == "panel":
             title = f"[bold {style}]{label}[/bold {style}]" if streaming else None
             return Panel(body_content, title=title, border_style=style, padding=(0, 1))
@@ -391,13 +443,23 @@ class TerminalRenderer:
         include_header: bool = True,
         include_footer_rule: bool = False,
         streaming: bool = False,
+        render_mode: str = "auto",
     ):
         """Monta bloco estruturado de turno: header -> corpo -> tools."""
         parts = []
         if include_header:
             parts.append(self._build_turn_header(theme_name, label, style))
         if content is not None:
-            parts.append(self._build_turn_body(theme_name, label, style, content, streaming=streaming))
+            parts.append(
+                self._build_turn_body(
+                    theme_name,
+                    label,
+                    style,
+                    content,
+                    streaming=streaming,
+                    render_mode=render_mode,
+                )
+            )
         if tools_table is not None:
             parts.append(self._build_turn_tools(theme_name, label, style, tools_table, turn_id))
         if include_footer_rule and theme_name == "rule":
@@ -423,7 +485,7 @@ class TerminalRenderer:
     # API pública de exibição de mensagens
     # ------------------------------------------------------------------
 
-    def show_message(self, agent, content):
+    def show_message(self, agent, content, render_mode: str = "auto"):
         """Exibe mensagem usando o tema ativo."""
         style, label = self._agent_style(agent)
         clean_content = strip_ansi(str(content))
@@ -439,6 +501,7 @@ class TerminalRenderer:
                 content=clean_content,
                 include_header=True,
                 include_footer_rule=True,
+                render_mode=render_mode,
             )
             self._print(block)
         else:
@@ -446,13 +509,13 @@ class TerminalRenderer:
 
     def _consume_completed_stream(self, agent, content: str) -> bool:
         """Evita render final duplicado quando a resposta já foi exibida via streaming."""
-        normalized = content.strip()
+        normalized = _normalize_completed_content(content)
         with self._lock:
             previous = self._completed_streams.get(agent)
             if previous is None:
                 return False
             del self._completed_streams[agent]
-        return previous.strip() == normalized
+        return _normalize_completed_content(previous) == normalized
 
     # ------------------------------------------------------------------
     # API pública de streaming
@@ -484,17 +547,18 @@ class TerminalRenderer:
             return
         self._queue.put(LiveUpdateChunkEvent(agent, chunk))
 
-    def finish_message_stream(self, agent, final_content: str):
+    def finish_message_stream(self, agent, final_content: str, render_mode: str = "auto"):
         """Fecha o streaming preservando o conteúdo já mostrado."""
         if not self._console:
             return
         clean_content = strip_ansi(str(final_content or ""))
+        normalized_mode = _normalize_render_mode(render_mode)
         # Atualiza _completed_streams de forma síncrona, antes de enfileirar live_stop,
         # para que _consume_completed_stream em show_message funcione corretamente.
         with self._lock:
             self._completed_streams[agent] = clean_content
             self._active_stream_agents.discard(agent)
-        self._queue.put(LiveStopEvent(agent, clean_content))
+        self._queue.put(LiveStopEvent(agent, clean_content, normalized_mode))
 
     def abort_message_stream(self, agent):
         """Fecha o stream sem marcar a resposta como completa."""
@@ -725,6 +789,18 @@ class TerminalRenderer:
             yield
             return
 
+        # C1: se o writer já tem um Live ativo (streaming), não abrir segundo Live no mesmo Console
+        if self._stream_live_active.is_set():
+            with self._lock:
+                self._statuses = {agent: "inicializando..." for agent in agents}
+            try:
+                yield
+            finally:
+                with self._lock:
+                    self._live = None
+                    self._statuses = {}
+            return
+
         with self._lock:
             self._statuses = {agent: "inicializando..." for agent in agents}
             self._live = Live(
@@ -766,9 +842,9 @@ class TerminalRenderer:
             # Se há um Live de streaming ativo no writer thread, não criar outro Live
             # (múltiplos Lives no mesmo Console causam corrupção visual)
             if self._stream_live_active.is_set():
-                return nullcontext(None)
+                return _NullStatus()
 
             # Caso sequencial sem Live ativo: usa o spinner padrão do Rich
             return self._console.status(initial)
 
-        return nullcontext(None)
+        return _NullStatus()

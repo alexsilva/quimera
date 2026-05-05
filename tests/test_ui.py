@@ -1,4 +1,5 @@
 """Tests for quimera.ui."""
+import threading
 from unittest.mock import patch, MagicMock
 
 import pytest
@@ -40,6 +41,12 @@ class TestStripAnsi:
         result = strip_ansi(text)
         assert "[bold]" in result
         assert "[/bold]" in result
+
+    def test_strips_unicode_control_and_bidi_chars(self):
+        """Test removal of zero-width and bidi control characters."""
+        text = "ab\u200bcd\u202ertl\u2069ef"
+        result = strip_ansi(text)
+        assert result == "abcdrtlef"
 
 
 class TestIsInteractiveTerminal:
@@ -327,6 +334,28 @@ class TestTerminalRenderer:
         assert stream_body.no_wrap is False
         assert isinstance(final_body, Markdown)
 
+    def test_build_turn_body_respects_explicit_render_modes(self, mock_renderer):
+        plain_body = mock_renderer._build_turn_body(
+            "rule", "Codex", "cyan", "```python\nprint('x')", render_mode="plain"
+        )
+        markdown_body = mock_renderer._build_turn_body(
+            "rule", "Codex", "cyan", "texto simples", render_mode="markdown"
+        )
+
+        assert isinstance(plain_body, Text)
+        assert isinstance(markdown_body, Markdown)
+
+    def test_build_turn_body_auto_mode_defaults_to_markdown(self, mock_renderer):
+        body = mock_renderer._build_turn_body(
+            "rule", "Codex", "cyan", "texto sem marcação", render_mode="auto"
+        )
+        assert isinstance(body, Markdown)
+
+    def test_flush_raises_timeout_error_when_writer_does_not_signal(self, mock_renderer):
+        with patch.object(threading.Event, "wait", return_value=False):
+            with pytest.raises(TimeoutError, match="timed out"):
+                mock_renderer.flush()
+
 
 class TestRenderOrdering:
     """Testes de integração: garante ordenação de eventos via fila única."""
@@ -397,6 +426,17 @@ class TestRenderOrdering:
             r.flush()
 
         # _completed_streams deve ter sido consumido pelo show_message
+        assert "codex" not in r._completed_streams
+
+    def test_show_message_suppressed_after_stream_finish_with_newline_normalization(self, recording_renderer):
+        """Deduplicação do pós-stream ignora diferença de CRLF/trailing spaces."""
+        r = recording_renderer
+        with patch("quimera.ui.Live"):
+            r.start_message_stream("codex")
+            r.finish_message_stream("codex", "linha 1\r\nlinha 2  \n")
+            r.show_message("codex", "linha 1\nlinha 2")
+            r.flush()
+
         assert "codex" not in r._completed_streams
 
     def test_coalescing_keeps_order_for_interleaved_agent_events(self, recording_renderer):
