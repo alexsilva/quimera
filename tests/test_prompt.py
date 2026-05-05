@@ -64,12 +64,12 @@ def test_final_prompt_contract_has_sections_once_in_order_and_without_duplicatio
         '<header title="Identificação">',
         '<session_state title="Estado da sessão">',
         '<rules title="Suas regras">',
+        '<current_turn title="Pedido atual de ALEX">',
         '<shared_state title="Estado compartilhado">',
         '<handoff title="Mensagem direta do outro agente">',
         '<persistent_context title="Contexto persistente do workspace">',
         '<recent_agent_messages title="Mensagens recentes de outros agentes">',
         '<recent_conversation title="Conversa recente">',
-        '<current_turn title="Pedido atual de ALEX">',
     ]
 
     last_position = -1
@@ -244,6 +244,21 @@ def test_collect_recent_facts_respects_max_items():
     facts_block = _extract_block(prompt, "recent_agent_messages")
     count = facts_block.count("[AGENT1]")
     assert count <= 4
+
+
+def test_collect_recent_facts_skips_diff_like_tool_output_claims():
+    builder = PromptBuilder(context_manager=_make_context_manager(""))
+    history = [
+        {"role": "codex", "content": "diff --git a/app.py b/app.py\n+++ b/app.py\n@@ -1,1 +1,2 @@"},
+        {"role": "claude", "content": "Teste falhou em test_x"},
+        {"role": "human", "content": "e agora?"},
+    ]
+
+    prompt = builder.build(agent="outro", history=history)
+
+    facts_block = _extract_block(prompt, "recent_agent_messages")
+    assert "diff --git" not in facts_block
+    assert "Teste falhou em test_x" in facts_block
 
 
 def test_build_conversation_block_skips_empty_content():

@@ -236,6 +236,14 @@ class PromptBuilder:
             "nao redefina o objetivo",
             "[state_update]",
             "fatos observados recentes",
+            # Evita promover "saída de ferramenta"/diff não verificável a fato canônico.
+            "git diff",
+            "diff --git ",
+            "```diff",
+            "+++ b/",
+            "--- a/",
+            "@@ ",
+            "arquivo alterado:",
         )
         return any(marker in lowered for marker in blocked_markers)
 
