@@ -1,4 +1,5 @@
 """Watchdog de subprocess unificado para modos silencioso e ao vivo."""
+import itertools
 import logging
 import queue
 import time
@@ -53,7 +54,7 @@ class ProcessRunner:
     def _check_rate_limit_silent(self) -> None:
         """Verifica novos itens de stderr por sinais de rate limit (modo silencioso)."""
         current_stderr = self.result_holder["stderr"]
-        for line in current_stderr[self._rate_checked:]:
+        for line in itertools.islice(current_stderr, self._rate_checked, None):
             if _is_rate_limit_signal(line):
                 self.notify_rate_limit()
         self._rate_checked = len(current_stderr)
