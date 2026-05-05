@@ -940,7 +940,7 @@ def test_agent_plugin_cli_defaults():
 # Testes de regressão: plugins existentes ainda funcionam
 # ---------------------------------------------------------------------------
 
-def test_existing_cli_plugins_still_register():
+def test_existing_plugins_still_register():
     import quimera.plugins.claude  # noqa: F401
     import quimera.plugins.mock  # noqa: F401
     import quimera.plugins.ollama  # noqa: F401
@@ -956,9 +956,9 @@ def test_existing_cli_plugins_still_register():
     assert mock is not None
     assert mock.driver == "cli"
 
-    qwen = plugins.get("ollama-qwen")
-    assert qwen is not None
-    assert qwen.driver == "openai_compat"
-    assert qwen.model == "qwen3-coder:30b"
-    assert qwen.supports_tools is True
-    assert qwen.supports_task_execution is True
+    granite = plugins.get("ollama-granite4")
+    assert granite is not None
+    assert granite.driver == "openai_compat"
+    assert granite.model == "granite4.1:8b"
+    assert granite.supports_tools is True
+    assert granite.supports_task_execution is True

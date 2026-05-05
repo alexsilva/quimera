@@ -327,7 +327,7 @@ def test_executor_approval_handler_property():
 def test_maybe_execute_from_response_with_tool_call(config, approval_handler):
     """maybe_execute_from_response com tool call válido executa e retorna (response, result)."""
     executor = ToolExecutor(config, approval_handler)
-    response = '<tool function="list_files" arguments="{&quot;path&quot;: &quot;/tmp&quot;}" />'
+    response = '<tool function="list_files">\n{"path": "/tmp"}\n</tool>'
     text, result = executor.maybe_execute_from_response(response)
     assert text == response
     assert result is not None
@@ -342,7 +342,7 @@ def test_maybe_execute_from_response_with_tool_call_needs_approval_denied(config
         approval_handler,
     )
     approval_handler.approve.return_value = False
-    response = '<tool function="write_file" arguments="{&quot;path&quot;: &quot;test.txt&quot;, &quot;content&quot;: &quot;x&quot;}" />'
+    response = '<tool function="write_file">\n{"path": "test.txt", "content": "x"}\n</tool>'
     text, result = executor.maybe_execute_from_response(response)
     assert text == response
     assert result is not None
@@ -357,7 +357,7 @@ def test_maybe_execute_from_response_with_tool_call_approved(config, approval_ha
         approval_handler,
     )
     approval_handler.approve.return_value = True
-    response = '<tool function="list_files" arguments="{&quot;path&quot;: &quot;/tmp&quot;}" />'
+    response = '<tool function="list_files">\n{"path": "/tmp"}\n</tool>'
     text, result = executor.maybe_execute_from_response(response)
     assert text == response
     assert result is not None
@@ -370,8 +370,11 @@ def test_maybe_execute_from_response_with_tool_call_approved(config, approval_ha
 def test_set_spinner_callbacks_on_pre_approval_with_mock_base():
     """set_spinner_callbacks atravessa PreApprovalHandler com base que
     tem set_spinner_callbacks mas não é ConsoleApprovalHandler."""
-    base = MagicMock()
-    base.set_spinner_callbacks = MagicMock()
+    class BaseWithSetter:
+        def __init__(self):
+            self.set_spinner_callbacks = MagicMock()
+
+    base = BaseWithSetter()
     pre = PreApprovalHandler(base)
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=Path("/tmp")), pre)
 

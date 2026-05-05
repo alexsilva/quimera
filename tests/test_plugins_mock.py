@@ -1,5 +1,6 @@
 import pytest
 
+import quimera.plugins.mock  # noqa: F401
 from quimera.plugins import get
 
 

@@ -77,13 +77,14 @@ class TestAppHistory(unittest.TestCase):
         completer = mock_readline.set_completer.call_args.args[0]
 
         c_matches = []
-        state = 0
-        while True:
+        max_states = 256
+        for state in range(max_states):
             match = completer("/c", state)
             if match is None:
                 break
             c_matches.append(match)
-            state += 1
+        else:
+            self.fail("readline completer não encerrou em limite seguro de estados")
 
         self.assertIn("/clear", c_matches)
         self.assertEqual(len(c_matches), len(set(c_matches)))
@@ -146,7 +147,7 @@ class TestAppHistory(unittest.TestCase):
                 app = QuimeraApp(self.tmp_cwd)
             app.user_name = "user"
 
-            result = app.input_services.read_user_input(prompt="user: ", timeout=30)
+            result = app.input_services.read_user_input(prompt="user: ", timeout=-1)
 
             self.assertEqual(result, "test input")
             mock_input.assert_called_with("user: ")

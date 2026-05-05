@@ -1,4 +1,5 @@
 import io
+import importlib
 import re
 import tempfile
 import threading
@@ -91,6 +92,7 @@ class DummyConfigManager:
         self.auto_summarize_threshold = 30
         self.idle_timeout_seconds = 300
         self.theme = None
+        self.density = "normal"
 
 
 class DummyStorage:
@@ -112,6 +114,16 @@ class DummyStorage:
 
     def load_last_session(self):
         return {"messages": [], "shared_state": {}}
+
+
+class DummyAgentClient:
+    def __init__(self):
+        self._user_cancelled = False
+        self._cancel_event = threading.Event()
+        self.rate_limit_detected = False
+
+    def close(self):
+        return None
 
 
 def materialize_internal_services(app):
@@ -137,6 +149,9 @@ def materialize_internal_services(app):
 
 
 class ProtocolTests(unittest.TestCase):
+    def setUp(self):
+        importlib.reload(plugins)
+
     @unittest.skipUnless(
         hasattr(cli_module, "TerminalRenderer") and hasattr(cli_module, "AgentClient"),
         "interactive-test CLI não está disponível nesta versão",
@@ -840,12 +855,11 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn("task criada com id", app.renderer.system_messages[-1])
         self.assertIn("atribuída para codex", app.renderer.system_messages[-1])
 
-    def test_handle_task_command_assigns_qwen_when_it_supports_task_execution(self):
-        # qwen agora suporta task execution via driver openai_compat
+    def test_handle_task_command_assigns_ollama_when_it_supports_task_execution(self):
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
         app._output_lock = threading.Lock()
-        app.active_agents = ["ollama-qwen"]
+        app.active_agents = ["ollama-granite4"]
         app.user_name = "Alex"
         app.shared_state = {}
         app.current_job_id = 1
@@ -861,8 +875,8 @@ class ProtocolTests(unittest.TestCase):
         self.assertTrue(handled)
         tasks = list_tasks({"job_id": 1}, db_path=str(db_path))
         self.assertEqual(len(tasks), 1)
-        self.assertEqual(tasks[0]["assigned_to"], "ollama-qwen")
-        self.assertIn("atribuída para ollama-qwen", app.renderer.system_messages[-1])
+        self.assertEqual(tasks[0]["assigned_to"], "ollama-granite4")
+        self.assertIn("atribuída para ollama-granite4", app.renderer.system_messages[-1])
 
     def test_classify_task_execution_result_rejects_needs_input(self):
         ok, reason = QuimeraApp.classify_task_execution_result(
@@ -1026,7 +1040,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertNotIn("goal_canonical continua ativo", prompt)
         self.assertNotIn("não redefina o objetivo", prompt)
         conversation = prompt.split('<recent_conversation title="Conversa recente">\n', 1)[1]
-        self.assertIn("[CLAUDE]: Arquivo alterado: app.py", conversation)
+        self.assertIn("[sem itens residuais na conversa recente]", conversation)
 
     def test_prompt_keeps_same_agent_history_in_conversation_not_other_agents_block(self):
         builder = PromptBuilder(DummyContextManager(), history_window=5)
@@ -1068,7 +1082,7 @@ class ProtocolTests(unittest.TestCase):
 
         conversation = prompt.split('<recent_conversation title="Conversa recente">\n', 1)[1]
         self.assertNotIn("[CODEX]: Teste falhou em test_x", conversation)
-        self.assertIn("[CLAUDE]: Arquivo alterado: app.py", conversation)
+        self.assertIn("[sem itens residuais na conversa recente]", conversation)
 
     def test_prompt_lists_only_active_agents(self):
         builder = PromptBuilder(
@@ -1446,7 +1460,7 @@ class ProtocolTests(unittest.TestCase):
         app.renderer = DummyRenderer()
         app.storage = DummyStorage()
         app.context_manager = None
-        app.agent_client = None
+        app.agent_client = DummyAgentClient()
         app.prompt_builder = None
         app.session_state = {
             "session_id": "sessao-2026-03-27-123456",
@@ -1507,6 +1521,7 @@ class ProtocolTests(unittest.TestCase):
             "history_count": 0,
             "summary_loaded": False,
         }
+        app.agent_client = DummyAgentClient()
         app.threads = 1
         app.read_user_input = Mock(side_effect=["/exit"])
         app.session_services = Mock()
@@ -1530,6 +1545,7 @@ class ProtocolTests(unittest.TestCase):
             "history_count": 0,
             "summary_loaded": False,
         }
+        app.agent_client = DummyAgentClient()
         app.threads = 1
         app.read_user_input = Mock(side_effect=KeyboardInterrupt)
         app.session_services = Mock()
@@ -1550,6 +1566,7 @@ class ProtocolTests(unittest.TestCase):
             "history_count": 0,
             "summary_loaded": False,
         }
+        app.agent_client = DummyAgentClient()
         app.threads = 1
         app.read_user_input = Mock(side_effect=["/edit", "/exit"])
         app.input_services = Mock()
@@ -1593,7 +1610,7 @@ class ProtocolTests(unittest.TestCase):
         app.renderer = DummyRenderer()
         app.storage = DummyStorage()
         app.context_manager = None
-        app.agent_client = None
+        app.agent_client = DummyAgentClient()
         app.prompt_builder = None
         app.session_state = {
             "session_id": "sessao-2026-03-27-123456",
@@ -1656,7 +1673,7 @@ class ProtocolTests(unittest.TestCase):
         app.renderer = DummyRenderer()
         app.storage = DummyStorage()
         app.context_manager = None
-        app.agent_client = None
+        app.agent_client = DummyAgentClient()
         app.prompt_builder = None
         app.session_state = {
             "session_id": "sessao-2026-03-27-123456",
@@ -1728,7 +1745,7 @@ class ProtocolTests(unittest.TestCase):
         app.renderer = DummyRenderer()
         app.storage = DummyStorage()
         app.context_manager = None
-        app.agent_client = None
+        app.agent_client = DummyAgentClient()
         app.prompt_builder = None
         app.session_state = {
             "session_id": "sessao-2026-03-27-123456",
@@ -1824,7 +1841,7 @@ class ProtocolTests(unittest.TestCase):
         app.renderer = DummyRenderer()
         app.storage = DummyStorage()
         app.context_manager = None
-        app.agent_client = None
+        app.agent_client = DummyAgentClient()
         app.prompt_builder = None
         app.shared_state = {}
         app._lock = threading.Lock()
@@ -2373,6 +2390,9 @@ class ProtocolTests(unittest.TestCase):
 
 
 class PluginTests(unittest.TestCase):
+    def setUp(self):
+        importlib.reload(plugins)
+
     def test_agent_plugin_fields(self):
         p = AgentPlugin(name="test", prefix="/test", cmd=["test", "-p"], style=("red", "Test"))
 
@@ -2514,7 +2534,7 @@ class PluginTests(unittest.TestCase):
         app.renderer = DummyRenderer()
         app.storage = DummyStorage()
         app.context_manager = None
-        app.agent_client = None
+        app.agent_client = DummyAgentClient()
         app.prompt_builder = None
         app.session_state = {
             "session_id": "sessao-2026-03-27-123456",
@@ -4144,7 +4164,7 @@ class FallbackChainTests(unittest.TestCase):
         app.renderer = DummyRenderer()
         app.storage = DummyStorage()
         app.context_manager = None
-        app.agent_client = None
+        app.agent_client = DummyAgentClient()
         app.prompt_builder = None
         app.summary_agent_preference = None
         app.session_state = {
@@ -4206,7 +4226,7 @@ class FallbackChainTests(unittest.TestCase):
         app.renderer = DummyRenderer()
         app.storage = DummyStorage()
         app.context_manager = None
-        app.agent_client = None
+        app.agent_client = DummyAgentClient()
         app.prompt_builder = None
         app.session_state = {
             "session_id": "test-fallback",

@@ -95,9 +95,11 @@ class AgentsCoverageTests(unittest.TestCase):
                 "threading.Thread", side_effect=[stdout_thread, stderr_thread]
         ), patch("time.sleep"), patch(
             "time.time", side_effect=[100.0, 101.0, 101.0]
-        ):
+        ), patch(
+            "quimera.agents.process_runner.terminate_process_group"
+        ) as mock_terminate_pg:
             self.assertIsNone(client.run(["slow"], silent=False))
-        proc.terminate.assert_called_once()
+        mock_terminate_pg.assert_called_once_with(proc)
         self.renderer.show_error.assert_called()
 
     def test_run_handles_reader_exception(self):
@@ -144,7 +146,14 @@ class AgentsCoverageTests(unittest.TestCase):
         plugin.prompt_as_arg = False
         with patch("quimera.plugins.get", return_value=plugin), patch.object(client, "run", return_value="ok") as run:
             self.assertEqual(client.call("mock", "hello"), "ok")
-        run.assert_called_once_with(["mock-agent"], input_text="hello", silent=False, agent="mock", show_status=True)
+        run.assert_called_once_with(
+            ["mock-agent"],
+            input_text="hello",
+            _primed_proc=None,
+            silent=False,
+            agent="mock",
+            show_status=True,
+        )
 
     def test_call_uses_prompt_as_arg_and_unknown_agent_errors(self):
         client = AgentClient(self.renderer)
@@ -153,8 +162,14 @@ class AgentsCoverageTests(unittest.TestCase):
         plugin.prompt_as_arg = True
         with patch("quimera.plugins.get", return_value=plugin), patch.object(client, "run", return_value="ok") as run:
             self.assertEqual(client.call("mock", "hello"), "ok")
-        run.assert_called_once_with(["mock-agent", "hello"], input_text=None, silent=False, agent="mock",
-                                    show_status=True)
+        run.assert_called_once_with(
+            ["mock-agent", "hello"],
+            input_text=None,
+            _primed_proc=None,
+            silent=False,
+            agent="mock",
+            show_status=True,
+        )
         with patch("quimera.plugins.get", return_value=None):
             self.assertIsNone(client.call("missing", "hello"))
         self.renderer.show_error.assert_called()
