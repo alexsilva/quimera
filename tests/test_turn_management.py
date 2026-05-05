@@ -325,6 +325,93 @@ class TestSingleAgentPerTurn(unittest.TestCase):
         agents_called = [c[0][0] for c in app.dispatch_services.call_agent.call_args_list]
         self.assertEqual(agents_called, ["claude", "codex", "claude"])
 
+    def test_handoff_secondary_can_delegate_to_third_before_synthesis(self):
+        """Se o secundário delega de novo, o terceiro responde em handoff_only antes da síntese."""
+        app = _make_app(active_agents=["claude", "codex", "opencode-qwen"])
+        app.parse_routing = Mock(return_value=("claude", "analisa", False))
+
+        first_handoff = {
+            "task": "Revisa parser",
+            "context": "Validar regras",
+            "expected": "2 bullets",
+            "handoff_id": "h1",
+            "chain": [],
+        }
+        second_handoff = {
+            "task": "Valida edge cases",
+            "context": "Cobrir entradas inválidas",
+            "expected": "1 resumo curto",
+            "handoff_id": "h2",
+            "chain": ["claude"],
+        }
+        app.parse_response = Mock(side_effect=[
+            ("resposta claude", "codex", first_handoff, False, False, None),
+            ("resposta codex", "opencode-qwen", second_handoff, False, False, "h1"),
+            ("resposta qwen", None, None, False, False, "h2"),
+            ("síntese final", None, None, False, False, None),
+        ])
+        app.dispatch_services.call_agent = Mock(side_effect=["r1", "r2", "r3", "r4"])
+
+        QuimeraApp._do_process_chat_message(app, "analisa")
+
+        self.assertEqual(app.dispatch_services.call_agent.call_count, 4)
+        calls = app.dispatch_services.call_agent.call_args_list
+        self.assertEqual([c[0][0] for c in calls], ["claude", "codex", "opencode-qwen", "claude"])
+
+        self.assertTrue(calls[1][1]["handoff_only"])
+        self.assertEqual(calls[1][1]["from_agent"], "claude")
+        self.assertTrue(calls[2][1]["handoff_only"])
+        self.assertEqual(calls[2][1]["handoff"]["task"], "Valida edge cases")
+        self.assertIn("resposta qwen", calls[3][1]["handoff"])
+
+    def test_handoff_circular_chain_does_not_loop(self):
+        """Tentativa de ciclo em handoff não deve entrar em loop infinito."""
+        app = _make_app(active_agents=["claude", "codex", "opencode-qwen"])
+        app.parse_routing = Mock(return_value=("claude", "analisa", False))
+
+        first_handoff = {
+            "task": "Revisa parser",
+            "context": "Validar regras",
+            "expected": "2 bullets",
+            "handoff_id": "h1",
+            "chain": [],
+        }
+        circular_handoff = {
+            "task": "Volta para claude",
+            "context": "Confere etapa anterior",
+            "expected": "1 linha",
+            "handoff_id": "h2",
+            "chain": ["claude", "codex"],
+        }
+        parsed = iter([
+            ("resposta claude", "codex", first_handoff, False, False, None),
+            ("resposta codex", "claude", circular_handoff, False, False, "h1"),
+            ("síntese", None, None, False, False, None),
+        ])
+
+        def fake_parse_response(_response):
+            try:
+                return next(parsed)
+            except StopIteration:
+                return "extra", None, None, False, False, None
+
+        calls = []
+
+        def fake_call_agent(agent, *args, **kwargs):
+            calls.append((agent, kwargs))
+            if len(calls) > 6:
+                raise AssertionError("Loop detectado: call_agent excedeu limite esperado")
+            return f"r{len(calls)}"
+
+        app.parse_response = Mock(side_effect=fake_parse_response)
+        app.dispatch_services.call_agent = Mock(side_effect=fake_call_agent)
+
+        QuimeraApp._do_process_chat_message(app, "analisa")
+
+        self.assertLessEqual(app.dispatch_services.call_agent.call_count, 4)
+        handoff_only_calls = [call for call in calls if call[1].get("handoff_only")]
+        self.assertLessEqual(len(handoff_only_calls), 2)
+
     def test_single_active_agent_works(self):
         """Com apenas um agente ativo, não há tentativa de chamar agente secundário."""
         app = _make_app(active_agents=["claude"])

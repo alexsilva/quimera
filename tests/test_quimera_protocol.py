@@ -956,7 +956,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn("validador", second_prompt)
         self.assertNotIn("inclua [DEBATE] ao final da sua resposta", second_prompt)
 
-    def test_prompt_uses_handoff_rule_in_handoff_only_mode(self):
+    def test_prompt_handoff_only_allows_route_for_multi_hop(self):
         builder = PromptBuilder(DummyContextManager(), history_window=3)
         history = [{"role": "human", "content": "Pergunta"}]
 
@@ -975,7 +975,8 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn("TASK:\nRevisar parser", prompt)
         self.assertIn("EXPECTED:\n1 parágrafo curto", prompt)
         self.assertNotIn("segundo agente nesta rodada", prompt)
-        self.assertNotIn("[ROUTE:claude]", prompt)
+        self.assertIn("[ROUTE:agente]", prompt)
+        self.assertNotIn("Não delegue de volta", prompt)
 
     def test_prompt_includes_handoff_when_present(self):
         builder = PromptBuilder(DummyContextManager(), history_window=3)
@@ -4487,7 +4488,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         """HANDOFF_RULE deve estar inline no template e mencionar ACK."""
         main = prompt_template._load()
         self.assertIn("ACK", main)
-        self.assertIn("delegue de volta", main)
+        self.assertIn("handoff em sequência", main)
         self.assertIn("arquivos", main)
 
     def test_behavior_metrics_tracker_integrated_with_app(self):

@@ -36,7 +36,8 @@ Agentes de IA nesta conversa: {agents}
 - Você recebeu uma subtarefa delegada por outro agente. Continue do ponto já avançado e responda diretamente à tarefa.
 - Inicie com [ACK:<HANDOFF_ID>] para confirmar recebimento.
 - Se envolver sistema/arquivos: descubra path/comando antes de editar.
-- Não delegue de volta. Não expanda o escopo nem repita análise já feita.
+- Se houver ganho real, você pode fazer 1 novo handoff em sequência usando [ROUTE:agente] com task/context/expected.
+- Não expanda o escopo nem repita análise já feita.
 - Ao final, diga o que mudou, a evidência e o próximo passo.
 <!-- ENDIF:handoff_only -->
 

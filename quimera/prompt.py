@@ -55,7 +55,10 @@ class PromptBuilder:
         context = self.context_manager.load()
 
         if handoff_only:
-            route_agents = ""
+            route_candidates = [n for n in self.active_agents if n.lower() != agent.lower()]
+            if from_agent:
+                route_candidates = [n for n in route_candidates if n.lower() != from_agent.lower()]
+            route_agents = ", ".join(route_candidates) if route_candidates else ""
             is_first_speaker_flag = False
             is_reviewer = False
         else:
