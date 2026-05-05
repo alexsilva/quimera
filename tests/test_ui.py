@@ -3,6 +3,8 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 from rich.console import Console
+from rich.markdown import Markdown
+from rich.text import Text
 
 from quimera.ui import (
     TerminalRenderer,
@@ -304,11 +306,26 @@ class TestTerminalRenderer:
         assert mock_live.update.call_count >= 1
 
     def test_start_message_stream_enables_auto_refresh(self, mock_renderer):
+        # Live agora é criado no writer thread (_ensure_live); flush() aguarda o processamento
         with patch("quimera.ui.Live") as mock_live:
             mock_live.return_value = MagicMock()
             mock_renderer.start_message_stream("codex")
+            mock_renderer.flush()
 
         assert mock_live.call_args.kwargs["auto_refresh"] is True
+
+    def test_build_turn_body_uses_text_while_streaming(self, mock_renderer):
+        stream_body = mock_renderer._build_turn_body(
+            "rule", "Codex", "cyan", "```python\nprint('x')", streaming=True
+        )
+        final_body = mock_renderer._build_turn_body(
+            "rule", "Codex", "cyan", "```python\nprint('x')", streaming=False
+        )
+
+        assert isinstance(stream_body, Text)
+        assert stream_body.overflow == "fold"
+        assert stream_body.no_wrap is False
+        assert isinstance(final_body, Markdown)
 
 
 class TestRenderOrdering:
@@ -381,6 +398,47 @@ class TestRenderOrdering:
 
         # _completed_streams deve ter sido consumido pelo show_message
         assert "codex" not in r._completed_streams
+
+    def test_coalescing_keeps_order_for_interleaved_agent_events(self, recording_renderer):
+        """Chunk batch mantém ordem quando há evento de outro agente no meio."""
+        r = recording_renderer
+        lives = []
+
+        class CapturingLive:
+            def __init__(self, renderable, console, **kwargs):
+                self.console = console
+                self.renderables = [renderable]
+                lives.append(self)
+
+            def start(self):
+                return None
+
+            def update(self, renderable, refresh=True):
+                self.renderables.append(renderable)
+
+            def stop(self):
+                return None
+
+        def _as_text(renderable):
+            c = Console(width=120, record=True, force_terminal=False)
+            c.print(renderable)
+            return c.export_text()
+
+        with patch("quimera.ui.Live", CapturingLive):
+            r.start_message_stream("codex")
+            r.start_message_stream("claude")
+            r.update_message_stream("codex", "A1")
+            r.update_message_stream("codex", "A2")
+            r.update_message_stream("claude", "B1")
+            r.update_message_stream("codex", "A3")
+            r.flush()
+
+        assert len(lives) == 1
+        snapshots = [_as_text(renderable) for renderable in lives[0].renderables]
+        i_a12 = next(i for i, snap in enumerate(snapshots) if "A1A2" in snap)
+        i_b1 = next(i for i, snap in enumerate(snapshots) if "B1" in snap and "A1A2A3" not in snap)
+        i_a123 = next(i for i, snap in enumerate(snapshots) if "A1A2A3" in snap)
+        assert i_a12 < i_b1 < i_a123
 
 
 class TestStreamingDiffHelpers:

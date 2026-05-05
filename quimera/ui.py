@@ -1,4 +1,5 @@
 """Componentes de `quimera.ui`."""
+import collections
 import os
 import queue as _queue_module
 import re
@@ -136,6 +137,9 @@ class TerminalRenderer:
         # Lock protege _completed_streams, _active_stream_agents e _statuses
         self._lock = threading.RLock()
 
+        # Flag: writer thread tem um Live ativo (sinaliza threads externas)
+        self._stream_live_active = threading.Event()
+
         # Fila com backpressure (item 3): produtor bloqueia se fila cheia
         self._queue: _queue_module.Queue = _queue_module.Queue(maxsize=512)
         self._writer_thread = threading.Thread(target=self._writer_loop, daemon=True)
@@ -162,92 +166,135 @@ class TerminalRenderer:
     # ------------------------------------------------------------------
 
     def _writer_loop(self):
-        """Single writer: processa todos os eventos de UI sequencialmente."""
-        _stream_states: dict[str, dict] = {}  # agent -> {live, content, label, style, theme_name}
+        """Single writer: processa todos os eventos de UI sequencialmente.
+
+        Mantém um único Live unificado para todos os streams ativos.
+        """
+        _stream_states: dict[str, dict] = {}  # agent -> {content, label, style, theme_name}
+        _ul: list = [None]  # _ul[0] = Live unificado ativo (ou None)
+        _local_pending: collections.deque = collections.deque()  # buffer de "unget" para coalescing
+
+        def _get_renderable():
+            if not _stream_states:
+                return Text("")
+            parts = [
+                self._build_stream_renderable(
+                    st["theme_name"], st["label"], st["style"], st["content"]
+                )
+                for st in _stream_states.values()
+            ]
+            return Group(*parts) if len(parts) > 1 else parts[0]
+
+        def _ensure_live():
+            if _ul[0] is None and self._console:
+                _ul[0] = Live(
+                    _get_renderable(),
+                    console=self._console,
+                    refresh_per_second=20,
+                    transient=False,
+                    auto_refresh=True,
+                )
+                _ul[0].start()
+                self._stream_live_active.set()
+
+        def _refresh():
+            if _ul[0] is not None:
+                _ul[0].update(_get_renderable(), refresh=True)
+
+        def _stop_if_empty():
+            if _ul[0] is not None and not _stream_states:
+                _ul[0].stop()
+                _ul[0] = None
+                self._stream_live_active.clear()
+
+        def _cprint(renderable, **kwargs):
+            """Imprime via Live ativo (acima do painel) ou direto ao console."""
+            if _ul[0] is not None:
+                _ul[0].console.print(renderable, **kwargs)
+            elif self._console:
+                self._console.print(renderable, **kwargs)
+
+        def _next_event():
+            if _local_pending:
+                return _local_pending.popleft()
+            return self._queue.get()
 
         while True:
-            event = self._queue.get()
+            event = _next_event()
             if event is _STOP:
-                for state in _stream_states.values():
-                    try:
-                        state["live"].stop()
-                    except Exception:
-                        pass
+                if _ul[0]:
+                    _ul[0].stop()
+                    self._stream_live_active.clear()
                 break
 
-            # Resiliência (item 2): exceção em qualquer evento não mata o writer
+            # Resiliência: exceção em qualquer evento não mata o writer
             try:
-                self._handle_event(event, _stream_states)
+                if isinstance(event, PrintEvent):
+                    _cprint(event.renderable, **event.kwargs)
+
+                elif isinstance(event, LiveStartEvent):
+                    _stream_states[event.agent] = event.state
+                    _ensure_live()
+                    _refresh()
+
+                elif isinstance(event, LiveUpdateChunkEvent):
+                    # Coalescing: drena chunks consecutivos do mesmo agente antes de renderizar
+                    agent = event.agent
+                    chunks = [event.chunk]
+                    while True:
+                        try:
+                            next_ev = self._queue.get_nowait()
+                        except _queue_module.Empty:
+                            break
+                        if isinstance(next_ev, LiveUpdateChunkEvent) and next_ev.agent == agent:
+                            chunks.append(next_ev.chunk)
+                        else:
+                            # Preserva a ordem: evento não-relacionado vai para o buffer local (frente)
+                            _local_pending.appendleft(next_ev)
+                            break
+
+                    state = _stream_states.get(agent)
+                    if state:
+                        for chunk in chunks:
+                            if isinstance(chunk, dict):
+                                state["content"] = _apply_stream_diff(
+                                    state["content"],
+                                    _normalize_stream_diff(chunk.get("diff"))
+                                )
+                                text = chunk.get("text")
+                                if text and not chunk.get("diff"):
+                                    state["content"] += strip_ansi(str(text))
+                            else:
+                                state["content"] += strip_ansi(str(chunk))
+                        _refresh()
+
+                elif isinstance(event, LiveStopEvent):
+                    state = _stream_states.pop(event.agent, None)
+                    if state:
+                        _refresh()       # remove agente do Live antes de imprimir estático
+                        _stop_if_empty() # para o Live se for o último agente
+                        final_block = self._render_turn_block(
+                            state["theme_name"], state["label"], state["style"],
+                            content=event.final_content,
+                            include_header=True,
+                            include_footer_rule=True,
+                        )
+                        _cprint(final_block)
+                        if state["theme_name"] == "rule":
+                            _cprint(Rule(style="dim"))
+                        _cprint("")
+
+                elif isinstance(event, LiveAbortEvent):
+                    _stream_states.pop(event.agent, None)
+                    _refresh()
+                    _stop_if_empty()
+                    _cprint("")
+
+                elif isinstance(event, NoopEvent):
+                    event.done.set()
+
             except Exception:
                 pass  # silencia para manter o loop vivo; erros visuais não devem travar o app
-
-    def _handle_event(self, event, _stream_states: dict) -> None:
-        """Despacha e processa um único evento de UI."""
-        if isinstance(event, PrintEvent):
-            if self._console:
-                self._console.print(event.renderable, **event.kwargs)
-
-        elif isinstance(event, LiveStartEvent):
-            _stream_states[event.agent] = event.state
-            event.state["live"].start()
-
-        elif isinstance(event, LiveUpdateChunkEvent):
-            # Coalescing (item 3): drena chunks consecutivos do mesmo agente antes de renderizar
-            agent = event.agent
-            chunks = [event.chunk]
-            while True:
-                try:
-                    next_ev = self._queue.get_nowait()
-                except _queue_module.Empty:
-                    break
-                if isinstance(next_ev, LiveUpdateChunkEvent) and next_ev.agent == agent:
-                    chunks.append(next_ev.chunk)
-                else:
-                    # Devolve o evento não relacionado para reprocessamento
-                    # Não há "unget" em Queue; processamos inline imediatamente
-                    self._handle_event(next_ev, _stream_states)
-                    break
-
-            state = _stream_states.get(agent)
-            if not state:
-                return
-            for chunk in chunks:
-                if isinstance(chunk, dict):
-                    state["content"] = _apply_stream_diff(
-                        state["content"],
-                        _normalize_stream_diff(chunk.get("diff"))
-                    )
-                    text = chunk.get("text")
-                    if text and not chunk.get("diff"):
-                        state["content"] += strip_ansi(str(text))
-                else:
-                    state["content"] += strip_ansi(str(chunk))
-            renderable = self._build_stream_renderable(
-                state["theme_name"], state["label"], state["style"], state["content"]
-            )
-            state["live"].update(renderable, refresh=True)
-
-        elif isinstance(event, LiveStopEvent):
-            state = _stream_states.pop(event.agent, None)
-            if state and self._console:
-                renderable = self._build_stream_renderable(
-                    state["theme_name"], state["label"], state["style"], event.final_content
-                )
-                state["live"].update(renderable, refresh=True)
-                state["live"].stop()
-                if state["theme_name"] == "rule":
-                    self._console.print(Rule(style="dim"))
-                self._console.print()
-
-        elif isinstance(event, LiveAbortEvent):
-            state = _stream_states.pop(event.agent, None)
-            if state:
-                state["live"].stop()
-            if self._console:
-                self._console.print()
-
-        elif isinstance(event, NoopEvent):
-            event.done.set()
 
     def flush(self):
         """Aguarda o writer thread processar todos os eventos pendentes."""
@@ -288,15 +335,19 @@ class TerminalRenderer:
 
     def _build_turn_body(self, theme_name: str, label: str, style: str, content: str, streaming: bool = False):
         """Monta corpo textual do turno."""
-        content_md = Markdown(content or "")
+        body_content = (
+            Text(content or "", no_wrap=False, overflow="fold")
+            if streaming
+            else Markdown(content or "")
+        )
         if theme_name == "panel":
             title = f"[bold {style}]{label}[/bold {style}]" if streaming else None
-            return Panel(content_md, title=title, border_style=style, padding=(0, 1))
+            return Panel(body_content, title=title, border_style=style, padding=(0, 1))
         if theme_name == "chat":
-            return Padding(content_md, pad=(0, 0, 0, 4))
+            return Padding(body_content, pad=(0, 0, 0, 4))
         if theme_name == "minimal":
-            return Padding(content_md, pad=(0, 0, 0, 2))
-        return content_md
+            return Padding(body_content, pad=(0, 0, 0, 2))
+        return body_content
 
     def _build_turn_tools(self, theme_name: str, label: str, style: str, tools_table, turn_id: str):
         """Monta seção de ferramentas mantendo vínculo visual com o turno."""
@@ -358,13 +409,13 @@ class TerminalRenderer:
         return Group(*parts)
 
     def _build_stream_renderable(self, theme_name: str, label: str, style: str, content: str):
-        """Monta o renderable dinâmico usado no streaming."""
+        """Monta o renderable dinâmico usado no streaming (header incluso no bloco live)."""
         return self._render_turn_block(
             theme_name,
             label,
             style,
             content=content,
-            include_header=False,
+            include_header=True,
             streaming=True,
         )
 
@@ -419,16 +470,11 @@ class TerminalRenderer:
             theme_name = self._theme.name
 
         self._spacing()
-        self._print(self._render_turn_block(theme_name, label, style, content=None, include_header=True))
-
-        initial = self._build_stream_renderable(theme_name, label, style, "")
-        live = Live(initial, console=self._console, refresh_per_second=20, transient=False, auto_refresh=True)
         state = {
             "content": "",
             "label": label,
             "style": style,
             "theme_name": theme_name,
-            "live": live,
         }
         self._queue.put(LiveStartEvent(agent, state))
 
@@ -699,7 +745,7 @@ class TerminalRenderer:
     def running_status(self, initial="", agent=None):
         """Retorna um context manager com spinner animado. Chame .update(text) dentro do bloco."""
         if self._console:
-            # Se já estamos em modo Live (paralelo), retornamos um proxy que atualiza o painel global
+            # Se já estamos em modo Live paralelo (live_status), atualiza o painel global
             if self._live and agent:
                 class StatusProxy:
                     def __init__(self, renderer, agent):
@@ -717,7 +763,12 @@ class TerminalRenderer:
 
                 return StatusProxy(self, agent)
 
-            # Caso contrário, usa o spinner padrão do Rich (sequencial)
+            # Se há um Live de streaming ativo no writer thread, não criar outro Live
+            # (múltiplos Lives no mesmo Console causam corrupção visual)
+            if self._stream_live_active.is_set():
+                return nullcontext(None)
+
+            # Caso sequencial sem Live ativo: usa o spinner padrão do Rich
             return self._console.status(initial)
 
         return nullcontext(None)
