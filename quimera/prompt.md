@@ -159,12 +159,14 @@ CHAIN:
 </persistent_context>
 <!-- ENDIF:context -->
 
+<!-- IF:recent_conversation -->
+<recent_conversation title="Conversa recente">
+{recent_conversation}
+</recent_conversation>
+<!-- ENDIF:recent_conversation -->
+
 <!-- IF:metrics -->
 <agent_metrics title="Suas métricas (apenas referência)">
 {metrics}
 </agent_metrics>
 <!-- ENDIF:metrics -->
-
-<recent_conversation title="Conversa recente">
-{recent_conversation}
-</recent_conversation>
