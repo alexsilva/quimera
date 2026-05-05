@@ -270,11 +270,19 @@ class QuimeraApp:
         plugin = self.get_agent_plugin(agent)
         return plugin.render_style if plugin else None
 
+    @staticmethod
+    def _normalize_agent_name(agent):
+        """Normaliza identificador de agente para nome canônico string."""
+        if hasattr(agent, "name"):
+            return getattr(agent, "name")
+        return agent
+
     def get_agent_plugin(self, agent_name: str):
         """Resolve um plugin pelo nome canônico do agente."""
-        if not agent_name:
+        normalized_name = self._normalize_agent_name(agent_name)
+        if not normalized_name:
             return None
-        return plugins.get(agent_name)
+        return plugins.get(normalized_name)
 
     def get_available_plugins(self) -> list:
         """Retorna a lista atual de plugins conhecidos pela aplicação."""
@@ -316,20 +324,23 @@ class QuimeraApp:
 
     def record_failure(self, agent):
         """Registra failure."""
+        agent_name = self._normalize_agent_name(agent)
+        if not agent_name:
+            return
         with self._agent_failures_lock:
-            self.agent_failures[agent] += 1
-            failures = self.agent_failures[agent]
+            self.agent_failures[agent_name] += 1
+            failures = self.agent_failures[agent_name]
         if failures >= 2:
-            if agent in self.active_agents:
-                self.active_agents.remove(agent)
-                logger.warning("agent %s removed after %d failures", agent, failures)
+            if agent_name in self.active_agents:
+                self.active_agents.remove(agent_name)
+                logger.warning("agent %s removed after %d failures", agent_name, failures)
                 try:
-                    runtime_tasks.release_agent_tasks(agent, db_path=self.tasks_db_path)
+                    runtime_tasks.release_agent_tasks(agent_name, db_path=self.tasks_db_path)
                 except Exception:
                     pass
         session_metrics = getattr(self, "session_metrics", None)
         if session_metrics is not None:
-            session_metrics.record_agent_metric(self, agent, "failed", 0)
+            session_metrics.record_agent_metric(self, agent_name, "failed", 0)
 
     @staticmethod
     def _unique_encodings(*encodings):
@@ -475,7 +486,7 @@ class QuimeraApp:
                 return self.parse_routing(rest)
             self.renderer.show_system(mode_message)
             if not self.active_agents:
-                self.active_agents = self.selected_agents
+                self.active_agents = [self._normalize_agent_name(a) for a in self.selected_agents]
             return None, "", False
 
         active_plugins = self.get_active_agent_plugins()
@@ -502,7 +513,7 @@ class QuimeraApp:
             logger.warning("no active agents, resetting to default")
             logger.warning("DEBUG selected_agents=%r", self.selected_agents)
             logger.warning("DEBUG available=%r", self.get_available_plugins())
-            self.active_agents = self.selected_agents or self.get_available_plugins()
+            self.active_agents = self.selected_agents or [p.name for p in self.get_available_plugins()]
             logger.warning("DEBUG after fallback active_agents=%r", self.active_agents)
             if not self.active_agents:
                 raise RuntimeError("No agents available")

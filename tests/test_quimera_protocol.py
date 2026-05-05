@@ -3029,6 +3029,53 @@ class PluginTests(unittest.TestCase):
         self.assertFalse(explicit)
         mock_choice.assert_called_once_with(app.active_agents)
 
+    def test_parse_routing_fallback_normalizes_plugin_objects_to_agent_names(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.active_agents = []
+        app.selected_agents = []
+        app.round_index = 0
+        app.renderer = DummyRenderer()
+        app.get_active_agent_plugins = Mock(return_value=[])
+        plugin = AgentPlugin(
+            name=AGENT_CLAUDE,
+            prefix="/claude",
+            style=("blue", "Claude"),
+            driver="claude",
+            model="claude-sonnet",
+            supports_tools=True,
+        )
+        app.get_available_plugins = Mock(return_value=[plugin])
+
+        with patch("quimera.app.core.random.choice", return_value=AGENT_CLAUDE):
+            agent, message, explicit = app.parse_routing("oi")
+
+        self.assertEqual(agent, AGENT_CLAUDE)
+        self.assertEqual(message, "oi")
+        self.assertFalse(explicit)
+        self.assertEqual(app.active_agents, [AGENT_CLAUDE])
+        self.assertIsInstance(app.active_agents[0], str)
+
+    def test_record_failure_accepts_agent_plugin_instance(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.active_agents = [AGENT_CLAUDE]
+        app.agent_failures = defaultdict(int)
+        app._agent_failures_lock = threading.Lock()
+        app.session_metrics = Mock()
+        plugin = AgentPlugin(
+            name=AGENT_CLAUDE,
+            prefix="/claude",
+            style=("blue", "Claude"),
+            driver="claude",
+            model="claude-sonnet",
+            supports_tools=True,
+        )
+
+        app.record_failure(plugin)
+
+        self.assertEqual(app.agent_failures[AGENT_CLAUDE], 1)
+        self.assertEqual(list(app.agent_failures.keys()), [AGENT_CLAUDE])
+        app.session_metrics.record_agent_metric.assert_called_once_with(app, AGENT_CLAUDE, "failed", 0)
+
     def test_parse_handoff_payload_with_priority(self):
         app = QuimeraApp.__new__(QuimeraApp)
         app.protocol = AppProtocol(app)
