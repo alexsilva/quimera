@@ -3016,19 +3016,17 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(app.renderer.system_messages, [])
         self.assertEqual(app._deferred_system_messages, ["[task 7] claude:\nresultado final"])
 
-    def test_parse_routing_selects_random_initial_agent(self):
+    def test_parse_routing_selects_first_initial_agent(self):
         app = QuimeraApp.__new__(QuimeraApp)
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
         app.round_index = 0
         app.renderer = DummyRenderer()
 
-        with patch("quimera.app.core.random.choice", return_value=AGENT_CODEX) as mock_choice:
-            agent, message, explicit = app.parse_routing("oi")
+        agent, message, explicit = app.parse_routing("oi")
 
-        self.assertEqual(agent, AGENT_CODEX)
+        self.assertEqual(agent, AGENT_CLAUDE)
         self.assertEqual(message, "oi")
         self.assertFalse(explicit)
-        mock_choice.assert_called_once_with(app.active_agents)
 
     def test_parse_routing_fallback_normalizes_plugin_objects_to_agent_names(self):
         app = QuimeraApp.__new__(QuimeraApp)

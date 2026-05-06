@@ -306,10 +306,14 @@ class ChatRoundOrchestrator:
         app = self.app
         dispatch_services = app.dispatch_services
         protocol_mode = "extended" if extend else "standard"
-        if explicit or not extend:
+        if explicit:
             remaining = []
-        else:
+        elif extend:
             remaining = [other_agents[0], first_agent, other_agents[0]] if other_agents else []
+        else:
+            remaining = []
+            if other_agents:
+                app.active_agents = app.active_agents[1:] + app.active_agents[:1]
 
         next_handoff = None
         if app.threads > 1 and len(remaining) > 1:

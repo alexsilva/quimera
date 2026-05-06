@@ -491,7 +491,7 @@ class QuimeraApp:
             logger.warning("DEBUG after fallback active_agents=%r", self.active_agents)
             if not self.active_agents:
                 raise RuntimeError("No agents available")
-        return random.choice(self.active_agents), user_input, False
+        return self.active_agents[0], user_input, False
 
     @staticmethod
     def _merge_state_value(current, incoming):
