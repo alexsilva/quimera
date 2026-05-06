@@ -49,10 +49,7 @@ USER_ROLE = "human"
 # Messages
 MSG_CHAT_STARTED = "Chat multi-agente iniciado (/exit para sair)\n"
 MSG_SESSION_LOG = "Log da sessão:\n  {}\n"
-MSG_SESSION_STATUS = (
-    "Sessão {session_id} | histórico restaurado: {history_count} mensagem(ns) | "
-    "resumo carregado: {summary_loaded}\n"
-)
+MSG_SESSION_STATUS = "Sessão {session_id} | resumo carregado: {summary_loaded}\n"
 MSG_MIGRATION = "[migração] {}\n"
 MSG_MEMORY_SAVING = "[memória] histórico salvo. Gerando resumo da sessão..."
 MSG_MEMORY_FAILED = "[memória] não foi possível gerar o resumo."

@@ -15,6 +15,7 @@ class SessionStorage:
     def __init__(self, logs_dir: Path, renderer):
         """Inicializa uma instância de SessionStorage."""
         self.renderer = renderer
+        self._pending_restore_notice = None
         now = datetime.now()
         date_str = now.strftime("%Y-%m-%d")
         self.session_dir = logs_dir / date_str
@@ -74,6 +75,7 @@ class SessionStorage:
 
     def load_last_session(self):
         """Restaura o snapshot mais recente salvo em JSON, se existir."""
+        self._pending_restore_notice = None
         json_files = sorted(
             self._logs_dir.rglob("sessao-*.json"),
             key=self._session_sort_key,
@@ -107,7 +109,7 @@ class SessionStorage:
                 continue
 
             if messages:
-                self.renderer.show_system(
+                self._pending_restore_notice = (
                     f"[memória] histórico restaurado de {json_file.parent.name}/{json_file.name} ({len(messages)} mensagens)\n"
                 )
             if not isinstance(shared_state, dict):
@@ -131,6 +133,12 @@ class SessionStorage:
 
         # No matching session found
         return {"messages": [], "shared_state": {}}
+
+    def pop_restore_notice(self):
+        """Retorna e limpa o aviso pendente de histórico restaurado."""
+        notice = self._pending_restore_notice
+        self._pending_restore_notice = None
+        return notice
 
     def load_last_history(self):
         """Compatibilidade: retorna apenas as mensagens do snapshot mais recente."""

@@ -123,7 +123,7 @@ class InputGate:
         if model:
             parts.append(f"model: {html.escape(model)}")
         if cwd:
-            parts.append(f"cwd: {html.escape(cwd)}")
+            parts.append(html.escape(cwd))
         return HTML(" | ".join(parts))
 
     def _build_placeholder(self):

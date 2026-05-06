@@ -583,6 +583,17 @@ class TerminalRenderer:
         else:
             print(f"{label}: {message}")
 
+    def show_banner(self, message):
+        """Exibe mensagem sem ícone (ex: logo de boas-vindas)."""
+        clean_message = strip_ansi(str(message)).strip("\r\n")
+        if self._console:
+            line = Text(clean_message)
+            line.no_wrap = False
+            line.overflow = "fold"
+            self._print(line)
+        else:
+            print(clean_message)
+
     def show_system(self, message):
         """Exibe system."""
         clean_message = strip_ansi(str(message)).strip("\r\n")
@@ -635,7 +646,7 @@ class TerminalRenderer:
 
     def show_error(self, message):
         """Exibe error."""
-        clean_message = strip_ansi(str(message))
+        clean_message = strip_ansi(str(message)).strip("\r\n")
         if self._console:
             style, icon = ROLE_STYLES["error"]
             line = Text.assemble((f"{icon} ", style), (clean_message, "red"))
@@ -645,7 +656,7 @@ class TerminalRenderer:
 
     def show_warning(self, message):
         """Exibe warning."""
-        clean_message = strip_ansi(str(message))
+        clean_message = strip_ansi(str(message)).strip("\r\n")
         if self._console:
             style, icon = ROLE_STYLES["warning"]
             line = Text.assemble((f"{icon} ", style), (clean_message, "yellow"))

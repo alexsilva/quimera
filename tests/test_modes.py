@@ -343,7 +343,7 @@ class TestInputContextAndWelcome(unittest.TestCase):
             message = app._build_welcome_message()
 
         self.assertIn("v0.1.0", message)
-        self.assertIn("projeto: /tmp/projeto", message)
+        self.assertNotIn("projeto:", message)
 
     def test_resolver_next_responder_prefers_pending_input_target(self):
         from quimera.app.core import QuimeraApp

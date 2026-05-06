@@ -228,6 +228,17 @@ class TestTerminalRenderer:
         """Test show_warning with Rich."""
         mock_renderer.show_warning("Warning message")
 
+    def test_show_warning_strips_crlf_edges_keeps_icon_inline(self):
+        """Test show_warning keeps warning icon and content on the same line."""
+        renderer = TerminalRenderer()
+        renderer._console = Console(width=80, record=True, force_terminal=False)
+
+        renderer.show_warning("\nUse /codex <mensagem>\n")
+        renderer.flush()
+
+        rendered = renderer._console.export_text()
+        assert "⚠ Use /codex <mensagem>" in rendered
+
     def test_show_warning_without_rich(self, renderer_no_rich, capsys):
         """Test show_warning without Rich."""
         renderer_no_rich.show_warning("Warning message")

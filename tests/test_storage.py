@@ -20,6 +20,34 @@ class DummyRenderer:
 
 
 class SessionStorageTests(unittest.TestCase):
+    def test_load_last_session_defers_restore_notice_until_consumed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            logs_dir = Path(tmp)
+            day_dir = logs_dir / "2026-04-17"
+            day_dir.mkdir()
+            snapshot = day_dir / "sessao-2026-04-17-090000.json"
+            snapshot.write_text(
+                json.dumps(
+                    {
+                        "session_id": "sessao-2026-04-17-090000",
+                        "messages": [{"role": "human", "content": "oi"}],
+                        "shared_state": {},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            renderer = DummyRenderer()
+            storage = SessionStorage(logs_dir, renderer)
+
+            restored = storage.load_last_session()
+
+            self.assertEqual(restored["messages"], [{"role": "human", "content": "oi"}])
+            self.assertEqual(renderer.system_messages, [])
+            notice = storage.pop_restore_notice()
+            self.assertIn("[memória] histórico restaurado de", notice)
+            self.assertIsNone(storage.pop_restore_notice())
+
     def test_load_last_session_discards_shared_state_for_legacy_snapshot_without_saved_at(self):
         with tempfile.TemporaryDirectory() as tmp:
             logs_dir = Path(tmp)

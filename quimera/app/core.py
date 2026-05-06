@@ -585,7 +585,6 @@ class QuimeraApp:
     def _build_welcome_logo() -> str:
         """Retorna logo ASCII simples para o banner inicial."""
         return (
-            "  ____        _                          \n"
             " / __ \\__  __(_)___ ___  ___  _________ _\n"
             "/ / / / / / / / __ `__ \\/ _ \\/ ___/ __ `/\n"
             "/ /_/ / /_/ / / / / / / /  __/ /  / /_/ / \n"
@@ -599,10 +598,7 @@ class QuimeraApp:
         project_path = str(getattr(workspace, "cwd", Path.cwd()))
         logo_lines = self._build_welcome_logo().split("\n")
         logo_lines[-1] = logo_lines[-1].rstrip() + f"  v{version}"
-        return (
-            f"{chr(10).join(logo_lines)}\n"
-            f"projeto: {project_path}\n"
-        )
+        return f"{chr(10).join(logo_lines)}\n"
 
     def _resolve_active_model_label(self) -> str:
         """Resolve o modelo ativo a partir do primeiro plugin/agente ativo."""
@@ -773,16 +769,20 @@ class QuimeraApp:
         agent_client = getattr(self, "agent_client", None)
         if agent_client:
             agent_client._user_cancelled = False
-        self.renderer.show_system(self._build_welcome_message())
-        self.renderer.show_system(MSG_CHAT_STARTED)
-        self.renderer.show_system(
+        show_banner = getattr(self.renderer, "show_banner", self.renderer.show_system)
+        show_banner(self._build_welcome_message())
+        _show_neutral = getattr(self.renderer, "show_system_neutral", self.renderer.show_system)
+        restore_notice = getattr(self.storage, "pop_restore_notice", lambda: None)()
+        if restore_notice:
+            _show_neutral(restore_notice)
+        _show_neutral(MSG_CHAT_STARTED)
+        _show_neutral(
             MSG_SESSION_STATUS.format(
                 session_id=self.session_state["session_id"],
-                history_count=self.session_state["history_count"],
                 summary_loaded=self._format_yes_no(self.session_state["summary_loaded"]),
             )
         )
-        self.renderer.show_system(self._format_session_log_message(self.storage.get_log_file()))
+        _show_neutral(self._format_session_log_message(self.storage.get_log_file()))
         flush = getattr(self.renderer, "flush", None)
         if callable(flush):
             flush()
