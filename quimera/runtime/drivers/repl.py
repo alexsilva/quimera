@@ -17,6 +17,8 @@ from typing import Optional
 from urllib import error as urllib_error
 from urllib import request as urllib_request
 
+from ...config import ConfigManager as GlobalConfigManager, DEFAULT_USER_NAME
+from ...paths import CANDIDATE_DIRS, find_base_writable
 from ...plugins.base import OpenAIConnection
 from .openai_compat import OpenAICompatDriver
 from ..approval import AutoApprovalHandler, ConsoleApprovalHandler
@@ -85,6 +87,7 @@ def _resolve_plugin_driver(plugin) -> str:
 
 class DriverRepl:
     """Loop REPL para testar um plugin baseado em openai_compat."""
+    _PROMPT_MODE_LABEL = "execute"
 
     def __init__(
         self,
@@ -114,11 +117,42 @@ class DriverRepl:
         self.working_dir = (working_dir or Path.cwd()).resolve()
         self._last_connection_signature = None
         self._update_driver()
+        self._input_prompt = self._resolve_input_prompt()
 
         rt_config = ToolRuntimeConfig(workspace_root=self.working_dir)
         self._rt_config = rt_config
         self.tool_executor = ToolExecutor(rt_config, ConsoleApprovalHandler())
         self._auto_tool_executor = ToolExecutor(rt_config, AutoApprovalHandler(approve_all=True))
+
+    @staticmethod
+    def _build_input_prompt(user_name: str | None, mode_name: str | None = None) -> str:
+        """Formata prompt do REPL, exibindo `[mode]` apenas fora do modo default."""
+        normalized_name = str(user_name or "").strip()
+        if not normalized_name:
+            normalized_name = DEFAULT_USER_NAME
+        if normalized_name not in {">", ">>>"}:
+            normalized_name = normalized_name.rstrip(":").rstrip(">").strip() or DEFAULT_USER_NAME
+
+        normalized_mode = str(mode_name or "").strip().lower() or "default"
+        if normalized_mode == "default":
+            return f"{normalized_name}: "
+        return f"{normalized_name} [{normalized_mode}]: "
+
+    @staticmethod
+    def _load_user_name_from_config() -> str:
+        """Carrega user_name da configuração global."""
+        try:
+            base_dir = find_base_writable(CANDIDATE_DIRS)
+            return GlobalConfigManager(base_dir / "config.json").user_name
+        except Exception:
+            return DEFAULT_USER_NAME
+
+    def _resolve_input_prompt(self) -> str:
+        """Resolve o prompt do input usando a configuração global."""
+        return self._build_input_prompt(
+            self._load_user_name_from_config(),
+            self._PROMPT_MODE_LABEL,
+        )
 
     @property
     def connection(self) -> OpenAIConnection:
@@ -242,7 +276,7 @@ class DriverRepl:
 
         while True:
             try:
-                raw = input(">>> ").strip()
+                raw = input(self._input_prompt).strip()
             except (EOFError, KeyboardInterrupt):
                 print("\nSaindo.")
                 break

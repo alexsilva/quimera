@@ -39,6 +39,8 @@ class TestPromptRedraw:
         app = QuimeraApp.__new__(QuimeraApp)
         app._nonblocking_input_status = status
         app._nonblocking_prompt_text = prompt
+        app.input_gate = MagicMock()
+        app.input_gate.get_line_buffer.return_value = ""
         return app
 
     def test_no_redraw_when_status_is_idle(self):
@@ -47,9 +49,9 @@ class TestPromptRedraw:
         stdin = io.StringIO("")
         stdin.isatty = lambda: True
         with patch("sys.stdin", stdin), \
-             patch("quimera.app.core.readline.get_line_buffer", return_value="texto"), \
              patch("sys.stdout.write") as mock_write, \
              patch("sys.stdout.flush"):
+            app.input_gate.get_line_buffer.return_value = "texto"
             app._redisplay_user_prompt_if_needed()
         mock_write.assert_not_called()
 
@@ -59,9 +61,9 @@ class TestPromptRedraw:
         stdin = io.StringIO("")
         stdin.isatty = lambda: False
         with patch("sys.stdin", stdin), \
-             patch("quimera.app.core.readline.get_line_buffer", return_value="texto"), \
              patch("sys.stdout.write") as mock_write, \
              patch("sys.stdout.flush"):
+            app.input_gate.get_line_buffer.return_value = "texto"
             app._redisplay_user_prompt_if_needed()
         mock_write.assert_not_called()
 
@@ -72,9 +74,9 @@ class TestPromptRedraw:
         stdin.isatty = lambda: True
         long_buffer = "x" * 2000
         with patch("sys.stdin", stdin), \
-             patch("quimera.app.core.readline.get_line_buffer", return_value=long_buffer), \
              patch("sys.stdout.write"), \
              patch("sys.stdout.flush"):
+            app.input_gate.get_line_buffer.return_value = long_buffer
             app._redisplay_user_prompt_if_needed()  # não deve lançar
 
     def test_clear_first_false_skips_clear_but_writes_line(self):
@@ -83,10 +85,9 @@ class TestPromptRedraw:
         stdin = io.StringIO("")
         stdin.isatty = lambda: True
         with patch("sys.stdin", stdin), \
-             patch("quimera.app.core.readline.get_line_buffer", return_value="oi"), \
-             patch("quimera.app.core.readline.redisplay"), \
              patch("sys.stdout.write") as mock_write, \
              patch("sys.stdout.flush"):
+            app.input_gate.get_line_buffer.return_value = "oi"
             app._redisplay_user_prompt_if_needed(clear_first=False)
         written = [c.args[0] for c in mock_write.call_args_list]
         assert "\r\x1b[2K" not in written

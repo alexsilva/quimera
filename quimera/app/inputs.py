@@ -24,6 +24,7 @@ class AppInputServices:
 
     def read_user_input(self, prompt, timeout: int) -> str | None:
         """Lê entrada do usuário com a política de timeout configurada."""
+        # Usa input_resolver() para obter o callable de input atual (InputGate ou input).
         return read_user_input(self.app, prompt, timeout, input_fn=self.input_resolver())
 
     def read_from_editor(self):

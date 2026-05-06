@@ -1,4 +1,6 @@
 """Testes para quimera.modes e integração com ToolPolicy e parse_routing."""
+import json
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -270,7 +272,7 @@ class TestParseRoutingWithModes(unittest.TestCase):
 
 
 class TestBuildInputPrompt(unittest.TestCase):
-    """Testa _build_input_prompt: formato do prompt conforme modo ativo."""
+    """Testa _build_input_prompt: prompt visível com nome e modo."""
 
     def _make_app(self, mode_cmd=None, user_name="Você"):
         from quimera.app.core import QuimeraApp
@@ -286,7 +288,7 @@ class TestBuildInputPrompt(unittest.TestCase):
 
     def test_execute_mode_plain_prompt(self):
         app = self._make_app("/execute")
-        self.assertEqual(app._build_input_prompt(), "Você: ")
+        self.assertEqual(app._build_input_prompt(), "Você [execute]: ")
 
     def test_planning_shows_mode_label(self):
         app = self._make_app("/planning")
@@ -307,3 +309,149 @@ class TestBuildInputPrompt(unittest.TestCase):
     def test_custom_user_name(self):
         app = self._make_app("/planning", user_name="Alex")
         self.assertEqual(app._build_input_prompt(), "Alex [planning]: ")
+
+    def test_symbol_name_preserved_as_fallback(self):
+        app = self._make_app(user_name=">>>")
+        self.assertEqual(app._build_input_prompt(), ">>>: ")
+
+
+class TestInputContextAndWelcome(unittest.TestCase):
+    def test_build_input_toolbar_context_exposes_responder_model_and_cwd(self):
+        from quimera.app.core import QuimeraApp
+
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.workspace = MagicMock(cwd=Path("/tmp/quimera-project"))
+        app.active_agents = []
+        app._pending_input_for = None
+        app._resolve_active_model_label = QuimeraApp._resolve_active_model_label.__get__(app, QuimeraApp)
+        app._resolve_next_responder_label = QuimeraApp._resolve_next_responder_label.__get__(app, QuimeraApp)
+        app._build_input_toolbar_context = QuimeraApp._build_input_toolbar_context.__get__(app, QuimeraApp)
+
+        context = app._build_input_toolbar_context()
+        self.assertEqual(context["responder"], "unknown")
+        self.assertEqual(context["model"], "unknown")
+        self.assertEqual(context["cwd"], "/tmp/quimera-project")
+
+    def test_build_welcome_message_includes_version_and_project_path(self):
+        from quimera.app.core import QuimeraApp
+
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.workspace = MagicMock(cwd=Path("/tmp/projeto"))
+        app._build_welcome_message = QuimeraApp._build_welcome_message.__get__(app, QuimeraApp)
+
+        with patch.object(QuimeraApp, "_resolve_app_version", return_value="0.1.0"):
+            message = app._build_welcome_message()
+
+        self.assertIn("v0.1.0", message)
+        self.assertIn("projeto: /tmp/projeto", message)
+
+    def test_resolver_next_responder_prefers_pending_input_target(self):
+        from quimera.app.core import QuimeraApp
+
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.active_agents = ["codex", "claude"]
+        app._pending_input_for = "claude"
+        app._resolve_next_responder_label = QuimeraApp._resolve_next_responder_label.__get__(app, QuimeraApp)
+
+        self.assertEqual(app._resolve_next_responder_label(), "claude")
+
+    def test_resolve_active_model_label_extracts_model_from_cli_equals(self):
+        from quimera.app.core import QuimeraApp
+        from quimera.plugins.base import CliConnection
+
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.active_agents = ["codex"]
+
+        plugin = MagicMock()
+        plugin.name = "codex"
+        plugin.model = None
+        plugin.cmd = ["codex", "exec", "--model=codex-5", "--json"]
+        plugin.effective_connection.return_value = CliConnection(cmd=list(plugin.cmd))
+        app.get_agent_plugin = MagicMock(return_value=plugin)
+
+        app._resolve_active_model_label = QuimeraApp._resolve_active_model_label.__get__(app, QuimeraApp)
+        self.assertEqual(app._resolve_active_model_label(), "codex-5")
+
+    def test_resolve_active_model_label_extracts_model_from_cli_next_arg(self):
+        from quimera.app.core import QuimeraApp
+        from quimera.plugins.base import CliConnection
+
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.active_agents = ["opencode"]
+
+        plugin = MagicMock()
+        plugin.name = "opencode"
+        plugin.model = None
+        plugin.cmd = ["opencode", "--model", "gpt-5-mini", "run"]
+        plugin.effective_connection.return_value = CliConnection(cmd=list(plugin.cmd))
+        app.get_agent_plugin = MagicMock(return_value=plugin)
+
+        app._resolve_active_model_label = QuimeraApp._resolve_active_model_label.__get__(app, QuimeraApp)
+        self.assertEqual(app._resolve_active_model_label(), "gpt-5-mini")
+
+    def test_resolve_active_model_label_falls_back_to_plugin_name_when_cli_has_no_model(self):
+        from quimera.app.core import QuimeraApp
+        from quimera.plugins.base import CliConnection
+
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.active_agents = ["claude"]
+
+        plugin = MagicMock()
+        plugin.name = "claude"
+        plugin.model = None
+        plugin.cmd = ["claude", "--output-format=stream-json", "-p"]
+        plugin.effective_connection.return_value = CliConnection(cmd=list(plugin.cmd))
+        app.get_agent_plugin = MagicMock(return_value=plugin)
+
+        app._resolve_active_model_label = QuimeraApp._resolve_active_model_label.__get__(app, QuimeraApp)
+        plugin.resolve_runtime_model.return_value = None
+        self.assertEqual(app._resolve_active_model_label(), "claude")
+
+
+class TestCliRuntimeModelResolution(unittest.TestCase):
+    def test_codex_plugin_resolve_runtime_model_reads_codex_config(self):
+        from quimera.plugins import get
+
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            codex_dir = home / ".codex"
+            codex_dir.mkdir(parents=True, exist_ok=True)
+            (codex_dir / "config.toml").write_text(
+                'model = "gpt-5.4"\nmodel_reasoning_effort = "high"\n[projects."/tmp"]\ntrust_level = "trusted"\n',
+                encoding="utf-8",
+            )
+
+            plugin = get("codex")
+            self.assertIsNotNone(plugin)
+            with patch("quimera.plugins.codex.Path.home", return_value=home):
+                model = plugin.resolve_runtime_model(cwd="/tmp")
+
+        self.assertEqual(model, "gpt-5.4")
+
+    def test_claude_plugin_resolve_runtime_model_reads_project_last_model_usage(self):
+        from quimera.plugins import get
+
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            claude_dir = home / ".claude"
+            claude_dir.mkdir(parents=True, exist_ok=True)
+            (claude_dir / "settings.json").write_text("{}", encoding="utf-8")
+            state = {
+                "projects": {
+                    "/tmp": {
+                        "lastModelUsage": {
+                            "claude-sonnet-4-6": {
+                                "inputTokens": 1,
+                            }
+                        }
+                    }
+                }
+            }
+            (home / ".claude.json").write_text(json.dumps(state), encoding="utf-8")
+
+            plugin = get("claude")
+            self.assertIsNotNone(plugin)
+            with patch("quimera.plugins.claude.Path.home", return_value=home):
+                model = plugin.resolve_runtime_model(cwd="/tmp/projeto")
+
+        self.assertEqual(model, "claude-sonnet-4-6")

@@ -40,6 +40,31 @@ class OpenAIConnection:
 Connection = Union[CliConnection, OpenAIConnection]
 
 
+def extract_model_from_cli_cmd(cmd) -> Optional[str]:
+    """Extrai model id de argumentos CLI como --model=<id> e --model <id>."""
+    if not cmd:
+        return None
+    try:
+        args = [str(part).strip() for part in cmd if str(part).strip()]
+    except Exception:
+        return None
+
+    for idx, arg in enumerate(args):
+        if arg.startswith("--model="):
+            model = arg.split("=", 1)[1].strip()
+            if model:
+                return model
+        if arg.startswith("-m="):
+            model = arg.split("=", 1)[1].strip()
+            if model:
+                return model
+        if arg in {"--model", "-m"} and idx + 1 < len(args):
+            model = args[idx + 1].strip()
+            if model and not model.startswith("-"):
+                return model
+    return None
+
+
 def _get_connections_file() -> Path:
     """Retorna o arquivo de conexões persistidas."""
     base = find_base_writable(CANDIDATE_DIRS)
@@ -250,6 +275,11 @@ class AgentPlugin:
         if isinstance(connection, CliConnection):
             return list(connection.cmd)
         return list(self.cmd)
+
+    def resolve_runtime_model(self, *, cwd: Optional[str] = None) -> Optional[str]:
+        """Resolve modelo em runtime para CLIs; plugins podem sobrescrever."""
+        _ = cwd
+        return extract_model_from_cli_cmd(self.effective_cmd())
 
     def effective_prompt_as_arg(self) -> bool:
         """Retorna se o prompt deve ser enviado como argumento."""

@@ -660,6 +660,36 @@ def test_driver_repl_probe_backend_unavailable_raises_clear_error():
             repl.ensure_backend_available()
 
 
+def test_driver_repl_build_input_prompt_formats_user_name():
+    assert DriverRepl._build_input_prompt("Alex", "execute") == "Alex [execute]: "
+    assert DriverRepl._build_input_prompt("Alex>", "execute") == "Alex [execute]: "
+    assert DriverRepl._build_input_prompt(">>>", "execute") == ">>> [execute]: "
+
+
+def test_driver_repl_run_uses_prompt_from_config_name():
+    fake_plugin = SimpleNamespace(
+        name="ollama-qwen",
+        driver="openai_compat",
+        model="qwen3-coder:30b",
+        base_url="http://localhost:11434/v1",
+        api_key_env=None,
+    )
+    with patch("quimera.runtime.drivers.repl.OpenAICompatDriver"), \
+            patch.object(DriverRepl, "_load_user_name_from_config", return_value="Alex"):
+        repl = DriverRepl(
+            "ollama-qwen",
+            get_plugin=lambda name: fake_plugin if name == "ollama-qwen" else None,
+            all_plugins=lambda: [fake_plugin],
+        )
+
+    with patch.object(repl, "ensure_backend_available"), \
+            patch("builtins.input", side_effect=EOFError) as mock_input, \
+            patch("builtins.print"):
+        repl.run()
+
+    mock_input.assert_called_once_with("Alex [execute]: ")
+
+
 def test_run_max_hops_returns_last_text():
     """Quando o modelo não para de chamar tools, o loop encerra no MAX_TOOL_HOPS."""
     from quimera.runtime.drivers.openai_compat import MAX_TOOL_HOPS

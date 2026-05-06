@@ -107,12 +107,6 @@ class AppSessionServices:
         """Finaliza a sessão tentando resumir o histórico no contexto persistente."""
         app = self.app
         app.task_services.stop_task_executors()
-        runtime_readline = app.readline if hasattr(app, "readline") else None
-        if runtime_readline:
-            try:
-                runtime_readline.write_history_file(str(app.history_file))
-            except Exception:
-                pass
 
         if not app.history:
             return

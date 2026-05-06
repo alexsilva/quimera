@@ -1,5 +1,6 @@
 """Componentes de `quimera.plugins.codex`."""
 import json
+import re
 import shlex
 from pathlib import Path
 
@@ -10,6 +11,29 @@ from quimera.plugins.spy_utils import (
     format_command_output_preview,
     truncate_spy_text,
 )
+
+
+def _extract_model_from_codex_config(config_path: Path | None = None) -> str | None:
+    """Lê o modelo padrão do Codex em ~/.codex/config.toml."""
+    path = config_path or (Path.home() / ".codex" / "config.toml")
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return None
+
+    # O `model = "..."` relevante é o da seção global (antes do primeiro [table]).
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("["):
+            break
+        match = re.match(r'^model\s*=\s*["\']([^"\']+)["\'](?:\s+#.*)?$', line)
+        if match:
+            model = (match.group(1) or "").strip()
+            if model:
+                return model
+    return None
 
 def _truncate_text(value: str, limit: int = 160) -> str:
     return truncate_spy_text(value, limit=limit)
@@ -172,6 +196,12 @@ class CodexPlugin(AgentPlugin):
         if not prompt_as_arg:
             resumed.append("-")
         return resumed
+
+    def resolve_runtime_model(self, *, cwd: str | None = None) -> str | None:
+        cli_model = super().resolve_runtime_model(cwd=cwd)
+        if cli_model:
+            return cli_model
+        return _extract_model_from_codex_config()
 
 
 register(CodexPlugin(

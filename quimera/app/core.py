@@ -8,12 +8,8 @@ import sys
 import threading
 import time
 from collections import defaultdict
+from importlib import metadata
 from pathlib import Path
-
-try:
-    import readline
-except ImportError:
-    readline = None
 
 from .handlers import PromptAwareStderrHandler
 from .chat_round import ChatRoundOrchestrator
@@ -22,10 +18,12 @@ from .session import AppSessionServices, compute_history_hard_limit, trim_histor
 from .session_metrics import SessionMetricsService
 from .dispatch import AppDispatchServices
 from .inputs import AppInputServices
+from .prompt_input import InputGate
 from .task import AppTaskServices, create_executor
 from .system_layer import AppSystemLayer
 from .turn import TurnManager
 from .. import plugins
+from ..plugins.base import extract_model_from_cli_cmd
 from ..runtime.parser import strip_tool_block
 from ..runtime import tasks as runtime_tasks
 from ..ui import TerminalRenderer
@@ -35,7 +33,7 @@ from ..agents import AgentClient
 from ..session_summary import SessionSummarizer, build_chain_summarizer
 from ..prompt import PromptBuilder
 from ..workspace import Workspace
-from ..config import ConfigManager
+from ..config import ConfigManager, DEFAULT_USER_NAME
 from ..metrics import BehaviorMetricsTracker
 from ..constants import (
     CMD_AGENTS, CMD_ALIASES, CMD_CLEAR, CMD_CONNECT, CMD_CONTEXT, CMD_CONTEXT_EDIT, CMD_EDIT, CMD_EXIT,
@@ -85,24 +83,18 @@ class QuimeraApp:
         self.task_services = AppTaskServices(self)
         self.dispatch_services = AppDispatchServices(self)
         self.session_services = AppSessionServices(self)
-        self.readline = readline
+        self.history_file = self.workspace.history_file
+        self.input_gate = InputGate(
+            renderer=self.renderer,
+            history_file=self.history_file,
+            command_resolver=self._available_commands,
+        )
         self.input_services = AppInputServices(
             self,
-            input_resolver=lambda: input,
+            input_resolver=lambda: self.input_gate,
         )
+        self.input_gate.set_toolbar_context_resolver(self._build_input_toolbar_context)
         self.chat_round_orchestrator = ChatRoundOrchestrator(self)
-
-        # Configuração do histórico persistente (readline)
-        self.history_file = self.workspace.history_file
-        runtime_readline = readline
-        if runtime_readline:
-            if self.history_file.exists():
-                try:
-                    runtime_readline.read_history_file(str(self.history_file))
-                except Exception:
-                    pass
-            runtime_readline.set_history_length(1000)
-            self._configure_readline_completion(runtime_readline)
 
         migrated = self.workspace.migrate_from_legacy(cwd)
         for item in migrated:
@@ -297,24 +289,6 @@ class QuimeraApp:
                 active_plugins.append(plugin)
         return active_plugins
 
-    def _configure_readline_completion(self, runtime_readline) -> None:
-        """Registra autocomplete de comandos slash quando readline estiver disponível."""
-        if runtime_readline is None:
-            return
-
-        def completer(text: str, state: int) -> str | None:
-            if not text.startswith("/"):
-                return None
-            matches = [cmd for cmd in self._available_commands() if cmd.startswith(text)]
-            return matches[state] if state < len(matches) else None
-
-        try:
-            runtime_readline.set_completer_delims(" \t\n")
-            runtime_readline.set_completer(completer)
-            runtime_readline.parse_and_bind("tab: complete")
-        except Exception:
-            logger.debug("falha ao configurar autocomplete do readline", exc_info=True)
-
     def __del__(self):
         """Libera recursos associados à instância."""
         try:
@@ -399,10 +373,10 @@ class QuimeraApp:
         try:
             prompt = getattr(self, "_nonblocking_prompt_text", "")
             line_buffer = ""
-            runtime_readline = readline
-            if runtime_readline is not None:
+            input_gate = getattr(self, "input_gate", None)
+            if input_gate is not None and hasattr(input_gate, "get_line_buffer"):
                 try:
-                    line_buffer = runtime_readline.get_line_buffer()
+                    line_buffer = input_gate.get_line_buffer()
                 except Exception:
                     line_buffer = ""
             full_line = f"{prompt}{line_buffer}"
@@ -411,9 +385,9 @@ class QuimeraApp:
                     self._clear_user_prompt_line_if_needed()
                 sys.stdout.write(full_line)
                 sys.stdout.flush()
-                if runtime_readline is not None:
+                if input_gate is not None and hasattr(input_gate, "redisplay"):
                     try:
-                        runtime_readline.redisplay()
+                        input_gate.redisplay()
                     except Exception:
                         pass
         except Exception:
@@ -580,12 +554,118 @@ class QuimeraApp:
         """Fachada compatível para renderização de respostas."""
         return self.dispatch_services.print_response(agent, response)
 
+    @staticmethod
+    def _format_user_prompt(user_name: str | None, mode_name: str | None = None) -> str:
+        """Formata prompt humano, exibindo `[mode]` apenas fora do modo default."""
+        normalized_name = str(user_name or "").strip()
+        if not normalized_name:
+            normalized_name = DEFAULT_USER_NAME
+        if normalized_name not in {">", ">>>"}:
+            normalized_name = normalized_name.rstrip(":").rstrip(">").strip() or DEFAULT_USER_NAME
+
+        normalized_mode = str(mode_name or "").strip().lower() or "default"
+        if normalized_mode == "default":
+            return f"{normalized_name}: "
+        return f"{normalized_name} [{normalized_mode}]: "
+
     def _build_input_prompt(self) -> str:
-        """Retorna o texto do prompt de input conforme o modo ativo."""
-        mode = getattr(self, "execution_mode", None)
-        if mode is not None and mode.name != "execute":
-            return f"{self.user_name} [{mode.name}]: "
-        return f"{self.user_name}: "
+        """Retorna o prompt visível ao humano com nome e modo atual."""
+        active_mode = getattr(getattr(self, "execution_mode", None), "name", None)
+        return self._format_user_prompt(self.user_name, active_mode)
+
+    @staticmethod
+    def _resolve_app_version() -> str:
+        """Resolve a versão instalada do pacote, com fallback seguro."""
+        try:
+            return metadata.version("quimera")
+        except Exception:
+            return "dev"
+
+    @staticmethod
+    def _build_welcome_logo() -> str:
+        """Retorna logo ASCII simples para o banner inicial."""
+        return (
+            "  ____        _                          \n"
+            " / __ \\__  __(_)___ ___  ___  _________ _\n"
+            "/ / / / / / / / __ `__ \\/ _ \\/ ___/ __ `/\n"
+            "/ /_/ / /_/ / / / / / / /  __/ /  / /_/ / \n"
+            "\\___\\_\\__,_/_/_/ /_/ /_/\\___/_/   \\__,_/  "
+        )
+
+    def _build_welcome_message(self) -> str:
+        """Monta texto de boas-vindas com versão e path do projeto."""
+        version = self._resolve_app_version()
+        workspace = getattr(self, "workspace", None)
+        project_path = str(getattr(workspace, "cwd", Path.cwd()))
+        logo_lines = self._build_welcome_logo().split("\n")
+        logo_lines[-1] = logo_lines[-1].rstrip() + f"  v{version}"
+        return (
+            f"{chr(10).join(logo_lines)}\n"
+            f"projeto: {project_path}\n"
+        )
+
+    def _resolve_active_model_label(self) -> str:
+        """Resolve o modelo ativo a partir do primeiro plugin/agente ativo."""
+        active_agents = getattr(self, "active_agents", None) or []
+        agent_name = active_agents[0] if active_agents else None
+        if not agent_name:
+            return "unknown"
+        plugin = self.get_agent_plugin(agent_name)
+        if plugin is None:
+            return str(agent_name)
+        connection = plugin.effective_connection() if hasattr(plugin, "effective_connection") else None
+        model = getattr(connection, "model", None) if connection is not None else None
+        if model:
+            return str(model)
+
+        cmd = getattr(connection, "cmd", None) if connection is not None else None
+        if not cmd and hasattr(plugin, "effective_cmd"):
+            try:
+                cmd = plugin.effective_cmd()
+            except Exception:
+                cmd = None
+        if not cmd:
+            cmd = getattr(plugin, "cmd", None)
+
+        workspace = getattr(self, "workspace", None)
+        cwd = str(getattr(workspace, "cwd", Path.cwd()))
+        cli_model: str | None = None
+        resolver = getattr(plugin, "resolve_runtime_model", None)
+        if callable(resolver):
+            try:
+                resolved = resolver(cwd=cwd)
+            except TypeError:
+                resolved = resolver()
+            if isinstance(resolved, str):
+                normalized = resolved.strip()
+                if normalized:
+                    cli_model = normalized
+        if cli_model is None:
+            cli_model = extract_model_from_cli_cmd(cmd)
+        if isinstance(cli_model, str) and cli_model.strip():
+            return cli_model.strip()
+
+        plugin_model = getattr(plugin, "model", None)
+        return str(plugin_model) if plugin_model else str(plugin.name)
+
+    def _resolve_next_responder_label(self) -> str:
+        """Resolve o agente que deve responder na próxima rodada."""
+        pending_input_for = str(getattr(self, "_pending_input_for", "") or "").strip()
+        if pending_input_for:
+            return pending_input_for
+        active_agents = getattr(self, "active_agents", None) or []
+        if active_agents:
+            return str(active_agents[0])
+        return "unknown"
+
+    def _build_input_toolbar_context(self) -> dict[str, str]:
+        """Retorna dados de contexto exibidos na toolbar do input."""
+        workspace = getattr(self, "workspace", None)
+        return {
+            "responder": self._resolve_next_responder_label(),
+            "model": self._resolve_active_model_label(),
+            "cwd": str(getattr(workspace, "cwd", Path.cwd())),
+        }
 
     def read_user_input(self, prompt, timeout: int):
         """Fachada compatível para leitura de input."""
@@ -693,6 +773,7 @@ class QuimeraApp:
         agent_client = getattr(self, "agent_client", None)
         if agent_client:
             agent_client._user_cancelled = False
+        self.renderer.show_system(self._build_welcome_message())
         self.renderer.show_system(MSG_CHAT_STARTED)
         self.renderer.show_system(
             MSG_SESSION_STATUS.format(

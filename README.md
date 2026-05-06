@@ -40,10 +40,10 @@ cd quimera
 pip install -e .
 ```
 
-Opcional (drivers via API compatível):
+Opcional (drivers via API compatível e input interativo com histórico/completion):
 
 ```bash
-pip install -e ".[api,ollama]"
+pip install -e ".[api,ollama,interactive]"
 ```
 
 ## Execução

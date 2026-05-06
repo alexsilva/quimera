@@ -1538,7 +1538,8 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(app.renderer.events[0][0], "show_system")
         self.assertEqual(app.renderer.events[1][0], "show_system")
         self.assertEqual(app.renderer.events[2][0], "show_system")
-        self.assertEqual(app.renderer.events[3], ("flush", None))
+        self.assertEqual(app.renderer.events[3][0], "show_system")
+        self.assertEqual(app.renderer.events[4], ("flush", None))
 
     def test_run_keyboard_interrupt_renders_shutdown_with_muted_style(self):
         app = QuimeraApp.__new__(QuimeraApp)
@@ -2828,17 +2829,17 @@ class PluginTests(unittest.TestCase):
         app._deferred_system_messages = []
         app._nonblocking_input_status = "reading"
         app._nonblocking_prompt_text = "Alex: "
+        app.input_gate = Mock()
+        app.input_gate.get_line_buffer.return_value = ""
 
         stdin = io.StringIO("")
         stdin.isatty = lambda: True
 
-        with patch("sys.stdin", stdin), patch("quimera.app.core.readline.get_line_buffer", return_value=""), patch(
-                "quimera.app.core.readline.redisplay"
-        ) as mock_redisplay:
+        with patch("sys.stdin", stdin):
             app.show_system_message("[task 7] claude: iniciando")
 
         self.assertEqual(app.renderer.system_messages, [])
-        mock_redisplay.assert_not_called()
+        app.input_gate.redisplay.assert_not_called()
 
     def test_show_system_message_redraws_human_prompt_with_user_name_for_task_error_text(self):
         app = QuimeraApp.__new__(QuimeraApp)
@@ -2848,13 +2849,13 @@ class PluginTests(unittest.TestCase):
         app._deferred_system_messages = []
         app._nonblocking_input_status = "reading"
         app._nonblocking_prompt_text = "Alex: "
+        app.input_gate = Mock()
+        app.input_gate.get_line_buffer.return_value = ""
 
         stdin = io.StringIO("")
         stdin.isatty = lambda: True
 
-        with patch("sys.stdin", stdin), patch("quimera.app.core.readline.get_line_buffer", return_value=""), patch(
-                "quimera.app.core.readline.redisplay"
-        ), patch("sys.stdout.write") as mock_write, patch("sys.stdout.flush") as mock_flush:
+        with patch("sys.stdin", stdin), patch("sys.stdout.write") as mock_write, patch("sys.stdout.flush") as mock_flush:
             app.show_system_message("[task 7] claude: erro: falha de rede")
 
         self.assertIn(call("\r\x1b[2K"), mock_write.call_args_list)
@@ -2865,21 +2866,20 @@ class PluginTests(unittest.TestCase):
         app = QuimeraApp.__new__(QuimeraApp)
         app._nonblocking_input_status = "reading"
         app._nonblocking_prompt_text = "Alex: "
+        app.input_gate = Mock()
+        app.input_gate.get_line_buffer.return_value = "digitando"
 
         stdin = io.StringIO("")
         stdin.isatty = lambda: True
 
-        with patch("sys.stdin", stdin), patch("quimera.app.core.readline.get_line_buffer",
-                                              return_value="digitando"), patch(
-                "quimera.app.core.readline.redisplay"
-        ) as mock_redisplay, patch("sys.stdout.write"), patch("sys.stdout.flush"), patch(
+        with patch("sys.stdin", stdin), patch("sys.stdout.write"), patch("sys.stdout.flush"), patch(
             "quimera.app.core.time.sleep"
         ) as mock_sleep:
             for _ in range(5):
                 app._redisplay_user_prompt_if_needed()
 
         mock_sleep.assert_not_called()
-        self.assertEqual(mock_redisplay.call_count, 5)
+        self.assertEqual(app.input_gate.redisplay.call_count, 5)
 
     def test_show_system_message_defers_multiline_review_message_while_tty_reader_is_active(self):
         app = QuimeraApp.__new__(QuimeraApp)
@@ -2891,13 +2891,13 @@ class PluginTests(unittest.TestCase):
 
         renderer = Mock()
         app.renderer = renderer
+        app.input_gate = Mock()
+        app.input_gate.get_line_buffer.return_value = ""
 
         stdin = io.StringIO("")
         stdin.isatty = lambda: True
 
-        with patch("sys.stdin", stdin), patch("quimera.app.core.readline.get_line_buffer", return_value=""), patch(
-                "quimera.app.core.readline.redisplay"
-        ), patch("sys.stdout.write") as mock_write, patch("sys.stdout.flush"):
+        with patch("sys.stdin", stdin), patch("sys.stdout.write") as mock_write, patch("sys.stdout.flush"):
             app.show_system_message("[task 7] gemini:\nACEITE\nResultado validado com evidência concreta.")
 
         self.assertEqual(mock_write.call_args_list, [])
@@ -2913,6 +2913,8 @@ class PluginTests(unittest.TestCase):
         app._deferred_system_messages = []
         app._nonblocking_input_status = "reading"
         app._nonblocking_prompt_text = "Alex: "
+        app.input_gate = Mock()
+        app.input_gate.get_line_buffer.return_value = ""
 
         stdin = io.StringIO("")
         stdin.isatty = lambda: True
@@ -2922,15 +2924,13 @@ class PluginTests(unittest.TestCase):
         previous_app = prompt_handler._app
         prompt_handler.bind_app(app)
         try:
-            with patch("sys.stdin", stdin), patch("quimera.app.core.readline.get_line_buffer", return_value=""), patch(
-                    "quimera.app.core.readline.redisplay"
-            ) as mock_redisplay, patch("sys.stdout.write") as mock_write, patch("sys.stdout.flush") as mock_flush:
+            with patch("sys.stdin", stdin), patch("sys.stdout.write") as mock_write, patch("sys.stdout.flush") as mock_flush:
                 app_module.logger.info("[DISPATCH] sending to agent=%s", AGENT_CODEX)
 
             self.assertNotIn(call("\r\x1b[2K"), mock_write.call_args_list)
             self.assertNotIn(call("Alex: "), mock_write.call_args_list)
             self.assertEqual(mock_flush.call_count, 0)
-            mock_redisplay.assert_not_called()
+            app.input_gate.redisplay.assert_not_called()
         finally:
             prompt_handler.bind_app(previous_app)
 
@@ -2940,6 +2940,8 @@ class PluginTests(unittest.TestCase):
         app._deferred_system_messages = []
         app._nonblocking_input_status = "reading"
         app._nonblocking_prompt_text = "Alex: "
+        app.input_gate = Mock()
+        app.input_gate.get_line_buffer.return_value = ""
 
         stdin = io.StringIO("")
         stdin.isatty = lambda: True
@@ -2949,14 +2951,12 @@ class PluginTests(unittest.TestCase):
         previous_app = prompt_handler._app
         prompt_handler.bind_app(app)
         try:
-            with patch("sys.stdin", stdin), patch("quimera.app.core.readline.get_line_buffer", return_value=""), patch(
-                    "quimera.app.core.readline.redisplay"
-            ) as mock_redisplay, patch("sys.stdout.write") as mock_write, patch("sys.stdout.flush"):
+            with patch("sys.stdin", stdin), patch("sys.stdout.write") as mock_write, patch("sys.stdout.flush"):
                 app_module.logger.warning("[DISPATCH] retry for agent=%s", AGENT_CODEX)
 
             self.assertIn(call("\r\x1b[2K"), mock_write.call_args_list)
             self.assertIn(call("Alex: "), mock_write.call_args_list)
-            mock_redisplay.assert_called_once_with()
+            app.input_gate.redisplay.assert_called_once_with()
         finally:
             prompt_handler.bind_app(previous_app)
 
@@ -2968,13 +2968,13 @@ class PluginTests(unittest.TestCase):
         app._deferred_system_messages = []
         app._nonblocking_input_status = "reading"
         app._nonblocking_prompt_text = "Alex: "
+        app.input_gate = Mock()
+        app.input_gate.get_line_buffer.return_value = "oi"
 
         stdin = io.StringIO("")
         stdin.isatty = lambda: True
 
-        with patch("sys.stdin", stdin), patch("quimera.app.core.readline.get_line_buffer", return_value="oi"), patch(
-                "quimera.app.core.readline.redisplay"
-        ), patch("sys.stdout.write") as mock_write, patch("sys.stdout.flush"):
+        with patch("sys.stdin", stdin), patch("sys.stdout.write") as mock_write, patch("sys.stdout.flush"):
             app.show_system_message("[task 7] claude: erro: timeout")
 
         clear_calls = [call_args for call_args in mock_write.call_args_list if call_args == call("\r\x1b[2K")]
@@ -2988,20 +2988,20 @@ class PluginTests(unittest.TestCase):
         app._nonblocking_input_status = "reading"
         app._nonblocking_prompt_text = "Alex: "
         app.renderer = Mock()
+        app.input_gate = Mock()
+        app.input_gate.get_line_buffer.return_value = "oi"
 
         stdin = io.StringIO("")
         stdin.isatty = lambda: True
 
-        with patch("sys.stdin", stdin), patch("quimera.app.core.readline.get_line_buffer", return_value="oi"), patch(
-                "quimera.app.core.readline.redisplay"
-        ) as mock_redisplay, patch("sys.stdout.write") as mock_write, patch("sys.stdout.flush"):
+        with patch("sys.stdin", stdin), patch("sys.stdout.write") as mock_write, patch("sys.stdout.flush"):
             app.print_response("claude", "resposta final")
 
         app.renderer.show_message.assert_called_once_with("claude", "resposta final")
         clear_calls = [call_args for call_args in mock_write.call_args_list if call_args == call("\r\x1b[2K")]
         self.assertEqual(len(clear_calls), 1)
         self.assertIn(call("Alex: oi"), mock_write.call_args_list)
-        mock_redisplay.assert_called_once_with()
+        app.input_gate.redisplay.assert_called_once_with()
 
     def test_show_system_message_defers_task_output_while_tty_reader_is_active(self):
         app = QuimeraApp.__new__(QuimeraApp)
