@@ -87,12 +87,6 @@ Sempre mescle com o estado existente, nunca substitua completamente.
 <!-- ENDIF:route_agents -->
 </rules>
 
-<!-- IF:request -->
-<current_turn title="Pedido atual de {user_name}">
-{request}
-</current_turn>
-<!-- ENDIF:request -->
-
 <!-- IF:shared_state_json -->
 <shared_state title="Estado compartilhado">
 {shared_state_json}
@@ -165,6 +159,12 @@ CHAIN:
 {recent_conversation}
 </recent_conversation>
 <!-- ENDIF:recent_conversation -->
+
+<!-- IF:request -->
+<current_turn title="Pedido atual de {user_name}">
+{request}
+</current_turn>
+<!-- ENDIF:request -->
 
 <!-- IF:metrics -->
 <agent_metrics title="Suas métricas (apenas referência)">
