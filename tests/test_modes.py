@@ -288,7 +288,7 @@ class TestBuildInputPrompt(unittest.TestCase):
 
     def test_execute_mode_plain_prompt(self):
         app = self._make_app("/execute")
-        self.assertEqual(app._build_input_prompt(), "Você [execute]: ")
+        self.assertEqual(app._build_input_prompt(), "Você: ")
 
     def test_planning_shows_mode_label(self):
         app = self._make_app("/planning")

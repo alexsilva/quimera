@@ -733,9 +733,10 @@ def test_driver_repl_probe_backend_unavailable_raises_clear_error():
 
 
 def test_driver_repl_build_input_prompt_formats_user_name():
-    assert DriverRepl._build_input_prompt("Alex", "execute") == "Alex [execute]: "
-    assert DriverRepl._build_input_prompt("Alex>", "execute") == "Alex [execute]: "
-    assert DriverRepl._build_input_prompt(">>>", "execute") == ">>> [execute]: "
+    assert DriverRepl._build_input_prompt("Alex", "execute") == "Alex: "
+    assert DriverRepl._build_input_prompt("Alex>", "execute") == "Alex: "
+    assert DriverRepl._build_input_prompt(">>>", "execute") == ">>>: "
+    assert DriverRepl._build_input_prompt("Alex", "review") == "Alex [review]: "
 
 
 def test_driver_repl_run_uses_prompt_from_config_name():
@@ -759,7 +760,7 @@ def test_driver_repl_run_uses_prompt_from_config_name():
             patch("builtins.print"):
         repl.run()
 
-    mock_input.assert_called_once_with("Alex [execute]: ")
+    mock_input.assert_called_once_with("Alex: ")
 
 
 def test_run_max_hops_returns_last_text():

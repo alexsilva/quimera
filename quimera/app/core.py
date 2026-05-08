@@ -592,7 +592,7 @@ class QuimeraApp:
             normalized_name = normalized_name.rstrip(":").rstrip(">").strip() or DEFAULT_USER_NAME
 
         normalized_mode = str(mode_name or "").strip().lower() or "default"
-        if normalized_mode == "default":
+        if normalized_mode in {"default", "execute"}:
             return f"{normalized_name}: "
         return f"{normalized_name} [{normalized_mode}]: "
 
