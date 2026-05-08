@@ -575,7 +575,7 @@ class AgentClient:
                 def _run_driver():
                     try:
                         def _on_tool_call(name, args):
-                            """Exibe preview OpenAI no terminal para ferramentas sem approval."""
+                            """Exibe preview no terminal para todas as tool calls."""
                             if effective_tool_executor is not None:
                                 policy = getattr(effective_tool_executor, "policy", None)
                                 if policy is not None:
@@ -589,14 +589,6 @@ class AgentClient:
                                         pass  # preview é best-effort
 
                         # Registra preview para ferramentas executadas pelo executor
-                        # (não apenas as chamadas pelo driver, mas também as que o runtime
-                        # invoca diretamente, ex: web_search, web_fetch, run_shell etc.)
-                        set_preview_cb = getattr(effective_tool_executor, "set_tool_preview_callback", None)
-                        if callable(set_preview_cb) and effective_tool_executor is not None:
-                            set_preview_cb(lambda name, args: self.renderer.show_system_neutral(
-                                f"[preview/executor] {json.dumps({name: args}, ensure_ascii=False)}"
-                            ))
-
                         result_holder["result"] = driver_instance.run(
                             prompt=prompt,
                             tool_executor=effective_tool_executor,
