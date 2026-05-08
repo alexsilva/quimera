@@ -15,7 +15,7 @@ from ..config import ToolRuntimeConfig
 from ..models import ToolCall, ToolResult
 
 
-_MAX_CHUNK_CHARS = 50_000  # limite de caracteres por stream (stdout/stderr)
+_MAX_CHUNK_CHARS = 250_000  # limite de caracteres por stream (stdout/stderr)
 _MAX_SESSIONS = 64  # limite de sessões simultâneas
 
 

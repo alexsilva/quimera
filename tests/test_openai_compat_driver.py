@@ -12,6 +12,7 @@ import pytest
 
 from quimera.runtime.drivers.openai_compat import (
     _MAX_TOOL_LOOP_MESSAGES,
+    _MAX_TOOL_RESULT_CHARS,
     MAX_TOOL_HOPS_BY_RELIABILITY,
     OpenAICompatDriver,
     _build_tool_budget_prompt,
@@ -204,7 +205,7 @@ def test_prune_tool_loop_messages_keeps_head_and_recent_tail():
         {"role": "user", "content": "user"},
     ] + [
         {"role": "tool" if i % 2 else "assistant", "content": f"m{i}"}
-        for i in range(20)
+        for i in range(_MAX_TOOL_LOOP_MESSAGES + 6)
     ]
 
     pruned = _prune_tool_loop_messages(messages)
@@ -245,18 +246,19 @@ def test_prune_tool_loop_messages_preserves_assistant_for_multi_tool_results():
 
 
 def test_prune_tool_loop_messages_caps_oversized_final_tool_segment():
+    total_calls = _MAX_TOOL_LOOP_MESSAGES
     messages = [
         {"role": "system", "content": "sys"},
         {"role": "user", "content": "user"},
         {
             "role": "assistant",
             "content": "",
-            "tool_calls": [{"id": f"call_{i}"} for i in range(20)],
+            "tool_calls": [{"id": f"call_{i}"} for i in range(total_calls)],
         },
     ]
     messages.extend(
         {"role": "tool", "tool_call_id": f"call_{i}", "content": '{"ok": true}'}
-        for i in range(20)
+        for i in range(total_calls)
     )
 
     pruned = _prune_tool_loop_messages(messages)
@@ -266,7 +268,9 @@ def test_prune_tool_loop_messages_caps_oversized_final_tool_segment():
     assert pruned[2]["role"] == "assistant"
 
     retained_tool_ids = [msg["tool_call_id"] for msg in pruned[3:]]
-    assert retained_tool_ids == [f"call_{i}" for i in range(7, 20)]
+    expected_kept_count = _MAX_TOOL_LOOP_MESSAGES - 3
+    expected_start = total_calls - expected_kept_count
+    assert retained_tool_ids == [f"call_{i}" for i in range(expected_start, total_calls)]
     assert [call["id"] for call in pruned[2]["tool_calls"]] == retained_tool_ids
 
 
@@ -606,6 +610,7 @@ def test_run_tool_loop_updates_remaining_budget_each_hop():
 
 def test_run_tool_loop_uses_minimal_prompt_payload_and_valid_json():
     driver, mock_client = _make_driver()
+    oversized_len = _MAX_TOOL_RESULT_CHARS + 1000
 
     tc_id = "call_minimal"
     tc = _make_tool_call(tc_id, "run_shell", '{"command":"ls"}')
@@ -619,8 +624,8 @@ def test_run_tool_loop_uses_minimal_prompt_payload_and_valid_json():
     mock_executor.execute.return_value = ToolResult(
         ok=False,
         tool_name="run_shell",
-        content="x" * 6000,
-        error="y" * 6000,
+        content="x" * oversized_len,
+        error="y" * oversized_len,
         exit_code=9,
         duration_ms=12,
         data={"cwd": "/tmp/workspace"},
@@ -638,8 +643,8 @@ def test_run_tool_loop_uses_minimal_prompt_payload_and_valid_json():
     assert payload["hint"] is None
     assert payload["exit_code"] == 9
     assert payload["truncated"] is True
-    assert "resultado com 6000 caracteres" in payload["content"]
-    assert "resultado com 6000 caracteres" in payload["error"]
+    assert f"resultado com {oversized_len} caracteres" in payload["content"]
+    assert f"resultado com {oversized_len} caracteres" in payload["error"]
 
 
 def test_run_tool_loop_prunes_messages_between_hops():

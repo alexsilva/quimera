@@ -34,8 +34,8 @@ _THINK_RE = re.compile(r"<think(?:ing)?>.*?</think(?:ing)?>", re.DOTALL)
 _FUNCTION_RESIDUE_RE = re.compile(r"</?(?:function|tool_call)\b[^>]*>")
 
 # Trunca tool results para evitar explosão de memória no array messages.
-_MAX_TOOL_RESULT_CHARS = 4000
-_MAX_TOOL_LOOP_MESSAGES = 16
+_MAX_TOOL_RESULT_CHARS = 32_000
+_MAX_TOOL_LOOP_MESSAGES = 24
 
 
 # Formato XML de text-tool-calls que alguns modelos emitem quando a API não suporta tool_calls:
