@@ -229,11 +229,11 @@ class PreApprovalHandler(ApprovalHandler):
         """Aprova automaticamente se pré-aprovado ou em modo approve-all, senão delega ao handler base."""
         with self._lock:
             if self._approve_all:
-                print(f"  [approve-all] {tool_name}")
+                print(f"  [approve-all] {tool_name} :: {summary}")
                 return True
             if self._pre_approved:
                 self._pre_approved = False
-                print(f"  [pré-aprovado] {tool_name}")
+                print(f"  [pré-aprovado] {tool_name} :: {summary}")
                 return True
         return self._base.approve(tool_name=tool_name, summary=summary)
 
