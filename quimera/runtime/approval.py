@@ -196,6 +196,7 @@ class PreApprovalHandler(ApprovalHandler):
     def __init__(self, base_handler: ApprovalHandler) -> None:
         """Inicializa com um handler base para fallback."""
         self._base = base_handler
+        self._renderer = getattr(base_handler, "_renderer", None)
         self._pre_approved = False
         self._approve_all = False
         self._approve_all_permanent = False
@@ -229,11 +230,17 @@ class PreApprovalHandler(ApprovalHandler):
         """Aprova automaticamente se pré-aprovado ou em modo approve-all, senão delega ao handler base."""
         with self._lock:
             if self._approve_all:
-                print(f"  [approve-all] {tool_name} :: {summary}")
+                if self._renderer is not None:
+                    self._renderer.show_system(f"  [approve-all] {tool_name} :: {summary}")
+                else:
+                    print(f"  [approve-all] {tool_name} :: {summary}")
                 return True
             if self._pre_approved:
                 self._pre_approved = False
-                print(f"  [pré-aprovado] {tool_name} :: {summary}")
+                if self._renderer is not None:
+                    self._renderer.show_system(f"  [pré-aprovado] {tool_name} :: {summary}")
+                else:
+                    print(f"  [pré-aprovado] {tool_name} :: {summary}")
                 return True
         return self._base.approve(tool_name=tool_name, summary=summary)
 
