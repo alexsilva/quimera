@@ -135,7 +135,6 @@ class WebTool:
                 text = html
             else:
                 text = self._strip_html(html)
-                text = text[:5000]
 
             return ToolResult(
                 ok=True,
