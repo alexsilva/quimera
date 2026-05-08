@@ -327,6 +327,44 @@ TOOL_SCHEMAS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": "Pesquisa na internet usando DuckDuckGo Lite. Retorna uma lista de resultados (título, URL, trecho).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Termo de busca na internet.",
+                    },
+                    "num_results": {
+                        "type": "integer",
+                        "description": "Número máximo de resultados a retornar (padrão: 5).",
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "web_fetch",
+            "description": "Faz uma requisição HTTP GET a uma URL e extrai o conteúdo textual. Útil para ler páginas web retornadas por web_search.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "URL completa (incluindo https://) da página a ser lida.",
+                    },
+                },
+                "required": ["url"],
+            },
+        },
+    },
 ]
 
 _TASK_TOOL_NAMES = {"list_tasks", "list_jobs", "get_job"}

@@ -64,12 +64,12 @@ def test_final_prompt_contract_has_sections_once_in_order_and_without_duplicatio
         '<header title="Identificação">',
         '<session_state title="Estado da sessão">',
         '<rules title="Suas regras">',
-        '<current_turn title="Pedido atual de ALEX">',
         '<shared_state title="Estado compartilhado">',
         '<handoff title="Mensagem direta do outro agente">',
         '<recent_agent_messages title="Mensagens recentes de outros agentes (referência auxiliar — não canônico sem evidência)">',
         '<persistent_context title="Contexto persistente do workspace">',
         '<recent_conversation title="Conversa recente">',
+        '<current_turn title="Pedido atual de ALEX">',
     ]
 
     last_position = -1

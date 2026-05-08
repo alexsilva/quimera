@@ -415,6 +415,17 @@ class ShellTool:
             time.sleep(min(0.01, remaining))
 
         stdout, stderr = self._drain_session_output(session)
+
+        # Se não capturamos nada e o processo ainda está rodando, espera um
+        # pouco mais para dar chance à thread leitora (importante em ambientes
+        # com maior latência de subprocesso como PyCharm).
+        if not wait_for_completion and not stdout and not stderr and session.process.poll() is None:
+            extra_deadline = time.perf_counter() + 0.2
+            while session.process.poll() is None and time.perf_counter() < extra_deadline:
+                if self._has_unread_output(session):
+                    break
+                time.sleep(0.005)
+            stdout, stderr = self._drain_session_output(session)
         duration_ms = int((time.perf_counter() - session.started_at) * 1000)
         returncode = session.process.poll()
         if returncode is None and (stdout or stderr):

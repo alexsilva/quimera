@@ -9,6 +9,7 @@ from .registry import ToolRegistry
 from .tools.files import FileTools
 from .tools.patch import PatchTool
 from .tools.shell import ShellTool
+from .tools.web import WebTool
 from .tools.tasks import TaskTools
 
 
@@ -17,7 +18,6 @@ class ToolExecutor:
 
     _ALIASES = {
         "run": "run_shell",
-        "run_shell_command": "run_shell",
         "execute_command": "exec_command",
     }
 
@@ -40,6 +40,7 @@ class ToolExecutor:
         file_tools = FileTools(self.config)
         patch_tool = PatchTool(self.config)
         shell_tool = ShellTool(self.config)
+        web_tool = WebTool(self.config)
         task_tools = TaskTools(self.config)
         self.registry.register("list_files", file_tools.list_files)
         self.registry.register("read_file", file_tools.read_file)
@@ -53,6 +54,8 @@ class ToolExecutor:
         self.registry.register("close_command_session", shell_tool.close_command_session)
         # Task-related read-only tools
         self.registry.register("list_tasks", task_tools.list_tasks)
+        self.registry.register("web_search", web_tool.web_search)
+        self.registry.register("web_fetch", web_tool.web_fetch)
         self.registry.register("list_jobs", task_tools.list_jobs)
         self.registry.register("get_job", task_tools.get_job)
 

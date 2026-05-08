@@ -128,6 +128,18 @@ class ToolPolicy:
                 "remove_file requer dry_run=False explícito para confirmar a remoção"
             )
 
+    def _validate_web_search(self, call: ToolCall) -> None:
+        """Valida uma chamada de busca na web."""
+        query = call.arguments.get("query", "")
+        if not query or not str(query).strip():
+            raise ToolPolicyError("web_search requer 'query' não vazia")
+
+    def _validate_web_fetch(self, call: ToolCall) -> None:
+        """Valida uma chamada de fetch de URL."""
+        url = call.arguments.get("url", "")
+        if not url or not str(url).strip():
+            raise ToolPolicyError("web_fetch requer 'url' não vazia")
+
     def _validate_propose_task(self, call: ToolCall) -> None:
         """Executa validate propose task."""
         raise ToolPolicyError("propose_task foi desativada; crie tasks apenas com o comando /task do humano")

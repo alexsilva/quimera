@@ -1,0 +1,250 @@
+"""Componentes de `quimera.runtime.tools.web`."""
+from __future__ import annotations
+
+import json
+import logging
+import subprocess
+import tempfile
+import time
+import urllib.parse
+from pathlib import Path
+
+from ..config import ToolRuntimeConfig
+from ..models import ToolCall, ToolResult
+
+_logger = logging.getLogger(__name__)
+
+
+class WebTool:
+    """Implementa `WebTool` — busca na web usando curl."""
+
+    def __init__(self, config: ToolRuntimeConfig) -> None:
+        """Inicializa uma instância de WebTool."""
+        self.config = config
+        # Limite de downloads em uma mesma chamada
+        self._MAX_URLS = 5
+        self._DUCKDUCKGO_LITE = "https://lite.duckduckgo.com/lite/"
+        self._DUCKDUCKGO_API = "https://api.duckduckgo.com/"
+
+    def _resolve_url(self, raw: str) -> str:
+        """Normaliza a URL."""
+        raw = raw.strip()
+        if not raw:
+            raise ValueError("URL vazia")
+        if not raw.startswith(("http://", "https://")):
+            raw = "https://" + raw
+        return raw
+
+    def web_search(self, call: ToolCall) -> ToolResult:
+        """Executa uma busca na web usando curl.
+
+        Argumentos:
+            query (str): Termo de busca.
+            count (int, opcional): Número de resultados (padrão 5, máx 10).
+
+        Usa duckduckgo HTML (lite) para obter resultados.
+        """
+        query = call.arguments.get("query", "")
+        count = min(int(call.arguments.get("count", 5)), 10)
+
+        if not query.strip():
+            return ToolResult(
+                ok=False,
+                tool_name=call.name,
+                error="Parâmetro 'query' é obrigatório.",
+            )
+
+        url = f"{self._DUCKDUCKGO_LITE}?{urllib.parse.urlencode({'q': query})}"
+
+        try:
+            result = self._curl(url, timeout=15)
+
+            links = self._parse_duckduckgo_links(result, count)
+
+            if not links:
+                # fallback: tenta o formato json
+                url_json = f"{self._DUCKDUCKGO_API}?{urllib.parse.urlencode({'q': query, 'format': 'json'})}"
+                result_json = self._curl(url_json, timeout=10)
+                if result_json and result_json.strip():
+                    data = json.loads(result_json)
+                    abstract = data.get("AbstractText", "")
+                    source = data.get("AbstractSource", "")
+                    link = data.get("AbstractURL", "")
+
+                    if abstract:
+                        links.append({
+                            "title": source or abstract[:50],
+                            "url": link,
+                            "snippet": abstract,
+                        })
+
+            return ToolResult(
+                ok=True,
+                tool_name=call.name,
+                data={"results": links, "total": len(links)},
+            )
+
+        except Exception as exc:
+            _logger.exception("Falha na busca web.")
+            return ToolResult(
+                ok=False,
+                tool_name=call.name,
+                error=f"Falha na busca web: {exc}",
+            )
+
+    def web_fetch(self, call: ToolCall) -> ToolResult:
+        """Faz download do conteúdo de uma ou mais URLs.
+
+        Argumentos:
+            urls (str | list[str]): URL(s) para baixar.
+            raw (bool, opcional): Se True, retorna HTML puro. Padrão False (extrai texto).
+            timeout (int, opcional): Timeout em segundos. Padrão 30.
+        """
+        raw_urls = call.arguments.get("urls", "")
+        raw_mode = bool(call.arguments.get("raw", False))
+        timeout = int(call.arguments.get("timeout", 30))
+
+        if isinstance(raw_urls, str):
+            raw_urls = [raw_urls]
+        # Remove strings vazias
+        raw_urls = [u for u in raw_urls if u.strip()]
+        raw_urls = raw_urls[: self._MAX_URLS]
+
+        if not raw_urls:
+            return ToolResult(
+                ok=False,
+                tool_name=call.name,
+                error="Nenhuma URL fornecida.",
+            )
+
+        results = []
+        for raw_url in raw_urls:
+            try:
+                url = self._resolve_url(raw_url)
+                html = self._curl(url, timeout=timeout)
+
+                if raw_mode:
+                    text = html
+                else:
+                    text = self._strip_html(html)
+                    text = text[:5000]
+
+                results.append({
+                    "url": url,
+                    "content": text,
+                    "length": len(text),
+                })
+            except Exception as exc:
+                _logger.exception("Falha ao baixar URL: %s", raw_url)
+                results.append({
+                    "url": raw_url,
+                    "error": str(exc),
+                })
+
+        return ToolResult(
+            ok=True,
+            tool_name=call.name,
+            data={"results": results, "total": len(results)},
+        )
+
+    def _curl(self, url: str, timeout: int = 30) -> str:
+        """Executa curl e retorna o corpo da resposta."""
+        args = [
+            "curl",
+            "-s",
+            "-L",
+            "-m",
+            str(timeout),
+            "-A",
+            "Mozilla/5.0 (X11; Linux x86_64; rv:120.0) Gecko/20100101 Firefox/120.0",
+            url,
+        ]
+        try:
+            result = subprocess.run(
+                args,
+                capture_output=True,
+                text=True,
+                timeout=timeout + 5,
+            )
+            return result.stdout
+        except subprocess.TimeoutExpired:
+            raise TimeoutError(f"curl excedeu o tempo limite de {timeout}s.")
+
+    def _write_and_curl(self, url: str, payload: str, content_type: str = "application/json", timeout: int = 30) -> str:
+        """Escreve payload em um arquivo temporário e faz POST via curl.
+
+        Usa o padrão de arquivo temporário para evitar expor dados no cmdline.
+        """
+        tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".payload", delete=False)
+        try:
+            tmp.write(payload)
+            tmp.close()
+            args = [
+                "curl",
+                "-s",
+                "-L",
+                "-m",
+                str(timeout),
+                "-X", "POST",
+                "-H", f"Content-Type: {content_type}",
+                "-d", f"@{tmp.name}",
+                "-A",
+                "Mozilla/5.0 (X11; Linux x86_64; rv:120.0) Gecko/20100101 Firefox/120.0",
+                url,
+            ]
+            result = subprocess.run(
+                args,
+                capture_output=True,
+                text=True,
+                timeout=timeout + 5,
+            )
+            return result.stdout
+        except subprocess.TimeoutExpired:
+            raise TimeoutError(f"curl excedeu o tempo limite de {timeout}s.")
+        finally:
+            Path(tmp.name).unlink(missing_ok=True)
+
+    @staticmethod
+    def _parse_duckduckgo_links(html: str, count: int) -> list[dict]:
+        """Extrai links e snippets do HTML do DuckDuckGo Lite."""
+        import re
+
+        links: list[dict] = []
+
+        href_pattern = re.compile(
+            r'<a(?=[^>]*class="result-link")[^>]*href="(https?://[^"]+)"[^>]*>(.*?)</a>',
+            re.DOTALL,
+        )
+        snippet_pattern = re.compile(
+            r'<td[^>]*class="result-snippet">(.*?)</td>',
+            re.DOTALL,
+        )
+
+        hrefs = href_pattern.findall(html)
+        snippets = snippet_pattern.findall(html)
+
+        for i, (url, title) in enumerate(hrefs):
+            if i >= count:
+                break
+            snippet = ""
+            if i < len(snippets):
+                snippet = re.sub(r"<[^>]+>", "", snippets[i]).strip()
+            title_clean = re.sub(r"<[^>]+>", "", title).strip()
+            links.append({
+                "title": title_clean or url,
+                "url": url,
+                "snippet": snippet,
+            })
+
+        return links
+
+    @staticmethod
+    def _strip_html(html: str) -> str:
+        """Remove tags HTML e normaliza espaços."""
+        import re
+
+        text = re.sub(r"<script[^>]*>.*?</script>", "", html, flags=re.DOTALL)
+        text = re.sub(r"<style[^>]*>.*?</style>", "", text, flags=re.DOTALL)
+        text = re.sub(r"<[^>]+>", " ", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        return text
