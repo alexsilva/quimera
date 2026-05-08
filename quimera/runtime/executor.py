@@ -11,6 +11,7 @@ from .tools.patch import PatchTool
 from .tools.shell import ShellTool
 from .tools.web import WebTool
 from .tools.tasks import TaskTools
+from .approve_summary import ApproveSummary
 
 
 class ToolExecutor:
@@ -102,7 +103,7 @@ class ToolExecutor:
                     summary=(
                         f"Permissão necessária para acessar: {permission_error.resolved_path}"
                         if has_permission_issue
-                        else str(normalized_call.arguments)
+                        else ApproveSummary.build(normalized_call.name, normalized_call.arguments)
                     ),
                 )
                 if not approved:
