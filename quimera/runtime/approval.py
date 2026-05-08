@@ -4,7 +4,35 @@ from __future__ import annotations
 import select
 import threading
 import sys
+import inspect
 from abc import ABC, abstractmethod
+
+
+def _emit_system_message(renderer, message: str) -> None:
+    """Emite mensagem de sistema e força flush quando houver renderer."""
+    if renderer is not None:
+        renderer.show_system(message)
+        flush = getattr(renderer, "flush", None)
+        if callable(flush):
+            try:
+                flush()
+            except Exception:
+                pass
+        return
+    print(message)
+
+
+def _extract_renderer(base_handler) -> object | None:
+    """Extrai renderer real sem materializar atributos dinâmicos de mocks."""
+    try:
+        inspect.getattr_static(base_handler, "_renderer")
+    except AttributeError:
+        return None
+    try:
+        return getattr(base_handler, "_renderer", None)
+    except Exception:
+        return None
+
 
 class ApprovalHandler(ABC):
     """Define o contrato de aprovação usado pelo runtime de ferramentas."""
@@ -99,11 +127,7 @@ class ConsoleApprovalHandler(ApprovalHandler):
         return answer in {"y", "yes", "s", "sim"}
 
     def _show(self, message: str) -> None:
-        renderer = self._renderer
-        if renderer is not None:
-            renderer.show_system(message)
-        else:
-            print(message)
+        _emit_system_message(self._renderer, message)
 
 
 class AutoApprovalHandler(ApprovalHandler):
@@ -128,26 +152,30 @@ class NonBlockingConsoleApprovalHandler(ApprovalHandler):
     Qualquer outra entrada ou timeout resulta em negação automática.
     """
 
-    def __init__(self, timeout_seconds: float = 5.0) -> None:
+    def __init__(self, timeout_seconds: float = 5.0, renderer=None) -> None:
         """Inicializa com timeout configurável (padrão: 5 segundos)."""
         self._timeout = timeout_seconds
+        self._renderer = renderer
 
     def approve(self, *, tool_name: str, summary: str) -> bool:
         """Exibe prompt e aguarda resposta não-bloqueante do usuário."""
-        print(f"\n[aprovação] {tool_name}")
-        print(f"  {summary}")
-        print(f"  Digite 'y' em até {self._timeout:.0f}s para aprovar, ou qualquer tecla para negar...")
+        _emit_system_message(self._renderer, f"\n[aprovação] {tool_name}")
+        _emit_system_message(self._renderer, f"  {summary}")
+        _emit_system_message(
+            self._renderer,
+            f"  Digite 'y' em até {self._timeout:.0f}s para aprovar, ou qualquer tecla para negar...",
+        )
 
-        answer = self._read_with_timeout(self._timeout)
+        answer = self._read_with_timeout(self._timeout, show_prompt=self._renderer is None)
         if answer is None:
-            print("  [aprovação] timeout — negando automaticamente")
+            _emit_system_message(self._renderer, "  [aprovação] timeout — negando automaticamente")
             return False
         approved = answer.strip().lower() in {"y", "yes", "s", "sim"}
         status = "aprovado" if approved else "negado"
-        print(f"  [aprovação] {status}")
+        _emit_system_message(self._renderer, f"  [aprovação] {status}")
         return approved
 
-    def _read_with_timeout(self, timeout: float) -> str | None:
+    def _read_with_timeout(self, timeout: float, *, show_prompt: bool = True) -> str | None:
         """Lê uma linha do stdin com timeout via select. Retorna None no timeout."""
         try:
             stdin = sys.stdin
@@ -156,8 +184,9 @@ class NonBlockingConsoleApprovalHandler(ApprovalHandler):
             # Drena qualquer input pendente antes de esperar
             self._drain_stdin()
             # Exibe o prompt
-            sys.stdout.write("  > ")
-            sys.stdout.flush()
+            if show_prompt:
+                sys.stdout.write("  > ")
+                sys.stdout.flush()
             # Aguarda input com timeout
             ready, _, _ = select.select([stdin], [], [], timeout)
             if not ready:
@@ -196,7 +225,7 @@ class PreApprovalHandler(ApprovalHandler):
     def __init__(self, base_handler: ApprovalHandler) -> None:
         """Inicializa com um handler base para fallback."""
         self._base = base_handler
-        self._renderer = getattr(base_handler, "_renderer", None)
+        self._renderer = _extract_renderer(base_handler)
         self._pre_approved = False
         self._approve_all = False
         self._approve_all_permanent = False
@@ -230,17 +259,11 @@ class PreApprovalHandler(ApprovalHandler):
         """Aprova automaticamente se pré-aprovado ou em modo approve-all, senão delega ao handler base."""
         with self._lock:
             if self._approve_all:
-                if self._renderer is not None:
-                    self._renderer.show_system(f"  [approve-all] {tool_name} :: {summary}")
-                else:
-                    print(f"  [approve-all] {tool_name} :: {summary}")
+                _emit_system_message(self._renderer, f"  [approve-all] {tool_name} :: {summary}")
                 return True
             if self._pre_approved:
                 self._pre_approved = False
-                if self._renderer is not None:
-                    self._renderer.show_system(f"  [pré-aprovado] {tool_name} :: {summary}")
-                else:
-                    print(f"  [pré-aprovado] {tool_name} :: {summary}")
+                _emit_system_message(self._renderer, f"  [pré-aprovado] {tool_name} :: {summary}")
                 return True
         return self._base.approve(tool_name=tool_name, summary=summary)
 

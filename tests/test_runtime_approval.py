@@ -272,6 +272,30 @@ def test_console_approval_handler_with_renderer():
     assert "[aprovação]" in renderer.calls[0]
 
 
+def test_console_approval_handler_renderer_flushes_before_input():
+    """Com renderer, flush é chamado antes de solicitar input."""
+    class FakeRenderer:
+        def __init__(self):
+            self.calls = []
+
+        def show_system(self, msg):
+            self.calls.append(("show", msg))
+
+        def flush(self):
+            self.calls.append(("flush", None))
+
+    renderer = FakeRenderer()
+    order = []
+    handler = ConsoleApprovalHandler(
+        input_fn=lambda _: order.append("input") or "y",
+        renderer=renderer,
+    )
+    result = handler.approve(tool_name="shell", summary="ls")
+    assert result is True
+    assert renderer.calls[:2] == [("show", "\n[aprovação] shell :: ls"), ("flush", None)]
+    assert order == ["input"]
+
+
 def test_console_approval_handler_renderer_shows_eof_message():
     """Com renderer, mensagem de EOF também usa show_system."""
     class FakeRenderer:
@@ -457,6 +481,39 @@ def test_pre_approval_handler_delegates_to_base_on_deny(mock_print):
     base.approve.assert_called_once_with(tool_name="shell", summary="ls")
 
 
+def test_pre_approval_handler_uses_renderer_property():
+    """PreApprovalHandler detecta _renderer definido como property."""
+    class FakeRenderer:
+        def __init__(self):
+            self.calls = []
+
+        def show_system(self, message):
+            self.calls.append(message)
+
+    class BaseWithRendererProperty(ApprovalHandler):
+        def __init__(self, renderer):
+            self._renderer_ref = renderer
+
+        @property
+        def _renderer(self):
+            return self._renderer_ref
+
+        def approve(self, *, tool_name: str, summary: str) -> bool:
+            return False
+
+    renderer = FakeRenderer()
+    pre = PreApprovalHandler(BaseWithRendererProperty(renderer))
+    pre.pre_approve()
+
+    with patch("builtins.print") as mock_print:
+        result = pre.approve(tool_name="shell", summary="ls")
+
+    assert result is True
+    assert renderer.calls
+    assert any("pré-aprovado" in msg for msg in renderer.calls)
+    mock_print.assert_not_called()
+
+
 # ── NonBlockingConsoleApprovalHandler ───────────────────────
 
 
@@ -498,6 +555,44 @@ def test_nonblocking_console_approval_accepts_s(mock_print):
     handler = NonBlockingConsoleApprovalHandler(timeout_seconds=5.0)
     with patch.object(handler, '_read_with_timeout', return_value="s"):
         assert handler.approve(tool_name="shell", summary="ls") is True
+
+
+def test_nonblocking_console_approval_with_renderer_uses_show_system():
+    """Com renderer, NonBlocking usa show_system em vez de print."""
+    class FakeRenderer:
+        def __init__(self):
+            self.calls = []
+
+        def show_system(self, msg):
+            self.calls.append(msg)
+
+        def flush(self):
+            pass
+
+    renderer = FakeRenderer()
+    handler = NonBlockingConsoleApprovalHandler(timeout_seconds=5.0, renderer=renderer)
+    with patch.object(handler, '_read_with_timeout', return_value="y"):
+        with patch('builtins.print') as mock_print:
+            result = handler.approve(tool_name="shell", summary="ls")
+    assert result is True
+    assert renderer.calls
+    assert any("[aprovação] shell" in msg for msg in renderer.calls)
+    mock_print.assert_not_called()
+
+
+def test_nonblocking_console_approval_renderer_disables_stdout_prompt():
+    """Com renderer, approve() chama _read_with_timeout sem prompt em stdout."""
+    class FakeRenderer:
+        def show_system(self, _msg):
+            pass
+
+        def flush(self):
+            pass
+
+    handler = NonBlockingConsoleApprovalHandler(timeout_seconds=5.0, renderer=FakeRenderer())
+    with patch.object(handler, "_read_with_timeout", return_value="y") as mock_read:
+        handler.approve(tool_name="shell", summary="ls")
+    mock_read.assert_called_once_with(5.0, show_prompt=False)
 
 
 @patch('builtins.print')
@@ -677,4 +772,3 @@ def test_console_approval_handler_renderer_with_spinner_callbacks():
     mock_print.assert_not_called()
     # Ordem correta
     assert order == ["suspend_spinner", "input", "resume_spinner"]
-

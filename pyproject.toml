@@ -22,3 +22,4 @@ quimera = "quimera.cli:main"
 filterwarnings = [
     "ignore::UserWarning:rich",
 ]
+norecursedirs = ["tmp"]
