@@ -95,9 +95,18 @@ class WebTool:
                             "snippet": abstract,
                         })
 
+            lines = []
+            for r in links:
+                lines.append(f"[{r['title']}]({r['url']})")
+                if r.get("snippet"):
+                    lines.append(r["snippet"])
+                lines.append("")
+            content = "\n".join(lines).strip()
+
             return ToolResult(
                 ok=True,
                 tool_name=call.name,
+                content=content,
                 data={"results": links, "total": len(links)},
             )
 
@@ -139,6 +148,7 @@ class WebTool:
             return ToolResult(
                 ok=True,
                 tool_name=call.name,
+                content=text,
                 data={
                     "results": [{"url": url, "content": text, "length": len(text)}],
                     "total": 1,
