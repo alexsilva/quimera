@@ -348,6 +348,23 @@ class TerminalRenderer:
     # Helpers internos
     # ------------------------------------------------------------------
 
+    @property
+    def theme_name(self) -> str:
+        """Retorna o nome do tema ativo."""
+        return self._theme.name
+
+    def cycle_theme(self) -> str:
+        """Avança para o próximo tema; retorna o nome do novo tema."""
+        import quimera.themes as _themes_mod
+        all_names = _themes_mod.names()
+        try:
+            idx = all_names.index(self._theme.name)
+        except ValueError:
+            idx = 0
+        next_name = all_names[(idx + 1) % len(all_names)]
+        self._theme = _themes_mod.get(next_name)
+        return next_name
+
     def _agent_style(self, agent: str):
         """Retorna (color, label) para o agente."""
         return _agent_style(agent, self._get_plugin_style)

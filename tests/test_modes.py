@@ -332,6 +332,51 @@ class TestInputContextAndWelcome(unittest.TestCase):
         self.assertEqual(context["model"], "unknown")
         self.assertEqual(context["cwd"], "/tmp/quimera-project")
 
+    def test_build_input_toolbar_context_includes_theme_when_experimental_ui_enabled(self):
+        from quimera.app.core import QuimeraApp
+
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.workspace = MagicMock(cwd=Path("/tmp/quimera-project"))
+        app.renderer = MagicMock(theme_name="rule")
+        app.active_agents = []
+        app._pending_input_for = None
+        app._experimental_ui = True
+        app._resolve_active_model_label = QuimeraApp._resolve_active_model_label.__get__(app, QuimeraApp)
+        app._resolve_next_responder_label = QuimeraApp._resolve_next_responder_label.__get__(app, QuimeraApp)
+        app._build_input_toolbar_context = QuimeraApp._build_input_toolbar_context.__get__(app, QuimeraApp)
+
+        context = app._build_input_toolbar_context()
+
+        self.assertEqual(context["theme"], "rule")
+
+    def test_build_input_toolbar_context_omits_theme_when_experimental_ui_disabled(self):
+        from quimera.app.core import QuimeraApp
+
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.workspace = MagicMock(cwd=Path("/tmp/quimera-project"))
+        app.renderer = MagicMock(theme_name="rule")
+        app.active_agents = []
+        app._pending_input_for = None
+        app._experimental_ui = False
+        app._resolve_active_model_label = QuimeraApp._resolve_active_model_label.__get__(app, QuimeraApp)
+        app._resolve_next_responder_label = QuimeraApp._resolve_next_responder_label.__get__(app, QuimeraApp)
+        app._build_input_toolbar_context = QuimeraApp._build_input_toolbar_context.__get__(app, QuimeraApp)
+
+        context = app._build_input_toolbar_context()
+
+        self.assertNotIn("theme", context)
+
+    def test_cycle_renderer_theme_calls_renderer_cycle_theme(self):
+        from quimera.app.core import QuimeraApp
+
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.renderer = MagicMock()
+        app._cycle_renderer_theme = QuimeraApp._cycle_renderer_theme.__get__(app, QuimeraApp)
+
+        app._cycle_renderer_theme()
+
+        app.renderer.cycle_theme.assert_called_once_with()
+
     def test_build_welcome_message_includes_version_and_project_path(self):
         from quimera.app.core import QuimeraApp
 

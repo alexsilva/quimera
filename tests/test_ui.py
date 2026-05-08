@@ -7,6 +7,7 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.text import Text
 
+from quimera import themes
 from quimera.ui import (
     TerminalRenderer,
     _apply_stream_diff,
@@ -131,6 +132,19 @@ class TestTerminalRenderer:
             TerminalRenderer()
 
         assert "width" not in mock_console.call_args.kwargs
+
+    def test_theme_name_exposes_active_theme(self):
+        renderer = TerminalRenderer(theme="panel")
+        assert renderer.theme_name == "panel"
+
+    def test_cycle_theme_advances_and_wraps(self):
+        ordered_names = themes.names()
+        renderer = TerminalRenderer(theme=ordered_names[-1])
+
+        next_name = renderer.cycle_theme()
+
+        assert next_name == ordered_names[0]
+        assert renderer.theme_name == ordered_names[0]
 
     def test_show_message_without_rich(self, renderer_no_rich, capsys):
         """Test show_message without Rich."""

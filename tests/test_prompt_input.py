@@ -44,10 +44,60 @@ class TestBuildToolbar:
             }
         )
         toolbar = gate._build_toolbar()
-        assert toolbar is not None
-        assert "claude" in str(toolbar)
-        assert "gpt-5" in str(toolbar)
-        assert "/tmp/projeto" in str(toolbar)
+        assert callable(toolbar)
+        content = toolbar()
+        assert "claude" in str(content)
+        assert "gpt-5" in str(content)
+        assert "/tmp/projeto" in str(content)
+
+    @pytest.mark.skipif(not _PT_AVAILABLE, reason="prompt_toolkit não disponível")
+    def test_toolbar_includes_theme_when_context_available(self):
+        gate = InputGate(
+            toolbar_context_resolver=lambda: {
+                "theme": "chat",
+            }
+        )
+        toolbar = gate._build_toolbar()
+        assert callable(toolbar)
+        assert "tema:chat" in str(toolbar())
+
+
+class TestKeyBindings:
+    def test_key_bindings_none_without_prompt_toolkit(self):
+        gate = InputGate.__new__(InputGate)
+        gate._theme_cycle_handler = lambda: None
+        with patch("quimera.app.prompt_input._PT_AVAILABLE", False):
+            assert gate._build_key_bindings() is None
+
+    @pytest.mark.skipif(not _PT_AVAILABLE, reason="prompt_toolkit não disponível")
+    def test_key_bindings_none_without_theme_handler(self):
+        gate = InputGate()
+        assert gate._build_key_bindings() is None
+
+    @pytest.mark.skipif(not _PT_AVAILABLE, reason="prompt_toolkit não disponível")
+    def test_ctrl_t_binding_calls_handler_and_invalidates_prompt(self):
+        gate = InputGate()
+        handler = MagicMock()
+        gate.set_theme_cycle_handler(handler)
+
+        key_bindings = gate._build_key_bindings()
+        assert key_bindings is not None
+        bindings = key_bindings.bindings
+        assert len(bindings) == 3
+
+        normalized_keys = {tuple(str(k) for k in binding.keys) for binding in bindings}
+        assert normalized_keys == {
+            ("Keys.ControlT",),
+            ("Keys.Escape", "t"),
+            ("Keys.F6",),
+        }
+        assert all(bool(binding.eager()) is True for binding in bindings)
+
+        for binding in bindings:
+            event = MagicMock()
+            binding.handler(event)
+            event.app.invalidate.assert_called_once_with()
+        assert handler.call_count == 3
 
 
 # ---------------------------------------------------------------------------

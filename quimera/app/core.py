@@ -63,8 +63,10 @@ class QuimeraApp:
                  theme: str | None = None,
                  workspace: Workspace | None = None,
                  auto_approve_mutations: bool = False,
+                 experimental_ui: bool = False,
                  ):
         """Inicializa uma instância de QuimeraApp."""
+        self._experimental_ui = experimental_ui
         self.selected_agents = list(agents) if agents else []
         self.active_agents = self.selected_agents
         self.threads = int(threads) if threads is not None else 1
@@ -94,6 +96,8 @@ class QuimeraApp:
             input_resolver=lambda: self.input_gate,
         )
         self.input_gate.set_toolbar_context_resolver(self._build_input_toolbar_context)
+        if experimental_ui:
+            self.input_gate.set_theme_cycle_handler(self._cycle_renderer_theme)
         self.chat_round_orchestrator = ChatRoundOrchestrator(self)
 
         migrated = self.workspace.migrate_from_legacy(cwd)
@@ -682,14 +686,30 @@ class QuimeraApp:
             return str(active_agents[0])
         return "unknown"
 
+    def _cycle_renderer_theme(self) -> None:
+        """Avança para o próximo tema no TerminalRenderer e persiste na config."""
+        renderer = getattr(self, "renderer", None)
+        if renderer is None:
+            return
+        cycle = getattr(renderer, "cycle_theme", None)
+        if callable(cycle):
+            new_name = cycle()
+            if new_name and hasattr(self, "config"):
+                self.config.set_theme(new_name)
+
     def _build_input_toolbar_context(self) -> dict[str, str]:
         """Retorna dados de contexto exibidos na toolbar do input."""
         workspace = getattr(self, "workspace", None)
-        return {
+        ctx = {
             "responder": self._resolve_next_responder_label(),
             "model": self._resolve_active_model_label(),
             "cwd": str(getattr(workspace, "cwd", Path.cwd())),
         }
+        if getattr(self, "_experimental_ui", False):
+            renderer = getattr(self, "renderer", None)
+            theme_name = getattr(renderer, "theme_name", "") if renderer else ""
+            ctx["theme"] = theme_name
+        return ctx
 
     def read_user_input(self, prompt, timeout: int):
         """Fachada compatível para leitura de input."""

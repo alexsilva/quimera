@@ -272,6 +272,8 @@ def main():
                         help="JSON com parâmetros extras para o corpo da requisição (ex: '{\"thinking\":{\"type\":\"disabled\"}}')")
     parser.add_argument("--list-connections", dest="list_connections", action="store_true",
                         help="Lista conexões persistidas")
+    parser.add_argument("--ui-experimental", dest="ui_experimental", action="store_true",
+                        help="Habilita recursos experimentais de UI (Ctrl+T para trocar tema, toolbar expandida)")
 
     args, unknown = parser.parse_known_args()
 
@@ -376,7 +378,8 @@ def main():
                      idle_timeout_seconds=args.idle_timeout,
                      workspace=workspace,
                      visibility=visibility,
-                     theme=args.theme)
+                     theme=args.theme,
+                     experimental_ui=args.ui_experimental)
 
     if args.interactive_test:
         if TerminalRenderer is None or AgentClient is None:
