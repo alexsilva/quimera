@@ -51,6 +51,7 @@ class Workspace:
         self.cwd = cwd.expanduser().resolve()
         self.cwd_hash = hashlib.sha256(str(self.cwd).encode()).hexdigest()[:16]
         self._root = self.base_dir / "workspaces" / self.cwd_hash
+        self._branch: str | None = None
         self._ensure_dirs()
         self._write_metadata()
         self._update_index()
@@ -60,10 +61,22 @@ class Workspace:
         """Executa root."""
         return self._root
 
+    def set_branch(self, branch: str) -> None:
+        """Define manualmente a branch para o contexto persistente.
+
+        O nome é sanitizado (troca '/' por '_') e armazenado.
+        Use '/context-branch <nome>' no chat.
+        """
+        sanitized = branch.replace("/", "_").strip()
+        self._branch = sanitized if sanitized else "_default"
+
     @property
     def context_persistent(self) -> Path:
-        """Executa context persistent."""
-        return self._root / "data" / "context" / "persistent.md"
+        """Contexto persistente isolado por branch (definida manualmente via set_branch)."""
+        branch = self._branch or "_default"
+        path = self._root / "data" / "context" / branch / "persistent.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
 
     @property
     def context_session(self) -> Path:

@@ -1244,7 +1244,7 @@ def test_call_api_renders_openai_preview_for_non_approval_tools(renderer):
     assert result == "ok"
     renderer.show_system_neutral.assert_called()
     message = renderer.show_system_neutral.call_args[0][0]
-    assert "[preview/executor]" in message
+    assert "[executando]" in message
     assert "read_file" in message
     assert "README.md" in message
 

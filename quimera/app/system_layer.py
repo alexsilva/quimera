@@ -11,6 +11,7 @@ from ..constants import (
     CMD_CLEAR,
     CMD_CONNECT,
     CMD_CONTEXT,
+    CMD_CONTEXT_BRANCH,
     CMD_CONTEXT_EDIT,
     CMD_HELP,
     CMD_PROMPT,
@@ -409,5 +410,8 @@ class AppSystemLayer:
         if command == CMD_CONTEXT_EDIT:
             self.app.context_manager.edit()
             return True
+
+        if command == CMD_CONTEXT_BRANCH or command.startswith(f"{CMD_CONTEXT_BRANCH} "):
+            return self.app.context_manager.handle_context_branch(command)
 
         return False

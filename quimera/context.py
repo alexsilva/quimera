@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import unicodedata
 from datetime import datetime
+from .constants import CMD_CONTEXT_BRANCH
 
 
 class ContextManager:
@@ -14,7 +15,7 @@ class ContextManager:
     GENERATED_AT_PREFIX = "_Gerado em "
 
     def __init__(self, base_context_file, session_context_file, renderer, previous_session_file=None,
-                 max_context_lines: int = 2000):
+                 max_context_lines: int = 2000, workspace=None):
         """Inicializa uma instância de ContextManager."""
         self.base_context_file = base_context_file
         self.session_context_file = session_context_file
@@ -22,6 +23,35 @@ class ContextManager:
         self.previous_session_file = previous_session_file
         # Limita o tamanho do contexto para evitar consumo de memória excessivo
         self.max_context_lines = int(max_context_lines) if max_context_lines is not None else 2000
+        self.workspace = workspace
+    
+    def handle_context_branch(self, command: str) -> bool:
+        """Processa o comando /context-branch [branch]."""
+        parts = command[len(CMD_CONTEXT_BRANCH):].strip().split()
+        workspace = self.workspace
+        if workspace is None:
+            self.renderer.show_warning("Workspace não disponível.")
+            return True
+        if parts:
+            branch = parts[0]
+        else:
+            try:
+                branch = subprocess.check_output(
+                    ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                    cwd=str(workspace.cwd),
+                    stderr=subprocess.DEVNULL,
+                    text=True,
+                ).strip()
+            except subprocess.CalledProcessError:
+                self.renderer.show_warning("Não foi possível detectar a branch via git.")
+                return True
+        workspace.set_branch(branch)
+        ctx_path = workspace.context_persistent
+        self.renderer.show_system(
+            f"Branch definida: {branch}\n"
+            f"Contexto persistente: {ctx_path}"
+        )
+        return True
 
     def _read(self, path):
         """Lê read."""

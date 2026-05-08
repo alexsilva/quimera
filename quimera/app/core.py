@@ -104,6 +104,7 @@ class QuimeraApp:
             self.workspace.context_persistent,
             self.workspace.context_session,
             self.renderer,
+            workspace=self.workspace,
         )
         self.storage = SessionStorage(self.workspace.logs_dir, self.renderer)
         session_id = self.storage.get_history_file().stem

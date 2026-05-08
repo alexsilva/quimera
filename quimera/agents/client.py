@@ -584,7 +584,7 @@ class AgentClient:
                                     if not effective_tool_executor.would_require_approval(call):
                                         summary = ApproveSummary.build(name, args)
                                         self.renderer.show_system_neutral(
-                                            f"[preview] {name} :: {summary}"
+                                            f"[executando] {name} :: {summary}"
                                         )
                                 except Exception:
                                     pass  # preview é best-effort

@@ -1265,14 +1265,14 @@ class ProtocolTests(unittest.TestCase):
         class FakeContextManager:
             SUMMARY_MARKER = "## Resumo da última sessão"
 
-            def __init__(self, *_args):
+            def __init__(self, *_args, **_kwargs):
                 pass
 
             def load_session(self):
                 return "## Resumo da última sessão\n\nResumo anterior"
 
         class FakeSessionStorage:
-            def __init__(self, *_args):
+            def __init__(self, *_args, **_kwargs):
                 pass
 
             def load_last_session(self):
@@ -1325,14 +1325,14 @@ class ProtocolTests(unittest.TestCase):
         class FakeContextManager:
             SUMMARY_MARKER = "## Resumo da última sessão"
 
-            def __init__(self, *_args):
+            def __init__(self, *_args, **_kwargs):
                 pass
 
             def load_session(self):
                 return ""
 
         class FakeSessionStorage:
-            def __init__(self, *_args):
+            def __init__(self, *_args, **_kwargs):
                 pass
 
             def load_last_session(self):
@@ -1374,14 +1374,14 @@ class ProtocolTests(unittest.TestCase):
         class FakeContextManager:
             SUMMARY_MARKER = "## Resumo da última sessão"
 
-            def __init__(self, *_args):
+            def __init__(self, *_args, **_kwargs):
                 pass
 
             def load_session(self):
                 return ""
 
         class FakeSessionStorage:
-            def __init__(self, *_args):
+            def __init__(self, *_args, **_kwargs):
                 pass
 
             def load_last_session(self):
@@ -1423,14 +1423,14 @@ class ProtocolTests(unittest.TestCase):
         class FakeContextManager:
             SUMMARY_MARKER = "## Resumo da última sessão"
 
-            def __init__(self, *_args):
+            def __init__(self, *_args, **_kwargs):
                 pass
 
             def load_session(self):
                 return ""
 
         class FakeSessionStorage:
-            def __init__(self, *_args):
+            def __init__(self, *_args, **_kwargs):
                 pass
 
             def load_last_session(self):
