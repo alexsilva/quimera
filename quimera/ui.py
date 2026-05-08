@@ -373,6 +373,10 @@ class TerminalRenderer:
             return Rule(f"[bold {style}]{label}[/bold {style}]", style=f"dim {style}")
         if theme_name == "minimal":
             return Text(f"▶ {label}", style=f"bold {style}")
+        if theme_name == "card":
+            return Text(f"▎ {label}", style=f"bold {style}")
+        if theme_name == "line":
+            return Text(f"{label}", style=f"bold {style}")
         return Text(label, style=f"bold {style}")
 
     def _build_turn_body(
@@ -399,6 +403,11 @@ class TerminalRenderer:
             return Padding(body_content, pad=(0, 0, 0, 4))
         if theme_name == "minimal":
             return Padding(body_content, pad=(0, 0, 0, 2))
+        if theme_name == "card":
+            from rich.panel import Panel as RichPanel
+            return RichPanel(body_content, border_style=f"dim {style}", padding=(0, 1))
+        if theme_name == "line":
+            return body_content
         return body_content
 
     def _build_turn_tools(self, theme_name: str, label: str, style: str, tools_table, turn_id: str):
@@ -429,6 +438,12 @@ class TerminalRenderer:
             return Group(Text(title, style=f"bold {style}"), tools_table)
         if theme_name == "minimal":
             return Group(Text(f"◦ {title}", style=f"bold {style}"), Padding(tools_table, pad=(0, 0, 0, 2)))
+        if theme_name == "card":
+            from rich.panel import Panel as RichPanel
+            return RichPanel(tools_table, border_style=f"dim {style}", padding=(0, 1),
+                             title=f"[bold {style}]tools · {turn_id}[/bold {style}]" if turn_id else None)
+        if theme_name == "line":
+            return tools_table
         return tools_table
 
     def _render_turn_block(
@@ -472,7 +487,7 @@ class TerminalRenderer:
 
     def _build_stream_renderable(self, theme_name: str, label: str, style: str, content: str):
         """Monta o renderable dinâmico usado no streaming (header incluso no bloco live)."""
-        return self._render_turn_block(
+        block = self._render_turn_block(
             theme_name,
             label,
             style,
@@ -480,6 +495,16 @@ class TerminalRenderer:
             include_header=True,
             streaming=True,
         )
+        from rich.console import Group as RichGroup
+        from rich.rule import Rule as RichRule
+        infobar = RichRule(
+            "[dim]· Ctrl+C para cancelar  · T para tema[/dim]",
+            characters="·",
+            style="dim",
+        )
+        if self._density == "compact":
+            return RichGroup(block)
+        return RichGroup(block, infobar)
 
     # ------------------------------------------------------------------
     # API pública de exibição de mensagens

@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 try:
-    from rich.console import Group
+    from rich.console import Group, RenderableType
     from rich.markdown import Markdown
     from rich.padding import Padding
     from rich.panel import Panel
@@ -80,6 +80,27 @@ def _render_minimal(console, label, style, content_md):
     console.print(content_md)
 
 
+def _render_card(console, label, style, content_md):
+    """Card limpo com borda sutil e cantos suaves — visual moderno."""
+    console.print()
+    from rich.panel import Panel as RichPanel
+    console.print(
+        RichPanel(
+            content_md,
+            title=f"[bold {style}]{label}[/bold {style}]",
+            border_style=f"dim {style}",
+            padding=(0, 1),
+            subtitle="▸",
+            subtitle_align="right",
+        )
+    )
+
+
+def _render_line(console, label, style, content_md):
+    """Linha com rótulo — estilo log/compacto."""
+    console.print(Text(f"{label}", style=f"bold {style}"), content_md)
+
+
 # ---------------------------------------------------------------------------
 # Dataclass e registro
 # ---------------------------------------------------------------------------
@@ -116,6 +137,16 @@ THEMES: dict[str, Theme] = {
         name="minimal",
         description="Seta ▶ + nome colorido, sem bordas",
         render_fn=_render_minimal,
+    ),
+    "card": Theme(
+        name="card",
+        description="Card com borda sutil e cantos suaves (moderno)",
+        render_fn=_render_card,
+    ),
+    "line": Theme(
+        name="line",
+        description="Linha única com rótulo colorido",
+        render_fn=_render_line,
     ),
 }
 

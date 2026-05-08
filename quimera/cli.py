@@ -8,6 +8,12 @@ import sys
 from pathlib import Path
 from typing import List
 
+try:
+    from prompt_toolkit.shortcuts import prompt as _pt_prompt
+    _HAS_PROMPT_TOOLKIT = True
+except ImportError:
+    _HAS_PROMPT_TOOLKIT = False
+
 from .constants import Visibility
 from . import plugins as _plugins
 from .plugins.base import (
@@ -57,10 +63,17 @@ def _expand_patterns(agents: List[str], available: List[str]) -> List[str]:
     return result
 
 
+def _read_input(prompt_text: str) -> str:
+    """Lê entrada interativa usando prompt_toolkit se disponível, senão input()."""
+    if _HAS_PROMPT_TOOLKIT and sys.stdout.isatty():
+        return _pt_prompt(prompt_text).strip()
+    return input(prompt_text).strip()
+
+
 def _prompt_text(label: str, default: str | None = None) -> str:
     """Lê um valor interativo com default opcional."""
     suffix = f" [{default}]" if default not in {None, ""} else ""
-    value = input(f"{label}{suffix}: ").strip()
+    value = _read_input(f"{label}{suffix}: ")
     if value:
         return value
     return default or ""
@@ -70,7 +83,7 @@ def _prompt_bool(label: str, default: bool = False) -> bool:
     """Lê um booleano interativo."""
     default_label = "s" if default else "n"
     while True:
-        raw = input(f"{label} [s/n] [{default_label}]: ").strip().lower()
+        raw = _read_input(f"{label} [s/n] [{default_label}]: ").lower()
         if not raw:
             return default
         if raw in {"s", "sim", "y", "yes"}:
