@@ -4136,12 +4136,16 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(metrics["tool_calls_failed"], 1)
         self.assertEqual(metrics["invalid_tool_calls"], 1)
         self.assertEqual(metrics["tool_loop_abortions"], 1)
+        self.assertEqual(metrics["tool_errors_by_type"]["policy"], 1)
+        self.assertEqual(metrics["tool_loop_abort_reasons"]["invalid_tool_loop"], 1)
 
         summary = app.behavior_metrics.get_agent_summary("ollama-qwen")
         self.assertEqual(summary["tool_calls_total"], 2)
         self.assertEqual(summary["tool_calls_failed"], 1)
         self.assertEqual(summary["invalid_tool_calls"], 1)
         self.assertEqual(summary["tool_loop_abortions"], 1)
+        self.assertEqual(summary["tool_errors_by_type"]["policy"], 1)
+        self.assertEqual(summary["tool_loop_abort_reasons"]["invalid_tool_loop"], 1)
 
     def test_resolve_agent_response_preserves_structured_tool_error_metadata(self):
         """Dispatch deve preservar ToolError existente em vez de reclassificar por texto."""
@@ -4177,8 +4181,54 @@ class PluginTests(unittest.TestCase):
 
         self.assertEqual(result, "resposta final")
         handoff = app._call_agent.call_args.kwargs["handoff"]
+        self.assertIn("max_tool_hops=12", handoff)
+        self.assertIn("remaining_tool_hops=11", handoff)
         self.assertIn("'error_type': 'validation'", handoff)
         self.assertIn("'error_metadata': {'field': 'command', 'hint': 'informe um comando não vazio'}", handoff)
+
+    def test_resolve_agent_response_aborts_on_repeated_policy_error(self):
+        """Dispatch deve abortar quando o mesmo error_type=policy se repete consecutivamente."""
+        from quimera.app.dispatch import AppDispatchServices
+        from quimera.runtime.models import ToolResult
+
+        app = Mock()
+        app.tool_executor.maybe_execute_from_response.side_effect = [
+            (
+                "",
+                ToolResult(
+                    ok=False,
+                    tool_name="run_shell",
+                    error="Comando bloqueado: operador de encadeamento proibido: '&&'",
+                ),
+            ),
+            (
+                "",
+                ToolResult(
+                    ok=False,
+                    tool_name="run_shell",
+                    error="Comando bloqueado: operador de encadeamento proibido: ';'",
+                ),
+            ),
+        ]
+        app.task_services.truncate_payload = lambda payload: payload
+        app.get_agent_plugin.return_value = Mock(tool_use_reliability="high")
+        app.session_services.persist_message = Mock()
+        app.print_response = Mock()
+        app.record_failure = Mock()
+        app._call_agent = Mock(return_value="continuação")
+        app.session_metrics = Mock()
+
+        dispatch = AppDispatchServices(app)
+        result = dispatch.resolve_agent_response("codex", "resposta inicial", show_output=False)
+
+        self.assertEqual(result, "Falha: loop de ferramenta inválida detectado.")
+        abort_calls = [
+            call.kwargs
+            for call in app.session_metrics.record_tool_event.call_args_list
+            if call.kwargs.get("loop_abort")
+        ]
+        self.assertEqual(len(abort_calls), 1)
+        self.assertEqual(abort_calls[0]["reason"], "invalid_tool_loop")
 
     def test_prompt_includes_proactivity_rules(self):
         """Prompt deve incluir NEEDS_INPUT e instruções de colaboração."""

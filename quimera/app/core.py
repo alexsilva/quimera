@@ -512,9 +512,36 @@ class QuimeraApp:
 
     def _record_tool_event(self, agent, result=None, loop_abort=False, reason=None):
         """Registra métricas de uso de ferramentas atribuídas ao agente."""
-        is_invalid = bool(getattr(result, "error", None)) and "Sem política para a ferramenta" in str(result.error)
+        error_type = getattr(result, "error_type", None) if result is not None else None
+        if not isinstance(error_type, str) or not error_type:
+            lowered_error = str(getattr(result, "error", "") or "").lower()
+            if any(
+                marker in lowered_error
+                for marker in (
+                    "sem política para a ferramenta",
+                    "bloqueada pelo modo de execução",
+                    "comando bloqueado",
+                    "comando inválido",
+                    "comando fora da allowlist",
+                    "path fora da workspace",
+                )
+            ):
+                error_type = "policy"
+            elif lowered_error:
+                error_type = "generic"
+            else:
+                error_type = "none"
+        is_invalid = error_type == "policy"
         ok = bool(getattr(result, "ok", False))
-        self.session_metrics.record_tool_event(self, agent, ok=ok, is_invalid=is_invalid, loop_abort=loop_abort)
+        self.session_metrics.record_tool_event(
+            self,
+            agent,
+            ok=ok,
+            is_invalid=is_invalid,
+            loop_abort=loop_abort,
+            reason=reason,
+            error_type=error_type,
+        )
 
     def resolve_agent_response(
             self,

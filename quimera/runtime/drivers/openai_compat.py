@@ -87,7 +87,11 @@ def _parse_text_tool_calls(text: str) -> list[dict]:
     return calls
 
 
-def _build_tool_system_prompt(tool_names: list[str], workspace_root: str | None) -> str:
+def _build_tool_system_prompt(
+    tool_names: list[str],
+    workspace_root: str | None,
+    shell_allowlist: list[str] | set[str] | tuple[str, ...] | None = None,
+) -> str:
     """Monta o system prompt usado no modo com ferramentas."""
     names_csv = ", ".join(tool_names)
     available = set(tool_names)
@@ -149,15 +153,40 @@ def _build_tool_system_prompt(tool_names: list[str], workspace_root: str | None)
         instructions.append(
             "para shell interativo, use exatamente 'exec_command' com argumento 'cmd' e write_stdin para polling; "
         )
+    if has_run_shell or has_exec_command:
+        instructions.append(
+            "política de shell: execute um comando por vez, sem operadores de encadeamento como &&, ;, ||, ` ou $(); "
+        )
+        if shell_allowlist:
+            instructions.append(
+                "comandos permitidos na allowlist: " + ", ".join(sorted(shell_allowlist)) + "; "
+            )
 
     return "".join(instructions)
+
+
+def _build_tool_budget_prompt(max_tool_hops: int, remaining_tool_hops: int) -> str:
+    """Monta contexto explícito de orçamento de tools para a iteração atual."""
+    return (
+        "Orçamento de ferramentas desta execução: "
+        f"max_tool_hops={max_tool_hops}, remaining_tool_hops={remaining_tool_hops}. "
+        "Evite chamadas desnecessárias e finalize quando tiver evidência suficiente."
+    )
 
 
 def _prune_tool_loop_messages(messages: list[dict]) -> list[dict]:
     """Limita o histórico do loop de tools preservando system/user e a cauda recente."""
     if len(messages) <= _MAX_TOOL_LOOP_MESSAGES:
         return messages
-    head = messages[:2]
+    head_end = 0
+    for msg in messages:
+        if msg.get("role") in {"system", "user"}:
+            head_end += 1
+            continue
+        break
+    if head_end == 0:
+        head_end = min(2, len(messages))
+    head = messages[:head_end]
     available = max(_MAX_TOOL_LOOP_MESSAGES - len(head), 0)
     tail = messages[len(head):]
     segments: list[list[dict]] = []
@@ -285,22 +314,40 @@ class OpenAICompatDriver:
             return None
 
         messages: list[dict] = []
+        tool_budget_index: int | None = None
         if tools:
             tool_names = [t["function"]["name"] for t in tools]
             workspace_root = getattr(getattr(tool_executor, "config", None), "workspace_root", None)
+            shell_allowlist = getattr(getattr(tool_executor, "config", None), "shell_allowlist", None)
+            max_tool_hops = get_max_tool_hops(self.tool_use_reliability)
             messages.append({
                 "role": "system",
-                "content": _build_tool_system_prompt(tool_names, workspace_root),
+                "content": _build_tool_system_prompt(tool_names, workspace_root, shell_allowlist),
             })
+            messages.append({
+                "role": "system",
+                "content": _build_tool_budget_prompt(
+                    max_tool_hops=max_tool_hops,
+                    remaining_tool_hops=max_tool_hops,
+                ),
+            })
+            tool_budget_index = len(messages) - 1
+        else:
+            max_tool_hops = get_max_tool_hops(self.tool_use_reliability)
         messages.append({"role": "user", "content": prompt})
 
-        max_tool_hops = get_max_tool_hops(self.tool_use_reliability)
-        last_invalid_tool_name: str | None = None
+        last_invalid_error_type: str | None = None
 
         try:
             for hop in range(max_tool_hops + 1):
                 if cancel_event is not None and cancel_event.is_set():
                     return None
+                if tool_budget_index is not None:
+                    remaining_tool_hops = max(max_tool_hops - hop, 0)
+                    messages[tool_budget_index]["content"] = _build_tool_budget_prompt(
+                        max_tool_hops=max_tool_hops,
+                        remaining_tool_hops=remaining_tool_hops,
+                    )
                 try:
                     response_text, tool_calls = self._chat(
                         messages,
@@ -360,17 +407,19 @@ class OpenAICompatDriver:
                         ),
                     })
                     if self._is_invalid_tool_result(result):
-                        if self.tool_use_reliability == "low" and last_invalid_tool_name == tc["name"]:
+                        if last_invalid_error_type == result.error_type:
                             _logger.warning(
-                                "OpenAICompatDriver: repeated invalid tool for low-reliability model: %s",
+                                "OpenAICompatDriver: repeated invalid policy error_type=%s tool=%s hop=%d",
+                                result.error_type,
                                 tc["name"],
+                                hop,
                             )
                             if on_tool_abort is not None:
                                 on_tool_abort("invalid_tool_loop")
                             return "Falha: loop de ferramenta inválida detectado."
-                        last_invalid_tool_name = tc["name"]
+                        last_invalid_error_type = result.error_type
                     else:
-                        last_invalid_tool_name = None
+                        last_invalid_error_type = None
                 messages = _prune_tool_loop_messages(messages)
 
             return None
@@ -383,7 +432,7 @@ class OpenAICompatDriver:
 
     def _is_invalid_tool_result(self, result: ToolResult) -> bool:
         """Indica se o resultado representa uso de ferramenta fora do contrato conhecido."""
-        return (not result.ok) and bool(result.error) and "Sem política para a ferramenta" in result.error
+        return (not result.ok) and result.error_type == "policy"
 
     def _chat(self, messages: list[dict], tools: list[dict], cancel_event=None, on_text_chunk=None) -> tuple[str, list[dict]]:
         """Despacha para o modo correto conforme presença de ferramentas.

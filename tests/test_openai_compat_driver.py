@@ -14,6 +14,7 @@ from quimera.runtime.drivers.openai_compat import (
     _MAX_TOOL_LOOP_MESSAGES,
     MAX_TOOL_HOPS_BY_RELIABILITY,
     OpenAICompatDriver,
+    _build_tool_budget_prompt,
     _build_tool_system_prompt,
     _prune_tool_loop_messages,
     _sanitize_assistant_text,
@@ -21,6 +22,7 @@ from quimera.runtime.drivers.openai_compat import (
 )
 from quimera.runtime.drivers.repl import DriverRepl
 from quimera.runtime.drivers.tool_schemas import TOOL_SCHEMAS, resolve_tool_schemas
+from quimera.runtime.errors import ToolPolicyViolationError
 from quimera.runtime.models import ToolCall, ToolResult
 
 
@@ -176,6 +178,24 @@ def test_build_tool_system_prompt_avoids_unavailable_tool_guidance():
     assert "run_shell" not in prompt
     assert "exec_command" not in prompt
     assert "começar exatamente com '*** Begin Patch'" not in prompt
+
+
+def test_build_tool_system_prompt_includes_shell_policy_rules():
+    prompt = _build_tool_system_prompt(
+        ["run_shell", "exec_command"],
+        "/tmp/workspace",
+        shell_allowlist=["ls", "cat", "pytest"],
+    )
+
+    assert "sem operadores de encadeamento como &&, ;, ||, ` ou $()" in prompt
+    assert "comandos permitidos na allowlist: cat, ls, pytest;" in prompt
+
+
+def test_build_tool_budget_prompt_includes_max_and_remaining():
+    prompt = _build_tool_budget_prompt(max_tool_hops=24, remaining_tool_hops=17)
+
+    assert "max_tool_hops=24" in prompt
+    assert "remaining_tool_hops=17" in prompt
 
 
 def test_prune_tool_loop_messages_keeps_head_and_recent_tail():
@@ -460,7 +480,9 @@ def test_run_tools_system_prompt_guides_tool_usage():
 
     messages = mock_client.chat.completions.create.call_args[1]["messages"]
     system_message = messages[0]
+    budget_message = messages[1]
     assert system_message["role"] == "system"
+    assert budget_message["role"] == "system"
     assert "descubra o alvo antes de editar" in system_message["content"]
     assert "começar exatamente com '*** Begin Patch'" in system_message["content"]
     assert "não repita o mesmo payload inválido" in system_message["content"]
@@ -470,6 +492,8 @@ def test_run_tools_system_prompt_guides_tool_usage():
            system_message["content"]
     assert "nunca invente nomes como 'run', 'run_shell_command' ou 'execute_command'" in system_message["content"]
     assert "Workspace raiz: /tmp/workspace." in system_message["content"]
+    assert f"max_tool_hops={MAX_TOOL_HOPS_BY_RELIABILITY['medium']}" in budget_message["content"]
+    assert f"remaining_tool_hops={MAX_TOOL_HOPS_BY_RELIABILITY['medium']}" in budget_message["content"]
     tool_names = {tool["function"]["name"] for tool in mock_client.chat.completions.create.call_args[1]["tools"]}
     assert tool_names == {
         "list_files",
@@ -545,6 +569,41 @@ def test_run_tool_loop_sends_tool_result_message():
     assert payload["content"] == "file.py"
 
 
+def test_run_tool_loop_updates_remaining_budget_each_hop():
+    driver, mock_client = _make_driver()
+
+    tc_id = "call_budget"
+    tc = _make_tool_call(tc_id, "run_shell", '{"command":"ls"}')
+    responses = iter(
+        [
+            _make_non_streaming_response(content="", tool_calls=[tc]),
+            _make_non_streaming_response(content="Done.", tool_calls=None),
+        ]
+    )
+    observed_budget_prompts = []
+
+    def side_effect(*args, **kwargs):
+        messages = kwargs["messages"]
+        observed_budget_prompts.append(messages[1]["content"])
+        return next(responses)
+
+    mock_client.chat.completions.create.side_effect = side_effect
+
+    mock_executor = MagicMock()
+    mock_executor.config = SimpleNamespace(db_path="/tmp/tasks.db", workspace_root="/tmp/workspace")
+    mock_executor.registry.names.return_value = [s["function"]["name"] for s in TOOL_SCHEMAS]
+    mock_executor.execute.return_value = ToolResult(ok=True, tool_name="run_shell", content="file.py")
+
+    driver.run("liste arquivos", tool_executor=mock_executor)
+
+    max_hops = MAX_TOOL_HOPS_BY_RELIABILITY["medium"]
+
+    assert f"max_tool_hops={max_hops}" in observed_budget_prompts[0]
+    assert f"remaining_tool_hops={max_hops}" in observed_budget_prompts[0]
+    assert f"max_tool_hops={max_hops}" in observed_budget_prompts[1]
+    assert f"remaining_tool_hops={max_hops - 1}" in observed_budget_prompts[1]
+
+
 def test_run_tool_loop_uses_minimal_prompt_payload_and_valid_json():
     driver, mock_client = _make_driver()
 
@@ -573,8 +632,10 @@ def test_run_tool_loop_uses_minimal_prompt_payload_and_valid_json():
     tool_result_msg = next(m for m in second_call_messages if m.get("role") == "tool")
     payload = json.loads(tool_result_msg["content"])
 
-    assert set(payload) == {"ok", "content", "error", "truncated", "exit_code"}
+    assert set(payload) == {"ok", "content", "error", "error_type", "hint", "truncated", "exit_code"}
     assert payload["ok"] is False
+    assert payload["error_type"] == "generic"
+    assert payload["hint"] is None
     assert payload["exit_code"] == 9
     assert payload["truncated"] is True
     assert "resultado com 6000 caracteres" in payload["content"]
@@ -609,7 +670,8 @@ def test_run_tool_loop_prunes_messages_between_hops():
     ]
     assert len(observed_lengths[-1]) <= _MAX_TOOL_LOOP_MESSAGES
     assert observed_lengths[-1][0]["role"] == "system"
-    assert observed_lengths[-1][1]["role"] == "user"
+    assert observed_lengths[-1][1]["role"] == "system"
+    assert observed_lengths[-1][2]["role"] == "user"
 
 
 def test_run_api_error_returns_none():
@@ -737,9 +799,9 @@ def test_run_low_reliability_uses_lower_max_hops():
     assert mock_client.chat.completions.create.call_count == MAX_TOOL_HOPS_BY_RELIABILITY["low"] + 1
 
 
-def test_run_low_reliability_aborts_on_repeated_invalid_tool():
+def test_run_aborts_on_repeated_policy_error_for_all_reliabilities():
     driver, mock_client = _make_driver()
-    driver.tool_use_reliability = "low"
+    driver.tool_use_reliability = "medium"
     tc = _make_tool_call("c", "bad_tool", '{"path":"x"}')
     mock_client.chat.completions.create.side_effect = [
         _make_non_streaming_response(content="", tool_calls=[tc]),
@@ -750,8 +812,22 @@ def test_run_low_reliability_aborts_on_repeated_invalid_tool():
     mock_executor.config = SimpleNamespace(db_path="/tmp/tasks.db", workspace_root="/tmp/workspace")
     mock_executor.registry.names.return_value = [s["function"]["name"] for s in TOOL_SCHEMAS]
     mock_executor.execute.side_effect = [
-        ToolResult(ok=False, tool_name="bad_tool", error="Sem política para a ferramenta: bad_tool"),
-        ToolResult(ok=False, tool_name="bad_tool", error="Sem política para a ferramenta: bad_tool"),
+        ToolResult(
+            ok=False,
+            tool_name="bad_tool",
+            error=ToolPolicyViolationError(
+                "Comando fora da allowlist: bash",
+                hint="Use apenas comandos permitidos.",
+            ),
+        ),
+        ToolResult(
+            ok=False,
+            tool_name="bad_tool",
+            error=ToolPolicyViolationError(
+                "Comando fora da allowlist: bash",
+                hint="Use apenas comandos permitidos.",
+            ),
+        ),
     ]
 
     result = driver.run("prompt", tool_executor=mock_executor)
@@ -761,7 +837,7 @@ def test_run_low_reliability_aborts_on_repeated_invalid_tool():
 
 def test_run_reports_tool_abort_callback():
     driver, mock_client = _make_driver()
-    driver.tool_use_reliability = "low"
+    driver.tool_use_reliability = "high"
     tc = _make_tool_call("c", "bad_tool", '{"path":"x"}')
     mock_client.chat.completions.create.side_effect = [
         _make_non_streaming_response(content="", tool_calls=[tc]),
@@ -772,8 +848,16 @@ def test_run_reports_tool_abort_callback():
     mock_executor.config = SimpleNamespace(db_path="/tmp/tasks.db", workspace_root="/tmp/workspace")
     mock_executor.registry.names.return_value = [s["function"]["name"] for s in TOOL_SCHEMAS]
     mock_executor.execute.side_effect = [
-        ToolResult(ok=False, tool_name="bad_tool", error="Sem política para a ferramenta: bad_tool"),
-        ToolResult(ok=False, tool_name="bad_tool", error="Sem política para a ferramenta: bad_tool"),
+        ToolResult(
+            ok=False,
+            tool_name="bad_tool",
+            error=ToolPolicyViolationError("Comando bloqueado: operador de encadeamento proibido: ';'"),
+        ),
+        ToolResult(
+            ok=False,
+            tool_name="bad_tool",
+            error=ToolPolicyViolationError("Comando bloqueado: operador de encadeamento proibido: ';'"),
+        ),
     ]
     aborts = []
 

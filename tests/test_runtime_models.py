@@ -1,4 +1,4 @@
-from quimera.runtime.errors import ToolValidationError
+from quimera.runtime.errors import ToolPolicyViolationError, ToolValidationError
 from quimera.runtime.models import ToolResult, ToolCall
 
 
@@ -54,9 +54,27 @@ def test_tool_result_to_prompt_payload_is_minimal_and_truncated():
 
     payload = result.to_prompt_payload(max_chars=40)
 
-    assert set(payload) == {"ok", "content", "error", "truncated", "exit_code"}
+    assert set(payload) == {"ok", "content", "error", "error_type", "hint", "truncated", "exit_code"}
     assert payload["ok"] is False
     assert payload["exit_code"] == 7
+    assert payload["error_type"] == "generic"
+    assert payload["hint"] is None
     assert payload["truncated"] is True
     assert "resultado com 80 caracteres" in payload["content"]
     assert "resultado com 80 caracteres" in payload["error"]
+
+
+def test_tool_result_to_prompt_payload_includes_policy_type_and_hint():
+    result = ToolResult(
+        ok=False,
+        tool_name="run_shell",
+        error=ToolPolicyViolationError(
+            "Comando bloqueado: operador de encadeamento proibido: '&&'",
+            hint="Use um comando por vez.",
+        ),
+    )
+
+    payload = result.to_prompt_payload(max_chars=200)
+
+    assert payload["error_type"] == "policy"
+    assert payload["hint"] == "Use um comando por vez."

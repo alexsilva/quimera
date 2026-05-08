@@ -31,6 +31,14 @@ def _coerce_tool_error(error):
     return error
 
 
+def _resolve_tool_error_type(tool_result) -> str:
+    """Resolve o tipo de erro padronizado quando disponível."""
+    error_type = getattr(tool_result, "error_type", None)
+    if isinstance(error_type, str) and error_type:
+        return error_type
+    return "none"
+
+
 class AppDispatchServices:
     """Agrupa despacho de agentes e persistência de mensagens."""
 
@@ -135,11 +143,12 @@ class AppDispatchServices:
         plugin = app.get_agent_plugin(agent)
         max_tool_hops = get_max_tool_hops(getattr(plugin, "tool_use_reliability", "medium"))
         tool_history = []
+        last_invalid_error_type = None
         _MAX_TOOL_HISTORY_ENTRIES = 3
         _MAX_HANDOFF_CHARS = 8000
 
         try:
-            for _ in range(max_tool_hops):
+            for hop in range(max_tool_hops):
                 if not current_response:
                     return current_response
 
@@ -148,13 +157,33 @@ class AppDispatchServices:
                 if tool_result is None:
                     return current_response
 
-                is_invalid = bool(getattr(tool_result, "error", None)) and "Sem política para a ferramenta" in str(tool_result.error)
-                ok = bool(getattr(tool_result, "ok", False))
                 if tool_result.error:
                     tool_result.error = _coerce_tool_error(tool_result.error)
+                error_type = _resolve_tool_error_type(tool_result)
+                is_invalid = error_type == "policy"
+                ok = bool(getattr(tool_result, "ok", False))
                 session_metrics = getattr(app, "session_metrics", None)
                 if session_metrics is not None:
-                    session_metrics.record_tool_event(app, agent, ok=ok, is_invalid=is_invalid)
+                    session_metrics.record_tool_event(
+                        app,
+                        agent,
+                        ok=ok,
+                        is_invalid=is_invalid,
+                        error_type=error_type,
+                    )
+                if is_invalid and last_invalid_error_type == error_type:
+                    if session_metrics is not None:
+                        session_metrics.record_tool_event(
+                            app,
+                            agent,
+                            ok=False,
+                            is_invalid=True,
+                            loop_abort=True,
+                            reason="invalid_tool_loop",
+                            error_type=error_type,
+                        )
+                    return "Falha: loop de ferramenta inválida detectado."
+                last_invalid_error_type = error_type if is_invalid else None
 
                 tool_payload = task_services.truncate_payload(tool_result.to_model_payload())
                 tool_history.append(
@@ -172,7 +201,12 @@ class AppDispatchServices:
                     if persist_history:
                         app.session_services.persist_message(agent, visible_text)
 
+                used_tool_hops = hop + 1
+                remaining_tool_hops = max(max_tool_hops - used_tool_hops, 0)
                 followup_handoff = (
+                    "Orçamento de ferramentas desta execução:\n"
+                    f"- max_tool_hops={max_tool_hops}\n"
+                    f"- remaining_tool_hops={remaining_tool_hops}\n\n"
                     "Histórico de ferramentas desta rodada:\n\n"
                     + "\n\n---\n\n".join(tool_history)
                 )
@@ -198,6 +232,15 @@ class AppDispatchServices:
                         silent=silent,
                     )
 
+            session_metrics = getattr(app, "session_metrics", None)
+            if session_metrics is not None:
+                session_metrics.record_tool_event(
+                    app,
+                    agent,
+                    ok=False,
+                    loop_abort=True,
+                    reason="max_tool_hops",
+                )
             return "Falha: limite de execuções de ferramenta atingido."
         finally:
             # Reseta approve-all (não-permanente) ao fim do ciclo de tool hops.

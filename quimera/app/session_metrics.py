@@ -20,6 +20,8 @@ class SessionMetricsService:
                 "tool_calls_failed": 0,
                 "invalid_tool_calls": 0,
                 "tool_loop_abortions": 0,
+                "tool_errors_by_type": {},
+                "tool_loop_abort_reasons": {},
             }
         if metric_name == "sent":
             metrics[agent]["sent"] += 1
@@ -42,28 +44,50 @@ class SessionMetricsService:
             )
 
     @staticmethod
-    def record_tool_event(app, agent, ok: bool, is_invalid: bool = False, loop_abort: bool = False):
+    def record_tool_event(
+        app,
+        agent,
+        ok: bool,
+        is_invalid: bool = False,
+        loop_abort: bool = False,
+        reason: str | None = None,
+        error_type: str | None = None,
+    ):
         """Registra métricas de uso de ferramentas por agente na sessão e no tracker persistido."""
         metrics = app.session_state.get("agent_metrics", {})
         if agent not in metrics:
             SessionMetricsService.record_agent_metric(app, agent, "received", 0.0)
             metrics = app.session_state.get("agent_metrics", {})
+        agent_metrics = metrics[agent]
+        agent_metrics.setdefault("tool_calls_total", 0)
+        agent_metrics.setdefault("tool_calls_failed", 0)
+        agent_metrics.setdefault("invalid_tool_calls", 0)
+        agent_metrics.setdefault("tool_loop_abortions", 0)
+        agent_metrics.setdefault("tool_errors_by_type", {})
+        agent_metrics.setdefault("tool_loop_abort_reasons", {})
 
         if not loop_abort:
-            metrics[agent]["tool_calls_total"] += 1
+            agent_metrics["tool_calls_total"] += 1
             if not ok:
-                metrics[agent]["tool_calls_failed"] += 1
+                agent_metrics["tool_calls_failed"] += 1
             if is_invalid:
-                metrics[agent]["invalid_tool_calls"] += 1
+                agent_metrics["invalid_tool_calls"] += 1
+            normalized_error_type = str(error_type or "none")
+            by_type = agent_metrics["tool_errors_by_type"]
+            if normalized_error_type != "none" and not ok:
+                by_type[normalized_error_type] = by_type.get(normalized_error_type, 0) + 1
         if loop_abort:
-            metrics[agent]["tool_loop_abortions"] += 1
+            agent_metrics["tool_loop_abortions"] += 1
+            reason_key = str(reason or "unknown")
+            reasons = agent_metrics["tool_loop_abort_reasons"]
+            reasons[reason_key] = reasons.get(reason_key, 0) + 1
         app.session_state["agent_metrics"] = metrics
 
         if hasattr(app, "behavior_metrics") and app.behavior_metrics:
             if not loop_abort:
-                app.behavior_metrics.record_tool_call(agent, ok=ok, is_invalid=is_invalid)
+                app.behavior_metrics.record_tool_call(agent, ok=ok, is_invalid=is_invalid, error_type=error_type)
             if loop_abort:
-                app.behavior_metrics.record_tool_loop_abort(agent)
+                app.behavior_metrics.record_tool_loop_abort(agent, reason=reason)
 
     @staticmethod
     def has_clear_next_step(response):

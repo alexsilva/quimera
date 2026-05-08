@@ -14,7 +14,7 @@ import atexit
 import threading
 import sys
 import time
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from pathlib import Path
 
 # Debounce para save: evita I/O síncrono + serialização JSON a cada métrica.
@@ -45,6 +45,8 @@ class AgentBehaviorMetrics:
     tool_calls_failed: int = 0
     invalid_tool_calls: int = 0
     tool_loop_abortions: int = 0
+    tool_errors_by_type: dict[str, int] = field(default_factory=dict)
+    tool_loop_abort_reasons: dict[str, int] = field(default_factory=dict)
 
     # Timing
     total_latency_seconds: float = 0.0
@@ -169,17 +171,21 @@ class AgentBehaviorMetrics:
         if needed_correction:
             self.synthesis_corrections += 1
 
-    def record_tool_call(self, ok: bool, is_invalid: bool = False):
+    def record_tool_call(self, ok: bool, is_invalid: bool = False, error_type: str | None = None):
         """Registra o resultado de uma chamada de ferramenta."""
         self.tool_calls_total += 1
         if not ok:
             self.tool_calls_failed += 1
+            normalized_type = str(error_type or "generic")
+            self.tool_errors_by_type[normalized_type] = self.tool_errors_by_type.get(normalized_type, 0) + 1
         if is_invalid:
             self.invalid_tool_calls += 1
 
-    def record_tool_loop_abort(self):
+    def record_tool_loop_abort(self, reason: str | None = None):
         """Registra um aborto de loop de ferramenta."""
         self.tool_loop_abortions += 1
+        reason_key = str(reason or "unknown")
+        self.tool_loop_abort_reasons[reason_key] = self.tool_loop_abort_reasons.get(reason_key, 0) + 1
 
     def to_dict(self) -> dict:
         """Converte para dicionário para serialização JSON."""
@@ -188,7 +194,10 @@ class AgentBehaviorMetrics:
     @classmethod
     def from_dict(cls, data: dict) -> 'AgentBehaviorMetrics':
         """Cria instância a partir de um dicionário."""
-        return cls(**data)
+        merged = dict(data)
+        merged.setdefault("tool_errors_by_type", {})
+        merged.setdefault("tool_loop_abort_reasons", {})
+        return cls(**merged)
 
 
 class BehaviorMetricsTracker:
@@ -304,16 +313,22 @@ class BehaviorMetricsTracker:
         metrics.record_synthesis(needed_correction)
         self._mark_dirty()
 
-    def record_tool_call(self, agent_name: str, ok: bool, is_invalid: bool = False):
+    def record_tool_call(
+        self,
+        agent_name: str,
+        ok: bool,
+        is_invalid: bool = False,
+        error_type: str | None = None,
+    ):
         """Registra uma chamada de ferramenta associada a um agente."""
         metrics = self.get_agent(agent_name)
-        metrics.record_tool_call(ok=ok, is_invalid=is_invalid)
+        metrics.record_tool_call(ok=ok, is_invalid=is_invalid, error_type=error_type)
         self._mark_dirty()
 
-    def record_tool_loop_abort(self, agent_name: str):
+    def record_tool_loop_abort(self, agent_name: str, reason: str | None = None):
         """Registra um aborto de loop de ferramentas para um agente."""
         metrics = self.get_agent(agent_name)
-        metrics.record_tool_loop_abort()
+        metrics.record_tool_loop_abort(reason=reason)
         self._mark_dirty()
 
     def get_agent_summary(self, agent_name: str) -> dict:
@@ -339,6 +354,8 @@ class BehaviorMetricsTracker:
             "tool_calls_failed": metrics.tool_calls_failed,
             "invalid_tool_calls": metrics.invalid_tool_calls,
             "tool_loop_abortions": metrics.tool_loop_abortions,
+            "tool_errors_by_type": dict(metrics.tool_errors_by_type),
+            "tool_loop_abort_reasons": dict(metrics.tool_loop_abort_reasons),
             "tool_success_rate": round(metrics.tool_success_rate, 3),
         }
 

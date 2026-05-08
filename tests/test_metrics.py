@@ -128,8 +128,8 @@ class TestBehaviorMetricsTracker(unittest.TestCase):
         """Resumo deve incluir métricas explícitas de ferramenta."""
         tracker = BehaviorMetricsTracker()
         tracker.record_tool_call("claude", ok=True)
-        tracker.record_tool_call("claude", ok=False, is_invalid=True)
-        tracker.record_tool_loop_abort("claude")
+        tracker.record_tool_call("claude", ok=False, is_invalid=True, error_type="policy")
+        tracker.record_tool_loop_abort("claude", reason="invalid_tool_loop")
 
         summary = tracker.get_agent_summary("claude")
 
@@ -137,6 +137,8 @@ class TestBehaviorMetricsTracker(unittest.TestCase):
         self.assertEqual(summary["tool_calls_failed"], 1)
         self.assertEqual(summary["invalid_tool_calls"], 1)
         self.assertEqual(summary["tool_loop_abortions"], 1)
+        self.assertEqual(summary["tool_errors_by_type"]["policy"], 1)
+        self.assertEqual(summary["tool_loop_abort_reasons"]["invalid_tool_loop"], 1)
         self.assertEqual(summary["tool_success_rate"], 0.5)
 
     def test_get_agent_summary_includes_verbosity_metrics(self):

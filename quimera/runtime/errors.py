@@ -48,10 +48,23 @@ class ToolRateLimitError(ToolError):
         super().__init__(message, metadata=metadata)
 
 
+class ToolPolicyViolationError(ToolError):
+    """Erro de política de ferramenta (comando bloqueado, allowlist, etc.)."""
+
+    def __init__(self, message: str, *, hint: str | None = None, rule: str | None = None):
+        metadata = {}
+        if hint:
+            metadata["hint"] = hint
+        if rule:
+            metadata["rule"] = rule
+        super().__init__(message, metadata=metadata)
+
+
 # Mapeamento de tipos para facilitar roteamento
 TOOL_ERROR_TYPES = {
     "validation": ToolValidationError,
     "environment": ToolEnvironmentError,
     "logic": ToolLogicError,
+    "policy": ToolPolicyViolationError,
     "rate_limit": ToolRateLimitError,
 }
