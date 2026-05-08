@@ -269,10 +269,12 @@ class AppTaskServices:
         app = self.app
         renderer = getattr(app, "renderer", None)
         input_services = getattr(app, "input_services", None)
+        input_gate = getattr(app, "input_gate", None)
         base_handler = ConsoleApprovalHandler(
             renderer=renderer,
             suspend_fn=input_services.suspend_nonblocking if input_services else None,
             resume_fn=input_services.resume_nonblocking if input_services else None,
+            input_gate=input_gate,
         )
         approval_handler = PreApprovalHandler(base_handler)
         # Conecta o callback de 'approve all' do ConsoleApprovalHandler

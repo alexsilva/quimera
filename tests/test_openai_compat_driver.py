@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import json
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 
@@ -761,6 +761,70 @@ def test_driver_repl_run_uses_prompt_from_config_name():
         repl.run()
 
     mock_input.assert_called_once_with("Alex: ")
+
+
+def test_driver_repl_with_input_gate_uses_gate_for_prompt_and_approval_handler():
+    fake_plugin = SimpleNamespace(
+        name="ollama-qwen",
+        driver="openai_compat",
+        model="qwen3-coder:30b",
+        base_url="http://localhost:11434/v1",
+        api_key_env=None,
+    )
+    gate = MagicMock(side_effect=EOFError)
+
+    with patch("quimera.runtime.drivers.repl.OpenAICompatDriver"), \
+            patch("quimera.runtime.drivers.repl.ConsoleApprovalHandler") as mock_approval_handler, \
+            patch.object(DriverRepl, "_load_user_name_from_config", return_value="Alex"):
+        repl = DriverRepl(
+            "ollama-qwen",
+            get_plugin=lambda name: fake_plugin if name == "ollama-qwen" else None,
+            all_plugins=lambda: [fake_plugin],
+            input_gate=gate,
+        )
+
+    mock_approval_handler.assert_called_once_with(input_gate=gate)
+
+    with patch.object(repl, "ensure_backend_available"), \
+            patch("builtins.input", side_effect=AssertionError("input() não deveria ser chamado")), \
+            patch("builtins.print"):
+        repl.run()
+
+    gate.assert_called_once_with("Alex: ")
+
+
+def test_driver_repl_with_input_gate_executes_regular_message_flow():
+    fake_plugin = SimpleNamespace(
+        name="ollama-qwen",
+        driver="openai_compat",
+        model="qwen3-coder:30b",
+        base_url="http://localhost:11434/v1",
+        api_key_env=None,
+    )
+    gate = MagicMock(side_effect=["mensagem teste", "exit"])
+
+    with patch("quimera.runtime.drivers.repl.OpenAICompatDriver"), \
+            patch.object(DriverRepl, "_load_user_name_from_config", return_value="Alex"):
+        repl = DriverRepl(
+            "ollama-qwen",
+            get_plugin=lambda name: fake_plugin if name == "ollama-qwen" else None,
+            all_plugins=lambda: [fake_plugin],
+            input_gate=gate,
+        )
+
+    with patch.object(repl, "ensure_backend_available"), \
+            patch.object(repl, "_connection_has_changed", return_value=False), \
+            patch.object(repl.driver, "run", return_value="ok") as mock_run, \
+            patch("builtins.print"):
+        repl.run()
+
+    mock_run.assert_called_once_with(
+        "mensagem teste",
+        tool_executor=repl.tool_executor,
+        on_tool_call=ANY,
+        on_tool_result=ANY,
+    )
+    assert gate.call_count == 2
 
 
 def test_run_max_hops_returns_last_text():

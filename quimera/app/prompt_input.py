@@ -1,4 +1,8 @@
-"""Gate de input: PromptSession singleton, toolbar e coordenação com Rich.Live."""
+"""Gate de input: PromptSession singleton, toolbar e coordenação com terminal.
+
+Evita patch_stdout() flushando o renderer antes do prompt, eliminando o conflito
+com Rich.Live que quebrava a toolbar. RichPromptSession é um wrapper thin que
+coordena o ciclo antes/depois do prompt sem substituir o PromptSession."""
 from __future__ import annotations
 
 import atexit
@@ -11,17 +15,10 @@ try:
     from prompt_toolkit.completion import Completer, Completion
     from prompt_toolkit.formatted_text import HTML
     from prompt_toolkit.history import FileHistory, InMemoryHistory
-    from prompt_toolkit.patch_stdout import patch_stdout
     _PT_AVAILABLE = True
 except ImportError:
     _PT_AVAILABLE = False
     Completer = object
-
-try:
-    import readline as _readline
-    _RL_AVAILABLE = True
-except ImportError:
-    _RL_AVAILABLE = False
 
 
 class _SlashCommandCompleter(Completer):
@@ -51,44 +48,53 @@ class _SlashCommandCompleter(Completer):
 
 
 class InputGate:
-    """Gate único de input com PromptSession singleton, toolbar e coordenação com Rich.Live.
+    """Gate único de input com PromptSession singleton, toolbar e coordenação com terminal.
 
     - Quando prompt_toolkit estiver disponível: exibe toolbar contextual
       e placeholder cinza no campo vazio.
     - Quando não estiver disponível: fallback transparente para input().
-    - Antes de exibir o prompt, drena eventos pendentes do Rich.Live (renderer.flush()),
+    - Antes de exibir o prompt, drena eventos pendentes do renderer,
       garantindo que o output acima do prompt esteja estável.
-    """
+    - Evita patch_stdout(): o renderer é flushado antes do prompt, então
+      não há output concorrente durante o prompt, preservando a toolbar."""
 
     def __init__(self, renderer=None, toolbar_context_resolver=None, history_file=None, command_resolver=None):
-        """Inicializa uma instância de InputGate."""
+        self._session: PromptSession | None = None
+        self._readline_history = None
         self._renderer = renderer
         self._toolbar_context_resolver = toolbar_context_resolver
         self._command_resolver = command_resolver
         self._history_file = Path(history_file).expanduser() if history_file else None
         self._lock = threading.Lock()
-        if _PT_AVAILABLE:
-            history = InMemoryHistory()
-            if self._history_file is not None:
+        if not _PT_AVAILABLE:
+            self._init_readline()
+            return
+
+        history = InMemoryHistory()
+        if self._history_file is not None:
+            try:
+                self._history_file.parent.mkdir(parents=True, exist_ok=True)
+                history = FileHistory(str(self._history_file))
+            except Exception:
+                history = InMemoryHistory()
+        self._session = PromptSession(history=history)
+
+    def _init_readline(self) -> None:
+        """Configura histórico readline como fallback."""
+        try:
+            import readline as _readline
+        except ImportError:
+            return
+        if self._history_file is not None:
+            try:
+                self._history_file.parent.mkdir(parents=True, exist_ok=True)
                 try:
-                    self._history_file.parent.mkdir(parents=True, exist_ok=True)
-                    history = FileHistory(str(self._history_file))
-                except Exception:
-                    history = InMemoryHistory()
-            self._session: "PromptSession | None" = PromptSession(
-                history=history
-            )
-        else:
-            self._session = None
-            if _RL_AVAILABLE and self._history_file is not None:
-                try:
-                    self._history_file.parent.mkdir(parents=True, exist_ok=True)
                     _readline.read_history_file(str(self._history_file))
                 except FileNotFoundError:
                     pass
-                except Exception:
-                    pass
                 atexit.register(_readline.write_history_file, str(self._history_file))
+            except Exception:
+                pass
 
     def set_toolbar_context_resolver(self, resolver) -> None:
         """Define callback para resolver contexto dinâmico da toolbar."""
@@ -141,7 +147,7 @@ class InputGate:
         return _SlashCommandCompleter(self._command_resolver)
 
     def _flush_renderer(self) -> None:
-        """Drena eventos pendentes do Rich.Live antes de exibir o prompt."""
+        """Drena eventos pendentes do renderer antes de exibir o prompt."""
         renderer = self._renderer
         if renderer is None:
             return
@@ -155,20 +161,21 @@ class InputGate:
     def __call__(self, prompt: str) -> str:
         """Lê input do usuário.
 
-        Flushes o renderer antes de exibir o prompt (T-001: coordenação com Rich.Live).
-        Usa PromptSession com toolbar e placeholder quando disponível (T-003).
+        Flusha o renderer antes de exibir o prompt, eliminando a necessidade
+        de patch_stdout(). Usa session.prompt() diretamente com toolbar,
+        placeholder e completer — tudo nativo do PromptSession, funcionando.
         """
         self._flush_renderer()
 
         if self._session is not None:
-            with patch_stdout():
-                return self._session.prompt(
-                    prompt,
-                    bottom_toolbar=self._build_toolbar(),
-                    placeholder=self._build_placeholder(),
-                    completer=self._build_completer(),
-                    complete_while_typing=False,
-                )
+            return self._session.prompt(
+                prompt,
+                bottom_toolbar=self._build_toolbar(),
+                placeholder=self._build_placeholder(),
+                completer=self._build_completer(),
+                complete_while_typing=False,
+                vi_mode=False,
+            )
 
         return input(prompt)
 

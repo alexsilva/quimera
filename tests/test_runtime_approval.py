@@ -823,3 +823,17 @@ def test_console_approval_handler_renderer_with_spinner_callbacks():
     mock_print.assert_not_called()
     # Ordem correta
     assert order == ["suspend_spinner", "input", "resume_spinner"]
+
+# ── ConsoleApprovalHandler + input_gate + cancel_event ──────
+
+
+def test_console_approval_handler_input_gate_with_cancel_pre_set():
+    """Com input_gate e cancel_event já setado, approve retorna False sem chamar o gate."""
+    cancel_event = threading.Event()
+    cancel_event.set()
+    mock_gate = MagicMock()
+    handler = ConsoleApprovalHandler(input_gate=mock_gate, cancel_event=cancel_event)
+    with patch('builtins.print'):
+        result = handler.approve(tool_name="shell", summary="ls")
+    assert result is False
+    mock_gate.assert_not_called()

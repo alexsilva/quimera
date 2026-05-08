@@ -13,7 +13,7 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 from urllib import error as urllib_error
 from urllib import request as urllib_request
 
@@ -96,6 +96,7 @@ class DriverRepl:
         *,
         get_plugin,
         all_plugins,
+        input_gate: Optional[Callable[[str], str]] = None,
     ) -> None:
         """Inicializa uma instância de DriverRepl."""
         plugin = get_plugin(plugin_name)
@@ -118,10 +119,14 @@ class DriverRepl:
         self._last_connection_signature = None
         self._update_driver()
         self._input_prompt = self._resolve_input_prompt()
+        self._input_gate = input_gate
 
         rt_config = ToolRuntimeConfig(workspace_root=self.working_dir)
         self._rt_config = rt_config
-        self.tool_executor = ToolExecutor(rt_config, ConsoleApprovalHandler())
+        self.tool_executor = ToolExecutor(
+            rt_config,
+            ConsoleApprovalHandler(input_gate=self._input_gate),
+        )
         self._auto_tool_executor = ToolExecutor(rt_config, AutoApprovalHandler(approve_all=True))
 
     @staticmethod
@@ -276,7 +281,8 @@ class DriverRepl:
 
         while True:
             try:
-                raw = input(self._input_prompt).strip()
+                input_reader = self._input_gate if self._input_gate is not None else input
+                raw = input_reader(self._input_prompt).strip()
             except (EOFError, KeyboardInterrupt):
                 print("\nSaindo.")
                 break

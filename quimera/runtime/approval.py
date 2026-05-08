@@ -58,6 +58,7 @@ class ConsoleApprovalHandler(ApprovalHandler):
         resume_fn=None,
         cancel_event=None,
         cancel_poll_interval: float = 0.1,
+        input_gate=None,
     ):
         """Inicializa com dependências injetáveis.
 
@@ -70,6 +71,8 @@ class ConsoleApprovalHandler(ApprovalHandler):
                         para suspender estado não-bloqueante do app.
             resume_fn: Callback chamado após input() bloqueante
                        para restaurar estado não-bloqueante do app.
+            input_gate: InputGate opcional. Quando fornecido, substitui
+                        input_fn e coordena com o renderer sem suspend/resume.
         """
         self._input_fn = input_fn
         self._renderer = renderer
@@ -80,6 +83,7 @@ class ConsoleApprovalHandler(ApprovalHandler):
         self._approve_all_callback = None
         self._cancel_event = cancel_event
         self._cancel_poll_interval = max(float(cancel_poll_interval), 0.01)
+        self._input_gate = input_gate
 
     def set_spinner_callbacks(self, suspend_spinner_fn, resume_spinner_fn):
         """Define callbacks para pausar/retomar o spinner do Rich.
@@ -114,35 +118,42 @@ class ConsoleApprovalHandler(ApprovalHandler):
         return self._approve_interactive(tool_name, summary)
 
     def _approve_interactive(self, tool_name: str, summary: str) -> bool:
-        """Aprovação interativa via input_fn (usado em testes/REPL).
+        """Aprovação interativa via input_gate ou input_fn (usado em testes/REPL).
 
-        Suspende o estado não-bloqueante do app (via suspend_fn) antes de
-        chamar input() bloqueante para evitar conflito com a thread de
-        input não-bloqueante competindo pelo mesmo stdin.
-        Também suspende o spinner do Rich (via suspend_spinner_fn) para
-        evitar que o refresh periódico do Live compita com input().
+        Quando input_gate está disponível, delega a ele — o InputGate já coordena
+        com o renderer via RichPromptSession, dispensando suspend/resume.
+        Caso contrário, usa o caminho legado com input_fn/suspend/resume.
         """
-        input_fn = self._input_fn if self._input_fn is not None else input
-        if self._suspend_fn:
-            self._suspend_fn()
-        if self._suspend_spinner_fn:
-            self._suspend_spinner_fn()
         self._show(f"\n[aprovação] {tool_name} :: {summary}")
-        try:
-            if self._input_fn is None and self._cancel_event is not None:
-                answer = self._read_builtin_input_with_cancel("  Executar? [y/N/a=todas]: ").strip().lower()
-            else:
-                answer = input_fn("  Executar? [y/N/a=todas]: ").strip().lower()
-        except _ApprovalCancelled:
-            return False
-        except EOFError:
-            self._show("  [aprovação] stdin não disponível — negando automaticamente")
-            return False
-        finally:
-            if self._resume_spinner_fn:
-                self._resume_spinner_fn()
-            if self._resume_fn:
-                self._resume_fn()
+        if self._input_gate is not None:
+            if self._cancel_event and self._cancel_event.is_set():
+                return False
+            try:
+                answer = self._input_gate("  Executar? [y/N/a=todas]: ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                self._show("  [aprovação] stdin não disponível — negando automaticamente")
+                return False
+        else:
+            input_fn = self._input_fn if self._input_fn is not None else input
+            if self._suspend_fn:
+                self._suspend_fn()
+            if self._suspend_spinner_fn:
+                self._suspend_spinner_fn()
+            try:
+                if self._input_fn is None and self._cancel_event is not None:
+                    answer = self._read_builtin_input_with_cancel("  Executar? [y/N/a=todas]: ").strip().lower()
+                else:
+                    answer = input_fn("  Executar? [y/N/a=todas]: ").strip().lower()
+            except _ApprovalCancelled:
+                return False
+            except EOFError:
+                self._show("  [aprovação] stdin não disponível — negando automaticamente")
+                return False
+            finally:
+                if self._resume_spinner_fn:
+                    self._resume_spinner_fn()
+                if self._resume_fn:
+                    self._resume_fn()
         if answer in {"a", "all", "todas"}:
             if self._approve_all_callback:
                 self._approve_all_callback()
