@@ -84,6 +84,7 @@ class ConsoleApprovalHandler(ApprovalHandler):
         self._cancel_event = cancel_event
         self._cancel_poll_interval = max(float(cancel_poll_interval), 0.01)
         self._input_gate = input_gate
+        self._interactive_lock = threading.Lock()
 
     def set_spinner_callbacks(self, suspend_spinner_fn, resume_spinner_fn):
         """Define callbacks para pausar/retomar o spinner do Rich.
@@ -120,45 +121,76 @@ class ConsoleApprovalHandler(ApprovalHandler):
     def _approve_interactive(self, tool_name: str, summary: str) -> bool:
         """Aprovação interativa via input_gate ou input_fn (usado em testes/REPL).
 
+        Serializada via _interactive_lock: se outra thread já estiver no meio
+        de um prompt de aprovação, esta chamada retorna False imediatamente
+        sem bloquear o executor, evitando prompts de aprovação concorrentes.
+
         Quando input_gate está disponível, delega a ele — o InputGate já coordena
         com o renderer via RichPromptSession, dispensando suspend/resume.
         Caso contrário, usa o caminho legado com input_fn/suspend/resume.
         """
-        self._show(f"\n[aprovação] {tool_name} :: {summary}")
-        if self._input_gate is not None:
-            if self._cancel_event and self._cancel_event.is_set():
-                return False
-            try:
-                answer = self._input_gate("  Executar? [y/N/a=todas]: ").strip().lower()
-            except (EOFError, KeyboardInterrupt):
-                self._show("  [aprovação] stdin não disponível — negando automaticamente")
-                return False
-        else:
-            input_fn = self._input_fn if self._input_fn is not None else input
-            if self._suspend_fn:
-                self._suspend_fn()
-            if self._suspend_spinner_fn:
-                self._suspend_spinner_fn()
-            try:
-                if self._input_fn is None and self._cancel_event is not None:
-                    answer = self._read_builtin_input_with_cancel("  Executar? [y/N/a=todas]: ").strip().lower()
-                else:
-                    answer = input_fn("  Executar? [y/N/a=todas]: ").strip().lower()
-            except _ApprovalCancelled:
-                return False
-            except EOFError:
-                self._show("  [aprovação] stdin não disponível — negando automaticamente")
-                return False
-            finally:
-                if self._resume_spinner_fn:
-                    self._resume_spinner_fn()
-                if self._resume_fn:
-                    self._resume_fn()
-        if answer in {"a", "all", "todas"}:
-            if self._approve_all_callback:
-                self._approve_all_callback()
-            return True
-        return answer in {"y", "yes", "s", "sim"}
+        # Lock não-bloqueante: se outra thread já está num prompt, nega.
+        if not self._interactive_lock.acquire(blocking=False):
+            self._show(
+                f"  [aprovação em outra thread] {tool_name} :: {summary} — negando"
+            )
+            return False
+
+        try:
+            self._show(f"\n[aprovação] {tool_name} :: {summary}")
+            if self._input_gate is not None:
+                if self._cancel_event and self._cancel_event.is_set():
+                    return False
+                if self._suspend_spinner_fn:
+                    self._suspend_spinner_fn()
+                try:
+                    answer = (
+                        self._input_gate("  Executar? [y/N/a=todas]: ")
+                        .strip()
+                        .lower()
+                    )
+                except (EOFError, KeyboardInterrupt):
+                    self._show(
+                        "  [aprovação] stdin não disponível — negando automaticamente"
+                    )
+                    return False
+                finally:
+                    if self._resume_spinner_fn:
+                        self._resume_spinner_fn()
+            else:
+                input_fn = self._input_fn if self._input_fn is not None else input
+                if self._suspend_fn:
+                    self._suspend_fn()
+                if self._suspend_spinner_fn:
+                    self._suspend_spinner_fn()
+                try:
+                    if self._input_fn is None and self._cancel_event is not None:
+                        answer = self._read_builtin_input_with_cancel(
+                            "  Executar? [y/N/a=todas]: "
+                        ).strip().lower()
+                    else:
+                        answer = input_fn(
+                            "  Executar? [y/N/a=todas]: "
+                        ).strip().lower()
+                except _ApprovalCancelled:
+                    return False
+                except EOFError:
+                    self._show(
+                        "  [aprovação] stdin não disponível — negando automaticamente"
+                    )
+                    return False
+                finally:
+                    if self._resume_spinner_fn:
+                        self._resume_spinner_fn()
+                    if self._resume_fn:
+                        self._resume_fn()
+            if answer in {"a", "all", "todas"}:
+                if self._approve_all_callback:
+                    self._approve_all_callback()
+                return True
+            return answer in {"y", "yes", "s", "sim"}
+        finally:
+            self._interactive_lock.release()
 
     def _show(self, message: str) -> None:
         _emit_system_message(self._renderer, message)

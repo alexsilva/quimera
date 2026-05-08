@@ -24,6 +24,7 @@ from .plugins.base import (
 )
 from . import themes as _themes
 from .app import QuimeraApp
+from .app.prompt_input import InputGate
 from .config import ConfigManager
 from .runtime.drivers.repl import DriverRepl
 from .workspace import Workspace
@@ -319,6 +320,7 @@ def main():
                 working_dir=working_dir,
                 get_plugin=_plugins.get,
                 all_plugins=_plugins.all_plugins,
+                input_gate=InputGate(),
             )
             repl.run(one_shot_prompt=args.repl_prompt)
         except (RuntimeError, ValueError) as exc:

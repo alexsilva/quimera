@@ -252,6 +252,26 @@ def test_console_approval_handler_spinner_and_suspend_order():
     ]
 
 
+def test_console_approval_handler_input_gate_spinner_callbacks_called():
+    """Com input_gate, spinner callbacks também são acionados (regressão P4)."""
+    order = []
+
+    def gate(_prompt):
+        order.append("input_gate")
+        return "y"
+
+    handler = ConsoleApprovalHandler(input_gate=gate)
+    handler.set_spinner_callbacks(
+        suspend_spinner_fn=lambda: order.append("suspend_spinner"),
+        resume_spinner_fn=lambda: order.append("resume_spinner"),
+    )
+    with patch("builtins.print"):
+        result = handler.approve(tool_name="shell", summary="ls")
+
+    assert result is True
+    assert order == ["suspend_spinner", "input_gate", "resume_spinner"]
+
+
 # ── ConsoleApprovalHandler + renderer ───────────────────────
 
 
@@ -837,3 +857,31 @@ def test_console_approval_handler_input_gate_with_cancel_pre_set():
         result = handler.approve(tool_name="shell", summary="ls")
     assert result is False
     mock_gate.assert_not_called()
+
+
+def test_cli_driver_repl_injects_input_gate_in_driver_repl_mode():
+    """No modo --driver-repl, CLI instancia DriverRepl com InputGate (regressão P5)."""
+    import quimera.cli as cli_module
+
+    captured = {}
+
+    class FakeInputGate:
+        pass
+
+    class FakeDriverRepl:
+        def __init__(self, *args, **kwargs):
+            captured["args"] = args
+            captured["kwargs"] = kwargs
+
+        def run(self, one_shot_prompt=None):
+            captured["one_shot_prompt"] = one_shot_prompt
+
+    with patch.object(cli_module, "DriverRepl", FakeDriverRepl), \
+            patch.object(cli_module, "InputGate", FakeInputGate), \
+            patch("sys.argv", ["quimera", "--driver-repl", "ollama-qwen"]), \
+            patch("builtins.print"):
+        cli_module.main()
+
+    assert captured["args"][0] == "ollama-qwen"
+    assert isinstance(captured["kwargs"]["input_gate"], FakeInputGate)
+    assert captured["one_shot_prompt"] is None
