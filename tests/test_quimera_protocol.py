@@ -4181,8 +4181,8 @@ class PluginTests(unittest.TestCase):
 
         self.assertEqual(result, "resposta final")
         handoff = app._call_agent.call_args.kwargs["handoff"]
-        self.assertIn("max_tool_hops=12", handoff)
-        self.assertIn("remaining_tool_hops=11", handoff)
+        self.assertIn("max_tool_hops=15", handoff)
+        self.assertIn("remaining_tool_hops=14", handoff)
         self.assertIn("'error_type': 'validation'", handoff)
         self.assertIn("'error_metadata': {'field': 'command', 'hint': 'informe um comando não vazio'}", handoff)
 

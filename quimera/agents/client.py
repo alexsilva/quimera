@@ -510,11 +510,6 @@ class AgentClient:
         if fmt == "opencode-json" and raw is not None:
             return parse_opencode_json(raw, agent, self.tool_event_callback)
         return raw
-
-    # ------------------------------------------------------------------
-    # _call_api() — driver de API (OpenAI compat / Ollama)
-    # ------------------------------------------------------------------
-
     def _call_api(
         self,
         agent,
@@ -579,11 +574,25 @@ class AgentClient:
 
                 def _run_driver():
                     try:
+                        def _on_tool_call(name, args):
+                            """Exibe preview OpenAI no terminal para ferramentas sem approval."""
+                            if effective_tool_executor is not None:
+                                policy = getattr(effective_tool_executor, "policy", None)
+                                if policy is not None:
+                                    try:
+                                        if not policy.requires_approval(name):
+                                            self.renderer.show_system_neutral(
+                                                f"[preview/openai] {json.dumps({name: args}, ensure_ascii=False)}"
+                                            )
+                                            return
+                                    except Exception:
+                                        pass  # preview é best-effort
                         result_holder["result"] = driver_instance.run(
                             prompt=prompt,
                             tool_executor=effective_tool_executor,
                             quiet=quiet,
                             cancel_event=self._cancel_event,
+                            on_tool_call=_on_tool_call,
                             on_tool_result=(lambda tool_result: self.tool_event_callback(agent, result=tool_result))
                             if self.tool_event_callback else None,
                             on_tool_abort=(

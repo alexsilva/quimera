@@ -1209,6 +1209,90 @@ def test_call_api_passes_cancel_event_to_driver(renderer):
         assert call_kwargs["cancel_event"] is client._cancel_event
 
 
+def test_call_api_renders_openai_preview_for_non_approval_tools(renderer):
+    """No driver OpenAI, tools sem approval devem exibir preview operacional."""
+    from types import SimpleNamespace
+
+    client = AgentClient(renderer)
+    policy = MagicMock()
+    policy.check_path_permission.return_value = None
+    policy.requires_approval.return_value = False
+    tool_executor = MagicMock()
+    tool_executor.policy = policy
+    tool_executor._normalize_call.side_effect = lambda call: call
+    client.tool_executor = tool_executor
+
+    plugin = SimpleNamespace(
+        driver="openai_compat",
+        model="test-model",
+        base_url="http://localhost",
+        api_key_env=None,
+        tool_use_reliability="medium",
+        supports_tools=True,
+    )
+
+    with patch("quimera.agents.client.OpenAICompatDriver") as mock_driver_cls, \
+            patch.object(client, "_start_esc_monitor"), \
+            patch.object(client, "_stop_esc_monitor"):
+        mock_driver = MagicMock()
+
+        def run_with_tool(**kwargs):
+            kwargs["on_tool_call"]("read_file", {"path": "README.md"})
+            return "ok"
+
+        mock_driver.run.side_effect = run_with_tool
+        mock_driver_cls.return_value = mock_driver
+
+        result = client._call_api("test-agent", plugin, "prompt")
+
+    assert result == "ok"
+    renderer.show_system_neutral.assert_called()
+    message = renderer.show_system_neutral.call_args[0][0]
+    assert "[preview/openai]" in message
+    assert "read_file" in message
+    assert "README.md" in message
+
+
+def test_call_api_skips_openai_preview_when_tool_requires_approval(renderer):
+    """Preview OpenAI não deve duplicar chamadas que já passam pelo fluxo de aprovação."""
+    from types import SimpleNamespace
+
+    client = AgentClient(renderer)
+    policy = MagicMock()
+    policy.check_path_permission.return_value = None
+    policy.requires_approval.return_value = True
+    tool_executor = MagicMock()
+    tool_executor.policy = policy
+    tool_executor._normalize_call.side_effect = lambda call: call
+    client.tool_executor = tool_executor
+
+    plugin = SimpleNamespace(
+        driver="openai_compat",
+        model="test-model",
+        base_url="http://localhost",
+        api_key_env=None,
+        tool_use_reliability="medium",
+        supports_tools=True,
+    )
+
+    with patch("quimera.agents.client.OpenAICompatDriver") as mock_driver_cls, \
+            patch.object(client, "_start_esc_monitor"), \
+            patch.object(client, "_stop_esc_monitor"):
+        mock_driver = MagicMock()
+
+        def run_with_tool(**kwargs):
+            kwargs["on_tool_call"]("exec_command", {"cmd": "ls"})
+            return "ok"
+
+        mock_driver.run.side_effect = run_with_tool
+        mock_driver_cls.return_value = mock_driver
+
+        result = client._call_api("test-agent", plugin, "prompt")
+
+    assert result == "ok"
+    renderer.show_system_neutral.assert_not_called()
+
+
 def test_call_api_cancel_event_detection(renderer):
     """Quando cancel_event é acionado externamente, o while loop detecta e retorna None."""
     from types import SimpleNamespace

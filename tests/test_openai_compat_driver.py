@@ -779,9 +779,12 @@ def test_run_max_hops_returns_last_text():
     mock_executor.registry.names.return_value = [s["function"]["name"] for s in TOOL_SCHEMAS]
     mock_executor.execute.return_value = ToolResult(ok=True, tool_name="run_shell", content="ok")
 
+    from quimera.runtime.tool_hops import MAX_TOOL_HOPS_BY_RELIABILITY
+    expected_hops = MAX_TOOL_HOPS_BY_RELIABILITY["medium"]
+    driver.tool_use_reliability = "medium"
     result = driver.run("prompt", tool_executor=mock_executor)
     assert result is not None
-    assert mock_client.chat.completions.create.call_count == MAX_TOOL_HOPS + 1
+    assert mock_client.chat.completions.create.call_count == expected_hops + 1
 
 
 def test_run_low_reliability_uses_lower_max_hops():

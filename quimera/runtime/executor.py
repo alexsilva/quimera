@@ -34,6 +34,7 @@ class ToolExecutor:
         self._approval_handler = approval_handler
         self.registry = registry or ToolRegistry()
         self.policy = policy or ToolPolicy(config)
+        self._tool_preview_callback = None
         self._register_builtin_tools()
 
     def _register_builtin_tools(self) -> None:
@@ -88,6 +89,30 @@ class ToolExecutor:
         if callable(setter):
             setter(cancel_event)
 
+    def would_require_approval(self, call: ToolCall) -> bool:
+        """Retorna True se a chamada passaria pelo fluxo de aprovação.
+
+        Consolida a lógica de permissão sem duplicar as regras de política.
+        Usado externamente (ex: preview de tools) para saber se o executor
+        vai pedir aprovação antes de executar.
+        """
+        normalized_call = self._normalize_call(call)
+        try:
+            self.policy.validate(normalized_call)
+            permission_error = self.policy.check_path_permission(normalized_call)
+            needs_approval = self.policy.requires_approval(normalized_call)
+            return permission_error is not None or bool(needs_approval)
+        except Exception:
+            # Se validation falha, consideramos que precisa de aprovação
+            # (seguro: mostra approval mesmo que não precise, nunca o contrário)
+            return True
+
+    def set_tool_preview_callback(self, fn) -> None:
+        """Registra um callback chamado antes de executar tools que NÃO passam por approval.
+        Assinatura esperada: fn(tool_name: str, arguments: dict) -> None
+        """
+        self._tool_preview_callback = fn
+
     def execute(self, call: ToolCall) -> ToolResult:
         """Executa um ToolCall com política de aprovação.
 
@@ -121,6 +146,10 @@ class ToolExecutor:
                         tool_name=normalized_call.name,
                         error="Execução negada pelo usuário",
                     )
+            else:
+                # Tool sem approval: exibe preview informativo se houver callback
+                if self._tool_preview_callback is not None:
+                    self._tool_preview_callback(normalized_call.name, normalized_call.arguments)
 
             handler = self.registry.get(normalized_call.name)
             return handler(normalized_call)
