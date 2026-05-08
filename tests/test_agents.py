@@ -1260,7 +1260,7 @@ def test_call_api_skips_openai_preview_when_tool_requires_approval(renderer):
     client = AgentClient(renderer)
     policy = MagicMock()
     policy.check_path_permission.return_value = None
-    policy.requires_approval.return_value = True
+    policy.requires_approval.return_value = False
     tool_executor = MagicMock()
     tool_executor.policy = policy
     tool_executor._normalize_call.side_effect = lambda call: call
@@ -1290,7 +1290,7 @@ def test_call_api_skips_openai_preview_when_tool_requires_approval(renderer):
         result = client._call_api("test-agent", plugin, "prompt")
 
     assert result == "ok"
-    renderer.show_system_neutral.assert_not_called()
+    renderer.show_system_neutral.assert_called_once_with('[preview/openai] {"exec_command": {"cmd": "ls"}}')
 
 
 def test_call_api_cancel_event_detection(renderer):
