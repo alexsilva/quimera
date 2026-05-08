@@ -1214,12 +1214,8 @@ def test_call_api_renders_openai_preview_for_non_approval_tools(renderer):
     from types import SimpleNamespace
 
     client = AgentClient(renderer)
-    policy = MagicMock()
-    policy.check_path_permission.return_value = None
-    policy.requires_approval.return_value = False
     tool_executor = MagicMock()
-    tool_executor.policy = policy
-    tool_executor._normalize_call.side_effect = lambda call: call
+    tool_executor.would_require_approval.return_value = False
     client.tool_executor = tool_executor
 
     plugin = SimpleNamespace(
@@ -1248,22 +1244,18 @@ def test_call_api_renders_openai_preview_for_non_approval_tools(renderer):
     assert result == "ok"
     renderer.show_system_neutral.assert_called()
     message = renderer.show_system_neutral.call_args[0][0]
-    assert "[preview/openai]" in message
+    assert "[preview/executor]" in message
     assert "read_file" in message
     assert "README.md" in message
 
 
 def test_call_api_skips_openai_preview_when_tool_requires_approval(renderer):
-    """Preview OpenAI não deve duplicar chamadas que já passam pelo fluxo de aprovação."""
+    """Preview não deve ser exibido para tools que já passam pelo fluxo de aprovação."""
     from types import SimpleNamespace
 
     client = AgentClient(renderer)
-    policy = MagicMock()
-    policy.check_path_permission.return_value = None
-    policy.requires_approval.return_value = False
     tool_executor = MagicMock()
-    tool_executor.policy = policy
-    tool_executor._normalize_call.side_effect = lambda call: call
+    tool_executor.would_require_approval.return_value = True
     client.tool_executor = tool_executor
 
     plugin = SimpleNamespace(
@@ -1290,7 +1282,7 @@ def test_call_api_skips_openai_preview_when_tool_requires_approval(renderer):
         result = client._call_api("test-agent", plugin, "prompt")
 
     assert result == "ok"
-    renderer.show_system_neutral.assert_called_once_with('[preview/openai] {"exec_command": {"cmd": "ls"}}')
+    renderer.show_system_neutral.assert_not_called()
 
 
 def test_call_api_cancel_event_detection(renderer):

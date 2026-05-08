@@ -16,6 +16,8 @@ from quimera.plugins.base import CliConnection, OpenAIConnection
 from quimera.sandbox.bwrap import build_bwrap_cmd
 from quimera.spy_output_presenter import SpyOutputPresenter
 from quimera.runtime.drivers.openai_compat import OpenAICompatDriver
+from quimera.runtime.models import ToolCall
+from quimera.runtime.approve_summary import ApproveSummary
 
 from quimera.agents.parsers import parse_stream_json, parse_codex_json, parse_opencode_json
 from quimera.agents.process_runner import ProcessRunner
@@ -575,18 +577,17 @@ class AgentClient:
                 def _run_driver():
                     try:
                         def _on_tool_call(name, args):
-                            """Exibe preview no terminal para todas as tool calls."""
+                            """Exibe preview formatado para tools sem approval; tools com approval são tratadas pelo approval handler."""
                             if effective_tool_executor is not None:
-                                policy = getattr(effective_tool_executor, "policy", None)
-                                if policy is not None:
-                                    try:
-                                        if True:  # preview para todas as ferramentas (removido filtro de approval)
-                                            self.renderer.show_system_neutral(
-                                                f"[preview/openai] {json.dumps({name: args}, ensure_ascii=False)}"
-                                            )
-                                            return
-                                    except Exception:
-                                        pass  # preview é best-effort
+                                try:
+                                    call = ToolCall(name=name, arguments=args)
+                                    if not effective_tool_executor.would_require_approval(call):
+                                        summary = ApproveSummary.build(name, args)
+                                        self.renderer.show_system_neutral(
+                                            f"[preview] {name} :: {summary}"
+                                        )
+                                except Exception:
+                                    pass  # preview é best-effort
 
                         # Registra preview para ferramentas executadas pelo executor
                         result_holder["result"] = driver_instance.run(
