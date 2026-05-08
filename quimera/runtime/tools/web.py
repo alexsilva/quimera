@@ -110,61 +110,50 @@ class WebTool:
             )
 
     def web_fetch(self, call: ToolCall) -> ToolResult:
-        """Faz download do conteúdo de uma ou mais URLs.
+        """Faz download do conteúdo de uma URL.
 
         Argumentos:
-            url/urls (str | list[str]): URL(s) para baixar.
+            url (str): URL para baixar.
             raw (bool, opcional): Se True, retorna HTML puro. Padrão False (extrai texto).
             timeout (int, opcional): Timeout em segundos. Padrão 30.
         """
-        raw_urls = call.arguments.get("urls")
-        if raw_urls is None:
-            raw_urls = call.arguments.get("url", "")
+        raw_url = call.arguments.get("url", "")
         raw_mode = bool(call.arguments.get("raw", False))
         timeout = int(call.arguments.get("timeout", 30))
 
-        if isinstance(raw_urls, str):
-            raw_urls = [raw_urls]
-        # Remove strings vazias
-        raw_urls = [u for u in raw_urls if u.strip()]
-        raw_urls = raw_urls[: self._MAX_URLS]
-
-        if not raw_urls:
+        if not isinstance(raw_url, str) or not raw_url.strip():
             return ToolResult(
                 ok=False,
                 tool_name=call.name,
                 error="Nenhuma URL fornecida.",
             )
 
-        results = []
-        for raw_url in raw_urls:
-            try:
-                url = self._resolve_url(raw_url)
-                html = self._curl(url, timeout=timeout)
+        url = self._resolve_url(raw_url.strip())
+        try:
+            html = self._curl(url, timeout=timeout)
+            if raw_mode:
+                text = html
+            else:
+                text = self._strip_html(html)
+                text = text[:5000]
 
-                if raw_mode:
-                    text = html
-                else:
-                    text = self._strip_html(html)
-                    text = text[:5000]
+            return ToolResult(
+                ok=True,
+                tool_name=call.name,
+                data={
+                    "results": [{"url": url, "content": text, "length": len(text)}],
+                    "total": 1,
+                },
+            )
+        except Exception as exc:
+            _logger.exception("Falha ao baixar URL: %s", url)
+            return ToolResult(
+                ok=False,
+                tool_name=call.name,
+                error=str(exc),
+                data={"results": [{"url": url, "error": str(exc)}], "total": 1},
+            )
 
-                results.append({
-                    "url": url,
-                    "content": text,
-                    "length": len(text),
-                })
-            except Exception as exc:
-                _logger.exception("Falha ao baixar URL: %s", raw_url)
-                results.append({
-                    "url": raw_url,
-                    "error": str(exc),
-                })
-
-        return ToolResult(
-            ok=True,
-            tool_name=call.name,
-            data={"results": results, "total": len(results)},
-        )
 
     def _curl(self, url: str, timeout: int = 30) -> str:
         """Executa curl e retorna o corpo da resposta."""

@@ -162,14 +162,14 @@ def test_policy_web_fetch_accepts_url(policy):
     policy.validate(call)
 
 
-def test_policy_web_fetch_accepts_urls_list(policy):
-    call = ToolCall(name="web_fetch", arguments={"urls": ["https://a.com", "https://b.com"]})
+def test_policy_web_fetch_accepts_url_string(policy):
+    call = ToolCall(name="web_fetch", arguments={"url": "https://example.com"})
     policy.validate(call)
 
 
-def test_policy_web_fetch_rejects_empty_url_and_urls(policy):
-    call = ToolCall(name="web_fetch", arguments={"url": " ", "urls": [" ", ""]})
-    with pytest.raises(ToolPolicyError, match="url' ou 'urls"):
+def test_policy_web_fetch_rejects_empty_url(policy):
+    call = ToolCall(name="web_fetch", arguments={"url": " "})
+    with pytest.raises(ToolPolicyError, match="url' não vazia"):
         policy.validate(call)
 
 

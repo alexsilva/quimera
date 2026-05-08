@@ -188,7 +188,7 @@ def test_web_fetch_strips_html(web_tool, mock_curl):
 
     result = web_tool.web_fetch(ToolCall(
         name="web_fetch",
-        arguments={"urls": "https://exemplo.com"},
+        arguments={"url": "https://exemplo.com"},
     ))
 
     assert result.ok is True
@@ -200,26 +200,13 @@ def test_web_fetch_strips_html(web_tool, mock_curl):
     assert "exemplo" in content
 
 
-def test_web_fetch_accepts_url_alias(web_tool, mock_curl):
-    """`url` (schema atual) também funciona além de `urls`."""
-    mock_curl.return_value = HTML_SAMPLE
-
-    result = web_tool.web_fetch(ToolCall(
-        name="web_fetch",
-        arguments={"url": "https://exemplo.com"},
-    ))
-
-    assert result.ok is True
-    assert result.data["total"] == 1
-
-
 def test_web_fetch_raw_mode(web_tool, mock_curl):
     """Com raw=True, retorna HTML puro."""
     mock_curl.return_value = HTML_SAMPLE
 
     result = web_tool.web_fetch(ToolCall(
         name="web_fetch",
-        arguments={"urls": "https://exemplo.com", "raw": True},
+        arguments={"url": "https://exemplo.com", "raw": True},
     ))
 
     assert result.ok is True
@@ -227,11 +214,11 @@ def test_web_fetch_raw_mode(web_tool, mock_curl):
     assert "<h1>Título</h1>" in content
 
 
-def test_web_fetch_empty_urls(web_tool, mock_curl):
-    """Lista vazia de URLs retorna erro."""
+def test_web_fetch_empty_url(web_tool, mock_curl):
+    """URL vazia retorna erro."""
     result = web_tool.web_fetch(ToolCall(
         name="web_fetch",
-        arguments={"urls": ""},
+        arguments={"url": ""},
     ))
 
     assert result.ok is False
@@ -245,7 +232,7 @@ def test_web_fetch_resolves_url(web_tool, mock_curl):
 
     result = web_tool.web_fetch(ToolCall(
         name="web_fetch",
-        arguments={"urls": "exemplo.com"},
+        arguments={"url": "exemplo.com"},
     ))
 
     assert result.ok is True
@@ -253,32 +240,31 @@ def test_web_fetch_resolves_url(web_tool, mock_curl):
     assert called_url.startswith("https://")
 
 
-def test_web_fetch_multiple_urls(web_tool, mock_curl):
-    """Múltiplas URLs são baixadas e retornadas."""
-    mock_curl.side_effect = ["pagina a", "pagina b"]
+def test_web_fetch_curl_error(web_tool, mock_curl):
+    """Falha no curl retorna ToolResult com ok=False."""
+    mock_curl.side_effect = TimeoutError("curl timeout")
 
     result = web_tool.web_fetch(ToolCall(
         name="web_fetch",
-        arguments={"urls": ["https://a.com", "https://b.com"]},
+        arguments={"url": "https://exemplo.com"},
     ))
 
-    assert result.ok is True
-    assert result.data["total"] == 2
-    assert mock_curl.call_count == 2
+    assert result.ok is False
+    assert "timeout" in result.error.lower()
 
 
-def test_web_fetch_respects_max_urls(web_tool, mock_curl):
-    """Mais de _MAX_URLS é truncado."""
-    mock_curl.side_effect = [f"pagina {i}" for i in range(10)]
+def test_web_fetch_timeout_parameter(web_tool, mock_curl):
+    """Parâmetro timeout é repassado ao curl."""
+    mock_curl.return_value = "conteudo"
 
     result = web_tool.web_fetch(ToolCall(
         name="web_fetch",
-        arguments={"urls": [f"https://site{i}.com" for i in range(10)]},
+        arguments={"url": "https://exemplo.com", "timeout": 15},
     ))
 
     assert result.ok is True
-    assert result.data["total"] == web_tool._MAX_URLS
-    assert mock_curl.call_count == web_tool._MAX_URLS
+    called_timeout = mock_curl.call_args[1].get("timeout", 30)
+    assert called_timeout == 15
 
 
 # ---------------------------------------------------------------------------
