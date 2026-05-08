@@ -15,6 +15,7 @@ from ..streaming import apply_stream_diff, normalize_stream_diff
 from ..tool_hops import (
     DEFAULT_MAX_TOOL_HOPS,
     MAX_TOOL_HOPS_BY_RELIABILITY,
+    get_invalid_tool_loop_threshold,
     get_max_tool_hops,
 )
 from .tool_schemas import resolve_tool_schemas
@@ -172,6 +173,14 @@ def _build_tool_budget_prompt(max_tool_hops: int, remaining_tool_hops: int) -> s
         f"max_tool_hops={max_tool_hops}, remaining_tool_hops={remaining_tool_hops}. "
         "Evite chamadas desnecessárias e finalize quando tiver evidência suficiente."
     )
+
+
+def _invalid_tool_signature(result: ToolResult) -> tuple[str, str, str]:
+    """Gera assinatura estável para detectar repetição do mesmo erro de policy."""
+    error_text = re.sub(r"\s+", " ", str(result.error or "").strip().lower())
+    if len(error_text) > 256:
+        error_text = error_text[:256]
+    return result.error_type, result.tool_name, error_text
 
 
 def _prune_tool_loop_messages(messages: list[dict]) -> list[dict]:
@@ -336,7 +345,9 @@ class OpenAICompatDriver:
             max_tool_hops = get_max_tool_hops(self.tool_use_reliability)
         messages.append({"role": "user", "content": prompt})
 
-        last_invalid_error_type: str | None = None
+        last_invalid_signature: tuple[str, str, str] | None = None
+        consecutive_invalid_signature_count = 0
+        max_consecutive_invalid_signatures = get_invalid_tool_loop_threshold(self.tool_use_reliability)
 
         try:
             for hop in range(max_tool_hops + 1):
@@ -407,19 +418,27 @@ class OpenAICompatDriver:
                         ),
                     })
                     if self._is_invalid_tool_result(result):
-                        if last_invalid_error_type == result.error_type:
+                        invalid_signature = _invalid_tool_signature(result)
+                        if last_invalid_signature == invalid_signature:
+                            consecutive_invalid_signature_count += 1
+                        else:
+                            last_invalid_signature = invalid_signature
+                            consecutive_invalid_signature_count = 1
+                        if consecutive_invalid_signature_count >= max_consecutive_invalid_signatures:
                             _logger.warning(
-                                "OpenAICompatDriver: repeated invalid policy error_type=%s tool=%s hop=%d",
+                                "OpenAICompatDriver: repeated invalid policy error_type=%s tool=%s hop=%d count=%d/%d",
                                 result.error_type,
                                 tc["name"],
                                 hop,
+                                consecutive_invalid_signature_count,
+                                max_consecutive_invalid_signatures,
                             )
                             if on_tool_abort is not None:
                                 on_tool_abort("invalid_tool_loop")
                             return "Falha: loop de ferramenta inválida detectado."
-                        last_invalid_error_type = result.error_type
                     else:
-                        last_invalid_error_type = None
+                        last_invalid_signature = None
+                        consecutive_invalid_signature_count = 0
                 messages = _prune_tool_loop_messages(messages)
 
             return None

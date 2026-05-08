@@ -4187,7 +4187,87 @@ class PluginTests(unittest.TestCase):
         self.assertIn("'error_metadata': {'field': 'command', 'hint': 'informe um comando não vazio'}", handoff)
 
     def test_resolve_agent_response_aborts_on_repeated_policy_error(self):
-        """Dispatch deve abortar quando o mesmo error_type=policy se repete consecutivamente."""
+        """Dispatch deve abortar quando a mesma assinatura de erro policy se repete consecutivamente."""
+        from quimera.app.dispatch import AppDispatchServices
+        from quimera.runtime.models import ToolResult
+        from quimera.runtime.tool_hops import get_invalid_tool_loop_threshold
+
+        app = Mock()
+        threshold = get_invalid_tool_loop_threshold("high")
+        app.tool_executor.maybe_execute_from_response.side_effect = [
+            (
+                "",
+                ToolResult(
+                    ok=False,
+                    tool_name="run_shell",
+                    error="Comando bloqueado: operador de encadeamento proibido: '&&'",
+                ),
+            )
+            for _ in range(threshold)
+        ]
+        app.task_services.truncate_payload = lambda payload: payload
+        app.get_agent_plugin.return_value = Mock(tool_use_reliability="high")
+        app.session_services.persist_message = Mock()
+        app.print_response = Mock()
+        app.record_failure = Mock()
+        app._call_agent = Mock(return_value="continuação")
+        app.session_metrics = Mock()
+
+        dispatch = AppDispatchServices(app)
+        result = dispatch.resolve_agent_response("codex", "resposta inicial", show_output=False)
+
+        self.assertEqual(result, "Falha: loop de ferramenta inválida detectado.")
+        abort_calls = [
+            call.kwargs
+            for call in app.session_metrics.record_tool_event.call_args_list
+            if call.kwargs.get("loop_abort")
+        ]
+        self.assertEqual(len(abort_calls), 1)
+        self.assertEqual(abort_calls[0]["reason"], "invalid_tool_loop")
+
+    def test_resolve_agent_response_allows_same_policy_signature_before_threshold(self):
+        """Dispatch não deve abortar antes do limite de repetição para a mesma assinatura."""
+        from quimera.app.dispatch import AppDispatchServices
+        from quimera.runtime.models import ToolResult
+        from quimera.runtime.tool_hops import get_invalid_tool_loop_threshold
+
+        app = Mock()
+        threshold = get_invalid_tool_loop_threshold("medium")
+        app.tool_executor.maybe_execute_from_response.side_effect = [
+            *[
+                (
+                    "",
+                    ToolResult(
+                        ok=False,
+                        tool_name="run_shell",
+                        error="Comando fora da allowlist: curl",
+                    ),
+                )
+                for _ in range(threshold - 1)
+            ],
+            ("", None),
+        ]
+        app.task_services.truncate_payload = lambda payload: payload
+        app.get_agent_plugin.return_value = Mock(tool_use_reliability="medium")
+        app.session_services.persist_message = Mock()
+        app.print_response = Mock()
+        app.record_failure = Mock()
+        app._call_agent = Mock(return_value="continuação")
+        app.session_metrics = Mock()
+
+        dispatch = AppDispatchServices(app)
+        result = dispatch.resolve_agent_response("codex", "resposta inicial", show_output=False)
+
+        self.assertEqual(result, "continuação")
+        abort_calls = [
+            call.kwargs
+            for call in app.session_metrics.record_tool_event.call_args_list
+            if call.kwargs.get("loop_abort")
+        ]
+        self.assertEqual(len(abort_calls), 0)
+
+    def test_resolve_agent_response_allows_different_policy_error_signatures(self):
+        """Dispatch não deve abortar quando o error_type=policy muda de assinatura."""
         from quimera.app.dispatch import AppDispatchServices
         from quimera.runtime.models import ToolResult
 
@@ -4209,6 +4289,7 @@ class PluginTests(unittest.TestCase):
                     error="Comando bloqueado: operador de encadeamento proibido: ';'",
                 ),
             ),
+            ("", None),
         ]
         app.task_services.truncate_payload = lambda payload: payload
         app.get_agent_plugin.return_value = Mock(tool_use_reliability="high")
@@ -4221,14 +4302,13 @@ class PluginTests(unittest.TestCase):
         dispatch = AppDispatchServices(app)
         result = dispatch.resolve_agent_response("codex", "resposta inicial", show_output=False)
 
-        self.assertEqual(result, "Falha: loop de ferramenta inválida detectado.")
+        self.assertEqual(result, "continuação")
         abort_calls = [
             call.kwargs
             for call in app.session_metrics.record_tool_event.call_args_list
             if call.kwargs.get("loop_abort")
         ]
-        self.assertEqual(len(abort_calls), 1)
-        self.assertEqual(abort_calls[0]["reason"], "invalid_tool_loop")
+        self.assertEqual(len(abort_calls), 0)
 
     def test_prompt_includes_proactivity_rules(self):
         """Prompt deve incluir NEEDS_INPUT e instruções de colaboração."""

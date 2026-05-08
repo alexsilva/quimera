@@ -1,4 +1,5 @@
 """Componentes de `quimera.app.dispatch`."""
+import re
 import time
 from contextlib import nullcontext
 from quimera.runtime.errors import (
@@ -8,7 +9,7 @@ from quimera.runtime.errors import (
     ToolLogicError,
     ToolRateLimitError,
 )
-from ..runtime.tool_hops import get_max_tool_hops
+from ..runtime.tool_hops import get_invalid_tool_loop_threshold, get_max_tool_hops
 from ..runtime.parser import strip_tool_block
 from .config import logger
 
@@ -37,6 +38,15 @@ def _resolve_tool_error_type(tool_result) -> str:
     if isinstance(error_type, str) and error_type:
         return error_type
     return "none"
+
+
+def _invalid_tool_signature(tool_result, error_type: str) -> tuple[str, str, str]:
+    """Gera assinatura estável para detectar repetição do mesmo erro de policy."""
+    tool_name = str(getattr(tool_result, "tool_name", "") or "")
+    error_text = re.sub(r"\s+", " ", str(getattr(tool_result, "error", "") or "").strip().lower())
+    if len(error_text) > 256:
+        error_text = error_text[:256]
+    return error_type, tool_name, error_text
 
 
 class AppDispatchServices:
@@ -142,8 +152,12 @@ class AppDispatchServices:
         current_response = response
         plugin = app.get_agent_plugin(agent)
         max_tool_hops = get_max_tool_hops(getattr(plugin, "tool_use_reliability", "medium"))
+        max_consecutive_invalid_signatures = get_invalid_tool_loop_threshold(
+            getattr(plugin, "tool_use_reliability", "medium")
+        )
         tool_history = []
-        last_invalid_error_type = None
+        last_invalid_signature = None
+        consecutive_invalid_signature_count = 0
         _MAX_TOOL_HISTORY_ENTRIES = 3
         _MAX_HANDOFF_CHARS = 8000
 
@@ -171,19 +185,28 @@ class AppDispatchServices:
                         is_invalid=is_invalid,
                         error_type=error_type,
                     )
-                if is_invalid and last_invalid_error_type == error_type:
-                    if session_metrics is not None:
-                        session_metrics.record_tool_event(
-                            app,
-                            agent,
-                            ok=False,
-                            is_invalid=True,
-                            loop_abort=True,
-                            reason="invalid_tool_loop",
-                            error_type=error_type,
-                        )
-                    return "Falha: loop de ferramenta inválida detectado."
-                last_invalid_error_type = error_type if is_invalid else None
+                if is_invalid:
+                    invalid_signature = _invalid_tool_signature(tool_result, error_type)
+                    if last_invalid_signature == invalid_signature:
+                        consecutive_invalid_signature_count += 1
+                    else:
+                        last_invalid_signature = invalid_signature
+                        consecutive_invalid_signature_count = 1
+                    if consecutive_invalid_signature_count >= max_consecutive_invalid_signatures:
+                        if session_metrics is not None:
+                            session_metrics.record_tool_event(
+                                app,
+                                agent,
+                                ok=False,
+                                is_invalid=True,
+                                loop_abort=True,
+                                reason="invalid_tool_loop",
+                                error_type=error_type,
+                            )
+                        return "Falha: loop de ferramenta inválida detectado."
+                else:
+                    last_invalid_signature = None
+                    consecutive_invalid_signature_count = 0
 
                 tool_payload = task_services.truncate_payload(tool_result.to_model_payload())
                 tool_history.append(

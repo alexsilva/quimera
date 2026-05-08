@@ -805,12 +805,45 @@ def test_run_low_reliability_uses_lower_max_hops():
 
 
 def test_run_aborts_on_repeated_policy_error_for_all_reliabilities():
-    driver, mock_client = _make_driver()
-    driver.tool_use_reliability = "medium"
+    from quimera.runtime.tool_hops import get_invalid_tool_loop_threshold
+
     tc = _make_tool_call("c", "bad_tool", '{"path":"x"}')
+    for reliability in ("low", "medium", "high"):
+        driver, mock_client = _make_driver()
+        driver.tool_use_reliability = reliability
+        threshold = get_invalid_tool_loop_threshold(reliability)
+        mock_client.chat.completions.create.side_effect = [
+            _make_non_streaming_response(content="", tool_calls=[tc])
+            for _ in range(threshold)
+        ]
+
+        mock_executor = MagicMock()
+        mock_executor.config = SimpleNamespace(db_path="/tmp/tasks.db", workspace_root="/tmp/workspace")
+        mock_executor.registry.names.return_value = [s["function"]["name"] for s in TOOL_SCHEMAS]
+        mock_executor.execute.side_effect = [
+            ToolResult(
+                ok=False,
+                tool_name="bad_tool",
+                error=ToolPolicyViolationError(
+                    "Comando fora da allowlist: bash",
+                    hint="Use apenas comandos permitidos.",
+                ),
+            )
+            for _ in range(threshold)
+        ]
+
+        result = driver.run("prompt", tool_executor=mock_executor)
+        assert result == "Falha: loop de ferramenta inválida detectado."
+        assert mock_client.chat.completions.create.call_count == threshold
+
+
+def test_run_does_not_abort_on_different_policy_error_signatures():
+    driver, mock_client = _make_driver()
+    tc = _make_tool_call("c", "run_shell", '{"command":"x"}')
     mock_client.chat.completions.create.side_effect = [
         _make_non_streaming_response(content="", tool_calls=[tc]),
         _make_non_streaming_response(content="", tool_calls=[tc]),
+        _make_non_streaming_response(content="resposta final", tool_calls=[]),
     ]
 
     mock_executor = MagicMock()
@@ -819,34 +852,63 @@ def test_run_aborts_on_repeated_policy_error_for_all_reliabilities():
     mock_executor.execute.side_effect = [
         ToolResult(
             ok=False,
-            tool_name="bad_tool",
-            error=ToolPolicyViolationError(
-                "Comando fora da allowlist: bash",
-                hint="Use apenas comandos permitidos.",
-            ),
+            tool_name="run_shell",
+            error=ToolPolicyViolationError("Comando bloqueado: operador de encadeamento proibido: '&&'"),
         ),
         ToolResult(
             ok=False,
-            tool_name="bad_tool",
-            error=ToolPolicyViolationError(
-                "Comando fora da allowlist: bash",
-                hint="Use apenas comandos permitidos.",
-            ),
+            tool_name="run_shell",
+            error=ToolPolicyViolationError("Comando bloqueado: operador de encadeamento proibido: ';'"),
         ),
     ]
 
     result = driver.run("prompt", tool_executor=mock_executor)
-    assert result == "Falha: loop de ferramenta inválida detectado."
-    assert mock_client.chat.completions.create.call_count == 2
+    assert result == "resposta final"
+    assert mock_client.chat.completions.create.call_count == 3
+
+
+def test_run_allows_same_policy_signature_before_threshold():
+    from quimera.runtime.tool_hops import get_invalid_tool_loop_threshold
+
+    driver, mock_client = _make_driver()
+    driver.tool_use_reliability = "medium"
+    threshold = get_invalid_tool_loop_threshold("medium")
+    tc = _make_tool_call("c", "run_shell", '{"command":"x"}')
+    mock_client.chat.completions.create.side_effect = [
+        *[
+            _make_non_streaming_response(content="", tool_calls=[tc])
+            for _ in range(threshold - 1)
+        ],
+        _make_non_streaming_response(content="resposta final", tool_calls=[]),
+    ]
+
+    mock_executor = MagicMock()
+    mock_executor.config = SimpleNamespace(db_path="/tmp/tasks.db", workspace_root="/tmp/workspace")
+    mock_executor.registry.names.return_value = [s["function"]["name"] for s in TOOL_SCHEMAS]
+    mock_executor.execute.side_effect = [
+        ToolResult(
+            ok=False,
+            tool_name="run_shell",
+            error=ToolPolicyViolationError("Comando fora da allowlist: curl"),
+        )
+        for _ in range(threshold - 1)
+    ]
+
+    result = driver.run("prompt", tool_executor=mock_executor)
+    assert result == "resposta final"
+    assert mock_client.chat.completions.create.call_count == threshold
 
 
 def test_run_reports_tool_abort_callback():
+    from quimera.runtime.tool_hops import get_invalid_tool_loop_threshold
+
     driver, mock_client = _make_driver()
     driver.tool_use_reliability = "high"
+    threshold = get_invalid_tool_loop_threshold("high")
     tc = _make_tool_call("c", "bad_tool", '{"path":"x"}')
     mock_client.chat.completions.create.side_effect = [
-        _make_non_streaming_response(content="", tool_calls=[tc]),
-        _make_non_streaming_response(content="", tool_calls=[tc]),
+        _make_non_streaming_response(content="", tool_calls=[tc])
+        for _ in range(threshold)
     ]
 
     mock_executor = MagicMock()
@@ -857,12 +919,8 @@ def test_run_reports_tool_abort_callback():
             ok=False,
             tool_name="bad_tool",
             error=ToolPolicyViolationError("Comando bloqueado: operador de encadeamento proibido: ';'"),
-        ),
-        ToolResult(
-            ok=False,
-            tool_name="bad_tool",
-            error=ToolPolicyViolationError("Comando bloqueado: operador de encadeamento proibido: ';'"),
-        ),
+        )
+        for _ in range(threshold)
     ]
     aborts = []
 
