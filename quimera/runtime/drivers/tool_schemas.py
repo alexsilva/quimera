@@ -360,6 +360,14 @@ TOOL_SCHEMAS = [
                         "type": "string",
                         "description": "URL completa (incluindo https://) da página a ser lida.",
                     },
+                    "raw": {
+                        "type": "boolean",
+                        "description": "Se true, retorna o HTML bruto sem extrair texto. Padrão: false.",
+                    },
+                    "timeout": {
+                        "type": "integer",
+                        "description": "Tempo máximo de espera pela resposta em segundos. Padrão: 30.",
+                    },
                 },
                 "required": ["url"],
             },
