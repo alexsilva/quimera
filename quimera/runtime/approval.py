@@ -43,10 +43,22 @@ class ApprovalHandler(ABC):
         raise NotImplementedError
 
 
+class _ApprovalCancelled(Exception):
+    """Sinal interno para interrupção cooperativa do prompt de aprovação."""
+
+
 class ConsoleApprovalHandler(ApprovalHandler):
     """Confirmação simples no terminal via input() bloqueante."""
 
-    def __init__(self, input_fn=None, renderer=None, suspend_fn=None, resume_fn=None):
+    def __init__(
+        self,
+        input_fn=None,
+        renderer=None,
+        suspend_fn=None,
+        resume_fn=None,
+        cancel_event=None,
+        cancel_poll_interval: float = 0.1,
+    ):
         """Inicializa com dependências injetáveis.
 
         Args:
@@ -66,6 +78,8 @@ class ConsoleApprovalHandler(ApprovalHandler):
         self._suspend_spinner_fn = None
         self._resume_spinner_fn = None
         self._approve_all_callback = None
+        self._cancel_event = cancel_event
+        self._cancel_poll_interval = max(float(cancel_poll_interval), 0.01)
 
     def set_spinner_callbacks(self, suspend_spinner_fn, resume_spinner_fn):
         """Define callbacks para pausar/retomar o spinner do Rich.
@@ -84,6 +98,10 @@ class ConsoleApprovalHandler(ApprovalHandler):
         'approve all' no handler de aprovação (ex: PreApprovalHandler).
         """
         self._approve_all_callback = callback
+
+    def set_cancel_event(self, cancel_event) -> None:
+        """Define um cancel_event opcional para interromper input bloqueante."""
+        self._cancel_event = cancel_event
 
     def approve(self, *, tool_name: str, summary: str) -> bool:
         """Tenta aprovação rápida; retorna False se precisar de interação.
@@ -111,7 +129,12 @@ class ConsoleApprovalHandler(ApprovalHandler):
             self._suspend_spinner_fn()
         self._show(f"\n[aprovação] {tool_name} :: {summary}")
         try:
-            answer = input_fn("  Executar? [y/N/a=todas]: ").strip().lower()
+            if self._input_fn is None and self._cancel_event is not None:
+                answer = self._read_builtin_input_with_cancel("  Executar? [y/N/a=todas]: ").strip().lower()
+            else:
+                answer = input_fn("  Executar? [y/N/a=todas]: ").strip().lower()
+        except _ApprovalCancelled:
+            return False
         except EOFError:
             self._show("  [aprovação] stdin não disponível — negando automaticamente")
             return False
@@ -128,6 +151,47 @@ class ConsoleApprovalHandler(ApprovalHandler):
 
     def _show(self, message: str) -> None:
         _emit_system_message(self._renderer, message)
+
+    def _is_cancelled(self) -> bool:
+        event = self._cancel_event
+        if event is None:
+            return False
+        is_set = getattr(event, "is_set", None)
+        if callable(is_set):
+            try:
+                return bool(is_set())
+            except Exception:
+                return False
+        return False
+
+    def _read_builtin_input_with_cancel(self, prompt: str) -> str:
+        """Lê uma linha com polling para permitir cancelamento cooperativo."""
+        stdin = sys.stdin
+        if stdin is None:
+            raise EOFError
+
+        fileno = getattr(stdin, "fileno", None)
+        isatty = getattr(stdin, "isatty", None)
+        if not callable(fileno) or (callable(isatty) and not isatty()):
+            if self._is_cancelled():
+                raise _ApprovalCancelled
+            return input(prompt)
+
+        sys.stdout.write(prompt)
+        sys.stdout.flush()
+        while True:
+            if self._is_cancelled():
+                # Garante quebra de linha para não colidir visualmente com o próximo prompt.
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+                raise _ApprovalCancelled
+            ready, _, _ = select.select([stdin], [], [], self._cancel_poll_interval)
+            if not ready:
+                continue
+            line = stdin.readline()
+            if line == "":
+                raise EOFError
+            return line
 
 
 class AutoApprovalHandler(ApprovalHandler):

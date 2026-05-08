@@ -1,5 +1,6 @@
 from pathlib import Path
 import tempfile
+import threading
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -213,6 +214,29 @@ def test_set_spinner_callbacks_ignores_non_console_handler():
     resume = MagicMock()
     # Não deve lançar exceção
     executor.set_spinner_callbacks(suspend, resume)
+
+
+def test_set_approval_cancel_event_injects_into_console_handler():
+    """set_approval_cancel_event injeta cancel_event no ConsoleApprovalHandler."""
+    handler = ConsoleApprovalHandler()
+    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=Path("/tmp")), handler)
+    cancel_event = threading.Event()
+
+    executor.set_approval_cancel_event(cancel_event)
+
+    assert handler._cancel_event is cancel_event
+
+
+def test_set_approval_cancel_event_traverses_pre_approval_wrapper():
+    """set_approval_cancel_event atravessa PreApprovalHandler e injeta no base."""
+    base = ConsoleApprovalHandler()
+    pre = PreApprovalHandler(base)
+    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=Path("/tmp")), pre)
+    cancel_event = threading.Event()
+
+    executor.set_approval_cancel_event(cancel_event)
+
+    assert base._cancel_event is cancel_event
 
 
 # ── Fluxo unificado de aprovação ────────────────────────────

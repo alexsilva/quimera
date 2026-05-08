@@ -553,14 +553,18 @@ class AgentClient:
         status_cm = self.renderer.running_status("", agent=agent) if (
                 show_status and not silent and not quiet) else nullcontext(None)
         status_label = f"[dim]{'conectando' if is_first_call else 'aguardando'} {connection.model}...[/dim]"
+        effective_tool_executor = None
 
         try:
             with status_cm as status:
                 if status is not None:
                     status.update(status_label)
-                effective_tool_executor = None
                 if allow_tools and getattr(plugin, "supports_tools", True):
                     effective_tool_executor = self.tool_executor
+                if effective_tool_executor is not None:
+                    set_cancel_event = getattr(effective_tool_executor, "set_approval_cancel_event", None)
+                    if callable(set_cancel_event):
+                        set_cancel_event(self._cancel_event)
                 # Injeta callbacks de spinner no executor para que o approval handler
                 # possa pausar o Live do Rich antes de input() bloqueante, evitando
                 # race condition entre o refresh do spinner e a leitura do stdin.
@@ -597,6 +601,7 @@ class AgentClient:
                 while t.is_alive():
                     if self._cancel_event.is_set():
                         self._user_cancelled = True
+                        t.join(timeout=0.5)
                         self.renderer.show_error("[cancelado] pelo usuário")
                         return None
                     time.sleep(0.25)
@@ -628,6 +633,10 @@ class AgentClient:
 
                 return result_holder["result"]
         finally:
+            if effective_tool_executor is not None:
+                set_cancel_event = getattr(effective_tool_executor, "set_approval_cancel_event", None)
+                if callable(set_cancel_event):
+                    set_cancel_event(None)
             self._agent_running = False
             self._stop_esc_monitor()
 

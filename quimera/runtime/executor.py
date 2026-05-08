@@ -79,6 +79,15 @@ class ToolExecutor:
         if callable(setter):
             setter(suspend_spinner_fn, resume_spinner_fn)
 
+    def set_approval_cancel_event(self, cancel_event) -> None:
+        """Injeta cancel_event no approval handler base quando suportado."""
+        handler = self._approval_handler
+        while hasattr(handler, '_base'):
+            handler = handler._base
+        setter = getattr(handler, "set_cancel_event", None)
+        if callable(setter):
+            setter(cancel_event)
+
     def execute(self, call: ToolCall) -> ToolResult:
         """Executa um ToolCall com política de aprovação.
 

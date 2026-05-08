@@ -4,6 +4,8 @@ Cobre todas as classes e fluxos: ConsoleApprovalHandler, AutoApprovalHandler,
 PreApprovalHandler, NonBlockingConsoleApprovalHandler, e suas interações
 com suspend/resume/spinner callbacks.
 """
+import io
+import threading
 from unittest.mock import MagicMock, patch, call
 
 import pytest
@@ -341,6 +343,55 @@ def test_console_approval_handler_none_input_fn_uses_builtin(mock_print, mock_in
     result = handler.approve(tool_name="shell", summary="ls")
     assert result is True
     mock_input.assert_called_once()
+
+
+@patch('builtins.print')
+@patch('builtins.input')
+def test_console_approval_handler_cancel_event_pre_set_skips_builtin_input(mock_input, _mock_print):
+    """Com cancel_event já setado, approve interrompe sem bloquear no input()."""
+    cancel_event = threading.Event()
+    cancel_event.set()
+    handler = ConsoleApprovalHandler(input_fn=None, cancel_event=cancel_event)
+
+    result = handler.approve(tool_name="shell", summary="ls")
+
+    assert result is False
+    mock_input.assert_not_called()
+
+
+@patch('builtins.print')
+def test_console_approval_handler_cancel_event_during_polling_returns_false(_mock_print):
+    """Quando cancel_event é acionado durante polling, approve retorna False rapidamente."""
+    cancel_event = threading.Event()
+    handler = ConsoleApprovalHandler(input_fn=None, cancel_event=cancel_event, cancel_poll_interval=0.01)
+
+    class FakeStdin:
+        @staticmethod
+        def isatty():
+            return True
+
+        @staticmethod
+        def fileno():
+            return 0
+
+        @staticmethod
+        def readline():
+            return "y\n"
+
+    calls = {"count": 0}
+
+    def _fake_select(*_args, **_kwargs):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            cancel_event.set()
+        return ([], [], [])
+
+    fake_stdout = io.StringIO()
+    with patch("sys.stdin", FakeStdin()), patch("sys.stdout", fake_stdout), patch("select.select", side_effect=_fake_select):
+        result = handler.approve(tool_name="shell", summary="ls")
+
+    assert result is False
+    assert calls["count"] >= 1
 
 
 # ── AutoApprovalHandler ─────────────────────────────────────
