@@ -28,6 +28,13 @@ def mock_curl():
         yield mock
 
 
+@pytest.fixture
+def mock_post_curl():
+    """Mocka WebTool._write_and_curl para chamadas POST."""
+    with patch.object(WebTool, "_write_and_curl") as mock:
+        yield mock
+
+
 # ---------------------------------------------------------------------------
 # web_search – sucesso com DuckDuckGo Lite HTML
 # ---------------------------------------------------------------------------
@@ -54,9 +61,9 @@ DUCK_HTML_SAMPLE = """\
 """
 
 
-def test_web_search_returns_links(web_tool, mock_curl):
+def test_web_search_returns_links(web_tool, mock_post_curl):
     """web_search retorna lista de links do HTML do DuckDuckGo Lite."""
-    mock_curl.return_value = DUCK_HTML_SAMPLE
+    mock_post_curl.return_value = DUCK_HTML_SAMPLE
 
     result = web_tool.web_search(ToolCall(
         name="web_search",
@@ -72,7 +79,7 @@ def test_web_search_returns_links(web_tool, mock_curl):
     assert data["results"][0]["snippet"] == "Exemplo de snippet 1"
 
 
-def test_web_search_empty_query(web_tool, mock_curl):
+def test_web_search_empty_query(web_tool, mock_curl, mock_post_curl):
     """Query vazia retorna erro sem chamar curl."""
     result = web_tool.web_search(ToolCall(
         name="web_search",
@@ -82,33 +89,33 @@ def test_web_search_empty_query(web_tool, mock_curl):
     assert result.ok is False
     assert "obrigatório" in result.error.lower() or "query" in result.error.lower()
     mock_curl.assert_not_called()
+    mock_post_curl.assert_not_called()
 
 
-def test_web_search_uses_configured_urls(web_tool, mock_curl):
+def test_web_search_uses_configured_urls(web_tool, mock_post_curl):
     """Confirma que as URLs das constantes da classe são usadas."""
-    mock_curl.return_value = "<html></html>"
+    mock_post_curl.return_value = "<html></html>"
 
     web_tool.web_search(ToolCall(
         name="web_search",
         arguments={"query": "python"},
     ))
 
-    # Deve chamar curl com a URL do DuckDuckGo Lite
-    called_url = mock_curl.call_args_list[0][0][0]
+    # Deve chamar POST com a URL do DuckDuckGo Lite
+    called_url = mock_post_curl.call_args_list[0][0][0]
+    called_payload = mock_post_curl.call_args_list[0][0][1]
     assert "lite.duckduckgo.com/lite/" in called_url
-    assert "q=python" in called_url
+    assert "q=python" in called_payload
 
 
-def test_web_search_fallback_json(web_tool, mock_curl):
+def test_web_search_fallback_json(web_tool, mock_curl, mock_post_curl):
     """Quando o HTML não retorna links, tenta fallback JSON da API."""
-    mock_curl.side_effect = [
-        "<html></html>",  # Primeira chamada (lite) – vazio
-        json.dumps({      # Segunda chamada (API JSON)
-            "AbstractText": "Linguagem de programação Python",
-            "AbstractSource": "Wikipedia",
-            "AbstractURL": "https://pt.wikipedia.org/wiki/Python",
-        }),
-    ]
+    mock_post_curl.return_value = "<html></html>"  # Primeira chamada (lite) – vazio
+    mock_curl.return_value = json.dumps({          # Segunda chamada (API JSON)
+        "AbstractText": "Linguagem de programação Python",
+        "AbstractSource": "Wikipedia",
+        "AbstractURL": "https://pt.wikipedia.org/wiki/Python",
+    })
 
     result = web_tool.web_search(ToolCall(
         name="web_search",
@@ -120,9 +127,9 @@ def test_web_search_fallback_json(web_tool, mock_curl):
     assert "Python" in result.data["results"][0]["snippet"]
 
 
-def test_web_search_curl_error(web_tool, mock_curl):
+def test_web_search_curl_error(web_tool, mock_post_curl):
     """Falha no curl retorna ToolResult com ok=False."""
-    mock_curl.side_effect = TimeoutError("curl timeout")
+    mock_post_curl.side_effect = TimeoutError("curl timeout")
 
     result = web_tool.web_search(ToolCall(
         name="web_search",
@@ -131,6 +138,36 @@ def test_web_search_curl_error(web_tool, mock_curl):
 
     assert result.ok is False
     assert "timeout" in result.error.lower()
+
+
+def test_web_search_supports_num_results_alias(web_tool, mock_post_curl):
+    """`num_results` no schema também limita a quantidade de resultados."""
+    mock_post_curl.return_value = DUCK_HTML_SAMPLE
+
+    result = web_tool.web_search(ToolCall(
+        name="web_search",
+        arguments={"query": "teste", "num_results": 1},
+    ))
+
+    assert result.ok is True
+    assert result.data["total"] == 1
+
+
+def test_web_search_parses_duckduckgo_redirect_links(web_tool, mock_post_curl):
+    """Links internos /l/?uddg são convertidos para URL final."""
+    mock_post_curl.return_value = (
+        "<td class='result-snippet'>Resumo</td>"
+        "<a class='result-link' href='//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fpage'>Titulo</a>"
+    )
+
+    result = web_tool.web_search(ToolCall(
+        name="web_search",
+        arguments={"query": "teste"},
+    ))
+
+    assert result.ok is True
+    assert result.data["total"] == 1
+    assert result.data["results"][0]["url"] == "https://example.com/page"
 
 
 # ---------------------------------------------------------------------------
@@ -161,6 +198,19 @@ def test_web_fetch_strips_html(web_tool, mock_curl):
     assert "<b>" not in content
     assert "Título" in content
     assert "exemplo" in content
+
+
+def test_web_fetch_accepts_url_alias(web_tool, mock_curl):
+    """`url` (schema atual) também funciona além de `urls`."""
+    mock_curl.return_value = HTML_SAMPLE
+
+    result = web_tool.web_fetch(ToolCall(
+        name="web_fetch",
+        arguments={"url": "https://exemplo.com"},
+    ))
+
+    assert result.ok is True
+    assert result.data["total"] == 1
 
 
 def test_web_fetch_raw_mode(web_tool, mock_curl):

@@ -136,9 +136,15 @@ class ToolPolicy:
 
     def _validate_web_fetch(self, call: ToolCall) -> None:
         """Valida uma chamada de fetch de URL."""
-        url = call.arguments.get("url", "")
-        if not url or not str(url).strip():
-            raise ToolPolicyError("web_fetch requer 'url' não vazia")
+        url = call.arguments.get("url")
+        urls = call.arguments.get("urls")
+        if isinstance(url, str) and url.strip():
+            return
+        if isinstance(urls, str) and urls.strip():
+            return
+        if isinstance(urls, list) and any(isinstance(item, str) and item.strip() for item in urls):
+            return
+        raise ToolPolicyError("web_fetch requer 'url' ou 'urls' não vazia")
 
     def _validate_propose_task(self, call: ToolCall) -> None:
         """Executa validate propose task."""

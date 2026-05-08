@@ -6,6 +6,7 @@ import logging
 import subprocess
 import tempfile
 import time
+from html import unescape
 import urllib.parse
 from pathlib import Path
 
@@ -17,22 +18,27 @@ _logger = logging.getLogger(__name__)
 
 class WebTool:
     """Implementa `WebTool` — busca na web usando curl."""
+    _MAX_URLS = 5
+    _HTTP_SCHEME = "http://"
+    _HTTPS_SCHEME = "https://"
+    _HTTPS_SCHEME_PREFIX = "https:"
+    _URL_SCHEMES = (_HTTP_SCHEME, _HTTPS_SCHEME)
+    _DUCKDUCKGO_DOMAIN = "duckduckgo.com"
+    _DUCKDUCKGO_BASE_URL = "https://duckduckgo.com"
+    _DUCKDUCKGO_LITE_URL = "https://lite.duckduckgo.com/lite/"
+    _DUCKDUCKGO_API_URL = "https://api.duckduckgo.com/"
 
     def __init__(self, config: ToolRuntimeConfig) -> None:
         """Inicializa uma instância de WebTool."""
         self.config = config
-        # Limite de downloads em uma mesma chamada
-        self._MAX_URLS = 5
-        self._DUCKDUCKGO_LITE = "https://lite.duckduckgo.com/lite/"
-        self._DUCKDUCKGO_API = "https://api.duckduckgo.com/"
 
     def _resolve_url(self, raw: str) -> str:
         """Normaliza a URL."""
         raw = raw.strip()
         if not raw:
             raise ValueError("URL vazia")
-        if not raw.startswith(("http://", "https://")):
-            raw = "https://" + raw
+        if not raw.startswith(self._URL_SCHEMES):
+            raw = self._HTTPS_SCHEME + raw
         return raw
 
     def web_search(self, call: ToolCall) -> ToolResult:
@@ -40,12 +46,17 @@ class WebTool:
 
         Argumentos:
             query (str): Termo de busca.
-            count (int, opcional): Número de resultados (padrão 5, máx 10).
+            num_results/count (int, opcional): Número de resultados (padrão 5, máx 10).
 
         Usa duckduckgo HTML (lite) para obter resultados.
         """
-        query = call.arguments.get("query", "")
-        count = min(int(call.arguments.get("count", 5)), 10)
+        query = str(call.arguments.get("query", ""))
+        raw_count = call.arguments.get("num_results", call.arguments.get("count", 5))
+        try:
+            count = int(raw_count)
+        except (TypeError, ValueError):
+            count = 5
+        count = max(1, min(count, 10))
 
         if not query.strip():
             return ToolResult(
@@ -54,16 +65,22 @@ class WebTool:
                 error="Parâmetro 'query' é obrigatório.",
             )
 
-        url = f"{self._DUCKDUCKGO_LITE}?{urllib.parse.urlencode({'q': query})}"
+        payload = urllib.parse.urlencode({"q": query})
 
         try:
-            result = self._curl(url, timeout=15)
+            # DuckDuckGo Lite responde melhor via POST para evitar challenges anti-bot em algumas queries.
+            result = self._write_and_curl(
+                self._DUCKDUCKGO_LITE_URL,
+                payload,
+                content_type="application/x-www-form-urlencoded",
+                timeout=15,
+            )
 
             links = self._parse_duckduckgo_links(result, count)
 
             if not links:
                 # fallback: tenta o formato json
-                url_json = f"{self._DUCKDUCKGO_API}?{urllib.parse.urlencode({'q': query, 'format': 'json'})}"
+                url_json = f"{self._DUCKDUCKGO_API_URL}?{urllib.parse.urlencode({'q': query, 'format': 'json'})}"
                 result_json = self._curl(url_json, timeout=10)
                 if result_json and result_json.strip():
                     data = json.loads(result_json)
@@ -96,11 +113,13 @@ class WebTool:
         """Faz download do conteúdo de uma ou mais URLs.
 
         Argumentos:
-            urls (str | list[str]): URL(s) para baixar.
+            url/urls (str | list[str]): URL(s) para baixar.
             raw (bool, opcional): Se True, retorna HTML puro. Padrão False (extrai texto).
             timeout (int, opcional): Timeout em segundos. Padrão 30.
         """
-        raw_urls = call.arguments.get("urls", "")
+        raw_urls = call.arguments.get("urls")
+        if raw_urls is None:
+            raw_urls = call.arguments.get("url", "")
         raw_mode = bool(call.arguments.get("raw", False))
         timeout = int(call.arguments.get("timeout", 30))
 
@@ -212,24 +231,27 @@ class WebTool:
         links: list[dict] = []
 
         href_pattern = re.compile(
-            r'<a(?=[^>]*class="result-link")[^>]*href="(https?://[^"]+)"[^>]*>(.*?)</a>',
+            r"""<a(?=[^>]*class=['"]result-link['"])[^>]*href=['"]([^'"]+)['"][^>]*>(.*?)</a>""",
             re.DOTALL,
         )
         snippet_pattern = re.compile(
-            r'<td[^>]*class="result-snippet">(.*?)</td>',
+            r"""<td[^>]*class=['"]result-snippet['"]>(.*?)</td>""",
             re.DOTALL,
         )
 
         hrefs = href_pattern.findall(html)
         snippets = snippet_pattern.findall(html)
 
-        for i, (url, title) in enumerate(hrefs):
+        for i, (raw_url, title) in enumerate(hrefs):
             if i >= count:
                 break
             snippet = ""
             if i < len(snippets):
-                snippet = re.sub(r"<[^>]+>", "", snippets[i]).strip()
-            title_clean = re.sub(r"<[^>]+>", "", title).strip()
+                snippet = unescape(re.sub(r"<[^>]+>", "", snippets[i])).strip()
+            title_clean = unescape(re.sub(r"<[^>]+>", "", title)).strip()
+            url = WebTool._normalize_duckduckgo_url(raw_url)
+            if not url:
+                continue
             links.append({
                 "title": title_clean or url,
                 "url": url,
@@ -237,6 +259,30 @@ class WebTool:
             })
 
         return links
+
+    @staticmethod
+    def _normalize_duckduckgo_url(raw_url: str) -> str:
+        """Normaliza URLs de resultado do DuckDuckGo, inclusive redirects internos."""
+        cleaned = unescape((raw_url or "").strip())
+        if not cleaned:
+            return ""
+        if cleaned.startswith("//"):
+            cleaned = WebTool._HTTPS_SCHEME_PREFIX + cleaned
+        if cleaned.startswith("/"):
+            cleaned = WebTool._DUCKDUCKGO_BASE_URL + cleaned
+
+        parsed = urllib.parse.urlparse(cleaned)
+        if WebTool._DUCKDUCKGO_DOMAIN in parsed.netloc and parsed.path.startswith("/l/"):
+            qs = urllib.parse.parse_qs(parsed.query)
+            uddg = qs.get("uddg", [])
+            if uddg:
+                target = urllib.parse.unquote(uddg[0]).strip()
+                if target.startswith(WebTool._URL_SCHEMES):
+                    return target
+
+        if cleaned.startswith(WebTool._URL_SCHEMES):
+            return cleaned
+        return ""
 
     @staticmethod
     def _strip_html(html: str) -> str:

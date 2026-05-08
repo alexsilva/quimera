@@ -157,6 +157,22 @@ def test_policy_other_validations(policy):
     policy.validate(ToolCall(name="get_job", arguments={}))
 
 
+def test_policy_web_fetch_accepts_url(policy):
+    call = ToolCall(name="web_fetch", arguments={"url": "https://example.com"})
+    policy.validate(call)
+
+
+def test_policy_web_fetch_accepts_urls_list(policy):
+    call = ToolCall(name="web_fetch", arguments={"urls": ["https://a.com", "https://b.com"]})
+    policy.validate(call)
+
+
+def test_policy_web_fetch_rejects_empty_url_and_urls(policy):
+    call = ToolCall(name="web_fetch", arguments={"url": " ", "urls": [" ", ""]})
+    with pytest.raises(ToolPolicyError, match="url' ou 'urls"):
+        policy.validate(call)
+
+
 def test_policy_disabled_tool_exceptions(policy):
     for tool in ["approve_task", "complete_task", "fail_task"]:
         with pytest.raises(ToolPolicyError):
