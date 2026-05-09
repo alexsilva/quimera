@@ -68,45 +68,6 @@ class TestAppHistory(unittest.TestCase):
     @patch("quimera.app.core.SessionStorage")
     @patch("quimera.app.core.AgentClient")
     @patch("quimera.app.core.SessionSummarizer")
-    @patch("quimera.app.core.InputGate")
-    def test_experimental_ui_registers_theme_cycle_handler_on_input_gate(
-        self,
-        mock_input_gate,
-        mock_session_sum,
-        mock_agent,
-        mock_storage,
-        mock_context,
-        mock_config,
-        mock_term,
-        mock_add_job,
-        mock_init_db,
-    ):
-        mock_add_job.return_value = 1
-        self._setup_common_mocks(mock_storage, mock_context)
-        mock_gate_instance = MagicMock()
-        mock_input_gate.return_value = mock_gate_instance
-
-        with patch("quimera.app.core.Workspace") as mock_ws:
-            mock_ws_instance = MagicMock()
-            mock_ws_instance.history_file = self.history_file
-            mock_ws_instance.root = Path("/tmp/quimera_test_workspace")
-            mock_ws.return_value = mock_ws_instance
-
-            with patch("quimera.app.core.create_executor"):
-                from quimera.app import QuimeraApp
-
-                app = QuimeraApp(self.tmp_cwd, experimental_ui=True)
-
-        mock_gate_instance.set_theme_cycle_handler.assert_called_once_with(app._cycle_renderer_theme)
-
-    @patch("quimera.runtime.tasks.init_db")
-    @patch("quimera.runtime.tasks.add_job")
-    @patch("quimera.app.core.TerminalRenderer")
-    @patch("quimera.app.core.ConfigManager")
-    @patch("quimera.app.core.ContextManager")
-    @patch("quimera.app.core.SessionStorage")
-    @patch("quimera.app.core.AgentClient")
-    @patch("quimera.app.core.SessionSummarizer")
     @patch("builtins.input", return_value="test input")
     def test_read_user_input_uses_input_function(
         self,

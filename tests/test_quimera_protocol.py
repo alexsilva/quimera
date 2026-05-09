@@ -253,24 +253,6 @@ class ProtocolTests(unittest.TestCase):
             cli_main()
 
         self.assertEqual(captured["visibility"], Visibility.FULL)
-        self.assertFalse(captured["experimental_ui"])
-        self.assertTrue(captured["ran"])
-
-    def test_cli_passes_ui_experimental_to_app(self):
-        captured = {}
-
-        class FakeApp:
-            def __init__(self, cwd, **kwargs):
-                captured["cwd"] = cwd
-                captured.update(kwargs)
-
-            def run(self):
-                captured["ran"] = True
-
-        with patch("quimera.cli.QuimeraApp", FakeApp), patch("sys.argv", ["quimera", "--ui-experimental"]):
-            cli_main()
-
-        self.assertTrue(captured["experimental_ui"])
         self.assertTrue(captured["ran"])
 
     def test_cli_rejects_legacy_spy_flag(self):
