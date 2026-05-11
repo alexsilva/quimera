@@ -594,7 +594,11 @@ class QuimeraApp:
 
         normalized_mode = str(mode_name or "").strip().lower() or "default"
         if normalized_mode in {"default", "execute"}:
+            if normalized_name in {">", ">>>"}:
+                return f"{normalized_name} "
             return f"{normalized_name}: "
+        if normalized_name in {">", ">>>"}:
+            return f"{normalized_name} [{normalized_mode}]: "
         return f"{normalized_name} [{normalized_mode}]: "
 
     def _build_input_prompt(self) -> str:

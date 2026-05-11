@@ -312,7 +312,7 @@ class TestBuildInputPrompt(unittest.TestCase):
 
     def test_symbol_name_preserved_as_fallback(self):
         app = self._make_app(user_name=">>>")
-        self.assertEqual(app._build_input_prompt(), ">>>: ")
+        self.assertEqual(app._build_input_prompt(), ">>> ")
 
 
 class TestInputContextAndWelcome(unittest.TestCase):

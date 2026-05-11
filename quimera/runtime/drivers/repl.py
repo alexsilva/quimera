@@ -140,7 +140,13 @@ class DriverRepl:
 
         normalized_mode = str(mode_name or "").strip().lower() or "default"
         if normalized_mode in {"default", "execute"}:
+            # O símbolo >>> não usa dois-pontos como separador
+            if normalized_name == ">>>":
+                return f"{normalized_name} "
             return f"{normalized_name}: "
+        # Modos não-default: o símbolo >>> mantém dois-pontos antes do [mode]
+        if normalized_name == ">>>":
+            return f"{normalized_name} [{normalized_mode}]: "
         return f"{normalized_name} [{normalized_mode}]: "
 
     @staticmethod

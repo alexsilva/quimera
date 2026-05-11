@@ -735,7 +735,7 @@ def test_driver_repl_probe_backend_unavailable_raises_clear_error():
 def test_driver_repl_build_input_prompt_formats_user_name():
     assert DriverRepl._build_input_prompt("Alex", "execute") == "Alex: "
     assert DriverRepl._build_input_prompt("Alex>", "execute") == "Alex: "
-    assert DriverRepl._build_input_prompt(">>>", "execute") == ">>>: "
+    assert DriverRepl._build_input_prompt(">>>", "execute") == ">>> "
     assert DriverRepl._build_input_prompt("Alex", "review") == "Alex [review]: "
 
 
