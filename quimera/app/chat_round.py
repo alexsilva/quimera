@@ -100,6 +100,16 @@ class ChatRoundOrchestrator:
         if response is not None:
             app.session_services.persist_message(first_agent, response)
 
+        # Impede handoff para si mesmo — evitar loops infinitos e delegar
+        # explicitamente para o mesmo agente não faz sentido.
+        if route_target and route_target == first_agent:
+            logger.warning(
+                "[HANDOFF] %s attempted to handoff to itself — ignored",
+                first_agent,
+            )
+            route_target = None
+            handoff = None
+
         if route_target and handoff:
             self._process_handoff(first_agent, route_target, handoff)
         else:
@@ -125,6 +135,18 @@ class ChatRoundOrchestrator:
             handoff_id = current_handoff.get("handoff_id", "?") if isinstance(current_handoff, dict) else "?"
             priority = current_handoff.get("priority", "normal") if isinstance(current_handoff, dict) else "normal"
             chain = current_handoff.get("chain", []) if isinstance(current_handoff, dict) else []
+
+            # Impede handoff para si mesmo no meio da cadeia
+            if current_target == current_from:
+                logger.warning(
+                    "[HANDOFF] %s attempted to handoff to itself in chain — ignored",
+                    current_target,
+                )
+                if hasattr(app, "renderer"):
+                    app.renderer.show_warning(
+                        f"{current_target} tentou delegar para si mesmo — ignorado"
+                    )
+                break
 
             if current_target in chain:
                 logger.warning(
@@ -391,4 +413,20 @@ class ChatRoundOrchestrator:
             if route_target and index + 1 < len(remaining):
                 remaining[index + 1] = route_target
             if route_target:
-                next_handoff = handoff
+                # Impede handoff para si mesmo no fluxo padrão
+                if route_target == agent:
+                    logger.warning(
+                        "[HANDOFF] %s attempted to handoff to itself in standard flow — ignored",
+                        agent,
+                    )
+                    if hasattr(app, "renderer"):
+                        app.renderer.show_warning(
+                            f"{agent} tentou delegar para si mesmo — ignorado"
+                        )
+                    route_target = None
+                    handoff = None
+                    next_handoff = None
+                else:
+                    next_handoff = handoff
+            else:
+                next_handoff = None

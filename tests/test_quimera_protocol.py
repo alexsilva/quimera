@@ -5199,9 +5199,13 @@ class AppProtocolDirectTests(unittest.TestCase):
     def test_parse_response_returns_none_when_route_consumes_all(self):
         app = self._make_app()
         proto = AppProtocol(app)
-        # ROUTE que consome a resposta inteira → response vira None após sub → retorna None tuple
+        # ROUTE que consome a resposta inteira → response virou None, mas handoff
+        # válido deve ser preservado (não cai em CHAT_FAILOVER).
+        # Se o payload for inválido (sem task), aí sim retorna None tuple.
         result = proto.parse_response("[ROUTE:codex] task: fazer algo")
-        self.assertEqual(result[:3], (None, None, None))
+        self.assertIsNone(result[0])  # response=None
+        self.assertEqual(result[1], "codex")  # route_target preservado
+        self.assertIsNotNone(result[2])  # handoff válido
 
 
 if __name__ == "__main__":

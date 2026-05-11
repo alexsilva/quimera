@@ -195,7 +195,12 @@ class AppProtocol:
                     route_target = None
                 response = self.ROUTE_PATTERN.sub("", response, count=1).strip() or None
 
+        # Handoff sem texto visível (ex: apenas [ROUTE:codex] task: ...) ainda
+        # é uma intenção válida do agente — retorna com response=None mas
+        # preservando route_target/handoff para não cair em CHAT_FAILOVER.
         if response is None:
+            if route_target is not None:
+                return None, route_target, handoff, False, False, ack_id
             return None, None, None, False, False, None
 
         extend = response.rstrip().endswith(EXTEND_MARKER)
