@@ -80,9 +80,11 @@ TOOL_SCHEMA = {
     },
     "read_file": {
         "name": "read_file",
-        "description": "Lê o conteúdo completo de um arquivo",
+        "description": "Lê o conteúdo de um arquivo, opcionalmente com intervalo de linhas",
         "parameters": {
-            "path": {"type": "str", "description": "Caminho absoluto do arquivo", "required": True}
+            "path": {"type": "str", "description": "Caminho absoluto do arquivo", "required": True},
+            "start_line": {"type": "int", "description": "Primeira linha (1-indexed, inclusiva)", "required": False},
+            "end_line": {"type": "int", "description": "Última linha (1-indexed, inclusiva)", "required": False}
         },
         "example": '<tool function="read_file" path="/src/app.py" />'
     },
@@ -111,7 +113,7 @@ TOOL_SCHEMA = {
         "name": "grep_search",
         "description": "Busca um padrão em arquivos de um diretório",
         "parameters": {
-            "pattern": {"type": "str", "description": "Regex a buscar", "required": True},
+            "pattern": {"type": "str", "description": "Substring literal a buscar (não suporta regex)", "required": True},
             "path": {"type": "str", "description": "Diretório base", "required": False},
         },
         "example": '<tool function="grep_search" pattern="class User" path="/src" />'

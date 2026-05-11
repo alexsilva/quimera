@@ -60,10 +60,7 @@ class FileTools:
 
         path = self._resolve(raw_path)
 
-        if staging and path.is_relative_to(staging):
-            base = path
-        else:
-            base = path
+        base = path
 
         all_names: dict[str, tuple[Path, bool]] = {}
 

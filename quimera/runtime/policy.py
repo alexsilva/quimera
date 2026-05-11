@@ -69,7 +69,7 @@ class ToolPolicy:
         path = (self.config.workspace_root / normalized).resolve()
 
         for allowed_root in self.config.allowed_read_roots:
-            if str(path).startswith(str(allowed_root)):
+            if path.is_relative_to(allowed_root):
                 return None
 
         return PathPermissionError(raw, path)
@@ -231,6 +231,6 @@ class ToolPolicy:
         """Resolve workspace path."""
         normalized = raw_path.lstrip("/") or "."
         path = (self.config.workspace_root / normalized).resolve()
-        if not str(path).startswith(str(self.config.workspace_root)):
+        if not path.is_relative_to(self.config.workspace_root):
             raise ToolPolicyError(f"Path fora da workspace: {raw_path}")
         return path

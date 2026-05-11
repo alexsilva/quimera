@@ -25,6 +25,21 @@ def test_file_tools_resolve_outside(tools):
         tools._resolve("../../etc/passwd")
 
 
+def test_file_tools_read_file_rejects_prefix_sibling_path(tools, config):
+    """Bloqueia bypass por prefixo de path (workspace vs workspace2)."""
+    sibling = config.workspace_root.parent / f"{config.workspace_root.name}2"
+    sibling.mkdir()
+    (sibling / "secret.txt").write_text("TOPSECRET", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Path fora da workspace"):
+        tools.read_file(
+            ToolCall(
+                name="read_file",
+                arguments={"path": f"../{sibling.name}/secret.txt"},
+            )
+        )
+
+
 def test_file_tools_list_files_staging(tools, config):
     # Line 47, 58-61 coverage
     workspace = config.workspace_root
@@ -218,3 +233,101 @@ def test_remove_file_outside_workspace(tools, config):
     call = ToolCall(name="remove_file", arguments={"path": "../../etc/passwd", "dry_run": False})
     with pytest.raises(ValueError, match="Path fora da workspace"):
         tools.remove_file(call)
+
+
+# ── read_file range de linhas ─────────────────────────────────
+
+def test_read_file_range_start_only(tools, config):
+    """read_file com start_line lê da linha em diante."""
+    workspace = config.workspace_root
+    lines = ["a", "b", "c", "d", "e"]
+    (workspace / "test.txt").write_text("".join(f"{l}\n" for l in lines), encoding="utf-8")
+
+    call = ToolCall(name="read_file", arguments={"path": "test.txt", "start_line": 3})
+    result = tools.read_file(call)
+    assert result.ok is True
+    assert result.content == "c\nd\ne\n"
+
+
+def test_read_file_range_start_end(tools, config):
+    """read_file com start_line e end_line (inclusivo) lê intervalo."""
+    workspace = config.workspace_root
+    lines = ["a", "b", "c", "d", "e"]
+    (workspace / "test.txt").write_text("".join(f"{l}\n" for l in lines), encoding="utf-8")
+
+    call = ToolCall(name="read_file", arguments={"path": "test.txt", "start_line": 2, "end_line": 4})
+    result = tools.read_file(call)
+    assert result.ok is True
+    # end_line é inclusivo: lines[start-1:end_line] → lines[1:4] → b, c, d
+    assert result.content == "b\nc\nd\n"
+
+
+def test_read_file_range_end_greater_than_total(tools, config):
+    """read_file com end_line > total limita ao total."""
+    workspace = config.workspace_root
+    lines = ["a", "b", "c"]
+    (workspace / "test.txt").write_text("".join(f"{l}\n" for l in lines), encoding="utf-8")
+
+    call = ToolCall(name="read_file", arguments={"path": "test.txt", "start_line": 2, "end_line": 99})
+    result = tools.read_file(call)
+    assert result.ok is True
+    assert result.content == "b\nc\n"
+
+
+def test_read_file_range_negative_start_clamps(tools, config):
+    """read_file com start_line < 1 é tratado como 0 (início)."""
+    workspace = config.workspace_root
+    lines = ["a", "b", "c"]
+    (workspace / "test.txt").write_text("".join(f"{l}\n" for l in lines), encoding="utf-8")
+
+    call = ToolCall(name="read_file", arguments={"path": "test.txt", "start_line": -5, "end_line": 2})
+    result = tools.read_file(call)
+    assert result.ok is True
+    assert result.content == "a\nb\n"
+
+
+def test_read_file_range_invalid_start_ge_end(tools, config):
+    """read_file com start_line >= end_line retorna erro."""
+    workspace = config.workspace_root
+    lines = ["a", "b", "c"]
+    (workspace / "test.txt").write_text("".join(f"{l}\n" for l in lines), encoding="utf-8")
+
+    call = ToolCall(name="read_file", arguments={"path": "test.txt", "start_line": 3, "end_line": 2})
+    result = tools.read_file(call)
+    assert result.ok is False
+    assert "Intervalo inválido" in result.error
+
+
+def test_read_file_range_end_line_zero(tools, config):
+    """read_file com end_line=0 retorna erro (start=1 >= end=0)."""
+    workspace = config.workspace_root
+    (workspace / "test.txt").write_text("a\nb\nc\n", encoding="utf-8")
+
+    call = ToolCall(name="read_file", arguments={"path": "test.txt", "start_line": 1, "end_line": 0})
+    result = tools.read_file(call)
+    assert result.ok is False
+    assert "Intervalo inválido" in result.error
+
+
+def test_read_file_range_invalid_start_type(tools, config):
+    """read_file com start_line não-inteiro lança ValueError."""
+    workspace = config.workspace_root
+    (workspace / "test.txt").write_text("a\nb\nc\n", encoding="utf-8")
+
+    call = ToolCall(name="read_file", arguments={"path": "test.txt", "start_line": "abc"})
+    with pytest.raises(ValueError):
+        tools.read_file(call)
+
+
+def test_read_file_staging_with_range(tools, config, tmp_path):
+    """read_file com staging ativo e start_line/end_line lê intervalo do arquivo em staging."""
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    (staging / "test.txt").write_text("x\ny\nz\nw\n", encoding="utf-8")
+
+    with patch("quimera.runtime.tools.files.get_staging_root", return_value=staging):
+        call = ToolCall(name="read_file", arguments={"path": "test.txt", "start_line": 2, "end_line": 3})
+        result = tools.read_file(call)
+
+    assert result.ok is True
+    assert result.content == "y\nz\n"

@@ -27,16 +27,24 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "read_file",
-            "description": "Lê o conteúdo de um arquivo dentro do workspace.",
+            "description": "Lê o conteúdo de um arquivo dentro do workspace. Opcionalmente, especifique start_line e end_line para ler apenas um intervalo de linhas (1-indexed).",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
                         "description": "Caminho relativo do arquivo a ser lido.",
+                    },
+                    "start_line": {
+                        "type": "integer",
+                        "description": "Primeira linha a ler (1-indexed, inclusiva). Opcional.",
+                    },
+                    "end_line": {
+                        "type": "integer",
+                        "description": "Última linha a ler (1-indexed, inclusiva). Se omitido e start_line fornecido, lê até o fim. Opcional.",
                     }
                 },
-                "required": ["path"],
+                "required": ["path"]
             },
         },
     },
@@ -115,7 +123,7 @@ TOOL_SCHEMAS = [
                 "properties": {
                     "pattern": {
                         "type": "string",
-                        "description": "Padrão de texto a buscar.",
+                        "description": "Substring literal a buscar (não suporta regex).",
                     },
                     "path": {
                         "type": "string",

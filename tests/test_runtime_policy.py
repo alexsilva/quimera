@@ -143,6 +143,20 @@ def test_policy_path_outside_workspace(policy):
         policy.validate(call)
 
 
+def test_policy_path_prefix_sibling_outside_workspace(tmp_path):
+    """Evita bypass por prefixo de path (workspace vs workspace2)."""
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    sibling = tmp_path / "workspace2"
+    sibling.mkdir()
+    (sibling / "secret.txt").write_text("TOPSECRET", encoding="utf-8")
+
+    policy = ToolPolicy(ToolRuntimeConfig(workspace_root=workspace))
+    call = ToolCall(name="read_file", arguments={"path": "../workspace2/secret.txt"})
+    with pytest.raises(ToolPolicyError, match="Path fora da workspace"):
+        policy.validate(call)
+
+
 def test_policy_requires_approval(policy):
     assert policy.requires_approval(ToolCall(name="write_file", arguments={})) is True
     assert policy.requires_approval(ToolCall(name="apply_patch", arguments={})) is True
@@ -429,5 +443,18 @@ def test_policy_check_path_permission_for_grep_search_outside(policy):
 def test_policy_check_path_permission_for_list_files_outside(policy):
     """check_path_permission retorna erro para list_files fora dos roots."""
     call = ToolCall(name="list_files", arguments={"path": "../../etc"})
+    result = policy.check_path_permission(call)
+    assert result is not None
+
+
+def test_policy_check_path_permission_rejects_prefix_sibling(tmp_path):
+    """check_path_permission também bloqueia bypass por prefixo de path."""
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    sibling = tmp_path / "workspace2"
+    sibling.mkdir()
+
+    policy = ToolPolicy(ToolRuntimeConfig(workspace_root=workspace))
+    call = ToolCall(name="list_files", arguments={"path": "../workspace2"})
     result = policy.check_path_permission(call)
     assert result is not None
