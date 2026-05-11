@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from quimera.context import ContextManager
+from quimera.workspace import Workspace
 
 
 @pytest.fixture
@@ -268,3 +269,34 @@ def test_load_truncates_context_to_max_lines(tmp_path, renderer):
     result = cm.load()
 
     assert result == "\nlinha 3\nlinha 4"
+
+
+@patch("os.environ.get")
+@patch("subprocess.run")
+def test_context_branch_switch_updates_edit_and_load_base(mock_run, mock_get, tmp_path, renderer):
+    mock_get.return_value = "code --wait"
+    base_dir = tmp_path / "base"
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+
+    with patch("quimera.workspace.find_base_writable", lambda dirs: base_dir):
+        workspace = Workspace(project_dir)
+        workspace.set_branch("feature/anterior")
+        old_context_path = workspace.context_persistent
+        old_context_path.write_text("conteudo antigo", encoding="utf-8")
+
+        cm = ContextManager(
+            old_context_path,
+            workspace.context_session,
+            renderer,
+            workspace=workspace,
+        )
+
+        assert cm.handle_context_branch("/context-branch feature/PC-12073") is True
+        new_context_path = workspace.context_persistent
+        new_context_path.write_text("conteudo novo", encoding="utf-8")
+
+        assert cm.load_base() == "conteudo novo"
+
+        cm.edit()
+        mock_run.assert_called_once_with(["code", "--wait", str(new_context_path)], check=True)

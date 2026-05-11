@@ -24,6 +24,12 @@ class ContextManager:
         # Limita o tamanho do contexto para evitar consumo de memória excessivo
         self.max_context_lines = int(max_context_lines) if max_context_lines is not None else 2000
         self.workspace = workspace
+
+    def _base_context_path(self):
+        """Resolve o arquivo de contexto persistente atual."""
+        if self.workspace is not None:
+            return self.workspace.context_persistent
+        return self.base_context_file
     
     def handle_context_branch(self, command: str) -> bool:
         """Processa o comando /context-branch [branch]."""
@@ -61,7 +67,7 @@ class ContextManager:
 
     def load_base(self):
         """Carrega base."""
-        return self._read(self.base_context_file)
+        return self._read(self._base_context_path())
 
     def load_session(self):
         """Carrega session."""
@@ -171,7 +177,7 @@ class ContextManager:
             editor_parts = [fallback]
 
         try:
-            subprocess.run(editor_parts + [str(self.base_context_file)], check=True)
+            subprocess.run(editor_parts + [str(self._base_context_path())], check=True)
         except FileNotFoundError:
             self.renderer.show_error(f"\nEditor não encontrado: {editor_parts[0]}\n")
         except subprocess.CalledProcessError as exc:
