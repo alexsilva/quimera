@@ -414,11 +414,11 @@ class ShellTool:
                 break
             time.sleep(min(0.01, remaining))
 
-        # PTY pode sofrer pequenas variações de agendamento e retornar "running"
-        # para comandos curtos imediatamente após o deadline.
+        # PTY pode sofrer variações de agendamento (spawn + dispatch de thread)
+        # e retornar "running" para comandos curtos imediatamente após o deadline.
         if wait_for_completion and session.process.poll() is None:
             try:
-                completion_grace_s = max(0.25, min(1.0, yield_time_ms / 1000))
+                completion_grace_s = max(0.5, min(1.5, (yield_time_ms / 1000) + 0.4))
                 session.process.wait(timeout=completion_grace_s)
             except subprocess.TimeoutExpired:
                 pass
@@ -428,7 +428,7 @@ class ShellTool:
         # Se não capturamos nada e o processo ainda está rodando, espera um
         # pouco mais para dar chance à thread leitora (importante em ambientes
         # com maior latência de subprocesso como PyCharm).
-        if not wait_for_completion and not stdout and not stderr and session.process.poll() is None:
+        if not stdout and not stderr and session.process.poll() is None:
             extra_deadline = time.perf_counter() + 0.2
             while session.process.poll() is None and time.perf_counter() < extra_deadline:
                 if self._has_unread_output(session):

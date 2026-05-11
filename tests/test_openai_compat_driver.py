@@ -21,10 +21,18 @@ from quimera.runtime.drivers.openai_compat import (
     _sanitize_assistant_text,
     _strip_thinking,
 )
-from quimera.runtime.drivers.repl import DriverRepl
+from quimera.runtime.drivers.repl import (
+    DriverRepl,
+    _header,
+    _on_tool_call,
+    _on_tool_result,
+    _resolve_plugin_connection,
+    _resolve_plugin_driver,
+)
 from quimera.runtime.drivers.tool_schemas import TOOL_SCHEMAS, resolve_tool_schemas
 from quimera.runtime.errors import ToolPolicyViolationError
 from quimera.runtime.models import ToolCall, ToolResult
+from quimera.plugins.base import OpenAIConnection
 
 
 # ---------------------------------------------------------------------------
@@ -825,6 +833,272 @@ def test_driver_repl_with_input_gate_executes_regular_message_flow():
         on_tool_result=ANY,
     )
     assert gate.call_count == 2
+
+
+def test_repl_helpers_print_and_truncate_fields():
+    with patch("builtins.print") as mock_print:
+        _header("Sessao")
+        _on_tool_call("run_shell", {"long": "x" * 305, "short": "ok"})
+        _on_tool_result(
+            ToolResult(
+                ok=True,
+                tool_name="read_file",
+                content="\n".join([f"line-{i}" for i in range(12)]),
+            )
+        )
+        _on_tool_result(
+            ToolResult(
+                ok=False,
+                tool_name="run_shell",
+                error="e" * 420,
+            )
+        )
+
+    printed = "\n".join(str(args[0]) for args, _ in mock_print.call_args_list if args)
+    assert "TOOL CALL: run_shell" in printed
+    assert "TOOL RESULT: read_file [✓ OK]" in printed
+    assert "TOOL RESULT: run_shell [✗ ERRO]" in printed
+    assert " …" in printed
+
+
+def test_resolve_plugin_connection_and_driver_with_fallbacks():
+    plugin_with_resolver = SimpleNamespace(
+        effective_connection=lambda: OpenAIConnection(
+            model="qwen3",
+            base_url="http://localhost:11434/v1",
+            api_key_env="OPENAI_API_KEY",
+            provider="openai_compat",
+            supports_native_tools=True,
+        )
+    )
+    assert isinstance(_resolve_plugin_connection(plugin_with_resolver), OpenAIConnection)
+
+    plugin_non_cli = SimpleNamespace(
+        driver="openai_compat",
+        model="qwen3",
+        base_url="http://localhost:11434/v1",
+        api_key_env=None,
+        supports_tools=False,
+    )
+    conn = _resolve_plugin_connection(plugin_non_cli)
+    assert isinstance(conn, OpenAIConnection)
+    assert conn.supports_native_tools is False
+
+    plugin_cli = SimpleNamespace(driver="cli")
+    assert _resolve_plugin_connection(plugin_cli) is None
+
+    plugin_driver_resolver = SimpleNamespace(effective_driver=lambda: "openai_compat")
+    assert _resolve_plugin_driver(plugin_driver_resolver) == "openai_compat"
+
+
+def test_driver_repl_init_fails_when_plugin_not_found_with_compat_list():
+    compat_plugin = SimpleNamespace(
+        name="ollama-qwen",
+        driver="openai_compat",
+        model="qwen3-coder:30b",
+        base_url="http://localhost:11434/v1",
+        api_key_env=None,
+    )
+    with pytest.raises(ValueError, match="Plugins openai_compat disponíveis: ollama-qwen"):
+        DriverRepl(
+            "missing",
+            get_plugin=lambda _: None,
+            all_plugins=lambda: [compat_plugin],
+        )
+
+
+def test_driver_repl_init_rejects_cli_plugins():
+    cli_plugin = SimpleNamespace(name="claude", driver="cli", model=None, base_url=None, api_key_env=None)
+    with pytest.raises(ValueError, match="driver='cli'"):
+        DriverRepl(
+            "claude",
+            get_plugin=lambda _: cli_plugin,
+            all_plugins=lambda: [cli_plugin],
+        )
+
+
+def test_driver_repl_build_input_prompt_handles_empty_name_and_mode_with_chevrons():
+    assert DriverRepl._build_input_prompt("", "execute") == ">>> "
+    assert DriverRepl._build_input_prompt(">>>", "review") == ">>> [review]: "
+
+
+def test_driver_repl_load_user_name_from_config_falls_back_to_default():
+    from quimera.config import DEFAULT_USER_NAME
+
+    with patch("quimera.runtime.drivers.repl.find_base_writable", side_effect=RuntimeError("boom")):
+        assert DriverRepl._load_user_name_from_config() == DEFAULT_USER_NAME
+
+
+def test_driver_repl_connection_signature_tracks_model_url_and_api_key_env():
+    plugin = SimpleNamespace(
+        name="ollama-qwen",
+        driver="openai_compat",
+        model="qwen3-coder:30b",
+        base_url="http://localhost:11434/v1",
+        api_key_env="MY_TEST_API_KEY",
+    )
+    with patch("quimera.runtime.drivers.repl.OpenAICompatDriver"), \
+            patch.dict("os.environ", {"MY_TEST_API_KEY": "k1"}, clear=False):
+        repl = DriverRepl(
+            "ollama-qwen",
+            get_plugin=lambda _: plugin,
+            all_plugins=lambda: [plugin],
+        )
+        assert repl._connection_has_changed() is True
+        assert repl._connection_has_changed() is False
+        with patch.dict("os.environ", {"MY_TEST_API_KEY": "k2"}, clear=False):
+            assert repl._connection_has_changed() is True
+
+
+def test_driver_repl_get_current_connection_rejects_when_plugin_driver_changes():
+    plugin = SimpleNamespace(
+        name="ollama-qwen",
+        driver="openai_compat",
+        model="qwen3-coder:30b",
+        base_url="http://localhost:11434/v1",
+        api_key_env=None,
+    )
+    with patch("quimera.runtime.drivers.repl.OpenAICompatDriver"):
+        repl = DriverRepl(
+            "ollama-qwen",
+            get_plugin=lambda _: plugin,
+            all_plugins=lambda: [plugin],
+        )
+    plugin.driver = "cli"
+    with pytest.raises(ValueError, match="driver='cli'"):
+        repl._get_current_connection()
+
+
+def test_driver_repl_backend_probe_handles_status_and_http_errors():
+    plugin = SimpleNamespace(
+        name="ollama-qwen",
+        driver="openai_compat",
+        model="qwen3-coder:30b",
+        base_url="http://localhost:11434/v1",
+        api_key_env=None,
+    )
+
+    bad_response = MagicMock()
+    bad_response.__enter__.return_value.status = 503
+    bad_response.__exit__.return_value = False
+
+    with patch("quimera.runtime.drivers.repl.OpenAICompatDriver"), \
+            patch("quimera.runtime.drivers.repl.urllib_request.urlopen", return_value=bad_response):
+        repl = DriverRepl(
+            "ollama-qwen",
+            get_plugin=lambda _: plugin,
+            all_plugins=lambda: [plugin],
+        )
+        with pytest.raises(RuntimeError, match="status HTTP 503"):
+            repl.ensure_backend_available()
+
+    from urllib.error import HTTPError
+
+    http_404 = HTTPError(
+        url="http://localhost:11434/v1/models",
+        code=404,
+        msg="not found",
+        hdrs=None,
+        fp=None,
+    )
+    with patch("quimera.runtime.drivers.repl.OpenAICompatDriver"), \
+            patch("quimera.runtime.drivers.repl.urllib_request.urlopen", side_effect=http_404):
+        repl = DriverRepl(
+            "ollama-qwen",
+            get_plugin=lambda _: plugin,
+            all_plugins=lambda: [plugin],
+        )
+        repl.ensure_backend_available()
+
+    http_500 = HTTPError(
+        url="http://localhost:11434/v1/models",
+        code=500,
+        msg="server error",
+        hdrs=None,
+        fp=None,
+    )
+    with patch("quimera.runtime.drivers.repl.OpenAICompatDriver"), \
+            patch("quimera.runtime.drivers.repl.urllib_request.urlopen", side_effect=http_500):
+        repl = DriverRepl(
+            "ollama-qwen",
+            get_plugin=lambda _: plugin,
+            all_plugins=lambda: [plugin],
+        )
+        with pytest.raises(RuntimeError, match="status HTTP 500"):
+            repl.ensure_backend_available()
+
+
+def test_driver_repl_probe_uses_executor_toggle():
+    plugin = SimpleNamespace(
+        name="ollama-qwen",
+        driver="openai_compat",
+        model="qwen3-coder:30b",
+        base_url="http://localhost:11434/v1",
+        api_key_env=None,
+    )
+    with patch("quimera.runtime.drivers.repl.OpenAICompatDriver"):
+        repl = DriverRepl(
+            "ollama-qwen",
+            get_plugin=lambda _: plugin,
+            all_plugins=lambda: [plugin],
+        )
+
+    with patch.object(repl, "ensure_backend_available"), \
+            patch.object(repl.driver, "run", return_value="ok") as mock_run:
+        assert repl.probe("prompt", use_tools=False) == "ok"
+    assert mock_run.call_args.kwargs["tool_executor"] is None
+
+    with patch.object(repl, "ensure_backend_available"), \
+            patch.object(repl.driver, "run", return_value="ok") as mock_run:
+        assert repl.probe("prompt", use_tools=True) == "ok"
+    assert mock_run.call_args.kwargs["tool_executor"] is repl.tool_executor
+
+
+def test_driver_repl_run_one_shot_and_interactive_commands():
+    plugin = SimpleNamespace(
+        name="ollama-qwen",
+        driver="openai_compat",
+        model="qwen3-coder:30b",
+        base_url="http://localhost:11434/v1",
+        api_key_env=None,
+    )
+    gate = MagicMock(side_effect=[
+        "   ",
+        "/sem-tools",
+        "msg-sem",
+        "/tools",
+        "/info",
+        "/reload",
+        "msg-normal",
+        "exit",
+    ])
+    with patch("quimera.runtime.drivers.repl.OpenAICompatDriver"), \
+            patch.object(DriverRepl, "_load_user_name_from_config", return_value="Alex"):
+        repl = DriverRepl(
+            "ollama-qwen",
+            get_plugin=lambda _: plugin,
+            all_plugins=lambda: [plugin],
+            input_gate=gate,
+        )
+
+    with patch.object(repl, "ensure_backend_available"), \
+            patch.object(repl, "probe", return_value=None) as mock_probe, \
+            patch("builtins.print"):
+        repl.run(one_shot_prompt="hello")
+    mock_probe.assert_called_once_with("hello")
+
+    with patch.object(repl, "ensure_backend_available"), \
+            patch.object(repl, "_update_driver") as mock_update_driver, \
+            patch.object(repl, "_connection_has_changed", side_effect=[True, False]), \
+            patch.object(repl.driver, "run", side_effect=[None, "ok"]) as mock_run, \
+            patch("builtins.print") as mock_print:
+        repl.run()
+
+    assert mock_run.call_args_list[0].kwargs["tool_executor"] is None
+    assert mock_run.call_args_list[1].kwargs["tool_executor"] is repl.tool_executor
+    assert mock_update_driver.call_count == 2
+    printed = "\n".join(str(args[0]) for args, _ in mock_print.call_args_list if args)
+    assert "[sem resposta]" in printed
 
 
 def test_run_max_hops_returns_last_text():
