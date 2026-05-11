@@ -67,3 +67,17 @@ class TestWorkspace(unittest.TestCase):
                 self.assertTrue(ws.context_session.exists())
                 self.assertEqual(ws.context_persistent.read_text(encoding="utf-8"), "Legacy Context")
                 self.assertEqual(ws.context_session.read_text(encoding="utf-8"), "Legacy Session")
+
+    def test_branch_persists_and_restores_across_instances(self):
+        with tempfile.TemporaryDirectory() as base_dir, tempfile.TemporaryDirectory() as proj_tmp:
+            base = Path(base_dir)
+            proj = Path(proj_tmp) / "branchproj"
+            proj.mkdir()
+            with patch("quimera.workspace.find_base_writable", lambda dirs: base):
+                ws1 = Workspace(proj)
+                ws1.set_branch("feature/my-feature")
+                self.assertEqual(ws1._branch, "feature_my-feature")
+
+                ws2 = Workspace(proj)
+                self.assertEqual(ws2._branch, "feature_my-feature")
+                self.assertEqual(ws2.context_persistent, ws1.context_persistent)

@@ -55,6 +55,14 @@ class Workspace:
         self._ensure_dirs()
         self._write_metadata()
         self._update_index()
+        self._restore_branch()
+
+    def _restore_branch(self) -> None:
+        """Restaura a branch persistida em workspace.json, se existir."""
+        meta_file = self._root / "workspace.json"
+        if meta_file.exists():
+            meta = json.loads(meta_file.read_text(encoding="utf-8"))
+            self._branch = meta.get("branch")
 
     @property
     def root(self) -> Path:
@@ -69,6 +77,15 @@ class Workspace:
         """
         sanitized = branch.replace("/", "_").strip()
         self._branch = sanitized if sanitized else "_default"
+        self._persist_branch()
+
+    def _persist_branch(self) -> None:
+        """Persiste a branch atual em workspace.json."""
+        meta_file = self._root / "workspace.json"
+        if meta_file.exists():
+            meta = json.loads(meta_file.read_text(encoding="utf-8"))
+            meta["branch"] = self._branch
+            meta_file.write_text(json.dumps(meta, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
     @property
     def context_persistent(self) -> Path:
