@@ -79,6 +79,18 @@ class Workspace:
         self._branch = sanitized if sanitized else "_default"
         self._persist_branch()
 
+    def list_branches(self) -> list[str]:
+        """Retorna branches de contexto existentes, incluindo a branch ativa."""
+        branches: set[str] = set()
+        ctx_dir = self._root / "data" / "context"
+        if ctx_dir.exists():
+            for d in ctx_dir.iterdir():
+                if d.is_dir():
+                    branches.add(d.name)
+        if self._branch:
+            branches.add(self._branch)
+        return sorted(branches)
+
     def _persist_branch(self) -> None:
         """Persiste a branch atual em workspace.json."""
         meta_file = self._root / "workspace.json"

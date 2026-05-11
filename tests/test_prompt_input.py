@@ -374,6 +374,30 @@ class TestCoreCommandArgumentResolver:
         result = app._command_argument_resolver("/context-branch", "")
         assert "current_feature" in result
 
+    def test_returns_connected_agents_for_disconnect(self):
+        """/disconnect sugere agentes com conexão persistida."""
+        from quimera.app.core import QuimeraApp
+        from unittest.mock import MagicMock
+
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.system_layer = MagicMock()
+        app.system_layer.list_connected_agents.return_value = ["chatgpt", "codex"]
+        result = app._command_argument_resolver("/disconnect", "")
+        assert result == ["chatgpt", "codex"]
+        app.system_layer.list_connected_agents.assert_called_once_with()
+
+    def test_returns_empty_for_disconnect_without_connections(self):
+        """Sem conexões persistidas, /disconnect não sugere argumentos."""
+        from quimera.app.core import QuimeraApp
+        from unittest.mock import MagicMock
+
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.system_layer = MagicMock()
+        app.system_layer.list_connected_agents.return_value = []
+        result = app._command_argument_resolver("/disconnect", "")
+        assert result == []
+        app.system_layer.list_connected_agents.assert_called_once_with()
+
 
 # ---------------------------------------------------------------------------
 # Singleton — InputGate instanciado em core.py

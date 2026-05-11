@@ -29,6 +29,7 @@ from ..plugins.base import (
     CliConnection,
     OpenAIConnection,
     format_connection_label,
+    get_connection_overrides,
     is_valid_agent_name,
     register_dynamic_plugin,
     reload_plugins,
@@ -129,6 +130,10 @@ class AppSystemLayer:
             if callable(flush):
                 flush()
             self.app._redisplay_user_prompt_if_needed(clear_first=False)
+
+    def list_connected_agents(self) -> list[str]:
+        """Retorna nomes dos agentes com conexão persistida."""
+        return sorted(get_connection_overrides().keys())
 
     def show_task_response(self, task_id: int, agent: str, response: str) -> None:
         """Exibe task response."""

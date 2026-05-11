@@ -265,16 +265,9 @@ class QuimeraApp:
     def _command_argument_resolver(self, command: str, partial: str) -> list[str]:
         """Resolve sugestões de argumentos para comandos com autocomplete contextual."""
         if command == CMD_CONTEXT_BRANCH:
-            branches = set()
-            ctx_dir = self.workspace._root / "data" / "context"
-            if ctx_dir.exists():
-                for d in ctx_dir.iterdir():
-                    if d.is_dir():
-                        branches.add(d.name)
-            active = self.workspace._branch
-            if active:
-                branches.add(active)
-            return sorted(branches)
+            return self.workspace.list_branches()
+        if command == CMD_DISCONNECT:
+            return self.system_layer.list_connected_agents()
         return []
 
     def _resolve_plugin_style(self, agent: str):

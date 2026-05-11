@@ -740,6 +740,16 @@ class ProtocolTests(unittest.TestCase):
     def test_available_internal_commands_include_disconnect(self):
         self.assertIn(CMD_DISCONNECT, QuimeraApp._available_internal_commands())
 
+    def test_list_connected_agents_returns_sorted_names(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        layer = AppSystemLayer(app)
+
+        with patch("quimera.app.system_layer.get_connection_overrides", return_value={"codex": {}, "chatgpt": {}}) as get_overrides:
+            result = layer.list_connected_agents()
+
+        self.assertEqual(result, ["chatgpt", "codex"])
+        get_overrides.assert_called_once_with()
+
     def test_handle_command_warns_when_connect_target_is_missing(self):
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
