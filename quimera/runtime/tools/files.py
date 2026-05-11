@@ -33,6 +33,13 @@ class FileTools:
         """Inicializa uma instância de FileTools."""
         self.config = config
 
+    def _is_allowed_path(self, path: Path) -> bool:
+        """Retorna True quando o path está em staging ou em algum root permitido."""
+        staging = get_staging_root()
+        if staging and path.is_relative_to(staging):
+            return True
+        return any(path.is_relative_to(allowed) for allowed in self.config.allowed_read_roots)
+
     def _resolve(self, raw_path: str) -> Path:
         """Resolve resolve."""
         normalized = raw_path.lstrip("/") or "."
@@ -40,11 +47,8 @@ class FileTools:
         base = staging if staging else self.config.workspace_root
         path = (base / normalized).resolve()
 
-        for allowed in self.config.allowed_read_roots:
-            if staging and path.is_relative_to(staging):
-                return path
-            if str(path).startswith(str(allowed)):
-                return path
+        if self._is_allowed_path(path):
+            return path
 
         raise ValueError(f"Path fora da workspace: {raw_path}")
 
@@ -67,7 +71,7 @@ class FileTools:
             for item in base.iterdir():
                 all_names[item.name] = (item, item.is_dir())
 
-        if staging and base != staging and str(path).startswith(str(workspace)):
+        if staging and base != staging and path.is_relative_to(workspace):
             staging_check = staging / (raw_path.lstrip("/") or ".")
             if staging_check.exists():
                 for item in staging_check.iterdir():
@@ -81,25 +85,46 @@ class FileTools:
         return ToolResult(ok=True, tool_name=call.name, content="\n".join(entries))
 
     def read_file(self, call: ToolCall) -> ToolResult:
-        """Lê file."""
+        """Lê arquivo, com suporte a range de linhas."""
         staging = get_staging_root()
         raw_path = call.arguments["path"]
+        start_line = call.arguments.get("start_line")
+        end_line = call.arguments.get("end_line")
 
         if staging:
             staging_path = (staging / raw_path.lstrip("/")).resolve()
-            if str(staging_path).startswith(str(staging)) and staging_path.exists():
+            if staging_path.is_relative_to(staging) and staging_path.exists():
                 path = staging_path
             else:
                 # Fall back to the real workspace when staging is active but does
                 # not contain the requested file.
                 workspace_path = (self.config.workspace_root / (raw_path.lstrip("/") or ".")).resolve()
-                if not str(workspace_path).startswith(str(self.config.workspace_root)):
+                if not workspace_path.is_relative_to(self.config.workspace_root):
                     raise ValueError(f"Path fora da workspace: {raw_path}")
                 path = workspace_path
         else:
             path = self._resolve(raw_path)
 
         text = path.read_text(encoding="utf-8")
+
+        if start_line is not None or end_line is not None:
+            lines = text.splitlines(keepends=True)
+            total = len(lines)
+            start = (int(start_line) - 1) if start_line is not None else 0
+            end = int(end_line) if end_line is not None else total
+            if start < 0:
+                start = 0
+            if end > total:
+                end = total
+            if start >= end:
+                return ToolResult(
+                    ok=False,
+                    tool_name=call.name,
+                    error=f"Intervalo inválido: start_line={start_line}, end_line={end_line}. "
+                          f"Arquivo tem {total} linhas.",
+                )
+            text = "".join(lines[start:end])
+
         truncated = len(text) > self.config.max_file_read_chars
         text = text[: self.config.max_file_read_chars]
         return ToolResult(
