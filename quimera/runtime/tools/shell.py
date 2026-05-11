@@ -414,6 +414,15 @@ class ShellTool:
                 break
             time.sleep(min(0.01, remaining))
 
+        # PTY pode sofrer pequenas variações de agendamento e retornar "running"
+        # para comandos curtos imediatamente após o deadline.
+        if wait_for_completion and session.process.poll() is None:
+            try:
+                completion_grace_s = max(0.25, min(1.0, yield_time_ms / 1000))
+                session.process.wait(timeout=completion_grace_s)
+            except subprocess.TimeoutExpired:
+                pass
+
         stdout, stderr = self._drain_session_output(session)
 
         # Se não capturamos nada e o processo ainda está rodando, espera um

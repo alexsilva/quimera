@@ -159,6 +159,23 @@ def test_exec_command_supports_tty_mode(tmp_path):
     assert "tty-ok" in result.data["stdout"]
 
 
+def test_exec_command_tty_waits_for_short_completion_after_yield(tmp_path):
+    tool = ShellTool(ToolRuntimeConfig(workspace_root=tmp_path))
+    result = tool.exec_command(
+        ToolCall(
+            name="exec_command",
+            arguments={
+                "cmd": 'python -u -c "import time; time.sleep(0.25); print(\'tty-grace\')"',
+                "yield_time_ms": 100,
+                "tty": True,
+            },
+        )
+    )
+    assert result.ok is True
+    assert result.data["status"] == "completed"
+    assert "tty-grace" in result.data["stdout"]
+
+
 def test_truncate_consumed_chunks_releases_stdout_without_stderr(config):
     tool = ShellTool(config)
     session = CommandSession(
