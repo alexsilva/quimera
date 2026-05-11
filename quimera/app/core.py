@@ -36,7 +36,7 @@ from ..workspace import Workspace
 from ..config import ConfigManager, DEFAULT_USER_NAME
 from ..metrics import BehaviorMetricsTracker
 from ..constants import (
-    CMD_AGENTS, CMD_ALIASES, CMD_CLEAR, CMD_CONNECT, CMD_CONTEXT, CMD_CONTEXT_EDIT, CMD_EDIT, CMD_EXIT,
+    CMD_AGENTS, CMD_ALIASES, CMD_CLEAR, CMD_CONNECT, CMD_CONTEXT, CMD_CONTEXT_BRANCH, CMD_CONTEXT_EDIT, CMD_EDIT, CMD_EXIT,
     CMD_APPROVE, CMD_APPROVE_ALL, CMD_FILE_PREFIX, CMD_HELP,
     CMD_PROMPT, CMD_RESET_STATE, CMD_TASK,
     MSG_CHAT_STARTED, MSG_SESSION_LOG, MSG_SESSION_STATUS, MSG_MIGRATION,
@@ -88,6 +88,7 @@ class QuimeraApp:
             renderer=self.renderer,
             history_file=self.history_file,
             command_resolver=self._available_commands,
+            argument_resolver=self._command_argument_resolver,
         )
         self.input_services = AppInputServices(
             self,
@@ -232,6 +233,7 @@ class QuimeraApp:
             CMD_CLEAR,
             CMD_CONNECT,
             CMD_CONTEXT,
+            CMD_CONTEXT_BRANCH,
             CMD_CONTEXT_EDIT,
             CMD_EDIT,
             CMD_EXIT,
@@ -258,6 +260,21 @@ class QuimeraApp:
                 commands.add(plugin.prefix)
             commands.update(alias for alias in (plugin.aliases or []) if alias)
         return sorted(commands)
+
+    def _command_argument_resolver(self, command: str, partial: str) -> list[str]:
+        """Resolve sugestões de argumentos para comandos com autocomplete contextual."""
+        if command == CMD_CONTEXT_BRANCH:
+            branches = set()
+            ctx_dir = self.workspace._root / "data" / "context"
+            if ctx_dir.exists():
+                for d in ctx_dir.iterdir():
+                    if d.is_dir():
+                        branches.add(d.name)
+            active = self.workspace._branch
+            if active:
+                branches.add(active)
+            return sorted(branches)
+        return []
 
     def _resolve_plugin_style(self, agent: str):
         """Resolve (color, label) para o agente; retorna None se não encontrado."""

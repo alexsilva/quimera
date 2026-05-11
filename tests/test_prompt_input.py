@@ -182,6 +182,200 @@ class TestInputGateCall:
 
 
 # ---------------------------------------------------------------------------
+# _SlashCommandCompleter — argument_resolver
+# ---------------------------------------------------------------------------
+
+class TestSlashCommandCompleterArgumentResolver:
+    """Testa o argument_resolver no _SlashCommandCompleter."""
+
+    def test_no_argument_resolver_returns_nothing_on_space(self):
+        """Sem argument_resolver, texto com espaço não produz sugestões."""
+        from quimera.app.prompt_input import _SlashCommandCompleter
+        resolver = MagicMock(return_value=["/context", "/help"])
+        completer = _SlashCommandCompleter(resolver, argument_resolver=None)
+
+        doc = MagicMock()
+        doc.text_before_cursor = "/context f"
+        results = list(completer.get_completions(doc, None))
+        assert results == []
+
+    def test_argument_resolver_called_with_command_and_partial(self):
+        """argument_resolver recebe (command, partial) quando há espaço."""
+        from quimera.app.prompt_input import _SlashCommandCompleter
+        arg_resolver = MagicMock(return_value=["feature_x", "feature_y"])
+        completer = _SlashCommandCompleter(MagicMock(return_value=[]), argument_resolver=arg_resolver)
+
+        doc = MagicMock()
+        doc.text_before_cursor = "/context-branch f"
+        results = list(completer.get_completions(doc, None))
+
+        arg_resolver.assert_called_once_with("/context-branch", "f")
+        assert len(results) == 2
+
+    def test_argument_resolver_filters_by_prefix(self):
+        """Sugestões são filtradas pelo que o usuário já digitou após o espaço."""
+        from quimera.app.prompt_input import _SlashCommandCompleter
+        arg_resolver = MagicMock(return_value=["feature_x", "other_branch"])
+        completer = _SlashCommandCompleter(MagicMock(return_value=[]), argument_resolver=arg_resolver)
+
+        doc = MagicMock()
+        doc.text_before_cursor = "/context-branch f"
+        results = list(completer.get_completions(doc, None))
+
+        assert len(results) == 1
+        assert results[0].text == "feature_x"
+
+    def test_argument_resolver_tolerates_exception(self):
+        """Exceção no argument_resolver não propaga; retorna lista vazia."""
+        from quimera.app.prompt_input import _SlashCommandCompleter
+
+        def failing_resolver(cmd, partial):
+            raise RuntimeError("fail")
+
+        completer = _SlashCommandCompleter(MagicMock(return_value=[]), argument_resolver=failing_resolver)
+
+        doc = MagicMock()
+        doc.text_before_cursor = "/context-branch x"
+        results = list(completer.get_completions(doc, None))
+        assert results == []
+
+    def test_no_space_delegates_to_command_resolver(self):
+        """Sem espaço, comportamento padrão de completar comandos slash."""
+        from quimera.app.prompt_input import _SlashCommandCompleter
+        cmd_resolver = MagicMock(return_value=["/context", "/context-branch", "/help"])
+        arg_resolver = MagicMock()
+        completer = _SlashCommandCompleter(cmd_resolver, argument_resolver=arg_resolver)
+
+        doc = MagicMock()
+        doc.text_before_cursor = "/context"
+        results = list(completer.get_completions(doc, None))
+
+        # command_resolver foi chamado, argument_resolver não
+        cmd_resolver.assert_called_once()
+        arg_resolver.assert_not_called()
+        texts = [r.text for r in results]
+        assert "/context" in texts
+        assert "/context-branch" in texts
+
+    def test_non_slash_returns_empty(self):
+        """Texto sem / não aciona nenhum resolver."""
+        from quimera.app.prompt_input import _SlashCommandCompleter
+        cmd_resolver = MagicMock()
+        arg_resolver = MagicMock()
+        completer = _SlashCommandCompleter(cmd_resolver, argument_resolver=arg_resolver)
+
+        doc = MagicMock()
+        doc.text_before_cursor = "hello"
+        results = list(completer.get_completions(doc, None))
+        assert results == []
+        cmd_resolver.assert_not_called()
+        arg_resolver.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# InputGate — argument_resolver integration
+# ---------------------------------------------------------------------------
+
+class TestInputGateArgumentResolver:
+    """Testa passagem de argument_resolver do InputGate para o completer."""
+
+    def test_build_completer_returns_none_without_command_resolver(self):
+        """Sem command_resolver, _build_completer retorna None."""
+        gate = InputGate(argument_resolver=MagicMock())
+        assert gate._build_completer() is None
+
+    def test_build_completer_includes_argument_resolver(self):
+        """_build_completer retorna _SlashCommandCompleter com argument_resolver."""
+        from quimera.app.prompt_input import _SlashCommandCompleter
+        arg_resolver = MagicMock()
+        gate = InputGate(
+            command_resolver=MagicMock(return_value=["/test"]),
+            argument_resolver=arg_resolver,
+        )
+        completer = gate._build_completer()
+        assert completer is not None
+        assert isinstance(completer, _SlashCommandCompleter)
+        assert completer._argument_resolver is arg_resolver
+
+    def test_set_argument_resolver_updates_completer(self):
+        """set_argument_resolver altera o resolver usado no completer."""
+        from quimera.app.prompt_input import _SlashCommandCompleter
+        gate = InputGate(command_resolver=MagicMock(return_value=["/test"]))
+        arg_resolver = MagicMock()
+        gate.set_argument_resolver(arg_resolver)
+
+        completer = gate._build_completer()
+        assert completer._argument_resolver is arg_resolver
+
+    def test_argument_resolver_none_by_default(self):
+        """Sem argument_resolver no __init__, o atributo é None."""
+        gate = InputGate(command_resolver=MagicMock(return_value=["/test"]))
+        assert gate._argument_resolver is None
+
+        completer = gate._build_completer()
+        assert completer._argument_resolver is None
+
+    def test_set_argument_resolver_can_be_set_to_none(self):
+        """set_argument_resolver(None) limpa o resolver."""
+        gate = InputGate(
+            command_resolver=MagicMock(return_value=["/test"]),
+            argument_resolver=MagicMock(),
+        )
+        gate.set_argument_resolver(None)
+        assert gate._argument_resolver is None
+
+
+# ---------------------------------------------------------------------------
+# Core — _command_argument_resolver integration
+# ---------------------------------------------------------------------------
+
+class TestCoreCommandArgumentResolver:
+    """Testa o _command_argument_resolver de core.py."""
+
+    def test_returns_empty_for_unknown_command(self):
+        """Comando não reconhecido retorna lista vazia."""
+        from quimera.app.core import QuimeraApp
+        resolver = QuimeraApp._command_argument_resolver
+        result = resolver(None, "/unknown", "")
+        assert result == []
+
+    def test_returns_branches_for_context_branch(self, tmp_path):
+        """Para /context-branch, retorna branches do diretório data/context."""
+        from quimera.app.core import QuimeraApp
+        from quimera.workspace import Workspace
+
+        ws = Workspace(tmp_path)
+        # O _root do workspace é diferente de tmp_path; usar _root
+        ctx_root = ws._root / "data" / "context"
+        ctx_root.mkdir(parents=True, exist_ok=True)
+        (ctx_root / "feature_x").mkdir()
+        (ctx_root / "feature_y").mkdir()
+
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.workspace = ws
+
+        result = app._command_argument_resolver("/context-branch", "")
+        assert "feature_x" in result
+        assert "feature_y" in result
+
+    def test_includes_active_branch(self, tmp_path):
+        """A branch ativa do workspace também aparece nas sugestões."""
+        from quimera.app.core import QuimeraApp
+        from quimera.workspace import Workspace
+
+        ws = Workspace(tmp_path)
+        ws._branch = "current_feature"
+
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.workspace = ws
+        # Garantir que o ctx_dir existe para não gerar erro
+        (ws._root / "data" / "context").mkdir(parents=True, exist_ok=True)
+
+        result = app._command_argument_resolver("/context-branch", "")
+        assert "current_feature" in result
+
+
+# ---------------------------------------------------------------------------
 # Singleton — InputGate instanciado em core.py
 # ---------------------------------------------------------------------------
 

@@ -25,14 +25,27 @@ except ImportError:
 class _SlashCommandCompleter(Completer):
     """Completa comandos slash usando o resolver da aplicação."""
 
-    def __init__(self, command_resolver):
+    def __init__(self, command_resolver, argument_resolver=None):
         self._command_resolver = command_resolver
+        self._argument_resolver = argument_resolver
 
     def get_completions(self, document, complete_event):
         text_before_cursor = (document.text_before_cursor or "").lstrip()
         if not text_before_cursor.startswith("/"):
             return
+
         if " " in text_before_cursor:
+            parts = text_before_cursor.split(" ", 1)
+            command = parts[0]
+            partial = parts[1] if len(parts) > 1 else ""
+            if callable(self._argument_resolver):
+                try:
+                    suggestions = self._argument_resolver(command, partial) or []
+                except Exception:
+                    suggestions = []
+                for suggestion in suggestions:
+                    if suggestion.startswith(partial):
+                        yield Completion(suggestion, start_position=-len(partial))
             return
 
         prefix = text_before_cursor
@@ -59,12 +72,13 @@ class InputGate:
     - Evita patch_stdout(): o renderer é flushado antes do prompt, então
       não há output concorrente durante o prompt, preservando a toolbar."""
 
-    def __init__(self, renderer=None, toolbar_context_resolver=None, history_file=None, command_resolver=None):
+    def __init__(self, renderer=None, toolbar_context_resolver=None, history_file=None, command_resolver=None, argument_resolver=None):
         self._session: PromptSession | None = None
         self._readline_history = None
         self._renderer = renderer
         self._toolbar_context_resolver = toolbar_context_resolver
         self._command_resolver = command_resolver
+        self._argument_resolver = argument_resolver
         self._theme_cycle_handler = None
         self._history_file = Path(history_file).expanduser() if history_file else None
         self._lock = threading.Lock()
@@ -105,6 +119,10 @@ class InputGate:
     def set_command_resolver(self, resolver) -> None:
         """Define callback para resolver comandos de autocomplete."""
         self._command_resolver = resolver
+
+    def set_argument_resolver(self, resolver) -> None:
+        """Define callback para resolver argumentos de comandos no autocomplete."""
+        self._argument_resolver = resolver
 
     def set_theme_cycle_handler(self, handler) -> None:
         """Define callback chamado ao pressionar Ctrl+T para trocar tema."""
@@ -161,7 +179,7 @@ class InputGate:
             return None
         if not callable(self._command_resolver):
             return None
-        return _SlashCommandCompleter(self._command_resolver)
+        return _SlashCommandCompleter(self._command_resolver, self._argument_resolver)
 
     def _build_key_bindings(self):
         """Monta key bindings adicionais para troca de tema."""
