@@ -325,6 +325,27 @@ class TestSingleAgentPerTurn(unittest.TestCase):
         agents_called = [c[0][0] for c in app.dispatch_services.call_agent.call_args_list]
         self.assertEqual(agents_called, ["claude", "codex", "claude"])
 
+    def test_self_handoff_is_ignored(self):
+        """Handoff de um agente para si mesmo deve ser ignorado — não gera nova chamada."""
+        app = _make_app(active_agents=["claude", "codex"])
+        app.parse_routing = Mock(return_value=("claude", "analisa", False))
+
+        handoff_payload = {
+            "task": "Revisa o código",
+            "context": "contexto",
+            "expected": "resultado",
+            "handoff_id": "abc123",
+            "chain": [],
+        }
+        # parse_response retorna route_target == first_agent ("claude") — self-handoff
+        app.parse_response = Mock(return_value=("resposta claude", "claude", handoff_payload, False, False, None))
+        app.dispatch_services.call_agent = Mock(return_value="resposta claude")
+
+        QuimeraApp._do_process_chat_message(app, "analisa")
+
+        # Apenas 1 chamada (claude como primary) — sem chamada extra para self-handoff
+        self.assertEqual(app.dispatch_services.call_agent.call_count, 1)
+
     def test_handoff_secondary_can_delegate_to_third_before_synthesis(self):
         """Se o secundário delega de novo, o terceiro responde em handoff_only antes da síntese."""
         app = _make_app(active_agents=["claude", "codex", "opencode-qwen"])
