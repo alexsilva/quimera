@@ -110,6 +110,17 @@ class ChatRoundOrchestrator:
             route_target = None
             handoff = None
 
+        active_agents = getattr(app, "active_agents", None) or []
+        if route_target and route_target not in active_agents:
+            logger.warning(
+                "[HANDOFF] %s attempted to handoff to unknown agent %r — ignored (active: %s)",
+                first_agent,
+                route_target,
+                active_agents,
+            )
+            route_target = None
+            handoff = None
+
         if route_target and handoff:
             self._process_handoff(first_agent, route_target, handoff)
         else:
@@ -161,6 +172,20 @@ class ChatRoundOrchestrator:
                 )
                 break
 
+            _active = getattr(app, "active_agents", None) or []
+            if current_target not in _active:
+                logger.warning(
+                    "[HANDOFF] %s attempted to handoff to unknown agent %r in chain — ignored (active: %s)",
+                    current_from,
+                    current_target,
+                    _active,
+                )
+                if hasattr(app, "renderer"):
+                    app.renderer.show_warning(
+                        f"Handoff ignorado: agente '{current_target}' não está conectado."
+                    )
+                break
+
             app.renderer.show_handoff(
                 current_from,
                 current_target,
@@ -202,7 +227,7 @@ class ChatRoundOrchestrator:
             if secondary_response is not None:
                 app.session_services.persist_message(current_target, secondary_response)
 
-            if not secondary_response:
+            if not secondary_response and not (next_target and next_handoff):
                 fallback_response = None
                 fallback_target = None
                 fallback_next_target = None

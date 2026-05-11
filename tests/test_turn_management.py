@@ -467,6 +467,65 @@ class TestSingleAgentPerTurn(unittest.TestCase):
 
         app.show_system_message.assert_called_once_with("\nResponda para CLAUDE:\n")
 
+    def test_handoff_without_body_continues_chain(self):
+        """Agente CLI que responde só com [ROUTE:x] task:... (sem body) não cai em fallback."""
+        app = _make_app(active_agents=["claude", "codex", "opencode-qwen"])
+        app.parse_routing = Mock(return_value=("claude", "analisa", False))
+
+        first_handoff = {
+            "task": "Revisa código",
+            "context": "branch main",
+            "expected": "lista de issues",
+            "handoff_id": "h1",
+            "chain": [],
+        }
+        second_handoff = {
+            "task": "Executa correções",
+            "context": "issues listados",
+            "expected": "patch aplicado",
+            "handoff_id": "h2",
+            "chain": ["claude"],
+        }
+        # codex responde com apenas ROUTE (body=None) — sem texto, só handoff
+        app.parse_response = Mock(side_effect=[
+            ("resposta claude", "codex", first_handoff, False, False, None),
+            (None, "opencode-qwen", second_handoff, False, False, "h1"),  # sem body
+            ("resposta qwen", None, None, False, False, "h2"),
+            ("síntese final", None, None, False, False, None),
+        ])
+        app.dispatch_services.call_agent = Mock(side_effect=["r1", "r2", "r3", "r4"])
+
+        QuimeraApp._do_process_chat_message(app, "analisa")
+
+        calls = app.dispatch_services.call_agent.call_args_list
+        agents_called = [c[0][0] for c in calls]
+        # Deve chamar: claude → codex → opencode-qwen → claude (síntese)
+        self.assertEqual(agents_called, ["claude", "codex", "opencode-qwen", "claude"])
+        # Não deve ter tentado fallback (apenas 4 chamadas esperadas)
+        self.assertEqual(app.dispatch_services.call_agent.call_count, 4)
+
+    def test_handoff_to_unknown_agent_is_ignored(self):
+        """Handoff para agente não conectado deve ser ignorado silenciosamente."""
+        app = _make_app(active_agents=["claude", "codex"])
+        app.parse_routing = Mock(return_value=("claude", "mensagem", False))
+
+        handoff = {
+            "task": "alguma tarefa",
+            "context": "",
+            "expected": "",
+            "handoff_id": "hx",
+            "chain": [],
+        }
+        # claude responde com [ROUTE:agente] onde 'agente' não está em active_agents
+        app.parse_response = Mock(return_value=("resposta claude", "agente", handoff, False, False, None))
+
+        QuimeraApp._do_process_chat_message(app, "mensagem")
+
+        # Apenas claude deve ter sido chamado; handoff para 'agente' ignorado
+        self.assertEqual(app.dispatch_services.call_agent.call_count, 1)
+        agents_called = [c[0][0] for c in app.dispatch_services.call_agent.call_args_list]
+        self.assertEqual(agents_called, ["claude"])
+
     def test_consecutive_turns_route_to_different_agents(self):
         """Duas falas seguidas do humano podem ir para agentes diferentes (roteamento aleatório)."""
         app = _make_app(active_agents=["claude", "codex"])
