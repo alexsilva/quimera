@@ -288,6 +288,7 @@ class AppSystemLayer:
             primary=True,
             shared_state=shared_state,
             skip_tool_prompt=True,
+            execution_mode=getattr(self.app, "execution_mode", None),
         )
         analysis_lines = [
             f"PROMPT PREVIEW: {agent}",

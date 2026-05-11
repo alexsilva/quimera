@@ -1,5 +1,6 @@
 import queue
 import threading
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch, ANY
 
 import pytest
@@ -180,6 +181,26 @@ def test_agent_client_call_prompt_as_arg(renderer):
             assert result == "output"
             mock_run.assert_called_with(["mock-agent", "prompt"], input_text=None, silent=False, agent="mock",
                                         show_status=True)
+
+
+def test_agent_client_call_does_not_duplicate_mode_prompt(renderer):
+    client = AgentClient(renderer)
+    mode_addon = "[MODO: ANÁLISE] Apenas leitura e análise. Não edite arquivos."
+    client.execution_mode = SimpleNamespace(prompt_addon=mode_addon)
+    initial_prompt = f"{mode_addon}\n\npedido"
+
+    with patch("quimera.plugins.get") as mock_get:
+        mock_plugin = MagicMock()
+        mock_plugin.cmd = ["mock-agent"]
+        mock_plugin.prompt_as_arg = False
+        mock_get.return_value = mock_plugin
+
+        with patch.object(client, "run") as mock_run:
+            mock_run.return_value = "output"
+            result = client.call("mock", initial_prompt)
+            assert result == "output"
+            mock_run.assert_called_with(["mock-agent"], input_text=initial_prompt, _primed_proc=None,
+                                        silent=False, agent="mock", show_status=True)
 
 
 def test_agent_client_log_metrics(renderer, tmp_path):

@@ -87,6 +87,12 @@ Sempre mescle com o estado existente, nunca substitua completamente.
 <!-- ENDIF:route_agents -->
 </rules>
 
+<!-- IF:execution_mode_prompt -->
+<execution_mode title="Modo de execução ativo">
+{execution_mode_prompt}
+</execution_mode>
+<!-- ENDIF:execution_mode_prompt -->
+
 <!-- IF:shared_state_json -->
 <shared_state title="Estado compartilhado">
 {shared_state_json}

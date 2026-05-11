@@ -405,6 +405,7 @@ class AppDispatchServices:
                     stream_state["started"] = True
             app.renderer.update_message_stream(agent, chunk)
 
+        active_execution_mode = getattr(app, "execution_mode", None)
         if app.debug_prompt_metrics:
             prompt, metrics = app.prompt_builder.build(
                 agent,
@@ -417,6 +418,7 @@ class AppDispatchServices:
                 handoff_only=handoff_only,
                 from_agent=from_agent,
                 skip_tool_prompt=True,
+                execution_mode=active_execution_mode,
             )
             app.agent_client.log_prompt_metrics(
                 agent,
@@ -438,6 +440,7 @@ class AppDispatchServices:
                 handoff_only=handoff_only,
                 from_agent=from_agent,
                 skip_tool_prompt=True,
+                execution_mode=active_execution_mode,
             )
 
         result = app.agent_client.call(agent, prompt, silent=silent, on_text_chunk=_on_text_chunk)

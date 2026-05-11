@@ -574,6 +574,7 @@ class ProtocolTests(unittest.TestCase):
             primary=True,
             shared_state=app.shared_state,
             skip_tool_prompt=True,
+            execution_mode=None,
         )
         message = app.renderer.system_messages[0]
         self.assertIn("PROMPT PREVIEW: claude", message)

@@ -113,6 +113,18 @@ class TestToolPolicyBlockedTools(unittest.TestCase):
         except ToolPolicyError as exc:
             self.assertNotIn("bloqueada", str(exc))
 
+    def test_execution_modes_keep_blocked_tools_enforced(self):
+        policy = self._make_policy()
+        analysis_mode = get_mode("/analysis")
+        policy.blocked_tools = list(analysis_mode.blocked_tools)
+        with self.assertRaises(ToolPolicyError) as ctx:
+            policy.validate(self._call("write_file", {"path": "x.py", "content": "x"}))
+        self.assertIn("bloqueada", str(ctx.exception))
+
+        execute_mode = get_mode("/execute")
+        policy.blocked_tools = list(execute_mode.blocked_tools)
+        self.assertEqual(policy.blocked_tools, [])
+
 
 class TestParseRoutingWithModes(unittest.TestCase):
     """Testa que parse_routing detecta comandos de modo e os aplica."""

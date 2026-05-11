@@ -39,6 +39,7 @@ class PromptBuilder:
             handoff_only=False,
             from_agent=None,
             skip_tool_prompt=False,
+            execution_mode=None,
     ):
         """Gera o prompt final enviado ao agente da vez.
 
@@ -111,6 +112,11 @@ class PromptBuilder:
             skip_indexes={idx for idx in [request_index, *fact_indexes] if idx is not None},
             current_agent=agent,
         )
+        execution_mode_prompt = ""
+        if execution_mode is not None:
+            prompt_addon = str(getattr(execution_mode, "prompt_addon", "") or "").strip()
+            if prompt_addon:
+                execution_mode_prompt = prompt_addon
         full_prompt = prompt_template.render(
             agent=agent.upper(),
             user_name=self.user_name.upper(),
@@ -141,6 +147,7 @@ class PromptBuilder:
             handoff_raw=handoff_fields["handoff_raw"],
             recent_conversation=recent_conversation,
             metrics=metrics,
+            execution_mode_prompt=execution_mode_prompt,
         )
 
         if debug:

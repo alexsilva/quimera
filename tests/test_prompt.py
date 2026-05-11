@@ -2,6 +2,7 @@ from unittest.mock import MagicMock
 import re
 
 from quimera.context import ContextManager
+from quimera.modes import get_mode
 from quimera.prompt import PromptBuilder
 from quimera.prompt_templates import PromptTemplate
 
@@ -123,6 +124,35 @@ def test_prompt_no_tools():
     assert '<recent_conversation title="Conversa recente">' in prompt
     assert '<response_prefix title="Prefixo de resposta">' not in prompt
     assert "\n\n\n" not in prompt
+
+
+def test_prompt_injects_execution_mode_prompt_for_all_modes():
+    builder = PromptBuilder(context_manager=_make_context_manager(""))
+    history = [{"role": "human", "content": "test"}]
+    mode_expectations = {
+        "/analysis": "[MODO: ANÁLISE]",
+        "/planning": "[MODO: PLANEJAMENTO]",
+        "/design": "[MODO: DESIGN]",
+        "/review": "[MODO: REVISÃO]",
+        "/execute": "[MODO: EXECUÇÃO]",
+    }
+
+    for mode_cmd, expected_marker in mode_expectations.items():
+        mode = get_mode(mode_cmd)
+        prompt = builder.build(agent="claude", history=history, execution_mode=mode)
+        assert expected_marker in prompt
+        assert prompt.count(expected_marker) == 1
+        assert '<execution_mode title="Modo de execução ativo">' in prompt
+
+
+def test_prompt_without_execution_mode_does_not_inject_mode_addon():
+    builder = PromptBuilder(context_manager=_make_context_manager(""))
+    history = [{"role": "human", "content": "test"}]
+
+    prompt = builder.build(agent="claude", history=history, execution_mode=None)
+
+    assert '<execution_mode title="Modo de execução ativo">' not in prompt
+    assert "[MODO:" not in prompt
 
 
 def test_prompt_primary_false_omits_only_session_state():
