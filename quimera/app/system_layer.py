@@ -11,6 +11,7 @@ from ..constants import (
     CMD_CLEAR,
     CMD_CONNECT,
     CMD_CONTEXT,
+    CMD_DISCONNECT,
     CMD_CONTEXT_BRANCH,
     CMD_CONTEXT_EDIT,
     CMD_HELP,
@@ -22,6 +23,7 @@ from ..constants import (
     build_agents_help,
     build_help,
 )
+from ..plugins import remove_connection
 from .. import plugins as _plugins
 from ..plugins.base import (
     CliConnection,
@@ -356,6 +358,17 @@ class AppSystemLayer:
             if target not in selected_agents:
                 self.app.selected_agents = selected_agents + [target]
             self.show_system_message(f"Conexão ativa para {target}: {format_connection_label(connection)}")
+            return True
+
+        if command == CMD_DISCONNECT or command.startswith(f"{CMD_DISCONNECT} "):
+            target = command[len(CMD_DISCONNECT):].strip().lower()
+            if not target:
+                self.app.renderer.show_warning("Uso: /disconnect <agente>")
+                return True
+            if remove_connection(target):
+                self.app.renderer.show_system(f"Conexão removida para {target}.")
+            else:
+                self.app.renderer.show_warning(f"Nenhuma conexão persistida encontrada para {target}.")
             return True
 
         if command == CMD_CLEAR:

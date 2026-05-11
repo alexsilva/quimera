@@ -26,7 +26,7 @@ from quimera.app.protocol import AppProtocol
 from quimera.app.session_metrics import SessionMetricsService
 from quimera.cli import main as cli_main
 from quimera.config import DEFAULT_HISTORY_WINDOW
-from quimera.constants import CMD_AGENTS, CMD_CLEAR, CMD_CONNECT, CMD_HELP, CMD_PROMPT, EXTEND_MARKER, MSG_SHUTDOWN, Visibility, build_agents_help, build_help
+from quimera.constants import CMD_AGENTS, CMD_CLEAR, CMD_CONNECT, CMD_DISCONNECT, CMD_HELP, CMD_PROMPT, EXTEND_MARKER, MSG_SHUTDOWN, Visibility, build_agents_help, build_help
 from quimera.plugins import AgentPlugin
 from quimera.plugins.base import OpenAIConnection
 from quimera.prompt import PromptBuilder
@@ -737,6 +737,9 @@ class ProtocolTests(unittest.TestCase):
     def test_available_internal_commands_include_connect(self):
         self.assertIn(CMD_CONNECT, QuimeraApp._available_internal_commands())
 
+    def test_available_internal_commands_include_disconnect(self):
+        self.assertIn(CMD_DISCONNECT, QuimeraApp._available_internal_commands())
+
     def test_handle_command_warns_when_connect_target_is_missing(self):
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
@@ -784,6 +787,43 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(connection.api_key_env, "LM_STUDIO_KEY")
         self.assertIn("Configurando conexão para chatgpt", app.renderer.system_messages[0])
         self.assertIn("Conexão ativa para chatgpt", app.renderer.system_messages[-1])
+
+    def test_handle_command_warns_when_disconnect_target_is_missing(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.renderer = DummyRenderer()
+        app.system_layer = AppSystemLayer(app)
+
+        handled = app.system_layer.handle_command(CMD_DISCONNECT)
+
+        self.assertTrue(handled)
+        self.assertEqual(app.renderer.warnings, ["Uso: /disconnect <agente>"])
+
+    def test_handle_command_disconnects_persisted_connection(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.renderer = DummyRenderer()
+        app.system_layer = AppSystemLayer(app)
+
+        with patch("quimera.app.system_layer.remove_connection", return_value=True) as remove_conn:
+            handled = app.system_layer.handle_command("/disconnect chatgpt")
+
+        self.assertTrue(handled)
+        remove_conn.assert_called_once_with("chatgpt")
+        self.assertIn("Conexão removida para chatgpt.", app.renderer.system_messages)
+
+    def test_handle_command_disconnect_warns_when_not_found(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.renderer = DummyRenderer()
+        app.system_layer = AppSystemLayer(app)
+
+        with patch("quimera.app.system_layer.remove_connection", return_value=False) as remove_conn:
+            handled = app.system_layer.handle_command("/disconnect chatgpt")
+
+        self.assertTrue(handled)
+        remove_conn.assert_called_once_with("chatgpt")
+        self.assertEqual(
+            app.renderer.warnings,
+            ["Nenhuma conexão persistida encontrada para chatgpt."],
+        )
 
     def test_configure_connection_interactively_openai_returns_dataclass_connection(self):
         app = QuimeraApp.__new__(QuimeraApp)

@@ -186,6 +186,27 @@ def set_connection_override(agent_name: str, connection: Connection, persist: bo
         save_connections(connections)
 
 
+def remove_connection(agent_name: str) -> bool:
+    """Remove a conexão persistida de um agente.
+
+    Args:
+        agent_name: Nome do agente cuja conexão será removida.
+
+    Returns:
+        True se a conexão existia e foi removida, False se não existia.
+    """
+    connections = load_connections()
+    if agent_name not in connections:
+        return False
+    del connections[agent_name]
+    save_connections(connections)
+    # Remove o override em memória se o plugin estiver registrado
+    plugin = _registry.get(agent_name)
+    if plugin is not None:
+        object.__setattr__(plugin, "_connection_override", None)
+    return True
+
+
 @dataclass
 class AgentPlugin:
     """Implementa `AgentPlugin`."""
