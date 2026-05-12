@@ -1612,6 +1612,8 @@ class ProtocolTests(unittest.TestCase):
         app.run()
 
         self.assertEqual(app.renderer.system_messages[-1], MSG_SHUTDOWN)
+        self.assertTrue(app.agent_client._user_cancelled)
+        self.assertTrue(app.agent_client._cancel_event.is_set())
 
     def test_run_forwards_full_multiline_editor_content_without_truncation(self):
         app = QuimeraApp.__new__(QuimeraApp)

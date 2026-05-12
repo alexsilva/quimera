@@ -807,6 +807,12 @@ class QuimeraApp:
 
     def _process_chat_message(self, user):
         """Executa process chat message com controle de turno."""
+        agent_client = getattr(self, "agent_client", None)
+        if agent_client is not None:
+            agent_client._user_cancelled = False
+            cancel_event = getattr(agent_client, "_cancel_event", None)
+            if cancel_event is not None:
+                cancel_event.clear()
         try:
             self._do_process_chat_message(user)
         finally:
@@ -901,6 +907,12 @@ class QuimeraApp:
                 else:
                     self._process_chat_message(user)
         except KeyboardInterrupt:
+            agent_client = getattr(self, "agent_client", None)
+            if agent_client is not None:
+                agent_client._user_cancelled = True
+                cancel_event = getattr(agent_client, "_cancel_event", None)
+                if cancel_event is not None and hasattr(cancel_event, "set"):
+                    cancel_event.set()
             self.show_muted_message(MSG_SHUTDOWN)
         finally:
             try:

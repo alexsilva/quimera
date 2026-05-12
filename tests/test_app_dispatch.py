@@ -3,6 +3,7 @@ from unittest.mock import MagicMock, Mock, call, patch, PropertyMock, sentinel
 import pytest
 import time
 import re
+import threading
 
 from quimera.app.dispatch import (
     _coerce_tool_error,
@@ -239,6 +240,8 @@ def dispatch_app():
     app.get_agent_plugin = MagicMock(return_value=MagicMock())
     app.prompt_builder = MagicMock()
     app.agent_client = MagicMock()
+    app.agent_client._user_cancelled = False
+    app.agent_client._cancel_event = threading.Event()
     app.renderer = MagicMock()
     app.shared_state = {}
     app.session_state = {
@@ -429,6 +432,36 @@ class TestResolveAgentResponse:
             result = ds.resolve_agent_response("agent1", "some cmd")
             assert result == "response from low level"
 
+    def test_user_cancelled_before_tool_hop_returns_none(self, dispatch_app):
+        dispatch_app.agent_client._user_cancelled = True
+        dispatch_app.tool_executor.maybe_execute_from_response = MagicMock(
+            side_effect=AssertionError("não deveria executar ferramenta após cancelamento")
+        )
+        ds = AppDispatchServices(dispatch_app)
+        result = ds.resolve_agent_response("agent1", "some cmd")
+        assert result is None
+        dispatch_app.tool_executor.maybe_execute_from_response.assert_not_called()
+
+    def test_user_cancelled_before_followup_tool_call_aborts(self, dispatch_app):
+        tool_result = MagicMock()
+        tool_result.error = None
+        tool_result.ok = True
+        tool_result.to_model_payload = MagicMock(return_value="{}")
+
+        def _maybe_exec(_):
+            dispatch_app.agent_client._user_cancelled = True
+            return ("tool output", tool_result)
+
+        dispatch_app.tool_executor.maybe_execute_from_response = MagicMock(side_effect=_maybe_exec)
+        dispatch_app._call_agent = MagicMock(return_value="não deveria chamar")
+        plugin = dispatch_app.get_agent_plugin("agent1")
+        plugin.tool_use_reliability = "high"
+
+        ds = AppDispatchServices(dispatch_app)
+        result = ds.resolve_agent_response("agent1", "some cmd")
+        assert result is None
+        dispatch_app._call_agent.assert_not_called()
+
 
 # =============================================================================
 # AppDispatchServices — call_agent
@@ -583,6 +616,38 @@ class TestCallAgent:
             result = ds.call_agent("agent1")
         assert result is None
 
+    def test_user_cancelled_prevents_retry_loop(self, dispatch_app):
+        """_user_cancelled True → low_level não é chamado de novo, sem fallback infinito"""
+        dispatch_app.MAX_RETRIES = 3
+        ds = AppDispatchServices(dispatch_app)
+        low_level = MagicMock(return_value=None)
+        ds.call_agent_low_level = low_level
+        dispatch_app.agent_client._user_cancelled = True
+        with patch("quimera.app.dispatch.time.sleep"):
+            result = ds.call_agent("agent1")
+        assert result is None
+        # zero chamadas low_level — abortou antes de qualquer tentativa
+        assert low_level.call_count == 0, (
+            f"call_agent_low_level chamado {low_level.call_count}x em vez de 0"
+        )
+
+    def test_cancelled_during_call_does_not_retry(self, dispatch_app):
+        """cancelamento durante call_agent_low_level → aborta sem tentar de novo"""
+        dispatch_app.MAX_RETRIES = 3
+        ds = AppDispatchServices(dispatch_app)
+
+        def _cancelled_then_boom(*args, **kwargs):
+            dispatch_app.agent_client._user_cancelled = True
+            raise ValueError("boom")
+
+        low_level = MagicMock(side_effect=_cancelled_then_boom)
+        ds.call_agent_low_level = low_level
+        with patch("quimera.app.dispatch.time.sleep"):
+            result = ds.call_agent("agent1")
+        assert result is None
+        # exatamente 1 chamada (a que lançou), sem retry
+        assert low_level.call_count == 1
+
     def test_with_handoff_options(self, dispatch_app):
         """handoff dict é passado corretamente"""
         dispatch_app.MAX_RETRIES = 1
@@ -735,6 +800,13 @@ class TestCallAgentLowLevel:
         ds.call_agent_low_level("agent1", show_output=False)
         ll_app.renderer.start_message_stream.assert_not_called()
         ll_app.renderer.update_message_stream.assert_not_called()
+
+    def test_cancelled_before_low_level_call_returns_none(self, ll_app):
+        ll_app.agent_client._user_cancelled = True
+        ds = AppDispatchServices(ll_app)
+        result = ds.call_agent_low_level("agent1")
+        assert result is None
+        ll_app.agent_client.call.assert_not_called()
 
     def test_failed_result_increments_failed_counter(self, ll_app):
         ll_app.agent_client.call = MagicMock(return_value=None)

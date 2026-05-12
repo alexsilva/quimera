@@ -63,6 +63,13 @@ class ChatRoundOrchestrator:
             return
 
         if response is None and not route_target and not needs_human_input:
+            # Não fazer fallback se o usuário já cancelou — evita fallback infinito
+            agent_client = getattr(app, "agent_client", None)
+            if agent_client and agent_client._user_cancelled:
+                self._show_system("[cancelado] fluxo interrompido.")
+                app.turn_manager.reset()
+                return
+
             fallback_candidates = [agent for agent in app.active_agents if agent != first_agent]
             failed_agent = first_agent
             for fallback_agent in fallback_candidates:
@@ -74,6 +81,11 @@ class ChatRoundOrchestrator:
                 self._show_system(
                     f"[fallback] {failed_agent} não respondeu; {fallback_agent} assumiu"
                 )
+                agent_client = getattr(app, "agent_client", None)
+                if agent_client and agent_client._user_cancelled:
+                    self._show_system("[cancelado] fluxo interrompido.")
+                    app.turn_manager.reset()
+                    return
                 fallback_response = dispatch_services.call_agent(
                     fallback_agent,
                     is_first_speaker=True,

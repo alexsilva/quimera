@@ -50,6 +50,22 @@ def _invalid_tool_signature(tool_result, error_type: str) -> tuple[str, str, str
     return error_type, tool_name, error_text
 
 
+def _is_user_cancelled(agent_client) -> bool:
+    """Retorna True quando há sinal explícito de cancelamento do usuário."""
+    if agent_client is None:
+        return False
+    if getattr(agent_client, "_user_cancelled", False) is True:
+        return True
+    cancel_event = getattr(agent_client, "_cancel_event", None)
+    is_set = getattr(cancel_event, "is_set", None)
+    if callable(is_set):
+        try:
+            return is_set() is True
+        except Exception:
+            return False
+    return False
+
+
 class AppDispatchServices:
     """Agrupa despacho de agentes e persistência de mensagens."""
 
@@ -163,6 +179,14 @@ class AppDispatchServices:
 
         try:
             for hop in range(max_tool_hops):
+                if _is_user_cancelled(getattr(app, "agent_client", None)):
+                    logger.info(
+                        "[DISPATCH] agent=%s cancelled by user during tool loop at hop=%d/%d, aborting",
+                        agent,
+                        hop + 1,
+                        max_tool_hops,
+                    )
+                    return None
                 if not current_response:
                     return current_response
 
@@ -238,6 +262,12 @@ class AppDispatchServices:
                 if len(followup_handoff) > _MAX_HANDOFF_CHARS:
                     followup_handoff = followup_handoff[-_MAX_HANDOFF_CHARS:]
                     followup_handoff = "(histórico truncado)...\n\n" + followup_handoff
+                if _is_user_cancelled(getattr(app, "agent_client", None)):
+                    logger.info(
+                        "[DISPATCH] agent=%s cancelled by user before followup tool call, aborting",
+                        agent,
+                    )
+                    return None
                 if hasattr(app, "_call_agent"):
                     current_response = app._call_agent(
                         agent,
@@ -254,6 +284,12 @@ class AppDispatchServices:
                         protocol_mode="tool_loop",
                         silent=silent,
                     )
+                if _is_user_cancelled(getattr(app, "agent_client", None)):
+                    logger.info(
+                        "[DISPATCH] agent=%s cancelled by user after followup tool call, aborting",
+                        agent,
+                    )
+                    return None
 
             session_metrics = getattr(app, "session_metrics", None)
             if session_metrics is not None:
@@ -293,8 +329,9 @@ class AppDispatchServices:
         max_retries = getattr(app, "MAX_RETRIES", 2)
         retry_backoff = getattr(app, "RETRY_BACKOFF_SECONDS", 1)
         for attempt in range(1, max_retries + 1):
-            if agent_client:
-                agent_client._user_cancelled = False
+            if _is_user_cancelled(agent_client):
+                logger.info("[DISPATCH] agent=%s cancelled by user before retry %d/%d, aborting", agent, attempt, max_retries)
+                return None
             try:
                 response = self.call_agent_low_level(
                     agent,
@@ -303,7 +340,7 @@ class AppDispatchServices:
                     **dispatch_options,
                 )
                 if response is None:
-                    if agent_client and agent_client._user_cancelled:
+                    if _is_user_cancelled(agent_client):
                         logger.info("[DISPATCH] agent=%s cancelled by user, aborting", agent)
                         return None
                     if attempt < max_retries:
@@ -326,7 +363,7 @@ class AppDispatchServices:
                     show_output=show_output,
                 )
                 if result is None:
-                    if agent_client and agent_client._user_cancelled:
+                    if _is_user_cancelled(agent_client):
                         logger.info("[DISPATCH] agent=%s cancelled by user, aborting", agent)
                         return None
                     if attempt < max_retries:
@@ -346,7 +383,7 @@ class AppDispatchServices:
                     app.record_failure(agent)
                 return result
             except Exception as exc:
-                if agent_client and agent_client._user_cancelled:
+                if _is_user_cancelled(agent_client):
                     logger.info("[DISPATCH] agent=%s cancelled by user, aborting", agent)
                     return None
                 last_error = exc
@@ -381,6 +418,10 @@ class AppDispatchServices:
     ):
         """Monta o prompt final e executa a chamada ao backend do agente."""
         app = self.app
+        agent_client = getattr(app, "agent_client", None)
+        if _is_user_cancelled(agent_client):
+            logger.info("[DISPATCH] agent=%s cancelled by user before low-level call, aborting", agent)
+            return None
         counter_lock = getattr(app, "_counter_lock", None)
         with (counter_lock if counter_lock is not None else nullcontext()):
             app.session_call_index += 1
@@ -443,6 +484,9 @@ class AppDispatchServices:
                 execution_mode=active_execution_mode,
             )
 
+        if _is_user_cancelled(agent_client):
+            logger.info("[DISPATCH] agent=%s cancelled by user before backend call, aborting", agent)
+            return None
         result = app.agent_client.call(agent, prompt, silent=silent, on_text_chunk=_on_text_chunk)
         self._update_spy_telemetry(agent)
         if stream_state["started"]:
