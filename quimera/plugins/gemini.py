@@ -5,7 +5,7 @@ plugin = AgentPlugin(
     name="gemini",
     prefix="/gemini",
     icon="🧭",
-    cmd=["gemini", "--approval-mode=yolo", "-p"],
+    cmd=["gemini", "--approval-mode=yolo", "--skip-trust", "-p"],
     style=("cyan", "Gemini"),
     prompt_as_arg=True,
     capabilities=["code_review", "documentation", "general_reasoning", "code_editing", "complex_refactoring",
