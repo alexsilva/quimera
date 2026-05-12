@@ -20,14 +20,15 @@ from quimera.runtime.parser import ToolCallParseError, _parse_json_object, extra
 from quimera.runtime.policy import ToolPolicy, ToolPolicyError
 from quimera.runtime.registry import ToolRegistry
 from quimera.runtime.task_executor import TaskExecutor, create_executor
+from quimera.constants import TaskType
 from quimera.runtime.task_planning import (
-    TASK_TYPE_CODE_EDIT,
-    TASK_TYPE_GENERAL,
-    TASK_TYPE_TEST_EXECUTION,
     choose_best_agent,
     classify_task_type,
     score_plugin_for_task,
 )
+TASK_TYPE_CODE_EDIT = TaskType.CODE_EDIT
+TASK_TYPE_GENERAL = TaskType.GENERAL
+TASK_TYPE_TEST_EXECUTION = TaskType.TEST_EXECUTION
 from quimera.runtime.tools.files import FileTools, set_staging_root
 from quimera.runtime.tools.shell import ShellTool
 from quimera.runtime.tools.tasks import TaskTools

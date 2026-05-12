@@ -4,6 +4,8 @@ from __future__ import annotations
 import re
 from typing import Iterable, Protocol, Sequence, runtime_checkable
 
+from ..constants import TaskType
+
 
 @runtime_checkable
 class _TaskAgentProto(Protocol):
@@ -20,35 +22,18 @@ class _TaskAgentProto(Protocol):
     supports_task_execution: bool
     tool_use_reliability: str
 
-TASK_TYPE_TEST_EXECUTION = "test_execution"
-TASK_TYPE_CODE_REVIEW = "code_review"
-TASK_TYPE_CODE_EDIT = "code_edit"
-TASK_TYPE_BUG_INVESTIGATION = "bug_investigation"
-TASK_TYPE_ARCHITECTURE = "architecture"
-TASK_TYPE_DOCUMENTATION = "documentation"
-TASK_TYPE_GENERAL = "general"
 
-TASK_TYPES = (
-    TASK_TYPE_TEST_EXECUTION,
-    TASK_TYPE_CODE_REVIEW,
-    TASK_TYPE_CODE_EDIT,
-    TASK_TYPE_BUG_INVESTIGATION,
-    TASK_TYPE_ARCHITECTURE,
-    TASK_TYPE_DOCUMENTATION,
-    TASK_TYPE_GENERAL,
-)
-
-_TASK_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    (TASK_TYPE_TEST_EXECUTION,
+_TASK_PATTERNS: tuple[tuple[TaskType, tuple[str, ...]], ...] = (
+    (TaskType.TEST_EXECUTION,
      ("execute os testes", "executar testes", "rode pytest", "rodar testes", "run tests", "pytest", "testes")),
-    (TASK_TYPE_CODE_REVIEW,
+    (TaskType.CODE_REVIEW,
      ("revise", "review", "analise esse arquivo", "code review", "revisar arquivo", "inspecione")),
-    (TASK_TYPE_CODE_EDIT,
+    (TaskType.CODE_EDIT,
      ("corrija", "implemente", "edite", "refatore", "refatoração", "refactor", "ajuste", "altere", "modifique")),
-    (TASK_TYPE_BUG_INVESTIGATION,
+    (TaskType.BUG_INVESTIGATION,
      ("investigue", "descubra por que", "erro", "falha", "bug", "quebrou", "não funciona")),
-    (TASK_TYPE_ARCHITECTURE, ("arquitetura", "design", "protocolo", "estratégia", "modelagem")),
-    (TASK_TYPE_DOCUMENTATION, ("documente", "readme", "explicar", "documentação", "docs")),
+    (TaskType.ARCHITECTURE, ("arquitetura", "design", "protocolo", "estratégia", "modelagem")),
+    (TaskType.DOCUMENTATION, ("documente", "readme", "explicar", "documentação", "docs")),
 )
 
 
@@ -61,21 +46,21 @@ def classify_task_type(description: str) -> str:
     """Classifica task type."""
     normalized = normalize_task_description(description).lower()
     if not normalized:
-        return TASK_TYPE_GENERAL
+        return TaskType.GENERAL
     for task_type, keywords in _TASK_PATTERNS:
         if any(keyword in normalized for keyword in keywords):
             return task_type
-    return TASK_TYPE_GENERAL
+    return TaskType.GENERAL
 
 
 CAPABILITY_BOOST = {
-    "code_editing": {"code_edit": 4, "bug_investigation": 1},
-    "bug_investigation": {"bug_investigation": 4, "code_edit": 1},
-    "documentation": {"documentation": 4},
-    "code_review": {"code_review": 4, "architecture": 1},
-    "architecture": {"architecture": 4, "code_review": 1},
-    "general_coding": {"code_edit": 3, "bug_investigation": 1},
-    "planning": {"architecture": 2, "code_review": 1},
+    "code_editing": {TaskType.CODE_EDIT: 4, TaskType.BUG_INVESTIGATION: 1},
+    "bug_investigation": {TaskType.BUG_INVESTIGATION: 4, TaskType.CODE_EDIT: 1},
+    "documentation": {TaskType.DOCUMENTATION: 4},
+    "code_review": {TaskType.CODE_REVIEW: 4, TaskType.ARCHITECTURE: 1},
+    "architecture": {TaskType.ARCHITECTURE: 4, TaskType.CODE_REVIEW: 1},
+    "general_coding": {TaskType.CODE_EDIT: 3, TaskType.BUG_INVESTIGATION: 1},
+    "planning": {TaskType.ARCHITECTURE: 2, TaskType.CODE_REVIEW: 1},
 }
 
 TOOL_RELIABILITY_SCORES = {
@@ -104,20 +89,20 @@ def score_plugin_for_task(plugin: _TaskAgentProto, task_type: str) -> int:
         score += 5
     if task_type in plugin.avoid_task_types:
         score -= 5
-    if task_type in {TASK_TYPE_CODE_EDIT, TASK_TYPE_BUG_INVESTIGATION,
-                     TASK_TYPE_CODE_REVIEW} and plugin.supports_code_editing:
+    if task_type in {TaskType.CODE_EDIT, TaskType.BUG_INVESTIGATION,
+                     TaskType.CODE_REVIEW} and plugin.supports_code_editing:
         score += 2
-    if task_type in {TASK_TYPE_ARCHITECTURE, TASK_TYPE_CODE_REVIEW,
-                     TASK_TYPE_DOCUMENTATION} and plugin.supports_long_context:
+    if task_type in {TaskType.ARCHITECTURE, TaskType.CODE_REVIEW,
+                     TaskType.DOCUMENTATION} and plugin.supports_long_context:
         score += 2
-    if plugin.supports_tools and task_type in {TASK_TYPE_TEST_EXECUTION, TASK_TYPE_BUG_INVESTIGATION}:
+    if plugin.supports_tools and task_type in {TaskType.TEST_EXECUTION, TaskType.BUG_INVESTIGATION}:
         score += 1
 
-    if task_type in {TASK_TYPE_TEST_EXECUTION, TASK_TYPE_BUG_INVESTIGATION}:
+    if task_type in {TaskType.TEST_EXECUTION, TaskType.BUG_INVESTIGATION}:
         score += TOOL_RELIABILITY_SCORES.get(tool_reliability(plugin), 0)
 
     # Penalty: for bug investigation tasks, penalize plugins without tooling
-    if task_type == TASK_TYPE_BUG_INVESTIGATION and not plugin.supports_tools:
+    if task_type == TaskType.BUG_INVESTIGATION and not plugin.supports_tools:
         score -= 3
 
     for cap in plugin.capabilities:
