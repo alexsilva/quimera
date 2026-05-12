@@ -204,104 +204,32 @@ def test_can_reassign_task_handles_candidate_and_failed_agent_cases(db_path):
 
 
 def test_can_reassign_task_returns_true_on_sqlite_error(monkeypatch):
-    class BrokenCursor:
-        def execute(self, *_args, **_kwargs):
-            raise sqlite3.Error("boom")
-
-        def fetchone(self):
-            return None
-
-    class BrokenConn:
-        def __init__(self):
-            self.closed = False
-
-        def cursor(self):
-            return BrokenCursor()
-
-        def close(self):
-            self.closed = True
-
-    conn = BrokenConn()
-    monkeypatch.setattr(tasks, "get_conn", lambda _db_path: conn)
-
+    from unittest.mock import MagicMock
+    mock_repo = MagicMock()
+    mock_repo.can_reassign_task.side_effect = sqlite3.Error("boom")
+    monkeypatch.setattr(tasks, "_repository", lambda _db_path: mock_repo)
     assert tasks.can_reassign_task(1, ["codex"], db_path="unused") is True
-    assert conn.closed is True
+    mock_repo.can_reassign_task.assert_called_once_with(1, ["codex"])
 
 
 def test_claim_task_rolls_back_and_reraises_on_error(monkeypatch):
-    class FailingCursor:
-        def __init__(self):
-            self.calls = 0
-
-        def execute(self, *_args, **_kwargs):
-            self.calls += 1
-            if self.calls == 2:
-                raise RuntimeError("db select failure")
-
-        def fetchone(self):
-            return None
-
-    class FailingConn:
-        def __init__(self):
-            self.rollback_called = False
-            self.close_called = False
-            self.cursor_obj = FailingCursor()
-
-        def cursor(self):
-            return self.cursor_obj
-
-        def rollback(self):
-            self.rollback_called = True
-
-        def close(self):
-            self.close_called = True
-
-    conn = FailingConn()
-    monkeypatch.setattr(tasks, "get_conn", lambda _db_path: conn)
-
+    from unittest.mock import MagicMock
+    mock_repo = MagicMock()
+    mock_repo.claim_task.side_effect = RuntimeError("db select failure")
+    monkeypatch.setattr(tasks, "_repository", lambda _db_path: mock_repo)
     with pytest.raises(RuntimeError, match="db select failure"):
         tasks.claim_task("codex", db_path="unused")
-
-    assert conn.rollback_called is True
-    assert conn.close_called is True
+    mock_repo.claim_task.assert_called_once_with("codex", job_id=None)
 
 
 def test_claim_review_task_rolls_back_and_reraises_on_error(monkeypatch):
-    class FailingCursor:
-        def __init__(self):
-            self.calls = 0
-
-        def execute(self, *_args, **_kwargs):
-            self.calls += 1
-            if self.calls == 2:
-                raise RuntimeError("db select failure")
-
-        def fetchone(self):
-            return None
-
-    class FailingConn:
-        def __init__(self):
-            self.rollback_called = False
-            self.close_called = False
-            self.cursor_obj = FailingCursor()
-
-        def cursor(self):
-            return self.cursor_obj
-
-        def rollback(self):
-            self.rollback_called = True
-
-        def close(self):
-            self.close_called = True
-
-    conn = FailingConn()
-    monkeypatch.setattr(tasks, "get_conn", lambda _db_path: conn)
-
+    from unittest.mock import MagicMock
+    mock_repo = MagicMock()
+    mock_repo.claim_review_task.side_effect = RuntimeError("db select failure")
+    monkeypatch.setattr(tasks, "_repository", lambda _db_path: mock_repo)
     with pytest.raises(RuntimeError, match="db select failure"):
         tasks.claim_review_task("gemini", db_path="unused")
-
-    assert conn.rollback_called is True
-    assert conn.close_called is True
+    mock_repo.claim_review_task.assert_called_once_with("gemini", job_id=None)
 
 
 def test_get_conn_raises_on_none():

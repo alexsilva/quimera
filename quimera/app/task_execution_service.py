@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Protocol
 
+from ..runtime.models import TaskRecord
 from ..runtime.parser import strip_tool_block
 from .task_repository import TaskRepository
 
@@ -87,11 +88,11 @@ class TaskExecutionService:
     def handler_for(self, agent_name: str):
         """Retorna handler de execução para o agente informado."""
 
-        def task_handler(task_dict: dict) -> bool:
+        def task_handler(task: TaskRecord) -> bool:
             try:
-                task_id = task_dict["id"]
-                description = task_dict.get("description", "")
-                body = task_dict.get("body", "") or description
+                task_id = task.id
+                description = task.description or ""
+                body = task.body or description
                 if not body:
                     self.repository.fail_task(task_id, reason="empty body")
                     return False
@@ -161,11 +162,11 @@ class TaskExecutionService:
                     self.system_layer.show_system_message(f"[task {task_id}] {agent_name}: concluída")
                 return True
             except Exception as exc:
-                self.system_layer.show_system_message(f"[task {task_dict['id']}] {agent_name}: erro: {exc}")
-                if self.failover_policy.can_failover(task_dict["id"], agent_name):
-                    self.repository.requeue_task(task_dict["id"], agent_name, reason=str(exc))
+                self.system_layer.show_system_message(f"[task {task_id}] {agent_name}: erro: {exc}")
+                if self.failover_policy.can_failover(task_id, agent_name):
+                    self.repository.requeue_task(task_id, agent_name, reason=str(exc))
                 else:
-                    self.repository.fail_task(task_dict["id"], reason=str(exc))
+                    self.repository.fail_task(task_id, reason=str(exc))
                 return False
 
         return task_handler

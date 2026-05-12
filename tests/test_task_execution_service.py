@@ -1,4 +1,5 @@
 from quimera.app.task_execution_service import TaskExecutionService
+from quimera.runtime.models import TaskRecord
 
 
 class DispatchStub:
@@ -73,7 +74,7 @@ def test_handler_completes_task_when_no_review_agent_available():
         was_user_cancelled=lambda: False,
     )
 
-    ok = service.handler_for("codex")({"id": 1, "description": "corrigir bug"})
+    ok = service.handler_for("codex")(TaskRecord(id=1, job_id=0, description="corrigir bug", status="in_progress"))
 
     assert ok is True
     assert repo.complete_calls == [(1, "resultado final", None)]
@@ -95,7 +96,7 @@ def test_handler_submits_for_review_when_other_reviewer_exists():
         was_user_cancelled=lambda: False,
     )
 
-    ok = service.handler_for("codex")({"id": 2, "description": "ajustar rota"})
+    ok = service.handler_for("codex")(TaskRecord(id=2, job_id=0, description="ajustar rota", status="in_progress"))
 
     assert ok is True
     assert repo.submit_calls == [(2, "resultado final")]
@@ -119,7 +120,7 @@ def test_handler_requeues_when_agent_returns_no_response_and_failover_is_possibl
         record_failure=lambda agent_name: failures.append(agent_name),
     )
 
-    ok = service.handler_for("codex")({"id": 3, "description": "rodar validação"})
+    ok = service.handler_for("codex")(TaskRecord(id=3, job_id=0, description="rodar validação", status="in_progress"))
 
     assert ok is False
     assert failures == ["codex"]
@@ -141,7 +142,7 @@ def test_handler_fails_when_execution_is_blocked_and_no_failover_exists():
         was_user_cancelled=lambda: False,
     )
 
-    ok = service.handler_for("codex")({"id": 4, "description": "aplicar patch"})
+    ok = service.handler_for("codex")(TaskRecord(id=4, job_id=0, description="aplicar patch", status="in_progress"))
 
     assert ok is False
     assert repo.fail_calls == [(4, "não consigo executar")]
@@ -163,7 +164,7 @@ def test_handler_fails_when_user_cancels_execution():
         was_user_cancelled=lambda: True,
     )
 
-    ok = service.handler_for("codex")({"id": 5, "description": "executar tarefa"})
+    ok = service.handler_for("codex")(TaskRecord(id=5, job_id=0, description="executar tarefa", status="in_progress"))
 
     assert ok is False
     assert repo.fail_calls == [(5, "cancelled by user")]

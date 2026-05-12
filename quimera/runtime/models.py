@@ -13,6 +13,39 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
+@dataclass(frozen=True)
+class JobRecord:
+    """Registro imutável de um job."""
+
+    id: int
+    description: str
+    status: str
+    created_by: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+@dataclass(frozen=True)
+class TaskRecord:
+    """Registro imutável de uma task."""
+
+    id: int
+    job_id: int
+    description: str
+    status: str
+    task_type: str = "general"
+    origin: str = "legacy"
+    body: str | None = None
+    assigned_to: str | None = None
+    result: str | None = None
+    notes: str | None = None
+    priority: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+    created_by: str | None = None
+    requested_by: str | None = None
+
+
 @dataclass(slots=True)
 class ToolCall:
     """Representa uma chamada de ferramenta emitida pelo modelo."""

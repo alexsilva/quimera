@@ -1,6 +1,7 @@
 from quimera.constants import TaskStatus
 
 from quimera.app.task_review_service import TaskReviewService
+from quimera.runtime.models import TaskRecord
 
 
 class DispatchStub:
@@ -74,7 +75,7 @@ def test_review_handler_rejects_self_review_and_returns_to_pending_review():
     )
 
     ok = service.handler_for("codex")(
-        {"id": 7, "assigned_to": "codex", "result": "ok", "notes": None}
+        TaskRecord(id=7, job_id=0, description="", status="reviewing", assigned_to="codex", result="ok", notes=None)
     )
 
     assert ok is False
@@ -97,7 +98,7 @@ def test_review_handler_completes_task_when_verdict_is_aceite():
     )
 
     ok = service.handler_for("pickle")(
-        {"id": 8, "assigned_to": "codex", "description": "ajuste", "body": "escopo", "result": "ok"}
+        TaskRecord(id=8, job_id=0, description="ajuste", body="escopo", status="reviewing", assigned_to="codex", result="ok")
     )
 
     assert ok is True
@@ -120,7 +121,7 @@ def test_review_handler_requeues_task_when_verdict_is_not_accepted():
     )
 
     ok = service.handler_for("pickle")(
-        {"id": 9, "assigned_to": "codex", "description": "ajuste", "body": "escopo", "result": "ok"}
+        TaskRecord(id=9, job_id=0, description="ajuste", body="escopo", status="reviewing", assigned_to="codex", result="ok")
     )
 
     assert ok is False
@@ -142,7 +143,9 @@ def test_review_handler_returns_to_pending_review_when_exception_has_fallback():
         was_user_cancelled=lambda: False,
     )
 
-    ok = service.handler_for("pickle")({"id": 10, "assigned_to": "codex", "result": "ok"})
+    ok = service.handler_for("pickle")(
+        TaskRecord(id=10, job_id=0, description="", status="reviewing", assigned_to="codex", result="ok")
+    )
 
     assert ok is False
     assert repo.transition_calls == [(10, TaskStatus.PENDING_REVIEW, "ok", "timeout", None)]
@@ -163,7 +166,9 @@ def test_review_handler_fails_when_exception_has_no_operational_fallback():
         was_user_cancelled=lambda: False,
     )
 
-    ok = service.handler_for("pickle")({"id": 11, "assigned_to": "codex", "result": "ok"})
+    ok = service.handler_for("pickle")(
+        TaskRecord(id=11, job_id=0, description="", status="reviewing", assigned_to="codex", result="ok")
+    )
 
     assert ok is False
     assert repo.transition_calls == []

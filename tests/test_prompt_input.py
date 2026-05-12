@@ -344,12 +344,13 @@ class TestCoreCommandArgumentResolver:
         from quimera.app.core import QuimeraApp
         from quimera.workspace import Workspace
 
-        ws = Workspace(tmp_path)
-        # O _root do workspace é diferente de tmp_path; usar _root
+        ws_root = tmp_path / "test_ws"
+        ws_root.mkdir(parents=True, exist_ok=True)
+        ws = Workspace(ws_root)
         ctx_root = ws._root / "data" / "context"
         ctx_root.mkdir(parents=True, exist_ok=True)
-        (ctx_root / "feature_x").mkdir()
-        (ctx_root / "feature_y").mkdir()
+        (ctx_root / "feature_x").mkdir(exist_ok=True)
+        (ctx_root / "feature_y").mkdir(exist_ok=True)
 
         app = QuimeraApp.__new__(QuimeraApp)
         app.workspace = ws

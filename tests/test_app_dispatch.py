@@ -5,11 +5,11 @@ import time
 import re
 import threading
 
-from quimera.app.dispatch import (
+from quimera.app.dispatch import AppDispatchServices
+from quimera.app.tool_loop import (
     _coerce_tool_error,
     _invalid_tool_signature,
     _resolve_tool_error_type,
-    AppDispatchServices,
 )
 from quimera.runtime.errors import (
     ToolError,

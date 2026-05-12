@@ -2,9 +2,10 @@
 import argparse
 import os
 import sqlite3
-from datetime import datetime, timezone
+from dataclasses import asdict
 
 from ..constants import TaskStatus, TaskType, can_transition
+from ..app.task_repository import TaskRepository
 
 _UNSET = object()
 
@@ -21,132 +22,29 @@ def get_conn(db_path):
 
 def init_db(db_path=None):
     """Executa init db."""
-    conn = get_conn(db_path)
-    cur = conn.cursor()
-    cur.execute("""
-                CREATE TABLE IF NOT EXISTS jobs
-                (
-                    id          INTEGER PRIMARY KEY,
-                    description TEXT NOT NULL,
-                    status      TEXT NOT NULL,
-                    created_by  TEXT,
-                    created_at  DATETIME,
-                    updated_at  DATETIME
-                );
-                """)
-    cur.execute("""
-                CREATE TABLE IF NOT EXISTS tasks
-                (
-                    id             INTEGER PRIMARY KEY AUTOINCREMENT,
-                    job_id         INTEGER NOT NULL,
-                    description    TEXT    NOT NULL,
-                    body           TEXT,
-                    status         TEXT    NOT NULL,
-                    task_type      TEXT    NOT NULL DEFAULT 'general',
-                    origin         TEXT    NOT NULL DEFAULT 'legacy',
-                    assigned_to    TEXT,
-                    result         TEXT,
-                    notes          TEXT,
-                    priority       TEXT,
-                    created_at     DATETIME,
-                    updated_at     DATETIME,
-                    created_by     TEXT,
-                    approved_by    TEXT,
-                    source_context TEXT,
-                    FOREIGN KEY (job_id) REFERENCES jobs (id) ON DELETE CASCADE
-                );
-                """)
-    cur.execute("PRAGMA table_info(tasks)")
-    existing_columns = {row[1] for row in cur.fetchall()}
-    column_specs = {
-        "task_type": "TEXT NOT NULL DEFAULT 'general'",
-        "origin": "TEXT NOT NULL DEFAULT 'legacy'",
-        "requested_by": "TEXT",
-        "reviewed_by": "TEXT",
-        "attempt_count": "INTEGER NOT NULL DEFAULT 0",
-        "failed_agents": "TEXT",
-    }
-    for column_name, column_spec in column_specs.items():
-        if column_name not in existing_columns:
-            cur.execute(f"ALTER TABLE tasks ADD COLUMN {column_name} {column_spec}")
-    conn.commit()
-    conn.close()
+    _repository(db_path)
 
 
-def _now():
-    """Executa now."""
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+def _repository(db_path):
+    if not db_path:
+        raise ValueError("db_path is required — use workspace.tasks_db")
+    return TaskRepository(str(db_path))
 
 
 def add_job(description, created_by=None, db_path=None, job_id=None):
     """Executa add job."""
-    conn = get_conn(db_path)
-    cur = conn.cursor()
-    now = _now()
-    if job_id is not None:
-        cur.execute("SELECT id FROM jobs WHERE id = ?", (job_id,))
-        if cur.fetchone():
-            conn.close()
-            return job_id
-        cur.execute(
-            "INSERT INTO jobs(id, description, status, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (job_id, description, "planning", created_by, now, now))
-    else:
-        cur.execute("INSERT INTO jobs(description, status, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-                    (description, "planning", created_by, now, now))
-        job_id = cur.lastrowid
-    conn.commit()
-    conn.close()
-    return job_id
+    return _repository(db_path).add_job(description, created_by=created_by, job_id=job_id)
 
 
 def list_jobs(filt=None, db_path=None):
     """Lista jobs."""
-    filt = filt or {}
-    conn = get_conn(db_path)
-    cur = conn.cursor()
-    sql = "SELECT id, description, status, created_by, created_at, updated_at FROM jobs"
-    clauses = []
-    params = []
-    if "status" in filt:
-        clauses.append("status = ?")
-        params.append(filt["status"])
-    if "created_by" in filt:
-        clauses.append("created_by = ?")
-        params.append(filt["created_by"])
-    if clauses:
-        sql += " WHERE " + " AND ".join(clauses)
-    sql += " ORDER BY updated_at ASC, id ASC"
-    cur.execute(sql, tuple(params))
-    rows = cur.fetchall()
-    conn.close()
-    return [{
-        "id": r[0],
-        "description": r[1],
-        "status": r[2],
-        "created_by": r[3],
-        "created_at": r[4],
-        "updated_at": r[5],
-    } for r in rows]
+    return [asdict(job) for job in _repository(db_path).list_jobs(filt or {})]
 
 
 def get_job(job_id, db_path=None):
     """Retorna job."""
-    conn = get_conn(db_path)
-    cur = conn.cursor()
-    cur.execute("SELECT id, description, status, created_by, created_at, updated_at FROM jobs WHERE id = ?", (job_id,))
-    row = cur.fetchone()
-    conn.close()
-    if not row:
-        return None
-    return {
-        "id": row[0],
-        "description": row[1],
-        "status": row[2],
-        "created_by": row[3],
-        "created_at": row[4],
-        "updated_at": row[5],
-    }
+    job = _repository(db_path).get_job(job_id)
+    return asdict(job) if job else None
 
 
 def create_task(
@@ -166,21 +64,20 @@ def create_task(
         db_path=None,
 ):
     """Cria task."""
-    conn = get_conn(db_path)
-    cur = conn.cursor()
-    now = _now()
-    cur.execute("""
-                INSERT INTO tasks(job_id, description, body, status, task_type, origin, assigned_to,
-                                  priority, created_at, updated_at, created_by, requested_by, notes, source_context)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    job_id, description, body, status, task_type, origin, assigned_to,
-                    priority, now, now, created_by, requested_by, notes, source_context,
-                ))
-    task_id = cur.lastrowid
-    conn.commit()
-    conn.close()
-    return task_id
+    return _repository(db_path).create_task(
+        job_id,
+        description,
+        task_type=task_type,
+        assigned_to=assigned_to,
+        origin=origin,
+        status=status,
+        priority=priority,
+        created_by=created_by,
+        requested_by=requested_by,
+        notes=notes,
+        body=body,
+        source_context=source_context,
+    )
 
 
 def propose_task(job_id, description, priority="medium", created_by=None, notes=None, source_context=None, db_path=None,
@@ -204,79 +101,26 @@ def propose_task(job_id, description, priority="medium", created_by=None, notes=
 
 def approve_task(task_id, approved_by, db_path=None):
     """Aprova task."""
-    conn = get_conn(db_path)
-    cur = conn.cursor()
-    now = _now()
-    cur.execute("SELECT status FROM tasks WHERE id = ?", (task_id,))
-    row = cur.fetchone()
-    if not row or row[0] != TaskStatus.PROPOSED:
-        conn.close()
-        return False
-    cur.execute("UPDATE tasks SET status = ?, approved_by = ?, updated_at = ? WHERE id = ?",
-                (TaskStatus.APPROVED, approved_by, now, task_id))
-    conn.commit()
-    conn.close()
-    return True
+    return _repository(db_path).transition_task(
+        task_id,
+        TaskStatus.APPROVED,
+        approved_by=approved_by,
+    )
 
 
 def reject_task(task_id, rejected_by, reason=None, db_path=None):
     """Rejeita task."""
-    conn = get_conn(db_path)
-    cur = conn.cursor()
-    now = _now()
-    cur.execute("SELECT status FROM tasks WHERE id = ?", (task_id,))
-    row = cur.fetchone()
-    if not row or row[0] != TaskStatus.PROPOSED:
-        conn.close()
-        return False
-    cur.execute("UPDATE tasks SET status = ?, approved_by = ?, notes = ?, updated_at = ? WHERE id = ?",
-                (TaskStatus.REJECTED, rejected_by, reason, now, task_id))
-    conn.commit()
-    conn.close()
-    return True
+    return _repository(db_path).transition_task(
+        task_id,
+        TaskStatus.REJECTED,
+        approved_by=rejected_by,
+        notes=reason,
+    )
 
 
 def list_tasks(filt=None, db_path=None):
     """Lista tasks."""
-    filt = filt or {}
-    conn = get_conn(db_path)
-    cur = conn.cursor()
-    sql = (
-        "SELECT id, job_id, description, body, status, task_type, origin, assigned_to, "
-        "result, notes, priority, created_at, updated_at, created_by, requested_by "
-        "FROM tasks"
-    )
-    clauses = []
-    params = []
-    if "job_id" in filt:
-        clauses.append("job_id = ?")
-        params.append(filt["job_id"])
-    if "status" in filt:
-        clauses.append("status = ?")
-        params.append(filt["status"])
-    if "assigned_to" in filt:
-        clauses.append("assigned_to = ?")
-        params.append(filt["assigned_to"])
-    if "task_type" in filt:
-        clauses.append("task_type = ?")
-        params.append(filt["task_type"])
-    if "origin" in filt:
-        clauses.append("origin = ?")
-        params.append(filt["origin"])
-    if "id" in filt:
-        clauses.append("id = ?")
-        params.append(filt["id"])
-    if clauses:
-        sql += " WHERE " + " AND ".join(clauses)
-    sql += " ORDER BY id ASC"
-    cur.execute(sql, tuple(params))
-    rows = cur.fetchall()
-    conn.close()
-    return [{
-        "id": r[0], "job_id": r[1], "description": r[2], "body": r[3], "status": r[4],
-        "task_type": r[5], "origin": r[6], "assigned_to": r[7], "result": r[8], "notes": r[9], "priority": r[10],
-        "created_at": r[11], "updated_at": r[12], "created_by": r[13], "requested_by": r[14],
-    } for r in rows]
+    return [asdict(task) for task in _repository(db_path).list_tasks(filt or {})]
 
 
 def release_agent_tasks(agent_name, db_path=None):
@@ -286,199 +130,45 @@ def release_agent_tasks(agent_name, db_path=None):
     by other agents. Previously, tasks could be left in 'in_progress' state
     after release, making them unclaimable by the router.
     """
-    conn = get_conn(db_path)
-    cur = conn.cursor()
-    cur.execute(
-        "UPDATE tasks SET assigned_to = NULL, status = ?, updated_at = ? "
-        "WHERE assigned_to = ? AND status IN (?, ?)",
-        (TaskStatus.PENDING, _now(), agent_name, TaskStatus.PENDING, TaskStatus.IN_PROGRESS),
-    )
-    conn.commit()
-    conn.close()
-
-
-def _failed_agents_token(agent_name: str) -> str:
-    """Executa failed agents token."""
-    return f"|{agent_name}|"
+    _repository(db_path).release_agent_tasks(agent_name)
 
 
 def requeue_task(task_id, failed_agent, reason=None, db_path=None):
     """Release a task after an execution failure so another agent can claim it."""
-    conn = get_conn(db_path)
-    cur = conn.cursor()
-    try:
-        cur.execute("BEGIN IMMEDIATE")
-        now = _now()
-        cur.execute("SELECT status, failed_agents, attempt_count FROM tasks WHERE id = ?", (task_id,))
-        row = cur.fetchone()
-        if not row:
-            conn.rollback()
-            conn.close()
-            return False
-        if not can_transition(row[0], TaskStatus.PENDING):
-            conn.rollback()
-            conn.close()
-            return False
-
-        failed_agents = row[1] or ""
-        token = _failed_agents_token(failed_agent)
-        if token not in failed_agents:
-            failed_agents += token
-        attempt_count = int(row[2] or 0) + 1
-
-        cur.execute(
-            "UPDATE tasks SET status = ?, assigned_to = NULL, result = ?, notes = ?, "
-            "failed_agents = ?, attempt_count = ?, updated_at = ? WHERE id = ?",
-            (TaskStatus.PENDING, reason, reason, failed_agents, attempt_count, now, task_id),
-        )
-        conn.commit()
-        conn.close()
-        return True
-    except Exception:
-        conn.rollback()
-        conn.close()
-        raise
+    return _repository(db_path).requeue_task(task_id, failed_agent, reason=reason)
 
 
 def requeue_task_after_review(task_id, failed_agent, result=None, notes=None, db_path=None):
     """Return a reviewed task to pending and force execution failover to another agent."""
-    conn = get_conn(db_path)
-    cur = conn.cursor()
-    try:
-        cur.execute("BEGIN IMMEDIATE")
-        now = _now()
-        cur.execute("SELECT status, failed_agents, attempt_count FROM tasks WHERE id = ?", (task_id,))
-        row = cur.fetchone()
-        if not row:
-            conn.rollback()
-            conn.close()
-            return False
-        if not can_transition(row[0], TaskStatus.PENDING):
-            conn.rollback()
-            conn.close()
-            return False
-
-        failed_agents = row[1] or ""
-        token = _failed_agents_token(failed_agent)
-        if token not in failed_agents:
-            failed_agents += token
-        attempt_count = int(row[2] or 0) + 1
-
-        cur.execute(
-            "UPDATE tasks SET status = ?, assigned_to = NULL, result = ?, notes = ?, "
-            "reviewed_by = NULL, failed_agents = ?, attempt_count = ?, updated_at = ? WHERE id = ?",
-            (TaskStatus.PENDING, result, notes, failed_agents, attempt_count, now, task_id),
-        )
-        conn.commit()
-        conn.close()
-        return True
-    except Exception:
-        conn.rollback()
-        conn.close()
-        raise
+    return _repository(db_path).requeue_task_after_review(
+        task_id,
+        failed_agent,
+        result=result,
+        notes=notes,
+    )
 
 
 def can_reassign_task(task_id, candidate_agents, db_path=None):
     """Return True when at least one candidate agent can still claim the task."""
-    if not candidate_agents:
-        return False
-
-    conn = get_conn(db_path)
     try:
-        cur = conn.cursor()
-        cur.execute("SELECT failed_agents FROM tasks WHERE id = ?", (task_id,))
-        row = cur.fetchone()
+        return _repository(db_path).can_reassign_task(task_id, candidate_agents)
     except sqlite3.Error:
-        conn.close()
         return True
-    conn.close()
-    if not row:
-        return False
-
-    failed_agents = row[0] or ""
-    return any(_failed_agents_token(agent_name) not in failed_agents for agent_name in candidate_agents)
 
 
 def claim_task(agent_name, job_id=None, db_path=None):
     """Reserva task."""
-    conn = get_conn(db_path)
-    cur = conn.cursor()
-    try:
-        # Use a simple transaction to avoid race conditions
-        cur.execute("BEGIN IMMEDIATE")
-        job_filter = "AND job_id = ?" if job_id is not None else ""
-        params = [agent_name, f"%{_failed_agents_token(agent_name)}%"]
-        if job_id is not None:
-            params.insert(1, job_id)
-        cur.execute(f"""
-            SELECT id FROM tasks
-            WHERE status IN (?, ?)
-              AND (assigned_to = ? OR assigned_to IS NULL)
-              {job_filter}
-              AND COALESCE(failed_agents, '') NOT LIKE ?
-            ORDER BY id ASC
-            LIMIT 1
-        """, (TaskStatus.PENDING, TaskStatus.APPROVED, *params))
-        row = cur.fetchone()
-        if not row:
-            conn.rollback()
-            conn.close()
-            return None
-        task_id = row[0]
-        cur.execute("UPDATE tasks SET assigned_to = ?, status = ?, updated_at = ? WHERE id = ?",
-                    (agent_name, TaskStatus.IN_PROGRESS, _now(), task_id))
-        conn.commit()
-        conn.close()
-        return task_id
-    except Exception:
-        conn.rollback()
-        conn.close()
-        raise
+    return _repository(db_path).claim_task(agent_name, job_id=job_id)
 
 
 def update_task(task_id, status, result=None, notes=None, db_path=None):
     """Atualiza task."""
-    conn = get_conn(db_path)
-    cur = conn.cursor()
-    now = _now()
-    cur.execute("UPDATE tasks SET status = ?, result = ?, notes = ?, updated_at = ? WHERE id = ?",
-                (status, result, notes, now, task_id))
-    conn.commit()
-    affected = cur.rowcount
-    conn.close()
-    return affected > 0
+    return _repository(db_path).update_task(task_id, status, result=result, notes=notes)
 
 
 def complete_task(task_id, result=None, reviewed_by=None, db_path=None):
     """Conclui task, validando a transição para COMPLETED atomicamente."""
-    conn = get_conn(db_path)
-    cur = conn.cursor()
-    try:
-        cur.execute("BEGIN IMMEDIATE")
-        cur.execute("SELECT status FROM tasks WHERE id = ?", (task_id,))
-        row = cur.fetchone()
-        if not row or not can_transition(row[0], TaskStatus.COMPLETED):
-            conn.rollback()
-            conn.close()
-            return False
-        now = _now()
-        if reviewed_by:
-            cur.execute(
-                "UPDATE tasks SET status = ?, result = ?, reviewed_by = ?, notes = ?, updated_at = ? WHERE id = ?",
-                (TaskStatus.COMPLETED, result, reviewed_by, None, now, task_id),
-            )
-        else:
-            cur.execute(
-                "UPDATE tasks SET status = ?, result = ?, notes = ?, updated_at = ? WHERE id = ?",
-                (TaskStatus.COMPLETED, result, None, now, task_id),
-            )
-        conn.commit()
-        conn.close()
-        return True
-    except Exception:
-        conn.rollback()
-        conn.close()
-        raise
+    return _repository(db_path).complete_task(task_id, result=result, reviewed_by=reviewed_by)
 
 
 def fail_task(task_id, reason=None, db_path=None):
@@ -488,65 +178,12 @@ def fail_task(task_id, reason=None, db_path=None):
 
 def submit_for_review(task_id, result=None, db_path=None):
     """Submete task para review, validando a transição para PENDING_REVIEW atomicamente."""
-    conn = get_conn(db_path)
-    cur = conn.cursor()
-    try:
-        cur.execute("BEGIN IMMEDIATE")
-        cur.execute("SELECT status FROM tasks WHERE id = ?", (task_id,))
-        row = cur.fetchone()
-        if not row or not can_transition(row[0], TaskStatus.PENDING_REVIEW):
-            conn.rollback()
-            conn.close()
-            return False
-        cur.execute(
-            "UPDATE tasks SET status = ?, result = ?, notes = ?, reviewed_by = NULL, updated_at = ? WHERE id = ?",
-            (TaskStatus.PENDING_REVIEW, result, None, _now(), task_id),
-        )
-        conn.commit()
-        conn.close()
-        return True
-    except Exception:
-        conn.rollback()
-        conn.close()
-        raise
+    return _repository(db_path).submit_for_review(task_id, result=result)
 
 
 def claim_review_task(agent_name, job_id=None, db_path=None):
     """Atomically claim a pending_review task executed and not already reviewed by this agent."""
-    conn = get_conn(db_path)
-    cur = conn.cursor()
-    try:
-        cur.execute("BEGIN IMMEDIATE")
-        job_filter = "AND job_id = ?" if job_id is not None else ""
-        params = [agent_name, agent_name]
-        if job_id is not None:
-            params.append(job_id)
-        cur.execute(f"""
-            SELECT id FROM tasks
-            WHERE status = ?
-              AND (assigned_to IS NULL OR assigned_to != ?)
-              AND (reviewed_by IS NULL OR reviewed_by != ?)
-              {job_filter}
-            ORDER BY id ASC
-            LIMIT 1
-        """, (TaskStatus.PENDING_REVIEW, *params))
-        row = cur.fetchone()
-        if not row:
-            conn.rollback()
-            conn.close()
-            return None
-        task_id = row[0]
-        cur.execute(
-            "UPDATE tasks SET status = ?, reviewed_by = ?, updated_at = ? WHERE id = ?",
-            (TaskStatus.REVIEWING, agent_name, _now(), task_id),
-        )
-        conn.commit()
-        conn.close()
-        return task_id
-    except Exception:
-        conn.rollback()
-        conn.close()
-        raise
+    return _repository(db_path).claim_review_task(agent_name, job_id=job_id)
 
 
 def transition_task(task_id, to_status, result=_UNSET, notes=_UNSET, approved_by=_UNSET, db_path=None):
@@ -556,39 +193,14 @@ def transition_task(task_id, to_status, result=_UNSET, notes=_UNSET, approved_by
     A operação é atômica: leitura e escrita ocorrem na mesma conexão.
     Colunas não fornecidas (sentinela _UNSET) são preservadas — não são sobrescritas.
     """
-    conn = get_conn(db_path)
-    cur = conn.cursor()
-    try:
-        cur.execute("BEGIN IMMEDIATE")
-        cur.execute("SELECT status FROM tasks WHERE id = ?", (task_id,))
-        row = cur.fetchone()
-        if not row:
-            conn.rollback()
-            conn.close()
-            return False
-        if not can_transition(row[0], to_status):
-            conn.rollback()
-            conn.close()
-            return False
-        fields = {"status": to_status, "updated_at": _now()}
-        if result is not _UNSET:
-            fields["result"] = result
-        if notes is not _UNSET:
-            fields["notes"] = notes
-        if approved_by is not _UNSET:
-            fields["approved_by"] = approved_by
-        set_clause = ", ".join(f"{k} = ?" for k in fields)
-        cur.execute(
-            f"UPDATE tasks SET {set_clause} WHERE id = ?",
-            (*fields.values(), task_id),
-        )
-        conn.commit()
-        conn.close()
-        return True
-    except Exception:
-        conn.rollback()
-        conn.close()
-        raise
+    kwargs = {}
+    if result is not _UNSET:
+        kwargs["result"] = result
+    if notes is not _UNSET:
+        kwargs["notes"] = notes
+    if approved_by is not _UNSET:
+        kwargs["approved_by"] = approved_by
+    return _repository(db_path).transition_task(task_id, to_status, **kwargs)
 
 
 def drop_db(db_path):

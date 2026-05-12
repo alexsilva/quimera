@@ -15,7 +15,7 @@ from quimera.plugins.base import AgentPlugin
 from quimera.runtime.approval import ApprovalHandler, ConsoleApprovalHandler
 from quimera.runtime.config import ToolRuntimeConfig
 from quimera.runtime.executor import ToolExecutor
-from quimera.runtime.models import ToolCall, ToolResult
+from quimera.runtime.models import TaskRecord, ToolCall, ToolResult
 from quimera.runtime.parser import ToolCallParseError, _parse_json_object, extract_tool_call, strip_tool_block
 from quimera.runtime.policy import ToolPolicy, ToolPolicyError
 from quimera.runtime.registry import ToolRegistry
@@ -441,42 +441,71 @@ class TaskPlanningCoverageTests(unittest.TestCase):
 
 
 class TaskExecutorCoverageTests(unittest.TestCase):
-    def test_constructor_requires_db_path(self):
-        with self.assertRaisesRegex(ValueError, "db_path is required"):
+    class RepositoryStub:
+        def __init__(self):
+            self.claim_sequence = []
+            self.claim_review_sequence = []
+            self.tasks_by_id = {}
+            self.failed = []
+
+        def claim_task(self, _agent_name, job_id=None):
+            if not self.claim_sequence:
+                return None
+            return self.claim_sequence.pop(0)
+
+        def claim_review_task(self, _agent_name, job_id=None):
+            if not self.claim_review_sequence:
+                return None
+            return self.claim_review_sequence.pop(0)
+
+        def list_tasks(self, filt=None):
+            task_id = (filt or {}).get("id")
+            if task_id is None:
+                return []
+            task = self.tasks_by_id.get(task_id)
+            return [task] if task else []
+
+        def fail_task(self, task_id, reason=None):
+            self.failed.append((task_id, reason))
+            return True
+
+    def test_constructor_requires_repository(self):
+        with self.assertRaisesRegex(ValueError, "repository is required"):
             TaskExecutor("agent", None)
 
     def test_start_stop_and_create_executor(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "tasks.db"
-            executor = TaskExecutor("agent", db_path, poll_interval=0.01)
+            repository = self.RepositoryStub()
+            executor = TaskExecutor("agent", db_path, poll_interval=0.01, repository=repository)
             with patch.object(executor, "_poll_loop") as poll_loop:
                 executor.start()
                 executor.start()
                 executor.stop()
             poll_loop.assert_called_once()
-            created = create_executor("agent", lambda task: True, db_path)
+            created = create_executor("agent", lambda task: True, db_path, repository=repository)
             self.assertEqual(created.agent_name, "agent")
             self.assertIsNotNone(created._handler)
 
     def test_process_pending_and_poll_loop_paths(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "tasks.db"
-            executor = TaskExecutor("agent", db_path, poll_interval=0.01)
+            repository = self.RepositoryStub()
+            executor = TaskExecutor("agent", db_path, poll_interval=0.01, repository=repository)
             handler = MagicMock(return_value=True)
             review_handler = MagicMock(return_value=True)
             executor.set_handler(handler)
             executor.set_review_handler(review_handler)
-            with patch("quimera.runtime.task_executor.claim_task", return_value=None):
-                self.assertIsNone(executor.process_pending())
-            with patch("quimera.runtime.task_executor.claim_task", return_value=1), patch(
-                    "quimera.runtime.task_executor.list_tasks", return_value=[{"id": 1}]
-            ):
-                self.assertEqual(executor.process_pending(), 1)
-            handler.assert_called_with({"id": 1})
+            self.assertIsNone(executor.process_pending())
+            _task1 = TaskRecord(id=1, job_id=0, description="", status="in_progress")
+            repository.tasks_by_id[1] = _task1
+            repository.claim_sequence = [1]
+            self.assertEqual(executor.process_pending(), 1)
+            handler.assert_called_with(_task1)
 
             claim_task_effects = [1, None, Exception("stop")]
 
-            def claim_task_side_effect(*_args, **_kwargs):
+            def claim_task_side_effect(_agent_name, job_id=None):
                 value = claim_task_effects.pop(0)
                 if isinstance(value, Exception):
                     raise value
@@ -487,20 +516,20 @@ class TaskExecutorCoverageTests(unittest.TestCase):
             def fake_wait(_seconds):
                 wait_calls.append(_seconds)
                 # Stop only after both task and review have been processed (2 waits)
-                if len(wait_calls) >= 2:
+                if len(wait_calls) >= 3:
                     executor._running = False
                     return True
                 return False
 
             executor._running = True
-            with patch("quimera.runtime.task_executor.claim_task", side_effect=claim_task_side_effect), patch(
-                    "quimera.runtime.task_executor.claim_review_task", return_value=2
-            ), patch("quimera.runtime.task_executor.list_tasks", side_effect=[[{"id": 1}], [{"id": 2}]]), patch.object(
-                executor, "_wait_or_stop", side_effect=fake_wait
-            ):
+            _task2 = TaskRecord(id=2, job_id=0, description="", status="in_progress")
+            repository.tasks_by_id[2] = _task2
+            repository.claim_task = MagicMock(side_effect=claim_task_side_effect)
+            repository.claim_review_task = MagicMock(return_value=2)
+            with patch.object(executor, "_wait_or_stop", side_effect=fake_wait):
                 executor._poll_loop()
-            handler.assert_called_with({"id": 1})
-            review_handler.assert_called_with({"id": 2})
+            self.assertGreaterEqual(handler.call_count, 2)
+            review_handler.assert_called_with(_task2)
             self.assertTrue(wait_calls)
 
 

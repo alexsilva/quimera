@@ -424,7 +424,7 @@ class TasksDbPathGuardTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             get_conn(None)
 
-    def test_task_executor_raises_without_db_path(self):
+    def test_task_executor_raises_without_repository(self):
         with self.assertRaises(ValueError):
             TaskExecutor(agent_name="codex", db_path=None)
 

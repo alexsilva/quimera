@@ -6,6 +6,7 @@ from collections.abc import Callable
 from typing import Protocol
 
 from ..constants import TaskStatus
+from ..runtime.models import TaskRecord
 from .task_repository import TaskRepository
 
 
@@ -92,16 +93,16 @@ class TaskReviewService:
     def handler_for(self, agent_name: str):
         """Retorna handler de review para o agente informado."""
 
-        def review_handler(task_dict: dict) -> bool:
+        def review_handler(task: TaskRecord) -> bool:
             try:
-                task_id = task_dict["id"]
-                executor = task_dict.get("assigned_to")
+                task_id = task.id
+                executor = task.assigned_to
                 if executor == agent_name:
                     ok = self.repository.transition_task(
                         task_id,
                         TaskStatus.PENDING_REVIEW,
-                        result=task_dict.get("result"),
-                        notes=task_dict.get("notes"),
+                        result=task.result,
+                        notes=task.notes,
                     )
                     if ok:
                         self.system_layer.show_system_message(
@@ -120,9 +121,9 @@ class TaskReviewService:
                 else:
                     self.system_layer.show_system_message(f"[task {task_id}] {agent_name}: revisando task")
 
-                task_result = task_dict.get("result", "")
-                description = task_dict.get("description", "")
-                body = task_dict.get("body", "") or description
+                task_result = task.result or ""
+                description = task.description or ""
+                body = task.body or description
                 review_prompt = (
                     "Faça um review real da task abaixo.\n\n"
                     "Responda com um veredicto explícito na primeira linha: "
@@ -184,23 +185,23 @@ class TaskReviewService:
                 return True
             except Exception as exc:
                 self.system_layer.show_system_message(
-                    f"[task {task_dict['id']}] {agent_name}: review falhou: {exc}"
+                    f"[task {task_id}] {agent_name}: review falhou: {exc}"
                 )
-                if self.failover_policy.has_review_failover(task_dict.get("assigned_to"), agent_name):
+                if self.failover_policy.has_review_failover(executor, agent_name):
                     ok = self.repository.transition_task(
-                        task_dict["id"],
+                        task_id,
                         TaskStatus.PENDING_REVIEW,
-                        result=task_dict.get("result"),
+                        result=task.result,
                         notes=str(exc),
                     )
                     if not ok:
                         self.repository.fail_task(
-                            task_dict["id"],
+                            task_id,
                             reason=f"review failed and fallback transition failed: {exc}",
                         )
                 else:
                     self.repository.fail_task(
-                        task_dict["id"],
+                        task_id,
                         reason=f"review failed without operational fallback: {exc}",
                     )
                 return False

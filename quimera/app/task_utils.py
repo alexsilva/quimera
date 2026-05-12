@@ -44,21 +44,21 @@ def truncate_payload(payload, max_lines: int = 10):
 
 
 def format_completed_task_result(
-    task: dict,
+    task,
     *,
     max_desc_chars: int = _MAX_COMPLETED_TASK_RESULT_DESC_CHARS,
     max_value_chars: int = _MAX_COMPLETED_TASK_RESULT_VALUE_CHARS,
 ) -> str:
     """Formata uma linha compacta para o resumo de tasks concluídas."""
-    desc = str(task.get("description", "") or "")[:max_desc_chars]
-    result = task.get("result", "")
+    desc = str(task.description or "")[:max_desc_chars]
+    result = task.result or ""
     if result:
-        return f"[task {task['id']}] {desc}: {str(result)[:max_value_chars]}"
-    return f"[task {task['id']}] {desc}: concluído"
+        return f"[task {task.id}] {desc}: {str(result)[:max_value_chars]}"
+    return f"[task {task.id}] {desc}: concluído"
 
 
 def build_completed_task_results(
-    completed_tasks: list[dict],
+    completed_tasks: list,
     *,
     max_chars: int = _MAX_COMPLETED_TASK_RESULTS_CHARS,
     max_desc_chars: int = _MAX_COMPLETED_TASK_RESULT_DESC_CHARS,

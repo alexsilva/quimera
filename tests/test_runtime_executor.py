@@ -100,7 +100,9 @@ def test_executor_normalizes_execute_command_alias(tmp_path):
 
 
 def test_task_executor_skips_review_claim_when_agent_is_not_operational(tmp_path):
-    executor = TaskExecutor("gemini", db_path=tmp_path / "tasks.db", poll_interval=0)
+    repository = MagicMock()
+    repository.claim_task.return_value = None
+    executor = TaskExecutor("gemini", db_path=tmp_path / "tasks.db", poll_interval=0, repository=repository)
     executor.set_review_handler(lambda _task: True)
     executor.set_review_eligibility(lambda: False)
     executor._running = True
@@ -109,12 +111,10 @@ def test_task_executor_skips_review_claim_when_agent_is_not_operational(tmp_path
         executor._running = False
         return True
 
-    with patch("quimera.runtime.task_executor.claim_task", return_value=None), patch(
-            "quimera.runtime.task_executor.claim_review_task"
-    ) as claim_review_task, patch.object(executor, "_wait_or_stop", side_effect=stop_loop):
+    with patch.object(executor, "_wait_or_stop", side_effect=stop_loop):
         executor._poll_loop()
 
-    claim_review_task.assert_not_called()
+    repository.claim_review_task.assert_not_called()
 
 
 # ── remove_file executor ─────────────────────────────────────

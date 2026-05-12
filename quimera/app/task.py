@@ -59,14 +59,15 @@ class AppTaskServices:
         task_execution_service = self._build_task_execution_service(failover_policy)
         task_review_service = self._build_task_review_service(failover_policy)
 
+        repository = self._build_task_repository()
         job_id = getattr(app, "current_job_id", None)
         app.task_executors = []
         for agent in app.active_agents:
             executor = task_executor_factory(
                 agent,
                 task_execution_service.handler_for(agent),
-                db_path=app.tasks_db_path,
                 job_id=job_id,
+                repository=repository,
             )
             if hasattr(executor, "set_review_eligibility"):
                 executor.set_review_eligibility(
@@ -132,19 +133,19 @@ class AppTaskServices:
                 open_tasks.extend(
                     repo.list_tasks({"job_id": app.current_job_id, "status": status})
                 )
-            open_tasks.sort(key=lambda task: task["id"])
+            open_tasks.sort(key=lambda task: task.id)
             counts = {
-                "pending": sum(1 for task in open_tasks if task["status"] == TaskStatus.PENDING),
-                "in_progress": sum(1 for task in open_tasks if task["status"] == TaskStatus.IN_PROGRESS),
+                "pending": sum(1 for task in open_tasks if task.status == TaskStatus.PENDING),
+                "in_progress": sum(1 for task in open_tasks if task.status == TaskStatus.IN_PROGRESS),
             }
             preview = [
                 {
-                    "id": task["id"],
-                    "status": task["status"],
-                    "priority": task.get("priority"),
-                    "task_type": task.get("task_type"),
-                    "assigned_to": task.get("assigned_to"),
-                    "description": task["description"],
+                    "id": task.id,
+                    "status": task.status,
+                    "priority": task.priority,
+                    "task_type": task.task_type,
+                    "assigned_to": task.assigned_to,
+                    "description": task.description,
                 }
                 for task in open_tasks[:6]
             ]
@@ -156,7 +157,7 @@ class AppTaskServices:
                 recommended = "Sem tarefas abertas; novas tasks só podem ser criadas pelo humano com /task."
             return {
                 "job_id": app.current_job_id,
-                "job_description": job["description"] if job else None,
+                "job_description": job.description if job else None,
                 "open_task_counts": counts,
                 "open_tasks_preview": preview,
                 "recommended_action": recommended,

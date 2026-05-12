@@ -28,6 +28,7 @@ from quimera.cli import main as cli_main
 from quimera.config import DEFAULT_HISTORY_WINDOW
 from quimera.constants import CMD_AGENTS, CMD_CLEAR, CMD_CONNECT, CMD_DISCONNECT, CMD_HELP, CMD_PROMPT, EXTEND_MARKER, MSG_SHUTDOWN, TaskStatus, Visibility, build_agents_help, build_help
 from quimera.plugins import AgentPlugin
+from quimera.runtime.models import TaskRecord
 from quimera.plugins.base import OpenAIConnection
 from quimera.prompt import PromptBuilder
 from quimera.prompt_templates import prompt_template
@@ -3441,7 +3442,7 @@ class PluginTests(unittest.TestCase):
             def start(self):
                 return None
 
-        def fake_create_executor(agent, handler, db_path=None, job_id=None):
+        def fake_create_executor(agent, handler, db_path=None, job_id=None, repository=None):
             handlers[agent] = handler
             return FakeExecutor(handler)
 
@@ -3450,10 +3451,10 @@ class PluginTests(unittest.TestCase):
         app.classify_task_execution_result = lambda response: (True, response)
 
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
-                "quimera.runtime.tasks.complete_task"
-        ) as complete_task, patch("quimera.runtime.tasks.fail_task") as fail_task:
+                "quimera.app.task_repository.TaskRepository.complete_task"
+        ) as complete_task, patch("quimera.app.task_repository.TaskRepository.fail_task") as fail_task:
             app._setup_task_executors()
-            ok = handlers[AGENT_CLAUDE]({"id": 1, "description": "rode a task"})
+            ok = handlers[AGENT_CLAUDE](TaskRecord(id=1, job_id=0, description="rode a task", status="in_progress"))
 
         self.assertTrue(ok)
         self.assertEqual(
@@ -3465,7 +3466,7 @@ class PluginTests(unittest.TestCase):
             ],
         )
         complete_task.assert_called_once_with(
-            1, result="resposta visivel da task", db_path=app.tasks_db_path
+            1, result="resposta visivel da task"
         )
         fail_task.assert_not_called()
 
@@ -3487,7 +3488,7 @@ class PluginTests(unittest.TestCase):
             def start(self):
                 return None
 
-        def fake_create_executor(agent, handler, db_path=None, job_id=None):
+        def fake_create_executor(agent, handler, db_path=None, job_id=None, repository=None):
             handlers[agent] = handler
             return FakeExecutor(handler)
 
@@ -3496,10 +3497,10 @@ class PluginTests(unittest.TestCase):
         app.classify_task_execution_result = lambda response: (True, response)
 
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
-                "quimera.runtime.tasks.submit_for_review"
-        ) as submit_for_review, patch("quimera.runtime.tasks.complete_task") as complete_task:
+                "quimera.app.task_repository.TaskRepository.submit_for_review"
+        ) as submit_for_review, patch("quimera.app.task_repository.TaskRepository.complete_task") as complete_task:
             app._setup_task_executors()
-            ok = handlers[AGENT_CLAUDE]({"id": 1, "description": "rode a task"})
+            ok = handlers[AGENT_CLAUDE](TaskRecord(id=1, job_id=0, description="rode a task", status="in_progress"))
 
         self.assertTrue(ok)
         self.assertEqual(
@@ -3511,7 +3512,7 @@ class PluginTests(unittest.TestCase):
             ],
         )
         submit_for_review.assert_called_once_with(
-            1, result="resposta visivel da task", db_path=app.tasks_db_path
+            1, result="resposta visivel da task"
         )
         complete_task.assert_not_called()
 
@@ -3533,7 +3534,7 @@ class PluginTests(unittest.TestCase):
             def start(self):
                 return None
 
-        def fake_create_executor(agent, handler, db_path=None, job_id=None):
+        def fake_create_executor(agent, handler, db_path=None, job_id=None, repository=None):
             handlers[agent] = handler
             return FakeExecutor(handler)
 
@@ -3548,11 +3549,11 @@ class PluginTests(unittest.TestCase):
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
                 "quimera.app.core.plugins.get",
                 side_effect=lambda agent: FakePlugin(agent == AGENT_CLAUDE),
-        ), patch("quimera.runtime.tasks.submit_for_review") as submit_for_review, patch(
-            "quimera.runtime.tasks.complete_task"
+        ), patch("quimera.app.task_repository.TaskRepository.submit_for_review") as submit_for_review, patch(
+            "quimera.app.task_repository.TaskRepository.complete_task"
         ) as complete_task:
             app._setup_task_executors()
-            ok = handlers[AGENT_CLAUDE]({"id": 11, "description": "rode a task"})
+            ok = handlers[AGENT_CLAUDE](TaskRecord(id=11, job_id=0, description="rode a task", status="in_progress"))
 
         self.assertTrue(ok)
         self.assertEqual(
@@ -3565,7 +3566,7 @@ class PluginTests(unittest.TestCase):
         )
         submit_for_review.assert_not_called()
         complete_task.assert_called_once_with(
-            11, result="resposta visivel da task", db_path=app.tasks_db_path
+            11, result="resposta visivel da task"
         )
 
     def test_review_handler_prints_review_progress_and_completion(self):
@@ -3587,7 +3588,7 @@ class PluginTests(unittest.TestCase):
             def start(self):
                 return None
 
-        def fake_create_executor(agent, handler, db_path=None, job_id=None):
+        def fake_create_executor(agent, handler, db_path=None, job_id=None, repository=None):
             executor = FakeExecutor(handler)
             executor.agent = agent
             return executor
@@ -3600,11 +3601,11 @@ class PluginTests(unittest.TestCase):
         app.system_layer.show_system_message = lambda message: status_updates.append(message)
 
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
-                "quimera.runtime.tasks.complete_task"
+                "quimera.app.task_repository.TaskRepository.complete_task"
         ) as complete_task:
             app._setup_task_executors()
             ok = review_handlers[AGENT_GEMINI](
-                {"id": 7, "assigned_to": AGENT_CLAUDE, "result": "ok"}
+                TaskRecord(id=7, job_id=0, description="", status="reviewing", assigned_to=AGENT_CLAUDE, result="ok")
             )
 
         self.assertTrue(ok)
@@ -3620,7 +3621,7 @@ class PluginTests(unittest.TestCase):
         self.assertIn("Faça um review real da task abaixo.", review_prompts[0])
         self.assertIn("Resultado do executor:\nok", review_prompts[0])
         complete_task.assert_called_once_with(
-            7, result="ok", reviewed_by=AGENT_GEMINI, db_path=app.tasks_db_path
+            7, result="ok", reviewed_by=AGENT_GEMINI
         )
 
     def test_review_handler_reports_rejected_self_review(self):
@@ -3641,7 +3642,7 @@ class PluginTests(unittest.TestCase):
             def start(self):
                 return None
 
-        def fake_create_executor(agent, handler, db_path=None, job_id=None):
+        def fake_create_executor(agent, handler, db_path=None, job_id=None, repository=None):
             executor = FakeExecutor(handler)
             executor.agent = agent
             return executor
@@ -3650,11 +3651,11 @@ class PluginTests(unittest.TestCase):
         app.system_layer.show_system_message = lambda message: status_updates.append(message)
 
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
-                "quimera.runtime.tasks.transition_task"
-        ) as transition_task, patch("quimera.runtime.tasks.complete_task") as complete_task:
+                "quimera.app.task_repository.TaskRepository.transition_task"
+        ) as transition_task, patch("quimera.app.task_repository.TaskRepository.complete_task") as complete_task:
             app._setup_task_executors()
             ok = review_handlers[AGENT_CLAUDE](
-                {"id": 8, "assigned_to": AGENT_CLAUDE, "result": "ok"}
+                TaskRecord(id=8, job_id=0, description="", status="reviewing", assigned_to=AGENT_CLAUDE, result="ok")
             )
 
         self.assertFalse(ok)
@@ -3662,7 +3663,7 @@ class PluginTests(unittest.TestCase):
             status_updates,
             ["[task 8] claude: review rejeitado, aguardando outro agente"],
         )
-        transition_task.assert_called_once_with(8, TaskStatus.PENDING_REVIEW, result='ok', notes=None, db_path=app.tasks_db_path)
+        transition_task.assert_called_once_with(8, TaskStatus.PENDING_REVIEW, result='ok', notes=None)
         complete_task.assert_not_called()
 
     def test_review_handler_returns_task_to_pending_on_retentativa(self):
@@ -3683,7 +3684,7 @@ class PluginTests(unittest.TestCase):
             def start(self):
                 return None
 
-        def fake_create_executor(agent, handler, db_path=None, job_id=None):
+        def fake_create_executor(agent, handler, db_path=None, job_id=None, repository=None):
             executor = FakeExecutor(handler)
             executor.agent = agent
             return executor
@@ -3692,17 +3693,12 @@ class PluginTests(unittest.TestCase):
         app.system_layer.show_system_message = lambda message: status_updates.append(message)
 
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
-                "quimera.runtime.tasks.requeue_task_after_review"
-        ) as requeue_task_after_review, patch("quimera.runtime.tasks.complete_task") as complete_task:
+                "quimera.app.task_repository.TaskRepository.requeue_task_after_review"
+        ) as requeue_task_after_review, patch("quimera.app.task_repository.TaskRepository.complete_task") as complete_task:
             app._setup_task_executors()
             ok = review_handlers[AGENT_GEMINI](
-                {
-                    "id": 9,
-                    "assigned_to": AGENT_CLAUDE,
-                    "description": "corrigir bug x",
-                    "body": "ajuste o fluxo y",
-                    "result": "ok",
-                }
+                TaskRecord(id=9, job_id=0, description="corrigir bug x", body="ajuste o fluxo y",
+                           status="reviewing", assigned_to=AGENT_CLAUDE, result="ok")
             )
 
         self.assertFalse(ok)
@@ -3719,7 +3715,6 @@ class PluginTests(unittest.TestCase):
             AGENT_CLAUDE,
             result="ok",
             notes="RETENTATIVA\nFaltou evidência de alteração no código.",
-            db_path=app.tasks_db_path,
         )
         complete_task.assert_not_called()
 
@@ -3741,7 +3736,7 @@ class PluginTests(unittest.TestCase):
             def start(self):
                 return None
 
-        def fake_create_executor(agent, handler, db_path=None, job_id=None):
+        def fake_create_executor(agent, handler, db_path=None, job_id=None, repository=None):
             executor = FakeExecutor(handler)
             executor.agent = agent
             return executor
@@ -3759,12 +3754,12 @@ class PluginTests(unittest.TestCase):
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
                 "quimera.app.core.plugins.get",
                 side_effect=lambda _agent: FakePlugin(True),
-        ), patch("quimera.runtime.tasks.transition_task") as transition_task, patch(
-            "quimera.runtime.tasks.fail_task"
+        ), patch("quimera.app.task_repository.TaskRepository.transition_task") as transition_task, patch(
+            "quimera.app.task_repository.TaskRepository.fail_task"
         ) as fail_task:
             app._setup_task_executors()
             ok = review_handlers[AGENT_GEMINI](
-                {"id": 10, "assigned_to": AGENT_CLAUDE, "result": "ok"}
+                TaskRecord(id=10, job_id=0, description="", status="reviewing", assigned_to=AGENT_CLAUDE, result="ok")
             )
 
         self.assertFalse(ok)
@@ -3780,7 +3775,6 @@ class PluginTests(unittest.TestCase):
             TaskStatus.PENDING_REVIEW,
             result="ok",
             notes="timeout",
-            db_path=app.tasks_db_path,
         )
         fail_task.assert_not_called()
 
@@ -3802,7 +3796,7 @@ class PluginTests(unittest.TestCase):
             def start(self):
                 return None
 
-        def fake_create_executor(agent, handler, db_path=None, job_id=None):
+        def fake_create_executor(agent, handler, db_path=None, job_id=None, repository=None):
             executor = FakeExecutor(handler)
             executor.agent = agent
             return executor
@@ -3820,13 +3814,13 @@ class PluginTests(unittest.TestCase):
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
                 "quimera.app.core.plugins.get",
                 side_effect=lambda _agent: FakePlugin(True),
-        ), patch("quimera.runtime.tasks.transition_task") as transition_task, patch(
-            "quimera.runtime.tasks.fail_task"
+        ), patch("quimera.app.task_repository.TaskRepository.transition_task") as transition_task, patch(
+            "quimera.app.task_repository.TaskRepository.fail_task"
         ) as fail_task:
             transition_task.return_value = False
             app._setup_task_executors()
             ok = review_handlers[AGENT_GEMINI](
-                {"id": 12, "assigned_to": AGENT_CLAUDE, "result": "ok"}
+                TaskRecord(id=12, job_id=0, description="", status="reviewing", assigned_to=AGENT_CLAUDE, result="ok")
             )
 
         self.assertFalse(ok)
@@ -3842,12 +3836,10 @@ class PluginTests(unittest.TestCase):
             TaskStatus.PENDING_REVIEW,
             result="ok",
             notes="timeout",
-            db_path=app.tasks_db_path,
         )
         fail_task.assert_called_once_with(
             12,
             reason="review failed and fallback transition failed: timeout",
-            db_path=app.tasks_db_path,
         )
 
     def test_review_handler_fails_when_no_other_operational_reviewer_exists(self):
@@ -3871,7 +3863,7 @@ class PluginTests(unittest.TestCase):
             def start(self):
                 return None
 
-        def fake_create_executor(agent, handler, db_path=None, job_id=None):
+        def fake_create_executor(agent, handler, db_path=None, job_id=None, repository=None):
             executor = FakeExecutor(handler)
             executor.agent = agent
             return executor
@@ -3889,12 +3881,12 @@ class PluginTests(unittest.TestCase):
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
                 "quimera.app.core.plugins.get",
                 side_effect=lambda agent: FakePlugin(agent == AGENT_GEMINI),
-        ), patch("quimera.runtime.tasks.update_task") as update_task, patch(
-            "quimera.runtime.tasks.fail_task"
+        ), patch("quimera.app.task_repository.TaskRepository.transition_task") as update_task, patch(
+            "quimera.app.task_repository.TaskRepository.fail_task"
         ) as fail_task:
             app._setup_task_executors()
             ok = review_handlers[AGENT_GEMINI](
-                {"id": 11, "assigned_to": AGENT_CLAUDE, "result": "ok"}
+                TaskRecord(id=11, job_id=0, description="", status="reviewing", assigned_to=AGENT_CLAUDE, result="ok")
             )
 
         self.assertFalse(ok)
@@ -3909,7 +3901,6 @@ class PluginTests(unittest.TestCase):
         fail_task.assert_called_once_with(
             11,
             reason="review failed without operational fallback: timeout",
-            db_path=app.tasks_db_path,
         )
 
     def test_setup_task_executors_only_registers_review_for_operational_agents(self):
@@ -3933,7 +3924,7 @@ class PluginTests(unittest.TestCase):
             def start(self):
                 return None
 
-        def fake_create_executor(agent, handler, db_path=None, job_id=None):
+        def fake_create_executor(agent, handler, db_path=None, job_id=None, repository=None):
             executor = FakeExecutor(handler)
             executor.agent = agent
             return executor
@@ -3973,7 +3964,7 @@ class PluginTests(unittest.TestCase):
             def start(self):
                 return None
 
-        def fake_create_executor(agent, handler, db_path=None, job_id=None):
+        def fake_create_executor(agent, handler, db_path=None, job_id=None, repository=None):
             executor = FakeExecutor(handler)
             executor.agent = agent
             return executor
@@ -4009,7 +4000,7 @@ class PluginTests(unittest.TestCase):
             def start(self):
                 return None
 
-        def fake_create_executor(agent, handler, db_path=None, job_id=None):
+        def fake_create_executor(agent, handler, db_path=None, job_id=None, repository=None):
             handlers[agent] = handler
             return FakeExecutor(handler)
 
@@ -4032,11 +4023,11 @@ class PluginTests(unittest.TestCase):
         )
 
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
-                "quimera.runtime.tasks.complete_task"
+                "quimera.app.task_repository.TaskRepository.complete_task"
         ) as complete_task:
             app._setup_task_executors()
             ok = handlers[AGENT_CLAUDE](
-                {"id": 1, "description": "validar regressão", "body": task_body}
+                TaskRecord(id=1, job_id=0, description="validar regressão", body=task_body, status="in_progress")
             )
 
         self.assertTrue(ok)
@@ -4047,7 +4038,7 @@ class PluginTests(unittest.TestCase):
         self.assertIn("[ALEX]: a execução da tarefa precisa receber o contexto do chat", captured["kwargs"]["handoff"])
         self.assertIn("[CLAUDE]: alguém passou contexto errado", captured["kwargs"]["handoff"])
         complete_task.assert_called_once_with(
-            1, result="resposta visivel da task", db_path=app.tasks_db_path
+            1, result="resposta visivel da task"
         )
 
     def test_task_handler_requeues_failed_execution_for_other_agent(self):
@@ -4067,7 +4058,7 @@ class PluginTests(unittest.TestCase):
             def start(self):
                 return None
 
-        def fake_create_executor(agent, handler, db_path=None, job_id=None):
+        def fake_create_executor(agent, handler, db_path=None, job_id=None, repository=None):
             handlers[agent] = handler
             return FakeExecutor(handler)
 
@@ -4077,14 +4068,16 @@ class PluginTests(unittest.TestCase):
         app.record_failure = lambda agent: None
 
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
-                "quimera.runtime.tasks.requeue_task"
-        ) as requeue_task, patch("quimera.runtime.tasks.fail_task") as fail_task:
+                "quimera.app.task_repository.TaskRepository.can_reassign_task", return_value=True
+        ), patch("quimera.app.task_repository.TaskRepository.requeue_task") as requeue_task, patch(
+            "quimera.app.task_repository.TaskRepository.fail_task"
+        ) as fail_task:
             app._setup_task_executors()
-            ok = handlers[AGENT_CLAUDE]({"id": 1, "description": "rode a task"})
+            ok = handlers[AGENT_CLAUDE](TaskRecord(id=1, job_id=0, description="rode a task", status="in_progress"))
 
         self.assertFalse(ok)
         requeue_task.assert_called_once_with(
-            1, AGENT_CLAUDE, reason="communication failed", db_path=app.tasks_db_path
+            1, AGENT_CLAUDE, reason="communication failed"
         )
         fail_task.assert_not_called()
 
@@ -4105,7 +4098,7 @@ class PluginTests(unittest.TestCase):
             def start(self):
                 return None
 
-        def fake_create_executor(agent, handler, db_path=None, job_id=None):
+        def fake_create_executor(agent, handler, db_path=None, job_id=None, repository=None):
             handlers[agent] = handler
             return FakeExecutor(handler)
 
@@ -4115,19 +4108,19 @@ class PluginTests(unittest.TestCase):
         app.record_failure = lambda agent: None
 
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
-                "quimera.runtime.tasks.can_reassign_task", return_value=False
-        ) as can_reassign_task, patch("quimera.runtime.tasks.requeue_task") as requeue_task, patch(
-            "quimera.runtime.tasks.fail_task"
+                "quimera.app.task_repository.TaskRepository.can_reassign_task", return_value=False
+        ) as can_reassign_task, patch("quimera.app.task_repository.TaskRepository.requeue_task") as requeue_task, patch(
+            "quimera.app.task_repository.TaskRepository.fail_task"
         ) as fail_task:
             app._setup_task_executors()
-            ok = handlers[AGENT_CLAUDE]({"id": 1, "description": "rode a task"})
+            ok = handlers[AGENT_CLAUDE](TaskRecord(id=1, job_id=0, description="rode a task", status="in_progress"))
 
         self.assertFalse(ok)
         can_reassign_task.assert_called_once_with(
-            1, [AGENT_CODEX], db_path=app.tasks_db_path
+            1, [AGENT_CODEX]
         )
         requeue_task.assert_not_called()
-        fail_task.assert_called_once_with(1, reason="communication failed", db_path=app.tasks_db_path)
+        fail_task.assert_called_once_with(1, reason="communication failed")
 
     def test_parse_response_extracts_ack_marker(self):
         app = QuimeraApp.__new__(QuimeraApp)

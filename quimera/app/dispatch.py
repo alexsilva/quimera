@@ -1,73 +1,14 @@
 """Componentes de `quimera.app.dispatch`."""
-import re
 import time
 from contextlib import nullcontext
-from quimera.runtime.errors import (
-    ToolError,
-    ToolValidationError,
-    ToolEnvironmentError,
-    ToolLogicError,
-    ToolRateLimitError,
-)
-from ..runtime.tool_hops import get_invalid_tool_loop_threshold, get_max_tool_hops
-from ..runtime.parser import strip_tool_block
-from .task_utils import truncate_payload
+
+from .agent_gateway import AgentGateway, _is_user_cancelled
+from .tool_loop import ToolLoopService
 from .config import logger
 
 
-def _coerce_tool_error(error):
-    """Normaliza strings cruas em ToolError quando houver heurística compatível."""
-    if not error or isinstance(error, ToolError):
-        return error
-
-    error_msg = str(error)
-    lowered = error_msg.lower()
-    if "validação" in lowered or "campo" in lowered or "formato" in lowered:
-        return ToolValidationError(error_msg)
-    if "arquivo" in lowered or "permissão" in lowered or "não encontrado" in lowered:
-        return ToolEnvironmentError(error_msg)
-    if "regra" in lowered or "lógica" in lowered or "contradiz" in lowered:
-        return ToolLogicError(error_msg)
-    if "rate limit" in lowered or "throttling" in lowered:
-        return ToolRateLimitError(error_msg)
-    return error
-
-
-def _resolve_tool_error_type(tool_result) -> str:
-    """Resolve o tipo de erro padronizado quando disponível."""
-    error_type = getattr(tool_result, "error_type", None)
-    if isinstance(error_type, str) and error_type:
-        return error_type
-    return "none"
-
-
-def _invalid_tool_signature(tool_result, error_type: str) -> tuple[str, str, str]:
-    """Gera assinatura estável para detectar repetição do mesmo erro de policy."""
-    tool_name = str(getattr(tool_result, "tool_name", "") or "")
-    error_text = re.sub(r"\s+", " ", str(getattr(tool_result, "error", "") or "").strip().lower())
-    if len(error_text) > 256:
-        error_text = error_text[:256]
-    return error_type, tool_name, error_text
-
-
-def _is_user_cancelled(agent_client) -> bool:
-    """Retorna True quando há sinal explícito de cancelamento do usuário."""
-    if agent_client is None:
-        return False
-    if getattr(agent_client, "_user_cancelled", False) is True:
-        return True
-    cancel_event = getattr(agent_client, "_cancel_event", None)
-    is_set = getattr(cancel_event, "is_set", None)
-    if callable(is_set):
-        try:
-            return is_set() is True
-        except Exception:
-            return False
-    return False
-
-
 class AppDispatchServices:
-    """Agrupa despacho de agentes e persistência de mensagens."""
+    """Coordena AgentGateway e ToolLoopService; mantém spy telemetry e retry."""
 
     _MAX_SPY_TOOLS = 12
     _MAX_SPY_TEXT_CHARS = 280
@@ -76,6 +17,109 @@ class AppDispatchServices:
     def __init__(self, app):
         """Inicializa uma instância de AppDispatchServices."""
         self.app = app
+        # _gateway e _tool_loop são construídos lazily porque app ainda não tem
+        # todos os atributos inicializados quando AppDispatchServices é criado.
+        self._gateway = None
+        self._tool_loop = None
+
+    # -------------------------------------------------------------------------
+    # Lazy builders
+    # -------------------------------------------------------------------------
+
+    def _get_gateway(self) -> AgentGateway:
+        if self._gateway is None:
+            self._gateway = self._build_gateway()
+        return self._gateway
+
+    def _get_tool_loop(self) -> ToolLoopService:
+        if self._tool_loop is None:
+            self._tool_loop = self._build_tool_loop()
+        return self._tool_loop
+
+    def _build_gateway(self) -> AgentGateway:
+        app = self.app
+        counter_lock = getattr(app, "_counter_lock", None)
+
+        def _increment_call_index():
+            with (counter_lock if counter_lock is not None else nullcontext()):
+                app.session_call_index += 1
+                return app.session_call_index
+
+        def _update_session(agent: str, success: bool, elapsed: float):
+            if not (hasattr(app, "session_state") and app.session_state):
+                return
+            with (counter_lock if counter_lock is not None else nullcontext()):
+                try:
+                    app.session_state["handoffs_sent"] += 1
+                    app.session_state["total_latency"] += elapsed
+                    if success:
+                        app.session_state["handoffs_succeeded"] += 1
+                    else:
+                        app.session_state["handoffs_failed"] += 1
+                except KeyError:
+                    pass
+            session_metrics = getattr(app, "session_metrics", None)
+            if session_metrics is not None:
+                session_metrics.record_agent_metric(app, agent, "succeeded" if success else "failed", elapsed)
+
+        return AgentGateway(
+            agent_client=app.agent_client,
+            prompt_builder=app.prompt_builder,
+            renderer=app.renderer,
+            plugin_resolver=app.get_agent_plugin,
+            get_history=lambda: app.history,
+            get_shared_state=lambda: app.shared_state,
+            get_execution_mode=lambda: getattr(app, "execution_mode", None),
+            refresh_task_state=app.task_services.refresh_task_shared_state,
+            session_state=app.session_state,
+            increment_call_index=_increment_call_index,
+            get_round_index=lambda: getattr(app, "round_index", 0),
+            debug_prompt_metrics=getattr(app, "debug_prompt_metrics", False),
+            clear_prompt_line=getattr(app, "_clear_user_prompt_line_if_needed", None),
+            redisplay_prompt=getattr(app, "_redisplay_user_prompt_if_needed", None),
+            update_session=_update_session,
+            output_lock=getattr(app, "_output_lock", None),
+            counter_lock=counter_lock,
+        )
+
+    def _build_tool_loop(self) -> ToolLoopService:
+        app = self.app
+
+        def _cancel_checker() -> bool:
+            return _is_user_cancelled(getattr(app, "agent_client", None))
+
+        def _call_agent_fn(agent, **kwargs):
+            if hasattr(app, "_call_agent"):
+                return app._call_agent(agent, **kwargs)
+            return self.call_agent_low_level(agent, **kwargs)
+
+        def _record_tool_event(agent, **kwargs):
+            session_metrics = getattr(app, "session_metrics", None)
+            if session_metrics is not None:
+                session_metrics.record_tool_event(app, agent, **kwargs)
+
+        def _reset_approve_all():
+            tool_executor = getattr(app, "tool_executor", None)
+            if tool_executor is None:
+                return
+            approval_handler = getattr(tool_executor, "approval_handler", None)
+            if approval_handler is not None and hasattr(approval_handler, "reset_approve_all_after_cycle"):
+                approval_handler.reset_approve_all_after_cycle()
+
+        return ToolLoopService(
+            tool_executor=app.tool_executor,
+            plugin_resolver=app.get_agent_plugin,
+            call_agent_fn=_call_agent_fn,
+            print_response_fn=app.print_response,
+            persist_message_fn=lambda agent, text: app.session_services.persist_message(agent, text),
+            cancel_checker=_cancel_checker,
+            record_tool_event=_record_tool_event,
+            reset_approve_all=_reset_approve_all,
+        )
+
+    # -------------------------------------------------------------------------
+    # Spy telemetry (permanece em AppDispatchServices)
+    # -------------------------------------------------------------------------
 
     @classmethod
     def _truncate_spy_text(cls, value):
@@ -155,6 +199,10 @@ class AppDispatchServices:
         if isinstance(session_state, dict):
             session_state["last_spy_turn_detail"] = snapshot
 
+    # -------------------------------------------------------------------------
+    # API pública
+    # -------------------------------------------------------------------------
+
     def resolve_agent_response(
             self,
             agent: str,
@@ -164,150 +212,9 @@ class AppDispatchServices:
             show_output: bool = True,
     ) -> str | None:
         """Resolve respostas com loop de ferramentas até estabilizar a saída."""
-        app = self.app
-        current_response = response
-        plugin = app.get_agent_plugin(agent)
-        max_tool_hops = get_max_tool_hops(getattr(plugin, "tool_use_reliability", "medium"))
-        max_consecutive_invalid_signatures = get_invalid_tool_loop_threshold(
-            getattr(plugin, "tool_use_reliability", "medium")
+        return self._get_tool_loop().execute(
+            agent, response, silent=silent, persist_history=persist_history, show_output=show_output
         )
-        tool_history = []
-        last_invalid_signature = None
-        consecutive_invalid_signature_count = 0
-        _MAX_TOOL_HISTORY_ENTRIES = 3
-        _MAX_HANDOFF_CHARS = 8000
-
-        try:
-            for hop in range(max_tool_hops):
-                if _is_user_cancelled(getattr(app, "agent_client", None)):
-                    logger.info(
-                        "[DISPATCH] agent=%s cancelled by user during tool loop at hop=%d/%d, aborting",
-                        agent,
-                        hop + 1,
-                        max_tool_hops,
-                    )
-                    return None
-                if not current_response:
-                    return current_response
-
-                raw_response, tool_result = app.tool_executor.maybe_execute_from_response(current_response)
-
-                if tool_result is None:
-                    return current_response
-
-                if tool_result.error:
-                    tool_result.error = _coerce_tool_error(tool_result.error)
-                error_type = _resolve_tool_error_type(tool_result)
-                is_invalid = error_type == "policy"
-                ok = bool(getattr(tool_result, "ok", False))
-                session_metrics = getattr(app, "session_metrics", None)
-                if session_metrics is not None:
-                    session_metrics.record_tool_event(
-                        app,
-                        agent,
-                        ok=ok,
-                        is_invalid=is_invalid,
-                        error_type=error_type,
-                    )
-                if is_invalid:
-                    invalid_signature = _invalid_tool_signature(tool_result, error_type)
-                    if last_invalid_signature == invalid_signature:
-                        consecutive_invalid_signature_count += 1
-                    else:
-                        last_invalid_signature = invalid_signature
-                        consecutive_invalid_signature_count = 1
-                    if consecutive_invalid_signature_count >= max_consecutive_invalid_signatures:
-                        if session_metrics is not None:
-                            session_metrics.record_tool_event(
-                                app,
-                                agent,
-                                ok=False,
-                                is_invalid=True,
-                                loop_abort=True,
-                                reason="invalid_tool_loop",
-                                error_type=error_type,
-                            )
-                        return "Falha: loop de ferramenta inválida detectado."
-                else:
-                    last_invalid_signature = None
-                    consecutive_invalid_signature_count = 0
-
-                tool_payload = truncate_payload(tool_result.to_model_payload())
-                tool_history.append(
-                    f"Sua resposta anterior:\n{current_response.strip()}\n\n"
-                    f"Resultado da ferramenta:\n{tool_payload}"
-                )
-                # Mantém apenas as últimas N entradas para evitar crescimento ilimitado
-                if len(tool_history) > _MAX_TOOL_HISTORY_ENTRIES:
-                    tool_history = tool_history[-_MAX_TOOL_HISTORY_ENTRIES:]
-
-                visible_text = strip_tool_block(raw_response or "")
-                if visible_text:
-                    if show_output:
-                        app.print_response(agent, visible_text)
-                    if persist_history:
-                        app.session_services.persist_message(agent, visible_text)
-
-                used_tool_hops = hop + 1
-                remaining_tool_hops = max(max_tool_hops - used_tool_hops, 0)
-                followup_handoff = (
-                    "Orçamento de ferramentas desta execução:\n"
-                    f"- max_tool_hops={max_tool_hops}\n"
-                    f"- remaining_tool_hops={remaining_tool_hops}\n\n"
-                    "Histórico de ferramentas desta rodada:\n\n"
-                    + "\n\n---\n\n".join(tool_history)
-                )
-
-                # Trunca o handoff para evitar prompts gigantes
-                if len(followup_handoff) > _MAX_HANDOFF_CHARS:
-                    followup_handoff = followup_handoff[-_MAX_HANDOFF_CHARS:]
-                    followup_handoff = "(histórico truncado)...\n\n" + followup_handoff
-                if _is_user_cancelled(getattr(app, "agent_client", None)):
-                    logger.info(
-                        "[DISPATCH] agent=%s cancelled by user before followup tool call, aborting",
-                        agent,
-                    )
-                    return None
-                if hasattr(app, "_call_agent"):
-                    current_response = app._call_agent(
-                        agent,
-                        handoff=followup_handoff,
-                        primary=False,
-                        protocol_mode="tool_loop",
-                        silent=silent,
-                    )
-                else:
-                    current_response = self.call_agent_low_level(
-                        agent,
-                        handoff=followup_handoff,
-                        primary=False,
-                        protocol_mode="tool_loop",
-                        silent=silent,
-                    )
-                if _is_user_cancelled(getattr(app, "agent_client", None)):
-                    logger.info(
-                        "[DISPATCH] agent=%s cancelled by user after followup tool call, aborting",
-                        agent,
-                    )
-                    return None
-
-            session_metrics = getattr(app, "session_metrics", None)
-            if session_metrics is not None:
-                session_metrics.record_tool_event(
-                    app,
-                    agent,
-                    ok=False,
-                    loop_abort=True,
-                    reason="max_tool_hops",
-                )
-            return "Falha: limite de execuções de ferramenta atingido."
-        finally:
-            # Reseta approve-all (não-permanente) ao fim do ciclo de tool hops.
-            tool_executor = getattr(app, "tool_executor", None)
-            if tool_executor is not None:
-                approval_handler = getattr(tool_executor, "approval_handler", None)
-                if approval_handler is not None and hasattr(approval_handler, "reset_approve_all_after_cycle"):
-                    approval_handler.reset_approve_all_after_cycle()
 
     def call_agent(self, agent, **options):
         """Executa despacho com retry e resolução de ferramentas."""
@@ -417,107 +324,18 @@ class AppDispatchServices:
             from_agent=None,
     ):
         """Monta o prompt final e executa a chamada ao backend do agente."""
-        app = self.app
-        agent_client = getattr(app, "agent_client", None)
-        if _is_user_cancelled(agent_client):
-            logger.info("[DISPATCH] agent=%s cancelled by user before low-level call, aborting", agent)
-            return None
-        counter_lock = getattr(app, "_counter_lock", None)
-        with (counter_lock if counter_lock is not None else nullcontext()):
-            app.session_call_index += 1
-            call_index_snapshot = app.session_call_index
-        start = time.time()
-        history = app.history
-        app.task_services.refresh_task_shared_state()
-
-        plugin = app.get_agent_plugin(agent)
-        driver = plugin.effective_driver() if plugin else "cli"
-        stream_state = {"started": False}
-
-        def _on_text_chunk(chunk):
-            if silent or not show_output or not chunk:
-                return
-            output_lock = getattr(app, "_output_lock", None)
-            if not stream_state["started"]:
-                with (output_lock if output_lock is not None else nullcontext()):
-                    if hasattr(app, "_clear_user_prompt_line_if_needed"):
-                        app._clear_user_prompt_line_if_needed()
-                    app.renderer.start_message_stream(agent)
-                    stream_state["started"] = True
-            app.renderer.update_message_stream(agent, chunk)
-
-        active_execution_mode = getattr(app, "execution_mode", None)
-        if app.debug_prompt_metrics:
-            prompt, metrics = app.prompt_builder.build(
-                agent,
-                history,
-                is_first_speaker,
-                handoff,
-                debug=True,
-                primary=primary,
-                shared_state=app.shared_state,
-                handoff_only=handoff_only,
-                from_agent=from_agent,
-                skip_tool_prompt=True,
-                execution_mode=active_execution_mode,
-            )
-            app.agent_client.log_prompt_metrics(
-                agent,
-                metrics,
-                session_id=app.session_state["session_id"],
-                round_index=app.round_index,
-                session_call_index=call_index_snapshot,
-                history_window=app.prompt_builder.history_window,
-                protocol_mode=protocol_mode,
-            )
-        else:
-            prompt = app.prompt_builder.build(
-                agent,
-                history,
-                is_first_speaker,
-                handoff,
-                primary=primary,
-                shared_state=app.shared_state,
-                handoff_only=handoff_only,
-                from_agent=from_agent,
-                skip_tool_prompt=True,
-                execution_mode=active_execution_mode,
-            )
-
-        if _is_user_cancelled(agent_client):
-            logger.info("[DISPATCH] agent=%s cancelled by user before backend call, aborting", agent)
-            return None
-        result = app.agent_client.call(agent, prompt, silent=silent, on_text_chunk=_on_text_chunk)
+        result = self._get_gateway().call(
+            agent,
+            is_first_speaker=is_first_speaker,
+            handoff=handoff,
+            primary=primary,
+            protocol_mode=protocol_mode,
+            handoff_only=handoff_only,
+            silent=silent,
+            show_output=show_output,
+            from_agent=from_agent,
+        )
         self._update_spy_telemetry(agent)
-        if stream_state["started"]:
-            output_lock = getattr(app, "_output_lock", None)
-            with (output_lock if output_lock is not None else nullcontext()):
-                if result is not None:
-                    app.renderer.finish_message_stream(agent, result)
-                else:
-                    app.renderer.abort_message_stream(agent)
-                flush = getattr(app.renderer, "flush", None)
-                if callable(flush):
-                    flush()
-                if hasattr(app, "_redisplay_user_prompt_if_needed"):
-                    app._redisplay_user_prompt_if_needed(clear_first=False)
-        app.agent_client.flush_pending_summary()
-        elapsed = time.time() - start
-        if hasattr(app, "session_state") and app.session_state:
-            with (counter_lock if counter_lock is not None else nullcontext()):
-                try:
-                    app.session_state["handoffs_sent"] += 1
-                    app.session_state["total_latency"] += elapsed
-                    if result:
-                        app.session_state["handoffs_succeeded"] += 1
-                    else:
-                        app.session_state["handoffs_failed"] += 1
-                except KeyError:
-                    pass
-            session_metrics = getattr(app, "session_metrics", None)
-            if session_metrics is not None:
-                session_metrics.record_agent_metric(app, agent, "succeeded" if result else "failed", elapsed)
-        logger.info("[DISPATCH] agent=%s latency=%.2fs result=%s", agent, elapsed, "ok" if result else "none")
         return result
 
     def print_response(self, agent, response):

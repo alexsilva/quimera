@@ -6,9 +6,9 @@ import queue
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
-from .tasks import list_tasks, claim_task, fail_task, claim_review_task
+from .models import TaskRecord
 
 _logger = logging.getLogger("quimera.task_executor")
 
@@ -16,12 +16,24 @@ _logger = logging.getLogger("quimera.task_executor")
 class TaskExecutor:
     """Implementa `TaskExecutor`."""
 
-    def __init__(self, agent_name: str, db_path, max_workers: int = 2, poll_interval: float = 5.0, job_id=None):
-        """Inicializa uma instância de TaskExecutor."""
-        if not db_path:
-            raise ValueError("db_path is required — use workspace.tasks_db")
+    def __init__(
+        self,
+        agent_name: str,
+        db_path=None,
+        max_workers: int = 2,
+        poll_interval: float = 5.0,
+        job_id=None,
+        repository: Any = None,
+    ):
+        """Inicializa uma instância de TaskExecutor.
+
+        ``TaskExecutor`` sempre opera via objeto de repositório explícito.
+        """
+        if repository is None:
+            raise ValueError("repository is required")
         self.agent_name = agent_name
         self.db_path = db_path
+        self._repository = repository
         self.job_id = job_id
         self.max_workers = max_workers
         self.poll_interval = poll_interval
@@ -34,11 +46,11 @@ class TaskExecutor:
         self._review_handler: Optional[Callable] = None
         self._review_eligibility: Optional[Callable[[], bool]] = None
 
-    def set_handler(self, handler: Callable[[dict], bool]):
-        """Set the task execution handler. Handler receives task dict and returns True on success."""
+    def set_handler(self, handler: Callable[[TaskRecord], bool]):
+        """Set the task execution handler. Handler receives TaskRecord and returns True on success."""
         self._handler = handler
 
-    def set_review_handler(self, handler: Callable[[dict], bool]):
+    def set_review_handler(self, handler: Callable[[TaskRecord], bool]):
         """Set the review handler. Called with tasks in 'pending_review' state from other agents."""
         self._review_handler = handler
 
@@ -65,18 +77,31 @@ class TaskExecutor:
             except KeyboardInterrupt:
                 _logger.debug("task executor stop interrupted for agent=%s", self.agent_name)
 
+    def _claim_task(self) -> Optional[int]:
+        return self._repository.claim_task(self.agent_name, job_id=self.job_id)
+
+    def _claim_review_task(self) -> Optional[int]:
+        return self._repository.claim_review_task(self.agent_name, job_id=self.job_id)
+
+    def _load_task(self, task_id: int) -> Optional[TaskRecord]:
+        tasks = self._repository.list_tasks({"id": task_id})
+        return tasks[0] if tasks else None
+
+    def _fail_task(self, task_id: int, reason: str) -> None:
+        self._repository.fail_task(task_id, reason=reason)
+
     def _poll_loop(self):
         """Executa poll loop."""
         while self._running:
             task_id = None
             try:
-                task_id = claim_task(self.agent_name, job_id=self.job_id, db_path=self.db_path)
+                task_id = self._claim_task()
                 if task_id:
-                    tasks = list_tasks({"id": task_id}, db_path=self.db_path)
-                    if tasks and self._handler:
-                        self._handler(tasks[0])
+                    task = self._load_task(task_id)
+                    if task and self._handler:
+                        self._handler(task)
                     else:
-                        fail_task(task_id, reason="handler unavailable or task not found", db_path=self.db_path)
+                        self._fail_task(task_id, "handler unavailable or task not found")
                         _logger.warning("task %s claimed by %s but could not be dispatched", task_id, self.agent_name)
                     task_id = None
                     # Brief pause after execution so other agents can pick up requeued tasks
@@ -86,13 +111,13 @@ class TaskExecutor:
                 # No regular task — check for review tasks from other agents
                 can_review = self._review_eligibility() if self._review_eligibility else True
                 if self._review_handler and can_review:
-                    review_id = claim_review_task(self.agent_name, job_id=self.job_id, db_path=self.db_path)
+                    review_id = self._claim_review_task()
                     if review_id:
-                        tasks = list_tasks({"id": review_id}, db_path=self.db_path)
-                        if tasks:
-                            self._review_handler(tasks[0])
+                        task = self._load_task(review_id)
+                        if task:
+                            self._review_handler(task)
                         else:
-                            fail_task(review_id, reason="review task not found", db_path=self.db_path)
+                            self._fail_task(review_id, "review task not found")
                             _logger.warning(
                                 "review task %s claimed by %s but could not be loaded",
                                 review_id,
@@ -107,7 +132,7 @@ class TaskExecutor:
                 _logger.exception("poll loop error agent=%s task_id=%s: %s", self.agent_name, task_id, exc)
                 if task_id:
                     try:
-                        fail_task(task_id, reason=str(exc), db_path=self.db_path)
+                        self._fail_task(task_id, str(exc))
                     except Exception:
                         pass
                 if self._wait_or_stop(self.poll_interval):
@@ -122,19 +147,26 @@ class TaskExecutor:
 
     def process_pending(self):
         """Process one iteration of pending tasks (for manual/batch execution)."""
-        task_id = claim_task(self.agent_name, job_id=self.job_id, db_path=self.db_path)
+        task_id = self._claim_task()
         if not task_id:
             return None
-        tasks = list_tasks({"id": task_id}, db_path=self.db_path)
-        if tasks and self._handler:
-            task = tasks[0]
-            success = self._handler(task)
+        task = self._load_task(task_id)
+        if task and self._handler:
+            self._handler(task)
             # Note: handler already calls complete_task/fail_task with result
         return task_id
 
 
-def create_executor(agent_name: str, handler: Callable[[dict], bool], db_path, job_id=None) -> TaskExecutor:
+def create_executor(
+    agent_name: str,
+    handler: Callable[[TaskRecord], bool],
+    db_path=None,
+    job_id=None,
+    repository=None,
+) -> TaskExecutor:
     """Factory function to create and configure a task executor."""
-    executor = TaskExecutor(agent_name, db_path=db_path, job_id=job_id)
+    if repository is None:
+        raise ValueError("repository is required")
+    executor = TaskExecutor(agent_name, db_path=db_path, job_id=job_id, repository=repository)
     executor.set_handler(handler)
     return executor
