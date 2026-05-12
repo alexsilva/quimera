@@ -11,6 +11,7 @@ from quimera.runtime.errors import (
 )
 from ..runtime.tool_hops import get_invalid_tool_loop_threshold, get_max_tool_hops
 from ..runtime.parser import strip_tool_block
+from .task_utils import truncate_payload
 from .config import logger
 
 
@@ -148,7 +149,6 @@ class AppDispatchServices:
     ) -> str | None:
         """Resolve respostas com loop de ferramentas até estabilizar a saída."""
         app = self.app
-        task_services = app.task_services
         current_response = response
         plugin = app.get_agent_plugin(agent)
         max_tool_hops = get_max_tool_hops(getattr(plugin, "tool_use_reliability", "medium"))
@@ -208,7 +208,7 @@ class AppDispatchServices:
                     last_invalid_signature = None
                     consecutive_invalid_signature_count = 0
 
-                tool_payload = task_services.truncate_payload(tool_result.to_model_payload())
+                tool_payload = truncate_payload(tool_result.to_model_payload())
                 tool_history.append(
                     f"Sua resposta anterior:\n{current_response.strip()}\n\n"
                     f"Resultado da ferramenta:\n{tool_payload}"

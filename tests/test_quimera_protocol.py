@@ -4713,6 +4713,7 @@ class MetricsFeedbackTests(unittest.TestCase):
     def test_get_task_routing_plugins_respects_explicit_active_agents(self):
         app = QuimeraApp.__new__(QuimeraApp)
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
+        app.tasks_db_path = str(Path(self.enterContext(tempfile.TemporaryDirectory())) / "tasks.db")
 
         selected = [plugin.name for plugin in AppTaskServices(app).get_task_routing_plugins()]
 
@@ -4721,6 +4722,7 @@ class MetricsFeedbackTests(unittest.TestCase):
     def test_get_task_routing_plugins_expands_wildcard_to_all_plugins(self):
         app = QuimeraApp.__new__(QuimeraApp)
         app.active_agents = ["*"]
+        app.tasks_db_path = str(Path(self.enterContext(tempfile.TemporaryDirectory())) / "tasks.db")
 
         selected = [plugin.name for plugin in AppTaskServices(app).get_task_routing_plugins()]
 
@@ -4946,19 +4948,11 @@ class MetricsFeedbackTests(unittest.TestCase):
         db_path = tmp_dir / "tasks.db"
         init_db(str(db_path))
         add_job("Session", db_path=str(db_path), job_id=1)
-        original_budget = AppTaskServices._MAX_COMPLETED_TASK_RESULTS_CHARS
-        self.addCleanup(
-            setattr,
-            AppTaskServices,
-            "_MAX_COMPLETED_TASK_RESULTS_CHARS",
-            original_budget,
-        )
-        AppTaskServices._MAX_COMPLETED_TASK_RESULTS_CHARS = 700
 
-        for label in ("primeira", "segunda", "terceira"):
+        for index in range(1, 11):
             task_id = create_task(
                 1,
-                f"{label} task com descricao longa para ocupar espaco",
+                f"task-{index:02d} com descricao longa para ocupar espaco",
                 db_path=str(db_path),
                 status="in_progress",
             )
@@ -4968,11 +4962,11 @@ class MetricsFeedbackTests(unittest.TestCase):
         AppTaskServices(app).refresh_task_shared_state()
 
         results = app.shared_state.get("completed_task_results", "")
-        self.assertLessEqual(len(results), AppTaskServices._MAX_COMPLETED_TASK_RESULTS_CHARS)
+        self.assertLessEqual(len(results), 2000)
         self.assertIn("omitida", results)
-        self.assertNotIn("primeira task", results)
-        self.assertIn("segunda task", results)
-        self.assertIn("terceira task", results)
+        self.assertNotIn("task-01", results)
+        self.assertIn("task-09", results)
+        self.assertIn("task-10", results)
 
     def test_refresh_task_shared_state_removes_completed_task_results_when_none_exist(self):
         app = QuimeraApp.__new__(QuimeraApp)

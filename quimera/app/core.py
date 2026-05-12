@@ -20,6 +20,7 @@ from .dispatch import AppDispatchServices
 from .inputs import AppInputServices
 from .prompt_input import InputGate
 from .task import AppTaskServices, create_executor
+from .task_classifiers import classify_task_execution_result, parse_task_command
 from .system_layer import AppSystemLayer
 from .turn import TurnManager
 from .. import plugins
@@ -429,12 +430,12 @@ class QuimeraApp:
     @staticmethod
     def parse_task_command(command: str) -> str:
         """Interpreta task command."""
-        return AppTaskServices.parse_task_command(command)
+        return parse_task_command(command)
 
     @staticmethod
     def classify_task_execution_result(response: str | None) -> tuple[bool, str]:
         """Return whether the task execution can be considered completed."""
-        return AppTaskServices.classify_task_execution_result(response)
+        return classify_task_execution_result(response)
 
     def _set_execution_mode(self, mode):
         """Define o modo de execução ativo e propaga para policy e agent_client."""
