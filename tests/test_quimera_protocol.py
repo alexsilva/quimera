@@ -26,7 +26,7 @@ from quimera.app.protocol import AppProtocol
 from quimera.app.session_metrics import SessionMetricsService
 from quimera.cli import main as cli_main
 from quimera.config import DEFAULT_HISTORY_WINDOW
-from quimera.constants import CMD_AGENTS, CMD_CLEAR, CMD_CONNECT, CMD_DISCONNECT, CMD_HELP, CMD_PROMPT, EXTEND_MARKER, MSG_SHUTDOWN, Visibility, build_agents_help, build_help
+from quimera.constants import CMD_AGENTS, CMD_CLEAR, CMD_CONNECT, CMD_DISCONNECT, CMD_HELP, CMD_PROMPT, EXTEND_MARKER, MSG_SHUTDOWN, TaskStatus, Visibility, build_agents_help, build_help
 from quimera.plugins import AgentPlugin
 from quimera.plugins.base import OpenAIConnection
 from quimera.prompt import PromptBuilder
@@ -3648,8 +3648,8 @@ class PluginTests(unittest.TestCase):
         app.system_layer.show_system_message = lambda message: status_updates.append(message)
 
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
-                "quimera.runtime.tasks.update_task"
-        ) as update_task, patch("quimera.runtime.tasks.complete_task") as complete_task:
+                "quimera.runtime.tasks.transition_task"
+        ) as transition_task, patch("quimera.runtime.tasks.complete_task") as complete_task:
             app._setup_task_executors()
             ok = review_handlers[AGENT_CLAUDE](
                 {"id": 8, "assigned_to": AGENT_CLAUDE, "result": "ok"}
@@ -3660,7 +3660,7 @@ class PluginTests(unittest.TestCase):
             status_updates,
             ["[task 8] claude: review rejeitado, aguardando outro agente"],
         )
-        update_task.assert_called_once_with(8, "pending_review", db_path=app.tasks_db_path)
+        transition_task.assert_called_once_with(8, TaskStatus.PENDING_REVIEW, result='ok', notes=None, db_path=app.tasks_db_path)
         complete_task.assert_not_called()
 
     def test_review_handler_returns_task_to_pending_on_retentativa(self):
@@ -3757,7 +3757,7 @@ class PluginTests(unittest.TestCase):
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
                 "quimera.app.core.plugins.get",
                 side_effect=lambda _agent: FakePlugin(True),
-        ), patch("quimera.runtime.tasks.update_task") as update_task, patch(
+        ), patch("quimera.runtime.tasks.transition_task") as transition_task, patch(
             "quimera.runtime.tasks.fail_task"
         ) as fail_task:
             app._setup_task_executors()
@@ -3773,14 +3773,80 @@ class PluginTests(unittest.TestCase):
                 "[task 10] gemini: review falhou: timeout",
             ],
         )
-        update_task.assert_called_once_with(
+        transition_task.assert_called_once_with(
             10,
-            "pending_review",
+            TaskStatus.PENDING_REVIEW,
             result="ok",
             notes="timeout",
             db_path=app.tasks_db_path,
         )
         fail_task.assert_not_called()
+
+    def test_review_handler_fails_when_pending_review_transition_fails(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        materialize_internal_services(app)
+        app.active_agents = [AGENT_CLAUDE, AGENT_GEMINI, AGENT_CODEX]
+        app.tasks_db_path = "/tmp/quimera-tasks-test.db"
+        status_updates = []
+        review_handlers = {}
+
+        class FakeExecutor:
+            def __init__(self, handler):
+                self.handler = handler
+
+            def set_review_handler(self, handler):
+                review_handlers[self.agent] = handler
+
+            def start(self):
+                return None
+
+        def fake_create_executor(agent, handler, db_path=None, job_id=None):
+            executor = FakeExecutor(handler)
+            executor.agent = agent
+            return executor
+
+        def fake_call_agent(*_args, **_kwargs):
+            raise RuntimeError("timeout")
+
+        class FakePlugin:
+            def __init__(self, supports_task_execution):
+                self.supports_task_execution = supports_task_execution
+
+        app.dispatch_services.call_agent = fake_call_agent
+        app.system_layer.show_system_message = lambda message: status_updates.append(message)
+
+        with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
+                "quimera.app.core.plugins.get",
+                side_effect=lambda _agent: FakePlugin(True),
+        ), patch("quimera.runtime.tasks.transition_task") as transition_task, patch(
+            "quimera.runtime.tasks.fail_task"
+        ) as fail_task:
+            transition_task.return_value = False
+            app._setup_task_executors()
+            ok = review_handlers[AGENT_GEMINI](
+                {"id": 12, "assigned_to": AGENT_CLAUDE, "result": "ok"}
+            )
+
+        self.assertFalse(ok)
+        self.assertEqual(
+            status_updates,
+            [
+                "[task 12] gemini: revisando execução de claude",
+                "[task 12] gemini: review falhou: timeout",
+            ],
+        )
+        transition_task.assert_called_once_with(
+            12,
+            TaskStatus.PENDING_REVIEW,
+            result="ok",
+            notes="timeout",
+            db_path=app.tasks_db_path,
+        )
+        fail_task.assert_called_once_with(
+            12,
+            reason="review failed and fallback transition failed: timeout",
+            db_path=app.tasks_db_path,
+        )
 
     def test_review_handler_fails_when_no_other_operational_reviewer_exists(self):
         app = QuimeraApp.__new__(QuimeraApp)
@@ -4860,7 +4926,7 @@ class MetricsFeedbackTests(unittest.TestCase):
             1,
             "validar cobertura dos testes",
             db_path=str(db_path),
-            status="completed",
+            status="in_progress",
         )
         complete_task(task_id, result="ok" * 200, db_path=str(db_path))
         app.tasks_db_path = str(db_path)
@@ -4894,7 +4960,7 @@ class MetricsFeedbackTests(unittest.TestCase):
                 1,
                 f"{label} task com descricao longa para ocupar espaco",
                 db_path=str(db_path),
-                status="completed",
+                status="in_progress",
             )
             complete_task(task_id, result="resultado " * 30, db_path=str(db_path))
 

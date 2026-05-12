@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
+from quimera.constants import TaskStatus, can_transition
 from quimera.runtime import tasks
 
 
@@ -156,7 +157,7 @@ def test_requeue_task_does_not_duplicate_failed_token_and_increments_attempt(db_
 
 def test_requeue_task_after_review_clears_reviewer_and_preserves_unique_failed_token(db_path):
     job_id = tasks.add_job("job", db_path=db_path)
-    task_id = tasks.create_task(job_id, "task", assigned_to="codex", status="reviewing", db_path=db_path)
+    task_id = tasks.create_task(job_id, "task", assigned_to="codex", status=TaskStatus.REVIEWING, db_path=db_path)
 
     conn = tasks.get_conn(db_path)
     cur = conn.cursor()
@@ -364,7 +365,7 @@ def test_requeue_task_adds_new_token(db_path):
 
 def test_requeue_task_after_review_adds_new_token(db_path):
     job_id = tasks.add_job("job", db_path=db_path)
-    task_id = tasks.create_task(job_id, "t", assigned_to="gemini", status="reviewing", db_path=db_path)
+    task_id = tasks.create_task(job_id, "t", assigned_to="gemini", status=TaskStatus.REVIEWING, db_path=db_path)
     # failed_agents is empty — token will be added (line 344)
     assert tasks.requeue_task_after_review(task_id, "gemini", result="r", notes="n", db_path=db_path) is True
 
@@ -378,7 +379,7 @@ def test_claim_task_with_job_id(db_path):
 
 def test_complete_task_with_reviewed_by(db_path):
     job_id = tasks.add_job("job", db_path=db_path)
-    task_id = tasks.create_task(job_id, "t", db_path=db_path)
+    task_id = tasks.create_task(job_id, "t", status=TaskStatus.REVIEWING, db_path=db_path)
     assert tasks.complete_task(task_id, result="done", reviewed_by="gemini", db_path=db_path) is True
     row = tasks.list_tasks({"id": task_id}, db_path=db_path)[0]
     assert row["status"] == "completed"
@@ -386,13 +387,13 @@ def test_complete_task_with_reviewed_by(db_path):
 
 def test_fail_task(db_path):
     job_id = tasks.add_job("job", db_path=db_path)
-    task_id = tasks.create_task(job_id, "t", db_path=db_path)
-    assert tasks.fail_task(task_id, reason="timeout", db_path=db_path) is not None
+    task_id = tasks.create_task(job_id, "t", status=TaskStatus.IN_PROGRESS, db_path=db_path)
+    assert tasks.fail_task(task_id, reason="timeout", db_path=db_path) is True
 
 
 def test_submit_for_review(db_path):
     job_id = tasks.add_job("job", db_path=db_path)
-    task_id = tasks.create_task(job_id, "t", status="completed", db_path=db_path)
+    task_id = tasks.create_task(job_id, "t", status=TaskStatus.IN_PROGRESS, db_path=db_path)
     assert tasks.submit_for_review(task_id, result="evidence", db_path=db_path) is True
     row = tasks.list_tasks({"id": task_id}, db_path=db_path)[0]
     assert row["status"] == "pending_review"
@@ -488,17 +489,25 @@ def test_cli_propose(cli_db):
 def test_cli_approve(cli_db):
     job_id = tasks.add_job("job", db_path=str(cli_db))
     task_id = tasks.propose_task(job_id, "t", db_path=str(cli_db))
-    out, code = _run_main(cli_db, "approve", "--id", str(task_id))
+    out, code = _run_main(cli_db, "approve", "--id", str(task_id), "--by", "codex")
     assert code == 0
     assert out == "approved"
+    conn = sqlite3.connect(str(cli_db))
+    row = conn.execute("SELECT status, approved_by FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    conn.close()
+    assert row == (TaskStatus.APPROVED, "codex")
 
 
 def test_cli_reject(cli_db):
     job_id = tasks.add_job("job", db_path=str(cli_db))
     task_id = tasks.propose_task(job_id, "t", db_path=str(cli_db))
-    out, code = _run_main(cli_db, "reject", "--id", str(task_id))
+    out, code = _run_main(cli_db, "reject", "--id", str(task_id), "--by", "claude", "--reason", "bad-plan")
     assert code == 0
     assert out == "rejected"
+    conn = sqlite3.connect(str(cli_db))
+    row = conn.execute("SELECT status, approved_by, notes FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    conn.close()
+    assert row == (TaskStatus.REJECTED, "claude", "bad-plan")
 
 
 def test_cli_list_tasks(cli_db):
@@ -527,17 +536,43 @@ def test_cli_claim_with_task(cli_db):
 def test_cli_update(cli_db):
     job_id = tasks.add_job("job", db_path=str(cli_db))
     task_id = tasks.propose_task(job_id, "t", db_path=str(cli_db))
-    out, code = _run_main(cli_db, "update", "--id", str(task_id), "--status", "in_progress")
+    # proposed → approved é uma transição válida
+    out, code = _run_main(cli_db, "update", "--id", str(task_id), "--status", "approved")
     assert code == 0
     assert out == "updated"
+
+
+def test_cli_update_preserves_approved_by(cli_db):
+    """update subsequente não deve apagar approved_by gravado por approve."""
+    job_id = tasks.add_job("job", db_path=str(cli_db))
+    task_id = tasks.propose_task(job_id, "t", db_path=str(cli_db))
+    # proposed → approved com metadados
+    out, code = _run_main(cli_db, "approve", "--id", str(task_id), "--by", "codex")
+    assert code == 0
+    # approved → in_progress via update sem --by
+    out, code = _run_main(cli_db, "update", "--id", str(task_id), "--status", "in_progress")
+    assert code == 0
+    conn = sqlite3.connect(str(cli_db))
+    row = conn.execute("SELECT approved_by FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    conn.close()
+    assert row[0] == "codex"
+
+
+def test_cli_update_invalid_transition(cli_db):
+    job_id = tasks.add_job("job", db_path=str(cli_db))
+    task_id = tasks.propose_task(job_id, "t", db_path=str(cli_db))
+    # proposed → in_progress é inválido — state machine recusa
+    out, code = _run_main(cli_db, "update", "--id", str(task_id), "--status", "in_progress")
+    assert code == 1
+    assert out == "transition-failed"
 
 
 def test_cli_complete(cli_db):
     job_id = tasks.add_job("job", db_path=str(cli_db))
     task_id = tasks.propose_task(job_id, "t", db_path=str(cli_db))
     out, code = _run_main(cli_db, "complete", "--id", str(task_id))
-    assert code == 0
-    assert out == "completed"
+    assert code == 1
+    assert out == "transition-failed"
 
 
 def test_cli_no_cmd_prints_help(cli_db):
@@ -550,3 +585,86 @@ def test_cli_no_cmd_prints_help(cli_db):
         except SystemExit as exc:
             assert exc.code == 1
     assert "usage" in buf.getvalue().lower()
+
+
+# --- Testes de state machine (can_transition / transition_task) ---
+
+class TestCanTransition:
+    def test_valid_proposed_to_approved(self):
+        assert can_transition(TaskStatus.PROPOSED, TaskStatus.APPROVED)
+
+    def test_valid_proposed_to_rejected(self):
+        assert can_transition(TaskStatus.PROPOSED, TaskStatus.REJECTED)
+
+    def test_valid_approved_to_in_progress(self):
+        assert can_transition(TaskStatus.APPROVED, TaskStatus.IN_PROGRESS)
+
+    def test_valid_pending_to_in_progress(self):
+        assert can_transition(TaskStatus.PENDING, TaskStatus.IN_PROGRESS)
+
+    def test_valid_in_progress_to_pending_review(self):
+        assert can_transition(TaskStatus.IN_PROGRESS, TaskStatus.PENDING_REVIEW)
+
+    def test_valid_in_progress_to_completed(self):
+        assert can_transition(TaskStatus.IN_PROGRESS, TaskStatus.COMPLETED)
+
+    def test_valid_in_progress_to_failed(self):
+        assert can_transition(TaskStatus.IN_PROGRESS, TaskStatus.FAILED)
+
+    def test_valid_in_progress_to_pending_requeue(self):
+        assert can_transition(TaskStatus.IN_PROGRESS, TaskStatus.PENDING)
+
+    def test_valid_pending_review_to_reviewing(self):
+        assert can_transition(TaskStatus.PENDING_REVIEW, TaskStatus.REVIEWING)
+
+    def test_valid_reviewing_to_completed(self):
+        assert can_transition(TaskStatus.REVIEWING, TaskStatus.COMPLETED)
+
+    def test_valid_reviewing_to_failed(self):
+        assert can_transition(TaskStatus.REVIEWING, TaskStatus.FAILED)
+
+    def test_valid_reviewing_to_pending_requeue(self):
+        assert can_transition(TaskStatus.REVIEWING, TaskStatus.PENDING)
+
+    def test_invalid_completed_to_anything(self):
+        assert not can_transition(TaskStatus.COMPLETED, TaskStatus.PENDING)
+        assert not can_transition(TaskStatus.COMPLETED, TaskStatus.IN_PROGRESS)
+
+    def test_invalid_failed_to_anything(self):
+        assert not can_transition(TaskStatus.FAILED, TaskStatus.PENDING)
+
+    def test_invalid_rejected_to_anything(self):
+        assert not can_transition(TaskStatus.REJECTED, TaskStatus.APPROVED)
+
+    def test_invalid_pending_to_completed_directly(self):
+        assert not can_transition(TaskStatus.PENDING, TaskStatus.COMPLETED)
+
+    def test_accepts_raw_strings(self):
+        assert can_transition("proposed", "approved")
+        assert not can_transition("completed", "pending")
+
+    def test_unknown_status_returns_false(self):
+        assert not can_transition("unknown_status", "pending")
+        assert not can_transition("pending", "unknown_status")
+
+
+class TestTransitionTask:
+    def test_valid_transition_succeeds(self, db_path):
+        job_id = tasks.add_job("j", db_path=db_path)
+        task_id = tasks.create_task(job_id, "t", status=TaskStatus.PENDING, db_path=db_path)
+        result = tasks.transition_task(task_id, TaskStatus.IN_PROGRESS, db_path=db_path)
+        assert result is True
+        row = _task_row(task_id, db_path)
+        assert row[0] == TaskStatus.IN_PROGRESS
+
+    def test_invalid_transition_returns_false(self, db_path):
+        job_id = tasks.add_job("j", db_path=db_path)
+        task_id = tasks.create_task(job_id, "t", status=TaskStatus.COMPLETED, db_path=db_path)
+        result = tasks.transition_task(task_id, TaskStatus.PENDING, db_path=db_path)
+        assert result is False
+        row = _task_row(task_id, db_path)
+        assert row[0] == TaskStatus.COMPLETED
+
+    def test_missing_task_returns_false(self, db_path):
+        result = tasks.transition_task(99999, TaskStatus.IN_PROGRESS, db_path=db_path)
+        assert result is False

@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 
 from ..constants import CMD_TASK
-from ..constants import NEEDS_INPUT_MARKER, USER_ROLE
+from ..constants import NEEDS_INPUT_MARKER, USER_ROLE, TaskStatus, TaskType
 from ..runtime import ToolRuntimeConfig, ConsoleApprovalHandler, create_executor
 from ..runtime import PreApprovalHandler
 from ..runtime.executor import ToolExecutor
@@ -144,10 +144,16 @@ class AppTaskServices:
                         return False
 
                     if review_agents:
-                        runtime_tasks.submit_for_review(task_id, result=task_result, db_path=app.tasks_db_path)
+                        ok = runtime_tasks.submit_for_review(task_id, result=task_result, db_path=app.tasks_db_path)
+                        if not ok:
+                            system_layer.show_system_message(f"[task {task_id}] {agent_name}: erro ao submeter para review")
+                            return False
                         system_layer.show_system_message(f"[task {task_id}] {agent_name}: aguardando review de outro agente")
                     else:
-                        runtime_tasks.complete_task(task_id, result=task_result, db_path=app.tasks_db_path)
+                        ok = runtime_tasks.complete_task(task_id, result=task_result, db_path=app.tasks_db_path)
+                        if not ok:
+                            system_layer.show_system_message(f"[task {task_id}] {agent_name}: erro ao concluir task")
+                            return False
                         system_layer.show_system_message(f"[task {task_id}] {agent_name}: concluída")
                     return True
                 except Exception as exc:
@@ -165,8 +171,16 @@ class AppTaskServices:
                     task_id = task_dict["id"]
                     executor = task_dict.get("assigned_to")
                     if executor == agent_name:
-                        runtime_tasks.update_task(task_id, "pending_review", db_path=app.tasks_db_path)
-                        system_layer.show_system_message(f"[task {task_id}] {agent_name}: review rejeitado, aguardando outro agente")
+                        ok = runtime_tasks.transition_task(
+                            task_id, TaskStatus.PENDING_REVIEW,
+                            result=task_dict.get("result"),
+                            notes=task_dict.get("notes"),
+                            db_path=app.tasks_db_path,
+                        )
+                        if ok:
+                            system_layer.show_system_message(f"[task {task_id}] {agent_name}: review rejeitado, aguardando outro agente")
+                        else:
+                            system_layer.show_system_message(f"[task {task_id}] {agent_name}: erro ao rejeitar review — transição inválida")
                         return False
                     if executor:
                         system_layer.show_system_message(f"[task {task_id}] {agent_name}: revisando execução de {executor}")
@@ -205,33 +219,45 @@ class AppTaskServices:
                     system_layer.show_system_message(f"[task {task_id}] {agent_name}:\n{response or ''}")
                     accepted, verdict, review_text = self.classify_task_review_result(response)
                     if not accepted:
-                        runtime_tasks.requeue_task_after_review(
+                        ok = runtime_tasks.requeue_task_after_review(
                             task_id,
                             executor or agent_name,
                             result=task_result,
                             notes=review_text,
                             db_path=app.tasks_db_path,
                         )
-                        system_layer.show_system_message(f"[task {task_id}] {agent_name}: review pediu {verdict.lower()}, task voltou para pending")
+                        if not ok:
+                            system_layer.show_system_message(f"[task {task_id}] {agent_name}: erro ao recolocar task em fila")
+                        else:
+                            system_layer.show_system_message(f"[task {task_id}] {agent_name}: review pediu {verdict.lower()}, task voltou para pending")
                         return False
-                    runtime_tasks.complete_task(
+                    ok = runtime_tasks.complete_task(
                         task_id,
                         result=task_result,
                         reviewed_by=agent_name,
                         db_path=app.tasks_db_path,
                     )
+                    if not ok:
+                        system_layer.show_system_message(f"[task {task_id}] {agent_name}: erro ao concluir task após review")
+                        return False
                     system_layer.show_system_message(f"[task {task_id}] {agent_name}: review concluído")
                     return True
                 except Exception as exc:
                     system_layer.show_system_message(f"[task {task_dict['id']}] {agent_name}: review falhou: {exc}")
                     if has_review_failover(task_dict.get("assigned_to"), agent_name):
-                        runtime_tasks.update_task(
+                        ok = runtime_tasks.transition_task(
                             task_dict["id"],
-                            "pending_review",
+                            TaskStatus.PENDING_REVIEW,
                             result=task_dict.get("result"),
                             notes=str(exc),
                             db_path=app.tasks_db_path,
                         )
+                        if not ok:
+                            runtime_tasks.fail_task(
+                                task_dict["id"],
+                                reason=f"review failed and fallback transition failed: {exc}",
+                                db_path=app.tasks_db_path,
+                            )
                     else:
                         runtime_tasks.fail_task(
                             task_dict["id"],
@@ -311,14 +337,14 @@ class AppTaskServices:
         try:
             job = runtime_tasks.get_job(app.current_job_id, db_path=app.tasks_db_path)
             open_tasks = []
-            for status in ("pending", "in_progress"):
+            for status in (TaskStatus.PENDING, TaskStatus.IN_PROGRESS):
                 open_tasks.extend(
                     runtime_tasks.list_tasks({"job_id": app.current_job_id, "status": status}, db_path=app.tasks_db_path)
                 )
             open_tasks.sort(key=lambda task: task["id"])
             counts = {
-                "pending": sum(1 for task in open_tasks if task["status"] == "pending"),
-                "in_progress": sum(1 for task in open_tasks if task["status"] == "in_progress"),
+                "pending": sum(1 for task in open_tasks if task["status"] == TaskStatus.PENDING),
+                "in_progress": sum(1 for task in open_tasks if task["status"] == TaskStatus.IN_PROGRESS),
             }
             preview = [
                 {

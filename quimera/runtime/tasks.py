@@ -4,7 +4,9 @@ import os
 import sqlite3
 from datetime import datetime, timezone
 
-from .task_planning import TASK_TYPE_GENERAL
+from ..constants import TaskStatus, TaskType, can_transition
+
+_UNSET = object()
 
 
 def get_conn(db_path):
@@ -151,10 +153,10 @@ def create_task(
         job_id,
         description,
         *,
-        task_type=TASK_TYPE_GENERAL,
+        task_type=TaskType.GENERAL,
         assigned_to=None,
         origin="human_command",
-        status="pending",
+        status=TaskStatus.PENDING,
         priority="medium",
         created_by=None,
         requested_by=None,
@@ -184,11 +186,11 @@ def create_task(
 def propose_task(job_id, description, priority="medium", created_by=None, notes=None, source_context=None, db_path=None,
                  auto_approve=False, body=None):
     """Executa propose task."""
-    status = "approved" if auto_approve else "proposed"
+    status = TaskStatus.APPROVED if auto_approve else TaskStatus.PROPOSED
     return create_task(
         job_id,
         description,
-        task_type=TASK_TYPE_GENERAL,
+        task_type=TaskType.GENERAL,
         origin="legacy_tool",
         status=status,
         priority=priority,
@@ -207,11 +209,11 @@ def approve_task(task_id, approved_by, db_path=None):
     now = _now()
     cur.execute("SELECT status FROM tasks WHERE id = ?", (task_id,))
     row = cur.fetchone()
-    if not row or row[0] != "proposed":
+    if not row or row[0] != TaskStatus.PROPOSED:
         conn.close()
         return False
     cur.execute("UPDATE tasks SET status = ?, approved_by = ?, updated_at = ? WHERE id = ?",
-                ("approved", approved_by, now, task_id))
+                (TaskStatus.APPROVED, approved_by, now, task_id))
     conn.commit()
     conn.close()
     return True
@@ -224,11 +226,11 @@ def reject_task(task_id, rejected_by, reason=None, db_path=None):
     now = _now()
     cur.execute("SELECT status FROM tasks WHERE id = ?", (task_id,))
     row = cur.fetchone()
-    if not row or row[0] != "proposed":
+    if not row or row[0] != TaskStatus.PROPOSED:
         conn.close()
         return False
     cur.execute("UPDATE tasks SET status = ?, approved_by = ?, notes = ?, updated_at = ? WHERE id = ?",
-                ("rejected", rejected_by, reason, now, task_id))
+                (TaskStatus.REJECTED, rejected_by, reason, now, task_id))
     conn.commit()
     conn.close()
     return True
@@ -287,9 +289,9 @@ def release_agent_tasks(agent_name, db_path=None):
     conn = get_conn(db_path)
     cur = conn.cursor()
     cur.execute(
-        "UPDATE tasks SET assigned_to = NULL, status = 'pending', updated_at = ? "
-        "WHERE assigned_to = ? AND status IN ('pending', 'in_progress')",
-        (_now(), agent_name),
+        "UPDATE tasks SET assigned_to = NULL, status = ?, updated_at = ? "
+        "WHERE assigned_to = ? AND status IN (?, ?)",
+        (TaskStatus.PENDING, _now(), agent_name, TaskStatus.PENDING, TaskStatus.IN_PROGRESS),
     )
     conn.commit()
     conn.close()
@@ -304,54 +306,76 @@ def requeue_task(task_id, failed_agent, reason=None, db_path=None):
     """Release a task after an execution failure so another agent can claim it."""
     conn = get_conn(db_path)
     cur = conn.cursor()
-    now = _now()
-    cur.execute("SELECT failed_agents, attempt_count FROM tasks WHERE id = ?", (task_id,))
-    row = cur.fetchone()
-    if not row:
+    try:
+        cur.execute("BEGIN IMMEDIATE")
+        now = _now()
+        cur.execute("SELECT status, failed_agents, attempt_count FROM tasks WHERE id = ?", (task_id,))
+        row = cur.fetchone()
+        if not row:
+            conn.rollback()
+            conn.close()
+            return False
+        if not can_transition(row[0], TaskStatus.PENDING):
+            conn.rollback()
+            conn.close()
+            return False
+
+        failed_agents = row[1] or ""
+        token = _failed_agents_token(failed_agent)
+        if token not in failed_agents:
+            failed_agents += token
+        attempt_count = int(row[2] or 0) + 1
+
+        cur.execute(
+            "UPDATE tasks SET status = ?, assigned_to = NULL, result = ?, notes = ?, "
+            "failed_agents = ?, attempt_count = ?, updated_at = ? WHERE id = ?",
+            (TaskStatus.PENDING, reason, reason, failed_agents, attempt_count, now, task_id),
+        )
+        conn.commit()
         conn.close()
-        return False
-
-    failed_agents = row[0] or ""
-    token = _failed_agents_token(failed_agent)
-    if token not in failed_agents:
-        failed_agents += token
-    attempt_count = int(row[1] or 0) + 1
-
-    cur.execute(
-        "UPDATE tasks SET status = ?, assigned_to = NULL, result = ?, notes = ?, "
-        "failed_agents = ?, attempt_count = ?, updated_at = ? WHERE id = ?",
-        ("pending", reason, reason, failed_agents, attempt_count, now, task_id),
-    )
-    conn.commit()
-    conn.close()
-    return True
+        return True
+    except Exception:
+        conn.rollback()
+        conn.close()
+        raise
 
 
 def requeue_task_after_review(task_id, failed_agent, result=None, notes=None, db_path=None):
     """Return a reviewed task to pending and force execution failover to another agent."""
     conn = get_conn(db_path)
     cur = conn.cursor()
-    now = _now()
-    cur.execute("SELECT failed_agents, attempt_count FROM tasks WHERE id = ?", (task_id,))
-    row = cur.fetchone()
-    if not row:
+    try:
+        cur.execute("BEGIN IMMEDIATE")
+        now = _now()
+        cur.execute("SELECT status, failed_agents, attempt_count FROM tasks WHERE id = ?", (task_id,))
+        row = cur.fetchone()
+        if not row:
+            conn.rollback()
+            conn.close()
+            return False
+        if not can_transition(row[0], TaskStatus.PENDING):
+            conn.rollback()
+            conn.close()
+            return False
+
+        failed_agents = row[1] or ""
+        token = _failed_agents_token(failed_agent)
+        if token not in failed_agents:
+            failed_agents += token
+        attempt_count = int(row[2] or 0) + 1
+
+        cur.execute(
+            "UPDATE tasks SET status = ?, assigned_to = NULL, result = ?, notes = ?, "
+            "reviewed_by = NULL, failed_agents = ?, attempt_count = ?, updated_at = ? WHERE id = ?",
+            (TaskStatus.PENDING, result, notes, failed_agents, attempt_count, now, task_id),
+        )
+        conn.commit()
         conn.close()
-        return False
-
-    failed_agents = row[0] or ""
-    token = _failed_agents_token(failed_agent)
-    if token not in failed_agents:
-        failed_agents += token
-    attempt_count = int(row[1] or 0) + 1
-
-    cur.execute(
-        "UPDATE tasks SET status = ?, assigned_to = NULL, result = ?, notes = ?, "
-        "reviewed_by = NULL, failed_agents = ?, attempt_count = ?, updated_at = ? WHERE id = ?",
-        ("pending", result, notes, failed_agents, attempt_count, now, task_id),
-    )
-    conn.commit()
-    conn.close()
-    return True
+        return True
+    except Exception:
+        conn.rollback()
+        conn.close()
+        raise
 
 
 def can_reassign_task(task_id, candidate_agents, db_path=None):
@@ -388,13 +412,13 @@ def claim_task(agent_name, job_id=None, db_path=None):
             params.insert(1, job_id)
         cur.execute(f"""
             SELECT id FROM tasks
-            WHERE status IN ('pending', 'approved')
+            WHERE status IN (?, ?)
               AND (assigned_to = ? OR assigned_to IS NULL)
               {job_filter}
               AND COALESCE(failed_agents, '') NOT LIKE ?
             ORDER BY id ASC
             LIMIT 1
-        """, params)
+        """, (TaskStatus.PENDING, TaskStatus.APPROVED, *params))
         row = cur.fetchone()
         if not row:
             conn.rollback()
@@ -402,7 +426,7 @@ def claim_task(agent_name, job_id=None, db_path=None):
             return None
         task_id = row[0]
         cur.execute("UPDATE tasks SET assigned_to = ?, status = ?, updated_at = ? WHERE id = ?",
-                    (agent_name, "in_progress", _now(), task_id))
+                    (agent_name, TaskStatus.IN_PROGRESS, _now(), task_id))
         conn.commit()
         conn.close()
         return task_id
@@ -420,46 +444,71 @@ def update_task(task_id, status, result=None, notes=None, db_path=None):
     cur.execute("UPDATE tasks SET status = ?, result = ?, notes = ?, updated_at = ? WHERE id = ?",
                 (status, result, notes, now, task_id))
     conn.commit()
+    affected = cur.rowcount
     conn.close()
-    return True
+    return affected > 0
 
 
 def complete_task(task_id, result=None, reviewed_by=None, db_path=None):
-    """Conclui task."""
+    """Conclui task, validando a transição para COMPLETED atomicamente."""
     conn = get_conn(db_path)
     cur = conn.cursor()
-    now = _now()
-    if reviewed_by:
-        cur.execute(
-            "UPDATE tasks SET status = ?, result = ?, reviewed_by = ?, notes = ?, updated_at = ? WHERE id = ?",
-            ("completed", result, reviewed_by, None, now, task_id),
-        )
-    else:
-        cur.execute(
-            "UPDATE tasks SET status = ?, result = ?, notes = ?, updated_at = ? WHERE id = ?",
-            ("completed", result, None, now, task_id),
-        )
-    conn.commit()
-    conn.close()
-    return True
+    try:
+        cur.execute("BEGIN IMMEDIATE")
+        cur.execute("SELECT status FROM tasks WHERE id = ?", (task_id,))
+        row = cur.fetchone()
+        if not row or not can_transition(row[0], TaskStatus.COMPLETED):
+            conn.rollback()
+            conn.close()
+            return False
+        now = _now()
+        if reviewed_by:
+            cur.execute(
+                "UPDATE tasks SET status = ?, result = ?, reviewed_by = ?, notes = ?, updated_at = ? WHERE id = ?",
+                (TaskStatus.COMPLETED, result, reviewed_by, None, now, task_id),
+            )
+        else:
+            cur.execute(
+                "UPDATE tasks SET status = ?, result = ?, notes = ?, updated_at = ? WHERE id = ?",
+                (TaskStatus.COMPLETED, result, None, now, task_id),
+            )
+        conn.commit()
+        conn.close()
+        return True
+    except Exception:
+        conn.rollback()
+        conn.close()
+        raise
 
 
 def fail_task(task_id, reason=None, db_path=None):
-    """Marca como falha task."""
-    return update_task(task_id, "failed", result=reason, notes=reason, db_path=db_path)
+    """Marca como falha task, validando a transição para FAILED via state machine."""
+    return transition_task(task_id, TaskStatus.FAILED, result=reason, notes=reason, db_path=db_path)
 
 
 def submit_for_review(task_id, result=None, db_path=None):
-    """Mark a completed task as pending review by another agent."""
+    """Submete task para review, validando a transição para PENDING_REVIEW atomicamente."""
     conn = get_conn(db_path)
     cur = conn.cursor()
-    cur.execute(
-        "UPDATE tasks SET status = ?, result = ?, notes = ?, reviewed_by = NULL, updated_at = ? WHERE id = ?",
-        ("pending_review", result, None, _now(), task_id),
-    )
-    conn.commit()
-    conn.close()
-    return True
+    try:
+        cur.execute("BEGIN IMMEDIATE")
+        cur.execute("SELECT status FROM tasks WHERE id = ?", (task_id,))
+        row = cur.fetchone()
+        if not row or not can_transition(row[0], TaskStatus.PENDING_REVIEW):
+            conn.rollback()
+            conn.close()
+            return False
+        cur.execute(
+            "UPDATE tasks SET status = ?, result = ?, notes = ?, reviewed_by = NULL, updated_at = ? WHERE id = ?",
+            (TaskStatus.PENDING_REVIEW, result, None, _now(), task_id),
+        )
+        conn.commit()
+        conn.close()
+        return True
+    except Exception:
+        conn.rollback()
+        conn.close()
+        raise
 
 
 def claim_review_task(agent_name, job_id=None, db_path=None):
@@ -474,13 +523,13 @@ def claim_review_task(agent_name, job_id=None, db_path=None):
             params.append(job_id)
         cur.execute(f"""
             SELECT id FROM tasks
-            WHERE status = 'pending_review'
+            WHERE status = ?
               AND (assigned_to IS NULL OR assigned_to != ?)
               AND (reviewed_by IS NULL OR reviewed_by != ?)
               {job_filter}
             ORDER BY id ASC
             LIMIT 1
-        """, params)
+        """, (TaskStatus.PENDING_REVIEW, *params))
         row = cur.fetchone()
         if not row:
             conn.rollback()
@@ -489,11 +538,53 @@ def claim_review_task(agent_name, job_id=None, db_path=None):
         task_id = row[0]
         cur.execute(
             "UPDATE tasks SET status = ?, reviewed_by = ?, updated_at = ? WHERE id = ?",
-            ("reviewing", agent_name, _now(), task_id),
+            (TaskStatus.REVIEWING, agent_name, _now(), task_id),
         )
         conn.commit()
         conn.close()
         return task_id
+    except Exception:
+        conn.rollback()
+        conn.close()
+        raise
+
+
+def transition_task(task_id, to_status, result=_UNSET, notes=_UNSET, approved_by=_UNSET, db_path=None):
+    """Transiciona uma task para to_status validando a transição via can_transition().
+
+    Retorna True em sucesso, False se a task não existir ou a transição for inválida.
+    A operação é atômica: leitura e escrita ocorrem na mesma conexão.
+    Colunas não fornecidas (sentinela _UNSET) são preservadas — não são sobrescritas.
+    """
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    try:
+        cur.execute("BEGIN IMMEDIATE")
+        cur.execute("SELECT status FROM tasks WHERE id = ?", (task_id,))
+        row = cur.fetchone()
+        if not row:
+            conn.rollback()
+            conn.close()
+            return False
+        if not can_transition(row[0], to_status):
+            conn.rollback()
+            conn.close()
+            return False
+        fields = {"status": to_status, "updated_at": _now()}
+        if result is not _UNSET:
+            fields["result"] = result
+        if notes is not _UNSET:
+            fields["notes"] = notes
+        if approved_by is not _UNSET:
+            fields["approved_by"] = approved_by
+        set_clause = ", ".join(f"{k} = ?" for k in fields)
+        cur.execute(
+            f"UPDATE tasks SET {set_clause} WHERE id = ?",
+            (*fields.values(), task_id),
+        )
+        conn.commit()
+        conn.close()
+        return True
     except Exception:
         conn.rollback()
         conn.close()
@@ -511,6 +602,7 @@ __all__ = [
     "create_task", "propose_task", "approve_task", "reject_task", "list_tasks",
     "claim_task", "release_agent_tasks", "update_task", "complete_task", "fail_task", "get_job",
     "submit_for_review", "claim_review_task", "requeue_task_after_review",
+    "transition_task",
 ]
 
 if __name__ == "__main__":
@@ -580,13 +672,17 @@ if __name__ == "__main__":
         print(f"task:{tid}")
         exit(0)
     elif ns.cmd == "approve":
-        approve_task(ns.task_id, ns.by, db_path=ns.db if hasattr(ns, "db") else None)
-        print("approved")
-        exit(0)
+        ok = transition_task(ns.task_id, TaskStatus.APPROVED,
+                             approved_by=ns.by,
+                             db_path=ns.db if hasattr(ns, "db") else None)
+        print("approved" if ok else "transition-failed")
+        exit(0 if ok else 1)
     elif ns.cmd == "reject":
-        reject_task(ns.task_id, ns.by, reason=ns.reason, db_path=ns.db if hasattr(ns, "db") else None)
-        print("rejected")
-        exit(0)
+        ok = transition_task(ns.task_id, TaskStatus.REJECTED,
+                             approved_by=ns.by, notes=ns.reason,
+                             db_path=ns.db if hasattr(ns, "db") else None)
+        print("rejected" if ok else "transition-failed")
+        exit(0 if ok else 1)
     elif ns.cmd == "list-tasks":
         for t in list_tasks({"job_id": ns.job_id, "status": ns.status}, db_path=ns.db if hasattr(ns, "db") else None):
             print(t)
@@ -599,14 +695,15 @@ if __name__ == "__main__":
             print("no-tasks-available")
         exit(0)
     elif ns.cmd == "update":
-        update_task(ns.task_id, ns.status, result=ns.result, notes=ns.notes,
-                    db_path=ns.db if hasattr(ns, "db") else None)
-        print("updated")
-        exit(0)
+        ok = transition_task(ns.task_id, ns.status, result=ns.result, notes=ns.notes,
+                             db_path=ns.db if hasattr(ns, "db") else None)
+        print("updated" if ok else "transition-failed")
+        exit(0 if ok else 1)
     elif ns.cmd == "complete":
-        complete_task(ns.task_id, result=ns.result, db_path=ns.db if hasattr(ns, "db") else None)
-        print("completed")
-        exit(0)
+        ok = transition_task(ns.task_id, TaskStatus.COMPLETED, result=ns.result,
+                             db_path=ns.db if hasattr(ns, "db") else None)
+        print("completed" if ok else "transition-failed")
+        exit(0 if ok else 1)
     else:
         parser.print_help()
         exit(1)
