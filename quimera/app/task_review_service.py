@@ -51,6 +51,7 @@ class TaskReviewService:
         failover_policy: _FailoverPolicyProto,
         classify_task_review_result: Callable[[str | None], tuple[bool, str, str]],
         was_user_cancelled: Callable[[], bool],
+        event_sink: object | None = None,
     ) -> None:
         self._reviewer = TaskReviewer(
             dispatch_services=dispatch_services,
@@ -59,6 +60,7 @@ class TaskReviewService:
             failover_policy=failover_policy,
             classify_task_review_result=classify_task_review_result,
             was_user_cancelled=was_user_cancelled,
+            event_sink=event_sink,
         )
 
     def handler_for(self, agent_name: str) -> Callable[[TaskRecord], bool]:

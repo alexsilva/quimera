@@ -109,7 +109,7 @@ def _build_tool_system_prompt(
         "Use apenas ferramentas listadas e disponíveis nesta requisição. ",
         "Quando decidir usar uma ferramenta, use o mecanismo de tool calling da API compatível ou o fallback textual já suportado; ",
         "não invente envelopes JSON para chamadas de ferramenta; use o mecanismo de tool calling da API ou fallback textual; ",
-        "envelopes JSON são aceitos apenas para o protocolo de comunicação entre agentes ([ROUTE], handoff). ",
+        "envelopes JSON são aceitos apenas para o protocolo de comunicação entre agentes ([ROUTE], handoff); escreva-os diretamente no texto, sem cerca de código. ",
         "Não escreva chamadas de ferramenta como texto visível ao usuário; ",
         "use exatamente os nomes de argumentos definidos nos schemas das ferramentas; ",
         "se uma ferramenta retornar erro, ajuste a próxima chamada com base no erro e não repita o mesmo payload inválido; ",

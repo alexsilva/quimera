@@ -2,6 +2,12 @@ import sqlite3
 
 import pytest
 
+from quimera.app.event_sink import EventSink
+from quimera.app.task_events import (
+    TaskProposed, TaskStarted, TaskSubmittedForReview,
+    TaskReviewStarted, TaskCompleted, TaskRequeued,
+    TaskApproved, TaskRejected, TaskFailed,
+)
 from quimera.app.task_repository import TaskRepository
 from quimera.constants import TaskStatus
 from quimera.runtime import tasks as runtime_tasks
@@ -12,6 +18,14 @@ from quimera.runtime.models import JobRecord, TaskRecord
 def repository(tmp_path):
     db_path = tmp_path / "task_repository.db"
     return TaskRepository(str(db_path))
+
+
+@pytest.fixture
+def sink_repository(tmp_path):
+    db_path = tmp_path / "task_repository_sink.db"
+    sink = EventSink()
+    repo = TaskRepository(str(db_path), event_sink=sink)
+    return repo, sink
 
 
 def _task_row(task_id, db_path):
@@ -191,3 +205,193 @@ def test_can_reassign_task_returns_true_on_sqlite_error(repository, monkeypatch)
 
     assert repository.can_reassign_task(1, ["codex"]) is True
     assert conn.closed is True
+
+
+# ── EventSink integration ──────────────────────────────────────────────────
+
+
+def test_no_event_sink_works_normally(repository):
+    """Repositório sem event_sink não lança exceção."""
+    job_id = runtime_tasks.add_job("job sem sink", db_path=repository.db_path)
+    task_id = repository.create_task(job_id, "tarefa sem sink")
+    assert task_id is not None
+
+
+def test_publish_swallows_sink_exception(tmp_path):
+    """_publish não propaga exceção quando o sink lança."""
+    class BoomSink:
+        def publish(self, _event):
+            raise RuntimeError("sink explodiu")
+
+    db_path = str(tmp_path / "boom.db")
+    repo = TaskRepository(db_path, event_sink=BoomSink())
+    job_id = runtime_tasks.add_job("job boom", db_path=db_path)
+    # deve concluir sem levantar RuntimeError
+    task_id = repo.create_task(job_id, "tarefa boom")
+    assert task_id is not None
+
+
+def test_create_task_publishes_task_proposed(sink_repository):
+    repo, sink = sink_repository
+    received = []
+    sink.subscribe(TaskProposed, received.append)
+
+    job_id = runtime_tasks.add_job("job proposed", db_path=repo.db_path)
+    task_id = repo.create_task(job_id, "minha tarefa", requested_by="human")
+
+    assert len(received) == 1
+    ev = received[0]
+    assert isinstance(ev, TaskProposed)
+    assert ev.task_id == task_id
+    assert ev.job_id == job_id
+    assert ev.description == "minha tarefa"
+    assert ev.requested_by == "human"
+
+
+def test_claim_task_publishes_task_started(sink_repository):
+    repo, sink = sink_repository
+    received = []
+    sink.subscribe(TaskStarted, received.append)
+
+    job_id = runtime_tasks.add_job("job started", db_path=repo.db_path)
+    task_id = repo.create_task(job_id, "executar", status=TaskStatus.PENDING)
+
+    claimed = repo.claim_task("codex", job_id=job_id)
+
+    assert claimed == task_id
+    assert len(received) == 1
+    ev = received[0]
+    assert isinstance(ev, TaskStarted)
+    assert ev.task_id == task_id
+    assert ev.assigned_to == "codex"
+
+
+def test_submit_for_review_publishes_event(sink_repository):
+    repo, sink = sink_repository
+    received = []
+    sink.subscribe(TaskSubmittedForReview, received.append)
+
+    job_id = runtime_tasks.add_job("job submit review", db_path=repo.db_path)
+    task_id = repo.create_task(job_id, "submeter", status=TaskStatus.IN_PROGRESS)
+    repo.submit_for_review(task_id, result="resultado")
+
+    assert len(received) == 1
+    ev = received[0]
+    assert isinstance(ev, TaskSubmittedForReview)
+    assert ev.task_id == task_id
+    assert ev.result == "resultado"
+
+
+def test_claim_review_task_publishes_event(sink_repository):
+    repo, sink = sink_repository
+    received = []
+    sink.subscribe(TaskReviewStarted, received.append)
+
+    job_id = runtime_tasks.add_job("job review started", db_path=repo.db_path)
+    task_id = repo.create_task(job_id, "revisar", status=TaskStatus.IN_PROGRESS, assigned_to="codex")
+    repo.submit_for_review(task_id)
+
+    claimed = repo.claim_review_task("gemini", job_id=job_id)
+
+    assert claimed == task_id
+    assert len(received) == 1
+    ev = received[0]
+    assert isinstance(ev, TaskReviewStarted)
+    assert ev.task_id == task_id
+    assert ev.reviewed_by == "gemini"
+
+
+def test_complete_task_publishes_event(sink_repository):
+    repo, sink = sink_repository
+    received = []
+    sink.subscribe(TaskCompleted, received.append)
+
+    job_id = runtime_tasks.add_job("job complete", db_path=repo.db_path)
+    task_id = repo.create_task(job_id, "completar", status=TaskStatus.IN_PROGRESS)
+    repo.complete_task(task_id, result="pronto", reviewed_by="gemini")
+
+    assert len(received) == 1
+    ev = received[0]
+    assert isinstance(ev, TaskCompleted)
+    assert ev.task_id == task_id
+    assert ev.result == "pronto"
+    assert ev.reviewed_by == "gemini"
+
+
+def test_requeue_task_publishes_event(sink_repository):
+    repo, sink = sink_repository
+    received = []
+    sink.subscribe(TaskRequeued, received.append)
+
+    job_id = runtime_tasks.add_job("job requeue sink", db_path=repo.db_path)
+    task_id = repo.create_task(job_id, "retentar", status=TaskStatus.IN_PROGRESS)
+    repo.requeue_task(task_id, "codex", reason="timeout")
+
+    assert len(received) == 1
+    ev = received[0]
+    assert isinstance(ev, TaskRequeued)
+    assert ev.task_id == task_id
+    assert ev.failed_agent == "codex"
+    assert ev.reason == "timeout"
+    assert ev.attempt == 1
+
+
+def test_requeue_task_after_review_publishes_event(sink_repository):
+    repo, sink = sink_repository
+    received = []
+    sink.subscribe(TaskRequeued, received.append)
+
+    job_id = runtime_tasks.add_job("job requeue review sink", db_path=repo.db_path)
+    task_id = repo.create_task(job_id, "retentar review", status=TaskStatus.REVIEWING)
+    repo.requeue_task_after_review(task_id, "gemini", notes="falhou na revisão")
+
+    assert len(received) == 1
+    ev = received[0]
+    assert isinstance(ev, TaskRequeued)
+    assert ev.failed_agent == "gemini"
+
+
+def test_transition_task_publishes_approved(sink_repository):
+    repo, sink = sink_repository
+    received = []
+    sink.subscribe(TaskApproved, received.append)
+
+    job_id = runtime_tasks.add_job("job approved", db_path=repo.db_path)
+    task_id = repo.create_task(job_id, "aprovar", status=TaskStatus.PROPOSED)
+    repo.transition_task(task_id, TaskStatus.APPROVED, approved_by="gemini")
+
+    assert len(received) == 1
+    ev = received[0]
+    assert isinstance(ev, TaskApproved)
+    assert ev.task_id == task_id
+    assert ev.approved_by == "gemini"
+
+
+def test_transition_task_publishes_rejected(sink_repository):
+    repo, sink = sink_repository
+    received = []
+    sink.subscribe(TaskRejected, received.append)
+
+    job_id = runtime_tasks.add_job("job rejected", db_path=repo.db_path)
+    task_id = repo.create_task(job_id, "rejeitar", status=TaskStatus.PROPOSED)
+    repo.transition_task(task_id, TaskStatus.REJECTED, result="fora do escopo")
+
+    assert len(received) == 1
+    ev = received[0]
+    assert isinstance(ev, TaskRejected)
+    assert ev.reason == "fora do escopo"
+
+
+def test_transition_task_publishes_failed(sink_repository):
+    repo, sink = sink_repository
+    received = []
+    sink.subscribe(TaskFailed, received.append)
+
+    job_id = runtime_tasks.add_job("job failed", db_path=repo.db_path)
+    task_id = repo.create_task(job_id, "falhar", status=TaskStatus.IN_PROGRESS)
+    repo.transition_task(task_id, TaskStatus.FAILED, result="erro crítico")
+
+    assert len(received) == 1
+    ev = received[0]
+    assert isinstance(ev, TaskFailed)
+    assert ev.reason == "erro crítico"

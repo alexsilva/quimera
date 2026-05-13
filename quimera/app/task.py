@@ -265,7 +265,8 @@ class AppTaskServices:
         db_path = getattr(self.app, "tasks_db_path", None)
         if not db_path:
             raise ValueError("tasks_db_path is required to access task repository")
-        return TaskRepository(db_path)
+        event_sink = getattr(self.app, "event_sink", None)
+        return TaskRepository(db_path, event_sink=event_sink)
 
     def _was_user_cancelled(self) -> bool:
         agent_client = getattr(self.app, "agent_client", None)
@@ -301,6 +302,7 @@ class AppTaskServices:
             failover_policy=failover_policy,
             classify_task_review_result=classify_task_review_result,
             was_user_cancelled=self._was_user_cancelled,
+            event_sink=getattr(app, "event_sink", None),
         )
 
     def _build_task_router(self) -> TaskRouter:

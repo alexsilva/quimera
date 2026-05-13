@@ -24,6 +24,15 @@ from .task import AppTaskServices, create_executor
 from .task_classifiers import classify_task_execution_result, parse_task_command
 from .system_layer import AppSystemLayer
 from .turn import TurnManager
+from .event_sink import EventSink
+from .task_events import (
+    TaskStarted,
+    TaskCompleted,
+    TaskFailed,
+    TaskProposed,
+    TaskSubmittedForReview,
+    TaskRequeued,
+)
 from .. import plugins
 from ..plugins.base import PluginRegistry, extract_model_from_cli_cmd
 from ..runtime.parser import strip_tool_block
@@ -79,6 +88,8 @@ class QuimeraApp:
         self.config = ConfigManager(self.workspace.config_file)
         _active_theme = theme if theme is not None else self.config.theme
         self.renderer = TerminalRenderer(theme=_active_theme, get_plugin_style=self._resolve_plugin_style, density=self.config.density)
+        self.event_sink = EventSink()
+        self._wire_event_ui()
         self.user_name = self.config.user_name
         self.visibility = Visibility(visibility)
         self.system_layer = AppSystemLayer(self)
@@ -381,6 +392,38 @@ class QuimeraApp:
             path_text = f"~{path_text[len(home_dir):]}"
         path_text = self._shorten_middle(path_text, self._SESSION_LOG_DISPLAY_MAX_CHARS)
         return MSG_SESSION_LOG.format(path_text)
+
+    def _wire_event_ui(self) -> None:
+        """Conecta eventos de domínio à renderização UI."""
+        renderer = self.renderer
+
+        def _on_task_started(event):
+            renderer.show_system_neutral(f"[task {event.task_id}] {event.assigned_to}: iniciando")
+
+        def _on_task_completed(event):
+            status = "(reviewed)" if event.reviewed_by else ""
+            renderer.show_system_neutral(f"[task {event.task_id}] concluída {status}")
+
+        def _on_task_failed(event):
+            renderer.show_warning(f"[task {event.task_id}] falhou: {event.reason or 'sem motivo'}")
+
+        def _on_task_proposed(event):
+            renderer.show_system(f"[task {event.task_id}] proposta: {event.description[:60]}")
+
+        def _on_task_submitted(event):
+            renderer.show_system_neutral(f"[task {event.task_id}] submetida para revisão")
+
+        def _on_task_requeued(event):
+            renderer.show_warning(f"[task {event.task_id}] requeue (tentativa {event.attempt})")
+
+        self._ui_subscriptions = [
+            self.event_sink.subscribe(TaskStarted, _on_task_started),
+            self.event_sink.subscribe(TaskCompleted, _on_task_completed),
+            self.event_sink.subscribe(TaskFailed, _on_task_failed),
+            self.event_sink.subscribe(TaskProposed, _on_task_proposed),
+            self.event_sink.subscribe(TaskSubmittedForReview, _on_task_submitted),
+            self.event_sink.subscribe(TaskRequeued, _on_task_requeued),
+        ]
 
     def _setup_task_executors(self):
         """Set up task executors for explicit human-created task execution."""

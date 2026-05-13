@@ -7,6 +7,7 @@ from typing import Protocol
 
 from ..constants import TaskStatus
 from ..runtime.models import TaskRecord
+from ..app.task_events import TaskReviewReassigned
 
 
 class _DispatchServicesProto(Protocol):
@@ -62,6 +63,11 @@ class _FailoverPolicyProto(Protocol):
         ...
 
 
+class _EventSinkProto(Protocol):
+    def publish(self, event: object) -> None:
+        ...
+
+
 class TaskReviewer:
     """Revisa uma task concluída por outro agente, gerencia transições e saída."""
 
@@ -73,6 +79,7 @@ class TaskReviewer:
         failover_policy: _FailoverPolicyProto,
         classify_task_review_result: Callable[[str | None], tuple[bool, str, str]],
         was_user_cancelled: Callable[[], bool],
+        event_sink: _EventSinkProto | None = None,
     ) -> None:
         self.dispatch_services = dispatch_services
         self.system_layer = system_layer
@@ -80,6 +87,7 @@ class TaskReviewer:
         self.failover_policy = failover_policy
         self.classify_task_review_result = classify_task_review_result
         self.was_user_cancelled = was_user_cancelled
+        self.event_sink = event_sink
 
     def review(self, task: TaskRecord, agent_name: str) -> bool:
         """Revisa a task com o agente informado. Retorna True se aprovada."""
@@ -97,6 +105,15 @@ class TaskReviewer:
                     self.system_layer.show_muted_message(
                         f"[task {task_id}] {agent_name}: review rejeitado, aguardando outro agente"
                     )
+                    if self.event_sink is not None:
+                        try:
+                            self.event_sink.publish(TaskReviewReassigned(
+                                task_id=task_id, job_id=task.job_id,
+                                reason="self-review rejected",
+                                previous_reviewer=agent_name,
+                            ))
+                        except Exception:
+                            pass
                 else:
                     self.system_layer.show_muted_message(
                         f"[task {task_id}] {agent_name}: erro ao rejeitar review \u2014 transi\u00e7\u00e3o inv\u00e1lida"
@@ -188,6 +205,16 @@ class TaskReviewer:
                         task_id,
                         reason=f"review failed and fallback transition failed: {exc}",
                     )
+                else:
+                    if self.event_sink is not None:
+                        try:
+                            self.event_sink.publish(TaskReviewReassigned(
+                                task_id=task_id, job_id=task.job_id,
+                                reason=f"review exception with fallback: {exc}",
+                                previous_reviewer=agent_name,
+                            ))
+                        except Exception:
+                            pass
             else:
                 self.repository.fail_task(
                     task_id,
