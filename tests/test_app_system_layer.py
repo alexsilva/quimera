@@ -415,6 +415,25 @@ def test_handle_command_connect_applies_base_plugin_and_updates_active_lists():
     set_override.assert_called_once()
 
 
+def test_handle_command_connect_passes_injected_registry_to_set_override():
+    app = make_app()
+    app._plugin_registry = object()
+    layer = AppSystemLayer(app)
+    plugin = make_plugin(name="target")
+    app.get_agent_plugin = Mock(return_value=plugin)
+
+    with patch.object(
+        layer,
+        "_configure_connection_interactively",
+        return_value=(CliConnection(cmd=["target"]), None),
+    ), patch("quimera.app.system_layer.set_connection_override") as set_override:
+        handled = layer.handle_command("/connect target")
+
+    assert handled is True
+    set_override.assert_called_once()
+    assert set_override.call_args.kwargs["registry"] is app._plugin_registry
+
+
 def test_handle_command_reload_and_reset_state_paths():
     app = make_app()
     layer = AppSystemLayer(app)
@@ -427,6 +446,28 @@ def test_handle_command_reload_and_reset_state_paths():
 
     assert layer.handle_command(CMD_RESET_STATE) is True
     app.reset_shared_state.assert_called_once()
+
+
+def test_handle_command_reload_passes_injected_registry():
+    app = make_app()
+    app._plugin_registry = object()
+    layer = AppSystemLayer(app)
+
+    with patch("quimera.app.system_layer.reload_plugins", return_value=["a"]) as reload_mock:
+        assert layer.handle_command(CMD_RELOAD) is True
+
+    reload_mock.assert_called_once_with(registry=app._plugin_registry)
+
+
+def test_handle_command_disconnect_passes_injected_registry():
+    app = make_app()
+    app._plugin_registry = object()
+    layer = AppSystemLayer(app)
+
+    with patch("quimera.app.system_layer.remove_connection", return_value=True) as remove_mock:
+        assert layer.handle_command("/disconnect target") is True
+
+    remove_mock.assert_called_once_with("target", registry=app._plugin_registry)
 
 
 def test_handle_command_approve_all_and_approve_available_and_unavailable():

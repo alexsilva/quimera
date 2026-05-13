@@ -22,7 +22,7 @@ from ..constants import TaskStatus
 from ..runtime import ConsoleApprovalHandler, PreApprovalHandler, create_executor
 from ..runtime import ToolRuntimeConfig
 from ..runtime.executor import ToolExecutor
-from ..runtime.task_planning import classify_task_type
+from ..runtime.task_planning import classify_task
 from .task_classifiers import (
     classify_task_execution_result,
     classify_task_review_result,
@@ -37,6 +37,7 @@ from .task_router import TaskRouter
 from .task_utils import (
     build_completed_task_results,
 )
+from .config import logger
 
 
 class AppTaskServices:
@@ -224,7 +225,15 @@ class AppTaskServices:
             app.renderer.show_warning("Uso: /task <descrição>")
             return
 
-        task_type = classify_task_type(description)
+        task_classifier = getattr(app, "task_classifier", None)
+        if task_classifier is not None and not hasattr(task_classifier, "classify"):
+            logger.warning(
+                "task_classifier inválido (%s): fallback para classificador padrão",
+                type(task_classifier).__name__,
+            )
+            task_classifier = None
+        classification = classify_task(description, classifier=task_classifier)
+        task_type = classification.task_type
         selected_agent = self.choose_agent_with_load_balance(task_type)
         repo = self._build_task_repository()
         task_id = repo.create_task(

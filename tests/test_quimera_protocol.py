@@ -26,7 +26,7 @@ from quimera.app.protocol import AppProtocol, ProtocolEnvelope
 from quimera.app.session_metrics import SessionMetricsService
 from quimera.cli import main as cli_main
 from quimera.config import DEFAULT_HISTORY_WINDOW
-from quimera.constants import CMD_AGENTS, CMD_CLEAR, CMD_CONNECT, CMD_DISCONNECT, CMD_HELP, CMD_PROMPT, EXTEND_MARKER, MSG_SHUTDOWN, TaskStatus, Visibility, build_agents_help, build_help
+from quimera.constants import CMD_AGENTS, CMD_CLEAR, CMD_CONNECT, CMD_DISCONNECT, CMD_HELP, CMD_PROMPT, EXTEND_MARKER, MSG_SHUTDOWN, TaskStatus, TaskType, Visibility, build_agents_help, build_help
 from quimera.plugins import AgentPlugin
 from quimera.plugins.base import PluginRegistry
 from quimera.runtime.models import TaskRecord
@@ -37,6 +37,7 @@ from quimera.prompt_templates import prompt_template
 from quimera.runtime.approval import ApprovalHandler
 from quimera.runtime.config import ToolRuntimeConfig
 from quimera.runtime.executor import ToolExecutor
+from quimera.runtime.task_planning import TaskClassification
 from quimera.runtime.tasks import add_job, complete_task, create_task, init_db, list_tasks
 from quimera.session_summary import SessionSummarizer, build_chain_summarizer
 from quimera.ui import _agent_style
@@ -817,7 +818,7 @@ class ProtocolTests(unittest.TestCase):
             handled = app.system_layer.handle_command("/disconnect chatgpt")
 
         self.assertTrue(handled)
-        remove_conn.assert_called_once_with("chatgpt")
+        remove_conn.assert_called_once_with("chatgpt", registry=None)
         self.assertIn("Conexão removida para chatgpt.", app.renderer.system_messages)
 
     def test_handle_command_disconnect_warns_when_not_found(self):
@@ -829,7 +830,7 @@ class ProtocolTests(unittest.TestCase):
             handled = app.system_layer.handle_command("/disconnect chatgpt")
 
         self.assertTrue(handled)
-        remove_conn.assert_called_once_with("chatgpt")
+        remove_conn.assert_called_once_with("chatgpt", registry=None)
         self.assertEqual(
             app.renderer.warnings,
             ["Nenhuma conexão persistida encontrada para chatgpt."],
@@ -934,6 +935,67 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(len(tasks), 1)
         self.assertEqual(tasks[0]["assigned_to"], "ollama-granite4")
         self.assertIn("atribuída para ollama-granite4", app.renderer.system_messages[-1])
+
+    def test_handle_task_command_uses_injected_task_classifier(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.renderer = DummyRenderer()
+        app._output_lock = threading.Lock()
+        app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
+        app.user_name = "Alex"
+        app.shared_state = {}
+        app.current_job_id = 1
+        tmp_dir = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        db_path = tmp_dir / "tasks.db"
+        init_db(str(db_path))
+        add_job("Session", db_path=str(db_path), job_id=1)
+        app.tasks_db_path = str(db_path)
+
+        class CustomClassifier:
+            def classify(self, _description: str) -> TaskClassification:
+                return TaskClassification(
+                    task_type=TaskType.DOCUMENTATION,
+                    complexity="low",
+                    requires_tools=False,
+                    requires_code_editing=False,
+                    risk_level="low",
+                )
+
+        app.task_classifier = CustomClassifier()
+        app.task_services = AppTaskServices(app)
+        app.system_layer = AppSystemLayer(app)
+
+        handled = app.system_layer.handle_command('/task "corrija o bug"')
+
+        self.assertTrue(handled)
+        tasks = list_tasks({"job_id": 1}, db_path=str(db_path))
+        self.assertEqual(len(tasks), 1)
+        self.assertEqual(tasks[0]["task_type"], TaskType.DOCUMENTATION)
+
+    def test_handle_task_command_warns_and_falls_back_for_invalid_task_classifier(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.renderer = DummyRenderer()
+        app._output_lock = threading.Lock()
+        app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
+        app.user_name = "Alex"
+        app.shared_state = {}
+        app.current_job_id = 1
+        tmp_dir = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        db_path = tmp_dir / "tasks.db"
+        init_db(str(db_path))
+        add_job("Session", db_path=str(db_path), job_id=1)
+        app.tasks_db_path = str(db_path)
+        app.task_classifier = object()
+        app.task_services = AppTaskServices(app)
+        app.system_layer = AppSystemLayer(app)
+
+        with patch("quimera.app.task.logger.warning") as warning:
+            handled = app.system_layer.handle_command('/task "execute os testes"')
+
+        self.assertTrue(handled)
+        warning.assert_called_once()
+        tasks = list_tasks({"job_id": 1}, db_path=str(db_path))
+        self.assertEqual(len(tasks), 1)
+        self.assertEqual(tasks[0]["task_type"], TaskType.TEST_EXECUTION)
 
     def test_classify_task_execution_result_rejects_needs_input(self):
         ok, reason = QuimeraApp.classify_task_execution_result(

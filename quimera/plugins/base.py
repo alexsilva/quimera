@@ -131,31 +131,39 @@ def connection_to_dict(connection: Connection) -> dict:
     return data
 
 
-def apply_connection_overrides() -> None:
+def _resolve_registry(registry=None):
+    """Retorna o registry explicitamente fornecido ou o global do módulo."""
+    return registry if registry is not None else _registry
+
+
+def apply_connection_overrides(registry=None) -> None:
     """Aplica conexões persistidas aos plugins registrados."""
+    target_registry = _resolve_registry(registry)
     overrides = get_connection_overrides()
     for name, conn_data in overrides.items():
-        if _registry.get(name) is None:
+        if target_registry.get(name) is None:
             try:
-                register_dynamic_plugin(name, metadata=conn_data.get("plugin"))
+                register_dynamic_plugin(name, metadata=conn_data.get("plugin"), registry=target_registry)
             except ValueError:
                 continue
-        plugin = _registry.get(name)
+        plugin = target_registry.get(name)
         if plugin is None:
             continue
         conn = _connection_from_dict(conn_data)
         object.__setattr__(plugin, "_connection_override", conn)
 
 
-def reload_plugins() -> list:
+def reload_plugins(registry=None) -> list:
     """Recarrega plugins e retorna nomes disponibles."""
-    apply_connection_overrides()
-    return all_names()
+    target_registry = _resolve_registry(registry)
+    apply_connection_overrides(registry=target_registry)
+    return target_registry.all_names()
 
 
-def set_connection_override(agent_name: str, connection: Connection, persist: bool = True) -> None:
+def set_connection_override(agent_name: str, connection: Connection, persist: bool = True, registry=None) -> None:
     """Aplica um override de conexão em memória e opcionalmente persiste."""
-    plugin = _registry.get(agent_name)
+    target_registry = _resolve_registry(registry)
+    plugin = target_registry.get(agent_name)
     if plugin is not None:
         object.__setattr__(plugin, "_connection_override", connection)
     if persist:
@@ -190,7 +198,7 @@ def set_connection_override(agent_name: str, connection: Connection, persist: bo
         save_connections(connections)
 
 
-def remove_connection(agent_name: str) -> bool:
+def remove_connection(agent_name: str, registry=None) -> bool:
     """Remove a conexão persistida de um agente.
 
     Args:
@@ -205,7 +213,7 @@ def remove_connection(agent_name: str) -> bool:
     del connections[agent_name]
     save_connections(connections)
     # Remove o override em memória se o plugin estiver registrado
-    plugin = _registry.get(agent_name)
+    plugin = _resolve_registry(registry).get(agent_name)
     if plugin is not None:
         object.__setattr__(plugin, "_connection_override", None)
     return True
@@ -407,8 +415,14 @@ def _dynamic_plugin_metadata(name: str) -> dict:
     }
 
 
-def register_dynamic_plugin(name: str, connection: Connection | None = None, metadata: dict | None = None) -> AgentPlugin:
+def register_dynamic_plugin(
+    name: str,
+    connection: Connection | None = None,
+    metadata: dict | None = None,
+    registry: PluginRegistry | None = None,
+) -> AgentPlugin:
     """Cria ou atualiza um plugin dinâmico e o registra no registry."""
+    target_registry = _resolve_registry(registry)
     normalized = (name or "").strip().lower()
     if not is_valid_agent_name(normalized):
         raise ValueError(f"Nome de agente inválido: {name}")
@@ -420,7 +434,7 @@ def register_dynamic_plugin(name: str, connection: Connection | None = None, met
     # Inherit non-serializable fields (spy formatter) from a named base plugin
     base_name = plugin_data.pop("base", None)
     if base_name:
-        base = _registry.get(base_name)
+        base = target_registry.get(base_name)
         if base is not None:
             plugin_data.setdefault("spy_stdout_formatter", base.spy_stdout_formatter)
             plugin_data.setdefault("has_builtin_tools", base.has_builtin_tools)
@@ -436,7 +450,7 @@ def register_dynamic_plugin(name: str, connection: Connection | None = None, met
 
     if connection is not None:
         object.__setattr__(plugin, "_connection_override", connection)
-    _registry.register(plugin)
+    target_registry.register(plugin)
     return plugin
 
 

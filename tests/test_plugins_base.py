@@ -413,6 +413,67 @@ def test_reload_plugins_returns_names(tmp_path):
     assert isinstance(names, list)
 
 
+def test_apply_connection_overrides_uses_explicit_registry(tmp_path):
+    f = tmp_path / "conn.json"
+    conn_data = {
+        "type": "openai",
+        "model": "gpt-4",
+        "base_url": "http://x",
+        "api_key_env": "K",
+        "provider": "openai",
+        "supports_native_tools": True,
+        "extra_body": None,
+        "plugin": {"dynamic": True},
+    }
+    f.write_text(json.dumps({"scoped_agent_zz99": conn_data}), encoding="utf-8")
+    scoped_registry = PluginRegistry()
+
+    with patch("quimera.plugins.base._get_connections_file", return_value=f):
+        apply_connection_overrides(registry=scoped_registry)
+
+    plugin = scoped_registry.get("scoped_agent_zz99")
+    assert plugin is not None
+    assert plugin._connection_override is not None
+
+
+def test_set_connection_override_uses_explicit_registry_without_persist():
+    scoped_registry = PluginRegistry()
+    plugin = _make_plugin(name="scoped-agent")
+    scoped_registry.register(plugin)
+    conn = OpenAIConnection(model="gpt-4")
+
+    set_connection_override("scoped-agent", conn, persist=False, registry=scoped_registry)
+
+    assert plugin._connection_override == conn
+
+
+def test_reload_plugins_uses_explicit_registry(tmp_path):
+    f = tmp_path / "conn.json"
+    f.write_text(json.dumps({}), encoding="utf-8")
+    scoped_registry = PluginRegistry()
+    scoped_registry.register(_make_plugin(name="only-local"))
+
+    with patch("quimera.plugins.base._get_connections_file", return_value=f):
+        names = reload_plugins(registry=scoped_registry)
+
+    assert names == ["only-local"]
+
+
+def test_remove_connection_uses_explicit_registry(tmp_path):
+    f = tmp_path / "conn.json"
+    f.write_text(json.dumps({"scoped-agent": {"model": "gpt-4"}}), encoding="utf-8")
+    scoped_registry = PluginRegistry()
+    plugin = _make_plugin(name="scoped-agent")
+    object.__setattr__(plugin, "_connection_override", OpenAIConnection(model="gpt-4"))
+    scoped_registry.register(plugin)
+
+    with patch("quimera.plugins.base._get_connections_file", return_value=f):
+        removed = remove_connection("scoped-agent", registry=scoped_registry)
+
+    assert removed is True
+    assert plugin._connection_override is None
+
+
 # ---------------------------------------------------------------------------
 # is_valid_agent_name
 # ---------------------------------------------------------------------------
@@ -563,7 +624,7 @@ def test_apply_connection_overrides_plugin_none_after_register(tmp_path):
     original_get = __import__("quimera.plugins.base", fromlist=["_registry"])
     call_count = [0]
 
-    def patched_register(name, metadata=None):
+    def patched_register(name, metadata=None, registry=None):
         # Register succeeds but we simulate the next _registry.get returning None
         pass  # Don't actually register — so plugin stays None
 

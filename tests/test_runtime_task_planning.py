@@ -3,6 +3,8 @@ import pytest
 from quimera.plugins.base import AgentPlugin
 from quimera.constants import TaskType
 from quimera.runtime.task_planning import (
+    TaskClassification,
+    classify_task,
     classify_task_type,
     score_plugin_for_task,
     choose_best_agent,
@@ -46,6 +48,52 @@ def test_classify_task_type():
     assert classify_task_type("something random") == TaskType.GENERAL
     assert classify_task_type("corrija o bug") == TaskType.CODE_EDIT
     assert classify_task_type("execute os testes") == TaskType.TEST_EXECUTION
+
+
+def test_classify_task_type_with_realistic_descriptions():
+    assert classify_task_type("Execute os testes de integração e reporte o traceback do task runner") == TaskType.TEST_EXECUTION
+    assert classify_task_type("Revise o módulo quimera/app/task.py e aponte regressões") == TaskType.CODE_REVIEW
+    assert classify_task_type("Implemente retry para falha transitória no executor de tasks") == TaskType.CODE_EDIT
+    assert classify_task_type("Investigue por que o roteador escolhe agente errado com carga alta") == TaskType.BUG_INVESTIGATION
+    assert classify_task_type("Documente o comando /task no README") == TaskType.DOCUMENTATION
+
+
+def test_classify_task_returns_richer_dimensions():
+    classification = classify_task("Investigue por que o /task falha em produção, rode pytest e traga traceback.")
+
+    assert classification == TaskClassification(
+        task_type=TaskType.BUG_INVESTIGATION,
+        complexity="high",
+        requires_tools=True,
+        requires_code_editing=False,
+        risk_level="high",
+    )
+
+
+def test_classify_task_allows_pluggable_classifier():
+    class CustomClassifier:
+        def classify(self, _description: str) -> TaskClassification:
+            return TaskClassification(
+                task_type=TaskType.CODE_REVIEW,
+                complexity="low",
+                requires_tools=False,
+                requires_code_editing=False,
+                risk_level="low",
+            )
+
+    classification = classify_task("qualquer descrição", classifier=CustomClassifier())
+
+    assert classification.task_type == TaskType.CODE_REVIEW
+    assert classify_task_type("qualquer descrição", classifier=CustomClassifier()) == TaskType.CODE_REVIEW
+
+
+def test_classify_task_rejects_invalid_classifier_return_type():
+    class InvalidClassifier:
+        def classify(self, _description: str):
+            return {"task_type": TaskType.CODE_EDIT}
+
+    with pytest.raises(TypeError, match="task classifier must return TaskClassification"):
+        classify_task("qualquer descrição", classifier=InvalidClassifier())
 
 
 def test_score_plugin_for_task():

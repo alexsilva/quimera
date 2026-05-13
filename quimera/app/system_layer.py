@@ -364,9 +364,10 @@ class AppSystemLayer:
             if target is None:
                 self.app.renderer.show_warning("Uso: /connect <agente>")
                 return True
+            plugin_registry = getattr(self.app, "_plugin_registry", None)
             plugin = self.app.get_agent_plugin(target)
             if plugin is None:
-                plugin = register_dynamic_plugin(target)
+                plugin = register_dynamic_plugin(target, registry=plugin_registry)
                 self.show_system_message(f"Agente registrado dinamicamente: {target}")
             self.show_system_message(f"Configurando conexão para {target}")
             self.show_system_message(f"Atual: {format_connection_label(plugin.effective_connection())}")
@@ -383,7 +384,7 @@ class AppSystemLayer:
                         plugin.spy_stdout_formatter = base_plugin.spy_stdout_formatter
                     if base_plugin.runtime_rw_paths:
                         plugin.runtime_rw_paths = list(base_plugin.runtime_rw_paths)
-            set_connection_override(target, connection, persist=True)
+            set_connection_override(target, connection, persist=True, registry=plugin_registry)
             active_agents = list(getattr(self.app, "active_agents", None) or [])
             selected_agents = list(getattr(self.app, "selected_agents", None) or [])
             if target not in active_agents:
@@ -398,7 +399,8 @@ class AppSystemLayer:
             if not target:
                 self.app.renderer.show_warning("Uso: /disconnect <agente>")
                 return True
-            if remove_connection(target):
+            plugin_registry = getattr(self.app, "_plugin_registry", None)
+            if remove_connection(target, registry=plugin_registry):
                 self.app.renderer.show_system(f"Conexão removida para {target}.")
             else:
                 self.app.renderer.show_warning(f"Nenhuma conexão persistida encontrada para {target}.")
@@ -409,7 +411,7 @@ class AppSystemLayer:
             return True
 
         if command == CMD_RELOAD:
-            names = reload_plugins()
+            names = reload_plugins(registry=getattr(self.app, "_plugin_registry", None))
             self.app.active_agents = names
             self.app.selected_agents = names
             self.app.renderer.show_system(f"Plugins recarregados: {len(names)} agentes disponíveis")
