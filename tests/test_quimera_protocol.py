@@ -5482,7 +5482,7 @@ class AppProtocolDirectTests(unittest.TestCase):
         self.assertIsNone(result)
 
     def test_parse_response_text_before_json_envelope_fallsback_to_regex(self):
-        """Texto antes de envelope JSON faz parse_envelope retornar None → fallback regex."""
+        """Texto antes de envelope JSON — parser encontra envelope embutido."""
         text = (
             'Aqui está minha análise\n'
             '{"type": "handoff", "content": "task: refactor", "route": "codex"}'
@@ -5492,13 +5492,13 @@ class AppProtocolDirectTests(unittest.TestCase):
         response, route_target, handoff, extend, needs_input, ack_id = (
             proto.parse_response(text)
         )
-        self.assertIsNone(route_target)
-        self.assertIsNone(handoff)
+        self.assertEqual(route_target, "codex")
+        self.assertIsNotNone(handoff)
+        self.assertEqual(handoff["task"], "task: refactor")
+        self.assertEqual(response, "Aqui está minha análise")
         self.assertIsNone(ack_id)
         self.assertFalse(extend)
         self.assertFalse(needs_input)
-        self.assertIsNotNone(response)
-        self.assertIn("Aqui está", response)
 
     def test_parse_response_partial_json_before_fallsback(self):
         """Texto que começa com { mas não é JSON válido cai para fallback regex."""
@@ -5514,6 +5514,117 @@ class AppProtocolDirectTests(unittest.TestCase):
         self.assertEqual(route_target, "gemini")
         self.assertIsNotNone(handoff)
         self.assertEqual(handoff["task"], "analyze this")
+
+    # --- Embedded envelope tests ---
+
+    def test_parse_response_embedded_envelope_text_before_and_after(self):
+        """Envelope JSON embutido com texto antes e depois."""
+        text = (
+            'Análise inicial\n'
+            '{"type": "handoff", "content": "task: revise", "route": "gemini"}\n'
+            'Observação final'
+        )
+        app = self._make_app()
+        proto = AppProtocol(app)
+        response, route_target, handoff, _, _, _ = proto.parse_response(text)
+        self.assertEqual(route_target, "gemini")
+        self.assertEqual(handoff["task"], "task: revise")
+        self.assertIn("Análise inicial", response)
+        self.assertIn("Observação final", response)
+        self.assertNotIn("task: revise", response)
+
+    def test_parse_response_embedded_envelope_text_after_only(self):
+        """Envelope JSON com texto apenas depois."""
+        text = (
+            '{"type": "handoff", "content": "task: check", "route": "codex"}\n'
+            'Resultado da análise'
+        )
+        app = self._make_app()
+        proto = AppProtocol(app)
+        response, route_target, handoff, _, _, _ = proto.parse_response(text)
+        self.assertEqual(route_target, "codex")
+        self.assertEqual(handoff["task"], "task: check")
+        self.assertEqual(response, "Resultado da análise")
+
+    def test_parse_response_embedded_envelope_empty_content_rejected(self):
+        """Envelope embutido com content vazio — rejeitado, sem route/handoff."""
+        text = (
+            'texto antes\n'
+            '{"type": "handoff", "content": "", "route": "codex"}'
+        )
+        app = self._make_app()
+        proto = AppProtocol(app)
+        response, route_target, handoff, _, _, _ = proto.parse_response(text)
+        self.assertIsNone(route_target)
+        self.assertIsNone(handoff)
+        self.assertEqual(response, "texto antes")
+
+    def test_parse_response_embedded_envelope_whitespace_content_rejected(self):
+        """Envelope embutido com content só whitespace — rejeitado."""
+        text = (
+            'texto antes\n'
+            '{"type": "handoff", "content": "   ", "route": "codex"}'
+        )
+        app = self._make_app()
+        proto = AppProtocol(app)
+        response, route_target, handoff, _, _, _ = proto.parse_response(text)
+        self.assertIsNone(route_target)
+        self.assertIsNone(handoff)
+        self.assertEqual(response, "texto antes")
+
+    def test_parse_response_embedded_envelope_state_update(self):
+        """Envelope embutido do tipo state_update aplica estado."""
+        import threading
+        text = (
+            'relatório\n'
+            '{"type": "state_update", "content": "", "state_updates": {"mode": "embedded"}}'
+        )
+        app = self._make_app()
+        app._lock = threading.Lock()
+        proto = AppProtocol(app)
+        response, _, _, _, _, _ = proto.parse_response(text)
+        self.assertEqual(app.shared_state.get("mode"), "embedded")
+        self.assertEqual(response, "relatório")
+
+    def test_parse_response_embedded_envelope_ack(self):
+        """Envelope embutido do tipo ack extrai ack_id."""
+        text = (
+            'processando\n'
+            '{"type": "ack", "content": "done", "handoff_id": "xyz789"}'
+        )
+        app = self._make_app()
+        proto = AppProtocol(app)
+        response, _, _, _, _, ack_id = proto.parse_response(text)
+        self.assertEqual(ack_id, "xyz789")
+        self.assertEqual(response, "processando")
+
+    def test_find_envelope_in_text_no_envelope(self):
+        """_find_envelope_in_text retorna None quando não há envelope."""
+        result = AppProtocol._find_envelope_in_text("texto normal sem json")
+        self.assertIsNone(result)
+
+    def test_find_envelope_in_text_only_envelope(self):
+        """_find_envelope_in_text encontra envelope mesmo sem texto ao redor."""
+        result = AppProtocol._find_envelope_in_text(
+            '{"type": "handoff", "content": "task", "route": "codex"}'
+        )
+        self.assertIsNotNone(result)
+        env, before, after = result
+        self.assertEqual(env.route, "codex")
+        self.assertEqual(before, "")
+        self.assertEqual(after, "")
+
+    def test_find_envelope_in_text_nested_braces(self):
+        """_find_envelope_in_text lida com chaves aninhadas no JSON."""
+        text = (
+            'texto\n'
+            '{"type": "handoff", "content": "nested {braces}", "route": "gemini"}\n'
+            'fim'
+        )
+        result = AppProtocol._find_envelope_in_text(text)
+        self.assertIsNotNone(result)
+        env, before, after = result
+        self.assertEqual(env.route, "gemini")
 
     # --- Gap 2: envelope com content vazio ---
 

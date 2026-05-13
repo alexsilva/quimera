@@ -106,6 +106,28 @@ class AppProtocol:
         return hashlib.sha256(raw.encode()).hexdigest()[:12]
 
     @staticmethod
+    def _find_envelope_in_text(text):
+        """Procura envelope JSON embutido em texto com conteúdo ao redor.
+        Retorna (ProtocolEnvelope, before_text, after_text) ou None."""
+        brace_depth = 0
+        start = -1
+        for i, ch in enumerate(text):
+            if ch == '{':
+                if brace_depth == 0:
+                    start = i
+                brace_depth += 1
+            elif ch == '}':
+                brace_depth -= 1
+                if brace_depth == 0 and start >= 0:
+                    candidate = text[start:i+1]
+                    envelope = AppProtocol.parse_envelope(candidate)
+                    if envelope is not None:
+                        before = text[:start]
+                        after = text[i+1:]
+                        return envelope, before, after
+        return None
+
+    @staticmethod
     def parse_envelope(text):
         """Tenta parsear como JSON envelope primeiro; retorna None se não for JSON válido."""
         text = text.strip()
@@ -183,13 +205,13 @@ class AppProtocol:
         app = self.app
         route_target, handoff, ack_id = None, None, None
 
-        # Tenta envelope JSON primeiro
-        envelope = self.parse_envelope(response)
-        if envelope is not None:
+        embedded = self._find_envelope_in_text(response)
+        if embedded is not None:
+            envelope, before_text, after_text = embedded
             if envelope.type == "handoff" and envelope.route:
                 if not envelope.content or not envelope.content.strip():
                     logger.warning(
-                        "[HANDOFF] Rejected handoff envelope with empty content (route=%s)",
+                        "[HANDOFF] Rejected embedded handoff envelope with empty content (route=%s)",
                         envelope.route,
                     )
                 else:
@@ -201,51 +223,55 @@ class AppProtocol:
                 self.apply_state_update(json.dumps(envelope.state_updates))
             if envelope.type == "ack" and envelope.handoff_id:
                 ack_id = envelope.handoff_id
-            response = envelope.content
+            parts = [p.strip() for p in [before_text, after_text] if p.strip()]
+            if parts:
+                response = "\n".join(parts)
+            else:
+                response = envelope.content
         else:
-            # Fallback: fluxo regex completo
-            if STATE_UPDATE_START in response:
-                for state_match in self.STATE_UPDATE_PATTERN.finditer(response):
-                    self.apply_state_update(state_match.group(1))
-                response = self.STATE_UPDATE_PATTERN.sub("", response).strip()
+                # Fallback: fluxo regex completo
+                if STATE_UPDATE_START in response:
+                    for state_match in self.STATE_UPDATE_PATTERN.finditer(response):
+                        self.apply_state_update(state_match.group(1))
+                    response = self.STATE_UPDATE_PATTERN.sub("", response).strip()
 
-            ack_match = self.ACK_PATTERN.search(response)
-            if ack_match:
-                ack_id = ack_match.group(1)
-                response = self.ACK_PATTERN.sub("", response, count=1).strip()
-                logger.info("[ACK] received ack_id=%s", ack_id)
+                ack_match = self.ACK_PATTERN.search(response)
+                if ack_match:
+                    ack_id = ack_match.group(1)
+                    response = self.ACK_PATTERN.sub("", response, count=1).strip()
+                    logger.info("[ACK] received ack_id=%s", ack_id)
 
-            if ROUTE_PREFIX in response:
-                match = self.ROUTE_PATTERN.search(response)
-                if match:
-                    raw_payload = match.group(2).strip()
-                    route_target = match.group(1)
-                    parsed_handoff = self.parse_handoff_payload(raw_payload, target=route_target)
-                    logger.info("[ROUTE] match=%s, target=%s", match.group(0)[:100], route_target)
-                    if parsed_handoff:
-                        handoff = parsed_handoff
-                        if hasattr(app, "session_state") and app.session_state:
-                            try:
-                                app.session_state["handoffs_received"] += 1
-                            except KeyError:
-                                pass
-                    else:
-                        logger.warning(
-                            "[ROUTE] handoff parse failed for target=%s, payload: %r",
-                            route_target,
-                            raw_payload,
-                        )
-                        if hasattr(app, "session_state") and app.session_state:
-                            try:
-                                app.session_state["handoff_invalid_count"] = app.session_state.get(
-                                    "handoff_invalid_count", 0
-                                ) + 1
-                            except KeyError:
-                                pass
-                        if hasattr(app, "behavior_metrics") and app.behavior_metrics:
-                            app.behavior_metrics.record_handoff_sent(route_target, is_invalid=True)
-                        route_target = None
-                    response = self.ROUTE_PATTERN.sub("", response, count=1).strip() or None
+                if ROUTE_PREFIX in response:
+                    match = self.ROUTE_PATTERN.search(response)
+                    if match:
+                        raw_payload = match.group(2).strip()
+                        route_target = match.group(1)
+                        parsed_handoff = self.parse_handoff_payload(raw_payload, target=route_target)
+                        logger.info("[ROUTE] match=%s, target=%s", match.group(0)[:100], route_target)
+                        if parsed_handoff:
+                            handoff = parsed_handoff
+                            if hasattr(app, "session_state") and app.session_state:
+                                try:
+                                    app.session_state["handoffs_received"] += 1
+                                except KeyError:
+                                    pass
+                        else:
+                            logger.warning(
+                                "[ROUTE] handoff parse failed for target=%s, payload: %r",
+                                route_target,
+                                raw_payload,
+                            )
+                            if hasattr(app, "session_state") and app.session_state:
+                                try:
+                                    app.session_state["handoff_invalid_count"] = app.session_state.get(
+                                        "handoff_invalid_count", 0
+                                    ) + 1
+                                except KeyError:
+                                    pass
+                            if hasattr(app, "behavior_metrics") and app.behavior_metrics:
+                                app.behavior_metrics.record_handoff_sent(route_target, is_invalid=True)
+                            route_target = None
+                        response = self.ROUTE_PATTERN.sub("", response, count=1).strip() or None
 
         # Handoff sem texto visível (ex: apenas [ROUTE:codex] task: ...) ainda
         # é uma intenção válida do agente — retorna com response=None mas
