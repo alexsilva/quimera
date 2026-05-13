@@ -78,6 +78,32 @@ class AppSystemLayer:
                 and ": review concluído" not in message
         )
 
+    def _is_prompt_active(self) -> bool:
+        """Retorna se há um prompt interativo ativo no momento."""
+        return getattr(self.app, "_nonblocking_input_status", None) == "reading"
+
+    def _is_prompt_owner_thread(self) -> bool:
+        """Retorna se a thread atual é a dona do prompt interativo."""
+        current_thread_id = getattr(self.app, "_prompt_owning_thread_id", None)
+        return current_thread_id is not None and current_thread_id == threading.get_ident()
+
+    def _is_foreign_prompt_thread(self) -> bool:
+        """Retorna se outra thread é a dona do prompt interativo."""
+        current_thread_id = getattr(self.app, "_prompt_owning_thread_id", None)
+        return current_thread_id is not None and current_thread_id != threading.get_ident()
+
+    def _enqueue_deferred_message(self, message: str, level: str = "system") -> bool:
+        """Enfileira mensagem diferida preservando o tipo visual."""
+        deferred_list = getattr(self.app, "_deferred_system_messages", None)
+        if deferred_list is None:
+            return False
+        max_deferred = getattr(self.app, "_MAX_DEFERRED_SYSTEM_MESSAGES", 100)
+        if len(deferred_list) >= max_deferred:
+            overflow = len(deferred_list) - max_deferred + 1
+            del deferred_list[:overflow]
+        deferred_list.append((level, message))
+        return True
+
     def flush_deferred_messages(self) -> None:
         """Exibe mensagens de sistema adiadas quando o prompt deixa de estar ativo."""
         deferred = getattr(self.app, "_deferred_system_messages", None)
@@ -89,8 +115,19 @@ class AppSystemLayer:
             return
         output_lock = getattr(self.app, "_output_lock", nullcontext())
         with output_lock:
-            for message in deferred:
-                renderer.show_system(message)
+            for item in deferred:
+                if isinstance(item, tuple) and len(item) == 2:
+                    level, message = item
+                else:
+                    level, message = "system", item
+                if level == "neutral" and hasattr(renderer, "show_system_neutral"):
+                    renderer.show_system_neutral(message)
+                elif level == "warning" and hasattr(renderer, "show_warning"):
+                    renderer.show_warning(message)
+                elif level == "error" and hasattr(renderer, "show_error"):
+                    renderer.show_error(message)
+                else:
+                    renderer.show_system(message)
             flush = getattr(renderer, "flush", None)
             if callable(flush):
                 flush()
@@ -104,16 +141,11 @@ class AppSystemLayer:
         if self._should_suppress_active_prompt_message(message):
             return
         if self._should_defer_active_prompt_message(message):
-            deferred_list = getattr(self.app, "_deferred_system_messages", None)
-            if deferred_list is None:
+            if self._enqueue_deferred_message(message, level="system"):
                 return
-            max_deferred = getattr(self.app, "_MAX_DEFERRED_SYSTEM_MESSAGES", 100)
-            if len(deferred_list) >= max_deferred:
-                # Descarta as mais antigas para não crescer sem limite
-                overflow = len(deferred_list) - max_deferred + 1
-                del deferred_list[:overflow]
-            deferred_list.append(message)
-            return
+        if self._is_prompt_active() and self._is_foreign_prompt_thread():
+            if self._enqueue_deferred_message(message, level="system"):
+                return
         output_lock = getattr(self.app, "_output_lock", nullcontext())
         with output_lock:
             # Clear prompt line only if we're the thread that owns the prompt
@@ -138,6 +170,9 @@ class AppSystemLayer:
         renderer = getattr(self.app, "renderer", None)
         if renderer is None:
             return
+        if self._is_prompt_active() and self._is_foreign_prompt_thread():
+            if self._enqueue_deferred_message(message, level="neutral"):
+                return
         output_lock = getattr(self.app, "_output_lock", nullcontext())
         with output_lock:
             current_thread_id = getattr(self.app, '_prompt_owning_thread_id', None)
@@ -151,6 +186,56 @@ class AppSystemLayer:
             show_system_neutral = getattr(renderer, "show_system_neutral", None)
             if callable(show_system_neutral):
                 show_system_neutral(message)
+            else:
+                renderer.show_system(message)
+            flush = getattr(renderer, "flush", None)
+            if callable(flush):
+                flush()
+            if is_owning:
+                self.app._redisplay_user_prompt_if_needed(clear_first=False)
+
+    def show_warning_message(self, message: str) -> None:
+        """Exibe warning de forma compatível com prompt ativo e background threads."""
+        renderer = getattr(self.app, "renderer", None)
+        if renderer is None:
+            return
+        if self._is_prompt_active() and self._is_foreign_prompt_thread():
+            if self._enqueue_deferred_message(message, level="warning"):
+                return
+        output_lock = getattr(self.app, "_output_lock", nullcontext())
+        with output_lock:
+            current_thread_id = getattr(self.app, '_prompt_owning_thread_id', None)
+            is_owning = current_thread_id is not None and current_thread_id == threading.get_ident()
+            if is_owning:
+                self.app._clear_user_prompt_line_if_needed()
+            show_warning = getattr(renderer, "show_warning", None)
+            if callable(show_warning):
+                show_warning(message)
+            else:
+                renderer.show_system(message)
+            flush = getattr(renderer, "flush", None)
+            if callable(flush):
+                flush()
+            if is_owning:
+                self.app._redisplay_user_prompt_if_needed(clear_first=False)
+
+    def show_error_message(self, message: str) -> None:
+        """Exibe error de forma compatível com prompt ativo e background threads."""
+        renderer = getattr(self.app, "renderer", None)
+        if renderer is None:
+            return
+        if self._is_prompt_active() and self._is_foreign_prompt_thread():
+            if self._enqueue_deferred_message(message, level="error"):
+                return
+        output_lock = getattr(self.app, "_output_lock", nullcontext())
+        with output_lock:
+            current_thread_id = getattr(self.app, '_prompt_owning_thread_id', None)
+            is_owning = current_thread_id is not None and current_thread_id == threading.get_ident()
+            if is_owning:
+                self.app._clear_user_prompt_line_if_needed()
+            show_error = getattr(renderer, "show_error", None)
+            if callable(show_error):
+                show_error(message)
             else:
                 renderer.show_system(message)
             flush = getattr(renderer, "flush", None)

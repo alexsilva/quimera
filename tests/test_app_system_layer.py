@@ -23,6 +23,7 @@ class DummyRenderer:
     def __init__(self):
         self.system_messages = []
         self.warning_messages = []
+        self.error_messages = []
         self.neutral_messages = []
         self.flush_calls = 0
 
@@ -31,6 +32,9 @@ class DummyRenderer:
 
     def show_warning(self, message):
         self.warning_messages.append(message)
+
+    def show_error(self, message):
+        self.error_messages.append(message)
 
     def show_system_neutral(self, message):
         self.neutral_messages.append(message)
@@ -55,6 +59,7 @@ def make_app(renderer=None):
         renderer=renderer,
         _output_lock=threading.Lock(),
         _nonblocking_input_status=None,
+        _prompt_owning_thread_id=None,
         _deferred_system_messages=[],
         _MAX_DEFERRED_SYSTEM_MESSAGES=2,
         active_agents=[],
@@ -94,11 +99,14 @@ def test_flush_deferred_messages_clears_when_renderer_missing():
 
 def test_flush_deferred_messages_shows_and_flushes():
     app = make_app()
-    app._deferred_system_messages = ["a", "b"]
+    app._deferred_system_messages = [("system", "a"), ("neutral", "b"), ("warning", "c"), ("error", "d")]
 
     AppSystemLayer(app).flush_deferred_messages()
 
-    assert app.renderer.system_messages == ["a", "b"]
+    assert app.renderer.system_messages == ["a"]
+    assert app.renderer.neutral_messages == ["b"]
+    assert app.renderer.warning_messages == ["c"]
+    assert app.renderer.error_messages == ["d"]
     assert app.renderer.flush_calls == 1
     assert app._deferred_system_messages == []
 
@@ -122,11 +130,14 @@ def test_show_system_message_defer_overflow_drops_oldest():
     app = make_app()
     app._nonblocking_input_status = "reading"
     app._MAX_DEFERRED_SYSTEM_MESSAGES = 2
-    app._deferred_system_messages = ["old-1", "old-2"]
+    app._deferred_system_messages = [("system", "old-1"), ("system", "old-2")]
 
     AppSystemLayer(app).show_system_message("[task 1] codex: novo resultado sem newline")
 
-    assert app._deferred_system_messages == ["old-2", "[task 1] codex: novo resultado sem newline"]
+    assert app._deferred_system_messages == [
+        ("system", "old-2"),
+        ("system", "[task 1] codex: novo resultado sem newline"),
+    ]
 
 
 def test_show_system_message_standard_path_flushes_and_redraws():
@@ -155,6 +166,42 @@ def test_show_muted_message_prefers_neutral_and_flushes():
     assert app.renderer.neutral_messages == ["neutro"]
     assert app.renderer.system_messages == []
     assert app.renderer.flush_calls == 1
+
+
+def test_show_muted_message_defers_from_background_thread_while_prompt_active():
+    app = make_app()
+    app._nonblocking_input_status = "reading"
+    app._prompt_owning_thread_id = object()
+
+    AppSystemLayer(app).show_muted_message("neutro")
+
+    assert app._deferred_system_messages == [("neutral", "neutro")]
+    assert app.renderer.neutral_messages == []
+    assert app.renderer.flush_calls == 0
+
+
+def test_show_warning_message_defers_from_background_thread_while_prompt_active():
+    app = make_app()
+    app._nonblocking_input_status = "reading"
+    app._prompt_owning_thread_id = object()
+
+    AppSystemLayer(app).show_warning_message("atenção")
+
+    assert app._deferred_system_messages == [("warning", "atenção")]
+    assert app.renderer.warning_messages == []
+    assert app.renderer.flush_calls == 0
+
+
+def test_show_error_message_defers_from_background_thread_while_prompt_active():
+    app = make_app()
+    app._nonblocking_input_status = "reading"
+    app._prompt_owning_thread_id = object()
+
+    AppSystemLayer(app).show_error_message("erro")
+
+    assert app._deferred_system_messages == [("error", "erro")]
+    assert app.renderer.error_messages == []
+    assert app.renderer.flush_calls == 0
 
 
 def test_show_task_response_uses_strip_and_emits_only_non_empty():

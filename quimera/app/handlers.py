@@ -32,6 +32,23 @@ class PromptAwareStderrHandler(logging.StreamHandler):
         ):
             return
 
+        formatter = self.formatter or logging.Formatter("%(message)s")
+        message = formatter.format(record)
+        if record.levelno >= logging.ERROR:
+            show_error_message = getattr(app, "show_error_message", None)
+            if callable(show_error_message):
+                show_error_message(message)
+                return
+        if record.levelno >= logging.WARNING:
+            show_warning_message = getattr(app, "show_warning_message", None)
+            if callable(show_warning_message):
+                show_warning_message(message)
+                return
+        show_system_message = getattr(app, "show_system_message", None)
+        if callable(show_system_message):
+            show_system_message(message)
+            return
+
         stdin_is_tty = sys.stdin is not None and sys.stdin.isatty()
         if stdin_is_tty and self.stream is sys.stderr:
             self.stream = sys.stdout

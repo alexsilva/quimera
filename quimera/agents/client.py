@@ -45,9 +45,10 @@ class AgentClient:
     _MAX_LOG_QUEUE_ITEMS = 512
 
     def __init__(self, renderer, metrics_file=None, timeout=None, visibility=Visibility.SUMMARY,
-                 working_dir=None, workspace_root=None, tool_executor=None):
+                 working_dir=None, workspace_root=None, tool_executor=None, error_reporter=None):
         """Inicializa uma instância de AgentClient."""
         self.renderer = renderer
+        self.error_reporter = error_reporter
         self.metrics_file = metrics_file
         self._metrics_lock = threading.Lock()
         self.timeout = timeout
@@ -72,6 +73,13 @@ class AgentClient:
         self.rate_limit_detected = False
         self.rate_limit_detected_at: float | None = None
         self._warm_pool = WarmPool()
+
+    def _show_error(self, message: str) -> None:
+        reporter = self.error_reporter
+        if callable(reporter):
+            reporter(message)
+            return
+        self.renderer.show_error(message)
 
     # ------------------------------------------------------------------
     # Helpers de sinal (delegam para EscMonitor para retrocompatibilidade)
@@ -196,7 +204,7 @@ class AgentClient:
             except OSError as exc:
                 self._agent_running = False
                 self._stop_esc_monitor()
-                self.renderer.show_error(f"[erro] não foi possível iniciar {cmd[0]}: {exc}")
+                self._show_error(f"[erro] não foi possível iniciar {cmd[0]}: {exc}")
                 return None
         self._current_proc = proc
 
@@ -245,7 +253,7 @@ class AgentClient:
         except Exception as exc:
             self._agent_running = False
             self._stop_esc_monitor()
-            self.renderer.show_error(f"[erro] falha ao enviar input para {cmd[0]}: {exc}")
+            self._show_error(f"[erro] falha ao enviar input para {cmd[0]}: {exc}")
             proc.kill()
             return None
 
@@ -339,13 +347,13 @@ class AgentClient:
                         self._agent_running = False
                         self._current_proc = None
                         self._stop_esc_monitor()
-                        self.renderer.show_error("[cancelado] pelo usuário")
+                        self._show_error("[cancelado] pelo usuário")
                         return None
                     if termination == ProcessRunner.RATE_LIMIT:
                         self._agent_running = False
                         self._current_proc = None
                         self._stop_esc_monitor()
-                        self.renderer.show_error(
+                        self._show_error(
                             f"[rate limit] {cmd[0]} em espera; cedendo para outros agentes")
                         return None
                     if termination == ProcessRunner.TIMEOUT:
@@ -353,7 +361,7 @@ class AgentClient:
                         self._current_proc = None
                         self._stop_esc_monitor()
                         wall_limit = self.timeout * 5
-                        self.renderer.show_error(
+                        self._show_error(
                             f"[erro] wall-clock timeout after {wall_limit}s for {cmd[0]}")
                         return None
 
@@ -367,7 +375,7 @@ class AgentClient:
             self._stop_esc_monitor()
 
             if result_holder["error"]:
-                self.renderer.show_error(f"[erro] falha ao comunicar com {cmd[0]}: {result_holder['error']}")
+                self._show_error(f"[erro] falha ao comunicar com {cmd[0]}: {result_holder['error']}")
                 return None
 
             output = self._get_capped_stdout(result_holder).strip()
@@ -384,18 +392,18 @@ class AgentClient:
             self._spy_output_presenter.reset()
 
         if proc.returncode != 0:
-            self.renderer.show_error(f"[erro] agente {cmd[0]} retornou código {proc.returncode}")
+            self._show_error(f"[erro] agente {cmd[0]} retornou código {proc.returncode}")
             if error and stderr_lines_shown <= MAX_STDERR_LINES:
                 tail = "\n".join(error.splitlines()[-5:])
-                self.renderer.show_error(tail)
+                self._show_error(tail)
             return None
 
         if not output:
             if error:
-                self.renderer.show_error(f"[erro] agente {cmd[0]} não retornou saída válida")
+                self._show_error(f"[erro] agente {cmd[0]} não retornou saída válida")
                 if stderr_lines_shown <= MAX_STDERR_LINES:
                     tail = "\n".join(error.splitlines()[-5:])
-                    self.renderer.show_error(tail)
+                    self._show_error(tail)
             return None
 
         return output
@@ -478,7 +486,7 @@ class AgentClient:
                 prompt = f"{mode_prompt}\n\n{prompt}"
         plugin = plugins.get(agent)
         if plugin is None:
-            self.renderer.show_error(f"[erro] agente desconhecido: {agent}")
+            self._show_error(f"[erro] agente desconhecido: {agent}")
             return None
         connection = self._resolve_plugin_connection(plugin)
         if isinstance(connection, OpenAIConnection):
@@ -528,7 +536,7 @@ class AgentClient:
         """Executa agentes com driver de API (ex: openai_compat para Ollama)."""
         connection = self._resolve_plugin_connection(plugin)
         if not isinstance(connection, OpenAIConnection):
-            self.renderer.show_error(f"[erro] conexão inválida para driver de API: {agent}")
+            self._show_error(f"[erro] conexão inválida para driver de API: {agent}")
             return None
         is_first_call = agent not in self._api_drivers
         if is_first_call:
@@ -617,7 +625,7 @@ class AgentClient:
                     if self._cancel_event.is_set():
                         self._user_cancelled = True
                         t.join(timeout=0.5)
-                        self.renderer.show_error("[cancelado] pelo usuário")
+                        self._show_error("[cancelado] pelo usuário")
                         return None
                     time.sleep(0.25)
                     if self.timeout is not None and self.timeout > 0:
@@ -625,7 +633,7 @@ class AgentClient:
                         wall_limit = self.timeout * 5
                         if _api_elapsed > wall_limit:
                             self._cancel_event.set()
-                            self.renderer.show_error(
+                            self._show_error(
                                 f"[erro] wall-clock timeout after {int(wall_limit)}s em driver API")
                             return None
 
@@ -643,7 +651,7 @@ class AgentClient:
                         (_cmd[0] if isinstance(_cmd, (list, tuple)) and _cmd else None)
                         or connection.model or "driver"
                     )
-                    self.renderer.show_error(f"[erro] falha ao comunicar com {_name}: {result_holder['error']}")
+                    self._show_error(f"[erro] falha ao comunicar com {_name}: {result_holder['error']}")
                     return None
 
                 return result_holder["result"]

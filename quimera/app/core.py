@@ -132,6 +132,7 @@ class QuimeraApp:
             timeout=timeout,
             visibility=self.visibility,
             working_dir=str(self.workspace.cwd),
+            error_reporter=self.show_error_message,
         )
         self.task_executor_factory = create_executor
         self.session_summarizer = SessionSummarizer(
@@ -395,26 +396,32 @@ class QuimeraApp:
 
     def _wire_event_ui(self) -> None:
         """Conecta eventos de domínio à renderização UI."""
-        renderer = self.renderer
-
         def _on_task_started(event):
-            renderer.show_system_neutral(f"[task {event.task_id}] {event.assigned_to}: iniciando")
+            self.show_muted_message(f"[task {event.task_id}] {event.assigned_to}: iniciando")
 
         def _on_task_completed(event):
             status = "(reviewed)" if event.reviewed_by else ""
-            renderer.show_system_neutral(f"[task {event.task_id}] concluída {status}")
+            self.show_muted_message(f"[task {event.task_id}] concluída {status}")
 
         def _on_task_failed(event):
-            renderer.show_warning(f"[task {event.task_id}] falhou: {event.reason or 'sem motivo'}")
+            system_layer = getattr(self, "system_layer", None)
+            if system_layer is not None and hasattr(system_layer, "show_warning_message"):
+                system_layer.show_warning_message(f"[task {event.task_id}] falhou: {event.reason or 'sem motivo'}")
+            else:
+                self.renderer.show_warning(f"[task {event.task_id}] falhou: {event.reason or 'sem motivo'}")
 
         def _on_task_proposed(event):
-            renderer.show_system(f"[task {event.task_id}] proposta: {event.description[:60]}")
+            self.show_system_message(f"[task {event.task_id}] proposta: {event.description[:60]}")
 
         def _on_task_submitted(event):
-            renderer.show_system_neutral(f"[task {event.task_id}] submetida para revisão")
+            self.show_muted_message(f"[task {event.task_id}] submetida para revisão")
 
         def _on_task_requeued(event):
-            renderer.show_warning(f"[task {event.task_id}] requeue (tentativa {event.attempt})")
+            system_layer = getattr(self, "system_layer", None)
+            if system_layer is not None and hasattr(system_layer, "show_warning_message"):
+                system_layer.show_warning_message(f"[task {event.task_id}] requeue (tentativa {event.attempt})")
+            else:
+                self.renderer.show_warning(f"[task {event.task_id}] requeue (tentativa {event.attempt})")
 
         self._ui_subscriptions = [
             self.event_sink.subscribe(TaskStarted, _on_task_started),
@@ -812,6 +819,24 @@ class QuimeraApp:
         show_plain = getattr(renderer, "show_plain", None)
         if callable(show_plain):
             show_plain(message)
+            return
+
+    def show_error_message(self, message: str) -> None:
+        """Fachada compatível para mensagens de erro."""
+        system_layer = getattr(self, "system_layer", None)
+        if system_layer is not None and hasattr(system_layer, "show_error_message"):
+            system_layer.show_error_message(message)
+            return
+        renderer = getattr(self, "renderer", None)
+        if renderer is None:
+            return
+        show_error = getattr(renderer, "show_error", None)
+        if callable(show_error):
+            show_error(message)
+            return
+        show_system = getattr(renderer, "show_system", None)
+        if callable(show_system):
+            show_system(message)
             return
 
     def _do_process_chat_message(self, user):

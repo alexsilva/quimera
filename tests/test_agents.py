@@ -151,6 +151,24 @@ def test_agent_client_run_failure_return_code(renderer):
         renderer.show_error.assert_called()
 
 
+def test_agent_client_run_failure_uses_error_reporter_when_provided(renderer):
+    error_reporter = MagicMock()
+    client = AgentClient(renderer, error_reporter=error_reporter)
+    with patch("subprocess.Popen") as mock_popen:
+        mock_proc = MagicMock()
+        mock_proc.stdout = []
+        mock_proc.stderr = ["Error detail\n"]
+        mock_proc.returncode = 1
+        mock_popen.return_value = mock_proc
+
+        result = client.run(["fail"], silent=True)
+
+    assert result is None
+    error_reporter.assert_any_call("[erro] agente fail retornou código 1")
+    assert error_reporter.call_count >= 1
+    renderer.show_error.assert_not_called()
+
+
 def test_agent_client_call(renderer):
     client = AgentClient(renderer)
     with patch("quimera.plugins.get") as mock_get:

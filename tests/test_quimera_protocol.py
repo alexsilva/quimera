@@ -3007,7 +3007,7 @@ class PluginTests(unittest.TestCase):
         with patch("sys.stdin", stdin), patch("sys.stdout.write"), patch("sys.stdout.flush"):
             app.show_system_message(msg)
 
-        self.assertEqual(app._deferred_system_messages, [msg])
+        self.assertEqual(app._deferred_system_messages, [("system", msg)])
 
     def test_redisplay_user_prompt_does_not_sleep_while_redrawing_after_agent_output(self):
         app = QuimeraApp.__new__(QuimeraApp)
