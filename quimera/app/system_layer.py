@@ -77,6 +77,15 @@ class AppSystemLayer:
                 and ": review concluído" not in message
         )
 
+    @staticmethod
+    def _is_terminal_task_feedback(message: str) -> bool:
+        """Identifica feedback final curto de task que merece aparecer na hora."""
+        return (
+            message.startswith("[task ")
+            and "\n" not in message
+            and " concluída" in message
+        )
+
     def _is_prompt_active(self) -> bool:
         """Retorna se há um prompt interativo ativo no momento."""
         return getattr(self.app, "_nonblocking_input_status", None) == "reading"
@@ -119,18 +128,45 @@ class AppSystemLayer:
                     level, message = item
                 else:
                     level, message = "system", item
-                if level == "neutral" and hasattr(renderer, "show_system_neutral"):
-                    renderer.show_system_neutral(message)
-                elif level == "warning" and hasattr(renderer, "show_warning"):
-                    renderer.show_warning(message)
-                elif level == "error" and hasattr(renderer, "show_error"):
-                    renderer.show_error(message)
-                else:
-                    renderer.show_system(message)
+                self._render_message(renderer, level, message)
             flush = getattr(renderer, "flush", None)
             if callable(flush):
                 flush()
             deferred.clear()
+
+    @staticmethod
+    def _render_message(renderer, level: str, message: str) -> None:
+        """Renderiza uma mensagem sem mexer diretamente no prompt."""
+        if level == "neutral" and hasattr(renderer, "show_system_neutral"):
+            renderer.show_system_neutral(message)
+        elif level == "warning" and hasattr(renderer, "show_warning"):
+            renderer.show_warning(message)
+        elif level == "error" and hasattr(renderer, "show_error"):
+            renderer.show_error(message)
+        else:
+            renderer.show_system(message)
+
+    def _show_above_active_prompt(self, message: str, *, level: str) -> bool:
+        """Tenta publicar a mensagem acima do prompt ativo via InputGate."""
+        input_gate = getattr(self.app, "input_gate", None)
+        if input_gate is None:
+            return False
+        run_in_terminal_message = getattr(input_gate, "run_in_terminal_message", None)
+        if not callable(run_in_terminal_message):
+            return False
+        renderer = getattr(self.app, "renderer", None)
+        if renderer is None:
+            return False
+        output_lock = getattr(self.app, "_output_lock", nullcontext())
+
+        def _render_callback() -> None:
+            with output_lock:
+                self._render_message(renderer, level, message)
+                flush = getattr(renderer, "flush", None)
+                if callable(flush):
+                    flush()
+
+        return bool(run_in_terminal_message(_render_callback))
 
     def show_system_message(self, message: str) -> None:
         """Exibe system message."""
@@ -170,6 +206,11 @@ class AppSystemLayer:
         if renderer is None:
             return
         if self._is_prompt_active() and self._is_foreign_prompt_thread():
+            if self._is_terminal_task_feedback(message) and self._show_above_active_prompt(
+                message,
+                level="neutral",
+            ):
+                return
             if self._enqueue_deferred_message(message, level="neutral"):
                 return
         output_lock = getattr(self.app, "_output_lock", nullcontext())

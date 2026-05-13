@@ -501,3 +501,41 @@ class TestRedisplay:
         gate._session = session
         gate.redisplay()
         session.app.invalidate.assert_called_once()
+
+
+class TestRunInTerminalMessage:
+    def test_returns_false_without_session(self):
+        gate = _make_gate()
+        gate._session = None
+        assert gate.run_in_terminal_message(lambda: None) is False
+
+    def test_returns_false_when_app_not_running(self):
+        gate = _make_gate()
+        session = MagicMock()
+        session.app._is_running = False
+        gate._session = session
+        assert gate.run_in_terminal_message(lambda: None) is False
+
+    def test_schedules_callback_on_prompt_toolkit_loop(self):
+        gate = _make_gate()
+        session = MagicMock()
+        loop = MagicMock()
+        loop.is_closed.return_value = False
+        session.app._is_running = True
+        session.app.loop = loop
+        gate._session = session
+        called = []
+
+        def callback():
+            called.append(True)
+
+        with patch("quimera.app.prompt_input._PT_AVAILABLE", True), patch(
+            "quimera.app.prompt_input.run_in_terminal",
+            side_effect=lambda fn, **kwargs: fn(),
+        ) as mock_run:
+            loop.call_soon_threadsafe.side_effect = lambda fn: fn()
+            assert gate.run_in_terminal_message(callback) is True
+
+        assert called == [True]
+        loop.call_soon_threadsafe.assert_called_once()
+        mock_run.assert_called_once()

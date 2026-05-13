@@ -12,6 +12,7 @@ from pathlib import Path
 
 try:
     from prompt_toolkit import PromptSession
+    from prompt_toolkit.application import run_in_terminal
     from prompt_toolkit.completion import Completer, Completion
     from prompt_toolkit.formatted_text import HTML
     from prompt_toolkit.history import FileHistory, InMemoryHistory
@@ -20,6 +21,7 @@ try:
 except ImportError:
     _PT_AVAILABLE = False
     Completer = object
+    run_in_terminal = None
 
 
 class _SlashCommandCompleter(Completer):
@@ -265,3 +267,29 @@ class InputGate:
         invalidate = getattr(app, "invalidate", None)
         if callable(invalidate):
             invalidate()
+
+    def run_in_terminal_message(self, callback) -> bool:
+        """Agenda callback acima do prompt ativo quando prompt_toolkit está rodando."""
+        if not callable(callback):
+            return False
+        session = self._session
+        if session is None or not _PT_AVAILABLE or run_in_terminal is None:
+            return False
+        app = getattr(session, "app", None)
+        if app is None or not getattr(app, "_is_running", False):
+            return False
+        loop = getattr(app, "loop", None)
+        if loop is None or loop.is_closed():
+            return False
+
+        def _schedule() -> None:
+            try:
+                run_in_terminal(callback, render_cli_done=False, in_executor=False)
+            except Exception:
+                pass
+
+        try:
+            loop.call_soon_threadsafe(_schedule)
+        except Exception:
+            return False
+        return True
