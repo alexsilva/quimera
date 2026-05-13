@@ -49,7 +49,7 @@ class TaskPromptFactory:
             f"CONTEXTO RECENTE DO CHAT:\n{self.format_task_chat_context()}",
         ]
         shared_state = self.shared_state or {}
-        trimmed_state = SharedStatePresenter.trim(shared_state) if shared_state else {}
+        trimmed_state = SharedStatePresenter.task_reference(shared_state) if shared_state else {}
         if trimmed_state:
             parts.append(
                 "ESTADO COMPARTILHADO (referência):\n"

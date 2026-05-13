@@ -58,7 +58,7 @@ Critério faltando → RETENTATIVA ou REPLANEJAR.
 Só ACEITE com prova concreta de conclusão.
 <!-- ENDIF:is_reviewer -->
 
-<!-- IF:shared_state_json -->
+<!-- IF:state_update_enabled -->
 Você pode atualizar o estado compartilhado usando:
 [STATE_UPDATE]
 {{JSON válido}}
@@ -74,7 +74,7 @@ Campos suportados:
 - next_step (string): o que deve ser feito depois que este passo estiver completo
 
 Sempre mescle com o estado existente, nunca substitua completamente.
-<!-- ENDIF:shared_state_json -->
+<!-- ENDIF:state_update_enabled -->
 
 <!-- IF:route_agents -->
 - Agentes: {route_agents}

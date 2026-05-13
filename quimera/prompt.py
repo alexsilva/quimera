@@ -133,6 +133,7 @@ class PromptBuilder:
             handoff_priority=handoff_fields["handoff_priority"],
             handoff_chain=handoff_fields["handoff_chain"],
             handoff_raw=handoff_fields["handoff_raw"],
+            state_update_enabled=True,
             recent_conversation=recent_conversation,
             metrics=metrics,
             execution_mode_prompt=execution_mode_prompt,

@@ -33,6 +33,7 @@ from quimera.runtime.models import TaskRecord
 from quimera.plugins.base import OpenAIConnection
 from quimera.handoff_presenter import HandoffPresenter
 from quimera.prompt import PromptBuilder
+from quimera.shared_state import AGENT_STATE_KEYS
 from quimera.prompt_templates import prompt_template
 from quimera.runtime.approval import ApprovalHandler
 from quimera.runtime.config import ToolRuntimeConfig
@@ -1336,14 +1337,14 @@ class ProtocolTests(unittest.TestCase):
         builder = PromptBuilder(DummyContextManager(), history_window=3)
         history = [{"role": "human", "content": "Pergunta"}]
 
-        # next_step é campo de execução legado e não deve acionar o bloco
+        # next_step é campo de execução legado e não deve acionar o bloco visual
         prompt = builder.build(
             AGENT_CLAUDE,
             history,
             shared_state={"next_step": "continuar"},
         )
         self.assertNotIn('<shared_state title="Estado compartilhado">', prompt)
-        self.assertNotIn("[STATE_UPDATE]", prompt)
+        self.assertIn("[STATE_UPDATE]", prompt)
 
         # task_overview (campo de infra) deve acionar o bloco e manter o contrato de escrita
         prompt2 = builder.build(
@@ -1355,6 +1356,34 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn("Você pode atualizar o estado compartilhado usando:", prompt2)
         self.assertIn("[STATE_UPDATE]", prompt2)
         self.assertEqual(prompt2.count("Você pode atualizar o estado compartilhado usando:"), 1)
+
+    def test_prompt_keeps_internal_shared_state_keys_out_of_visible_blocks(self):
+        builder = PromptBuilder(DummyContextManager(), history_window=3)
+        history = [{"role": "human", "content": "Pergunta"}]
+
+        prompt = builder.build(
+            AGENT_CLAUDE,
+            history,
+            shared_state={
+                "goal_canonical": "não deve aparecer no bloco visível",
+                "task_overview": {"job_id": 33},
+                "working_dir": "/tmp/worktree",
+                "workspace_root": "/tmp/worktree",
+                "completed_task_results": "[task 1] ok",
+                "spy_last_turn_detail": {"agent": "codex"},
+            },
+        )
+
+        shared_state_block = _extract_block(prompt, "shared_state")
+        completed_block = _extract_block(prompt, "completed_tasks")
+
+        self.assertIn('"task_overview"', shared_state_block)
+        self.assertIn('"working_dir": "/tmp/worktree"', shared_state_block)
+        self.assertIn('"workspace_root": "/tmp/worktree"', shared_state_block)
+        self.assertNotIn("goal_canonical", shared_state_block)
+        self.assertNotIn("spy_last_turn_detail", shared_state_block)
+        self.assertNotIn("completed_task_results", shared_state_block)
+        self.assertEqual(completed_block.strip(), "[task 1] ok")
 
     def test_app_builds_explicit_session_state_for_prompt(self):
         temp_root = Path(self.enterContext(tempfile.TemporaryDirectory()))
@@ -5283,7 +5312,7 @@ class AppProtocolDirectTests(unittest.TestCase):
         result = proto.apply_state_update('{"": "value", "valid": "ok"}')
         self.assertTrue(result)
         self.assertNotIn("", app.shared_state)
-        self.assertEqual(app.shared_state["valid"], "ok")
+        self.assertEqual(app.shared_state, {})
 
     def test_apply_state_update_pops_key_when_merged_is_none(self):
         app = self._make_app(shared_state={"goal": "old"})
@@ -5292,6 +5321,48 @@ class AppProtocolDirectTests(unittest.TestCase):
         result = proto.apply_state_update('{"goal": ""}')
         self.assertTrue(result)
         self.assertNotIn("goal", app.shared_state)
+
+    def test_apply_state_update_ignores_keys_outside_agent_allowlist(self):
+        app = self._make_app(shared_state={"goal": "old"})
+        proto = AppProtocol(app)
+
+        result = proto.apply_state_update(
+            '{"goal_canonical":"corrigir parser","task_overview":{"job_id": 1},"completed_task_results":"hack","spy_last_turn_detail":{"agent":"claude"},"mode":"test"}'
+        )
+
+        self.assertTrue(result)
+        self.assertEqual(
+            app.shared_state,
+            {
+                "goal": "old",
+                "goal_canonical": "corrigir parser",
+            },
+        )
+        self.assertLessEqual(set(app.shared_state), AGENT_STATE_KEYS)
+
+    def test_apply_state_update_rejects_invalid_value_types_for_agent_contract(self):
+        app = self._make_app()
+        proto = AppProtocol(app)
+
+        result = proto.apply_state_update(
+            '{"goal_canonical":["lista inválida"],"allowed_scope":"parser.py","evidence":["pytest -q"],"next_step":"executar suíte"}'
+        )
+
+        self.assertTrue(result)
+        self.assertEqual(
+            app.shared_state,
+            {
+                "evidence": ["pytest -q"],
+                "next_step": "executar suíte",
+            },
+        )
+
+    def test_apply_state_update_ignores_invalid_type_for_list_field(self):
+        app = self._make_app()
+        proto = AppProtocol(app)
+        result = proto.apply_state_update('{"allowed_scope": "parser.py"}')
+        self.assertTrue(result)
+        self.assertEqual(app.shared_state, {})
 
     # --- parse_handoff_payload ---
 
@@ -5414,11 +5485,11 @@ class AppProtocolDirectTests(unittest.TestCase):
 
     def test_parse_envelope_valid_state_update(self):
         env = AppProtocol.parse_envelope(
-            '{"type": "state_update", "content": "", "state_updates": {"mode": "test"}}'
+            '{"type": "state_update", "content": "", "state_updates": {"goal_canonical": "test"}}'
         )
         self.assertIsInstance(env, ProtocolEnvelope)
         self.assertEqual(env.type, "state_update")
-        self.assertEqual(env.state_updates, {"mode": "test"})
+        self.assertEqual(env.state_updates, {"goal_canonical": "test"})
 
     def test_parse_envelope_valid_ack(self):
         env = AppProtocol.parse_envelope(
@@ -5509,9 +5580,9 @@ class AppProtocolDirectTests(unittest.TestCase):
         app = self._make_app()
         proto = AppProtocol(app)
         proto.parse_response(
-            '{"type": "state_update", "content": "", "state_updates": {"mode": "test"}}'
+            '{"type": "state_update", "content": "", "state_updates": {"goal_canonical": "corrigir parser","mode":"test"}}'
         )
-        self.assertEqual(app.shared_state.get("mode"), "test")
+        self.assertEqual(app.shared_state, {"goal_canonical": "corrigir parser"})
 
     def test_parse_response_json_envelope_ack(self):
         app = self._make_app()
@@ -5643,13 +5714,13 @@ class AppProtocolDirectTests(unittest.TestCase):
         import threading
         text = (
             'relatório\n'
-            '{"type": "state_update", "content": "", "state_updates": {"mode": "embedded"}}'
+            '{"type": "state_update", "content": "", "state_updates": {"goal":"embedded","mode":"ignored"}}'
         )
         app = self._make_app()
         app._lock = threading.Lock()
         proto = AppProtocol(app)
         response, _, _, _, _, _ = proto.parse_response(text)
-        self.assertEqual(app.shared_state.get("mode"), "embedded")
+        self.assertEqual(app.shared_state, {"goal": "embedded"})
         self.assertEqual(response, "relatório")
 
     def test_parse_response_embedded_envelope_ack(self):

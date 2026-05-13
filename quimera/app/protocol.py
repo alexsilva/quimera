@@ -6,6 +6,7 @@ import time
 from dataclasses import dataclass
 
 from ..constants import EXTEND_MARKER, NEEDS_INPUT_MARKER, ROUTE_PREFIX, STATE_UPDATE_START
+from ..shared_state import is_agent_state_key, normalize_state_key, validate_agent_state_value
 from . import logger
 
 
@@ -81,8 +82,18 @@ class AppProtocol:
         app = self.app
         with app._lock:
             for key, value in payload.items():
-                normalized_key = str(key).strip().lower().replace(" ", "_")
+                normalized_key = normalize_state_key(key)
                 if not normalized_key:
+                    continue
+                if not is_agent_state_key(normalized_key):
+                    logger.warning("[STATE_UPDATE] Ignored unsupported shared_state key: %s", normalized_key)
+                    continue
+                if not validate_agent_state_value(normalized_key, value):
+                    logger.warning(
+                        "[STATE_UPDATE] Ignored invalid value for shared_state key %s: %r",
+                        normalized_key,
+                        type(value).__name__,
+                    )
                     continue
                 current = app.shared_state.get(normalized_key)
                 merged = self.merge_state_value(current, value)

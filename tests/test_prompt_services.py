@@ -1,9 +1,11 @@
 """Testes unitários para os serviços extraídos do PromptBuilder (Seção 8)."""
 
+import json
 from unittest.mock import MagicMock
 
 from quimera.memory_selector import MemorySelector
 from quimera.shared_state_presenter import SharedStatePresenter
+from quimera.shared_state import PROMPT_REFERENCE_KEYS, TASK_REFERENCE_KEYS
 from quimera.handoff_presenter import HandoffPresenter
 from quimera.execution_mode_presenter import ExecutionModePresenter
 from quimera.prompt_budget import PromptBudget
@@ -197,12 +199,20 @@ class TestSharedStatePresenter:
         state = {
             "goal_canonical": "objetivo",
             "current_step": "passo",
+            "task_overview": {"job_id": 7},
             "internal_note": "secreto",
+            "working_dir": "/tmp/worktree",
+            "workspace_root": "/tmp/worktree",
+            "completed_task_results": "não faz parte do task_reference",
             "random_key": "valor",
         }
         trimmed = SharedStatePresenter.trim(state)
         assert "goal_canonical" in trimmed
         assert "current_step" in trimmed
+        assert "task_overview" in trimmed
+        assert "working_dir" not in trimmed
+        assert "workspace_root" not in trimmed
+        assert "completed_task_results" not in trimmed
         assert "internal_note" not in trimmed
         assert "random_key" not in trimmed
 
@@ -210,6 +220,30 @@ class TestSharedStatePresenter:
         state = {"decisions": list(range(20))}
         trimmed = SharedStatePresenter.trim(state, decisions_tail=3)
         assert trimmed["decisions"] == [17, 18, 19]
+
+    def test_trim_uses_centralized_task_reference_contract(self):
+        state = {
+            "goal": "corrigir parser",
+            "goal_canonical": "corrigir parser legado",
+            "decisions": [f"d{i}" for i in range(8)],
+            "current_step": "ajustar tokenizer",
+            "acceptance_criteria": ["teste verde"],
+            "allowed_scope": ["parser.py"],
+            "non_goals": ["refatorar CLI"],
+            "out_of_scope_notes": ["não tocar UI"],
+            "evidence": ["trace reproduzido"],
+            "next_step": "executar pytest",
+            "task_overview": {"job_id": 42},
+            "working_dir": "/tmp/worktree",
+            "spy_last_turn_detail": {"agent": "codex"},
+        }
+
+        trimmed = SharedStatePresenter.trim(state)
+
+        assert set(trimmed) == TASK_REFERENCE_KEYS
+        assert trimmed["decisions"] == ["d3", "d4", "d5", "d6", "d7"]
+        assert "working_dir" not in trimmed
+        assert "spy_last_turn_detail" not in trimmed
 
     def test_present_returns_empty_json_when_no_state(self):
         json_str, results = SharedStatePresenter.present(None)
@@ -240,6 +274,29 @@ class TestSharedStatePresenter:
         json_str, results = SharedStatePresenter.present(state)
         assert results == "Task 1: OK"
         assert json_str
+
+    def test_present_exposes_only_prompt_reference_keys_without_internal_leaks(self):
+        state = {
+            "goal_canonical": "não deve vazar no prompt principal",
+            "next_step": "também não",
+            "task_overview": {"job_id": 9, "recommended_action": "executar task aprovada"},
+            "working_dir": "/tmp/worktree",
+            "workspace_root": "/tmp/worktree",
+            "spy_last_turn_detail": {"agent": "claude"},
+            "completed_task_results": "[task 1] ok",
+            "internal_note": "segredo",
+        }
+
+        json_str, results = SharedStatePresenter.present(state)
+        payload = json.loads(json_str)
+
+        assert set(payload) == PROMPT_REFERENCE_KEYS
+        assert payload["task_overview"]["job_id"] == 9
+        assert payload["working_dir"] == "/tmp/worktree"
+        assert payload["workspace_root"] == "/tmp/worktree"
+        assert "goal_canonical" not in payload
+        assert "spy_last_turn_detail" not in payload
+        assert results == "[task 1] ok"
 
 
 class TestHandoffPresenter:

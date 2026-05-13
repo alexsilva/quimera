@@ -198,6 +198,18 @@ def test_prompt_keeps_empty_optional_blocks_in_output():
     assert '<agent_metrics title="Suas métricas (apenas referência)">' not in prompt
 
 
+def test_prompt_template_uses_explicit_bool_for_state_update_block(tmp_path):
+    template_path = tmp_path / "prompt.md"
+    template_path.write_text(
+        "<!-- IF:state_update_enabled -->state<!-- ENDIF:state_update_enabled -->",
+        encoding="utf-8",
+    )
+    template = PromptTemplate(template_path)
+
+    assert template.render(state_update_enabled=True) == "state"
+    assert template.render(state_update_enabled=False) == ""
+
+
 def test_prompt_completed_tasks():
     builder = PromptBuilder(context_manager=_make_context_manager(""))
     history = [{"role": "human", "content": "test"}]
