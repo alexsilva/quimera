@@ -7,13 +7,6 @@ class PromptBuilderStub:
     def __init__(self, history_window=4):
         self.history_window = history_window
 
-    @staticmethod
-    def _trim_shared_state(state):
-        return {
-            "goal_canonical": state.get("goal_canonical"),
-            "current_step": state.get("current_step"),
-        }
-
 
 def test_task_context_history_window_uses_prompt_builder_value():
     factory = TaskPromptFactory(
@@ -94,6 +87,7 @@ def test_build_task_body_uses_trimmed_shared_state_when_available():
             "goal_canonical": "Corrigir parser legado",
             "current_step": "Ajustar tokenizer",
             "allowed_scope": ["parser.py"],
+            "internal_note": "não deve aparecer",
         },
         prompt_builder=PromptBuilderStub(history_window=4),
     )
@@ -103,4 +97,24 @@ def test_build_task_body_uses_trimmed_shared_state_when_available():
     assert "ESTADO COMPARTILHADO (referência):" in body
     assert '"goal_canonical": "Corrigir parser legado"' in body
     assert '"current_step": "Ajustar tokenizer"' in body
-    assert '"allowed_scope"' not in body
+    assert '"allowed_scope"' in body
+    assert '"internal_note"' not in body
+
+
+def test_format_task_chat_context_skips_empty_messages():
+    factory = TaskPromptFactory(
+        history=[
+            {"role": "human", "content": "  "},
+            {"role": "codex", "content": ""},
+            {"role": "human", "content": "Pedido válido"},
+        ],
+        user_name="Alex",
+        shared_state={},
+        prompt_builder=PromptBuilderStub(history_window=4),
+    )
+
+    context = factory.format_task_chat_context()
+
+    assert "[ALEX]: Pedido válido" in context
+    assert context.count("[ALEX]") == 1
+    assert "[CODEX]" not in context

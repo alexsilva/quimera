@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 from ..constants import USER_ROLE
+from ..shared_state_presenter import SharedStatePresenter
 
 
 class TaskPromptFactory:
@@ -48,11 +49,7 @@ class TaskPromptFactory:
             f"CONTEXTO RECENTE DO CHAT:\n{self.format_task_chat_context()}",
         ]
         shared_state = self.shared_state or {}
-        trimmed_state = {}
-        if self.prompt_builder is not None and hasattr(self.prompt_builder, "_trim_shared_state"):
-            trimmed_state = self.prompt_builder._trim_shared_state(shared_state)
-        elif shared_state:
-            trimmed_state = shared_state
+        trimmed_state = SharedStatePresenter.trim(shared_state) if shared_state else {}
         if trimmed_state:
             parts.append(
                 "ESTADO COMPARTILHADO (referência):\n"

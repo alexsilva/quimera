@@ -308,3 +308,44 @@ def test_build_conversation_block_skips_empty_content():
     lines = [l for l in conversation_block.splitlines() if "[ALEX]" in l]
     assert len(lines) == 1
     assert "pergunta anterior válida" in lines[0]
+
+
+def test_prompt_build_accepts_history_none_and_iterables():
+    builder = PromptBuilder(context_manager=_make_context_manager(""))
+
+    prompt_none = builder.build(agent="claude", history=None)
+    assert "<current_turn" not in prompt_none
+
+    tuple_history = (
+        {"role": "human", "content": "pedido"},
+        {"role": "codex", "content": "resposta"},
+    )
+    prompt_tuple = builder.build(agent="claude", history=tuple_history)
+    assert '<current_turn title="Pedido atual de >>>">' in prompt_tuple
+    assert "pedido" in prompt_tuple
+
+
+def test_prompt_history_window_property_setter_updates_memory_selector():
+    builder = PromptBuilder(context_manager=_make_context_manager(""), history_window=6)
+    assert builder.history_window == 6
+    builder.history_window = 2
+    assert builder.history_window == 2
+
+
+def test_prompt_handoff_only_filters_agent_and_from_agent_from_route_list():
+    builder = PromptBuilder(
+        context_manager=_make_context_manager(""),
+        active_agents=["codex", "claude", "gemini"],
+    )
+
+    prompt = builder.build(
+        agent="codex",
+        history=[{"role": "human", "content": "faça a revisão"}],
+        handoff_only=True,
+        from_agent="claude",
+    )
+
+    rules_block = _extract_block(prompt, "rules")
+    assert "- Agentes: gemini" in rules_block
+    assert "codex" not in rules_block
+    assert "claude" not in rules_block

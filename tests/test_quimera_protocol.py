@@ -30,6 +30,7 @@ from quimera.constants import CMD_AGENTS, CMD_CLEAR, CMD_CONNECT, CMD_DISCONNECT
 from quimera.plugins import AgentPlugin
 from quimera.runtime.models import TaskRecord
 from quimera.plugins.base import OpenAIConnection
+from quimera.handoff_presenter import HandoffPresenter
 from quimera.prompt import PromptBuilder
 from quimera.prompt_templates import prompt_template
 from quimera.runtime.approval import ApprovalHandler
@@ -3154,7 +3155,7 @@ class PluginTests(unittest.TestCase):
             "priority": "urgent",
             "handoff_id": "abc123",
         }
-        fields = builder._build_handoff_fields(handoff, from_agent="claude")
+        fields = HandoffPresenter.present(handoff, from_agent="claude")
         self.assertEqual(fields["handoff_priority"], "URGENT")
         self.assertEqual(fields["handoff_id"], "abc123")
 
@@ -3165,7 +3166,7 @@ class PluginTests(unittest.TestCase):
             "priority": "normal",
             "handoff_id": "xyz789",
         }
-        fields = builder._build_handoff_fields(handoff, from_agent="codex")
+        fields = HandoffPresenter.present(handoff, from_agent="codex")
         self.assertEqual(fields["handoff_id"], "xyz789")
         self.assertEqual(fields["handoff_priority"], "")
 
@@ -4676,7 +4677,7 @@ class MetricsFeedbackTests(unittest.TestCase):
             "chain": ["claude", "codex"],
             "handoff_id": "abc123",
         }
-        fields = builder._build_handoff_fields(handoff, from_agent="qwen")
+        fields = HandoffPresenter.present(handoff, from_agent="qwen")
         self.assertEqual(fields["handoff_chain"], "claude -> codex")
         self.assertEqual(fields["handoff_id"], "abc123")
         self.assertEqual(fields["handoff_from"], "qwen")
@@ -4689,7 +4690,7 @@ class MetricsFeedbackTests(unittest.TestCase):
             "chain": [],
             "handoff_id": "xyz",
         }
-        fields = builder._build_handoff_fields(handoff, from_agent="claude")
+        fields = HandoffPresenter.present(handoff, from_agent="claude")
         self.assertEqual(fields["handoff_chain"], "")
 
     def test_prompt_includes_collaboration_rules(self):
