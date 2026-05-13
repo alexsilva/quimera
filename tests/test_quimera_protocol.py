@@ -24,6 +24,8 @@ from quimera.app.system_layer import AppSystemLayer
 from quimera.app.task import AppTaskServices, call_agent_for_parallel
 from quimera.app.protocol import AppProtocol, ProtocolEnvelope
 from quimera.app.session_metrics import SessionMetricsService
+from quimera.app.task_events import TaskCompleted
+from quimera.app.event_sink import EventSink
 from quimera.cli import main as cli_main
 from quimera.config import DEFAULT_HISTORY_WINDOW
 from quimera.constants import CMD_AGENTS, CMD_CLEAR, CMD_CONNECT, CMD_DISCONNECT, CMD_HELP, CMD_PROMPT, EXTEND_MARKER, MSG_SHUTDOWN, TaskStatus, TaskType, Visibility, build_agents_help, build_help
@@ -3080,6 +3082,8 @@ class PluginTests(unittest.TestCase):
 
     def test_staging_logger_still_shows_warning_logs_while_tty_reader_is_active(self):
         app = QuimeraApp.__new__(QuimeraApp)
+        materialize_internal_services(app)
+        app.renderer = DummyRenderer()
         app._output_lock = threading.Lock()
         app._deferred_system_messages = []
         app._nonblocking_input_status = "reading"
@@ -3098,9 +3102,12 @@ class PluginTests(unittest.TestCase):
             with patch("sys.stdin", stdin), patch("sys.stdout.write") as mock_write, patch("sys.stdout.flush"):
                 app_module.logger.warning("[DISPATCH] retry for agent=%s", AGENT_CODEX)
 
-            self.assertIn(call("\r\x1b[2K"), mock_write.call_args_list)
-            self.assertIn(call("Alex: "), mock_write.call_args_list)
-            app.input_gate.redisplay.assert_called_once_with()
+            self.assertEqual(mock_write.call_args_list, [])
+            self.assertEqual(len(app.renderer.warnings), 1)
+            self.assertTrue(
+                app.renderer.warnings[0].endswith("[DISPATCH] retry for agent=codex")
+            )
+            app.input_gate.redisplay.assert_not_called()
         finally:
             prompt_handler.bind_app(previous_app)
 
@@ -3813,6 +3820,28 @@ class PluginTests(unittest.TestCase):
             notes="RETENTATIVA\nFaltou evidência de alteração no código.",
         )
         complete_task.assert_not_called()
+
+    def test_task_completed_event_shows_consolidated_feedback_to_human(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        materialize_internal_services(app)
+        status_updates = []
+        app.event_sink = EventSink()
+        app.show_muted_message = lambda message: status_updates.append(message)
+
+        app._wire_event_ui()
+        app.event_sink.publish(TaskCompleted(
+            task_id=252,
+            job_id=1,
+            result="ACEITE\nCommit criado com hash abc123 e worktree limpo.",
+            reviewed_by=AGENT_GEMINI,
+        ))
+
+        self.assertEqual(
+            status_updates,
+            [
+                "[task 252] concluída | aprovada por gemini: ACEITE Commit criado com hash abc123 e worktree limpo.",
+            ],
+        )
 
     def test_review_handler_returns_task_to_pending_review_on_failure(self):
         app = QuimeraApp.__new__(QuimeraApp)

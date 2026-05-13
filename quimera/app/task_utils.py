@@ -8,6 +8,7 @@ from __future__ import annotations
 _MAX_COMPLETED_TASK_RESULTS_CHARS = 2000
 _MAX_COMPLETED_TASK_RESULT_DESC_CHARS = 80
 _MAX_COMPLETED_TASK_RESULT_VALUE_CHARS = 200
+_MAX_TASK_FEEDBACK_SUMMARY_CHARS = 140
 
 
 def truncate_tool_result(content: str, max_lines: int = 10) -> str:
@@ -118,3 +119,19 @@ def build_completed_task_results(
             kept_lines[0] = kept_lines[0][:available_chars]
         return "\n".join([omitted_line, *kept_lines])
     return "\n".join(kept_lines)
+
+
+def summarize_task_feedback(
+    result: str | None,
+    *,
+    max_chars: int = _MAX_TASK_FEEDBACK_SUMMARY_CHARS,
+) -> str:
+    """Resume o resultado final da task para uma linha de feedback humano."""
+    if not result:
+        return ""
+    summary = " ".join(str(result).split())
+    if len(summary) <= max_chars:
+        return summary
+    if max_chars <= 1:
+        return summary[:max_chars]
+    return f"{summary[: max_chars - 1].rstrip()}…"

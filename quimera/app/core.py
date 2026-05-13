@@ -33,6 +33,7 @@ from .task_events import (
     TaskSubmittedForReview,
     TaskRequeued,
 )
+from .task_utils import summarize_task_feedback
 from .. import plugins
 from ..plugins.base import PluginRegistry, extract_model_from_cli_cmd
 from ..runtime.parser import strip_tool_block
@@ -400,8 +401,13 @@ class QuimeraApp:
             self.show_muted_message(f"[task {event.task_id}] {event.assigned_to}: iniciando")
 
         def _on_task_completed(event):
-            status = "(reviewed)" if event.reviewed_by else ""
-            self.show_muted_message(f"[task {event.task_id}] concluída {status}")
+            line = f"[task {event.task_id}] concluída"
+            if event.reviewed_by:
+                line = f"{line} | aprovada por {event.reviewed_by}"
+            summary = summarize_task_feedback(event.result)
+            if summary:
+                line = f"{line}: {summary}"
+            self.show_muted_message(line)
 
         def _on_task_failed(event):
             system_layer = getattr(self, "system_layer", None)
@@ -833,6 +839,19 @@ class QuimeraApp:
         show_error = getattr(renderer, "show_error", None)
         if callable(show_error):
             show_error(message)
+
+    def show_warning_message(self, message: str) -> None:
+        """Fachada compatível para mensagens de aviso."""
+        system_layer = getattr(self, "system_layer", None)
+        if system_layer is not None and hasattr(system_layer, "show_warning_message"):
+            system_layer.show_warning_message(message)
+            return
+        renderer = getattr(self, "renderer", None)
+        if renderer is None:
+            return
+        show_warning = getattr(renderer, "show_warning", None)
+        if callable(show_warning):
+            show_warning(message)
             return
         show_system = getattr(renderer, "show_system", None)
         if callable(show_system):

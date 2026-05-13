@@ -2,6 +2,7 @@
 
 from quimera.runtime.task_runner import TaskRunner
 from quimera.runtime.models import TaskRecord
+from quimera.app.task_utils import summarize_task_feedback
 
 
 class DispatchStub:
@@ -285,3 +286,13 @@ def test_runner_complete_task_fails():
     assert ok is False
     assert repo.complete_calls == [(10, "finalizado", None)]
     assert system.messages[-1] == "[task 10] codex: erro ao concluir task"
+
+
+def test_summarize_task_feedback_flattens_and_truncates():
+    result = "ACEITE\nImplementação concluída com evidência concreta e detalhes extras para exceder o limite configurado."
+
+    summary = summarize_task_feedback(result, max_chars=50)
+
+    assert "\n" not in summary
+    assert summary.endswith("…")
+    assert len(summary) <= 50
