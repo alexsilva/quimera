@@ -407,11 +407,9 @@ class PreApprovalHandler(ApprovalHandler):
         thread_id = threading.get_ident()
         with self._lock:
             if thread_id in self._thread_approve_all:
-                _emit_system_message(self._renderer, f"  [approve-all-task] {tool_name} :: {summary}")
                 return True
             scope_key = self._thread_scope_keys.get(thread_id)
             if scope_key is not None and scope_key in self._scope_approve_all:
-                _emit_system_message(self._renderer, f"  [approve-all-task] {tool_name} :: {summary}")
                 return True
             if self._approve_all:
                 _emit_system_message(self._renderer, f"  [approve-all] {tool_name} :: {summary}")
