@@ -180,6 +180,18 @@ def test_show_muted_message_defers_from_background_thread_while_prompt_active():
     assert app.renderer.flush_calls == 0
 
 
+def test_show_muted_message_does_not_defer_task_completion_from_background_thread():
+    app = make_app()
+    app._nonblocking_input_status = "reading"
+    app._prompt_owning_thread_id = object()
+
+    AppSystemLayer(app).show_muted_message("[task 252] concluída: Commit criado")
+
+    assert app._deferred_system_messages == []
+    assert app.renderer.neutral_messages == ["[task 252] concluída: Commit criado"]
+    assert app.renderer.flush_calls == 1
+
+
 def test_show_warning_message_defers_from_background_thread_while_prompt_active():
     app = make_app()
     app._nonblocking_input_status = "reading"

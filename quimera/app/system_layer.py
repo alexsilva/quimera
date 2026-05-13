@@ -50,6 +50,12 @@ class AppSystemLayer:
         ": revisando execução de ",
         ": review rejeitado, aguardando outro agente",
     )
+    _NON_DEFERRED_TASK_TERMINAL_FRAGMENTS = (
+        "] concluída",
+        ": concluída",
+        ": review concluído",
+        "] falhou",
+    )
 
     def __init__(self, app):
         """Inicializa uma instância de AppSystemLayer."""
@@ -76,6 +82,14 @@ class AppSystemLayer:
                 and "\n" not in message
                 and ": concluída" not in message
                 and ": review concluído" not in message
+        )
+
+    def _is_terminal_task_muted_message(self, message: str) -> bool:
+        """Retorna se a mensagem neutra representa o fechamento final de uma task."""
+        return (
+            message.startswith("[task ")
+            and "\n" not in message
+            and any(fragment in message for fragment in self._NON_DEFERRED_TASK_TERMINAL_FRAGMENTS)
         )
 
     def _is_prompt_active(self) -> bool:
@@ -170,7 +184,11 @@ class AppSystemLayer:
         renderer = getattr(self.app, "renderer", None)
         if renderer is None:
             return
-        if self._is_prompt_active() and self._is_foreign_prompt_thread():
+        if (
+            self._is_prompt_active()
+            and self._is_foreign_prompt_thread()
+            and not self._is_terminal_task_muted_message(message)
+        ):
             if self._enqueue_deferred_message(message, level="neutral"):
                 return
         output_lock = getattr(self.app, "_output_lock", nullcontext())
