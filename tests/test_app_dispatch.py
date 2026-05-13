@@ -485,7 +485,7 @@ class TestCallAgent:
         ds = AppDispatchServices(dispatch_app)
         with patch.object(ds, "call_agent_low_level", return_value=None), \
              patch.object(ds, "resolve_agent_response") as mock_resolve, \
-             patch("quimera.app.dispatch.time.sleep"):
+             patch("quimera.app.agent_call_service.time.sleep"):
             result = ds.call_agent("agent1")
         assert result is None
         mock_resolve.assert_not_called()  # nunca chamado pois low_level retornou None
@@ -497,7 +497,7 @@ class TestCallAgent:
         dispatch_app.agent_client.rate_limit_detected = False
         ds = AppDispatchServices(dispatch_app)
         with patch.object(ds, "call_agent_low_level", return_value=None), \
-             patch("quimera.app.dispatch.time.sleep") as mock_sleep:
+             patch("quimera.app.agent_call_service.time.sleep") as mock_sleep:
             result = ds.call_agent("agent1")
         assert result is None
         mock_sleep.assert_called_with(0.5)
@@ -521,7 +521,7 @@ class TestCallAgent:
         ds = AppDispatchServices(dispatch_app)
         with patch.object(ds, "call_agent_low_level", return_value="response"), \
              patch.object(ds, "resolve_agent_response", return_value=None) as mock_resolve, \
-             patch("quimera.app.dispatch.time.sleep"):
+             patch("quimera.app.agent_call_service.time.sleep"):
             result = ds.call_agent("agent1")
         assert result is None
         assert mock_resolve.call_count >= 1  # chamado pelo menos uma vez
@@ -533,7 +533,7 @@ class TestCallAgent:
         ds = AppDispatchServices(dispatch_app)
         with patch.object(ds, "call_agent_low_level", return_value="response"), \
              patch.object(ds, "resolve_agent_response", return_value=None), \
-             patch("quimera.app.dispatch.time.sleep") as mock_sleep:
+             patch("quimera.app.agent_call_service.time.sleep") as mock_sleep:
             result = ds.call_agent("agent1")
         assert result is None
         mock_sleep.assert_called_with(0.5)
@@ -557,7 +557,7 @@ class TestCallAgent:
         dispatch_app.MAX_RETRIES = 2
         ds = AppDispatchServices(dispatch_app)
         with patch.object(ds, "call_agent_low_level", return_value=None), \
-             patch("quimera.app.dispatch.time.sleep"):
+             patch("quimera.app.agent_call_service.time.sleep"):
             result = ds.call_agent("agent1")
         assert result is None
 
@@ -568,7 +568,7 @@ class TestCallAgent:
         dispatch_app.RETRY_BACKOFF_SECONDS = 0.5
         ds = AppDispatchServices(dispatch_app)
         with patch.object(ds, "call_agent_low_level", return_value=None), \
-             patch("quimera.app.dispatch.time.sleep") as mock_sleep:
+             patch("quimera.app.agent_call_service.time.sleep") as mock_sleep:
             result = ds.call_agent("agent1")
         assert result is None
         # rate_limit_detected=True deve usar RATE_LIMIT_BACKOFF_SECONDS (0.01)
@@ -581,7 +581,7 @@ class TestCallAgent:
         dispatch_app.RETRY_BACKOFF_SECONDS = 0.01
         ds = AppDispatchServices(dispatch_app)
         with patch.object(ds, "call_agent_low_level", side_effect=ValueError("boom")), \
-             patch("quimera.app.dispatch.time.sleep"):
+             patch("quimera.app.agent_call_service.time.sleep"):
             with pytest.raises(ValueError, match="boom"):
                 ds.call_agent("agent1")
 
@@ -600,7 +600,7 @@ class TestCallAgent:
 
         dispatch_app.agent_client._user_cancelled = True
         with patch.object(ds, "call_agent_low_level", _CancelledOnSecondCall()), \
-             patch("quimera.app.dispatch.time.sleep"):
+             patch("quimera.app.agent_call_service.time.sleep"):
             result = ds.call_agent("agent1")
         assert result is None
 
@@ -623,7 +623,7 @@ class TestCallAgent:
         low_level = MagicMock(return_value=None)
         ds.call_agent_low_level = low_level
         dispatch_app.agent_client._user_cancelled = True
-        with patch("quimera.app.dispatch.time.sleep"):
+        with patch("quimera.app.agent_call_service.time.sleep"):
             result = ds.call_agent("agent1")
         assert result is None
         # zero chamadas low_level — abortou antes de qualquer tentativa
@@ -642,7 +642,7 @@ class TestCallAgent:
 
         low_level = MagicMock(side_effect=_cancelled_then_boom)
         ds.call_agent_low_level = low_level
-        with patch("quimera.app.dispatch.time.sleep"):
+        with patch("quimera.app.agent_call_service.time.sleep"):
             result = ds.call_agent("agent1")
         assert result is None
         # exatamente 1 chamada (a que lançou), sem retry
@@ -668,7 +668,7 @@ class TestCallAgent:
         ds = AppDispatchServices(dispatch_app)
         with patch.object(ds, "call_agent_low_level", return_value="response"), \
              patch.object(ds, "resolve_agent_response", side_effect=[RuntimeError("resolve fail"), "ok"]), \
-             patch("quimera.app.dispatch.time.sleep"):
+             patch("quimera.app.agent_call_service.time.sleep"):
             result = ds.call_agent("agent1")
         assert result == "ok"
 

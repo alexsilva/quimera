@@ -2,13 +2,14 @@
 import time
 from contextlib import nullcontext
 
+from .agent_call_service import AgentCallService
 from .agent_gateway import AgentGateway, _is_user_cancelled
 from .tool_loop import ToolLoopService
 from .config import logger
 
 
 class AppDispatchServices:
-    """Coordena AgentGateway e ToolLoopService; mantém spy telemetry e retry."""
+    """Coordena AgentGateway e ToolLoopService; mantém spy telemetry."""
 
     _MAX_SPY_TOOLS = 12
     _MAX_SPY_TEXT_CHARS = 280
@@ -21,6 +22,7 @@ class AppDispatchServices:
         # todos os atributos inicializados quando AppDispatchServices é criado.
         self._gateway = None
         self._tool_loop = None
+        self._agent_call_service = None
 
     # -------------------------------------------------------------------------
     # Lazy builders
@@ -126,6 +128,30 @@ class AppDispatchServices:
             record_tool_event=_record_tool_event,
             reset_approve_all=_reset_approve_all,
             progress_callback=_progress_callback,
+        )
+
+    # -------------------------------------------------------------------------
+    # Agent call service (retry)
+    # -------------------------------------------------------------------------
+
+    def _get_agent_call_service(self) -> AgentCallService:
+        if self._agent_call_service is None:
+            self._agent_call_service = self._build_agent_call_service()
+        return self._agent_call_service
+
+    def _build_agent_call_service(self) -> AgentCallService:
+        app = self.app
+        agent_client = getattr(app, "agent_client", None)
+
+        def _is_rate_limited():
+            return bool(agent_client and getattr(agent_client, 'rate_limit_detected', False))
+
+        return AgentCallService(
+            max_retries=getattr(app, "MAX_RETRIES", 2),
+            retry_backoff=getattr(app, "RETRY_BACKOFF_SECONDS", 1),
+            rate_limit_backoff=getattr(app, "RATE_LIMIT_BACKOFF_SECONDS", 30),
+            record_failure=getattr(app, "record_failure", None),
+            is_rate_limited=_is_rate_limited,
         )
 
     # -------------------------------------------------------------------------
@@ -246,86 +272,25 @@ class AppDispatchServices:
             "[DISPATCH] sending to agent=%s, handoff_only=%s, handoff_id=%s",
             agent, dispatch_options.get("handoff_only", False), handoff_id,
         )
-        last_error = None
         agent_client = getattr(app, "agent_client", None)
+        service = self._get_agent_call_service()
 
-        max_retries = getattr(app, "MAX_RETRIES", 2)
-        retry_backoff = getattr(app, "RETRY_BACKOFF_SECONDS", 1)
-        for attempt in range(1, max_retries + 1):
-            if _is_user_cancelled(agent_client):
-                logger.info("[DISPATCH] agent=%s cancelled by user before retry %d/%d, aborting", agent, attempt, max_retries)
-                return None
-            try:
-                response = self.call_agent_low_level(
-                    agent,
-                    silent=silent,
-                    show_output=show_output,
-                    **dispatch_options,
-                )
-                if response is None:
-                    if _is_user_cancelled(agent_client):
-                        logger.info("[DISPATCH] agent=%s cancelled by user, aborting", agent)
-                        return None
-                    if attempt < max_retries:
-                        if agent_client and getattr(agent_client, 'rate_limit_detected', False):
-                            backoff = getattr(app, 'RATE_LIMIT_BACKOFF_SECONDS', 30)
-                            logger.warning("[DISPATCH] rate limit for agent=%s, waiting %ds before retry", agent, backoff)
-                        else:
-                            backoff = retry_backoff * attempt
-                            logger.warning("[DISPATCH] retry %d/%d for agent=%s", attempt, max_retries, agent)
-                        time.sleep(backoff)
-                        continue
-                    app.record_failure(agent)
-                    return None
+        def _call_fn(a):
+            return self.call_agent_low_level(
+                a, silent=silent, show_output=show_output, **dispatch_options,
+            )
 
-                result = self.resolve_agent_response(
-                    agent,
-                    response,
-                    silent=silent,
-                    persist_history=persist_history,
-                    show_output=show_output,
-                )
-                if result is None:
-                    if _is_user_cancelled(agent_client):
-                        logger.info("[DISPATCH] agent=%s cancelled by user, aborting", agent)
-                        return None
-                    if attempt < max_retries:
-                        if agent_client and getattr(agent_client, 'rate_limit_detected', False):
-                            backoff = getattr(app, 'RATE_LIMIT_BACKOFF_SECONDS', 30)
-                            logger.warning("[DISPATCH] rate limit for agent=%s, waiting %ds before retry", agent, backoff)
-                        else:
-                            backoff = retry_backoff * attempt
-                            logger.warning(
-                                "[DISPATCH] retry %d/%d for agent=%s (resolve failed)",
-                                attempt,
-                                max_retries,
-                                agent,
-                            )
-                        time.sleep(backoff)
-                        continue
-                    app.record_failure(agent)
-                return result
-            except Exception as exc:
-                if _is_user_cancelled(agent_client):
-                    logger.info("[DISPATCH] agent=%s cancelled by user, aborting", agent)
-                    return None
-                last_error = exc
-                if attempt < max_retries:
-                    logger.warning(
-                        "[DISPATCH] retry %d/%d for agent=%s after exception: %s",
-                        attempt,
-                        max_retries,
-                        agent,
-                        exc,
-                    )
-                    time.sleep(retry_backoff * attempt)
-                    continue
-                app.record_failure(agent)
-                raise
+        def _resolve_fn(a, response):
+            return self.resolve_agent_response(
+                a, response, silent=silent, persist_history=persist_history, show_output=show_output,
+            )
 
-        if last_error:
-            logger.error("[DISPATCH] all retries exhausted for agent=%s", agent)
-        return None
+        return service.call(
+            agent=agent,
+            call_fn=_call_fn,
+            resolve_fn=_resolve_fn,
+            is_user_cancelled=lambda: _is_user_cancelled(agent_client),
+        )
 
     def call_agent_low_level(
             self,
