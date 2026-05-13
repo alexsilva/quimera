@@ -528,11 +528,6 @@ class QuimeraApp:
     MAX_RETRIES = 2
     RETRY_BACKOFF_SECONDS = 1
 
-    @staticmethod
-    def _strip_payload_residual(text):
-        """Remove payload residual."""
-        return AppProtocol().strip_payload_residual(text)
-
     def _record_tool_event(self, agent, result=None, loop_abort=False, reason=None):
         """Registra métricas de uso de ferramentas atribuídas ao agente."""
         error_type = getattr(result, "error_type", None) if result is not None else None

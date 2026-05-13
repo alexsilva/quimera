@@ -179,7 +179,7 @@ def test_build_tool_system_prompt_includes_workspace_hint():
 
     assert "read_file, apply_patch" in prompt
     assert "Workspace raiz: /tmp/workspace." in prompt
-    assert "não invente envelopes JSON intermediários" in prompt
+    assert "não invente envelopes JSON para chamadas de ferramenta" in prompt
 
 
 def test_build_tool_system_prompt_avoids_unavailable_tool_guidance():
@@ -500,7 +500,7 @@ def test_run_tools_system_prompt_guides_tool_usage():
     assert "descubra o alvo antes de editar" in system_message["content"]
     assert "começar exatamente com '*** Begin Patch'" in system_message["content"]
     assert "não repita o mesmo payload inválido" in system_message["content"]
-    assert '"action":"execute"' in system_message["content"]
+    assert "não invente envelopes JSON para chamadas de ferramenta" in system_message["content"]
     assert "read_file usa 'path', não 'file_path'" in system_message["content"]
     assert "use exatamente 'run_shell' para uma execução simples ou 'exec_command' para sessão interativa" in \
            system_message["content"]

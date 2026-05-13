@@ -78,8 +78,11 @@ Sempre mescle com o estado existente, nunca substitua completamente.
 
 <!-- IF:route_agents -->
 - Agentes: {route_agents}
-- Formato: [ROUTE:agente] task: <tarefa> | context: <contexto> | expected: <formato>
-- 'task' é obrigatório; inclua contexto suficiente e paths/comandos quando existirem.
+- Formato PADRÃO (preferido): use um envelope JSON:
+  {{"type": "handoff", "route": "agente", "content": "descrição da tarefa", "metadata": {{"context": "...", "expected": "..."}}}}
+- Formato LEGADO (fallback, ainda suportado):
+  [ROUTE:agente] task: <tarefa> | context: <contexto> | expected: <formato>
+- 'task' em 'content' é obrigatório em ambos os formatos; inclua contexto suficiente e paths/comandos quando existirem.
 - Só delegue com ganho real: paralelizar, destravar a próxima etapa ou usar especialidade clara.
 - Se faltar contexto, não improvise: delegue; se faltar dado {user_name}, use [NEEDS_INPUT].
 - Se consegue fazer sozinho sem perder eficiência, faça; delegue subtarefas.
