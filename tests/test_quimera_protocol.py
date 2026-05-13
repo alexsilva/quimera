@@ -28,6 +28,7 @@ from quimera.cli import main as cli_main
 from quimera.config import DEFAULT_HISTORY_WINDOW
 from quimera.constants import CMD_AGENTS, CMD_CLEAR, CMD_CONNECT, CMD_DISCONNECT, CMD_HELP, CMD_PROMPT, EXTEND_MARKER, MSG_SHUTDOWN, TaskStatus, Visibility, build_agents_help, build_help
 from quimera.plugins import AgentPlugin
+from quimera.plugins.base import PluginRegistry
 from quimera.runtime.models import TaskRecord
 from quimera.plugins.base import OpenAIConnection
 from quimera.handoff_presenter import HandoffPresenter
@@ -2464,12 +2465,12 @@ class PluginTests(unittest.TestCase):
     def test_register_and_get(self):
         p = AgentPlugin(name="dummy", prefix="/dummy", cmd=["dummy"], style=("yellow", "Dummy"))
 
-        with patch.dict(plugins._registry, {}, clear=False):
+        with patch("quimera.plugins.base._registry", PluginRegistry()):
             plugins.register(p)
             self.assertIs(plugins.get("dummy"), p)
 
     def test_get_returns_none_for_unknown(self):
-        with patch.dict(plugins._registry, {}, clear=True):
+        with patch("quimera.plugins.base._registry", PluginRegistry()):
             self.assertIsNone(plugins.get("naoexiste"))
 
     def test_default_plugins_loaded(self):
@@ -2493,7 +2494,7 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(_agent_style("stub", get_plugin_style=get_style), ("magenta", "🤖 Stub"))
 
     def test_agent_style_fallback_for_unknown(self):
-        with patch.dict(plugins._registry, {}, clear=True):
+        with patch("quimera.plugins.base._registry", PluginRegistry()):
             color, label = _agent_style("unknown")
             self.assertEqual(color, "white")
             self.assertEqual(label, "🤖 Unknown")
@@ -2502,7 +2503,9 @@ class PluginTests(unittest.TestCase):
         stub = AgentPlugin(name="stub", prefix="/stub", cmd=["stub", "-x"], style=("white", "Stub"))
         renderer = Mock()
 
-        with patch.dict(plugins._registry, {"stub": stub}):
+        reg = PluginRegistry()
+        reg.register(stub)
+        with patch("quimera.plugins.base._registry", reg):
             client = AgentClient(renderer)
             with patch.object(client, "run", return_value="ok") as mock_run:
                 result = client.call("stub", "hello")
@@ -2515,7 +2518,7 @@ class PluginTests(unittest.TestCase):
 
     def test_agent_client_call_error_on_unknown_agent(self):
         renderer = Mock()
-        with patch.dict(plugins._registry, {}, clear=True):
+        with patch("quimera.plugins.base._registry", PluginRegistry()):
             client = AgentClient(renderer)
             result = client.call("fantasma", "msg")
 
@@ -2526,7 +2529,7 @@ class PluginTests(unittest.TestCase):
     def test_new_plugin_registration_visible_via_all_names(self):
         novo = AgentPlugin(name="novo", prefix="/novo", cmd=["novo"], style=("cyan", "Novo"))
 
-        with patch.dict(plugins._registry, {}, clear=True):
+        with patch("quimera.plugins.base._registry", PluginRegistry()):
             plugins.register(novo)
             self.assertEqual(plugins.all_names(), ["novo"])
             self.assertEqual(plugins.all_plugins(), [novo])

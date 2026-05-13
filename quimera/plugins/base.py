@@ -353,7 +353,26 @@ def format_connection_label(connection: Connection) -> str:
     return label
 
 
-_registry: dict[str, AgentPlugin] = {}
+class PluginRegistry:
+    """Registry for AgentPlugin instances."""
+
+    def __init__(self):
+        self._plugins: dict[str, AgentPlugin] = {}
+
+    def register(self, plugin: AgentPlugin) -> None:
+        self._plugins[plugin.name] = plugin
+
+    def get(self, name: str) -> Optional[AgentPlugin]:
+        return self._plugins.get(name)
+
+    def all_names(self) -> List[str]:
+        return list(self._plugins.keys())
+
+    def all_plugins(self) -> List[AgentPlugin]:
+        return list(self._plugins.values())
+
+
+_registry = PluginRegistry()
 
 
 _DYNAMIC_AGENT_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
@@ -417,13 +436,13 @@ def register_dynamic_plugin(name: str, connection: Connection | None = None, met
 
     if connection is not None:
         object.__setattr__(plugin, "_connection_override", connection)
-    _registry[normalized] = plugin
+    _registry.register(plugin)
     return plugin
 
 
 def register(plugin: AgentPlugin) -> None:
     """Executa register."""
-    _registry[plugin.name] = plugin
+    _registry.register(plugin)
 
 
 def get(name: str) -> Optional[AgentPlugin]:
@@ -433,9 +452,9 @@ def get(name: str) -> Optional[AgentPlugin]:
 
 def all_names() -> List[str]:
     """Executa all names."""
-    return list(_registry.keys())
+    return _registry.all_names()
 
 
 def all_plugins() -> List[AgentPlugin]:
     """Executa all plugins."""
-    return list(_registry.values())
+    return _registry.all_plugins()

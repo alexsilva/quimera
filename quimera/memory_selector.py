@@ -1,4 +1,11 @@
 from .config import DEFAULT_HISTORY_WINDOW, DEFAULT_USER_NAME
+from .constants import (
+    EXTEND_MARKER,
+    NEEDS_INPUT_MARKER,
+    ROUTE_PREFIX,
+    STATE_UPDATE_END,
+    STATE_UPDATE_START,
+)
 
 
 class MemorySelector:
@@ -66,6 +73,12 @@ class MemorySelector:
             "--- a/",
             "@@ ",
             "arquivo alterado:",
+            ROUTE_PREFIX.lower(),
+            "[ack:",
+            NEEDS_INPUT_MARKER.lower(),
+            EXTEND_MARKER.lower(),
+            STATE_UPDATE_START.lower(),
+            STATE_UPDATE_END.lower(),
         )
         return any(marker in lowered for marker in blocked_markers)
 

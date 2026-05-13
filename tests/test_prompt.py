@@ -291,6 +291,21 @@ def test_collect_recent_facts_skips_diff_like_tool_output_claims():
     assert "Teste falhou em test_x" in facts_block
 
 
+def test_collect_recent_facts_skips_protocol_control_markers():
+    builder = PromptBuilder(context_manager=_make_context_manager(""))
+    history = [
+        {"role": "codex", "content": "[ROUTE:claude] task: revisar testes"},
+        {"role": "claude", "content": "[ACK:abc123] recebido"},
+        {"role": "human", "content": "qual o próximo passo?"},
+    ]
+
+    prompt = builder.build(agent="outro", history=history)
+
+    assert '<recent_agent_messages title=' not in prompt
+    conversation_block = _extract_block(prompt, "recent_conversation")
+    assert "[sem itens residuais na conversa recente]" in conversation_block
+
+
 def test_build_conversation_block_skips_empty_content():
     """Mensagens com content vazio não devem aparecer na conversa recente."""
     builder = PromptBuilder(context_manager=_make_context_manager(""), user_name="ALEX")

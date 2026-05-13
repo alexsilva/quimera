@@ -25,7 +25,7 @@ from .task_classifiers import classify_task_execution_result, parse_task_command
 from .system_layer import AppSystemLayer
 from .turn import TurnManager
 from .. import plugins
-from ..plugins.base import extract_model_from_cli_cmd
+from ..plugins.base import PluginRegistry, extract_model_from_cli_cmd
 from ..runtime.parser import strip_tool_block
 from ..runtime import tasks as runtime_tasks
 from ..ui import TerminalRenderer
@@ -65,6 +65,7 @@ class QuimeraApp:
                  theme: str | None = None,
                  workspace: Workspace | None = None,
                  auto_approve_mutations: bool = False,
+                 plugin_registry: PluginRegistry | None = None,
                  ):
         """Inicializa uma instância de QuimeraApp."""
         self.selected_agents = list(agents) if agents else []
@@ -74,6 +75,7 @@ class QuimeraApp:
         self._agent_failures_lock = threading.Lock()
         self.workspace = workspace if workspace is not None else Workspace(cwd)
         self.auto_approve_mutations = auto_approve_mutations
+        self._plugin_registry = plugin_registry
         self.config = ConfigManager(self.workspace.config_file)
         _active_theme = theme if theme is not None else self.config.theme
         self.renderer = TerminalRenderer(theme=_active_theme, get_plugin_style=self._resolve_plugin_style, density=self.config.density)
@@ -293,10 +295,16 @@ class QuimeraApp:
         normalized_name = self._normalize_agent_name(agent_name)
         if not normalized_name:
             return None
+        reg = getattr(self, '_plugin_registry', None)
+        if reg is not None:
+            return reg.get(normalized_name)
         return plugins.get(normalized_name)
 
     def get_available_plugins(self) -> list:
         """Retorna a lista atual de plugins conhecidos pela aplicação."""
+        reg = getattr(self, '_plugin_registry', None)
+        if reg is not None:
+            return list(reg.all_plugins())
         return list(plugins.all_plugins())
 
     def get_active_agent_plugins(self) -> list:

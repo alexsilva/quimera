@@ -77,6 +77,13 @@ class TestMemorySelector:
         assert MemorySelector.should_skip_fact("goal_canonical: corrigir bug")
         assert MemorySelector.should_skip_fact("Objetivo fixo é resolver")
 
+    def test_should_skip_fact_blocks_protocol_markers(self):
+        assert MemorySelector.should_skip_fact("[ROUTE:codex] task: revisar parser")
+        assert MemorySelector.should_skip_fact("[ACK:abc123] recebido")
+        assert MemorySelector.should_skip_fact("Aguardando dados [NEEDS_INPUT]")
+        assert MemorySelector.should_skip_fact("Encaminhar para debate [DEBATE]")
+        assert MemorySelector.should_skip_fact("[STATE_UPDATE]{\"next_step\":\"x\"}[/STATE_UPDATE]")
+
     def test_build_conversation_block_skips_specified_indexes(self):
         selector = MemorySelector(history_window=10, user_name="ALEX")
         history = [

@@ -9,9 +9,12 @@ from quimera.plugins.base import (
     AgentPlugin,
     CliConnection,
     OpenAIConnection,
+    PluginRegistry,
     _connection_from_dict,
     _dynamic_plugin_metadata,
     _humanize_agent_name,
+    all_names,
+    all_plugins,
     apply_connection_overrides,
     connection_to_dict,
     extract_model_from_cli_cmd,
@@ -589,3 +592,58 @@ def test_set_connection_override_dynamic_with_base_ref(tmp_path):
 
     saved = json.loads(f.read_text())
     assert saved["dynwithbase1"]["plugin"]["base"] == "mybase2"
+
+
+# ---------------------------------------------------------------------------
+# PluginRegistry
+# ---------------------------------------------------------------------------
+
+def _make_plugin_for_registry(name: str = "regtest") -> AgentPlugin:
+    return AgentPlugin(name=name, prefix=f"/{name}", style=("blue", name))
+
+
+def test_plugin_registry_register_and_get():
+    registry = PluginRegistry()
+    p = _make_plugin_for_registry("p1")
+    registry.register(p)
+    assert registry.get("p1") is p
+
+
+def test_plugin_registry_get_nonexistent():
+    registry = PluginRegistry()
+    assert registry.get("nope") is None
+
+
+def test_plugin_registry_all_names():
+    registry = PluginRegistry()
+    registry.register(_make_plugin_for_registry("b"))
+    registry.register(_make_plugin_for_registry("a"))
+    assert registry.all_names() == ["b", "a"]
+
+
+def test_plugin_registry_all_plugins():
+    registry = PluginRegistry()
+    p = _make_plugin_for_registry("p1")
+    registry.register(p)
+    result = registry.all_plugins()
+    assert result == [p]
+
+
+def test_plugin_registry_isolation():
+    r1 = PluginRegistry()
+    r2 = PluginRegistry()
+    r1.register(_make_plugin_for_registry("shared"))
+    assert r2.get("shared") is None
+
+
+def test_default_registry_is_plugin_registry_instance():
+    from quimera.plugins.base import _registry
+    assert isinstance(_registry, PluginRegistry)
+
+
+def test_register_get_all_names_all_plugins_delegate_to_default():
+    p = _make_plugin_for_registry("delegated")
+    register(p)
+    assert get("delegated") is p
+    assert "delegated" in all_names()
+    assert p in all_plugins()
