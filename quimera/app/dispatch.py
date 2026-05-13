@@ -107,12 +107,14 @@ class AppDispatchServices:
                 approval_handler.reset_approve_all_after_cycle()
 
         def _progress_callback(agent, tool_name, hop, max_hops, elapsed, ok, is_invalid):
-            system_layer = getattr(app, "system_layer", None)
-            if system_layer is not None:
+            renderer = getattr(app, "renderer", None)
+            if renderer is not None:
                 status = "✓" if ok else "✗" if is_invalid else "○"
-                system_layer.show_system_message(
-                    f"[tool hop {hop}/{max_hops}] {agent} {status} {tool_name}"
-                )
+                show_system_neutral = getattr(renderer, "show_system_neutral", None)
+                if callable(show_system_neutral):
+                    show_system_neutral(
+                        f"[tool hop {hop}/{max_hops}] {agent} {status} {tool_name}"
+                    )
 
         return ToolLoopService(
             tool_executor=app.tool_executor,
