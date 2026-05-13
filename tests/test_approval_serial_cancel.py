@@ -14,7 +14,7 @@ class TestConsoleApprovalHandlerSerialLock:
 
     def test_serial_lock_denies_concurrent_approval(self):
         """Quando duas threads chamam approve() concorrentemente, a segunda
-        deve retornar False imediatamente (lock não-bloqueante)."""
+        deve aguardar a primeira terminar (lock bloqueante)."""
         gate_calls = []
         gate_lock = threading.Event()
 
@@ -26,11 +26,15 @@ class TestConsoleApprovalHandlerSerialLock:
         handler = ConsoleApprovalHandler(input_gate=slow_gate)
 
         results = []
+        errors = []
 
         def call_approve():
             with patch("builtins.print"):
-                r = handler.approve(tool_name="tool1", summary="test")
-                results.append(r)
+                try:
+                    r = handler.approve(tool_name="tool1", summary="test")
+                    results.append(r)
+                except Exception as e:
+                    errors.append(e)
 
         t = threading.Thread(target=call_approve, daemon=True)
         t.start()
@@ -39,16 +43,30 @@ class TestConsoleApprovalHandlerSerialLock:
         time.sleep(0.3)
         assert len(gate_calls) == 1, "gate deve ter sido chamado 1x"
 
-        # Segunda chamada deve retornar False imediatamente (lock não-bloqueante)
-        with patch("builtins.print"):
-            r2 = handler.approve(tool_name="tool2", summary="test2")
-        assert r2 is False, "segunda chamada concorrente deve retornar False"
-        assert len(gate_calls) == 1, "gate não pode ter sido chamado de novo"
+        # Segunda chamada em background (lock bloqueante)
+        results2 = []
+        def call_approve2():
+            with patch("builtins.print"):
+                r = handler.approve(tool_name="tool2", summary="test2")
+                results2.append(r)
+
+        t2 = threading.Thread(target=call_approve2, daemon=True)
+        t2.start()
+
+        # Breve pausa: t2 deve estar bloqueada no lock, não no gate
+        time.sleep(0.2)
+        assert len(gate_calls) == 1, "gate ainda só deve ter sido chamado 1x (t2 bloqueada no lock)"
 
         # Libera a thread presa
         gate_lock.set()
         t.join(3)
-        assert results == [False], "primeira chamada deve retornar False (digitou 'n')"
+        t2.join(3)
+
+        assert errors == [], f"erros: {errors}"
+        assert len(results) == 1
+        assert results[0] is False  # digitou 'n'
+        assert len(results2) == 1
+        assert results2[0] is False  # também retorna False (digitou 'n')
 
     def test_serial_lock_allows_sequential_approvals(self):
         """Chamadas sequenciais (não concorrentes) funcionam normalmente."""
@@ -141,11 +159,10 @@ class TestConsoleApprovalHandlerParallelApproval:
     """Simula múltiplas threads chamando approve() concorrentemente."""
 
     def test_parallel_approvals_only_one_wins_lock(self):
-        """Duas threads chamando approve() concorrentemente: apenas uma
-        executa o prompt; as demais retornam False imediatamente."""
+        """Duas threads chamando approve() concorrentemente: a segunda
+        aguarda a primeira terminar (lock bloqueante), depois executa."""
         gate_calls = []
         gate_started = threading.Event()
-        gate_done = threading.Event()
         proceed = threading.Event()
         entered_count = 0
         entered_lock = threading.Lock()
@@ -180,13 +197,14 @@ class TestConsoleApprovalHandlerParallelApproval:
         # Pequena pausa para dar tempo da segunda thread tentar o lock
         time.sleep(0.5)
 
-        # Libera o gate
+        # Libera o gate — ambas executam em sequência
         proceed.set()
 
         for t in threads:
             t.join(3)
 
-        # Apenas 1 thread conseguiu entrar no gate (a que ganhou o lock)
-        assert len(gate_calls) == 1, "apenas 1 chamada ao gate"
+        # Ambas as threads entram no gate (lock bloqueante serializa)
+        assert len(gate_calls) == 2, "ambas as threads devem chamar o gate"
+        assert entered_count == 2, "ambas devem entrar no gate"
         assert len(results) == 2, "ambas as threads devem ter retornado"
         assert all(r is False for r in results), "ambas retornam False"

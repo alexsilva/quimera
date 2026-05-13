@@ -332,7 +332,7 @@ class TestInputContextAndWelcome(unittest.TestCase):
         from quimera.app.core import QuimeraApp
 
         app = QuimeraApp.__new__(QuimeraApp)
-        app.workspace = MagicMock(cwd=Path("/tmp/quimera-project"))
+        app.workspace = MagicMock(cwd=Path("/tmp/quimera-project"), tasks_db=Path("/tmp/quimera_test_tasks.db"))
         app.active_agents = []
         app._pending_input_for = None
         app._resolve_active_model_label = QuimeraApp._resolve_active_model_label.__get__(app, QuimeraApp)
@@ -348,7 +348,7 @@ class TestInputContextAndWelcome(unittest.TestCase):
         from quimera.app.core import QuimeraApp
 
         app = QuimeraApp.__new__(QuimeraApp)
-        app.workspace = MagicMock(cwd=Path("/tmp/projeto"))
+        app.workspace = MagicMock(cwd=Path("/tmp/projeto"), tasks_db=Path("/tmp/quimera_test_tasks.db"))
         app._build_welcome_message = QuimeraApp._build_welcome_message.__get__(app, QuimeraApp)
 
         with patch.object(QuimeraApp, "_resolve_app_version", return_value="0.1.0"):

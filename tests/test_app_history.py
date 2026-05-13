@@ -48,6 +48,7 @@ class TestAppHistory(unittest.TestCase):
             mock_ws_instance = MagicMock()
             mock_ws_instance.history_file = self.history_file
             mock_ws_instance.root = Path("/tmp/quimera_test_workspace")
+            mock_ws_instance.tasks_db = Path("/tmp/quimera_test_tasks.db")
             mock_ws.return_value = mock_ws_instance
 
             with patch("quimera.app.core.create_executor"):
@@ -88,6 +89,7 @@ class TestAppHistory(unittest.TestCase):
             mock_ws_instance = MagicMock()
             mock_ws_instance.history_file = self.history_file
             mock_ws_instance.root = Path("/tmp/quimera_test_workspace")
+            mock_ws_instance.tasks_db = Path("/tmp/quimera_test_tasks.db")
             mock_ws.return_value = mock_ws_instance
 
             with patch("quimera.app.core.create_executor"):

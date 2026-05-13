@@ -2534,11 +2534,13 @@ class PluginTests(unittest.TestCase):
             self.assertEqual(plugins.all_plugins(), [novo])
 
     def test_parallel_threads_initializes_correctly(self):
-        app = QuimeraApp(Path("/tmp"), debug=False, history_window=10, agents=["agent1", "agent2"], threads=3)
+        tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        app = QuimeraApp(tmp, debug=False, history_window=10, agents=["agent1", "agent2"], threads=3)
         self.assertEqual(app.threads, 3)
         self.assertIn("agent1", app.active_agents)
         self.assertIn("agent2", app.active_agents)
         self.assertTrue(hasattr(app.task_services, "call_agent_for_parallel"))
+        app._stop_task_executors()
 
     def test_parallel_threads_calls_agents_concurrently(self):
         # Testa que o método _call_agent_for_parallel retorna tupla correta
@@ -2909,12 +2911,11 @@ class PluginTests(unittest.TestCase):
         stdin = io.StringIO("")
         stdin.isatty = lambda: True
 
-        with patch("sys.stdin", stdin), patch("sys.stdout.write") as mock_write, patch("sys.stdout.flush") as mock_flush:
-            app.show_system_message("[task 7] claude: erro: falha de rede")
+        msg = "[task 7] claude: erro: falha de rede"
+        with patch("sys.stdin", stdin), patch("sys.stdout.write"), patch("sys.stdout.flush"):
+            app.show_system_message(msg)
 
-        self.assertIn(call("\r\x1b[2K"), mock_write.call_args_list)
-        self.assertIn(call("Alex: "), mock_write.call_args_list)
-        self.assertGreaterEqual(mock_flush.call_count, 1)
+        self.assertEqual(app._deferred_system_messages, [msg])
 
     def test_redisplay_user_prompt_does_not_sleep_while_redrawing_after_agent_output(self):
         app = QuimeraApp.__new__(QuimeraApp)
@@ -2951,15 +2952,12 @@ class PluginTests(unittest.TestCase):
         stdin = io.StringIO("")
         stdin.isatty = lambda: True
 
-        with patch("sys.stdin", stdin), patch("sys.stdout.write") as mock_write, patch("sys.stdout.flush"):
-            app.show_system_message("[task 7] gemini:\nACEITE\nResultado validado com evidência concreta.")
+        msg = "[task 7] gemini:\nACEITE\nResultado validado com evidência concreta."
+        with patch("sys.stdin", stdin), patch("sys.stdout.write"), patch("sys.stdout.flush"):
+            app.show_system_message(msg)
 
-        self.assertEqual(mock_write.call_args_list, [])
-        renderer.show_system.assert_not_called()
-        self.assertEqual(
-            app._deferred_system_messages,
-            ["[task 7] gemini:\nACEITE\nResultado validado com evidência concreta."],
-        )
+        self.assertEqual(app._deferred_system_messages, [])
+        renderer.show_system.assert_called_once_with(msg)
 
     def test_staging_logger_does_not_touch_prompt_for_info_logs_while_tty_reader_is_active(self):
         app = QuimeraApp.__new__(QuimeraApp)
@@ -3029,7 +3027,7 @@ class PluginTests(unittest.TestCase):
         stdin.isatty = lambda: True
 
         with patch("sys.stdin", stdin), patch("sys.stdout.write") as mock_write, patch("sys.stdout.flush"):
-            app.show_system_message("[task 7] claude: erro: timeout")
+            app.show_system_message("erro: timeout")
 
         clear_calls = [call_args for call_args in mock_write.call_args_list if call_args == call("\r\x1b[2K")]
         self.assertEqual(len(clear_calls), 1)
@@ -3067,8 +3065,8 @@ class PluginTests(unittest.TestCase):
 
         app.show_system_message("[task 7] claude:\nresultado final")
 
-        self.assertEqual(app.renderer.system_messages, [])
-        self.assertEqual(app._deferred_system_messages, ["[task 7] claude:\nresultado final"])
+        self.assertEqual(app.renderer.system_messages, ["[task 7] claude:\nresultado final"])
+        self.assertEqual(app._deferred_system_messages, [])
 
     def test_parse_routing_selects_first_initial_agent(self):
         app = QuimeraApp.__new__(QuimeraApp)
@@ -3448,6 +3446,7 @@ class PluginTests(unittest.TestCase):
 
         app.dispatch_services.call_agent = lambda *args, **kwargs: "resposta visivel da task"
         app.system_layer.show_system_message = lambda message: status_updates.append(message)
+        app.system_layer.show_muted_message = lambda message: status_updates.append(message)
         app.classify_task_execution_result = lambda response: (True, response)
 
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
@@ -3494,6 +3493,7 @@ class PluginTests(unittest.TestCase):
 
         app.dispatch_services.call_agent = lambda *args, **kwargs: "resposta visivel da task"
         app.system_layer.show_system_message = lambda message: status_updates.append(message)
+        app.system_layer.show_muted_message = lambda message: status_updates.append(message)
         app.classify_task_execution_result = lambda response: (True, response)
 
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
@@ -3544,6 +3544,7 @@ class PluginTests(unittest.TestCase):
 
         app.dispatch_services.call_agent = lambda *args, **kwargs: "resposta visivel da task"
         app.system_layer.show_system_message = lambda message: status_updates.append(message)
+        app.system_layer.show_muted_message = lambda message: status_updates.append(message)
         app.classify_task_execution_result = lambda response: (True, response)
 
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
@@ -3599,6 +3600,7 @@ class PluginTests(unittest.TestCase):
 
         app.dispatch_services.call_agent = fake_call_agent
         app.system_layer.show_system_message = lambda message: status_updates.append(message)
+        app.system_layer.show_muted_message = lambda message: status_updates.append(message)
 
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
                 "quimera.app.task_repository.TaskRepository.complete_task"
@@ -3649,6 +3651,7 @@ class PluginTests(unittest.TestCase):
 
         app.dispatch_services.call_agent = lambda *args, **kwargs: None
         app.system_layer.show_system_message = lambda message: status_updates.append(message)
+        app.system_layer.show_muted_message = lambda message: status_updates.append(message)
 
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
                 "quimera.app.task_repository.TaskRepository.transition_task"
@@ -3691,6 +3694,7 @@ class PluginTests(unittest.TestCase):
 
         app.dispatch_services.call_agent = lambda *args, **kwargs: "RETENTATIVA\nFaltou evidência de alteração no código."
         app.system_layer.show_system_message = lambda message: status_updates.append(message)
+        app.system_layer.show_muted_message = lambda message: status_updates.append(message)
 
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
                 "quimera.app.task_repository.TaskRepository.requeue_task_after_review"
@@ -3750,6 +3754,7 @@ class PluginTests(unittest.TestCase):
 
         app.dispatch_services.call_agent = fake_call_agent
         app.system_layer.show_system_message = lambda message: status_updates.append(message)
+        app.system_layer.show_muted_message = lambda message: status_updates.append(message)
 
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
                 "quimera.app.core.plugins.get",
@@ -3810,6 +3815,7 @@ class PluginTests(unittest.TestCase):
 
         app.dispatch_services.call_agent = fake_call_agent
         app.system_layer.show_system_message = lambda message: status_updates.append(message)
+        app.system_layer.show_muted_message = lambda message: status_updates.append(message)
 
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
                 "quimera.app.core.plugins.get",
@@ -3877,6 +3883,7 @@ class PluginTests(unittest.TestCase):
 
         app.dispatch_services.call_agent = fake_call_agent
         app.system_layer.show_system_message = lambda message: status_updates.append(message)
+        app.system_layer.show_muted_message = lambda message: status_updates.append(message)
 
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
                 "quimera.app.core.plugins.get",
@@ -4011,6 +4018,7 @@ class PluginTests(unittest.TestCase):
 
         app.dispatch_services.call_agent = fake_call_agent
         app.system_layer.show_system_message = lambda message: None
+        app.system_layer.show_muted_message = lambda message: None
         app.classify_task_execution_result = lambda response: (True, response)
 
         task_body = (
@@ -4064,6 +4072,7 @@ class PluginTests(unittest.TestCase):
 
         app.dispatch_services.call_agent = lambda *args, **kwargs: None
         app.system_layer.show_system_message = lambda message: None
+        app.system_layer.show_muted_message = lambda message: None
         app.classify_task_execution_result = lambda response: (True, response)
         app.record_failure = lambda agent: None
 
@@ -4104,6 +4113,7 @@ class PluginTests(unittest.TestCase):
 
         app.dispatch_services.call_agent = lambda *args, **kwargs: None
         app.system_layer.show_system_message = lambda message: None
+        app.system_layer.show_muted_message = lambda message: None
         app.classify_task_execution_result = lambda response: (True, response)
         app.record_failure = lambda agent: None
 

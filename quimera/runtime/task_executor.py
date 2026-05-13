@@ -64,6 +64,7 @@ class TaskExecutor:
             return
         self._running = True
         self._wake_event.clear()
+        self._executor = ThreadPoolExecutor(max_workers=self.max_workers, thread_name_prefix=f"task-{self.agent_name}")
         self._thread = threading.Thread(target=self._poll_loop, daemon=True)
         self._thread.start()
 
@@ -71,6 +72,8 @@ class TaskExecutor:
         """Executa stop."""
         self._running = False
         self._wake_event.set()
+        if self._executor:
+            self._executor.shutdown(wait=False)
         if self._thread:
             try:
                 self._thread.join(timeout=5)
@@ -91,7 +94,7 @@ class TaskExecutor:
         self._repository.fail_task(task_id, reason=reason)
 
     def _poll_loop(self):
-        """Executa poll loop."""
+        """Executa poll loop — tasks despachadas em paralelo via ThreadPoolExecutor quando ativo."""
         while self._running:
             task_id = None
             try:
@@ -99,16 +102,17 @@ class TaskExecutor:
                 if task_id:
                     task = self._load_task(task_id)
                     if task and self._handler:
-                        self._handler(task)
+                        if self._executor is not None:
+                            self._executor.submit(self._handler, task)
+                        else:
+                            self._handler(task)
                     else:
                         self._fail_task(task_id, "handler unavailable or task not found")
                         _logger.warning("task %s claimed by %s but could not be dispatched", task_id, self.agent_name)
                     task_id = None
-                    # Brief pause after execution so other agents can pick up requeued tasks
                     if self._wait_or_stop(1):
                         break
                     continue
-                # No regular task — check for review tasks from other agents
                 can_review = self._review_eligibility() if self._review_eligibility else True
                 if self._review_handler and can_review:
                     review_id = self._claim_review_task()
@@ -144,6 +148,10 @@ class TaskExecutor:
         if self._wake_event.is_set():
             self._wake_event.clear()
         return not self._running
+
+    def wake(self):
+        """Wake the poll loop to check for new tasks immediately."""
+        self._wake_event.set()
 
     def process_pending(self):
         """Process one iteration of pending tasks (for manual/batch execution)."""

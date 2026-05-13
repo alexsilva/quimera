@@ -5,22 +5,24 @@ O cliente OpenAI é sempre mockado — não há chamada de rede real.
 from __future__ import annotations
 
 import json
+import threading
 from types import SimpleNamespace
 from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 
 from quimera.runtime.drivers.openai_compat import (
-    _MAX_TOOL_LOOP_MESSAGES,
-    _MAX_TOOL_RESULT_CHARS,
-    MAX_TOOL_HOPS_BY_RELIABILITY,
-    OpenAICompatDriver,
-    _build_tool_budget_prompt,
-    _build_tool_system_prompt,
-    _prune_tool_loop_messages,
-    _sanitize_assistant_text,
-    _strip_thinking,
-)
+     _MAX_TOOL_LOOP_MESSAGES,
+     _MAX_TOOL_RESULT_CHARS,
+     DEFAULT_MAX_CONNECTIONS,
+     MAX_TOOL_HOPS_BY_RELIABILITY,
+     OpenAICompatDriver,
+     _build_tool_budget_prompt,
+     _build_tool_system_prompt,
+     _prune_tool_loop_messages,
+     _sanitize_assistant_text,
+     _strip_thinking,
+ )
 from quimera.runtime.drivers.repl import (
     DriverRepl,
     _header,
@@ -1486,3 +1488,118 @@ def test_existing_plugins_still_register():
     assert granite.model == "granite4.1:8b"
     assert granite.supports_tools is True
     assert granite.supports_task_execution is True
+
+
+# ---------------------------------------------------------------------------
+# Testes de semáforo de rate-limit (fix #14)
+# ---------------------------------------------------------------------------
+
+def test_default_max_connections_is_positive():
+    """DEFAULT_MAX_CONNECTIONS deve ser um inteiro positivo."""
+    from quimera.runtime.drivers.openai_compat import DEFAULT_MAX_CONNECTIONS
+    assert isinstance(DEFAULT_MAX_CONNECTIONS, int)
+    assert DEFAULT_MAX_CONNECTIONS > 0
+
+
+def test_driver_has_instance_semaphore():
+    """Cada instância de OpenAICompatDriver deve ter seu próprio semáforo."""
+    import threading
+    driver, _ = _make_driver()
+    assert hasattr(driver, "_semaphore")
+    assert isinstance(driver._semaphore, threading.Semaphore)
+
+
+def test_semaphore_initial_value_equals_max_connections():
+    """Valor inicial do semáforo deve corresponder a max_connections passado."""
+    from quimera.runtime.drivers.openai_compat import DEFAULT_MAX_CONNECTIONS
+    driver, _ = _make_driver()
+    assert driver._semaphore._value == DEFAULT_MAX_CONNECTIONS
+
+
+def test_run_acquires_and_releases_semaphore():
+    """run() deve adquirir e liberar o semáforo ao redor da chamada API."""
+    from quimera.runtime.drivers.openai_compat import OpenAICompatDriver, DEFAULT_MAX_CONNECTIONS
+    driver, mock_client = _make_driver()
+
+    # Reduz o semáforo para 1 para testar contenção
+    driver._semaphore = threading.Semaphore(1)
+
+    _setup_stream(mock_client, [_make_chunk(content="ok")])
+
+    # Semáforo deve ser adquirido durante a execução e liberado após
+    assert driver._semaphore._value == 1
+    result = driver.run("prompt", tool_executor=None)
+    assert result == "ok"
+    # Após run(), o semáforo deve estar liberado de volta
+    assert driver._semaphore._value == 1
+
+
+def test_concurrent_runs_block_at_max_connections():
+    """Chamadas concorrentes além de max_connections devem esperar."""
+    import threading
+    import time
+    from quimera.runtime.drivers.openai_compat import OpenAICompatDriver
+
+    driver, mock_client = _make_driver(model="model-x", base_url="http://localhost:1/v1")
+
+    # Permite apenas 1 conexão simultânea
+    driver._semaphore = threading.Semaphore(1)
+
+    # Controla quando a primeira chamada pode terminar
+    first_can_finish = threading.Event()
+
+    def slow_create(*args, **kwargs):
+        first_can_finish.wait(timeout=5)
+        # Retorna resposta simples fora do semaphore (já liberado)
+        return _make_non_streaming_response(content="ok", tool_calls=None)
+
+    mock_client.chat.completions.create.side_effect = slow_create
+    _setup_stream(mock_client, [_make_chunk(content="ok")])
+
+    completed = {"count": 0}
+    errors = {"list": []}
+
+    def run_in_thread(name):
+        try:
+            driver.run(f"prompt-{name}", tool_executor=None)
+            completed["count"] += 1
+        except Exception as e:
+            errors["list"].append(e)
+
+    # Inicia a primeira chamada (vai bloquear em slow_create até first_can_finish)
+    t1 = threading.Thread(target=lambda: run_in_thread("A"))
+    t1.start()
+
+    # Inicia a segunda thread imediatamente — vai bloquear no semáforo
+    t2_start = time.monotonic()
+    t2 = threading.Thread(target=lambda: run_in_thread("B"))
+    t2.start()
+
+    # Espera um curto período — t2 ainda deve estar bloqueada no semáforo
+    time.sleep(0.2)
+
+    # Ainda nenhuma completou (ambas bloqueadas)
+    assert completed["count"] == 0, "Nenhuma chamada deveria ter completado ainda"
+
+    # Libera a primeira chamada
+    first_can_finish.set()
+
+    # Espera ambas completarem
+    t1.join(timeout=5)
+    t2.join(timeout=5)
+
+    # Verifica que ambas completaram sem erro
+    assert errors["list"] == [], f"Erros: {errors['list']}"
+    assert completed["count"] == 2
+
+    # A segunda thread levou pelo menos 0.2s (esperou no semáforo)
+    elapsed = time.monotonic() - t2_start
+    assert elapsed >= 0.15, f"Segunda thread não deveria ter sido bloqueada no semáforo ({elapsed:.2f}s)"
+
+
+def test_semaphore_is_per_instance_not_class():
+    """Cada instância deve ter seu próprio semáforo independente."""
+    driver1, _ = _make_driver(model="model-a", base_url="http://localhost:1/v1")
+    driver2, _ = _make_driver(model="model-b", base_url="http://localhost:2/v1")
+
+    assert driver1._semaphore is not driver2._semaphore

@@ -105,21 +105,21 @@ class TaskReviewService:
                         notes=task.notes,
                     )
                     if ok:
-                        self.system_layer.show_system_message(
+                        self.system_layer.show_muted_message(
                             f"[task {task_id}] {agent_name}: review rejeitado, aguardando outro agente"
                         )
                     else:
-                        self.system_layer.show_system_message(
+                        self.system_layer.show_muted_message(
                             f"[task {task_id}] {agent_name}: erro ao rejeitar review — transição inválida"
                         )
                     return False
 
                 if executor:
-                    self.system_layer.show_system_message(
+                    self.system_layer.show_muted_message(
                         f"[task {task_id}] {agent_name}: revisando execução de {executor}"
                     )
                 else:
-                    self.system_layer.show_system_message(f"[task {task_id}] {agent_name}: revisando task")
+                    self.system_layer.show_muted_message(f"[task {task_id}] {agent_name}: revisando task")
 
                 task_result = task.result or ""
                 description = task.description or ""
@@ -146,13 +146,13 @@ class TaskReviewService:
                 )
 
                 if self.was_user_cancelled():
-                    self.system_layer.show_system_message(
+                    self.system_layer.show_muted_message(
                         f"[task {task_id}] {agent_name}: cancelado pelo usuário"
                     )
                     self.repository.fail_task(task_id, reason="cancelled by user")
                     return False
 
-                self.system_layer.show_system_message(f"[task {task_id}] {agent_name}:\n{response or ''}")
+                self.system_layer.show_muted_message(f"[task {task_id}] {agent_name}:\n{response or ''}")
                 accepted, verdict, review_text = self.classify_task_review_result(response)
                 if not accepted:
                     ok = self.repository.requeue_task_after_review(
@@ -162,11 +162,11 @@ class TaskReviewService:
                         notes=review_text,
                     )
                     if not ok:
-                        self.system_layer.show_system_message(
+                        self.system_layer.show_muted_message(
                             f"[task {task_id}] {agent_name}: erro ao recolocar task em fila"
                         )
                     else:
-                        self.system_layer.show_system_message(
+                        self.system_layer.show_muted_message(
                             f"[task {task_id}] {agent_name}: review pediu {verdict.lower()}, task voltou para pending"
                         )
                     return False
@@ -177,14 +177,14 @@ class TaskReviewService:
                     reviewed_by=agent_name,
                 )
                 if not ok:
-                    self.system_layer.show_system_message(
+                    self.system_layer.show_muted_message(
                         f"[task {task_id}] {agent_name}: erro ao concluir task após review"
                     )
                     return False
-                self.system_layer.show_system_message(f"[task {task_id}] {agent_name}: review concluído")
+                self.system_layer.show_muted_message(f"[task {task_id}] {agent_name}: review concluído")
                 return True
             except Exception as exc:
-                self.system_layer.show_system_message(
+                self.system_layer.show_muted_message(
                     f"[task {task_id}] {agent_name}: review falhou: {exc}"
                 )
                 if self.failover_policy.has_review_failover(executor, agent_name):

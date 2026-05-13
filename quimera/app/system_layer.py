@@ -2,6 +2,8 @@
 from __future__ import annotations
 import json
 import shlex
+import threading
+from contextlib import nullcontext
 
 from ..constants import (
     CMD_AGENTS,
@@ -44,10 +46,8 @@ class AppSystemLayer:
     _SUPPRESSED_TASK_STATUS_FRAGMENTS = (
         ": iniciando",
         ": aguardando review de outro agente",
-        ": concluída",
         ": revisando task",
         ": revisando execução de ",
-        ": review concluído",
         ": review rejeitado, aguardando outro agente",
     )
 
@@ -64,11 +64,18 @@ class AppSystemLayer:
         return any(fragment in message for fragment in self._SUPPRESSED_TASK_STATUS_FRAGMENTS)
 
     def _should_defer_active_prompt_message(self, message: str) -> bool:
-        """Adia mensagens de task enquanto o input TTY estiver ativo."""
+        """Adia mensagens de task enquanto o input TTY estiver ativo.
+
+        Mensagens com \n contêm o resultado da task (resposta do agente
+        ou review) e devem ser exibidas imediatamente, não adiadas.
+        Mensagens de conclusão de task também são exibidas imediatamente.
+        """
         return (
                 getattr(self.app, "_nonblocking_input_status", None) == "reading"
                 and message.startswith("[task ")
-                and "\n" in message
+                and "\n" not in message
+                and ": concluída" not in message
+                and ": review concluído" not in message
         )
 
     def flush_deferred_messages(self) -> None:
@@ -80,7 +87,8 @@ class AppSystemLayer:
         if renderer is None:
             deferred.clear()
             return
-        with self.app._output_lock:
+        output_lock = getattr(self.app, "_output_lock", nullcontext())
+        with output_lock:
             for message in deferred:
                 renderer.show_system(message)
             flush = getattr(renderer, "flush", None)
@@ -99,28 +107,47 @@ class AppSystemLayer:
             deferred_list = getattr(self.app, "_deferred_system_messages", None)
             if deferred_list is None:
                 return
-            max_deferred = getattr(self.app, "_MAX_DEFERRED_SYSTEM_MESSAGES", 20)
+            max_deferred = getattr(self.app, "_MAX_DEFERRED_SYSTEM_MESSAGES", 100)
             if len(deferred_list) >= max_deferred:
                 # Descarta as mais antigas para não crescer sem limite
                 overflow = len(deferred_list) - max_deferred + 1
                 del deferred_list[:overflow]
             deferred_list.append(message)
             return
-        with self.app._output_lock:
-            self.app._clear_user_prompt_line_if_needed()
+        output_lock = getattr(self.app, "_output_lock", nullcontext())
+        with output_lock:
+            # Clear prompt line only if we're the thread that owns the prompt
+            current_thread_id = getattr(self.app, '_prompt_owning_thread_id', None)
+            if current_thread_id is None or current_thread_id == threading.get_ident():
+                self.app._clear_user_prompt_line_if_needed()
             renderer.show_system(message)
             flush = getattr(renderer, "flush", None)
             if callable(flush):
                 flush()
-            self.app._redisplay_user_prompt_if_needed(clear_first=False)
+            # Redisplay prompt only if we're the thread that owns the prompt
+            if current_thread_id is None or current_thread_id == threading.get_ident():
+                self.app._redisplay_user_prompt_if_needed(clear_first=False)
 
     def show_muted_message(self, message: str) -> None:
-        """Exibe mensagem em estilo neutro (dim), preservando clear/redraw do prompt."""
+        """Exibe mensagem em estilo neutro (dim) via writer thread do renderer.
+
+        Toda escrita de terminal passa pela fila do writer thread para evitar
+        conflito com o estado interno do prompt_toolkit. Background threads
+        nunca escrevem diretamente no stdout.
+        """
         renderer = getattr(self.app, "renderer", None)
         if renderer is None:
             return
-        with self.app._output_lock:
-            self.app._clear_user_prompt_line_if_needed()
+        output_lock = getattr(self.app, "_output_lock", nullcontext())
+        with output_lock:
+            current_thread_id = getattr(self.app, '_prompt_owning_thread_id', None)
+            is_owning = current_thread_id is not None and current_thread_id == threading.get_ident()
+            if is_owning:
+                self.app._clear_user_prompt_line_if_needed()
+            elif not is_owning:
+                show_newline = getattr(renderer, "show_newline", None)
+                if callable(show_newline):
+                    show_newline()
             show_system_neutral = getattr(renderer, "show_system_neutral", None)
             if callable(show_system_neutral):
                 show_system_neutral(message)
@@ -129,7 +156,8 @@ class AppSystemLayer:
             flush = getattr(renderer, "flush", None)
             if callable(flush):
                 flush()
-            self.app._redisplay_user_prompt_if_needed(clear_first=False)
+            if is_owning:
+                self.app._redisplay_user_prompt_if_needed(clear_first=False)
 
     def list_connected_agents(self) -> list[str]:
         """Retorna nomes dos agentes com conexão persistida."""
@@ -139,7 +167,7 @@ class AppSystemLayer:
         """Exibe task response."""
         text = strip_tool_block(response).strip()
         if text:
-            self.show_system_message(f"[task {task_id}] {agent}:\n{text}")
+            self.show_muted_message(f"[task {task_id}] {agent}:\n{text}")
 
     def _resolve_prompt_target(self, command: str) -> str | None:
         """Resolve o agente alvo para preview de prompt."""

@@ -105,7 +105,9 @@ class TestTerminalRenderer:
     def renderer_no_rich(self):
         """Create renderer without Rich."""
         with patch("quimera.ui._RICH_AVAILABLE", False):
-            return TerminalRenderer()
+            renderer = TerminalRenderer()
+        yield renderer
+        renderer.close(timeout=1.0)
 
     @pytest.fixture
     def mock_renderer(self):
@@ -115,7 +117,8 @@ class TestTerminalRenderer:
             with patch("quimera.ui.Console", return_value=mock_console):
                 renderer = TerminalRenderer()
                 renderer._console = mock_console
-                return renderer
+        yield renderer
+        renderer.close(timeout=1.0)
 
     def test_show_message_with_rich(self, mock_renderer):
         """Test show_message with Rich available."""
@@ -129,13 +132,15 @@ class TestTerminalRenderer:
         """Test renderer does not force a fixed console width."""
         with patch("quimera.ui._RICH_AVAILABLE", True), \
                 patch("quimera.ui.Console") as mock_console:
-            TerminalRenderer()
+            renderer = TerminalRenderer()
+            renderer.close(timeout=1.0)
 
         assert "width" not in mock_console.call_args.kwargs
 
     def test_theme_name_exposes_active_theme(self):
         renderer = TerminalRenderer(theme="panel")
         assert renderer.theme_name == "panel"
+        renderer.close(timeout=1.0)
 
     def test_cycle_theme_advances_and_wraps(self):
         ordered_names = themes.names()
@@ -145,6 +150,7 @@ class TestTerminalRenderer:
 
         assert next_name == ordered_names[0]
         assert renderer.theme_name == ordered_names[0]
+        renderer.close(timeout=1.0)
 
     def test_show_message_without_rich(self, renderer_no_rich, capsys):
         """Test show_message without Rich."""
@@ -209,6 +215,7 @@ class TestTerminalRenderer:
         renderer.flush()
         rendered = renderer._console.export_text()
         assert "🔷 Codex execução concluída" in rendered
+        renderer.close(timeout=1.0)
 
     def test_show_plain_with_agent_strips_crlf_edges(self):
         """Test show_plain keeps agent label inline when message has CRLF edges."""
@@ -221,6 +228,7 @@ class TestTerminalRenderer:
         renderer.flush()
         rendered = renderer._console.export_text()
         assert "🔷 Codex execução concluída" in rendered
+        renderer.close(timeout=1.0)
 
     def test_show_plain_without_agent(self, renderer_no_rich, capsys):
         """Test show_plain without agent."""
@@ -252,6 +260,7 @@ class TestTerminalRenderer:
 
         rendered = renderer._console.export_text()
         assert "⚠ Use /codex <mensagem>" in rendered
+        renderer.close(timeout=1.0)
 
     def test_show_warning_without_rich(self, renderer_no_rich, capsys):
         """Test show_warning without Rich."""
@@ -391,7 +400,8 @@ class TestRenderOrdering:
         with patch("quimera.ui._RICH_AVAILABLE", True):
             renderer = TerminalRenderer()
             renderer._console = Console(width=80, record=True, force_terminal=False)
-            return renderer
+        yield renderer
+        renderer.close(timeout=1.0)
 
     def test_summary_rendered_after_stream_closed(self, recording_renderer):
         """show_turn_summary enfileirada após finish_message_stream é renderizada depois do stream."""

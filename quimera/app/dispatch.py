@@ -106,6 +106,14 @@ class AppDispatchServices:
             if approval_handler is not None and hasattr(approval_handler, "reset_approve_all_after_cycle"):
                 approval_handler.reset_approve_all_after_cycle()
 
+        def _progress_callback(agent, tool_name, hop, max_hops, elapsed, ok, is_invalid):
+            system_layer = getattr(app, "system_layer", None)
+            if system_layer is not None:
+                status = "✓" if ok else "✗" if is_invalid else "○"
+                system_layer.show_system_message(
+                    f"[tool hop {hop}/{max_hops}] {agent} {status} {tool_name}"
+                )
+
         return ToolLoopService(
             tool_executor=app.tool_executor,
             plugin_resolver=app.get_agent_plugin,
@@ -115,6 +123,7 @@ class AppDispatchServices:
             cancel_checker=_cancel_checker,
             record_tool_event=_record_tool_event,
             reset_approve_all=_reset_approve_all,
+            progress_callback=_progress_callback,
         )
 
     # -------------------------------------------------------------------------
@@ -194,10 +203,14 @@ class AppDispatchServices:
         }
         shared_state = getattr(app, "shared_state", None)
         if isinstance(shared_state, dict):
-            shared_state["spy_last_turn_detail"] = snapshot
+            shared_state_lock = getattr(app, "_shared_state_lock", None)
+            with (shared_state_lock if shared_state_lock is not None else nullcontext()):
+                shared_state["spy_last_turn_detail"] = snapshot
         session_state = getattr(app, "session_state", None)
         if isinstance(session_state, dict):
-            session_state["last_spy_turn_detail"] = snapshot
+            counter_lock = getattr(app, "_counter_lock", None)
+            with (counter_lock if counter_lock is not None else nullcontext()):
+                session_state["last_spy_turn_detail"] = snapshot
 
     # -------------------------------------------------------------------------
     # API pública
@@ -224,6 +237,7 @@ class AppDispatchServices:
         persist_history = dispatch_options.pop("persist_history", True)
         show_output = dispatch_options.pop("show_output", True)
         dispatch_options.pop("quiet", False)
+        dispatch_options.pop("progress_callback", None)
         handoff = dispatch_options.get("handoff")
         handoff_id = handoff.get("handoff_id") if isinstance(handoff, dict) else None
         logger.info(

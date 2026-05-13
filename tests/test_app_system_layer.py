@@ -121,11 +121,12 @@ def test_show_system_message_defer_queue_none_is_noop():
 def test_show_system_message_defer_overflow_drops_oldest():
     app = make_app()
     app._nonblocking_input_status = "reading"
+    app._MAX_DEFERRED_SYSTEM_MESSAGES = 2
     app._deferred_system_messages = ["old-1", "old-2"]
 
-    AppSystemLayer(app).show_system_message("[task 1] codex:\nnovo")
+    AppSystemLayer(app).show_system_message("[task 1] codex: novo resultado sem newline")
 
-    assert app._deferred_system_messages == ["old-2", "[task 1] codex:\nnovo"]
+    assert app._deferred_system_messages == ["old-2", "[task 1] codex: novo resultado sem newline"]
 
 
 def test_show_system_message_standard_path_flushes_and_redraws():
@@ -163,7 +164,7 @@ def test_show_task_response_uses_strip_and_emits_only_non_empty():
     layer.show_task_response(7, "codex", "   resultado final   ")
     layer.show_task_response(8, "codex", "   ")
 
-    assert app.renderer.system_messages == ["[task 7] codex:\nresultado final"]
+    assert app.renderer.neutral_messages == ["[task 7] codex:\nresultado final"]
 
 
 def test_resolve_prompt_target_covers_default_exact_and_alias_paths():

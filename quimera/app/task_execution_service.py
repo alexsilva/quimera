@@ -100,7 +100,7 @@ class TaskExecutionService:
                 prompt = f"Execute a seguinte tarefa:\n\n{body}"
                 review_agents = self.failover_policy.review_agents_for(agent_name)
                 desc_preview = (description[:60] + "…") if len(description) > 60 else description
-                self.system_layer.show_system_message(
+                self.system_layer.show_muted_message(
                     f"[task {task_id}] {agent_name}: iniciando — {desc_preview}"
                 )
 
@@ -109,20 +109,20 @@ class TaskExecutionService:
                     handoff=prompt,
                     handoff_only=True,
                     primary=False,
-                    silent=True,
                     persist_history=False,
                     show_output=False,
+                    silent=True,
                 )
 
                 if self.was_user_cancelled():
-                    self.system_layer.show_system_message(
+                    self.system_layer.show_muted_message(
                         f"[task {task_id}] {agent_name}: cancelado pelo usuário"
                     )
                     self.repository.fail_task(task_id, reason="cancelled by user")
                     return False
 
                 if response is None:
-                    self.system_layer.show_system_message(f"[task {task_id}] {agent_name}: sem resposta")
+                    self.system_layer.show_muted_message(f"[task {task_id}] {agent_name}: sem resposta")
                     self.record_failure(agent_name)
                     if self.failover_policy.can_failover(task_id, agent_name):
                         self.repository.requeue_task(task_id, agent_name, reason="communication failed")
@@ -130,12 +130,12 @@ class TaskExecutionService:
                         self.repository.fail_task(task_id, reason="communication failed")
                     return False
 
-                self.system_layer.show_system_message(
+                self.system_layer.show_muted_message(
                     f"[task {task_id}] {agent_name}:\n{strip_tool_block(response).strip()}"
                 )
                 ok, task_result = self.classify_task_execution_result(response)
                 if not ok:
-                    self.system_layer.show_system_message(f"[task {task_id}] {agent_name}: bloqueada")
+                    self.system_layer.show_muted_message(f"[task {task_id}] {agent_name}: bloqueada")
                     if self.failover_policy.can_failover(task_id, agent_name):
                         self.repository.requeue_task(task_id, agent_name, reason=task_result)
                     else:
@@ -145,24 +145,24 @@ class TaskExecutionService:
                 if review_agents:
                     ok = self.repository.submit_for_review(task_id, result=task_result)
                     if not ok:
-                        self.system_layer.show_system_message(
+                        self.system_layer.show_muted_message(
                             f"[task {task_id}] {agent_name}: erro ao submeter para review"
                         )
                         return False
-                    self.system_layer.show_system_message(
+                    self.system_layer.show_muted_message(
                         f"[task {task_id}] {agent_name}: aguardando review de outro agente"
                     )
                 else:
                     ok = self.repository.complete_task(task_id, result=task_result)
                     if not ok:
-                        self.system_layer.show_system_message(
+                        self.system_layer.show_muted_message(
                             f"[task {task_id}] {agent_name}: erro ao concluir task"
                         )
                         return False
-                    self.system_layer.show_system_message(f"[task {task_id}] {agent_name}: concluída")
+                    self.system_layer.show_muted_message(f"[task {task_id}] {agent_name}: concluída")
                 return True
             except Exception as exc:
-                self.system_layer.show_system_message(f"[task {task_id}] {agent_name}: erro: {exc}")
+                self.system_layer.show_muted_message(f"[task {task_id}] {agent_name}: erro: {exc}")
                 if self.failover_policy.can_failover(task_id, agent_name):
                     self.repository.requeue_task(task_id, agent_name, reason=str(exc))
                 else:

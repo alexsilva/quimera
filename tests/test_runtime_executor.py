@@ -184,8 +184,8 @@ def test_set_spinner_callbacks_injects_into_console_handler():
     resume = MagicMock()
     executor.set_spinner_callbacks(suspend, resume)
 
-    assert handler._suspend_spinner_fn is suspend
-    assert handler._resume_spinner_fn is resume
+    assert handler._suspend_spinner_fn[threading.get_ident()] is suspend
+    assert handler._resume_spinner_fn[threading.get_ident()] is resume
 
 
 def test_set_spinner_callbacks_traverses_pre_approval_wrapper():
@@ -199,8 +199,8 @@ def test_set_spinner_callbacks_traverses_pre_approval_wrapper():
     executor.set_spinner_callbacks(suspend, resume)
 
     # O base (ConsoleApprovalHandler) recebeu os callbacks
-    assert base._suspend_spinner_fn is suspend
-    assert base._resume_spinner_fn is resume
+    assert base._suspend_spinner_fn[threading.get_ident()] is suspend
+    assert base._resume_spinner_fn[threading.get_ident()] is resume
     # O PreApprovalHandler não tem os callbacks diretamente
     assert not hasattr(pre, '_suspend_spinner_fn')
 
@@ -422,8 +422,8 @@ def test_set_spinner_callbacks_double_wrapped_pre_approval():
     executor.set_spinner_callbacks(suspend, resume)
 
     # inner_base (ConsoleApprovalHandler) deve receber os callbacks
-    assert inner_base._suspend_spinner_fn is suspend
-    assert inner_base._resume_spinner_fn is resume
+    assert inner_base._suspend_spinner_fn[threading.get_ident()] is suspend
+    assert inner_base._resume_spinner_fn[threading.get_ident()] is resume
     # Camadas intermediárias não recebem
     assert not hasattr(middle, "_suspend_spinner_fn")
     assert not hasattr(outer, "_suspend_spinner_fn")

@@ -360,9 +360,12 @@ def test_drop_db_removes_existing_file(tmp_path):
 
 def _run_main(db_path, *args):
     """Execute the __main__ block of tasks.py in-process and return (stdout, exit_code)."""
+    import sys
     buf = io.StringIO()
     argv = ["quimera.runtime.tasks", "--db", str(db_path), *args]
     exit_code = 0
+    sys.stdout.flush()
+    sys.stderr.flush()
     with patch("sys.argv", argv), redirect_stdout(buf):
         try:
             runpy.run_module("quimera.runtime.tasks", run_name="__main__", alter_sys=False)

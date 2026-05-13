@@ -1,3 +1,4 @@
+import os
 import sys
 from pathlib import Path
 
@@ -23,3 +24,30 @@ def cleanup_task_executors(monkeypatch):
     yield
     for executor in reversed(executors):
         executor.stop()
+
+
+@pytest.fixture(autouse=True)
+def cleanup_env_vars(monkeypatch):
+    monkeypatch.delenv("QUIMERA_CURRENT_JOB_ID", raising=False)
+    yield
+
+
+@pytest.fixture(autouse=True)
+def reset_stdout_stderr(monkeypatch):
+    import sys
+    import io
+    real_stdout = sys.stdout
+    real_stderr = sys.stderr
+    yield
+    if sys.stdout is not real_stdout:
+        sys.stdout = real_stdout
+    if sys.stderr is not real_stderr:
+        sys.stderr = real_stderr
+
+
+@pytest.fixture(autouse=True)
+def reset_builtins_print(monkeypatch):
+    import builtins
+    real_print = builtins.print
+    yield
+    builtins.print = real_print

@@ -648,6 +648,10 @@ class TerminalRenderer:
         else:
             print(clean_message)
 
+    def show_newline(self):
+        """Print a blank newline through the writer thread (thread-safe)."""
+        self._print("")
+
     def show_system_neutral(self, message):
         """Exibe mensagem de sistema com ícone padrão e texto em estilo neutro (dim)."""
         clean_message = strip_ansi(str(message)).strip("\r\n")

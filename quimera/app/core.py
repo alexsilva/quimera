@@ -8,6 +8,7 @@ import sys
 import threading
 import time
 from collections import defaultdict
+from contextlib import nullcontext
 from importlib import metadata
 from pathlib import Path
 
@@ -172,7 +173,9 @@ class QuimeraApp:
         self.round_index = 0
         self.session_call_index = 0
         self.shared_state = last_session["shared_state"]
+        self._shared_state_lock = threading.Lock()
         self._lock = threading.Lock()
+        self._history_lock = threading.Lock()
         self._output_lock = threading.Lock()
         self._counter_lock = threading.Lock()
         self._nonblocking_prompt_visible = False
@@ -182,6 +185,8 @@ class QuimeraApp:
         self._nonblocking_input_thread: threading.Thread | None = None
         self._nonblocking_input_queue: "queue.Queue | None" = None
         self._nonblocking_input_status = "idle"
+        self._nonblocking_input_status_lock = threading.Lock()
+        self._prompt_owning_thread_id: int | None = None
         self.turn_manager = TurnManager()
         for handler in logger.handlers:
             if isinstance(handler, PromptAwareStderrHandler):
@@ -382,8 +387,10 @@ class QuimeraApp:
         stdin = sys.stdin
         if stdin is None or not stdin.isatty():
             return
-        if self._nonblocking_input_status != "reading":
-            return
+        status_lock = getattr(self, "_nonblocking_input_status_lock", nullcontext())
+        with status_lock:
+            if self._nonblocking_input_status != "reading":
+                return
         try:
             prompt = getattr(self, "_nonblocking_prompt_text", "")
             line_buffer = ""
@@ -412,8 +419,10 @@ class QuimeraApp:
         stdin = sys.stdin
         if stdin is None or not stdin.isatty():
             return
-        if self._nonblocking_input_status != "reading":
-            return
+        status_lock = getattr(self, "_nonblocking_input_status_lock", nullcontext())
+        with status_lock:
+            if self._nonblocking_input_status != "reading":
+                return
         sys.stdout.write("\r\x1b[2K")
         sys.stdout.flush()
 
@@ -733,7 +742,9 @@ class QuimeraApp:
 
     def show_system_message(self, message: str) -> None:
         """Fachada compatível para mensagens de sistema."""
-        self.system_layer.show_system_message(message)
+        system_layer = getattr(self, "system_layer", None)
+        if system_layer is not None:
+            system_layer.show_system_message(message)
 
     def show_muted_message(self, message: str) -> None:
         """Fachada compatível para mensagens neutras (dim)."""

@@ -239,6 +239,10 @@ class AppTaskServices:
             body=self.build_task_body(description),
             source_context=command,
         )
+        # Wake all task executors so they pick up the new task immediately
+        for executor in getattr(app, "task_executors", []):
+            if hasattr(executor, "wake"):
+                executor.wake()
         self.refresh_task_shared_state()
         lines = [f"task criada com id {task_id}"]
         if selected_agent:

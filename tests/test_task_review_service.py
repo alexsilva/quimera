@@ -24,6 +24,9 @@ class SystemLayerSpy:
     def show_system_message(self, message):
         self.messages.append(message)
 
+    def show_muted_message(self, message):
+        self.messages.append(message)
+
 
 class RepositorySpy:
     def __init__(self):

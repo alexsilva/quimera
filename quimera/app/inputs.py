@@ -42,6 +42,7 @@ class AppInputServices:
         self._suspended = was_reading
         if was_reading:
             app._nonblocking_input_status = "idle"
+            app._prompt_owning_thread_id = None
             # Limpa qualquer resíduo visual da linha de prompt
             sys.stdout.write("\r\x1b[2K")
             sys.stdout.flush()
@@ -50,6 +51,7 @@ class AppInputServices:
         """Restaura o estado não-bloqueante após input bloqueante."""
         if self._suspended:
             self.app._nonblocking_input_status = "reading"
+            self.app._prompt_owning_thread_id = threading.get_ident()
             self._suspended = False
 
 
@@ -70,6 +72,7 @@ def read_user_input(app, prompt, timeout: int, input_fn=input) -> str | None:
             if stdin.isatty():
                 app._nonblocking_input_status = "reading"
                 app._nonblocking_prompt_text = prompt
+                app._prompt_owning_thread_id = threading.get_ident()
                 app.system_layer.flush_deferred_messages()
                 try:
                     return input_fn(prompt)
@@ -79,6 +82,7 @@ def read_user_input(app, prompt, timeout: int, input_fn=input) -> str | None:
                 finally:
                     app._nonblocking_input_status = "idle"
                     app._nonblocking_prompt_text = ""
+                    app._prompt_owning_thread_id = None
             if select.select([stdin], [], [], 0)[0]:
                 line = stdin.readline()
                 if line == "":
@@ -138,6 +142,8 @@ def start_nonblocking_input_reader(app, prompt: str, input_fn=input) -> None:
     app._nonblocking_prompt_text = prompt
 
     def _reader() -> None:
+        # Set the prompt owning thread ID to this thread's ID
+        app._prompt_owning_thread_id = threading.get_ident()
         try:
             value = input_fn(prompt)
         except EOFError:
@@ -148,6 +154,9 @@ def start_nonblocking_input_reader(app, prompt: str, input_fn=input) -> None:
             app._nonblocking_input_queue.put(("error", None))
         else:
             app._nonblocking_input_queue.put(("line", value))
+        finally:
+            # Clear the prompt owning thread ID
+            app._prompt_owning_thread_id = None
 
     app._nonblocking_input_thread = threading.Thread(target=_reader, daemon=True)
     app._nonblocking_input_thread.start()

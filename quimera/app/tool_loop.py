@@ -67,6 +67,7 @@ class ToolLoopService:
         cancel_checker,
         record_tool_event=None,
         reset_approve_all=None,
+        progress_callback=None,
     ):
         """Inicializa ToolLoopService com dependências explícitas.
 
@@ -88,6 +89,7 @@ class ToolLoopService:
         self._cancel_checker = cancel_checker
         self._record_tool_event = record_tool_event or (lambda *a, **kw: None)
         self._reset_approve_all = reset_approve_all or (lambda: None)
+        self._progress_callback = progress_callback or (lambda *a, **kw: None)
 
     def execute(self, agent, response, silent=False, persist_history=True, show_output=True):
         """Executa o loop de ferramentas até estabilizar a saída.
@@ -164,6 +166,17 @@ class ToolLoopService:
                         self._print_response_fn(agent, visible_text)
                     if persist_history:
                         self._persist_message_fn(agent, visible_text)
+                
+                # Report progress for this tool hop
+                self._progress_callback(
+                    agent=agent,
+                    tool_name=getattr(tool_result, "tool_name", "unknown"),
+                    hop=hop + 1,
+                    max_hops=max_tool_hops,
+                    elapsed=0.0,  # We don't have timing info here
+                    ok=ok,
+                    is_invalid=is_invalid
+                )
 
                 used_tool_hops = hop + 1
                 remaining_tool_hops = max(max_tool_hops - used_tool_hops, 0)

@@ -78,8 +78,8 @@ class ConsoleApprovalHandler(ApprovalHandler):
         self._renderer = renderer
         self._suspend_fn = suspend_fn
         self._resume_fn = resume_fn
-        self._suspend_spinner_fn = None
-        self._resume_spinner_fn = None
+        self._suspend_spinner_fn = {}
+        self._resume_spinner_fn = {}
         self._approve_all_callback = None
         self._cancel_event = cancel_event
         self._cancel_poll_interval = max(float(cancel_poll_interval), 0.01)
@@ -93,8 +93,9 @@ class ConsoleApprovalHandler(ApprovalHandler):
         que o refresh do Rich Console.status() compita com input() bloqueante
         durante a aprovação. Chamados em _approve_interactive.
         """
-        self._suspend_spinner_fn = suspend_spinner_fn
-        self._resume_spinner_fn = resume_spinner_fn
+        thread_id = threading.get_ident()
+        self._suspend_spinner_fn[thread_id] = suspend_spinner_fn
+        self._resume_spinner_fn[thread_id] = resume_spinner_fn
 
     def set_approve_all_callback(self, callback):
         """Define callback chamado quando o usuário digita 'a' (approve all).
@@ -129,20 +130,18 @@ class ConsoleApprovalHandler(ApprovalHandler):
         com o renderer via RichPromptSession, dispensando suspend/resume.
         Caso contrário, usa o caminho legado com input_fn/suspend/resume.
         """
-        # Lock não-bloqueante: se outra thread já está num prompt, nega.
-        if not self._interactive_lock.acquire(blocking=False):
-            self._show(
-                f"  [aprovação em outra thread] {tool_name} :: {summary} — negando"
-            )
-            return False
+        # Lock bloqueante: se outra thread já está num prompt, aguarda.
+        self._interactive_lock.acquire(blocking=True)
 
         try:
             self._show(f"\n[aprovação] {tool_name} :: {summary}")
             if self._input_gate is not None:
                 if self._cancel_event and self._cancel_event.is_set():
                     return False
-                if self._suspend_spinner_fn:
-                    self._suspend_spinner_fn()
+                thread_id = threading.get_ident()
+                suspend_fn = self._suspend_spinner_fn.get(thread_id)
+                if suspend_fn:
+                    suspend_fn()
                 try:
                     answer = (
                         self._input_gate("  Executar? [y/N/a=todas]: ")
@@ -155,14 +154,18 @@ class ConsoleApprovalHandler(ApprovalHandler):
                     )
                     return False
                 finally:
-                    if self._resume_spinner_fn:
-                        self._resume_spinner_fn()
+                    thread_id = threading.get_ident()
+                    resume_fn = self._resume_spinner_fn.get(thread_id)
+                    if resume_fn:
+                        resume_fn()
             else:
                 input_fn = self._input_fn if self._input_fn is not None else input
                 if self._suspend_fn:
                     self._suspend_fn()
-                if self._suspend_spinner_fn:
-                    self._suspend_spinner_fn()
+                thread_id = threading.get_ident()
+                suspend_fn = self._suspend_spinner_fn.get(thread_id)
+                if suspend_fn:
+                    suspend_fn()
                 try:
                     if self._input_fn is None and self._cancel_event is not None:
                         answer = self._read_builtin_input_with_cancel(
@@ -180,8 +183,10 @@ class ConsoleApprovalHandler(ApprovalHandler):
                     )
                     return False
                 finally:
-                    if self._resume_spinner_fn:
-                        self._resume_spinner_fn()
+                    thread_id = threading.get_ident()
+                    resume_fn = self._resume_spinner_fn.get(thread_id)
+                    if resume_fn:
+                        resume_fn()
                     if self._resume_fn:
                         self._resume_fn()
             if answer in {"a", "all", "todas"}:

@@ -29,6 +29,7 @@ class TaskRepository:
             os.makedirs(parent, exist_ok=True)
         conn = sqlite3.connect(self.db_path, check_same_thread=False)
         conn.execute("PRAGMA foreign_keys = ON;")
+        conn.execute("PRAGMA journal_mode=WAL;")
         return conn
 
     @staticmethod
@@ -96,25 +97,31 @@ class TaskRepository:
         conn = self._conn()
         cur = conn.cursor()
         now = self._now()
-        if job_id is not None:
-            cur.execute("SELECT id FROM jobs WHERE id = ?", (job_id,))
-            if cur.fetchone():
-                conn.close()
-                return job_id
-            cur.execute(
-                "INSERT INTO jobs(id, description, status, created_by, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (job_id, description, "planning", created_by, now, now),
-            )
-        else:
-            cur.execute(
-                "INSERT INTO jobs(description, status, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-                (description, "planning", created_by, now, now),
-            )
-            job_id = cur.lastrowid
-        conn.commit()
-        conn.close()
-        return int(job_id)
+        try:
+            cur.execute("BEGIN IMMEDIATE")
+            if job_id is not None:
+                cur.execute("SELECT id FROM jobs WHERE id = ?", (job_id,))
+                if cur.fetchone():
+                    conn.close()
+                    return job_id
+                cur.execute(
+                    "INSERT INTO jobs(id, description, status, created_by, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (job_id, description, "planning", created_by, now, now),
+                )
+            else:
+                cur.execute(
+                    "INSERT INTO jobs(description, status, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                    (description, "planning", created_by, now, now),
+                )
+                job_id = cur.lastrowid
+            conn.commit()
+            conn.close()
+            return int(job_id)
+        except Exception:
+            conn.rollback()
+            conn.close()
+            raise
 
     def list_jobs(self, filt: dict | None = None) -> list[JobRecord]:
         """Lista jobs com filtros opcionais."""
@@ -209,13 +216,19 @@ class TaskRepository:
         """Libera tasks pendentes/em progresso de um agente para reatribuição."""
         conn = self._conn()
         cur = conn.cursor()
-        cur.execute(
-            "UPDATE tasks SET assigned_to = NULL, status = ?, updated_at = ? "
-            "WHERE assigned_to = ? AND status IN (?, ?)",
-            (TaskStatus.PENDING, self._now(), agent_name, TaskStatus.PENDING, TaskStatus.IN_PROGRESS),
-        )
-        conn.commit()
-        conn.close()
+        try:
+            cur.execute("BEGIN IMMEDIATE")
+            cur.execute(
+                "UPDATE tasks SET assigned_to = NULL, status = ?, updated_at = ? "
+                "WHERE assigned_to = ? AND status IN (?, ?)",
+                (TaskStatus.PENDING, self._now(), agent_name, TaskStatus.PENDING, TaskStatus.IN_PROGRESS),
+            )
+            conn.commit()
+            conn.close()
+        except Exception:
+            conn.rollback()
+            conn.close()
+            raise
 
     def create_task(
         self,
@@ -237,19 +250,25 @@ class TaskRepository:
         conn = self._conn()
         cur = conn.cursor()
         now = self._now()
-        cur.execute(
-            """
-            INSERT INTO tasks(job_id, description, body, status, task_type, origin, assigned_to,
-                              priority, created_at, updated_at, created_by, requested_by, notes, source_context)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (job_id, description, body, status, task_type, origin, assigned_to,
-             priority, now, now, created_by, requested_by, notes, source_context),
-        )
-        task_id = cur.lastrowid
-        conn.commit()
-        conn.close()
-        return task_id
+        try:
+            cur.execute("BEGIN IMMEDIATE")
+            cur.execute(
+                """
+                INSERT INTO tasks(job_id, description, body, status, task_type, origin, assigned_to,
+                                  priority, created_at, updated_at, created_by, requested_by, notes, source_context)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (job_id, description, body, status, task_type, origin, assigned_to,
+                 priority, now, now, created_by, requested_by, notes, source_context),
+            )
+            task_id = cur.lastrowid
+            conn.commit()
+            conn.close()
+            return task_id
+        except Exception:
+            conn.rollback()
+            conn.close()
+            raise
 
     def update_task(
         self,
@@ -261,14 +280,20 @@ class TaskRepository:
         """Atualiza status/result/notes sem validação de state machine."""
         conn = self._conn()
         cur = conn.cursor()
-        cur.execute(
-            "UPDATE tasks SET status = ?, result = ?, notes = ?, updated_at = ? WHERE id = ?",
-            (status, result, notes, self._now(), task_id),
-        )
-        conn.commit()
-        affected = cur.rowcount
-        conn.close()
-        return affected > 0
+        try:
+            cur.execute("BEGIN IMMEDIATE")
+            cur.execute(
+                "UPDATE tasks SET status = ?, result = ?, notes = ?, updated_at = ? WHERE id = ?",
+                (status, result, notes, self._now(), task_id),
+            )
+            conn.commit()
+            affected = cur.rowcount
+            conn.close()
+            return affected > 0
+        except Exception:
+            conn.rollback()
+            conn.close()
+            raise
 
     def fail_task(self, task_id: int, reason: str | None = None) -> bool:
         """Marca task como failed."""
