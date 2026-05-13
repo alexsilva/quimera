@@ -8,6 +8,19 @@ from .config import ToolRuntimeConfig
 from .models import ToolCall
 
 
+def is_path_inside(path: Path, root: Path) -> bool:
+    """Return True when *path* resolves inside *root*.
+
+    Both paths are resolved before comparison to avoid false prefix matches
+    (e.g. ``/home/foo-bar`` is NOT inside ``/home/foo``).
+    """
+    try:
+        path.resolve().relative_to(root.resolve())
+    except ValueError:
+        return False
+    return True
+
+
 class ToolPolicyError(Exception):
     """Implementa `ToolPolicyError`."""
     pass
@@ -69,7 +82,7 @@ class ToolPolicy:
         path = (self.config.workspace_root / normalized).resolve()
 
         for allowed_root in self.config.allowed_read_roots:
-            if path.is_relative_to(allowed_root):
+            if is_path_inside(path, allowed_root):
                 return None
 
         return PathPermissionError(raw, path)
@@ -231,6 +244,6 @@ class ToolPolicy:
         """Resolve workspace path."""
         normalized = raw_path.lstrip("/") or "."
         path = (self.config.workspace_root / normalized).resolve()
-        if not path.is_relative_to(self.config.workspace_root):
+        if not is_path_inside(path, self.config.workspace_root):
             raise ToolPolicyError(f"Path fora da workspace: {raw_path}")
         return path

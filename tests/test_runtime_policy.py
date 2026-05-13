@@ -4,7 +4,7 @@ import pytest
 
 from quimera.runtime.config import ToolRuntimeConfig
 from quimera.runtime.models import ToolCall
-from quimera.runtime.policy import ToolPolicy, ToolPolicyError
+from quimera.runtime.policy import ToolPolicy, ToolPolicyError, is_path_inside
 
 
 @pytest.fixture
@@ -458,3 +458,51 @@ def test_policy_check_path_permission_rejects_prefix_sibling(tmp_path):
     call = ToolCall(name="list_files", arguments={"path": "../workspace2"})
     result = policy.check_path_permission(call)
     assert result is not None
+
+
+# ── is_path_inside ─────────────────────────────────────────
+
+def test_is_path_inside_same_dir(tmp_path):
+    assert is_path_inside(tmp_path / "file.txt", tmp_path) is True
+
+
+def test_is_path_inside_subdir(tmp_path):
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    assert is_path_inside(sub / "file.txt", tmp_path) is True
+
+
+def test_is_path_inside_outside(tmp_path):
+    assert is_path_inside(Path("/etc/passwd"), tmp_path) is False
+
+
+def test_is_path_inside_prefix_sibling(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    sibling = tmp_path / "workspace2"
+    sibling.mkdir()
+    assert is_path_inside(sibling / "secret.txt", workspace) is False
+
+
+def test_is_path_inside_exact_root(tmp_path):
+    assert is_path_inside(tmp_path, tmp_path) is True
+
+
+def test_is_path_inside_symlink(tmp_path):
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    target = sub / "target.txt"
+    target.write_text("data")
+    link = tmp_path / "link.txt"
+    link.symlink_to(target)
+    assert is_path_inside(link, tmp_path) is True
+
+
+def test_is_path_inside_with_symlinked_root(tmp_path):
+    real_root = tmp_path / "workspace"
+    real_root.mkdir()
+    root_alias = tmp_path / "workspace-link"
+    root_alias.symlink_to(real_root, target_is_directory=True)
+
+    child = real_root / "file.txt"
+    assert is_path_inside(child, root_alias) is True
