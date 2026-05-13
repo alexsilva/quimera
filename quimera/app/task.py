@@ -301,7 +301,11 @@ class AppTaskServices:
             return
         approval_handler = getattr(self.app, "_approval_handler", None)
         if approval_handler is not None and hasattr(approval_handler, "set_thread_approve_all"):
-            approval_handler.set_thread_approve_all(True, scope_key=f"task:{agent_name}:{id(self)}")
+            approval_handler.set_thread_approve_all(
+                True,
+                scope_key=f"task:{agent_name}:{id(self)}",
+                silent=True,
+            )
 
     def _disable_task_tool_auto_approval(self, agent_name: str) -> None:
         plugin = getattr(self.app, "get_agent_plugin", lambda _agent_name: None)(agent_name)

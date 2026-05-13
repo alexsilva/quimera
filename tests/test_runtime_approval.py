@@ -558,7 +558,7 @@ def test_pre_approval_handler_thread_approve_all_short_circuits_base_without_log
     base.approve.return_value = False
     pre = PreApprovalHandler(base)
 
-    pre.set_thread_approve_all(True)
+    pre.set_thread_approve_all(True, silent=True)
     try:
         result = pre.approve(tool_name="apply_patch", summary="patch")
     finally:
@@ -588,7 +588,7 @@ def test_pre_approval_handler_scope_approve_all_propagates_across_threads_withou
     base.approve.return_value = False
     pre = PreApprovalHandler(base)
 
-    pre.set_thread_approve_all(True, scope_key="task:qwen")
+    pre.set_thread_approve_all(True, scope_key="task:qwen", silent=True)
     result_holder = {}
 
     def worker():
@@ -607,6 +607,27 @@ def test_pre_approval_handler_scope_approve_all_propagates_across_threads_withou
     assert result_holder["result"] is True
     base.approve.assert_not_called()
     mock_print.assert_not_called()
+
+
+@patch('builtins.print')
+def test_pre_approval_handler_thread_approve_all_logs_by_default(mock_print):
+    base = MagicMock()
+    base.approve.return_value = False
+    pre = PreApprovalHandler(base)
+
+    pre.set_thread_approve_all(True)
+    try:
+        result = pre.approve(tool_name="apply_patch", summary="patch")
+    finally:
+        pre.set_thread_approve_all(False)
+
+    assert result is True
+    base.approve.assert_not_called()
+    found = any(
+        "[approve-all]" in str(call_args)
+        for call_args in mock_print.call_args_list
+    )
+    assert found
 
 
 def test_pre_approval_handler_uses_renderer_property():
