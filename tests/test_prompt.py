@@ -210,6 +210,36 @@ def test_prompt_template_uses_explicit_bool_for_state_update_block(tmp_path):
     assert template.render(state_update_enabled=False) == ""
 
 
+def test_prompt_template_treats_boolean_like_strings_explicitly(tmp_path):
+    template_path = tmp_path / "prompt.md"
+    template_path.write_text(
+        "\n".join(
+            [
+                "<!-- IF:enabled -->enabled<!-- ENDIF:enabled -->",
+                "<!-- NOT_IF:disabled -->disabled<!-- ENDNOT_IF:disabled -->",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    template = PromptTemplate(template_path)
+
+    assert template.render(enabled="1", disabled="0") == "enabled\ndisabled"
+    assert template.render(enabled="true", disabled="false") == "enabled\ndisabled"
+    assert template.render(enabled="yes", disabled="off") == "enabled\ndisabled"
+    assert template.render(enabled="0", disabled="1") == ""
+
+
+def test_prompt_template_keeps_presence_semantics_for_non_boolean_strings(tmp_path):
+    template_path = tmp_path / "prompt.md"
+    template_path.write_text(
+        "<!-- IF:session_id -->session<!-- ENDIF:session_id -->",
+        encoding="utf-8",
+    )
+    template = PromptTemplate(template_path)
+
+    assert template.render(session_id="sessao-123") == "session"
+
+
 def test_prompt_completed_tasks():
     builder = PromptBuilder(context_manager=_make_context_manager(""))
     history = [{"role": "human", "content": "test"}]

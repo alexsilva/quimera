@@ -4,6 +4,9 @@ from pathlib import Path
 class PromptParser:
     """Parseia seções de um arquivo de template de prompt."""
 
+    _TRUE_STRINGS = {"1", "true", "yes", "on"}
+    _FALSE_STRINGS = {"0", "false", "no", "off", ""}
+
     IF_PATTERN = re.compile(
         r"<!--\s*(NOT_IF|IF):([A-Za-z_][A-Za-z0-9_]*)\s*-->(.*?)<!--\s*END\1:\2\s*-->",
         re.DOTALL,
@@ -16,10 +19,25 @@ class PromptParser:
         return self._source.read_text(encoding="utf-8").strip()
 
     @classmethod
+    def _resolve_condition_value(cls, value: object) -> bool:
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return False
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in cls._TRUE_STRINGS:
+                return True
+            if normalized in cls._FALSE_STRINGS:
+                return False
+            return bool(value)
+        return bool(value)
+
+    @classmethod
     def resolve_conditionals(cls, template: str, context: dict) -> str:
         def replace(match: re.Match[str]) -> str:
             mode, key, content = match.groups()
-            value = bool(context.get(key))
+            value = cls._resolve_condition_value(context.get(key))
             should_include = value if mode == "IF" else not value
             return content.strip() if should_include else ""
 
