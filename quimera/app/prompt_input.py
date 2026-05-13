@@ -160,7 +160,7 @@ class InputGate:
             if theme:
                 parts.append(f"<b>tema:{html.escape(theme)}</b>")
             if responder:
-                parts.append(f"responde:{html.escape(responder)}")
+                parts.append(html.escape(responder))
             if model:
                 parts.append(html.escape(model))
             if cwd:

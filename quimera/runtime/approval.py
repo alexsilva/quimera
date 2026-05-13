@@ -341,6 +341,9 @@ class PreApprovalHandler(ApprovalHandler):
         self._pre_approved = False
         self._approve_all = False
         self._approve_all_permanent = False
+        self._thread_approve_all: set[int] = set()
+        self._scope_approve_all: set[str] = set()
+        self._thread_scope_keys: dict[int, str] = {}
         self._lock = threading.Lock()
 
     def pre_approve(self) -> None:
@@ -367,9 +370,49 @@ class PreApprovalHandler(ApprovalHandler):
             if enabled:
                 self._pre_approved = False
 
+    def set_thread_approve_all(self, enabled: bool = True, scope_key: str | None = None) -> None:
+        """Ativa approve-all para a thread atual e seu escopo propagável."""
+        thread_id = threading.get_ident()
+        with self._lock:
+            if enabled:
+                resolved_scope = scope_key or self._thread_scope_keys.get(thread_id) or f"thread:{thread_id}"
+                self._thread_scope_keys[thread_id] = resolved_scope
+                self._thread_approve_all.add(thread_id)
+                self._scope_approve_all.add(resolved_scope)
+            else:
+                self._thread_approve_all.discard(thread_id)
+                resolved_scope = scope_key or self._thread_scope_keys.pop(thread_id, None)
+                if resolved_scope is not None:
+                    self._scope_approve_all.discard(resolved_scope)
+
+    def get_thread_approval_scope(self) -> str | None:
+        """Retorna o escopo propagável associado à thread atual."""
+        thread_id = threading.get_ident()
+        with self._lock:
+            return self._thread_scope_keys.get(thread_id)
+
+    def bind_thread_approval_scope(self, scope_key: str | None) -> str | None:
+        """Associa temporariamente um escopo de aprovação à thread atual."""
+        thread_id = threading.get_ident()
+        with self._lock:
+            previous = self._thread_scope_keys.get(thread_id)
+            if scope_key is None:
+                self._thread_scope_keys.pop(thread_id, None)
+            else:
+                self._thread_scope_keys[thread_id] = scope_key
+            return previous
+
     def approve(self, *, tool_name: str, summary: str) -> bool:
         """Aprova automaticamente se pré-aprovado ou em modo approve-all, senão delega ao handler base."""
+        thread_id = threading.get_ident()
         with self._lock:
+            if thread_id in self._thread_approve_all:
+                _emit_system_message(self._renderer, f"  [approve-all-task] {tool_name} :: {summary}")
+                return True
+            scope_key = self._thread_scope_keys.get(thread_id)
+            if scope_key is not None and scope_key in self._scope_approve_all:
+                _emit_system_message(self._renderer, f"  [approve-all-task] {tool_name} :: {summary}")
+                return True
             if self._approve_all:
                 _emit_system_message(self._renderer, f"  [approve-all] {tool_name} :: {summary}")
                 return True
@@ -381,6 +424,11 @@ class PreApprovalHandler(ApprovalHandler):
 
     def reset_approve_all_after_cycle(self) -> None:
         """Reseta approve-all ao final do ciclo de tool hops, a menos que seja permanente."""
+        thread_id = threading.get_ident()
         with self._lock:
+            self._thread_approve_all.discard(thread_id)
+            scope_key = self._thread_scope_keys.pop(thread_id, None)
+            if scope_key is not None:
+                self._scope_approve_all.discard(scope_key)
             if self._approve_all and not self._approve_all_permanent:
                 self._approve_all = False

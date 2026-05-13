@@ -58,6 +58,8 @@ class TaskExecutionService:
         classify_task_execution_result: Callable[[str | None], tuple[bool, str]],
         was_user_cancelled: Callable[[], bool],
         record_failure: Callable[[str], None] | None = None,
+        before_agent_call: Callable[[str], None] | None = None,
+        after_agent_call: Callable[[str], None] | None = None,
     ) -> None:
         self._runner = TaskRunner(
             dispatch_services=dispatch_services,
@@ -67,6 +69,8 @@ class TaskExecutionService:
             classify_task_execution_result=classify_task_execution_result,
             was_user_cancelled=was_user_cancelled,
             record_failure=record_failure,
+            before_agent_call=before_agent_call,
+            after_agent_call=after_agent_call,
         )
 
     def handler_for(self, agent_name: str) -> Callable[[TaskRecord], bool]:

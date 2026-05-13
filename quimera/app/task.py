@@ -291,7 +291,25 @@ class AppTaskServices:
             classify_task_execution_result=classify_task_execution_result,
             was_user_cancelled=self._was_user_cancelled,
             record_failure=getattr(app, "record_failure", None),
+            before_agent_call=self._enable_task_tool_auto_approval,
+            after_agent_call=self._disable_task_tool_auto_approval,
         )
+
+    def _enable_task_tool_auto_approval(self, agent_name: str) -> None:
+        plugin = getattr(self.app, "get_agent_plugin", lambda _agent_name: None)(agent_name)
+        if plugin is None or plugin.effective_driver() != "openai_compat" or not plugin.supports_tools:
+            return
+        approval_handler = getattr(self.app, "_approval_handler", None)
+        if approval_handler is not None and hasattr(approval_handler, "set_thread_approve_all"):
+            approval_handler.set_thread_approve_all(True, scope_key=f"task:{agent_name}:{id(self)}")
+
+    def _disable_task_tool_auto_approval(self, agent_name: str) -> None:
+        plugin = getattr(self.app, "get_agent_plugin", lambda _agent_name: None)(agent_name)
+        if plugin is None or plugin.effective_driver() != "openai_compat" or not plugin.supports_tools:
+            return
+        approval_handler = getattr(self.app, "_approval_handler", None)
+        if approval_handler is not None and hasattr(approval_handler, "set_thread_approve_all"):
+            approval_handler.set_thread_approve_all(False, scope_key=f"task:{agent_name}:{id(self)}")
 
     def _build_task_review_service(self, failover_policy: TaskFailoverPolicy) -> TaskReviewService:
         app = self.app

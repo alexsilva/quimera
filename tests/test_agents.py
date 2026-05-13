@@ -1,7 +1,7 @@
 import queue
 import threading
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch, ANY
+from unittest.mock import MagicMock, patch, ANY, call
 
 import pytest
 
@@ -1288,6 +1288,48 @@ def test_call_api_renders_openai_preview_for_non_approval_tools(renderer):
     assert "README.md" in message
 
 
+def test_call_api_routes_openai_preview_through_muted_reporter(renderer):
+    """Preview operacional deve usar callback neutro quando fornecido pelo app."""
+    from types import SimpleNamespace
+
+    muted_reporter = MagicMock()
+    client = AgentClient(renderer, muted_reporter=muted_reporter)
+    tool_executor = MagicMock()
+    tool_executor.would_require_approval.return_value = False
+    client.tool_executor = tool_executor
+
+    plugin = SimpleNamespace(
+        driver="openai_compat",
+        model="test-model",
+        base_url="http://localhost",
+        api_key_env=None,
+        tool_use_reliability="medium",
+        supports_tools=True,
+    )
+
+    with patch("quimera.agents.client.OpenAICompatDriver") as mock_driver_cls, \
+            patch.object(client, "_start_esc_monitor"), \
+            patch.object(client, "_stop_esc_monitor"):
+        mock_driver = MagicMock()
+
+        def run_with_tool(**kwargs):
+            kwargs["on_tool_call"]("read_file", {"path": "README.md"})
+            return "ok"
+
+        mock_driver.run.side_effect = run_with_tool
+        mock_driver_cls.return_value = mock_driver
+
+        result = client._call_api("test-agent", plugin, "prompt")
+
+    assert result == "ok"
+    muted_reporter.assert_called_once()
+    message = muted_reporter.call_args[0][0]
+    assert "[executando]" in message
+    assert "read_file" in message
+    assert "README.md" in message
+    renderer.show_system_neutral.assert_not_called()
+
+
 def test_call_api_skips_openai_preview_when_tool_requires_approval(renderer):
     """Preview não deve ser exibido para tools que já passam pelo fluxo de aprovação."""
     from types import SimpleNamespace
@@ -1321,6 +1363,41 @@ def test_call_api_skips_openai_preview_when_tool_requires_approval(renderer):
         result = client._call_api("test-agent", plugin, "prompt")
 
     assert result == "ok"
+
+
+def test_call_api_propagates_task_approval_scope_to_driver_thread(renderer):
+    from types import SimpleNamespace
+
+    client = AgentClient(renderer)
+    tool_executor = MagicMock()
+    tool_executor.get_thread_approval_scope.return_value = "task:qwen"
+    tool_executor.bind_thread_approval_scope.side_effect = [None, "driver-prev"]
+    client.tool_executor = tool_executor
+
+    plugin = SimpleNamespace(
+        driver="openai_compat",
+        model="test-model",
+        base_url="http://localhost",
+        api_key_env=None,
+        tool_use_reliability="medium",
+        supports_tools=True,
+    )
+
+    with patch("quimera.agents.client.OpenAICompatDriver") as mock_driver_cls, \
+            patch.object(client, "_start_esc_monitor"), \
+            patch.object(client, "_stop_esc_monitor"):
+        mock_driver = MagicMock()
+        mock_driver.run.return_value = "ok"
+        mock_driver_cls.return_value = mock_driver
+
+        result = client._call_api("test-agent", plugin, "prompt")
+
+    assert result == "ok"
+    tool_executor.get_thread_approval_scope.assert_called_once_with()
+    assert tool_executor.bind_thread_approval_scope.call_args_list == [
+        call("task:qwen"),
+        call(None),
+    ]
     renderer.show_system_neutral.assert_not_called()
 
 

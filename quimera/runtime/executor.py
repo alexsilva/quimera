@@ -89,6 +89,20 @@ class ToolExecutor:
         if callable(setter):
             setter(cancel_event)
 
+    def get_thread_approval_scope(self) -> str | None:
+        """Lê o escopo de aprovação propagável da thread atual."""
+        getter = getattr(self._approval_handler, "get_thread_approval_scope", None)
+        if callable(getter):
+            return getter()
+        return None
+
+    def bind_thread_approval_scope(self, scope_key: str | None) -> str | None:
+        """Associa temporariamente um escopo de aprovação à thread atual."""
+        binder = getattr(self._approval_handler, "bind_thread_approval_scope", None)
+        if callable(binder):
+            return binder(scope_key)
+        return None
+
     def would_require_approval(self, call: ToolCall) -> bool:
         """Retorna True se a chamada passaria pelo fluxo de aprovação.
 

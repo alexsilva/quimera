@@ -134,6 +134,7 @@ class QuimeraApp:
             visibility=self.visibility,
             working_dir=str(self.workspace.cwd),
             error_reporter=self.show_error_message,
+            muted_reporter=self.show_muted_message,
         )
         self.task_executor_factory = create_executor
         self.session_summarizer = SessionSummarizer(

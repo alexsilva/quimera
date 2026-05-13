@@ -67,6 +67,8 @@ class TaskRunner:
         classify_task_execution_result: Callable[[str | None], tuple[bool, str]],
         was_user_cancelled: Callable[[], bool],
         record_failure: Callable[[str], None] | None = None,
+        before_agent_call: Callable[[str], None] | None = None,
+        after_agent_call: Callable[[str], None] | None = None,
     ) -> None:
         self.dispatch_services = dispatch_services
         self.system_layer = system_layer
@@ -75,6 +77,8 @@ class TaskRunner:
         self.classify_task_execution_result = classify_task_execution_result
         self.was_user_cancelled = was_user_cancelled
         self.record_failure = record_failure or (lambda _agent_name: None)
+        self.before_agent_call = before_agent_call or (lambda _agent_name: None)
+        self.after_agent_call = after_agent_call or (lambda _agent_name: None)
 
     def run(self, task: TaskRecord, agent_name: str) -> bool:
         """Executa a task com o agente informado. Retorna True se bem-sucedida."""
@@ -93,15 +97,19 @@ class TaskRunner:
                 f"[task {task_id}] {agent_name}: iniciando \u2014 {desc_preview}"
             )
 
-            response = self.dispatch_services.call_agent(
-                agent_name,
-                handoff=prompt,
-                handoff_only=True,
-                primary=False,
-                persist_history=False,
-                show_output=False,
-                silent=True,
-            )
+            self.before_agent_call(agent_name)
+            try:
+                response = self.dispatch_services.call_agent(
+                    agent_name,
+                    handoff=prompt,
+                    handoff_only=True,
+                    primary=False,
+                    persist_history=False,
+                    show_output=False,
+                    silent=True,
+                )
+            finally:
+                self.after_agent_call(agent_name)
 
             if self.was_user_cancelled():
                 self.system_layer.show_muted_message(

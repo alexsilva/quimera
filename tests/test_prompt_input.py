@@ -47,6 +47,7 @@ class TestBuildToolbar:
         assert callable(toolbar)
         content = toolbar()
         assert "claude" in str(content)
+        assert "responde:" not in str(content)
         assert "gpt-5" in str(content)
         assert "/tmp/projeto" in str(content)
 

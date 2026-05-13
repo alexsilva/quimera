@@ -552,6 +552,71 @@ def test_pre_approval_handler_delegates_to_base_on_deny(mock_print):
     base.approve.assert_called_once_with(tool_name="shell", summary="ls")
 
 
+@patch('builtins.print')
+def test_pre_approval_handler_thread_approve_all_short_circuits_base(mock_print):
+    base = MagicMock()
+    base.approve.return_value = False
+    pre = PreApprovalHandler(base)
+
+    pre.set_thread_approve_all(True)
+    try:
+        result = pre.approve(tool_name="apply_patch", summary="patch")
+    finally:
+        pre.set_thread_approve_all(False)
+
+    assert result is True
+    base.approve.assert_not_called()
+    found = any(
+        "approve-all-task" in str(call_args)
+        for call_args in mock_print.call_args_list
+    )
+    assert found
+
+
+def test_pre_approval_handler_thread_approve_all_is_cleared_after_cycle():
+    base = MagicMock()
+    base.approve.return_value = False
+    pre = PreApprovalHandler(base)
+
+    pre.set_thread_approve_all(True)
+    pre.reset_approve_all_after_cycle()
+
+    result = pre.approve(tool_name="apply_patch", summary="patch")
+    assert result is False
+    base.approve.assert_called_once_with(tool_name="apply_patch", summary="patch")
+
+
+@patch('builtins.print')
+def test_pre_approval_handler_scope_approve_all_propagates_across_threads(mock_print):
+    base = MagicMock()
+    base.approve.return_value = False
+    pre = PreApprovalHandler(base)
+
+    pre.set_thread_approve_all(True, scope_key="task:qwen")
+    result_holder = {}
+
+    def worker():
+        previous = pre.bind_thread_approval_scope("task:qwen")
+        try:
+            result_holder["result"] = pre.approve(tool_name="run_shell", summary="cmd")
+        finally:
+            pre.bind_thread_approval_scope(previous)
+
+    thread = threading.Thread(target=worker)
+    thread.start()
+    thread.join()
+
+    pre.set_thread_approve_all(False, scope_key="task:qwen")
+
+    assert result_holder["result"] is True
+    base.approve.assert_not_called()
+    found = any(
+        "approve-all-task" in str(call_args)
+        for call_args in mock_print.call_args_list
+    )
+    assert found
+
+
 def test_pre_approval_handler_uses_renderer_property():
     """PreApprovalHandler detecta _renderer definido como property."""
     class FakeRenderer:

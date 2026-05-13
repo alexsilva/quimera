@@ -222,6 +222,55 @@ def test_runner_requeues_on_exception_when_failover_possible():
     assert system.messages[-1] == "[task 7] codex: erro: api timeout"
 
 
+def test_runner_wraps_agent_call_with_hooks():
+    dispatch = DispatchStub(response="resultado final")
+    system = SystemLayerSpy()
+    repo = RepositorySpy()
+    policy = FailoverPolicyStub(review_agents=[])
+    events = []
+    runner = TaskRunner(
+        dispatch_services=dispatch,
+        system_layer=system,
+        repository=repo,
+        failover_policy=policy,
+        classify_task_execution_result=lambda response: (True, response),
+        was_user_cancelled=lambda: False,
+        before_agent_call=lambda agent_name: events.append(("before", agent_name)),
+        after_agent_call=lambda agent_name: events.append(("after", agent_name)),
+    )
+
+    ok = runner.run(TaskRecord(id=8, job_id=0, description="corrigir bug", status="in_progress"), agent_name="chatgpt-api")
+
+    assert ok is True
+    assert events == [("before", "chatgpt-api"), ("after", "chatgpt-api")]
+
+
+def test_runner_calls_after_hook_even_when_dispatch_raises():
+    class FailingDispatch:
+        def call_agent(self, agent_name, **kwargs):
+            raise RuntimeError("api timeout")
+
+    system = SystemLayerSpy()
+    repo = RepositorySpy()
+    policy = FailoverPolicyStub(review_agents=[], can_failover=False)
+    events = []
+    runner = TaskRunner(
+        dispatch_services=FailingDispatch(),
+        system_layer=system,
+        repository=repo,
+        failover_policy=policy,
+        classify_task_execution_result=lambda response: (True, response or ""),
+        was_user_cancelled=lambda: False,
+        before_agent_call=lambda agent_name: events.append(("before", agent_name)),
+        after_agent_call=lambda agent_name: events.append(("after", agent_name)),
+    )
+
+    ok = runner.run(TaskRecord(id=9, job_id=0, description="test", body="body", status="in_progress"), agent_name="chatgpt-api")
+
+    assert ok is False
+    assert events == [("before", "chatgpt-api"), ("after", "chatgpt-api")]
+
+
 def test_runner_fails_on_exception_when_no_failover():
     class FailingDispatch:
         def call_agent(self, agent_name, **kwargs):

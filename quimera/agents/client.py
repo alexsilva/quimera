@@ -45,10 +45,12 @@ class AgentClient:
     _MAX_LOG_QUEUE_ITEMS = 512
 
     def __init__(self, renderer, metrics_file=None, timeout=None, visibility=Visibility.SUMMARY,
-                 working_dir=None, workspace_root=None, tool_executor=None, error_reporter=None):
+                 working_dir=None, workspace_root=None, tool_executor=None, error_reporter=None,
+                 muted_reporter=None):
         """Inicializa uma instância de AgentClient."""
         self.renderer = renderer
         self.error_reporter = error_reporter
+        self.muted_reporter = muted_reporter
         self.metrics_file = metrics_file
         self._metrics_lock = threading.Lock()
         self.timeout = timeout
@@ -80,6 +82,17 @@ class AgentClient:
             reporter(message)
             return
         self.renderer.show_error(message)
+
+    def _show_muted(self, message: str) -> None:
+        reporter = self.muted_reporter
+        if callable(reporter):
+            reporter(message)
+            return
+        show_system_neutral = getattr(self.renderer, "show_system_neutral", None)
+        if callable(show_system_neutral):
+            show_system_neutral(message)
+            return
+        self.renderer.show_system(message)
 
     # ------------------------------------------------------------------
     # Helpers de sinal (delegam para EscMonitor para retrocompatibilidade)
@@ -573,6 +586,11 @@ class AgentClient:
                     set_cancel_event = getattr(effective_tool_executor, "set_approval_cancel_event", None)
                     if callable(set_cancel_event):
                         set_cancel_event(self._cancel_event)
+                approval_scope = None
+                if effective_tool_executor is not None:
+                    get_approval_scope = getattr(effective_tool_executor, "get_thread_approval_scope", None)
+                    if callable(get_approval_scope):
+                        approval_scope = get_approval_scope()
                 # Injeta callbacks de spinner no executor para que o approval handler
                 # possa pausar o Live do Rich antes de input() bloqueante, evitando
                 # race condition entre o refresh do spinner e a leitura do stdin.
@@ -586,7 +604,17 @@ class AgentClient:
                 result_holder = {"result": None, "error": None}
 
                 def _run_driver():
+                    previous_scope = None
                     try:
+                        if effective_tool_executor is not None:
+                            bind_approval_scope = getattr(
+                                effective_tool_executor,
+                                "bind_thread_approval_scope",
+                                None,
+                            )
+                            if callable(bind_approval_scope):
+                                previous_scope = bind_approval_scope(approval_scope)
+
                         def _on_tool_call(name, args):
                             """Exibe preview formatado para tools sem approval; tools com approval são tratadas pelo approval handler."""
                             if effective_tool_executor is not None:
@@ -594,9 +622,7 @@ class AgentClient:
                                     call = ToolCall(name=name, arguments=args)
                                     if not effective_tool_executor.would_require_approval(call):
                                         summary = ApproveSummary.build(name, args)
-                                        self.renderer.show_system_neutral(
-                                            f"[executando] {name} :: {summary}"
-                                        )
+                                        self._show_muted(f"[executando] {name} :: {summary}")
                                 except Exception:
                                     pass  # preview é best-effort
 
@@ -616,6 +642,15 @@ class AgentClient:
                         )
                     except Exception as exc:
                         result_holder["error"] = exc
+                    finally:
+                        if effective_tool_executor is not None:
+                            bind_approval_scope = getattr(
+                                effective_tool_executor,
+                                "bind_thread_approval_scope",
+                                None,
+                            )
+                            if callable(bind_approval_scope):
+                                bind_approval_scope(previous_scope)
 
                 t = threading.Thread(target=_run_driver, daemon=True)
                 t.start()
