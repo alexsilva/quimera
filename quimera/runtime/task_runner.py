@@ -148,7 +148,6 @@ class TaskRunner:
                         f"[task {task_id}] {agent_name}: erro ao concluir task"
                     )
                     return False
-                self.system_layer.show_muted_message(f"[task {task_id}] {agent_name}: conclu\u00edda")
             return True
         except Exception as exc:
             self.system_layer.show_muted_message(f"[task {task_id}] {agent_name}: erro: {exc}")

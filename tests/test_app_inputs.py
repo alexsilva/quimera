@@ -121,6 +121,7 @@ class TestReadUserInput:
             assert result == "line"
             assert mock_app._nonblocking_input_status == "idle"
             mock_input_fn.assert_called_once_with(">")
+            assert mock_app.system_layer.flush_deferred_messages.call_count == 2
 
     def test_timeout_zero_tty_keyboard_interrupt(self, mock_app):
         from quimera.app.inputs import read_user_input

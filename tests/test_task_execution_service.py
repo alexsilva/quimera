@@ -82,7 +82,10 @@ def test_handler_completes_task_when_no_review_agent_available():
     assert ok is True
     assert repo.complete_calls == [(1, "resultado final", None)]
     assert repo.submit_calls == []
-    assert system.messages[-1] == "[task 1] codex: concluída"
+    assert system.messages == [
+        "[task 1] codex: iniciando — corrigir bug",
+        "[task 1] codex:\nresultado final",
+    ]
 
 
 def test_handler_submits_for_review_when_other_reviewer_exists():
