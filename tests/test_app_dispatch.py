@@ -711,20 +711,19 @@ class TestCallAgentLowLevel:
         ll_app.renderer.start_message_stream.assert_not_called()
 
     def test_on_text_chunk_starts_stream(self, ll_app):
-        """chunk chama start_message_stream e update_message_stream"""
+        """chunks são bufferizados e entregues via show_message"""
         def _call(agent, prompt, silent=False, on_text_chunk=None):
             if on_text_chunk:
                 on_text_chunk("hello")
+                on_text_chunk(" world")
             return "response"
         ll_app.agent_client.call = _call
         ds = AppDispatchServices(ll_app)
         ds.call_agent_low_level("agent1")
-        ll_app.renderer.start_message_stream.assert_called_once_with("agent1")
-        ll_app.renderer.update_message_stream.assert_called_with("agent1", "hello")
-        ll_app.renderer.finish_message_stream.assert_called_once_with("agent1", "response")
+        ll_app.renderer.show_message.assert_called_once_with("agent1", "response")
 
-    def test_stream_result_none_aborts(self, ll_app):
-        """stream started mas result None → abort"""
+    def test_stream_result_none_shows_buffered(self, ll_app):
+        """stream com result None ainda mostra o que foi bufferizado"""
         def _call(agent, prompt, silent=False, on_text_chunk=None):
             if on_text_chunk:
                 on_text_chunk("hello")
@@ -733,7 +732,7 @@ class TestCallAgentLowLevel:
         ds = AppDispatchServices(ll_app)
         result = ds.call_agent_low_level("agent1")
         assert result is None
-        ll_app.renderer.abort_message_stream.assert_called_once_with("agent1")
+        ll_app.renderer.show_message.assert_called_once_with("agent1", "hello")
 
     def test_debug_prompt_metrics(self, ll_app):
         """debug_prompt_metrics=True chama log_prompt_metrics"""

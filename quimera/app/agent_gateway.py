@@ -90,19 +90,14 @@ class AgentGateway:
         history = self._get_history()
         self._refresh_task_state()
 
-        stream_state = {"started": False}
         renderer = self._renderer
         output_lock = self._output_lock
 
+        _stream_buffer = []
         def _on_text_chunk(chunk):
             if silent or not show_output or not chunk:
                 return
-            if not stream_state["started"]:
-                with (output_lock if output_lock is not None else nullcontext()):
-                    self._clear_prompt_line()
-                    renderer.start_message_stream(agent)
-                    stream_state["started"] = True
-            renderer.update_message_stream(agent, chunk)
+            _stream_buffer.append(chunk)
 
         shared_state = self._get_shared_state()
         active_execution_mode = self._get_execution_mode()
@@ -152,12 +147,20 @@ class AgentGateway:
 
         result = agent_client.call(agent, prompt, silent=silent, on_text_chunk=_on_text_chunk)
 
-        if stream_state["started"]:
+        if _stream_buffer or result:
             with (output_lock if output_lock is not None else nullcontext()):
+                self._clear_prompt_line()
                 if result is not None:
-                    renderer.finish_message_stream(agent, result)
+                    full_text = str(result)
                 else:
-                    renderer.abort_message_stream(agent)
+                    parts = []
+                    for chunk in _stream_buffer:
+                        if isinstance(chunk, dict):
+                            parts.append(chunk.get("text", ""))
+                        else:
+                            parts.append(str(chunk))
+                    full_text = "".join(parts)
+                renderer.show_message(agent, full_text)
                 flush = getattr(renderer, "flush", None)
                 if callable(flush):
                     flush()

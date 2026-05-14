@@ -111,8 +111,14 @@ class AppSystemLayer:
 
     @staticmethod
     def _is_terminal_task_message(message: str) -> bool:
-        """Verifica se a mensagem contém indicador terminal de task."""
-        return any(kw in message for kw in _TERMINAL_TASK_KEYWORDS)
+        """Verifica se a mensagem contém indicador terminal de task.
+
+        Só checa a primeira linha — mensagens terminais são sempre
+        curtas (sem \n). Isso evita falso positivo quando o corpo
+        de uma resposta longa contém acidentalmente a keyword.
+        """
+        first_line = message.split("\n", 1)[0]
+        return any(kw in first_line for kw in _TERMINAL_TASK_KEYWORDS)
 
     @staticmethod
     def _format_task_summary(task_id: int, message: str, retry_count: int = 0) -> str:
@@ -150,7 +156,7 @@ class AppSystemLayer:
                     retry_counts[task_id] = retry_counts.get(task_id, 0) + 1
 
         if not terminal_tasks:
-            return list(deferred)
+            return AppSystemLayer._dedup_without_terminal(deferred)
 
         result: list = []
 
@@ -176,6 +182,18 @@ class AppSystemLayer:
             result.append(item)
 
         return result
+
+    @staticmethod
+    def _dedup_without_terminal(deferred: list) -> list:
+        """Dedup messages even when no terminal message exists (task still running)."""
+        last_msg_by_task: dict[int, tuple] = {}
+        for item in deferred:
+            msg = item[1] if isinstance(item, tuple) and len(item) == 2 else str(item)
+            task_id = AppSystemLayer._extract_task_id(msg)
+            if task_id is not None:
+                last_msg_by_task[task_id] = item
+
+        return list(last_msg_by_task.values()) if last_msg_by_task else list(deferred)
 
     def _is_prompt_active(self) -> bool:
         """Retorna se há um prompt interativo ativo no momento."""
@@ -314,7 +332,7 @@ class AppSystemLayer:
         if renderer is None:
             return
         if self._is_prompt_active() and self._is_foreign_prompt_thread():
-            if self._is_terminal_task_feedback(message) and self._show_above_active_prompt(
+            if self._show_above_active_prompt(
                 message,
                 level="neutral",
             ):

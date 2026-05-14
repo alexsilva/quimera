@@ -670,13 +670,14 @@ def test_deferred_audit_no_logger_does_not_crash():
 
 
 def test_compact_deferred_only_transient():
-    """Lote com apenas mensagens transitórias: todas aparecem."""
+    """Lote com apenas mensagens transitórias: dedup mantém só a última por task."""
     deferred = [
         ("system", "[task 1] codex: iniciando"),
         ("system", "[task 1] codex: aguardando review"),
     ]
     result = AppSystemLayer._compact_deferred(deferred)
-    assert result == deferred
+    # Now dedup keeps only the last message per task (T2b)
+    assert result == [("system", "[task 1] codex: aguardando review")]
 
 
 def test_compact_deferred_terminal_suppresses_transient_same_task():
