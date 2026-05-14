@@ -2181,6 +2181,26 @@ class ProtocolTests(unittest.TestCase):
         )
         self.assertEqual(app.storage.saved_shared_state, {"goal": "manter memória"})
 
+    def test_auto_summarize_skips_when_threshold_is_hit_but_history_window_is_larger(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.history = [{"role": "human", "content": f"m{i}"} for i in range(48)]
+        app.auto_summarize_threshold = 30
+        app.prompt_builder = type("PromptBuilderStub", (), {"history_window": 96})()
+        app.context_manager = Mock()
+        app.session_summarizer = Mock()
+        app.renderer = DummyRenderer()
+        app.storage = DummyStorage()
+        app.shared_state = {"goal": "manter memória"}
+
+        app.session_services = AppSessionServices(app)
+        app.session_services.maybe_auto_summarize()
+
+        app.context_manager.load_session_summary.assert_not_called()
+        app.session_summarizer.summarize.assert_not_called()
+        self.assertEqual(app.renderer.system_messages, [])
+        self.assertEqual(len(app.history), 48)
+        self.assertFalse(hasattr(app.storage, "saved_history"))
+
     def test_shutdown_merges_existing_session_summary(self):
         class FakeContextManager:
             def __init__(self):

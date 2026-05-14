@@ -76,6 +76,8 @@ class AppSessionServices:
             return
 
         keep = app.prompt_builder.history_window
+        if len(app.history) <= keep:
+            return
         to_summarize = app.history[:-keep]
         recent = app.history[-keep:]
         existing_summary = app.context_manager.load_session_summary()
