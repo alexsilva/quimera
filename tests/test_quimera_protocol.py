@@ -1866,6 +1866,7 @@ class ProtocolTests(unittest.TestCase):
                 protocol_mode="standard",
                 handoff_only=False,
                 from_agent=None,
+                prompt_kind=None,
         ):
             calls.append((agent, is_first_speaker, handoff, handoff_only, from_agent))
             return next(responses)
@@ -1938,6 +1939,7 @@ class ProtocolTests(unittest.TestCase):
                 protocol_mode="standard",
                 handoff_only=False,
                 from_agent=None,
+                prompt_kind=None,
         ):
             calls.append((agent, is_first_speaker, handoff, handoff_only, from_agent))
             return next(responses)
@@ -2063,6 +2065,7 @@ class ProtocolTests(unittest.TestCase):
                 handoff_only=False,
                 silent=False,
                 from_agent=None,
+                prompt_kind=None,
         ):
             calls.append((agent, protocol_mode, handoff_only, from_agent, handoff))
             return next(responses)
@@ -4685,6 +4688,7 @@ class FallbackChainTests(unittest.TestCase):
                 protocol_mode="standard",
                 handoff_only=False,
                 from_agent=None,
+                prompt_kind=None,
         ):
             calls.append((agent, is_first_speaker, handoff, handoff_only, from_agent))
             return next(responses)
@@ -4752,6 +4756,7 @@ class FallbackChainTests(unittest.TestCase):
                 protocol_mode="standard",
                 handoff_only=False,
                 from_agent=None,
+                prompt_kind=None,
         ):
             calls.append((agent, is_first_speaker, handoff, handoff_only, from_agent))
             return next(responses)

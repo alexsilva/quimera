@@ -590,3 +590,346 @@ def test_handle_command_returns_false_for_unknown_command():
     layer = AppSystemLayer(app)
 
     assert layer.handle_command("/nao-existe") is False
+
+
+# ---------------------------------------------------------------------------
+# Eventos de auditoria do ciclo deferred
+# ---------------------------------------------------------------------------
+
+
+def test_enqueue_logs_audit_event():
+    """_enqueue_deferred_message loga deferred_enqueue via audit logger."""
+    audit_logger = Mock()
+    renderer = DummyRenderer()
+    renderer._audit_logger = audit_logger
+    app = make_app(renderer)
+    layer = AppSystemLayer(app)
+
+    layer._enqueue_deferred_message("[task 1] codex: testando", level="system")
+
+    audit_logger.log_event.assert_called_once_with(
+        "deferred_enqueue",
+        message="[task 1] codex: testando",
+        level="system",
+        task_id=1,
+    )
+
+
+def test_enqueue_logs_audit_event_without_task_id():
+    """deferred_enqueue funciona com mensagem sem task_id."""
+    audit_logger = Mock()
+    renderer = DummyRenderer()
+    renderer._audit_logger = audit_logger
+    app = make_app(renderer)
+    layer = AppSystemLayer(app)
+
+    layer._enqueue_deferred_message("mensagem livre", level="warning")
+
+    audit_logger.log_event.assert_called_once_with(
+        "deferred_enqueue",
+        message="mensagem livre",
+        level="warning",
+    )
+
+
+def test_flush_logs_audit_event():
+    """flush_deferred_messages loga deferred_flush via audit logger."""
+    audit_logger = Mock()
+    renderer = DummyRenderer()
+    renderer._audit_logger = audit_logger
+    app = make_app(renderer)
+    app._deferred_system_messages = [
+        ("system", "[task 1] codex: concluída"),
+        ("neutral", "outra msg"),
+    ]
+    layer = AppSystemLayer(app)
+
+    layer.flush_deferred_messages()
+
+    audit_logger.log_event.assert_called_once_with(
+        "deferred_flush",
+        count=2,
+        previews=["[task 1] codex: concluída", "outra msg"],
+    )
+
+
+def test_deferred_audit_no_logger_does_not_crash():
+    """Enqueue e flush não quebram quando não há _audit_logger."""
+    app = make_app()  # DummyRenderer não tem _audit_logger
+    layer = AppSystemLayer(app)
+
+    layer._enqueue_deferred_message("teste", level="system")
+
+    app._deferred_system_messages = [("system", "teste")]
+    layer.flush_deferred_messages()
+
+
+# ---------------------------------------------------------------------------
+# Compactação do flush_deferred_messages (T1)
+# ---------------------------------------------------------------------------
+
+
+def test_compact_deferred_only_transient():
+    """Lote com apenas mensagens transitórias: todas aparecem."""
+    deferred = [
+        ("system", "[task 1] codex: iniciando"),
+        ("system", "[task 1] codex: aguardando review"),
+    ]
+    result = AppSystemLayer._compact_deferred(deferred)
+    assert result == deferred
+
+
+def test_compact_deferred_terminal_suppresses_transient_same_task():
+    """Lote com terminal + transitórios da mesma task: remove os transitórios."""
+    deferred = [
+        ("system", "[task 1] codex: iniciando"),
+        ("system", "[task 1] codex: processando"),
+        ("system", "[task 1] codex: concluída"),
+    ]
+    result = AppSystemLayer._compact_deferred(deferred)
+    assert result == [("system", "⚙ [task 1] codex: concluída")]
+
+
+def test_compact_deferred_terminal_middle():
+    """Terminal no meio do lote ainda remove transitórios anteriores."""
+    deferred = [
+        ("system", "[task 1] codex: iniciando"),
+        ("system", "[task 1] codex: concluída"),
+        ("system", "[task 1] codex: pós-processamento"),
+    ]
+    result = AppSystemLayer._compact_deferred(deferred)
+    assert result == [("system", "⚙ [task 1] codex: concluída")]
+
+
+def test_compact_deferred_different_tasks_not_affected():
+    """Tasks diferentes não se afetam."""
+    deferred = [
+        ("system", "[task 1] codex: iniciando"),
+        ("system", "[task 2] claude: processando"),
+        ("system", "[task 1] codex: concluída"),
+    ]
+    result = AppSystemLayer._compact_deferred(deferred)
+    assert result == [
+        ("system", "[task 2] claude: processando"),
+        ("system", "⚙ [task 1] codex: concluída"),
+    ]
+
+
+def test_compact_deferred_no_task_messages():
+    """Mensagens sem task ID não são afetadas."""
+    deferred = [
+        ("system", "mensagem normal"),
+        ("neutral", "outra mensagem"),
+    ]
+    result = AppSystemLayer._compact_deferred(deferred)
+    assert result == deferred
+
+
+def test_compact_deferred_mixed_tasks_one_terminal():
+    """Task 1 terminal, task 2 sem terminal: task 2 preservada."""
+    deferred = [
+        ("system", "[task 1] codex: iniciando"),
+        ("system", "[task 2] claude: iniciando"),
+        ("system", "[task 1] codex: concluída"),
+        ("system", "[task 2] claude: processando"),
+    ]
+    result = AppSystemLayer._compact_deferred(deferred)
+    assert result == [
+        ("system", "[task 2] claude: iniciando"),
+        ("system", "⚙ [task 1] codex: concluída"),
+        ("system", "[task 2] claude: processando"),
+    ]
+
+
+def test_compact_deferred_plain_string_items():
+    """Mensagens como string simples (formato legado) também são compactadas."""
+    deferred = [
+        "[task 1] codex: iniciando",
+        "[task 1] codex: concluída",
+    ]
+    result = AppSystemLayer._compact_deferred(deferred)
+    assert result == ["⚙ [task 1] codex: concluída"]
+
+
+def test_compact_deferred_falhou_keyword():
+    """Terminal 'falhou' suprime transitórios da mesma task."""
+    deferred = [
+        ("system", "[task 5] codex: executando"),
+        ("system", "[task 5] codex: falhou: erro crítico"),
+    ]
+    result = AppSystemLayer._compact_deferred(deferred)
+    assert result == [("system", "⚙ [task 5] codex: falhou: erro crítico")]
+
+
+def test_compact_deferred_cancelado_keyword():
+    """Terminal 'cancelado' suprime transitórios da mesma task."""
+    deferred = [
+        ("system", "[task 3] codex: processando"),
+        ("system", "[task 3] codex: cancelado pelo usuário"),
+    ]
+    result = AppSystemLayer._compact_deferred(deferred)
+    assert result == [("system", "⚙ [task 3] codex: cancelado pelo usuário")]
+
+
+def test_flush_deferred_compactacao_integration():
+    """flush_deferred_messages aplica compactação antes de renderizar."""
+    app = make_app()
+    app._deferred_system_messages = [
+        ("system", "[task 1] codex: iniciando"),
+        ("system", "[task 1] codex: concluída"),
+    ]
+
+    AppSystemLayer(app).flush_deferred_messages()
+
+    assert app.renderer.system_messages == ["⚙ [task 1] codex: concluída"]
+    assert app._deferred_system_messages == []
+
+
+# ---------------------------------------------------------------------------
+# T2: Anotação de retries/falhas na conclusão + linha compacta
+# ---------------------------------------------------------------------------
+
+
+def test_compact_deferred_t2_annotates_single_retry():
+    """Task com 1 retry (bloqueada): terminal é anotado."""
+    deferred = [
+        ("system", "[task 1] codex: iniciando"),
+        ("system", "[task 1] codex: bloqueada"),
+        ("system", "[task 1] codex: iniciando"),
+        ("system", "[task 1] codex: concluída"),
+    ]
+    result = AppSystemLayer._compact_deferred(deferred)
+    assert result == [("system", "⚙ [task 1] codex: concluída (após 1 tentativas)")]
+
+
+def test_compact_deferred_t2_annotates_multiple_retries():
+    """Múltiplos retries: contagem correta."""
+    deferred = [
+        ("system", "[task 1] codex: iniciando"),
+        ("system", "[task 1] codex: bloqueada"),
+        ("system", "[task 1] codex: iniciando"),
+        ("system", "[task 1] codex: bloqueada"),
+        ("system", "[task 1] codex: iniciando"),
+        ("system", "[task 1] codex: concluída"),
+    ]
+    result = AppSystemLayer._compact_deferred(deferred)
+    assert result == [("system", "⚙ [task 1] codex: concluída (após 2 tentativas)")]
+
+
+def test_compact_deferred_t2_annotates_requeue_as_retry():
+    """requeue (tentativa N) conta como retry."""
+    deferred = [
+        ("system", "[task 1] codex: iniciando"),
+        ("warning", "[task 1] requeue (tentativa 2)"),
+        ("system", "[task 1] codex: iniciando"),
+        ("system", "[task 1] codex: concluída"),
+    ]
+    result = AppSystemLayer._compact_deferred(deferred)
+    assert result == [("system", "⚙ [task 1] codex: concluída (após 1 tentativas)")]
+
+
+def test_compact_deferred_t2_annotates_sem_resposta_as_retry():
+    """sem resposta conta como retry."""
+    """sem resposta conta como retry."""
+    deferred = [
+        ("system", "[task 1] codex: iniciando"),
+        ("system", "[task 1] codex: sem resposta"),
+        ("system", "[task 1] codex: iniciando"),
+        ("system", "[task 1] codex: concluída"),
+    ]
+    result = AppSystemLayer._compact_deferred(deferred)
+    assert result == [("system", "⚙ [task 1] codex: concluída (após 1 tentativas)")]
+
+
+def test_compact_deferred_t2_annotates_erro_as_retry():
+    """erro: conta como retry."""
+    deferred = [
+        ("neutral", "[task 1] codex: iniciando"),
+        ("neutral", "[task 1] codex: erro: timeout"),
+        ("neutral", "[task 1] codex: iniciando"),
+        ("neutral", "[task 1] codex: concluída"),
+    ]
+    result = AppSystemLayer._compact_deferred(deferred)
+    assert result == [("neutral", "⚙ [task 1] codex: concluída (após 1 tentativas)")]
+
+
+def test_compact_deferred_t2_dedup_multiple_terminals():
+    """Múltiplas mensagens terminais da mesma task: apenas a última sobrevive."""
+    deferred = [
+        ("system", "[task 1] codex: iniciando"),
+        ("system", "[task 1] codex: concluída"),
+        ("system", "[task 1] concluída | aprovada por gemini: resultado ok"),
+    ]
+    result = AppSystemLayer._compact_deferred(deferred)
+    assert result == [
+        ("system", "⚙ [task 1] concluída | aprovada por gemini: resultado ok"),
+    ]
+
+
+def test_compact_deferred_t2_no_annotation_without_retries():
+    """Sem retries: terminal não é anotado."""
+    deferred = [
+        ("system", "[task 1] codex: iniciando"),
+        ("system", "[task 1] codex: processando"),
+        ("system", "[task 1] codex: concluída"),
+    ]
+    result = AppSystemLayer._compact_deferred(deferred)
+    assert result == [("system", "⚙ [task 1] codex: concluída")]
+
+
+def test_compact_deferred_t2_annotates_falhou_with_retries():
+    """Falha com retries anteriores: terminal falhou é anotado."""
+    deferred = [
+        ("system", "[task 5] codex: iniciando"),
+        ("system", "[task 5] codex: bloqueada"),
+        ("system", "[task 5] codex: iniciando"),
+        ("system", "[task 5] codex: falhou: erro crítico"),
+    ]
+    result = AppSystemLayer._compact_deferred(deferred)
+    assert result == [("system", "⚙ [task 5] codex: falhou: erro crítico (após 1 tentativas)")]
+
+
+def test_compact_deferred_t2_plain_strings_with_retries():
+    """Mensagens como string simples com retries preservam nível."""
+    deferred = [
+        "[task 1] codex: iniciando",
+        "[task 1] codex: bloqueada",
+        "[task 1] codex: iniciando",
+        "[task 1] codex: concluída",
+    ]
+    result = AppSystemLayer._compact_deferred(deferred)
+    assert result == ["⚙ [task 1] codex: concluída (após 1 tentativas)"]
+
+
+def test_compact_deferred_t2_mixed_tasks_retry():
+    """Tasks diferentes: retry de uma não contamina a outra."""
+    deferred = [
+        ("system", "[task 1] codex: iniciando"),
+        ("system", "[task 1] codex: bloqueada"),
+        ("system", "[task 2] claude: processando"),
+        ("system", "[task 1] codex: iniciando"),
+        ("system", "[task 1] codex: concluída"),
+    ]
+    result = AppSystemLayer._compact_deferred(deferred)
+    assert result == [
+        ("system", "[task 2] claude: processando"),
+        ("system", "⚙ [task 1] codex: concluída (após 1 tentativas)"),
+    ]
+
+
+def test_flush_deferred_t2_retry_annotation_integration():
+    """flush_deferred_messages renderiza terminal com anotação de retry."""
+    app = make_app()
+    app._deferred_system_messages = [
+        ("system", "[task 1] codex: iniciando"),
+        ("system", "[task 1] codex: bloqueada"),
+        ("system", "[task 1] codex: iniciando"),
+        ("system", "[task 1] codex: concluída"),
+    ]
+
+    AppSystemLayer(app).flush_deferred_messages()
+
+    assert app.renderer.system_messages == [
+        "⚙ [task 1] codex: concluída (após 1 tentativas)",
+    ]
+    assert app._deferred_system_messages == []

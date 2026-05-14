@@ -1,6 +1,7 @@
 """Componentes de `quimera.app.system_layer`."""
 from __future__ import annotations
 import json
+import re
 import shlex
 import threading
 from contextlib import nullcontext
@@ -38,6 +39,22 @@ from ..plugins.base import (
     set_connection_override,
 )
 from ..runtime.parser import strip_tool_block
+
+
+_TASK_ID_RE = re.compile(r'\[task (\d+)\]')
+
+_TERMINAL_TASK_KEYWORDS = (
+    "concluída",
+    "falhou",
+    "cancelad",  # matches "cancelado" and "cancelada"
+)
+
+_RETRY_TASK_KEYWORDS = (
+    "bloqueada",
+    "sem resposta",
+    "erro:",
+    "requeue",
+)
 
 
 class AppSystemLayer:
@@ -86,6 +103,80 @@ class AppSystemLayer:
             and " concluída" in message
         )
 
+    @staticmethod
+    def _extract_task_id(message: str) -> int | None:
+        """Extrai o ID numérico de uma task no formato [task N]."""
+        m = _TASK_ID_RE.search(message)
+        return int(m.group(1)) if m else None
+
+    @staticmethod
+    def _is_terminal_task_message(message: str) -> bool:
+        """Verifica se a mensagem contém indicador terminal de task."""
+        return any(kw in message for kw in _TERMINAL_TASK_KEYWORDS)
+
+    @staticmethod
+    def _format_task_summary(task_id: int, message: str, retry_count: int = 0) -> str:
+        """Formata mensagem terminal de task como linha compacta com ⚙."""
+        task_tag = f"[task {task_id}]"
+        body = message
+        if message.startswith(task_tag):
+            body = message[len(task_tag):].lstrip()
+
+        suffix = f" (após {retry_count} tentativas)" if retry_count > 0 else ""
+        return f"⚙ [task {task_id}] {body}{suffix}"
+
+    @staticmethod
+    def _compact_deferred(deferred: list) -> list:
+        """Remove mensagens transitórias e compacta conclusões de task no lote.
+
+        T1: Suprime mensagens transitórias de tasks que têm mensagem terminal
+        no mesmo lote.
+
+        T2: Deduplica mensagens terminais (1 por task concluída, mantém a
+        última) e anota com sumário de retries/falhas intermediárias.
+        """
+        terminal_tasks: set[int] = set()
+        retry_counts: dict[int, int] = {}
+        last_terminal_idx: dict[int, int] = {}
+
+        for idx, item in enumerate(deferred):
+            msg = item[1] if isinstance(item, tuple) and len(item) == 2 else str(item)
+            task_id = AppSystemLayer._extract_task_id(msg)
+            if task_id is not None:
+                if AppSystemLayer._is_terminal_task_message(msg):
+                    terminal_tasks.add(task_id)
+                    last_terminal_idx[task_id] = idx
+                elif any(kw in msg for kw in _RETRY_TASK_KEYWORDS):
+                    retry_counts[task_id] = retry_counts.get(task_id, 0) + 1
+
+        if not terminal_tasks:
+            return list(deferred)
+
+        result: list = []
+
+        for idx, item in enumerate(deferred):
+            msg = item[1] if isinstance(item, tuple) and len(item) == 2 else str(item)
+            task_id = AppSystemLayer._extract_task_id(msg)
+
+            if task_id is not None and task_id in terminal_tasks:
+                if not AppSystemLayer._is_terminal_task_message(msg):
+                    continue  # T1: suprime transitório
+                if idx != last_terminal_idx.get(task_id):
+                    continue  # T2: só a última terminal por task
+
+                retry_count = retry_counts.get(task_id, 0)
+                formatted = AppSystemLayer._format_task_summary(
+                    task_id, msg, retry_count,
+                )
+                if isinstance(item, tuple) and len(item) == 2:
+                    item = (item[0], formatted)
+                else:
+                    item = formatted
+
+            result.append(item)
+
+        return result
+
     def _is_prompt_active(self) -> bool:
         """Retorna se há um prompt interativo ativo no momento."""
         return getattr(self.app, "_nonblocking_input_status", None) == "reading"
@@ -110,6 +201,15 @@ class AppSystemLayer:
             overflow = len(deferred_list) - max_deferred + 1
             del deferred_list[:overflow]
         deferred_list.append((level, message))
+        renderer = getattr(self.app, "renderer", None)
+        if renderer is not None:
+            audit_logger = getattr(renderer, "_audit_logger", None)
+            if audit_logger is not None:
+                payload: dict = dict(message=message[:120], level=level)
+                task_id = self._extract_task_id(message)
+                if task_id is not None:
+                    payload["task_id"] = task_id
+                audit_logger.log_event("deferred_enqueue", **payload)
         return True
 
     def flush_deferred_messages(self) -> None:
@@ -121,9 +221,17 @@ class AppSystemLayer:
         if renderer is None:
             deferred.clear()
             return
+        audit_logger = getattr(renderer, "_audit_logger", None)
+        if audit_logger is not None:
+            audit_logger.log_event(
+                "deferred_flush",
+                count=len(deferred),
+                previews=[msg[:80] for _, msg in deferred],
+            )
+        compacted = self._compact_deferred(deferred)
         output_lock = getattr(self.app, "_output_lock", nullcontext())
         with output_lock:
-            for item in deferred:
+            for item in compacted:
                 if isinstance(item, tuple) and len(item) == 2:
                     level, message = item
                 else:
