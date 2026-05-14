@@ -103,6 +103,51 @@ def test_final_prompt_contract_has_sections_once_in_order_and_without_duplicatio
     assert "\n\n\n" not in prompt
 
 
+def test_prompt_includes_render_debug_block_when_active():
+    session_state = {
+        "session_id": "test-session",
+        "current_job_id": 123,
+        "workspace_root": "/tmp/test",
+        "current_dir": ".",
+        "render_debug_active": True,
+        "render_log_path": "/tmp/test/data/logs/render/render.jsonl",
+        "render_ansi_path": "/tmp/test/data/logs/render/render.ansi",
+    }
+
+    builder = PromptBuilder(
+        context_manager=_make_context_manager(""),
+        session_state=session_state,
+        user_name="ALEX",
+    )
+
+    prompt = builder.build(agent="codex", history=[{"role": "human", "content": "investigue o bug visual"}])
+
+    debug_block = _extract_block(prompt, "debug_state")
+    assert "Auditoria de renderização ativa nesta sessão." in debug_block
+    assert "/tmp/test/data/logs/render/render.jsonl" in debug_block
+    assert "/tmp/test/data/logs/render/render.ansi" in debug_block
+
+
+def test_prompt_omits_render_debug_block_when_inactive():
+    session_state = {
+        "session_id": "test-session",
+        "current_job_id": 123,
+        "workspace_root": "/tmp/test",
+        "current_dir": ".",
+        "render_debug_active": False,
+    }
+
+    builder = PromptBuilder(
+        context_manager=_make_context_manager(""),
+        session_state=session_state,
+        user_name="ALEX",
+    )
+
+    prompt = builder.build(agent="codex", history=[{"role": "human", "content": "pedido"}])
+
+    assert '<debug_state title="Debug de render ativo">' not in prompt
+
+
 def test_prompt_template_loads_file_lazily(tmp_path):
     template_path = tmp_path / "prompt.md"
     template = PromptTemplate(template_path)

@@ -123,6 +123,21 @@ class Workspace:
         return self._root / "data" / "logs" / "sessions"
 
     @property
+    def render_logs_dir(self) -> Path:
+        """Diretório de auditoria de renderização."""
+        return self._root / "data" / "logs" / "render"
+
+    @property
+    def render_log_path(self) -> Path:
+        """Arquivo JSONL de eventos de renderização."""
+        return self.render_logs_dir / "render.jsonl"
+
+    @property
+    def render_ansi_path(self) -> Path:
+        """Arquivo com o stream ANSI bruto da renderização."""
+        return self.render_logs_dir / "render.ansi"
+
+    @property
     def tasks_db(self) -> Path:
         """Executa tasks db."""
         return self._root / "data" / "tasks.db"
@@ -157,6 +172,7 @@ class Workspace:
         (self._root / "data" / "context").mkdir(parents=True, exist_ok=True)
         (self._root / "data" / "logs" / "sessions").mkdir(parents=True, exist_ok=True)
         (self._root / "data" / "logs" / "metrics").mkdir(parents=True, exist_ok=True)
+        (self._root / "data" / "logs" / "render").mkdir(parents=True, exist_ok=True)
         (self._root / "data").mkdir(parents=True, exist_ok=True)
         (self._root / "state").mkdir(parents=True, exist_ok=True)
         (self.base_dir / "index").mkdir(parents=True, exist_ok=True)

@@ -38,7 +38,7 @@ from .. import plugins
 from ..plugins.base import PluginRegistry, extract_model_from_cli_cmd
 from ..runtime.parser import strip_tool_block
 from ..runtime import tasks as runtime_tasks
-from ..ui import TerminalRenderer
+from ..ui import RenderAuditLogger, TerminalRenderer
 from ..context import ContextManager
 from ..storage import SessionStorage
 from ..agents import AgentClient
@@ -88,7 +88,13 @@ class QuimeraApp:
         self._plugin_registry = plugin_registry
         self.config = ConfigManager(self.workspace.config_file)
         _active_theme = theme if theme is not None else self.config.theme
-        self.renderer = TerminalRenderer(theme=_active_theme, get_plugin_style=self._resolve_plugin_style, density=self.config.density)
+        render_audit_logger = RenderAuditLogger(self.workspace.render_logs_dir) if debug else None
+        self.renderer = TerminalRenderer(
+            theme=_active_theme,
+            get_plugin_style=self._resolve_plugin_style,
+            density=self.config.density,
+            audit_logger=render_audit_logger,
+        )
         self.event_sink = EventSink()
         self._wire_event_ui()
         self.user_name = self.config.user_name
@@ -229,6 +235,9 @@ class QuimeraApp:
             "workspace_root": str(self.workspace.cwd),
             "current_dir": ".",
             "os_info": f"{platform.system()} {platform.release()}",
+            "render_debug_active": debug,
+            "render_log_path": str(self.workspace.render_log_path) if debug else "",
+            "render_ansi_path": str(self.workspace.render_ansi_path) if debug else "",
         }
         self.prompt_builder = PromptBuilder(
             self.context_manager,

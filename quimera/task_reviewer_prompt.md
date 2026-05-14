@@ -13,6 +13,15 @@ Esta é uma revisão isolada de task, não uma conversa normal.
 </session_state>
 <!-- ENDIF:session_id -->
 
+<!-- IF:render_debug_active -->
+<debug_state title="Debug de render ativo">
+- Auditoria de renderização ativa nesta sessão.
+- Eventos estruturados: {render_log_path}
+- Stream ANSI bruto: {render_ansi_path}
+- Se o review for sobre bug visual, use esses arquivos na validação.
+</debug_state>
+<!-- ENDIF:render_debug_active -->
+
 <task_review_rules title="Critério de review">
 - Foque apenas nesta task. Ignore qualquer contexto de conversa fora desta task.
 - Avalie a task original, o escopo enviado, o resultado do executor e a evidência concreta.

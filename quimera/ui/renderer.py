@@ -1,9 +1,10 @@
-"""Componentes de `quimera.ui`."""
+"""Renderização de terminal para a UI do Quimera."""
 import collections
 import logging
 import os
 import queue as _queue_module
 import re
+import sys as _sys_module
 import sys
 import threading
 from contextlib import contextmanager
@@ -13,11 +14,13 @@ from typing import Any
 _log = logging.getLogger(__name__)
 
 from quimera.runtime.streaming import apply_stream_diff, normalize_stream_diff
+from .audit import RenderAuditLogger
 
 _UNICODE_CONTROL_RE = re.compile(
     r"[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u061C\u200B-\u200F\u202A-\u202E\u2060-\u2069\uFEFF]"
 )
 _RENDER_MODES = {"plain", "markdown", "auto"}
+_PREVIEW_LIMIT = 160
 
 
 def strip_ansi(text: str) -> str:
@@ -63,6 +66,31 @@ def _apply_stream_diff(content: str, diff: list[dict[str, str]]) -> str:
 def _is_interactive_terminal() -> bool:
     """Check if we're running in an interactive terminal (not piped/captured)."""
     return sys.stdout.isatty() and os.environ.get('TERM') != 'dumb'
+
+
+def _public_ui_module():
+    module = _sys_module.modules.get("quimera.ui")
+    if module is not None:
+        return module
+    return _sys_module.modules[__name__]
+
+
+def _preview_text(value: Any, limit: int = _PREVIEW_LIMIT) -> str:
+    text = strip_ansi(str(value or "")).replace("\r", "\\r").replace("\n", "\\n")
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1] + "…"
+
+
+def _preview_chunk(chunk: Any) -> str:
+    if isinstance(chunk, dict):
+        text = chunk.get("text")
+        if text:
+            return _preview_text(text)
+        diff = chunk.get("diff")
+        if diff:
+            return _preview_text(diff)
+    return _preview_text(chunk)
 
 
 try:
@@ -152,15 +180,60 @@ class _NullStatus:
         pass
 
 
+class _AuditConsoleFile:
+    """Duplica a escrita do console para o terminal real e para o audit logger."""
+
+    def __init__(self, wrapped, audit_logger: RenderAuditLogger):
+        self._wrapped = wrapped
+        self._audit_logger = audit_logger
+
+    def write(self, data):
+        written = self._wrapped.write(data)
+        try:
+            self._audit_logger.write_ansi(data)
+        except Exception:
+            _log.exception("audit logger: failed to record ANSI output")
+        return written
+
+    def flush(self):
+        return self._wrapped.flush()
+
+    def isatty(self):
+        return self._wrapped.isatty()
+
+    def fileno(self):
+        return self._wrapped.fileno()
+
+    @property
+    def encoding(self):
+        return getattr(self._wrapped, "encoding", "utf-8")
+
+    @property
+    def errors(self):
+        return getattr(self._wrapped, "errors", "replace")
+
+
 class TerminalRenderer:
     """Camada exclusiva de apresentação no terminal. Nunca toca em persistência."""
 
-    def __init__(self, theme: str | None = None, get_plugin_style=None, density: str | None = None):
+    def __init__(
+        self,
+        theme: str | None = None,
+        get_plugin_style=None,
+        density: str | None = None,
+        audit_logger: RenderAuditLogger | None = None,
+    ):
         """Inicializa uma instância de TerminalRenderer."""
-        if _RICH_AVAILABLE:
-            self._console = Console(
+        self._audit_logger = audit_logger
+        console_file = sys.stdout
+        if self._audit_logger is not None:
+            console_file = _AuditConsoleFile(console_file, self._audit_logger)
+        public_ui = _public_ui_module()
+        if public_ui._RICH_AVAILABLE:
+            self._console = public_ui.Console(
                 force_terminal=_is_interactive_terminal(),
-                no_color=False
+                no_color=False,
+                file=console_file,
             )
         else:
             self._console = None
@@ -206,6 +279,8 @@ class TerminalRenderer:
         """Encerra o writer thread graciosamente, aguardando eventos pendentes."""
         self._queue.put(_STOP)
         self._writer_thread.join(timeout=timeout)
+        if self._audit_logger is not None:
+            self._audit_logger.close()
 
     def __del__(self):
         try:
@@ -244,7 +319,7 @@ class TerminalRenderer:
                 # de terminal conflitam e corrompem o display.
                 if self._is_prompt_active_fn is not None and self._is_prompt_active_fn():
                     return
-                _ul[0] = Live(
+                _ul[0] = _public_ui_module().Live(
                     _get_renderable(),
                     console=self._console,
                     refresh_per_second=20,
@@ -278,6 +353,11 @@ class TerminalRenderer:
                     return
             self._console.print(renderable, **kwargs)
 
+        def _audit_event(event_name: str, **payload) -> None:
+            if self._audit_logger is None:
+                return
+            self._audit_logger.log_event(event_name, **payload)
+
         def _next_event():
             if _local_pending:
                 return _local_pending.popleft()
@@ -294,9 +374,19 @@ class TerminalRenderer:
             # Resiliência: exceção em qualquer evento não mata o writer
             try:
                 if isinstance(event, PrintEvent):
+                    _audit_event(
+                        "print",
+                        prompt_active=bool(self._is_prompt_active_fn and self._is_prompt_active_fn()),
+                        preview=_preview_text(event.renderable),
+                    )
                     _cprint(event.renderable, **event.kwargs)
 
                 elif isinstance(event, LiveStartEvent):
+                    _audit_event(
+                        "stream_start",
+                        agent=event.agent,
+                        prompt_active=bool(self._is_prompt_active_fn and self._is_prompt_active_fn()),
+                    )
                     _stream_states[event.agent] = event.state
                     _ensure_live()
                     _refresh()
@@ -330,9 +420,21 @@ class TerminalRenderer:
                                     state["content"] += strip_ansi(str(text))
                             else:
                                 state["content"] += strip_ansi(str(chunk))
+                        _audit_event(
+                            "stream_chunk",
+                            agent=agent,
+                            chunk_count=len(chunks),
+                            preview=_preview_chunk(chunks[-1]),
+                        )
                         _refresh()
 
                 elif isinstance(event, LiveStopEvent):
+                    _audit_event(
+                        "stream_stop",
+                        agent=event.agent,
+                        render_mode=event.render_mode,
+                        preview=_preview_text(event.final_content),
+                    )
                     state = _stream_states.pop(event.agent, None)
                     if state:
                         _refresh()       # remove agente do Live antes de imprimir estático
@@ -350,12 +452,14 @@ class TerminalRenderer:
                         _cprint("")
 
                 elif isinstance(event, LiveAbortEvent):
+                    _audit_event("stream_abort", agent=event.agent)
                     _stream_states.pop(event.agent, None)
                     _refresh()
                     _stop_if_empty()
                     _cprint("")
 
                 elif isinstance(event, NoopEvent):
+                    _audit_event("noop")
                     event.done.set()
 
             except Exception:
@@ -391,7 +495,7 @@ class TerminalRenderer:
 
     def _agent_style(self, agent: str):
         """Retorna (color, label) para o agente."""
-        return _agent_style(agent, self._get_plugin_style)
+        return _public_ui_module()._agent_style(agent, self._get_plugin_style)
 
     def _print(self, renderable, **kwargs):
         """Enfileira um evento de print para o writer thread."""
@@ -433,13 +537,14 @@ class TerminalRenderer:
         mode = _normalize_render_mode(render_mode)
         if mode == "auto":
             mode = "markdown"
+        public_ui = _public_ui_module()
         if streaming or mode == "plain":
             body_content = Text(content or "", no_wrap=False, overflow="fold")
         else:
-            body_content = Markdown(content or "")
+            body_content = public_ui.Markdown(content or "")
         if theme_name == "panel":
             title = f"[bold {style}]{label}[/bold {style}]" if streaming else None
-            return Panel(body_content, title=title, border_style=style, padding=(0, 1))
+            return public_ui.Panel(body_content, title=title, border_style=style, padding=(0, 1))
         if theme_name == "chat":
             return Padding(body_content, pad=(0, 0, 0, 4))
         if theme_name == "minimal":
@@ -736,7 +841,8 @@ class TerminalRenderer:
 
     def show_turn_summary(self, agent: str | None, detail: dict) -> None:
         """Exibe resumo do turno como tabela Rich compacta."""
-        if not self._console or not _RICH_AVAILABLE:
+        public_ui = _public_ui_module()
+        if not self._console or not public_ui._RICH_AVAILABLE:
             return
         tools = detail.get("tools", []) if isinstance(detail, dict) else []
         if not tools:
@@ -840,6 +946,7 @@ class TerminalRenderer:
 
     def _render_status_panel(self):
         """Renderiza o painel de status fixo."""
+        public_ui = _public_ui_module()
         table = Table.grid(expand=True)
         table.add_column(width=3)
         table.add_column()
@@ -856,7 +963,7 @@ class TerminalRenderer:
 
                 table.add_row(icon, f"[{style}]{label}[/]: {markup_escape(status)}")
 
-        return Panel(
+        return public_ui.Panel(
             table,
             title="[bold blue]Agentes em Execução[/]",
             border_style="blue",
@@ -866,7 +973,8 @@ class TerminalRenderer:
     @contextmanager
     def live_status(self, agents):
         """Context manager para exibir status dinâmico de múltiplos agentes."""
-        if not self._console or not _RICH_AVAILABLE:
+        public_ui = _public_ui_module()
+        if not self._console or not public_ui._RICH_AVAILABLE:
             yield
             return
 
@@ -884,7 +992,7 @@ class TerminalRenderer:
 
         with self._lock:
             self._statuses = {agent: "inicializando..." for agent in agents}
-            self._live = Live(
+            self._live = public_ui.Live(
                 self._render_status_panel(),
                 console=self._console,
                 refresh_per_second=10,

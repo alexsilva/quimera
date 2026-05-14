@@ -21,6 +21,7 @@ class TestAppHistory(unittest.TestCase):
     @patch("quimera.runtime.tasks.init_db")
     @patch("quimera.runtime.tasks.add_job")
     @patch("quimera.app.core.TerminalRenderer")
+    @patch("quimera.app.core.RenderAuditLogger")
     @patch("quimera.app.core.ConfigManager")
     @patch("quimera.app.core.ContextManager")
     @patch("quimera.app.core.SessionStorage")
@@ -35,6 +36,7 @@ class TestAppHistory(unittest.TestCase):
         mock_storage,
         mock_context,
         mock_config,
+        mock_audit_logger,
         mock_term,
         mock_add_job,
         mock_init_db,
@@ -90,6 +92,7 @@ class TestAppHistory(unittest.TestCase):
             mock_ws_instance.history_file = self.history_file
             mock_ws_instance.root = Path("/tmp/quimera_test_workspace")
             mock_ws_instance.tasks_db = Path("/tmp/quimera_test_tasks.db")
+            mock_ws_instance.render_logs_dir = Path("/tmp/quimera_test_workspace/data/logs/render")
             mock_ws.return_value = mock_ws_instance
 
             with patch("quimera.app.core.create_executor"):
@@ -103,6 +106,54 @@ class TestAppHistory(unittest.TestCase):
 
             self.assertEqual(result, "test input")
             mock_input.assert_called_with("user: ")
+
+    @patch("quimera.runtime.tasks.init_db")
+    @patch("quimera.runtime.tasks.add_job")
+    @patch("quimera.app.core.TerminalRenderer")
+    @patch("quimera.app.core.RenderAuditLogger")
+    @patch("quimera.app.core.ConfigManager")
+    @patch("quimera.app.core.ContextManager")
+    @patch("quimera.app.core.SessionStorage")
+    @patch("quimera.app.core.AgentClient")
+    @patch("quimera.app.core.SessionSummarizer")
+    @patch("quimera.app.core.InputGate")
+    def test_debug_mode_injects_render_audit_logger(
+        self,
+        mock_input_gate,
+        mock_session_sum,
+        mock_agent,
+        mock_storage,
+        mock_context,
+        mock_config,
+        mock_audit_logger,
+        mock_term,
+        mock_add_job,
+        mock_init_db,
+    ):
+        mock_add_job.return_value = 1
+        self._setup_common_mocks(mock_storage, mock_context)
+        mock_input_gate.return_value = MagicMock()
+
+        render_logs_dir = Path("/tmp/quimera_test_workspace/data/logs/render")
+        audit_instance = MagicMock()
+        mock_audit_logger.return_value = audit_instance
+
+        with patch("quimera.app.core.Workspace") as mock_ws:
+            mock_ws_instance = MagicMock()
+            mock_ws_instance.history_file = self.history_file
+            mock_ws_instance.root = Path("/tmp/quimera_test_workspace")
+            mock_ws_instance.tasks_db = Path("/tmp/quimera_test_tasks.db")
+            mock_ws_instance.render_logs_dir = render_logs_dir
+            mock_ws.return_value = mock_ws_instance
+
+            with patch("quimera.app.core.create_executor"):
+                from quimera.app import QuimeraApp
+
+                QuimeraApp(self.tmp_cwd, debug=True)
+
+        mock_audit_logger.assert_called_once_with(render_logs_dir)
+        _, kwargs = mock_term.call_args
+        self.assertIs(kwargs["audit_logger"], audit_instance)
 
 
 if __name__ == "__main__":

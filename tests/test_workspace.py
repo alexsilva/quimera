@@ -81,3 +81,17 @@ class TestWorkspace(unittest.TestCase):
                 ws2 = Workspace(proj)
                 self.assertEqual(ws2._branch, "feature_my-feature")
                 self.assertEqual(ws2.context_persistent, ws1.context_persistent)
+
+    def test_render_debug_paths_live_under_workspace_logs(self):
+        with tempfile.TemporaryDirectory() as base_dir, tempfile.TemporaryDirectory() as proj_tmp:
+            base = Path(base_dir)
+            proj = Path(proj_tmp) / "renderproj"
+            proj.mkdir()
+
+            with patch("quimera.workspace.find_base_writable", lambda dirs: base):
+                ws = Workspace(proj)
+
+                self.assertEqual(ws.render_logs_dir, ws.root / "data" / "logs" / "render")
+                self.assertEqual(ws.render_log_path, ws.render_logs_dir / "render.jsonl")
+                self.assertEqual(ws.render_ansi_path, ws.render_logs_dir / "render.ansi")
+                self.assertTrue(ws.render_logs_dir.exists())

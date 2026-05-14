@@ -210,7 +210,11 @@ def main():
     parser = argparse.ArgumentParser(prog="quimera")
     parser.add_argument("--name", metavar="NOME", nargs="+", default=None)
     parser.add_argument("--whoami", action="store_true")
-    parser.add_argument("--debug", action="store_true")
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Ativa métricas e auditoria de renderização em data/logs/render/",
+    )
     parser.add_argument("--history-window", type=int, default=None)
     parser.add_argument("--visibility", choices=[v.value for v in Visibility], default=Visibility.SUMMARY.value,
                         help="Nível de visibilidade da execução do agente: quiet (stderr truncado), "

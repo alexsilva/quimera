@@ -14,6 +14,15 @@ Agentes de IA nesta conversa: {agents}
 </session_state>
 <!-- ENDIF:session_id -->
 
+<!-- IF:render_debug_active -->
+<debug_state title="Debug de render ativo">
+- Auditoria de renderização ativa nesta sessão.
+- Eventos estruturados: {render_log_path}
+- Stream ANSI bruto: {render_ansi_path}
+- Quando o problema for visual, leia esses arquivos antes de concluir.
+</debug_state>
+<!-- ENDIF:render_debug_active -->
+
 <rules title="Suas regras">
 1. Mantenha foco no pedido de {user_name}. Não expanda escopo sem autorização.
 

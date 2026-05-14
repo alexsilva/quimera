@@ -13,6 +13,15 @@ Esta é uma execução isolada de task, não uma conversa normal.
 </session_state>
 <!-- ENDIF:session_id -->
 
+<!-- IF:render_debug_active -->
+<debug_state title="Debug de render ativo">
+- Auditoria de renderização ativa nesta sessão.
+- Eventos estruturados: {render_log_path}
+- Stream ANSI bruto: {render_ansi_path}
+- Se a task envolver bug visual, use esses arquivos como evidência.
+</debug_state>
+<!-- ENDIF:render_debug_active -->
+
 <task_execution_rules title="Protocolo operacional">
 - Foque apenas nesta task. Ignore qualquer contexto de conversa fora desta task.
 - Leia o alvo antes de editar e preserve o que não foi pedido.
