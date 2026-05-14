@@ -268,6 +268,15 @@ class InputGate:
         if callable(invalidate):
             invalidate()
 
+    def is_active(self) -> bool:
+        """Returns True if the prompt_toolkit session is currently waiting for input."""
+        if self._session is None or not _PT_AVAILABLE:
+            return False
+        app = getattr(self._session, "app", None)
+        if app is None:
+            return False
+        return bool(getattr(app, "_is_running", False))
+
     def run_in_terminal_message(self, callback) -> bool:
         """Agenda callback acima do prompt ativo quando prompt_toolkit está rodando."""
         if not callable(callback):

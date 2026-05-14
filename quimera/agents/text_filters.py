@@ -1,5 +1,6 @@
 """Filtros e detecções de texto para saída de agentes externos."""
 import re
+from functools import lru_cache
 
 import quimera.plugins as plugins
 
@@ -23,15 +24,26 @@ def _strip_spinner(text: str) -> str:
     return _BRALLE_RANGE.sub('', text)
 
 
+@lru_cache(maxsize=32)
+def _compile_noise_patterns(patterns: tuple) -> tuple:
+    """Compila e armazena em cache os padrões regex de ruído de stderr."""
+    return tuple(re.compile(p) for p in patterns)
+
+
 def _should_ignore_stderr_line(agent: str | None, line: str) -> bool:
     """Filtra ruído conhecido de stderr que não representa erro real."""
     if not agent:
         return False
     plugin = plugins.get(agent)
-    if not plugin or not plugin.stderr_noise:
+    if not plugin:
         return False
     cleaned = _ANSI_ESCAPE.sub("", _strip_spinner(line)).replace("\r", "").strip()
-    return cleaned in plugin.stderr_noise
+    if plugin.stderr_noise and cleaned in plugin.stderr_noise:
+        return True
+    if plugin.stderr_noise_patterns:
+        compiled = _compile_noise_patterns(plugin.stderr_noise_patterns)
+        return any(p.search(cleaned) for p in compiled)
+    return False
 
 
 def _filter_stderr_lines(agent: str | None, lines: list[str]) -> list[str]:

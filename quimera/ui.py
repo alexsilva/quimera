@@ -180,6 +180,10 @@ class TerminalRenderer:
         # Flag: writer thread tem um Live ativo (sinaliza threads externas)
         self._stream_live_active = threading.Event()
 
+        # Hooks de integração com prompt_toolkit (configurados via set_prompt_integration)
+        self._is_prompt_active_fn = None  # () -> bool
+        self._run_above_prompt_fn = None  # (callable) -> bool
+
         # Fila com backpressure (item 3): produtor bloqueia se fila cheia
         self._queue: _queue_module.Queue = _queue_module.Queue(maxsize=512)
         self._writer_thread = threading.Thread(target=self._writer_loop, daemon=True)
@@ -188,6 +192,15 @@ class TerminalRenderer:
     # ------------------------------------------------------------------
     # Ciclo de vida (item 1)
     # ------------------------------------------------------------------
+
+    def set_prompt_integration(self, is_active_fn, run_above_fn) -> None:
+        """Integra o renderer com prompt_toolkit para evitar corrupção visual.
+
+        is_active_fn: callable que retorna True quando o prompt_toolkit está ativo (>>>).
+        run_above_fn: callable(callback) -> bool que executa callback acima do prompt ativo.
+        """
+        self._is_prompt_active_fn = is_active_fn
+        self._run_above_prompt_fn = run_above_fn
 
     def close(self, timeout: float = 5.0) -> None:
         """Encerra o writer thread graciosamente, aguardando eventos pendentes."""
@@ -227,6 +240,10 @@ class TerminalRenderer:
 
         def _ensure_live():
             if _ul[0] is None and self._console:
+                # Não inicia Live quando prompt_toolkit está ativo — os dois controladores
+                # de terminal conflitam e corrompem o display.
+                if self._is_prompt_active_fn is not None and self._is_prompt_active_fn():
+                    return
                 _ul[0] = Live(
                     _get_renderable(),
                     console=self._console,
@@ -248,11 +265,18 @@ class TerminalRenderer:
                 self._stream_live_active.clear()
 
         def _cprint(renderable, **kwargs):
-            """Imprime via Live ativo (acima do painel) ou direto ao console."""
+            """Imprime via Live ativo, run_in_terminal (se prompt ativo) ou direto ao console."""
             if _ul[0] is not None:
                 _ul[0].console.print(renderable, **kwargs)
-            elif self._console:
-                self._console.print(renderable, **kwargs)
+                return
+            if self._console is None:
+                return
+            run_above = self._run_above_prompt_fn
+            if run_above is not None:
+                _r, _k = renderable, dict(kwargs)
+                if run_above(lambda: self._console.print(_r, **_k)):
+                    return
+            self._console.print(renderable, **kwargs)
 
         def _next_event():
             if _local_pending:

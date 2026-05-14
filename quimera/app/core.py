@@ -112,6 +112,10 @@ class QuimeraApp:
         )
         self.input_gate.set_toolbar_context_resolver(self._build_input_toolbar_context)
         self.input_gate.set_theme_cycle_handler(self._cycle_renderer_theme)
+        self.renderer.set_prompt_integration(
+            is_active_fn=self.input_gate.is_active,
+            run_above_fn=self.input_gate.run_in_terminal_message,
+        )
         self.chat_round_orchestrator = ChatRoundOrchestrator(self)
 
         migrated = self.workspace.migrate_from_legacy(cwd)

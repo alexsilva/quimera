@@ -49,6 +49,13 @@ _OPENCODE_RW_PATHS = [
     str(Path.home() / ".local" / "state" / "opencode"),
 ]
 
+# Padrões de ruído de stderr específicos do runtime bun (linha com número variável).
+# O path real é "/$bunfs/..." — o "/" antes de "$bunfs" estava ausente nos padrões originais.
+_BUN_STDERR_NOISE_PATTERNS = (
+    r"^\s*at .+\(/?bunfs/",   # stack frame com função: "  at fn (/$bunfs/...)"
+    r"^\s*at /?bunfs/",       # frame direto sem função: "  at /$bunfs/..."
+)
+
 # Campos fixos compartilhados por todos os plugins opencode.
 _OPENCODE_DEFAULTS = dict(
     runtime_rw_paths=_OPENCODE_RW_PATHS,
@@ -59,6 +66,7 @@ _OPENCODE_DEFAULTS = dict(
     supports_code_editing=True,
     supports_long_context=False,
     base_tier=2,
+    stderr_noise_patterns=_BUN_STDERR_NOISE_PATTERNS,
 )
 
 # Plugin base genérico: cmd sem modelo fixo — usado como template para --base.

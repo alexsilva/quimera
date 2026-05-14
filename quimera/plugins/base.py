@@ -250,6 +250,7 @@ class AgentPlugin:
     api_key_env: Optional[str] = None  # nome da variável de ambiente com a API key
     spy_stdout_formatter: Optional[Callable[[str], SpyFormatterOutput]] = None
     stderr_noise: FrozenSet[str] = field(default_factory=frozenset)
+    stderr_noise_patterns: Tuple[str, ...] = field(default_factory=tuple)
     dynamic: bool = False
     # Connection override (carregado automaticamente do base_dir)
     _connection_override: Optional[Connection] = field(default=None, repr=False)
