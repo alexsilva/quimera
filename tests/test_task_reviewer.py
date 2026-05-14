@@ -1,6 +1,7 @@
 """Testes para TaskReviewer — review isolado de tasks sem subir o app."""
 
 from quimera.constants import TaskStatus
+from quimera.prompt_kinds import PromptKind
 from quimera.runtime.task_reviewer import TaskReviewer
 from quimera.runtime.models import TaskRecord
 
@@ -109,6 +110,12 @@ def test_reviewer_completes_task_when_verdict_is_aceite():
     assert ok is True
     assert repo.complete_calls == [(8, "ok", "pickle")]
     assert repo.requeue_calls == []
+    handoff = dispatch.calls[0][1]["handoff"]
+    assert dispatch.calls[0][1]["prompt_kind"] is PromptKind.TASK_REVIEWER
+    assert handoff["handoff_id"] == "task-review-8"
+    assert "Task original:\najuste" in handoff["context"]
+    assert "Resultado do executor:\nok" in handoff["context"]
+    assert "ACEITE, RETENTATIVA, REPLANEJAR ou REJEITAR" in handoff["expected"]
     assert "review concluído" in system.messages[-1]
 
 

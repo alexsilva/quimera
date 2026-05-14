@@ -1,5 +1,6 @@
 """Testes para TaskRunner — execução isolada de tasks sem subir o app."""
 
+from quimera.prompt_kinds import PromptKind
 from quimera.runtime.task_runner import TaskRunner
 from quimera.runtime.models import TaskRecord
 from quimera.app.task_utils import summarize_task_feedback
@@ -83,9 +84,15 @@ def test_runner_completes_task_when_no_review_agent():
     assert ok is True
     assert repo.complete_calls == [(1, "resultado final", None)]
     assert repo.submit_calls == []
+    handoff = dispatch.calls[0][1]["handoff"]
+    assert dispatch.calls[0][1]["prompt_kind"] is PromptKind.TASK_EXECUTOR
+    assert handoff["handoff_id"] == "task-1"
+    assert handoff["task"] == "corrigir bug"
+    assert handoff["context"] == "corrigir bug"
     assert system.messages == [
         "[task 1] codex: iniciando — corrigir bug",
         "[task 1] codex:\nresultado final",
+        "[task 1] codex: concluída",
     ]
 
 
@@ -243,6 +250,30 @@ def test_runner_wraps_agent_call_with_hooks():
 
     assert ok is True
     assert events == [("before", "chatgpt-api"), ("after", "chatgpt-api")]
+
+
+def test_runner_uses_structured_handoff_with_real_task_id():
+    dispatch = DispatchStub(response="resultado final")
+    runner = TaskRunner(
+        dispatch_services=dispatch,
+        system_layer=SystemLayerSpy(),
+        repository=RepositorySpy(),
+        failover_policy=FailoverPolicyStub(review_agents=[]),
+        classify_task_execution_result=lambda response: (True, response),
+        was_user_cancelled=lambda: False,
+    )
+
+    ok = runner.run(
+        TaskRecord(id=123, job_id=0, description="validar regressão", body="body da task", status="in_progress"),
+        agent_name="codex",
+    )
+
+    assert ok is True
+    handoff = dispatch.calls[0][1]["handoff"]
+    assert handoff["handoff_id"] == "task-123"
+    assert handoff["task"] == "validar regressão"
+    assert handoff["context"] == "body da task"
+    assert dispatch.calls[0][1]["prompt_kind"] is PromptKind.TASK_EXECUTOR
 
 
 def test_runner_calls_after_hook_even_when_dispatch_raises():

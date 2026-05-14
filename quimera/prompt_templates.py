@@ -1,6 +1,9 @@
 import re
 from pathlib import Path
 
+from .prompt_kinds import PromptKind, coerce_prompt_kind
+
+
 class PromptParser:
     """Parseia seções de um arquivo de template de prompt."""
 
@@ -76,4 +79,27 @@ class PromptTemplate:
         return re.sub(r"\n{3,}", "\n\n", rendered).strip()
 
 
-prompt_template = PromptTemplate(Path(__file__).with_name("prompt.md"))
+_PROMPT_FILE_BY_KIND = {
+    PromptKind.CHAT: "prompt.md",
+    PromptKind.TASK_EXECUTOR: "task_prompt.md",
+    PromptKind.TASK_REVIEWER: "task_reviewer_prompt.md",
+}
+
+_template_cache: dict[tuple[str, str], PromptTemplate] = {}
+
+
+def get_prompt_template(kind: PromptKind | str = PromptKind.CHAT) -> PromptTemplate:
+    """Retorna o template do prompt solicitado com fallback seguro para chat."""
+    normalized = coerce_prompt_kind(kind)
+    filename = _PROMPT_FILE_BY_KIND.get(normalized, _PROMPT_FILE_BY_KIND[PromptKind.CHAT])
+    template_path = Path(__file__).with_name(filename)
+    cache_key = (normalized.value, str(template_path))
+    if template_path.exists():
+        return _template_cache.setdefault(cache_key, PromptTemplate(template_path))
+
+    fallback_path = Path(__file__).with_name(_PROMPT_FILE_BY_KIND[PromptKind.CHAT])
+    fallback_key = (PromptKind.CHAT.value, str(fallback_path))
+    return _template_cache.setdefault(fallback_key, PromptTemplate(fallback_path))
+
+
+prompt_template = get_prompt_template(PromptKind.CHAT)

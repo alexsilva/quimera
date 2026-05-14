@@ -4,6 +4,7 @@ import re
 from quimera.context import ContextManager
 from quimera.modes import get_mode
 from quimera.prompt import PromptBuilder
+from quimera.prompt_kinds import PromptKind
 from quimera.prompt_templates import PromptTemplate
 
 
@@ -406,3 +407,74 @@ def test_prompt_handoff_only_filters_agent_and_from_agent_from_route_list():
     assert "- Agentes: gemini" in rules_block
     assert "codex" not in rules_block
     assert "claude" not in rules_block
+
+
+def test_task_executor_prompt_uses_dedicated_template_without_chat_blocks():
+    builder = PromptBuilder(
+        context_manager=_make_context_manager("contexto persistente que não deve entrar"),
+        session_state={"session_id": "sessao-1", "current_job_id": 123, "workspace_root": "/tmp/test", "current_dir": "."},
+        active_agents=["codex", "claude", "gemini"],
+    )
+
+    prompt = builder.build(
+        agent="codex",
+        history=[
+            {"role": "human", "content": "pedido geral"},
+            {"role": "claude", "content": "contexto paralelo"},
+        ],
+        handoff={
+            "handoff_id": "task-123",
+            "task": "corrigir parser",
+            "context": "TAREFA:\ncorrigir parser",
+            "expected": "validar com pytest",
+        },
+        handoff_only=True,
+        from_agent="claude",
+        prompt_kind=PromptKind.TASK_EXECUTOR,
+    )
+
+    assert '<header title="Task Executor">' in prompt
+    assert "HANDOFF_ID:\ntask-123" in prompt
+    assert '<recent_conversation title="Conversa recente">' not in prompt
+    assert '<current_turn title=' not in prompt
+    assert '<recent_agent_messages title=' not in prompt
+    assert '<persistent_context title=' not in prompt
+    assert "contexto persistente que não deve entrar" not in prompt
+
+
+def test_task_reviewer_prompt_uses_dedicated_template_and_review_material():
+    builder = PromptBuilder(context_manager=_make_context_manager("contexto persistente"))
+
+    prompt = builder.build(
+        agent="pickle",
+        history=[{"role": "human", "content": "pedido geral"}],
+        handoff={
+            "handoff_id": "task-review-123",
+            "task": "revisar parser",
+            "context": "Task original:\nparser\n\nResultado do executor:\nok",
+            "expected": "ACEITE, RETENTATIVA, REPLANEJAR ou REJEITAR",
+        },
+        handoff_only=True,
+        prompt_kind=PromptKind.TASK_REVIEWER,
+    )
+
+    assert '<header title="Task Reviewer">' in prompt
+    assert "Task original:\nparser" in prompt
+    assert "Resultado do executor:\nok" in prompt
+    assert '<recent_conversation title="Conversa recente">' not in prompt
+    assert '<current_turn title=' not in prompt
+    assert '<recent_agent_messages title=' not in prompt
+
+
+def test_chat_prompt_still_uses_default_template():
+    builder = PromptBuilder(context_manager=_make_context_manager("Contexto"))
+
+    prompt = builder.build(
+        agent="claude",
+        history=[{"role": "human", "content": "pedido"}],
+        prompt_kind=PromptKind.CHAT,
+    )
+
+    assert '<rules title="Suas regras">' in prompt
+    assert '<current_turn title="Pedido atual de >>>">' in prompt
+    assert '<recent_conversation title="Conversa recente">' in prompt

@@ -7,7 +7,8 @@ from .execution_mode_presenter import ExecutionModePresenter
 from .handoff_presenter import HandoffPresenter
 from .memory_selector import MemorySelector
 from .prompt_budget import PromptBudget
-from .prompt_templates import prompt_template
+from .prompt_kinds import PromptKind, coerce_prompt_kind
+from .prompt_templates import get_prompt_template
 from .shared_state_presenter import SharedStatePresenter
 
 
@@ -54,13 +55,16 @@ class PromptBuilder:
             from_agent=None,
             skip_tool_prompt=False,
             execution_mode=None,
+            prompt_kind=PromptKind.CHAT,
     ):
         """Gera o prompt final para um agente considerando contexto, handoff e histórico."""
         if history is None:
             history = []
         elif not isinstance(history, list):
             history = list(history)
-        context = self.context_manager.load()
+        normalized_prompt_kind = coerce_prompt_kind(prompt_kind)
+        is_chat_prompt = normalized_prompt_kind is PromptKind.CHAT
+        context = self.context_manager.load() if is_chat_prompt else ""
 
         if handoff_only:
             route_candidates = [n for n in self.active_agents if n.lower() != agent.lower()]
@@ -90,22 +94,29 @@ class PromptBuilder:
             os_info = self.session_state.get("os_info", "")
 
         handoff_fields = self.handoff_presenter.present(handoff, from_agent)
-        request_index, request = self.memory_selector.select_request(history)
-        fact_indexes, facts = self.memory_selector.select_facts(history, current_agent=agent)
-        shared_state_json, completed_task_results = self.shared_state_presenter.present(shared_state)
+        if is_chat_prompt:
+            request_index, request = self.memory_selector.select_request(history)
+            fact_indexes, facts = self.memory_selector.select_facts(history, current_agent=agent)
+            recent_conversation = self.memory_selector.build_conversation_block(
+                history,
+                skip_indexes={idx for idx in [request_index, *fact_indexes] if idx is not None},
+                current_agent=agent,
+            )
+            shared_state_json, completed_task_results = self.shared_state_presenter.present(shared_state)
+        else:
+            request_index, request = None, ""
+            fact_indexes, facts = [], ""
+            recent_conversation = ""
+            shared_state_json, completed_task_results = "", ""
 
         metrics = ""
         if self.metrics_tracker:
             feedback = self.metrics_tracker.generate_feedback(agent)
             if feedback:
                 metrics = feedback
-        recent_conversation = self.memory_selector.build_conversation_block(
-            history,
-            skip_indexes={idx for idx in [request_index, *fact_indexes] if idx is not None},
-            current_agent=agent,
-        )
         execution_mode_prompt = self.execution_mode_presenter.present(execution_mode)
-        full_prompt = prompt_template.render(
+        template = get_prompt_template(normalized_prompt_kind)
+        full_prompt = template.render(
             agent=agent.upper(),
             user_name=self.memory_selector.user_name.upper(),
             agents=agents_list,

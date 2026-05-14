@@ -2,6 +2,7 @@
 import time
 from contextlib import nullcontext
 
+from ..prompt_kinds import PromptKind
 from .agent_call_service import AgentCallService
 from .agent_gateway import AgentGateway, _is_user_cancelled
 from .tool_loop import ToolLoopService
@@ -303,6 +304,7 @@ class AppDispatchServices:
             silent=False,
             show_output=True,
             from_agent=None,
+            prompt_kind=PromptKind.CHAT,
     ):
         """Monta o prompt final e executa a chamada ao backend do agente."""
         result = self._get_gateway().call(
@@ -315,6 +317,7 @@ class AppDispatchServices:
             silent=silent,
             show_output=show_output,
             from_agent=from_agent,
+            prompt_kind=prompt_kind,
         )
         self._update_spy_telemetry(agent)
         return result

@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Protocol
 
+from ..prompt_kinds import PromptKind
 from ..runtime.models import TaskRecord
 from ..runtime.parser import strip_tool_block
 
@@ -14,12 +15,13 @@ class _DispatchServicesProto(Protocol):
         self,
         agent_name: str,
         *,
-        handoff: str,
+        handoff: str | dict[str, object],
         handoff_only: bool,
         primary: bool,
         silent: bool,
         persist_history: bool,
         show_output: bool,
+        prompt_kind: PromptKind,
     ) -> str | None:
         ...
 
@@ -90,7 +92,17 @@ class TaskRunner:
                 self.repository.fail_task(task_id, reason="empty body")
                 return False
 
-            prompt = f"Execute a seguinte tarefa:\n\n{body}"
+            handoff = {
+                "handoff_id": f"task-{task_id}",
+                "task": description or f"Executar task {task_id}",
+                "context": body,
+                "expected": (
+                    "Execute a task, faça a menor mudança segura, valide com evidência concreta "
+                    "e reporte arquivos alterados, validação e próximo passo."
+                ),
+                "priority": task.priority or "normal",
+                "chain": ["task-runner", agent_name],
+            }
             review_agents = self.failover_policy.review_agents_for(agent_name)
             desc_preview = (description[:60] + "\u2026") if len(description) > 60 else description
             self.system_layer.show_muted_message(
@@ -101,12 +113,13 @@ class TaskRunner:
             try:
                 response = self.dispatch_services.call_agent(
                     agent_name,
-                    handoff=prompt,
+                    handoff=handoff,
                     handoff_only=True,
                     primary=False,
                     persist_history=False,
                     show_output=False,
                     silent=True,
+                    prompt_kind=PromptKind.TASK_EXECUTOR,
                 )
             finally:
                 self.after_agent_call(agent_name)
@@ -156,6 +169,9 @@ class TaskRunner:
                         f"[task {task_id}] {agent_name}: erro ao concluir task"
                     )
                     return False
+                self.system_layer.show_muted_message(
+                    f"[task {task_id}] {agent_name}: concluída"
+                )
             return True
         except Exception as exc:
             self.system_layer.show_muted_message(f"[task {task_id}] {agent_name}: erro: {exc}")

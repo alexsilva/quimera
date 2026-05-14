@@ -85,10 +85,13 @@ def test_build_task_body_includes_protocol_and_instruction():
     body = factory.build_task_body("corrigir parser")
 
     assert "PROTOCOLO OPERACIONAL:" in body
+    assert "CONTEXTO RECENTE DO CHAT:" not in body
+    assert "CONTEXTO DA TASK (sanitizado):" in body
     assert "Descubra o alvo antes de mudar" in body
     assert "apply_patch" in body
     assert "run_shell" in body
     assert "exec_command" in body
+    assert "Ignore conversa recente fora da task" in body
     assert "Use o estado compartilhado apenas como referência auxiliar" in body
 
 
@@ -139,6 +142,19 @@ def test_format_task_chat_context_skips_empty_messages():
     assert "[ALEX]: Pedido válido" in context
     assert context.count("[ALEX]") == 1
     assert "[CODEX]" not in context
+
+
+def test_build_task_body_omits_task_context_block_when_history_is_empty():
+    factory = TaskPromptFactory(
+        history=[],
+        user_name="Alex",
+        shared_state={},
+        prompt_builder=PromptBuilderStub(history_window=4),
+    )
+
+    body = factory.build_task_body("corrigir parser")
+
+    assert "CONTEXTO DA TASK (sanitizado):" not in body
 
 
 def test_build_task_body_serializes_shared_state_reference_as_valid_json():

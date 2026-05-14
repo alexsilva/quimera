@@ -909,7 +909,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(tasks[0]["origin"], "human_command")
         self.assertEqual(tasks[0]["assigned_to"], AGENT_CODEX)
         self.assertIn("TAREFA:\nexecute os testes", tasks[0]["body"])
-        self.assertIn("CONTEXTO RECENTE DO CHAT:", tasks[0]["body"])
+        self.assertIn("CONTEXTO DA TASK (sanitizado):", tasks[0]["body"])
         self.assertIn("ALEX]: o teste de task perdeu contexto", tasks[0]["body"])
         self.assertIn("CLAUDE]: precisamos serializar o chat recente", tasks[0]["body"])
         self.assertIn('"goal": "corrigir task runner"', tasks[0]["body"])
@@ -3719,8 +3719,8 @@ class PluginTests(unittest.TestCase):
             ],
         )
         self.assertTrue(review_prompts)
-        self.assertIn("Faça um review real da task abaixo.", review_prompts[0])
-        self.assertIn("Resultado do executor:\nok", review_prompts[0])
+        self.assertEqual(review_prompts[0]["handoff_id"], "task-review-7")
+        self.assertIn("Resultado do executor:\nok", review_prompts[0]["context"])
         complete_task.assert_called_once_with(
             7, result="ok", reviewed_by=AGENT_GEMINI
         )
@@ -4144,8 +4144,8 @@ class PluginTests(unittest.TestCase):
 
         task_body = (
             "TAREFA:\nvalidar regressão\n\n"
-            "CONTEXTO RECENTE DO CHAT:\n"
-            "[ALEX]: a execução da tarefa precisa receber o contexto do chat\n"
+            "CONTEXTO DA TASK (sanitizado):\n"
+            "[ALEX]: a execução da tarefa precisa receber o contexto da task\n"
             "[CLAUDE]: alguém passou contexto errado\n\n"
             "INSTRUÇÃO:\n"
             "Execute a tarefa usando o contexto acima como referência."
@@ -4163,9 +4163,12 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(captured["agent"], AGENT_CLAUDE)
         self.assertTrue(captured["kwargs"]["handoff_only"])
         self.assertFalse(captured["kwargs"]["primary"])
-        self.assertIn("Execute a seguinte tarefa:\n\nTAREFA:\nvalidar regressão", captured["kwargs"]["handoff"])
-        self.assertIn("[ALEX]: a execução da tarefa precisa receber o contexto do chat", captured["kwargs"]["handoff"])
-        self.assertIn("[CLAUDE]: alguém passou contexto errado", captured["kwargs"]["handoff"])
+        self.assertEqual(captured["kwargs"]["prompt_kind"], "task_executor")
+        self.assertEqual(captured["kwargs"]["handoff"]["handoff_id"], "task-1")
+        self.assertEqual(captured["kwargs"]["handoff"]["task"], "validar regressão")
+        self.assertIn("TAREFA:\nvalidar regressão", captured["kwargs"]["handoff"]["context"])
+        self.assertIn("[ALEX]: a execução da tarefa precisa receber o contexto da task", captured["kwargs"]["handoff"]["context"])
+        self.assertIn("[CLAUDE]: alguém passou contexto errado", captured["kwargs"]["handoff"]["context"])
         complete_task.assert_called_once_with(
             1, result="resposta visivel da task"
         )

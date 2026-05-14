@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Protocol
 
+from ..prompt_kinds import PromptKind
 from ..constants import TaskStatus
 from ..runtime.models import TaskRecord
 from ..app.task_events import TaskReviewReassigned
@@ -15,12 +16,13 @@ class _DispatchServicesProto(Protocol):
         self,
         agent_name: str,
         *,
-        handoff: str,
+        handoff: str | dict[str, object],
         handoff_only: bool,
         primary: bool,
         silent: bool,
         persist_history: bool,
         show_output: bool,
+        prompt_kind: PromptKind,
     ) -> str | None:
         ...
 
@@ -130,25 +132,32 @@ class TaskReviewer:
             task_result = task.result or ""
             description = task.description or ""
             body = task.body or description
-            review_prompt = (
-                "Fa\u00e7a um review real da task abaixo.\n\n"
-                "Responda com um veredicto expl\u00edcito na primeira linha: "
-                "ACEITE, RETENTATIVA, REPLANEJAR ou REJEITAR.\n"
-                "Depois justifique com evid\u00eancia concreta e objetiva.\n\n"
-                f"Task ID: {task_id}\n"
-                f"Executor: {executor or 'desconhecido'}\n"
-                f"Descri\u00e7\u00e3o: {description}\n\n"
-                f"Escopo enviado:\n{body}\n\n"
-                f"Resultado do executor:\n{task_result}"
-            )
+            review_handoff = {
+                "handoff_id": f"task-review-{task_id}",
+                "task": description or f"Revisar task {task_id}",
+                "context": (
+                    f"Task ID: {task_id}\n"
+                    f"Executor: {executor or 'desconhecido'}\n\n"
+                    f"Task original:\n{description or '[sem descrição]'}\n\n"
+                    f"Escopo enviado:\n{body}\n\n"
+                    f"Resultado do executor:\n{task_result or '[sem resultado]'}"
+                ),
+                "expected": (
+                    "Primeira linha com ACEITE, RETENTATIVA, REPLANEJAR ou REJEITAR. "
+                    "Depois justifique com evidência concreta e objetiva."
+                ),
+                "priority": task.priority or "normal",
+                "chain": ["task-reviewer", agent_name],
+            }
             response = self.dispatch_services.call_agent(
                 agent_name,
-                handoff=review_prompt,
+                handoff=review_handoff,
                 handoff_only=True,
                 primary=False,
                 silent=True,
                 persist_history=False,
                 show_output=False,
+                prompt_kind=PromptKind.TASK_REVIEWER,
             )
 
             if self.was_user_cancelled():

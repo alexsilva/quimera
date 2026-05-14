@@ -2,6 +2,7 @@
 import time
 from contextlib import nullcontext
 
+from ..prompt_kinds import PromptKind
 from .config import logger
 
 
@@ -76,6 +77,7 @@ class AgentGateway:
         silent=False,
         show_output=True,
         from_agent=None,
+        prompt_kind=PromptKind.CHAT,
     ):
         """Monta o prompt final e executa a chamada ao backend do agente."""
         agent_client = self._agent_client
@@ -118,6 +120,7 @@ class AgentGateway:
                 from_agent=from_agent,
                 skip_tool_prompt=True,
                 execution_mode=active_execution_mode,
+                prompt_kind=prompt_kind,
             )
             agent_client.log_prompt_metrics(
                 agent,
@@ -140,6 +143,7 @@ class AgentGateway:
                 from_agent=from_agent,
                 skip_tool_prompt=True,
                 execution_mode=active_execution_mode,
+                prompt_kind=prompt_kind,
             )
 
         if _is_user_cancelled(agent_client):

@@ -297,7 +297,10 @@ class AppTaskServices:
 
     def _enable_task_tool_auto_approval(self, agent_name: str) -> None:
         plugin = getattr(self.app, "get_agent_plugin", lambda _agent_name: None)(agent_name)
-        if plugin is None or plugin.effective_driver() != "openai_compat" or not plugin.supports_tools:
+        effective_driver = getattr(plugin, "effective_driver", None)
+        supports_tools = bool(getattr(plugin, "supports_tools", False))
+        driver_name = effective_driver() if callable(effective_driver) else None
+        if plugin is None or driver_name != "openai_compat" or not supports_tools:
             return
         approval_handler = getattr(self.app, "_approval_handler", None)
         if approval_handler is not None and hasattr(approval_handler, "set_thread_approve_all"):
@@ -309,7 +312,10 @@ class AppTaskServices:
 
     def _disable_task_tool_auto_approval(self, agent_name: str) -> None:
         plugin = getattr(self.app, "get_agent_plugin", lambda _agent_name: None)(agent_name)
-        if plugin is None or plugin.effective_driver() != "openai_compat" or not plugin.supports_tools:
+        effective_driver = getattr(plugin, "effective_driver", None)
+        supports_tools = bool(getattr(plugin, "supports_tools", False))
+        driver_name = effective_driver() if callable(effective_driver) else None
+        if plugin is None or driver_name != "openai_compat" or not supports_tools:
             return
         approval_handler = getattr(self.app, "_approval_handler", None)
         if approval_handler is not None and hasattr(approval_handler, "set_thread_approve_all"):
