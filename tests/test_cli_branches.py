@@ -20,15 +20,22 @@ class _FakeWorkspace:
 
 
 class _FakeConfig:
+    last_instance = None
+
     def __init__(self, _config_file):
         self.user_name = "Tester"
         self.theme_set = None
+        self.history_window_set = None
+        _FakeConfig.last_instance = self
 
     def set_user_name(self, name):
         self.user_name = name
 
     def set_theme(self, theme):
         self.theme_set = theme
+
+    def set_history_window(self, value):
+        self.history_window_set = value
 
 
 class _FakeApp:
@@ -333,6 +340,33 @@ def test_main_rejects_non_positive_history_window(monkeypatch):
         cli.main()
 
     assert exc.value.code == 2
+
+
+def test_main_rejects_non_positive_set_history_window(monkeypatch):
+    """`--set-history-window` deve rejeitar valores menores ou iguais a zero."""
+    _patch_main_basics(monkeypatch)
+    monkeypatch.setattr(sys, "argv", ["quimera", "--set-history-window", "0"])
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+
+    assert exc.value.code == 2
+
+
+def test_main_set_history_window_persists_and_exits(monkeypatch):
+    """`--set-history-window` persiste a config e encerra sem iniciar a app interativa."""
+    _patch_main_basics(monkeypatch)
+    _FakeApp.last_instance = None
+    _FakeConfig.last_instance = None
+    monkeypatch.setattr(sys, "argv", ["quimera", "--set-history-window", "96"])
+
+    with patch("builtins.print") as mock_print:
+        cli.main()
+
+    assert _FakeConfig.last_instance is not None
+    assert _FakeConfig.last_instance.history_window_set == 96
+    assert _FakeApp.last_instance is None
+    mock_print.assert_called_once_with("History window definida: 96")
 
 
 def test_main_list_connections_empty_prints_message(monkeypatch):

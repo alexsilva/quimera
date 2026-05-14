@@ -247,6 +247,13 @@ def main():
         choices=_themes.names(),
         help="Define o tema padrão persistente e encerra.",
     )
+    parser.add_argument(
+        "--set-history-window",
+        type=int,
+        metavar="N",
+        default=None,
+        help="Persiste o history_window na config e encerra.",
+    )
     parser.add_argument("--driver-repl", dest="driver_repl", metavar="PLUGIN",
                         default=None,
                         help="Inicia REPL interativo para testar um plugin openai_compat (ex: ollama-qwen)")
@@ -365,6 +372,13 @@ def main():
         config.set_theme(args.set_theme)
         t = _themes.get(args.set_theme)
         print(f"Tema padrão definido: {t.name} — {t.description}")
+        return
+
+    if args.set_history_window is not None:
+        if args.set_history_window <= 0:
+            parser.error("--set-history-window deve ser maior que zero")
+        config.set_history_window(args.set_history_window)
+        print(f"History window definida: {args.set_history_window}")
         return
 
     visibility = Visibility(args.visibility)

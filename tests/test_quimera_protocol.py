@@ -2182,6 +2182,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(app.storage.saved_shared_state, {"goal": "manter memória"})
 
     def test_auto_summarize_skips_when_threshold_is_hit_but_history_window_is_larger(self):
+        """Não resume nem emite UI quando o threshold dispara, mas nada sairia da janela de histórico."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.history = [{"role": "human", "content": f"m{i}"} for i in range(48)]
         app.auto_summarize_threshold = 30
