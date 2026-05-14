@@ -47,6 +47,7 @@ def _format_opencode_spy_event(line: str) -> list[SpyEvent]:
 _OPENCODE_RW_PATHS = [
     str(Path.home() / ".local" / "share" / "opencode"),
     str(Path.home() / ".local" / "state" / "opencode"),
+    str(Path.home() / ".local" / "share" / "quimera"),
 ]
 
 # Padrões de ruído de stderr específicos do runtime bun (linha com número variável).
@@ -75,7 +76,7 @@ register(AgentPlugin(
     prefix="/opencode",
     icon="⚙️",
     style=("blue", "OpenCode"),
-    cmd=["opencode", "--model=", "run", "--format=json"],
+    cmd=["opencode", "--model=", "run", "--format=json", "--thinking"],
     capabilities=["general_coding", "code_review", "code_editing"],
     preferred_task_types=["code_edit", "code_review"],
     **_OPENCODE_DEFAULTS,
@@ -98,7 +99,7 @@ for _spec in _PLUGIN_SPECS:
         prefix=f"/{_name}",
         icon=_spec.get("icon", "⚙️"),
         style=_spec["style"],
-        cmd=["opencode", f"--model={_spec['model']}", "run", "--format=json"],
+        cmd=["opencode", f"--model={_spec['model']}", "run", "--format=json", "--thinking"],
         capabilities=["general_coding", "code_review", "code_editing"],
         preferred_task_types=["code_edit", "code_review"],
         **_OPENCODE_DEFAULTS,

@@ -17,3 +17,4 @@ mock.py
 .pytest_cache/
 .codex
 TODO.md
+opencode.json
