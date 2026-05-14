@@ -5,6 +5,7 @@ com Rich.Live que quebrava a toolbar. RichPromptSession é um wrapper thin que
 coordena o ciclo antes/depois do prompt sem substituir o PromptSession."""
 from __future__ import annotations
 
+import asyncio
 import atexit
 import html
 import threading
@@ -293,7 +294,8 @@ class InputGate:
 
         def _schedule() -> None:
             try:
-                run_in_terminal(callback, render_cli_done=False, in_executor=False)
+                coro = run_in_terminal(callback, render_cli_done=True, in_executor=False)
+                asyncio.ensure_future(coro)
             except Exception:
                 pass
 
