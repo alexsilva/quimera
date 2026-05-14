@@ -9,6 +9,7 @@ from ..constants import MSG_MEMORY_FAILED, MSG_MEMORY_SAVING
 _SAVE_DEBOUNCE_SECONDS = 5.0
 _SAVE_DEBOUNCE_MESSAGES = 5
 _MIN_HISTORY_HARD_LIMIT = 24
+_MIN_SUMMARIZE_SURPLUS = 10
 
 
 def compute_history_hard_limit(history_window, auto_summarize_threshold) -> int:
@@ -77,6 +78,8 @@ class AppSessionServices:
 
         keep = app.prompt_builder.history_window
         if len(app.history) <= keep:
+            return
+        if len(app.history) - keep < _MIN_SUMMARIZE_SURPLUS:
             return
         to_summarize = app.history[:-keep]
         recent = app.history[-keep:]

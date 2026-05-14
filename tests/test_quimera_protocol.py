@@ -2139,13 +2139,9 @@ class ProtocolTests(unittest.TestCase):
                 self.calls.append((history, existing_summary, preferred_agent))
                 return "## Resumo da Conversa\n\n- Consolidado"
 
+        # 12 mensagens com janela=2: surplus=10 >= _MIN_SUMMARIZE_SURPLUS, então resume as 10 primeiras.
         app = QuimeraApp.__new__(QuimeraApp)
-        app.history = [
-            {"role": "human", "content": "m1"},
-            {"role": "claude", "content": "m2"},
-            {"role": "codex", "content": "m3"},
-            {"role": "human", "content": "m4"},
-        ]
+        app.history = [{"role": "human", "content": f"m{i}"} for i in range(1, 13)]
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
         app.auto_summarize_threshold = 4
         app.prompt_builder = type("PromptBuilderStub", (), {"history_window": 2})()
@@ -2162,10 +2158,7 @@ class ProtocolTests(unittest.TestCase):
             app.session_summarizer.calls,
             [
                 (
-                    [
-                        {"role": "human", "content": "m1"},
-                        {"role": "claude", "content": "m2"},
-                    ],
+                    [{"role": "human", "content": f"m{i}"} for i in range(1, 11)],
                     "## Resumo da Conversa\n\n- Contexto anterior",
                     "claude",
                 )
@@ -2175,8 +2168,8 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(
             app.history,
             [
-                {"role": "codex", "content": "m3"},
-                {"role": "human", "content": "m4"},
+                {"role": "human", "content": "m11"},
+                {"role": "human", "content": "m12"},
             ],
         )
         self.assertEqual(app.storage.saved_shared_state, {"goal": "manter memória"})
@@ -2201,6 +2194,50 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(app.renderer.system_messages, [])
         self.assertEqual(len(app.history), 48)
         self.assertFalse(hasattr(app.storage, "saved_history"))
+
+    def test_auto_summarize_skips_when_surplus_below_minimum(self):
+        """Não resume quando o excedente acima da janela é menor que _MIN_SUMMARIZE_SURPLUS."""
+        app = QuimeraApp.__new__(QuimeraApp)
+        # surplus = 66 - 64 = 2, abaixo do mínimo de 10
+        app.history = [{"role": "human", "content": f"m{i}"} for i in range(66)]
+        app.auto_summarize_threshold = 30
+        app.prompt_builder = type("PromptBuilderStub", (), {"history_window": 64})()
+        app.context_manager = Mock()
+        app.session_summarizer = Mock()
+        app.renderer = DummyRenderer()
+        app.storage = DummyStorage()
+        app.shared_state = {}
+
+        app.session_services = AppSessionServices(app)
+        app.session_services.maybe_auto_summarize()
+
+        app.session_summarizer.summarize.assert_not_called()
+        self.assertEqual(app.renderer.system_messages, [])
+        self.assertEqual(len(app.history), 66)
+
+    def test_auto_summarize_runs_when_surplus_meets_minimum(self):
+        """Resume quando o excedente atinge o mínimo de 10 mensagens acima da janela."""
+        app = QuimeraApp.__new__(QuimeraApp)
+        # surplus = 74 - 64 = 10, exatamente no limite mínimo
+        app.history = [{"role": "human", "content": f"m{i}"} for i in range(74)]
+        app.auto_summarize_threshold = 30
+        app.prompt_builder = type("PromptBuilderStub", (), {"history_window": 64})()
+        app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
+        app.context_manager = Mock()
+        app.context_manager.load_session_summary.return_value = None
+        app.session_summarizer = Mock()
+        app.session_summarizer.summarize.return_value = "resumo"
+        app.renderer = DummyRenderer()
+        app.storage = DummyStorage()
+        app.shared_state = {}
+
+        app.session_services = AppSessionServices(app)
+        app.session_services.maybe_auto_summarize()
+
+        app.session_summarizer.summarize.assert_called_once()
+        summarized_history = app.session_summarizer.summarize.call_args[0][0]
+        self.assertEqual(len(summarized_history), 10)  # os 10 excedentes
+        self.assertEqual(len(app.history), 64)  # janela preservada
 
     def test_shutdown_merges_existing_session_summary(self):
         class FakeContextManager:
