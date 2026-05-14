@@ -294,7 +294,7 @@ class InputGate:
 
         def _schedule() -> None:
             try:
-                coro = run_in_terminal(callback, render_cli_done=True, in_executor=False)
+                coro = run_in_terminal(callback, render_cli_done=False, in_executor=False)
                 asyncio.ensure_future(coro)
             except Exception:
                 pass
