@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock, patch
 
 from quimera.app.chat_round import ChatRoundOrchestrator
+from quimera.prompt_kinds import PromptKind
 
 
 # ---------------------------------------------------------------------------
@@ -221,6 +222,21 @@ class TestProcessHandoff(unittest.TestCase):
 
         app.behavior_metrics.record_handoff_sent.assert_called_with("claude")
         app.behavior_metrics.record_handoff_received.assert_any_call("codex")
+
+    def test_handoff_dispatch_uses_task_executor_prompt(self):
+        """Handoff vindo do chat deve chamar o destino com prompt isolado de executor."""
+        app = _make_app()
+        handoff = _make_handoff("task x")
+        app.dispatch_services.call_agent = Mock(return_value="codex respondeu")
+        app.parse_response = Mock(return_value=("codex respondeu", None, None, False, False, None))
+        orchestrator = ChatRoundOrchestrator(app)
+
+        orchestrator._process_handoff("claude", "codex", handoff)
+
+        first_call = app.dispatch_services.call_agent.call_args_list[0]
+        self.assertEqual(first_call.args[0], "codex")
+        self.assertTrue(first_call.kwargs["handoff_only"])
+        self.assertEqual(first_call.kwargs["prompt_kind"], PromptKind.TASK_EXECUTOR)
 
     def test_user_cancelled_during_handoff(self):
         """_user_cancelled após chamada ao agente secundário deve resetar e retornar."""

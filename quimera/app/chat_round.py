@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from ..constants import HANDOFF_SYNTHESIS_MSG, MSG_EMPTY_INPUT, USER_ROLE
+from ..prompt_kinds import PromptKind
 from .config import logger
 
 
@@ -222,6 +223,7 @@ class ChatRoundOrchestrator:
                 primary=False,
                 protocol_mode="handoff",
                 from_agent=current_from,
+                prompt_kind=PromptKind.TASK_EXECUTOR,
             )
             agent_client = getattr(app, "agent_client", None)
             if agent_client and agent_client._user_cancelled:
@@ -270,6 +272,7 @@ class ChatRoundOrchestrator:
                         primary=False,
                         protocol_mode="handoff",
                         from_agent=current_from,
+                        prompt_kind=PromptKind.TASK_EXECUTOR,
                     )
                     agent_client = getattr(app, "agent_client", None)
                     if agent_client and agent_client._user_cancelled:
