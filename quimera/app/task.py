@@ -18,11 +18,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from ..agents import AgentClient
 from ..constants import TaskStatus
 from ..runtime import ConsoleApprovalHandler, PreApprovalHandler, create_executor
 from ..runtime import ToolRuntimeConfig
 from ..runtime.executor import ToolExecutor
 from ..runtime.task_planning import classify_task
+from .dispatch import AppDispatchServices
 from .task_classifiers import (
     classify_task_execution_result,
     classify_task_review_result,
@@ -49,6 +51,8 @@ class AppTaskServices:
 
     def __init__(self, app):
         self.app = app
+        self._background_dispatch_services: AppDispatchServices | None = None
+        self._background_tool_executor: ToolExecutor | None = None
 
     # ── Setup / bootstrap ──────────────────────────────────────────────
 
@@ -79,7 +83,12 @@ class AppTaskServices:
             executor.start()
             app.task_executors.append(executor)
 
-    def build_tool_executor(self, require_approval_for_mutations: bool = True) -> ToolExecutor:
+    def build_tool_executor(
+        self,
+        require_approval_for_mutations: bool = True,
+        *,
+        register_as_primary: bool = True,
+    ) -> ToolExecutor:
         """Cria o executor de ferramentas do app com a configuração padrão."""
         app = self.app
         renderer = getattr(app, "renderer", None)
@@ -93,7 +102,8 @@ class AppTaskServices:
         )
         approval_handler = PreApprovalHandler(base_handler)
         base_handler.set_approve_all_callback(approval_handler.set_approve_all)
-        app._approval_handler = approval_handler
+        if register_as_primary:
+            app._approval_handler = approval_handler
         return ToolExecutor(
             config=ToolRuntimeConfig(
                 workspace_root=app.workspace.cwd,
@@ -118,6 +128,12 @@ class AppTaskServices:
                 executor.stop()
             except KeyboardInterrupt:
                 pass
+            except Exception:
+                pass
+        background_dispatch = self._background_dispatch_services
+        if background_dispatch is not None:
+            try:
+                background_dispatch.close()
             except Exception:
                 pass
 
@@ -272,6 +288,41 @@ class AppTaskServices:
         agent_client = getattr(self.app, "agent_client", None)
         return bool(agent_client and agent_client._user_cancelled)
 
+    def _background_was_user_cancelled(self) -> bool:
+        return False
+
+    def _get_background_tool_executor(self) -> ToolExecutor:
+        if self._background_tool_executor is None:
+            self._background_tool_executor = self.build_tool_executor(
+                require_approval_for_mutations=not getattr(self.app, "auto_approve_mutations", False),
+                register_as_primary=False,
+            )
+        return self._background_tool_executor
+
+    def _get_background_dispatch_services(self) -> AppDispatchServices:
+        if self._background_dispatch_services is not None:
+            return self._background_dispatch_services
+
+        app = self.app
+        background_agent_client = AgentClient(
+            app.renderer,
+            timeout=getattr(getattr(app, "agent_client", None), "timeout", None),
+            visibility=getattr(app, "visibility", None),
+            working_dir=str(app.workspace.cwd),
+            error_reporter=getattr(app, "show_error_message", None),
+            muted_reporter=getattr(app, "show_muted_message", None),
+        )
+        background_agent_client.execution_mode = getattr(app, "execution_mode", None)
+        background_agent_client.tool_event_callback = getattr(app, "_record_tool_event", None)
+        background_agent_client.tool_executor = self._get_background_tool_executor()
+        self._background_dispatch_services = AppDispatchServices(
+            app,
+            agent_client_override=background_agent_client,
+            tool_executor_override=background_agent_client.tool_executor,
+            cancel_checker_override=self._background_was_user_cancelled,
+        )
+        return self._background_dispatch_services
+
     def _build_task_prompt_factory(self) -> TaskPromptFactory:
         app = self.app
         return TaskPromptFactory(
@@ -284,25 +335,32 @@ class AppTaskServices:
     def _build_task_execution_service(self, failover_policy: TaskFailoverPolicy) -> TaskExecutionService:
         app = self.app
         return TaskExecutionService(
-            dispatch_services=getattr(app, "dispatch_services", None),
+            dispatch_services=self._get_background_dispatch_services(),
             system_layer=getattr(app, "system_layer", None),
             repository=self._build_task_repository(),
             failover_policy=failover_policy,
             classify_task_execution_result=classify_task_execution_result,
-            was_user_cancelled=self._was_user_cancelled,
+            was_user_cancelled=self._background_was_user_cancelled,
             record_failure=getattr(app, "record_failure", None),
-            before_agent_call=self._enable_task_tool_auto_approval,
-            after_agent_call=self._disable_task_tool_auto_approval,
+            before_agent_call=lambda agent_name: self._enable_task_tool_auto_approval(
+                agent_name,
+                approval_handler=getattr(self._get_background_tool_executor(), "approval_handler", None),
+            ),
+            after_agent_call=lambda agent_name: self._disable_task_tool_auto_approval(
+                agent_name,
+                approval_handler=getattr(self._get_background_tool_executor(), "approval_handler", None),
+            ),
         )
 
-    def _enable_task_tool_auto_approval(self, agent_name: str) -> None:
+    def _enable_task_tool_auto_approval(self, agent_name: str, approval_handler=None) -> None:
         plugin = getattr(self.app, "get_agent_plugin", lambda _agent_name: None)(agent_name)
         effective_driver = getattr(plugin, "effective_driver", None)
         supports_tools = bool(getattr(plugin, "supports_tools", False))
         driver_name = effective_driver() if callable(effective_driver) else None
         if plugin is None or driver_name != "openai_compat" or not supports_tools:
             return
-        approval_handler = getattr(self.app, "_approval_handler", None)
+        if approval_handler is None:
+            approval_handler = getattr(self.app, "_approval_handler", None)
         if approval_handler is not None and hasattr(approval_handler, "set_thread_approve_all"):
             approval_handler.set_thread_approve_all(
                 True,
@@ -310,26 +368,27 @@ class AppTaskServices:
                 silent=True,
             )
 
-    def _disable_task_tool_auto_approval(self, agent_name: str) -> None:
+    def _disable_task_tool_auto_approval(self, agent_name: str, approval_handler=None) -> None:
         plugin = getattr(self.app, "get_agent_plugin", lambda _agent_name: None)(agent_name)
         effective_driver = getattr(plugin, "effective_driver", None)
         supports_tools = bool(getattr(plugin, "supports_tools", False))
         driver_name = effective_driver() if callable(effective_driver) else None
         if plugin is None or driver_name != "openai_compat" or not supports_tools:
             return
-        approval_handler = getattr(self.app, "_approval_handler", None)
+        if approval_handler is None:
+            approval_handler = getattr(self.app, "_approval_handler", None)
         if approval_handler is not None and hasattr(approval_handler, "set_thread_approve_all"):
             approval_handler.set_thread_approve_all(False, scope_key=f"task:{agent_name}:{id(self)}")
 
     def _build_task_review_service(self, failover_policy: TaskFailoverPolicy) -> TaskReviewService:
         app = self.app
         return TaskReviewService(
-            dispatch_services=getattr(app, "dispatch_services", None),
+            dispatch_services=self._get_background_dispatch_services(),
             system_layer=getattr(app, "system_layer", None),
             repository=self._build_task_repository(),
             failover_policy=failover_policy,
             classify_task_review_result=classify_task_review_result,
-            was_user_cancelled=self._was_user_cancelled,
+            was_user_cancelled=self._background_was_user_cancelled,
             event_sink=getattr(app, "event_sink", None),
         )
 

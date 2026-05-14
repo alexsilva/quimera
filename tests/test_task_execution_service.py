@@ -1,4 +1,5 @@
 from quimera.app.task_execution_service import TaskExecutionService
+from quimera.app.task import AppTaskServices
 from quimera.runtime.models import TaskRecord
 
 
@@ -176,3 +177,35 @@ def test_handler_fails_when_user_cancels_execution():
     assert repo.fail_calls == [(5, "cancelled by user")]
     assert repo.complete_calls == []
     assert system.messages[-1] == "[task 5] codex: cancelado pelo usuário"
+
+
+def test_app_task_services_execution_isolated_from_chat_cancel_state(monkeypatch, tmp_path):
+    """Tasks em background não devem herdar o cancelamento do chat interativo."""
+    dispatch = DispatchStub(response="resultado final")
+    system = SystemLayerSpy()
+    repo = RepositorySpy()
+    policy = FailoverPolicyStub(review_agents=[])
+
+    class AppStub:
+        pass
+
+    app = AppStub()
+    app.agent_client = type("ChatClient", (), {"_user_cancelled": True})()
+    app.system_layer = system
+    app.record_failure = lambda _agent_name: None
+    app.workspace = type("WorkspaceStub", (), {"cwd": tmp_path})()
+    app.tasks_db_path = str(tmp_path / "tasks.db")
+    app.auto_approve_mutations = False
+    app.get_agent_plugin = lambda _agent_name: None
+
+    services = AppTaskServices(app)
+    monkeypatch.setattr(services, "_build_task_repository", lambda: repo)
+    monkeypatch.setattr(services, "_get_background_dispatch_services", lambda: dispatch)
+
+    ok = services._build_task_execution_service(policy).handler_for("codex")(
+        TaskRecord(id=6, job_id=0, description="executar tarefa", status="in_progress")
+    )
+
+    assert ok is True
+    assert repo.fail_calls == []
+    assert repo.complete_calls == [(6, "resultado final", None)]

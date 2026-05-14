@@ -16,14 +16,30 @@ class AppDispatchServices:
     _MAX_SPY_TEXT_CHARS = 280
     _MAX_SPY_MAP_ITEMS = 6
 
-    def __init__(self, app):
+    def __init__(
+        self,
+        app,
+        *,
+        agent_client_override=None,
+        tool_executor_override=None,
+        cancel_checker_override=None,
+    ):
         """Inicializa uma instância de AppDispatchServices."""
         self.app = app
+        self._agent_client_override = agent_client_override
+        self._tool_executor_override = tool_executor_override
+        self._cancel_checker_override = cancel_checker_override
         # _gateway e _tool_loop são construídos lazily porque app ainda não tem
         # todos os atributos inicializados quando AppDispatchServices é criado.
         self._gateway = None
         self._tool_loop = None
         self._agent_call_service = None
+
+    def _get_agent_client(self):
+        return self._agent_client_override or getattr(self.app, "agent_client", None)
+
+    def _get_tool_executor(self):
+        return self._tool_executor_override or getattr(self.app, "tool_executor", None)
 
     # -------------------------------------------------------------------------
     # Lazy builders
@@ -66,7 +82,7 @@ class AppDispatchServices:
                 session_metrics.record_agent_metric(app, agent, "succeeded" if success else "failed", elapsed)
 
         return AgentGateway(
-            agent_client=app.agent_client,
+            agent_client=self._get_agent_client(),
             prompt_builder=app.prompt_builder,
             renderer=app.renderer,
             plugin_resolver=app.get_agent_plugin,
@@ -89,7 +105,9 @@ class AppDispatchServices:
         app = self.app
 
         def _cancel_checker() -> bool:
-            return _is_user_cancelled(getattr(app, "agent_client", None))
+            if callable(self._cancel_checker_override):
+                return bool(self._cancel_checker_override())
+            return _is_user_cancelled(self._get_agent_client())
 
         def _call_agent_fn(agent, **kwargs):
             if hasattr(app, "_call_agent"):
@@ -102,7 +120,7 @@ class AppDispatchServices:
                 session_metrics.record_tool_event(app, agent, **kwargs)
 
         def _reset_approve_all():
-            tool_executor = getattr(app, "tool_executor", None)
+            tool_executor = self._get_tool_executor()
             if tool_executor is None:
                 return
             approval_handler = getattr(tool_executor, "approval_handler", None)
@@ -120,7 +138,7 @@ class AppDispatchServices:
                     )
 
         return ToolLoopService(
-            tool_executor=app.tool_executor,
+            tool_executor=self._get_tool_executor(),
             plugin_resolver=app.get_agent_plugin,
             call_agent_fn=_call_agent_fn,
             print_response_fn=app.print_response,
@@ -142,7 +160,7 @@ class AppDispatchServices:
 
     def _build_agent_call_service(self) -> AgentCallService:
         app = self.app
-        agent_client = getattr(app, "agent_client", None)
+        agent_client = self._get_agent_client()
 
         def _is_rate_limited():
             return bool(agent_client and getattr(agent_client, 'rate_limit_detected', False))
@@ -219,7 +237,7 @@ class AppDispatchServices:
 
     def _update_spy_telemetry(self, agent: str) -> None:
         app = self.app
-        agent_client = getattr(app, "agent_client", None)
+        agent_client = self._get_agent_client()
         if agent_client is None:
             return
         detail = self._sanitize_spy_turn_detail(getattr(agent_client, "last_spy_turn_detail", None))
@@ -273,7 +291,9 @@ class AppDispatchServices:
             "[DISPATCH] sending to agent=%s, handoff_only=%s, handoff_id=%s",
             agent, dispatch_options.get("handoff_only", False), handoff_id,
         )
-        agent_client = getattr(app, "agent_client", None)
+        agent_client = self._get_agent_client()
+        if agent_client is not None and hasattr(agent_client, "execution_mode"):
+            agent_client.execution_mode = getattr(app, "execution_mode", None)
         service = self._get_agent_call_service()
 
         def _call_fn(a):
@@ -290,7 +310,11 @@ class AppDispatchServices:
             agent=agent,
             call_fn=_call_fn,
             resolve_fn=_resolve_fn,
-            is_user_cancelled=lambda: _is_user_cancelled(agent_client),
+            is_user_cancelled=(
+                (lambda: bool(self._cancel_checker_override()))
+                if callable(self._cancel_checker_override)
+                else (lambda: _is_user_cancelled(agent_client))
+            ),
         )
 
     def call_agent_low_level(
@@ -338,3 +362,12 @@ class AppDispatchServices:
                 flush()
             if hasattr(app, "_redisplay_user_prompt_if_needed"):
                 app._redisplay_user_prompt_if_needed(clear_first=False)
+
+    def close(self) -> None:
+        """Libera recursos do agent client dedicado quando houver override."""
+        agent_client = self._agent_client_override
+        if agent_client is None:
+            return
+        close = getattr(agent_client, "close", None)
+        if callable(close):
+            close()
