@@ -1,5 +1,5 @@
 from quimera.app.task_execution_service import TaskExecutionService
-from quimera.app.task import AppTaskServices
+from quimera.app.task import AppTaskServices, _BACKGROUND_AGENT_TIMEOUT_SECONDS
 from quimera.runtime.models import TaskRecord
 
 
@@ -83,10 +83,11 @@ def test_handler_completes_task_when_no_review_agent_available():
     assert ok is True
     assert repo.complete_calls == [(1, "resultado final", None)]
     assert repo.submit_calls == []
-    assert system.messages == [
+    assert system.messages[:2] == [
         "[task 1] codex: iniciando — corrigir bug",
         "[task 1] codex:\nresultado final",
     ]
+    assert system.messages[-1] == "[task 1] codex: concluída"
 
 
 def test_handler_submits_for_review_when_other_reviewer_exists():
@@ -209,3 +210,41 @@ def test_app_task_services_execution_isolated_from_chat_cancel_state(monkeypatch
     assert ok is True
     assert repo.fail_calls == []
     assert repo.complete_calls == [(6, "resultado final", None)]
+
+
+def test_background_dispatch_uses_chat_timeout_when_present(tmp_path):
+    class AppStub:
+        pass
+
+    app = AppStub()
+    app.renderer = object()
+    app.agent_client = type("ChatClient", (), {"timeout": 45})()
+    app.workspace = type("WorkspaceStub", (), {"cwd": tmp_path})()
+    app.visibility = "summary"
+    app.tasks_db_path = None
+    app.auto_approve_mutations = False
+
+    services = AppTaskServices(app)
+
+    dispatch = services._get_background_dispatch_services()
+
+    assert dispatch._get_agent_client().timeout == 45
+
+
+def test_background_dispatch_uses_fallback_timeout_when_chat_timeout_is_missing(tmp_path):
+    class AppStub:
+        pass
+
+    app = AppStub()
+    app.renderer = object()
+    app.agent_client = type("ChatClient", (), {"timeout": None})()
+    app.workspace = type("WorkspaceStub", (), {"cwd": tmp_path})()
+    app.visibility = "summary"
+    app.tasks_db_path = None
+    app.auto_approve_mutations = False
+
+    services = AppTaskServices(app)
+
+    dispatch = services._get_background_dispatch_services()
+
+    assert dispatch._get_agent_client().timeout == _BACKGROUND_AGENT_TIMEOUT_SECONDS

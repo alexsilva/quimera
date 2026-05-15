@@ -42,6 +42,9 @@ from .task_utils import (
 from .config import logger
 
 
+_BACKGROUND_AGENT_TIMEOUT_SECONDS = 120
+
+
 class AppTaskServices:
     """Adaptador entre o ``QuimeraApp`` e o domínio de tasks.
 
@@ -304,9 +307,13 @@ class AppTaskServices:
             return self._background_dispatch_services
 
         app = self.app
+        chat_agent_client = getattr(app, "agent_client", None)
+        background_timeout = getattr(chat_agent_client, "timeout", None)
+        if background_timeout is None or background_timeout <= 0:
+            background_timeout = _BACKGROUND_AGENT_TIMEOUT_SECONDS
         background_agent_client = AgentClient(
             app.renderer,
-            timeout=getattr(getattr(app, "agent_client", None), "timeout", None),
+            timeout=background_timeout,
             visibility=getattr(app, "visibility", None),
             working_dir=str(app.workspace.cwd),
             error_reporter=getattr(app, "show_error_message", None),
