@@ -11,10 +11,15 @@ class EnvConfig:
     """
 
     def __init__(self, path: Path):
-        """Inicializa uma instância de EnvConfig."""
+        """Inicializa uma instância de EnvConfig apontando para *path* (arquivo ``.env``)."""
         self._path = path
 
     def _load(self) -> dict:
+        """Lê e parseia o arquivo ``.env``, retornando um dict KEY→valor.
+
+        Linhas vazias e comentários (``#``) são ignorados.
+        Retorna dict vazio se o arquivo não existir.
+        """
         data = {}
         if not self._path.exists():
             return data
@@ -28,6 +33,7 @@ class EnvConfig:
         return data
 
     def _save(self, data: dict) -> None:
+        """Persiste *data* no arquivo ``.env`` no formato ``KEY=VALUE``, ordenado alfabeticamente."""
         self._path.parent.mkdir(parents=True, exist_ok=True)
         lines = [f"{k}={v}" for k, v in sorted(data.items())]
         self._path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")

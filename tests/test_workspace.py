@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from quimera.workspace import Workspace, find_base_writable
+from quimera.workspace import Workspace, WorkspaceTmp, find_base_writable
 
 
 class TestWorkspace(unittest.TestCase):
@@ -82,7 +82,7 @@ class TestWorkspace(unittest.TestCase):
                 self.assertEqual(ws2._branch, "feature_my-feature")
                 self.assertEqual(ws2.context_persistent, ws1.context_persistent)
 
-    def test_render_debug_paths_live_under_workspace_logs(self):
+    def test_tmp_render_debug_paths_live_under_workspace_tmp(self):
         with tempfile.TemporaryDirectory() as base_dir, tempfile.TemporaryDirectory() as proj_tmp:
             base = Path(base_dir)
             proj = Path(proj_tmp) / "renderproj"
@@ -90,16 +90,58 @@ class TestWorkspace(unittest.TestCase):
 
             with patch("quimera.workspace.find_base_writable", lambda dirs: base):
                 ws = Workspace(proj)
+                tmp = ws.tmp
 
-                self.assertEqual(ws.render_logs_dir, ws.root / "data" / "logs" / "render")
-                self.assertEqual(ws.render_log_path, ws.render_logs_dir / "render.jsonl")
-                self.assertEqual(ws.render_ansi_path, ws.render_logs_dir / "render.ansi")
+                self.assertEqual(tmp.root, ws.tmp.root)
                 self.assertEqual(
-                    ws.render_log_path_for("sessao-2026-05-14-225819"),
-                    ws.render_logs_dir / "render-sessao-2026-05-14-225819.jsonl",
+                    tmp.render_logs_dir,
+                    Path("/tmp") / "quimera" / ws.cwd_hash / "data" / "logs" / "render",
                 )
                 self.assertEqual(
-                    ws.render_ansi_path_for("sessao-2026-05-14-225819"),
-                    ws.render_logs_dir / "render-sessao-2026-05-14-225819.ansi",
+                    tmp.render_log_path_for("sessao-2026-05-14-225819"),
+                    tmp.render_logs_dir / "render-sessao-2026-05-14-225819.jsonl",
                 )
-                self.assertTrue(ws.render_logs_dir.exists())
+                self.assertEqual(
+                    tmp.render_ansi_path_for("sessao-2026-05-14-225819"),
+                    tmp.render_logs_dir / "render-sessao-2026-05-14-225819.ansi",
+                )
+                self.assertTrue(ws.tmp.render_logs_dir.exists())
+
+    def test_tmp_metrics_paths_live_under_workspace_tmp(self):
+        with tempfile.TemporaryDirectory() as base_dir, tempfile.TemporaryDirectory() as proj_tmp:
+            base = Path(base_dir)
+            proj = Path(proj_tmp) / "renderproj"
+            proj.mkdir()
+
+            with patch("quimera.workspace.find_base_writable", lambda dirs: base):
+                ws = Workspace(proj)
+                tmp = ws.tmp
+
+                self.assertEqual(
+                    tmp.metrics_dir,
+                    Path("/tmp") / "quimera" / ws.cwd_hash / "data" / "logs" / "metrics",
+                )
+                self.assertEqual(
+                    tmp.metrics_path_for("sessao-2026-05-14-225819"),
+                    tmp.metrics_dir / "sessao-2026-05-14-225819.jsonl",
+                )
+                self.assertTrue(ws.tmp.metrics_dir.exists())
+
+    def test_tmp_ensure_dirs_logs_only_the_failing_directory(self):
+        render_dir = Path("/tmp") / "quimera" / "hash123" / "data" / "logs" / "render"
+        metrics_dir = Path("/tmp") / "quimera" / "hash123" / "data" / "logs" / "metrics"
+
+        def fake_mkdir(path, parents=False, exist_ok=False):
+            if path == render_dir:
+                raise OSError("boom")
+            return None
+
+        with patch.object(Path, "mkdir", autospec=True, side_effect=fake_mkdir):
+            with patch("quimera.workspace.logger.warning") as warning:
+                WorkspaceTmp("hash123")
+
+        warning.assert_called_once()
+        self.assertEqual(
+            warning.call_args.args,
+            ("Failed to create %s %s: %s", "render logs dir", render_dir, unittest.mock.ANY),
+        )

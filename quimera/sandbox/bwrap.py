@@ -22,6 +22,7 @@ class _ExecutionModeProto(Protocol):
 
 _HOME_DIR = str(Path.home())
 _COMMON_RO_PATHS = ["/usr", "/lib", "/lib64", "/bin", "/sbin", "/etc", "/opt", _HOME_DIR]
+_QUIMERA_DATA_DIR = str(Path.home() / ".local" / "share" / "quimera")
 
 
 def is_bwrap_available() -> bool:
@@ -44,6 +45,9 @@ def build_bwrap_cmd(
     for path in _COMMON_RO_PATHS:
         if os.path.exists(path):
             bwrap += ["--ro-bind", path, path]
+
+    if os.path.exists(_QUIMERA_DATA_DIR):
+        bwrap += ["--tmpfs", _QUIMERA_DATA_DIR]
 
     for path in getattr(plugin, "runtime_rw_paths", []):
         if os.path.exists(path):

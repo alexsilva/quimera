@@ -1,11 +1,14 @@
 """Componentes de `quimera.workspace`."""
 import hashlib
 import json
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
-from .paths import CANDIDATE_DIRS, find_base_writable
+from .paths import CANDIDATE_DIRS, TMP_BASE_DIR, find_base_writable
+
+logger = logging.getLogger(__name__)
 
 
 class DecisionsLogger:
@@ -42,6 +45,54 @@ class DecisionsLogger:
         return entries[-limit:]
 
 
+class WorkspaceTmp:
+    """Subtree temporária do workspace em /tmp — logs de sessão, nunca dados persistentes."""
+
+    def __init__(self, cwd_hash: str):
+        """Inicializa a subtree temporária para o workspace identificado por *cwd_hash*."""
+        self._root = TMP_BASE_DIR / cwd_hash
+        self._ensure_dirs()
+
+    def _ensure_dirs(self):
+        """Cria os subdiretórios temporários necessários, registrando warnings em caso de falha."""
+        self._ensure_dir(self.render_logs_dir, "render logs dir")
+        self._ensure_dir(self.metrics_dir, "metrics dir")
+
+    def _ensure_dir(self, path: Path, label: str) -> None:
+        """Cria *path* (incluindo pais) e registra warning se a criação falhar."""
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            logger.warning("Failed to create %s %s: %s", label, path, e)
+
+    @property
+    def root(self) -> Path:
+        """Raiz da subtree temporária: ``/tmp/quimera/{cwd_hash}/``."""
+        return self._root
+
+    @property
+    def render_logs_dir(self) -> Path:
+        """Diretório de logs de auditoria de render (JSONL + ANSI bruto)."""
+        return self._root / "data" / "logs" / "render"
+
+    @property
+    def metrics_dir(self) -> Path:
+        """Diretório de métricas de sessão (latência, tokens, etc.)."""
+        return self._root / "data" / "logs" / "metrics"
+
+    def render_log_path_for(self, session_id: str) -> Path:
+        """Caminho do arquivo JSONL de auditoria de render para *session_id*."""
+        return self.render_logs_dir / f"render-{session_id}.jsonl"
+
+    def render_ansi_path_for(self, session_id: str) -> Path:
+        """Caminho do arquivo ANSI bruto de render para *session_id*."""
+        return self.render_logs_dir / f"render-{session_id}.ansi"
+
+    def metrics_path_for(self, session_id: str) -> Path:
+        """Caminho do arquivo JSONL de métricas para *session_id*."""
+        return self.metrics_dir / f"{session_id}.jsonl"
+
+
 class Workspace:
     """Resolve e gerencia o diretório de dados de um projeto no armazenamento global do quimera."""
 
@@ -52,6 +103,7 @@ class Workspace:
         self.cwd_hash = hashlib.sha256(str(self.cwd).encode()).hexdigest()[:16]
         self._root = self.base_dir / "workspaces" / self.cwd_hash
         self._branch: str | None = None
+        self._tmp = WorkspaceTmp(self.cwd_hash)
         self._ensure_dirs()
         self._write_metadata()
         self._update_index()
@@ -66,8 +118,13 @@ class Workspace:
 
     @property
     def root(self) -> Path:
-        """Executa root."""
+        """Raiz dos dados persistentes do workspace: ``~/.local/share/quimera/workspaces/{cwd_hash}/``."""
         return self._root
+
+    @property
+    def tmp(self) -> WorkspaceTmp:
+        """Subtree temporária em ``/tmp/quimera/{cwd_hash}/`` — logs de sessão, nunca dados persistentes."""
+        return self._tmp
 
     def set_branch(self, branch: str) -> None:
         """Define manualmente a branch para o contexto persistente.
@@ -109,7 +166,7 @@ class Workspace:
 
     @property
     def context_session(self) -> Path:
-        """Executa context session."""
+        """Arquivo de contexto de sessão (descartado ao final de cada chat)."""
         return self._root / "data" / "context" / "session.md"
 
     @property
@@ -119,55 +176,27 @@ class Workspace:
 
     @property
     def logs_dir(self) -> Path:
-        """Executa logs dir."""
+        """Diretório de logs de sessões persistentes (JSONL por sessão)."""
         return self._root / "data" / "logs" / "sessions"
 
     @property
-    def render_logs_dir(self) -> Path:
-        """Diretório de auditoria de renderização."""
-        return self._root / "data" / "logs" / "render"
-
-    def render_log_path_for(self, session_id: str) -> Path:
-        """Arquivo JSONL de eventos de renderização para uma sessão."""
-        return self.render_logs_dir / f"render-{session_id}.jsonl"
-
-    def render_ansi_path_for(self, session_id: str) -> Path:
-        """Arquivo ANSI bruto de renderização para uma sessão."""
-        return self.render_logs_dir / f"render-{session_id}.ansi"
-
-    @property
-    def render_log_path(self) -> Path:
-        """Arquivo JSONL de eventos de renderização."""
-        return self.render_logs_dir / "render.jsonl"
-
-    @property
-    def render_ansi_path(self) -> Path:
-        """Arquivo com o stream ANSI bruto da renderização."""
-        return self.render_logs_dir / "render.ansi"
-
-    @property
     def tasks_db(self) -> Path:
-        """Executa tasks db."""
+        """Banco de dados SQLite de tasks do workspace."""
         return self._root / "data" / "tasks.db"
 
     @property
-    def metrics_dir(self) -> Path:
-        """Executa metrics dir."""
-        return self._root / "data" / "logs" / "metrics"
-
-    @property
     def state_dir(self) -> Path:
-        """Executa state dir."""
+        """Diretório de estado interno do workspace (shared state, locks, etc.)."""
         return self._root / "state"
 
     @property
     def history_file(self) -> Path:
-        """Executa history file."""
+        """Arquivo de histórico de comandos do workspace."""
         return self._root / "history"
 
     @property
     def decisions_log(self) -> Path:
-        """Executa decisions log."""
+        """Log JSONL de decisões registradas durante as sessões."""
         return self._root / "data" / "decisions.jsonl"
 
     @property
@@ -181,17 +210,23 @@ class Workspace:
         return self.base_dir / ".env"
 
     def _ensure_dirs(self):
-        """Executa ensure dirs."""
-        (self._root / "data" / "context").mkdir(parents=True, exist_ok=True)
-        (self._root / "data" / "logs" / "sessions").mkdir(parents=True, exist_ok=True)
-        (self._root / "data" / "logs" / "metrics").mkdir(parents=True, exist_ok=True)
-        (self._root / "data" / "logs" / "render").mkdir(parents=True, exist_ok=True)
-        (self._root / "data").mkdir(parents=True, exist_ok=True)
-        (self._root / "state").mkdir(parents=True, exist_ok=True)
-        (self.base_dir / "index").mkdir(parents=True, exist_ok=True)
+        """Cria os diretórios persistentes do workspace, registrando warnings em caso de falha."""
+        dirs = [
+            self._root / "data",
+            self._root / "data" / "context",
+            self._root / "data" / "logs" / "sessions",
+            self._root / "state",
+            self.base_dir / "index",
+        ]
+        for d in dirs:
+            try:
+                d.mkdir(parents=True, exist_ok=True)
+                logger.debug("Created dir: %s", d)
+            except OSError as e:
+                logger.warning("Failed to create dir %s: %s", d, e)
 
     def _write_metadata(self):
-        """Escreve metadata."""
+        """Cria ou atualiza ``workspace.json`` com metadados do projeto (cwd, hash, timestamps)."""
         meta_file = self._root / "workspace.json"
         now = datetime.now(timezone.utc).isoformat(timespec="seconds")
         if meta_file.exists():
@@ -214,7 +249,7 @@ class Workspace:
         meta_file.write_text(json.dumps(meta, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
     def _update_index(self):
-        """Atualiza index."""
+        """Atualiza o índice global de workspaces em ``~/.local/share/quimera/index/workspaces.json``."""
         index_file = self.base_dir / "index" / "workspaces.json"
         now = datetime.now(timezone.utc).isoformat(timespec="seconds")
         if index_file.exists():

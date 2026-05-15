@@ -155,7 +155,7 @@ Gerado a partir de `quimera/app/core.py::QuimeraApp.__init__`.
 | `session_metrics` | `SessionMetricsService` | Métricas da sessão (latência, rounds) |
 | `behavior_metrics` | `BehaviorMetricsTracker` | Rastreamento de comportamento de agentes |
 
-**Dependências externas:** `workspace.state_dir`, `workspace.metrics_dir` (se debug)
+**Dependências externas:** `workspace.state_dir`, `workspace.tmp.metrics_dir` (se debug)
 
 ---
 

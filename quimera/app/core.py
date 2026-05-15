@@ -46,6 +46,7 @@ from ..session_summary import SessionSummarizer, build_chain_summarizer
 from ..prompt import PromptBuilder
 from ..workspace import Workspace
 from ..config import ConfigManager, DEFAULT_USER_NAME
+from ..env_config import EnvConfig
 from ..metrics import BehaviorMetricsTracker
 from ..constants import (
     CMD_AGENTS, CMD_ALIASES, CMD_CLEAR, CMD_CONNECT, CMD_DISCONNECT, CMD_CONTEXT, CMD_CONTEXT_BRANCH, CMD_CONTEXT_EDIT, CMD_EDIT, CMD_EXIT,
@@ -84,14 +85,15 @@ class QuimeraApp:
         self.agent_failures = defaultdict(int)
         self._agent_failures_lock = threading.Lock()
         self.workspace = workspace if workspace is not None else Workspace(cwd)
+        EnvConfig(self.workspace.env_file).apply_to_environ()
         self.auto_approve_mutations = auto_approve_mutations
         self._plugin_registry = plugin_registry
         self.config = ConfigManager(self.workspace.config_file)
         _active_theme = theme if theme is not None else self.config.theme
         self.storage = SessionStorage(self.workspace.logs_dir)
         session_id = self.storage.session_id
-        render_log_path = self.workspace.render_log_path_for(session_id)
-        render_ansi_path = self.workspace.render_ansi_path_for(session_id)
+        render_log_path = self.workspace.tmp.render_log_path_for(session_id)
+        render_ansi_path = self.workspace.tmp.render_ansi_path_for(session_id)
         render_audit_logger = (
             RenderAuditLogger(render_log_path, render_ansi_path) if debug else None
         )
@@ -140,7 +142,7 @@ class QuimeraApp:
             self.renderer,
             workspace=self.workspace,
         )
-        metrics_file = self.workspace.metrics_dir / f"{session_id}.jsonl" if debug else None
+        metrics_file = self.workspace.tmp.metrics_path_for(session_id) if debug else None
         self.agent_client = AgentClient(
             self.renderer,
             metrics_file=metrics_file,

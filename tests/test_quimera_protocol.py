@@ -1349,6 +1349,16 @@ class ProtocolTests(unittest.TestCase):
     def test_app_builds_explicit_session_state_for_prompt(self):
         temp_root = Path(self.enterContext(tempfile.TemporaryDirectory()))
 
+        class FakeTmp:
+            def render_log_path_for(self, session_id):
+                return temp_root / f"render-{session_id}.jsonl"
+
+            def render_ansi_path_for(self, session_id):
+                return temp_root / f"render-{session_id}.ansi"
+
+            def metrics_path_for(self, session_id):
+                return temp_root / f"metrics-{session_id}.jsonl"
+
         class FakeWorkspace:
             def __init__(self, cwd):
                 self.root = temp_root
@@ -1361,15 +1371,11 @@ class ProtocolTests(unittest.TestCase):
                 self.state_dir = temp_root / "quimera_state"
                 self.tasks_db = temp_root / "quimera_tasks.db"
                 self.decisions_log = temp_root / "decisions.jsonl"
+                self.env_file = temp_root / ".env"
+                self.tmp = FakeTmp()
 
             def migrate_from_legacy(self, cwd):
                 return []
-
-            def render_log_path_for(self, session_id):
-                return temp_root / f"render-{session_id}.jsonl"
-
-            def render_ansi_path_for(self, session_id):
-                return temp_root / f"render-{session_id}.ansi"
 
         class FakeContextManager:
             SUMMARY_MARKER = "## Resumo da última sessão"
@@ -1417,6 +1423,16 @@ class ProtocolTests(unittest.TestCase):
     def test_app_uses_default_history_window_from_config(self):
         temp_root = Path(self.enterContext(tempfile.TemporaryDirectory()))
 
+        class FakeTmp:
+            def render_log_path_for(self, session_id):
+                return temp_root / f"render-{session_id}.jsonl"
+
+            def render_ansi_path_for(self, session_id):
+                return temp_root / f"render-{session_id}.ansi"
+
+            def metrics_path_for(self, session_id):
+                return temp_root / f"metrics-{session_id}.jsonl"
+
         class FakeWorkspace:
             def __init__(self, cwd):
                 self.root = temp_root
@@ -1429,15 +1445,11 @@ class ProtocolTests(unittest.TestCase):
                 self.state_dir = temp_root / "quimera_state"
                 self.tasks_db = temp_root / "quimera_tasks.db"
                 self.decisions_log = temp_root / "decisions.jsonl"
+                self.env_file = temp_root / ".env"
+                self.tmp = FakeTmp()
 
             def migrate_from_legacy(self, cwd):
                 return []
-
-            def render_log_path_for(self, session_id):
-                return temp_root / f"render-{session_id}.jsonl"
-
-            def render_ansi_path_for(self, session_id):
-                return temp_root / f"render-{session_id}.ansi"
 
         class FakeContextManager:
             SUMMARY_MARKER = "## Resumo da última sessão"
@@ -1474,6 +1486,16 @@ class ProtocolTests(unittest.TestCase):
     def test_app_allows_history_window_override(self):
         temp_root = Path(self.enterContext(tempfile.TemporaryDirectory()))
 
+        class FakeTmp:
+            def render_log_path_for(self, session_id):
+                return temp_root / f"render-{session_id}.jsonl"
+
+            def render_ansi_path_for(self, session_id):
+                return temp_root / f"render-{session_id}.ansi"
+
+            def metrics_path_for(self, session_id):
+                return temp_root / f"metrics-{session_id}.jsonl"
+
         class FakeWorkspace:
             def __init__(self, cwd):
                 self.root = temp_root
@@ -1486,15 +1508,11 @@ class ProtocolTests(unittest.TestCase):
                 self.state_dir = temp_root / "quimera_state"
                 self.tasks_db = temp_root / "quimera_tasks.db"
                 self.decisions_log = temp_root / "decisions.jsonl"
+                self.env_file = temp_root / ".env"
+                self.tmp = FakeTmp()
 
             def migrate_from_legacy(self, cwd):
                 return []
-
-            def render_log_path_for(self, session_id):
-                return temp_root / f"render-{session_id}.jsonl"
-
-            def render_ansi_path_for(self, session_id):
-                return temp_root / f"render-{session_id}.ansi"
 
         class FakeContextManager:
             SUMMARY_MARKER = "## Resumo da última sessão"
@@ -1531,6 +1549,16 @@ class ProtocolTests(unittest.TestCase):
     def test_app_truncates_restored_history_to_hard_limit(self):
         temp_root = Path(self.enterContext(tempfile.TemporaryDirectory()))
 
+        class FakeTmp:
+            def render_log_path_for(self, session_id):
+                return temp_root / f"render-{session_id}.jsonl"
+
+            def render_ansi_path_for(self, session_id):
+                return temp_root / f"render-{session_id}.ansi"
+
+            def metrics_path_for(self, session_id):
+                return temp_root / f"metrics-{session_id}.jsonl"
+
         class FakeWorkspace:
             def __init__(self, cwd):
                 self.root = temp_root
@@ -1543,15 +1571,11 @@ class ProtocolTests(unittest.TestCase):
                 self.state_dir = temp_root / "quimera_state"
                 self.tasks_db = temp_root / "quimera_tasks.db"
                 self.decisions_log = temp_root / "decisions.jsonl"
+                self.env_file = temp_root / ".env"
+                self.tmp = FakeTmp()
 
             def migrate_from_legacy(self, cwd):
                 return []
-
-            def render_log_path_for(self, session_id):
-                return temp_root / f"render-{session_id}.jsonl"
-
-            def render_ansi_path_for(self, session_id):
-                return temp_root / f"render-{session_id}.ansi"
 
         class FakeContextManager:
             SUMMARY_MARKER = "## Resumo da última sessão"

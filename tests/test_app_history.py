@@ -135,7 +135,7 @@ class TestAppHistory(unittest.TestCase):
         self._setup_common_mocks(mock_storage, mock_context)
         mock_input_gate.return_value = MagicMock()
 
-        render_logs_dir = Path("/tmp/quimera_test_workspace/data/logs/render")
+        tmp_render_logs_dir = Path("/tmp/quimera_test_workspace/data/logs/render")
         audit_instance = MagicMock()
         mock_audit_logger.return_value = audit_instance
 
@@ -144,13 +144,14 @@ class TestAppHistory(unittest.TestCase):
             mock_ws_instance.history_file = self.history_file
             mock_ws_instance.root = Path("/tmp/quimera_test_workspace")
             mock_ws_instance.tasks_db = Path("/tmp/quimera_test_tasks.db")
-            mock_ws_instance.render_logs_dir = render_logs_dir
-            mock_ws_instance.render_log_path_for.side_effect = (
-                lambda session_id: render_logs_dir / f"render-{session_id}.jsonl"
+            mock_tmp = MagicMock()
+            mock_tmp.render_log_path_for.side_effect = (
+                lambda session_id: tmp_render_logs_dir / f"render-{session_id}.jsonl"
             )
-            mock_ws_instance.render_ansi_path_for.side_effect = (
-                lambda session_id: render_logs_dir / f"render-{session_id}.ansi"
+            mock_tmp.render_ansi_path_for.side_effect = (
+                lambda session_id: tmp_render_logs_dir / f"render-{session_id}.ansi"
             )
+            mock_ws_instance.tmp = mock_tmp
             mock_ws.return_value = mock_ws_instance
 
             with patch("quimera.app.core.create_executor"):
@@ -159,8 +160,8 @@ class TestAppHistory(unittest.TestCase):
                 QuimeraApp(self.tmp_cwd, debug=True)
 
         mock_audit_logger.assert_called_once_with(
-            render_logs_dir / "render-test.jsonl",
-            render_logs_dir / "render-test.ansi",
+            tmp_render_logs_dir / "render-test.jsonl",
+            tmp_render_logs_dir / "render-test.ansi",
         )
         _, kwargs = mock_term.call_args
         self.assertIs(kwargs["audit_logger"], audit_instance)

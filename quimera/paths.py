@@ -2,9 +2,11 @@
 import tempfile
 from pathlib import Path
 
+TMP_BASE_DIR = Path(tempfile.gettempdir()) / "quimera"
+
 CANDIDATE_DIRS = [
     Path.home() / ".local" / "share" / "quimera",
-    Path(tempfile.gettempdir()) / "quimera",
+    TMP_BASE_DIR,
 ]
 
 
