@@ -21,6 +21,7 @@ _UNICODE_CONTROL_RE = re.compile(
 )
 _RENDER_MODES = {"plain", "markdown", "auto"}
 _PREVIEW_LIMIT = 160
+_SEQUENTIAL_STATUS_REFRESH_PER_SECOND = 4
 
 
 def strip_ansi(text: str) -> str:
@@ -1083,6 +1084,9 @@ class TerminalRenderer:
                 return _NullStatus()
 
             # Caso sequencial sem Live ativo: usa o spinner padrão do Rich
-            return self._console.status(initial)
+            return self._console.status(
+                initial,
+                refresh_per_second=_SEQUENTIAL_STATUS_REFRESH_PER_SECOND,
+            )
 
         return _NullStatus()

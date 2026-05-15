@@ -351,6 +351,10 @@ class TestTerminalRenderer:
         mock_renderer._console.status.return_value = mock_status
         with mock_renderer.running_status("Processing...") as ctx:
             assert ctx is not None
+        mock_renderer._console.status.assert_called_once_with(
+            "Processing...",
+            refresh_per_second=4,
+        )
 
     def test_running_status_in_live_mode(self, mock_renderer):
         """Test running_status in live mode returns proxy."""

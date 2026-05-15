@@ -315,13 +315,21 @@ class AgentClient:
                     self.renderer.show_plain(f"→ {cmd[0]} iniciando...", agent=agent)
 
                 with status_cm as status:
+                    _last_status_text = [None]
+
+                    def _update_status_once(text: str) -> None:
+                        if status is None or text == _last_status_text[0]:
+                            return
+                        status.update(text)
+                        _last_status_text[0] = text
+
                     def _on_item(stream_type, line):
                         nonlocal stderr_lines_shown
                         if stream_type == "stderr" and _is_rate_limit_signal(line):
                             runner.notify_rate_limit()
                         if status is not None:
                             _lbl = self._spy_output_presenter.compose_status_label(cmd[0])
-                            status.update(f"[dim]{_lbl}... {_elapsed[0]}s[/dim]")
+                            _update_status_once(f"[dim]{_lbl}... {_elapsed[0]}s[/dim]")
                         cleaned = _strip_spinner(line.rstrip("\n"))
                         if not cleaned.strip():
                             return
@@ -349,7 +357,7 @@ class AgentClient:
                         _elapsed[0] = elapsed
                         if status is not None:
                             _lbl = self._spy_output_presenter.compose_status_label(cmd[0])
-                            status.update(f"[dim]{_lbl}... {elapsed}s[/dim]")
+                            _update_status_once(f"[dim]{_lbl}... {elapsed}s[/dim]")
 
                     termination = runner.watch(log_queue=log_queue, on_item=_on_item, on_tick=_on_tick)
                     self.rate_limit_detected = runner.rate_limit_detected

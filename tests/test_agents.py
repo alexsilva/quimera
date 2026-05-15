@@ -13,6 +13,7 @@ from quimera.agents import (
     _strip_spinner,
     _should_ignore_stderr_line,
 )
+from quimera.agents.process_runner import ProcessRunner
 from quimera.constants import MAX_STDERR_LINES, Visibility
 from quimera.plugins import get as get_plugin
 from quimera.plugins.base import CliConnection
@@ -1696,3 +1697,33 @@ def test_task_cancellation_after_review(renderer):
         pass
 
     assert app.agent_client._user_cancelled
+
+
+def test_process_runner_watch_emits_tick_only_on_elapsed_change():
+    proc = MagicMock()
+    stdout_thread = MagicMock()
+    stderr_thread = MagicMock()
+    stdout_thread.is_alive.side_effect = [True, True, True, False]
+    stderr_thread.is_alive.return_value = False
+    runner = ProcessRunner(
+        proc,
+        stdout_thread,
+        stderr_thread,
+        {"stderr": []},
+        threading.Event(),
+        timeout=None,
+    )
+
+    ticks = []
+    with patch("time.sleep"):
+        with patch("time.time") as mock_time:
+            mock_time.side_effect = [
+                100.0,
+                100.2, 100.2,
+                100.4, 100.4,
+                101.1, 101.1,
+            ]
+            result = runner.watch(on_tick=ticks.append)
+
+    assert result == ProcessRunner.COMPLETED
+    assert ticks == [0, 1]

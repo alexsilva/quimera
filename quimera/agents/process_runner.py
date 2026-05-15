@@ -90,6 +90,7 @@ class ProcessRunner:
         """
         start_time = time.time()
         elapsed = 0
+        last_tick_elapsed = None
         self._rate_checked = 0
 
         def _threads_active() -> bool:
@@ -122,8 +123,9 @@ class ProcessRunner:
             time.sleep(0.2)
             elapsed = int(time.time() - start_time)
 
-            if on_tick is not None:
+            if on_tick is not None and elapsed != last_tick_elapsed:
                 on_tick(elapsed)
+                last_tick_elapsed = elapsed
 
             reason = self._check_timeout(elapsed, time.time())
             if reason is not None:
