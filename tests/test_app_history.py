@@ -13,8 +13,9 @@ class TestAppHistory(unittest.TestCase):
         self.history_file = Path("/tmp/quimera_test_workspace/history")
 
     def _setup_common_mocks(self, mock_storage, mock_context):
-        mock_storage.get_history_file.return_value = Path("test.json")
-        mock_storage.load_last_session.return_value = {"messages": [], "shared_state": {}}
+        mock_storage.return_value.get_history_file.return_value = Path("test.json")
+        mock_storage.return_value.session_id = "test"
+        mock_storage.return_value.load_last_session.return_value = {"messages": [], "shared_state": {}}
         mock_context.SUMMARY_MARKER = "SUMMARY"
         mock_context.load_session.return_value = ""
 
@@ -144,6 +145,12 @@ class TestAppHistory(unittest.TestCase):
             mock_ws_instance.root = Path("/tmp/quimera_test_workspace")
             mock_ws_instance.tasks_db = Path("/tmp/quimera_test_tasks.db")
             mock_ws_instance.render_logs_dir = render_logs_dir
+            mock_ws_instance.render_log_path_for.side_effect = (
+                lambda session_id: render_logs_dir / f"render-{session_id}.jsonl"
+            )
+            mock_ws_instance.render_ansi_path_for.side_effect = (
+                lambda session_id: render_logs_dir / f"render-{session_id}.ansi"
+            )
             mock_ws.return_value = mock_ws_instance
 
             with patch("quimera.app.core.create_executor"):
@@ -151,7 +158,10 @@ class TestAppHistory(unittest.TestCase):
 
                 QuimeraApp(self.tmp_cwd, debug=True)
 
-        mock_audit_logger.assert_called_once_with(render_logs_dir)
+        mock_audit_logger.assert_called_once_with(
+            render_logs_dir / "render-test.jsonl",
+            render_logs_dir / "render-test.ansi",
+        )
         _, kwargs = mock_term.call_args
         self.assertIs(kwargs["audit_logger"], audit_instance)
 

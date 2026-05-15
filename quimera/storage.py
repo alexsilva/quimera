@@ -12,16 +12,16 @@ _SESSION_TIMESTAMP_RE = re.compile(r"sessao-(\d{4}-\d{2}-\d{2}-\d{6})\.json$")
 class SessionStorage:
     """Centraliza logs textuais e snapshots JSON de uma sessão."""
 
-    def __init__(self, logs_dir: Path, renderer):
+    def __init__(self, logs_dir: Path):
         """Inicializa uma instância de SessionStorage."""
-        self.renderer = renderer
         self._pending_restore_notice = None
         now = datetime.now()
         date_str = now.strftime("%Y-%m-%d")
+        self.session_id = f"sessao-{now.strftime('%Y-%m-%d-%H%M%S')}"
         self.session_dir = logs_dir / date_str
         self.session_dir.mkdir(parents=True, exist_ok=True)
         self.log_file = self.session_dir / f"sessao-{date_str}.txt"
-        self.history_file = self.session_dir / f"sessao-{now.strftime('%Y-%m-%d-%H%M%S')}.json"
+        self.history_file = self.session_dir / f"{self.session_id}.json"
         self._logs_dir = logs_dir
 
     def get_log_file(self):

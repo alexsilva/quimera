@@ -127,6 +127,14 @@ class Workspace:
         """Diretório de auditoria de renderização."""
         return self._root / "data" / "logs" / "render"
 
+    def render_log_path_for(self, session_id: str) -> Path:
+        """Arquivo JSONL de eventos de renderização para uma sessão."""
+        return self.render_logs_dir / f"render-{session_id}.jsonl"
+
+    def render_ansi_path_for(self, session_id: str) -> Path:
+        """Arquivo ANSI bruto de renderização para uma sessão."""
+        return self.render_logs_dir / f"render-{session_id}.ansi"
+
     @property
     def render_log_path(self) -> Path:
         """Arquivo JSONL de eventos de renderização."""

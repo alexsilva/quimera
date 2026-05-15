@@ -11,14 +11,6 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from quimera.storage import SessionStorage
 
 
-class DummyRenderer:
-    def __init__(self):
-        self.system_messages = []
-
-    def show_system(self, message):
-        self.system_messages.append(message)
-
-
 class SessionStorageTests(unittest.TestCase):
     def test_load_last_session_defers_restore_notice_until_consumed(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -37,13 +29,11 @@ class SessionStorageTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            renderer = DummyRenderer()
-            storage = SessionStorage(logs_dir, renderer)
+            storage = SessionStorage(logs_dir)
 
             restored = storage.load_last_session()
 
             self.assertEqual(restored["messages"], [{"role": "human", "content": "oi"}])
-            self.assertEqual(renderer.system_messages, [])
             notice = storage.pop_restore_notice()
             self.assertIn("[memória] histórico restaurado de", notice)
             self.assertIsNone(storage.pop_restore_notice())
@@ -65,7 +55,7 @@ class SessionStorageTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            storage = SessionStorage(logs_dir, DummyRenderer())
+            storage = SessionStorage(logs_dir)
 
             restored = storage.load_last_session()
 
@@ -90,7 +80,7 @@ class SessionStorageTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            storage = SessionStorage(logs_dir, DummyRenderer())
+            storage = SessionStorage(logs_dir)
 
             restored = storage.load_last_session()
 
@@ -114,7 +104,7 @@ class SessionStorageTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            storage = SessionStorage(logs_dir, DummyRenderer())
+            storage = SessionStorage(logs_dir)
 
             restored = storage.load_last_session()
 

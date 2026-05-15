@@ -94,4 +94,12 @@ class TestWorkspace(unittest.TestCase):
                 self.assertEqual(ws.render_logs_dir, ws.root / "data" / "logs" / "render")
                 self.assertEqual(ws.render_log_path, ws.render_logs_dir / "render.jsonl")
                 self.assertEqual(ws.render_ansi_path, ws.render_logs_dir / "render.ansi")
+                self.assertEqual(
+                    ws.render_log_path_for("sessao-2026-05-14-225819"),
+                    ws.render_logs_dir / "render-sessao-2026-05-14-225819.jsonl",
+                )
+                self.assertEqual(
+                    ws.render_ansi_path_for("sessao-2026-05-14-225819"),
+                    ws.render_logs_dir / "render-sessao-2026-05-14-225819.ansi",
+                )
                 self.assertTrue(ws.render_logs_dir.exists())

@@ -24,15 +24,15 @@ def _json_safe(value: Any) -> Any:
 class RenderAuditLogger:
     """Grava eventos estruturados e o stream ANSI bruto de renderização."""
 
-    def __init__(self, log_dir: Path):
-        self.log_dir = Path(log_dir)
+    def __init__(self, events_path: Path, ansi_path: Path):
+        self.events_path = Path(events_path)
+        self.ansi_path = Path(ansi_path)
+        self.log_dir = self.events_path.parent
         self.log_dir.mkdir(parents=True, exist_ok=True)
-        self.events_path = self.log_dir / "render.jsonl"
-        self.ansi_path = self.log_dir / "render.ansi"
         self._lock = threading.RLock()
         self._closed = False
-        self._events_handle = self.events_path.open("a", encoding="utf-8")
-        self._ansi_handle = self.ansi_path.open("ab")
+        self._events_handle = self.events_path.open("w", encoding="utf-8")
+        self._ansi_handle = self.ansi_path.open("wb")
 
     def log_event(self, event: str, **payload: Any) -> None:
         record = {

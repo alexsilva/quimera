@@ -88,7 +88,13 @@ class QuimeraApp:
         self._plugin_registry = plugin_registry
         self.config = ConfigManager(self.workspace.config_file)
         _active_theme = theme if theme is not None else self.config.theme
-        render_audit_logger = RenderAuditLogger(self.workspace.render_logs_dir) if debug else None
+        self.storage = SessionStorage(self.workspace.logs_dir)
+        session_id = self.storage.session_id
+        render_log_path = self.workspace.render_log_path_for(session_id)
+        render_ansi_path = self.workspace.render_ansi_path_for(session_id)
+        render_audit_logger = (
+            RenderAuditLogger(render_log_path, render_ansi_path) if debug else None
+        )
         self.renderer = TerminalRenderer(
             theme=_active_theme,
             get_plugin_style=self._resolve_plugin_style,
@@ -134,8 +140,6 @@ class QuimeraApp:
             self.renderer,
             workspace=self.workspace,
         )
-        self.storage = SessionStorage(self.workspace.logs_dir, self.renderer)
-        session_id = self.storage.get_history_file().stem
         metrics_file = self.workspace.metrics_dir / f"{session_id}.jsonl" if debug else None
         self.agent_client = AgentClient(
             self.renderer,
@@ -236,8 +240,8 @@ class QuimeraApp:
             "current_dir": ".",
             "os_info": f"{platform.system()} {platform.release()}",
             "render_debug_active": debug,
-            "render_log_path": str(self.workspace.render_log_path) if debug else "",
-            "render_ansi_path": str(self.workspace.render_ansi_path) if debug else "",
+            "render_log_path": str(render_log_path) if debug else "",
+            "render_ansi_path": str(render_ansi_path) if debug else "",
         }
         self.prompt_builder = PromptBuilder(
             self.context_manager,
@@ -1040,5 +1044,8 @@ class QuimeraApp:
                 pass
             self.session_services.shutdown()
             self.agent_client.close()
+            renderer = getattr(self, "renderer", None)
+            if renderer is not None and hasattr(renderer, "close"):
+                renderer.close()
             if hasattr(self, "behavior_metrics"):
                 self.behavior_metrics._flush_if_dirty()

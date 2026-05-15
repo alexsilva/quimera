@@ -1365,6 +1365,12 @@ class ProtocolTests(unittest.TestCase):
             def migrate_from_legacy(self, cwd):
                 return []
 
+            def render_log_path_for(self, session_id):
+                return temp_root / f"render-{session_id}.jsonl"
+
+            def render_ansi_path_for(self, session_id):
+                return temp_root / f"render-{session_id}.ansi"
+
         class FakeContextManager:
             SUMMARY_MARKER = "## Resumo da última sessão"
 
@@ -1375,6 +1381,8 @@ class ProtocolTests(unittest.TestCase):
                 return "## Resumo da última sessão\n\nResumo anterior"
 
         class FakeSessionStorage:
+            session_id = "sessao-2026-03-27-123456"
+
             def __init__(self, *_args, **_kwargs):
                 pass
 
@@ -1425,6 +1433,12 @@ class ProtocolTests(unittest.TestCase):
             def migrate_from_legacy(self, cwd):
                 return []
 
+            def render_log_path_for(self, session_id):
+                return temp_root / f"render-{session_id}.jsonl"
+
+            def render_ansi_path_for(self, session_id):
+                return temp_root / f"render-{session_id}.ansi"
+
         class FakeContextManager:
             SUMMARY_MARKER = "## Resumo da última sessão"
 
@@ -1435,6 +1449,8 @@ class ProtocolTests(unittest.TestCase):
                 return ""
 
         class FakeSessionStorage:
+            session_id = "sessao-2026-03-27-123456"
+
             def __init__(self, *_args, **_kwargs):
                 pass
 
@@ -1474,6 +1490,12 @@ class ProtocolTests(unittest.TestCase):
             def migrate_from_legacy(self, cwd):
                 return []
 
+            def render_log_path_for(self, session_id):
+                return temp_root / f"render-{session_id}.jsonl"
+
+            def render_ansi_path_for(self, session_id):
+                return temp_root / f"render-{session_id}.ansi"
+
         class FakeContextManager:
             SUMMARY_MARKER = "## Resumo da última sessão"
 
@@ -1484,6 +1506,8 @@ class ProtocolTests(unittest.TestCase):
                 return ""
 
         class FakeSessionStorage:
+            session_id = "sessao-2026-03-27-123456"
+
             def __init__(self, *_args, **_kwargs):
                 pass
 
@@ -1523,6 +1547,12 @@ class ProtocolTests(unittest.TestCase):
             def migrate_from_legacy(self, cwd):
                 return []
 
+            def render_log_path_for(self, session_id):
+                return temp_root / f"render-{session_id}.jsonl"
+
+            def render_ansi_path_for(self, session_id):
+                return temp_root / f"render-{session_id}.ansi"
+
         class FakeContextManager:
             SUMMARY_MARKER = "## Resumo da última sessão"
 
@@ -1533,6 +1563,8 @@ class ProtocolTests(unittest.TestCase):
                 return ""
 
         class FakeSessionStorage:
+            session_id = "sessao-2026-03-27-123456"
+
             def __init__(self, *_args, **_kwargs):
                 pass
 
