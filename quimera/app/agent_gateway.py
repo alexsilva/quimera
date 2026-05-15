@@ -150,17 +150,6 @@ class AgentGateway:
         if _stream_buffer or result:
             with (output_lock if output_lock is not None else nullcontext()):
                 self._clear_prompt_line()
-                if result is not None:
-                    full_text = str(result)
-                else:
-                    parts = []
-                    for chunk in _stream_buffer:
-                        if isinstance(chunk, dict):
-                            parts.append(chunk.get("text", ""))
-                        else:
-                            parts.append(str(chunk))
-                    full_text = "".join(parts)
-                renderer.show_message(agent, full_text)
                 flush = getattr(renderer, "flush", None)
                 if callable(flush):
                     flush()

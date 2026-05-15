@@ -719,11 +719,12 @@ class TestCallAgentLowLevel:
             return "response"
         ll_app.agent_client.call = _call
         ds = AppDispatchServices(ll_app)
-        ds.call_agent_low_level("agent1")
-        ll_app.renderer.show_message.assert_called_once_with("agent1", "response")
+        result = ds.call_agent_low_level("agent1")
+        assert result == "response"
+        ll_app.renderer.show_message.assert_not_called()
 
     def test_stream_result_none_shows_buffered(self, ll_app):
-        """stream com result None ainda mostra o que foi bufferizado"""
+        """stream com result None — gateway não renderiza, caller faz"""
         def _call(agent, prompt, silent=False, on_text_chunk=None):
             if on_text_chunk:
                 on_text_chunk("hello")
@@ -732,7 +733,7 @@ class TestCallAgentLowLevel:
         ds = AppDispatchServices(ll_app)
         result = ds.call_agent_low_level("agent1")
         assert result is None
-        ll_app.renderer.show_message.assert_called_once_with("agent1", "hello")
+        ll_app.renderer.show_message.assert_not_called()
 
     def test_debug_prompt_metrics(self, ll_app):
         """debug_prompt_metrics=True chama log_prompt_metrics"""
