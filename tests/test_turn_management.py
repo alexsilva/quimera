@@ -49,6 +49,7 @@ def _make_app(active_agents=None):
     app.dispatch_services.call_agent = Mock(return_value="resposta")
     app.dispatch_services.print_response = Mock()
     app.chat_round_orchestrator = ChatRoundOrchestrator(app)
+    app._generate_handoff_id = lambda task, target: f"gen-{target}"
 
     return app
 
@@ -293,7 +294,7 @@ class TestSingleAgentPerTurn(unittest.TestCase):
         self.assertEqual(app.dispatch_services.call_agent.call_count, 1)
 
     def test_handoff_triggers_secondary_agent(self):
-        """[ROUTE:codex] no fluxo padrão ainda aciona o agente secundário."""
+        """Handoff JSON no fluxo padrão ainda aciona o agente secundário."""
         app = _make_app(active_agents=["claude", "codex"])
         app.parse_routing = Mock(return_value=("claude", "analisa", False))
 
@@ -468,7 +469,7 @@ class TestSingleAgentPerTurn(unittest.TestCase):
         app.show_system_message.assert_called_once_with("\nResponda para CLAUDE:\n")
 
     def test_handoff_without_body_continues_chain(self):
-        """Agente CLI que responde só com [ROUTE:x] task:... (sem body) não cai em fallback."""
+        """Agente que responde só com handoff JSON (sem body) não cai em fallback."""
         app = _make_app(active_agents=["claude", "codex", "opencode-qwen"])
         app.parse_routing = Mock(return_value=("claude", "analisa", False))
 
@@ -486,7 +487,7 @@ class TestSingleAgentPerTurn(unittest.TestCase):
             "handoff_id": "h2",
             "chain": ["claude"],
         }
-        # codex responde com apenas ROUTE (body=None) — sem texto, só handoff
+        # codex responde com apenas handoff (body=None) — sem texto, só delegação
         app.parse_response = Mock(side_effect=[
             ("resposta claude", "codex", first_handoff, False, False, None),
             (None, "opencode-qwen", second_handoff, False, False, "h1"),  # sem body
@@ -516,7 +517,7 @@ class TestSingleAgentPerTurn(unittest.TestCase):
             "handoff_id": "hx",
             "chain": [],
         }
-        # claude responde com [ROUTE:agente] onde 'agente' não está em active_agents
+        # claude responde com handoff para agente fora de active_agents
         app.parse_response = Mock(return_value=("resposta claude", "agente", handoff, False, False, None))
 
         QuimeraApp._do_process_chat_message(app, "mensagem")
@@ -525,6 +526,45 @@ class TestSingleAgentPerTurn(unittest.TestCase):
         self.assertEqual(app.dispatch_services.call_agent.call_count, 1)
         agents_called = [c[0][0] for c in app.dispatch_services.call_agent.call_args_list]
         self.assertEqual(agents_called, ["claude"])
+
+    def test_sequential_handoffs_accumulate_all_delegate_responses_for_synthesis(self):
+        """handoffs em sequência devem sintetizar com o resultado de todos os agentes delegados."""
+        app = _make_app(active_agents=["claude", "codex", "opencode-qwen"])
+        app.parse_routing = Mock(return_value=("claude", "analisa", False))
+
+        first_handoff = {
+            "task": "Revisar implementação",
+            "context": "contexto",
+            "expected": "resumo",
+            "handoff_id": "h1",
+            "chain": [],
+            "_pending_handoffs": [
+                {
+                    "route": "opencode-qwen",
+                    "content": "Validar edge cases",
+                    "metadata": {
+                        "context": "contexto 2",
+                        "expected": "resumo 2",
+                    },
+                    "handoff_id": "h2",
+                }
+            ],
+        }
+        app.parse_response = Mock(side_effect=[
+            (None, "codex", first_handoff, False, False, None),
+            ("resposta codex", None, None, False, False, "h1"),
+            ("resposta qwen", None, None, False, False, "h2"),
+            ("síntese final", None, None, False, False, None),
+        ])
+        app.dispatch_services.call_agent = Mock(side_effect=["r1", "r2", "r3", "r4"])
+
+        QuimeraApp._do_process_chat_message(app, "analisa")
+
+        calls = app.dispatch_services.call_agent.call_args_list
+        self.assertEqual([c[0][0] for c in calls], ["claude", "codex", "opencode-qwen", "claude"])
+        synthesis_handoff = calls[3][1]["handoff"]
+        self.assertIn("CODEX:\nresposta codex", synthesis_handoff)
+        self.assertIn("OPENCODE-QWEN:\nresposta qwen", synthesis_handoff)
 
     def test_consecutive_turns_route_to_different_agents(self):
         """Duas falas seguidas do humano podem ir para agentes diferentes (roteamento aleatório)."""

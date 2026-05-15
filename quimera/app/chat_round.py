@@ -32,6 +32,26 @@ class ChatRoundOrchestrator:
                 pass
         app.renderer.show_system(message)
 
+    @staticmethod
+    def _build_synthesis_payload(responses: list[tuple[str, str]]) -> tuple[str, str]:
+        if len(responses) == 1:
+            agent, response = responses[0]
+            return agent.upper(), response
+
+        parts = []
+        for agent, response in responses:
+            parts.append(f"{agent.upper()}:\n{response}")
+        return "AGENTES DELEGADOS", "\n\n".join(parts)
+
+    @staticmethod
+    def _copy_pending_handoffs(handoff: dict | None) -> list[dict]:
+        if not isinstance(handoff, dict):
+            return []
+        pending = handoff.get("_pending_handoffs", [])
+        if not isinstance(pending, list):
+            return []
+        return [dict(item) for item in pending if isinstance(item, dict)]
+
     def process(self, user):
         """Implementação real do processamento de mensagens do chat."""
         app = self.app
@@ -150,6 +170,7 @@ class ChatRoundOrchestrator:
         final_response = None
         final_target = None
         original_task = handoff.get("task") if isinstance(handoff, dict) else None
+        collected_responses: list[tuple[str, str]] = []
         max_hops = max(1, len(getattr(app, "active_agents", []) or []) * self.HANDOFF_MAX_HOPS_FACTOR)
         hops = 0
         failed_target = current_target
@@ -240,6 +261,7 @@ class ChatRoundOrchestrator:
             dispatch_services.print_response(current_target, secondary_response)
             if secondary_response is not None:
                 app.session_services.persist_message(current_target, secondary_response)
+                collected_responses.append((current_target, secondary_response))
 
             if not secondary_response and not (next_target and next_handoff):
                 fallback_response = None
@@ -285,6 +307,7 @@ class ChatRoundOrchestrator:
                     dispatch_services.print_response(fallback_agent, fallback_response)
                     if fallback_response is not None:
                         app.session_services.persist_message(fallback_agent, fallback_response)
+                        collected_responses.append((fallback_agent, fallback_response))
                     if fallback_response or (fallback_next_target and fallback_next_handoff):
                         fallback_target = fallback_agent
                         break
@@ -312,9 +335,37 @@ class ChatRoundOrchestrator:
                         if chain_agent not in propagated_chain:
                             propagated_chain.append(chain_agent)
                     next_handoff["chain"] = propagated_chain
+                    pending = self._copy_pending_handoffs(current_handoff)
+                    if pending:
+                        next_handoff["_pending_handoffs"] = pending
                 current_from = current_target
                 current_target = next_target
                 current_handoff = next_handoff
+                continue
+
+            pending_handoffs = self._copy_pending_handoffs(current_handoff)
+            if pending_handoffs:
+                next_item = pending_handoffs[0]
+                next_target = next_item["route"]
+                current_handoff = {
+                    "task": next_item["content"],
+                    "chain": [],
+                }
+                if isinstance(next_item.get("metadata"), dict):
+                    current_handoff.update(next_item["metadata"])
+                current_handoff["handoff_id"] = next_item.get("handoff_id") or app._generate_handoff_id(
+                    next_item["content"],
+                    next_target,
+                )
+                current_handoff["priority"] = current_handoff.get("priority", "normal")
+                if len(pending_handoffs) > 1:
+                    current_handoff["_pending_handoffs"] = pending_handoffs[1:]
+                current_from = first_agent
+                current_target = next_target
+                logger.info(
+                    "[HANDOFF] pending handoff: proceeding to %s after %s",
+                    next_target, current_from,
+                )
                 continue
 
             if secondary_response:
@@ -332,10 +383,11 @@ class ChatRoundOrchestrator:
             return
 
         if final_response and final_target:
+            synthesis_agent, synthesis_response = self._build_synthesis_payload(collected_responses or [(final_target, final_response)])
             synthesis_handoff = HANDOFF_SYNTHESIS_MSG.format(
-                agent=final_target.upper(),
+                agent=synthesis_agent,
                 task=original_task or current_handoff["task"],
-                response=final_response,
+                response=synthesis_response,
             )
             if hasattr(app, "behavior_metrics") and app.behavior_metrics:
                 app.behavior_metrics.record_synthesis(first_agent)

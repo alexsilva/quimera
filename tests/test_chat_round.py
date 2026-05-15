@@ -39,6 +39,7 @@ def _make_app(active_agents=None, threads=1):
 
     app.turn_manager = Mock()
     app.turn_manager.reset = Mock()
+    app._generate_handoff_id = lambda task, target: f"gen-{target}"
 
     app.agent_client = Mock()
     app.agent_client._user_cancelled = False

@@ -253,6 +253,39 @@ def test_handoff_prompt_uses_current_active_agents_for_route_candidates():
     assert "claude" not in prompt
 
 
+def test_prompt_includes_updated_handoff_contract_in_route_rules():
+    builder = PromptBuilder(
+        context_manager=_make_context_manager(""),
+        active_agents=["claude", "codex", "deepseek"],
+    )
+
+    prompt = builder.build(agent="codex", history=[{"role": "human", "content": "delegue"}])
+
+    assert '"handoffs"' in prompt
+    assert "_pending_handoffs" in prompt
+    assert "Não use `routes`, `_pending_handoffs` nem `[ROUTE:agente]`." in prompt
+    assert '"metadata":{"context":"...","expected":"..."}' in prompt
+
+
+def test_handoff_only_prompt_includes_updated_handoff_contract():
+    builder = PromptBuilder(
+        context_manager=_make_context_manager(""),
+        active_agents=["claude", "codex", "deepseek"],
+    )
+
+    prompt = builder.build(
+        agent="deepseek",
+        history=[],
+        handoff_only=True,
+        from_agent="codex",
+    )
+
+    assert '"handoffs"' in prompt
+    assert "_pending_handoffs" in prompt
+    assert "Handoff simples:" in prompt
+    assert "handoff em sequência com tarefas independentes:" in prompt
+
+
 def test_prompt_shared_state():
     builder = PromptBuilder(context_manager=_make_context_manager(""))
     history = [{"role": "human", "content": "test"}]
@@ -420,7 +453,7 @@ def test_collect_recent_facts_skips_diff_like_tool_output_claims():
 def test_collect_recent_facts_skips_protocol_control_markers():
     builder = PromptBuilder(context_manager=_make_context_manager(""))
     history = [
-        {"role": "codex", "content": "[ROUTE:claude] task: revisar testes"},
+        {"role": "codex", "content": '{"type": "handoff", "route": "claude", "content": "revisar testes"}'},
         {"role": "claude", "content": "[ACK:abc123] recebido"},
         {"role": "human", "content": "qual o próximo passo?"},
     ]

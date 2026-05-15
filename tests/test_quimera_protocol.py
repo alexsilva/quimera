@@ -298,8 +298,10 @@ class ProtocolTests(unittest.TestCase):
 
         response, target, message, extend, _, _ = app.parse_response(
             "Resposta visivel\n"
-            "[ROUTE:codex] task: Revise este argumento. | context: "
-            "Analisar risco no parser atual. | expected: 2 bullets objetivos"
+            '{"type": "handoff", "route": "codex", '
+            '"content": "Revise este argumento.", '
+            '"metadata": {"context": "Analisar risco no parser atual.", '
+            '"expected": "2 bullets objetivos"}}'
         )
 
         self.assertEqual(response, "Resposta visivel")
@@ -308,38 +310,39 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(message["context"], "Analisar risco no parser atual.")
         self.assertEqual(message["expected"], "2 bullets objetivos")
         self.assertEqual(message["priority"], "normal")
-        self.assertIn("handoff_id", message)
         self.assertFalse(extend)
 
-    def test_parse_response_extracts_multiline_handoff(self):
+    def test_parse_response_handoff_with_handoffs_array(self):
         app = QuimeraApp.__new__(QuimeraApp)
         app.protocol = AppProtocol(app)
         app.shared_state = {}
 
         response, target, message, extend, _, _ = app.parse_response(
             "Resposta visivel\n"
-            "[ROUTE:codex]\n"
-            "task: Revise este argumento.\n"
-            "context: Analisar risco no parser atual.\n"
-            "expected: 2 bullets objetivos"
+            '{"type": "handoff", "handoffs": ['
+            '{"route": "codex", "content": "Revise este argumento.", '
+            '"metadata": {"context": "Risco no parser atual.", "expected": "2 bullets"}}, '
+            '{"route": "claude", "content": "Valide a síntese."}'
+            ']}'
         )
 
         self.assertEqual(response, "Resposta visivel")
         self.assertEqual(target, AGENT_CODEX)
         self.assertEqual(message["task"], "Revise este argumento.")
-        self.assertEqual(message["context"], "Analisar risco no parser atual.")
-        self.assertEqual(message["expected"], "2 bullets objetivos")
-        self.assertEqual(message["priority"], "normal")
-        self.assertIn("handoff_id", message)
+        self.assertEqual(message["context"], "Risco no parser atual.")
+        self.assertEqual(message["expected"], "2 bullets")
+        self.assertEqual(message["_pending_handoffs"][0]["route"], "claude")
         self.assertFalse(extend)
 
-    def test_parse_response_ignores_invalid_handoff_payload(self):
+    def test_parse_response_invalid_handoff_missing_route(self):
+        """Handoff envelope without route/handoffs is rejected."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.protocol = AppProtocol(app)
         app.shared_state = {}
 
         response, target, message, extend, _, _ = app.parse_response(
-            "Resposta visivel\n[ROUTE:codex] Revise este argumento."
+            "Resposta visivel\n"
+            '{"type": "handoff", "content": "task: algo"}'
         )
 
         self.assertEqual(response, "Resposta visivel")
@@ -365,51 +368,6 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(result["context"], "Verificar performance")
         self.assertIsNone(result["expected"])
         self.assertEqual(result["priority"], "normal")
-
-    def test_parse_response_route_with_residual_text(self):
-        """ROUTE block is recognized but residual text causes handoff parse to fail."""
-        app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = AppProtocol(app)
-        app.shared_state = {}
-
-        # Residual text after the handoff payload prevents regex match
-        response, target, message, extend, _, _ = app.parse_response(
-            "Resposta visível\n[ROUTE:codex] task: Revise este código\nTexto residual após o bloco ROUTE."
-        )
-
-        self.assertEqual(response, "Resposta visível")
-        self.assertIsNone(target)
-        self.assertIsNone(message)
-        self.assertFalse(extend)
-
-    def test_parse_response_wildcard_route_captures_any_agent(self):
-        """ROUTE com active_agents=['*'] deve capturar qualquer agente."""
-        app = QuimeraApp.__new__(QuimeraApp)
-        app.active_agents = ["*"]
-        escaped_agents = [
-            r'[A-Za-z0-9_-]+' if agent == '*' else re.escape(agent)
-            for agent in app.active_agents
-        ]
-        app.protocol = AppProtocol(app)
-        app.protocol.ROUTE_PATTERN = re.compile(
-            rf"^\[ROUTE:({'|'.join(escaped_agents)})\]\s*([\s\S]+)\s*\Z",
-            re.MULTILINE
-        )
-        app.shared_state = {}
-
-        response, target, message, extend, _, _ = app.parse_response(
-            "Resposta visivel\n"
-            "[ROUTE:OPENCODE-GPT] task: Revise este código"
-        )
-
-        self.assertEqual(response, "Resposta visivel")
-        self.assertEqual(target, "OPENCODE-GPT")
-        self.assertEqual(message["task"], "Revise este código")
-        self.assertIsNone(message["context"])
-        self.assertIsNone(message["expected"])
-        self.assertEqual(message["priority"], "normal")
-        self.assertIn("handoff_id", message)
-        self.assertFalse(extend)
 
     def test_parse_response_extracts_state_update_before_debate(self):
         import threading
@@ -1091,7 +1049,8 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn("TASK:\nRevisar parser", prompt)
         self.assertIn("EXPECTED:\n1 parágrafo curto", prompt)
         self.assertNotIn("segundo agente nesta rodada", prompt)
-        self.assertIn("[ROUTE:agente]", prompt)
+        self.assertIn('"handoff"', prompt)
+        self.assertIn('"route": "agente"', prompt)
         self.assertNotIn("Não delegue de volta", prompt)
 
     def test_prompt_includes_handoff_when_present(self):
@@ -1850,9 +1809,11 @@ class ProtocolTests(unittest.TestCase):
         app.read_user_input = Mock(side_effect=["mensagem", "/exit"])
         responses = iter(
             [
-                "claude responde\n"
-                "[ROUTE:codex] task: Revise este argumento. | context: "
-                "Analisar risco no parser atual. | expected: 2 bullets objetivos",
+                'claude responde\n'
+                '{"type": "handoff", "route": "codex", '
+                '"content": "Revise este argumento.", '
+                '"metadata": {"context": "Analisar risco no parser atual.", '
+                '"expected": "2 bullets objetivos"}}',
                 "codex comenta",
                 "claude sintetiza",
             ]
@@ -1877,7 +1838,6 @@ class ProtocolTests(unittest.TestCase):
 
         self.assertEqual(len(calls), 3)
         self.assertEqual(calls[0], (AGENT_CLAUDE, True, None, False, None))
-        # Verifica campos essenciais do handoff (agora tem priority e handoff_id extras)
         handoff_to_codex = calls[1][2]
         self.assertEqual(handoff_to_codex["task"], "Revise este argumento.")
         self.assertEqual(handoff_to_codex["context"], "Analisar risco no parser atual.")
@@ -1923,9 +1883,11 @@ class ProtocolTests(unittest.TestCase):
         app.read_user_input = Mock(side_effect=["/claude mensagem", "/exit"])
         responses = iter(
             [
-                "claude responde\n"
-                "[ROUTE:codex] task: Revise este argumento. | context: "
-                "Analisar risco no parser atual. | expected: 2 bullets objetivos",
+                'claude responde\n'
+                '{"type": "handoff", "route": "codex", '
+                '"content": "Revise este argumento.", '
+                '"metadata": {"context": "Analisar risco no parser atual.", '
+                '"expected": "2 bullets objetivos"}}',
                 "codex comenta",
                 "claude sintetiza",
             ]
@@ -4631,7 +4593,8 @@ class PluginTests(unittest.TestCase):
         """Route rule deve estar inline no template principal."""
         main = prompt_template._load()
 
-        self.assertIn("[ROUTE:agente]", main)
+        self.assertIn("handoff", main)
+        self.assertIn("\"route\": \"agente\"", main)
         self.assertIn("task", main)
         self.assertIn("obrigatório", main)
         self.assertIn("não improvise", main)
@@ -4739,7 +4702,9 @@ class FallbackChainTests(unittest.TestCase):
         app.read_user_input = Mock(side_effect=["mensagem", "/exit"])
         responses = iter([
             # Claude responde e delega para codex
-            "claude responde\n[ROUTE:codex] task: Revise este código",
+            'claude responde\n'
+            '{"type": "handoff", "route": "codex", '
+            '"content": "Revise este código"}',
             # Codex NÃO responde (None)
             None,
             # Fallback: qwen responde
@@ -4962,7 +4927,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         self.assertEqual(claude_metrics["responses_total"], 4)
 
     def test_behavior_metrics_tracks_invalid_handoff(self):
-        """Handoff inválido deve ser registrado no tracker."""
+        """Handoff inválido (sem route/handoffs) não deve crashar nem gerar target."""
         from quimera.metrics import BehaviorMetricsTracker
 
         app = QuimeraApp.__new__(QuimeraApp)
@@ -4970,16 +4935,14 @@ class MetricsFeedbackTests(unittest.TestCase):
         app.shared_state = {}
         app.behavior_metrics = BehaviorMetricsTracker()
 
-        # Simula resposta com handoff inválido
+        # Texto sem envelope JSON não é mais detectado como handoff
         response, target, handoff, extend, needs_input, ack_id = app.parse_response(
-            "Resposta visivel\n[ROUTE:codex] texto sem formato válido"
+            "Resposta visivel\nsem formato de handoff válido"
         )
 
         self.assertIsNone(target)
         self.assertIsNone(handoff)
-        # O tracker deve ter registrado o handoff inválido
-        claude_summary = app.behavior_metrics.get_agent_summary("codex")
-        self.assertGreaterEqual(claude_summary["handoffs_sent"], 0)
+        self.assertEqual(response, "Resposta visivel\nsem formato de handoff válido")
 
     def test_route_rule_is_concise(self):
         """Route rule deve estar inline no template e ser conciso."""
@@ -5492,52 +5455,30 @@ class AppProtocolDirectTests(unittest.TestCase):
         self.assertTrue(needs_input)
         self.assertNotIn(NEEDS_INPUT_MARKER, response)
 
-    def test_parse_response_invalid_handoff_increments_session_state(self):
-        session_state = {"handoff_invalid_count": 0}
-        app = self._make_app(session_state=session_state)
-        app.behavior_metrics = None
-        proto = AppProtocol(app)
-        # ROUTE com payload inválido → handoff_invalid_count sobe
-        response, target, handoff, _, _, _ = proto.parse_response(
-            "[ROUTE:codex] texto sem task keyword válido\nline2\n"
-        )
-        self.assertIsNone(target)
-        self.assertIsNone(handoff)
-        self.assertEqual(session_state["handoff_invalid_count"], 1)
-
-    def test_parse_response_invalid_handoff_calls_behavior_metrics(self):
-        session_state = {"handoff_invalid_count": 0}
-        app = self._make_app(session_state=session_state)
-        app.behavior_metrics = Mock()
-        proto = AppProtocol(app)
-        proto.parse_response("[ROUTE:codex] texto sem task keyword válido\nline2\n")
-        app.behavior_metrics.record_handoff_sent.assert_called_once_with("codex", is_invalid=True)
-
-    def test_parse_response_invalid_handoff_session_state_key_error_is_swallowed(self):
-        # Exercita o except KeyError: pass (linhas 184-185) no bloco de contagem de handoff inválido
-        class _RaisingDict(dict):
-            def __setitem__(self, key, value):
-                raise KeyError(key)
-
-        session_state = _RaisingDict()
-        dict.__setitem__(session_state, "handoff_invalid_count", 0)  # inicializa sem usar __setitem__
-
-        app = self._make_app(session_state=session_state)
-        app.behavior_metrics = None
-        proto = AppProtocol(app)
-        # Não deve levantar exceção
-        proto.parse_response("[ROUTE:codex] texto sem task keyword\nline2\n")
-
-    def test_parse_response_returns_none_when_route_consumes_all(self):
+    def test_parse_response_json_envelope_no_response_content(self):
+        """Envelope JSON puro de handoff não vaza content como resposta visível."""
         app = self._make_app()
         proto = AppProtocol(app)
-        # ROUTE que consome a resposta inteira → response virou None, mas handoff
-        # válido deve ser preservado (não cai em CHAT_FAILOVER).
-        # Se o payload for inválido (sem task), aí sim retorna None tuple.
-        result = proto.parse_response("[ROUTE:codex] task: fazer algo")
-        self.assertIsNone(result[0])  # response=None
-        self.assertEqual(result[1], "codex")  # route_target preservado
-        self.assertIsNotNone(result[2])  # handoff válido
+        result = proto.parse_response(
+            '{"type": "handoff", "route": "codex", "content": "task: fazer algo"}'
+        )
+        self.assertIsNone(result[0])
+        self.assertEqual(result[1], "codex")
+        self.assertIsNotNone(result[2])
+
+    def test_parse_response_json_envelope_handoffs_array_no_surrounding_text(self):
+        """Envelope JSON com handoffs[] e sem texto ao redor."""
+        app = self._make_app()
+        proto = AppProtocol(app)
+        result = proto.parse_response(
+            '{"type": "handoff", "handoffs": ['
+            '{"route": "codex", "content": "task: fazer algo"}, '
+            '{"route": "claude", "content": "task: validar"}'
+            ']}'
+        )
+        self.assertIsNone(result[0])
+        self.assertEqual(result[1], "codex")
+        self.assertEqual(result[2]["_pending_handoffs"][0]["route"], "claude")
 
 
     # --- ProtocolEnvelope dataclass ---
@@ -5666,7 +5607,7 @@ class AppProtocolDirectTests(unittest.TestCase):
         self.assertIsNotNone(handoff)
         self.assertEqual(handoff["task"], "task: refactor")
         self.assertEqual(handoff["chain"], [])
-        self.assertEqual(response, "task: refactor")
+        self.assertIsNone(response)
         self.assertFalse(extend)
         self.assertFalse(needs_input)
         self.assertIsNone(ack_id)
@@ -5689,18 +5630,6 @@ class AppProtocolDirectTests(unittest.TestCase):
         self.assertEqual(response, "done")
         self.assertIsNone(route_target)
 
-    def test_parse_response_json_envelope_then_fallback(self):
-        app = self._make_app()
-        proto = AppProtocol(app)
-        response, route_target, handoff, extend, needs_input, ack_id = (
-            proto.parse_response("[ROUTE:codex] task: do something")
-        )
-        self.assertIsNotNone(handoff)
-        self.assertEqual(route_target, "codex")
-        self.assertIsNone(response)
-
-    # --- Gap 1: texto antes do envelope JSON ---
-
     def test_parse_envelope_text_before_json_returns_none(self):
         """parse_envelope retorna None se há texto antes do JSON."""
         text = 'aqui\n{"type": "handoff", "content": "task: refactor", "route": "codex"}'
@@ -5713,7 +5642,7 @@ class AppProtocolDirectTests(unittest.TestCase):
         result = AppProtocol.parse_envelope(text)
         self.assertIsNone(result)
 
-    def test_parse_response_text_before_json_envelope_fallsback_to_regex(self):
+    def test_parse_response_embedded_envelope_with_text_before(self):
         """Texto antes de envelope JSON — parser encontra envelope embutido."""
         text = (
             'Aqui está minha análise\n'
@@ -5732,11 +5661,14 @@ class AppProtocolDirectTests(unittest.TestCase):
         self.assertFalse(extend)
         self.assertFalse(needs_input)
 
-    def test_parse_response_partial_json_before_fallsback(self):
-        """Texto que começa com { mas não é JSON válido cai para fallback regex."""
+    def test_parse_response_embedded_envelope_with_handoffs(self):
+        """Envelope JSON com handoffs[] embutido em texto."""
         text = (
-            '{"not valid json" aqui esta\n'
-            '[ROUTE:gemini] task: analyze this'
+            'Análise\n'
+            '{"type": "handoff", "handoffs": ['
+            '{"route": "gemini", "content": "task: analyze this"}, '
+            '{"route": "codex", "content": "task: validate this"}'
+            ']}'
         )
         app = self._make_app()
         proto = AppProtocol(app)
@@ -5745,7 +5677,9 @@ class AppProtocolDirectTests(unittest.TestCase):
         )
         self.assertEqual(route_target, "gemini")
         self.assertIsNotNone(handoff)
-        self.assertEqual(handoff["task"], "analyze this")
+        self.assertEqual(handoff["task"], "task: analyze this")
+        self.assertEqual(handoff["_pending_handoffs"][0]["route"], "codex")
+        self.assertEqual(response, "Análise")
 
     # --- Embedded envelope tests ---
 
@@ -5869,7 +5803,7 @@ class AppProtocolDirectTests(unittest.TestCase):
         )
         self.assertIsNone(route_target)
         self.assertIsNone(handoff)
-        self.assertEqual(response, "")
+        self.assertIsNone(response)
 
     def test_parse_response_json_envelope_whitespace_content_handoff(self):
         """Handoff envelope com content só whitespace é rejeitado."""
@@ -5880,7 +5814,106 @@ class AppProtocolDirectTests(unittest.TestCase):
         )
         self.assertIsNone(route_target)
         self.assertIsNone(handoff)
-        self.assertEqual(response, "   ")
+        self.assertIsNone(response)
+
+    # --- ProtocolEnvelope com handoffs ---
+
+    def test_protocol_envelope_with_handoffs_field(self):
+        env = ProtocolEnvelope(
+            type="handoff",
+            content="",
+            handoffs=[
+                {"route": "codex", "content": "task: multi"},
+                {"route": "claude", "content": "task: review"},
+            ],
+        )
+        self.assertEqual(env.type, "handoff")
+        self.assertEqual(env.handoffs[0]["route"], "codex")
+        self.assertIsNone(env.route)
+
+    def test_parse_envelope_with_handoffs_array(self):
+        env = AppProtocol.parse_envelope(
+            '{"type": "handoff", "handoffs": ['
+            '{"route": "codex", "content": "task: refactor"}, '
+            '{"route": "claude", "content": "task: review"}'
+            ']}'
+        )
+        self.assertIsInstance(env, ProtocolEnvelope)
+        self.assertEqual(env.handoffs[0]["route"], "codex")
+        self.assertEqual(env.handoffs[1]["route"], "claude")
+        self.assertIsNone(env.route)
+
+    def test_parse_envelope_ignores_invalid_handoff_items(self):
+        """Itens inválidos em handoffs[] não entram no envelope normalizado."""
+        env = AppProtocol.parse_envelope(
+            '{"type": "handoff", "handoffs": ['
+            '{"route": "codex", "content": "task"}, '
+            '{"route": 123, "content": "ignorar"}, '
+            '{"route": "claude"}'
+            ']}'
+        )
+        self.assertEqual(env.handoffs, [{"route": "codex", "content": "task"}])
+
+    def test_validate_handoff_envelope_with_handoffs(self):
+        env = ProtocolEnvelope(
+            type="handoff",
+            content="",
+            handoffs=[
+                {"route": "codex", "content": "task: multi"},
+                {"route": "claude", "content": "task: review"},
+            ],
+        )
+        is_valid, msg = AppProtocol.validate_handoff_envelope(env)
+        self.assertTrue(is_valid)
+        self.assertEqual(msg, "")
+
+    def test_validate_handoff_envelope_missing_route_and_handoffs(self):
+        env = ProtocolEnvelope(type="handoff", content="task: something")
+        is_valid, msg = AppProtocol.validate_handoff_envelope(env)
+        self.assertFalse(is_valid)
+        self.assertIn("missing 'route'", msg)
+
+    def test_parse_response_handoffs_array_single_item_has_no_pending(self):
+        """handoffs com 1 item não cria _pending_handoffs."""
+        app = self._make_app()
+        proto = AppProtocol(app)
+        response, target, handoff, _, _, _ = proto.parse_response(
+            '{"type": "handoff", "handoffs": [{"route": "codex", "content": "task: single target"}]}'
+        )
+        self.assertIsNone(response)
+        self.assertEqual(target, "codex")
+        self.assertNotIn("_pending_handoffs", handoff)
+
+    def test_parse_response_handoffs_rejected_empty_content(self):
+        """handoffs + content vazio — rejeitado."""
+        app = self._make_app()
+        proto = AppProtocol(app)
+        response, target, handoff, _, _, _ = proto.parse_response(
+            '{"type": "handoff", "handoffs": [{"route": "codex", "content": ""}]}'
+        )
+        self.assertIsNone(target)
+        self.assertIsNone(handoff)
+
+    def test_parse_response_rejects_legacy_routes_field(self):
+        """type=handoff com routes legado é rejeitado."""
+        app = self._make_app()
+        proto = AppProtocol(app)
+        response, target, handoff, _, _, _ = proto.parse_response(
+            '{"type": "handoff", "routes": ["codex"], "content": "task: something"}'
+        )
+        self.assertIsNone(target)
+        self.assertIsNone(handoff)
+        self.assertIsNone(response)
+
+    def test_parse_response_rejected_missing_route_and_handoffs_value(self):
+        """type=handoff sem route e sem handoffs — rejeitado."""
+        app = self._make_app()
+        proto = AppProtocol(app)
+        response, target, handoff, _, _, _ = proto.parse_response(
+            '{"type": "handoff", "content": "task: something"}'
+        )
+        self.assertIsNone(target)
+        self.assertIsNone(handoff)
 
 
 if __name__ == "__main__":

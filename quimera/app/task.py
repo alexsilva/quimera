@@ -296,6 +296,8 @@ class AppTaskServices:
 
     def _get_background_tool_executor(self) -> ToolExecutor:
         if self._background_tool_executor is None:
+            if not hasattr(self.app, "workspace"):
+                return getattr(getattr(self.app, "dispatch_services", None), "tool_executor", None)
             self._background_tool_executor = self.build_tool_executor(
                 require_approval_for_mutations=not getattr(self.app, "auto_approve_mutations", False),
                 register_as_primary=False,
@@ -307,6 +309,9 @@ class AppTaskServices:
             return self._background_dispatch_services
 
         app = self.app
+        if not hasattr(app, "renderer") or not hasattr(app, "workspace"):
+            return getattr(app, "dispatch_services")
+
         chat_agent_client = getattr(app, "agent_client", None)
         background_timeout = getattr(chat_agent_client, "timeout", None)
         if background_timeout is None or background_timeout <= 0:

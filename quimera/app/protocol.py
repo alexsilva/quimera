@@ -5,7 +5,7 @@ import re
 import time
 from dataclasses import dataclass
 
-from ..constants import EXTEND_MARKER, NEEDS_INPUT_MARKER, ROUTE_PREFIX, STATE_UPDATE_START
+from ..constants import EXTEND_MARKER, NEEDS_INPUT_MARKER, STATE_UPDATE_START
 from ..shared_state import is_agent_state_key, normalize_state_key, validate_agent_state_value
 from . import logger
 
@@ -15,6 +15,8 @@ class ProtocolEnvelope:
     type: str
     content: str
     route: str | None = None
+    handoffs: list[dict] | None = None
+    legacy_routes_present: bool = False
     state_updates: dict | None = None
     metadata: dict | None = None
     handoff_id: str | None = None
@@ -30,9 +32,9 @@ class AppProtocol:
     STATE_UPDATE_PATTERN = re.compile(
         r"\[STATE_UPDATE\](.*?)\[/STATE_UPDATE\]", re.DOTALL
     )
-    ROUTE_PATTERN = re.compile(r"\[ROUTE:([A-Za-z0-9_-]+)\]\s*([\s\S]+)", re.M | re.I)
     ACK_PATTERN = re.compile(r"^\s*\[ACK:([A-Za-z0-9]+)\]\s*", re.M)
     PAYLOAD_FIELD_RE = re.compile(r"^\s*(task|context|expected)\s*:", re.IGNORECASE)
+    PROTOCOL_ENVELOPE_TYPES = ('"type": "handoff"', '"type": "state_update"', '"type": "ack"')
 
     def __init__(self, app=None, decisions_log_path=None) -> None:
         """Inicializa uma instância de AppProtocol."""
@@ -150,10 +152,37 @@ class AppProtocol:
             return None
         if not isinstance(data, dict) or "type" not in data:
             return None
+        handoffs_raw = data.get("handoffs")
+        handoffs = None
+        if isinstance(handoffs_raw, list):
+            handoffs = []
+            for item in handoffs_raw:
+                if not isinstance(item, dict):
+                    continue
+                route = item.get("route")
+                content = item.get("content")
+                if not isinstance(route, str) or not isinstance(content, str):
+                    continue
+                route = route.strip()
+                content = content.strip()
+                if not route or not content:
+                    continue
+                normalized = {
+                    "route": route,
+                    "content": content,
+                }
+                if isinstance(item.get("metadata"), dict):
+                    normalized["metadata"] = item["metadata"]
+                if isinstance(item.get("handoff_id"), str) and item["handoff_id"].strip():
+                    normalized["handoff_id"] = item["handoff_id"].strip()
+                handoffs.append(normalized)
+
         return ProtocolEnvelope(
             type=str(data["type"]),
             content=str(data.get("content", "")),
             route=str(data["route"]) if data.get("route") else None,
+            handoffs=handoffs,
+            legacy_routes_present="routes" in data,
             state_updates=data.get("state_updates"),
             metadata=data.get("metadata"),
             handoff_id=str(data["handoff_id"]) if data.get("handoff_id") else None,
@@ -167,11 +196,27 @@ class AppProtocol:
             return False, "not a ProtocolEnvelope"
         if envelope.type != "handoff":
             return False, f"expected type='handoff', got '{envelope.type}'"
+        if envelope.handoffs:
+            for item in envelope.handoffs:
+                if not item.get("route"):
+                    return False, "handoff item missing 'route' target"
+                if not item.get("content") or not item["content"].strip():
+                    return False, "handoff item missing 'content' (task description)"
+            return True, ""
         if not envelope.route:
             return False, "handoff missing 'route' target"
         if not envelope.content or not envelope.content.strip():
             return False, "handoff missing 'content' (task description)"
         return True, ""
+
+    def _build_handoff_message(self, route, content, metadata=None, handoff_id=None):
+        handoff = {"task": content, "chain": []}
+        if isinstance(metadata, dict):
+            handoff.update(metadata)
+        if "priority" not in handoff:
+            handoff["priority"] = "normal"
+        handoff["handoff_id"] = handoff_id or self.generate_handoff_id(content, route)
+        return handoff
 
     def parse_handoff_payload(self, payload, target=None):
         """Interpreta handoff payload."""
@@ -219,17 +264,36 @@ class AppProtocol:
         embedded = self._find_envelope_in_text(response)
         if embedded is not None:
             envelope, before_text, after_text = embedded
-            if envelope.type == "handoff" and envelope.route:
-                if not envelope.content or not envelope.content.strip():
+            if envelope.type == "handoff":
+                if envelope.handoffs:
+                    first_item = envelope.handoffs[0] if envelope.handoffs else None
+                    if not first_item:
+                        logger.warning("[HANDOFF] Rejected handoff envelope — empty handoffs list")
+                    else:
+                        route_target = first_item["route"]
+                        handoff = self._build_handoff_message(
+                            route_target,
+                            first_item["content"],
+                            first_item.get("metadata"),
+                            first_item.get("handoff_id"),
+                        )
+                        if len(envelope.handoffs) > 1:
+                            handoff["_pending_handoffs"] = envelope.handoffs[1:]
+                elif envelope.legacy_routes_present:
+                    logger.warning("[HANDOFF] Rejected legacy handoff envelope using 'routes'")
+                elif not envelope.route or not envelope.content or not envelope.content.strip():
                     logger.warning(
-                        "[HANDOFF] Rejected embedded handoff envelope with empty content (route=%s)",
+                        "[HANDOFF] Rejected handoff envelope — missing route or empty content (route=%s)",
                         envelope.route,
                     )
                 else:
                     route_target = envelope.route
-                    handoff = {"task": envelope.content, "chain": []}
-                    if envelope.metadata:
-                        handoff.update(envelope.metadata)
+                    handoff = self._build_handoff_message(
+                        route_target,
+                        envelope.content,
+                        envelope.metadata,
+                        envelope.handoff_id,
+                    )
             if envelope.type == "state_update" and envelope.state_updates:
                 self.apply_state_update(json.dumps(envelope.state_updates))
             if envelope.type == "ack" and envelope.handoff_id:
@@ -237,55 +301,24 @@ class AppProtocol:
             parts = [p.strip() for p in [before_text, after_text] if p.strip()]
             if parts:
                 response = "\n".join(parts)
+            elif envelope.type == "handoff":
+                response = None
             else:
                 response = envelope.content
         else:
-                # Fallback: fluxo regex completo
-                if STATE_UPDATE_START in response:
-                    for state_match in self.STATE_UPDATE_PATTERN.finditer(response):
-                        self.apply_state_update(state_match.group(1))
-                    response = self.STATE_UPDATE_PATTERN.sub("", response).strip()
+            if STATE_UPDATE_START in response:
+                for state_match in self.STATE_UPDATE_PATTERN.finditer(response):
+                    self.apply_state_update(state_match.group(1))
+                response = self.STATE_UPDATE_PATTERN.sub("", response).strip()
 
-                ack_match = self.ACK_PATTERN.search(response)
-                if ack_match:
-                    ack_id = ack_match.group(1)
-                    response = self.ACK_PATTERN.sub("", response, count=1).strip()
-                    logger.info("[ACK] received ack_id=%s", ack_id)
+            ack_match = self.ACK_PATTERN.search(response)
+            if ack_match:
+                ack_id = ack_match.group(1)
+                response = self.ACK_PATTERN.sub("", response, count=1).strip()
+                logger.info("[ACK] received ack_id=%s", ack_id)
 
-                if ROUTE_PREFIX in response:
-                    match = self.ROUTE_PATTERN.search(response)
-                    if match:
-                        raw_payload = match.group(2).strip()
-                        route_target = match.group(1)
-                        parsed_handoff = self.parse_handoff_payload(raw_payload, target=route_target)
-                        logger.info("[ROUTE] match=%s, target=%s", match.group(0)[:100], route_target)
-                        if parsed_handoff:
-                            handoff = parsed_handoff
-                            if hasattr(app, "session_state") and app.session_state:
-                                try:
-                                    app.session_state["handoffs_received"] += 1
-                                except KeyError:
-                                    pass
-                        else:
-                            logger.warning(
-                                "[ROUTE] handoff parse failed for target=%s, payload: %r",
-                                route_target,
-                                raw_payload,
-                            )
-                            if hasattr(app, "session_state") and app.session_state:
-                                try:
-                                    app.session_state["handoff_invalid_count"] = app.session_state.get(
-                                        "handoff_invalid_count", 0
-                                    ) + 1
-                                except KeyError:
-                                    pass
-                            if hasattr(app, "behavior_metrics") and app.behavior_metrics:
-                                app.behavior_metrics.record_handoff_sent(route_target, is_invalid=True)
-                            route_target = None
-                        response = self.ROUTE_PATTERN.sub("", response, count=1).strip() or None
-
-        # Handoff sem texto visível (ex: apenas [ROUTE:codex] task: ...) ainda
-        # é uma intenção válida do agente — retorna com response=None mas
+        # Handoff sem texto visível (apenas envelope JSON que foi consumido)
+        # ainda é uma intenção válida do agente — retorna com response=None mas
         # preservando route_target/handoff para não cair em CHAT_FAILOVER.
         if response is None:
             if route_target is not None:

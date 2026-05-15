@@ -55,8 +55,22 @@ class MemorySelector:
         return fact_indexes, "\n".join(facts)
 
     @staticmethod
+    def _is_pure_protocol_envelope(content):
+        stripped = content.strip()
+        if not (stripped.startswith("{") and stripped.endswith("}")):
+            return False
+        lowered = stripped.lower()
+        return '"type"' in lowered and any(marker in lowered for marker in (
+            '"type": "handoff"',
+            '"type": "state_update"',
+            '"type": "ack"',
+        ))
+
+    @staticmethod
     def should_skip_fact(content):
         """Indica se o conteúdo deve ser excluído da área de fatos/contexto."""
+        if MemorySelector._is_pure_protocol_envelope(content):
+            return True
         lowered = content.lower()
         blocked_markers = (
             "goal_canonical",
