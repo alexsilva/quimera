@@ -175,6 +175,11 @@ class Workspace:
         """Caminho do arquivo de configuração global do usuário."""
         return self.base_dir / "config.json"
 
+    @property
+    def env_file(self) -> Path:
+        """Caminho do arquivo de variáveis de ambiente de modelo."""
+        return self.base_dir / ".env"
+
     def _ensure_dirs(self):
         """Executa ensure dirs."""
         (self._root / "data" / "context").mkdir(parents=True, exist_ok=True)
