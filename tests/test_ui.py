@@ -5,6 +5,8 @@ from unittest.mock import patch, MagicMock
 import pytest
 from rich.console import Console, Group
 from rich.markdown import Markdown
+from rich.rule import Rule
+from rich.table import Table
 from rich.text import Text
 
 from quimera import themes
@@ -584,6 +586,21 @@ class TestExtractTextFromRenderable:
         assert "a" in result
         assert "b" in result
         assert "c" in result
+
+    def test_extracts_text_from_rule_title(self):
+        result = _extract_text_from_renderable(Rule("section"))
+        assert result == "section"
+
+    def test_extracts_text_from_table_cells(self):
+        table = Table()
+        table.add_column("Ferramenta")
+        table.add_column("Status")
+        table.add_row("exec", "ok")
+        result = _extract_text_from_renderable(table)
+        assert "Ferramenta" in result
+        assert "Status" in result
+        assert "exec" in result
+        assert "ok" in result
 
 
 class TestHighlightTags:

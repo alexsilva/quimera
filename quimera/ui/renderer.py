@@ -82,6 +82,15 @@ def _extract_text_from_renderable(value: Any) -> str:
         return ""
     if isinstance(value, str):
         return value
+    if hasattr(value, "title") and hasattr(value, "characters"):
+        return _extract_text_from_renderable(value.title)
+    if hasattr(value, "columns") and hasattr(value, "rows"):
+        parts = []
+        for column in value.columns:
+            parts.append(_extract_text_from_renderable(getattr(column, "header", "")))
+            for cell in getattr(column, "_cells", ()):
+                parts.append(_extract_text_from_renderable(cell))
+        return " ".join(p for p in parts if p)
     if hasattr(value, "plain"):
         return str(value.plain)
     if hasattr(value, "renderables"):
@@ -805,7 +814,7 @@ class TerminalRenderer:
         clean_message = strip_ansi(str(message)).strip("\r\n")
         if self._console:
             style, icon = ROLE_STYLES["system"]
-            line = Text.assemble((f"{icon} ", f"dim {style}"), (clean_message, style))
+            line = Text.assemble((f"{icon} ", f"dim {style}"), (clean_message, f"dim {style}"))
             line.no_wrap = False
             line.overflow = "fold"
             self._print(line)
@@ -973,7 +982,7 @@ class TerminalRenderer:
         if self._console and public_ui._RICH_AVAILABLE:
             renderable = public_ui.Panel(
                 _highlight_tags(strip_ansi(content.strip())),
-                title=f"[bold]Prompt Preview: {agent}[/]",
+                title=f"[bold]Prompt Preview: {markup_escape(agent)}[/]",
                 border_style="dim blue",
                 padding=(1, 2),
             )

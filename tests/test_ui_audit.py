@@ -75,6 +75,38 @@ def test_audit_preview_extracts_text_from_rich_group(tmp_path):
     assert "object at" not in preview
 
 
+def test_audit_preview_extracts_text_from_table_and_rule_group(tmp_path):
+    """Prompt-preview-like groups must not leak Rich object reprs into audit logs."""
+    from rich.console import Group
+    from rich.rule import Rule
+    from rich.table import Table
+
+    log_dir = tmp_path / "render"
+    events_path = log_dir / "render-table-rule-test.jsonl"
+    ansi_path = log_dir / "render-table-rule-test.ansi"
+    renderer = TerminalRenderer(audit_logger=RenderAuditLogger(events_path, ansi_path), theme="line")
+    try:
+        table = Table()
+        table.add_column("Tool")
+        table.add_column("Status")
+        table.add_row("exec", "ok")
+        renderer._print(Group(table, Rule("Prompt Preview")))
+        renderer.flush()
+    finally:
+        renderer.close(timeout=1.0)
+
+    events = _read_jsonl(events_path)
+    print_events = [e for e in events if e["event"] == "print"]
+    assert len(print_events) == 1
+    preview = print_events[0].get("preview", "")
+    assert "Tool" in preview
+    assert "Status" in preview
+    assert "exec" in preview
+    assert "ok" in preview
+    assert "Prompt Preview" in preview
+    assert "object at" not in preview
+
+
 def test_audit_no_empty_print_events(tmp_path):
     """Empty prints must not produce audit entries (they add no debug value)."""
     log_dir = tmp_path / "render"
