@@ -620,6 +620,47 @@ class TestCoverageGaps(unittest.TestCase):
         # Não deve levantar exceção; lines 297-298 são executadas
         orchestrator._process_handoff("claude", "codex", handoff)
 
+    def test_process_handoff_executes_target_then_returns_synthesis_to_origin(self):
+        """No chat, o handoff deve ser executado pelo alvo antes da síntese voltar ao agente de origem."""
+        app = _make_app(active_agents=["claude", "codex"])
+        app.parse_routing = Mock(return_value=("claude", "analisa isso", False))
+
+        handoff = {
+            "task": "Revisar implementação",
+            "context": "Validar o fluxo",
+            "expected": "Resumo curto",
+            "handoff_id": "h1",
+            "chain": [],
+        }
+
+        app.dispatch_services.call_agent = Mock(side_effect=["r1", "r2", "r3"])
+        app.parse_response = Mock(side_effect=[
+            ("resposta claude", "codex", handoff, False, False, None),
+            ("resposta codex", None, None, False, False, "h1"),
+            ("síntese claude", None, None, False, False, None),
+        ])
+
+        app.chat_round_orchestrator.process("analisa isso")
+
+        calls = app.dispatch_services.call_agent.call_args_list
+        self.assertEqual([call.args[0] for call in calls], ["claude", "codex", "claude"])
+
+        first_call = calls[0]
+        self.assertEqual(first_call.kwargs["protocol_mode"], "standard")
+        self.assertNotIn("handoff_only", first_call.kwargs)
+
+        handoff_call = calls[1]
+        self.assertEqual(handoff_call.kwargs["handoff"]["task"], "Revisar implementação")
+        self.assertTrue(handoff_call.kwargs["handoff_only"])
+        self.assertEqual(handoff_call.kwargs["from_agent"], "claude")
+        self.assertEqual(handoff_call.kwargs["protocol_mode"], "handoff")
+        self.assertEqual(handoff_call.kwargs["prompt_kind"], PromptKind.TASK_EXECUTOR)
+
+        synthesis_call = calls[2]
+        self.assertFalse(synthesis_call.kwargs.get("handoff_only", False))
+        self.assertEqual(synthesis_call.kwargs["protocol_mode"], "handoff")
+        self.assertIn("resposta codex", synthesis_call.kwargs["handoff"])
+
     def test_parallel_mode_warns_stream_json_agents(self):
         """Agentes com output_format=stream-json em modo paralelo devem executar sem erro."""
         app = _make_app(active_agents=["claude", "codex"], threads=2)

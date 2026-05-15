@@ -245,6 +245,7 @@ class QuimeraApp:
             session_state=session_state,
             user_name=self.user_name,
             active_agents=self.active_agents,
+            active_agents_provider=lambda: list(getattr(self, "active_agents", []) or []),
             metrics_tracker=self.behavior_metrics,
         )
         self.auto_summarize_threshold = configured_auto_summarize_threshold

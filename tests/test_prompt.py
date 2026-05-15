@@ -215,6 +215,44 @@ def test_prompt_primary_false_omits_only_session_state():
     assert '<current_turn title="Pedido atual de >>>">' in prompt_secondary
 
 
+def test_prompt_uses_current_active_agents_in_header_and_route_list():
+    state = {"active_agents": ["claude", "codex", "deepseek"]}
+    builder = PromptBuilder(
+        context_manager=_make_context_manager(""),
+        active_agents=["claude", "codex", "deepseek"],
+        active_agents_provider=lambda: state["active_agents"],
+    )
+    history = [{"role": "human", "content": "valide o handoff"}]
+
+    state["active_agents"] = ["codex", "deepseek"]
+    prompt = builder.build(agent="codex", history=history)
+
+    assert "Agentes de IA nesta conversa: DEEPSEEK" in prompt
+    assert "- Agentes: codex, deepseek" in prompt
+    assert "CLAUDE" not in prompt
+    assert "claude" not in prompt
+
+
+def test_handoff_prompt_uses_current_active_agents_for_route_candidates():
+    state = {"active_agents": ["claude", "codex", "deepseek"]}
+    builder = PromptBuilder(
+        context_manager=_make_context_manager(""),
+        active_agents=["claude", "codex", "deepseek"],
+        active_agents_provider=lambda: state["active_agents"],
+    )
+
+    state["active_agents"] = ["codex", "deepseek"]
+    prompt = builder.build(
+        agent="deepseek",
+        history=[],
+        handoff_only=True,
+        from_agent="codex",
+    )
+
+    assert "- Agentes:" not in prompt
+    assert "claude" not in prompt
+
+
 def test_prompt_shared_state():
     builder = PromptBuilder(context_manager=_make_context_manager(""))
     history = [{"role": "human", "content": "test"}]

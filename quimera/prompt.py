@@ -22,17 +22,31 @@ class PromptBuilder:
             session_state=None,
             user_name=None,
             active_agents=None,
+            active_agents_provider=None,
             metrics_tracker=None,
     ):
         self.context_manager = context_manager
         self.session_state = session_state or {}
         self.active_agents = list(active_agents) if active_agents is not None else plugins.all_names()
+        self.active_agents_provider = active_agents_provider
         self.metrics_tracker = metrics_tracker
         self.memory_selector = MemorySelector(history_window, user_name)
         self.shared_state_presenter = SharedStatePresenter()
         self.handoff_presenter = HandoffPresenter()
         self.execution_mode_presenter = ExecutionModePresenter()
         self.prompt_budget = PromptBudget()
+
+    def _get_active_agents(self) -> list[str]:
+        """Retorna a lista de agentes ativos atual, com fallback seguro."""
+        provider = self.active_agents_provider
+        if callable(provider):
+            try:
+                provided = provider()
+            except Exception:
+                provided = None
+            if provided is not None:
+                return list(provided)
+        return list(self.active_agents)
 
     @property
     def history_window(self):
@@ -65,20 +79,21 @@ class PromptBuilder:
         normalized_prompt_kind = coerce_prompt_kind(prompt_kind)
         is_chat_prompt = normalized_prompt_kind is PromptKind.CHAT
         context = self.context_manager.load() if is_chat_prompt else ""
+        active_agents = self._get_active_agents()
 
         if handoff_only:
-            route_candidates = [n for n in self.active_agents if n.lower() != agent.lower()]
+            route_candidates = [n for n in active_agents if n.lower() != agent.lower()]
             if from_agent:
                 route_candidates = [n for n in route_candidates if n.lower() != from_agent.lower()]
             route_agents = ", ".join(route_candidates) if route_candidates else ""
             is_first_speaker_flag = False
             is_reviewer = False
         else:
-            route_agents = ", ".join(self.active_agents) if self.active_agents else "nenhum"
+            route_agents = ", ".join(active_agents) if active_agents else "nenhum"
             is_first_speaker_flag = is_first_speaker
             is_reviewer = not is_first_speaker
 
-        other_agents = [n for n in self.active_agents if n.lower() != agent.lower()]
+        other_agents = [n for n in active_agents if n.lower() != agent.lower()]
         agents_list = ", ".join(n.upper() for n in other_agents) if other_agents else "nenhum"
 
         session_id = ""
