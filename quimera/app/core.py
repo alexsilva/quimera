@@ -94,6 +94,7 @@ class QuimeraApp:
         session_id = self.storage.session_id
         render_log_path = self.workspace.tmp.render_log_path_for(session_id)
         render_ansi_path = self.workspace.tmp.render_ansi_path_for(session_id)
+        metrics_file = self.workspace.tmp.metrics_path_for(session_id) if debug else None
         render_audit_logger = (
             RenderAuditLogger(render_log_path, render_ansi_path) if debug else None
         )
@@ -142,7 +143,6 @@ class QuimeraApp:
             self.renderer,
             workspace=self.workspace,
         )
-        metrics_file = self.workspace.tmp.metrics_path_for(session_id) if debug else None
         self.agent_client = AgentClient(
             self.renderer,
             metrics_file=metrics_file,
@@ -244,6 +244,7 @@ class QuimeraApp:
             "render_debug_active": debug,
             "render_log_path": str(render_log_path) if debug else "",
             "render_ansi_path": str(render_ansi_path) if debug else "",
+            "metrics_path": str(metrics_file) if metrics_file else "",
         }
         self.prompt_builder = PromptBuilder(
             self.context_manager,

@@ -112,6 +112,7 @@ def test_prompt_includes_render_debug_block_when_active():
         "render_debug_active": True,
         "render_log_path": "/tmp/test/data/logs/render/render.jsonl",
         "render_ansi_path": "/tmp/test/data/logs/render/render.ansi",
+        "metrics_path": "/tmp/test/data/logs/metrics/test-session.jsonl",
     }
 
     builder = PromptBuilder(
@@ -126,6 +127,7 @@ def test_prompt_includes_render_debug_block_when_active():
     assert "Auditoria de renderização ativa nesta sessão." in debug_block
     assert "/tmp/test/data/logs/render/render.jsonl" in debug_block
     assert "/tmp/test/data/logs/render/render.ansi" in debug_block
+    assert "/tmp/test/data/logs/metrics/test-session.jsonl" in debug_block
 
 
 def test_prompt_omits_render_debug_block_when_inactive():

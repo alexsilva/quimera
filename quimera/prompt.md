@@ -19,6 +19,7 @@ Agentes de IA nesta conversa: {agents}
 - Auditoria de renderização ativa nesta sessão.
 - Eventos estruturados: {render_log_path}
 - Stream ANSI bruto: {render_ansi_path}
+- Métricas da sessão: {metrics_path}
 - Quando o problema for visual, leia esses arquivos antes de concluir.
 </debug_state>
 <!-- ENDIF:render_debug_active -->

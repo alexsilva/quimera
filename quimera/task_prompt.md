@@ -18,6 +18,7 @@ Esta é uma execução isolada de task, não uma conversa normal.
 - Auditoria de renderização ativa nesta sessão.
 - Eventos estruturados: {render_log_path}
 - Stream ANSI bruto: {render_ansi_path}
+- Métricas da sessão: {metrics_path}
 - Se a task envolver bug visual, use esses arquivos como evidência.
 </debug_state>
 <!-- ENDIF:render_debug_active -->

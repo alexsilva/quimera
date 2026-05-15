@@ -104,6 +104,7 @@ class PromptBuilder:
         render_debug_active = False
         render_log_path = ""
         render_ansi_path = ""
+        metrics_path = ""
         if self.session_state and primary:
             session_id = self.session_state.get("session_id", "desconhecida")
             current_job_id = self.session_state.get("current_job_id", "desconhecido")
@@ -113,6 +114,7 @@ class PromptBuilder:
             render_debug_active = bool(self.session_state.get("render_debug_active", False))
             render_log_path = self.session_state.get("render_log_path", "")
             render_ansi_path = self.session_state.get("render_ansi_path", "")
+            metrics_path = self.session_state.get("metrics_path", "")
 
         handoff_fields = self.handoff_presenter.present(handoff, from_agent)
         if is_chat_prompt:
@@ -154,6 +156,7 @@ class PromptBuilder:
             render_debug_active=render_debug_active,
             render_log_path=render_log_path,
             render_ansi_path=render_ansi_path,
+            metrics_path=metrics_path,
             context=context,
             request=request,
             facts=facts,
