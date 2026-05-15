@@ -314,7 +314,7 @@ class AppTaskServices:
 
         chat_agent_client = getattr(app, "agent_client", None)
         background_timeout = getattr(chat_agent_client, "timeout", None)
-        if background_timeout is None or background_timeout <= 0:
+        if background_timeout is None or not isinstance(background_timeout, (int, float)) or background_timeout <= 0:
             background_timeout = _BACKGROUND_AGENT_TIMEOUT_SECONDS
         background_agent_client = AgentClient(
             app.renderer,
