@@ -3,7 +3,7 @@ import threading
 from unittest.mock import patch, MagicMock
 
 import pytest
-from rich.console import Console
+from rich.console import Console, Group
 from rich.markdown import Markdown
 from rich.text import Text
 
@@ -12,7 +12,9 @@ from quimera.ui import (
     TerminalRenderer,
     _apply_stream_diff,
     _agent_style,
+    _highlight_tags,
     _normalize_stream_diff,
+    _extract_text_from_renderable,
     strip_ansi,
     _is_interactive_terminal,
 )
@@ -268,6 +270,36 @@ class TestTerminalRenderer:
         captured = capsys.readouterr()
         assert "Warning message" in captured.out
 
+    def test_show_prompt_preview_with_rich(self, mock_renderer):
+        """Test show_prompt_preview with Rich available."""
+        mock_renderer.show_prompt_preview("codex", "PROMPT PREVIEW: codex\n\n<tool>test</tool>\nPROMPT FINAL:\nHello")
+        mock_renderer.flush()
+        assert mock_renderer._console.print.called
+        call_args = mock_renderer._console.print.call_args
+        panel = call_args[0][0]
+        from rich.panel import Panel
+        assert isinstance(panel, Panel)
+        assert isinstance(panel.renderable, Text)
+
+    def test_show_prompt_preview_without_rich(self, renderer_no_rich, capsys):
+        """Test show_prompt_preview without Rich falls back to stderr."""
+        import io
+        with patch("sys.stderr", new_callable=io.StringIO) as mock_stderr:
+            renderer_no_rich.show_prompt_preview("codex", "PROMPT PREVIEW: codex\n\nPROMPT FINAL:\nHello")
+        stderr_output = mock_stderr.getvalue()
+        assert "PROMPT PREVIEW: codex" in stderr_output
+        assert "PROMPT FINAL:" in stderr_output
+
+    def test_show_prompt_preview_tags_highlighted_in_panel(self, mock_renderer):
+        """Verifica que tags XML no preview são destacadas como Text, não str."""
+        mock_renderer.show_prompt_preview("codex", "<tool>hello</tool>")
+        mock_renderer.flush()
+        call_args = mock_renderer._console.print.call_args
+        panel = call_args[0][0]
+        assert isinstance(panel.renderable, Text)
+        text = panel.renderable
+        assert "bold magenta" in str(text.spans) or len(text.spans) > 0
+
     def test_show_handoff(self, mock_renderer):
         """Test show_handoff display."""
         with patch("quimera.ui._agent_style", side_effect=lambda x, *_: ("white", x.capitalize())):
@@ -346,14 +378,14 @@ class TestTerminalRenderer:
 
         assert mock_live.update.call_count >= 1
 
-    def test_start_message_stream_enables_auto_refresh(self, mock_renderer):
-        # Live agora é criado no writer thread (_ensure_live); flush() aguarda o processamento
+    def test_start_message_stream_disables_auto_refresh(self, mock_renderer):
+        # Live é criado no writer thread (_ensure_live); auto_refresh=False elimina repaints ociosos
         with patch("quimera.ui.Live") as mock_live:
             mock_live.return_value = MagicMock()
             mock_renderer.start_message_stream("codex")
             mock_renderer.flush()
 
-        assert mock_live.call_args.kwargs["auto_refresh"] is True
+        assert mock_live.call_args.kwargs["auto_refresh"] is False
 
     def test_build_turn_body_uses_text_while_streaming(self, mock_renderer):
         stream_body = mock_renderer._build_turn_body(
@@ -522,3 +554,80 @@ class TestStreamingDiffHelpers:
 
     def test_apply_stream_diff_supports_replace_and_add(self):
         assert _apply_stream_diff("old", [{"op": "replace", "text": "new"}, {"op": "add", "text": "!"}]) == "new!"
+
+
+class TestExtractTextFromRenderable:
+    def test_returns_empty_string_for_none(self):
+        assert _extract_text_from_renderable(None) == ""
+
+    def test_returns_string_unchanged(self):
+        assert _extract_text_from_renderable("hello") == "hello"
+
+    def test_extracts_plain_from_text(self):
+        t = Text("hello world")
+        assert _extract_text_from_renderable(t) == "hello world"
+
+    def test_extracts_text_from_group(self):
+        g = Group(Text("first"), Text("second"))
+        result = _extract_text_from_renderable(g)
+        assert "first" in result
+        assert "second" in result
+
+    def test_nested_group_extraction(self):
+        inner = Group(Text("a"), Text("b"))
+        outer = Group(inner, Text("c"))
+        result = _extract_text_from_renderable(outer)
+        assert "a" in result
+        assert "b" in result
+        assert "c" in result
+
+
+class TestHighlightTags:
+    """Test suite for _highlight_tags function."""
+
+    def test_simple_tag(self):
+        result = _highlight_tags("<tool>")
+        assert isinstance(result, Text)
+        assert result.plain == "<tool>"
+        assert len(result.spans) == 1
+
+    def test_closing_tag(self):
+        result = _highlight_tags("</tool>")
+        assert isinstance(result, Text)
+        assert result.plain == "</tool>"
+        assert len(result.spans) == 1
+
+    def test_self_closing_tag(self):
+        result = _highlight_tags('<tool name="x"/>')
+        assert isinstance(result, Text)
+        assert result.plain == '<tool name="x"/>'
+        assert len(result.spans) == 1
+
+    def test_plain_text_no_tags(self):
+        result = _highlight_tags("hello world")
+        assert isinstance(result, Text)
+        assert result.plain == "hello world"
+        assert len(result.spans) == 0
+
+    def test_mixed_content(self):
+        result = _highlight_tags("a <tool>b</tool> c")
+        assert isinstance(result, Text)
+        assert result.plain == "a <tool>b</tool> c"
+        assert len(result.spans) == 2
+
+    def test_empty_string(self):
+        result = _highlight_tags("")
+        assert isinstance(result, Text)
+        assert result.plain == ""
+
+    def test_rich_markup_is_not_confused_with_tags(self):
+        result = _highlight_tags("[bold]text[/bold]")
+        assert isinstance(result, Text)
+        assert result.plain == "[bold]text[/bold]"
+        assert len(result.spans) == 0
+
+    def test_lone_angle_bracket_not_tag(self):
+        result = _highlight_tags("a < b > c")
+        assert isinstance(result, Text)
+        assert result.plain == "a < b > c"
+        assert len(result.spans) == 0

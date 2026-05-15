@@ -6,6 +6,8 @@ from .renderer import TerminalRenderer
 from .renderer import _RICH_AVAILABLE
 from .renderer import _agent_style
 from .renderer import _apply_stream_diff
+from .renderer import _extract_text_from_renderable
+from .renderer import _highlight_tags
 from .renderer import _is_interactive_terminal
 from .renderer import _normalize_stream_diff
 from .renderer import os

@@ -287,7 +287,7 @@ class AppDispatchServices:
         dispatch_options.pop("progress_callback", None)
         handoff = dispatch_options.get("handoff")
         handoff_id = handoff.get("handoff_id") if isinstance(handoff, dict) else None
-        logger.info(
+        logger.debug(
             "[DISPATCH] sending to agent=%s, handoff_only=%s, handoff_id=%s",
             agent, dispatch_options.get("handoff_only", False), handoff_id,
         )

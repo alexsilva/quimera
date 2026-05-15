@@ -22,7 +22,6 @@ def test_renderer_audit_logs_static_print_and_ansi(tmp_path):
     events = _read_jsonl(events_path)
     event_names = [event["event"] for event in events]
     assert "print" in event_names
-    assert "noop" in event_names
     assert any("System message" in event.get("preview", "") for event in events)
     assert "System message" in ansi_path.read_text(encoding="utf-8")
 
@@ -48,3 +47,63 @@ def test_renderer_audit_logs_stream_lifecycle(tmp_path):
     assert "stream_stop" in event_names
     assert any(event.get("agent") == "codex" for event in events if event["event"].startswith("stream_"))
     assert ansi_path.read_bytes()
+
+
+def test_audit_preview_extracts_text_from_rich_group(tmp_path):
+    """Previews must show human-readable text, not '<rich.console.Group object at 0x...>'."""
+    from rich.console import Group
+    from rich.text import Text
+
+    log_dir = tmp_path / "render"
+    events_path = log_dir / "render-group-test.jsonl"
+    ansi_path = log_dir / "render-group-test.ansi"
+    renderer = TerminalRenderer(audit_logger=RenderAuditLogger(events_path, ansi_path), theme="line")
+    try:
+        group = Group(Text("Hello"), Text("World"))
+        renderer._print(group)
+        renderer.flush()
+    finally:
+        renderer.close(timeout=1.0)
+
+    events = _read_jsonl(events_path)
+    print_events = [e for e in events if e["event"] == "print"]
+    assert len(print_events) == 1
+    preview = print_events[0].get("preview", "")
+    assert "Hello" in preview
+    assert "World" in preview
+    assert "<rich.console.Group" not in preview
+    assert "object at" not in preview
+
+
+def test_audit_no_empty_print_events(tmp_path):
+    """Empty prints must not produce audit entries (they add no debug value)."""
+    log_dir = tmp_path / "render"
+    events_path = log_dir / "render-empty-test.jsonl"
+    ansi_path = log_dir / "render-empty-test.ansi"
+    renderer = TerminalRenderer(audit_logger=RenderAuditLogger(events_path, ansi_path), theme="line")
+    try:
+        renderer._print("")
+        renderer.flush()
+    finally:
+        renderer.close(timeout=1.0)
+
+    events = _read_jsonl(events_path)
+    print_events = [e for e in events if e["event"] == "print"]
+    assert len(print_events) == 0
+
+
+def test_audit_no_noop_events(tmp_path):
+    """NoopEvent (used for flush sync) must not produce audit entries."""
+    log_dir = tmp_path / "render"
+    events_path = log_dir / "render-noop-test.jsonl"
+    ansi_path = log_dir / "render-noop-test.ansi"
+    renderer = TerminalRenderer(audit_logger=RenderAuditLogger(events_path, ansi_path), theme="line")
+    try:
+        renderer.show_system("test")
+        renderer.flush()
+    finally:
+        renderer.close(timeout=1.0)
+
+    events = _read_jsonl(events_path)
+    noop_events = [e for e in events if e["event"] == "noop"]
+    assert len(noop_events) == 0

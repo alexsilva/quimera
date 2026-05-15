@@ -417,6 +417,20 @@ class QuimeraApp:
         path_text = self._shorten_middle(path_text, self._SESSION_LOG_DISPLAY_MAX_CHARS)
         return MSG_SESSION_LOG.format(path_text)
 
+    def _resolve_session_log_path(self) -> str | Path:
+        """Prefere o log temporário de render, com fallback para o log persistente em setups parciais."""
+        workspace = getattr(self, "workspace", None)
+        storage = getattr(self, "storage", None)
+        session_id = getattr(storage, "session_id", None)
+        workspace_tmp = getattr(workspace, "tmp", None)
+        render_log_path_for = getattr(workspace_tmp, "render_log_path_for", None)
+        if callable(render_log_path_for) and session_id:
+            return render_log_path_for(session_id)
+        get_log_file = getattr(storage, "get_log_file", None)
+        if callable(get_log_file):
+            return get_log_file()
+        return ""
+
     def _wire_event_ui(self) -> None:
         """Conecta eventos de domínio à renderização UI."""
         def _on_task_started(event):
@@ -594,10 +608,10 @@ class QuimeraApp:
 
         if not self.active_agents:
             logger.warning("no active agents, resetting to default")
-            logger.warning("DEBUG selected_agents=%r", self.selected_agents)
-            logger.warning("DEBUG available=%r", self.get_available_plugins())
+            logger.debug("selected_agents=%r", self.selected_agents)
+            logger.debug("available=%r", self.get_available_plugins())
             self.active_agents = self.selected_agents or [p.name for p in self.get_available_plugins()]
-            logger.warning("DEBUG after fallback active_agents=%r", self.active_agents)
+            logger.debug("after fallback active_agents=%r", self.active_agents)
             if not self.active_agents:
                 raise RuntimeError("No agents available")
         return self.active_agents[0], user_input, False
@@ -971,7 +985,7 @@ class QuimeraApp:
                 summary_loaded=self._format_yes_no(self.session_state["summary_loaded"]),
             )
         )
-        _show_neutral(self._format_session_log_message(self.storage.get_log_file()))
+        _show_neutral(self._format_session_log_message(self._resolve_session_log_path()))
         flush = getattr(self.renderer, "flush", None)
         if callable(flush):
             flush()

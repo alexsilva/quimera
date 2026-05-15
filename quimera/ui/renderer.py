@@ -75,8 +75,26 @@ def _public_ui_module():
     return _sys_module.modules[__name__]
 
 
+def _extract_text_from_renderable(value: Any) -> str:
+    """Extract human-readable text from Rich renderables without exposing internal repr."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if hasattr(value, "plain"):
+        return str(value.plain)
+    if hasattr(value, "renderables"):
+        parts = []
+        for child in value.renderables:
+            parts.append(_extract_text_from_renderable(child))
+        return " ".join(p for p in parts if p)
+    if hasattr(value, "__rich_text__"):
+        return str(value.__rich_text__())
+    return str(value)
+
+
 def _preview_text(value: Any, limit: int = _PREVIEW_LIMIT) -> str:
-    text = strip_ansi(str(value or "")).replace("\r", "\\r").replace("\n", "\\n")
+    text = strip_ansi(_extract_text_from_renderable(value)).replace("\r", "\\r").replace("\n", "\\n")
     if len(text) <= limit:
         return text
     return text[: limit - 1] + "…"
@@ -91,6 +109,21 @@ def _preview_chunk(chunk: Any) -> str:
         if diff:
             return _preview_text(diff)
     return _preview_text(chunk)
+
+
+_TAG_HIGHLIGHT_RE = re.compile(r'(</?[\w-]+(?:\s+[^>]*?)?\s*/?>)')
+
+
+def _highlight_tags(text: str) -> "Text":
+    result = Text()
+    for token in _TAG_HIGHLIGHT_RE.split(text):
+        if not token:
+            continue
+        if _TAG_HIGHLIGHT_RE.fullmatch(token):
+            result.append(token, style="bold magenta")
+        else:
+            result.append(token)
+    return result
 
 
 try:
@@ -322,9 +355,9 @@ class TerminalRenderer:
                 _ul[0] = _public_ui_module().Live(
                     _get_renderable(),
                     console=self._console,
-                    refresh_per_second=20,
+                    refresh_per_second=8,
                     transient=False,
-                    auto_refresh=True,
+                    auto_refresh=False,
                 )
                 _ul[0].start()
                 self._stream_live_active.set()
@@ -374,11 +407,13 @@ class TerminalRenderer:
             # Resiliência: exceção em qualquer evento não mata o writer
             try:
                 if isinstance(event, PrintEvent):
-                    _audit_event(
-                        "print",
-                        prompt_active=bool(self._is_prompt_active_fn and self._is_prompt_active_fn()),
-                        preview=_preview_text(event.renderable),
-                    )
+                    preview = _preview_text(event.renderable)
+                    if preview:
+                        _audit_event(
+                            "print",
+                            prompt_active=bool(self._is_prompt_active_fn and self._is_prompt_active_fn()),
+                            preview=preview,
+                        )
                     _cprint(event.renderable, **event.kwargs)
 
                 elif isinstance(event, LiveStartEvent):
@@ -459,7 +494,6 @@ class TerminalRenderer:
                     _cprint("")
 
                 elif isinstance(event, NoopEvent):
-                    _audit_event("noop")
                     event.done.set()
 
             except Exception:
@@ -932,6 +966,21 @@ class TerminalRenderer:
         else:
             print(arrow)
 
+    def show_prompt_preview(self, agent: str, content: str):
+        """Exibe preview do /prompt como painel de depuração."""
+        public_ui = _public_ui_module()
+        if self._console and public_ui._RICH_AVAILABLE:
+            renderable = public_ui.Panel(
+                _highlight_tags(strip_ansi(content.strip())),
+                title=f"[bold]Prompt Preview: {agent}[/]",
+                border_style="dim blue",
+                padding=(1, 2),
+            )
+            self._print(renderable)
+        else:
+            sys.stderr.write(content + "\n")
+            sys.stderr.flush()
+
     # ------------------------------------------------------------------
     # Status dinâmico (agentes paralelos)
     # ------------------------------------------------------------------
@@ -995,7 +1044,7 @@ class TerminalRenderer:
             self._live = public_ui.Live(
                 self._render_status_panel(),
                 console=self._console,
-                refresh_per_second=10,
+                refresh_per_second=4,
                 get_renderable=self._render_status_panel,
                 transient=False
             )

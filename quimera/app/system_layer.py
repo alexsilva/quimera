@@ -673,7 +673,8 @@ class AppSystemLayer:
             if target is None:
                 self.app.renderer.show_warning("Uso: /prompt [agente]")
                 return True
-            self.show_muted_message(self._build_prompt_preview_message(target))
+            preview = self._build_prompt_preview_message(target)
+            self.app.renderer.show_prompt_preview(target, preview)
             return True
 
         if command.startswith(CMD_TASK):

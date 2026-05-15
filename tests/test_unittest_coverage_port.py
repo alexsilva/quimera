@@ -183,7 +183,6 @@ class AgentsCoverageTests(unittest.TestCase):
             payload = json.loads(metrics_file.read_text(encoding="utf-8").strip())
             self.assertEqual(payload["agent"], "claude")
             self.assertEqual(payload["largest_block"], "history")
-            self.renderer.show_system.assert_called_once()
 
 
 class ContextCoverageTests(unittest.TestCase):

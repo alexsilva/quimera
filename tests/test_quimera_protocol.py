@@ -63,6 +63,7 @@ class DummyRenderer:
         self.system_messages = []
         self.plain_messages = []
         self.handoffs = []
+        self.prompt_previews = []
         self._output_lock = threading.Lock()
         self.task_services = None
 
@@ -77,6 +78,9 @@ class DummyRenderer:
 
     def show_handoff(self, from_agent, to_agent, task=None):
         self.handoffs.append((from_agent, to_agent, task))
+
+    def show_prompt_preview(self, agent, content):
+        self.prompt_previews.append((agent, content))
 
 
 class DummyContextManager:
@@ -538,11 +542,13 @@ class ProtocolTests(unittest.TestCase):
             skip_tool_prompt=True,
             execution_mode=None,
         )
-        message = app.renderer.system_messages[0]
-        self.assertIn("PROMPT PREVIEW: claude", message)
-        self.assertIn("ANÁLISE DOS BLOCOS:", message)
-        self.assertIn("- total_chars: 280", message)
-        self.assertIn("PROMPT FINAL:\nPROMPT GERADO", message)
+        self.assertEqual(len(app.renderer.prompt_previews), 1)
+        agent, content = app.renderer.prompt_previews[0]
+        self.assertEqual(agent, AGENT_CLAUDE)
+        self.assertIn("PROMPT PREVIEW: claude", content)
+        self.assertIn("ANÁLISE DOS BLOCOS:", content)
+        self.assertIn("- total_chars: 280", content)
+        self.assertIn("PROMPT FINAL:\nPROMPT GERADO", content)
 
     def test_handle_command_shows_prompt_preview_for_agent_alias(self):
         app = QuimeraApp.__new__(QuimeraApp)
@@ -579,6 +585,9 @@ class ProtocolTests(unittest.TestCase):
         self.assertTrue(handled)
         app.prompt_builder.build.assert_called_once()
         self.assertEqual(app.prompt_builder.build.call_args.args[0], AGENT_CODEX)
+        self.assertEqual(len(app.renderer.prompt_previews), 1)
+        self.assertEqual(app.renderer.prompt_previews[0][0], AGENT_CODEX)
+        self.assertIn("PROMPT PREVIEW: codex", app.renderer.prompt_previews[0][1])
 
     def test_prompt_preview_omits_tool_prompt_for_cli_agent_without_builtin_tools(self):
         app = QuimeraApp.__new__(QuimeraApp)

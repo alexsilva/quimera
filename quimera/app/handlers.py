@@ -34,6 +34,10 @@ class PromptAwareStderrHandler(logging.StreamHandler):
 
         formatter = self.formatter or logging.Formatter("%(message)s")
         message = formatter.format(record)
+
+        _raw = str(record.msg) if record.msg else ""
+        _is_operational_noise = _raw.startswith("[DISPATCH]") or _raw.startswith("[GATEWAY]")
+
         if record.levelno >= logging.ERROR:
             show_error_message = getattr(app, "show_error_message", None)
             if callable(show_error_message):
@@ -44,6 +48,10 @@ class PromptAwareStderrHandler(logging.StreamHandler):
             if callable(show_warning_message):
                 show_warning_message(message)
                 return
+        if _is_operational_noise:
+            super().emit(record)
+            return
+
         show_system_message = getattr(app, "show_system_message", None)
         if callable(show_system_message):
             show_system_message(message)

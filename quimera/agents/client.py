@@ -721,7 +721,7 @@ class AgentClient:
             round_index=0, session_call_index=0,
             history_window=12, protocol_mode="standard",
     ):
-        """Exibe métricas do prompt e persiste em JSONL quando metrics_file estiver configurado."""
+        """Persiste métricas do prompt em JSONL quando metrics_file estiver configurado."""
         largest_block = max(
             (
                 ("rules", metrics.get("rules_chars", 0)),
@@ -731,19 +731,6 @@ class AgentClient:
                 ("handoff", metrics.get("handoff_chars", 0)),
             ),
             key=lambda item: item[1],
-        )
-        self.renderer.show_system(
-            "[debug] prompt "
-            f"{agent}: total={metrics.get('total_chars', 0)} chars | "
-            f"round={round_index} call={session_call_index} | "
-            f"history_msgs={metrics.get('history_messages', 0)} | "
-            f"primary={metrics.get('primary', True)} | "
-            f"rules={metrics.get('rules_chars', 0)} | "
-            f"session={metrics.get('session_state_chars', 0)} | "
-            f"persistent={metrics.get('persistent_chars', 0)} | "
-            f"history={metrics.get('history_chars', 0)} | "
-            f"handoff={metrics.get('handoff_chars', 0)} | "
-            f"largest_block={largest_block[0]}"
         )
         if self.metrics_file:
             record = {

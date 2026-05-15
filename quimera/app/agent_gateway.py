@@ -82,7 +82,7 @@ class AgentGateway:
         """Monta o prompt final e executa a chamada ao backend do agente."""
         agent_client = self._agent_client
         if _is_user_cancelled(agent_client):
-            logger.info("[GATEWAY] agent=%s cancelled by user before low-level call, aborting", agent)
+            logger.debug("[GATEWAY] agent=%s cancelled by user before low-level call, aborting", agent)
             return None
 
         call_index_snapshot = self._increment_call_index()
@@ -142,7 +142,7 @@ class AgentGateway:
             )
 
         if _is_user_cancelled(agent_client):
-            logger.info("[GATEWAY] agent=%s cancelled by user before backend call, aborting", agent)
+            logger.debug("[GATEWAY] agent=%s cancelled by user before backend call, aborting", agent)
             return None
 
         result = agent_client.call(agent, prompt, silent=silent, on_text_chunk=_on_text_chunk)
@@ -158,5 +158,5 @@ class AgentGateway:
         agent_client.flush_pending_summary()
         elapsed = time.time() - start
         self._update_session(agent, bool(result), elapsed)
-        logger.info("[GATEWAY] agent=%s latency=%.2fs result=%s", agent, elapsed, "ok" if result else "none")
+        logger.debug("[GATEWAY] agent=%s latency=%.2fs result=%s", agent, elapsed, "ok" if result else "none")
         return result
