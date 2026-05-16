@@ -12,19 +12,25 @@ from contextlib import nullcontext
 from importlib import metadata
 from pathlib import Path
 
+from .agent_pool import AgentPool, AgentPoolView
 from .handlers import PromptAwareStderrHandler
+from ..domain.session_state import SessionState
 from .chat_round import ChatRoundOrchestrator
 from .protocol import AppProtocol
+from .render_event import RenderEvent
 from .session import AppSessionServices, compute_history_hard_limit, trim_history_messages
 from .session_metrics import SessionMetricsService
 from .dispatch import AppDispatchServices
 from .inputs import AppInputServices
+from .interfaces import PluginResolverAdapter
 from .prompt_input import InputGate
 from .task import AppTaskServices, create_executor
-from .task_classifiers import classify_task_execution_result, parse_task_command
+from .task_classifiers import classify_task_execution_result, classify_task_review_result, parse_task_command
+from .display_service import DisplayService
 from .system_layer import AppSystemLayer
 from .turn import TurnManager
 from .event_sink import EventSink
+from .worker import ChatWorker
 from .task_events import (
     TaskStarted,
     TaskCompleted,
@@ -60,6 +66,13 @@ from ..modes import MODES, get_mode
 from .config import logger
 
 
+def normalize_agent_name(agent):
+    """Normaliza identificador de agente para nome canônico string."""
+    if hasattr(agent, "name"):
+        return getattr(agent, "name")
+    return agent
+
+
 class QuimeraApp:
     """Orquestra comandos locais, roteamento entre agentes e ciclo da sessão."""
     _SESSION_LOG_DISPLAY_MAX_CHARS = 96
@@ -80,7 +93,7 @@ class QuimeraApp:
                  ):
         """Inicializa uma instância de QuimeraApp."""
         self.selected_agents = list(agents) if agents else []
-        self.active_agents = self.selected_agents
+        self.agent_pool = AgentPool(self.selected_agents)
         self.threads = int(threads) if threads is not None else 1
         self.agent_failures = defaultdict(int)
         self._agent_failures_lock = threading.Lock()
@@ -108,12 +121,16 @@ class QuimeraApp:
         self._wire_event_ui()
         self.user_name = self.config.user_name
         self.visibility = Visibility(visibility)
-        self.system_layer = AppSystemLayer(self)
-        self.protocol = AppProtocol(self, decisions_log_path=self.workspace.decisions_log)
         self.session_metrics = SessionMetricsService()
-        self.task_services = AppTaskServices(self)
-        self.dispatch_services = AppDispatchServices(self)
-        self.session_services = AppSessionServices(self)
+        self.task_services = None
+        self.task_executors = []
+        self._approval_handler = None
+        self.session_services = None
+        self.system_layer = None
+        self.execution_mode = None
+        self.task_classifier = None
+        self.tool_executor = None
+        self.dispatch_services = None
         self.history_file = self.workspace.history_file
         self.input_gate = InputGate(
             renderer=self.renderer,
@@ -122,8 +139,15 @@ class QuimeraApp:
             argument_resolver=self._command_argument_resolver,
         )
         self.input_services = AppInputServices(
-            self,
+            self.renderer,
             input_resolver=lambda: self.input_gate,
+            get_input_status=lambda: getattr(self, '_nonblocking_input_status', 'idle'),
+            set_input_status=lambda v: setattr(self, '_nonblocking_input_status', v),
+            set_prompt_text=lambda v: setattr(self, '_nonblocking_prompt_text', v),
+            set_prompt_owner=lambda v: setattr(self, '_prompt_owning_thread_id', v),
+            set_prompt_visible=lambda v: setattr(self, '_nonblocking_prompt_visible', v),
+            flush_deferred_messages=lambda: self.system_layer.flush_deferred_messages(),
+            output_lock=getattr(self, '_output_lock', None),
         )
         self.input_gate.set_toolbar_context_resolver(self._build_input_toolbar_context)
         self.input_gate.set_theme_cycle_handler(self._cycle_renderer_theme)
@@ -131,8 +155,6 @@ class QuimeraApp:
             is_active_fn=self.input_gate.is_active,
             run_above_fn=self.input_gate.run_in_terminal_message,
         )
-        self.chat_round_orchestrator = ChatRoundOrchestrator(self)
-
         migrated = self.workspace.migrate_from_legacy(cwd)
         for item in migrated:
             self.renderer.show_system(MSG_MIGRATION.format(item))
@@ -157,11 +179,9 @@ class QuimeraApp:
             self.renderer,
             summarizer_call=build_chain_summarizer(
                 self.agent_client,
-                list(dict.fromkeys(["ollama-granite4"] + (self.active_agents or []))),
+                list(dict.fromkeys(["ollama-granite4"] + self.agent_pool.agents)),
             ),
         )
-        self.summary_agent_preference = "ollama-granite4"
-        self._pending_input_for: str | None = None
         configured_history_window = history_window or self.config.history_window
         configured_auto_summarize_threshold = self.config.auto_summarize_threshold
         history_hard_limit = compute_history_hard_limit(
@@ -202,11 +222,22 @@ class QuimeraApp:
         self.behavior_metrics = BehaviorMetricsTracker(storage_path=metrics_state_path)
         self.agent_client.tool_event_callback = self._record_tool_event
         self.debug_prompt_metrics = debug
-        self.round_index = 0
-        self.session_call_index = 0
         self.shared_state = last_session["shared_state"]
         self._shared_state_lock = threading.Lock()
+        self._chat_state = SessionState(
+            history=self.history,
+            shared_state=self.shared_state,
+            session_meta=self.session_state,
+            shared_state_lock=self._shared_state_lock,
+        )
+        self._chat_state.summary_agent_preference = "ollama-granite4"
         self._lock = threading.Lock()
+        self.protocol = AppProtocol(
+            lock=self._lock,
+            shared_state=self.shared_state,
+            workspace=self.workspace,
+            decisions_log_path=self.workspace.decisions_log,
+        )
         self._history_lock = threading.Lock()
         self._output_lock = threading.Lock()
         self._counter_lock = threading.Lock()
@@ -222,7 +253,15 @@ class QuimeraApp:
         self.turn_manager = TurnManager()
         for handler in logger.handlers:
             if isinstance(handler, PromptAwareStderrHandler):
-                handler.bind_app(self)
+                handler.bind_callbacks(
+                    output_lock=self._output_lock,
+                    clear_prompt=self._clear_user_prompt_line_if_needed,
+                    redisplay_prompt=self._redisplay_user_prompt_if_needed,
+                    show_error=self.show_error_message,
+                    show_warning=self.show_warning_message,
+                    show_system=self.show_system_message,
+                    is_reading=lambda: self._nonblocking_input_status
+                )
         is_new_session = not history_restored and not summary_loaded
 
         # Unify tasks database path
@@ -251,20 +290,225 @@ class QuimeraApp:
             history_window=configured_history_window,
             session_state=session_state,
             user_name=self.user_name,
-            active_agents=self.active_agents,
-            active_agents_provider=lambda: list(getattr(self, "active_agents", []) or []),
+            active_agents=self.agent_pool.agents,
+            active_agents_provider=lambda: self.agent_pool.agents,
             metrics_tracker=self.behavior_metrics,
         )
         self.auto_summarize_threshold = configured_auto_summarize_threshold
+        self.task_services = AppTaskServices(
+            task_executor_factory=self.task_executor_factory,
+            get_current_job_id=lambda: self.current_job_id,
+            get_agent_pool_agents=lambda: list(self.agent_pool.agents),
+            get_task_executors=lambda: list(self.task_executors),
+            set_task_executors=lambda executors: setattr(self, "task_executors", list(executors)),
+            get_renderer=lambda: self.renderer,
+            get_input_services=lambda: self.input_services,
+            get_input_gate=lambda: self.input_gate,
+            get_tasks_db_path=lambda: self.tasks_db_path,
+            get_event_sink=lambda: self.event_sink,
+            get_agent_client=lambda: self.agent_client,
+            get_workspace=lambda: self.workspace,
+            get_dispatch_tool_executor=lambda: self.tool_executor,
+            get_dispatch_services=lambda: self.dispatch_services,
+            get_auto_approve_mutations=lambda: self.auto_approve_mutations,
+            get_approval_handler=lambda: self._approval_handler,
+            set_approval_handler=lambda handler: setattr(self, "_approval_handler", handler),
+            get_agent_plugin=self.get_agent_plugin,
+            get_available_plugins=self.get_available_plugins,
+            session_state=self._chat_state,
+            get_system_layer=lambda: self.system_layer,
+            get_task_classifier=lambda: self.task_classifier,
+            get_user_name=lambda: self.user_name,
+            get_prompt_builder=lambda: self.prompt_builder,
+            get_visibility=lambda: self.visibility,
+            get_show_error_message=lambda: self.show_error_message,
+            get_show_muted_message=lambda: self.show_muted_message,
+            get_execution_mode=lambda: self.execution_mode,
+            get_record_tool_event=lambda: self._record_tool_event,
+            get_record_failure=lambda: self.record_failure,
+            get_session_metrics=lambda: self.session_metrics,
+            get_debug_prompt_metrics=lambda: self.debug_prompt_metrics,
+            get_clear_prompt_line=lambda: self._clear_user_prompt_line_if_needed,
+            get_redisplay_prompt=lambda: self._redisplay_user_prompt_if_needed,
+            get_output_lock=lambda: self._output_lock,
+            get_counter_lock=lambda: self._counter_lock,
+            get_session_services=lambda: self.session_services,
+            get_max_retries=lambda: self.MAX_RETRIES,
+            get_retry_backoff_seconds=lambda: self.RETRY_BACKOFF_SECONDS,
+            get_rate_limit_backoff_seconds=lambda: self.RATE_LIMIT_BACKOFF_SECONDS,
+            call_agent=self.call_agent,
+            parse_response=self.parse_response,
+            classify_task_execution_result=self.classify_task_execution_result,
+            classify_task_review_result=classify_task_review_result,
+        )
+        self.session_services = AppSessionServices(
+            history=self.history,
+            storage=self.storage,
+            renderer=self.renderer,
+            agent_pool=self.agent_pool,
+            lock=self._lock,
+            context_manager=self.context_manager,
+            session_summarizer=self.session_summarizer,
+            task_services=self.task_services,
+            prompt_builder=self.prompt_builder,
+            shared_state=self.shared_state,
+            auto_summarize_threshold=self.auto_summarize_threshold,
+            summary_agent_preference=self.summary_agent_preference,
+            agent_client=self.agent_client,
+        )
+        self.dispatch_services = AppDispatchServices(
+            prompt_builder=self.prompt_builder,
+            renderer=self.renderer,
+            get_agent_plugin=self.get_agent_plugin,
+            session_state=self._chat_state,
+            get_execution_mode=lambda: self.execution_mode,
+            refresh_task_state=self.task_services.refresh_task_shared_state,
+            debug_prompt_metrics=self.debug_prompt_metrics,
+            clear_prompt_line=self._clear_user_prompt_line_if_needed,
+            redisplay_prompt=self._redisplay_user_prompt_if_needed,
+            output_lock=self._output_lock,
+            counter_lock=self._counter_lock,
+            print_response_fn=self.print_response,
+            persist_message_fn=lambda agent, text: self.session_services.persist_message(agent, text),
+            record_session_metric=lambda agent, metric, elapsed: self.session_metrics.record_agent_metric(
+                self, agent, metric, elapsed
+            ),
+            record_tool_event_fn=lambda agent, **kw: self.session_metrics.record_tool_event(self, agent, **kw),
+            max_retries=self.MAX_RETRIES,
+            retry_backoff=self.RETRY_BACKOFF_SECONDS,
+            rate_limit_backoff=getattr(self, 'RATE_LIMIT_BACKOFF_SECONDS', 30),
+            record_failure=self.record_failure,
+            get_agent_client=lambda: self.agent_client,
+            get_tool_executor=lambda: self.tool_executor,
+        )
+        self.chat_round_orchestrator = ChatRoundOrchestrator(
+            dispatch_services=self.dispatch_services,
+            parse_routing=self.parse_routing,
+            agent_pool=self.agent_pool,
+            session_services=self.session_services,
+            parse_response=self.parse_response,
+            agent_client=self.agent_client,
+            turn_manager=self.turn_manager,
+            task_services=self.task_services,
+            get_agent_plugin=self.get_agent_plugin,
+            behavior_metrics=self.behavior_metrics,
+            threads=self.threads,
+            session_state=self._chat_state,
+            show_system_message=self.show_system_message,
+            renderer=self.renderer,
+            merge_staging_to_workspace=self._merge_staging_to_workspace,
+            generate_handoff_id=self._generate_handoff_id,
+        )
         self.idle_timeout_seconds = idle_timeout_seconds if idle_timeout_seconds is not None else self.config.idle_timeout_seconds
 
         self.tool_executor = self.task_services.build_tool_executor(require_approval_for_mutations=not self.auto_approve_mutations)
         # Injeta o executor nos drivers de API do agent_client.
         self.agent_client.tool_executor = self.tool_executor
-        # Modo de execução ativo (definido via /planning, /analysis, etc.)
-        self.execution_mode = None
+        self._display_service = DisplayService(
+            renderer=self.renderer,
+            input_status_getter=lambda: getattr(self, "_nonblocking_input_status", "idle"),
+            clear_prompt_line=self._clear_user_prompt_line_if_needed,
+            redisplay_prompt=self._redisplay_user_prompt_if_needed,
+            output_lock=self._output_lock,
+            prompt_owner_thread_id_getter=lambda: getattr(self, "_prompt_owning_thread_id", None),
+            run_above_active_prompt=self.input_gate.run_in_terminal_message,
+        )
+        self.system_layer = AppSystemLayer(
+            display_service=self._display_service,
+            plugin_resolver=PluginResolverAdapter(
+                registry=self._plugin_registry,
+                normalize=self._normalize_agent_name,
+            ),
+            prompt_builder=self.prompt_builder,
+            history_getter=lambda: list(getattr(self, "history", []) or []),
+            shared_state_getter=lambda: getattr(self, "shared_state", None),
+            execution_mode_getter=lambda: getattr(self, "execution_mode", None),
+            agent_pool=self.agent_pool,
+            get_selected_agents=lambda: list(getattr(self, "selected_agents", []) or []),
+            set_selected_agents=lambda agents: setattr(self, "selected_agents", list(agents)),
+            clear_screen=self.clear_terminal_screen,
+            read_user_input=self.read_user_input,
+            task_command_handler=self.task_services.handle_task_command,
+            reset_shared_state=self.reset_shared_state,
+            approval_handler_getter=lambda: getattr(self, "_approval_handler", None),
+            context_manager=self.context_manager,
+            plugin_registry=self._plugin_registry,
+        )
         # Set up task executors for autonomous task execution
         self._setup_task_executors()
+
+    def _ensure_agent_pool(self) -> AgentPool:
+        """Materializa o pool ao acessar instâncias criadas via ``__new__``."""
+        pool = getattr(self, "agent_pool", None)
+        if pool is None:
+            pool = AgentPool([])
+            self.agent_pool = pool
+        return pool
+
+    @property
+    def active_agents(self):
+        """Compatibilidade temporária com call sites legados baseados em lista."""
+        return AgentPoolView(self._ensure_agent_pool())
+
+    @active_agents.setter
+    def active_agents(self, agents) -> None:
+        self._ensure_agent_pool().set(list(agents or []))
+
+    # ------------------------------------------------------------------
+    # Propriedades que delegam para _chat_state (compatibilidade)
+    # ------------------------------------------------------------------
+
+    @property
+    def round_index(self) -> int:
+        cs = getattr(self, '_chat_state', None)
+        return cs.round_index if cs is not None else getattr(self, '_round_index_raw', 0)
+
+    @round_index.setter
+    def round_index(self, value: int) -> None:
+        cs = getattr(self, '_chat_state', None)
+        if cs is not None:
+            cs.round_index = value
+        else:
+            object.__setattr__(self, '_round_index_raw', value)
+
+    @property
+    def session_call_index(self) -> int:
+        cs = getattr(self, '_chat_state', None)
+        return cs.call_index if cs is not None else getattr(self, '_call_index_raw', 0)
+
+    @session_call_index.setter
+    def session_call_index(self, value: int) -> None:
+        cs = getattr(self, '_chat_state', None)
+        if cs is not None:
+            cs._call_index = value
+        else:
+            object.__setattr__(self, '_call_index_raw', value)
+
+    @property
+    def summary_agent_preference(self) -> str | None:
+        cs = getattr(self, '_chat_state', None)
+        return cs.summary_agent_preference if cs is not None else getattr(self, '_summary_agent_pref_raw', None)
+
+    @summary_agent_preference.setter
+    def summary_agent_preference(self, value: str | None) -> None:
+        cs = getattr(self, '_chat_state', None)
+        if cs is not None:
+            cs.summary_agent_preference = value
+        else:
+            object.__setattr__(self, '_summary_agent_pref_raw', value)
+
+    @property
+    def _pending_input_for(self) -> str | None:
+        cs = getattr(self, '_chat_state', None)
+        return cs.pending_input_for if cs is not None else getattr(self, '_pending_input_for_raw', None)
+
+    @_pending_input_for.setter
+    def _pending_input_for(self, value: str | None) -> None:
+        cs = getattr(self, '_chat_state', None)
+        if cs is not None:
+            cs.pending_input_for = value
+        else:
+            object.__setattr__(self, '_pending_input_for_raw', value)
 
     @staticmethod
     def _available_internal_commands() -> list[str]:
@@ -320,10 +564,7 @@ class QuimeraApp:
 
     @staticmethod
     def _normalize_agent_name(agent):
-        """Normaliza identificador de agente para nome canônico string."""
-        if hasattr(agent, "name"):
-            return getattr(agent, "name")
-        return agent
+        return normalize_agent_name(agent)
 
     def get_agent_plugin(self, agent_name: str):
         """Resolve um plugin pelo nome canônico do agente."""
@@ -345,7 +586,7 @@ class QuimeraApp:
     def get_active_agent_plugins(self) -> list:
         """Retorna os plugins válidos dos agentes ativos na sessão."""
         active_plugins = []
-        for agent_name in self.active_agents:
+        for agent_name in self.agent_pool:
             plugin = self.get_agent_plugin(agent_name)
             if plugin is not None:
                 active_plugins.append(plugin)
@@ -367,8 +608,8 @@ class QuimeraApp:
             self.agent_failures[agent_name] += 1
             failures = self.agent_failures[agent_name]
         if failures >= 2:
-            if agent_name in self.active_agents:
-                self.active_agents.remove(agent_name)
+            if agent_name in self.agent_pool:
+                self.agent_pool.remove(agent_name)
                 logger.warning("agent %s removed after %d failures", agent_name, failures)
                 try:
                     runtime_tasks.release_agent_tasks(agent_name, db_path=self.tasks_db_path)
@@ -418,7 +659,24 @@ class QuimeraApp:
         return MSG_SESSION_LOG.format(path_text)
 
     def _resolve_session_log_path(self) -> str | Path:
-        """Prefere o log temporário de render, com fallback para o log persistente em setups parciais."""
+        """Retorna o log persistente da sessão usado como histórico canônico do chat."""
+        workspace = getattr(self, "workspace", None)
+        storage = getattr(self, "storage", None)
+        get_log_file = getattr(storage, "get_log_file", None)
+        if callable(get_log_file):
+            log_file = get_log_file()
+            if log_file:
+                return log_file
+        logs_dir = getattr(workspace, "logs_dir", None)
+        session_id = getattr(storage, "session_id", None)
+        if logs_dir and session_id:
+            return Path(logs_dir) / f"{session_id}.jsonl"
+        return ""
+
+    def _resolve_render_debug_log_path(self) -> str | Path:
+        """Retorna o log temporário de auditoria de render, somente em modo debug."""
+        if not getattr(self, "debug_prompt_metrics", False):
+            return ""
         workspace = getattr(self, "workspace", None)
         storage = getattr(self, "storage", None)
         session_id = getattr(storage, "session_id", None)
@@ -426,9 +684,6 @@ class QuimeraApp:
         render_log_path_for = getattr(workspace_tmp, "render_log_path_for", None)
         if callable(render_log_path_for) and session_id:
             return render_log_path_for(session_id)
-        get_log_file = getattr(storage, "get_log_file", None)
-        if callable(get_log_file):
-            return get_log_file()
         return ""
 
     def _wire_event_ui(self) -> None:
@@ -582,8 +837,8 @@ class QuimeraApp:
                 self.renderer.show_system(mode_message)
                 return self.parse_routing(rest)
             self.renderer.show_system(mode_message)
-            if not self.active_agents:
-                self.active_agents = [self._normalize_agent_name(a) for a in self.selected_agents]
+            if not self.agent_pool:
+                self.agent_pool.set([self._normalize_agent_name(a) for a in self.selected_agents])
             return None, "", False
 
         active_plugins = self.get_active_agent_plugins()
@@ -606,15 +861,15 @@ class QuimeraApp:
                         return None, None, False
                     return agent, message, True
 
-        if not self.active_agents:
+        if not self.agent_pool:
             logger.warning("no active agents, resetting to default")
             logger.debug("selected_agents=%r", self.selected_agents)
             logger.debug("available=%r", self.get_available_plugins())
-            self.active_agents = self.selected_agents or [p.name for p in self.get_available_plugins()]
-            logger.debug("after fallback active_agents=%r", self.active_agents)
-            if not self.active_agents:
+            self.agent_pool.set(self.selected_agents or [p.name for p in self.get_available_plugins()])
+            logger.debug("after fallback active_agents=%r", self.agent_pool.agents)
+            if not self.agent_pool:
                 raise RuntimeError("No agents available")
-        return self.active_agents[0], user_input, False
+        return self.agent_pool.primary, user_input, False
 
     @staticmethod
     def _merge_state_value(current, incoming):
@@ -726,9 +981,12 @@ class QuimeraApp:
     def _resolve_app_version() -> str:
         """Resolve a versão instalada do pacote, com fallback seguro."""
         try:
-            return metadata.version("quimera")
+            ver = metadata.version("quimera")
+            if ver is not None:
+                return ver
         except Exception:
-            return "dev"
+            pass
+        return "dev"
 
     @staticmethod
     def _build_welcome_logo() -> str:
@@ -751,8 +1009,7 @@ class QuimeraApp:
 
     def _resolve_active_model_label(self) -> str:
         """Resolve o modelo ativo a partir do primeiro plugin/agente ativo."""
-        active_agents = getattr(self, "active_agents", None) or []
-        agent_name = active_agents[0] if active_agents else None
+        agent_name = self.agent_pool.primary
         if not agent_name:
             return "unknown"
         plugin = self.get_agent_plugin(agent_name)
@@ -798,9 +1055,8 @@ class QuimeraApp:
         pending_input_for = str(getattr(self, "_pending_input_for", "") or "").strip()
         if pending_input_for:
             return pending_input_for
-        active_agents = getattr(self, "active_agents", None) or []
-        if active_agents:
-            return str(active_agents[0])
+        if self.agent_pool.primary:
+            return str(self.agent_pool.primary)
         return "unknown"
 
     def _cycle_renderer_theme(self) -> None:
@@ -829,6 +1085,8 @@ class QuimeraApp:
 
     def read_user_input(self, prompt, timeout: int):
         """Fachada compatível para leitura de input."""
+        if not hasattr(self, "input_services") or self.input_services is None:
+            return None
         return self.input_services.read_user_input(prompt, timeout)
 
     def handle_command(self, user_input: str) -> bool:
@@ -896,7 +1154,19 @@ class QuimeraApp:
 
     def _do_process_chat_message(self, user):
         """Fachada compatível para a implementação da rodada de chat."""
-        self.chat_round_orchestrator.process(user)
+        orchestrator = self.chat_round_orchestrator
+        if orchestrator is not None:
+            orchestrator._session_services = getattr(self, "session_services", None)
+            orchestrator._task_services = getattr(self, "task_services", None)
+            orchestrator._renderer = getattr(self, "renderer", None)
+            orchestrator._session_state = getattr(self, "_chat_state", None)
+            orchestrator._parse_routing = self.parse_routing
+            orchestrator._parse_response = self.parse_response
+            orchestrator._dispatch_services = getattr(self, "dispatch_services", None)
+            orchestrator._show_system_message = getattr(self, "show_system_message", None)
+        else:
+            orchestrator = self.chat_round_orchestrator
+        orchestrator.process(user)
 
     @staticmethod
     def _generate_handoff_id(task, target, timestamp=None):
@@ -909,6 +1179,11 @@ class QuimeraApp:
 
     def parse_response(self, response):
         """Interpreta response."""
+        if getattr(self.protocol, "_shared_state", None) is not self.shared_state:
+            self.protocol._shared_state = self.shared_state
+        current_lock = getattr(self, "_lock", None)
+        if current_lock is not None and getattr(self.protocol, "_lock", None) is not current_lock:
+            self.protocol._lock = current_lock
         return self.protocol.parse_response(response)
 
     def reset_shared_state(self) -> None:
@@ -967,6 +1242,50 @@ class QuimeraApp:
             finally:
                 chat_queue.task_done()
 
+    def _drain_ui_events(self, ui_queue: "queue.Queue") -> None:
+        """Consome todos os RenderEvents pendentes na fila e chama renderer na main thread."""
+        while True:
+            try:
+                event: RenderEvent = ui_queue.get_nowait()
+            except queue.Empty:
+                break
+            try:
+                event_type = event.type
+                if event_type == RenderEvent.SYSTEM:
+                    self.renderer.show_system_neutral(event.payload)
+                elif event_type == RenderEvent.TEXT:
+                    no_response = (event.metadata or {}).get("no_response", False)
+                    if no_response:
+                        self.renderer.show_no_response(event.agent)
+                    else:
+                        self.renderer.show_message(event.agent, event.payload)
+                elif event_type == RenderEvent.WARNING:
+                    self.renderer.show_warning(event.payload)
+                elif event_type == RenderEvent.ERROR:
+                    self.renderer.show_error(event.payload)
+                elif event_type == RenderEvent.HANDOFF:
+                    meta = event.metadata or {}
+                    self.renderer.show_handoff(event.agent, meta.get("to"), task=meta.get("task"))
+                elif event_type == RenderEvent.TURN_SUMMARY:
+                    self.renderer.show_turn_summary(event.agent, event.payload)
+                elif event_type == RenderEvent.REDISPLAY:
+                    if hasattr(self, "_clear_user_prompt_line_if_needed"):
+                        self._clear_user_prompt_line_if_needed()
+                    flush = getattr(self.renderer, "flush", None)
+                    if callable(flush):
+                        flush()
+                    if hasattr(self, "_redisplay_user_prompt_if_needed"):
+                        self._redisplay_user_prompt_if_needed(clear_first=False)
+                elif event_type == RenderEvent.EVENT:
+                    meta = event.metadata or {}
+                    event_obj = meta.get("event_obj")
+                    if event_obj is not None and hasattr(self, "event_sink"):
+                        self.event_sink._dispatch(event_obj)
+            except Exception:
+                logger.exception("_drain_ui_events: erro ao processar evento type=%s", event.type)
+            finally:
+                ui_queue.task_done()
+
     def run(self):
         """Executa o loop interativo do chat multiagente."""
         agent_client = getattr(self, "agent_client", None)
@@ -985,31 +1304,69 @@ class QuimeraApp:
                 summary_loaded=self._format_yes_no(self.session_state["summary_loaded"]),
             )
         )
-        _show_neutral(self._format_session_log_message(self._resolve_session_log_path()))
+        session_log_path = self._resolve_session_log_path()
+        if session_log_path:
+            _show_neutral(self._format_session_log_message(session_log_path))
+        render_debug_log_path = self._resolve_render_debug_log_path()
+        if render_debug_log_path:
+            _show_neutral(f"Audit de render:\n  {render_debug_log_path}\n")
         flush = getattr(self.renderer, "flush", None)
         if callable(flush):
             flush()
 
+        _ui_event_queue: queue.Queue = queue.Queue()
+        if hasattr(self, "dispatch_services") and self.dispatch_services is not None:
+            self.dispatch_services._ui_queue = _ui_event_queue
+        if hasattr(self, "chat_round_orchestrator") and self.chat_round_orchestrator is not None:
+            self.chat_round_orchestrator._ui_queue = _ui_event_queue
+        if hasattr(self, "event_sink") and self.event_sink is not None:
+            self.event_sink._ui_queue = _ui_event_queue
+        if not hasattr(self, "turn_manager") or self.turn_manager is None:
+            self.turn_manager = TurnManager()
+
         threaded_chat = self.threads > 1
+        if hasattr(self, "input_services") and self.input_services is not None:
+            self.input_services.set_nonblocking_tty(threaded_chat)
         chat_queue = None
         chat_worker = None
+        chat_worker_failure_reported = False
         if threaded_chat:
             chat_queue = queue.Queue()
-            chat_worker = threading.Thread(
-                target=self._process_chat_queue,
-                args=(chat_queue,),
-                daemon=True,
+            chat_worker = ChatWorker(
+                chat_queue=chat_queue,
+                ui_event_queue=_ui_event_queue,
+                agent_executor=self._process_chat_message,
+                turn_manager=self.turn_manager,
             )
             chat_worker.start()
 
         try:
             while True:
-                if hasattr(self, "turn_manager") and not self.turn_manager.is_human_turn:
-                    if not getattr(self, "_turn_blocked_warning_shown", False):
-                        self.renderer.show_system("[Aguardando resposta do agente...]")
-                        self._turn_blocked_warning_shown = True
-                    self.turn_manager.wait_for_human_turn(timeout=0.01)
-                    continue
+                self._drain_ui_events(_ui_event_queue)
+                if hasattr(self, "event_sink") and self.event_sink is not None:
+                    self.event_sink.drain_pending()
+                if threaded_chat and chat_worker is not None and not chat_worker.is_alive():
+                    if not chat_worker_failure_reported:
+                        logger.error("chat worker morreu; alternando para processamento síncrono")
+                        self.show_error_message(
+                            "[erro] worker do chat interrompido; alternando para processamento síncrono."
+                        )
+                        chat_worker_failure_reported = True
+                    chat_worker = None
+                    chat_queue = None
+                    threaded_chat = False
+                    if hasattr(self, "turn_manager"):
+                        self.turn_manager.reset()
+                if (
+                    hasattr(self, "turn_manager")
+                    and not self.turn_manager.is_human_turn
+                ):
+                    if not threaded_chat:
+                        if not getattr(self, "_turn_blocked_warning_shown", False):
+                            self.renderer.show_system("[Aguardando resposta do agente...]")
+                            self._turn_blocked_warning_shown = True
+                        self.turn_manager.wait_for_human_turn(timeout=0.01)
+                        continue
                 self._turn_blocked_warning_shown = False
 
                 user = self.read_user_input(self._build_input_prompt(), timeout=0)
@@ -1037,12 +1394,16 @@ class QuimeraApp:
                 if self.handle_command(user):
                     continue
 
-                if hasattr(self, "turn_manager"):
-                    self.turn_manager.next_turn()
                 if chat_queue is not None:
                     chat_queue.put(user)
+                    if hasattr(self, "turn_manager"):
+                        self.turn_manager.next_turn()
                 else:
+                    if hasattr(self, "turn_manager"):
+                        self.turn_manager.next_turn()
                     self._process_chat_message(user)
+                    if hasattr(self, "turn_manager") and self.turn_manager.is_ai_turn:
+                        self.turn_manager.next_turn()
         except KeyboardInterrupt:
             agent_client = getattr(self, "agent_client", None)
             if agent_client is not None:
