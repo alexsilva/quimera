@@ -100,6 +100,10 @@ def _extract_text_from_renderable(value: Any) -> str:
         return " ".join(p for p in parts if p)
     if hasattr(value, "__rich_text__"):
         return str(value.__rich_text__())
+    # rich.markdown.Markdown — extrai o texto-fonte do markup
+    markup = getattr(value, "markup", None)
+    if isinstance(markup, str):
+        return markup
     return str(value)
 
 

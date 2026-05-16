@@ -654,8 +654,6 @@ class ChatRoundOrchestrator:
                     self._show_warning(
                         "[parallel] timeout aguardando agentes; cancelando tarefas pendentes."
                     )
-                    if self._turn_manager is not None:
-                        self._turn_manager.reset()
                     return
                 finally:
                     executor.shutdown(wait=False, cancel_futures=True)

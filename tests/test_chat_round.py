@@ -836,7 +836,7 @@ class TestCoverageGaps(unittest.TestCase):
             orchestrator._process_standard_flow("claude", False, True, ["codex"])
 
         self.assertEqual(cancelled, ["codex", "claude", "codex"])
-        app.turn_manager.reset.assert_called_once()
+        app.turn_manager.reset.assert_not_called()
         app.renderer.show_warning.assert_called_once()
         app._merge_staging_to_workspace.assert_not_called()
 
