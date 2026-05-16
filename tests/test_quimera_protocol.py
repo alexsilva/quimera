@@ -16,12 +16,14 @@ import quimera.plugins as plugins
 from quimera.agents import AgentClient
 from quimera.app import QuimeraApp
 from quimera.app.chat_round import ChatRoundOrchestrator
+from quimera.app.agent_pool import AgentPool
 from quimera.app.core import TurnManager
 from quimera.app.dispatch import AppDispatchServices
 from quimera.app.inputs import AppInputServices, read_from_editor, read_user_input_with_timeout
 from quimera.app.session import AppSessionServices
 from quimera.app.system_layer import AppSystemLayer
 from quimera.app.task import AppTaskServices, call_agent_for_parallel
+from quimera.app.task_classifiers import classify_task_execution_result, classify_task_review_result
 from quimera.app.protocol import AppProtocol, ProtocolEnvelope
 from quimera.app.session_metrics import SessionMetricsService
 from quimera.app.task_events import TaskCompleted
@@ -55,6 +57,14 @@ def _extract_block(prompt: str, tag: str) -> str:
     if not match:
         raise AssertionError(f"Bloco <{tag}> não encontrado no prompt")
     return match.group(1)
+
+
+def _make_protocol(app):
+    return AppProtocol(
+        lock=getattr(app, '_lock', threading.Lock()),
+        shared_state=getattr(app, 'shared_state', {}),
+        workspace=getattr(app, 'workspace', None),
+    )
 
 
 class DummyRenderer:
@@ -108,7 +118,7 @@ class DummyConfigManager:
 
 class DummyStorage:
     def __init__(self, *args, **kwargs):
-        pass
+        self.session_id = "sessao-2026-03-27-123456"
 
     def append_log(self, role, content):
         self.last_log = (role, content)
@@ -137,23 +147,237 @@ class DummyAgentClient:
         return None
 
 
-def materialize_internal_services(app):
-    if not hasattr(app, "protocol"):
-        app.protocol = AppProtocol(app)
-    if not hasattr(app, "task_services"):
-        app.task_services = AppTaskServices(app)
-    if not hasattr(app, "dispatch_services"):
-        app.dispatch_services = AppDispatchServices(app)
-    if not hasattr(app, "input_services"):
-        app.input_services = AppInputServices(app, input_resolver=lambda: input)
-    if not hasattr(app, "system_layer"):
-        app.system_layer = AppSystemLayer(app)
-    if not hasattr(app, "chat_round_orchestrator"):
-        app.chat_round_orchestrator = ChatRoundOrchestrator(app)
+def build_task_services(app):
     if not hasattr(app, "task_executor_factory"):
         app.task_executor_factory = lambda *args, **kwargs: __import__(
             "quimera.app.core", fromlist=["create_executor"]
         ).create_executor(*args, **kwargs)
+    if not hasattr(app, "current_job_id"):
+        app.current_job_id = None
+    if not hasattr(app, "agent_pool"):
+        app.agent_pool = AgentPool([])
+    if not hasattr(app, "task_executors"):
+        app.task_executors = []
+    if not hasattr(app, "renderer"):
+        app.renderer = None
+    if not hasattr(app, "input_services"):
+        app.input_services = None
+    if not hasattr(app, "input_gate"):
+        app.input_gate = None
+    if not hasattr(app, "tasks_db_path"):
+        app.tasks_db_path = None
+    if not hasattr(app, "event_sink"):
+        app.event_sink = None
+    if not hasattr(app, "agent_client"):
+        app.agent_client = None
+    if not hasattr(app, "workspace"):
+        app.workspace = None
+    if not hasattr(app, "dispatch_services"):
+        app.dispatch_services = None
+    if not hasattr(app, "tool_executor"):
+        app.tool_executor = None
+    if not hasattr(app, "auto_approve_mutations"):
+        app.auto_approve_mutations = False
+    if not hasattr(app, "_approval_handler"):
+        app._approval_handler = None
+    if not hasattr(app, "get_agent_plugin"):
+        app.get_agent_plugin = lambda _agent_name: None
+    if not hasattr(app, "get_available_plugins"):
+        app.get_available_plugins = lambda: []
+    if not hasattr(app, "session_state"):
+        app.session_state = None
+    if not hasattr(app, "history"):
+        app.history = None
+    if not hasattr(app, "shared_state"):
+        app.shared_state = None
+    if not hasattr(app, "system_layer"):
+        app.system_layer = None
+    if not hasattr(app, "task_classifier"):
+        app.task_classifier = None
+    if not hasattr(app, "user_name"):
+        app.user_name = ""
+    if not hasattr(app, "prompt_builder"):
+        app.prompt_builder = None
+    if not hasattr(app, "visibility"):
+        app.visibility = None
+    if not hasattr(app, "show_error_message"):
+        app.show_error_message = None
+    if not hasattr(app, "show_muted_message"):
+        app.show_muted_message = None
+    if not hasattr(app, "execution_mode"):
+        app.execution_mode = None
+    if not hasattr(app, "_record_tool_event"):
+        app._record_tool_event = None
+    if not hasattr(app, "record_failure"):
+        app.record_failure = None
+    if not hasattr(app, "session_metrics"):
+        app.session_metrics = None
+    if not hasattr(app, "round_index"):
+        app.round_index = 0
+    if not hasattr(app, "debug_prompt_metrics"):
+        app.debug_prompt_metrics = False
+    if not hasattr(app, "_clear_user_prompt_line_if_needed"):
+        app._clear_user_prompt_line_if_needed = None
+    if not hasattr(app, "_redisplay_user_prompt_if_needed"):
+        app._redisplay_user_prompt_if_needed = None
+    if not hasattr(app, "_output_lock"):
+        app._output_lock = None
+    if not hasattr(app, "_counter_lock"):
+        app._counter_lock = None
+    if not hasattr(app, "_shared_state_lock"):
+        app._shared_state_lock = None
+    if not hasattr(app, "session_services"):
+        app.session_services = None
+    if not hasattr(app, "MAX_RETRIES"):
+        app.MAX_RETRIES = 2
+    if not hasattr(app, "RETRY_BACKOFF_SECONDS"):
+        app.RETRY_BACKOFF_SECONDS = 1
+    if not hasattr(app, "RATE_LIMIT_BACKOFF_SECONDS"):
+        app.RATE_LIMIT_BACKOFF_SECONDS = 30
+    if not hasattr(app, "call_agent"):
+        app.call_agent = lambda *args, **kwargs: None
+    if not hasattr(app, "parse_response"):
+        app.parse_response = lambda raw: (raw, None, None, False, False, None)
+
+    return AppTaskServices(
+        task_executor_factory=app.task_executor_factory,
+        get_current_job_id=lambda: app.current_job_id,
+        get_agent_pool_agents=lambda: list(app.agent_pool.agents),
+        get_task_executors=lambda: list(app.task_executors),
+        set_task_executors=lambda executors: setattr(app, "task_executors", list(executors)),
+        get_renderer=lambda: app.renderer,
+        get_input_services=lambda: app.input_services,
+        get_input_gate=lambda: app.input_gate,
+        get_tasks_db_path=lambda: app.tasks_db_path,
+        get_event_sink=lambda: app.event_sink,
+        get_agent_client=lambda: app.agent_client,
+        get_workspace=lambda: app.workspace,
+        get_dispatch_tool_executor=lambda: app.tool_executor,
+        get_dispatch_services=lambda: app.dispatch_services,
+        get_auto_approve_mutations=lambda: app.auto_approve_mutations,
+        get_approval_handler=lambda: app._approval_handler,
+        set_approval_handler=lambda handler: setattr(app, "_approval_handler", handler),
+        get_agent_plugin=app.get_agent_plugin,
+        get_available_plugins=app.get_available_plugins,
+        get_session_state=lambda: app.session_state,
+        get_history=lambda: app.history,
+        get_shared_state=lambda: app.shared_state,
+        get_system_layer=lambda: app.system_layer,
+        get_task_classifier=lambda: app.task_classifier,
+        get_user_name=lambda: app.user_name,
+        get_prompt_builder=lambda: app.prompt_builder,
+        get_visibility=lambda: app.visibility,
+        get_show_error_message=lambda: app.show_error_message,
+        get_show_muted_message=lambda: app.show_muted_message,
+        get_execution_mode=lambda: app.execution_mode,
+        get_record_tool_event=lambda: app._record_tool_event,
+        get_record_failure=lambda: app.record_failure,
+        get_session_metrics=lambda: app.session_metrics,
+        get_round_index=lambda: app.round_index,
+        get_debug_prompt_metrics=lambda: app.debug_prompt_metrics,
+        get_clear_prompt_line=lambda: app._clear_user_prompt_line_if_needed,
+        get_redisplay_prompt=lambda: app._redisplay_user_prompt_if_needed,
+        get_output_lock=lambda: app._output_lock,
+        get_counter_lock=lambda: app._counter_lock,
+        get_shared_state_lock=lambda: app._shared_state_lock,
+        get_session_services=lambda: app.session_services,
+        get_max_retries=lambda: app.MAX_RETRIES,
+        get_retry_backoff_seconds=lambda: app.RETRY_BACKOFF_SECONDS,
+        get_rate_limit_backoff_seconds=lambda: app.RATE_LIMIT_BACKOFF_SECONDS,
+        call_agent=app.call_agent,
+        parse_response=app.parse_response,
+        classify_task_execution_result=getattr(app, "classify_task_execution_result", classify_task_execution_result),
+        classify_task_review_result=getattr(app, "classify_task_review_result", classify_task_review_result),
+    )
+
+
+def _make_session_services(app):
+    """Constrói AppSessionServices com dependências explícitas a partir de app de teste."""
+    agent_pool = getattr(app, "agent_pool", None)
+    if agent_pool is None:
+        active = getattr(app, "active_agents", None)
+        if active is not None and len(active) > 0:
+            agent_pool = SimpleNamespace(primary=active[0])
+        else:
+            agent_pool = SimpleNamespace(primary=None)
+
+    prompt_builder = getattr(app, "prompt_builder", None)
+    if prompt_builder is None and not hasattr(app, "prompt_builder"):
+        prompt_builder = SimpleNamespace(history_window=None)
+
+    return AppSessionServices(
+        history=app.history,
+        storage=getattr(app, "storage", DummyStorage()),
+        renderer=getattr(app, "renderer", DummyRenderer()),
+        agent_pool=agent_pool,
+        lock=getattr(app, "_lock", threading.Lock()),
+        context_manager=getattr(app, "context_manager", Mock()),
+        session_summarizer=getattr(app, "session_summarizer", Mock()),
+        task_services=getattr(app, "task_services", Mock()),
+        prompt_builder=prompt_builder,
+        shared_state=getattr(app, "shared_state", {}),
+        auto_summarize_threshold=getattr(app, "auto_summarize_threshold", None),
+        summary_agent_preference=getattr(app, "summary_agent_preference", None),
+        agent_client=getattr(app, "agent_client", None),
+    )
+
+
+def materialize_internal_services(app):
+    if getattr(app, "renderer", None) is None:
+        app.renderer = DummyRenderer()
+    if getattr(app, "protocol", None) is None:
+        app.protocol = _make_protocol(app)
+    if getattr(app, "task_executor_factory", None) is None:
+        app.task_executor_factory = lambda *args, **kwargs: __import__(
+            "quimera.app.core", fromlist=["create_executor"]
+        ).create_executor(*args, **kwargs)
+    if getattr(app, "task_services", None) is None:
+        app.task_services = build_task_services(app)
+    if getattr(app, "dispatch_services", None) is None:
+        app.dispatch_services = AppDispatchServices.from_app(app)
+    if getattr(app, "input_services", None) is None:
+        app.input_services = AppInputServices(
+            app.renderer,
+            input_resolver=lambda: input,
+            get_input_status=lambda: getattr(app, "_nonblocking_input_status", "idle"),
+            set_input_status=lambda v: setattr(app, "_nonblocking_input_status", v),
+            set_prompt_text=lambda v: setattr(app, "_nonblocking_prompt_text", v),
+            set_prompt_owner=lambda v: setattr(app, "_prompt_owning_thread_id", v),
+            set_prompt_visible=lambda v: setattr(app, "_nonblocking_prompt_visible", v),
+            flush_deferred_messages=lambda: app.system_layer.flush_deferred_messages(),
+            output_lock=getattr(app, "_output_lock", None),
+        )
+    if getattr(app, "system_layer", None) is None:
+        app.system_layer = AppSystemLayer(app)
+    if getattr(app, "chat_round_orchestrator", None) is None:
+        _agent_pool = getattr(app, "agent_pool", None)
+        if _agent_pool is None:
+            from quimera.app.agent_pool import AgentPool
+            _agent_pool = AgentPool(getattr(app, "active_agents", []) or [])
+            app.agent_pool = _agent_pool
+        app.chat_round_orchestrator = ChatRoundOrchestrator(
+            dispatch_services=getattr(app, "dispatch_services", None),
+            parse_routing=lambda u: app.parse_routing(u),
+            agent_pool=_agent_pool,
+            session_services=getattr(app, "session_services", None),
+            parse_response=lambda r: app.parse_response(r),
+            agent_client=getattr(app, "agent_client", None),
+            turn_manager=getattr(app, "turn_manager", None),
+            task_services=getattr(app, "task_services", None),
+            get_agent_plugin=getattr(app, "get_agent_plugin", None),
+            behavior_metrics=getattr(app, "behavior_metrics", None),
+            threads=getattr(app, "threads", 1),
+            session_state=getattr(app, "session_state", {}),
+            renderer=getattr(app, "renderer", None),
+            show_system_message=getattr(app, "show_system_message", None),
+            get_round_index=lambda: getattr(app, "round_index", 0),
+            set_round_index=lambda v: setattr(app, "round_index", v),
+            set_summary_agent_preference=lambda v: setattr(app, "summary_agent_preference", v),
+            get_pending_input_for=lambda: getattr(app, "_pending_input_for", None),
+            set_pending_input_for=lambda v: setattr(app, "_pending_input_for", v),
+            merge_staging_to_workspace=getattr(app, "_merge_staging_to_workspace", None),
+            generate_handoff_id=getattr(app, "_generate_handoff_id", lambda t, tg: f"gen-{tg}"),
+        )
     if not hasattr(app, "execution_mode"):
         app.execution_mode = None
     return app
@@ -275,7 +499,7 @@ class ProtocolTests(unittest.TestCase):
 
     def test_parse_response_detects_extend_marker_at_end(self):
         app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = AppProtocol(app)
+        app.protocol = _make_protocol(app)
         app.shared_state = {}
 
         response, _, _, extend, _, _ = app.parse_response(f"Resposta objetiva {EXTEND_MARKER}")
@@ -285,7 +509,7 @@ class ProtocolTests(unittest.TestCase):
 
     def test_parse_response_keeps_plain_response(self):
         app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = AppProtocol(app)
+        app.protocol = _make_protocol(app)
         app.shared_state = {}
 
         response, target, handoff, extend, _, _ = app.parse_response("Resposta objetiva")
@@ -297,7 +521,7 @@ class ProtocolTests(unittest.TestCase):
 
     def test_parse_response_extracts_internal_handoff(self):
         app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = AppProtocol(app)
+        app.protocol = _make_protocol(app)
         app.shared_state = {}
 
         response, target, message, extend, _, _ = app.parse_response(
@@ -318,7 +542,7 @@ class ProtocolTests(unittest.TestCase):
 
     def test_parse_response_handoff_with_handoffs_array(self):
         app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = AppProtocol(app)
+        app.protocol = _make_protocol(app)
         app.shared_state = {}
 
         response, target, message, extend, _, _ = app.parse_response(
@@ -341,7 +565,7 @@ class ProtocolTests(unittest.TestCase):
     def test_parse_response_invalid_handoff_missing_route(self):
         """Handoff envelope without route/handoffs is rejected."""
         app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = AppProtocol(app)
+        app.protocol = _make_protocol(app)
         app.shared_state = {}
 
         response, target, message, extend, _, _ = app.parse_response(
@@ -356,7 +580,7 @@ class ProtocolTests(unittest.TestCase):
 
     def test_parse_handoff_payload_task_only(self):
         app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = AppProtocol(app)
+        app.protocol = _make_protocol(app)
         result = app.parse_handoff_payload("task: Revise este código")
         self.assertEqual(result["task"], "Revise este código")
         self.assertIsNone(result["context"])
@@ -366,7 +590,7 @@ class ProtocolTests(unittest.TestCase):
 
     def test_parse_handoff_payload_task_and_context(self):
         app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = AppProtocol(app)
+        app.protocol = _make_protocol(app)
         result = app.parse_handoff_payload("task: Revise este código | context: Verificar performance")
         self.assertEqual(result["task"], "Revise este código")
         self.assertEqual(result["context"], "Verificar performance")
@@ -376,7 +600,7 @@ class ProtocolTests(unittest.TestCase):
     def test_parse_response_extracts_state_update_before_debate(self):
         import threading
         app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = AppProtocol(app)
+        app.protocol = _make_protocol(app)
         app.shared_state = {}
         app._lock = threading.Lock()
 
@@ -398,7 +622,7 @@ class ProtocolTests(unittest.TestCase):
     def test_parse_response_extracts_state_update_after_debate_marker(self):
         import threading
         app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = AppProtocol(app)
+        app.protocol = _make_protocol(app)
         app.shared_state = {}
         app._lock = threading.Lock()
 
@@ -417,7 +641,7 @@ class ProtocolTests(unittest.TestCase):
     def test_parse_response_merges_multiple_state_updates(self):
         import threading
         app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = AppProtocol(app)
+        app.protocol = _make_protocol(app)
         app.shared_state = {"decisions": ["A"]}
         app._lock = threading.Lock()
 
@@ -864,7 +1088,7 @@ class ProtocolTests(unittest.TestCase):
         init_db(str(db_path))
         add_job("Session", db_path=str(db_path), job_id=1)
         app.tasks_db_path = str(db_path)
-        app.task_services = AppTaskServices(app)
+        app.task_services = build_task_services(app)
         app.system_layer = AppSystemLayer(app)
         handled = app.system_layer.handle_command('/task "execute os testes"')
 
@@ -896,7 +1120,7 @@ class ProtocolTests(unittest.TestCase):
         init_db(str(db_path))
         add_job("Session", db_path=str(db_path), job_id=1)
         app.tasks_db_path = str(db_path)
-        app.task_services = AppTaskServices(app)
+        app.task_services = build_task_services(app)
         app.system_layer = AppSystemLayer(app)
         handled = app.system_layer.handle_command('/task "revise o arquivo quimera/app.py"')
 
@@ -931,7 +1155,7 @@ class ProtocolTests(unittest.TestCase):
                 )
 
         app.task_classifier = CustomClassifier()
-        app.task_services = AppTaskServices(app)
+        app.task_services = build_task_services(app)
         app.system_layer = AppSystemLayer(app)
 
         handled = app.system_layer.handle_command('/task "corrija o bug"')
@@ -955,7 +1179,7 @@ class ProtocolTests(unittest.TestCase):
         add_job("Session", db_path=str(db_path), job_id=1)
         app.tasks_db_path = str(db_path)
         app.task_classifier = object()
-        app.task_services = AppTaskServices(app)
+        app.task_services = build_task_services(app)
         app.system_layer = AppSystemLayer(app)
 
         with patch("quimera.app.task.logger.warning") as warning:
@@ -1003,7 +1227,7 @@ class ProtocolTests(unittest.TestCase):
                 db_path=str(db_path),
             )
 
-        selected = AppTaskServices(app).choose_agent_with_load_balance("general")
+        selected = build_task_services(app).choose_agent_with_load_balance("general")
 
         self.assertEqual(selected, AGENT_CODEX)
 
@@ -1019,7 +1243,7 @@ class ProtocolTests(unittest.TestCase):
         init_db(str(db_path))
         add_job("Session", db_path=str(db_path), job_id=1)
         app.tasks_db_path = str(db_path)
-        app.task_services = AppTaskServices(app)
+        app.task_services = build_task_services(app)
         app.system_layer = AppSystemLayer(app)
 
         handled = app.system_layer.handle_command('/task ""')
@@ -1654,7 +1878,7 @@ class ProtocolTests(unittest.TestCase):
         app.session_services.maybe_auto_summarize = Mock()
         app.system_layer = Mock()
         app.system_layer.handle_command = Mock(return_value=False)
-        app.protocol = AppProtocol(app)
+        app.protocol = _make_protocol(app)
         app.dispatch_services = Mock(spec=AppDispatchServices)
         app.dispatch_services.call_agent = Mock(return_value="claude responde")
         app.dispatch_services.print_response = lambda agent, response: printed.append((agent, response))
@@ -1708,6 +1932,55 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(app.renderer.events[2][0], "show_system")
         self.assertEqual(app.renderer.events[3][0], "show_system")
         self.assertEqual(app.renderer.events[4], ("flush", None))
+
+    def test_run_shows_render_audit_path_only_in_debug_mode(self):
+        class RecordingRenderer(DummyRenderer):
+            def __init__(self):
+                super().__init__()
+                self.events = []
+
+            def show_system(self, message):
+                self.events.append(message)
+
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.history = []
+        app.user_name = "Alex"
+        app.execution_mode = None
+        app.renderer = RecordingRenderer()
+        app.storage = SimpleNamespace(
+            session_id="sessao-2026-03-27-123456",
+            get_log_file=lambda: Path("/home/alex/.local/share/quimera/workspaces/abc/data/logs/sessions/sessao-2026-03-27-123456.jsonl"),
+            pop_restore_notice=lambda: None,
+        )
+        app.workspace = SimpleNamespace(
+            tmp=SimpleNamespace(
+                render_log_path_for=lambda _session_id: Path("/tmp/quimera/render-sessao-2026-03-27-123456.jsonl")
+            )
+        )
+        app.session_state = {
+            "session_id": "sessao-2026-03-27-123456",
+            "history_count": 0,
+            "summary_loaded": False,
+        }
+        app.agent_client = DummyAgentClient()
+        app.threads = 1
+        app.read_user_input = Mock(side_effect=["/exit"])
+        app.session_services = Mock()
+        app.debug_prompt_metrics = False
+
+        app.run()
+
+        self.assertTrue(any("Log da sessão:" in msg for msg in app.renderer.events))
+        self.assertTrue(any("sessao-2026-03-27-123456.jsonl" in msg for msg in app.renderer.events))
+        self.assertFalse(any("/tmp/quimera/" in msg for msg in app.renderer.events))
+
+        app.renderer.events.clear()
+        app.read_user_input = Mock(side_effect=["/exit"])
+        app.debug_prompt_metrics = True
+
+        app.run()
+
+        self.assertTrue(any("/tmp/quimera/" in msg for msg in app.renderer.events))
 
     def test_run_keyboard_interrupt_renders_shutdown_with_muted_style(self):
         app = QuimeraApp.__new__(QuimeraApp)
@@ -1776,6 +2049,39 @@ class ProtocolTests(unittest.TestCase):
         self.assertTrue(lines[1].startswith("  ~"))
         self.assertIn("...", lines[1])
         self.assertLessEqual(len(lines[1].strip()), app._SESSION_LOG_DISPLAY_MAX_CHARS)
+
+    def test_resolve_session_log_path_does_not_fallback_to_render_tmp(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.storage = SimpleNamespace(get_log_file=lambda: "", session_id="sessao-2026-03-27-123456")
+        app.workspace = SimpleNamespace(
+            logs_dir=Path("/home/alex/.local/share/quimera/workspaces/abc/data/logs/sessions"),
+            tmp=SimpleNamespace(render_log_path_for=lambda _session_id: Path("/tmp/quimera/render.jsonl")),
+        )
+
+        log_path = app._resolve_session_log_path()
+
+        self.assertEqual(
+            log_path,
+            Path("/home/alex/.local/share/quimera/workspaces/abc/data/logs/sessions/sessao-2026-03-27-123456.jsonl"),
+        )
+
+    def test_resolve_render_debug_log_path_only_when_debug_active(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.storage = SimpleNamespace(session_id="sessao-2026-03-27-123456")
+        app.workspace = SimpleNamespace(
+            tmp=SimpleNamespace(
+                render_log_path_for=lambda session_id: Path(f"/tmp/quimera/render-{session_id}.jsonl")
+            )
+        )
+        app.debug_prompt_metrics = False
+
+        self.assertEqual(app._resolve_render_debug_log_path(), "")
+
+        app.debug_prompt_metrics = True
+        self.assertEqual(
+            app._resolve_render_debug_log_path(),
+            Path("/tmp/quimera/render-sessao-2026-03-27-123456.jsonl"),
+        )
 
     def test_run_uses_four_turns_when_extended(self):
         app = QuimeraApp.__new__(QuimeraApp)
@@ -2128,7 +2434,7 @@ class ProtocolTests(unittest.TestCase):
         app.storage = DummyStorage()
         app._lock = threading.Lock()
 
-        app.session_services = AppSessionServices(app)
+        app.session_services = _make_session_services(app)
         app.session_services.persist_message("human", "oi")
 
         self.assertEqual(app.storage.saved_shared_state, {"goal": "corrigir protocolo"})
@@ -2143,7 +2449,7 @@ class ProtocolTests(unittest.TestCase):
         app.prompt_builder = type("PromptBuilderStub", (), {"history_window": 2})()
         app.auto_summarize_threshold = 0
 
-        app.session_services = AppSessionServices(app)
+        app.session_services = _make_session_services(app)
         app.session_services.persist_message("human", "m24")
 
         self.assertEqual(len(app.history), 24)
@@ -2181,7 +2487,7 @@ class ProtocolTests(unittest.TestCase):
         app.storage = DummyStorage()
         app.shared_state = {"goal": "manter memória"}
 
-        app.session_services = AppSessionServices(app)
+        app.session_services = _make_session_services(app)
         app.session_services.maybe_auto_summarize()
 
         self.assertEqual(
@@ -2216,7 +2522,7 @@ class ProtocolTests(unittest.TestCase):
         app.storage = DummyStorage()
         app.shared_state = {"goal": "manter memória"}
 
-        app.session_services = AppSessionServices(app)
+        app.session_services = _make_session_services(app)
         app.session_services.maybe_auto_summarize()
 
         app.context_manager.load_session_summary.assert_not_called()
@@ -2238,7 +2544,7 @@ class ProtocolTests(unittest.TestCase):
         app.storage = DummyStorage()
         app.shared_state = {}
 
-        app.session_services = AppSessionServices(app)
+        app.session_services = _make_session_services(app)
         app.session_services.maybe_auto_summarize()
 
         app.session_summarizer.summarize.assert_not_called()
@@ -2261,7 +2567,7 @@ class ProtocolTests(unittest.TestCase):
         app.storage = DummyStorage()
         app.shared_state = {}
 
-        app.session_services = AppSessionServices(app)
+        app.session_services = _make_session_services(app)
         app.session_services.maybe_auto_summarize()
 
         app.session_summarizer.summarize.assert_called_once()
@@ -2297,7 +2603,7 @@ class ProtocolTests(unittest.TestCase):
         app.task_services = Mock()
         app.task_services.stop_task_executors = Mock()
 
-        AppSessionServices(app).shutdown()
+        _make_session_services(app).shutdown()
 
         self.assertEqual(
             app.session_summarizer.calls,
@@ -2342,7 +2648,7 @@ class ProtocolTests(unittest.TestCase):
         app.task_services.stop_task_executors = Mock()
 
         with patch("quimera.app.session.threading.Thread", FakeThread):
-            AppSessionServices(app).shutdown()
+            _make_session_services(app).shutdown()
 
         self.assertTrue(app.agent_client._user_cancelled)
         self.assertTrue(app.agent_client._cancel_event.is_set())
@@ -2983,7 +3289,7 @@ class PluginTests(unittest.TestCase):
             "quimera.app.inputs.subprocess.run",
             side_effect=_fake_editor_run,
         ):
-            content = read_from_editor(app)
+            content = read_from_editor(app.renderer, output_lock=app._output_lock)
 
         self.assertEqual(content, "texto do editor")
         self.assertFalse(app._output_lock.locked())
@@ -3007,7 +3313,7 @@ class PluginTests(unittest.TestCase):
             "quimera.app.inputs.subprocess.run",
             side_effect=_fake_editor_run,
         ):
-            content = read_from_editor(app)
+            content = read_from_editor(app.renderer, output_lock=app._output_lock)
 
         self.assertEqual(content, expected)
 
@@ -3024,7 +3330,7 @@ class PluginTests(unittest.TestCase):
             "quimera.app.inputs.subprocess.run",
             side_effect=_fake_editor_run,
         ), patch("quimera.app.inputs.sys.stdout") as mock_stdout:
-            read_from_editor(app)
+            read_from_editor(app.renderer, output_lock=app._output_lock)
 
         writes = [c.args[0] for c in mock_stdout.write.call_args_list]
         self.assertIn("\n", writes)
@@ -3055,7 +3361,7 @@ class PluginTests(unittest.TestCase):
             "quimera.app.inputs.subprocess.run",
             side_effect=_fake_editor_run,
         ), patch("quimera.app.inputs.sys.stdout"):
-            content = read_from_editor(app)
+            content = read_from_editor(app.renderer, output_lock=app._output_lock)
 
         self.assertEqual(content, expected)
 
@@ -3316,7 +3622,7 @@ class PluginTests(unittest.TestCase):
 
     def test_parse_handoff_payload_with_priority(self):
         app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = AppProtocol(app)
+        app.protocol = _make_protocol(app)
         result = app.parse_handoff_payload("task: Corrigir bug crítico | priority: urgent")
         self.assertEqual(result["task"], "Corrigir bug crítico")
         self.assertEqual(result["priority"], "urgent")
@@ -3324,13 +3630,13 @@ class PluginTests(unittest.TestCase):
 
     def test_parse_handoff_payload_invalid_priority_defaults_to_normal(self):
         app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = AppProtocol(app)
+        app.protocol = _make_protocol(app)
         result = app.parse_handoff_payload("task: Algo qualquer | priority: invalido")
         self.assertEqual(result["priority"], "normal")
 
     def test_parse_handoff_payload_generates_unique_ids(self):
         app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = AppProtocol(app)
+        app.protocol = _make_protocol(app)
         r1 = app.parse_handoff_payload("task: Tarefa 1")
         r2 = app.parse_handoff_payload("task: Tarefa 2")
         self.assertNotEqual(r1["handoff_id"], r2["handoff_id"])
@@ -3374,7 +3680,7 @@ class PluginTests(unittest.TestCase):
                 return None
             return "sucesso no retry"
 
-        dispatch = AppDispatchServices(app)
+        dispatch = AppDispatchServices.from_app(app)
         dispatch.call_agent_low_level = fake_call_agent
         dispatch.resolve_agent_response = lambda agent, response, silent=False, persist_history=True, show_output=True: response
 
@@ -3407,7 +3713,7 @@ class PluginTests(unittest.TestCase):
             has_builtin_tools=True,
         ))
 
-        dispatch = AppDispatchServices(app)
+        dispatch = AppDispatchServices.from_app(app)
         result = dispatch.call_agent_low_level("codex-cli")
 
         self.assertEqual(result, "resposta")
@@ -3440,7 +3746,7 @@ class PluginTests(unittest.TestCase):
             has_builtin_tools=True,
         ))
 
-        dispatch = AppDispatchServices(app)
+        dispatch = AppDispatchServices.from_app(app)
         result = dispatch.call_agent_low_level("chatgpt-api")
 
         self.assertEqual(result, "resposta")
@@ -3474,7 +3780,7 @@ class PluginTests(unittest.TestCase):
             has_builtin_tools=True,
         ))
 
-        dispatch = AppDispatchServices(app)
+        dispatch = AppDispatchServices.from_app(app)
         result = dispatch.call_agent_low_level(
             "codex",
             handoff={"task": "Continue a investigação"},
@@ -3519,7 +3825,7 @@ class PluginTests(unittest.TestCase):
         app.agent_client = Mock()
         app.agent_client.call.side_effect = fake_call
 
-        dispatch = AppDispatchServices(app)
+        dispatch = AppDispatchServices.from_app(app)
         result = dispatch.call_agent_low_level("chatgpt-api", show_output=False)
 
         self.assertEqual(result, "resposta final")
@@ -3567,7 +3873,7 @@ class PluginTests(unittest.TestCase):
             ],
         }
 
-        dispatch = AppDispatchServices(app)
+        dispatch = AppDispatchServices.from_app(app)
         result = dispatch.call_agent_low_level("codex-cli")
 
         self.assertEqual(result, "resposta final")
@@ -4346,7 +4652,7 @@ class PluginTests(unittest.TestCase):
 
     def test_parse_response_extracts_ack_marker(self):
         app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = AppProtocol(app)
+        app.protocol = _make_protocol(app)
         app.shared_state = {}
 
         response, target, handoff, extend, needs_input, ack_id = app.parse_response(
@@ -4362,7 +4668,7 @@ class PluginTests(unittest.TestCase):
 
     def test_parse_response_without_ack(self):
         app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = AppProtocol(app)
+        app.protocol = _make_protocol(app)
         app.shared_state = {}
 
         response, _, _, _, _, ack_id = app.parse_response("Resposta sem ACK")
@@ -4373,7 +4679,7 @@ class PluginTests(unittest.TestCase):
     def test_handoff_chain_propagation(self):
         """Test that handoff chain is propagated correctly."""
         app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = AppProtocol(app)
+        app.protocol = _make_protocol(app)
         result = app.parse_handoff_payload("task: Test task")
         self.assertEqual(result["chain"], [])
 
@@ -4385,7 +4691,7 @@ class PluginTests(unittest.TestCase):
     def test_handoff_id_uses_real_target(self):
         """Test that handoff_id includes target in its generation."""
         app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = AppProtocol(app)
+        app.protocol = _make_protocol(app)
         # Generate IDs with same timestamp to verify target affects the hash
         ts = 1234567890.0
         id1 = app._generate_handoff_id("Test task", "codex", timestamp=ts)
@@ -4399,7 +4705,7 @@ class PluginTests(unittest.TestCase):
     def test_ack_mismatch_logged_on_validation(self):
         """Test that ACK mismatch is detected when ack_id != handoff_id."""
         app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = AppProtocol(app)
+        app.protocol = _make_protocol(app)
         app.shared_state = {}
         app.renderer = DummyRenderer()
 
@@ -4510,7 +4816,7 @@ class PluginTests(unittest.TestCase):
         app.record_failure = Mock()
         app._call_agent = Mock(return_value="resposta final")
 
-        dispatch = AppDispatchServices(app)
+        dispatch = AppDispatchServices.from_app(app)
         result = dispatch.resolve_agent_response("codex", "resposta inicial", show_output=False)
 
         self.assertEqual(result, "resposta final")
@@ -4547,7 +4853,7 @@ class PluginTests(unittest.TestCase):
         app._call_agent = Mock(return_value="continuação")
         app.session_metrics = Mock()
 
-        dispatch = AppDispatchServices(app)
+        dispatch = AppDispatchServices.from_app(app)
         result = dispatch.resolve_agent_response("codex", "resposta inicial", show_output=False)
 
         self.assertEqual(result, "Falha: loop de ferramenta inválida detectado.")
@@ -4589,7 +4895,7 @@ class PluginTests(unittest.TestCase):
         app._call_agent = Mock(return_value="continuação")
         app.session_metrics = Mock()
 
-        dispatch = AppDispatchServices(app)
+        dispatch = AppDispatchServices.from_app(app)
         result = dispatch.resolve_agent_response("codex", "resposta inicial", show_output=False)
 
         self.assertEqual(result, "continuação")
@@ -4633,7 +4939,7 @@ class PluginTests(unittest.TestCase):
         app._call_agent = Mock(return_value="continuação")
         app.session_metrics = Mock()
 
-        dispatch = AppDispatchServices(app)
+        dispatch = AppDispatchServices.from_app(app)
         result = dispatch.resolve_agent_response("codex", "resposta inicial", show_output=False)
 
         self.assertEqual(result, "continuação")
@@ -4810,7 +5116,7 @@ class FallbackChainTests(unittest.TestCase):
     def test_fallback_skips_original_agent_and_chain(self):
         """Fallback não deve tentar o agente original nem os já na cadeia."""
         app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = AppProtocol(app)
+        app.protocol = _make_protocol(app)
         app.shared_state = {}
 
         # Simula handoff com chain
@@ -4937,7 +5243,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
         app.tasks_db_path = str(Path(self.enterContext(tempfile.TemporaryDirectory())) / "tasks.db")
 
-        selected = [plugin.name for plugin in AppTaskServices(app).get_task_routing_plugins()]
+        selected = [plugin.name for plugin in build_task_services(app).get_task_routing_plugins()]
 
         self.assertEqual(selected, [AGENT_CLAUDE, AGENT_CODEX])
 
@@ -4946,7 +5252,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         app.active_agents = ["*"]
         app.tasks_db_path = str(Path(self.enterContext(tempfile.TemporaryDirectory())) / "tasks.db")
 
-        selected = [plugin.name for plugin in AppTaskServices(app).get_task_routing_plugins()]
+        selected = [plugin.name for plugin in build_task_services(app).get_task_routing_plugins()]
 
         self.assertEqual(
             selected,
@@ -4996,7 +5302,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         from quimera.metrics import BehaviorMetricsTracker
 
         app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = AppProtocol(app)
+        app.protocol = _make_protocol(app)
         app.shared_state = {}
         app.behavior_metrics = BehaviorMetricsTracker()
 
@@ -5081,7 +5387,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         app.history = [{"role": "human", "content": "Corrija o parser atual"}]
         app.shared_state = {}
 
-        body = AppTaskServices(app).build_task_body("corrigir parser")
+        body = build_task_services(app).build_task_body("corrigir parser")
 
         self.assertIn("PROTOCOLO OPERACIONAL:", body)
         self.assertIn("Descubra o alvo antes de mudar", body)
@@ -5100,7 +5406,7 @@ class MetricsFeedbackTests(unittest.TestCase):
             "allowed_scope": ["parser.py"],
         }
 
-        body = AppTaskServices(app).build_task_body("corrigir parser")
+        body = build_task_services(app).build_task_body("corrigir parser")
 
         self.assertIn("ESTADO COMPARTILHADO (referência):", body)
         self.assertIn('"goal_canonical": "Corrigir parser legado"', body)
@@ -5118,7 +5424,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         app.shared_state = {}
         app.prompt_builder = type("PromptBuilderStub", (), {"history_window": 4})()
 
-        body = AppTaskServices(app).build_task_body("corrigir parser")
+        body = build_task_services(app).build_task_body("corrigir parser")
 
         self.assertIn("ALEX]: Corrija o parser atual", body)
         self.assertIn("CODEX]: Vou inspecionar o arquivo antes de editar.", body)
@@ -5152,7 +5458,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         )
         complete_task(task_id, result="ok" * 200, db_path=str(db_path))
         app.tasks_db_path = str(db_path)
-        AppTaskServices(app).refresh_task_shared_state()
+        build_task_services(app).refresh_task_shared_state()
 
         self.assertIn("task_overview", app.shared_state)
         results = app.shared_state.get("completed_task_results", "")
@@ -5179,7 +5485,7 @@ class MetricsFeedbackTests(unittest.TestCase):
             complete_task(task_id, result="resultado " * 30, db_path=str(db_path))
 
         app.tasks_db_path = str(db_path)
-        AppTaskServices(app).refresh_task_shared_state()
+        build_task_services(app).refresh_task_shared_state()
 
         results = app.shared_state.get("completed_task_results", "")
         self.assertLessEqual(len(results), 2000)
@@ -5197,7 +5503,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         init_db(str(db_path))
         add_job("Session", db_path=str(db_path), job_id=1)
         app.tasks_db_path = str(db_path)
-        AppTaskServices(app).refresh_task_shared_state()
+        build_task_services(app).refresh_task_shared_state()
 
         self.assertIn("task_overview", app.shared_state)
         self.assertNotIn("completed_task_results", app.shared_state)
@@ -5208,7 +5514,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         app.current_job_id = 1
         app.tasks_db_path = "/tmp/unused.db"
 
-        AppTaskServices(app).refresh_task_shared_state()
+        build_task_services(app).refresh_task_shared_state()
 
         self.assertIsNone(app.shared_state)
 
@@ -5373,7 +5679,7 @@ class AppProtocolDirectTests(unittest.TestCase):
     # --- _get_decisions_logger ---
 
     def test_get_decisions_logger_returns_none_when_no_path(self):
-        proto = AppProtocol(Mock(), decisions_log_path=None)
+        proto = AppProtocol(lock=threading.Lock(), shared_state={}, decisions_log_path=None)
         result = proto._get_decisions_logger()
         self.assertIsNone(result)
 
@@ -5381,7 +5687,7 @@ class AppProtocolDirectTests(unittest.TestCase):
         with patch("quimera.workspace.DecisionsLogger") as MockDL:
             import tempfile
             tmp = tempfile.mktemp(suffix=".json")
-            proto = AppProtocol(Mock(), decisions_log_path=tmp)
+            proto = AppProtocol(lock=threading.Lock(), shared_state={}, decisions_log_path=tmp)
             # first call creates it
             first = proto._get_decisions_logger()
             # second call returns cached (line 34)
@@ -5399,7 +5705,7 @@ class AppProtocolDirectTests(unittest.TestCase):
             with patch("quimera.workspace.DecisionsLogger", return_value=mock_logger):
                 app = self._make_app()
                 app.workspace = SimpleNamespace(cwd="/tmp")
-                proto = AppProtocol(app, decisions_log_path=log_path)
+                proto = AppProtocol(lock=app._lock, shared_state=app.shared_state, workspace=app.workspace, decisions_log_path=log_path)
                 payload = '{"decisions": ["dec1", "dec2"]}'
                 result = proto.apply_state_update(payload)
             self.assertTrue(result)
@@ -5419,19 +5725,19 @@ class AppProtocolDirectTests(unittest.TestCase):
 
     def test_apply_state_update_invalid_json_returns_false(self):
         app = self._make_app()
-        proto = AppProtocol(app)
+        proto = _make_protocol(app)
         result = proto.apply_state_update("not json {{")
         self.assertFalse(result)
 
     def test_apply_state_update_non_dict_returns_false(self):
         app = self._make_app()
-        proto = AppProtocol(app)
+        proto = _make_protocol(app)
         result = proto.apply_state_update('"just a string"')
         self.assertFalse(result)
 
     def test_apply_state_update_skips_empty_key(self):
         app = self._make_app()
-        proto = AppProtocol(app)
+        proto = _make_protocol(app)
         result = proto.apply_state_update('{"": "value", "valid": "ok"}')
         self.assertTrue(result)
         self.assertNotIn("", app.shared_state)
@@ -5439,7 +5745,7 @@ class AppProtocolDirectTests(unittest.TestCase):
 
     def test_apply_state_update_pops_key_when_merged_is_none(self):
         app = self._make_app(shared_state={"goal": "old"})
-        proto = AppProtocol(app)
+        proto = _make_protocol(app)
         # incoming "" causes merge to return None → pop
         result = proto.apply_state_update('{"goal": ""}')
         self.assertTrue(result)
@@ -5447,7 +5753,7 @@ class AppProtocolDirectTests(unittest.TestCase):
 
     def test_apply_state_update_ignores_keys_outside_agent_allowlist(self):
         app = self._make_app(shared_state={"goal": "old"})
-        proto = AppProtocol(app)
+        proto = _make_protocol(app)
 
         result = proto.apply_state_update(
             '{"goal_canonical":"corrigir parser","task_overview":{"job_id": 1},"completed_task_results":"hack","spy_last_turn_detail":{"agent":"claude"},"mode":"test"}'
@@ -5465,7 +5771,7 @@ class AppProtocolDirectTests(unittest.TestCase):
 
     def test_apply_state_update_rejects_invalid_value_types_for_agent_contract(self):
         app = self._make_app()
-        proto = AppProtocol(app)
+        proto = _make_protocol(app)
 
         result = proto.apply_state_update(
             '{"goal_canonical":["lista inválida"],"allowed_scope":"parser.py","evidence":["pytest -q"],"next_step":"executar suíte"}'
@@ -5482,7 +5788,7 @@ class AppProtocolDirectTests(unittest.TestCase):
 
     def test_apply_state_update_ignores_invalid_type_for_list_field(self):
         app = self._make_app()
-        proto = AppProtocol(app)
+        proto = _make_protocol(app)
         result = proto.apply_state_update('{"allowed_scope": "parser.py"}')
         self.assertTrue(result)
         self.assertEqual(app.shared_state, {})
@@ -5490,13 +5796,12 @@ class AppProtocolDirectTests(unittest.TestCase):
     # --- parse_handoff_payload ---
 
     def test_parse_handoff_payload_no_match_returns_none(self):
-        proto = AppProtocol(Mock())
+        proto = AppProtocol(lock=threading.Lock(), shared_state={})
         result = proto.parse_handoff_payload("completely invalid payload no task keyword", target="codex")
         self.assertIsNone(result)
 
     def test_parse_handoff_payload_empty_task_returns_none(self):
-        # Usa regex customizado que aceita grupo vazio para exercer linha 123-129
-        proto = AppProtocol(Mock())
+        proto = AppProtocol(lock=threading.Lock(), shared_state={})
         proto.HANDOFF_PAYLOAD_PATTERN = re.compile(
             r"^\s*task:\s*([^\n]*?)\s*(?:context:\s*([^\n]*?))?\s*(?:expected:\s*([^\n]*?))?\s*(?:priority:\s*([^\n]*?))?\s*$",
             re.IGNORECASE,
@@ -5508,14 +5813,14 @@ class AppProtocolDirectTests(unittest.TestCase):
 
     def test_parse_response_none_returns_all_none(self):
         app = self._make_app()
-        proto = AppProtocol(app)
+        proto = _make_protocol(app)
         result = proto.parse_response(None)
         self.assertEqual(result, (None, None, None, False, False, None))
 
     def test_parse_response_needs_human_input_marker(self):
         from quimera.constants import NEEDS_INPUT_MARKER
         app = self._make_app()
-        proto = AppProtocol(app)
+        proto = _make_protocol(app)
         response, _, _, _, needs_input, _ = proto.parse_response(f"pergunta {NEEDS_INPUT_MARKER}")
         self.assertTrue(needs_input)
         self.assertNotIn(NEEDS_INPUT_MARKER, response)
@@ -5523,7 +5828,7 @@ class AppProtocolDirectTests(unittest.TestCase):
     def test_parse_response_json_envelope_no_response_content(self):
         """Envelope JSON puro de handoff não vaza content como resposta visível."""
         app = self._make_app()
-        proto = AppProtocol(app)
+        proto = _make_protocol(app)
         result = proto.parse_response(
             '{"type": "handoff", "route": "codex", "content": "task: fazer algo"}'
         )
@@ -5534,7 +5839,7 @@ class AppProtocolDirectTests(unittest.TestCase):
     def test_parse_response_json_envelope_handoffs_array_no_surrounding_text(self):
         """Envelope JSON com handoffs[] e sem texto ao redor."""
         app = self._make_app()
-        proto = AppProtocol(app)
+        proto = _make_protocol(app)
         result = proto.parse_response(
             '{"type": "handoff", "handoffs": ['
             '{"route": "codex", "content": "task: fazer algo"}, '
@@ -5664,7 +5969,7 @@ class AppProtocolDirectTests(unittest.TestCase):
 
     def test_parse_response_json_envelope_handoff(self):
         app = self._make_app()
-        proto = AppProtocol(app)
+        proto = _make_protocol(app)
         response, route_target, handoff, extend, needs_input, ack_id = (
             proto.parse_response('{"type": "handoff", "content": "task: refactor", "route": "codex"}')
         )
@@ -5679,7 +5984,7 @@ class AppProtocolDirectTests(unittest.TestCase):
 
     def test_parse_response_json_envelope_state_update(self):
         app = self._make_app()
-        proto = AppProtocol(app)
+        proto = _make_protocol(app)
         proto.parse_response(
             '{"type": "state_update", "content": "", "state_updates": {"goal_canonical": "corrigir parser","mode":"test"}}'
         )
@@ -5687,7 +5992,7 @@ class AppProtocolDirectTests(unittest.TestCase):
 
     def test_parse_response_json_envelope_ack(self):
         app = self._make_app()
-        proto = AppProtocol(app)
+        proto = _make_protocol(app)
         response, route_target, handoff, extend, needs_input, ack_id = (
             proto.parse_response('{"type": "ack", "content": "done", "handoff_id": "abc123"}')
         )
@@ -5714,7 +6019,7 @@ class AppProtocolDirectTests(unittest.TestCase):
             '{"type": "handoff", "content": "task: refactor", "route": "codex"}'
         )
         app = self._make_app()
-        proto = AppProtocol(app)
+        proto = _make_protocol(app)
         response, route_target, handoff, extend, needs_input, ack_id = (
             proto.parse_response(text)
         )
@@ -5736,7 +6041,7 @@ class AppProtocolDirectTests(unittest.TestCase):
             ']}'
         )
         app = self._make_app()
-        proto = AppProtocol(app)
+        proto = _make_protocol(app)
         response, route_target, handoff, extend, needs_input, ack_id = (
             proto.parse_response(text)
         )
@@ -5756,7 +6061,7 @@ class AppProtocolDirectTests(unittest.TestCase):
             'Observação final'
         )
         app = self._make_app()
-        proto = AppProtocol(app)
+        proto = _make_protocol(app)
         response, route_target, handoff, _, _, _ = proto.parse_response(text)
         self.assertEqual(route_target, "gemini")
         self.assertEqual(handoff["task"], "task: revise")
@@ -5771,7 +6076,7 @@ class AppProtocolDirectTests(unittest.TestCase):
             'Resultado da análise'
         )
         app = self._make_app()
-        proto = AppProtocol(app)
+        proto = _make_protocol(app)
         response, route_target, handoff, _, _, _ = proto.parse_response(text)
         self.assertEqual(route_target, "codex")
         self.assertEqual(handoff["task"], "task: check")
@@ -5784,7 +6089,7 @@ class AppProtocolDirectTests(unittest.TestCase):
             '{"type": "handoff", "content": "", "route": "codex"}'
         )
         app = self._make_app()
-        proto = AppProtocol(app)
+        proto = _make_protocol(app)
         response, route_target, handoff, _, _, _ = proto.parse_response(text)
         self.assertIsNone(route_target)
         self.assertIsNone(handoff)
@@ -5797,7 +6102,7 @@ class AppProtocolDirectTests(unittest.TestCase):
             '{"type": "handoff", "content": "   ", "route": "codex"}'
         )
         app = self._make_app()
-        proto = AppProtocol(app)
+        proto = _make_protocol(app)
         response, route_target, handoff, _, _, _ = proto.parse_response(text)
         self.assertIsNone(route_target)
         self.assertIsNone(handoff)
@@ -5812,7 +6117,7 @@ class AppProtocolDirectTests(unittest.TestCase):
         )
         app = self._make_app()
         app._lock = threading.Lock()
-        proto = AppProtocol(app)
+        proto = _make_protocol(app)
         response, _, _, _, _, _ = proto.parse_response(text)
         self.assertEqual(app.shared_state, {"goal": "embedded"})
         self.assertEqual(response, "relatório")
@@ -5824,7 +6129,7 @@ class AppProtocolDirectTests(unittest.TestCase):
             '{"type": "ack", "content": "done", "handoff_id": "xyz789"}'
         )
         app = self._make_app()
-        proto = AppProtocol(app)
+        proto = _make_protocol(app)
         response, _, _, _, _, ack_id = proto.parse_response(text)
         self.assertEqual(ack_id, "xyz789")
         self.assertEqual(response, "processando")
@@ -5862,7 +6167,7 @@ class AppProtocolDirectTests(unittest.TestCase):
     def test_parse_response_json_envelope_empty_content_handoff(self):
         """Handoff envelope com content vazio é rejeitado — não cria route/handoff."""
         app = self._make_app()
-        proto = AppProtocol(app)
+        proto = _make_protocol(app)
         response, route_target, handoff, extend, needs_input, ack_id = (
             proto.parse_response('{"type": "handoff", "content": "", "route": "codex"}')
         )
@@ -5873,7 +6178,7 @@ class AppProtocolDirectTests(unittest.TestCase):
     def test_parse_response_json_envelope_whitespace_content_handoff(self):
         """Handoff envelope com content só whitespace é rejeitado."""
         app = self._make_app()
-        proto = AppProtocol(app)
+        proto = _make_protocol(app)
         response, route_target, handoff, extend, needs_input, ack_id = (
             proto.parse_response('{"type": "handoff", "content": "   ", "route": "codex"}')
         )
@@ -5941,7 +6246,7 @@ class AppProtocolDirectTests(unittest.TestCase):
     def test_parse_response_handoffs_array_single_item_has_no_pending(self):
         """handoffs com 1 item não cria _pending_handoffs."""
         app = self._make_app()
-        proto = AppProtocol(app)
+        proto = _make_protocol(app)
         response, target, handoff, _, _, _ = proto.parse_response(
             '{"type": "handoff", "handoffs": [{"route": "codex", "content": "task: single target"}]}'
         )
@@ -5952,7 +6257,7 @@ class AppProtocolDirectTests(unittest.TestCase):
     def test_parse_response_handoffs_rejected_empty_content(self):
         """handoffs + content vazio — rejeitado."""
         app = self._make_app()
-        proto = AppProtocol(app)
+        proto = _make_protocol(app)
         response, target, handoff, _, _, _ = proto.parse_response(
             '{"type": "handoff", "handoffs": [{"route": "codex", "content": ""}]}'
         )
@@ -5962,7 +6267,7 @@ class AppProtocolDirectTests(unittest.TestCase):
     def test_parse_response_rejects_legacy_routes_field(self):
         """type=handoff com routes legado é rejeitado."""
         app = self._make_app()
-        proto = AppProtocol(app)
+        proto = _make_protocol(app)
         response, target, handoff, _, _, _ = proto.parse_response(
             '{"type": "handoff", "routes": ["codex"], "content": "task: something"}'
         )
@@ -5973,7 +6278,7 @@ class AppProtocolDirectTests(unittest.TestCase):
     def test_parse_response_rejected_missing_route_and_handoffs_value(self):
         """type=handoff sem route e sem handoffs — rejeitado."""
         app = self._make_app()
-        proto = AppProtocol(app)
+        proto = _make_protocol(app)
         response, target, handoff, _, _, _ = proto.parse_response(
             '{"type": "handoff", "content": "task: something"}'
         )

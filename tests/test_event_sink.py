@@ -151,3 +151,27 @@ def test_concurrent_publish_does_not_raise():
         t.join()
 
     assert errors == []
+
+
+def test_publish_from_background_thread_defers_until_main_thread_drains():
+    sink = EventSink()
+    received = []
+    handler_threads = []
+
+    def handler(event):
+        received.append(event)
+        handler_threads.append(threading.current_thread())
+
+    sink.subscribe(TaskProposed, handler)
+    event = _proposed()
+
+    worker = threading.Thread(target=lambda: sink.publish(event))
+    worker.start()
+    worker.join()
+
+    assert received == []
+
+    sink.drain_pending()
+
+    assert received == [event]
+    assert handler_threads == [threading.main_thread()]

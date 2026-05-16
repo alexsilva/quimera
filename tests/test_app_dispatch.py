@@ -270,7 +270,7 @@ class TestResolveAgentResponse:
     """Testes para AppDispatchServices.resolve_agent_response"""
 
     def test_empty_response_returns_none(self, dispatch_app):
-        ds = AppDispatchServices(dispatch_app)
+        ds = AppDispatchServices.from_app(dispatch_app)
         assert ds.resolve_agent_response("agent1", None) is None
         assert ds.resolve_agent_response("agent1", "") == ""
 
@@ -278,7 +278,7 @@ class TestResolveAgentResponse:
         dispatch_app.tool_executor.maybe_execute_from_response = MagicMock(
             return_value=("raw", None)
         )
-        ds = AppDispatchServices(dispatch_app)
+        ds = AppDispatchServices.from_app(dispatch_app)
         result = ds.resolve_agent_response("agent1", "hello")
         assert result == "hello"
 
@@ -297,7 +297,7 @@ class TestResolveAgentResponse:
         # Para que não atinja threshold de loop
         plugin = dispatch_app.get_agent_plugin("agent1")
         plugin.tool_use_reliability = "high"
-        ds = AppDispatchServices(dispatch_app)
+        ds = AppDispatchServices.from_app(dispatch_app)
         result = ds.resolve_agent_response("agent1", "some cmd")
         # Deve ter saido pelo segundo hop (sem tool)
         assert result is not None
@@ -313,7 +313,7 @@ class TestResolveAgentResponse:
         )
         plugin = dispatch_app.get_agent_plugin("agent1")
         plugin.tool_use_reliability = "low"  # threshold baixo
-        ds = AppDispatchServices(dispatch_app)
+        ds = AppDispatchServices.from_app(dispatch_app)
         result = ds.resolve_agent_response("agent1", "some cmd")
         assert "loop de ferramenta inválida" in (result or "")
 
@@ -328,7 +328,7 @@ class TestResolveAgentResponse:
         )
         plugin = dispatch_app.get_agent_plugin("agent1")
         plugin.tool_use_reliability = "low"  # max_tool_hops baixo
-        ds = AppDispatchServices(dispatch_app)
+        ds = AppDispatchServices.from_app(dispatch_app)
         result = ds.resolve_agent_response("agent1", "some cmd")
         assert "limite de execuções de ferramenta" in (result or "")
 
@@ -348,7 +348,7 @@ class TestResolveAgentResponse:
         dispatch_app.tool_executor.maybe_execute_from_response = MagicMock(side_effect=_maybe_exec)
         plugin = dispatch_app.get_agent_plugin("agent1")
         plugin.tool_use_reliability = "high"
-        ds = AppDispatchServices(dispatch_app)
+        ds = AppDispatchServices.from_app(dispatch_app)
         ds.resolve_agent_response("agent1", "some text with tool", show_output=True, persist_history=True)
         dispatch_app.print_response.assert_called()
         dispatch_app.session_services.persist_message.assert_called()
@@ -369,7 +369,7 @@ class TestResolveAgentResponse:
         dispatch_app.tool_executor.maybe_execute_from_response = MagicMock(side_effect=_maybe_exec)
         plugin = dispatch_app.get_agent_plugin("agent1")
         plugin.tool_use_reliability = "high"
-        ds = AppDispatchServices(dispatch_app)
+        ds = AppDispatchServices.from_app(dispatch_app)
         ds.resolve_agent_response("agent1", "some text with tool", show_output=False)
         dispatch_app.print_response.assert_not_called()
 
@@ -380,7 +380,7 @@ class TestResolveAgentResponse:
         dispatch_app.tool_executor.maybe_execute_from_response = MagicMock(
             return_value=("hello", None)
         )
-        ds = AppDispatchServices(dispatch_app)
+        ds = AppDispatchServices.from_app(dispatch_app)
         ds.resolve_agent_response("agent1", "hello")
         approval_handler.reset_approve_all_after_cycle.assert_called_once()
 
@@ -399,7 +399,7 @@ class TestResolveAgentResponse:
         dispatch_app._call_agent = MagicMock(return_value="after-tool")
         plugin = dispatch_app.get_agent_plugin("agent1")
         plugin.tool_use_reliability = "high"
-        ds = AppDispatchServices(dispatch_app)
+        ds = AppDispatchServices.from_app(dispatch_app)
         result = ds.resolve_agent_response("agent1", "initial")
         assert result == "after-tool"
         handoff_arg = dispatch_app._call_agent.call_args.kwargs["handoff"]
@@ -424,7 +424,7 @@ class TestResolveAgentResponse:
         # Remove _call_agent para forçar o fallback
         if hasattr(dispatch_app, "_call_agent"):
             del dispatch_app._call_agent
-        ds = AppDispatchServices(dispatch_app)
+        ds = AppDispatchServices.from_app(dispatch_app)
         # O hop tool_result gera followup_handoff que chama call_agent_low_level
         # Como call_agent_low_level não está mockado, ele vai tentar chamar de verdade
         # Vamos mocká-lo para evitar erro
@@ -437,7 +437,7 @@ class TestResolveAgentResponse:
         dispatch_app.tool_executor.maybe_execute_from_response = MagicMock(
             side_effect=AssertionError("não deveria executar ferramenta após cancelamento")
         )
-        ds = AppDispatchServices(dispatch_app)
+        ds = AppDispatchServices.from_app(dispatch_app)
         result = ds.resolve_agent_response("agent1", "some cmd")
         assert result is None
         dispatch_app.tool_executor.maybe_execute_from_response.assert_not_called()
@@ -457,7 +457,7 @@ class TestResolveAgentResponse:
         plugin = dispatch_app.get_agent_plugin("agent1")
         plugin.tool_use_reliability = "high"
 
-        ds = AppDispatchServices(dispatch_app)
+        ds = AppDispatchServices.from_app(dispatch_app)
         result = ds.resolve_agent_response("agent1", "some cmd")
         assert result is None
         dispatch_app._call_agent.assert_not_called()
@@ -472,7 +472,7 @@ class TestCallAgent:
 
     def test_successful_single_call(self, dispatch_app):
         dispatch_app.MAX_RETRIES = 1
-        ds = AppDispatchServices(dispatch_app)
+        ds = AppDispatchServices.from_app(dispatch_app)
         with patch.object(ds, "call_agent_low_level", return_value="response"), \
              patch.object(ds, "resolve_agent_response", return_value="result"):
             result = ds.call_agent("agent1")
@@ -482,7 +482,7 @@ class TestCallAgent:
         """response None → retry até max_retries, depois record_failure"""
         dispatch_app.MAX_RETRIES = 2
         dispatch_app.RETRY_BACKOFF_SECONDS = 0.01
-        ds = AppDispatchServices(dispatch_app)
+        ds = AppDispatchServices.from_app(dispatch_app)
         with patch.object(ds, "call_agent_low_level", return_value=None), \
              patch.object(ds, "resolve_agent_response") as mock_resolve, \
              patch("quimera.app.agent_call_service.time.sleep"):
@@ -495,7 +495,7 @@ class TestCallAgent:
         dispatch_app.MAX_RETRIES = 2
         dispatch_app.RETRY_BACKOFF_SECONDS = 0.5
         dispatch_app.agent_client.rate_limit_detected = False
-        ds = AppDispatchServices(dispatch_app)
+        ds = AppDispatchServices.from_app(dispatch_app)
         with patch.object(ds, "call_agent_low_level", return_value=None), \
              patch("quimera.app.agent_call_service.time.sleep") as mock_sleep:
             result = ds.call_agent("agent1")
@@ -504,7 +504,7 @@ class TestCallAgent:
 
     def test_none_low_level_with_user_cancelled_after_call_aborts(self, dispatch_app):
         dispatch_app.MAX_RETRIES = 2
-        ds = AppDispatchServices(dispatch_app)
+        ds = AppDispatchServices.from_app(dispatch_app)
 
         def _low_level(*args, **kwargs):
             dispatch_app.agent_client._user_cancelled = True
@@ -518,7 +518,7 @@ class TestCallAgent:
         """resolve_agent_response retorna None → retry"""
         dispatch_app.MAX_RETRIES = 2
         dispatch_app.RETRY_BACKOFF_SECONDS = 0.01
-        ds = AppDispatchServices(dispatch_app)
+        ds = AppDispatchServices.from_app(dispatch_app)
         with patch.object(ds, "call_agent_low_level", return_value="response"), \
              patch.object(ds, "resolve_agent_response", return_value=None) as mock_resolve, \
              patch("quimera.app.agent_call_service.time.sleep"):
@@ -530,7 +530,7 @@ class TestCallAgent:
         dispatch_app.MAX_RETRIES = 2
         dispatch_app.RETRY_BACKOFF_SECONDS = 0.5
         dispatch_app.agent_client.rate_limit_detected = False
-        ds = AppDispatchServices(dispatch_app)
+        ds = AppDispatchServices.from_app(dispatch_app)
         with patch.object(ds, "call_agent_low_level", return_value="response"), \
              patch.object(ds, "resolve_agent_response", return_value=None), \
              patch("quimera.app.agent_call_service.time.sleep") as mock_sleep:
@@ -540,7 +540,7 @@ class TestCallAgent:
 
     def test_none_resolve_with_user_cancelled_after_resolve_aborts(self, dispatch_app):
         dispatch_app.MAX_RETRIES = 2
-        ds = AppDispatchServices(dispatch_app)
+        ds = AppDispatchServices.from_app(dispatch_app)
 
         def _resolve(*args, **kwargs):
             dispatch_app.agent_client._user_cancelled = True
@@ -555,7 +555,7 @@ class TestCallAgent:
         """_user_cancelled True → aborta sem retry"""
         dispatch_app.agent_client._user_cancelled = True
         dispatch_app.MAX_RETRIES = 2
-        ds = AppDispatchServices(dispatch_app)
+        ds = AppDispatchServices.from_app(dispatch_app)
         with patch.object(ds, "call_agent_low_level", return_value=None), \
              patch("quimera.app.agent_call_service.time.sleep"):
             result = ds.call_agent("agent1")
@@ -566,7 +566,7 @@ class TestCallAgent:
         dispatch_app.agent_client.rate_limit_detected = True
         dispatch_app.MAX_RETRIES = 2
         dispatch_app.RETRY_BACKOFF_SECONDS = 0.5
-        ds = AppDispatchServices(dispatch_app)
+        ds = AppDispatchServices.from_app(dispatch_app)
         with patch.object(ds, "call_agent_low_level", return_value=None), \
              patch("quimera.app.agent_call_service.time.sleep") as mock_sleep:
             result = ds.call_agent("agent1")
@@ -579,7 +579,7 @@ class TestCallAgent:
         """Exception no low_level → retry → exhausted → raise"""
         dispatch_app.MAX_RETRIES = 2
         dispatch_app.RETRY_BACKOFF_SECONDS = 0.01
-        ds = AppDispatchServices(dispatch_app)
+        ds = AppDispatchServices.from_app(dispatch_app)
         with patch.object(ds, "call_agent_low_level", side_effect=ValueError("boom")), \
              patch("quimera.app.agent_call_service.time.sleep"):
             with pytest.raises(ValueError, match="boom"):
@@ -588,7 +588,7 @@ class TestCallAgent:
     def test_exception_with_user_cancelled_returns_none(self, dispatch_app):
         """Exception + _user_cancelled → return None"""
         dispatch_app.MAX_RETRIES = 2
-        ds = AppDispatchServices(dispatch_app)
+        ds = AppDispatchServices.from_app(dispatch_app)
 
         class _CancelledOnSecondCall:
             call_count = 0
@@ -606,7 +606,7 @@ class TestCallAgent:
 
     def test_exception_marks_cancelled_and_returns_none(self, dispatch_app):
         dispatch_app.MAX_RETRIES = 2
-        ds = AppDispatchServices(dispatch_app)
+        ds = AppDispatchServices.from_app(dispatch_app)
 
         def _boom(*args, **kwargs):
             dispatch_app.agent_client._user_cancelled = True
@@ -619,7 +619,7 @@ class TestCallAgent:
     def test_user_cancelled_prevents_retry_loop(self, dispatch_app):
         """_user_cancelled True → low_level não é chamado de novo, sem fallback infinito"""
         dispatch_app.MAX_RETRIES = 3
-        ds = AppDispatchServices(dispatch_app)
+        ds = AppDispatchServices.from_app(dispatch_app)
         low_level = MagicMock(return_value=None)
         ds.call_agent_low_level = low_level
         dispatch_app.agent_client._user_cancelled = True
@@ -634,7 +634,7 @@ class TestCallAgent:
     def test_cancelled_during_call_does_not_retry(self, dispatch_app):
         """cancelamento durante call_agent_low_level → aborta sem tentar de novo"""
         dispatch_app.MAX_RETRIES = 3
-        ds = AppDispatchServices(dispatch_app)
+        ds = AppDispatchServices.from_app(dispatch_app)
 
         def _cancelled_then_boom(*args, **kwargs):
             dispatch_app.agent_client._user_cancelled = True
@@ -651,7 +651,7 @@ class TestCallAgent:
     def test_with_handoff_options(self, dispatch_app):
         """handoff dict é passado corretamente"""
         dispatch_app.MAX_RETRIES = 1
-        ds = AppDispatchServices(dispatch_app)
+        ds = AppDispatchServices.from_app(dispatch_app)
         with patch.object(ds, "call_agent_low_level", return_value="resp") as mock_ll, \
              patch.object(ds, "resolve_agent_response", return_value="result"):
             result = ds.call_agent("agent1", handoff={"handoff_id": "h123"})
@@ -665,7 +665,7 @@ class TestCallAgent:
         """Exception no resolve_agent_response → retry"""
         dispatch_app.MAX_RETRIES = 2
         dispatch_app.RETRY_BACKOFF_SECONDS = 0.01
-        ds = AppDispatchServices(dispatch_app)
+        ds = AppDispatchServices.from_app(dispatch_app)
         with patch.object(ds, "call_agent_low_level", return_value="response"), \
              patch.object(ds, "resolve_agent_response", side_effect=[RuntimeError("resolve fail"), "ok"]), \
              patch("quimera.app.agent_call_service.time.sleep"):
@@ -701,12 +701,12 @@ class TestCallAgentLowLevel:
         return app
 
     def test_basic_call(self, ll_app):
-        ds = AppDispatchServices(ll_app)
+        ds = AppDispatchServices.from_app(ll_app)
         result = ds.call_agent_low_level("agent1")
         assert result == "agent response"
 
     def test_silent_does_not_start_stream(self, ll_app):
-        ds = AppDispatchServices(ll_app)
+        ds = AppDispatchServices.from_app(ll_app)
         ds.call_agent_low_level("agent1", silent=True)
         ll_app.renderer.start_message_stream.assert_not_called()
 
@@ -718,7 +718,7 @@ class TestCallAgentLowLevel:
                 on_text_chunk(" world")
             return "response"
         ll_app.agent_client.call = _call
-        ds = AppDispatchServices(ll_app)
+        ds = AppDispatchServices.from_app(ll_app)
         result = ds.call_agent_low_level("agent1")
         assert result == "response"
         ll_app.renderer.show_message.assert_not_called()
@@ -730,7 +730,7 @@ class TestCallAgentLowLevel:
                 on_text_chunk("hello")
             return None
         ll_app.agent_client.call = _call
-        ds = AppDispatchServices(ll_app)
+        ds = AppDispatchServices.from_app(ll_app)
         result = ds.call_agent_low_level("agent1")
         assert result is None
         ll_app.renderer.show_message.assert_not_called()
@@ -740,12 +740,12 @@ class TestCallAgentLowLevel:
         ll_app.debug_prompt_metrics = True
         ll_app.prompt_builder.build = MagicMock(return_value=("prompt_text", {"tokens": 10}))
         ll_app.agent_client.log_prompt_metrics = MagicMock()
-        ds = AppDispatchServices(ll_app)
+        ds = AppDispatchServices.from_app(ll_app)
         ds.call_agent_low_level("agent1")
         ll_app.agent_client.log_prompt_metrics.assert_called_once()
 
     def test_handoff_passed_to_build(self, ll_app):
-        ds = AppDispatchServices(ll_app)
+        ds = AppDispatchServices.from_app(ll_app)
         ds.call_agent_low_level("agent1", handoff={"route_target": "agent2"})
         # build foi chamado com handoff
         ll_app.prompt_builder.build.assert_called_once()
@@ -753,20 +753,20 @@ class TestCallAgentLowLevel:
         assert args[3] == {"route_target": "agent2"}  # 4º arg posicional
 
     def test_handoff_only(self, ll_app):
-        ds = AppDispatchServices(ll_app)
+        ds = AppDispatchServices.from_app(ll_app)
         ds.call_agent_low_level("agent1", handoff_only=True)
         kwargs = ll_app.prompt_builder.build.call_args.kwargs
         assert kwargs.get("handoff_only") is True
 
     def test_flush_pending_summary_called(self, ll_app):
-        ds = AppDispatchServices(ll_app)
+        ds = AppDispatchServices.from_app(ll_app)
         ds.call_agent_low_level("agent1")
         ll_app.agent_client.flush_pending_summary.assert_called_once()
 
     def test_counter_lock(self, ll_app):
         """_counter_lock None → não crasha"""
         ll_app._counter_lock = None
-        ds = AppDispatchServices(ll_app)
+        ds = AppDispatchServices.from_app(ll_app)
         result = ds.call_agent_low_level("agent1")
         assert result == "agent response"
 
@@ -779,12 +779,12 @@ class TestCallAgentLowLevel:
                 on_text_chunk("hello")
             return "response"
         ll_app.agent_client.call = _call
-        ds = AppDispatchServices(ll_app)
+        ds = AppDispatchServices.from_app(ll_app)
         ds.call_agent_low_level("agent1")
         ll_app._redisplay_user_prompt_if_needed.assert_called_once_with(clear_first=False)
 
     def test_primary_false(self, ll_app):
-        ds = AppDispatchServices(ll_app)
+        ds = AppDispatchServices.from_app(ll_app)
         ds.call_agent_low_level("agent1", primary=False)
         kwargs = ll_app.prompt_builder.build.call_args.kwargs
         assert kwargs.get("primary") is False
@@ -796,14 +796,14 @@ class TestCallAgentLowLevel:
             return "response"
 
         ll_app.agent_client.call = _call
-        ds = AppDispatchServices(ll_app)
+        ds = AppDispatchServices.from_app(ll_app)
         ds.call_agent_low_level("agent1", show_output=False)
         ll_app.renderer.start_message_stream.assert_not_called()
         ll_app.renderer.update_message_stream.assert_not_called()
 
     def test_cancelled_before_low_level_call_returns_none(self, ll_app):
         ll_app.agent_client._user_cancelled = True
-        ds = AppDispatchServices(ll_app)
+        ds = AppDispatchServices.from_app(ll_app)
         result = ds.call_agent_low_level("agent1")
         assert result is None
         ll_app.agent_client.call.assert_not_called()
@@ -818,7 +818,7 @@ class TestCallAgentLowLevel:
                 "handoffs_failed": 0,
             }
         )
-        ds = AppDispatchServices(ll_app)
+        ds = AppDispatchServices.from_app(ll_app)
         ds.call_agent_low_level("agent1")
         assert ll_app.session_state["handoffs_failed"] == 1
         assert ll_app.session_state["handoffs_succeeded"] == 0
@@ -833,7 +833,7 @@ class TestCallAgentLowLevel:
                 "handoffs_failed": 0,
             }
         )
-        ds = AppDispatchServices(ll_app)
+        ds = AppDispatchServices.from_app(ll_app)
         ds.call_agent_low_level("agent1")
         assert ll_app.session_state["handoffs_succeeded"] == 1
         assert ll_app.session_state["handoffs_failed"] == 0
@@ -841,7 +841,7 @@ class TestCallAgentLowLevel:
 
 class TestPrintResponse:
     def test_print_response_with_text_shows_message(self, dispatch_app):
-        ds = AppDispatchServices(dispatch_app)
+        ds = AppDispatchServices.from_app(dispatch_app)
         dispatch_app._redisplay_user_prompt_if_needed = MagicMock()
         dispatch_app._clear_user_prompt_line_if_needed = MagicMock()
         ds.print_response("agent1", "hello")
@@ -850,7 +850,7 @@ class TestPrintResponse:
         dispatch_app._redisplay_user_prompt_if_needed.assert_called_once_with(clear_first=False)
 
     def test_print_response_without_text_shows_no_response(self, dispatch_app):
-        ds = AppDispatchServices(dispatch_app)
+        ds = AppDispatchServices.from_app(dispatch_app)
         dispatch_app._redisplay_user_prompt_if_needed = MagicMock()
         dispatch_app._clear_user_prompt_line_if_needed = MagicMock()
         ds.print_response("agent1", None)
@@ -868,13 +868,13 @@ class TestUpdateSpyTelemetry:
 
     def test_no_agent_client_does_nothing(self, dispatch_app):
         dispatch_app.agent_client = None
-        ds = AppDispatchServices(dispatch_app)
+        ds = AppDispatchServices.from_app(dispatch_app)
         # Não deve crashar
         ds._update_spy_telemetry("agent1")
 
     def test_no_last_spy_turn_detail_does_nothing(self, dispatch_app):
         dispatch_app.agent_client.last_spy_turn_detail = None
-        ds = AppDispatchServices(dispatch_app)
+        ds = AppDispatchServices.from_app(dispatch_app)
         ds._update_spy_telemetry("agent1")
         assert "spy_last_turn_detail" not in dispatch_app.shared_state
 
@@ -883,7 +883,7 @@ class TestUpdateSpyTelemetry:
             "turn_id": "t1",
             "tools": [{"tool_call_id": "c1"}],
         }
-        ds = AppDispatchServices(dispatch_app)
+        ds = AppDispatchServices.from_app(dispatch_app)
         ds._update_spy_telemetry("agent1")
         assert "spy_last_turn_detail" in dispatch_app.shared_state
         assert dispatch_app.shared_state["spy_last_turn_detail"]["agent"] == "agent1"
@@ -893,7 +893,7 @@ class TestUpdateSpyTelemetry:
             "turn_id": "t1",
             "tools": [],
         }
-        ds = AppDispatchServices(dispatch_app)
+        ds = AppDispatchServices.from_app(dispatch_app)
         ds._update_spy_telemetry("agent1")
         assert "last_spy_turn_detail" in dispatch_app.session_state
 
@@ -903,6 +903,6 @@ class TestUpdateSpyTelemetry:
             "turn_id": "t1",
             "tools": [],
         }
-        ds = AppDispatchServices(dispatch_app)
+        ds = AppDispatchServices.from_app(dispatch_app)
         ds._update_spy_telemetry("agent1")
         # Não deve crashar

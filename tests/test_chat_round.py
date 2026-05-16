@@ -1,9 +1,11 @@
 """Testes de cobertura para quimera/app/chat_round.py."""
 import threading
 import unittest
+from concurrent.futures import TimeoutError
 from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock, patch
 
+from quimera.app.agent_pool import AgentPool
 from quimera.app.chat_round import ChatRoundOrchestrator
 from quimera.prompt_kinds import PromptKind
 
@@ -15,7 +17,7 @@ from quimera.prompt_kinds import PromptKind
 def _make_app(active_agents=None, threads=1):
     """Cria um app mínimo para testes do ChatRoundOrchestrator."""
     app = SimpleNamespace()
-    app.active_agents = list(active_agents or ["claude", "codex"])
+    app.agent_pool = AgentPool(list(active_agents or ["claude", "codex"]))
     app.threads = threads
     app.round_index = 0
     app.summary_agent_preference = None
@@ -36,6 +38,10 @@ def _make_app(active_agents=None, threads=1):
     app.session_services = Mock()
     app.session_services.persist_message = Mock()
     app.session_services.maybe_auto_summarize = Mock()
+    app.task_services = Mock()
+    app.task_services.call_agent_for_parallel = Mock(
+        return_value=("codex", "resposta", None, None, False, False)
+    )
 
     app.turn_manager = Mock()
     app.turn_manager.reset = Mock()
@@ -49,8 +55,34 @@ def _make_app(active_agents=None, threads=1):
     # parse_response padrão: resposta simples sem handoff
     app.parse_response = Mock(return_value=("resposta", None, None, False, False, None))
 
-    app.chat_round_orchestrator = ChatRoundOrchestrator(app)
+    app.chat_round_orchestrator = _make_orchestrator(app)
     return app
+
+
+def _make_orchestrator(app):
+    return ChatRoundOrchestrator(
+        dispatch_services=app.dispatch_services,
+        parse_routing=lambda user: app.parse_routing(user),
+        agent_pool=app.agent_pool,
+        session_services=app.session_services,
+        parse_response=lambda resp: app.parse_response(resp),
+        agent_client=getattr(app, 'agent_client', None),
+        turn_manager=getattr(app, 'turn_manager', None),
+        task_services=getattr(app, 'task_services', None),
+        get_agent_plugin=getattr(app, 'get_agent_plugin', None),
+        behavior_metrics=getattr(app, 'behavior_metrics', None),
+        threads=getattr(app, 'threads', 1),
+        session_state=getattr(app, 'session_state', {"session_id": "test-cr"}),
+        renderer=getattr(app, 'renderer', None),
+        show_system_message=getattr(app, 'show_system_message', None),
+        get_round_index=lambda: app.round_index,
+        set_round_index=lambda v: setattr(app, 'round_index', v),
+        set_summary_agent_preference=lambda v: setattr(app, 'summary_agent_preference', v),
+        get_pending_input_for=lambda: app._pending_input_for,
+        set_pending_input_for=lambda v: setattr(app, '_pending_input_for', v),
+        merge_staging_to_workspace=getattr(app, '_merge_staging_to_workspace', None),
+        generate_handoff_id=getattr(app, '_generate_handoff_id', lambda t, tg: f"gen-{tg}"),
+    )
 
 
 def _make_handoff(task="Faça X", handoff_id="id-001", chain=None, priority="normal"):
@@ -172,7 +204,7 @@ class TestProcessHandoff(unittest.TestCase):
         """Handoff para si mesmo dentro da cadeia deve interromper com warning."""
         app = _make_app()
         handoff = _make_handoff("task x")
-        orchestrator = ChatRoundOrchestrator(app)
+        orchestrator = _make_orchestrator(app)
 
         # current_from == current_target → self-handoff
         orchestrator._process_handoff("claude", "claude", handoff)
@@ -183,7 +215,7 @@ class TestProcessHandoff(unittest.TestCase):
         """Delegação circular detectada na chain deve interromper com warning."""
         app = _make_app()
         handoff = _make_handoff("task x", chain=["codex"])  # codex já na chain
-        orchestrator = ChatRoundOrchestrator(app)
+        orchestrator = _make_orchestrator(app)
 
         orchestrator._process_handoff("claude", "codex", handoff)
 
@@ -194,7 +226,7 @@ class TestProcessHandoff(unittest.TestCase):
         app = _make_app()
         app.behavior_metrics = Mock()
         handoff = _make_handoff("task x", chain=["codex"])
-        orchestrator = ChatRoundOrchestrator(app)
+        orchestrator = _make_orchestrator(app)
 
         orchestrator._process_handoff("claude", "codex", handoff)
 
@@ -204,7 +236,7 @@ class TestProcessHandoff(unittest.TestCase):
         """Agente desconhecido na cadeia deve interromper com warning."""
         app = _make_app(active_agents=["claude", "codex"])
         handoff = _make_handoff("task x")
-        orchestrator = ChatRoundOrchestrator(app)
+        orchestrator = _make_orchestrator(app)
 
         orchestrator._process_handoff("claude", "fantasma", handoff)
 
@@ -217,7 +249,7 @@ class TestProcessHandoff(unittest.TestCase):
         handoff = _make_handoff("task x")
         app.dispatch_services.call_agent = Mock(return_value="codex respondeu")
         app.parse_response = Mock(return_value=("codex respondeu", None, None, False, False, None))
-        orchestrator = ChatRoundOrchestrator(app)
+        orchestrator = _make_orchestrator(app)
 
         orchestrator._process_handoff("claude", "codex", handoff)
 
@@ -230,7 +262,7 @@ class TestProcessHandoff(unittest.TestCase):
         handoff = _make_handoff("task x")
         app.dispatch_services.call_agent = Mock(return_value="codex respondeu")
         app.parse_response = Mock(return_value=("codex respondeu", None, None, False, False, None))
-        orchestrator = ChatRoundOrchestrator(app)
+        orchestrator = _make_orchestrator(app)
 
         orchestrator._process_handoff("claude", "codex", handoff)
 
@@ -246,7 +278,7 @@ class TestProcessHandoff(unittest.TestCase):
         app.dispatch_services.call_agent = Mock(return_value="resp")
         app.parse_response = Mock(return_value=("resp", None, None, False, False, None))
         app.agent_client._user_cancelled = True
-        orchestrator = ChatRoundOrchestrator(app)
+        orchestrator = _make_orchestrator(app)
 
         orchestrator._process_handoff("claude", "codex", handoff)
 
@@ -259,7 +291,7 @@ class TestProcessHandoff(unittest.TestCase):
         app.dispatch_services.call_agent = Mock(return_value="resp")
         # ack_id diferente do handoff_id
         app.parse_response = Mock(return_value=("resp", None, None, False, False, "wrong-id"))
-        orchestrator = ChatRoundOrchestrator(app)
+        orchestrator = _make_orchestrator(app)
 
         # Não deve levantar exceção
         orchestrator._process_handoff("claude", "codex", handoff)
@@ -270,7 +302,7 @@ class TestProcessHandoff(unittest.TestCase):
         handoff = _make_handoff("task x")
         app.dispatch_services.call_agent = Mock(return_value=None)
         app.parse_response = Mock(return_value=(None, None, None, False, False, None))
-        orchestrator = ChatRoundOrchestrator(app)
+        orchestrator = _make_orchestrator(app)
 
         # Executa sem levantar exceção; codex não responde e não há fallback
         orchestrator._process_handoff("claude", "codex", handoff)
@@ -305,7 +337,7 @@ class TestProcessHandoff(unittest.TestCase):
             return ("síntese", None, None, False, False, None)
 
         app.parse_response = Mock(side_effect=fake_parse)
-        orchestrator = ChatRoundOrchestrator(app)
+        orchestrator = _make_orchestrator(app)
 
         orchestrator._process_handoff("claude", "codex", handoff)
 
@@ -335,7 +367,7 @@ class TestProcessHandoff(unittest.TestCase):
             return (resp, None, None, False, False, None)
 
         app.parse_response = Mock(side_effect=fake_parse)
-        orchestrator = ChatRoundOrchestrator(app)
+        orchestrator = _make_orchestrator(app)
 
         orchestrator._process_handoff("claude", "codex", handoff)
 
@@ -347,7 +379,7 @@ class TestProcessHandoff(unittest.TestCase):
         handoff = _make_handoff("task x")
         # HANDOFF_MAX_HOPS_FACTOR=0 → max_hops = max(1, 2*0) = 1
         # Após 1 hop, o while não itera mais e exibe mensagem de limite
-        orchestrator = ChatRoundOrchestrator(app)
+        orchestrator = _make_orchestrator(app)
         orchestrator.HANDOFF_MAX_HOPS_FACTOR = 0
 
         next_h = _make_handoff("next task", handoff_id="id-002")
@@ -376,7 +408,7 @@ class TestProcessHandoff(unittest.TestCase):
             return ("síntese final", None, None, False, False, None)
 
         app.parse_response = Mock(side_effect=fake_parse)
-        orchestrator = ChatRoundOrchestrator(app)
+        orchestrator = _make_orchestrator(app)
 
         orchestrator._process_handoff("claude", "codex", handoff)
 
@@ -399,7 +431,7 @@ class TestProcessHandoff(unittest.TestCase):
         app.dispatch_services.call_agent = Mock(side_effect=fake_call)
         # parse só é chamado para a resposta do codex; síntese é abortada antes
         app.parse_response = Mock(return_value=("codex respondeu", None, None, False, False, None))
-        orchestrator = ChatRoundOrchestrator(app)
+        orchestrator = _make_orchestrator(app)
 
         orchestrator._process_handoff("claude", "codex", handoff)
 
@@ -418,7 +450,7 @@ class TestProcessStandardFlow(unittest.TestCase):
         app.agent_client._user_cancelled = True
         app.dispatch_services.call_agent = Mock(return_value="resp")
         app.parse_response = Mock(return_value=("resp", None, None, False, False, None))
-        orchestrator = ChatRoundOrchestrator(app)
+        orchestrator = _make_orchestrator(app)
 
         orchestrator._process_standard_flow("claude", False, True, ["codex"])
 
@@ -429,7 +461,7 @@ class TestProcessStandardFlow(unittest.TestCase):
         app = _make_app(active_agents=["claude", "codex"])
         app.dispatch_services.call_agent = Mock(return_value="resp")
         app.parse_response = Mock(return_value=("resp", None, None, False, True, None))
-        orchestrator = ChatRoundOrchestrator(app)
+        orchestrator = _make_orchestrator(app)
 
         orchestrator._process_standard_flow("claude", False, True, ["codex"])
 
@@ -450,7 +482,7 @@ class TestProcessStandardFlow(unittest.TestCase):
             return ("resp2", None, None, False, False, None)
 
         app.parse_response = Mock(side_effect=fake_parse)
-        orchestrator = ChatRoundOrchestrator(app)
+        orchestrator = _make_orchestrator(app)
 
         orchestrator._process_standard_flow("claude", False, True, ["codex"])
 
@@ -466,7 +498,7 @@ class TestProcessStandardFlow(unittest.TestCase):
         app.task_services.call_agent_for_parallel = Mock(
             return_value=("codex", "resposta", None, None, False, False)
         )
-        orchestrator = ChatRoundOrchestrator(app)
+        orchestrator = _make_orchestrator(app)
 
         orchestrator._process_standard_flow("claude", False, True, ["codex"])
 
@@ -486,7 +518,7 @@ class TestProcessStandardFlow(unittest.TestCase):
         app.task_services.call_agent_for_parallel = Mock(
             return_value=("codex", "resposta", None, None, False, False)
         )
-        orchestrator = ChatRoundOrchestrator(app)
+        orchestrator = _make_orchestrator(app)
 
         orchestrator._process_standard_flow("claude", False, True, ["codex"])
 
@@ -501,7 +533,7 @@ class TestProcessStandardFlow(unittest.TestCase):
         app.task_services.call_agent_for_parallel = Mock(
             return_value=("codex", "resposta", None, None, True, True)
         )
-        orchestrator = ChatRoundOrchestrator(app)
+        orchestrator = _make_orchestrator(app)
 
         orchestrator._process_standard_flow("claude", False, True, ["codex"])
 
@@ -518,7 +550,7 @@ class TestShowSystem(unittest.TestCase):
         """_show_system deve preferir app.show_system_message se disponível."""
         app = _make_app()
         app.show_system_message = Mock()
-        orchestrator = ChatRoundOrchestrator(app)
+        orchestrator = _make_orchestrator(app)
 
         orchestrator._show_system("teste")
 
@@ -528,7 +560,7 @@ class TestShowSystem(unittest.TestCase):
     def test_show_system_falls_back_to_renderer(self):
         """_show_system deve usar renderer.show_system se show_system_message não existir."""
         app = _make_app()
-        orchestrator = ChatRoundOrchestrator(app)
+        orchestrator = _make_orchestrator(app)
 
         orchestrator._show_system("teste")
 
@@ -538,7 +570,7 @@ class TestShowSystem(unittest.TestCase):
         """_show_system deve usar renderer.show_system se show_system_message levanta AttributeError."""
         app = _make_app()
         app.show_system_message = Mock(side_effect=AttributeError("stub"))
-        orchestrator = ChatRoundOrchestrator(app)
+        orchestrator = _make_orchestrator(app)
 
         orchestrator._show_system("teste")
 
@@ -566,7 +598,7 @@ class TestCoverageGaps(unittest.TestCase):
     def test_process_standard_flow_explicit_empty_remaining(self):
         """explicit=True deve resultar em remaining=[] sem chamar call_agent."""
         app = _make_app(active_agents=["claude", "codex"])
-        orchestrator = ChatRoundOrchestrator(app)
+        orchestrator = _make_orchestrator(app)
 
         orchestrator._process_standard_flow("claude", True, False, ["codex"])
 
@@ -587,7 +619,7 @@ class TestCoverageGaps(unittest.TestCase):
 
         app.dispatch_services.call_agent = Mock(return_value="resp")
         app.parse_response = Mock(side_effect=fake_parse)
-        orchestrator = ChatRoundOrchestrator(app)
+        orchestrator = _make_orchestrator(app)
 
         # extend=True → remaining = ["codex", "claude", "codex"]
         orchestrator._process_standard_flow("claude", False, True, ["codex"])
@@ -616,7 +648,7 @@ class TestCoverageGaps(unittest.TestCase):
 
         app.dispatch_services.call_agent = Mock(side_effect=fake_call)
         app.parse_response = Mock(side_effect=fake_parse)
-        orchestrator = ChatRoundOrchestrator(app)
+        orchestrator = _make_orchestrator(app)
 
         # Não deve levantar exceção; lines 297-298 são executadas
         orchestrator._process_handoff("claude", "codex", handoff)
@@ -671,12 +703,88 @@ class TestCoverageGaps(unittest.TestCase):
         app.task_services.call_agent_for_parallel = Mock(
             return_value=("codex", "resposta", None, None, False, False)
         )
-        orchestrator = ChatRoundOrchestrator(app)
+        orchestrator = _make_orchestrator(app)
 
         # Deve executar sem exceção; o warning é emitido via logger interno
         orchestrator._process_standard_flow("claude", False, True, ["codex"])
         # get_agent_plugin chamado para detectar agentes stream-json
         app.get_agent_plugin.assert_called()
+
+    def test_parallel_mode_uses_timeout_on_future_result(self):
+        """Fan-out paralelo deve aguardar cada future com timeout explícito."""
+        app = _make_app(active_agents=["claude", "codex"], threads=2)
+        app.get_agent_plugin = Mock(return_value=SimpleNamespace(output_format="text"))
+        app._merge_staging_to_workspace = Mock()
+        orchestrator = _make_orchestrator(app)
+        seen_timeouts = []
+
+        class FakeFuture:
+            def result(self, timeout=None):
+                seen_timeouts.append(timeout)
+                return ("codex", "resposta", None, None, False, False)
+
+            def done(self):
+                return True
+
+            def cancel(self):
+                return False
+
+        class FakeExecutor:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def submit(self, *args, **kwargs):
+                return FakeFuture()
+
+            def shutdown(self, wait=True, cancel_futures=False):
+                return None
+
+        with patch("quimera.app.chat_round.ThreadPoolExecutor", FakeExecutor):
+            orchestrator._process_standard_flow("claude", False, True, ["codex"])
+
+        self.assertEqual(seen_timeouts, [30, 30, 30])
+
+    def test_parallel_mode_cancels_pending_futures_on_timeout(self):
+        """Timeout no fan-out paralelo deve cancelar pendências, avisar e resetar turno."""
+        app = _make_app(active_agents=["claude", "codex"], threads=2)
+        app.get_agent_plugin = Mock(return_value=SimpleNamespace(output_format="text"))
+        app._merge_staging_to_workspace = Mock()
+        orchestrator = _make_orchestrator(app)
+        cancelled = []
+
+        class FakeFuture:
+            def __init__(self, agent):
+                self.agent = agent
+                self._done = False
+
+            def result(self, timeout=None):
+                raise TimeoutError()
+
+            def done(self):
+                return self._done
+
+            def cancel(self):
+                cancelled.append(self.agent)
+                self._done = True
+                return True
+
+        class FakeExecutor:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def submit(self, fn, agent, *args, **kwargs):
+                return FakeFuture(agent)
+
+            def shutdown(self, wait=True, cancel_futures=False):
+                return None
+
+        with patch("quimera.app.chat_round.ThreadPoolExecutor", FakeExecutor):
+            orchestrator._process_standard_flow("claude", False, True, ["codex"])
+
+        self.assertEqual(cancelled, ["codex", "claude", "codex"])
+        app.turn_manager.reset.assert_called_once()
+        app.renderer.show_warning.assert_called_once()
+        app._merge_staging_to_workspace.assert_not_called()
 
 
 if __name__ == "__main__":

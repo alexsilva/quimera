@@ -1,6 +1,151 @@
 from quimera.app.task_execution_service import TaskExecutionService
 from quimera.app.task import AppTaskServices, _BACKGROUND_AGENT_TIMEOUT_SECONDS
+from quimera.app.task_classifiers import classify_task_execution_result, classify_task_review_result
 from quimera.runtime.models import TaskRecord
+
+
+def build_task_services(app):
+    if not hasattr(app, "task_executor_factory"):
+        app.task_executor_factory = lambda *args, **kwargs: __import__(
+            "quimera.app.core", fromlist=["create_executor"]
+        ).create_executor(*args, **kwargs)
+    if not hasattr(app, "current_job_id"):
+        app.current_job_id = None
+    if not hasattr(app, "agent_pool"):
+        app.agent_pool = type("AgentPoolStub", (), {"agents": []})()
+    if not hasattr(app, "task_executors"):
+        app.task_executors = []
+    if not hasattr(app, "renderer"):
+        app.renderer = None
+    if not hasattr(app, "input_services"):
+        app.input_services = None
+    if not hasattr(app, "input_gate"):
+        app.input_gate = None
+    if not hasattr(app, "tasks_db_path"):
+        app.tasks_db_path = None
+    if not hasattr(app, "event_sink"):
+        app.event_sink = None
+    if not hasattr(app, "agent_client"):
+        app.agent_client = None
+    if not hasattr(app, "workspace"):
+        app.workspace = None
+    if not hasattr(app, "dispatch_services"):
+        app.dispatch_services = None
+    if not hasattr(app, "tool_executor"):
+        app.tool_executor = None
+    if not hasattr(app, "auto_approve_mutations"):
+        app.auto_approve_mutations = False
+    if not hasattr(app, "_approval_handler"):
+        app._approval_handler = None
+    if not hasattr(app, "get_agent_plugin"):
+        app.get_agent_plugin = lambda _agent_name: None
+    if not hasattr(app, "get_available_plugins"):
+        app.get_available_plugins = lambda: []
+    if not hasattr(app, "session_state"):
+        app.session_state = None
+    if not hasattr(app, "history"):
+        app.history = None
+    if not hasattr(app, "shared_state"):
+        app.shared_state = None
+    if not hasattr(app, "system_layer"):
+        app.system_layer = None
+    if not hasattr(app, "task_classifier"):
+        app.task_classifier = None
+    if not hasattr(app, "user_name"):
+        app.user_name = ""
+    if not hasattr(app, "prompt_builder"):
+        app.prompt_builder = None
+    if not hasattr(app, "visibility"):
+        app.visibility = None
+    if not hasattr(app, "show_error_message"):
+        app.show_error_message = None
+    if not hasattr(app, "show_muted_message"):
+        app.show_muted_message = None
+    if not hasattr(app, "execution_mode"):
+        app.execution_mode = None
+    if not hasattr(app, "_record_tool_event"):
+        app._record_tool_event = None
+    if not hasattr(app, "record_failure"):
+        app.record_failure = None
+    if not hasattr(app, "session_metrics"):
+        app.session_metrics = None
+    if not hasattr(app, "round_index"):
+        app.round_index = 0
+    if not hasattr(app, "debug_prompt_metrics"):
+        app.debug_prompt_metrics = False
+    if not hasattr(app, "_clear_user_prompt_line_if_needed"):
+        app._clear_user_prompt_line_if_needed = None
+    if not hasattr(app, "_redisplay_user_prompt_if_needed"):
+        app._redisplay_user_prompt_if_needed = None
+    if not hasattr(app, "_output_lock"):
+        app._output_lock = None
+    if not hasattr(app, "_counter_lock"):
+        app._counter_lock = None
+    if not hasattr(app, "_shared_state_lock"):
+        app._shared_state_lock = None
+    if not hasattr(app, "session_services"):
+        app.session_services = None
+    if not hasattr(app, "MAX_RETRIES"):
+        app.MAX_RETRIES = 2
+    if not hasattr(app, "RETRY_BACKOFF_SECONDS"):
+        app.RETRY_BACKOFF_SECONDS = 1
+    if not hasattr(app, "RATE_LIMIT_BACKOFF_SECONDS"):
+        app.RATE_LIMIT_BACKOFF_SECONDS = 30
+    if not hasattr(app, "call_agent"):
+        app.call_agent = lambda *args, **kwargs: None
+    if not hasattr(app, "parse_response"):
+        app.parse_response = lambda raw: (raw, None, None, False, False, None)
+
+    return AppTaskServices(
+        task_executor_factory=app.task_executor_factory,
+        get_current_job_id=lambda: app.current_job_id,
+        get_agent_pool_agents=lambda: list(app.agent_pool.agents),
+        get_task_executors=lambda: list(app.task_executors),
+        set_task_executors=lambda executors: setattr(app, "task_executors", list(executors)),
+        get_renderer=lambda: app.renderer,
+        get_input_services=lambda: app.input_services,
+        get_input_gate=lambda: app.input_gate,
+        get_tasks_db_path=lambda: app.tasks_db_path,
+        get_event_sink=lambda: app.event_sink,
+        get_agent_client=lambda: app.agent_client,
+        get_workspace=lambda: app.workspace,
+        get_dispatch_tool_executor=lambda: app.tool_executor,
+        get_dispatch_services=lambda: app.dispatch_services,
+        get_auto_approve_mutations=lambda: app.auto_approve_mutations,
+        get_approval_handler=lambda: app._approval_handler,
+        set_approval_handler=lambda handler: setattr(app, "_approval_handler", handler),
+        get_agent_plugin=app.get_agent_plugin,
+        get_available_plugins=app.get_available_plugins,
+        get_session_state=lambda: app.session_state,
+        get_history=lambda: app.history,
+        get_shared_state=lambda: app.shared_state,
+        get_system_layer=lambda: app.system_layer,
+        get_task_classifier=lambda: app.task_classifier,
+        get_user_name=lambda: app.user_name,
+        get_prompt_builder=lambda: app.prompt_builder,
+        get_visibility=lambda: app.visibility,
+        get_show_error_message=lambda: app.show_error_message,
+        get_show_muted_message=lambda: app.show_muted_message,
+        get_execution_mode=lambda: app.execution_mode,
+        get_record_tool_event=lambda: app._record_tool_event,
+        get_record_failure=lambda: app.record_failure,
+        get_session_metrics=lambda: app.session_metrics,
+        get_round_index=lambda: app.round_index,
+        get_debug_prompt_metrics=lambda: app.debug_prompt_metrics,
+        get_clear_prompt_line=lambda: app._clear_user_prompt_line_if_needed,
+        get_redisplay_prompt=lambda: app._redisplay_user_prompt_if_needed,
+        get_output_lock=lambda: app._output_lock,
+        get_counter_lock=lambda: app._counter_lock,
+        get_shared_state_lock=lambda: app._shared_state_lock,
+        get_session_services=lambda: app.session_services,
+        get_max_retries=lambda: app.MAX_RETRIES,
+        get_retry_backoff_seconds=lambda: app.RETRY_BACKOFF_SECONDS,
+        get_rate_limit_backoff_seconds=lambda: app.RATE_LIMIT_BACKOFF_SECONDS,
+        call_agent=app.call_agent,
+        parse_response=app.parse_response,
+        classify_task_execution_result=getattr(app, "classify_task_execution_result", classify_task_execution_result),
+        classify_task_review_result=getattr(app, "classify_task_review_result", classify_task_review_result),
+    )
 
 
 class DispatchStub:
@@ -199,7 +344,7 @@ def test_app_task_services_execution_isolated_from_chat_cancel_state(monkeypatch
     app.auto_approve_mutations = False
     app.get_agent_plugin = lambda _agent_name: None
 
-    services = AppTaskServices(app)
+    services = build_task_services(app)
     monkeypatch.setattr(services, "_build_task_repository", lambda: repo)
     monkeypatch.setattr(services, "_get_background_dispatch_services", lambda: dispatch)
 
@@ -224,7 +369,7 @@ def test_background_dispatch_uses_chat_timeout_when_present(tmp_path):
     app.tasks_db_path = None
     app.auto_approve_mutations = False
 
-    services = AppTaskServices(app)
+    services = build_task_services(app)
 
     dispatch = services._get_background_dispatch_services()
 
@@ -243,7 +388,7 @@ def test_background_dispatch_uses_fallback_timeout_when_chat_timeout_is_missing(
     app.tasks_db_path = None
     app.auto_approve_mutations = False
 
-    services = AppTaskServices(app)
+    services = build_task_services(app)
 
     dispatch = services._get_background_dispatch_services()
 

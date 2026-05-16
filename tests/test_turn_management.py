@@ -1,12 +1,16 @@
 """Testes de gerenciamento de turno e comportamento de disparo de agentes."""
+import queue
 import threading
 import time
 import unittest
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
+from quimera.app.agent_pool import AgentPool
 from quimera.app.chat_round import ChatRoundOrchestrator
 from quimera.app.core import QuimeraApp, TurnManager
+from quimera.app.render_event import RenderEvent
+from quimera.app.worker import ChatWorker
 from quimera.constants import CMD_EXIT
 
 
@@ -18,10 +22,13 @@ class DummyRenderer:
     def __init__(self):
         self.warnings = []
         self.system_messages = []
+        self.errors = []
 
     def show_system(self, msg): self.system_messages.append(msg)
 
     def show_warning(self, msg): self.warnings.append(msg)
+
+    def show_error(self, msg): self.errors.append(msg)
 
     def show_message(self, *a, **kw): pass
 
@@ -32,12 +39,13 @@ class DummyRenderer:
 
 def _make_app(active_agents=None):
     """Cria um stub mínimo de QuimeraApp para testes de _do_process_chat_message."""
+    agents = list(active_agents or ["claude", "codex"])
     app = QuimeraApp.__new__(QuimeraApp)
-    app.active_agents = list(active_agents or ["claude", "codex"])
-    app.round_index = 0
-    app.summary_agent_preference = ""
+    app.agent_pool = AgentPool(agents)
+    app._round_index_val = 0
+    app._summary_agent_preference_val = ""
     app.threads = 1
-    app._pending_input_for = None
+    app._pending_input_for_val = None
     app.renderer = DummyRenderer()
     app.turn_manager = TurnManager()
 
@@ -48,7 +56,23 @@ def _make_app(active_agents=None):
     app.dispatch_services = Mock()
     app.dispatch_services.call_agent = Mock(return_value="resposta")
     app.dispatch_services.print_response = Mock()
-    app.chat_round_orchestrator = ChatRoundOrchestrator(app)
+    app.chat_round_orchestrator = ChatRoundOrchestrator(
+        dispatch_services=app.dispatch_services,
+        parse_routing=app.parse_routing,
+        agent_pool=app.agent_pool,
+        session_services=app.session_services,
+        parse_response=app.parse_response,
+        agent_client=Mock(_user_cancelled=False),
+        turn_manager=app.turn_manager,
+        threads=app.threads,
+        renderer=app.renderer,
+        get_round_index=lambda: app._round_index_val,
+        set_round_index=lambda v: setattr(app, '_round_index_val', v),
+        set_summary_agent_preference=lambda v: setattr(app, '_summary_agent_preference_val', v),
+        get_pending_input_for=lambda: app._pending_input_for_val,
+        set_pending_input_for=lambda v: setattr(app, '_pending_input_for_val', v),
+        generate_handoff_id=lambda task, target: f"gen-{target}",
+    )
     app._generate_handoff_id = lambda task, target: f"gen-{target}"
 
     return app
@@ -204,21 +228,20 @@ class TestTurnCycle(unittest.TestCase):
         app.handle_command = Mock(return_value=False)
         app.session_services = Mock()
         app.agent_client = Mock()
-
-        reads = iter(["mensagem", KeyboardInterrupt()])
-
-        def mock_read_user_input(prompt, timeout):
-            value = next(reads)
-            if isinstance(value, BaseException):
-                raise value
-            return value
-
-        app.read_user_input = mock_read_user_input
+        app.turn_manager = TurnManager()
+        app._build_input_prompt = lambda: "User: "
+        reads = iter(["mensagem"])
+        app.read_user_input = lambda prompt, timeout: next(reads)
 
         def slow_process(_user):
             time.sleep(10)
 
         app._process_chat_message = slow_process
+
+        def interrupting_wait(timeout=None):
+            raise KeyboardInterrupt()
+
+        app.turn_manager.wait_for_human_turn = interrupting_wait
 
         run_thread = threading.Thread(target=QuimeraApp.run, args=(app,), daemon=True)
         run_thread.start()
@@ -226,6 +249,161 @@ class TestTurnCycle(unittest.TestCase):
 
         self.assertFalse(run_thread.is_alive(), "run() travou no encerramento com worker ocupado")
         app.session_services.shutdown.assert_called_once()
+
+    def test_run_falls_back_to_sync_when_chat_worker_dies(self):
+        """run() deve alertar e voltar ao modo síncrono quando o worker morre."""
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.renderer = DummyRenderer()
+        app.threads = 2
+        app.user_name = "User"
+        app.session_state = {
+            "session_id": "test-session",
+            "history_count": 0,
+            "summary_loaded": False,
+        }
+        app._format_yes_no = lambda x: "sim" if x else "não"
+        storage = Mock()
+        storage.get_log_file.return_value = Path("/tmp/quimera-test.log")
+        app.storage = storage
+        app.handle_command = Mock(return_value=False)
+        app.session_services = Mock()
+        app.agent_client = Mock()
+        app.show_error_message = QuimeraApp.show_error_message.__get__(app, QuimeraApp)
+        app._build_input_prompt = lambda: "User: "
+        processed = []
+        read_values = iter(["mensagem", CMD_EXIT])
+
+        def mock_read_user_input(prompt, timeout):
+            return next(read_values)
+
+        app.read_user_input = mock_read_user_input
+
+        def record_message(user):
+            processed.append(user)
+            app.turn_manager.reset()
+
+        app._process_chat_message = record_message
+
+        class DeadWorker:
+            def start(self):
+                return None
+
+            def is_alive(self):
+                return False
+
+            def join(self, timeout=None):
+                return None
+
+        with patch("quimera.app.core.ChatWorker", return_value=DeadWorker()):
+            QuimeraApp.run(app)
+
+        self.assertEqual(processed, ["mensagem"])
+        self.assertEqual(len(app.renderer.errors), 1)
+        self.assertIn("worker do chat interrompido", app.renderer.errors[0])
+
+    def test_run_enqueues_before_switching_turn_with_worker(self):
+        """No modo com worker, run() deve enfileirar a mensagem antes de ceder o turno."""
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.renderer = DummyRenderer()
+        app.threads = 2
+        app.user_name = "User"
+        app.session_state = {
+            "session_id": "test-session",
+            "history_count": 0,
+            "summary_loaded": False,
+        }
+        app._format_yes_no = lambda x: "sim" if x else "não"
+        storage = Mock()
+        storage.get_log_file.return_value = Path("/tmp/quimera-test.log")
+        app.storage = storage
+        app.handle_command = Mock(return_value=False)
+        app.session_services = Mock()
+        app.agent_client = Mock()
+        app._build_input_prompt = lambda: "User: "
+        order = []
+        real_turn_manager = TurnManager()
+
+        class ObservedTurnManager:
+            @property
+            def is_human_turn(self):
+                return real_turn_manager.is_human_turn
+
+            def wait_for_human_turn(self, timeout=None):
+                return real_turn_manager.wait_for_human_turn(timeout=timeout)
+
+            def next_turn(self):
+                order.append("next_turn")
+                return real_turn_manager.next_turn()
+
+            def reset(self):
+                return real_turn_manager.reset()
+
+        app.turn_manager = ObservedTurnManager()
+        read_values = iter(["mensagem", CMD_EXIT])
+
+        def mock_read_user_input(prompt, timeout):
+            return next(read_values)
+
+        app.read_user_input = mock_read_user_input
+        app._process_chat_message = Mock()
+
+        class ObservedQueue(queue.Queue):
+            def put(self, item, block=True, timeout=None):
+                if item not in (None,):
+                    order.append(f"put:{item}")
+                return super().put(item, block=block, timeout=timeout)
+
+        original_queue_cls = queue.Queue
+
+        def queue_factory(*args, **kwargs):
+            if not hasattr(queue_factory, "calls"):
+                queue_factory.calls = 0
+            queue_factory.calls += 1
+            if queue_factory.calls == 2:
+                return ObservedQueue()
+            return original_queue_cls(*args, **kwargs)
+
+        class IdleWorker:
+            def __init__(self):
+                self._checks = 0
+
+            def start(self):
+                return None
+
+            def is_alive(self):
+                self._checks += 1
+                return self._checks == 1
+
+            def join(self, timeout=None):
+                return None
+
+        with patch("quimera.app.core.queue.Queue", side_effect=queue_factory), patch(
+            "quimera.app.core.ChatWorker", return_value=IdleWorker()
+        ):
+            QuimeraApp.run(app)
+
+        self.assertEqual(order[:2], ["put:mensagem", "next_turn"])
+
+
+class TestChatWorker(unittest.TestCase):
+
+    def test_process_chat_queue_keeps_worker_alive_after_exception(self):
+        """Erros do executor devem ser capturados sem matar o fluxo do worker."""
+        turn_manager = Mock()
+        ui_queue = queue.Queue()
+        worker = ChatWorker(
+            chat_queue=queue.Queue(),
+            ui_event_queue=ui_queue,
+            agent_executor=Mock(side_effect=RuntimeError("boom")),
+            turn_manager=turn_manager,
+        )
+
+        worker._process_chat_queue("mensagem")
+
+        event = ui_queue.get_nowait()
+        self.assertEqual(event.type, RenderEvent.ERROR)
+        self.assertEqual(event.payload, "boom")
+        turn_manager.reset.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -455,7 +633,7 @@ class TestSingleAgentPerTurn(unittest.TestCase):
         # Apenas o primeiro agente respondeu
         self.assertEqual(app.dispatch_services.call_agent.call_count, 1)
         # Turno suspenso: próxima fala do humano vai para claude
-        self.assertEqual(app._pending_input_for, "claude")
+        self.assertEqual(app._pending_input_for_val, "claude")
 
     def test_needs_human_input_uses_prompt_aware_system_message_when_available(self):
         """Quando disponível, usa show_system_message para evitar saída inline com o prompt."""
