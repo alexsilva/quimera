@@ -36,9 +36,11 @@ class AppProtocol:
     PAYLOAD_FIELD_RE = re.compile(r"^\s*(task|context|expected)\s*:", re.IGNORECASE)
     PROTOCOL_ENVELOPE_TYPES = ('"type": "handoff"', '"type": "state_update"', '"type": "ack"')
 
-    def __init__(self, app=None, decisions_log_path=None) -> None:
+    def __init__(self, lock, shared_state, workspace=None, decisions_log_path=None) -> None:
         """Inicializa uma instância de AppProtocol."""
-        self.app = app
+        self._lock = lock
+        self._shared_state = shared_state
+        self._workspace = workspace
         self._decisions_log_path = decisions_log_path
         self._decisions_logger = None
 
@@ -81,8 +83,7 @@ class AppProtocol:
         if not isinstance(payload, dict):
             return False
 
-        app = self.app
-        with app._lock:
+        with self._lock:
             for key, value in payload.items():
                 normalized_key = normalize_state_key(key)
                 if not normalized_key:
@@ -97,18 +98,18 @@ class AppProtocol:
                         type(value).__name__,
                     )
                     continue
-                current = app.shared_state.get(normalized_key)
+                current = self._shared_state.get(normalized_key)
                 merged = self.merge_state_value(current, value)
                 if merged is None:
-                    app.shared_state.pop(normalized_key, None)
+                    self._shared_state.pop(normalized_key, None)
                 else:
-                    app.shared_state[normalized_key] = merged
+                    self._shared_state[normalized_key] = merged
                     if normalized_key == "decisions" and isinstance(value, list):
                         dlogger = self._get_decisions_logger()
                         if dlogger:
                             for item in value:
                                 dlogger.append(item, {
-                                    "workspace": str(app.workspace.cwd) if hasattr(app, "workspace") else None})
+                                    "workspace": str(self._workspace.cwd) if self._workspace else None})
         return True
 
     @staticmethod
@@ -258,7 +259,6 @@ class AppProtocol:
         if response is None:
             return None, None, None, False, False, None
 
-        app = self.app
         route_target, handoff, ack_id = None, None, None
 
         embedded = self._find_envelope_in_text(response)

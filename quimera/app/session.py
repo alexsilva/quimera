@@ -1,9 +1,12 @@
 """Serviços de sessão, persistência e sumarização."""
+from __future__ import annotations
+
 import sys
 import threading
 import time
 
 from ..constants import MSG_MEMORY_FAILED, MSG_MEMORY_SAVING
+from .interfaces import IAgentPool, IRenderer, ISessionStorage
 
 # Debounce para save_history: evita serializar JSON inteiro a cada mensagem.
 _SAVE_DEBOUNCE_SECONDS = 5.0
@@ -33,99 +36,117 @@ def trim_history_messages(history, limit):
 class AppSessionServices:
     """Agrupa persistência do histórico e fechamento de sessão."""
 
-    def __init__(self, app):
-        self.app = app
+    def __init__(
+        self,
+        history: list,
+        storage: ISessionStorage,
+        renderer: IRenderer,
+        agent_pool: IAgentPool,
+        lock: threading.Lock,
+        context_manager,
+        session_summarizer,
+        task_services,
+        prompt_builder,
+        shared_state: dict,
+        auto_summarize_threshold: int | None = None,
+        summary_agent_preference: str | None = None,
+        agent_client=None,
+    ):
+        self._history = history
+        self._storage = storage
+        self._renderer = renderer
+        self._agent_pool = agent_pool
+        self._lock = lock
+        self._context_manager = context_manager
+        self._session_summarizer = session_summarizer
+        self._task_services = task_services
+        self._prompt_builder = prompt_builder
+        self._shared_state = shared_state
+        self._auto_summarize_threshold = auto_summarize_threshold
+        self._summary_agent_preference = summary_agent_preference
+        self._agent_client = agent_client
         self._last_save_time: float = 0.0
         self._unsaved_messages: int = 0
 
     def _enforce_history_limit(self) -> int:
         """Aplica o teto do histórico mesmo quando o resumo automático não roda."""
-        app = self.app
+        prompt_builder = self._prompt_builder
         limit = compute_history_hard_limit(
-            getattr(getattr(app, "prompt_builder", None), "history_window", None),
-            getattr(app, "auto_summarize_threshold", None),
+            getattr(prompt_builder, "history_window", None) if prompt_builder else None,
+            self._auto_summarize_threshold,
         )
-        trimmed_history, dropped = trim_history_messages(app.history, limit)
+        trimmed_history, dropped = trim_history_messages(self._history, limit)
         if dropped:
-            app.history = trimmed_history
+            self._history[:] = trimmed_history
         return dropped
 
     def persist_message(self, role, content):
         """Persiste mensagem no histórico, log e snapshot."""
-        app = self.app
-        with app._lock:
-            app.history.append({"role": role, "content": content})
-            app.storage.append_log(role, content)
+        with self._lock:
+            self._history.append({"role": role, "content": content})
+            self._storage.append_log(role, content)
             self._enforce_history_limit()
             self._unsaved_messages += 1
             now = time.monotonic()
             if self._unsaved_messages >= _SAVE_DEBOUNCE_MESSAGES or (now - self._last_save_time) >= _SAVE_DEBOUNCE_SECONDS:
-                app.storage.save_history(app.history, shared_state=app.shared_state)
+                self._storage.save_history(self._history, shared_state=self._shared_state)
                 self._last_save_time = now
                 self._unsaved_messages = 0
-            session_metrics = getattr(app, "session_metrics", None)
-            if session_metrics is not None:
-                session_metrics.update_persisted_message_metrics(app, role, content)
 
     def maybe_auto_summarize(self, preferred_agent=None):
         """Sumariza e trunca o histórico quando excede o threshold configurado."""
-        app = self.app
-        threshold = getattr(app, "auto_summarize_threshold", None)
+        threshold = self._auto_summarize_threshold
         if not isinstance(threshold, int) or threshold <= 0:
             return
-        if len(app.history) < threshold:
+        if len(self._history) < threshold:
             return
 
-        keep = app.prompt_builder.history_window
-        if len(app.history) <= keep:
+        prompt_builder = self._prompt_builder
+        keep = prompt_builder.history_window if prompt_builder else 0
+        if len(self._history) <= keep:
             return
-        if len(app.history) - keep < _MIN_SUMMARIZE_SURPLUS:
+        if len(self._history) - keep < _MIN_SUMMARIZE_SURPLUS:
             return
-        to_summarize = app.history[:-keep]
-        recent = app.history[-keep:]
-        existing_summary = app.context_manager.load_session_summary()
+        to_summarize = self._history[:-keep]
+        recent = self._history[-keep:]
+        existing_summary = self._context_manager.load_session_summary()
 
-        app.renderer.show_system(
-            f"[memória] histórico com {len(app.history)} mensagens — gerando resumo automático..."
+        self._renderer.show_system(
+            f"[memória] histórico com {len(self._history)} mensagens — gerando resumo automático..."
         )
-        summary_agent_preference = preferred_agent or getattr(
-            app,
-            "summary_agent_preference",
-            app.active_agents[0],
-        )
-        summary = app.session_summarizer.summarize(
+        summary_agent = preferred_agent or self._summary_agent_preference or self._agent_pool.primary
+        summary = self._session_summarizer.summarize(
             to_summarize,
             existing_summary=existing_summary,
-            preferred_agent=summary_agent_preference,
+            preferred_agent=summary_agent,
         )
         if summary:
-            app.context_manager.update_with_summary(summary)
-            app.history = recent
-            app.storage.save_history(app.history, shared_state=app.shared_state)
-            app.renderer.show_system(
-                f"[memória] histórico truncado para {len(app.history)} mensagens recentes"
+            self._context_manager.update_with_summary(summary)
+            self._history[:] = recent
+            self._storage.save_history(self._history, shared_state=self._shared_state)
+            self._renderer.show_system(
+                f"[memória] histórico truncado para {len(self._history)} mensagens recentes"
             )
         else:
-            app.renderer.show_system("[memória] resumo automático falhou — histórico mantido")
+            self._renderer.show_system("[memória] resumo automático falhou — histórico mantido")
 
     def shutdown(self):
         """Finaliza a sessão tentando resumir o histórico no contexto persistente."""
-        app = self.app
-        app.task_services.stop_task_executors()
+        self._task_services.stop_task_executors()
 
-        if not app.history:
+        if not self._history:
             return
 
-        app.show_muted_message(MSG_MEMORY_SAVING)
+        self._renderer.show_system(MSG_MEMORY_SAVING)
 
         result = [None]
 
         def _run_summary():
             try:
-                result[0] = app.session_summarizer.summarize(
-                    app.history,
-                    existing_summary=app.context_manager.load_session_summary(),
-                    preferred_agent=getattr(app, "summary_agent_preference", None),
+                result[0] = self._session_summarizer.summarize(
+                    self._history,
+                    existing_summary=self._context_manager.load_session_summary(),
+                    preferred_agent=self._summary_agent_preference,
                 )
             except Exception:
                 pass
@@ -135,12 +156,12 @@ class AppSessionServices:
         try:
             worker.join(timeout=30)
         except KeyboardInterrupt:
-            if app.agent_client:
-                app.agent_client._user_cancelled = True
-                app.agent_client._cancel_event.set()
+            if self._agent_client:
+                self._agent_client._user_cancelled = True
+                self._agent_client._cancel_event.set()
             sys.stdout.write('\r\033[K')
             sys.stdout.flush()
-            app.show_muted_message(MSG_MEMORY_FAILED)
+            self._renderer.show_system(MSG_MEMORY_FAILED)
             try:
                 worker.join(timeout=1)
             except KeyboardInterrupt:
@@ -148,6 +169,6 @@ class AppSessionServices:
             return
         summary = result[0]
         if summary:
-            app.context_manager.update_with_summary(summary)
+            self._context_manager.update_with_summary(summary)
         else:
-            app.show_muted_message(MSG_MEMORY_FAILED)
+            self._renderer.show_system(MSG_MEMORY_FAILED)
