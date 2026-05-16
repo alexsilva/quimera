@@ -46,8 +46,7 @@ def _format_opencode_spy_event(line: str) -> list[SpyEvent]:
 
 _OPENCODE_RW_PATHS = [
     str(Path.home() / ".local" / "share" / "opencode"),
-    str(Path.home() / ".local" / "state" / "opencode"),
-    str(Path.home() / ".local" / "share" / "quimera"),
+    str(Path.home() / ".local" / "state" / "opencode")
 ]
 
 # Padrões de ruído de stderr específicos do runtime bun (linha com número variável).
@@ -55,19 +54,6 @@ _OPENCODE_RW_PATHS = [
 _BUN_STDERR_NOISE_PATTERNS = (
     r"^\s*at .+\(/?bunfs/",   # stack frame com função: "  at fn (/$bunfs/...)"
     r"^\s*at /?bunfs/",       # frame direto sem função: "  at /$bunfs/..."
-)
-
-# Campos fixos compartilhados por todos os plugins opencode.
-_OPENCODE_DEFAULTS = dict(
-    runtime_rw_paths=_OPENCODE_RW_PATHS,
-    output_format="opencode-json",
-    spy_stdout_formatter=_format_opencode_spy_event,
-    supports_tools=True,
-    has_builtin_tools=True,
-    supports_code_editing=True,
-    supports_long_context=False,
-    base_tier=2,
-    stderr_noise_patterns=_BUN_STDERR_NOISE_PATTERNS,
 )
 
 # Plugin base genérico: cmd sem modelo fixo — usado como template para --base.
@@ -79,28 +65,13 @@ register(AgentPlugin(
     cmd=["opencode", "--model=", "run", "--format=json", "--thinking"],
     capabilities=["general_coding", "code_review", "code_editing"],
     preferred_task_types=["code_edit", "code_review"],
-    **_OPENCODE_DEFAULTS,
+    runtime_rw_paths=_OPENCODE_RW_PATHS,
+    output_format="opencode-json",
+    spy_stdout_formatter=_format_opencode_spy_event,
+    supports_tools=True,
+    has_builtin_tools=True,
+    supports_code_editing=True,
+    supports_long_context=False,
+    base_tier=2,
+    stderr_noise_patterns=_BUN_STDERR_NOISE_PATTERNS,
 ))
-
-# Variantes concretas — só diferem em nome, modelo, ícone e estilo visual.
-_PLUGIN_SPECS = [
-    dict(
-        name="opencode-pickle",
-        model="opencode/big-pickle",
-        icon="🥒",
-        style=("blue", "OpenCodePickle"),
-    ),
-]
-
-for _spec in _PLUGIN_SPECS:
-    _name = _spec["name"]
-    register(AgentPlugin(
-        name=_name,
-        prefix=f"/{_name}",
-        icon=_spec.get("icon", "⚙️"),
-        style=_spec["style"],
-        cmd=["opencode", f"--model={_spec['model']}", "run", "--format=json", "--thinking"],
-        capabilities=["general_coding", "code_review", "code_editing"],
-        preferred_task_types=["code_edit", "code_review"],
-        **_OPENCODE_DEFAULTS,
-    ))
