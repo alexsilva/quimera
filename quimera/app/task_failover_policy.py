@@ -30,13 +30,21 @@ class TaskFailoverPolicy:
 
     def __init__(
         self,
-        active_agents: list[str] | None,
+        active_agents: list[str] | None | Callable[[], list[str] | None],
         get_agent_plugin: Callable[[str], _TaskPluginProto | None],
         repository: TaskRepository | _TaskRepositoryProto,
     ) -> None:
-        self.active_agents = active_agents or []
+        if callable(active_agents):
+            self._get_active_agents = active_agents
+        else:
+            self._get_active_agents = lambda: active_agents or []
         self.get_agent_plugin = get_agent_plugin
         self.repository = repository
+
+    @property
+    def active_agents(self) -> list[str]:
+        """Retorna a lista atual de agentes ativos."""
+        return list(self._get_active_agents() or [])
 
     @staticmethod
     def _normalize_agent_name(agent_name: str | None) -> str:
