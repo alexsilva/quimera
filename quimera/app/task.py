@@ -619,13 +619,14 @@ class AppTaskServices:
         background_timeout = getattr(chat_agent_client, "timeout", None)
         if background_timeout is None or not isinstance(background_timeout, (int, float)) or background_timeout <= 0:
             background_timeout = _BACKGROUND_AGENT_TIMEOUT_SECONDS
+        _muted = self._get_show_muted_message()
         background_agent_client = AgentClient(
             renderer,
             timeout=background_timeout,
             visibility=self._get_visibility(),
             working_dir=str(workspace.cwd),
-            error_reporter=self._get_show_error_message(),
-            muted_reporter=self._get_show_muted_message(),
+            error_reporter=_muted,
+            muted_reporter=_muted,
         )
         background_agent_client.execution_mode = self._get_execution_mode()
         background_agent_client.tool_event_callback = self._get_record_tool_event()

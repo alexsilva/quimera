@@ -341,7 +341,6 @@ def test_agent_client_run_failure_with_tail(renderer):
 
         result = client.run(["fail"], silent=True)
         assert result is None
-        # Should show error message AND tail (last 5 lines)
         assert renderer.show_error.call_count >= 2
 
 
