@@ -1,9 +1,11 @@
 """AgentGateway — chamada bruta a agentes: prompt, backend, streaming."""
+import queue as _queue_module
 import time
 from contextlib import nullcontext
 
 from ..prompt_kinds import PromptKind
 from .config import logger
+from .render_event import RenderEvent
 
 
 def _is_user_cancelled(agent_client) -> bool:
@@ -47,6 +49,7 @@ class AgentGateway:
         update_session=None,
         output_lock=None,
         counter_lock=None,
+        ui_queue: "_queue_module.Queue | None" = None,
     ):
         self._agent_client = agent_client
         self._prompt_builder = prompt_builder
@@ -65,6 +68,7 @@ class AgentGateway:
         self._update_session = update_session or (lambda *a: None)
         self._output_lock = output_lock
         self._counter_lock = counter_lock
+        self._ui_queue = ui_queue
 
     def call(
         self,
@@ -90,7 +94,6 @@ class AgentGateway:
         history = self._get_history()
         self._refresh_task_state()
 
-        renderer = self._renderer
         output_lock = self._output_lock
 
         _stream_buffer = []
@@ -148,12 +151,16 @@ class AgentGateway:
         result = agent_client.call(agent, prompt, silent=silent, on_text_chunk=_on_text_chunk)
 
         if _stream_buffer or result:
-            with (output_lock if output_lock is not None else nullcontext()):
-                self._clear_prompt_line()
-                flush = getattr(renderer, "flush", None)
-                if callable(flush):
-                    flush()
-                self._redisplay_prompt(clear_first=False)
+            if self._ui_queue is not None:
+                self._ui_queue.put(RenderEvent(RenderEvent.REDISPLAY, "", agent=agent))
+            else:
+                renderer = self._renderer
+                with (output_lock if output_lock is not None else nullcontext()):
+                    self._clear_prompt_line()
+                    flush = getattr(renderer, "flush", None)
+                    if callable(flush):
+                        flush()
+                    self._redisplay_prompt(clear_first=False)
 
         agent_client.flush_pending_summary()
         elapsed = time.time() - start
