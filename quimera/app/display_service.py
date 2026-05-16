@@ -260,6 +260,8 @@ class DisplayService:
             if self._enqueue_deferred_message(message, level="system"):
                 return
         if self._is_prompt_active() and self._is_foreign_prompt_thread():
+            if self._show_above_active_prompt(message, level="system"):
+                return
             if self._enqueue_deferred_message(message, level="system"):
                 return
         with self._get_output_lock():
@@ -309,6 +311,8 @@ class DisplayService:
         if renderer is None:
             return
         if self._is_prompt_active() and self._is_foreign_prompt_thread():
+            if self._show_above_active_prompt(message, level="warning"):
+                return
             if self._enqueue_deferred_message(message, level="warning"):
                 return
         with self._get_output_lock():
@@ -333,6 +337,8 @@ class DisplayService:
         if renderer is None:
             return
         if self._is_prompt_active() and self._is_foreign_prompt_thread():
+            if self._show_above_active_prompt(message, level="error"):
+                return
             if self._enqueue_deferred_message(message, level="error"):
                 return
         with self._get_output_lock():

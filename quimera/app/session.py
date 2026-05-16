@@ -154,7 +154,7 @@ class AppSessionServices:
         worker = threading.Thread(target=_run_summary, daemon=True)
         worker.start()
         try:
-            worker.join(timeout=30)
+            worker.join(timeout=90)
         except KeyboardInterrupt:
             if self._agent_client:
                 self._agent_client._user_cancelled = True

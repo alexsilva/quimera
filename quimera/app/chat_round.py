@@ -339,6 +339,9 @@ class ChatRoundOrchestrator:
         else:
             self._process_standard_flow(first_agent, explicit, extend, other_agents)
 
+        if self._get_pending_input_for() is not None:
+            return
+
         self._session_services.maybe_auto_summarize(preferred_agent=first_agent)
 
     def _process_handoff(self, first_agent, route_target, handoff):
@@ -590,12 +593,15 @@ class ChatRoundOrchestrator:
         elif extend:
             remaining = [other_agents[0], first_agent, other_agents[0]] if other_agents else []
         else:
-            remaining = []
+            remaining = list(other_agents[:self._threads - 1]) if (self._threads > 1 and other_agents) else []
             if other_agents:
                 self._agent_pool.rotate()
 
         next_handoff = None
-        if self._threads > 1 and len(remaining) > 1:
+        if self._threads > 1 and len(remaining) >= 1:
+            if self._turn_manager is not None and not self._turn_manager.is_ai_turn:
+                self._show_warning("[parallel] turno da IA encerrado antes da execução paralela — ignorando")
+                return
             staging_root = Path(
                 tempfile.gettempdir()
             ) / "quimera-staging" / f"{self._session_state.get('session_id') if self._session_state else (self._session_state_dict or {}).get('session_id', 'unknown')}-round{self._get_round_index()}"
@@ -653,24 +659,44 @@ class ChatRoundOrchestrator:
                     return
                 finally:
                     executor.shutdown(wait=False, cancel_futures=True)
+                if self._turn_manager is not None and not self._turn_manager.is_ai_turn:
+                    self._show_warning("[parallel] turno da IA encerrado durante execução — ignorando resultados")
+                    return
                 if self._merge_staging_to_workspace_fn is not None:
                     self._merge_staging_to_workspace_fn(staging_root)
                 if self._is_cancelled():
                     self._handle_cancelled()
                     return
+                if self._turn_manager is not None and not self._turn_manager.is_ai_turn:
+                    self._show_warning("[parallel] turno da IA encerrado — ignorando persistência de resultados")
+                    return
                 needs_input_any = False
+                pending_handoffs = []
                 for item in results:
                     agent, response, route_target, handoff, extend, needs_input = item
                     self._dispatch_services.print_response(agent, response)
                     if response is not None:
                         self._session_services.persist_message(agent, response)
                     needs_input_any = needs_input or needs_input_any
+                    if route_target:
+                        pending_handoffs.append((agent, route_target, handoff))
+
                 if needs_input_any:
                     needing = next((agent_data for agent_data in results if agent_data[-1]), None)
                     if needing:
                         current_agent = needing[0]
                         self._set_pending_input_for(current_agent)
                         self._show_system(f"\nResponda para {current_agent.upper()}:\n")
+                    if self._turn_manager is not None:
+                        self._turn_manager.reset()
+                    return
+
+                if pending_handoffs:
+                    # Processa o primeiro handoff encontrado para manter o fluxo
+                    # TODO: No futuro, suportar múltiplos handoffs em paralelo
+                    origin, target, payload = pending_handoffs[0]
+                    logger.info("[parallel] following handoff from %s to %s", origin, target)
+                    self._process_handoff(origin, target, payload)
             finally:
                 if staging_root.exists():
                     shutil.rmtree(staging_root)

@@ -750,7 +750,7 @@ def call_agent_for_parallel_with_client(
 
     set_staging_root(staging_root / str(index))
     try:
-        raw = call_agent(agent, handoff=handoff, primary=False, protocol_mode=protocol_mode)
+        raw = call_agent(agent, handoff=handoff, primary=False, protocol_mode=protocol_mode, silent=True, show_output=False)
         response, route_target, parsed_handoff, extend, needs_input, _ = parse_response(raw)
         return agent, response, route_target, parsed_handoff, extend, needs_input
     finally:

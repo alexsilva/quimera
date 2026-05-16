@@ -9,10 +9,15 @@ def _is_cancelled(agent_client) -> bool:
     return bool(cancel_event is not None and cancel_event.is_set())
 
 
-def build_chain_summarizer(agent_client, agents):
-    """Tenta cada agente em ordem; retorna o primeiro resultado bem-sucedido ou None."""
+def build_chain_summarizer(agent_client, agents_or_fn):
+    """Tenta cada agente em ordem; retorna o primeiro resultado bem-sucedido ou None.
+
+    ``agents_or_fn`` pode ser uma lista estática ou um callable que retorna a lista
+    no momento da chamada (útil para refletir o pool atual após remoções).
+    """
 
     def _ordered_agents(preferred_agent=None):
+        agents = agents_or_fn() if callable(agents_or_fn) else agents_or_fn
         if preferred_agent and preferred_agent in agents:
             return [preferred_agent, *[agent for agent in agents if agent != preferred_agent]]
         return list(agents)
@@ -52,13 +57,19 @@ class SessionSummarizer:
         if not history and not existing_summary:
             return None
 
+        if self.summarizer_call is None:
+            self.renderer.show_system("[memória] nenhum agente disponível para resumo")
+            return None
+
         prompt = self._build_prompt(history, existing_summary)
         try:
             summary = self.summarizer_call(prompt, preferred_agent=preferred_agent)
         except Exception:
             summary = None
-        if not summary and getattr(self.summarizer_call, "last_outcome", None) != "cancelled":
-            self.renderer.show_system("[memória] resumidores indisponíveis")
+        if not summary:
+            outcome = getattr(self.summarizer_call, "last_outcome", None)
+            if outcome != "cancelled":
+                self.renderer.show_system("[memória] resumidores indisponíveis")
         return summary or None
 
     @staticmethod

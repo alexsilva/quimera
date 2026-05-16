@@ -309,10 +309,10 @@ class AgentClient:
 
             else:
                 assert log_queue is not None
-                status_cm = self.renderer.running_status("", agent=agent) if show_status else nullcontext(None)
+                status_cm = self.renderer.running_status("", agent=agent) if (show_status and not silent) else nullcontext(None)
 
                 if self.visibility == Visibility.SUMMARY:
-                    self.renderer.show_plain(f"→ {cmd[0]} iniciando...", agent=agent)
+                    self._show_muted(f"→ {cmd[0]} iniciando...")
 
                 with status_cm as status:
                     _last_status_text = [None]

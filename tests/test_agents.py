@@ -517,7 +517,7 @@ def test_agent_client_run_summary_shows_formatted_codex_stdout(renderer):
         with patch("time.sleep"):
             client.run(["codex", "exec"], silent=False, agent="codex", show_status=False)
 
-    renderer.show_plain.assert_any_call("→ codex iniciando...", agent="codex")
+    renderer.show_system_neutral.assert_any_call("→ codex iniciando...")
     renderer.show_plain.assert_any_call("message 1", agent="codex")
     renderer.show_plain.assert_any_call("message 2", agent="codex")
     renderer.show_plain.assert_any_call("message 3", agent="codex")

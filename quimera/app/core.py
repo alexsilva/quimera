@@ -179,7 +179,7 @@ class QuimeraApp:
             self.renderer,
             summarizer_call=build_chain_summarizer(
                 self.agent_client,
-                list(dict.fromkeys(["ollama-granite4"] + self.agent_pool.agents)),
+                lambda: list(dict.fromkeys(self.agent_pool.agents)),
             ),
         )
         configured_history_window = history_window or self.config.history_window
@@ -230,7 +230,7 @@ class QuimeraApp:
             session_meta=self.session_state,
             shared_state_lock=self._shared_state_lock,
         )
-        self._chat_state.summary_agent_preference = "ollama-granite4"
+        self._chat_state.summary_agent_preference = self.agent_pool.primary
         self._lock = threading.Lock()
         self.protocol = AppProtocol(
             lock=self._lock,
@@ -378,6 +378,7 @@ class QuimeraApp:
             retry_backoff=self.RETRY_BACKOFF_SECONDS,
             rate_limit_backoff=getattr(self, 'RATE_LIMIT_BACKOFF_SECONDS', 30),
             record_failure=self.record_failure,
+            record_success=self.record_success,
             get_agent_client=lambda: self.agent_client,
             get_tool_executor=lambda: self.tool_executor,
         )
@@ -598,6 +599,16 @@ class QuimeraApp:
             self._stop_task_executors()
         except Exception:
             pass
+
+    def record_success(self, agent):
+        """Reseta o contador de falhas de um agente após resposta bem-sucedida."""
+        agent_name = self._normalize_agent_name(agent)
+        if not agent_name:
+            return
+        with self._agent_failures_lock:
+            if self.agent_failures.get(agent_name, 0) > 0:
+                self.agent_failures[agent_name] = 0
+                logger.debug("agent %s failure counter reset after success", agent_name)
 
     def record_failure(self, agent):
         """Registra failure."""

@@ -46,6 +46,7 @@ class AppDispatchServices:
         retry_backoff=1,
         rate_limit_backoff=1,
         record_failure=None,
+        record_success=None,
         get_agent_client=None,
         get_tool_executor=None,
         get_call_agent_fn_override=None,
@@ -90,6 +91,7 @@ class AppDispatchServices:
         self._retry_backoff = retry_backoff
         self._rate_limit_backoff = rate_limit_backoff
         self._record_failure = record_failure
+        self._record_success = record_success
         self._get_agent_client_fn = get_agent_client
         self._get_tool_executor_fn = get_tool_executor
         self._get_call_agent_fn_override = get_call_agent_fn_override
@@ -140,6 +142,7 @@ class AppDispatchServices:
             retry_backoff=lambda: getattr(app, 'RETRY_BACKOFF_SECONDS', 1),
             rate_limit_backoff=lambda: getattr(app, 'RATE_LIMIT_BACKOFF_SECONDS', 1),
             record_failure=getattr(app, 'record_failure', None),
+            record_success=getattr(app, 'record_success', None),
             get_shared_state_lock=lambda: getattr(app, '_shared_state_lock', None),
             get_agent_client=lambda: getattr(app, 'agent_client', None),
             get_tool_executor=lambda: getattr(app, 'tool_executor', None),
@@ -330,6 +333,7 @@ class AppDispatchServices:
             retry_backoff=self._call(self._retry_backoff),
             rate_limit_backoff=self._call(self._rate_limit_backoff),
             record_failure=self._record_failure,
+            record_success=self._record_success,
             is_rate_limited=_is_rate_limited,
         )
 

@@ -22,12 +22,14 @@ class AgentCallService:
         retry_backoff: float = 1.0,
         rate_limit_backoff: float = 30.0,
         record_failure=None,
+        record_success=None,
         is_rate_limited=None,
     ):
         self._max_retries = max_retries
         self._retry_backoff = retry_backoff
         self._rate_limit_backoff = rate_limit_backoff
         self._record_failure = record_failure or (lambda agent: None)
+        self._record_success = record_success or (lambda agent: None)
         self._is_rate_limited = is_rate_limited or (lambda: False)
 
     def call(
@@ -86,6 +88,8 @@ class AgentCallService:
                         time.sleep(backoff)
                         continue
                     self._record_failure(agent)
+                else:
+                    self._record_success(agent)
                 return result
 
             except Exception as exc:

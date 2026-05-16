@@ -192,6 +192,27 @@ def test_show_muted_message_defers_task_completion_from_background_thread():
     assert app.renderer.flush_calls == 0
 
 
+def test_show_system_message_shows_above_prompt_when_input_gate_supports_it():
+    app = make_app()
+    app._nonblocking_input_status = "reading"
+    app._prompt_owning_thread_id = object()
+    callbacks = []
+
+    def run_in_terminal_message(callback):
+        callbacks.append(callback)
+        callback()
+        return True
+
+    app.input_gate = SimpleNamespace(run_in_terminal_message=run_in_terminal_message)
+
+    AppSystemLayer(app).show_system_message("sys msg")
+
+    assert app._deferred_system_messages == []
+    assert app.renderer.system_messages == ["sys msg"]
+    assert app.renderer.flush_calls == 1
+    assert len(callbacks) == 1
+
+
 def test_show_muted_message_shows_task_completion_above_prompt_when_input_gate_supports_it():
     app = make_app()
     app._nonblocking_input_status = "reading"
@@ -225,6 +246,27 @@ def test_show_warning_message_defers_from_background_thread_while_prompt_active(
     assert app.renderer.flush_calls == 0
 
 
+def test_show_warning_message_shows_above_prompt_when_input_gate_supports_it():
+    app = make_app()
+    app._nonblocking_input_status = "reading"
+    app._prompt_owning_thread_id = object()
+    callbacks = []
+
+    def run_in_terminal_message(callback):
+        callbacks.append(callback)
+        callback()
+        return True
+
+    app.input_gate = SimpleNamespace(run_in_terminal_message=run_in_terminal_message)
+
+    AppSystemLayer(app).show_warning_message("atenção")
+
+    assert app._deferred_system_messages == []
+    assert app.renderer.warning_messages == ["atenção"]
+    assert app.renderer.flush_calls == 1
+    assert len(callbacks) == 1
+
+
 def test_show_error_message_defers_from_background_thread_while_prompt_active():
     app = make_app()
     app._nonblocking_input_status = "reading"
@@ -235,6 +277,27 @@ def test_show_error_message_defers_from_background_thread_while_prompt_active():
     assert app._deferred_system_messages == [("error", "erro")]
     assert app.renderer.error_messages == []
     assert app.renderer.flush_calls == 0
+
+
+def test_show_error_message_shows_above_prompt_when_input_gate_supports_it():
+    app = make_app()
+    app._nonblocking_input_status = "reading"
+    app._prompt_owning_thread_id = object()
+    callbacks = []
+
+    def run_in_terminal_message(callback):
+        callbacks.append(callback)
+        callback()
+        return True
+
+    app.input_gate = SimpleNamespace(run_in_terminal_message=run_in_terminal_message)
+
+    AppSystemLayer(app).show_error_message("erro")
+
+    assert app._deferred_system_messages == []
+    assert app.renderer.error_messages == ["erro"]
+    assert app.renderer.flush_calls == 1
+    assert len(callbacks) == 1
 
 
 def test_show_task_response_uses_strip_and_emits_only_non_empty():

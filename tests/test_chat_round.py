@@ -539,6 +539,60 @@ class TestProcessStandardFlow(unittest.TestCase):
 
         self.assertEqual(app._pending_input_for, "codex")
 
+    def test_parallel_mode_skips_merge_when_turn_lost(self):
+        """is_ai_turn=False após execução paralela deve pular merge e persistência."""
+        app = _make_app(active_agents=["claude", "codex"], threads=2)
+        app.get_agent_plugin = Mock(return_value=SimpleNamespace(output_format="text"))
+        app._merge_staging_to_workspace = Mock()
+        app.task_services = Mock()
+        app.task_services.call_agent_for_parallel = Mock(
+            return_value=("codex", "resposta", None, None, False, False)
+        )
+        orchestrator = _make_orchestrator(app)
+
+        class _ToggleTurn:
+            def __init__(self):
+                self._reads = 0
+            @property
+            def is_ai_turn(self):
+                self._reads += 1
+                return self._reads <= 1
+            def reset(self):
+                pass
+
+        orchestrator._turn_manager = _ToggleTurn()
+        orchestrator._process_standard_flow("claude", False, True, ["codex"])
+
+        app._merge_staging_to_workspace.assert_not_called()
+        app.session_services.persist_message.assert_not_called()
+
+    def test_parallel_mode_skips_persist_when_turn_lost_after_merge(self):
+        """is_ai_turn=False após merge deve pular persistência de resultados."""
+        app = _make_app(active_agents=["claude", "codex"], threads=2)
+        app.get_agent_plugin = Mock(return_value=SimpleNamespace(output_format="text"))
+        app._merge_staging_to_workspace = Mock()
+        app.task_services = Mock()
+        app.task_services.call_agent_for_parallel = Mock(
+            return_value=("codex", "resposta", None, None, False, False)
+        )
+        orchestrator = _make_orchestrator(app)
+
+        class _ToggleTurnAfterMerge:
+            def __init__(self):
+                self._reads = 0
+            @property
+            def is_ai_turn(self):
+                self._reads += 1
+                return self._reads <= 2
+            def reset(self):
+                pass
+
+        orchestrator._turn_manager = _ToggleTurnAfterMerge()
+        orchestrator._process_standard_flow("claude", False, True, ["codex"])
+
+        app._merge_staging_to_workspace.assert_called_once()
+        app.session_services.persist_message.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # _show_system helper

@@ -1092,7 +1092,12 @@ class TerminalRenderer:
             if self._stream_live_active.is_set():
                 return _NullStatus()
 
-            # Caso sequencial sem Live ativo: usa o spinner padrão do Rich
+            # Caso sequencial sem Live ativo: usa o spinner padrão do Rich.
+            # Em threads de background (modo threaded), o Rich escreve diretamente
+            # no terminal enquanto prompt_toolkit controla o input na main thread —
+            # isso causa corrupção visual. Neste caso, suprime o spinner.
+            if threading.current_thread() is not threading.main_thread():
+                return _NullStatus()
             return self._console.status(
                 initial,
                 refresh_per_second=_SEQUENTIAL_STATUS_REFRESH_PER_SECOND,
