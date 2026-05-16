@@ -4233,7 +4233,7 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(
             status_updates,
             [
-                "[task 252] concluída | aprovada por gemini: ACEITE Commit criado com hash abc123 e worktree limpo.",
+                "[task 252] concluída | aprovada por gemini: ACEITE\nCommit criado com hash abc123 e worktree limpo.",
             ],
         )
 

@@ -371,11 +371,19 @@ def test_runner_complete_task_fails():
     assert system.messages[-1] == "[task 10] codex: erro ao concluir task"
 
 
-def test_summarize_task_feedback_flattens_and_truncates():
+def test_summarize_task_feedback_truncates_lines():
     result = "ACEITE\nImplementação concluída com evidência concreta e detalhes extras para exceder o limite configurado."
 
-    summary = summarize_task_feedback(result, max_chars=50)
+    summary = summarize_task_feedback(result, max_chars=50, max_lines=6)
 
-    assert "\n" not in summary
+    assert "\n" in summary
     assert summary.endswith("…")
     assert len(summary) <= 50
+
+def test_summarize_task_feedback_single_line_without_newlines():
+    result = "Implementação concluída com sucesso."
+
+    summary = summarize_task_feedback(result, max_chars=100)
+
+    assert "\n" not in summary
+    assert not summary.endswith("…")

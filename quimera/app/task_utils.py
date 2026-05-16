@@ -9,6 +9,7 @@ _MAX_COMPLETED_TASK_RESULTS_CHARS = 2000
 _MAX_COMPLETED_TASK_RESULT_DESC_CHARS = 80
 _MAX_COMPLETED_TASK_RESULT_VALUE_CHARS = 200
 _MAX_TASK_FEEDBACK_SUMMARY_CHARS = 140
+_MAX_TASK_FEEDBACK_SUMMARY_LINES = 6
 
 
 def truncate_tool_result(content: str, max_lines: int = 10) -> str:
@@ -125,13 +126,25 @@ def summarize_task_feedback(
     result: str | None,
     *,
     max_chars: int = _MAX_TASK_FEEDBACK_SUMMARY_CHARS,
+    max_lines: int = _MAX_TASK_FEEDBACK_SUMMARY_LINES,
 ) -> str:
-    """Resume o resultado final da task para uma linha de feedback humano."""
     if not result:
         return ""
-    summary = " ".join(str(result).split())
+    text = str(result)
+    lines = text.split("\n")
+    stripped = _strip_empty_trailing(lines)
+    kept = stripped[:max_lines]
+    if len(kept) < len(stripped):
+        kept.append("…")
+    summary = "\n".join(kept)
     if len(summary) <= max_chars:
         return summary
     if max_chars <= 1:
         return summary[:max_chars]
     return f"{summary[: max_chars - 1].rstrip()}…"
+
+
+def _strip_empty_trailing(lines: list[str]) -> list[str]:
+    while lines and not lines[-1].strip():
+        lines.pop()
+    return lines
