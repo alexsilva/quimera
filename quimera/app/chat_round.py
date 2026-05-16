@@ -1,14 +1,20 @@
 """Orquestra uma rodada de chat multiagente."""
 from __future__ import annotations
 
+import queue as _queue_module
 import shutil
 import tempfile
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from pathlib import Path
 
 from ..constants import HANDOFF_SYNTHESIS_MSG, MSG_EMPTY_INPUT, USER_ROLE
 from ..prompt_kinds import PromptKind
 from .config import logger
+from .render_event import RenderEvent
+from ..domain.session_state import SessionState
+
+AGENT_TIMEOUT_SECS = 120  # timeout máximo por agente no fan-out paralelo
+PARALLEL_FUTURE_RESULT_TIMEOUT_SECS = 30
 
 
 class ChatRoundOrchestrator:
@@ -16,21 +22,198 @@ class ChatRoundOrchestrator:
 
     HANDOFF_MAX_HOPS_FACTOR = 2
 
-    def __init__(self, app):
-        self.app = app
+    def __init__(
+        self,
+        dispatch_services=None,
+        parse_routing=None,
+        agent_pool=None,
+        session_services=None,
+        parse_response=None,
+        *,
+        agent_client=None,
+        turn_manager=None,
+        task_services=None,
+        get_agent_plugin=None,
+        behavior_metrics=None,
+        threads=1,
+        session_state=None,
+        show_system_message=None,
+        renderer=None,
+        ui_queue=None,
+        merge_staging_to_workspace=None,
+        generate_handoff_id=None,
+        # compat: aceita lambdas individuais quando session_state não é SessionState
+        get_round_index=None,
+        set_round_index=None,
+        set_summary_agent_preference=None,
+        get_pending_input_for=None,
+        set_pending_input_for=None,
+    ):
+        if parse_routing is None and hasattr(dispatch_services, "parse_routing"):
+            app = dispatch_services
+            dispatch_services = getattr(app, "dispatch_services", None)
+            parse_routing = lambda user: app.parse_routing(user)
+            agent_pool = getattr(app, "agent_pool", None)
+            if agent_pool is None:
+                from .agent_pool import AgentPool
+                agent_pool = AgentPool(getattr(app, "active_agents", []) or [])
+            session_services = getattr(app, "session_services", None)
+            parse_response = lambda response: app.parse_response(response)
+            agent_client = getattr(app, "agent_client", agent_client)
+            turn_manager = getattr(app, "turn_manager", turn_manager)
+            task_services = getattr(app, "task_services", task_services)
+            get_agent_plugin = getattr(app, "get_agent_plugin", get_agent_plugin)
+            behavior_metrics = getattr(app, "behavior_metrics", behavior_metrics)
+            threads = getattr(app, "threads", threads)
+            session_state = getattr(app, "_chat_state", getattr(app, "session_state", session_state))
+            show_system_message = getattr(app, "show_system_message", show_system_message)
+            renderer = getattr(app, "renderer", renderer)
+            ui_queue = getattr(app, "_ui_event_queue", ui_queue)
+            if not isinstance(session_state, SessionState):
+                get_round_index = get_round_index or (lambda: getattr(app, "round_index", 0))
+                set_round_index = set_round_index or (lambda value: setattr(app, "round_index", value))
+                set_summary_agent_preference = set_summary_agent_preference or (
+                    lambda value: setattr(app, "summary_agent_preference", value)
+                )
+                get_pending_input_for = get_pending_input_for or (
+                    lambda: getattr(app, "_pending_input_for", None)
+                )
+                set_pending_input_for = set_pending_input_for or (
+                    lambda value: setattr(app, "_pending_input_for", value)
+                )
+            merge_staging_to_workspace = merge_staging_to_workspace or getattr(
+                app, "_merge_staging_to_workspace", None
+            )
+            generate_handoff_id = generate_handoff_id or getattr(
+                app, "_generate_handoff_id", None
+            )
+
+        self._dispatch_services = dispatch_services
+        self._parse_routing = parse_routing
+        self._agent_pool = agent_pool
+        self._session_services = session_services
+        self._parse_response = parse_response
+        self._agent_client = agent_client
+        self._turn_manager = turn_manager
+        self._task_services = task_services
+        self._get_agent_plugin = get_agent_plugin
+        self._behavior_metrics = behavior_metrics
+        self._threads = threads
+        # session_state pode ser SessionState ou dict legado
+        self._session_state = session_state if isinstance(session_state, SessionState) else None
+        self._session_state_dict = session_state if not isinstance(session_state, SessionState) else None
+        # compat: lambdas individuais (usadas quando _session_state é None)
+        self._get_round_index_fn = get_round_index or (lambda: 0)
+        self._set_round_index_fn = set_round_index
+        self._set_summary_agent_preference_fn = set_summary_agent_preference
+        self._get_pending_input_for_fn = get_pending_input_for or (lambda: None)
+        self._set_pending_input_for_fn = set_pending_input_for
+        self._show_system_message = show_system_message
+        self._renderer = renderer
+        self._ui_queue = ui_queue
+        self._merge_staging_to_workspace_fn = merge_staging_to_workspace
+        self._generate_handoff_id = generate_handoff_id or (lambda task, target: f"gen-{target}")
+
+    # ------------------------------------------------------------------
+    # Accessors de estado — preferem SessionState, caem nos lambdas legados
+    # ------------------------------------------------------------------
+
+    def _get_round_index(self) -> int:
+        if self._session_state is not None:
+            return self._session_state.round_index
+        return self._get_round_index_fn()
+
+    def _set_round_index(self, value: int) -> None:
+        if self._session_state is not None:
+            self._session_state.round_index = value
+        elif self._set_round_index_fn is not None:
+            self._set_round_index_fn(value)
+
+    def _set_summary_agent_preference(self, value: str | None) -> None:
+        if self._session_state is not None:
+            self._session_state.summary_agent_preference = value
+        elif self._set_summary_agent_preference_fn is not None:
+            self._set_summary_agent_preference_fn(value)
+
+    def _get_pending_input_for(self) -> str | None:
+        if self._session_state is not None:
+            return self._session_state.pending_input_for
+        return self._get_pending_input_for_fn()
+
+    def _set_pending_input_for(self, value: str | None) -> None:
+        if self._session_state is not None:
+            self._session_state.pending_input_for = value
+        elif self._set_pending_input_for_fn is not None:
+            self._set_pending_input_for_fn(value)
+
+    def _emit_event(
+        self,
+        event_type: str,
+        payload,
+        *,
+        agent: str | None = None,
+        metadata: dict | None = None,
+    ) -> bool:
+        if self._ui_queue is None:
+            return False
+        self._ui_queue.put(RenderEvent(event_type, payload, agent=agent, metadata=metadata))
+        return True
 
     def _show_system(self, message: str) -> None:
         """Exibe mensagem de sistema via camada que preserva prompt quando disponível."""
-        app = self.app
-        show_system_message = getattr(app, "show_system_message", None)
+        if self._emit_event(RenderEvent.SYSTEM, message):
+            return
+        show_system_message = self._show_system_message
         if callable(show_system_message):
             try:
                 show_system_message(message)
                 return
             except AttributeError:
-                # Stubs de teste podem expor o método sem inicializar system_layer.
                 pass
-        app.renderer.show_system(message)
+        if self._renderer is not None:
+            show_system = getattr(self._renderer, "show_system", None)
+            if callable(show_system):
+                show_system(message)
+
+    def _show_warning(self, message: str) -> None:
+        if self._emit_event(RenderEvent.WARNING, message):
+            return
+        if self._renderer is not None:
+            show_warning = getattr(self._renderer, "show_warning", None)
+            if callable(show_warning):
+                show_warning(message)
+
+    def _show_agent_message(self, agent: str, message: str | None) -> None:
+        if self._emit_event(
+            RenderEvent.TEXT,
+            message if message is not None else "",
+            agent=agent,
+            metadata={"no_response": message is None},
+        ):
+            return
+        if self._renderer is None:
+            return
+        if message is None:
+            show_no_response = getattr(self._renderer, "show_no_response", None)
+            if callable(show_no_response):
+                show_no_response(agent)
+            return
+        show_message = getattr(self._renderer, "show_message", None)
+        if callable(show_message):
+            show_message(agent, message)
+
+    def _show_handoff(self, from_agent: str, to_agent: str, task: str | None) -> None:
+        if self._emit_event(
+            RenderEvent.HANDOFF,
+            "",
+            agent=from_agent,
+            metadata={"to": to_agent, "task": task},
+        ):
+            return
+        if self._renderer is not None:
+            show_handoff = getattr(self._renderer, "show_handoff", None)
+            if callable(show_handoff):
+                show_handoff(from_agent, to_agent, task=task)
 
     @staticmethod
     def _build_synthesis_payload(responses: list[tuple[str, str]]) -> tuple[str, str]:
@@ -52,46 +235,47 @@ class ChatRoundOrchestrator:
             return []
         return [dict(item) for item in pending if isinstance(item, dict)]
 
+    def _is_cancelled(self) -> bool:
+        return bool(self._agent_client and getattr(self._agent_client, '_user_cancelled', False))
+
+    def _handle_cancelled(self) -> None:
+        self._show_system("[cancelado] fluxo interrompido.")
+        if self._turn_manager is not None:
+            self._turn_manager.reset()
+
     def process(self, user):
         """Implementação real do processamento de mensagens do chat."""
-        app = self.app
-        dispatch_services = app.dispatch_services
-        first_agent, message, explicit = app.parse_routing(user)
+        first_agent, message, explicit = self._parse_routing(user)
         if first_agent is None:
             return
         if not message or not message.strip():
-            app.renderer.show_warning(MSG_EMPTY_INPUT.format(first_agent))
+            self._show_warning(MSG_EMPTY_INPUT.format(first_agent))
             return
 
-        pending_input_for = getattr(app, "_pending_input_for", None)
+        pending_input_for = self._get_pending_input_for()
         if pending_input_for and not explicit:
             first_agent = pending_input_for
-        app._pending_input_for = None
+        self._set_pending_input_for(None)
 
-        other_agents = [n for n in app.active_agents if n != first_agent]
+        other_agents = [n for n in self._agent_pool.agents if n != first_agent]
 
-        app.round_index += 1
-        app.summary_agent_preference = first_agent
-        app.session_services.persist_message(USER_ROLE, message)
+        self._set_round_index(self._get_round_index() + 1)
+        self._set_summary_agent_preference(first_agent)
+        self._session_services.persist_message(USER_ROLE, message)
 
-        response = dispatch_services.call_agent(first_agent, is_first_speaker=True, protocol_mode="standard")
-        response, route_target, handoff, extend, needs_human_input, _ = app.parse_response(response)
+        response = self._dispatch_services.call_agent(first_agent, is_first_speaker=True, protocol_mode="standard")
+        response, route_target, handoff, extend, needs_human_input, _ = self._parse_response(response)
 
-        agent_client = getattr(app, "agent_client", None)
-        if agent_client and agent_client._user_cancelled:
-            self._show_system("[cancelado] fluxo interrompido.")
-            app.turn_manager.reset()
+        if self._is_cancelled():
+            self._handle_cancelled()
             return
 
         if response is None and not route_target and not needs_human_input:
-            # Não fazer fallback se o usuário já cancelou — evita fallback infinito
-            agent_client = getattr(app, "agent_client", None)
-            if agent_client and agent_client._user_cancelled:
-                self._show_system("[cancelado] fluxo interrompido.")
-                app.turn_manager.reset()
+            if self._is_cancelled():
+                self._handle_cancelled()
                 return
 
-            fallback_candidates = [agent for agent in app.active_agents if agent != first_agent]
+            fallback_candidates = [agent for agent in self._agent_pool.agents if agent != first_agent]
             failed_agent = first_agent
             for fallback_agent in fallback_candidates:
                 logger.info(
@@ -102,39 +286,35 @@ class ChatRoundOrchestrator:
                 self._show_system(
                     f"[fallback] {failed_agent} não respondeu; {fallback_agent} assumiu"
                 )
-                agent_client = getattr(app, "agent_client", None)
-                if agent_client and agent_client._user_cancelled:
-                    self._show_system("[cancelado] fluxo interrompido.")
-                    app.turn_manager.reset()
+                if self._is_cancelled():
+                    self._handle_cancelled()
                     return
-                fallback_response = dispatch_services.call_agent(
+                fallback_response = self._dispatch_services.call_agent(
                     fallback_agent,
                     is_first_speaker=True,
                     primary=False,
                     protocol_mode="standard",
                 )
-                fallback_response, route_target, handoff, extend, needs_human_input, _ = app.parse_response(
+                fallback_response, route_target, handoff, extend, needs_human_input, _ = self._parse_response(
                     fallback_response
                 )
                 if fallback_response is None and not route_target and not needs_human_input:
                     continue
                 first_agent = fallback_agent
-                app.summary_agent_preference = first_agent
+                self._set_summary_agent_preference(first_agent)
                 response = fallback_response
                 break
 
         if needs_human_input:
             if response:
-                app.renderer.show_message(first_agent, response)
-            app._pending_input_for = first_agent
+                self._show_agent_message(first_agent, response)
+            self._set_pending_input_for(first_agent)
             self._show_system(f"\nResponda para {first_agent.upper()}:\n")
             return
-        dispatch_services.print_response(first_agent, response)
+        self._dispatch_services.print_response(first_agent, response)
         if response is not None:
-            app.session_services.persist_message(first_agent, response)
+            self._session_services.persist_message(first_agent, response)
 
-        # Impede handoff para si mesmo — evitar loops infinitos e delegar
-        # explicitamente para o mesmo agente não faz sentido.
         if route_target and route_target == first_agent:
             logger.warning(
                 "[HANDOFF] %s attempted to handoff to itself — ignored",
@@ -143,13 +323,13 @@ class ChatRoundOrchestrator:
             route_target = None
             handoff = None
 
-        active_agents = getattr(app, "active_agents", None) or []
-        if route_target and route_target not in active_agents:
+        connected_agents = self._agent_pool.agents
+        if route_target and route_target not in connected_agents:
             logger.warning(
                 "[HANDOFF] %s attempted to handoff to unknown agent %r — ignored (active: %s)",
                 first_agent,
                 route_target,
-                active_agents,
+                connected_agents,
             )
             route_target = None
             handoff = None
@@ -159,11 +339,9 @@ class ChatRoundOrchestrator:
         else:
             self._process_standard_flow(first_agent, explicit, extend, other_agents)
 
-        app.session_services.maybe_auto_summarize(preferred_agent=first_agent)
+        self._session_services.maybe_auto_summarize(preferred_agent=first_agent)
 
     def _process_handoff(self, first_agent, route_target, handoff):
-        app = self.app
-        dispatch_services = app.dispatch_services
         current_from = first_agent
         current_target = route_target
         current_handoff = dict(handoff) if isinstance(handoff, dict) else handoff
@@ -171,7 +349,7 @@ class ChatRoundOrchestrator:
         final_target = None
         original_task = handoff.get("task") if isinstance(handoff, dict) else None
         collected_responses: list[tuple[str, str]] = []
-        max_hops = max(1, len(getattr(app, "active_agents", []) or []) * self.HANDOFF_MAX_HOPS_FACTOR)
+        max_hops = max(1, len(self._agent_pool.agents) * self.HANDOFF_MAX_HOPS_FACTOR)
         hops = 0
         failed_target = current_target
 
@@ -181,16 +359,12 @@ class ChatRoundOrchestrator:
             priority = current_handoff.get("priority", "normal") if isinstance(current_handoff, dict) else "normal"
             chain = current_handoff.get("chain", []) if isinstance(current_handoff, dict) else []
 
-            # Impede handoff para si mesmo no meio da cadeia
             if current_target == current_from:
                 logger.warning(
                     "[HANDOFF] %s attempted to handoff to itself in chain — ignored",
                     current_target,
                 )
-                if hasattr(app, "renderer"):
-                    app.renderer.show_warning(
-                        f"{current_target} tentou delegar para si mesmo — ignorado"
-                    )
+                self._show_warning(f"{current_target} tentou delegar para si mesmo — ignorado")
                 break
 
             if current_target in chain:
@@ -198,15 +372,15 @@ class ChatRoundOrchestrator:
                     "[HANDOFF] Circular delegation detected: %s -> %s (chain: %s)",
                     current_from, current_target, chain,
                 )
-                if hasattr(app, "behavior_metrics") and app.behavior_metrics:
-                    app.behavior_metrics.record_handoff_received(current_target, is_circular=True)
-                app.renderer.show_warning(
+                if self._behavior_metrics is not None:
+                    self._behavior_metrics.record_handoff_received(current_target, is_circular=True)
+                self._show_warning(
                     f"Delegação circular detectada: {current_from} -> {current_target}. "
                     f"Cadeia: {' -> '.join(chain + [current_target])}"
                 )
                 break
 
-            _active = getattr(app, "active_agents", None) or []
+            _active = self._agent_pool.agents
             if current_target not in _active:
                 logger.warning(
                     "[HANDOFF] %s attempted to handoff to unknown agent %r in chain — ignored (active: %s)",
@@ -214,16 +388,15 @@ class ChatRoundOrchestrator:
                     current_target,
                     _active,
                 )
-                if hasattr(app, "renderer"):
-                    app.renderer.show_warning(
-                        f"Handoff ignorado: agente '{current_target}' não está conectado."
-                    )
+                self._show_warning(
+                    f"Handoff ignorado: agente '{current_target}' não está conectado."
+                )
                 break
 
-            app.renderer.show_handoff(
+            self._show_handoff(
                 current_from,
                 current_target,
-                task=current_handoff["task"],
+                current_handoff.get("task") if isinstance(current_handoff, dict) else None,
             )
             logger.info(
                 "[HANDOFF] id=%s from=%s to=%s priority=%s chain=%s",
@@ -233,11 +406,11 @@ class ChatRoundOrchestrator:
             if isinstance(outbound_handoff, dict):
                 outbound_handoff["chain"] = chain + [current_from]
             response_handoff = outbound_handoff
-            if hasattr(app, "behavior_metrics") and app.behavior_metrics:
-                app.behavior_metrics.record_handoff_sent(current_from)
-                app.behavior_metrics.record_handoff_received(current_target)
+            if self._behavior_metrics is not None:
+                self._behavior_metrics.record_handoff_sent(current_from)
+                self._behavior_metrics.record_handoff_received(current_target)
 
-            secondary_response = dispatch_services.call_agent(
+            secondary_response = self._dispatch_services.call_agent(
                 current_target,
                 handoff=outbound_handoff,
                 handoff_only=True,
@@ -246,21 +419,19 @@ class ChatRoundOrchestrator:
                 from_agent=current_from,
                 prompt_kind=PromptKind.TASK_EXECUTOR,
             )
-            agent_client = getattr(app, "agent_client", None)
-            if agent_client and agent_client._user_cancelled:
-                self._show_system("[cancelado] fluxo interrompido.")
-                app.turn_manager.reset()
+            if self._is_cancelled():
+                self._handle_cancelled()
                 return
             expected_ack = current_handoff.get("handoff_id") if isinstance(current_handoff, dict) else None
-            secondary_response, next_target, next_handoff, _, _, ack_id = app.parse_response(secondary_response)
+            secondary_response, next_target, next_handoff, _, _, ack_id = self._parse_response(secondary_response)
             if expected_ack and ack_id and ack_id != expected_ack:
                 logger.warning(
                     "[ACK] mismatch: expected=%s, received=%s from agent=%s",
                     expected_ack, ack_id, current_target,
                 )
-            dispatch_services.print_response(current_target, secondary_response)
+            self._dispatch_services.print_response(current_target, secondary_response)
             if secondary_response is not None:
-                app.session_services.persist_message(current_target, secondary_response)
+                self._session_services.persist_message(current_target, secondary_response)
                 collected_responses.append((current_target, secondary_response))
 
             if not secondary_response and not (next_target and next_handoff):
@@ -269,7 +440,7 @@ class ChatRoundOrchestrator:
                 fallback_next_target = None
                 fallback_next_handoff = None
                 fallback_candidates = [
-                    agent for agent in app.active_agents
+                    agent for agent in self._agent_pool.agents
                     if agent != first_agent and agent != current_from and agent != current_target and agent not in chain
                 ]
                 for fallback_agent in fallback_candidates:
@@ -287,7 +458,7 @@ class ChatRoundOrchestrator:
                             fallback_chain.extend(outbound_handoff.get("chain", []))
                         fallback_chain.append(current_target)
                         fallback_handoff["chain"] = fallback_chain
-                    fallback_response = dispatch_services.call_agent(
+                    fallback_response = self._dispatch_services.call_agent(
                         fallback_agent,
                         handoff=fallback_handoff,
                         handoff_only=True,
@@ -296,17 +467,15 @@ class ChatRoundOrchestrator:
                         from_agent=current_from,
                         prompt_kind=PromptKind.TASK_EXECUTOR,
                     )
-                    agent_client = getattr(app, "agent_client", None)
-                    if agent_client and agent_client._user_cancelled:
-                        self._show_system("[cancelado] fluxo interrompido.")
-                        app.turn_manager.reset()
+                    if self._is_cancelled():
+                        self._handle_cancelled()
                         return
-                    fallback_response, fallback_next_target, fallback_next_handoff, _, _, ack_id = app.parse_response(
+                    fallback_response, fallback_next_target, fallback_next_handoff, _, _, ack_id = self._parse_response(
                         fallback_response
                     )
-                    dispatch_services.print_response(fallback_agent, fallback_response)
+                    self._dispatch_services.print_response(fallback_agent, fallback_response)
                     if fallback_response is not None:
-                        app.session_services.persist_message(fallback_agent, fallback_response)
+                        self._session_services.persist_message(fallback_agent, fallback_response)
                         collected_responses.append((fallback_agent, fallback_response))
                     if fallback_response or (fallback_next_target and fallback_next_handoff):
                         fallback_target = fallback_agent
@@ -353,7 +522,7 @@ class ChatRoundOrchestrator:
                 }
                 if isinstance(next_item.get("metadata"), dict):
                     current_handoff.update(next_item["metadata"])
-                current_handoff["handoff_id"] = next_item.get("handoff_id") or app._generate_handoff_id(
+                current_handoff["handoff_id"] = next_item.get("handoff_id") or self._generate_handoff_id(
                     next_item["content"],
                     next_target,
                 )
@@ -389,23 +558,21 @@ class ChatRoundOrchestrator:
                 task=original_task or current_handoff["task"],
                 response=synthesis_response,
             )
-            if hasattr(app, "behavior_metrics") and app.behavior_metrics:
-                app.behavior_metrics.record_synthesis(first_agent)
-            final_response = dispatch_services.call_agent(
+            if self._behavior_metrics is not None:
+                self._behavior_metrics.record_synthesis(first_agent)
+            final_response = self._dispatch_services.call_agent(
                 first_agent,
                 handoff=synthesis_handoff,
                 primary=False,
                 protocol_mode="handoff",
             )
-            agent_client = getattr(app, "agent_client", None)
-            if agent_client and agent_client._user_cancelled:
-                self._show_system("[cancelado] fluxo interrompido.")
-                app.turn_manager.reset()
+            if self._is_cancelled():
+                self._handle_cancelled()
                 return
-            final_response, _, _, _, _, _ = app.parse_response(final_response)
-            dispatch_services.print_response(first_agent, final_response)
+            final_response, _, _, _, _, _ = self._parse_response(final_response)
+            self._dispatch_services.print_response(first_agent, final_response)
             if final_response is not None:
-                app.session_services.persist_message(first_agent, final_response)
+                self._session_services.persist_message(first_agent, final_response)
         else:
             logger.warning(
                 "[HANDOFF] id=%s failed: secondary agent %s returned no response",
@@ -417,8 +584,6 @@ class ChatRoundOrchestrator:
             )
 
     def _process_standard_flow(self, first_agent, explicit, extend, other_agents):
-        app = self.app
-        dispatch_services = app.dispatch_services
         protocol_mode = "extended" if extend else "standard"
         if explicit:
             remaining = []
@@ -427,18 +592,19 @@ class ChatRoundOrchestrator:
         else:
             remaining = []
             if other_agents:
-                app.active_agents = app.active_agents[1:] + app.active_agents[:1]
+                self._agent_pool.rotate()
 
         next_handoff = None
-        if app.threads > 1 and len(remaining) > 1:
+        if self._threads > 1 and len(remaining) > 1:
             staging_root = Path(
                 tempfile.gettempdir()
-            ) / "quimera-staging" / f"{app.session_state['session_id']}-round{app.round_index}"
+            ) / "quimera-staging" / f"{self._session_state.get('session_id') if self._session_state else (self._session_state_dict or {}).get('session_id', 'unknown')}-round{self._get_round_index()}"
             staging_root.mkdir(parents=True, exist_ok=True)
-            logger.info("parallel mode: %d threads, staging=%s", app.threads, staging_root)
+            logger.info("parallel mode: %d threads, staging=%s", self._threads, staging_root)
             native_tool_agents = [
                 a for a in remaining
-                if getattr(app.get_agent_plugin(a), "output_format", None) == "stream-json"
+                if self._get_agent_plugin is not None
+                and getattr(self._get_agent_plugin(a), "output_format", None) == "stream-json"
             ]
             if native_tool_agents:
                 logger.warning(
@@ -447,11 +613,12 @@ class ChatRoundOrchestrator:
                     native_tool_agents,
                 )
             try:
-                with ThreadPoolExecutor(max_workers=app.threads) as executor:
+                executor = ThreadPoolExecutor(max_workers=self._threads)
+                try:
                     agent_handoff_pairs = [(agent, None, staging_root, i) for i, agent in enumerate(remaining)]
                     futures = [
                         executor.submit(
-                            app.task_services.call_agent_for_parallel,
+                            self._task_services.call_agent_for_parallel,
                             agent,
                             handoff,
                             protocol_mode,
@@ -460,25 +627,49 @@ class ChatRoundOrchestrator:
                         )
                         for agent, handoff, staging_dir, idx in agent_handoff_pairs
                     ]
-                    results = [future.result() for future in futures]
-                app._merge_staging_to_workspace(staging_root)
-                agent_client = getattr(app, "agent_client", None)
-                if agent_client and agent_client._user_cancelled:
-                    self._show_system("[cancelado] fluxo interrompido.")
-                    app.turn_manager.reset()
+                    results = [
+                        future.result(timeout=PARALLEL_FUTURE_RESULT_TIMEOUT_SECS)
+                        for future in futures
+                    ]
+                except TimeoutError:
+                    pending_agents = [
+                        agent
+                        for (agent, *_), future in zip(agent_handoff_pairs, futures)
+                        if not future.done()
+                    ]
+                    for future in futures:
+                        if not future.done():
+                            future.cancel()
+                    logger.warning(
+                        "[parallel] timeout aguardando agentes após %ss: %s",
+                        PARALLEL_FUTURE_RESULT_TIMEOUT_SECS,
+                        pending_agents,
+                    )
+                    self._show_warning(
+                        "[parallel] timeout aguardando agentes; cancelando tarefas pendentes."
+                    )
+                    if self._turn_manager is not None:
+                        self._turn_manager.reset()
+                    return
+                finally:
+                    executor.shutdown(wait=False, cancel_futures=True)
+                if self._merge_staging_to_workspace_fn is not None:
+                    self._merge_staging_to_workspace_fn(staging_root)
+                if self._is_cancelled():
+                    self._handle_cancelled()
                     return
                 needs_input_any = False
                 for item in results:
                     agent, response, route_target, handoff, extend, needs_input = item
-                    dispatch_services.print_response(agent, response)
+                    self._dispatch_services.print_response(agent, response)
                     if response is not None:
-                        app.session_services.persist_message(agent, response)
+                        self._session_services.persist_message(agent, response)
                     needs_input_any = needs_input or needs_input_any
                 if needs_input_any:
                     needing = next((agent_data for agent_data in results if agent_data[-1]), None)
                     if needing:
                         current_agent = needing[0]
-                        app._pending_input_for = current_agent
+                        self._set_pending_input_for(current_agent)
                         self._show_system(f"\nResponda para {current_agent.upper()}:\n")
             finally:
                 if staging_root.exists():
@@ -487,34 +678,28 @@ class ChatRoundOrchestrator:
             return
 
         for index, agent in enumerate(remaining):
-            response = dispatch_services.call_agent(agent, handoff=next_handoff, primary=False, protocol_mode=protocol_mode)
-            agent_client = getattr(app, "agent_client", None)
-            if agent_client and agent_client._user_cancelled:
-                self._show_system("[cancelado] fluxo interrompido.")
-                app.turn_manager.reset()
+            response = self._dispatch_services.call_agent(agent, handoff=next_handoff, primary=False, protocol_mode=protocol_mode)
+            if self._is_cancelled():
+                self._handle_cancelled()
                 return
             next_handoff = None
-            response, route_target, handoff, _, needs_human_input, _ = app.parse_response(response)
-            dispatch_services.print_response(agent, response)
+            response, route_target, handoff, _, needs_human_input, _ = self._parse_response(response)
+            self._dispatch_services.print_response(agent, response)
             if response is not None:
-                app.session_services.persist_message(agent, response)
+                self._session_services.persist_message(agent, response)
             if needs_human_input:
-                app._pending_input_for = agent
+                self._set_pending_input_for(agent)
                 self._show_system(f"\nResponda para {agent.upper()}:\n")
                 break
             if route_target and index + 1 < len(remaining):
                 remaining[index + 1] = route_target
             if route_target:
-                # Impede handoff para si mesmo no fluxo padrão
                 if route_target == agent:
                     logger.warning(
                         "[HANDOFF] %s attempted to handoff to itself in standard flow — ignored",
                         agent,
                     )
-                    if hasattr(app, "renderer"):
-                        app.renderer.show_warning(
-                            f"{agent} tentou delegar para si mesmo — ignorado"
-                        )
+                    self._show_warning(f"{agent} tentou delegar para si mesmo — ignorado")
                     route_target = None
                     handoff = None
                     next_handoff = None
