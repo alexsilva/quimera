@@ -16,6 +16,7 @@ injetadas explicitamente) e delegação rasa.
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from typing import Any, Callable
 
@@ -412,21 +413,41 @@ class AppTaskServices:
             approval_handler=approval_handler,
         )
 
-    def call_agent_for_parallel(self, agent, handoff, protocol_mode, staging_root: Path, index: int):
-        """Executa chamada paralela isolando staging por thread."""
-        background_dispatch = self._get_background_dispatch_services()
+    def call_agent_for_parallel(
+        self,
+        agent,
+        handoff,
+        protocol_mode,
+        staging_root: Path,
+        index: int,
+        cancel_event: threading.Event | None = None,
+    ):
+        """Executa chamada paralela isolando staging e cliente por worker."""
+        background_dispatch = self._create_background_dispatch_services(
+            cancel_checker_override=(
+                (lambda: bool(cancel_event and cancel_event.is_set()))
+                if cancel_event is not None
+                else self._background_was_user_cancelled
+            ),
+            cancel_event=cancel_event,
+        )
         call_agent = self._call_agent
         if background_dispatch is not None:
             call_agent = background_dispatch.call_agent
-        return call_agent_for_parallel_with_client(
-            call_agent,
-            self._parse_response,
-            agent,
-            handoff,
-            protocol_mode,
-            staging_root,
-            index,
-        )
+        try:
+            return call_agent_for_parallel_with_client(
+                call_agent,
+                self._parse_response,
+                agent,
+                handoff,
+                protocol_mode,
+                staging_root,
+                index,
+            )
+        finally:
+            close = getattr(background_dispatch, "close", None)
+            if callable(close):
+                close()
 
     def stop_task_executors(self):
         """Interrompe executores de tasks em segundo plano."""
@@ -610,10 +631,12 @@ class AppTaskServices:
             )
         return self._background_tool_executor
 
-    def _get_background_dispatch_services(self) -> AppDispatchServices | None:
-        if self._background_dispatch_services is not None:
-            return self._background_dispatch_services
-
+    def _create_background_dispatch_services(
+        self,
+        *,
+        cancel_checker_override=None,
+        cancel_event: threading.Event | None = None,
+    ) -> AppDispatchServices | None:
         renderer = self._get_renderer()
         workspace = self._get_workspace()
         if renderer is None or workspace is None:
@@ -635,6 +658,8 @@ class AppTaskServices:
         background_agent_client.execution_mode = self._get_execution_mode()
         background_agent_client.tool_event_callback = self._get_record_tool_event()
         background_agent_client.tool_executor = self._get_background_tool_executor()
+        if cancel_event is not None:
+            background_agent_client._cancel_event = cancel_event
         proxy = _BackgroundDispatchAppProxy(
             task_services=self,
             get_session_metrics=self._get_session_metrics,
@@ -650,12 +675,17 @@ class AppTaskServices:
             get_retry_backoff_seconds=self._get_retry_backoff_seconds,
             get_rate_limit_backoff_seconds=self._get_rate_limit_backoff_seconds,
         )
-        self._background_dispatch_services = AppDispatchServices.from_app(
+        return AppDispatchServices.from_app(
             proxy,
             agent_client_override=background_agent_client,
             tool_executor_override=background_agent_client.tool_executor,
-            cancel_checker_override=self._background_was_user_cancelled,
+            cancel_checker_override=cancel_checker_override or self._background_was_user_cancelled,
         )
+
+    def _get_background_dispatch_services(self) -> AppDispatchServices | None:
+        if self._background_dispatch_services is not None:
+            return self._background_dispatch_services
+        self._background_dispatch_services = self._create_background_dispatch_services()
         return self._background_dispatch_services
 
     def _build_task_prompt_factory(self) -> TaskPromptFactory:

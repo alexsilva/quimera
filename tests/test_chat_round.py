@@ -883,6 +883,7 @@ class TestCoverageGaps(unittest.TestCase):
         app._merge_staging_to_workspace = Mock()
         orchestrator = _make_orchestrator(app)
         cancelled = []
+        seen_cancel_events = []
 
         class FakeFuture:
             def __init__(self, agent):
@@ -904,7 +905,8 @@ class TestCoverageGaps(unittest.TestCase):
             def __init__(self, *args, **kwargs):
                 pass
 
-            def submit(self, fn, agent, *args, **kwargs):
+            def submit(self, fn, agent, handoff, protocol_mode, staging_dir, idx, cancel_event):
+                seen_cancel_events.append(cancel_event)
                 return FakeFuture(agent)
 
             def shutdown(self, wait=True, cancel_futures=False):
@@ -914,6 +916,8 @@ class TestCoverageGaps(unittest.TestCase):
             orchestrator._process_standard_flow("claude", False, True, ["codex"])
 
         self.assertEqual(cancelled, ["codex"])
+        self.assertEqual(len(seen_cancel_events), 1)
+        self.assertTrue(seen_cancel_events[0].is_set())
         app.turn_manager.reset.assert_not_called()
         app.renderer.show_warning.assert_called_once()
         app._merge_staging_to_workspace.assert_not_called()

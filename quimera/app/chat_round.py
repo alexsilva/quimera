@@ -4,6 +4,7 @@ from __future__ import annotations
 import queue as _queue_module
 import shutil
 import tempfile
+import threading
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from pathlib import Path
 
@@ -670,7 +671,10 @@ class ChatRoundOrchestrator:
                     max_parallel_workers = min(len(parallel_agents), parallel_slots)
                     executor = ThreadPoolExecutor(max_workers=max_parallel_workers)
                     try:
-                        agent_handoff_pairs = [(agent, None, staging_root, i) for i, agent in enumerate(parallel_agents)]
+                        agent_handoff_pairs = [
+                            (agent, None, staging_root, i, threading.Event())
+                            for i, agent in enumerate(parallel_agents)
+                        ]
                         futures = [
                             executor.submit(
                                 self._task_services.call_agent_for_parallel,
@@ -679,8 +683,9 @@ class ChatRoundOrchestrator:
                                 protocol_mode,
                                 staging_dir,
                                 idx,
+                                cancel_event,
                             )
-                            for agent, handoff, staging_dir, idx in agent_handoff_pairs
+                            for agent, handoff, staging_dir, idx, cancel_event in agent_handoff_pairs
                         ]
                         results = [
                             future.result(timeout=PARALLEL_FUTURE_RESULT_TIMEOUT_SECS)
@@ -689,11 +694,12 @@ class ChatRoundOrchestrator:
                     except TimeoutError:
                         pending_agents = [
                             agent
-                            for (agent, *_), future in zip(agent_handoff_pairs, futures)
+                            for (agent, *_, cancel_event), future in zip(agent_handoff_pairs, futures)
                             if not future.done()
                         ]
-                        for future in futures:
+                        for (_, *_, cancel_event), future in zip(agent_handoff_pairs, futures):
                             if not future.done():
+                                cancel_event.set()
                                 future.cancel()
                         logger.warning(
                             "[parallel] timeout aguardando agentes após %ss: %s",

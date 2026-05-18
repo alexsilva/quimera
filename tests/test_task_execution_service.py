@@ -1,3 +1,5 @@
+import threading
+
 from quimera.app.task_execution_service import TaskExecutionService
 from quimera.app.task import AppTaskServices, _BACKGROUND_AGENT_TIMEOUT_SECONDS
 from quimera.app.task_classifiers import classify_task_execution_result, classify_task_review_result
@@ -346,7 +348,11 @@ def test_app_task_services_execution_isolated_from_chat_cancel_state(monkeypatch
 
     services = build_task_services(app)
     monkeypatch.setattr(services, "_build_task_repository", lambda: repo)
-    monkeypatch.setattr(services, "_get_background_dispatch_services", lambda: dispatch)
+    monkeypatch.setattr(
+        services,
+        "_create_background_dispatch_services",
+        lambda **kwargs: dispatch,
+    )
 
     ok = services._build_task_execution_service(policy).handler_for("codex")(
         TaskRecord(id=6, job_id=0, description="executar tarefa", status="in_progress")
@@ -417,7 +423,11 @@ def test_parallel_calls_use_background_dispatch_when_available(tmp_path, monkeyp
 
     services = build_task_services(app)
     dispatch = DispatchStub(response="background-response")
-    monkeypatch.setattr(services, "_get_background_dispatch_services", lambda: dispatch)
+    monkeypatch.setattr(
+        services,
+        "_create_background_dispatch_services",
+        lambda **kwargs: dispatch,
+    )
 
     result = services.call_agent_for_parallel(
         "codex",
@@ -441,3 +451,68 @@ def test_parallel_calls_use_background_dispatch_when_available(tmp_path, monkeyp
         )
     ]
     assert app.call_agent_calls == []
+
+
+def test_parallel_calls_create_dedicated_background_dispatch_and_close_it(tmp_path, monkeypatch):
+    class AppStub:
+        pass
+
+    app = AppStub()
+    app.renderer = object()
+    app.agent_client = type("ChatClient", (), {"timeout": 45})()
+    app.workspace = type("WorkspaceStub", (), {"cwd": tmp_path})()
+    app.visibility = "summary"
+    app.tasks_db_path = None
+    app.auto_approve_mutations = False
+    app.call_agent = lambda *args, **kwargs: "chat-response"
+    app.parse_response = lambda raw: (raw, None, None, False, False, None)
+
+    services = build_task_services(app)
+    created = []
+    closed = []
+
+    class DispatchPerCall(DispatchStub):
+        def __init__(self):
+            super().__init__(response="background-response")
+
+        def close(self):
+            closed.append(self)
+
+    def _create_background_dispatch_services(**kwargs):
+        dispatch = DispatchPerCall()
+        dispatch.kwargs = kwargs
+        created.append(dispatch)
+        return dispatch
+
+    monkeypatch.setattr(
+        services,
+        "_create_background_dispatch_services",
+        _create_background_dispatch_services,
+    )
+
+    first_cancel = threading.Event()
+    second_cancel = threading.Event()
+    first = services.call_agent_for_parallel(
+        "codex",
+        None,
+        "standard",
+        tmp_path / "staging",
+        0,
+        cancel_event=first_cancel,
+    )
+    second = services.call_agent_for_parallel(
+        "codex",
+        None,
+        "standard",
+        tmp_path / "staging",
+        1,
+        cancel_event=second_cancel,
+    )
+
+    assert first == ("codex", "background-response", None, None, False, False)
+    assert second == ("codex", "background-response", None, None, False, False)
+    assert len(created) == 2
+    assert len(closed) == 2
+    assert created[0] is not created[1]
+    assert created[0].kwargs["cancel_event"] is first_cancel
+    assert created[1].kwargs["cancel_event"] is second_cancel
