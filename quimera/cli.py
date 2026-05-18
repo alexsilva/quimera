@@ -268,7 +268,7 @@ def main():
     parser.add_argument("--connect", dest="connect", metavar="AGENTE", default=None,
                         help="Configura interativamente a conexão de um agente e persiste no base_dir")
     parser.add_argument("--base", dest="base", metavar="PLUGIN", default=None,
-                        help="Plugin base para herdar cmd/output_format (ex: opencode-pickle)")
+                        help="Plugin base para herdar cmd/output_format (ex: opencode)")
     parser.add_argument("--driver", dest="driver", choices=["cli", "openai"], default=None,
                         help="Driver de conexão (cli ou openai)")
     parser.add_argument("--cmd", dest="cmd", metavar="CMD", nargs=argparse.REMAINDER, default=None,

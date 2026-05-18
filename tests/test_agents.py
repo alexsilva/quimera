@@ -1088,7 +1088,7 @@ def test_claude_plugin_exposes_spy_stdout_formatter():
 
 
 def test_opencode_plugin_exposes_spy_stdout_formatter_and_json_output():
-    plugin = get_plugin("opencode-pickle")
+    plugin = get_plugin("opencode")
     assert plugin is not None
     assert plugin.spy_stdout_formatter is _format_opencode_spy_event
     assert plugin.output_format == "opencode-json"

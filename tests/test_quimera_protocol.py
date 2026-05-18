@@ -832,16 +832,16 @@ class ProtocolTests(unittest.TestCase):
             "primary": True,
         })
         app.get_agent_plugin = Mock(return_value=AgentPlugin(
-            name="pickle",
-            prefix="/opencode-pickle",
-            style=("green", "Pickle"),
-            cmd=["pickle"],
+            name="opencode",
+            prefix="/opencode",
+            style=("blue", "OpenCode"),
+            cmd=["opencode"],
             driver="cli",
             supports_tools=True,
             has_builtin_tools=False,
         ))
 
-        message = AppSystemLayer(app)._build_prompt_preview_message("pickle")
+        message = AppSystemLayer(app)._build_prompt_preview_message("opencode")
 
         self.assertIn("TOOLS NO TEXTO: não", message)
         self.assertTrue(app.prompt_builder.build.call_args.kwargs["skip_tool_prompt"])
@@ -924,7 +924,7 @@ class ProtocolTests(unittest.TestCase):
         handled = app.system_layer.handle_command("/prompt inexistente")
 
         self.assertTrue(handled)
-        self.assertEqual(app.renderer.warnings, ["Uso: /prompt [agente]"])
+        self.assertEqual(app.renderer.warnings, ["Uso: /prompt [agente] [follower]"])
 
     def test_available_internal_commands_include_prompt(self):
         self.assertIn(CMD_PROMPT, QuimeraApp._available_internal_commands())

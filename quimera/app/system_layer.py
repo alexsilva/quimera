@@ -318,7 +318,8 @@ class AppSystemLayer:
             execution_mode=self._execution_mode_getter(),
         )
 
-        history_window = getattr(prompt_builder, "history_window", len(history))
+        _hw = getattr(prompt_builder, "history_window", None)
+        history_window = int(_hw) if isinstance(_hw, (int, float)) else len(history)
         window_start = max(0, len(history) - history_window)
         raw_history_lines = ["RAW HISTÓRICO (janela atual, ordem cronológica):"]
         if not history:
@@ -330,15 +331,24 @@ class AppSystemLayer:
                 raw_history_lines.append(f"[{idx}] {role}: {content}")
 
         mode_label = "primeiro-falante" if is_first_speaker else "follower/reviewer"
+        persistent_chars = metrics.get("persistent_chars", 0)
+        persistent_notice = (
+            f"AVISO: histórico parcialmente sumarizado ({persistent_chars} chars em persistent_context)"
+            if persistent_chars else ""
+        )
         analysis_lines = [
             f"PROMPT PREVIEW: {agent}",
             f"MODO: {mode_label}",
             f"DRIVER: {driver}",
             "TOOLS NO TEXTO: não",
+        ]
+        if persistent_notice:
+            analysis_lines.append(persistent_notice)
+        analysis_lines += [
             "ANÁLISE DOS BLOCOS:",
             f"- regras_chars: {metrics['rules_chars']}",
             f"- session_state_chars: {metrics['session_state_chars']}",
-            f"- persistent_chars: {metrics['persistent_chars']}",
+            f"- persistent_chars: {persistent_chars}",
             f"- request_chars: {metrics['request_chars']}",
             f"- facts_chars: {metrics['facts_chars']}",
             f"- shared_state_chars: {metrics['shared_state_chars']}",

@@ -358,7 +358,17 @@ class TerminalRenderer:
                 )
                 for st in _stream_states.values()
             ]
-            return Group(*parts) if len(parts) > 1 else parts[0]
+            main = Group(*parts) if len(parts) > 1 else parts[0]
+            if self._density == "compact":
+                return main
+            active_count = len(parts)
+            count_prefix = f"{active_count} agentes · " if active_count > 1 else ""
+            infobar = Rule(
+                f"[dim]{count_prefix}Ctrl+C para cancelar  · T para tema[/dim]",
+                characters="·",
+                style="dim",
+            )
+            return Group(main, infobar)
 
         def _ensure_live():
             if _ul[0] is None and self._console:
@@ -496,8 +506,6 @@ class TerminalRenderer:
                             render_mode=event.render_mode,
                         )
                         _cprint(final_block)
-                        if state["theme_name"] == "rule":
-                            _cprint(Rule(style="dim"))
                         _cprint("")
 
                 elif isinstance(event, LiveAbortEvent):
@@ -637,7 +645,7 @@ class TerminalRenderer:
             return RichPanel(tools_table, border_style=f"dim {style}", padding=(0, 1),
                              title=f"[bold {style}]tools · {turn_id}[/bold {style}]" if turn_id else None)
         if theme_name == "line":
-            return tools_table
+            return Group(Text(title, style=f"bold {style}"), tools_table)
         return tools_table
 
     def _render_turn_block(
@@ -681,7 +689,7 @@ class TerminalRenderer:
 
     def _build_stream_renderable(self, theme_name: str, label: str, style: str, content: str):
         """Monta o renderable dinâmico usado no streaming (header incluso no bloco live)."""
-        block = self._render_turn_block(
+        return self._render_turn_block(
             theme_name,
             label,
             style,
@@ -689,16 +697,6 @@ class TerminalRenderer:
             include_header=True,
             streaming=True,
         )
-        from rich.console import Group as RichGroup
-        from rich.rule import Rule as RichRule
-        infobar = RichRule(
-            "[dim]· Ctrl+C para cancelar  · T para tema[/dim]",
-            characters="·",
-            style="dim",
-        )
-        if self._density == "compact":
-            return RichGroup(block)
-        return RichGroup(block, infobar)
 
     # ------------------------------------------------------------------
     # API pública de exibição de mensagens
@@ -793,11 +791,16 @@ class TerminalRenderer:
 
     def show_no_response(self, agent):
         """Exibe no response."""
-        _, label = self._agent_style(agent)
+        agent_style, label = self._agent_style(agent)
         message = "sem resposta válida"
         if self._console:
-            style, icon = ROLE_STYLES["info"]
-            line = Text.assemble((f"{icon} ", f"dim {style}"), (f"{label}: {message}", "dim"))
+            _, icon = ROLE_STYLES["info"]
+            line = Text.assemble(
+                (f"{icon} ", "dim"),
+                (label, f"bold {agent_style}"),
+                (": ", "dim"),
+                (message, "dim"),
+            )
             self._print(line)
         else:
             print(f"{label}: {message}")
@@ -806,10 +809,11 @@ class TerminalRenderer:
         """Exibe mensagem sem ícone (ex: logo de boas-vindas)."""
         clean_message = strip_ansi(str(message)).strip("\r\n")
         if self._console:
-            line = Text(clean_message)
+            line = Text(clean_message, style="bold cyan")
             line.no_wrap = False
             line.overflow = "fold"
             self._print(line)
+            self._print(Rule(style="dim cyan"))
         else:
             print(clean_message)
 
@@ -968,26 +972,33 @@ class TerminalRenderer:
 
     def show_handoff(self, from_agent, to_agent, task=None):
         """Exibe handoff."""
-        _, from_label = self._agent_style(from_agent)
-        _, to_label = self._agent_style(to_agent)
-        arrow = f"{from_label} → {to_label}"
-        if task:
-            arrow += f"  ·  {task}"
+        from_style, from_label = self._agent_style(from_agent)
+        to_style, to_label = self._agent_style(to_agent)
         if self._console:
-            style, icon = ROLE_STYLES["info"]
-            line = Text.assemble((f"{icon} ", f"dim {style}"), (arrow, "dim"))
-            self._print(line)
+            title_parts = [
+                (f"  {from_label} ", f"bold {from_style}"),
+                ("→ ", "dim"),
+                (f"{to_label}  ", f"bold {to_style}"),
+            ]
+            if task:
+                title_parts.append((f"· {task}", "dim"))
+            title = Text.assemble(*title_parts)
+            self._print(Rule(title, style="dim", characters="─"))
         else:
+            arrow = f"{from_label} → {to_label}"
+            if task:
+                arrow += f"  ·  {task}"
             print(arrow)
 
     def show_prompt_preview(self, agent: str, content: str):
         """Exibe preview do /prompt como painel de depuração."""
         public_ui = _public_ui_module()
         if self._console and public_ui._RICH_AVAILABLE:
+            style, label = self._agent_style(agent)
             renderable = public_ui.Panel(
                 _highlight_tags(strip_ansi(content.strip())),
-                title=f"[bold]Prompt Preview: {markup_escape(agent)}[/]",
-                border_style="dim blue",
+                title=f"[bold {style}]Prompt Preview · {markup_escape(label)}[/]",
+                border_style=f"dim {style}",
                 padding=(1, 2),
             )
             self._print(renderable)
@@ -1028,8 +1039,8 @@ class TerminalRenderer:
 
         return public_ui.Panel(
             table,
-            title="[bold blue]Agentes em Execução[/]",
-            border_style="blue",
+            title="[dim]Agentes em Execução[/]",
+            border_style="dim",
             padding=(0, 1)
         )
 
@@ -1102,8 +1113,16 @@ class TerminalRenderer:
             # isso causa corrupção visual. Neste caso, suprime o spinner.
             if threading.current_thread() is not threading.main_thread():
                 return _NullStatus()
+            if agent:
+                color, label = self._agent_style(agent)
+                status_text = _public_ui_module().Text.assemble(
+                    (f"[{label}] ", f"bold {color}"),
+                    (initial, ""),
+                )
+            else:
+                status_text = initial
             return self._console.status(
-                initial,
+                status_text,
                 refresh_per_second=_SEQUENTIAL_STATUS_REFRESH_PER_SECOND,
             )
 

@@ -101,14 +101,14 @@ def test_review_agents_for_treats_alias_as_same_agent_identity():
     repository = RepositorySpy()
     plugins = {
         "codex": PluginStub(name="codex", prefix="/codex", aliases=["/code"]),
-        "opencode-pickle": PluginStub(name="opencode-pickle", prefix="/opencode-pickle"),
+        "opencode": PluginStub(name="opencode", prefix="/opencode"),
     }
     policy = TaskFailoverPolicy(
-        active_agents=["codex", "opencode-pickle"],
+        active_agents=["codex", "opencode"],
         get_agent_plugin=lambda name: plugins.get(name),
         repository=repository,
     )
 
     candidates = policy.review_agents_for(executor_agent="/code")
 
-    assert candidates == ["opencode-pickle"]
+    assert candidates == ["opencode"]

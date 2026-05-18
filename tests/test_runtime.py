@@ -199,7 +199,7 @@ class PolicyTests(unittest.TestCase):
 
     def test_choose_best_agent_prefers_tooling_for_test_execution(self):
         selected = choose_best_agent("test_execution",
-                                     [plugins.get("claude"), plugins.get("ollama-granite4"), plugins.get("opencode-pickle")])
+                                     [plugins.get("claude"), plugins.get("ollama-granite4"), plugins.get("opencode")])
         self.assertEqual(selected, "claude")
 
     def test_choose_best_agent_penalizes_low_reliability_tool_users_for_bug_investigation(self):
@@ -219,9 +219,9 @@ class PolicyTests(unittest.TestCase):
                                      [plugins.get("ollama-granite4"), plugins.get("claude"), plugins.get("codex")])
         self.assertEqual(selected, "claude")
 
-    def test_choose_best_agent_does_not_route_general_to_opencode_pickle_on_tie_order(self):
+    def test_choose_best_agent_does_not_route_general_to_opencode_on_tie_order(self):
         selected = choose_best_agent("general",
-                                     [plugins.get("opencode-pickle"), plugins.get("claude"), plugins.get("codex")])
+                                     [plugins.get("opencode"), plugins.get("claude"), plugins.get("codex")])
         self.assertEqual(selected, "claude")
 
     def test_choose_best_agent_prefers_higher_tier_for_general_tasks(self):
@@ -229,7 +229,7 @@ class PolicyTests(unittest.TestCase):
         # codex has general preferred (5) + tier 2 (2 boost) = 7
         # claude has general preferred (5) + tier 3 (4 boost) = 9
         selected = choose_best_agent("general",
-                                     [plugins.get("opencode-pickle"), plugins.get("claude"), plugins.get("codex")])
+                                     [plugins.get("opencode"), plugins.get("claude"), plugins.get("codex")])
         self.assertEqual(selected, "claude")
 
     def test_all_code_editing_agents_are_review_eligible(self):

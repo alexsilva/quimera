@@ -127,17 +127,17 @@ def test_count_agent_open_tasks_uses_repository_list_tasks():
 
 def test_get_task_routing_plugins_resolves_name_case_and_prefix_without_direct_lookup():
     codex = PluginStub("codex", prefix="/codex", aliases=["/code"])
-    pickle = PluginStub("opencode-pickle", prefix="/opencode-pickle")
+    opencode = PluginStub("opencode", prefix="/opencode")
     router = TaskRouter(
-        active_agents=["CODEX", "/opencode-pickle", "/ghost"],
+        active_agents=["CODEX", "/opencode", "/ghost"],
         get_agent_plugin=lambda _name: None,
-        get_available_plugins=lambda: [codex, pickle],
+        get_available_plugins=lambda: [codex, opencode],
         repository=RepositorySpy(),
     )
 
     selected = [plugin.name for plugin in router.get_task_routing_plugins()]
 
-    assert selected == ["codex", "opencode-pickle"]
+    assert selected == ["codex", "opencode"]
 
 
 def test_get_task_routing_plugins_deduplicates_same_plugin_when_name_and_alias_are_active():
