@@ -684,6 +684,31 @@ class TestCoverageGaps(unittest.TestCase):
         self.assertEqual(called_agents, ["codex", "deepseek", "qwen"])
         app.dispatch_services.call_agent.assert_not_called()
 
+    def test_process_standard_flow_explicit_queues_overflow_followers_sequentially(self):
+        """explicit=True com overflow deve usar só os slots paralelos e seguir o restante em sequência."""
+        app = _make_app(active_agents=["claude", "codex", "deepseek", "qwen"], threads=2)
+        app.get_agent_plugin = Mock(return_value=SimpleNamespace(output_format="text"))
+        app._merge_staging_to_workspace = Mock()
+        app.task_services = Mock()
+        app.task_services.call_agent_for_parallel = Mock(
+            return_value=("codex", "r1", None, None, False, False)
+        )
+        app.dispatch_services.call_agent = Mock(return_value="seq")
+        app.parse_response = Mock(return_value=("seq", None, None, False, False, None))
+        orchestrator = _make_orchestrator(app)
+
+        orchestrator._process_standard_flow(
+            "claude", True, False, ["codex", "deepseek", "qwen"]
+        )
+
+        self.assertEqual(app.task_services.call_agent_for_parallel.call_count, 1)
+        self.assertEqual(
+            app.task_services.call_agent_for_parallel.call_args.args[0],
+            "codex",
+        )
+        sequential_agents = [call.args[0] for call in app.dispatch_services.call_agent.call_args_list]
+        self.assertEqual(sequential_agents, ["deepseek", "qwen"])
+
     def test_standard_flow_next_handoff_set_on_valid_route(self):
         """route_target válido (≠ agente) no loop padrão deve setar next_handoff."""
         app = _make_app(active_agents=["claude", "codex"])
@@ -822,7 +847,7 @@ class TestCoverageGaps(unittest.TestCase):
         with patch("quimera.app.chat_round.ThreadPoolExecutor", FakeExecutor):
             orchestrator._process_standard_flow("claude", False, True, ["codex"])
 
-        self.assertEqual(seen_timeouts, [30, 30, 30])
+        self.assertEqual(seen_timeouts, [30])
 
     def test_parallel_mode_cancels_pending_futures_on_timeout(self):
         """Timeout no fan-out paralelo deve cancelar pendências, avisar e resetar turno."""
@@ -861,7 +886,7 @@ class TestCoverageGaps(unittest.TestCase):
         with patch("quimera.app.chat_round.ThreadPoolExecutor", FakeExecutor):
             orchestrator._process_standard_flow("claude", False, True, ["codex"])
 
-        self.assertEqual(cancelled, ["codex", "claude", "codex"])
+        self.assertEqual(cancelled, ["codex"])
         app.turn_manager.reset.assert_not_called()
         app.renderer.show_warning.assert_called_once()
         app._merge_staging_to_workspace.assert_not_called()

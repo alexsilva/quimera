@@ -590,16 +590,22 @@ class ChatRoundOrchestrator:
         protocol_mode = "extended" if extend else "standard"
         parallel_slots = max(0, self._threads - 1)
         if explicit:
-            remaining = list(other_agents[:parallel_slots]) if (parallel_slots > 0 and other_agents) else []
+            remaining = list(other_agents) if parallel_slots > 0 else []
         elif extend:
             remaining = [other_agents[0], first_agent, other_agents[0]] if other_agents else []
         else:
-            remaining = list(other_agents[:parallel_slots]) if (parallel_slots > 0 and other_agents) else []
+            remaining = list(other_agents) if parallel_slots > 0 else []
             if other_agents:
                 self._agent_pool.rotate()
 
+        parallel_agents = []
+        sequential_agents = list(remaining)
+        if self._threads > 1 and parallel_slots > 0 and remaining:
+            parallel_agents = list(remaining[:parallel_slots])
+            sequential_agents = list(remaining[parallel_slots:])
+
         next_handoff = None
-        if self._threads > 1 and len(remaining) >= 1:
+        if self._threads > 1 and parallel_agents:
             if self._turn_manager is not None and not self._turn_manager.is_ai_turn:
                 self._show_warning("[parallel] turno da IA encerrado antes da execução paralela — ignorando")
                 return
@@ -609,7 +615,7 @@ class ChatRoundOrchestrator:
             staging_root.mkdir(parents=True, exist_ok=True)
             logger.info("parallel mode: %d threads, staging=%s", self._threads, staging_root)
             native_tool_agents = [
-                a for a in remaining
+                a for a in parallel_agents
                 if self._get_agent_plugin is not None
                 and getattr(self._get_agent_plugin(a), "output_format", None) == "stream-json"
             ]
@@ -620,10 +626,10 @@ class ChatRoundOrchestrator:
                     native_tool_agents,
                 )
             try:
-                max_parallel_workers = min(len(remaining), parallel_slots)
+                max_parallel_workers = min(len(parallel_agents), parallel_slots)
                 executor = ThreadPoolExecutor(max_workers=max_parallel_workers)
                 try:
-                    agent_handoff_pairs = [(agent, None, staging_root, i) for i, agent in enumerate(remaining)]
+                    agent_handoff_pairs = [(agent, None, staging_root, i) for i, agent in enumerate(parallel_agents)]
                     futures = [
                         executor.submit(
                             self._task_services.call_agent_for_parallel,
@@ -701,7 +707,7 @@ class ChatRoundOrchestrator:
                 if staging_root.exists():
                     shutil.rmtree(staging_root)
                     logger.info("staging cleanup: %s removed", staging_root)
-            return
+            remaining = sequential_agents
 
         for index, agent in enumerate(remaining):
             response = self._dispatch_services.call_agent(agent, handoff=next_handoff, primary=False, protocol_mode=protocol_mode)

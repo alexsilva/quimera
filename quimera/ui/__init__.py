@@ -22,13 +22,19 @@ if hasattr(_renderer, "Markdown"):
     Markdown = _renderer.Markdown
 if hasattr(_renderer, "Panel"):
     Panel = _renderer.Panel
+if hasattr(_renderer, "Rule"):
+    Rule = _renderer.Rule
+if hasattr(_renderer, "Text"):
+    Text = _renderer.Text
 
 __all__ = [
     "Console",
     "Live",
     "Markdown",
     "Panel",
+    "Rule",
     "RenderAuditLogger",
     "TerminalRenderer",
+    "Text",
     "strip_ansi",
 ]

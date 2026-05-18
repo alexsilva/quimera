@@ -1115,7 +1115,7 @@ class TerminalRenderer:
                 return _NullStatus()
             if agent:
                 color, label = self._agent_style(agent)
-                status_text = _public_ui_module().Text.assemble(
+                status_text = Text.assemble(
                     (f"[{label}] ", f"bold {color}"),
                     (initial, ""),
                 )
