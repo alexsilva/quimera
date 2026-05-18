@@ -649,13 +649,39 @@ class TestCoverageGaps(unittest.TestCase):
             app.chat_round_orchestrator.process("hello")
             mock_ph.assert_called_once_with("claude", "codex", handoff)
 
-    def test_process_standard_flow_explicit_empty_remaining(self):
-        """explicit=True deve resultar em remaining=[] sem chamar call_agent."""
-        app = _make_app(active_agents=["claude", "codex"])
+    def test_process_standard_flow_explicit_without_parallel_slots_skips_followers(self):
+        """explicit=True com threads=1 não deve executar followers."""
+        app = _make_app(active_agents=["claude", "codex"], threads=1)
         orchestrator = _make_orchestrator(app)
 
         orchestrator._process_standard_flow("claude", True, False, ["codex"])
 
+        app.dispatch_services.call_agent.assert_not_called()
+
+    def test_process_standard_flow_explicit_uses_parallel_slots_for_followers(self):
+        """explicit=True com threads>1 deve permitir followers em paralelo."""
+        app = _make_app(active_agents=["claude", "codex", "deepseek", "qwen"], threads=4)
+        app.get_agent_plugin = Mock(return_value=SimpleNamespace(output_format="text"))
+        app._merge_staging_to_workspace = Mock()
+        app.task_services = Mock()
+        app.task_services.call_agent_for_parallel = Mock(
+            side_effect=[
+                ("codex", "r1", None, None, False, False),
+                ("deepseek", "r2", None, None, False, False),
+                ("qwen", "r3", None, None, False, False),
+            ]
+        )
+        orchestrator = _make_orchestrator(app)
+
+        orchestrator._process_standard_flow(
+            "claude", True, False, ["codex", "deepseek", "qwen"]
+        )
+
+        self.assertEqual(app.task_services.call_agent_for_parallel.call_count, 3)
+        called_agents = [
+            call.args[0] for call in app.task_services.call_agent_for_parallel.call_args_list
+        ]
+        self.assertEqual(called_agents, ["codex", "deepseek", "qwen"])
         app.dispatch_services.call_agent.assert_not_called()
 
     def test_standard_flow_next_handoff_set_on_valid_route(self):

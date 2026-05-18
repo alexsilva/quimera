@@ -588,12 +588,13 @@ class ChatRoundOrchestrator:
 
     def _process_standard_flow(self, first_agent, explicit, extend, other_agents):
         protocol_mode = "extended" if extend else "standard"
+        parallel_slots = max(0, self._threads - 1)
         if explicit:
-            remaining = []
+            remaining = list(other_agents[:parallel_slots]) if (parallel_slots > 0 and other_agents) else []
         elif extend:
             remaining = [other_agents[0], first_agent, other_agents[0]] if other_agents else []
         else:
-            remaining = list(other_agents[:self._threads - 1]) if (self._threads > 1 and other_agents) else []
+            remaining = list(other_agents[:parallel_slots]) if (parallel_slots > 0 and other_agents) else []
             if other_agents:
                 self._agent_pool.rotate()
 
@@ -619,7 +620,8 @@ class ChatRoundOrchestrator:
                     native_tool_agents,
                 )
             try:
-                executor = ThreadPoolExecutor(max_workers=self._threads)
+                max_parallel_workers = min(len(remaining), parallel_slots)
+                executor = ThreadPoolExecutor(max_workers=max_parallel_workers)
                 try:
                     agent_handoff_pairs = [(agent, None, staging_root, i) for i, agent in enumerate(remaining)]
                     futures = [
