@@ -566,11 +566,12 @@ class TestProcessStandardFlow(unittest.TestCase):
 
         class _ToggleTurn:
             def __init__(self):
-                self._reads = 0
+                self._values = [False]
             @property
             def is_ai_turn(self):
-                self._reads += 1
-                return self._reads <= 1
+                if self._values:
+                    return self._values.pop(0)
+                return False
             def reset(self):
                 pass
 
@@ -593,11 +594,12 @@ class TestProcessStandardFlow(unittest.TestCase):
 
         class _ToggleTurnAfterMerge:
             def __init__(self):
-                self._reads = 0
+                self._values = [True, False]
             @property
             def is_ai_turn(self):
-                self._reads += 1
-                return self._reads <= 2
+                if self._values:
+                    return self._values.pop(0)
+                return False
             def reset(self):
                 pass
 
@@ -606,6 +608,39 @@ class TestProcessStandardFlow(unittest.TestCase):
 
         app._merge_staging_to_workspace.assert_called_once()
         app.session_services.persist_message.assert_not_called()
+
+    def test_parallel_mode_does_not_abort_on_transient_turn_state_before_submit(self):
+        """Não deve abortar followers antes do submit só porque o turno foi lido como falso momentaneamente."""
+        app = _make_app(active_agents=["claude", "codex"], threads=2)
+        app.get_agent_plugin = Mock(return_value=SimpleNamespace(output_format="text"))
+        app._merge_staging_to_workspace = Mock()
+        app.task_services = Mock()
+        app.task_services.call_agent_for_parallel = Mock(
+            return_value=("codex", "resposta", None, None, False, False)
+        )
+        orchestrator = _make_orchestrator(app)
+
+        class _TransientFalseTurn:
+            def __init__(self):
+                self._reads = 0
+
+            @property
+            def is_ai_turn(self):
+                self._reads += 1
+                return self._reads != 1
+
+            def reset(self):
+                pass
+
+        orchestrator._turn_manager = _TransientFalseTurn()
+        orchestrator._process_standard_flow("claude", False, True, ["codex"])
+
+        app.task_services.call_agent_for_parallel.assert_called_once()
+        shown = [call.args[0] for call in app.renderer.show_warning.call_args_list]
+        self.assertNotIn(
+            "[parallel] turno da IA encerrado antes da execução paralela — ignorando",
+            shown,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -698,14 +733,18 @@ class TestCoverageGaps(unittest.TestCase):
         self.assertEqual(called_agents, ["codex", "deepseek", "qwen"])
         app.dispatch_services.call_agent.assert_not_called()
 
-    def test_process_standard_flow_explicit_queues_overflow_followers_sequentially(self):
-        """explicit=True com overflow deve usar só os slots paralelos e seguir o restante em sequência."""
+    def test_process_standard_flow_explicit_runs_overflow_followers_in_same_turn(self):
+        """explicit=True com overflow deve usar os slots paralelos e drenar o restante no mesmo turno."""
         app = _make_app(active_agents=["claude", "codex", "deepseek", "qwen"], threads=2)
         app.get_agent_plugin = Mock(return_value=SimpleNamespace(output_format="text"))
         app._merge_staging_to_workspace = Mock()
         app.task_services = Mock()
         app.task_services.call_agent_for_parallel = Mock(
-            return_value=("codex", "r1", None, None, False, False)
+            side_effect=[
+                ("codex", "r1", None, None, False, False),
+                ("deepseek", "r2", None, None, False, False),
+                ("qwen", "r3", None, None, False, False),
+            ]
         )
         app.dispatch_services.call_agent = Mock(return_value="seq")
         app.parse_response = Mock(return_value=("seq", None, None, False, False, None))
@@ -715,13 +754,13 @@ class TestCoverageGaps(unittest.TestCase):
             "claude", True, False, ["codex", "deepseek", "qwen"]
         )
 
-        self.assertEqual(app.task_services.call_agent_for_parallel.call_count, 1)
-        self.assertEqual(
-            app.task_services.call_agent_for_parallel.call_args.args[0],
-            "codex",
+        self.assertEqual(app.task_services.call_agent_for_parallel.call_count, 3)
+        parallel_calls = [call.args[0] for call in app.task_services.call_agent_for_parallel.call_args_list]
+        self.assertEqual(parallel_calls, ["codex", "deepseek", "qwen"])
+        app.dispatch_services.call_agent.assert_not_called()
+        app.renderer.show_system.assert_any_call(
+            "[parallel] 2 followers excedentes seguem em fila neste turno."
         )
-        sequential_agents = [call.args[0] for call in app.dispatch_services.call_agent.call_args_list]
-        self.assertEqual(sequential_agents, ["deepseek", "qwen"])
         self.assertIn(
             {
                 "active": 1,
@@ -735,6 +774,28 @@ class TestCoverageGaps(unittest.TestCase):
             app._parallel_toolbar_state,
             {"active": 0, "queued": 0, "capacity": 1, "active_agents": ()},
         )
+        app.renderer.show_system.assert_any_call("→ deepseek iniciando...")
+        app.renderer.show_system.assert_any_call("→ qwen iniciando...")
+
+    def test_process_standard_flow_announces_parallel_followers_before_execution(self):
+        """Followers paralelos devem emitir 'iniciando' para manter rastreabilidade no log/render."""
+        app = _make_app(active_agents=["claude", "codex", "deepseek"], threads=3)
+        app.get_agent_plugin = Mock(return_value=SimpleNamespace(output_format="text"))
+        app._merge_staging_to_workspace = Mock()
+        app.task_services.call_agent_for_parallel = Mock(
+            side_effect=[
+                ("codex", "r1", None, None, False, False),
+                ("deepseek", "r2", None, None, False, False),
+            ]
+        )
+        orchestrator = _make_orchestrator(app)
+
+        orchestrator._process_standard_flow(
+            "claude", True, False, ["codex", "deepseek"]
+        )
+
+        app.renderer.show_system.assert_any_call("→ codex iniciando...")
+        app.renderer.show_system.assert_any_call("→ deepseek iniciando...")
 
     def test_standard_flow_next_handoff_set_on_valid_route(self):
         """route_target válido (≠ agente) no loop padrão deve setar next_handoff."""
@@ -872,7 +933,7 @@ class TestCoverageGaps(unittest.TestCase):
                 return None
 
         with patch("quimera.app.chat_round.ThreadPoolExecutor", FakeExecutor):
-            orchestrator._process_standard_flow("claude", False, True, ["codex"])
+            orchestrator._process_standard_flow("claude", False, False, ["codex"])
 
         self.assertEqual(seen_timeouts, [30])
 
