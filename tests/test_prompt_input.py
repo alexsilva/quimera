@@ -62,6 +62,19 @@ class TestBuildToolbar:
         assert callable(toolbar)
         assert "tema:chat" in str(toolbar())
 
+    @pytest.mark.skipif(not _PT_AVAILABLE, reason="prompt_toolkit não disponível")
+    def test_toolbar_includes_parallel_status_when_context_available(self):
+        gate = InputGate(
+            toolbar_context_resolver=lambda: {
+                "parallel": "paralelo:1/1 · fila:2",
+            }
+        )
+        toolbar = gate._build_toolbar()
+        assert callable(toolbar)
+        content = str(toolbar())
+        assert "paralelo:1/1" in content
+        assert "fila:2" in content
+
 
 class TestKeyBindings:
     def test_key_bindings_none_without_prompt_toolkit(self):

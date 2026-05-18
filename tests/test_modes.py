@@ -1,6 +1,7 @@
 """Testes para quimera.modes e integração com ToolPolicy e parse_routing."""
 import json
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -334,15 +335,38 @@ class TestInputContextAndWelcome(unittest.TestCase):
         app = QuimeraApp.__new__(QuimeraApp)
         app.workspace = MagicMock(cwd=Path("/tmp/quimera-project"), tasks_db=Path("/tmp/quimera_test_tasks.db"))
         app.active_agents = []
+        app.threads = 1
+        app._parallel_toolbar_lock = threading.Lock()
+        app._parallel_toolbar_state = {"active": 0, "queued": 0, "capacity": 0, "active_agents": ()}
         app._pending_input_for = None
         app._resolve_active_model_label = QuimeraApp._resolve_active_model_label.__get__(app, QuimeraApp)
         app._resolve_next_responder_label = QuimeraApp._resolve_next_responder_label.__get__(app, QuimeraApp)
+        app._get_parallel_toolbar_state = QuimeraApp._get_parallel_toolbar_state.__get__(app, QuimeraApp)
         app._build_input_toolbar_context = QuimeraApp._build_input_toolbar_context.__get__(app, QuimeraApp)
 
         context = app._build_input_toolbar_context()
         self.assertEqual(context["responder"], "unknown")
         self.assertEqual(context["model"], "unknown")
         self.assertEqual(context["cwd"], "/tmp/quimera-project")
+
+    def test_build_input_toolbar_context_exposes_parallel_status_when_threads_enabled(self):
+        from quimera.app.core import QuimeraApp
+
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.workspace = MagicMock(cwd=Path("/tmp/quimera-project"), tasks_db=Path("/tmp/quimera_test_tasks.db"))
+        app.active_agents = []
+        app.threads = 2
+        app._parallel_toolbar_lock = threading.Lock()
+        app._parallel_toolbar_state = {"active": 1, "queued": 2, "capacity": 1, "active_agents": ("codex",)}
+        app._pending_input_for = None
+        app._resolve_active_model_label = QuimeraApp._resolve_active_model_label.__get__(app, QuimeraApp)
+        app._resolve_next_responder_label = QuimeraApp._resolve_next_responder_label.__get__(app, QuimeraApp)
+        app._get_parallel_toolbar_state = QuimeraApp._get_parallel_toolbar_state.__get__(app, QuimeraApp)
+        app._build_input_toolbar_context = QuimeraApp._build_input_toolbar_context.__get__(app, QuimeraApp)
+
+        context = app._build_input_toolbar_context()
+        self.assertEqual(context["threads"], "2")
+        self.assertEqual(context["parallel"], "paralelo:1/1 · fila:2")
 
     def test_build_welcome_message_includes_version_and_project_path(self):
         from quimera.app.core import QuimeraApp

@@ -25,6 +25,13 @@ def _make_app(active_agents=None, threads=1):
     app._pending_input_for = None
     app.session_state = {"session_id": "test-cr", "history_count": 0, "summary_loaded": False}
     app.behavior_metrics = None
+    app._parallel_toolbar_state = {
+        "active": 0,
+        "queued": 0,
+        "capacity": max(0, threads - 1),
+        "active_agents": (),
+    }
+    app._parallel_toolbar_updates = []
 
     app.renderer = Mock()
     app.renderer.show_warning = Mock()
@@ -49,6 +56,12 @@ def _make_app(active_agents=None, threads=1):
 
     app.agent_client = Mock()
     app.agent_client._user_cancelled = False
+
+    def _set_parallel_toolbar_state(**kwargs):
+        app._parallel_toolbar_state.update(kwargs)
+        app._parallel_toolbar_updates.append(dict(app._parallel_toolbar_state))
+
+    app._set_parallel_toolbar_state = _set_parallel_toolbar_state
 
     # parse_routing padrão: ("claude", "hello", False)
     app.parse_routing = Mock(return_value=("claude", "hello", False))
@@ -78,6 +91,7 @@ def _make_orchestrator(app):
         get_round_index=lambda: app.round_index,
         set_round_index=lambda v: setattr(app, 'round_index', v),
         set_summary_agent_preference=lambda v: setattr(app, 'summary_agent_preference', v),
+        set_parallel_toolbar_state=getattr(app, '_set_parallel_toolbar_state', None),
         get_pending_input_for=lambda: app._pending_input_for,
         set_pending_input_for=lambda v: setattr(app, '_pending_input_for', v),
         merge_staging_to_workspace=getattr(app, '_merge_staging_to_workspace', None),
@@ -708,6 +722,19 @@ class TestCoverageGaps(unittest.TestCase):
         )
         sequential_agents = [call.args[0] for call in app.dispatch_services.call_agent.call_args_list]
         self.assertEqual(sequential_agents, ["deepseek", "qwen"])
+        self.assertIn(
+            {
+                "active": 1,
+                "queued": 2,
+                "capacity": 1,
+                "active_agents": ["codex"],
+            },
+            app._parallel_toolbar_updates,
+        )
+        self.assertEqual(
+            app._parallel_toolbar_state,
+            {"active": 0, "queued": 0, "capacity": 1, "active_agents": ()},
+        )
 
     def test_standard_flow_next_handoff_set_on_valid_route(self):
         """route_target válido (≠ agente) no loop padrão deve setar next_handoff."""

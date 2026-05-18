@@ -362,12 +362,15 @@ class TerminalRenderer:
             if self._density == "compact":
                 return main
             active_count = len(parts)
-            count_prefix = f"{active_count} agentes · " if active_count > 1 else ""
-            infobar = Rule(
-                f"[dim]{count_prefix}Ctrl+C para cancelar  · T para tema[/dim]",
-                characters="·",
-                style="dim",
-            )
+            if active_count > 1:
+                toolbar_text = f"[dim]{active_count} agentes · Ctrl+C para cancelar · T para tema[/dim]"
+            else:
+                only_state = next(iter(_stream_states.values()))
+                toolbar_text = (
+                    f"[bold {only_state['style']}]{markup_escape(only_state['label'])}[/] "
+                    f"[dim]· Ctrl+C para cancelar · T para tema[/dim]"
+                )
+            infobar = Rule(toolbar_text, characters="·", style="dim")
             return Group(main, infobar)
 
         def _ensure_live():
@@ -1037,9 +1040,11 @@ class TerminalRenderer:
 
                 table.add_row(icon, f"[{style}]{label}[/]: {markup_escape(status)}")
 
+        count = len(self._statuses)
+        title = f"[dim]Agentes em Execução · {count}[/]" if count else "[dim]Agentes em Execução[/]"
         return public_ui.Panel(
             table,
-            title="[dim]Agentes em Execução[/]",
+            title=title,
             border_style="dim",
             padding=(0, 1)
         )
@@ -1115,10 +1120,13 @@ class TerminalRenderer:
                 return _NullStatus()
             if agent:
                 color, label = self._agent_style(agent)
-                status_text = Text.assemble(
-                    (f"[{label}] ", f"bold {color}"),
-                    (initial, ""),
-                )
+                segments = [(label, f"bold {color}")]
+                if initial:
+                    segments.extend([
+                        (" · ", "dim"),
+                        (initial, ""),
+                    ])
+                status_text = Text.assemble(*segments)
             else:
                 status_text = initial
             return self._console.status(

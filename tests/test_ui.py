@@ -332,6 +332,15 @@ class TestTerminalRenderer:
             result = mock_renderer._render_status_panel()
             assert mock_panel.called
 
+    def test_render_status_panel_title_includes_agent_count(self, mock_renderer):
+        """Painel de status explicita quantos agentes estão ativos."""
+        mock_renderer._statuses = {"agent1": "running", "agent2": "done"}
+
+        with patch("quimera.ui._agent_style", side_effect=lambda x, *_: ("blue", x.capitalize())):
+            panel = mock_renderer._render_status_panel()
+
+        assert "Agentes em Execução · 2" in _extract_text_from_renderable(panel.title)
+
     def test_live_status_context_manager(self, mock_renderer):
         """Test live_status context manager."""
         with patch("quimera.ui._RICH_AVAILABLE", True):
@@ -357,6 +366,20 @@ class TestTerminalRenderer:
             "Processing...",
             refresh_per_second=4,
         )
+
+    def test_running_status_with_agent_formats_identity_without_brackets(self, mock_renderer):
+        """Status sequencial inclui identidade do agente sem colchetes artificiais."""
+        mock_renderer._live = None
+        mock_renderer._console = MagicMock()
+        mock_renderer._console.status.return_value = MagicMock()
+
+        with patch("quimera.ui._agent_style", return_value=("cyan", "Codex")):
+            mock_renderer.running_status("Processing...", agent="codex")
+
+        status_text = mock_renderer._console.status.call_args.args[0]
+        assert isinstance(status_text, Text)
+        assert status_text.plain == "Codex · Processing..."
+        assert "[Codex]" not in status_text.plain
 
     def test_running_status_in_live_mode(self, mock_renderer):
         """Test running_status in live mode returns proxy."""

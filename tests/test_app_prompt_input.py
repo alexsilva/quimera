@@ -250,6 +250,20 @@ class TestBuildToolbar:
                     # result is an HTML object or string
                     assert result is not None
 
+    def test_toolbar_includes_parallel_context_when_available(self):
+        with patch("quimera.app.prompt_input._PT_AVAILABLE", True):
+            with patch("quimera.app.prompt_input.PromptSession"):
+                with patch("quimera.app.prompt_input.InMemoryHistory"):
+                    gate = _make_gate(toolbar_context_resolver=lambda: {
+                        "theme": "line",
+                        "parallel": "paralelo:1/1 · fila:2",
+                        "responder": "claude",
+                    })
+                    toolbar_fn = gate._build_toolbar()
+                    result = str(toolbar_fn())
+                    assert "paralelo:1/1" in result
+                    assert "fila:2" in result
+
     def test_toolbar_empty_context_returns_empty_string(self):
         with patch("quimera.app.prompt_input._PT_AVAILABLE", True):
             with patch("quimera.app.prompt_input.PromptSession"):

@@ -414,8 +414,12 @@ class AppTaskServices:
 
     def call_agent_for_parallel(self, agent, handoff, protocol_mode, staging_root: Path, index: int):
         """Executa chamada paralela isolando staging por thread."""
+        background_dispatch = self._get_background_dispatch_services()
+        call_agent = self._call_agent
+        if background_dispatch is not None:
+            call_agent = background_dispatch.call_agent
         return call_agent_for_parallel_with_client(
-            self._call_agent,
+            call_agent,
             self._parse_response,
             agent,
             handoff,

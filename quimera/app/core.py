@@ -95,6 +95,13 @@ class QuimeraApp:
         self.selected_agents = list(agents) if agents else []
         self.agent_pool = AgentPool(self.selected_agents)
         self.threads = int(threads) if threads is not None else 1
+        self._parallel_toolbar_lock = threading.Lock()
+        self._parallel_toolbar_state = {
+            "active": 0,
+            "queued": 0,
+            "capacity": max(0, self.threads - 1),
+            "active_agents": (),
+        }
         self.agent_failures = defaultdict(int)
         self._agent_failures_lock = threading.Lock()
         self.workspace = workspace if workspace is not None else Workspace(cwd)
@@ -1092,7 +1099,44 @@ class QuimeraApp:
         renderer = getattr(self, "renderer", None)
         theme_name = getattr(renderer, "theme_name", "") if renderer else ""
         ctx["theme"] = theme_name
+        if self.threads > 1:
+            ctx["threads"] = str(self.threads)
+            parallel_state = self._get_parallel_toolbar_state()
+            capacity = int(parallel_state.get("capacity", max(0, self.threads - 1)) or 0)
+            active = int(parallel_state.get("active", 0) or 0)
+            queued = int(parallel_state.get("queued", 0) or 0)
+            if active or queued:
+                parallel_label = f"paralelo:{active}/{capacity}"
+                if queued:
+                    parallel_label = f"{parallel_label} · fila:{queued}"
+                ctx["parallel"] = parallel_label
+            else:
+                ctx["parallel"] = f"threads:{self.threads}"
         return ctx
+
+    def _set_parallel_toolbar_state(
+        self,
+        *,
+        active: int | None = None,
+        queued: int | None = None,
+        capacity: int | None = None,
+        active_agents: list[str] | tuple[str, ...] | None = None,
+    ) -> None:
+        """Atualiza o snapshot de paralelismo exibido na toolbar do prompt."""
+        with self._parallel_toolbar_lock:
+            if active is not None:
+                self._parallel_toolbar_state["active"] = max(0, int(active))
+            if queued is not None:
+                self._parallel_toolbar_state["queued"] = max(0, int(queued))
+            if capacity is not None:
+                self._parallel_toolbar_state["capacity"] = max(0, int(capacity))
+            if active_agents is not None:
+                self._parallel_toolbar_state["active_agents"] = tuple(active_agents)
+
+    def _get_parallel_toolbar_state(self) -> dict[str, object]:
+        """Retorna uma cópia do estado de paralelismo da toolbar."""
+        with self._parallel_toolbar_lock:
+            return dict(self._parallel_toolbar_state)
 
     def read_user_input(self, prompt, timeout: int):
         """Fachada compatível para leitura de input."""

@@ -393,3 +393,51 @@ def test_background_dispatch_uses_fallback_timeout_when_chat_timeout_is_missing(
     dispatch = services._get_background_dispatch_services()
 
     assert dispatch._get_agent_client().timeout == _BACKGROUND_AGENT_TIMEOUT_SECONDS
+
+
+def test_parallel_calls_use_background_dispatch_when_available(tmp_path, monkeypatch):
+    class AppStub:
+        pass
+
+    app = AppStub()
+    app.renderer = object()
+    app.agent_client = type("ChatClient", (), {"timeout": 45})()
+    app.workspace = type("WorkspaceStub", (), {"cwd": tmp_path})()
+    app.visibility = "summary"
+    app.tasks_db_path = None
+    app.auto_approve_mutations = False
+    app.call_agent_calls = []
+
+    def _chat_call_agent(*args, **kwargs):
+        app.call_agent_calls.append((args, kwargs))
+        return "chat-response"
+
+    app.call_agent = _chat_call_agent
+    app.parse_response = lambda raw: (raw, None, None, False, False, None)
+
+    services = build_task_services(app)
+    dispatch = DispatchStub(response="background-response")
+    monkeypatch.setattr(services, "_get_background_dispatch_services", lambda: dispatch)
+
+    result = services.call_agent_for_parallel(
+        "codex",
+        None,
+        "standard",
+        tmp_path / "staging",
+        0,
+    )
+
+    assert result == ("codex", "background-response", None, None, False, False)
+    assert dispatch.calls == [
+        (
+            "codex",
+            {
+                "handoff": None,
+                "primary": False,
+                "protocol_mode": "standard",
+                "silent": True,
+                "show_output": False,
+            },
+        )
+    ]
+    assert app.call_agent_calls == []

@@ -154,12 +154,18 @@ class InputGate:
             model = str(context.get("model", "")).strip()
             cwd = str(context.get("cwd", "")).strip()
             theme = str(context.get("theme", "")).strip()
-            if not responder and not model and not cwd and not theme:
+            threads = str(context.get("threads", "")).strip()
+            parallel = str(context.get("parallel", "")).strip()
+            if not responder and not model and not cwd and not theme and not threads and not parallel:
                 return ""
 
             parts = []
             if theme:
                 parts.append(f"<b>tema:{html.escape(theme)}</b>")
+            if parallel:
+                parts.append(f"<b>{html.escape(parallel)}</b>")
+            elif threads:
+                parts.append(f"<b>{html.escape(threads)}</b>")
             if responder:
                 parts.append(html.escape(responder))
             if model:
