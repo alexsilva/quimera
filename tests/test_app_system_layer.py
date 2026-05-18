@@ -513,6 +513,86 @@ def test_build_prompt_preview_message_raises_without_prompt_builder():
         layer._build_prompt_preview_message("codex")
 
 
+def _make_dummy_metrics():
+    return {
+        "rules_chars": 0,
+        "session_state_chars": 0,
+        "persistent_chars": 0,
+        "request_chars": 0,
+        "facts_chars": 0,
+        "shared_state_chars": 0,
+        "history_chars": 0,
+        "handoff_chars": 0,
+        "history_messages": 0,
+        "total_chars": 5,
+    }
+
+
+def test_build_prompt_preview_message_includes_raw_history():
+    app = make_app()
+    app.history = [
+        {"role": "user", "content": "oi"},
+        {"role": "assistant", "content": "olá"},
+    ]
+    mock_builder = Mock()
+    mock_builder.build.return_value = ("PROMPT", _make_dummy_metrics())
+    mock_builder.history_window = 10
+    app.prompt_builder = mock_builder
+    layer = AppSystemLayer(app)
+
+    result = layer._build_prompt_preview_message("codex")
+
+    assert "RAW HISTÓRICO" in result
+    assert "[0] USER: oi" in result
+    assert "[1] ASSISTANT: olá" in result
+
+
+def test_build_prompt_preview_message_empty_history_shows_placeholder():
+    app = make_app()
+    app.history = []
+    mock_builder = Mock()
+    mock_builder.build.return_value = ("PROMPT", _make_dummy_metrics())
+    mock_builder.history_window = 10
+    app.prompt_builder = mock_builder
+    layer = AppSystemLayer(app)
+
+    result = layer._build_prompt_preview_message("codex")
+
+    assert "RAW HISTÓRICO" in result
+    assert "[sem mensagens no histórico]" in result
+
+
+def test_build_prompt_preview_message_follower_mode_passes_is_first_speaker_false():
+    app = make_app()
+    app.history = []
+    mock_builder = Mock()
+    mock_builder.build.return_value = ("PROMPT", _make_dummy_metrics())
+    mock_builder.history_window = 10
+    app.prompt_builder = mock_builder
+    layer = AppSystemLayer(app)
+
+    layer._build_prompt_preview_message("codex", is_first_speaker=False)
+
+    _, kwargs = mock_builder.build.call_args
+    assert kwargs.get("is_first_speaker") is False
+
+
+def test_build_prompt_preview_message_first_speaker_mode_label():
+    app = make_app()
+    app.history = []
+    mock_builder = Mock()
+    mock_builder.build.return_value = ("PROMPT", _make_dummy_metrics())
+    mock_builder.history_window = 10
+    app.prompt_builder = mock_builder
+    layer = AppSystemLayer(app)
+
+    result = layer._build_prompt_preview_message("codex", is_first_speaker=True)
+    assert "primeiro-falante" in result
+
+    result_follower = layer._build_prompt_preview_message("codex", is_first_speaker=False)
+    assert "follower/reviewer" in result_follower
+
+
 def test_handle_command_connect_dynamic_plugin_and_configure_error():
     app = make_app()
     app.get_agent_plugin = Mock(return_value=None)

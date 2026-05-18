@@ -297,7 +297,7 @@ class AppSystemLayer:
     def _dedup_without_terminal(deferred: list) -> list:
         return DisplayService._dedup_without_terminal(deferred)
 
-    def _build_prompt_preview_message(self, agent: str) -> str:
+    def _build_prompt_preview_message(self, agent: str, is_first_speaker: bool = True) -> str:
         """Monta a saída textual do comando /prompt."""
         history = list(self._history_getter() or [])
         shared_state = self._shared_state_getter()
@@ -310,15 +310,29 @@ class AppSystemLayer:
         prompt, metrics = prompt_builder.build(
             agent,
             history,
-            is_first_speaker=True,
+            is_first_speaker=is_first_speaker,
             debug=True,
             primary=True,
             shared_state=shared_state,
             skip_tool_prompt=True,
             execution_mode=self._execution_mode_getter(),
         )
+
+        history_window = getattr(prompt_builder, "history_window", len(history))
+        window_start = max(0, len(history) - history_window)
+        raw_history_lines = ["RAW HISTÓRICO (janela atual, ordem cronológica):"]
+        if not history:
+            raw_history_lines.append("[sem mensagens no histórico]")
+        else:
+            for idx, msg in enumerate(history[window_start:], start=window_start):
+                role = (msg.get("role") or "").upper()
+                content = (msg.get("content") or "").strip()
+                raw_history_lines.append(f"[{idx}] {role}: {content}")
+
+        mode_label = "primeiro-falante" if is_first_speaker else "follower/reviewer"
         analysis_lines = [
             f"PROMPT PREVIEW: {agent}",
+            f"MODO: {mode_label}",
             f"DRIVER: {driver}",
             "TOOLS NO TEXTO: não",
             "ANÁLISE DOS BLOCOS:",
@@ -332,6 +346,8 @@ class AppSystemLayer:
             f"- handoff_chars: {metrics['handoff_chars']}",
             f"- history_messages: {metrics['history_messages']}",
             f"- total_chars: {metrics['total_chars']}",
+            "",
+            "\n".join(raw_history_lines),
             "",
             "PROMPT FINAL:",
             prompt,
@@ -549,11 +565,16 @@ class AppSystemLayer:
             return True
 
         if command == CMD_PROMPT or command.startswith(f"{CMD_PROMPT} "):
-            target = self._resolve_prompt_target(command)
+            raw_args = command[len(CMD_PROMPT):].strip()
+            is_follower = raw_args.endswith(" follower") or raw_args == "follower"
+            if is_follower:
+                raw_args = raw_args[: -len("follower")].rstrip()
+            lookup_cmd = f"{CMD_PROMPT} {raw_args}".rstrip() if raw_args else CMD_PROMPT
+            target = self._resolve_prompt_target(lookup_cmd)
             if target is None:
-                self._display.show_warning_message("Uso: /prompt [agente]")
+                self._display.show_warning_message("Uso: /prompt [agente] [follower]")
                 return True
-            preview = self._build_prompt_preview_message(target)
+            preview = self._build_prompt_preview_message(target, is_first_speaker=not is_follower)
             self._display.show_prompt_preview(target, preview)
             return True
 
