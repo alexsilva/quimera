@@ -8,6 +8,7 @@ import sys
 import threading
 import time
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from importlib import metadata
 from pathlib import Path
@@ -257,6 +258,8 @@ class QuimeraApp:
         self._nonblocking_input_status = "idle"
         self._nonblocking_input_status_lock = threading.Lock()
         self._prompt_owning_thread_id: int | None = None
+        self._chat_inflight_lock = threading.Lock()
+        self._chat_inflight_count = 0
         self.turn_manager = TurnManager()
         for handler in logger.handlers:
             if isinstance(handler, PromptAwareStderrHandler):
@@ -1283,8 +1286,77 @@ class QuimeraApp:
         try:
             self._do_process_chat_message(user)
         finally:
-            if hasattr(self, "turn_manager") and self.turn_manager.is_ai_turn:
+            if (
+                hasattr(self, "turn_manager")
+                and self.turn_manager.is_ai_turn
+                and self._get_chat_inflight_count() <= 1
+            ):
                 self.turn_manager.next_turn()
+
+    def _get_chat_inflight_count(self) -> int:
+        lock = getattr(self, "_chat_inflight_lock", None)
+        if lock is None:
+            return int(getattr(self, "_chat_inflight_count", 0) or 0)
+        with lock:
+            return int(getattr(self, "_chat_inflight_count", 0) or 0)
+
+    def _increment_chat_inflight(self) -> int:
+        lock = getattr(self, "_chat_inflight_lock", None)
+        if lock is None:
+            current = int(getattr(self, "_chat_inflight_count", 0) or 0) + 1
+            self._chat_inflight_count = current
+            return current
+        with lock:
+            current = int(getattr(self, "_chat_inflight_count", 0) or 0) + 1
+            self._chat_inflight_count = current
+            return current
+
+    def _decrement_chat_inflight(self) -> int:
+        lock = getattr(self, "_chat_inflight_lock", None)
+        if lock is None:
+            current = max(0, int(getattr(self, "_chat_inflight_count", 0) or 0) - 1)
+            self._chat_inflight_count = current
+            return current
+        with lock:
+            current = max(0, int(getattr(self, "_chat_inflight_count", 0) or 0) - 1)
+            self._chat_inflight_count = current
+            return current
+
+    def _release_chat_slot(self) -> None:
+        slot_semaphore = getattr(self, "_chat_slot_semaphore", None)
+        if slot_semaphore is not None:
+            slot_semaphore.release()
+
+    def _process_async_chat_message(self, user):
+        """Processa um prompt vindo da fila assíncrona e libera o slot ao final."""
+        try:
+            self._process_chat_message(user)
+        finally:
+            remaining = self._decrement_chat_inflight()
+            self._release_chat_slot()
+            if remaining == 0 and hasattr(self, "turn_manager") and self.turn_manager.is_ai_turn:
+                self.turn_manager.next_turn()
+
+    def _submit_async_chat_message(self, user):
+        """Submete um prompt já reservado para a pool de execução do chat."""
+        chat_executor = getattr(self, "_chat_executor", None)
+        if chat_executor is None:
+            raise RuntimeError("chat executor não inicializado")
+        try:
+            chat_executor.submit(self._process_async_chat_message, user)
+        except Exception:
+            self._decrement_chat_inflight()
+            self._release_chat_slot()
+            raise
+
+    def _process_sync_chat_message_with_slot(self, user):
+        """Executa um prompt no thread principal ocupando um slot de concorrência."""
+        self._increment_chat_inflight()
+        try:
+            self._process_chat_message(user)
+        finally:
+            self._decrement_chat_inflight()
+            self._release_chat_slot()
 
     def _process_chat_queue(self, chat_queue: queue.Queue):
         """Executa process chat queue."""
@@ -1384,13 +1456,23 @@ class QuimeraApp:
             self.input_services.set_nonblocking_tty(threaded_chat)
         chat_queue = None
         chat_worker = None
+        chat_executor = None
+        chat_slot_semaphore = None
         chat_worker_failure_reported = False
         if threaded_chat:
+            async_capacity = max(1, int(getattr(self, "threads", 1) or 1))
+            chat_executor = ThreadPoolExecutor(
+                max_workers=async_capacity,
+                thread_name_prefix="quimera-chat-prompt",
+            )
+            chat_slot_semaphore = threading.Semaphore(async_capacity)
+            self._chat_executor = chat_executor
+            self._chat_slot_semaphore = chat_slot_semaphore
             chat_queue = queue.Queue()
             chat_worker = ChatWorker(
                 chat_queue=chat_queue,
                 ui_event_queue=_ui_event_queue,
-                agent_executor=self._process_chat_message,
+                agent_executor=self._submit_async_chat_message,
                 turn_manager=self.turn_manager,
             )
             chat_worker.start()
@@ -1410,6 +1492,12 @@ class QuimeraApp:
                     chat_worker = None
                     chat_queue = None
                     threaded_chat = False
+                    self._chat_inflight_count = 0
+                    if chat_executor is not None:
+                        chat_executor.shutdown(wait=False, cancel_futures=True)
+                        chat_executor = None
+                        self._chat_executor = None
+                    self._chat_slot_semaphore = None
                     if hasattr(self, "turn_manager"):
                         self.turn_manager.reset()
                 if (
@@ -1450,9 +1538,26 @@ class QuimeraApp:
                     continue
 
                 if chat_queue is not None:
-                    chat_queue.put(user)
-                    if hasattr(self, "turn_manager"):
-                        self.turn_manager.next_turn()
+                    acquired_async_slot = False
+                    if chat_slot_semaphore is not None:
+                        acquired_async_slot = chat_slot_semaphore.acquire(blocking=False)
+                    if acquired_async_slot:
+                        self._increment_chat_inflight()
+                        chat_queue.put(user)
+                        time.sleep(0.001)
+                        if (
+                            hasattr(self, "turn_manager")
+                            and self.turn_manager.is_human_turn
+                        ):
+                            self.turn_manager.next_turn()
+                    else:
+                        if hasattr(self, "turn_manager") and self.turn_manager.is_human_turn:
+                            self.turn_manager.next_turn()
+                        if chat_slot_semaphore is not None:
+                            chat_slot_semaphore.acquire()
+                        self._process_sync_chat_message_with_slot(user)
+                        if hasattr(self, "turn_manager") and self.turn_manager.is_ai_turn:
+                            self.turn_manager.next_turn()
                 else:
                     if hasattr(self, "turn_manager"):
                         self.turn_manager.next_turn()
@@ -1473,8 +1578,12 @@ class QuimeraApp:
                     chat_queue.put(None)
                 if chat_worker is not None:
                     chat_worker.join(timeout=0.5)
+                if chat_executor is not None:
+                    chat_executor.shutdown(wait=False, cancel_futures=True)
             except KeyboardInterrupt:
                 pass
+            self._chat_executor = None
+            self._chat_slot_semaphore = None
             self.session_services.shutdown()
             self.agent_client.close()
             renderer = getattr(self, "renderer", None)

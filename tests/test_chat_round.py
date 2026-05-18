@@ -1,7 +1,5 @@
 """Testes de cobertura para quimera/app/chat_round.py."""
-import threading
 import unittest
-from concurrent.futures import TimeoutError
 from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock, patch
 
@@ -206,6 +204,46 @@ class TestProcessMainFlow(unittest.TestCase):
         app.chat_round_orchestrator.process("hello")
 
         app.renderer.show_handoff.assert_not_called()
+
+    def test_process_does_not_dispatch_other_agents_for_same_prompt(self):
+        """Uma mensagem sem handoff aciona apenas o agente reservado para o prompt."""
+        app = _make_app(active_agents=["codex", "claude", "opencode"], threads=2)
+        app.parse_routing = Mock(return_value=("codex", "status", False))
+        app.dispatch_services.call_agent = Mock(return_value="resposta codex")
+        app.parse_response = Mock(return_value=("resposta codex", None, None, False, False, None))
+
+        app.chat_round_orchestrator.process("status")
+
+        app.dispatch_services.call_agent.assert_called_once_with(
+            "codex",
+            is_first_speaker=True,
+            protocol_mode="standard",
+        )
+        app.task_services.call_agent_for_parallel.assert_not_called()
+        self.assertEqual(
+            [call.args for call in app.dispatch_services.print_response.call_args_list],
+            [("codex", "resposta codex")],
+        )
+
+    def test_process_rotates_round_robin_at_prompt_start(self):
+        """Prompts sequenciais sem prefixo explícito reservam agentes em round-robin."""
+        app = _make_app(active_agents=["A", "B", "C"], threads=3)
+        app.parse_routing = Mock(side_effect=[
+            ("A", "p1", False),
+            ("A", "p2", False),
+            ("A", "p3", False),
+        ])
+        app.dispatch_services.call_agent = Mock(side_effect=["r1", "r2", "r3"])
+        app.parse_response = Mock(return_value=("ok", None, None, False, False, None))
+
+        app.chat_round_orchestrator.process("p1")
+        app.chat_round_orchestrator.process("p2")
+        app.chat_round_orchestrator.process("p3")
+
+        self.assertEqual(
+            [call.args[0] for call in app.dispatch_services.call_agent.call_args_list],
+            ["A", "B", "C"],
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -458,189 +496,53 @@ class TestProcessHandoff(unittest.TestCase):
 
 class TestProcessStandardFlow(unittest.TestCase):
 
-    def test_user_cancelled_in_standard_loop(self):
-        """_user_cancelled no loop padrão deve resetar e retornar."""
-        app = _make_app(active_agents=["claude", "codex"])
-        app.agent_client._user_cancelled = True
-        app.dispatch_services.call_agent = Mock(return_value="resp")
-        app.parse_response = Mock(return_value=("resp", None, None, False, False, None))
+    def test_standard_flow_does_not_dispatch_followers_with_extra_threads(self):
+        """`threads` não deve disparar followers para o mesmo prompt."""
+        app = _make_app(active_agents=["claude", "codex", "deepseek"], threads=2)
         orchestrator = _make_orchestrator(app)
 
-        orchestrator._process_standard_flow("claude", False, True, ["codex"])
+        orchestrator._process_standard_flow("claude", False, False, ["codex", "deepseek"])
 
-        app.turn_manager.reset.assert_called()
+        self.assertIsNone(app._pending_input_for)
+        app.dispatch_services.call_agent.assert_not_called()
+        app.task_services.call_agent_for_parallel.assert_not_called()
+        self.assertEqual(app.agent_pool.agents, ["claude", "codex", "deepseek"])
+        self.assertEqual(app.dispatch_services.print_response.call_args_list, [])
 
-    def test_needs_human_input_sets_pending_in_loop(self):
-        """needs_human_input=True no loop padrão deve setar _pending_input_for."""
-        app = _make_app(active_agents=["claude", "codex"])
-        app.dispatch_services.call_agent = Mock(return_value="resp")
-        app.parse_response = Mock(return_value=("resp", None, None, False, True, None))
+    def test_standard_flow_ignores_overflow_followers(self):
+        """Followers extras também não executam no mesmo prompt."""
+        app = _make_app(active_agents=["claude", "codex", "deepseek", "qwen"], threads=2)
         orchestrator = _make_orchestrator(app)
 
-        orchestrator._process_standard_flow("claude", False, True, ["codex"])
+        orchestrator._process_standard_flow("claude", False, False, ["codex", "deepseek", "qwen"])
 
-        self.assertEqual(app._pending_input_for, "codex")
+        app.task_services.call_agent_for_parallel.assert_not_called()
+        self.assertEqual(app.agent_pool.agents, ["claude", "codex", "deepseek", "qwen"])
+        self.assertEqual(app.dispatch_services.print_response.call_args_list, [])
 
-    def test_self_handoff_ignored_in_standard_flow(self):
-        """Handoff para si mesmo no fluxo padrão deve ser ignorado com warning."""
-        app = _make_app(active_agents=["claude", "codex"])
-        app.dispatch_services.call_agent = Mock(return_value="resp")
-        # codex tenta handoff para si mesmo
-        handoff = _make_handoff("task y")
-        parse_count = [0]
-
-        def fake_parse(resp):
-            parse_count[0] += 1
-            if parse_count[0] == 1:
-                return ("resp", "codex", handoff, False, False, None)
-            return ("resp2", None, None, False, False, None)
-
-        app.parse_response = Mock(side_effect=fake_parse)
+    def test_standard_flow_does_not_rotate_pool(self):
+        """A rotação do pool acontece na reserva do prompt, não aqui."""
+        app = _make_app(active_agents=["claude", "codex"], threads=3)
         orchestrator = _make_orchestrator(app)
 
-        orchestrator._process_standard_flow("claude", False, True, ["codex"])
+        orchestrator._process_standard_flow("claude", False, False, ["codex", "codex"])
 
-        app.renderer.show_warning.assert_called()
+        app.task_services.call_agent_for_parallel.assert_not_called()
+        self.assertEqual(app.agent_pool.agents, ["claude", "codex"])
 
-    def test_parallel_mode_uses_thread_pool(self):
-        """Com threads > 1 e remaining > 1, deve usar ThreadPoolExecutor."""
+    def test_standard_flow_extend_runs_sequential_follow_up(self):
+        """`extend` mantém o fluxo histórico de follow-up sequencial no mesmo prompt."""
         app = _make_app(active_agents=["claude", "codex"], threads=2)
-        # Para entrar no modo paralelo: extend=True → remaining = ["codex", "claude", "codex"]
-        app.get_agent_plugin = Mock(return_value=SimpleNamespace(output_format="text"))
-        app._merge_staging_to_workspace = Mock()
-        app.task_services = Mock()
-        app.task_services.call_agent_for_parallel = Mock(
-            return_value=("codex", "resposta", None, None, False, False)
-        )
         orchestrator = _make_orchestrator(app)
 
         orchestrator._process_standard_flow("claude", False, True, ["codex"])
 
-        app.task_services.call_agent_for_parallel.assert_called()
-        app._merge_staging_to_workspace.assert_called()
-
-    def test_parallel_mode_user_cancelled_after_merge(self):
-        """_user_cancelled após merge em modo paralelo deve resetar e retornar."""
-        app = _make_app(active_agents=["claude", "codex"], threads=2)
-        app.get_agent_plugin = Mock(return_value=SimpleNamespace(output_format="text"))
-
-        def fake_merge(staging_root):
-            app.agent_client._user_cancelled = True
-
-        app._merge_staging_to_workspace = Mock(side_effect=fake_merge)
-        app.task_services = Mock()
-        app.task_services.call_agent_for_parallel = Mock(
-            return_value=("codex", "resposta", None, None, False, False)
+        self.assertEqual(
+            [call.args[0] for call in app.dispatch_services.call_agent.call_args_list],
+            ["codex", "claude", "codex"],
         )
-        orchestrator = _make_orchestrator(app)
-
-        orchestrator._process_standard_flow("claude", False, True, ["codex"])
-
-        app.turn_manager.reset.assert_called()
-
-    def test_parallel_mode_needs_input(self):
-        """needs_input=True em resultado paralelo deve setar _pending_input_for."""
-        app = _make_app(active_agents=["claude", "codex"], threads=2)
-        app.get_agent_plugin = Mock(return_value=SimpleNamespace(output_format="text"))
-        app._merge_staging_to_workspace = Mock()
-        app.task_services = Mock()
-        app.task_services.call_agent_for_parallel = Mock(
-            return_value=("codex", "resposta", None, None, True, True)
-        )
-        orchestrator = _make_orchestrator(app)
-
-        orchestrator._process_standard_flow("claude", False, True, ["codex"])
-
-        self.assertEqual(app._pending_input_for, "codex")
-
-    def test_parallel_mode_skips_merge_when_turn_lost(self):
-        """is_ai_turn=False após execução paralela deve pular merge e persistência."""
-        app = _make_app(active_agents=["claude", "codex"], threads=2)
-        app.get_agent_plugin = Mock(return_value=SimpleNamespace(output_format="text"))
-        app._merge_staging_to_workspace = Mock()
-        app.task_services = Mock()
-        app.task_services.call_agent_for_parallel = Mock(
-            return_value=("codex", "resposta", None, None, False, False)
-        )
-        orchestrator = _make_orchestrator(app)
-
-        class _ToggleTurn:
-            def __init__(self):
-                self._values = [False]
-            @property
-            def is_ai_turn(self):
-                if self._values:
-                    return self._values.pop(0)
-                return False
-            def reset(self):
-                pass
-
-        orchestrator._turn_manager = _ToggleTurn()
-        orchestrator._process_standard_flow("claude", False, True, ["codex"])
-
-        app._merge_staging_to_workspace.assert_not_called()
-        app.session_services.persist_message.assert_not_called()
-
-    def test_parallel_mode_skips_persist_when_turn_lost_after_merge(self):
-        """is_ai_turn=False após merge deve pular persistência de resultados."""
-        app = _make_app(active_agents=["claude", "codex"], threads=2)
-        app.get_agent_plugin = Mock(return_value=SimpleNamespace(output_format="text"))
-        app._merge_staging_to_workspace = Mock()
-        app.task_services = Mock()
-        app.task_services.call_agent_for_parallel = Mock(
-            return_value=("codex", "resposta", None, None, False, False)
-        )
-        orchestrator = _make_orchestrator(app)
-
-        class _ToggleTurnAfterMerge:
-            def __init__(self):
-                self._values = [True, False]
-            @property
-            def is_ai_turn(self):
-                if self._values:
-                    return self._values.pop(0)
-                return False
-            def reset(self):
-                pass
-
-        orchestrator._turn_manager = _ToggleTurnAfterMerge()
-        orchestrator._process_standard_flow("claude", False, True, ["codex"])
-
-        app._merge_staging_to_workspace.assert_called_once()
-        app.session_services.persist_message.assert_not_called()
-
-    def test_parallel_mode_does_not_abort_on_transient_turn_state_before_submit(self):
-        """Não deve abortar followers antes do submit só porque o turno foi lido como falso momentaneamente."""
-        app = _make_app(active_agents=["claude", "codex"], threads=2)
-        app.get_agent_plugin = Mock(return_value=SimpleNamespace(output_format="text"))
-        app._merge_staging_to_workspace = Mock()
-        app.task_services = Mock()
-        app.task_services.call_agent_for_parallel = Mock(
-            return_value=("codex", "resposta", None, None, False, False)
-        )
-        orchestrator = _make_orchestrator(app)
-
-        class _TransientFalseTurn:
-            def __init__(self):
-                self._reads = 0
-
-            @property
-            def is_ai_turn(self):
-                self._reads += 1
-                return self._reads != 1
-
-            def reset(self):
-                pass
-
-        orchestrator._turn_manager = _TransientFalseTurn()
-        orchestrator._process_standard_flow("claude", False, True, ["codex"])
-
-        app.task_services.call_agent_for_parallel.assert_called_once()
-        shown = [call.args[0] for call in app.renderer.show_warning.call_args_list]
-        self.assertNotIn(
-            "[parallel] turno da IA encerrado antes da execução paralela — ignorando",
-            shown,
-        )
+        app.task_services.call_agent_for_parallel.assert_not_called()
+        self.assertEqual(app.agent_pool.agents, ["claude", "codex"])
 
 
 # ---------------------------------------------------------------------------
@@ -706,119 +608,19 @@ class TestCoverageGaps(unittest.TestCase):
         orchestrator._process_standard_flow("claude", True, False, ["codex"])
 
         app.dispatch_services.call_agent.assert_not_called()
+        app.task_services.call_agent_for_parallel.assert_not_called()
 
-    def test_process_standard_flow_explicit_uses_parallel_slots_for_followers(self):
-        """explicit=True com threads>1 deve permitir followers em paralelo."""
+    def test_process_standard_flow_explicit_with_threads_still_skips_followers(self):
+        """explicit=True não deve fan-out para followers, mesmo com threads sobrando."""
         app = _make_app(active_agents=["claude", "codex", "deepseek", "qwen"], threads=4)
-        app.get_agent_plugin = Mock(return_value=SimpleNamespace(output_format="text"))
-        app._merge_staging_to_workspace = Mock()
-        app.task_services = Mock()
-        app.task_services.call_agent_for_parallel = Mock(
-            side_effect=[
-                ("codex", "r1", None, None, False, False),
-                ("deepseek", "r2", None, None, False, False),
-                ("qwen", "r3", None, None, False, False),
-            ]
-        )
         orchestrator = _make_orchestrator(app)
 
         orchestrator._process_standard_flow(
             "claude", True, False, ["codex", "deepseek", "qwen"]
         )
 
-        self.assertEqual(app.task_services.call_agent_for_parallel.call_count, 3)
-        called_agents = [
-            call.args[0] for call in app.task_services.call_agent_for_parallel.call_args_list
-        ]
-        self.assertEqual(called_agents, ["codex", "deepseek", "qwen"])
         app.dispatch_services.call_agent.assert_not_called()
-
-    def test_process_standard_flow_explicit_runs_overflow_followers_in_same_turn(self):
-        """explicit=True com overflow deve usar os slots paralelos e drenar o restante no mesmo turno."""
-        app = _make_app(active_agents=["claude", "codex", "deepseek", "qwen"], threads=2)
-        app.get_agent_plugin = Mock(return_value=SimpleNamespace(output_format="text"))
-        app._merge_staging_to_workspace = Mock()
-        app.task_services = Mock()
-        app.task_services.call_agent_for_parallel = Mock(
-            side_effect=[
-                ("codex", "r1", None, None, False, False),
-                ("deepseek", "r2", None, None, False, False),
-                ("qwen", "r3", None, None, False, False),
-            ]
-        )
-        app.dispatch_services.call_agent = Mock(return_value="seq")
-        app.parse_response = Mock(return_value=("seq", None, None, False, False, None))
-        orchestrator = _make_orchestrator(app)
-
-        orchestrator._process_standard_flow(
-            "claude", True, False, ["codex", "deepseek", "qwen"]
-        )
-
-        self.assertEqual(app.task_services.call_agent_for_parallel.call_count, 3)
-        parallel_calls = [call.args[0] for call in app.task_services.call_agent_for_parallel.call_args_list]
-        self.assertEqual(parallel_calls, ["codex", "deepseek", "qwen"])
-        app.dispatch_services.call_agent.assert_not_called()
-        app.renderer.show_system.assert_any_call(
-            "[parallel] 2 followers excedentes seguem em fila neste turno."
-        )
-        self.assertIn(
-            {
-                "active": 1,
-                "queued": 2,
-                "capacity": 1,
-                "active_agents": ["codex"],
-            },
-            app._parallel_toolbar_updates,
-        )
-        self.assertEqual(
-            app._parallel_toolbar_state,
-            {"active": 0, "queued": 0, "capacity": 1, "active_agents": ()},
-        )
-        app.renderer.show_system.assert_any_call("→ deepseek iniciando...")
-        app.renderer.show_system.assert_any_call("→ qwen iniciando...")
-
-    def test_process_standard_flow_announces_parallel_followers_before_execution(self):
-        """Followers paralelos devem emitir 'iniciando' para manter rastreabilidade no log/render."""
-        app = _make_app(active_agents=["claude", "codex", "deepseek"], threads=3)
-        app.get_agent_plugin = Mock(return_value=SimpleNamespace(output_format="text"))
-        app._merge_staging_to_workspace = Mock()
-        app.task_services.call_agent_for_parallel = Mock(
-            side_effect=[
-                ("codex", "r1", None, None, False, False),
-                ("deepseek", "r2", None, None, False, False),
-            ]
-        )
-        orchestrator = _make_orchestrator(app)
-
-        orchestrator._process_standard_flow(
-            "claude", True, False, ["codex", "deepseek"]
-        )
-
-        app.renderer.show_system.assert_any_call("→ codex iniciando...")
-        app.renderer.show_system.assert_any_call("→ deepseek iniciando...")
-
-    def test_standard_flow_next_handoff_set_on_valid_route(self):
-        """route_target válido (≠ agente) no loop padrão deve setar next_handoff."""
-        app = _make_app(active_agents=["claude", "codex"])
-        handoff = _make_handoff("next task")
-        parse_count = [0]
-
-        def fake_parse(resp):
-            parse_count[0] += 1
-            if parse_count[0] == 1:
-                # codex retorna handoff para claude
-                return ("resp", "claude", handoff, False, False, None)
-            return ("resp2", None, None, False, False, None)
-
-        app.dispatch_services.call_agent = Mock(return_value="resp")
-        app.parse_response = Mock(side_effect=fake_parse)
-        orchestrator = _make_orchestrator(app)
-
-        # extend=True → remaining = ["codex", "claude", "codex"]
-        orchestrator._process_standard_flow("claude", False, True, ["codex"])
-
-        # call_agent chamado pelo menos 2 vezes (loop com remaining)
-        self.assertGreaterEqual(app.dispatch_services.call_agent.call_count, 2)
+        app.task_services.call_agent_for_parallel.assert_not_called()
 
     def test_handoff_chain_propagates_existing_chain(self):
         """Propagação de chain deve incluir agentes do next_handoff.chain não duplicados."""
@@ -887,101 +689,18 @@ class TestCoverageGaps(unittest.TestCase):
         self.assertEqual(synthesis_call.kwargs["protocol_mode"], "handoff")
         self.assertIn("resposta codex", synthesis_call.kwargs["handoff"])
 
-    def test_parallel_mode_warns_stream_json_agents(self):
-        """Agentes com output_format=stream-json em modo paralelo devem executar sem erro."""
+    def test_standard_flow_keeps_toolbar_idle_even_with_extra_threads(self):
+        """A toolbar permanece ociosa quando não há fan-out dentro do prompt."""
         app = _make_app(active_agents=["claude", "codex"], threads=2)
-        app.get_agent_plugin = Mock(return_value=SimpleNamespace(output_format="stream-json"))
-        app._merge_staging_to_workspace = Mock()
-        app.task_services = Mock()
-        app.task_services.call_agent_for_parallel = Mock(
-            return_value=("codex", "resposta", None, None, False, False)
+        orchestrator = _make_orchestrator(app)
+
+        orchestrator._process_standard_flow("claude", False, False, ["codex"])
+
+        self.assertEqual(
+            app._parallel_toolbar_state,
+            {"active": 0, "queued": 0, "capacity": 1, "active_agents": ()},
         )
-        orchestrator = _make_orchestrator(app)
-
-        # Deve executar sem exceção; o warning é emitido via logger interno
-        orchestrator._process_standard_flow("claude", False, True, ["codex"])
-        # get_agent_plugin chamado para detectar agentes stream-json
-        app.get_agent_plugin.assert_called()
-
-    def test_parallel_mode_uses_timeout_on_future_result(self):
-        """Fan-out paralelo deve aguardar cada future com timeout explícito."""
-        app = _make_app(active_agents=["claude", "codex"], threads=2)
-        app.get_agent_plugin = Mock(return_value=SimpleNamespace(output_format="text"))
-        app._merge_staging_to_workspace = Mock()
-        orchestrator = _make_orchestrator(app)
-        seen_timeouts = []
-
-        class FakeFuture:
-            def result(self, timeout=None):
-                seen_timeouts.append(timeout)
-                return ("codex", "resposta", None, None, False, False)
-
-            def done(self):
-                return True
-
-            def cancel(self):
-                return False
-
-        class FakeExecutor:
-            def __init__(self, *args, **kwargs):
-                pass
-
-            def submit(self, *args, **kwargs):
-                return FakeFuture()
-
-            def shutdown(self, wait=True, cancel_futures=False):
-                return None
-
-        with patch("quimera.app.chat_round.ThreadPoolExecutor", FakeExecutor):
-            orchestrator._process_standard_flow("claude", False, False, ["codex"])
-
-        self.assertEqual(seen_timeouts, [30])
-
-    def test_parallel_mode_cancels_pending_futures_on_timeout(self):
-        """Timeout no fan-out paralelo deve cancelar pendências, avisar e resetar turno."""
-        app = _make_app(active_agents=["claude", "codex"], threads=2)
-        app.get_agent_plugin = Mock(return_value=SimpleNamespace(output_format="text"))
-        app._merge_staging_to_workspace = Mock()
-        orchestrator = _make_orchestrator(app)
-        cancelled = []
-        seen_cancel_events = []
-
-        class FakeFuture:
-            def __init__(self, agent):
-                self.agent = agent
-                self._done = False
-
-            def result(self, timeout=None):
-                raise TimeoutError()
-
-            def done(self):
-                return self._done
-
-            def cancel(self):
-                cancelled.append(self.agent)
-                self._done = True
-                return True
-
-        class FakeExecutor:
-            def __init__(self, *args, **kwargs):
-                pass
-
-            def submit(self, fn, agent, handoff, protocol_mode, staging_dir, idx, cancel_event):
-                seen_cancel_events.append(cancel_event)
-                return FakeFuture(agent)
-
-            def shutdown(self, wait=True, cancel_futures=False):
-                return None
-
-        with patch("quimera.app.chat_round.ThreadPoolExecutor", FakeExecutor):
-            orchestrator._process_standard_flow("claude", False, True, ["codex"])
-
-        self.assertEqual(cancelled, ["codex"])
-        self.assertEqual(len(seen_cancel_events), 1)
-        self.assertTrue(seen_cancel_events[0].is_set())
-        app.turn_manager.reset.assert_not_called()
-        app.renderer.show_warning.assert_called_once()
-        app._merge_staging_to_workspace.assert_not_called()
+        app.task_services.call_agent_for_parallel.assert_not_called()
 
 
 if __name__ == "__main__":

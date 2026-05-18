@@ -1,22 +1,11 @@
 """Orquestra uma rodada de chat multiagente."""
 from __future__ import annotations
 
-import queue as _queue_module
-import shutil
-import tempfile
-import threading
-from concurrent.futures import ThreadPoolExecutor, TimeoutError
-from pathlib import Path
-
 from ..constants import HANDOFF_SYNTHESIS_MSG, MSG_EMPTY_INPUT, USER_ROLE
 from ..prompt_kinds import PromptKind
 from .config import logger
 from .render_event import RenderEvent
 from ..domain.session_state import SessionState
-
-AGENT_TIMEOUT_SECS = 120  # timeout máximo por agente no fan-out paralelo
-PARALLEL_FUTURE_RESULT_TIMEOUT_SECS = 30
-
 
 class ChatRoundOrchestrator:
     """Executa o fluxo completo de uma rodada de chat."""
@@ -162,12 +151,15 @@ class ChatRoundOrchestrator:
     ) -> None:
         if self._set_parallel_toolbar_state_fn is None:
             return
-        self._set_parallel_toolbar_state_fn(
-            active=active,
-            queued=queued,
-            capacity=capacity,
-            active_agents=active_agents,
-        )
+        try:
+            self._set_parallel_toolbar_state_fn(
+                active=active,
+                queued=queued,
+                capacity=capacity,
+                active_agents=active_agents,
+            )
+        except AttributeError:
+            return
 
     def _emit_event(
         self,
@@ -284,6 +276,10 @@ class ChatRoundOrchestrator:
         pending_input_for = self._get_pending_input_for()
         if pending_input_for and not explicit:
             first_agent = pending_input_for
+        elif not explicit and self._agent_pool is not None:
+            reserved_agent = self._agent_pool.take_primary()
+            if reserved_agent is not None:
+                first_agent = reserved_agent
         self._set_pending_input_for(None)
 
         other_agents = [n for n in self._agent_pool.agents if n != first_agent]
@@ -618,150 +614,19 @@ class ChatRoundOrchestrator:
     def _process_standard_flow(self, first_agent, explicit, extend, other_agents):
         protocol_mode = "extended" if extend else "standard"
         parallel_slots = max(0, self._threads - 1)
-        staging_root = None
         self._set_parallel_toolbar_state(
             active=0,
             queued=0,
             capacity=parallel_slots,
             active_agents=(),
         )
-        if explicit:
-            remaining = list(other_agents) if parallel_slots > 0 else []
-        elif extend:
+        if extend and not explicit and self._task_services is not None:
+            logger.info(
+                "[standard-flow] extend marker received; running sequential follow-up from %s",
+                first_agent,
+            )
             remaining = [other_agents[0], first_agent, other_agents[0]] if other_agents else []
-        else:
-            remaining = list(other_agents) if parallel_slots > 0 else []
-            if other_agents:
-                self._agent_pool.rotate()
-
-        parallel_agents = []
-        sequential_agents = list(remaining)
-        if self._threads > 1 and parallel_slots > 0 and remaining:
-            parallel_agents = list(remaining[:parallel_slots])
-            sequential_agents = list(remaining[parallel_slots:])
-
-        next_handoff = None
-        try:
-            if self._threads > 1 and remaining:
-                staging_root = Path(
-                    tempfile.gettempdir()
-                ) / "quimera-staging" / f"{self._session_state.get('session_id') if self._session_state else (self._session_state_dict or {}).get('session_id', 'unknown')}-round{self._get_round_index()}"
-                staging_root.mkdir(parents=True, exist_ok=True)
-            if self._threads > 1 and parallel_agents:
-                self._set_parallel_toolbar_state(
-                    active=len(parallel_agents),
-                    queued=len(sequential_agents),
-                    capacity=parallel_slots,
-                    active_agents=parallel_agents,
-                )
-                logger.info("parallel mode: %d threads, staging=%s", self._threads, staging_root)
-                native_tool_agents = [
-                    a for a in parallel_agents
-                    if self._get_agent_plugin is not None
-                    and getattr(self._get_agent_plugin(a), "output_format", None) == "stream-json"
-                ]
-                if native_tool_agents:
-                    logger.warning(
-                        "[parallel] agentes com tools nativas não usam staging: %s — "
-                        "escritas de arquivo vão direto ao disco e podem conflitar",
-                        native_tool_agents,
-                    )
-                max_parallel_workers = min(len(parallel_agents), parallel_slots)
-                executor = ThreadPoolExecutor(max_workers=max_parallel_workers)
-                try:
-                    for agent in parallel_agents:
-                        self._show_system(f"→ {agent} iniciando...")
-                    if sequential_agents:
-                        overflow_count = len(sequential_agents)
-                        plural = "s" if overflow_count != 1 else ""
-                        self._show_system(
-                            f"[parallel] {overflow_count} follower{plural} excedente{plural} segue{'' if overflow_count == 1 else 'm'} em fila neste turno."
-                        )
-                    agent_handoff_pairs = [
-                        (agent, None, staging_root, i, threading.Event())
-                        for i, agent in enumerate(parallel_agents)
-                    ]
-                    futures = [
-                        executor.submit(
-                            self._task_services.call_agent_for_parallel,
-                            agent,
-                            handoff,
-                            protocol_mode,
-                            staging_dir,
-                            idx,
-                            cancel_event,
-                        )
-                        for agent, handoff, staging_dir, idx, cancel_event in agent_handoff_pairs
-                    ]
-                    results = [
-                        future.result(timeout=PARALLEL_FUTURE_RESULT_TIMEOUT_SECS)
-                        for future in futures
-                    ]
-                except TimeoutError:
-                    pending_agents = [
-                        agent
-                        for (agent, *_, cancel_event), future in zip(agent_handoff_pairs, futures)
-                        if not future.done()
-                    ]
-                    for (_, *_, cancel_event), future in zip(agent_handoff_pairs, futures):
-                        if not future.done():
-                            cancel_event.set()
-                            future.cancel()
-                    logger.warning(
-                        "[parallel] timeout aguardando agentes após %ss: %s",
-                        PARALLEL_FUTURE_RESULT_TIMEOUT_SECS,
-                        pending_agents,
-                    )
-                    self._show_warning(
-                        "[parallel] timeout aguardando agentes; cancelando tarefas pendentes."
-                    )
-                    return
-                finally:
-                    executor.shutdown(wait=False, cancel_futures=True)
-                if self._turn_manager is not None and not self._turn_manager.is_ai_turn:
-                    self._show_warning("[parallel] turno da IA encerrado durante execução — ignorando resultados")
-                    return
-                if self._merge_staging_to_workspace_fn is not None:
-                    self._merge_staging_to_workspace_fn(staging_root)
-                if self._is_cancelled():
-                    self._handle_cancelled()
-                    return
-                if self._turn_manager is not None and not self._turn_manager.is_ai_turn:
-                    self._show_warning("[parallel] turno da IA encerrado — ignorando persistência de resultados")
-                    return
-                needs_input_any = False
-                pending_handoffs = []
-                for item in results:
-                    agent, response, route_target, handoff, extend, needs_input = item
-                    self._dispatch_services.print_response(agent, response)
-                    if response is not None:
-                        self._session_services.persist_message(agent, response)
-                    needs_input_any = needs_input or needs_input_any
-                    if route_target:
-                        pending_handoffs.append((agent, route_target, handoff))
-
-                self._set_parallel_toolbar_state(
-                    active=0,
-                    queued=len(sequential_agents),
-                    capacity=parallel_slots,
-                    active_agents=(),
-                )
-                if needs_input_any:
-                    needing = next((agent_data for agent_data in results if agent_data[-1]), None)
-                    if needing:
-                        current_agent = needing[0]
-                        self._set_pending_input_for(current_agent)
-                        self._show_system(f"\nResponda para {current_agent.upper()}:\n")
-                    if self._turn_manager is not None:
-                        self._turn_manager.reset()
-                    return
-
-                if pending_handoffs:
-                    origin, target, payload = pending_handoffs[0]
-                    logger.info("[parallel] following handoff from %s to %s", origin, target)
-                    self._process_handoff(origin, target, payload)
-                remaining = list(sequential_agents)
-
+            next_handoff = None
             for index, agent in enumerate(remaining):
                 self._set_parallel_toolbar_state(
                     active=0,
@@ -769,84 +634,34 @@ class ChatRoundOrchestrator:
                     capacity=parallel_slots,
                     active_agents=(),
                 )
-                use_timeout = self._threads > 1 and self._task_services is not None
-                if use_timeout:
-                    self._show_system(f"→ {agent} iniciando...")
-                    seq_cancel = threading.Event()
-                    seq_staging = staging_root / f"seq-{index}"
-                    seq_staging.mkdir(parents=True, exist_ok=True)
-                    seq_executor = ThreadPoolExecutor(max_workers=1)
-                    fut = seq_executor.submit(
-                        self._task_services.call_agent_for_parallel,
-                        agent,
-                        next_handoff,
-                        protocol_mode,
-                        seq_staging,
-                        index,
-                        seq_cancel,
-                    )
-                    try:
-                        seq_item = fut.result(timeout=PARALLEL_FUTURE_RESULT_TIMEOUT_SECS)
-                    except TimeoutError:
-                        seq_cancel.set()
-                        fut.cancel()
-                        logger.warning(
-                            "[sequential-overflow] timeout aguardando %s após %ss — pulando",
-                            agent,
-                            PARALLEL_FUTURE_RESULT_TIMEOUT_SECS,
-                        )
-                        self._show_warning(f"[overflow] {agent} não respondeu a tempo — pulando")
-                        continue
-                    finally:
-                        seq_executor.shutdown(wait=False, cancel_futures=True)
-                        if self._is_cancelled():
-                            self._handle_cancelled()
-                            return
-                    next_handoff = None
-                    _, response, route_target, seq_handoff, _, needs_human_input = seq_item
-                    self._dispatch_services.print_response(agent, response)
-                    if response is not None:
-                        self._session_services.persist_message(agent, response)
-                else:
-                    response = self._dispatch_services.call_agent(agent, handoff=next_handoff, primary=False, protocol_mode=protocol_mode)
-                    if self._is_cancelled():
-                        self._handle_cancelled()
-                        return
-                    next_handoff = None
-                    response, route_target, seq_handoff, _, needs_human_input, _ = self._parse_response(response)
-                    self._dispatch_services.print_response(agent, response)
-                    if response is not None:
-                        self._session_services.persist_message(agent, response)
+                response = self._dispatch_services.call_agent(
+                    agent,
+                    handoff=next_handoff,
+                    primary=False,
+                    protocol_mode=protocol_mode,
+                )
+                if self._is_cancelled():
+                    self._handle_cancelled()
+                    return
+                next_handoff = None
+                response, route_target, handoff, _, needs_human_input, _ = self._parse_response(response)
+                self._dispatch_services.print_response(agent, response)
+                if response is not None:
+                    self._session_services.persist_message(agent, response)
                 if needs_human_input:
-                    self._set_parallel_toolbar_state(
-                        active=0,
-                        queued=max(0, len(remaining) - (index + 1)),
-                        capacity=parallel_slots,
-                        active_agents=(),
-                    )
                     self._set_pending_input_for(agent)
                     self._show_system(f"\nResponda para {agent.upper()}:\n")
                     break
-                if route_target and index + 1 < len(remaining):
-                    remaining[index + 1] = route_target
+                if route_target == agent:
+                    logger.warning(
+                        "[HANDOFF] %s attempted to handoff to itself in standard flow — ignored",
+                        agent,
+                    )
+                    self._show_warning(f"{agent} tentou delegar para si mesmo — ignorado")
+                    route_target = None
+                    handoff = None
                 if route_target:
-                    if route_target == agent:
-                        logger.warning(
-                            "[HANDOFF] %s attempted to handoff to itself in standard flow — ignored",
-                            agent,
-                        )
-                        self._show_warning(f"{agent} tentou delegar para si mesmo — ignorado")
-                        route_target = None
-                        seq_handoff = None
-                        next_handoff = None
-                    else:
-                        next_handoff = seq_handoff
-                else:
-                    next_handoff = None
-        finally:
-            if staging_root is not None and staging_root.exists():
-                shutil.rmtree(staging_root)
-                logger.info("staging cleanup: %s removed", staging_root)
+                    next_handoff = handoff
             if self._get_pending_input_for() is None:
                 self._set_parallel_toolbar_state(
                     active=0,
@@ -854,3 +669,16 @@ class ChatRoundOrchestrator:
                     capacity=parallel_slots,
                     active_agents=(),
                 )
+            return
+        if extend:
+            logger.info(
+                "[standard-flow] extend marker ignored in chat round; same prompt stays bound to %s",
+                first_agent,
+            )
+        if self._get_pending_input_for() is None:
+            self._set_parallel_toolbar_state(
+                active=0,
+                queued=0,
+                capacity=parallel_slots,
+                active_agents=(),
+            )

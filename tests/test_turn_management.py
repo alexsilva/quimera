@@ -230,7 +230,7 @@ class TestTurnCycle(unittest.TestCase):
         app.agent_client = Mock()
         app.turn_manager = TurnManager()
         app._build_input_prompt = lambda: "User: "
-        reads = iter(["mensagem"])
+        reads = iter(["mensagem", CMD_EXIT])
         app.read_user_input = lambda prompt, timeout: next(reads)
 
         def slow_process(_user):
@@ -249,6 +249,20 @@ class TestTurnCycle(unittest.TestCase):
 
         self.assertFalse(run_thread.is_alive(), "run() travou no encerramento com worker ocupado")
         app.session_services.shutdown.assert_called_once()
+
+    def test_process_chat_message_keeps_ai_turn_while_async_queue_has_pending_work(self):
+        """Um prompt concluído não deve devolver o turno se ainda houver trabalho assíncrono pendente."""
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.turn_manager = TurnManager()
+        app.turn_manager.next_turn()
+        app._chat_inflight_count = 2
+        app._chat_inflight_lock = threading.Lock()
+        app.agent_client = Mock(_user_cancelled=False, _cancel_event=None)
+        app._do_process_chat_message = Mock()
+
+        QuimeraApp._process_chat_message(app, "mensagem")
+
+        self.assertTrue(app.turn_manager.is_ai_turn)
 
     def test_run_falls_back_to_sync_when_chat_worker_dies(self):
         """run() deve alertar e voltar ao modo síncrono quando o worker morre."""
@@ -300,6 +314,82 @@ class TestTurnCycle(unittest.TestCase):
         self.assertEqual(processed, ["mensagem"])
         self.assertEqual(len(app.renderer.errors), 1)
         self.assertIn("worker do chat interrompido", app.renderer.errors[0])
+
+    def test_run_blocks_until_slot_frees_then_processes_prompt_sync(self):
+        """Com todos os slots ocupados, o próximo prompt espera e roda no thread principal."""
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.renderer = DummyRenderer()
+        app.threads = 2
+        app.user_name = "User"
+        app.session_state = {
+            "session_id": "test-session",
+            "history_count": 0,
+            "summary_loaded": False,
+        }
+        app._format_yes_no = lambda x: "sim" if x else "não"
+        storage = Mock()
+        storage.get_log_file.return_value = Path("/tmp/quimera-test.log")
+        app.storage = storage
+        app.handle_command = Mock(return_value=False)
+        app.session_services = Mock()
+        app.agent_client = Mock()
+        app.turn_manager = TurnManager()
+        app._chat_inflight_count = 0
+        app._chat_inflight_lock = threading.Lock()
+        app._build_input_prompt = lambda: "User: "
+        reads = iter(["m1", "m2", "m3", CMD_EXIT])
+        app.read_user_input = lambda prompt, timeout: next(reads)
+        calls = []
+
+        def observed_process(user):
+            mode = "sync" if threading.current_thread() is threading.main_thread() else "async"
+            calls.append((user, mode, time.monotonic()))
+            if user in {"m1", "m2"}:
+                time.sleep(0.25)
+
+        app._process_chat_message = observed_process
+
+        started = time.monotonic()
+        QuimeraApp.run(app)
+        elapsed = time.monotonic() - started
+
+        self.assertEqual([user for user, _, _ in calls], ["m1", "m2", "m3"])
+        self.assertEqual([mode for _, mode, _ in calls[:2]], ["async", "async"])
+        self.assertEqual(calls[2][1], "sync")
+        self.assertGreaterEqual(elapsed, 0.20)
+
+    def test_threads_one_is_serial(self):
+        """Com threads=1, todos os prompts rodam serialmente no thread principal."""
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.renderer = DummyRenderer()
+        app.threads = 1
+        app.user_name = "User"
+        app.session_state = {
+            "session_id": "test-session",
+            "history_count": 0,
+            "summary_loaded": False,
+        }
+        app._format_yes_no = lambda x: "sim" if x else "não"
+        storage = Mock()
+        storage.get_log_file.return_value = Path("/tmp/quimera-test.log")
+        app.storage = storage
+        app.handle_command = Mock(return_value=False)
+        app.session_services = Mock()
+        app.agent_client = Mock()
+        app.turn_manager = TurnManager()
+        app._build_input_prompt = lambda: "User: "
+        reads = iter(["m1", "m2", CMD_EXIT])
+        app.read_user_input = lambda prompt, timeout: next(reads)
+        calls = []
+
+        def observed_process(user):
+            calls.append((user, threading.current_thread() is threading.main_thread()))
+
+        app._process_chat_message = observed_process
+
+        QuimeraApp.run(app)
+
+        self.assertEqual(calls, [("m1", True), ("m2", True)])
 
     def test_run_enqueues_before_switching_turn_with_worker(self):
         """No modo com worker, run() deve enfileirar a mensagem antes de ceder o turno."""
@@ -438,27 +528,17 @@ class TestSingleAgentPerTurn(unittest.TestCase):
         self.assertEqual(app.dispatch_services.call_agent.call_count, 1)
         self.assertEqual(app.dispatch_services.call_agent.call_args_list[0][0][0], "codex")
 
-    def test_extend_mode_allows_alternation(self):
-        """EXTEND_MARKER permite debate estendido: primeiro agente → segundo → primeiro → segundo."""
+    def test_extend_mode_stays_on_first_agent(self):
+        """EXTEND_MARKER no chat interativo não deve mais disparar outros agentes no mesmo prompt."""
         app = _make_app(active_agents=["claude", "codex"])
         app.parse_routing = Mock(return_value=("claude", "debate isso", False))
-
-        # Primeira chamada retorna extend=True; demais retornam False
-        responses = [
-            ("resposta1", None, None, True, False, None),  # claude, extend=True
-            ("resposta2", None, None, False, False, None),  # codex
-            ("resposta3", None, None, False, False, None),  # claude
-            ("resposta4", None, None, False, False, None),  # codex
-        ]
-        app.parse_response = Mock(side_effect=responses)
-        app.dispatch_services.call_agent = Mock(side_effect=["r1", "r2", "r3", "r4"])
+        app.parse_response = Mock(return_value=("resposta1", None, None, True, False, None))
+        app.dispatch_services.call_agent = Mock(return_value="r1")
 
         QuimeraApp._do_process_chat_message(app, "debate isso")
 
-        # 1 (first_agent) + 3 (remaining=[codex, claude, codex]) = 4 chamadas
-        self.assertEqual(app.dispatch_services.call_agent.call_count, 4)
-        agents_called = [c[0][0] for c in app.dispatch_services.call_agent.call_args_list]
-        self.assertEqual(agents_called, ["claude", "codex", "claude", "codex"])
+        self.assertEqual(app.dispatch_services.call_agent.call_count, 1)
+        self.assertEqual(app.dispatch_services.call_agent.call_args_list[0][0][0], "claude")
 
     def test_extend_with_explicit_prefix_still_single_agent(self):
         """Prefixo explícito anula extend: mesmo com EXTEND_MARKER, só um agente responde."""

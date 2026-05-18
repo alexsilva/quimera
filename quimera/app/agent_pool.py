@@ -22,6 +22,16 @@ class AgentPool:
         with self._lock:
             return self._agents[0] if self._agents else None
 
+    def take_primary(self) -> str | None:
+        """Retorna o agente atual e avança o round-robin de forma atômica."""
+        with self._lock:
+            if not self._agents:
+                return None
+            primary = self._agents[0]
+            if len(self._agents) > 1:
+                self._agents = self._agents[1:] + self._agents[:1]
+            return primary
+
     def add(self, name: str) -> None:
         with self._lock:
             if name not in self._agents:
