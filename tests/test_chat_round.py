@@ -26,7 +26,7 @@ def _make_app(active_agents=None, threads=1):
     app._parallel_toolbar_state = {
         "active": 0,
         "queued": 0,
-        "capacity": max(0, threads - 1),
+        "capacity": max(0, threads),
         "active_agents": (),
     }
     app._parallel_toolbar_updates = []
@@ -698,7 +698,7 @@ class TestCoverageGaps(unittest.TestCase):
 
         self.assertEqual(
             app._parallel_toolbar_state,
-            {"active": 0, "queued": 0, "capacity": 1, "active_agents": ()},
+            {"active": 0, "queued": 0, "capacity": 2, "active_agents": ()},
         )
         app.task_services.call_agent_for_parallel.assert_not_called()
 

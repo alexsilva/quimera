@@ -1108,13 +1108,10 @@ class QuimeraApp:
             capacity = int(parallel_state.get("capacity", max(0, self.threads - 1)) or 0)
             active = int(parallel_state.get("active", 0) or 0)
             queued = int(parallel_state.get("queued", 0) or 0)
-            if active or queued:
-                parallel_label = f"paralelo:{active}/{capacity}"
-                if queued:
-                    parallel_label = f"{parallel_label} · fila:{queued}"
-                ctx["parallel"] = parallel_label
-            else:
-                ctx["parallel"] = f"threads:{self.threads}"
+            slots_label = f"slots:{active}/{capacity}"
+            if queued:
+                slots_label = f"{slots_label} · fila:{queued}"
+            ctx["parallel"] = slots_label
         return ctx
 
     def _set_parallel_toolbar_state(

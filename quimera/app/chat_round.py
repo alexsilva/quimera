@@ -263,7 +263,7 @@ class ChatRoundOrchestrator:
         self._set_parallel_toolbar_state(
             active=0,
             queued=0,
-            capacity=max(0, self._threads - 1),
+            capacity=max(0, self._threads),
             active_agents=(),
         )
         first_agent, message, explicit = self._parse_routing(user)
@@ -613,7 +613,7 @@ class ChatRoundOrchestrator:
 
     def _process_standard_flow(self, first_agent, explicit, extend, other_agents):
         protocol_mode = "extended" if extend else "standard"
-        parallel_slots = max(0, self._threads - 1)
+        parallel_slots = max(0, self._threads)
         self._set_parallel_toolbar_state(
             active=0,
             queued=0,
