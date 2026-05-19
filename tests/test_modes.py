@@ -368,6 +368,24 @@ class TestInputContextAndWelcome(unittest.TestCase):
         self.assertEqual(context["threads"], "2")
         self.assertEqual(context["parallel"], "slots:1/2 · fila:2")
 
+    def test_build_input_toolbar_context_defaults_capacity_to_thread_count(self):
+        from quimera.app.core import QuimeraApp
+
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.workspace = MagicMock(cwd=Path("/tmp/quimera-project"), tasks_db=Path("/tmp/quimera_test_tasks.db"))
+        app.active_agents = []
+        app.threads = 2
+        app._parallel_toolbar_lock = threading.Lock()
+        app._parallel_toolbar_state = {"active": 0, "queued": 0, "active_agents": ()}
+        app._pending_input_for = None
+        app._resolve_active_model_label = QuimeraApp._resolve_active_model_label.__get__(app, QuimeraApp)
+        app._resolve_next_responder_label = QuimeraApp._resolve_next_responder_label.__get__(app, QuimeraApp)
+        app._get_parallel_toolbar_state = QuimeraApp._get_parallel_toolbar_state.__get__(app, QuimeraApp)
+        app._build_input_toolbar_context = QuimeraApp._build_input_toolbar_context.__get__(app, QuimeraApp)
+
+        context = app._build_input_toolbar_context()
+        self.assertEqual(context["parallel"], "slots:0/2")
+
     def test_build_welcome_message_includes_version_and_project_path(self):
         from quimera.app.core import QuimeraApp
 

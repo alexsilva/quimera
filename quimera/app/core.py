@@ -100,7 +100,7 @@ class QuimeraApp:
         self._parallel_toolbar_state = {
             "active": 0,
             "queued": 0,
-            "capacity": max(0, self.threads - 1),
+            "capacity": max(0, self.threads),
             "active_agents": (),
         }
         self.agent_failures = defaultdict(int)
@@ -1110,7 +1110,7 @@ class QuimeraApp:
         if self.threads > 1:
             ctx["threads"] = str(self.threads)
             parallel_state = self._get_parallel_toolbar_state()
-            capacity = int(parallel_state.get("capacity", max(0, self.threads - 1)) or 0)
+            capacity = int(parallel_state.get("capacity", max(0, self.threads)) or 0)
             active = int(parallel_state.get("active", 0) or 0)
             queued = int(parallel_state.get("queued", 0) or 0)
             slots_label = f"slots:{active}/{capacity}"
