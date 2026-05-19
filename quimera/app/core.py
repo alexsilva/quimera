@@ -1619,7 +1619,9 @@ class QuimeraApp:
                 if chat_worker is not None:
                     chat_worker.join(timeout=0.5)
                 if chat_executor is not None:
-                    chat_executor.shutdown(wait=False, cancel_futures=True)
+                    # Em shutdown normal, drena prompts já submetidos para não perder
+                    # resposta em voo ao encerrar logo após `/exit`.
+                    chat_executor.shutdown(wait=True, cancel_futures=False)
             except KeyboardInterrupt:
                 pass
             self._chat_executor = None

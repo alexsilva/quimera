@@ -4792,6 +4792,7 @@ class PluginTests(unittest.TestCase):
         from quimera.app.dispatch import AppDispatchServices
         from quimera.runtime.errors import ToolValidationError
         from quimera.runtime.models import ToolResult
+        from quimera.runtime.tool_hops import MAX_TOOL_HOPS_BY_RELIABILITY
 
         app = Mock()
         app.tool_executor.maybe_execute_from_response.side_effect = [
@@ -4821,8 +4822,9 @@ class PluginTests(unittest.TestCase):
 
         self.assertEqual(result, "resposta final")
         handoff = app._call_agent.call_args.kwargs["handoff"]
-        self.assertIn("max_tool_hops=15", handoff)
-        self.assertIn("remaining_tool_hops=14", handoff)
+        max_hops = MAX_TOOL_HOPS_BY_RELIABILITY["low"]
+        self.assertIn(f"max_tool_hops={max_hops}", handoff)
+        self.assertIn(f"remaining_tool_hops={max_hops - 1}", handoff)
         self.assertIn("'error_type': 'validation'", handoff)
         self.assertIn("'error_metadata': {'field': 'command', 'hint': 'informe um comando não vazio'}", handoff)
 
