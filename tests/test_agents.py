@@ -690,6 +690,37 @@ def test_spy_output_presenter_persists_evidence_from_raw_output(renderer, tmp_pa
     assert evidences[0].session_id == "sessao-1"
 
 
+def test_spy_output_presenter_persists_structured_tool_execution_evidence(renderer, tmp_path):
+    presenter = SpyOutputPresenter(
+        renderer,
+        Visibility.SUMMARY,
+        session_id="sessao-1",
+        base_dir=tmp_path,
+    )
+
+    for event in _format_codex_spy_event(
+        '{"type":"item.started","item":{"type":"command_execution","command":"ls","id":"t_17"}}'
+    ):
+        presenter.emit("codex", event)
+    for event in _format_codex_spy_event(
+        '{"type":"item.completed","item":{"type":"command_execution","command":"ls","exit_code":0,"id":"t_17"}}'
+    ):
+        presenter.emit("codex", event)
+
+    presenter.finalize_turn("codex")
+
+    store = EvidenceStore(tmp_path, "sessao-1")
+    try:
+        evidences = store.query("sessao-1")
+    finally:
+        store.close()
+
+    tool_evidences = [e for e in evidences if e.type == "tool_call"]
+    assert len(tool_evidences) == 1
+    assert tool_evidences[0].summary == "exec_command: ok | cmd: ls"
+    assert tool_evidences[0].agent == "codex"
+
+
 def test_spy_output_presenter_finalize_turn_renders_human_summary(renderer):
     presenter = SpyOutputPresenter(renderer, Visibility.SUMMARY)
 

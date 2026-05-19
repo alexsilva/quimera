@@ -5,6 +5,7 @@ from quimera.evidence.parser import (
     FileReadExtractor,
     PatternRegistry,
     ThinkExtractor,
+    _sanitize_path,
 )
 
 SAMPLE_AGENT = "test-agent"
@@ -180,3 +181,123 @@ class TestPatternRegistry:
         for ev in results:
             assert ev.agent == "my-agent"
             assert ev.session_id == "my-session"
+
+
+class TestSanitizePath:
+    """Testes para a função de sanitização de paths."""
+
+    def test_valid_path_passes_through(self):
+        assert _sanitize_path("src/main.py") == "src/main.py"
+        assert _sanitize_path("/home/user/file.txt") == "/home/user/file.txt"
+        assert _sanitize_path("./config.yaml") == "./config.yaml"
+
+    def test_strips_trailing_checkmark(self):
+        assert _sanitize_path("quimera/prompt.py✓") == "quimera/prompt.py"
+        assert _sanitize_path("src/models.py✓") == "src/models.py"
+
+    def test_strips_leading_checkmark(self):
+        assert _sanitize_path("✓src/models.py") == "src/models.py"
+
+    def test_strips_ansi_codes(self):
+        ansi_path = "\x1b[32mquimera/prompt.py\x1b[0m"
+        assert _sanitize_path(ansi_path) == "quimera/prompt.py"
+
+    def test_rejects_plain_word_no_path_structure(self):
+        assert _sanitize_path("Read") is None
+        assert _sanitize_path("Edit") is None
+        assert _sanitize_path("hello") is None
+
+    def test_rejects_empty_and_whitespace(self):
+        assert _sanitize_path("") is None
+        assert _sanitize_path("   ") is None
+
+    def test_strips_surrounding_noise_chars(self):
+        assert _sanitize_path("[src/main.py]") == "src/main.py"
+        assert _sanitize_path("`config.yaml`") == "config.yaml"
+
+    def test_rejects_path_with_invalid_chars(self):
+        assert _sanitize_path("file name.py") is None
+        assert _sanitize_path("file\nname.py") is None
+
+
+class TestNoisyStdoutScenarios:
+    """Testes cobrindo cenários reais de stdout com ruído de renderização."""
+
+    def test_checkmark_attached_to_read_path(self):
+        """Caso: 'Read file: quimera/prompt.py✓' - checkmark colado no path."""
+        output = "Read file: quimera/prompt.py✓"
+        ext = FileReadExtractor()
+        results = ext.extract(output, SAMPLE_AGENT, SAMPLE_SESSION)
+
+        assert len(results) == 1
+        assert results[0].path == "quimera/prompt.py"
+
+    def test_edit_path_concatenated_with_next_event_word(self):
+        """Caso: 'Edit quimera/evidence/formatter.pyRead' - concatenação de linhas.
+
+        'Read' vem do próximo evento e não tem estrutura de path,
+        então o path completo é rejeitado pela validação.
+        """
+        output = "Edit quimera/evidence/formatter.pyRead"
+        ext = FileEditExtractor()
+        results = ext.extract(output, SAMPLE_AGENT, SAMPLE_SESSION)
+
+        assert len(results) == 0
+
+    def test_ansi_colored_output(self):
+        """Output com cores ANSI em volta do path."""
+        output = "\x1b[32mRead file: src/main.py\x1b[0m"
+        ext = FileReadExtractor()
+        results = ext.extract(output, SAMPLE_AGENT, SAMPLE_SESSION)
+
+        assert len(results) == 1
+        assert results[0].path == "src/main.py"
+
+    def test_realistic_noisy_stdout(self):
+        """Stdout realista com múltiplos artefatos misturados."""
+        output = (
+            "\x1b[1mAgent started\x1b[0m\n"
+            "Read file: quimera/prompt.py✓\n"
+            "✓ Edit quimera/evidence/parser.py\n"
+            "Read quimera/evidence/formatter.py\n"
+            "Wrote tests/test_parser.py\n"
+            "\x1b[32mDone\x1b[0m"
+        )
+        ext_read = FileReadExtractor()
+        ext_edit = FileEditExtractor()
+
+        read_results = ext_read.extract(output, SAMPLE_AGENT, SAMPLE_SESSION)
+        edit_results = ext_edit.extract(output, SAMPLE_AGENT, SAMPLE_SESSION)
+
+        read_paths = {e.path for e in read_results}
+        assert read_paths == {"quimera/prompt.py", "quimera/evidence/formatter.py"}
+
+        edit_paths = {e.path for e in edit_results}
+        assert edit_paths == {"quimera/evidence/parser.py", "tests/test_parser.py"}
+
+    def test_line_merge_with_checkmark_between_events(self):
+        """Duas linhas fundidas: path + checkmark + próximo evento."""
+        output = "Read file: src/a.py✓ Edit src/b.py"
+        ext = FileReadExtractor()
+        results = ext.extract(output, SAMPLE_AGENT, SAMPLE_SESSION)
+
+        assert len(results) == 1
+        assert results[0].path == "src/a.py"
+
+    def test_bracket_artifacts_around_path(self):
+        """Path envolto em brackets de template markdown."""
+        output = "Read file: [src/config.yaml]"
+        ext = FileReadExtractor()
+        results = ext.extract(output, SAMPLE_AGENT, SAMPLE_SESSION)
+
+        assert len(results) == 1
+        assert results[0].path == "src/config.yaml"
+
+    def test_multiple_noise_chars_stripped(self):
+        """Vários caracteres de ruído ao redor do path."""
+        output = "Edit ``src/utils.py``;"
+        ext = FileEditExtractor()
+        results = ext.extract(output, SAMPLE_AGENT, SAMPLE_SESSION)
+
+        assert len(results) == 1
+        assert results[0].path == "src/utils.py"

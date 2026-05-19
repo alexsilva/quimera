@@ -264,6 +264,7 @@ class QuimeraApp:
         self._prompt_owning_thread_id: int | None = None
         self._chat_inflight_lock = threading.Lock()
         self._chat_inflight_count = 0
+        self._chat_queue = None
         self.turn_manager = TurnManager()
         for handler in logger.handlers:
             if isinstance(handler, PromptAwareStderrHandler):
@@ -1139,9 +1140,36 @@ class QuimeraApp:
                 self._parallel_toolbar_state["active_agents"] = tuple(active_agents)
 
     def _get_parallel_toolbar_state(self) -> dict[str, object]:
-        """Retorna uma cópia do estado de paralelismo da toolbar."""
+        """Retorna uma cópia do estado de paralelismo da toolbar.
+
+        Usa ``_chat_inflight_count`` como fonte de verdade para slots ativos
+        e deriva ``queued`` do tamanho da fila do chat quando disponível,
+        garantindo que a toolbar reflita a ocupação real em runtime.
+        """
         with self._parallel_toolbar_lock:
-            return dict(self._parallel_toolbar_state)
+            snapshot = dict(self._parallel_toolbar_state)
+        active = self._get_chat_inflight_count()
+        snapshot["active"] = active
+        chat_queue = getattr(self, "_chat_queue", None)
+        if chat_queue is not None:
+            try:
+                queued_from_queue = max(0, int(chat_queue.qsize()))
+                if queued_from_queue > 0:
+                    snapshot["queued"] = queued_from_queue
+            except Exception:
+                pass
+        return snapshot
+
+    def _refresh_parallel_toolbar(self) -> None:
+        """Solicita redraw do prompt quando o estado de paralelismo muda."""
+        input_gate = getattr(self, "input_gate", None)
+        redisplay = getattr(input_gate, "redisplay", None)
+        if not callable(redisplay):
+            return
+        try:
+            redisplay()
+        except Exception:
+            logger.debug("falha ao redesenhar toolbar de paralelismo", exc_info=True)
 
     def read_user_input(self, prompt, timeout: int):
         """Fachada compatível para leitura de input."""
@@ -1307,22 +1335,26 @@ class QuimeraApp:
         if lock is None:
             current = int(getattr(self, "_chat_inflight_count", 0) or 0) + 1
             self._chat_inflight_count = current
+            self._refresh_parallel_toolbar()
             return current
         with lock:
             current = int(getattr(self, "_chat_inflight_count", 0) or 0) + 1
             self._chat_inflight_count = current
-            return current
+        self._refresh_parallel_toolbar()
+        return current
 
     def _decrement_chat_inflight(self) -> int:
         lock = getattr(self, "_chat_inflight_lock", None)
         if lock is None:
             current = max(0, int(getattr(self, "_chat_inflight_count", 0) or 0) - 1)
             self._chat_inflight_count = current
+            self._refresh_parallel_toolbar()
             return current
         with lock:
             current = max(0, int(getattr(self, "_chat_inflight_count", 0) or 0) - 1)
             self._chat_inflight_count = current
-            return current
+        self._refresh_parallel_toolbar()
+        return current
 
     def _release_chat_slot(self) -> None:
         slot_semaphore = getattr(self, "_chat_slot_semaphore", None)
@@ -1346,9 +1378,11 @@ class QuimeraApp:
             raise RuntimeError("chat executor não inicializado")
         try:
             chat_executor.submit(self._process_async_chat_message, user)
+            self._refresh_parallel_toolbar()
         except Exception:
             self._decrement_chat_inflight()
             self._release_chat_slot()
+            self._refresh_parallel_toolbar()
             raise
 
     def _process_sync_chat_message_with_slot(self, user):
@@ -1478,6 +1512,7 @@ class QuimeraApp:
                 turn_manager=self.turn_manager,
             )
             chat_worker.start()
+            self._chat_queue = chat_queue
 
         try:
             while True:
@@ -1495,11 +1530,13 @@ class QuimeraApp:
                     chat_queue = None
                     threaded_chat = False
                     self._chat_inflight_count = 0
+                    self._chat_queue = None
                     if chat_executor is not None:
                         chat_executor.shutdown(wait=False, cancel_futures=True)
                         chat_executor = None
                         self._chat_executor = None
                     self._chat_slot_semaphore = None
+                    self._refresh_parallel_toolbar()
                     if hasattr(self, "turn_manager"):
                         self.turn_manager.reset()
                 if (
@@ -1546,6 +1583,7 @@ class QuimeraApp:
                     if acquired_async_slot:
                         self._increment_chat_inflight()
                         chat_queue.put(user)
+                        self._refresh_parallel_toolbar()
                         time.sleep(0.001)
                         if (
                             hasattr(self, "turn_manager")
@@ -1586,6 +1624,8 @@ class QuimeraApp:
                 pass
             self._chat_executor = None
             self._chat_slot_semaphore = None
+            self._chat_queue = None
+            self._refresh_parallel_toolbar()
             self.session_services.shutdown()
             self.agent_client.close()
             renderer = getattr(self, "renderer", None)

@@ -4,7 +4,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 from quimera.app.agent_pool import AgentPool
 from quimera.app.chat_round import ChatRoundOrchestrator
@@ -841,6 +841,145 @@ class TestSingleAgentPerTurn(unittest.TestCase):
         self.assertEqual(app.dispatch_services.call_agent.call_count, 2)
         agents_called = [c[0][0] for c in app.dispatch_services.call_agent.call_args_list]
         self.assertEqual(agents_called, ["claude", "codex"])
+
+
+# ---------------------------------------------------------------------------
+# Testes de toolbar de paralelismo — ocupação real dos slots
+# ---------------------------------------------------------------------------
+
+class TestParallelToolbarState(unittest.TestCase):
+
+    def _make_minimal_app(self, threads=2):
+        """Cria um stub de QuimeraApp com os atributos necessários para toolbar."""
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.threads = threads
+        app._parallel_toolbar_lock = threading.Lock()
+        app._parallel_toolbar_state = {
+            "active": 0,
+            "queued": 0,
+            "capacity": threads,
+            "active_agents": (),
+        }
+        app._chat_inflight_count = 0
+        app._chat_inflight_lock = threading.Lock()
+        app._chat_queue = None
+        app.input_gate = MagicMock()
+        app._get_chat_inflight_count = QuimeraApp._get_chat_inflight_count.__get__(app, QuimeraApp)
+        app._get_parallel_toolbar_state = QuimeraApp._get_parallel_toolbar_state.__get__(app, QuimeraApp)
+        app._refresh_parallel_toolbar = QuimeraApp._refresh_parallel_toolbar.__get__(app, QuimeraApp)
+        app._increment_chat_inflight = QuimeraApp._increment_chat_inflight.__get__(app, QuimeraApp)
+        app._decrement_chat_inflight = QuimeraApp._decrement_chat_inflight.__get__(app, QuimeraApp)
+        return app
+
+    def test_slot_async_acquired_shows_active_1_of_2(self):
+        """Quando um slot async é adquirido, a toolbar deve mostrar active=1/capacity."""
+        app = self._make_minimal_app(threads=2)
+        app._chat_queue = queue.Queue()
+
+        app._increment_chat_inflight()
+
+        state = app._get_parallel_toolbar_state()
+        self.assertEqual(state["active"], 1)
+        self.assertEqual(state["capacity"], 2)
+        self.assertEqual(state["queued"], 0)
+
+    def test_two_simultaneous_prompts_show_active_2_of_2(self):
+        """Dois prompts simultâneos devem mostrar active=2/capacity=2."""
+        app = self._make_minimal_app(threads=2)
+        app._chat_queue = queue.Queue()
+
+        app._increment_chat_inflight()
+        app._increment_chat_inflight()
+
+        state = app._get_parallel_toolbar_state()
+        self.assertEqual(state["active"], 2)
+        self.assertEqual(state["capacity"], 2)
+
+    def test_slot_release_returns_active_to_0_of_2(self):
+        """Liberação de todos os slots deve voltar active para 0."""
+        app = self._make_minimal_app(threads=2)
+        app._chat_queue = queue.Queue()
+
+        app._increment_chat_inflight()
+        app._increment_chat_inflight()
+        app._decrement_chat_inflight()
+        app._decrement_chat_inflight()
+
+        state = app._get_parallel_toolbar_state()
+        self.assertEqual(state["active"], 0)
+        self.assertEqual(state["capacity"], 2)
+
+    def test_queued_reflects_chat_queue_size(self):
+        """Quando há mensagens na fila do chat, queued deve refletir o tamanho."""
+        app = self._make_minimal_app(threads=2)
+        app._chat_queue = queue.Queue()
+        app._chat_queue.put("msg1")
+        app._chat_queue.put("msg2")
+
+        state = app._get_parallel_toolbar_state()
+        self.assertEqual(state["queued"], 2)
+
+    def test_toolbar_context_parallel_label_with_active_and_queued(self):
+        """_build_input_toolbar_context deve gerar label correta com slots e fila."""
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.workspace = MagicMock(cwd=Path("/tmp/proj"), tasks_db=Path("/tmp/quimera_test_tasks.db"))
+        app.active_agents = []
+        app.threads = 2
+        app._parallel_toolbar_lock = threading.Lock()
+        app._parallel_toolbar_state = {
+            "active": 0,
+            "queued": 0,
+            "capacity": 2,
+            "active_agents": (),
+        }
+        app._chat_inflight_count = 1
+        app._chat_inflight_lock = threading.Lock()
+        app._chat_queue = queue.Queue()
+        app._chat_queue.put("pending_msg")
+        app._pending_input_for = None
+        app._resolve_active_model_label = QuimeraApp._resolve_active_model_label.__get__(app, QuimeraApp)
+        app._resolve_next_responder_label = QuimeraApp._resolve_next_responder_label.__get__(app, QuimeraApp)
+        app._get_chat_inflight_count = QuimeraApp._get_chat_inflight_count.__get__(app, QuimeraApp)
+        app._get_parallel_toolbar_state = QuimeraApp._get_parallel_toolbar_state.__get__(app, QuimeraApp)
+        app._build_input_toolbar_context = QuimeraApp._build_input_toolbar_context.__get__(app, QuimeraApp)
+
+        context = app._build_input_toolbar_context()
+        self.assertIn("parallel", context)
+        self.assertEqual(context["parallel"], "slots:1/2 · fila:1")
+
+    def test_toolbar_ignores_stale_snapshot_active(self):
+        """O snapshot zerado de active não deve sobrescrever o inflight count real."""
+        app = self._make_minimal_app(threads=2)
+        app._chat_queue = queue.Queue()
+
+        app._increment_chat_inflight()
+        app._increment_chat_inflight()
+
+        state = app._get_parallel_toolbar_state()
+        self.assertEqual(state["active"], 2)
+
+        chat_round_resets_snapshot_to_zero = {"active": 0, "queued": 0, "capacity": 2, "active_agents": ()}
+        with app._parallel_toolbar_lock:
+            app._parallel_toolbar_state.update(chat_round_resets_snapshot_to_zero)
+
+        state_after_reset = app._get_parallel_toolbar_state()
+        self.assertEqual(state_after_reset["active"], 2)
+
+    def test_increment_requests_toolbar_redisplay(self):
+        app = self._make_minimal_app(threads=2)
+
+        app._increment_chat_inflight()
+
+        app.input_gate.redisplay.assert_called_once_with()
+
+    def test_decrement_requests_toolbar_redisplay(self):
+        app = self._make_minimal_app(threads=2)
+        app._increment_chat_inflight()
+        app.input_gate.redisplay.reset_mock()
+
+        app._decrement_chat_inflight()
+
+        app.input_gate.redisplay.assert_called_once_with()
 
 
 if __name__ == "__main__":

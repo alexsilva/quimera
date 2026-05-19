@@ -317,6 +317,17 @@ def test_prompt_renders_evidence_context_when_session_has_entries(tmp_path):
                 session_id="sessao-1",
             )
         )
+        store.append(
+            Evidence(
+                ts="2026-05-18T20:36:12.000Z",
+                path="",
+                digest="",
+                type="tool_call",
+                summary="exec_command: ok | cmd: rg",
+                agent="codex",
+                session_id="sessao-1",
+            )
+        )
     finally:
         store.close()
 
@@ -339,6 +350,8 @@ def test_prompt_renders_evidence_context_when_session_has_entries(tmp_path):
 
     assert '<evidence_context title="Contexto Compartilhado de Evidências">' in prompt
     assert "- quimera/prompt.py" in prompt
+    assert "### Execução recente" in prompt
+    assert "exec_command: ok | cmd: rg" in prompt
     assert prompt.index('<evidence_context title="Contexto Compartilhado de Evidências">') < prompt.index(
         '<recent_conversation title="Conversa recente">'
     )

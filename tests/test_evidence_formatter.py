@@ -32,15 +32,32 @@ def test_only_think_summary():
     assert "Preciso verificar testes" in result
 
 
+def test_tool_call_section():
+    evidences = [
+        Evidence(
+            ts="2026-05-18T20:36:10.000Z",
+            path="",
+            digest="",
+            type="tool_call",
+            summary="exec_command: ok | cmd: ls",
+        ),
+    ]
+    result = EvidenceFormatter.format(evidences)
+    assert "Execução recente" in result
+    assert "exec_command: ok | cmd: ls" in result
+
+
 def test_mixed_types():
     evidences = [
         Evidence(ts="2026-05-18T20:36:10.000Z", path="/tmp/a.txt", digest="aaa", type="file_read"),
+        Evidence(ts="2026-05-18T20:36:10.500Z", path="", digest="", type="tool_call", summary="exec_command: ok | cmd: rg"),
         Evidence(ts="2026-05-18T20:36:11.000Z", path="", digest="", type="think_summary", summary="Pensamento 1"),
         Evidence(ts="2026-05-18T20:36:12.000Z", path="/tmp/b.txt", digest="bbb", type="file_edit"),
     ]
     result = EvidenceFormatter.format(evidences)
     assert '<evidence_context title="Contexto Compartilhado de Evidências">' in result
     assert "Arquivos visitados" in result
+    assert "Execução recente" in result
     assert "Pensamentos" in result
     assert "/tmp/a.txt" in result
     assert "/tmp/b.txt" in result

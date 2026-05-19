@@ -7,7 +7,7 @@ from pathlib import Path
 import quimera.plugins as plugins
 from quimera.agent_events import SpyEvent
 from quimera.constants import Visibility
-from quimera.evidence import EvidenceStore, PatternRegistry
+from quimera.evidence import Evidence, EvidenceStore, PatternRegistry
 
 
 class SpyOutputPresenter:
@@ -222,18 +222,59 @@ class SpyOutputPresenter:
         return {"turn_id": self.turn_id, "tools": tools}
 
     def _persist_evidences(self, agent: str | None) -> None:
-        if not agent or not self.session_id or self.base_dir is None or not self._raw_output_lines:
+        if not agent or not self.session_id or self.base_dir is None:
             return
+        evidences: list[Evidence] = []
         raw_output = "\n".join(self._raw_output_lines)
-        if not raw_output.strip():
-            return
-        PatternRegistry.default()
-        evidences = PatternRegistry.extract_all(raw_output, agent, self.session_id)
+        if raw_output.strip():
+            PatternRegistry.default()
+            evidences.extend(PatternRegistry.extract_all(raw_output, agent, self.session_id))
+        evidences.extend(self._build_tool_call_evidences(agent))
         if not evidences:
             return
         with EvidenceStore(self.base_dir, self.session_id) as store:
             for evidence in evidences:
                 store.append(evidence)
+
+    def _build_tool_call_evidences(self, agent: str) -> list[Evidence]:
+        evidences: list[Evidence] = []
+        seen: set[str] = set()
+        for tool in self.turn_tools:
+            summary = self._summarize_tool_record(tool)
+            if not summary or summary in seen:
+                continue
+            seen.add(summary)
+            evidences.append(
+                Evidence(
+                    ts=self._iso(time.time()) or "",
+                    path="",
+                    digest="",
+                    type="tool_call",
+                    summary=summary,
+                    agent=agent,
+                    session_id=self.session_id,
+                )
+            )
+        return evidences
+
+    def _summarize_tool_record(self, tool: dict) -> str:
+        if not isinstance(tool, dict):
+            return ""
+        tool_name = str(tool.get("tool") or "").strip()
+        if not tool_name:
+            return ""
+        status = str(tool.get("status") or "unknown").strip()
+        summary = f"{tool_name}: {status}"
+        input_payload = tool.get("input")
+        input_summary = self._format_input_summary(input_payload)
+        if input_summary:
+            summary = f"{summary} | {input_summary}"
+        error = tool.get("error")
+        if isinstance(error, dict):
+            message = str(error.get("message") or "").strip()
+            if message:
+                summary = f"{summary} | erro: {message}"
+        return summary
 
     @staticmethod
     def _format_duration(duration_ms: int | None) -> str:

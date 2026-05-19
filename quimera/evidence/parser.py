@@ -10,6 +10,60 @@ from typing import Protocol
 
 from quimera.evidence.models import Evidence
 
+# ANSI escape sequences (CSI, SGR, etc.)
+_ANSI_RE = re.compile(r'\x1b\[[0-9;]*[a-zA-Z]|\x1b\([a-zA-Z]')
+
+# Terminal/markdown artifacts that can leak into captured paths
+_PATH_TRAILING_NOISE = re.compile(r'[✓✗✔✘\u2713\u2714\u2717\u2718\[\]`\'",;:]+$')
+_PATH_LEADING_NOISE = re.compile(r'^[✓✗✔✘\u2713\u2714\u2717\u2718\[\]`\'",;:]+')
+
+# Characters allowed in Unix-style file paths
+_VALID_PATH_CHARS = re.compile(r'^[a-zA-Z0-9_./\-~@+]+$')
+
+# Common file extensions to help validate path-like strings
+_HAS_PATH_STRUCTURE = re.compile(r'(?:/|\.[a-zA-Z0-9]+$)')
+
+# Valid file extension: 1-5 lowercase alphabetic chars after the last dot
+# (covers py, js, ts, yaml, json, html, css, scss, md, txt, etc.)
+_VALID_EXTENSION = re.compile(r'\.[a-z]{1,5}$')
+
+
+def _sanitize_path(raw: str) -> str | None:
+    """Limpa e valida um path capturado do stdout.
+
+    Remove ANSI codes, artefatos de terminal (checkmarks, brackets),
+    e rejeita strings que não parecem paths de arquivo válidos.
+    """
+    if not raw:
+        return None
+
+    # Strip ANSI escape sequences
+    path = _ANSI_RE.sub('', raw)
+
+    # Strip leading/trailing noise characters
+    path = _PATH_LEADING_NOISE.sub('', path)
+    path = _PATH_TRAILING_NOISE.sub('', path)
+
+    # Strip whitespace
+    path = path.strip()
+
+    if not path:
+        return None
+
+    # Must contain only valid path characters
+    if not _VALID_PATH_CHARS.match(path):
+        return None
+
+    # Must have path structure (directory separator or file extension)
+    if not _HAS_PATH_STRUCTURE.search(path):
+        return None
+
+    # If path has a dot, validate the extension looks real (catches concatenated noise like .pyRead)
+    if '.' in path and not _VALID_EXTENSION.search(path):
+        return None
+
+    return path
+
 
 class PatternExtractor(Protocol):
     """Protocolo para extratores de evidências."""
@@ -79,9 +133,9 @@ class FileReadExtractor:
     """Captura padrões de leitura de arquivos no output."""
 
     _PATTERNS = [
-        re.compile(r"Read file:\s*(\S+)", re.IGNORECASE),
-        re.compile(r"Lendo\s+(\S+)", re.IGNORECASE),
-        re.compile(r"Read\s+(\S+)"),
+        re.compile(r"Read file:\s*([^\s]+)", re.IGNORECASE),
+        re.compile(r"Lendo\s+([^\s]+)", re.IGNORECASE),
+        re.compile(r"Read\s+([^\s]+)"),
     ]
 
     def extract(self, output: str, agent: str, session_id: str) -> list[Evidence]:
@@ -91,7 +145,7 @@ class FileReadExtractor:
             for pattern in self._PATTERNS:
                 m = pattern.search(line)
                 if m:
-                    path = m.group(1).strip()
+                    path = _sanitize_path(m.group(1))
                     if path and path not in seen:
                         seen.add(path)
                         evidences.append(
@@ -112,9 +166,9 @@ class FileEditExtractor:
     """Captura padrões de edição de arquivos no output."""
 
     _PATTERNS = [
-        re.compile(r"\u2713\s*Edit\s+(\S+)"),
-        re.compile(r"Edit\s+(\S+)"),
-        re.compile(r"Wrote\s+(\S+)"),
+        re.compile(r"\u2713\s*Edit\s+([^\s]+)"),
+        re.compile(r"Edit\s+([^\s]+)"),
+        re.compile(r"Wrote\s+([^\s]+)"),
     ]
 
     def extract(self, output: str, agent: str, session_id: str) -> list[Evidence]:
@@ -124,7 +178,7 @@ class FileEditExtractor:
             for pattern in self._PATTERNS:
                 m = pattern.search(line)
                 if m:
-                    path = m.group(1).strip()
+                    path = _sanitize_path(m.group(1))
                     if path and path not in seen:
                         seen.add(path)
                         evidences.append(
