@@ -97,6 +97,10 @@ Sempre mescle com o estado existente, nunca substitua completamente.
 </execution_mode>
 <!-- ENDIF:execution_mode_prompt -->
 
+<!-- IF:evidence_section -->
+{evidence_section}
+<!-- ENDIF:evidence_section -->
+
 <!-- IF:shared_state_json -->
 <shared_state title="Estado compartilhado">
 {shared_state_json}

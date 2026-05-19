@@ -2,6 +2,7 @@ from unittest.mock import MagicMock
 import re
 
 from quimera.context import ContextManager
+from quimera.evidence import Evidence, EvidenceStore
 from quimera.modes import get_mode
 from quimera.prompt import PromptBuilder
 from quimera.prompt_kinds import PromptKind
@@ -301,6 +302,46 @@ def test_prompt_shared_state():
     assert '<shared_state title="Estado compartilhado">' in prompt
     assert '"working_dir": "/home/user"' in prompt
     assert '"workspace_root": "/home/user/project"' in prompt
+
+
+def test_prompt_renders_evidence_context_when_session_has_entries(tmp_path):
+    store = EvidenceStore(tmp_path, "sessao-1")
+    try:
+        store.append(
+            Evidence(
+                ts="2026-05-18T20:36:11.000Z",
+                path="quimera/prompt.py",
+                digest="",
+                type="file_read",
+                agent="codex",
+                session_id="sessao-1",
+            )
+        )
+    finally:
+        store.close()
+
+    builder = PromptBuilder(
+        context_manager=_make_context_manager(""),
+        session_state={
+            "session_id": "sessao-1",
+            "workspace_root": "/tmp/test",
+            "workspace_tmp_root": str(tmp_path),
+            "current_job_id": 123,
+            "current_dir": ".",
+        },
+    )
+
+    prompt = builder.build(
+        agent="claude",
+        history=[{"role": "human", "content": "continue"}],
+        shared_state={"session_id": "sessao-1"},
+    )
+
+    assert '<evidence_context title="Contexto Compartilhado de Evidências">' in prompt
+    assert "- quimera/prompt.py" in prompt
+    assert prompt.index('<evidence_context title="Contexto Compartilhado de Evidências">') < prompt.index(
+        '<recent_conversation title="Conversa recente">'
+    )
 
 
 def test_prompt_keeps_empty_optional_blocks_in_output():

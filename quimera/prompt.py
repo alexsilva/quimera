@@ -1,8 +1,10 @@
 import json
+from pathlib import Path
 
 from . import plugins
 from .config import DEFAULT_HISTORY_WINDOW, DEFAULT_USER_NAME
 from .constants import EXTEND_MARKER
+from .evidence import EvidenceFormatter, EvidenceStore
 from .execution_mode_presenter import ExecutionModePresenter
 from .handoff_presenter import HandoffPresenter
 from .memory_selector import MemorySelector
@@ -138,6 +140,7 @@ class PromptBuilder:
             if feedback:
                 metrics = feedback
         execution_mode_prompt = self.execution_mode_presenter.present(execution_mode)
+        evidence_section = self._build_evidence_section(shared_state, session_id)
         template = get_prompt_template(normalized_prompt_kind)
         full_prompt = template.render(
             agent=agent.upper(),
@@ -175,6 +178,7 @@ class PromptBuilder:
             recent_conversation=recent_conversation,
             metrics=metrics,
             execution_mode_prompt=execution_mode_prompt,
+            evidence_section=evidence_section,
         )
 
         if debug:
@@ -199,3 +203,19 @@ class PromptBuilder:
             return full_prompt, metrics
 
         return full_prompt
+
+    def _build_evidence_section(self, shared_state, session_id: str) -> str:
+        if not isinstance(shared_state, dict):
+            return ""
+        evidence_session_id = shared_state.get("session_id") or session_id
+        base_dir = self.session_state.get("workspace_tmp_root") if isinstance(self.session_state, dict) else None
+        if not evidence_session_id or not base_dir:
+            return ""
+        store = EvidenceStore(Path(base_dir), evidence_session_id)
+        try:
+            evidences = store.query(evidence_session_id)
+        finally:
+            store.close()
+        if not evidences:
+            return ""
+        return EvidenceFormatter().format(evidences)

@@ -9,6 +9,7 @@ import time
 from collections import deque
 from contextlib import nullcontext
 from datetime import datetime, timezone
+from pathlib import Path
 
 import quimera.plugins as plugins
 from quimera.constants import MAX_STDERR_LINES, Visibility
@@ -46,7 +47,7 @@ class AgentClient:
 
     def __init__(self, renderer, metrics_file=None, timeout=None, visibility=Visibility.SUMMARY,
                  working_dir=None, workspace_root=None, tool_executor=None, error_reporter=None,
-                 muted_reporter=None):
+                 muted_reporter=None, session_id=None, workspace_tmp_root=None):
         """Inicializa uma instância de AgentClient."""
         self.renderer = renderer
         self.error_reporter = error_reporter
@@ -69,7 +70,14 @@ class AgentClient:
         self._user_cancelled = False
         self._agent_running = False
         self._current_proc = None
-        self._spy_output_presenter = SpyOutputPresenter(self.renderer, self.visibility)
+        self.session_id = session_id
+        self.workspace_tmp_root = Path(workspace_tmp_root) if workspace_tmp_root is not None else None
+        self._spy_output_presenter = SpyOutputPresenter(
+            self.renderer,
+            self.visibility,
+            session_id=self.session_id,
+            base_dir=self.workspace_tmp_root,
+        )
         self.last_spy_turn_detail: dict | None = None
         self._pending_summary_render: tuple | None = None
         self.rate_limit_detected = False
@@ -638,6 +646,9 @@ class AgentClient:
                         result_holder["result"] = driver_instance.run(
                             prompt=prompt,
                             tool_executor=effective_tool_executor,
+                            agent_name=agent,
+                            session_id=self.session_id,
+                            base_dir=self.workspace_tmp_root,
                             quiet=quiet,
                             cancel_event=self._cancel_event,
                             on_tool_call=_on_tool_call,

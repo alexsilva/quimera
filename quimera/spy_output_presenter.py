@@ -2,18 +2,22 @@
 
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 import quimera.plugins as plugins
 from quimera.agent_events import SpyEvent
 from quimera.constants import Visibility
+from quimera.evidence import EvidenceStore, PatternRegistry
 
 
 class SpyOutputPresenter:
     """Converte stdout em eventos e aplica a política de visibilidade."""
 
-    def __init__(self, renderer, visibility: Visibility):
+    def __init__(self, renderer, visibility: Visibility, session_id: str | None = None, base_dir: Path | None = None):
         self.renderer = renderer
         self.visibility = visibility
+        self.session_id = session_id or ""
+        self.base_dir = Path(base_dir) if base_dir is not None else None
         self.last_message: str | None = None
         self.pending_event: SpyEvent | None = None
         self.current_status_label = ""
@@ -23,6 +27,7 @@ class SpyOutputPresenter:
         self.turn_id = ""
         self.turn_started_at = 0.0
         self.turn_tools: list[dict] = []
+        self._raw_output_lines: list[str] = []
         self._active_tool_calls: dict[str, dict] = {}
         self._start_turn()
 
@@ -216,6 +221,20 @@ class SpyOutputPresenter:
             )
         return {"turn_id": self.turn_id, "tools": tools}
 
+    def _persist_evidences(self, agent: str | None) -> None:
+        if not agent or not self.session_id or self.base_dir is None or not self._raw_output_lines:
+            return
+        raw_output = "\n".join(self._raw_output_lines)
+        if not raw_output.strip():
+            return
+        PatternRegistry.default()
+        evidences = PatternRegistry.extract_all(raw_output, agent, self.session_id)
+        if not evidences:
+            return
+        with EvidenceStore(self.base_dir, self.session_id) as store:
+            for evidence in evidences:
+                store.append(evidence)
+
     @staticmethod
     def _format_duration(duration_ms: int | None) -> str:
         if not isinstance(duration_ms, int) or duration_ms < 0:
@@ -280,6 +299,7 @@ class SpyOutputPresenter:
         """Finaliza o turno atual e retorna o detalhe estruturado coletado."""
         self.flush(agent)
         detail = self.build_turn_detail()
+        self._persist_evidences(agent)
         if render_summary:
             self._render_turn_summary(agent, detail)
         self.last_turn_detail = detail
@@ -313,6 +333,7 @@ class SpyOutputPresenter:
 
     def consume_stdout(self, agent: str | None, line: str) -> bool:
         """Processa e emite uma linha de stdout."""
+        self._raw_output_lines.append(line)
         events = self.format_stdout(agent, line)
         for event in events:
             self.emit(agent, event)
@@ -380,6 +401,7 @@ class SpyOutputPresenter:
         self.last_message = None
         self.pending_event = None
         self.current_status_label = ""
+        self._raw_output_lines = []
         self._start_turn()
 
     def _show(self, agent: str | None, event: SpyEvent) -> None:

@@ -10,8 +10,11 @@ import json
 import logging
 import re
 import threading
+import time
+from pathlib import Path
 from typing import Optional
 
+from ...evidence import Evidence, EvidenceStore
 from ..streaming import apply_stream_diff, normalize_stream_diff
 from ..tool_hops import (
     DEFAULT_MAX_TOOL_HOPS,
@@ -50,14 +53,48 @@ _TEXT_FUNC_CALL_RE = re.compile(r"<function=(\w+)>(.*?)</function>", re.DOTALL)
 _TEXT_PARAM_RE = re.compile(r"<parameter=(\w+)>")
 
 
-def _strip_thinking(text: str) -> str:
+def _strip_thinking(
+    text: str,
+    *,
+    agent_name: str | None = None,
+    session_id: str | None = None,
+    base_dir: str | Path | None = None,
+) -> str:
     """Remove thinking."""
+    if text and agent_name and session_id and base_dir is not None:
+        evidences: list[Evidence] = []
+        for match in _THINK_RE.finditer(text):
+            content = match.group(0)
+            inner = re.sub(r"^<think(?:ing)?>|</think(?:ing)?>$", "", content, flags=re.DOTALL).strip()
+            if not inner:
+                continue
+            evidences.append(
+                Evidence(
+                    type="think_summary",
+                    agent=agent_name,
+                    session_id=session_id,
+                    summary=inner[:500],
+                    ts=str(time.time()),
+                    path="",
+                    digest="",
+                )
+            )
+        if evidences:
+            with EvidenceStore(Path(base_dir), session_id) as store:
+                for evidence in evidences:
+                    store.append(evidence)
     return _THINK_RE.sub("", text).strip()
 
 
-def _sanitize_assistant_text(text: str) -> str:
+def _sanitize_assistant_text(
+    text: str,
+    *,
+    agent_name: str | None = None,
+    session_id: str | None = None,
+    base_dir: str | Path | None = None,
+) -> str:
     """Remove resíduos textuais de tool calling que alguns modelos deixam no content."""
-    text = _strip_thinking(text)
+    text = _strip_thinking(text, agent_name=agent_name, session_id=session_id, base_dir=base_dir)
     text = _FUNCTION_RESIDUE_RE.sub("", text)
     return text.strip()
 
@@ -305,6 +342,9 @@ class OpenAICompatDriver:
             self,
             prompt: str,
             tool_executor=None,
+            agent_name: str | None = None,
+            session_id: str | None = None,
+            base_dir: str | Path | None = None,
             on_tool_call=None,
             on_tool_result=None,
             on_tool_abort=None,
@@ -386,14 +426,23 @@ class OpenAICompatDriver:
                         return None
 
                     if not tool_calls:
-                        return _sanitize_assistant_text(response_text) if response_text else None
+                        return _sanitize_assistant_text(
+                            response_text,
+                            agent_name=agent_name,
+                            session_id=session_id,
+                            base_dir=base_dir,
+                        ) if response_text else None
 
                     if hop == max_tool_hops:
                         _logger.warning("OpenAICompatDriver: max tool hops (%d) reached", max_tool_hops)
                         if on_tool_abort is not None:
                             on_tool_abort("max_tool_hops")
                         return _sanitize_assistant_text(
-                            response_text) if response_text else "Limite de chamadas de ferramenta atingido."
+                            response_text,
+                            agent_name=agent_name,
+                            session_id=session_id,
+                            base_dir=base_dir,
+                        ) if response_text else "Limite de chamadas de ferramenta atingido."
 
                     # Adiciona turno do assistente com os tool calls
                     assistant_msg: dict = {

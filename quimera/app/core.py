@@ -173,6 +173,8 @@ class QuimeraApp:
             self.renderer,
             workspace=self.workspace,
         )
+        workspace_tmp = getattr(self.workspace, "tmp", None)
+        workspace_tmp_root = getattr(workspace_tmp, "root", None)
         self.agent_client = AgentClient(
             self.renderer,
             metrics_file=metrics_file,
@@ -181,6 +183,8 @@ class QuimeraApp:
             working_dir=str(self.workspace.cwd),
             error_reporter=self.show_error_message,
             muted_reporter=self.show_muted_message,
+            session_id=session_id,
+            workspace_tmp_root=workspace_tmp_root,
         )
         self.task_executor_factory = create_executor
         self.session_summarizer = SessionSummarizer(
@@ -288,6 +292,7 @@ class QuimeraApp:
             "summary_loaded": self._format_yes_no(summary_loaded),
             "current_job_id": self.current_job_id,
             "workspace_root": str(self.workspace.cwd),
+            "workspace_tmp_root": str(workspace_tmp_root) if workspace_tmp_root is not None else "",
             "current_dir": ".",
             "os_info": f"{platform.system()} {platform.release()}",
             "render_debug_active": debug,

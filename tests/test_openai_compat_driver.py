@@ -11,6 +11,7 @@ from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 
+from quimera.evidence import EvidenceStore
 from quimera.runtime.drivers.openai_compat import (
      _MAX_TOOL_LOOP_MESSAGES,
      _MAX_TOOL_RESULT_CHARS,
@@ -167,6 +168,30 @@ def test_strip_thinking_no_block():
 def test_strip_thinking_multiple_blocks():
     text = "<think>a</think>Texto<think>b</think>Final"
     assert _strip_thinking(text) == "TextoFinal"
+
+
+def test_strip_thinking_persists_evidence_before_removal(tmp_path):
+    text = "<think>raciocínio interno detalhado</think>Resposta final."
+
+    cleaned = _strip_thinking(
+        text,
+        agent_name="codex",
+        session_id="sessao-1",
+        base_dir=tmp_path,
+    )
+
+    store = EvidenceStore(tmp_path, "sessao-1")
+    try:
+        evidences = store.query("sessao-1")
+    finally:
+        store.close()
+
+    assert cleaned == "Resposta final."
+    assert len(evidences) == 1
+    assert evidences[0].type == "think_summary"
+    assert evidences[0].summary == "raciocínio interno detalhado"
+    assert evidences[0].agent == "codex"
+    assert evidences[0].session_id == "sessao-1"
 
 
 def test_sanitize_assistant_text_removes_function_residue():

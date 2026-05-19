@@ -1,5 +1,6 @@
 import queue
 import threading
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch, ANY, call
 
@@ -22,6 +23,7 @@ from quimera.plugins.codex import _format_codex_spy_event
 from quimera.plugins.opencode import _format_opencode_spy_event
 from quimera.plugins.spy_utils import format_command_output_preview
 from quimera.spy_output_presenter import SpyOutputPresenter
+from quimera.evidence import EvidenceStore
 
 
 @pytest.fixture
@@ -662,6 +664,30 @@ def test_spy_output_presenter_collects_structured_turn_detail(renderer):
     assert detail["tools"][0]["status"] == "ok"
     assert detail["tools"][0]["input"] == {"cmd": "ls"}
     assert isinstance(detail["tools"][0]["duration_ms"], int)
+
+
+def test_spy_output_presenter_persists_evidence_from_raw_output(renderer, tmp_path):
+    presenter = SpyOutputPresenter(
+        renderer,
+        Visibility.SUMMARY,
+        session_id="sessao-1",
+        base_dir=tmp_path,
+    )
+
+    presenter.consume_stdout("codex", "Read file: quimera/prompt.py")
+    presenter.finalize_turn("codex")
+
+    store = EvidenceStore(tmp_path, "sessao-1")
+    try:
+        evidences = store.query("sessao-1")
+    finally:
+        store.close()
+
+    assert len(evidences) == 1
+    assert evidences[0].type == "file_read"
+    assert evidences[0].path == "quimera/prompt.py"
+    assert evidences[0].agent == "codex"
+    assert evidences[0].session_id == "sessao-1"
 
 
 def test_spy_output_presenter_finalize_turn_renders_human_summary(renderer):

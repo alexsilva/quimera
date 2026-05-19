@@ -647,6 +647,9 @@ class AppTaskServices:
         if background_timeout is None or not isinstance(background_timeout, (int, float)) or background_timeout <= 0:
             background_timeout = _BACKGROUND_AGENT_TIMEOUT_SECONDS
         _muted = self._get_show_muted_message()
+        session_state = self._get_session_state()
+        workspace_tmp = getattr(workspace, "tmp", None)
+        workspace_tmp_root = getattr(workspace_tmp, "root", None)
         background_agent_client = AgentClient(
             renderer,
             timeout=background_timeout,
@@ -654,6 +657,8 @@ class AppTaskServices:
             working_dir=str(workspace.cwd),
             error_reporter=_muted,
             muted_reporter=_muted,
+            session_id=session_state.get("session_id") if isinstance(session_state, dict) else None,
+            workspace_tmp_root=workspace_tmp_root,
         )
         background_agent_client.execution_mode = self._get_execution_mode()
         background_agent_client.tool_event_callback = self._get_record_tool_event()
