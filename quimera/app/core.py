@@ -1361,6 +1361,13 @@ class QuimeraApp:
         if slot_semaphore is not None:
             slot_semaphore.release()
 
+    def _handle_local_processing_interrupt(self) -> None:
+        """Cancela só o processamento atual e devolve o chat ao input."""
+        if hasattr(self, "turn_manager") and self.turn_manager is not None:
+            self.turn_manager.reset()
+        self.show_muted_message("[cancelado] pelo usuário")
+        self._refresh_parallel_toolbar()
+
     def _process_async_chat_message(self, user):
         """Processa um prompt vindo da fila assíncrona e libera o slot ao final."""
         try:
@@ -1387,6 +1394,9 @@ class QuimeraApp:
 
     def _process_sync_chat_message_with_slot(self, user):
         """Executa um prompt no thread principal ocupando um slot de concorrência."""
+        slot_semaphore = getattr(self, "_chat_slot_semaphore", None)
+        if slot_semaphore is not None:
+            slot_semaphore.acquire()
         self._increment_chat_inflight()
         try:
             self._process_chat_message(user)
@@ -1495,6 +1505,8 @@ class QuimeraApp:
         chat_executor = None
         chat_slot_semaphore = None
         chat_worker_failure_reported = False
+        interrupted_shutdown = False
+        swallow_threaded_input_interrupt = False
         if threaded_chat:
             async_capacity = max(1, int(getattr(self, "threads", 1) or 1))
             chat_executor = ThreadPoolExecutor(
@@ -1551,7 +1563,15 @@ class QuimeraApp:
                         continue
                 self._turn_blocked_warning_shown = False
 
-                user = self.read_user_input(self._build_input_prompt(), timeout=0)
+                try:
+                    user = self.read_user_input(self._build_input_prompt(), timeout=0)
+                    if user is not None:
+                        swallow_threaded_input_interrupt = False
+                except KeyboardInterrupt:
+                    if threaded_chat and swallow_threaded_input_interrupt:
+                        swallow_threaded_input_interrupt = False
+                        continue
+                    raise
                 if user is None:
                     if not sys.stdin.isatty():
                         break
@@ -1593,18 +1613,26 @@ class QuimeraApp:
                     else:
                         if hasattr(self, "turn_manager") and self.turn_manager.is_human_turn:
                             self.turn_manager.next_turn()
-                        if chat_slot_semaphore is not None:
-                            chat_slot_semaphore.acquire()
-                        self._process_sync_chat_message_with_slot(user)
+                        try:
+                            self._process_sync_chat_message_with_slot(user)
+                        except KeyboardInterrupt:
+                            swallow_threaded_input_interrupt = True
+                            self._handle_local_processing_interrupt()
+                            continue
                         if hasattr(self, "turn_manager") and self.turn_manager.is_ai_turn:
                             self.turn_manager.next_turn()
                 else:
                     if hasattr(self, "turn_manager"):
                         self.turn_manager.next_turn()
-                    self._process_chat_message(user)
+                    try:
+                        self._process_chat_message(user)
+                    except KeyboardInterrupt:
+                        self._handle_local_processing_interrupt()
+                        continue
                     if hasattr(self, "turn_manager") and self.turn_manager.is_ai_turn:
                         self.turn_manager.next_turn()
         except KeyboardInterrupt:
+            interrupted_shutdown = True
             agent_client = getattr(self, "agent_client", None)
             if agent_client is not None:
                 agent_client._user_cancelled = True
@@ -1619,9 +1647,12 @@ class QuimeraApp:
                 if chat_worker is not None:
                     chat_worker.join(timeout=0.5)
                 if chat_executor is not None:
-                    # Em shutdown normal, drena prompts já submetidos para não perder
-                    # resposta em voo ao encerrar logo após `/exit`.
-                    chat_executor.shutdown(wait=True, cancel_futures=False)
+                    if interrupted_shutdown:
+                        chat_executor.shutdown(wait=False, cancel_futures=True)
+                    else:
+                        # Em shutdown normal, drena prompts já submetidos para não perder
+                        # resposta em voo ao encerrar logo após `/exit`.
+                        chat_executor.shutdown(wait=True, cancel_futures=False)
             except KeyboardInterrupt:
                 pass
             self._chat_executor = None

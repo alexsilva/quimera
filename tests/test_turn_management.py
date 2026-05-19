@@ -11,7 +11,7 @@ from quimera.app.chat_round import ChatRoundOrchestrator
 from quimera.app.core import QuimeraApp, TurnManager
 from quimera.app.render_event import RenderEvent
 from quimera.app.worker import ChatWorker
-from quimera.constants import CMD_EXIT
+from quimera.constants import CMD_EXIT, MSG_SHUTDOWN
 
 
 # ---------------------------------------------------------------------------
@@ -230,18 +230,20 @@ class TestTurnCycle(unittest.TestCase):
         app.agent_client = Mock()
         app.turn_manager = TurnManager()
         app._build_input_prompt = lambda: "User: "
-        reads = iter(["mensagem", CMD_EXIT])
-        app.read_user_input = lambda prompt, timeout: next(reads)
+        reads = iter(["mensagem"])
+
+        def interrupting_read_user_input(prompt, timeout):
+            try:
+                return next(reads)
+            except StopIteration:
+                raise KeyboardInterrupt()
+
+        app.read_user_input = interrupting_read_user_input
 
         def slow_process(_user):
             time.sleep(10)
 
         app._process_chat_message = slow_process
-
-        def interrupting_wait(timeout=None):
-            raise KeyboardInterrupt()
-
-        app.turn_manager.wait_for_human_turn = interrupting_wait
 
         run_thread = threading.Thread(target=QuimeraApp.run, args=(app,), daemon=True)
         run_thread.start()
@@ -249,6 +251,147 @@ class TestTurnCycle(unittest.TestCase):
 
         self.assertFalse(run_thread.is_alive(), "run() travou no encerramento com worker ocupado")
         app.session_services.shutdown.assert_called_once()
+
+    def test_run_keeps_chat_alive_on_keyboard_interrupt_during_sync_processing(self):
+        """Ctrl+C durante processamento síncrono deve cancelar só a execução atual."""
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.renderer = DummyRenderer()
+        app.threads = 1
+        app.user_name = "User"
+        app.session_state = {
+            "session_id": "test-session",
+            "history_count": 0,
+            "summary_loaded": False,
+        }
+        app._format_yes_no = lambda x: "sim" if x else "não"
+        storage = Mock()
+        storage.get_log_file.return_value = Path("/tmp/quimera-test.log")
+        app.storage = storage
+        app.handle_command = Mock(return_value=False)
+        app.session_services = Mock()
+        app.agent_client = Mock()
+        app.turn_manager = TurnManager()
+        app._build_input_prompt = lambda: "User: "
+
+        reads = iter(["mensagem", CMD_EXIT])
+        read_calls = []
+
+        def mock_read_user_input(prompt, timeout):
+            read_calls.append((prompt, timeout))
+            return next(reads)
+
+        process_calls = []
+
+        def interrupting_process(user):
+            process_calls.append(user)
+            raise KeyboardInterrupt()
+
+        status_updates = []
+        app.read_user_input = mock_read_user_input
+        app._process_chat_message = interrupting_process
+        app.show_muted_message = lambda message: status_updates.append(message)
+
+        QuimeraApp.run(app)
+
+        self.assertEqual(process_calls, ["mensagem"])
+        self.assertEqual(len(read_calls), 2, "run() deveria voltar ao input após o cancelamento")
+        self.assertEqual(status_updates, ["[cancelado] pelo usuário"])
+        self.assertTrue(app.turn_manager.is_human_turn)
+        app.session_services.shutdown.assert_called_once()
+        app.agent_client.close.assert_called_once()
+
+    def test_run_keeps_chat_alive_on_threaded_input_interrupt_after_sync_cancel(self):
+        """Em modo threaded, o interrupt residual do input não deve encerrar o chat."""
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.renderer = DummyRenderer()
+        app.threads = 2
+        app.user_name = "User"
+        app.session_state = {
+            "session_id": "test-session",
+            "history_count": 0,
+            "summary_loaded": False,
+        }
+        app._format_yes_no = lambda x: "sim" if x else "não"
+        storage = Mock()
+        storage.get_log_file.return_value = Path("/tmp/quimera-test.log")
+        app.storage = storage
+        app.handle_command = Mock(return_value=False)
+        app.session_services = Mock()
+        app.agent_client = Mock()
+        app.turn_manager = TurnManager()
+        app._build_input_prompt = lambda: "User: "
+        app.show_muted_message = MagicMock()
+        app._refresh_parallel_toolbar = Mock()
+        app._chat_inflight_count = 0
+        app._chat_inflight_lock = threading.Lock()
+        app._chat_queue = None
+        app._chat_slot_semaphore = None
+        app._chat_executor = None
+
+        reads = iter(["mensagem", KeyboardInterrupt(), CMD_EXIT])
+        read_calls = []
+
+        def mock_read_user_input(prompt, timeout):
+            read_calls.append((prompt, timeout))
+            value = next(reads)
+            if isinstance(value, BaseException):
+                raise value
+            return value
+
+        process_calls = []
+
+        def interrupting_sync_process(user):
+            process_calls.append(user)
+            raise KeyboardInterrupt()
+
+        class NoAsyncSlotSemaphore:
+            def acquire(self, blocking=True):
+                return False if blocking is False else True
+
+            def release(self):
+                return None
+
+        app.read_user_input = mock_read_user_input
+        app._process_sync_chat_message_with_slot = interrupting_sync_process
+
+        with patch("quimera.app.core.threading.Semaphore", return_value=NoAsyncSlotSemaphore()):
+            QuimeraApp.run(app)
+
+        self.assertEqual(process_calls, ["mensagem"])
+        self.assertEqual(len(read_calls), 3, "run() deveria consumir o interrupt residual e voltar ao input")
+        self.assertEqual(app.show_muted_message.call_args_list, [unittest.mock.call("[cancelado] pelo usuário")])
+        self.assertTrue(app.turn_manager.is_human_turn)
+        app.session_services.shutdown.assert_called_once()
+        app.agent_client.close.assert_called_once()
+
+    def test_run_threaded_keyboard_interrupt_without_local_cancel_still_shuts_down(self):
+        """Ctrl+C no input ocioso em modo threaded deve continuar encerrando o chat."""
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.renderer = DummyRenderer()
+        app.threads = 2
+        app.user_name = "User"
+        app.session_state = {
+            "session_id": "test-session",
+            "history_count": 0,
+            "summary_loaded": False,
+        }
+        app._format_yes_no = lambda x: "sim" if x else "não"
+        storage = Mock()
+        storage.get_log_file.return_value = Path("/tmp/quimera-test.log")
+        app.storage = storage
+        app.handle_command = Mock(return_value=False)
+        app.session_services = Mock()
+        app.agent_client = Mock(_user_cancelled=False, _cancel_event=None)
+        app.turn_manager = TurnManager()
+        app._build_input_prompt = lambda: "User: "
+        app.read_user_input = Mock(side_effect=KeyboardInterrupt())
+        app.show_muted_message = MagicMock()
+
+        QuimeraApp.run(app)
+
+        self.assertEqual(app.show_muted_message.call_args_list, [unittest.mock.call(MSG_SHUTDOWN)])
+        app.session_services.shutdown.assert_called_once()
+        app.agent_client.close.assert_called_once()
 
     def test_process_chat_message_keeps_ai_turn_while_async_queue_has_pending_work(self):
         """Um prompt concluído não deve devolver o turno se ainda houver trabalho assíncrono pendente."""
