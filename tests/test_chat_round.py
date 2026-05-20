@@ -219,11 +219,29 @@ class TestProcessMainFlow(unittest.TestCase):
             is_first_speaker=True,
             protocol_mode="standard",
             request_override="status",
+            max_retries=1,
         )
         app.task_services.call_agent_for_parallel.assert_not_called()
         self.assertEqual(
             [call.args for call in app.dispatch_services.print_response.call_args_list],
             [("codex", "resposta codex")],
+        )
+
+    def test_threaded_mode_skips_failover_on_no_response(self):
+        """Em threads>1, no-response não deve encadear fallback para outros agentes."""
+        app = _make_app(active_agents=["codex", "claude", "opencode"], threads=2)
+        app.parse_routing = Mock(return_value=("codex", "status", False))
+        app.dispatch_services.call_agent = Mock(return_value=None)
+        app.parse_response = Mock(return_value=(None, None, None, False, False, None))
+
+        app.chat_round_orchestrator.process("status")
+
+        app.dispatch_services.call_agent.assert_called_once_with(
+            "codex",
+            is_first_speaker=True,
+            protocol_mode="standard",
+            request_override="status",
+            max_retries=1,
         )
 
     def test_process_rotates_round_robin_at_prompt_start(self):

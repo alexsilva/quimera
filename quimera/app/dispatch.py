@@ -410,6 +410,7 @@ class AppDispatchServices:
     def call_agent(self, agent, **options):
         """Executa despacho com retry e resolução de ferramentas."""
         dispatch_options = dict(options)
+        max_retries_override = dispatch_options.pop("max_retries", None)
         silent = dispatch_options.pop("silent", False)
         persist_history = dispatch_options.pop("persist_history", True)
         show_output = dispatch_options.pop("show_output", True)
@@ -445,6 +446,7 @@ class AppDispatchServices:
                 if callable(self._cancel_checker_override)
                 else (lambda: _is_user_cancelled(agent_client))
             ),
+            max_retries=max_retries_override,
         )
 
     def call_agent_low_level(

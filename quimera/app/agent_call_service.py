@@ -38,6 +38,7 @@ class AgentCallService:
         call_fn,
         resolve_fn,
         is_user_cancelled,
+        max_retries: int | None = None,
     ):
         """Executa chamada com retry.
 
@@ -49,11 +50,15 @@ class AgentCallService:
         """
         last_error = None
 
-        for attempt in range(1, self._max_retries + 1):
+        effective_max_retries = self._max_retries
+        if isinstance(max_retries, int):
+            effective_max_retries = max(1, max_retries)
+
+        for attempt in range(1, effective_max_retries + 1):
             if is_user_cancelled():
                 logger.info(
                     "[AGENT_CALL] agent=%s cancelled by user before retry %d/%d, aborting",
-                    agent, attempt, self._max_retries,
+                    agent, attempt, effective_max_retries,
                 )
                 return None
 
@@ -63,11 +68,11 @@ class AgentCallService:
                     if is_user_cancelled():
                         logger.info("[AGENT_CALL] agent=%s cancelled by user, aborting", agent)
                         return None
-                    if attempt < self._max_retries:
+                    if attempt < effective_max_retries:
                         backoff = self._compute_backoff(attempt)
                         logger.warning(
                             "[AGENT_CALL] retry %d/%d for agent=%s (no response)",
-                            attempt, self._max_retries, agent,
+                            attempt, effective_max_retries, agent,
                         )
                         time.sleep(backoff)
                         continue
@@ -79,11 +84,11 @@ class AgentCallService:
                     if is_user_cancelled():
                         logger.info("[AGENT_CALL] agent=%s cancelled by user, aborting", agent)
                         return None
-                    if attempt < self._max_retries:
+                    if attempt < effective_max_retries:
                         backoff = self._compute_backoff(attempt)
                         logger.warning(
                             "[AGENT_CALL] retry %d/%d for agent=%s (resolve failed)",
-                            attempt, self._max_retries, agent,
+                            attempt, effective_max_retries, agent,
                         )
                         time.sleep(backoff)
                         continue
@@ -97,10 +102,10 @@ class AgentCallService:
                     logger.info("[AGENT_CALL] agent=%s cancelled by user, aborting", agent)
                     return None
                 last_error = exc
-                if attempt < self._max_retries:
+                if attempt < effective_max_retries:
                     logger.warning(
                         "[AGENT_CALL] retry %d/%d for agent=%s after exception: %s",
-                        attempt, self._max_retries, agent, exc,
+                        attempt, effective_max_retries, agent, exc,
                     )
                     time.sleep(self._retry_backoff * attempt)
                     continue

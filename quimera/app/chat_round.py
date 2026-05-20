@@ -210,6 +210,10 @@ class ChatRoundOrchestrator:
         return {key: value for key, value in kwargs.items() if key in allowed}
 
     def _call_agent(self, agent: str, **kwargs):
+        if self._threads > 1 and "max_retries" not in kwargs:
+            # Em modo threaded cada prompt deve executar uma vez por agente;
+            # retries automáticos causam efeito de loop/cascata no chat.
+            kwargs["max_retries"] = 1
         call_agent = self._dispatch_services.call_agent
         filtered_kwargs = self._filter_supported_kwargs(call_agent, kwargs)
         return call_agent(agent, **filtered_kwargs)
@@ -381,36 +385,42 @@ class ChatRoundOrchestrator:
                 self._handle_cancelled()
                 return
 
-            fallback_candidates = [agent for agent in self._agent_pool.agents if agent != first_agent]
-            failed_agent = first_agent
-            for fallback_agent in fallback_candidates:
+            if self._threads > 1:
                 logger.info(
-                    "[CHAT_FAILOVER] trying %s after %s returned no response",
-                    fallback_agent,
-                    failed_agent,
+                    "[CHAT_FAILOVER] skipped in threaded mode for first agent=%s",
+                    first_agent,
                 )
-                self._show_system(
-                    f"[fallback] {failed_agent} não respondeu; {fallback_agent} assumiu"
-                )
-                if self._is_cancelled():
-                    self._handle_cancelled()
-                    return
-                fallback_response = self._call_agent(
-                    fallback_agent,
-                    is_first_speaker=True,
-                    primary=False,
-                    protocol_mode="standard",
-                    **prompt_binding,
-                )
-                fallback_response, route_target, handoff, extend, needs_human_input, _ = self._parse_response(
-                    fallback_response
-                )
-                if fallback_response is None and not route_target and not needs_human_input:
-                    continue
-                first_agent = fallback_agent
-                self._set_summary_agent_preference(first_agent)
-                response = fallback_response
-                break
+            else:
+                fallback_candidates = [agent for agent in self._agent_pool.agents if agent != first_agent]
+                failed_agent = first_agent
+                for fallback_agent in fallback_candidates:
+                    logger.info(
+                        "[CHAT_FAILOVER] trying %s after %s returned no response",
+                        fallback_agent,
+                        failed_agent,
+                    )
+                    self._show_system(
+                        f"[fallback] {failed_agent} não respondeu; {fallback_agent} assumiu"
+                    )
+                    if self._is_cancelled():
+                        self._handle_cancelled()
+                        return
+                    fallback_response = self._call_agent(
+                        fallback_agent,
+                        is_first_speaker=True,
+                        primary=False,
+                        protocol_mode="standard",
+                        **prompt_binding,
+                    )
+                    fallback_response, route_target, handoff, extend, needs_human_input, _ = self._parse_response(
+                        fallback_response
+                    )
+                    if fallback_response is None and not route_target and not needs_human_input:
+                        continue
+                    first_agent = fallback_agent
+                    self._set_summary_agent_preference(first_agent)
+                    response = fallback_response
+                    break
 
         if needs_human_input:
             if response:

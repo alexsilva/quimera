@@ -492,6 +492,17 @@ class TestCallAgent:
         mock_resolve.assert_not_called()  # nunca chamado pois low_level retornou None
         dispatch_app.record_failure.assert_called_once_with("agent1")
 
+    def test_call_agent_honors_max_retries_override(self, dispatch_app):
+        """max_retries por chamada deve sobrescrever o default do app."""
+        dispatch_app.MAX_RETRIES = 3
+        ds = AppDispatchServices.from_app(dispatch_app)
+        with patch.object(ds, "call_agent_low_level", return_value=None) as mock_ll, \
+             patch("quimera.app.agent_call_service.time.sleep") as mock_sleep:
+            result = ds.call_agent("agent1", max_retries=1)
+        assert result is None
+        assert mock_ll.call_count == 1
+        mock_sleep.assert_not_called()
+
     def test_retry_on_none_low_level_uses_linear_backoff_without_rate_limit(self, dispatch_app):
         dispatch_app.MAX_RETRIES = 2
         dispatch_app.RETRY_BACKOFF_SECONDS = 0.5
