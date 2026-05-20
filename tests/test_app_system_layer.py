@@ -528,7 +528,7 @@ def _make_dummy_metrics():
     }
 
 
-def test_build_prompt_preview_message_includes_raw_history():
+def test_build_prompt_preview_message_omits_raw_history():
     app = make_app()
     app.history = [
         {"role": "user", "content": "oi"},
@@ -542,12 +542,14 @@ def test_build_prompt_preview_message_includes_raw_history():
 
     result = layer._build_prompt_preview_message("codex")
 
-    assert "RAW HISTÓRICO" in result
-    assert "[0] USER: oi" in result
-    assert "[1] ASSISTANT: olá" in result
+    assert "RAW HISTÓRICO" not in result
+    assert "[0] USER: oi" not in result
+    assert "[1] ASSISTANT: olá" not in result
+    assert "ANÁLISE DOS BLOCOS:" in result
+    assert "PROMPT FINAL:" in result
 
 
-def test_build_prompt_preview_message_empty_history_shows_placeholder():
+def test_build_prompt_preview_message_empty_history_omits_placeholder():
     app = make_app()
     app.history = []
     mock_builder = Mock()
@@ -558,8 +560,9 @@ def test_build_prompt_preview_message_empty_history_shows_placeholder():
 
     result = layer._build_prompt_preview_message("codex")
 
-    assert "RAW HISTÓRICO" in result
-    assert "[sem mensagens no histórico]" in result
+    assert "RAW HISTÓRICO" not in result
+    assert "[sem mensagens no histórico]" not in result
+    assert "ANÁLISE DOS BLOCOS:" in result
 
 
 def test_build_prompt_preview_message_follower_mode_passes_is_first_speaker_false():

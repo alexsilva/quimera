@@ -318,18 +318,6 @@ class AppSystemLayer:
             execution_mode=self._execution_mode_getter(),
         )
 
-        _hw = getattr(prompt_builder, "history_window", None)
-        history_window = int(_hw) if isinstance(_hw, (int, float)) else len(history)
-        window_start = max(0, len(history) - history_window)
-        raw_history_lines = ["RAW HISTÓRICO (janela atual, ordem cronológica):"]
-        if not history:
-            raw_history_lines.append("[sem mensagens no histórico]")
-        else:
-            for idx, msg in enumerate(history[window_start:], start=window_start):
-                role = (msg.get("role") or "").upper()
-                content = (msg.get("content") or "").strip()
-                raw_history_lines.append(f"[{idx}] {role}: {content}")
-
         mode_label = "primeiro-falante" if is_first_speaker else "follower/reviewer"
         persistent_chars = metrics.get("persistent_chars", 0)
         persistent_notice = (
@@ -356,8 +344,6 @@ class AppSystemLayer:
             f"- handoff_chars: {metrics['handoff_chars']}",
             f"- history_messages: {metrics['history_messages']}",
             f"- total_chars: {metrics['total_chars']}",
-            "",
-            "\n".join(raw_history_lines),
             "",
             "PROMPT FINAL:",
             prompt,
