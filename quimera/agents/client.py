@@ -305,7 +305,11 @@ class AgentClient:
                     self._agent_running = False
                     self._current_proc = None
                     self._stop_esc_monitor()
-                    _logger.warning("[erro] wall-clock timeout after %ds for %s", self.timeout * 5, cmd[0])
+                    _logger.warning(
+                        "[erro] idle timeout after %ds without stdout for %s",
+                        self.timeout * 5,
+                        cmd[0],
+                    )
                     return None
 
                 debug_output = self._get_capped_stdout(result_holder)
@@ -391,7 +395,7 @@ class AgentClient:
                         self._stop_esc_monitor()
                         wall_limit = self.timeout * 5
                         self._show_error(
-                            f"[erro] wall-clock timeout after {wall_limit}s for {cmd[0]}")
+                            f"[erro] idle timeout after {wall_limit}s without stdout for {cmd[0]}")
                         return None
 
             self._spy_output_presenter.flush(agent)
