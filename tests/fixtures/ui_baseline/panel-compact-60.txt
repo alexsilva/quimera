@@ -7,12 +7,5 @@ ao-2026-04-30-222821.jsonl
 │ Implementação concluída. Ajustes de wrapping e           │
 │ alinhamento preservados.                                 │
 ╰──────────────────────────────────────────────────────────╯
-╭────────────── 🤖 Codex · tools · turn_1650 ──────────────╮
-│                                                          │
-│ Ferramenta                                      St   Dur │
-│ ──────────────────────────────────────────────────────── │
-│ exec_command                                    ✓   87ms │
-│ cmd: pytest -q tests/test_ui.py                          │
-│ tests/test_ui_nonregression.py                           │
-│                                                          │
-╰──────────────────────────────────────────────────────────╯
+🤖 Codex TOOLS: 1 chamadas · 1 ok · 0 erro · 87ms · último: 
+exec_command(ok) · trace_id=turn_1650

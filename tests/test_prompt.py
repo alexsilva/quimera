@@ -1,12 +1,18 @@
 from unittest.mock import MagicMock
 import re
 
+from rich.console import Console
+
 from quimera.context import ContextManager
+from quimera.constants import Visibility
 from quimera.evidence import Evidence, EvidenceStore
 from quimera.modes import get_mode
+from quimera.plugins.codex import _format_codex_spy_event
 from quimera.prompt import PromptBuilder
 from quimera.prompt_kinds import PromptKind
 from quimera.prompt_templates import PromptTemplate
+from quimera.spy_output_presenter import SpyOutputPresenter
+from quimera.ui import TerminalRenderer
 
 
 def _extract_block(prompt: str, tag: str) -> str:
@@ -370,6 +376,47 @@ def test_prompt_renders_evidence_context_when_session_has_entries(tmp_path):
     assert prompt.index('<evidence_context title="Contexto Compartilhado de Evidências">') < prompt.index(
         '<recent_conversation title="Conversa recente">'
     )
+
+
+def test_prompt_evidence_pipeline_is_identical_across_compact_and_wide_tool_rendering(tmp_path):
+    def _collect_evidence_section(session_id: str, width: int) -> tuple[str, str]:
+        renderer = TerminalRenderer(theme="rule")
+        renderer._console = Console(width=width, record=True, force_terminal=False)
+        presenter = SpyOutputPresenter(
+            renderer,
+            Visibility.SUMMARY,
+            session_id=session_id,
+            base_dir=tmp_path,
+        )
+
+        for event in _format_codex_spy_event(
+            '{"type":"item.started","item":{"type":"command_execution","command":"pytest -q","id":"t_21"}}'
+        ):
+            presenter.emit("codex", event)
+        for event in _format_codex_spy_event(
+            '{"type":"item.completed","item":{"type":"command_execution","command":"pytest -q","exit_code":0,"id":"t_21"}}'
+        ):
+            presenter.emit("codex", event)
+        presenter.finalize_turn("codex", render_summary=True)
+        renderer.flush()
+
+        builder = PromptBuilder(
+            context_manager=_make_context_manager(""),
+            session_state={"workspace_tmp_root": str(tmp_path)},
+        )
+        evidence_section = builder._build_evidence_section({"session_id": session_id}, session_id)
+        rendered_summary = renderer._console.export_text()
+        return evidence_section, rendered_summary
+
+    compact_evidence, compact_render = _collect_evidence_section("sessao-compact", 40)
+    wide_evidence, wide_render = _collect_evidence_section("sessao-wide", 120)
+
+    assert compact_evidence == wide_evidence
+    assert "exec_command: ok | cmd: pytest -q" in compact_evidence
+    assert "TOOLS: 1 chamadas" in compact_render
+    assert "TOOLS: 1 chamadas" in wide_render
+    assert "trace_id=sessao-compact:turn_0001" in compact_render
+    assert "trace_id=sessao-wide:turn_0001" in wide_render
 
 
 def test_prompt_keeps_empty_optional_blocks_in_output():

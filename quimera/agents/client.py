@@ -519,6 +519,7 @@ class AgentClient:
             return None
         connection = self._resolve_plugin_connection(plugin)
         if isinstance(connection, OpenAIConnection):
+            self._spy_output_presenter.set_turn_runtime("openai")
             return self._call_api(
                 agent, plugin, prompt,
                 silent=silent,
@@ -527,6 +528,7 @@ class AgentClient:
                 on_text_chunk=on_text_chunk,
                 allow_tools=allow_tools,
             )
+        self._spy_output_presenter.set_turn_runtime("cli")
         cmd, prompt_as_arg, output_format = self._resolve_plugin_cli_attrs(plugin, connection)
         extra_env = connection.env if isinstance(connection, CliConnection) else None
         cwd = connection.cwd if isinstance(connection, CliConnection) else None

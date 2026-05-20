@@ -4,10 +4,5 @@
 · Alex: validar baseline visual oficial
 ▶ 🤖 Codex
   Implementação concluída. Ajustes de wrapping e alinhamento preservados.       
-◦ tools · turn_1650
-                                                                                
-    Ferramenta     Status   Duração   Detalhes                                  
-   ──────────────────────────────────────────────────────────────────────────── 
-    exec_command     ✓         87ms   cmd: pytest -q tests/test_ui.py           
-                                      tests/test_ui_nonregression.py            
-                                                                                
+🤖 Codex TOOLS: 1 chamadas · 1 ok · 0 erro · 87ms · último: exec_command(ok) · 
+trace_id=turn_1650

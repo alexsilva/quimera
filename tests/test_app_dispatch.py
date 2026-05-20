@@ -164,8 +164,8 @@ class TestSanitizeSpyTurnDetail:
         detail = {"turn_id": "t1", "tools": tools}
         result = AppDispatchServices._sanitize_spy_turn_detail(detail)
         assert result is not None
-        assert len(result["tools"]) == AppDispatchServices._MAX_SPY_TOOLS  # 12
-        assert result["truncated_tools"] is True
+        assert len(result["tools"]) == 20
+        assert result["truncated_tools"] is False
 
     def test_no_truncation_if_within_limit(self):
         tools = [{"tool_call_id": str(i)} for i in range(3)]
@@ -190,7 +190,7 @@ class TestSanitizeSpyTurnDetail:
     def test_truncate_spy_text_long_string(self):
         long_str = "a" * 500
         result = AppDispatchServices._truncate_spy_text(long_str)
-        assert len(result) <= AppDispatchServices._MAX_SPY_TEXT_CHARS
+        assert result == long_str
 
     def test_truncate_spy_text_non_string(self):
         assert AppDispatchServices._truncate_spy_text(42) == 42
@@ -205,7 +205,7 @@ class TestSanitizeSpyTurnDetail:
         payload = {str(i): i for i in range(20)}
         result = AppDispatchServices._sanitize_spy_map(payload)
         assert result is not None
-        assert len(result) <= AppDispatchServices._MAX_SPY_MAP_ITEMS
+        assert len(result) == len(payload)
 
     def test_sanitize_spy_map_preserves_simple_types(self):
         payload = {"a": 1, "b": 2.5, "c": True, "d": None}
@@ -218,12 +218,13 @@ class TestSanitizeSpyTurnDetail:
     def test_sanitize_spy_map_truncates_long_values(self):
         payload = {"key": "x" * 500}
         result = AppDispatchServices._sanitize_spy_map(payload)
-        assert len(result["key"]) <= AppDispatchServices._MAX_SPY_TEXT_CHARS
+        assert result["key"] == payload["key"]
 
     def test_sanitize_spy_map_converts_non_string_value(self):
-        payload = {"key": object()}
+        marker = object()
+        payload = {"key": marker}
         result = AppDispatchServices._sanitize_spy_map(payload)
-        assert isinstance(result["key"], str)
+        assert not isinstance(result["key"], str)
 
 
 # =============================================================================

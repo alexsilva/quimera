@@ -25,6 +25,7 @@ class SpyOutputPresenter:
         self._turn_seq = 0
         self._tool_seq = 0
         self.turn_id = ""
+        self.turn_runtime = ""
         self.turn_started_at = 0.0
         self.turn_tools: list[dict] = []
         self._raw_output_lines: list[str] = []
@@ -35,9 +36,17 @@ class SpyOutputPresenter:
         self._turn_seq += 1
         self._tool_seq = 0
         self.turn_id = f"turn_{self._turn_seq:04d}"
+        self.turn_runtime = ""
         self.turn_started_at = 0.0
         self.turn_tools = []
         self._active_tool_calls = {}
+
+    def set_turn_runtime(self, runtime: str | None) -> None:
+        """Define o runtime efetivo do turno atual (ex.: cli, openai)."""
+        if runtime is None:
+            self.turn_runtime = ""
+            return
+        self.turn_runtime = str(runtime).strip().lower()
 
     @staticmethod
     def _iso(ts: float | None) -> str | None:
@@ -219,7 +228,18 @@ class SpyOutputPresenter:
                     "error": record.get("error"),
                 }
             )
-        return {"turn_id": self.turn_id, "tools": tools}
+        return {
+            "turn_id": self.turn_id,
+            "trace_id": self._trace_id(),
+            "runtime": self.turn_runtime,
+            "tools": tools,
+        }
+
+    def _trace_id(self) -> str:
+        session = str(self.session_id or "").strip()
+        if session:
+            return f"{session}:{self.turn_id}"
+        return self.turn_id
 
     def _persist_evidences(self, agent: str | None) -> None:
         if not agent or not self.session_id or self.base_dir is None:
@@ -310,24 +330,54 @@ class SpyOutputPresenter:
             return []
         if not tools:
             return []
-        lines = [f"Ferramentas executadas neste turno ({detail.get('turn_id')}):"]
+        total = len([tool for tool in tools if isinstance(tool, dict)])
+        ok_count = 0
+        err_count = 0
+        total_ms = 0
         for tool in tools:
-            tool_name = tool.get("tool") or "ferramenta"
-            call_id = tool.get("tool_call_id") or "n/a"
-            status = tool.get("status") or "unknown"
-            duration = self._format_duration(tool.get("duration_ms"))
-            input_summary = self._format_input_summary(tool.get("input"))
-            line = f"- {tool_name} ({call_id}) — {status} — {duration}"
-            if input_summary:
-                line += f" | {input_summary}"
-            error = tool.get("error")
-            if isinstance(error, dict) and error.get("message"):
-                line += f" | erro: {error['message']}"
-            lines.append(line)
-        return lines
+            if not isinstance(tool, dict):
+                continue
+            status = str(tool.get("status") or "").lower()
+            if status in {"ok", "success", "succeeded"}:
+                ok_count += 1
+            if status in {"error", "failed", "fail", "timeout"}:
+                err_count += 1
+            duration_ms = tool.get("duration_ms")
+            if isinstance(duration_ms, int) and duration_ms >= 0:
+                total_ms += duration_ms
+        total_duration = self._format_duration(total_ms)
+        last = next((tool for tool in reversed(tools) if isinstance(tool, dict)), {})
+        last_tool = str(last.get("tool") or "ferramenta")
+        last_status = str(last.get("status") or "unknown")
+        trace_id = str(detail.get("trace_id") or detail.get("turn_id") or "n/a")
+        summary = (
+            f"TOOLS: {total} chamadas · {ok_count} ok · {err_count} erro · {total_duration} "
+            f"· último: {last_tool}({last_status}) · trace_id={trace_id}"
+        )
+        return [summary]
+
+    @staticmethod
+    def _is_cli_agent(agent: str | None) -> bool:
+        if not agent:
+            return False
+        plugin = plugins.get(agent)
+        if plugin is None:
+            return False
+        effective_driver = getattr(plugin, "effective_driver", None)
+        if callable(effective_driver):
+            try:
+                return str(effective_driver()).strip().lower() == "cli"
+            except Exception:
+                return False
+        return False
 
     def _render_turn_summary(self, agent: str | None, detail: dict) -> None:
         if self.visibility == Visibility.QUIET:
+            return
+        runtime = str((detail or {}).get("runtime") or "").strip().lower()
+        if runtime and runtime != "cli":
+            return
+        if not runtime and not self._is_cli_agent(agent):
             return
         if hasattr(self.renderer, "show_turn_summary"):
             self.renderer.show_turn_summary(agent, detail)

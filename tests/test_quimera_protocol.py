@@ -3887,7 +3887,7 @@ class PluginTests(unittest.TestCase):
             "exec_command",
         )
 
-    def test_sanitize_spy_turn_detail_caps_payload_size(self):
+    def test_sanitize_spy_turn_detail_preserves_full_payload(self):
         long_text = "x" * 500
         detail = {
             "turn_id": "turn_1234",
@@ -3909,12 +3909,11 @@ class PluginTests(unittest.TestCase):
         sanitized = AppDispatchServices._sanitize_spy_turn_detail(detail)
 
         self.assertIsNotNone(sanitized)
-        self.assertEqual(len(sanitized["tools"]), AppDispatchServices._MAX_SPY_TOOLS)
-        self.assertTrue(sanitized["truncated_tools"])
+        self.assertEqual(len(sanitized["tools"]), 20)
+        self.assertFalse(sanitized["truncated_tools"])
         cmd = sanitized["tools"][0]["input"]["cmd"]
-        self.assertLessEqual(len(cmd), AppDispatchServices._MAX_SPY_TEXT_CHARS)
-        self.assertTrue(cmd.endswith("..."))
-        self.assertEqual(set(sanitized["tools"][0]["error"].keys()), {"type", "message"})
+        self.assertEqual(cmd, long_text)
+        self.assertEqual(set(sanitized["tools"][0]["error"].keys()), {"type", "message", "stack"})
 
     def test_task_handler_prints_and_persists_agent_response(self):
         app = QuimeraApp.__new__(QuimeraApp)

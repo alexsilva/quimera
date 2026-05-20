@@ -895,83 +895,50 @@ class TerminalRenderer:
             print(clean_message)
 
     def show_turn_summary(self, agent: str | None, detail: dict) -> None:
-        """Exibe resumo do turno como tabela Rich compacta."""
-        public_ui = _public_ui_module()
-        if not self._console or not public_ui._RICH_AVAILABLE:
+        """Exibe resumo compacto do turno em uma linha."""
+        runtime = str((detail or {}).get("runtime") or "").strip().lower()
+        if runtime and runtime != "cli":
             return
         tools = detail.get("tools", []) if isinstance(detail, dict) else []
-        if not tools:
+        if not isinstance(tools, list) or not tools:
             return
-        style, label = self._agent_style(agent) if agent else ("dim", "sistema")
-        turn_id = detail.get("turn_id", "")
-        width = getattr(self._console, "width", 80)
-        compact_tools_layout = width < 72
-        table_padding = (0, 0) if compact_tools_layout else (0, 1)
-        table = Table(
-            box=rich_box.SIMPLE_HEAD,
-            show_header=True,
-            header_style="bold",
-            padding=table_padding,
-        )
-        table.add_column("Ferramenta", style="cyan", no_wrap=False, overflow="fold")
-        if compact_tools_layout:
-            table.add_column("St", width=2, justify="center")
-            table.add_column("Dur", width=5, justify="right", style="dim")
-        else:
-            table.add_column("Status", width=6, justify="center")
-            table.add_column("Duração", width=7, justify="right", style="dim")
-        if not compact_tools_layout:
-            table.add_column("Detalhes", style="dim", overflow="fold")
+
+        total = 0
+        ok_count = 0
+        err_count = 0
+        total_ms = 0
+        last_tool_name = "ferramenta"
+        last_tool_status = "unknown"
+
         for tool in tools:
             if not isinstance(tool, dict):
                 continue
-            tool_name = markup_escape(str(tool.get("tool") or "ferramenta"))
-            status = tool.get("status") or "unknown"
-            dur_ms = tool.get("duration_ms")
-            if isinstance(dur_ms, int) and dur_ms >= 0:
-                dur_str = f"{dur_ms}ms" if dur_ms < 1000 else f"{dur_ms / 1000:.1f}s"
-            else:
-                dur_str = "—"
-            if status in ("ok", "success"):
-                status_cell = Text("✓", style="green")
-            elif status == "error":
-                status_cell = Text("✗", style="bold red")
-            elif status in ("running", "unknown"):
-                status_cell = Text("…", style="yellow")
-            else:
-                status_max = 2 if compact_tools_layout else 5
-                status_cell = Text(status[:status_max], style="dim")
-            inp = tool.get("input")
-            if isinstance(inp, dict):
-                if inp.get("cmd"):
-                    details = markup_escape(f"cmd: {inp['cmd']}")
-                elif inp.get("path"):
-                    details = markup_escape(f"path: {inp['path']}")
-                else:
-                    parts = [f"{k}={v}" for k, v in inp.items() if v is not None][:2]
-                    details = markup_escape(", ".join(parts))
-            else:
-                details = ""
-            err = tool.get("error")
-            if isinstance(err, dict) and err.get("message"):
-                details = markup_escape(f"erro: {err['message']}")
-            if compact_tools_layout:
-                tool_cell = Text(tool_name, style="cyan")
-                if details:
-                    tool_cell.append(f"\n{details}", style="dim")
-                table.add_row(tool_cell, status_cell, dur_str)
-            else:
-                table.add_row(tool_name, status_cell, dur_str, details)
-        block = self._render_turn_block(
-            self._theme.name,
-            label,
-            style,
-            tools_table=table,
-            turn_id=str(turn_id),
-            include_header=False,
-            include_footer_rule=True,
+            total += 1
+            status = str(tool.get("status") or "").strip().lower()
+            if status in {"ok", "success", "succeeded"}:
+                ok_count += 1
+            if status in {"error", "failed", "fail", "timeout"}:
+                err_count += 1
+            duration_ms = tool.get("duration_ms")
+            if isinstance(duration_ms, int) and duration_ms >= 0:
+                total_ms += duration_ms
+            last_tool_name = str(tool.get("tool") or "ferramenta")
+            last_tool_status = str(tool.get("status") or "unknown")
+
+        if total <= 0:
+            return
+
+        if total_ms < 1000:
+            duration = f"{total_ms}ms"
+        else:
+            duration = f"{total_ms / 1000:.1f}s"
+
+        trace_id = str(detail.get("trace_id") or detail.get("turn_id") or "n/a")
+        summary = (
+            f"TOOLS: {total} chamadas · {ok_count} ok · {err_count} erro · {duration} "
+            f"· último: {last_tool_name}({last_tool_status}) · trace_id={trace_id}"
         )
-        self._print(block)
+        self.show_plain(summary, agent=agent)
 
     def show_handoff(self, from_agent, to_agent, task=None):
         """Exibe handoff."""

@@ -1,4 +1,5 @@
 """Componentes de `quimera.app.dispatch`."""
+import copy
 import queue as _queue_module
 import time
 from contextlib import nullcontext
@@ -343,61 +344,28 @@ class AppDispatchServices:
 
     @classmethod
     def _truncate_spy_text(cls, value):
-        if not isinstance(value, str):
-            return value
-        if len(value) <= cls._MAX_SPY_TEXT_CHARS:
-            return value
-        return value[: cls._MAX_SPY_TEXT_CHARS - 3] + "..."
+        # Mantido por compatibilidade; não truncamos mais para preservar evidência completa.
+        return value
 
     @classmethod
     def _sanitize_spy_map(cls, payload, max_items=None):
         if not isinstance(payload, dict):
             return None
-        item_limit = max_items if isinstance(max_items, int) and max_items > 0 else cls._MAX_SPY_MAP_ITEMS
-        sanitized = {}
-        for index, (key, value) in enumerate(payload.items()):
-            if index >= item_limit:
-                break
-            normalized_key = cls._truncate_spy_text(str(key))
-            if isinstance(value, str):
-                sanitized[normalized_key] = cls._truncate_spy_text(value)
-            elif isinstance(value, (int, float, bool)) or value is None:
-                sanitized[normalized_key] = value
-            else:
-                sanitized[normalized_key] = cls._truncate_spy_text(str(value))
-        return sanitized or None
+        return copy.deepcopy(payload) or None
 
     @classmethod
     def _sanitize_spy_turn_detail(cls, detail):
         if not isinstance(detail, dict):
             return None
 
-        tools = detail.get("tools")
+        sanitized = copy.deepcopy(detail)
+        tools = sanitized.get("tools")
         if not isinstance(tools, list):
-            tools = []
-
-        sanitized_tools = []
-        for tool in tools[: cls._MAX_SPY_TOOLS]:
-            if not isinstance(tool, dict):
-                continue
-            sanitized = {
-                "tool_call_id": cls._truncate_spy_text(tool.get("tool_call_id")),
-                "tool": cls._truncate_spy_text(tool.get("tool")),
-                "status": cls._truncate_spy_text(tool.get("status")),
-                "started_at": cls._truncate_spy_text(tool.get("started_at")),
-                "ended_at": cls._truncate_spy_text(tool.get("ended_at")),
-                "duration_ms": tool.get("duration_ms"),
-                "input": cls._sanitize_spy_map(tool.get("input"), max_items=4),
-                "output_meta": cls._sanitize_spy_map(tool.get("output_meta"), max_items=4),
-                "error": cls._sanitize_spy_map(tool.get("error"), max_items=2),
-            }
-            sanitized_tools.append(sanitized)
-
-        return {
-            "turn_id": cls._truncate_spy_text(detail.get("turn_id")),
-            "tools": sanitized_tools,
-            "truncated_tools": len(tools) > cls._MAX_SPY_TOOLS,
-        }
+            sanitized["tools"] = []
+        else:
+            sanitized["tools"] = [tool for tool in tools if isinstance(tool, dict)]
+        sanitized["truncated_tools"] = False
+        return sanitized
 
     def _update_spy_telemetry(self, agent: str) -> None:
         agent_client = self._get_agent_client()

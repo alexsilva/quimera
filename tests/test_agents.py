@@ -645,6 +645,7 @@ def test_spy_output_presenter_compose_status_label_keeps_base_and_tool(renderer)
 
 def test_spy_output_presenter_collects_structured_turn_detail(renderer):
     presenter = SpyOutputPresenter(renderer, Visibility.SUMMARY)
+    presenter.set_turn_runtime("cli")
 
     for event in _format_codex_spy_event(
         '{"type":"item.started","item":{"type":"command_execution","command":"ls","id":"t_17"}}'
@@ -658,6 +659,8 @@ def test_spy_output_presenter_collects_structured_turn_detail(renderer):
     detail = presenter.finalize_turn("codex")
 
     assert detail["turn_id"].startswith("turn_")
+    assert detail["trace_id"].endswith(detail["turn_id"])
+    assert detail["runtime"] == "cli"
     assert len(detail["tools"]) == 1
     assert detail["tools"][0]["tool_call_id"] == "t_17"
     assert detail["tools"][0]["tool"] == "exec_command"
@@ -741,6 +744,27 @@ def test_spy_output_presenter_finalize_turn_renders_human_summary(renderer):
     assert detail["tools"][0]["tool"] == "exec_command"
     assert detail["tools"][0]["tool_call_id"] == "t_17"
     assert detail["tools"][0]["status"] == "ok"
+
+
+def test_spy_output_presenter_finalize_turn_skips_summary_for_non_cli(renderer):
+    presenter = SpyOutputPresenter(renderer, Visibility.SUMMARY)
+    with patch("quimera.spy_output_presenter.plugins.get") as mock_get_plugin:
+        non_cli = MagicMock()
+        non_cli.effective_driver.return_value = "openai"
+        mock_get_plugin.return_value = non_cli
+        for event in _format_codex_spy_event(
+            '{"type":"item.started","item":{"type":"command_execution","command":"ls","id":"t_17"}}'
+        ):
+            presenter.emit("claude", event)
+        for event in _format_codex_spy_event(
+            '{"type":"item.completed","item":{"type":"command_execution","command":"ls","exit_code":0,"id":"t_17"}}'
+        ):
+            presenter.emit("claude", event)
+
+        detail = presenter.finalize_turn("claude", render_summary=True)
+
+    renderer.show_turn_summary.assert_not_called()
+    assert detail["tools"]
 
 
 def test_spy_output_presenter_full_mode_renders_tool_timeline(renderer):
