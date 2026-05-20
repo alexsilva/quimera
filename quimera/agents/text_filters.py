@@ -6,6 +6,7 @@ import quimera.plugins as plugins
 
 _BRALLE_RANGE = re.compile(r'[\u2800-\u28FF]')
 _ANSI_ESCAPE = re.compile(r'\x1B\[[0-?]*[ -/]*[@-~]')
+_CONTROL_CHARS = re.compile(r'[\x00-\x02\x04-\x1F\x7F]')
 _RATE_LIMIT_RE = re.compile(
     r"""
     \brate[\s-]?limit(?:ed|ing)?\b
@@ -24,6 +25,20 @@ def _strip_spinner(text: str) -> str:
     return _BRALLE_RANGE.sub('', text)
 
 
+def _is_interrupt_echo(text: str) -> bool:
+    """Detecta eco cru de Ctrl+C emitido por alguns CLIs no stderr/stdout."""
+    cleaned = _ANSI_ESCAPE.sub("", _strip_spinner(text)).replace("\r", "").strip()
+    if not cleaned:
+        return False
+
+    # Alguns terminais/CLIs ecoam ETX bruto (\x03) em vez de "^C".
+    normalized = _CONTROL_CHARS.sub("", cleaned).replace("\x03", "^C")
+    normalized = "".join(normalized.split())
+    if not normalized:
+        return False
+    return bool(re.fullmatch(r"(?:\^C)+", normalized))
+
+
 @lru_cache(maxsize=32)
 def _compile_noise_patterns(patterns: tuple) -> tuple:
     """Compila e armazena em cache os padrões regex de ruído de stderr."""
@@ -32,6 +47,8 @@ def _compile_noise_patterns(patterns: tuple) -> tuple:
 
 def _should_ignore_stderr_line(agent: str | None, line: str) -> bool:
     """Filtra ruído conhecido de stderr que não representa erro real."""
+    if _is_interrupt_echo(line):
+        return True
     if not agent:
         return False
     plugin = plugins.get(agent)

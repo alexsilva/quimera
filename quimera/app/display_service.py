@@ -290,10 +290,6 @@ class DisplayService:
             is_owning = current_thread_id is not None and current_thread_id == threading.get_ident()
             if is_owning:
                 self.clear_prompt_line()
-            elif not is_owning:
-                show_newline = getattr(renderer, "show_newline", None)
-                if callable(show_newline):
-                    show_newline()
             show_system_neutral = getattr(renderer, "show_system_neutral", None)
             if callable(show_system_neutral):
                 show_system_neutral(message)

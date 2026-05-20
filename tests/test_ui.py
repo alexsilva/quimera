@@ -5,6 +5,7 @@ from unittest.mock import patch, MagicMock
 import pytest
 from rich.console import Console, Group
 from rich.markdown import Markdown
+from rich.panel import Panel
 from rich.rule import Rule
 from rich.table import Table
 from rich.text import Text
@@ -131,6 +132,20 @@ class TestTerminalRenderer:
                 patch("quimera.ui.Markdown") as mock_md, \
                 patch("quimera.ui._agent_style", return_value=("blue", "Test")):
             mock_renderer.show_message("test", "Hello")
+
+    def test_show_message_extracts_text_from_panel_content(self):
+        """Renderable Rich não deve vazar repr interna no conteúdo final."""
+        renderer = TerminalRenderer()
+        renderer._console = Console(width=80, record=True, force_terminal=False)
+
+        with patch("quimera.ui._agent_style", return_value=("blue", "🔷 Codex")):
+            renderer.show_message("codex", Panel(Text("conteudo interno"), title="Titulo"))
+
+        renderer.flush()
+        rendered = renderer._console.export_text()
+        assert "conteudo interno" in rendered
+        assert "rich.panel.Panel object" not in rendered
+        renderer.close(timeout=1.0)
 
     def test_renderer_uses_dynamic_console_width(self):
         """Test renderer does not force a fixed console width."""
@@ -542,6 +557,18 @@ class TestRenderOrdering:
         assert mock_live.stop.called
         # live.update deve ter sido chamado ao menos uma vez (durante update e finish)
         assert mock_live.update.call_count >= 1
+
+    def test_show_turn_summary_without_agent_prefix(self, recording_renderer):
+        """Resumo de tools sem agent não deve renderizar prefixo literal None."""
+        r = recording_renderer
+        r.show_turn_summary(None, {
+            "tools": [{"tool": "bash", "status": "ok", "duration_ms": 42}],
+            "trace_id": "trace-1",
+        })
+        r.flush()
+        output = r._console.export_text()
+        assert "TOOLS: 1 chamadas" in output
+        assert "None TOOLS:" not in output
 
     def test_concurrent_prints_no_exception(self, recording_renderer):
         """Múltiplas threads enfileirando prints não geram erros."""

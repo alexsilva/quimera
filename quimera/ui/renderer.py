@@ -106,6 +106,15 @@ def _extract_text_from_renderable(value: Any) -> str:
     markup = getattr(value, "markup", None)
     if isinstance(markup, str):
         return markup
+    # rich.panel.Panel — extrai título e corpo
+    panel_renderable = getattr(value, "renderable", None)
+    if panel_renderable is not None:
+        parts = []
+        title = getattr(value, "title", None) or ""
+        if title:
+            parts.append(_extract_text_from_renderable(title))
+        parts.append(_extract_text_from_renderable(panel_renderable))
+        return " ".join(p for p in parts if p)
     return str(value)
 
 
@@ -354,6 +363,7 @@ class TerminalRenderer:
         _stream_states: dict[str, dict] = {}  # agent -> {content, label, style, theme_name}
         _ul: list = [None]  # _ul[0] = Live unificado ativo (ou None)
         _local_pending: collections.deque = collections.deque()  # buffer de "unget" para coalescing
+        _deferred_post_prompt: collections.deque = collections.deque()  # prints deferidos enquanto prompt ativo
 
         def _get_renderable():
             if not _stream_states:
@@ -416,8 +426,22 @@ class TerminalRenderer:
             if run_above is not None:
                 _r, _k = renderable, dict(kwargs)
                 if run_above(lambda: self._console.print(_r, **_k)):
+                    _flush_deferred()
                     return
+                if self._is_prompt_active_fn is not None and self._is_prompt_active_fn():
+                    _deferred_post_prompt.append((renderable, kwargs))
+                    return
+            _flush_deferred()
             self._console.print(renderable, **kwargs)
+
+        def _flush_deferred():
+            """Flush prints que foram deferidos enquanto prompt estava ativo."""
+            while _deferred_post_prompt:
+                _r, _k = _deferred_post_prompt.popleft()
+                if _ul[0] is not None:
+                    _ul[0].console.print(_r, **_k)
+                elif self._console:
+                    self._console.print(_r, **_k)
 
         def _audit_event(event_name: str, **payload) -> None:
             if self._audit_logger is None:
@@ -515,14 +539,12 @@ class TerminalRenderer:
                             render_mode=event.render_mode,
                         )
                         _cprint(final_block)
-                        _cprint("")
 
                 elif isinstance(event, LiveAbortEvent):
                     _audit_event("stream_abort", agent=event.agent)
                     _stream_states.pop(event.agent, None)
                     _refresh()
                     _stop_if_empty()
-                    _cprint("")
 
                 elif isinstance(event, NoopEvent):
                     event.done.set()
@@ -715,7 +737,7 @@ class TerminalRenderer:
         """Exibe mensagem usando o tema ativo."""
         self.clear_agent_transient(agent)
         style, label = self._agent_style(agent)
-        clean_content = strip_ansi(str(content))
+        clean_content = strip_ansi(_extract_text_from_renderable(content))
         if self._consume_completed_stream(agent, clean_content):
             return
         if self._console:
@@ -949,9 +971,7 @@ class TerminalRenderer:
         """Exibe plain."""
         if agent:
             self.clear_agent_transient(agent)
-        clean_message = strip_ansi(str(message))
-        if agent:
-            clean_message = clean_message.strip("\r\n")
+        clean_message = strip_ansi(str(message)).strip("\r\n")
         if self._console:
             if agent:
                 style, label = self._agent_style(agent)
@@ -1037,7 +1057,8 @@ class TerminalRenderer:
             f"TOOLS: {total} chamadas · {ok_count} ok · {err_count} erro · {duration} "
             f"· último: {last_tool_name}({last_tool_status}) · trace_id={trace_id}"
         )
-        self.show_plain(summary, agent=agent)
+        prefix = f"{agent} " if isinstance(agent, str) and agent.strip() else ""
+        self.show_system_neutral(f"{prefix}{summary}")
 
     def show_handoff(self, from_agent, to_agent, task=None):
         """Exibe handoff."""

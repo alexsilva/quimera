@@ -44,6 +44,14 @@ def test_should_ignore_codex_stdin_noise():
     assert _should_ignore_stderr_line("codex", "real error\n") is False
 
 
+def test_should_ignore_interrupt_echo_caret_c():
+    assert _should_ignore_stderr_line("codex", "^C\n") is True
+    assert _should_ignore_stderr_line(None, "\x1b[2m^C\x1b[0m\r\n") is True
+    assert _should_ignore_stderr_line("codex", "\x03\n") is True
+    assert _should_ignore_stderr_line("codex", "\x03\x03\n") is True
+    assert _should_ignore_stderr_line("codex", "^C^C\n") is True
+
+
 def test_filter_stderr_lines_removes_codex_stdin_noise():
     assert _filter_stderr_lines(
         "codex",
@@ -526,7 +534,7 @@ def test_agent_client_run_summary_shows_formatted_codex_stdout(renderer):
     renderer.update_agent_transient.assert_any_call("codex", "message 2")
     renderer.update_agent_transient.assert_any_call("codex", "message 3")
     renderer.clear_agent_transient.assert_called_with("codex")
-    renderer.show_plain.assert_any_call("← codex concluído", agent="codex")
+    renderer.show_system_neutral.assert_any_call("← codex concluído")
 
 
 def test_agent_client_run_summary_flushes_compacted_responses_before_context(renderer):
@@ -1537,6 +1545,44 @@ def test_call_api_cancel_event_detection(renderer):
 
     assert result is None
     renderer.show_error.assert_called_with("[cancelado] pelo usuário")
+
+
+def test_show_cancelled_once_deduplicates_repeated_messages(renderer):
+    client = AgentClient(renderer)
+
+    client._show_cancelled_once()
+    client._show_cancelled_once()
+
+    renderer.show_error.assert_called_once_with("[cancelado] pelo usuário")
+    client.reset_cancel_notices()
+    client._show_cancelled_once()
+    assert renderer.show_error.call_count == 2
+
+
+def test_spy_output_presenter_drops_interrupt_echo_from_raw_stdout(renderer):
+    presenter = SpyOutputPresenter(renderer, Visibility.SUMMARY)
+
+    consumed = presenter.consume_stdout("unknown-agent", "^C\n")
+
+    assert consumed is False
+    renderer.show_plain.assert_not_called()
+
+
+def test_spy_output_presenter_drops_interrupt_echo_etx_from_raw_stdout(renderer):
+    presenter = SpyOutputPresenter(renderer, Visibility.SUMMARY)
+
+    consumed = presenter.consume_stdout("unknown-agent", "\x03\n")
+
+    assert consumed is False
+    renderer.show_plain.assert_not_called()
+
+
+def test_spy_output_presenter_never_renders_interrupt_echo_from_event_text(renderer):
+    presenter = SpyOutputPresenter(renderer, Visibility.FULL)
+
+    presenter.emit("codex", SpyEvent(kind="response", text="\x03"))
+
+    renderer.show_plain.assert_not_called()
 
 
 def test_call_api_stop_monitor_called_on_error(renderer):

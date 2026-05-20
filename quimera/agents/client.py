@@ -68,6 +68,8 @@ class AgentClient:
         self._cancel_event = threading.Event()
         self._esc_monitor = EscMonitor(self._cancel_event)
         self._user_cancelled = False
+        self._cancel_notice_shown = False
+        self._cancel_notice_lock = threading.Lock()
         self._agent_running = False
         self._current_proc = None
         self.session_id = session_id
@@ -101,6 +103,21 @@ class AgentClient:
             show_system_neutral(message)
             return
         self.renderer.show_system(message)
+
+    def reset_cancel_notices(self) -> None:
+        """Permite exibir novamente avisos de cancelamento em um novo ciclo."""
+        with self._cancel_notice_lock:
+            self._cancel_notice_shown = False
+
+    def _show_cancelled_once(self) -> None:
+        """Evita repetição de '[cancelado] pelo usuário' em cancelamentos concorrentes."""
+        should_show = False
+        with self._cancel_notice_lock:
+            if not self._cancel_notice_shown:
+                self._cancel_notice_shown = True
+                should_show = True
+        if should_show:
+            self._show_error("[cancelado] pelo usuário")
 
     # ------------------------------------------------------------------
     # Helpers de sinal (delegam para EscMonitor para retrocompatibilidade)
@@ -380,7 +397,7 @@ class AgentClient:
                         self._agent_running = False
                         self._current_proc = None
                         self._stop_esc_monitor()
-                        self._show_error("[cancelado] pelo usuário")
+                        self._show_cancelled_once()
                         return None
                     if termination == ProcessRunner.RATE_LIMIT:
                         self._agent_running = False
@@ -402,7 +419,7 @@ class AgentClient:
             proc.wait()
             if not silent and self.visibility == Visibility.SUMMARY:
                 status_word = "concluído" if proc.returncode == 0 else f"falhou (código {proc.returncode})"
-                self.renderer.show_plain(f"← {cmd[0]} {status_word}", agent=agent)
+                self._show_muted(f"← {cmd[0]} {status_word}")
             self._agent_running = False
             self._current_proc = None
             self._stop_esc_monitor()
@@ -685,7 +702,7 @@ class AgentClient:
                     if self._cancel_event.is_set():
                         self._user_cancelled = True
                         t.join(timeout=0.5)
-                        self._show_error("[cancelado] pelo usuário")
+                        self._show_cancelled_once()
                         return None
                     time.sleep(0.25)
                     if self.timeout is not None and self.timeout > 0:

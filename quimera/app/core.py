@@ -1379,6 +1379,9 @@ class QuimeraApp:
             cancel_event = getattr(agent_client, "_cancel_event", None)
             if cancel_event is not None:
                 cancel_event.clear()
+            reset_cancel_notices = getattr(agent_client, "reset_cancel_notices", None)
+            if callable(reset_cancel_notices):
+                reset_cancel_notices()
         try:
             self._do_process_chat_message(user)
         finally:
@@ -1427,12 +1430,91 @@ class QuimeraApp:
         if slot_semaphore is not None:
             slot_semaphore.release()
 
+    def _should_render_ui_event_above_prompt(self) -> bool:
+        """Retorna True quando há prompt ativo controlado por outra thread."""
+        stdin = sys.stdin
+        if stdin is None or not stdin.isatty():
+            return False
+        status_lock = getattr(self, "_nonblocking_input_status_lock", nullcontext())
+        with status_lock:
+            if self._nonblocking_input_status != "reading":
+                return False
+        owner_thread_id = getattr(self, "_prompt_owning_thread_id", None)
+        if owner_thread_id is None:
+            return False
+        return owner_thread_id != threading.get_ident()
+
+    def _run_ui_event_above_prompt(self, callback) -> bool:
+        """Tenta renderizar callback acima do prompt ativo via InputGate."""
+        if not callable(callback):
+            return False
+        input_gate = getattr(self, "input_gate", None)
+        run_in_terminal_message = getattr(input_gate, "run_in_terminal_message", None)
+        if not callable(run_in_terminal_message):
+            return False
+        output_lock = getattr(self, "_output_lock", nullcontext())
+
+        def _render_callback() -> None:
+            with output_lock:
+                callback()
+                flush = getattr(self.renderer, "flush", None)
+                if callable(flush):
+                    flush()
+
+        try:
+            return bool(run_in_terminal_message(_render_callback))
+        except Exception:
+            return False
+
     def _handle_local_processing_interrupt(self) -> None:
         """Cancela só o processamento atual e devolve o chat ao input."""
         if hasattr(self, "turn_manager") and self.turn_manager is not None:
             self.turn_manager.reset()
         self.show_muted_message("[cancelado] pelo usuário")
         self._refresh_parallel_toolbar()
+
+    def _suppress_tty_control_echo(self) -> None:
+        """Desativa eco visual de controles (^C/^Z) enquanto o chat está ativo."""
+        stdin = getattr(sys, "stdin", None)
+        if stdin is None or not getattr(stdin, "isatty", lambda: False)():
+            return
+        try:
+            import termios  # pylint: disable=import-outside-toplevel
+        except Exception:
+            return
+        if not hasattr(termios, "ECHOCTL"):
+            return
+        try:
+            fd = stdin.fileno()
+            attrs = termios.tcgetattr(fd)
+        except Exception:
+            return
+        lflag = attrs[3]
+        if (lflag & termios.ECHOCTL) == 0:
+            return
+        updated = list(attrs)
+        updated[3] = lflag & ~termios.ECHOCTL
+        try:
+            termios.tcsetattr(fd, termios.TCSANOW, updated)
+        except Exception:
+            return
+        self._tty_echoctl_fd = fd
+        self._tty_echoctl_attrs = attrs
+
+    def _restore_tty_control_echo(self) -> None:
+        """Restaura flags de TTY alteradas por _suppress_tty_control_echo()."""
+        fd = getattr(self, "_tty_echoctl_fd", None)
+        attrs = getattr(self, "_tty_echoctl_attrs", None)
+        if fd is None or attrs is None:
+            return
+        try:
+            import termios  # pylint: disable=import-outside-toplevel
+            termios.tcsetattr(fd, termios.TCSADRAIN, attrs)
+        except Exception:
+            pass
+        finally:
+            self._tty_echoctl_fd = None
+            self._tty_echoctl_attrs = None
 
     def _process_async_chat_message(self, user):
         """Processa um prompt vindo da fila assíncrona e libera o slot ao final."""
@@ -1491,22 +1573,52 @@ class QuimeraApp:
             try:
                 event_type = event.type
                 if event_type == RenderEvent.SYSTEM:
-                    self.renderer.show_system_neutral(event.payload)
+                    self.show_muted_message(event.payload)
                 elif event_type == RenderEvent.TEXT:
                     no_response = (event.metadata or {}).get("no_response", False)
-                    if no_response:
-                        self.renderer.show_no_response(event.agent)
-                    else:
-                        self.renderer.show_message(event.agent, event.payload)
+
+                    def _render_text_event() -> None:
+                        if no_response:
+                            self.renderer.show_no_response(event.agent)
+                        else:
+                            self.renderer.show_message(event.agent, event.payload)
+
+                    if self._should_render_ui_event_above_prompt():
+                        if not self._run_ui_event_above_prompt(_render_text_event):
+                            self._clear_user_prompt_line_if_needed()
+                            _render_text_event()
+                            self._redisplay_user_prompt_if_needed(clear_first=False)
+                        continue
+                    _render_text_event()
                 elif event_type == RenderEvent.WARNING:
-                    self.renderer.show_warning(event.payload)
+                    self.show_warning_message(event.payload)
                 elif event_type == RenderEvent.ERROR:
-                    self.renderer.show_error(event.payload)
+                    self.show_error_message(event.payload)
                 elif event_type == RenderEvent.HANDOFF:
                     meta = event.metadata or {}
-                    self.renderer.show_handoff(event.agent, meta.get("to"), task=meta.get("task"))
+
+                    def _render_handoff_event() -> None:
+                        self.renderer.show_handoff(event.agent, meta.get("to"), task=meta.get("task"))
+
+                    if self._should_render_ui_event_above_prompt():
+                        if not self._run_ui_event_above_prompt(_render_handoff_event):
+                            self._clear_user_prompt_line_if_needed()
+                            _render_handoff_event()
+                            self._redisplay_user_prompt_if_needed(clear_first=False)
+                        continue
+                    _render_handoff_event()
                 elif event_type == RenderEvent.TURN_SUMMARY:
-                    self.renderer.show_turn_summary(event.agent, event.payload)
+
+                    def _render_turn_summary_event() -> None:
+                        self.renderer.show_turn_summary(event.agent, event.payload)
+
+                    if self._should_render_ui_event_above_prompt():
+                        if not self._run_ui_event_above_prompt(_render_turn_summary_event):
+                            self._clear_user_prompt_line_if_needed()
+                            _render_turn_summary_event()
+                            self._redisplay_user_prompt_if_needed(clear_first=False)
+                        continue
+                    _render_turn_summary_event()
                 elif event_type == RenderEvent.REDISPLAY:
                     if hasattr(self, "_clear_user_prompt_line_if_needed"):
                         self._clear_user_prompt_line_if_needed()
@@ -1530,6 +1642,7 @@ class QuimeraApp:
         agent_client = getattr(self, "agent_client", None)
         if agent_client:
             agent_client._user_cancelled = False
+        self._suppress_tty_control_echo()
         show_banner = getattr(self.renderer, "show_banner", self.renderer.show_system)
         show_banner(self._build_welcome_message())
         _show_neutral = getattr(self.renderer, "show_system_neutral", self.renderer.show_system)
@@ -1709,6 +1822,7 @@ class QuimeraApp:
                     cancel_event.set()
             self.show_muted_message(MSG_SHUTDOWN)
         finally:
+            self._restore_tty_control_echo()
             try:
                 if threaded_chat and chat_queue is not None:
                     chat_queue.put(None)

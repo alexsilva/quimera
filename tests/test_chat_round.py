@@ -227,8 +227,34 @@ class TestProcessMainFlow(unittest.TestCase):
             [("codex", "resposta codex")],
         )
 
-    def test_threaded_mode_skips_failover_on_no_response(self):
-        """Em threads>1, no-response não deve encadear fallback para outros agentes."""
+    def test_threaded_mode_failover_tries_next_agent(self):
+        """Em threads>1, no-response deve tentar fallback para outros agentes."""
+        app = _make_app(active_agents=["codex", "claude", "opencode"], threads=2)
+        app.parse_routing = Mock(return_value=("codex", "status", False))
+        responses = iter([None, "ok"])
+        app.dispatch_services.call_agent = Mock(side_effect=lambda *a, **kw: next(responses))
+
+        def fake_parse(resp):
+            if resp is None:
+                return (None, None, None, False, False, None)
+            return (resp, None, None, False, False, None)
+
+        app.parse_response = Mock(side_effect=fake_parse)
+
+        app.chat_round_orchestrator.process("status")
+
+        self.assertEqual(app.dispatch_services.call_agent.call_count, 2)
+        self.assertEqual(
+            app.dispatch_services.call_agent.call_args_list[0].args[0],
+            "codex",
+        )
+        self.assertEqual(
+            app.dispatch_services.call_agent.call_args_list[1].args[0],
+            "claude",
+        )
+
+    def test_threaded_mode_all_agents_fail_ends_round(self):
+        """Em threads>1, quando todos os agentes falham, a rodada termina."""
         app = _make_app(active_agents=["codex", "claude", "opencode"], threads=2)
         app.parse_routing = Mock(return_value=("codex", "status", False))
         app.dispatch_services.call_agent = Mock(return_value=None)
@@ -236,13 +262,91 @@ class TestProcessMainFlow(unittest.TestCase):
 
         app.chat_round_orchestrator.process("status")
 
-        app.dispatch_services.call_agent.assert_called_once_with(
-            "codex",
-            is_first_speaker=True,
-            protocol_mode="standard",
-            request_override="status",
-            max_retries=1,
+        self.assertEqual(app.dispatch_services.call_agent.call_count, 3)
+        app.renderer.show_warning.assert_called_once_with(
+            "Nenhum agente disponível respondeu."
         )
+
+    def test_main_flow_fallback_cancelled_resets_turn_without_warning(self):
+        """Cancelamento após fallback no fluxo principal deve resetar turno e retornar."""
+        app = _make_app(active_agents=["codex", "claude", "opencode"], threads=2)
+        app.parse_routing = Mock(return_value=("codex", "status", False))
+        call_count = [0]
+
+        def fake_call(*args, **kwargs):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return None
+            app.agent_client._user_cancelled = True
+            return "claude respondeu"
+
+        app.dispatch_services.call_agent = Mock(side_effect=fake_call)
+
+        def fake_parse(resp):
+            if resp is None:
+                return (None, None, None, False, False, None)
+            return (resp, None, None, False, False, None)
+
+        app.parse_response = Mock(side_effect=fake_parse)
+
+        app.chat_round_orchestrator.process("status")
+
+        self.assertEqual(app.dispatch_services.call_agent.call_count, 2)
+        app.turn_manager.reset.assert_called_once()
+        app.renderer.show_warning.assert_not_called()
+        app.dispatch_services.print_response.assert_not_called()
+
+    def test_handle_cancelled_is_idempotent_for_shared_cancel(self):
+        """Mesmo cancelamento compartilhado não deve repetir aviso de fluxo interrompido."""
+        app = _make_app(active_agents=["codex", "claude"], threads=2)
+        orchestrator = app.chat_round_orchestrator
+
+        orchestrator._handle_cancelled()
+        orchestrator._handle_cancelled()
+
+        app.renderer.show_system.assert_called_once_with("[cancelado] fluxo interrompido.")
+        app.turn_manager.reset.assert_called_once()
+
+    def test_main_flow_failover_message_uses_latest_failed_agent(self):
+        """Mensagem de failover deve apontar o último agente que falhou."""
+        app = _make_app(active_agents=["codex", "claude", "opencode"], threads=2)
+        app.parse_routing = Mock(return_value=("codex", "status", False))
+        responses = iter([None, None, "ok"])
+        app.dispatch_services.call_agent = Mock(side_effect=lambda *a, **kw: next(responses))
+
+        def fake_parse(resp):
+            if resp is None:
+                return (None, None, None, False, False, None)
+            return (resp, None, None, False, False, None)
+
+        app.parse_response = Mock(side_effect=fake_parse)
+
+        app.chat_round_orchestrator.process("status")
+
+        fallback_messages = [
+            call.args[0]
+            for call in app.renderer.show_system.call_args_list
+            if call.args and str(call.args[0]).startswith("[fallback]")
+        ]
+        self.assertIn("[fallback] codex não respondeu; claude assumiu", fallback_messages)
+        self.assertIn("[fallback] claude não respondeu; opencode assumiu", fallback_messages)
+
+    def test_main_flow_cancelled_before_fallback_message_skips_fallback_notice(self):
+        """Se cancelar no limiar do fallback, não deve imprimir aviso de fallback."""
+        app = _make_app(active_agents=["codex", "claude", "opencode"], threads=2)
+        app.parse_routing = Mock(return_value=("codex", "status", False))
+        app.dispatch_services.call_agent = Mock(return_value=None)
+        app.parse_response = Mock(return_value=(None, None, None, False, False, None))
+
+        cancel_checks = iter([False, False, False, True])
+        app.chat_round_orchestrator._is_cancelled = Mock(side_effect=lambda: next(cancel_checks))
+
+        app.chat_round_orchestrator.process("status")
+
+        shown_messages = [call.args[0] for call in app.renderer.show_system.call_args_list if call.args]
+        self.assertIn("[cancelado] fluxo interrompido.", shown_messages)
+        self.assertFalse(any(msg.startswith("[fallback]") for msg in shown_messages))
+        app.turn_manager.reset.assert_called_once()
 
     def test_process_rotates_round_robin_at_prompt_start(self):
         """Prompts sequenciais sem prefixo explícito reservam agentes em round-robin."""

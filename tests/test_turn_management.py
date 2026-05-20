@@ -1,5 +1,6 @@
 """Testes de gerenciamento de turno e comportamento de disparo de agentes."""
 import queue
+import sys
 import threading
 import time
 import unittest
@@ -363,6 +364,44 @@ class TestTurnCycle(unittest.TestCase):
         self.assertTrue(app.turn_manager.is_human_turn)
         app.session_services.shutdown.assert_called_once()
         app.agent_client.close.assert_called_once()
+
+    def test_drain_ui_events_routes_agent_text_above_active_prompt(self):
+        """Eventos TEXT devem usar run_in_terminal quando o prompt humano está ativo."""
+        app = QuimeraApp.__new__(QuimeraApp)
+        rendered_messages = []
+        scheduled_callbacks = []
+
+        class Renderer:
+            def show_message(self, agent, payload):
+                rendered_messages.append((agent, payload))
+
+            def flush(self):
+                return None
+
+        class InputGate:
+            def run_in_terminal_message(self, callback):
+                scheduled_callbacks.append(callback)
+                return True
+
+        app.renderer = Renderer()
+        app.input_gate = InputGate()
+        app._output_lock = threading.Lock()
+        app._nonblocking_input_status_lock = threading.Lock()
+        app._nonblocking_input_status = "reading"
+        app._prompt_owning_thread_id = object()
+
+        ui_queue = queue.Queue()
+        ui_queue.put(RenderEvent(RenderEvent.TEXT, "mensagem do agente", agent="codex"))
+
+        with patch("quimera.app.core.sys.stdin") as mock_stdin:
+            mock_stdin.isatty.return_value = True
+            QuimeraApp._drain_ui_events(app, ui_queue)
+
+        self.assertEqual(rendered_messages, [])
+        self.assertEqual(len(scheduled_callbacks), 1)
+
+        scheduled_callbacks[0]()
+        self.assertEqual(rendered_messages, [("codex", "mensagem do agente")])
 
     def test_run_threaded_keyboard_interrupt_without_local_cancel_still_shuts_down(self):
         """Ctrl+C no input ocioso em modo threaded deve continuar encerrando o chat."""
@@ -867,7 +906,7 @@ class TestSingleAgentPerTurn(unittest.TestCase):
 
         QuimeraApp._do_process_chat_message(app, "pergunta")
 
-        app.show_system_message.assert_called_once_with("\nResponda para CLAUDE:\n")
+        app.show_system_message.assert_called_once_with("Responda para CLAUDE:")
 
     def test_handoff_without_body_continues_chain(self):
         """Agente que responde só com handoff JSON (sem body) não cai em fallback."""
@@ -1123,6 +1162,53 @@ class TestParallelToolbarState(unittest.TestCase):
         app._decrement_chat_inflight()
 
         app.input_gate.redisplay.assert_called_once_with()
+
+
+class TestTTYControlEcho(unittest.TestCase):
+
+    def test_suppress_and_restore_tty_control_echo(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app._tty_echoctl_fd = None
+        app._tty_echoctl_attrs = None
+
+        stdin_mock = Mock()
+        stdin_mock.isatty.return_value = True
+        stdin_mock.fileno.return_value = 9
+        fake_termios = Mock()
+        fake_termios.ECHOCTL = 0x200
+        fake_termios.TCSANOW = 0
+        fake_termios.TCSADRAIN = 1
+        original_attrs = [0, 0, 0, 0x200, 0, 0, [b"\x03"]]
+        fake_termios.tcgetattr.return_value = list(original_attrs)
+
+        with patch("quimera.app.core.sys.stdin", stdin_mock), patch.dict(sys.modules, {"termios": fake_termios}):
+            QuimeraApp._suppress_tty_control_echo(app)
+            self.assertEqual(app._tty_echoctl_fd, 9)
+            self.assertEqual(app._tty_echoctl_attrs, original_attrs)
+            fake_termios.tcsetattr.assert_called_with(9, fake_termios.TCSANOW, [0, 0, 0, 0, 0, 0, [b"\x03"]])
+
+            QuimeraApp._restore_tty_control_echo(app)
+            self.assertIsNone(app._tty_echoctl_fd)
+            self.assertIsNone(app._tty_echoctl_attrs)
+            self.assertEqual(fake_termios.tcsetattr.call_count, 2)
+            fake_termios.tcsetattr.assert_called_with(9, fake_termios.TCSADRAIN, original_attrs)
+
+    def test_suppress_skips_when_not_tty(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app._tty_echoctl_fd = None
+        app._tty_echoctl_attrs = None
+
+        stdin_mock = Mock()
+        stdin_mock.isatty.return_value = False
+        fake_termios = Mock()
+
+        with patch("quimera.app.core.sys.stdin", stdin_mock), patch.dict(sys.modules, {"termios": fake_termios}):
+            QuimeraApp._suppress_tty_control_echo(app)
+
+        fake_termios.tcgetattr.assert_not_called()
+        fake_termios.tcsetattr.assert_not_called()
+        self.assertIsNone(app._tty_echoctl_fd)
+        self.assertIsNone(app._tty_echoctl_attrs)
 
 
 if __name__ == "__main__":

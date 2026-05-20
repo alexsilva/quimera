@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import inspect
+import threading
 
 from ..constants import HANDOFF_SYNTHESIS_MSG, MSG_EMPTY_INPUT, USER_ROLE
 from ..prompt_kinds import PromptKind
@@ -111,6 +112,7 @@ class ChatRoundOrchestrator:
         self._merge_staging_to_workspace_fn = merge_staging_to_workspace
         self._generate_handoff_id = generate_handoff_id or (lambda task, target: f"gen-{target}")
         self._persist_message_supports_snapshot: bool | None = None
+        self._cancel_notice_tls = threading.local()
 
     # ------------------------------------------------------------------
     # Accessors de estado — preferem SessionState, caem nos lambdas legados
@@ -331,12 +333,16 @@ class ChatRoundOrchestrator:
         return bool(self._agent_client and getattr(self._agent_client, '_user_cancelled', False))
 
     def _handle_cancelled(self) -> None:
+        if bool(getattr(self._cancel_notice_tls, "shown", False)):
+            return
+        self._cancel_notice_tls.shown = True
         self._show_system("[cancelado] fluxo interrompido.")
         if self._turn_manager is not None:
             self._turn_manager.reset()
 
     def process(self, user):
         """Implementação real do processamento de mensagens do chat."""
+        self._cancel_notice_tls.shown = False
         self._set_parallel_toolbar_state(
             active=0,
             queued=0,
@@ -385,48 +391,56 @@ class ChatRoundOrchestrator:
                 self._handle_cancelled()
                 return
 
-            if self._threads > 1:
+            fallback_candidates = [agent for agent in self._agent_pool.agents if agent != first_agent]
+            failed_agent = first_agent
+            for fallback_agent in fallback_candidates:
+                if self._is_cancelled():
+                    self._handle_cancelled()
+                    return
                 logger.info(
-                    "[CHAT_FAILOVER] skipped in threaded mode for first agent=%s",
-                    first_agent,
+                    "[CHAT_FAILOVER] trying %s after %s returned no response",
+                    fallback_agent,
+                    failed_agent,
                 )
-            else:
-                fallback_candidates = [agent for agent in self._agent_pool.agents if agent != first_agent]
-                failed_agent = first_agent
-                for fallback_agent in fallback_candidates:
-                    logger.info(
-                        "[CHAT_FAILOVER] trying %s after %s returned no response",
-                        fallback_agent,
-                        failed_agent,
-                    )
-                    self._show_system(
-                        f"[fallback] {failed_agent} não respondeu; {fallback_agent} assumiu"
-                    )
-                    if self._is_cancelled():
-                        self._handle_cancelled()
-                        return
-                    fallback_response = self._call_agent(
-                        fallback_agent,
-                        is_first_speaker=True,
-                        primary=False,
-                        protocol_mode="standard",
-                        **prompt_binding,
-                    )
-                    fallback_response, route_target, handoff, extend, needs_human_input, _ = self._parse_response(
-                        fallback_response
-                    )
-                    if fallback_response is None and not route_target and not needs_human_input:
-                        continue
-                    first_agent = fallback_agent
-                    self._set_summary_agent_preference(first_agent)
-                    response = fallback_response
-                    break
+                if self._is_cancelled():
+                    self._handle_cancelled()
+                    return
+                self._show_system(
+                    f"[fallback] {failed_agent} não respondeu; {fallback_agent} assumiu"
+                )
+                fallback_response = self._call_agent(
+                    fallback_agent,
+                    is_first_speaker=True,
+                    primary=False,
+                    protocol_mode="standard",
+                    **prompt_binding,
+                )
+                fallback_response, route_target, handoff, extend, needs_human_input, _ = self._parse_response(
+                    fallback_response
+                )
+                if self._is_cancelled():
+                    self._handle_cancelled()
+                    return
+                if fallback_response is None and not route_target and not needs_human_input:
+                    failed_agent = fallback_agent
+                    continue
+                first_agent = fallback_agent
+                self._set_summary_agent_preference(first_agent)
+                response = fallback_response
+                break
+
+            if response is None and not route_target and not needs_human_input:
+                if self._is_cancelled():
+                    self._handle_cancelled()
+                    return
+                self._show_warning("Nenhum agente disponível respondeu.")
+                return
 
         if needs_human_input:
             if response:
                 self._show_agent_message(first_agent, response)
             self._set_pending_input_for(first_agent)
-            self._show_system(f"\nResponda para {first_agent.upper()}:\n")
+            self._show_system(f"Responda para {first_agent.upper()}:")
             return
         self._dispatch_services.print_response(first_agent, response)
         if response is not None:
@@ -787,7 +801,7 @@ class ChatRoundOrchestrator:
                     self._session_services.persist_message(agent, response)
                 if needs_human_input:
                     self._set_pending_input_for(agent)
-                    self._show_system(f"\nResponda para {agent.upper()}:\n")
+                    self._show_system(f"Responda para {agent.upper()}:")
                     break
                 if route_target == agent:
                     logger.warning(
