@@ -64,6 +64,7 @@ from ..constants import (
     Visibility,
 )
 from ..modes import MODES, get_mode
+from ..shared_state import AGENT_STATE_KEYS, bootstrap_state_key_stamps, expire_stale_keys
 from .config import logger
 
 
@@ -235,6 +236,17 @@ class QuimeraApp:
         self.agent_client.tool_event_callback = self._record_tool_event
         self.debug_prompt_metrics = debug
         self.shared_state = last_session["shared_state"]
+        # Sessão nova: limpa estado de agentes para evitar objetivo "grudado".
+        self._turn_stamps: dict = {}
+        if not history_restored:
+            for key in AGENT_STATE_KEYS:
+                self.shared_state.pop(key, None)
+            self.shared_state.pop("_current_turn", None)
+        bootstrap_state_key_stamps(
+            self.shared_state,
+            self._turn_stamps,
+            current_turn=int(self.shared_state.get("_current_turn", 0) or 0),
+        )
         self._shared_state_lock = threading.Lock()
         self._chat_state = SessionState(
             history=self.history,
@@ -245,10 +257,11 @@ class QuimeraApp:
         self._chat_state.summary_agent_preference = self.agent_pool.primary
         self._lock = threading.Lock()
         self.protocol = AppProtocol(
-            lock=self._lock,
+            lock=self._shared_state_lock,
             shared_state=self.shared_state,
             workspace=self.workspace,
             decisions_log_path=self.workspace.decisions_log,
+            turn_stamps=self._turn_stamps,
         )
         self._history_lock = threading.Lock()
         self._output_lock = threading.Lock()
@@ -1269,15 +1282,43 @@ class QuimeraApp:
         """Interpreta response."""
         if getattr(self.protocol, "_shared_state", None) is not self.shared_state:
             self.protocol._shared_state = self.shared_state
-        current_lock = getattr(self, "_lock", None)
+        current_lock = getattr(self, "_shared_state_lock", None) or getattr(self, "_lock", None)
         if current_lock is not None and getattr(self.protocol, "_lock", None) is not current_lock:
             self.protocol._lock = current_lock
         return self.protocol.parse_response(response)
 
+    def _advance_shared_state_turn(self) -> None:
+        """Avança turno lógico de conversa e expira agent keys antigas."""
+        shared = getattr(self, "shared_state", None)
+        if not isinstance(shared, dict):
+            return
+        state_lock = getattr(self, "_shared_state_lock", None) or getattr(self, "_lock", None)
+        if state_lock is None:
+            return
+        with state_lock:
+            turn = int(shared.get("_current_turn", 0) or 0) + 1
+            shared["_current_turn"] = turn
+            stamps = getattr(self, "_turn_stamps", None)
+            if isinstance(stamps, dict):
+                expired = expire_stale_keys(shared, stamps, turn)
+                if expired:
+                    logger.info("[shared_state] expired stale keys: %s", expired)
+
     def reset_shared_state(self) -> None:
         """Limpa o shared_state em memória e persiste o snapshot atualizado."""
-        with self._lock:
+        state_lock = getattr(self, "_shared_state_lock", None) or getattr(self, "_lock", None)
+        if state_lock is None:
             self.shared_state.clear()
+            stamps = getattr(self, "_turn_stamps", None)
+            if isinstance(stamps, dict):
+                stamps.clear()
+            self.storage.save_history(self.history, shared_state=self.shared_state)
+            return
+        with state_lock:
+            self.shared_state.clear()
+            stamps = getattr(self, "_turn_stamps", None)
+            if isinstance(stamps, dict):
+                stamps.clear()
             self.storage.save_history(self.history, shared_state=self.shared_state)
 
     def _merge_staging_to_workspace(self, staging_root: Path):
@@ -1595,6 +1636,8 @@ class QuimeraApp:
 
                 if self.handle_command(user):
                     continue
+
+                self._advance_shared_state_turn()
 
                 if chat_queue is not None:
                     acquired_async_slot = False

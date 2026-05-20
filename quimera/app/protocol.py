@@ -6,7 +6,7 @@ import time
 from dataclasses import dataclass
 
 from ..constants import EXTEND_MARKER, NEEDS_INPUT_MARKER, STATE_UPDATE_START
-from ..shared_state import is_agent_state_key, normalize_state_key, validate_agent_state_value
+from ..shared_state import is_agent_state_key, normalize_state_key, validate_agent_state_value, stamp_state_keys
 from . import logger
 
 
@@ -36,13 +36,14 @@ class AppProtocol:
     PAYLOAD_FIELD_RE = re.compile(r"^\s*(task|context|expected)\s*:", re.IGNORECASE)
     PROTOCOL_ENVELOPE_TYPES = ('"type": "handoff"', '"type": "state_update"', '"type": "ack"')
 
-    def __init__(self, lock, shared_state, workspace=None, decisions_log_path=None) -> None:
+    def __init__(self, lock, shared_state, workspace=None, decisions_log_path=None, turn_stamps=None) -> None:
         """Inicializa uma instância de AppProtocol."""
         self._lock = lock
         self._shared_state = shared_state
         self._workspace = workspace
         self._decisions_log_path = decisions_log_path
         self._decisions_logger = None
+        self._turn_stamps = turn_stamps if turn_stamps is not None else {}
 
     def _get_decisions_logger(self):
         """Executa lazy load do DecisionsLogger."""
@@ -84,6 +85,7 @@ class AppProtocol:
             return False
 
         with self._lock:
+            stamped_keys = set()
             for key, value in payload.items():
                 normalized_key = normalize_state_key(key)
                 if not normalized_key:
@@ -102,14 +104,20 @@ class AppProtocol:
                 merged = self.merge_state_value(current, value)
                 if merged is None:
                     self._shared_state.pop(normalized_key, None)
+                    self._turn_stamps.pop(normalized_key, None)
                 else:
                     self._shared_state[normalized_key] = merged
+                    stamped_keys.add(normalized_key)
                     if normalized_key == "decisions" and isinstance(value, list):
                         dlogger = self._get_decisions_logger()
                         if dlogger:
                             for item in value:
                                 dlogger.append(item, {
                                     "workspace": str(self._workspace.cwd) if self._workspace else None})
+            # Registrar turno apenas para chaves efetivamente aplicadas.
+            if stamped_keys:
+                current_turn = self._shared_state.get("_current_turn", 0)
+                stamp_state_keys(self._turn_stamps, stamped_keys, current_turn)
         return True
 
     @staticmethod

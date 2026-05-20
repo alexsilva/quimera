@@ -61,9 +61,10 @@ def _extract_block(prompt: str, tag: str) -> str:
 
 def _make_protocol(app):
     return AppProtocol(
-        lock=getattr(app, '_lock', threading.Lock()),
+        lock=getattr(app, '_shared_state_lock', None) or getattr(app, '_lock', threading.Lock()),
         shared_state=getattr(app, 'shared_state', {}),
         workspace=getattr(app, 'workspace', None),
+        turn_stamps=getattr(app, '_turn_stamps', None),
     )
 
 
@@ -5672,6 +5673,8 @@ class AppProtocolDirectTests(unittest.TestCase):
         app = QuimeraApp.__new__(QuimeraApp)
         import threading
         app._lock = threading.Lock()
+        app._shared_state_lock = threading.Lock()
+        app._turn_stamps = {}
         app.shared_state = shared_state if shared_state is not None else {}
         app.session_state = session_state
         return app
@@ -5792,6 +5795,51 @@ class AppProtocolDirectTests(unittest.TestCase):
         result = proto.apply_state_update('{"allowed_scope": "parser.py"}')
         self.assertTrue(result)
         self.assertEqual(app.shared_state, {})
+
+    def test_apply_state_update_stamps_only_effective_keys(self):
+        app = self._make_app(shared_state={"_current_turn": 9})
+        proto = _make_protocol(app)
+
+        result = proto.apply_state_update(
+            '{"goal_canonical":"valid","allowed_scope":"invalid","non_agent":"x","next_step":"seguir"}'
+        )
+
+        self.assertTrue(result)
+        self.assertEqual(
+            app.shared_state,
+            {"_current_turn": 9, "goal_canonical": "valid", "next_step": "seguir"},
+        )
+        self.assertEqual(app._turn_stamps["goal_canonical"], 9)
+        self.assertEqual(app._turn_stamps["next_step"], 9)
+        self.assertNotIn("allowed_scope", app._turn_stamps)
+
+    def test_apply_state_update_clearing_key_removes_stamp(self):
+        app = self._make_app(shared_state={"_current_turn": 5, "goal_canonical": "old"})
+        app._turn_stamps["goal_canonical"] = 4
+        proto = _make_protocol(app)
+
+        result = proto.apply_state_update('{"goal_canonical": ""}')
+
+        self.assertTrue(result)
+        self.assertNotIn("goal_canonical", app.shared_state)
+        self.assertNotIn("goal_canonical", app._turn_stamps)
+
+    def test_advance_shared_state_turn_increments_once_per_call_and_expires(self):
+        app = self._make_app(
+            shared_state={
+                "_current_turn": 10,
+                "goal_canonical": "g",
+                "current_step": "s",
+            }
+        )
+        app._turn_stamps["goal_canonical"] = 0
+        app._turn_stamps["current_step"] = 10
+
+        app._advance_shared_state_turn()
+
+        self.assertEqual(app.shared_state["_current_turn"], 11)
+        self.assertNotIn("goal_canonical", app.shared_state)
+        self.assertIn("current_step", app.shared_state)
 
     # --- parse_handoff_payload ---
 

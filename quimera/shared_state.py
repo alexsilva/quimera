@@ -98,3 +98,47 @@ def build_task_reference_payload(shared_state) -> dict:
     """Retorna o subconjunto do estado usado como referência em tasks."""
     shared = shared_state or {}
     return trim_state(shared, allowed_keys=TASK_REFERENCE_KEYS)
+
+
+# --- TTL por turno para agent keys ---
+
+# Número máximo de turnos que uma agent key sobrevive sem reafirmação.
+STATE_KEY_MAX_AGE_TURNS = 10
+
+def stamp_state_keys(turn_stamps: dict, keys: set[str], current_turn: int) -> None:
+    """Registra o turno atual para cada key atualizada.
+
+    ``turn_stamps`` é um dicionário externo mantido separadamente do
+    ``shared_state`` para não poluir o estado visível a agentes/testes.
+    """
+    for key in keys:
+        if key in AGENT_STATE_KEYS:
+            turn_stamps[key] = current_turn
+
+
+def bootstrap_state_key_stamps(shared_state: dict, turn_stamps: dict, current_turn: int = 0) -> None:
+    """Inicializa stamps para agent keys já presentes no estado restaurado."""
+    if not isinstance(shared_state, dict):
+        return
+    for key in AGENT_STATE_KEYS:
+        if key in shared_state:
+            turn_stamps.setdefault(key, current_turn)
+
+
+def expire_stale_keys(shared_state: dict, turn_stamps: dict, current_turn: int, max_age: int = STATE_KEY_MAX_AGE_TURNS) -> list[str]:
+    """Remove agent keys não reafirmadas nos últimos ``max_age`` turnos.
+
+    ``turn_stamps`` é um dicionário externo de {key: last_turn}.
+    Retorna lista de keys expiradas.
+    """
+    expired = []
+    for key in list(turn_stamps):
+        if key not in AGENT_STATE_KEYS:
+            turn_stamps.pop(key, None)
+            continue
+        age = current_turn - turn_stamps[key]
+        if age > max_age:
+            shared_state.pop(key, None)
+            turn_stamps.pop(key, None)
+            expired.append(key)
+    return expired
