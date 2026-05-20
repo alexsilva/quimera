@@ -407,6 +407,66 @@ class TestTerminalRenderer:
 
         assert mock_live.update.call_count >= 1
 
+    def test_update_agent_transient_prompt_active_emits_compact_snapshots(self):
+        renderer = TerminalRenderer()
+        renderer._console = Console(width=100, record=True, force_terminal=False)
+        renderer.set_prompt_integration(lambda: True, None)
+
+        with patch("quimera.ui._agent_style", return_value=("cyan", "🔷 Codex")), patch(
+            "quimera.ui.renderer.time.monotonic",
+            side_effect=[0.0, 0.3, 2.1],
+        ):
+            renderer.update_agent_transient("codex", "mensagem 1")
+            renderer.update_agent_transient("codex", "mensagem 2")
+            renderer.update_agent_transient("codex", "mensagem 3")
+
+        renderer.flush()
+        rendered = renderer._console.export_text()
+        assert "🔷 Codex mensagem 1" in rendered
+        assert "🔷 Codex … mensagem 3" in rendered
+        assert "mensagem 2" not in rendered
+        renderer.close(timeout=1.0)
+
+    def test_clear_agent_transient_resets_prompt_snapshot_buffer(self):
+        renderer = TerminalRenderer()
+        renderer._console = Console(width=100, record=True, force_terminal=False)
+        renderer.set_prompt_integration(lambda: True, None)
+
+        with patch("quimera.ui._agent_style", return_value=("cyan", "🔷 Codex")), patch(
+            "quimera.ui.renderer.time.monotonic",
+            side_effect=[0.0, 0.2, 0.4],
+        ):
+            renderer.update_agent_transient("codex", "mensagem 1")
+            renderer.update_agent_transient("codex", "mensagem 2")
+            renderer.clear_agent_transient("codex")
+            renderer.update_agent_transient("codex", "mensagem 3")
+
+        renderer.flush()
+        rendered = renderer._console.export_text()
+        assert "🔷 Codex mensagem 1" in rendered
+        assert "🔷 Codex mensagem 3" in rendered
+        assert "🔷 Codex … mensagem 3" not in rendered
+        renderer.close(timeout=1.0)
+
+    def test_clear_agent_transient_flushes_latest_suppressed_prompt_snapshot(self):
+        renderer = TerminalRenderer()
+        renderer._console = Console(width=100, record=True, force_terminal=False)
+        renderer.set_prompt_integration(lambda: True, None)
+
+        with patch("quimera.ui._agent_style", return_value=("cyan", "🔷 Codex")), patch(
+            "quimera.ui.renderer.time.monotonic",
+            side_effect=[0.0, 0.2],
+        ):
+            renderer.update_agent_transient("codex", "mensagem 1")
+            renderer.update_agent_transient("codex", "mensagem 2")
+            renderer.clear_agent_transient("codex")
+
+        renderer.flush()
+        rendered = renderer._console.export_text()
+        assert "🔷 Codex mensagem 1" in rendered
+        assert "🔷 Codex … mensagem 2" in rendered
+        renderer.close(timeout=1.0)
+
     def test_start_message_stream_disables_auto_refresh(self, mock_renderer):
         # Live é criado no writer thread (_ensure_live); auto_refresh=False elimina repaints ociosos
         with patch("quimera.ui.Live") as mock_live:

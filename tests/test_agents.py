@@ -498,11 +498,12 @@ def test_agent_client_run_spy_shows_codex_stdout_context(renderer):
             result = client.run(["codex", "exec"], silent=False, agent="codex", show_status=False)
 
     assert "agent_message" in result
-    renderer.show_plain.assert_any_call("Vou checar o estado do repositório antes de editar", agent="codex")
+    renderer.update_agent_transient.assert_any_call("codex", "Vou checar o estado do repositório antes de editar")
     renderer.show_plain.assert_any_call("$ git status", agent="codex")
     # exit_code=0 é silencioso — nenhum [ok] emitido
-    renderer.show_plain.assert_any_call("Encontrei alterações locais e vou seguir sem revertê-las.",
-                                        agent="codex")
+    renderer.update_agent_transient.assert_any_call(
+        "codex", "Encontrei alterações locais e vou seguir sem revertê-las."
+    )
 
 
 def test_agent_client_run_summary_shows_formatted_codex_stdout(renderer):
@@ -521,9 +522,10 @@ def test_agent_client_run_summary_shows_formatted_codex_stdout(renderer):
             client.run(["codex", "exec"], silent=False, agent="codex", show_status=False)
 
     renderer.show_system_neutral.assert_any_call("→ codex iniciando...")
-    renderer.show_plain.assert_any_call("message 1", agent="codex")
-    renderer.show_plain.assert_any_call("message 2", agent="codex")
-    renderer.show_plain.assert_any_call("message 3", agent="codex")
+    renderer.update_agent_transient.assert_any_call("codex", "message 1")
+    renderer.update_agent_transient.assert_any_call("codex", "message 2")
+    renderer.update_agent_transient.assert_any_call("codex", "message 3")
+    renderer.clear_agent_transient.assert_called_with("codex")
     renderer.show_plain.assert_any_call("← codex concluído", agent="codex")
 
 
@@ -548,8 +550,8 @@ def test_agent_client_run_summary_flushes_compacted_responses_before_context(ren
         with patch("time.sleep"):
             client.run(["codex", "exec"], silent=False, agent="codex", show_status=True)
 
-    renderer.show_plain.assert_any_call("linha 1", agent="codex")
-    renderer.show_plain.assert_any_call("linha 2", agent="codex")
+    renderer.update_agent_transient.assert_any_call("codex", "linha 1")
+    renderer.update_agent_transient.assert_any_call("codex", "linha 2")
     assert any("codex | $ git status" in str(c) for c in status.update.call_args_list)
     assert ("$ git status",) not in [call.args for call in renderer.show_plain.call_args_list]
 
@@ -780,9 +782,9 @@ def test_spy_output_presenter_full_mode_renders_tool_timeline(renderer):
     ):
         presenter.emit("codex", event)
 
-    rendered_lines = [call.args[0] for call in renderer.show_plain.call_args_list]
-    assert any("TOOL_START id=t_17 tool=exec_command cmd=ls" in line for line in rendered_lines)
-    assert any("TOOL_END id=t_17 status=ok" in line for line in rendered_lines)
+    transient_lines = [call.args[1] for call in renderer.update_agent_transient.call_args_list]
+    assert any("TOOL_START id=t_17 tool=exec_command cmd=ls" in line for line in transient_lines)
+    assert any("TOOL_END id=t_17 status=ok" in line for line in transient_lines)
 
 
 def test_agent_client_run_summary_does_not_persist_started_tool_without_status(renderer):
@@ -845,7 +847,8 @@ def test_agent_client_run_spy_shows_claude_stdout_context(renderer):
     renderer.show_plain.assert_any_call("usando Read", agent="claude")
     renderer.show_plain.assert_any_call("Vou inspecionar o arquivo antes de sugerir a mudança.",
                                         agent="claude")
-    renderer.show_plain.assert_any_call("execução concluída", agent="claude")
+    renderer.update_agent_transient.assert_any_call("claude", "execução concluída")
+    renderer.clear_agent_transient.assert_any_call("claude")
 
 
 def test_agent_client_run_post_drain(renderer):
@@ -1095,7 +1098,7 @@ def test_format_codex_spy_event_reasoning_and_message():
         '{"type":"item.completed","item":{"type":"agent_message","text":"Ajustei a saída para mostrar progresso útil ao usuário."}}'
     )
     assert reasoning == [SpyEvent(kind="context", text="Vou localizar o formatter do plugin e ajustar a mensagem", transient=True)]
-    assert message == [SpyEvent(kind="response", text="Ajustei a saída para mostrar progresso útil ao usuário.", final=True)]
+    assert message == [SpyEvent(kind="response", text="Ajustei a saída para mostrar progresso útil ao usuário.", transient=True)]
 
 
 def test_format_codex_spy_event_splits_multiline_agent_messages():
@@ -1103,11 +1106,19 @@ def test_format_codex_spy_event_splits_multiline_agent_messages():
         '{"type":"item.completed","item":{"type":"agent_message","text":"message 1\\nmessage 2\\nclear\\nmessage 3"}}'
     )
     assert message == [
-        SpyEvent(kind="response", text="message 1", final=True),
-        SpyEvent(kind="response", text="message 2", final=True),
+        SpyEvent(kind="response", text="message 1", transient=True),
+        SpyEvent(kind="response", text="message 2", transient=True),
         SpyEvent(kind="clear", text="", transient=True),
-        SpyEvent(kind="response", text="message 3", final=True),
+        SpyEvent(kind="response", text="message 3", transient=True),
     ]
+
+
+def test_format_codex_spy_event_keeps_full_transient_agent_line_without_truncation():
+    long_line = "x" * 220
+    message = _format_codex_spy_event(
+        f'{{"type":"item.completed","item":{{"type":"agent_message","text":"{long_line}"}}}}'
+    )
+    assert message == [SpyEvent(kind="response", text=long_line, transient=True)]
 
 
 def test_format_codex_spy_event_reports_failed_test_command():
@@ -1199,9 +1210,9 @@ def test_format_opencode_spy_event_summarizes_text_and_result():
     )
     assert started == [SpyEvent(kind="context", text="iniciando execução", transient=True)]
     assert message == [
-        SpyEvent(kind="response", text="message 1", final=True),
+        SpyEvent(kind="response", text="message 1", transient=True),
         SpyEvent(kind="clear", text="", transient=True),
-        SpyEvent(kind="response", text="message 2", final=True),
+        SpyEvent(kind="response", text="message 2", transient=True),
     ]
     assert result == [SpyEvent(kind="context", text="execução concluída", transient=True)]
 

@@ -3,9 +3,14 @@
 from quimera.agent_events import SpyEvent
 
 
+def normalize_spy_text(value: str) -> str:
+    """Normaliza texto em linha única, preservando todo o conteúdo."""
+    return " ".join((value or "").split())
+
+
 def truncate_spy_text(value: str, limit: int = 160) -> str:
     """Normaliza texto em linha única com limite de tamanho."""
-    value = " ".join((value or "").split())
+    value = normalize_spy_text(value)
     if len(value) <= limit:
         return value
     return value[: limit - 3].rstrip() + "..."
@@ -21,7 +26,9 @@ def format_agent_message_lines(text: str) -> list[SpyEvent]:
         if line.lower() == "clear":
             messages.append(SpyEvent(kind="clear", text="", transient=True))
             continue
-        messages.append(SpyEvent(kind="response", text=truncate_spy_text(line), final=True))
+        # Mensagens intermediárias do agente devem atualizar no mesmo bloco visual
+        # sem truncar o conteúdo (apenas normalização).
+        messages.append(SpyEvent(kind="response", text=normalize_spy_text(line), transient=True))
     return messages
 
 

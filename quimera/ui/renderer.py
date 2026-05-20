@@ -4,6 +4,7 @@ import logging
 import os
 import queue as _queue_module
 import re
+import time
 import sys as _sys_module
 import sys
 import threading
@@ -22,6 +23,7 @@ _UNICODE_CONTROL_RE = re.compile(
 _RENDER_MODES = {"plain", "markdown", "auto"}
 _PREVIEW_LIMIT = 160
 _SEQUENTIAL_STATUS_REFRESH_PER_SECOND = 4
+_PROMPT_TRANSIENT_SNAPSHOT_INTERVAL_SEC = 1.0
 
 
 def strip_ansi(text: str) -> str:
@@ -296,6 +298,8 @@ class TerminalRenderer:
         self._active_stream_agents = set()
         # Streams transitórios de progresso (substituídos visualmente no mesmo bloco)
         self._transient_stream_agents = set()
+        # Fallback em prompt ativo: snapshots compactos de "pensando" por agente.
+        self._prompt_transient_snapshots: dict[str, dict[str, Any]] = {}
         # Lock protege _completed_streams, _active_stream_agents e _statuses
         self._lock = threading.RLock()
 
@@ -799,6 +803,45 @@ class TerminalRenderer:
         if not clean_message:
             return
 
+        prompt_active = bool(self._is_prompt_active_fn and self._is_prompt_active_fn())
+        if prompt_active:
+            now = time.monotonic()
+            with self._lock:
+                snapshot = self._prompt_transient_snapshots.get(agent, {
+                    "last_render_at": None,
+                    "suppressed": 0,
+                    "pending_message": "",
+                    "last_emitted_message": "",
+                })
+                last_render_at = snapshot.get("last_render_at")
+                should_emit = (
+                    last_render_at is None
+                    or (now - float(last_render_at)) >= _PROMPT_TRANSIENT_SNAPSHOT_INTERVAL_SEC
+                )
+                if should_emit:
+                    suppressed = int(snapshot.get("suppressed") or 0)
+                    snapshot["last_render_at"] = now
+                    snapshot["suppressed"] = 0
+                    snapshot["pending_message"] = ""
+                    snapshot["last_emitted_message"] = clean_message
+                else:
+                    snapshot["suppressed"] = int(snapshot.get("suppressed") or 0) + 1
+                    snapshot["pending_message"] = clean_message
+                    self._prompt_transient_snapshots[agent] = snapshot
+                    return
+                self._prompt_transient_snapshots[agent] = snapshot
+            display_message = f"… {clean_message}" if suppressed > 0 else clean_message
+            style, label = self._agent_style(agent)
+            line = Text.assemble(
+                (label, f"bold {style}"),
+                (" "),
+                (display_message, "dim"),
+            )
+            line.no_wrap = False
+            line.overflow = "fold"
+            self._print(line)
+            return
+
         with self._lock:
             is_owned = agent in self._transient_stream_agents
             is_active = agent in self._active_stream_agents
@@ -817,8 +860,26 @@ class TerminalRenderer:
         """Limpa o bloco transitório do agente, se ativo."""
         if not self._console or not agent:
             return
+        pending_message = ""
+        suppressed = 0
+        last_emitted_message = ""
         with self._lock:
+            snapshot = self._prompt_transient_snapshots.pop(agent, None) or {}
+            pending_message = str(snapshot.get("pending_message") or "").strip()
+            suppressed = int(snapshot.get("suppressed") or 0)
+            last_emitted_message = str(snapshot.get("last_emitted_message") or "")
             if agent not in self._transient_stream_agents:
+                if pending_message and pending_message != last_emitted_message:
+                    style, label = self._agent_style(agent)
+                    display_message = f"… {pending_message}" if suppressed > 0 else pending_message
+                    line = Text.assemble(
+                        (label, f"bold {style}"),
+                        (" "),
+                        (display_message, "dim"),
+                    )
+                    line.no_wrap = False
+                    line.overflow = "fold"
+                    self._print(line)
                 return
             self._transient_stream_agents.discard(agent)
         self.abort_message_stream(agent)

@@ -389,6 +389,8 @@ class SpyOutputPresenter:
     def finalize_turn(self, agent: str | None = None, render_summary: bool = False) -> dict:
         """Finaliza o turno atual e retorna o detalhe estruturado coletado."""
         self.flush(agent)
+        if agent and hasattr(self.renderer, "clear_agent_transient"):
+            self.renderer.clear_agent_transient(agent)
         detail = self.build_turn_detail()
         self._persist_evidences(agent)
         if render_summary:
@@ -498,8 +500,17 @@ class SpyOutputPresenter:
     def _show(self, agent: str | None, event: SpyEvent) -> None:
         """Renderiza um evento já processado, evitando duplicatas consecutivas."""
         rendered = event.text
+        if event.kind == "clear":
+            if agent and hasattr(self.renderer, "clear_agent_transient"):
+                self.renderer.clear_agent_transient(agent)
+            self.last_message = "clear:"
+            return
         dedupe_key = f"{event.kind}:{rendered}"
         if event.kind != "clear" and dedupe_key == self.last_message:
+            return
+        if event.transient and agent and hasattr(self.renderer, "update_agent_transient"):
+            self.renderer.update_agent_transient(agent, rendered)
+            self.last_message = dedupe_key
             return
         self.renderer.show_plain(rendered, agent=agent)
         self.last_message = dedupe_key
