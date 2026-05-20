@@ -275,11 +275,12 @@ def test_agent_client_run_timeout(renderer):
             mock_thread_cls.side_effect = [mock_stdout_thread, mock_stderr_thread]
 
             with patch("time.time") as mock_time:
-                # 1. start_time = time.time() -> 100.0 (ProcessRunner.watch)
-                # 2. elapsed = int(time.time() - start_time) -> 101.0 => elapsed=1
-                # 3. now = time.time() -> 101.0 (_check_timeout)
-                # wall_limit = 0.1 * 5 = 0.5; elapsed=1 > 0.5 => wall timeout fires
-                mock_time.side_effect = [100.0, 101.0, 101.0]
+                # 1. _last_stdout_time = time.time() -> 100.0 (ProcessRunner.__init__)
+                # 2. start_time = time.time() -> 101.0 (ProcessRunner.watch)
+                # 3. elapsed = int(time.time() - start_time) -> 101.0 => elapsed=1
+                # 4. now = time.time() -> 101.0 (_check_timeout)
+                # idle = 101.0 - 100.0 = 1.0; limit = 0.1*5 = 0.5; 1.0 > 0.5 => idle timeout fires
+                mock_time.side_effect = [100.0, 101.0, 101.0, 101.0]
                 with patch("time.sleep"):
                     result = client.run(["slow"], silent=False)
                     assert result is None
@@ -1798,7 +1799,7 @@ def test_process_runner_watch_emits_tick_only_on_elapsed_change():
     with patch("time.sleep"):
         with patch("time.time") as mock_time:
             mock_time.side_effect = [
-                100.0,
+                100.0,  # start_time
                 100.2, 100.2,
                 100.4, 100.4,
                 101.1, 101.1,

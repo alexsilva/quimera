@@ -294,6 +294,8 @@ class TerminalRenderer:
         self._completed_streams = {}
         # Agents com stream ativo (atualizado sync, protegido por _lock)
         self._active_stream_agents = set()
+        # Streams transitórios de progresso (substituídos visualmente no mesmo bloco)
+        self._transient_stream_agents = set()
         # Lock protege _completed_streams, _active_stream_agents e _statuses
         self._lock = threading.RLock()
 
@@ -707,6 +709,7 @@ class TerminalRenderer:
 
     def show_message(self, agent, content, render_mode: str = "auto"):
         """Exibe mensagem usando o tema ativo."""
+        self.clear_agent_transient(agent)
         style, label = self._agent_style(agent)
         clean_content = strip_ansi(str(content))
         if self._consume_completed_stream(agent, clean_content):
@@ -788,12 +791,45 @@ class TerminalRenderer:
             self._active_stream_agents.discard(agent)
         self._queue.put(LiveAbortEvent(agent))
 
+    def update_agent_transient(self, agent, message: str) -> None:
+        """Atualiza progresso transitório do agente sem acumular linhas."""
+        if not self._console or not agent:
+            return
+        clean_message = strip_ansi(str(message or "")).strip("\r\n")
+        if not clean_message:
+            return
+
+        with self._lock:
+            is_owned = agent in self._transient_stream_agents
+            is_active = agent in self._active_stream_agents
+            # Não interfere em stream de resposta que não pertence ao canal transitório.
+            if not is_owned and is_active:
+                return
+            should_start = not is_owned
+            if should_start:
+                self._transient_stream_agents.add(agent)
+
+        if should_start:
+            self.start_message_stream(agent)
+        self.update_message_stream(agent, {"diff": [{"op": "replace", "text": clean_message}]})
+
+    def clear_agent_transient(self, agent) -> None:
+        """Limpa o bloco transitório do agente, se ativo."""
+        if not self._console or not agent:
+            return
+        with self._lock:
+            if agent not in self._transient_stream_agents:
+                return
+            self._transient_stream_agents.discard(agent)
+        self.abort_message_stream(agent)
+
     # ------------------------------------------------------------------
     # Exibição de tipos especiais
     # ------------------------------------------------------------------
 
     def show_no_response(self, agent):
         """Exibe no response."""
+        self.clear_agent_transient(agent)
         agent_style, label = self._agent_style(agent)
         message = "sem resposta válida"
         if self._console:
@@ -850,6 +886,8 @@ class TerminalRenderer:
 
     def show_plain(self, message, agent=None):
         """Exibe plain."""
+        if agent:
+            self.clear_agent_transient(agent)
         clean_message = strip_ansi(str(message))
         if agent:
             clean_message = clean_message.strip("\r\n")

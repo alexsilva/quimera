@@ -44,6 +44,8 @@ class ProcessRunner:
         self.rate_limit_detected = False
         self.rate_limit_detected_at: float | None = None
         self._rate_checked = 0
+        self._last_stdout_time = time.time()
+        self._last_stdout_total = 0
 
     def notify_rate_limit(self) -> None:
         """Registra detecção de rate limit (pode ser chamado externamente em modo ao vivo)."""
@@ -60,14 +62,19 @@ class ProcessRunner:
         self._rate_checked = len(current_stderr)
 
     def _check_timeout(self, elapsed: int, now: float):
-        """Retorna a razão de término por timeout, ou None se ainda dentro do limite."""
+        """Retorna a razão de término por timeout, ou None se ainda dentro do limite.
+
+        O timeout é baseado em **silêncio** (sem stdout), não em tempo de parede:
+        só dispara se o agente ficar sem produzir stdout por mais de ``timeout * 5``.
+        """
         if self._timeout is None or self._timeout <= 0:
             return None
         if self.rate_limit_detected and self.rate_limit_detected_at is not None:
             if now - self.rate_limit_detected_at > _RATE_LIMIT_YIELD_SECONDS:
                 return self.RATE_LIMIT
         else:
-            if elapsed > self._timeout * 5:
+            silent_duration = now - self._last_stdout_time
+            if silent_duration > self._timeout * 5:
                 return self.TIMEOUT
         return None
 
@@ -115,6 +122,12 @@ class ProcessRunner:
                 self.stdout_thread.join(2)
                 self.stderr_thread.join(2)
                 return self.CANCELLED
+
+            # Detecta nova atividade de stdout para resetar o timer de idle
+            current_total = self.result_holder.get("stdout_total", 0)
+            if current_total != self._last_stdout_total:
+                self._last_stdout_time = time.time()
+                self._last_stdout_total = current_total
 
             # Em modo silencioso, detecta rate limit no stderr acumulado
             if log_queue is None:

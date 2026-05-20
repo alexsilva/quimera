@@ -81,7 +81,7 @@ class AgentsCoverageTests(unittest.TestCase):
         self.renderer.show_error.assert_called_once()
 
     def test_run_handles_timeout(self):
-        # Non-rate-limited agents use wall-clock safety (timeout * 5); idle timeout no longer applies.
+        # Agents idle (no stdout) for > timeout*5 are killed; producing stdout resets the idle timer.
         client = AgentClient(self.renderer, timeout=0.1)
         proc = MagicMock()
         proc.stdout = iter(())
@@ -95,7 +95,7 @@ class AgentsCoverageTests(unittest.TestCase):
         with patch("subprocess.Popen", return_value=proc), patch(
                 "threading.Thread", side_effect=[stdout_thread, stderr_thread]
         ), patch("time.sleep"), patch(
-            "time.time", side_effect=[100.0, 101.0, 101.0]
+            "time.time", side_effect=[100.0, 101.0, 101.0, 101.0]
         ), patch(
             "quimera.agents.process_runner.terminate_process_group"
         ) as mock_terminate_pg:
