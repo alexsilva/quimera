@@ -133,11 +133,21 @@ class AppSessionServices:
         else:
             self._renderer.show_system("[memória] resumo automático falhou — histórico mantido")
 
-    def shutdown(self):
+    def _flush_pending_history(self) -> None:
+        """Garante persistência do histórico em memória antes do encerramento."""
+        with self._lock:
+            if self._unsaved_messages <= 0:
+                return
+            self._storage.save_history(self._history, shared_state=self._shared_state)
+            self._last_save_time = time.monotonic()
+            self._unsaved_messages = 0
+
+    def shutdown(self, *, interrupted: bool = False):
         """Finaliza a sessão tentando resumir o histórico no contexto persistente."""
         self._task_services.stop_task_executors()
+        self._flush_pending_history()
 
-        if not self._history:
+        if not self._history or interrupted:
             return
 
         self._renderer.show_system(MSG_MEMORY_SAVING)
@@ -161,7 +171,9 @@ class AppSessionServices:
         except KeyboardInterrupt:
             if self._agent_client:
                 self._agent_client._user_cancelled = True
-                self._agent_client._cancel_event.set()
+                cancel_event = getattr(self._agent_client, "_cancel_event", None)
+                if cancel_event is not None and hasattr(cancel_event, "set"):
+                    cancel_event.set()
             sys.stdout.write('\r\033[K')
             sys.stdout.flush()
             self._renderer.show_system(MSG_MEMORY_FAILED)

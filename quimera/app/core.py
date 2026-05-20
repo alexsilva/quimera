@@ -1705,6 +1705,7 @@ class QuimeraApp:
             chat_worker.start()
             self._chat_queue = chat_queue
 
+        _pending_async_slot = False
         try:
             while True:
                 self._drain_ui_events(_ui_event_queue)
@@ -1783,7 +1784,9 @@ class QuimeraApp:
                         acquired_async_slot = chat_slot_semaphore.acquire(blocking=False)
                     if acquired_async_slot:
                         self._increment_chat_inflight()
+                        _pending_async_slot = True
                         chat_queue.put(user)
+                        _pending_async_slot = False
                         self._refresh_parallel_toolbar()
                         time.sleep(0.001)
                         if (
@@ -1822,7 +1825,11 @@ class QuimeraApp:
                     cancel_event.set()
             self.show_muted_message(MSG_SHUTDOWN)
         finally:
-            self._restore_tty_control_echo()
+            # Libera slot se KeyboardInterrupt atingiu entre acquire e queue.put
+            if _pending_async_slot:
+                self._decrement_chat_inflight()
+                self._release_chat_slot()
+                _pending_async_slot = False
             try:
                 if threaded_chat and chat_queue is not None:
                     chat_queue.put(None)
@@ -1831,6 +1838,8 @@ class QuimeraApp:
                 if chat_executor is not None:
                     if interrupted_shutdown:
                         chat_executor.shutdown(wait=False, cancel_futures=True)
+                        # Drena threads do executor para evitar atexit travar com KeyboardInterrupt
+                        _join_executor_threads(chat_executor, timeout=0.3)
                     else:
                         # Em shutdown normal, drena prompts já submetidos para não perder
                         # resposta em voo ao encerrar logo após `/exit`.
@@ -1841,10 +1850,31 @@ class QuimeraApp:
             self._chat_slot_semaphore = None
             self._chat_queue = None
             self._refresh_parallel_toolbar()
-            self.session_services.shutdown()
-            self.agent_client.close()
-            renderer = getattr(self, "renderer", None)
-            if renderer is not None and hasattr(renderer, "close"):
-                renderer.close()
-            if hasattr(self, "behavior_metrics"):
-                self.behavior_metrics._flush_if_dirty()
+            try:
+                self.session_services.shutdown(interrupted=interrupted_shutdown)
+                self.agent_client.close()
+                renderer = getattr(self, "renderer", None)
+                if renderer is not None and hasattr(renderer, "close"):
+                    renderer.close()
+                if hasattr(self, "behavior_metrics"):
+                    self.behavior_metrics._flush_if_dirty()
+            finally:
+                self._restore_tty_control_echo()
+
+
+def _join_executor_threads(executor, timeout=2.0):
+    """Aguarda threads internas do ThreadPoolExecutor finalizarem para evitar
+    que o atexit handler ``_python_exit`` do concurrent.futures as encontre
+    vivas e propague KeyboardInterrupt no shutdown."""
+    try:
+        threads = list(getattr(executor, "_threads", []))
+        if not threads:
+            return
+        deadline = time.monotonic() + timeout
+        for t in threads:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            t.join(timeout=remaining)
+    except Exception:
+        pass

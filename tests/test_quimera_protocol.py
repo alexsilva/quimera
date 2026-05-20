@@ -2622,6 +2622,21 @@ class ProtocolTests(unittest.TestCase):
             ["[memória] histórico salvo. Gerando resumo da sessão..."],
         )
 
+    def test_shutdown_skips_summary_when_interrupted(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.history = [{"role": "human", "content": "mensagem final"}]
+        app.context_manager = DummyContextManager()
+        app.session_summarizer = Mock()
+        app.renderer = DummyRenderer()
+        app.summary_agent_preference = "codex"
+        app.task_services = Mock()
+        app.task_services.stop_task_executors = Mock()
+
+        _make_session_services(app).shutdown(interrupted=True)
+
+        app.session_summarizer.summarize.assert_not_called()
+        self.assertEqual(app.renderer.system_messages, [])
+
     def test_shutdown_cancels_agent_summary_when_join_is_interrupted(self):
         class FakeThread:
             def __init__(self, target=None, daemon=None):

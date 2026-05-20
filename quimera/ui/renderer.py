@@ -211,6 +211,7 @@ class LiveAbortEvent:
 @dataclass
 class NoopEvent:
     done: threading.Event
+    force_flush: bool = False
 
 
 def _agent_style(agent: str, get_plugin_style=None):
@@ -428,20 +429,28 @@ class TerminalRenderer:
                 if run_above(lambda: self._console.print(_r, **_k)):
                     _flush_deferred()
                     return
-                if self._is_prompt_active_fn is not None and self._is_prompt_active_fn():
-                    _deferred_post_prompt.append((renderable, kwargs))
-                    return
-            _flush_deferred()
-            self._console.print(renderable, **kwargs)
+            _deferred_post_prompt.append((renderable, kwargs))
 
-        def _flush_deferred():
-            """Flush prints que foram deferidos enquanto prompt estava ativo."""
+        def _flush_deferred(force=False):
+            """Flush prints que foram deferidos enquanto prompt estava ativo.
+            Só imprime se houver Live ou run_above disponível — caso contrário
+            mantém deferido para evitar colar saída na linha do prompt.
+            Use force=True (ex: flush()) para forçar o dreno mesmo sem run_above."""
+            run_above = self._run_above_prompt_fn
             while _deferred_post_prompt:
                 _r, _k = _deferred_post_prompt.popleft()
                 if _ul[0] is not None:
                     _ul[0].console.print(_r, **_k)
-                elif self._console:
+                elif run_above is not None:
+                    if not run_above(lambda: self._console.print(_r, **_k)):
+                        _deferred_post_prompt.appendleft((_r, _k))
+                        break
+                elif force and self._console:
                     self._console.print(_r, **_k)
+                else:
+                    # Sem Live nem run_above — re-defer para não colar no prompt
+                    _deferred_post_prompt.appendleft((_r, _k))
+                    break
 
         def _audit_event(event_name: str, **payload) -> None:
             if self._audit_logger is None:
@@ -529,8 +538,9 @@ class TerminalRenderer:
                     )
                     state = _stream_states.pop(event.agent, None)
                     if state:
-                        _refresh()       # remove agente do Live antes de imprimir estático
-                        _stop_if_empty() # para o Live se for o último agente
+                        if _stream_states:   # só atualiza Live se ainda há outros streams
+                            _refresh()
+                        _stop_if_empty()    # para o Live se for o último agente
                         final_block = self._render_turn_block(
                             state["theme_name"], state["label"], state["style"],
                             content=event.final_content,
@@ -543,19 +553,22 @@ class TerminalRenderer:
                 elif isinstance(event, LiveAbortEvent):
                     _audit_event("stream_abort", agent=event.agent)
                     _stream_states.pop(event.agent, None)
-                    _refresh()
+                    if _stream_states:   # só atualiza Live se ainda há outros streams
+                        _refresh()
                     _stop_if_empty()
 
                 elif isinstance(event, NoopEvent):
+                    _flush_deferred(force=event.force_flush)
                     event.done.set()
 
             except Exception:
                 _log.exception("writer thread: erro ao processar evento %r", event)
 
     def flush(self):
-        """Aguarda o writer thread processar todos os eventos pendentes."""
+        """Aguarda o writer thread processar todos os eventos pendentes
+        e força o dreno de mensagens deferidas para o console."""
         done = threading.Event()
-        self._queue.put(NoopEvent(done))
+        self._queue.put(NoopEvent(done, force_flush=True))
         if not done.wait(timeout=5):
             raise TimeoutError("TerminalRenderer.flush timed out after 5 seconds")
 

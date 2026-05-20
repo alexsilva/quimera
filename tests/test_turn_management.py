@@ -251,7 +251,7 @@ class TestTurnCycle(unittest.TestCase):
         run_thread.join(timeout=2)
 
         self.assertFalse(run_thread.is_alive(), "run() travou no encerramento com worker ocupado")
-        app.session_services.shutdown.assert_called_once()
+        app.session_services.shutdown.assert_called_once_with(interrupted=True)
 
     def test_run_keeps_chat_alive_on_keyboard_interrupt_during_sync_processing(self):
         """Ctrl+C durante processamento síncrono deve cancelar só a execução atual."""
@@ -298,7 +298,7 @@ class TestTurnCycle(unittest.TestCase):
         self.assertEqual(len(read_calls), 2, "run() deveria voltar ao input após o cancelamento")
         self.assertEqual(status_updates, ["[cancelado] pelo usuário"])
         self.assertTrue(app.turn_manager.is_human_turn)
-        app.session_services.shutdown.assert_called_once()
+        app.session_services.shutdown.assert_called_once_with(interrupted=False)
         app.agent_client.close.assert_called_once()
 
     def test_run_keeps_chat_alive_on_threaded_input_interrupt_after_sync_cancel(self):
@@ -362,7 +362,7 @@ class TestTurnCycle(unittest.TestCase):
         self.assertEqual(len(read_calls), 3, "run() deveria consumir o interrupt residual e voltar ao input")
         self.assertEqual(app.show_muted_message.call_args_list, [unittest.mock.call("[cancelado] pelo usuário")])
         self.assertTrue(app.turn_manager.is_human_turn)
-        app.session_services.shutdown.assert_called_once()
+        app.session_services.shutdown.assert_called_once_with(interrupted=False)
         app.agent_client.close.assert_called_once()
 
     def test_drain_ui_events_routes_agent_text_above_active_prompt(self):
@@ -429,7 +429,7 @@ class TestTurnCycle(unittest.TestCase):
         QuimeraApp.run(app)
 
         self.assertEqual(app.show_muted_message.call_args_list, [unittest.mock.call(MSG_SHUTDOWN)])
-        app.session_services.shutdown.assert_called_once()
+        app.session_services.shutdown.assert_called_once_with(interrupted=True)
         app.agent_client.close.assert_called_once()
 
     def test_process_chat_message_keeps_ai_turn_while_async_queue_has_pending_work(self):
