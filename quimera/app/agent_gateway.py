@@ -82,6 +82,8 @@ class AgentGateway:
         show_output=True,
         from_agent=None,
         prompt_kind=PromptKind.CHAT,
+        history_snapshot=None,
+        request_override=None,
     ):
         """Monta o prompt final e executa a chamada ao backend do agente."""
         agent_client = self._agent_client
@@ -91,7 +93,14 @@ class AgentGateway:
 
         call_index_snapshot = self._increment_call_index()
         start = time.time()
-        history = self._get_history()
+        if history_snapshot is None:
+            history = self._get_history()
+        else:
+            history = history_snapshot
+        if history is None:
+            history = []
+        elif not isinstance(history, list):
+            history = list(history)
         self._refresh_task_state()
 
         output_lock = self._output_lock
@@ -119,6 +128,7 @@ class AgentGateway:
                 skip_tool_prompt=True,
                 execution_mode=active_execution_mode,
                 prompt_kind=prompt_kind,
+                request_override=request_override,
             )
             agent_client.log_prompt_metrics(
                 agent,
@@ -142,6 +152,7 @@ class AgentGateway:
                 skip_tool_prompt=True,
                 execution_mode=active_execution_mode,
                 prompt_kind=prompt_kind,
+                request_override=request_override,
             )
 
         if _is_user_cancelled(agent_client):

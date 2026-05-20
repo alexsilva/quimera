@@ -82,7 +82,13 @@ class PluginResolverAdapter:
 @runtime_checkable
 class ISessionServices(Protocol):
     """Serviços de ciclo de vida da sessão: persistência de mensagens, sumarização automática e shutdown."""
-    def persist_message(self, role: str, content: str) -> None: ...
+    def persist_message(
+        self,
+        role: str,
+        content: str,
+        *,
+        return_history_snapshot: bool = ...,
+    ) -> list | None: ...
     def maybe_auto_summarize(self, preferred_agent: str | None = ...) -> None: ...
     def shutdown(self) -> None: ...
 

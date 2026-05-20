@@ -491,6 +491,8 @@ class AppDispatchServices:
             show_output=True,
             from_agent=None,
             prompt_kind=PromptKind.CHAT,
+            history_snapshot=None,
+            request_override=None,
     ):
         """Monta o prompt final e executa a chamada ao backend do agente."""
         result = self._get_gateway().call(
@@ -504,6 +506,8 @@ class AppDispatchServices:
             show_output=show_output,
             from_agent=from_agent,
             prompt_kind=prompt_kind,
+            history_snapshot=history_snapshot,
+            request_override=request_override,
         )
         self._update_spy_telemetry(agent)
         return result

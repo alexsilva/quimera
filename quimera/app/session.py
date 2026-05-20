@@ -80,7 +80,7 @@ class AppSessionServices:
             self._history[:] = trimmed_history
         return dropped
 
-    def persist_message(self, role, content):
+    def persist_message(self, role, content, *, return_history_snapshot: bool = False):
         """Persiste mensagem no histórico, log e snapshot."""
         with self._lock:
             self._history.append({"role": role, "content": content})
@@ -92,6 +92,9 @@ class AppSessionServices:
                 self._storage.save_history(self._history, shared_state=self._shared_state)
                 self._last_save_time = now
                 self._unsaved_messages = 0
+            if return_history_snapshot:
+                return list(self._history)
+        return None
 
     def maybe_auto_summarize(self, preferred_agent=None):
         """Sumariza e trunca o histórico quando excede o threshold configurado."""

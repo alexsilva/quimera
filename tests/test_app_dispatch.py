@@ -758,6 +758,17 @@ class TestCallAgentLowLevel:
         kwargs = ll_app.prompt_builder.build.call_args.kwargs
         assert kwargs.get("handoff_only") is True
 
+    def test_request_override_and_history_snapshot_passed_to_build(self, ll_app):
+        ds = AppDispatchServices.from_app(ll_app)
+        ds.call_agent_low_level(
+            "agent1",
+            request_override="pedido fixo",
+            history_snapshot=[{"role": "human", "content": "pedido fixo"}],
+        )
+        args, kwargs = ll_app.prompt_builder.build.call_args
+        assert args[1] == [{"role": "human", "content": "pedido fixo"}]
+        assert kwargs.get("request_override") == "pedido fixo"
+
     def test_flush_pending_summary_called(self, ll_app):
         ds = AppDispatchServices.from_app(ll_app)
         ds.call_agent_low_level("agent1")

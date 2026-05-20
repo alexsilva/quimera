@@ -1,6 +1,8 @@
 """Orquestra uma rodada de chat multiagente."""
 from __future__ import annotations
 
+import inspect
+
 from ..constants import HANDOFF_SYNTHESIS_MSG, MSG_EMPTY_INPUT, USER_ROLE
 from ..prompt_kinds import PromptKind
 from .config import logger
@@ -108,6 +110,7 @@ class ChatRoundOrchestrator:
         self._ui_queue = ui_queue
         self._merge_staging_to_workspace_fn = merge_staging_to_workspace
         self._generate_handoff_id = generate_handoff_id or (lambda task, target: f"gen-{target}")
+        self._persist_message_supports_snapshot: bool | None = None
 
     # ------------------------------------------------------------------
     # Accessors de estado — preferem SessionState, caem nos lambdas legados
@@ -140,6 +143,76 @@ class ChatRoundOrchestrator:
             self._session_state.pending_input_for = value
         elif self._set_pending_input_for_fn is not None:
             self._set_pending_input_for_fn(value)
+
+    def _snapshot_history(self) -> list:
+        history = None
+        if self._session_state is not None:
+            history = self._session_state.history
+        elif isinstance(self._session_state_dict, dict):
+            history = self._session_state_dict.get("history")
+        if history is None:
+            return []
+        if isinstance(history, list):
+            return list(history)
+        try:
+            return list(history)
+        except Exception:
+            return []
+
+    def _can_request_history_snapshot(self) -> bool:
+        if self._persist_message_supports_snapshot is not None:
+            return self._persist_message_supports_snapshot
+        persist_message = getattr(self._session_services, "persist_message", None)
+        if not callable(persist_message):
+            self._persist_message_supports_snapshot = False
+            return False
+        try:
+            signature = inspect.signature(persist_message)
+        except (TypeError, ValueError):
+            self._persist_message_supports_snapshot = False
+            return False
+        self._persist_message_supports_snapshot = "return_history_snapshot" in signature.parameters
+        return self._persist_message_supports_snapshot
+
+    def _persist_user_message(self, message: str) -> list:
+        if self._can_request_history_snapshot():
+            history_snapshot = self._session_services.persist_message(
+                USER_ROLE,
+                message,
+                return_history_snapshot=True,
+            )
+            if isinstance(history_snapshot, list):
+                return history_snapshot
+        else:
+            self._session_services.persist_message(USER_ROLE, message)
+        return self._snapshot_history()
+
+    @staticmethod
+    def _filter_supported_kwargs(func, kwargs: dict) -> dict:
+        try:
+            signature = inspect.signature(func)
+        except (TypeError, ValueError):
+            return kwargs
+        has_var_kwargs = any(
+            parameter.kind == inspect.Parameter.VAR_KEYWORD
+            for parameter in signature.parameters.values()
+        )
+        if has_var_kwargs:
+            return kwargs
+        allowed = {
+            name
+            for name, parameter in signature.parameters.items()
+            if parameter.kind in (
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                inspect.Parameter.KEYWORD_ONLY,
+            )
+        }
+        return {key: value for key, value in kwargs.items() if key in allowed}
+
+    def _call_agent(self, agent: str, **kwargs):
+        call_agent = self._dispatch_services.call_agent
+        filtered_kwargs = self._filter_supported_kwargs(call_agent, kwargs)
+        return call_agent(agent, **filtered_kwargs)
 
     def _set_parallel_toolbar_state(
         self,
@@ -286,9 +359,17 @@ class ChatRoundOrchestrator:
 
         self._set_round_index(self._get_round_index() + 1)
         self._set_summary_agent_preference(first_agent)
-        self._session_services.persist_message(USER_ROLE, message)
+        history_snapshot = self._persist_user_message(message)
+        prompt_binding = {"request_override": message}
+        if history_snapshot:
+            prompt_binding["history_snapshot"] = history_snapshot
 
-        response = self._dispatch_services.call_agent(first_agent, is_first_speaker=True, protocol_mode="standard")
+        response = self._call_agent(
+            first_agent,
+            is_first_speaker=True,
+            protocol_mode="standard",
+            **prompt_binding,
+        )
         response, route_target, handoff, extend, needs_human_input, _ = self._parse_response(response)
 
         if self._is_cancelled():
@@ -314,11 +395,12 @@ class ChatRoundOrchestrator:
                 if self._is_cancelled():
                     self._handle_cancelled()
                     return
-                fallback_response = self._dispatch_services.call_agent(
+                fallback_response = self._call_agent(
                     fallback_agent,
                     is_first_speaker=True,
                     primary=False,
                     protocol_mode="standard",
+                    **prompt_binding,
                 )
                 fallback_response, route_target, handoff, extend, needs_human_input, _ = self._parse_response(
                     fallback_response
@@ -360,16 +442,37 @@ class ChatRoundOrchestrator:
             handoff = None
 
         if route_target and handoff:
-            self._process_handoff(first_agent, route_target, handoff)
+            self._process_handoff(
+                first_agent,
+                route_target,
+                handoff,
+                request_override=message,
+                history_snapshot=history_snapshot if history_snapshot else None,
+            )
         else:
-            self._process_standard_flow(first_agent, explicit, extend, other_agents)
+            self._process_standard_flow(
+                first_agent,
+                explicit,
+                extend,
+                other_agents,
+                request_override=message,
+                history_snapshot=history_snapshot if history_snapshot else None,
+            )
 
         if self._get_pending_input_for() is not None:
             return
 
         self._session_services.maybe_auto_summarize(preferred_agent=first_agent)
 
-    def _process_handoff(self, first_agent, route_target, handoff):
+    def _process_handoff(
+        self,
+        first_agent,
+        route_target,
+        handoff,
+        *,
+        request_override: str | None = None,
+        history_snapshot: list | None = None,
+    ):
         current_from = first_agent
         current_target = route_target
         current_handoff = dict(handoff) if isinstance(handoff, dict) else handoff
@@ -380,6 +483,12 @@ class ChatRoundOrchestrator:
         max_hops = max(1, len(self._agent_pool.agents) * self.HANDOFF_MAX_HOPS_FACTOR)
         hops = 0
         failed_target = current_target
+
+        call_prompt_binding = {}
+        if request_override:
+            call_prompt_binding["request_override"] = request_override
+        if history_snapshot:
+            call_prompt_binding["history_snapshot"] = history_snapshot
 
         while current_target and current_handoff and hops < max_hops:
             hops += 1
@@ -438,7 +547,7 @@ class ChatRoundOrchestrator:
                 self._behavior_metrics.record_handoff_sent(current_from)
                 self._behavior_metrics.record_handoff_received(current_target)
 
-            secondary_response = self._dispatch_services.call_agent(
+            secondary_response = self._call_agent(
                 current_target,
                 handoff=outbound_handoff,
                 handoff_only=True,
@@ -446,6 +555,7 @@ class ChatRoundOrchestrator:
                 protocol_mode="handoff",
                 from_agent=current_from,
                 prompt_kind=PromptKind.TASK_EXECUTOR,
+                **call_prompt_binding,
             )
             if self._is_cancelled():
                 self._handle_cancelled()
@@ -486,7 +596,7 @@ class ChatRoundOrchestrator:
                             fallback_chain.extend(outbound_handoff.get("chain", []))
                         fallback_chain.append(current_target)
                         fallback_handoff["chain"] = fallback_chain
-                    fallback_response = self._dispatch_services.call_agent(
+                    fallback_response = self._call_agent(
                         fallback_agent,
                         handoff=fallback_handoff,
                         handoff_only=True,
@@ -494,6 +604,7 @@ class ChatRoundOrchestrator:
                         protocol_mode="handoff",
                         from_agent=current_from,
                         prompt_kind=PromptKind.TASK_EXECUTOR,
+                        **call_prompt_binding,
                     )
                     if self._is_cancelled():
                         self._handle_cancelled()
@@ -588,11 +699,12 @@ class ChatRoundOrchestrator:
             )
             if self._behavior_metrics is not None:
                 self._behavior_metrics.record_synthesis(first_agent)
-            final_response = self._dispatch_services.call_agent(
+            final_response = self._call_agent(
                 first_agent,
                 handoff=synthesis_handoff,
                 primary=False,
                 protocol_mode="handoff",
+                **call_prompt_binding,
             )
             if self._is_cancelled():
                 self._handle_cancelled()
@@ -611,8 +723,22 @@ class ChatRoundOrchestrator:
                 f"[handoff] {failed_target} não respondeu — delegação falhou"
             )
 
-    def _process_standard_flow(self, first_agent, explicit, extend, other_agents):
+    def _process_standard_flow(
+        self,
+        first_agent,
+        explicit,
+        extend,
+        other_agents,
+        *,
+        request_override: str | None = None,
+        history_snapshot: list | None = None,
+    ):
         protocol_mode = "extended" if extend else "standard"
+        call_prompt_binding = {}
+        if request_override:
+            call_prompt_binding["request_override"] = request_override
+        if history_snapshot:
+            call_prompt_binding["history_snapshot"] = history_snapshot
         parallel_slots = max(0, self._threads)
         self._set_parallel_toolbar_state(
             active=0,
@@ -634,11 +760,12 @@ class ChatRoundOrchestrator:
                     capacity=parallel_slots,
                     active_agents=(),
                 )
-                response = self._dispatch_services.call_agent(
+                response = self._call_agent(
                     agent,
                     handoff=next_handoff,
                     primary=False,
                     protocol_mode=protocol_mode,
+                    **call_prompt_binding,
                 )
                 if self._is_cancelled():
                     self._handle_cancelled()

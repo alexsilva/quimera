@@ -218,6 +218,7 @@ class TestProcessMainFlow(unittest.TestCase):
             "codex",
             is_first_speaker=True,
             protocol_mode="standard",
+            request_override="status",
         )
         app.task_services.call_agent_for_parallel.assert_not_called()
         self.assertEqual(
@@ -598,7 +599,13 @@ class TestCoverageGaps(unittest.TestCase):
         # Mocar _process_handoff para evitar side effects
         with patch.object(ChatRoundOrchestrator, "_process_handoff") as mock_ph:
             app.chat_round_orchestrator.process("hello")
-            mock_ph.assert_called_once_with("claude", "codex", handoff)
+            mock_ph.assert_called_once_with(
+                "claude",
+                "codex",
+                handoff,
+                request_override="hello",
+                history_snapshot=None,
+            )
 
     def test_process_standard_flow_explicit_without_parallel_slots_skips_followers(self):
         """explicit=True com threads=1 não deve executar followers."""

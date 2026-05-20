@@ -26,6 +26,21 @@ class MemorySelector:
                     return index, content
         return None, ""
 
+    def find_request_index(self, history, request_content):
+        """Retorna o índice mais recente da mensagem humana que casa com o request."""
+        target = (request_content or "").strip()
+        if not target:
+            return None
+        window_start = max(0, len(history) - self.history_window)
+        for index in range(len(history) - 1, window_start - 1, -1):
+            message = history[index]
+            if message.get("role") != "human":
+                continue
+            content = (message.get("content") or "").strip()
+            if content == target:
+                return index
+        return None
+
     def select_facts(self, history, max_items=4, current_agent=None):
         """Seleciona mensagens relevantes (não-humano) da janela de história."""
         facts = []

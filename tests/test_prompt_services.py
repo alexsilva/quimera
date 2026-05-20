@@ -39,6 +39,17 @@ class TestMemorySelector:
         assert idx is None
         assert content == ""
 
+    def test_find_request_index_returns_matching_human_message(self):
+        selector = MemorySelector(history_window=10)
+        history = [
+            {"role": "human", "content": "primeira"},
+            {"role": "claude", "content": "resposta"},
+            {"role": "human", "content": "segunda"},
+        ]
+        assert selector.find_request_index(history, "primeira") == 0
+        assert selector.find_request_index(history, "segunda") == 2
+        assert selector.find_request_index(history, "inexistente") is None
+
     def test_select_facts_skips_human_and_current_agent(self):
         selector = MemorySelector(history_window=10)
         history = [

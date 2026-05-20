@@ -1,4 +1,5 @@
 """Componentes de `quimera.app.core`."""
+import inspect
 import os
 import platform
 import queue
@@ -980,7 +981,31 @@ class QuimeraApp:
             silent = dispatch_options.pop("silent", False)
             persist_history = dispatch_options.pop("persist_history", True)
             show_output = dispatch_options.pop("show_output", True)
-            response = self._call_agent(agent, silent=silent, **dispatch_options)
+            call_options = {"silent": silent, **dispatch_options}
+            try:
+                signature = inspect.signature(self._call_agent)
+            except (TypeError, ValueError):
+                filtered_options = call_options
+            else:
+                accepts_var_kwargs = any(
+                    parameter.kind == inspect.Parameter.VAR_KEYWORD
+                    for parameter in signature.parameters.values()
+                )
+                if accepts_var_kwargs:
+                    filtered_options = call_options
+                else:
+                    allowed = {
+                        name
+                        for name, parameter in signature.parameters.items()
+                        if parameter.kind in (
+                            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                            inspect.Parameter.KEYWORD_ONLY,
+                        )
+                    }
+                    filtered_options = {
+                        key: value for key, value in call_options.items() if key in allowed
+                    }
+            response = self._call_agent(agent, **filtered_options)
             return self.resolve_agent_response(
                 agent,
                 response,

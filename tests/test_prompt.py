@@ -204,6 +204,21 @@ def test_prompt_without_execution_mode_does_not_inject_mode_addon():
     assert "[MODO:" not in prompt
 
 
+def test_prompt_uses_request_override_when_latest_human_differs():
+    builder = PromptBuilder(context_manager=_make_context_manager(""))
+    history = [
+        {"role": "human", "content": "pedido A"},
+        {"role": "claude", "content": "resposta A"},
+        {"role": "human", "content": "pedido B"},
+    ]
+
+    prompt = builder.build(agent="claude", history=history, request_override="pedido A")
+
+    current_turn = _extract_block(prompt, "current_turn")
+    assert "pedido A" in current_turn
+    assert "pedido B" not in current_turn
+
+
 def test_prompt_primary_false_omits_only_session_state():
     session_state = {"session_id": "test"}
     builder = PromptBuilder(context_manager=_make_context_manager("Contexto"), session_state=session_state)

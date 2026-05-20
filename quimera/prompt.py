@@ -72,6 +72,7 @@ class PromptBuilder:
             skip_tool_prompt=False,
             execution_mode=None,
             prompt_kind=PromptKind.CHAT,
+            request_override=None,
     ):
         """Gera o prompt final para um agente considerando contexto, handoff e histórico."""
         if history is None:
@@ -120,7 +121,12 @@ class PromptBuilder:
 
         handoff_fields = self.handoff_presenter.present(handoff, from_agent)
         if is_chat_prompt:
-            request_index, request = self.memory_selector.select_request(history)
+            override_request = (request_override or "").strip()
+            if override_request:
+                request = override_request
+                request_index = self.memory_selector.find_request_index(history, request)
+            else:
+                request_index, request = self.memory_selector.select_request(history)
             fact_indexes, facts = self.memory_selector.select_facts(history, current_agent=agent)
             recent_conversation = self.memory_selector.build_conversation_block(
                 history,
