@@ -102,6 +102,12 @@ class TestAgentStyle:
         assert color == "white"
         assert label == "🤖 Unknownagent"
 
+    def test_fallback_for_none_agent(self):
+        """Test fallback is safe when agent is None."""
+        color, label = _agent_style(None)
+        assert color == "white"
+        assert label == "🤖 Unknown"
+
 
 class TestTerminalRenderer:
     """Test suite for TerminalRenderer."""
@@ -211,6 +217,17 @@ class TestTerminalRenderer:
         rendered_line = mock_renderer._console.print.call_args.args[0]
         assert rendered_line.plain.startswith("⚙ System message")
         assert any(span.start == 2 and span.style == "dim" for span in rendered_line.spans)
+
+    def test_show_banner_with_rich_preserves_ascii_layout(self, mock_renderer):
+        """Banner deve evitar wrap para não distorcer logo ASCII."""
+        banner = " / __ \\\\__  __(_)___\n/ / / / / / / / __"
+        mock_renderer.show_banner(f"\r\n{banner}\r\n")
+        mock_renderer.flush()
+        first_call_arg = mock_renderer._console.print.call_args_list[0].args[0]
+        assert isinstance(first_call_arg, Text)
+        assert first_call_arg.no_wrap is True
+        assert first_call_arg.overflow == "ignore"
+        assert first_call_arg.plain.startswith(" / __ \\\\__")
 
     def test_show_system_without_rich(self, renderer_no_rich, capsys):
         """Test show_system without Rich."""
@@ -525,6 +542,42 @@ class TestTerminalRenderer:
         with patch.object(threading.Event, "wait", return_value=False):
             with pytest.raises(TimeoutError, match="timed out"):
                 mock_renderer.flush()
+
+    def test_flush_prints_deferred_when_prompt_is_active_without_run_above(self):
+        renderer = TerminalRenderer()
+        renderer._console = MagicMock()
+        renderer.set_prompt_integration(lambda: True, None)
+
+        renderer.show_system("mensagem pendente")
+        renderer.flush()
+
+        renderer._console.print.assert_called_once()
+        renderer.close(timeout=1.0)
+
+    def test_flush_prints_deferred_when_run_above_is_set_but_inactive(self):
+        """flush() com force=True deve imprimir mesmo quando run_above está
+        configurado mas retorna False (ex: antes do prompt iniciar)."""
+        renderer = TerminalRenderer()
+        renderer._console = Console(width=80, record=True, force_terminal=False)
+        renderer.set_prompt_integration(lambda: False, lambda cb: False)
+
+        renderer.show_system("banner pendente")
+        renderer.flush()
+
+        rendered = renderer._console.export_text()
+        assert "banner pendente" in rendered
+        renderer.close(timeout=1.0)
+
+    def test_close_flushes_deferred_when_prompt_is_inactive(self):
+        renderer = TerminalRenderer()
+        renderer._console = Console(width=80, record=True, force_terminal=False)
+        renderer.set_prompt_integration(lambda: False, None)
+
+        renderer.show_system("mensagem final")
+        renderer.close(timeout=1.0)
+
+        rendered = renderer._console.export_text()
+        assert "⚙ mensagem final" in rendered
 
 
 class TestRenderOrdering:

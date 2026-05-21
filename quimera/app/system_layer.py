@@ -14,6 +14,7 @@ from ..constants import (
     CMD_ALIASES,
     CMD_APPROVE,
     CMD_APPROVE_ALL,
+    CMD_BUGS,
     CMD_CLEAR,
     CMD_CONNECT,
     CMD_DISCONNECT,
@@ -122,6 +123,7 @@ class AppSystemLayer:
         run_above_active_prompt=None,
         read_user_input=None,
         task_command_handler=None,
+        bugs_command_handler=None,
         reset_shared_state=None,
         approval_handler_getter=None,
         context_manager=None,
@@ -179,6 +181,7 @@ class AppSystemLayer:
                 if task_command_handler is None:
                     task_services = getattr(app, "task_services", None)
                     task_command_handler = getattr(task_services, "handle_task_command", None)
+                bugs_command_handler = bugs_command_handler or getattr(app, "_handle_bugs_command", None)
                 reset_shared_state = reset_shared_state or getattr(app, "reset_shared_state", None)
                 approval_handler_getter = approval_handler_getter or (
                     lambda: getattr(app, "_approval_handler", None)
@@ -219,6 +222,7 @@ class AppSystemLayer:
         self.run_above_active_prompt = run_above_active_prompt
         self.read_user_input = read_user_input
         self.task_command_handler = task_command_handler
+        self.bugs_command_handler = bugs_command_handler
         self.reset_shared_state = reset_shared_state
         self.approval_handler_getter = approval_handler_getter or (lambda: None)
         self.context_manager = context_manager
@@ -500,6 +504,12 @@ class AppSystemLayer:
 
         if command == CMD_AGENTS:
             renderer.show_system(build_agents_help(self._get_active_agents()))
+            return True
+
+        if command == CMD_BUGS or command.startswith(f"{CMD_BUGS} "):
+            if callable(self.bugs_command_handler):
+                return bool(self.bugs_command_handler(command))
+            self._display.show_warning_message("Comando /bugs indisponível nesta sessão.")
             return True
 
         if command == CMD_CONNECT or command.startswith(f"{CMD_CONNECT} "):

@@ -1931,8 +1931,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(app.renderer.events[0][0], "show_system")
         self.assertEqual(app.renderer.events[1][0], "show_system")
         self.assertEqual(app.renderer.events[2][0], "show_system")
-        self.assertEqual(app.renderer.events[3][0], "show_system")
-        self.assertEqual(app.renderer.events[4], ("flush", None))
+        self.assertEqual(app.renderer.events[3], ("flush", None))
 
     def test_run_shows_render_audit_path_only_in_debug_mode(self):
         class RecordingRenderer(DummyRenderer):
@@ -1971,8 +1970,7 @@ class ProtocolTests(unittest.TestCase):
 
         app.run()
 
-        self.assertTrue(any("Log da sessão:" in msg for msg in app.renderer.events))
-        self.assertTrue(any("sessao-2026-03-27-123456.jsonl" in msg for msg in app.renderer.events))
+        self.assertFalse(any("Log da sessão:" in msg for msg in app.renderer.events))
         self.assertFalse(any("/tmp/quimera/" in msg for msg in app.renderer.events))
 
         app.renderer.events.clear()
@@ -1981,6 +1979,8 @@ class ProtocolTests(unittest.TestCase):
 
         app.run()
 
+        self.assertTrue(any("Log da sessão:" in msg for msg in app.renderer.events))
+        self.assertTrue(any("sessao-2026-03-27-123456.jsonl" in msg for msg in app.renderer.events))
         self.assertTrue(any("/tmp/quimera/" in msg for msg in app.renderer.events))
 
     def test_run_keyboard_interrupt_renders_shutdown_with_muted_style(self):
@@ -2079,6 +2079,50 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(app._resolve_render_debug_log_path(), "")
 
         app.debug_prompt_metrics = True
+        self.assertEqual(
+            app._resolve_render_debug_log_path(),
+            Path("/tmp/quimera/render-sessao-2026-03-27-123456.jsonl"),
+        )
+
+    def test_resolve_render_debug_log_path_prefers_workspace_tmp_path(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.storage = SimpleNamespace(session_id="sessao-2026-03-27-123456")
+        app.workspace = SimpleNamespace(
+            render_log_path_for=lambda session_id: Path(
+                f"/home/alex/.local/share/quimera/workspaces/abc/data/logs/render/render-{session_id}.jsonl"
+            ),
+            tmp=SimpleNamespace(
+                render_log_path_for=lambda session_id: Path(f"/tmp/quimera/render-{session_id}.jsonl")
+            ),
+        )
+        app.debug_prompt_metrics = True
+
+        self.assertEqual(
+            app._resolve_render_debug_log_path(),
+            Path("/tmp/quimera/render-sessao-2026-03-27-123456.jsonl"),
+        )
+
+    def test_resolve_render_debug_log_path_returns_empty_when_getters_missing(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.storage = SimpleNamespace(session_id="sessao-2026-03-27-123456")
+        app.workspace = SimpleNamespace(
+            tmp=SimpleNamespace(),
+        )
+        app.debug_prompt_metrics = True
+
+        self.assertEqual(app._resolve_render_debug_log_path(), "")
+
+    def test_resolve_render_debug_log_path_ignores_dot_path(self):
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.storage = SimpleNamespace(session_id="sessao-2026-03-27-123456")
+        app.workspace = SimpleNamespace(
+            render_log_path_for=lambda _session_id: Path("."),
+            tmp=SimpleNamespace(
+                render_log_path_for=lambda session_id: Path(f"/tmp/quimera/render-{session_id}.jsonl")
+            ),
+        )
+        app.debug_prompt_metrics = True
+
         self.assertEqual(
             app._resolve_render_debug_log_path(),
             Path("/tmp/quimera/render-sessao-2026-03-27-123456.jsonl"),

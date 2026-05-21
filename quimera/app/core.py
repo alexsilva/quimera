@@ -56,8 +56,15 @@ from ..workspace import Workspace
 from ..config import ConfigManager, DEFAULT_USER_NAME
 from ..env_config import EnvConfig
 from ..metrics import BehaviorMetricsTracker
+from ..bugs import (
+    BugEvidenceRef,
+    BugReport,
+    BugStore,
+    RenderBugDetector,
+    make_bug_fingerprint,
+)
 from ..constants import (
-    CMD_AGENTS, CMD_ALIASES, CMD_CLEAR, CMD_CONNECT, CMD_DISCONNECT, CMD_CONTEXT, CMD_CONTEXT_BRANCH, CMD_CONTEXT_EDIT, CMD_EDIT, CMD_EXIT,
+    CMD_AGENTS, CMD_ALIASES, CMD_BUGS, CMD_CLEAR, CMD_CONNECT, CMD_DISCONNECT, CMD_CONTEXT, CMD_CONTEXT_BRANCH, CMD_CONTEXT_EDIT, CMD_EDIT, CMD_EXIT,
     CMD_APPROVE, CMD_APPROVE_ALL, CMD_FILE_PREFIX, CMD_HELP,
     CMD_PROMPT, CMD_RESET_STATE, CMD_TASK,
     MSG_CHAT_STARTED, MSG_SESSION_LOG, MSG_SESSION_STATUS, MSG_MIGRATION,
@@ -74,6 +81,20 @@ def normalize_agent_name(agent):
     if hasattr(agent, "name"):
         return getattr(agent, "name")
     return agent
+
+
+def _call_path_getter(source, getter_name: str, session_id: str):
+    getter = getattr(source, getter_name, None)
+    if callable(getter) and session_id:
+        try:
+            value = getter(session_id)
+        except Exception:
+            return None
+        if isinstance(value, (str, Path)):
+            normalized = str(value).strip()
+            if normalized and normalized != ".":
+                return Path(normalized)
+    return None
 
 
 class QuimeraApp:
@@ -114,10 +135,12 @@ class QuimeraApp:
         self.config = ConfigManager(self.workspace.config_file)
         _active_theme = theme if theme is not None else self.config.theme
         self.storage = SessionStorage(self.workspace.logs_dir)
+        self.bug_store = BugStore(self.workspace.root / "data" / "logs")
+        self.bug_detector = RenderBugDetector(repeat_threshold=2)
         session_id = self.storage.session_id
-        render_log_path = self.workspace.tmp.render_log_path_for(session_id)
-        render_ansi_path = self.workspace.tmp.render_ansi_path_for(session_id)
-        metrics_file = self.workspace.tmp.metrics_path_for(session_id) if debug else None
+        render_log_path = self._resolve_workspace_render_log_path(session_id)
+        render_ansi_path = self._resolve_workspace_render_ansi_path(session_id)
+        metrics_file = self._resolve_workspace_metrics_path(session_id) if debug else None
         render_audit_logger = (
             RenderAuditLogger(render_log_path, render_ansi_path) if debug else None
         )
@@ -307,6 +330,7 @@ class QuimeraApp:
             "summary_loaded": self._format_yes_no(summary_loaded),
             "current_job_id": self.current_job_id,
             "workspace_root": str(self.workspace.cwd),
+            "workspace_data_root": str(self.workspace.root / "data"),
             "workspace_tmp_root": str(workspace_tmp_root) if workspace_tmp_root is not None else "",
             "current_dir": ".",
             "os_info": f"{platform.system()} {platform.release()}",
@@ -460,6 +484,7 @@ class QuimeraApp:
             clear_screen=self.clear_terminal_screen,
             read_user_input=self.read_user_input,
             task_command_handler=self.task_services.handle_task_command,
+            bugs_command_handler=self._handle_bugs_command,
             reset_shared_state=self.reset_shared_state,
             approval_handler_getter=lambda: getattr(self, "_approval_handler", None),
             context_manager=self.context_manager,
@@ -548,6 +573,7 @@ class QuimeraApp:
             CMD_AGENTS,
             CMD_APPROVE,
             CMD_APPROVE_ALL,
+            CMD_BUGS,
             CMD_CLEAR,
             CMD_CONNECT,
             CMD_DISCONNECT,
@@ -586,6 +612,8 @@ class QuimeraApp:
             return self.workspace.list_branches()
         if command == CMD_DISCONNECT:
             return self.system_layer.list_connected_agents()
+        if command == CMD_BUGS:
+            return ["list", "show", "close", "analyze"]
         return []
 
     def _resolve_plugin_style(self, agent: str):
@@ -659,6 +687,93 @@ class QuimeraApp:
         session_metrics = getattr(self, "session_metrics", None)
         if session_metrics is not None:
             session_metrics.record_agent_metric(self, agent_name, "failed", 0)
+        if failures >= 2:
+            self._file_bug(
+                session_id=getattr(self.storage, "session_id", ""),
+                category="agent_failure_burst",
+                summary=f"Agente {agent_name} acumulou falhas consecutivas",
+                severity="medium",
+                confidence=0.85,
+                description=f"Falhas consecutivas atuais: {failures}",
+                agent=agent_name,
+            )
+
+    def _file_bug(
+        self,
+        *,
+        session_id: str,
+        category: str,
+        summary: str,
+        severity: str = "medium",
+        confidence: float = 0.5,
+        description: str = "",
+        agent: str = "",
+        evidence_refs: list[BugEvidenceRef] | None = None,
+    ) -> BugReport | None:
+        bug_store = getattr(self, "bug_store", None)
+        if bug_store is None or not session_id or not category or not summary:
+            return None
+        fingerprint = make_bug_fingerprint(session_id, category, summary)
+        report = BugReport(
+            id=f"bug_{fingerprint[:12]}",
+            session_id=session_id,
+            category=category,
+            summary=summary,
+            severity=severity,
+            confidence=confidence,
+            description=description,
+            fingerprint=fingerprint,
+            evidence_refs=list(evidence_refs or []),
+            agent=agent,
+        )
+        try:
+            filed_report = bug_store.file(report)
+        except Exception:
+            logger.debug("falha ao persistir bug report", exc_info=True)
+            return None
+        if filed_report is not None:
+            event_sink = getattr(self, "event_sink", None)
+            publish = getattr(event_sink, "publish", None)
+            if callable(publish):
+                try:
+                    from ..app.task_events import BugFiled
+                    bug_event = BugFiled(
+                        task_id=0,  # Bug events don't have a specific task ID
+                        job_id=0,   # Bug events don't have a specific job ID
+                        bug_id=filed_report.id,
+                        category=filed_report.category,
+                        summary=filed_report.summary,
+                        severity=filed_report.severity,
+                    )
+                    publish(bug_event)
+                except Exception:
+                    logger.debug("falha ao publicar BugFiled", exc_info=True)
+        return filed_report
+
+    def _run_render_bug_detector(self) -> None:
+        detector = getattr(self, "bug_detector", None)
+        bug_store = getattr(self, "bug_store", None)
+        workspace = getattr(self, "workspace", None)
+        storage = getattr(self, "storage", None)
+        if detector is None or bug_store is None or workspace is None or storage is None:
+            return
+        session_id = getattr(storage, "session_id", "")
+        if not session_id:
+            return
+        events_path = self._resolve_workspace_render_log_path(session_id)
+        ansi_path = self._resolve_workspace_render_ansi_path(session_id)
+        if events_path is None and ansi_path is None:
+            return
+        try:
+            reports = detector.analyze_session(
+                session_id=session_id,
+                events_path=events_path,
+                ansi_path=ansi_path,
+            )
+            for report in reports:
+                bug_store.file(report)
+        except Exception:
+            logger.debug("falha ao analisar bugs de render", exc_info=True)
 
     @staticmethod
     def _unique_encodings(*encodings):
@@ -715,17 +830,54 @@ class QuimeraApp:
         return ""
 
     def _resolve_render_debug_log_path(self) -> str | Path:
-        """Retorna o log temporário de auditoria de render, somente em modo debug."""
+        """Retorna o log de auditoria de render, somente em modo debug."""
         if not getattr(self, "debug_prompt_metrics", False):
             return ""
-        workspace = getattr(self, "workspace", None)
         storage = getattr(self, "storage", None)
         session_id = getattr(storage, "session_id", None)
-        workspace_tmp = getattr(workspace, "tmp", None)
-        render_log_path_for = getattr(workspace_tmp, "render_log_path_for", None)
-        if callable(render_log_path_for) and session_id:
-            return render_log_path_for(session_id)
+        if session_id:
+            resolved = self._resolve_workspace_render_log_path(session_id)
+            return resolved if resolved is not None else ""
         return ""
+
+    def _resolve_workspace_render_log_path(self, session_id: str):
+        workspace = getattr(self, "workspace", None)
+        if workspace is None:
+            return None
+        workspace_tmp = getattr(workspace, "tmp", None)
+        path = _call_path_getter(workspace_tmp, "render_log_path_for", session_id)
+        if path:
+            return path
+        path = _call_path_getter(workspace, "render_log_path_for", session_id)
+        if path:
+            return path
+        return None
+
+    def _resolve_workspace_render_ansi_path(self, session_id: str):
+        workspace = getattr(self, "workspace", None)
+        if workspace is None:
+            return None
+        workspace_tmp = getattr(workspace, "tmp", None)
+        path = _call_path_getter(workspace_tmp, "render_ansi_path_for", session_id)
+        if path:
+            return path
+        path = _call_path_getter(workspace, "render_ansi_path_for", session_id)
+        if path:
+            return path
+        return None
+
+    def _resolve_workspace_metrics_path(self, session_id: str):
+        workspace = getattr(self, "workspace", None)
+        if workspace is None:
+            return None
+        workspace_tmp = getattr(workspace, "tmp", None)
+        path = _call_path_getter(workspace_tmp, "metrics_path_for", session_id)
+        if path:
+            return path
+        path = _call_path_getter(workspace, "metrics_path_for", session_id)
+        if path:
+            return path
+        return None
 
     def _wire_event_ui(self) -> None:
         """Conecta eventos de domínio à renderização UI."""
@@ -1215,6 +1367,99 @@ class QuimeraApp:
             return None
         return self.input_services.read_user_input(prompt, timeout)
 
+    def _handle_bugs_command(self, command: str) -> bool:
+        """Processa operações de bug report via `/bugs`."""
+        raw = str(command or "").strip()
+        parts = raw.split()
+        action = parts[1].lower() if len(parts) >= 2 else "list"
+        bug_store = getattr(self, "bug_store", None)
+        if bug_store is None:
+            self.show_warning_message("[bugs] bug store não disponível.")
+            return True
+        try:
+            if action == "list":
+                session_id = parts[2] if len(parts) >= 3 else getattr(self.storage, "session_id", "")
+                reports = bug_store.query(session_id=session_id, status="open", limit=20) if session_id else bug_store.query(status="open", limit=20)
+                if not reports:
+                    self.show_system_message("[bugs] nenhum bug aberto.")
+                    return True
+                lines = [f"[bugs] abertos ({len(reports)}):"]
+                for report in reports:
+                    lines.append(f"- {report.id} | {report.severity} | {report.category} | count={report.count}")
+                self.show_muted_message("\n".join(lines))
+                return True
+
+            if action == "show":
+                if len(parts) < 3:
+                    self.show_warning_message("Uso: /bugs show <bug_id>")
+                    return True
+                bug_id = parts[2].strip()
+                reports = bug_store.query(limit=500)
+                target = next((item for item in reports if item.id == bug_id), None)
+                if target is None:
+                    self.show_warning_message(f"[bugs] bug não encontrado: {bug_id}")
+                    return True
+                lines = [
+                    f"[bugs] {target.id}",
+                    f"status={target.status} severity={target.severity} category={target.category} count={target.count}",
+                    f"session={target.session_id} summary={target.summary}",
+                ]
+                if target.description:
+                    lines.append(f"description={target.description}")
+                if target.evidence_refs:
+                    evidence = target.evidence_refs[0]
+                    location = evidence.path
+                    if evidence.line is not None:
+                        location = f"{location}:{evidence.line}"
+                    lines.append(f"evidence={evidence.kind} {location}")
+                self.show_muted_message("\n".join(lines))
+                return True
+
+            if action == "close":
+                if len(parts) < 3:
+                    self.show_warning_message("Uso: /bugs close <bug_id>")
+                    return True
+                bug_id = parts[2].strip()
+                closed = bug_store.close_bug(bug_id)
+                if closed is None:
+                    self.show_warning_message(f"[bugs] bug não encontrado: {bug_id}")
+                    return True
+                self.show_system_message(f"[bugs] bug fechado: {closed.id}")
+                return True
+
+            if action == "analyze":
+                detector = getattr(self, "bug_detector", None)
+                if detector is None:
+                    self.show_warning_message("[bugs] detector não disponível.")
+                    return True
+                session_id = parts[2] if len(parts) >= 3 else getattr(self.storage, "session_id", "")
+                if not session_id:
+                    self.show_warning_message("[bugs] session_id inválido para análise.")
+                    return True
+                events_path = self._resolve_workspace_render_log_path(session_id)
+                ansi_path = self._resolve_workspace_render_ansi_path(session_id)
+                if events_path is None and ansi_path is None:
+                    self.show_warning_message("[bugs] logs de render não encontrados para a sessão.")
+                    return True
+                reports = detector.analyze_session(
+                    session_id=session_id,
+                    events_path=events_path,
+                    ansi_path=ansi_path,
+                )
+                filed = 0
+                for report in reports:
+                    if bug_store.file(report) is not None:
+                        filed += 1
+                self.show_system_message(f"[bugs] análise concluída: {len(reports)} sinal(is), {filed} registro(s) processado(s).")
+                return True
+        except Exception:
+            logger.exception("falha ao processar comando /bugs: %s", raw)
+            self.show_warning_message("[bugs] falha interna ao processar comando.")
+            return True
+
+        self.show_warning_message("Uso: /bugs [list|show|close|analyze] [args]")
+        return True
+
     def handle_command(self, user_input: str) -> bool:
         """Fachada compatível para comandos slash."""
         return self.system_layer.handle_command(user_input)
@@ -1656,12 +1901,14 @@ class QuimeraApp:
                 summary_loaded=self._format_yes_no(self.session_state["summary_loaded"]),
             )
         )
-        session_log_path = self._resolve_session_log_path()
-        if session_log_path:
-            _show_neutral(self._format_session_log_message(session_log_path))
-        render_debug_log_path = self._resolve_render_debug_log_path()
-        if render_debug_log_path:
-            _show_neutral(f"Audit de render:\n  {render_debug_log_path}\n")
+        # Em startup normal, prioriza banner limpo; paths de diagnóstico só em debug.
+        if getattr(self, "debug_prompt_metrics", False):
+            session_log_path = self._resolve_session_log_path()
+            if session_log_path:
+                _show_neutral(self._format_session_log_message(session_log_path))
+            render_debug_log_path = self._resolve_render_debug_log_path()
+            if render_debug_log_path:
+                _show_neutral(f"Audit de render:\n  {render_debug_log_path}\n")
         flush = getattr(self.renderer, "flush", None)
         if callable(flush):
             flush()
@@ -1830,6 +2077,21 @@ class QuimeraApp:
                 self._decrement_chat_inflight()
                 self._release_chat_slot()
                 _pending_async_slot = False
+            leaked_slots = self._get_chat_inflight_count()
+            if leaked_slots > 0:
+                self._file_bug(
+                    session_id=getattr(self.storage, "session_id", ""),
+                    category="slot_leak_suspect",
+                    summary=f"Shutdown iniciou com {leaked_slots} slot(s) ainda em uso",
+                    severity="high",
+                    confidence=0.9,
+                )
+                lock = getattr(self, "_chat_inflight_lock", None)
+                if lock is not None:
+                    with lock:
+                        self._chat_inflight_count = 0
+                else:
+                    self._chat_inflight_count = 0
             try:
                 if threaded_chat and chat_queue is not None:
                     chat_queue.put(None)
@@ -1856,9 +2118,16 @@ class QuimeraApp:
                 renderer = getattr(self, "renderer", None)
                 if renderer is not None and hasattr(renderer, "close"):
                     renderer.close()
+                self._run_render_bug_detector()
                 if hasattr(self, "behavior_metrics"):
                     self.behavior_metrics._flush_if_dirty()
             finally:
+                bug_store = getattr(self, "bug_store", None)
+                if bug_store is not None and hasattr(bug_store, "close"):
+                    try:
+                        bug_store.close()
+                    except Exception:
+                        pass
                 self._restore_tty_control_echo()
 
 

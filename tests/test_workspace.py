@@ -127,6 +127,37 @@ class TestWorkspace(unittest.TestCase):
                 )
                 self.assertTrue(ws.tmp.metrics_dir.exists())
 
+    def test_debug_render_and_metrics_paths_are_persistent_under_workspace_root(self):
+        with tempfile.TemporaryDirectory() as base_dir, tempfile.TemporaryDirectory() as proj_tmp:
+            base = Path(base_dir)
+            proj = Path(proj_tmp) / "renderproj"
+            proj.mkdir()
+
+            with patch("quimera.workspace.find_base_writable", lambda dirs: base):
+                ws = Workspace(proj)
+                self.assertEqual(
+                    ws.render_logs_dir,
+                    ws.root / "data" / "logs" / "render",
+                )
+                self.assertEqual(
+                    ws.metrics_dir,
+                    ws.root / "data" / "logs" / "metrics",
+                )
+                self.assertEqual(
+                    ws.render_log_path_for("sessao-2026-05-14-225819"),
+                    ws.root / "data" / "logs" / "render" / "render-sessao-2026-05-14-225819.jsonl",
+                )
+                self.assertEqual(
+                    ws.render_ansi_path_for("sessao-2026-05-14-225819"),
+                    ws.root / "data" / "logs" / "render" / "render-sessao-2026-05-14-225819.ansi",
+                )
+                self.assertEqual(
+                    ws.metrics_path_for("sessao-2026-05-14-225819"),
+                    ws.root / "data" / "logs" / "metrics" / "sessao-2026-05-14-225819.jsonl",
+                )
+                self.assertTrue(ws.render_logs_dir.exists())
+                self.assertTrue(ws.metrics_dir.exists())
+
     def test_tmp_ensure_dirs_logs_only_the_failing_directory(self):
         render_dir = Path("/tmp") / "quimera" / "hash123" / "data" / "logs" / "render"
         metrics_dir = Path("/tmp") / "quimera" / "hash123" / "data" / "logs" / "metrics"

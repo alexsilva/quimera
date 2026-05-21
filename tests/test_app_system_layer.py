@@ -8,6 +8,7 @@ from quimera.app.system_layer import AppSystemLayer
 from quimera.constants import (
     CMD_APPROVE,
     CMD_APPROVE_ALL,
+    CMD_BUGS,
     CMD_CONNECT,
     CMD_CONTEXT,
     CMD_CONTEXT_BRANCH,
@@ -147,6 +148,30 @@ def test_show_system_message_standard_path_flushes_and_redraws():
 
     assert app.renderer.system_messages == ["mensagem"]
     assert app.renderer.flush_calls == 1
+    app._clear_user_prompt_line_if_needed.assert_called_once()
+    app._redisplay_user_prompt_if_needed.assert_called_once_with(clear_first=False)
+
+
+def test_show_system_message_prefers_quick_flush_on_prompt_owner_thread():
+    class QuickFlushRenderer(DummyRenderer):
+        def __init__(self):
+            super().__init__()
+            self.flush_quick_calls = 0
+
+        def flush_quick(self):
+            self.flush_quick_calls += 1
+            return True
+
+        def flush(self):
+            raise AssertionError("flush() não deveria ser usado quando flush_quick existe")
+
+    renderer = QuickFlushRenderer()
+    app = make_app(renderer=renderer)
+
+    AppSystemLayer(app).show_system_message("mensagem")
+
+    assert renderer.system_messages == ["mensagem"]
+    assert renderer.flush_quick_calls == 1
     app._clear_user_prompt_line_if_needed.assert_called_once()
     app._redisplay_user_prompt_if_needed.assert_called_once_with(clear_first=False)
 
@@ -736,6 +761,24 @@ def test_handle_command_returns_false_for_unknown_command():
     layer = AppSystemLayer(app)
 
     assert layer.handle_command("/nao-existe") is False
+
+
+def test_handle_command_bugs_dispatches_to_handler():
+    app = make_app()
+    handler = Mock(return_value=True)
+    layer = AppSystemLayer(app, bugs_command_handler=handler)
+
+    assert layer.handle_command(CMD_BUGS) is True
+
+    handler.assert_called_once_with(CMD_BUGS)
+
+
+def test_handle_command_bugs_without_handler_warns():
+    app = make_app()
+    layer = AppSystemLayer(app)
+
+    assert layer.handle_command(CMD_BUGS) is True
+    assert app.renderer.warning_messages[-1] == "Comando /bugs indisponível nesta sessão."
 
 
 # ---------------------------------------------------------------------------

@@ -175,6 +175,28 @@ class Workspace:
         return self._root / "data" / "context" / "previous_session.md"
 
     @property
+    def render_logs_dir(self) -> Path:
+        """Diretório persistente de auditoria de render (JSONL + ANSI)."""
+        return self._root / "data" / "logs" / "render"
+
+    @property
+    def metrics_dir(self) -> Path:
+        """Diretório persistente de métricas de sessão."""
+        return self._root / "data" / "logs" / "metrics"
+
+    def render_log_path_for(self, session_id: str) -> Path:
+        """Caminho do arquivo JSONL de auditoria de render para *session_id*."""
+        return self.render_logs_dir / f"render-{session_id}.jsonl"
+
+    def render_ansi_path_for(self, session_id: str) -> Path:
+        """Caminho do arquivo ANSI bruto de render para *session_id*."""
+        return self.render_logs_dir / f"render-{session_id}.ansi"
+
+    def metrics_path_for(self, session_id: str) -> Path:
+        """Caminho do arquivo JSONL de métricas para *session_id*."""
+        return self.metrics_dir / f"{session_id}.jsonl"
+
+    @property
     def logs_dir(self) -> Path:
         """Diretório de logs de sessões persistentes (JSONL por sessão)."""
         return self._root / "data" / "logs" / "sessions"
@@ -214,6 +236,8 @@ class Workspace:
         dirs = [
             self._root / "data",
             self._root / "data" / "context",
+            self._root / "data" / "logs" / "render",
+            self._root / "data" / "logs" / "metrics",
             self._root / "data" / "logs" / "sessions",
             self._root / "state",
             self.base_dir / "index",

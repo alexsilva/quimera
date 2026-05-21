@@ -82,3 +82,12 @@ class TaskReviewReassigned(TaskEvent):
     """Review foi reatribuído para outro revisor (REVIEWING→PENDING_REVIEW)."""
     reason: str | None = None
     previous_reviewer: str | None = None
+
+
+@dataclass(frozen=True, kw_only=True)
+class BugFiled(TaskEvent):
+    """Bug foi arquivado no sistema de rastreamento."""
+    bug_id: str
+    category: str
+    summary: str
+    severity: str

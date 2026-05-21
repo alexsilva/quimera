@@ -214,13 +214,25 @@ class NoopEvent:
     force_flush: bool = False
 
 
+def _coerce_agent_name(agent: Any) -> str:
+    """Normaliza identificador de agente para uso seguro na UI."""
+    if isinstance(agent, str):
+        candidate = strip_ansi(agent).strip()
+    elif agent is None:
+        candidate = ""
+    else:
+        candidate = strip_ansi(str(agent)).strip()
+    return candidate or "unknown"
+
+
 def _agent_style(agent: str, get_plugin_style=None):
     """Retorna (color, label) para o agente; fallback para white/capitalize."""
+    agent_name = _coerce_agent_name(agent)
     if get_plugin_style:
-        result = get_plugin_style(agent.lower())
+        result = get_plugin_style(agent_name.lower())
         if result:
             return result
-    return ("white", f"🤖 {agent.capitalize()}")
+    return ("white", f"🤖 {agent_name.capitalize()}")
 
 
 class _NullStatus:
@@ -366,6 +378,12 @@ class TerminalRenderer:
         _local_pending: collections.deque = collections.deque()  # buffer de "unget" para coalescing
         _deferred_post_prompt: collections.deque = collections.deque()  # prints deferidos enquanto prompt ativo
 
+        def _prompt_active() -> bool:
+            try:
+                return bool(self._is_prompt_active_fn and self._is_prompt_active_fn())
+            except Exception:
+                return False
+
         def _get_renderable():
             if not _stream_states:
                 return Text("")
@@ -394,7 +412,7 @@ class TerminalRenderer:
             if _ul[0] is None and self._console:
                 # Não inicia Live quando prompt_toolkit está ativo — os dois controladores
                 # de terminal conflitam e corrompem o display.
-                if self._is_prompt_active_fn is not None and self._is_prompt_active_fn():
+                if _prompt_active():
                     return
                 _ul[0] = _public_ui_module().Live(
                     _get_renderable(),
@@ -441,12 +459,15 @@ class TerminalRenderer:
                 _r, _k = _deferred_post_prompt.popleft()
                 if _ul[0] is not None:
                     _ul[0].console.print(_r, **_k)
+                elif force and self._console:
+                    # force=True: imprime direto no console mesmo sem prompt ativo.
+                    # Usado por flush() antes do prompt iniciar, quando run_above
+                    # falharia porque prompt_toolkit ainda não está rodando.
+                    self._console.print(_r, **_k)
                 elif run_above is not None:
                     if not run_above(lambda: self._console.print(_r, **_k)):
                         _deferred_post_prompt.appendleft((_r, _k))
                         break
-                elif force and self._console:
-                    self._console.print(_r, **_k)
                 else:
                     # Sem Live nem run_above — re-defer para não colar no prompt
                     _deferred_post_prompt.appendleft((_r, _k))
@@ -465,6 +486,7 @@ class TerminalRenderer:
         while True:
             event = _next_event()
             if event is _STOP:
+                _flush_deferred(force=True)
                 if _ul[0]:
                     _ul[0].stop()
                     self._stream_live_active.clear()
@@ -477,7 +499,7 @@ class TerminalRenderer:
                     if preview:
                         _audit_event(
                             "print",
-                            prompt_active=bool(self._is_prompt_active_fn and self._is_prompt_active_fn()),
+                            prompt_active=_prompt_active(),
                             preview=preview,
                         )
                     _cprint(event.renderable, **event.kwargs)
@@ -486,7 +508,7 @@ class TerminalRenderer:
                     _audit_event(
                         "stream_start",
                         agent=event.agent,
-                        prompt_active=bool(self._is_prompt_active_fn and self._is_prompt_active_fn()),
+                        prompt_active=_prompt_active(),
                     )
                     _stream_states[event.agent] = event.state
                     _ensure_live()
@@ -564,13 +586,21 @@ class TerminalRenderer:
             except Exception:
                 _log.exception("writer thread: erro ao processar evento %r", event)
 
-    def flush(self):
+    def flush(self, timeout: float = 5.0):
         """Aguarda o writer thread processar todos os eventos pendentes
         e força o dreno de mensagens deferidas para o console."""
         done = threading.Event()
         self._queue.put(NoopEvent(done, force_flush=True))
-        if not done.wait(timeout=5):
-            raise TimeoutError("TerminalRenderer.flush timed out after 5 seconds")
+        if not done.wait(timeout=timeout):
+            raise TimeoutError(f"TerminalRenderer.flush timed out after {timeout} seconds")
+
+    def flush_quick(self, timeout: float = 0.15) -> bool:
+        """Tenta drenar rapidamente sem bloquear o thread do prompt por muito tempo."""
+        try:
+            self.flush(timeout=timeout)
+            return True
+        except TimeoutError:
+            return False
 
     # ------------------------------------------------------------------
     # Helpers internos
@@ -945,8 +975,9 @@ class TerminalRenderer:
         clean_message = strip_ansi(str(message)).strip("\r\n")
         if self._console:
             line = Text(clean_message, style="bold cyan")
-            line.no_wrap = False
-            line.overflow = "fold"
+            # Logo ASCII precisa manter geometria original; wrap automático deforma.
+            line.no_wrap = True
+            line.overflow = "ignore"
             self._print(line)
             self._print(Rule(style="dim cyan"))
         else:

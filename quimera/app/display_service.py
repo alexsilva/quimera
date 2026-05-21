@@ -231,6 +231,18 @@ class DisplayService:
         else:
             renderer.show_system(message)
 
+    @staticmethod
+    def _flush_renderer(renderer, *, prefer_quick: bool = False) -> None:
+        """Realiza flush do renderer, com modo rápido opcional para evitar travar o prompt."""
+        if prefer_quick:
+            flush_quick = getattr(renderer, "flush_quick", None)
+            if callable(flush_quick):
+                flush_quick()
+                return
+        flush = getattr(renderer, "flush", None)
+        if callable(flush):
+            flush()
+
     def _show_above_active_prompt(self, message: str, *, level: str) -> bool:
         """Tenta publicar a mensagem acima do prompt ativo via InputGate."""
         run_in_terminal_message = self.run_above_active_prompt
@@ -243,9 +255,7 @@ class DisplayService:
         def _render_callback() -> None:
             with self._get_output_lock():
                 self._render_message(renderer, level, message)
-                flush = getattr(renderer, "flush", None)
-                if callable(flush):
-                    flush()
+                self._flush_renderer(renderer)
 
         return bool(run_in_terminal_message(_render_callback))
 
@@ -266,13 +276,12 @@ class DisplayService:
                 return
         with self._get_output_lock():
             current_thread_id = self.prompt_owner_thread_id_getter()
-            if current_thread_id is None or current_thread_id == threading.get_ident():
+            is_owning = current_thread_id is None or current_thread_id == threading.get_ident()
+            if is_owning:
                 self.clear_prompt_line()
             renderer.show_system(message)
-            flush = getattr(renderer, "flush", None)
-            if callable(flush):
-                flush()
-            if current_thread_id is None or current_thread_id == threading.get_ident():
+            self._flush_renderer(renderer, prefer_quick=is_owning)
+            if is_owning:
                 self.redisplay_prompt(clear_first=False)
 
     def show_muted_message(self, message: str) -> None:
@@ -295,9 +304,7 @@ class DisplayService:
                 show_system_neutral(message)
             else:
                 renderer.show_system(message)
-            flush = getattr(renderer, "flush", None)
-            if callable(flush):
-                flush()
+            self._flush_renderer(renderer, prefer_quick=is_owning)
             if is_owning:
                 self.redisplay_prompt(clear_first=False)
 
@@ -321,9 +328,7 @@ class DisplayService:
                 show_warning(message)
             else:
                 renderer.show_system(message)
-            flush = getattr(renderer, "flush", None)
-            if callable(flush):
-                flush()
+            self._flush_renderer(renderer, prefer_quick=is_owning)
             if is_owning:
                 self.redisplay_prompt(clear_first=False)
 
@@ -347,9 +352,7 @@ class DisplayService:
                 show_error(message)
             else:
                 renderer.show_system(message)
-            flush = getattr(renderer, "flush", None)
-            if callable(flush):
-                flush()
+            self._flush_renderer(renderer, prefer_quick=is_owning)
             if is_owning:
                 self.redisplay_prompt(clear_first=False)
 
@@ -400,7 +403,5 @@ class DisplayService:
                 else:
                     level, message = "system", item
                 self._render_message(renderer, level, message)
-            flush = getattr(renderer, "flush", None)
-            if callable(flush):
-                flush()
+            self._flush_renderer(renderer)
             deferred.clear()

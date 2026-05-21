@@ -12,6 +12,7 @@ from .prompt_budget import PromptBudget
 from .prompt_kinds import PromptKind, coerce_prompt_kind
 from .prompt_templates import get_prompt_template
 from .shared_state_presenter import SharedStatePresenter
+from .bugs import BugStore, format_bug_context
 
 
 class PromptBuilder:
@@ -211,6 +212,13 @@ class PromptBuilder:
         return full_prompt
 
     def _build_evidence_section(self, shared_state, session_id: str) -> str:
+        evidence_section = self._build_evidence_context(shared_state, session_id)
+        bugs_section = self._build_bugs_context(shared_state, session_id)
+        if evidence_section and bugs_section:
+            return f"{evidence_section}\n\n{bugs_section}"
+        return evidence_section or bugs_section
+
+    def _build_evidence_context(self, shared_state, session_id: str) -> str:
         if not isinstance(shared_state, dict):
             return ""
         evidence_session_id = shared_state.get("session_id") or session_id
@@ -225,3 +233,27 @@ class PromptBuilder:
         if not evidences:
             return ""
         return EvidenceFormatter().format(evidences)
+
+    def _build_bugs_context(self, shared_state, session_id: str) -> str:
+        if not isinstance(shared_state, dict):
+            return ""
+        bug_session_id = shared_state.get("session_id") or session_id
+        if not bug_session_id:
+            return ""
+        data_root = self.session_state.get("workspace_data_root") if isinstance(self.session_state, dict) else None
+        if not data_root:
+            return ""
+        try:
+            store = BugStore(Path(data_root) / "logs")
+        except Exception:
+            return ""
+        try:
+            reports = store.query(session_id=bug_session_id, status="open", limit=3)
+        except Exception:
+            return ""
+        finally:
+            try:
+                store.close()
+            except Exception:
+                pass
+        return format_bug_context(reports)

@@ -139,3 +139,42 @@ def test_audit_no_noop_events(tmp_path):
     events = _read_jsonl(events_path)
     noop_events = [e for e in events if e["event"] == "noop"]
     assert len(noop_events) == 0
+
+
+def test_ansi_burst_duplicates_are_suppressed_and_logged(tmp_path):
+    log_dir = tmp_path / "render"
+    events_path = log_dir / "render-dedup-test.jsonl"
+    ansi_path = log_dir / "render-dedup-test.ansi"
+    logger = RenderAuditLogger(events_path, ansi_path)
+    payload = ("⚙ Audit de render:\n  /tmp/quimera/render-session.jsonl\n" * 2).encode("utf-8")
+    with patch("quimera.ui.audit.time.monotonic", side_effect=[1.0, 1.01, 1.02, 1.03, 2.0]):
+        logger.write_ansi(payload)
+        logger.write_ansi(payload)
+        logger.write_ansi(payload)
+        logger.write_ansi(payload)
+        logger.write_ansi(b"next\n")
+    logger.close()
+
+    assert ansi_path.read_bytes() == payload + b"next\n"
+    events = _read_jsonl(events_path)
+    dedup_events = [e for e in events if e.get("event") == "ansi_duplicate_suppressed"]
+    assert len(dedup_events) == 1
+    assert dedup_events[0].get("repeats") == 3
+    assert int(dedup_events[0].get("payload_bytes", 0)) == len(payload)
+
+
+def test_ansi_dedup_does_not_suppress_short_payload(tmp_path):
+    log_dir = tmp_path / "render"
+    events_path = log_dir / "render-dedup-short-test.jsonl"
+    ansi_path = log_dir / "render-dedup-short-test.ansi"
+    logger = RenderAuditLogger(events_path, ansi_path)
+    payload = b"short\n"
+    with patch("quimera.ui.audit.time.monotonic", side_effect=[1.0, 1.01]):
+        logger.write_ansi(payload)
+        logger.write_ansi(payload)
+    logger.close()
+
+    assert ansi_path.read_bytes() == payload + payload
+    events = _read_jsonl(events_path)
+    dedup_events = [e for e in events if e.get("event") == "ansi_duplicate_suppressed"]
+    assert len(dedup_events) == 0
