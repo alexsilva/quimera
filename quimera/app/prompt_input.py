@@ -194,19 +194,21 @@ class InputGate:
             if mode:
                 parts.append(f"<i><style fg='#c3a6ff'>{html.escape(_clip(mode, 18))}</style></i>")
             if branch:
-                parts.append(f"<style fg='#7a7a7a'>br:{html.escape(_clip(branch, 24))}</style>")
+                parts.append(f"<style fg='#909090'>br:{html.escape(_clip(branch, 24))}</style>")
             if elapsed:
-                parts.append(f"<style fg='#7a7a7a'>{html.escape(elapsed)}</style>")
+                parts.append(f"<style fg='#909090'>{html.escape(elapsed)}</style>")
             if turns:
-                parts.append(f"<style fg='#7a7a7a'>{html.escape(turns)}</style>")
+                parts.append(f"<style fg='#909090'>{html.escape(turns)}</style>")
             if theme:
-                parts.append(f"<style fg='#7a7a7a'>tema:{html.escape(_clip(theme, 18))}</style>")
+                parts.append(f"<style fg='#909090'>◈{html.escape(_clip(theme, 18))}</style>")
             if session_id:
-                parts.append(f"<style fg='#5f5f5f'>sess:{html.escape(_clip(session_id, 12))}</style>")
-            separator = "<style fg='#5f5f5f'> · </style>"
-            # Keep a subtle, consistent toolbar strip across sessions.
+                parts.append(f"<style fg='#808080'>sess:{html.escape(_clip(session_id, 12))}</style>")
+            separator = "<style fg='#666666'> · </style>"
             content = separator.join(parts)
-            return HTML(f"<style bg='#262626'>{content}</style>")
+            # Subtle frame around the full toolbar line for stronger container shape.
+            left_edge = "<style fg='#555555' bg='#1d1d1d'>▎</style>"
+            right_edge = "<style fg='#555555' bg='#1d1d1d'>▕</style>"
+            return HTML(f"<style bg='#1d1d1d'>{left_edge} {content} {right_edge}</style>")
 
         return _toolbar
 

@@ -58,8 +58,10 @@ class TestBuildToolbar:
         )
         toolbar = gate._build_toolbar()
         assert callable(toolbar)
-        assert "<style fg='#7a7a7a'>tema:chat</style>" in str(toolbar())
-        assert "bg='#262626'" in str(toolbar())
+        assert "<style fg='#909090'>◈chat</style>" in str(toolbar())
+        assert "bg='#1d1d1d'" in str(toolbar())
+        assert "▎" in str(toolbar())
+        assert "▕" in str(toolbar())
 
     @pytest.mark.skipif(not _PT_AVAILABLE, reason="prompt_toolkit não disponível")
     def test_toolbar_includes_turns_when_context_available(self):
