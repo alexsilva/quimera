@@ -123,6 +123,8 @@ class BugStore:
     """Store append-only JSONL para bugs com deduplicação por fingerprint."""
 
     def __init__(self, base_dir: Path):
+        if not isinstance(base_dir, (str, Path)):
+            raise TypeError(f"BugStore requires a str or Path, got {type(base_dir).__name__}")
         self.base_dir = Path(base_dir)
         self.bugs_dir = self.base_dir / "bugs"
         self.bugs_dir.mkdir(parents=True, exist_ok=True)

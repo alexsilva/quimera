@@ -47,11 +47,14 @@ class TestAppHistory(unittest.TestCase):
         mock_gate_instance = MagicMock()
         mock_input_gate.return_value = mock_gate_instance
 
+        tmp_root = Path("/tmp/quimera_test_workspace_tmp")
         with patch("quimera.app.core.Workspace") as mock_ws:
             mock_ws_instance = MagicMock()
             mock_ws_instance.history_file = self.history_file
             mock_ws_instance.root = Path("/tmp/quimera_test_workspace")
             mock_ws_instance.tasks_db = Path("/tmp/quimera_test_tasks.db")
+            mock_ws_instance.tmp = MagicMock()
+            mock_ws_instance.tmp.root = tmp_root
             mock_ws.return_value = mock_ws_instance
 
             with patch("quimera.app.core.create_executor"):
@@ -88,12 +91,15 @@ class TestAppHistory(unittest.TestCase):
         mock_add_job.return_value = 1
         self._setup_common_mocks(mock_storage, mock_context)
 
+        tmp_root = Path("/tmp/quimera_test_workspace_tmp")
         with patch("quimera.app.core.Workspace") as mock_ws:
             mock_ws_instance = MagicMock()
             mock_ws_instance.history_file = self.history_file
             mock_ws_instance.root = Path("/tmp/quimera_test_workspace")
             mock_ws_instance.tasks_db = Path("/tmp/quimera_test_tasks.db")
             mock_ws_instance.render_logs_dir = Path("/tmp/quimera_test_workspace/data/logs/render")
+            mock_ws_instance.tmp = MagicMock()
+            mock_ws_instance.tmp.root = tmp_root
             mock_ws.return_value = mock_ws_instance
 
             with patch("quimera.app.core.create_executor"):
@@ -145,6 +151,7 @@ class TestAppHistory(unittest.TestCase):
             mock_ws_instance.root = Path("/tmp/quimera_test_workspace")
             mock_ws_instance.tasks_db = Path("/tmp/quimera_test_tasks.db")
             mock_tmp = MagicMock()
+            mock_tmp.root = Path("/tmp/quimera_test_workspace_tmp")
             mock_tmp.render_log_path_for.side_effect = (
                 lambda session_id: tmp_render_logs_dir / f"render-{session_id}.jsonl"
             )
