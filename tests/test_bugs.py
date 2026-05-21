@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 from quimera.bugs import (
+    AgentRuntimeBugDetector,
     BugEvidenceRef,
     BugReport,
     BugStore,
@@ -140,6 +141,47 @@ def test_render_bug_detector_accepts_missing_events_path(tmp_path):
     assert reports[0].category == "interrupt_shutdown_traceback"
 
 
+def test_agent_runtime_bug_detector_scans_metrics_and_prompt_pressure(tmp_path):
+    metrics_path = tmp_path / "sessao-1.jsonl"
+    lines = [
+        {"agent": "codex", "total_chars": 62000},
+        {"agent": "codex", "total_chars": 64000},
+    ]
+    metrics_path.write_text(
+        "".join(json.dumps(item, ensure_ascii=False) + "\n" for item in lines),
+        encoding="utf-8",
+    )
+    detector = AgentRuntimeBugDetector(
+        min_failures=2,
+        min_tool_calls=3,
+        latency_threshold_seconds=20.0,
+        prompt_total_chars_threshold=60000,
+        prompt_threshold_hits=2,
+    )
+    reports = detector.analyze(
+        session_id="sessao-1",
+        agent_metrics={
+            "codex": {
+                "succeeded": 1,
+                "failed": 3,
+                "latency": 120.0,
+                "tool_calls_total": 6,
+                "tool_calls_failed": 4,
+                "invalid_tool_calls": 2,
+                "tool_loop_abortions": 2,
+            }
+        },
+        prompt_metrics_path=metrics_path,
+    )
+    categories = {item.category for item in reports}
+    assert "agent_failure_rate_high" in categories
+    assert "agent_latency_high" in categories
+    assert "agent_tool_error_burst" in categories
+    assert "agent_invalid_tool_calls" in categories
+    assert "agent_tool_loop_abort" in categories
+    assert "agent_prompt_budget_pressure" in categories
+
+
 def test_format_bug_context_renders_readable_block(tmp_path):
     store = BugStore(tmp_path)
     try:
@@ -187,3 +229,66 @@ def test_handle_bugs_command_handles_store_errors_without_crashing():
 
     assert result is True
     app.show_warning_message.assert_called_with("[bugs] falha interna ao processar comando.")
+
+
+def test_handle_bugs_command_stats_renders_aggregates(tmp_path):
+    app = QuimeraApp.__new__(QuimeraApp)
+    app.storage = SimpleNamespace(session_id="sessao-1")
+    app.show_warning_message = Mock()
+    app.show_system_message = Mock()
+    app.show_muted_message = Mock()
+    app.bug_store = BugStore(tmp_path)
+    try:
+        app.bug_store.file(_build_report("sessao-1", "render_repeat_block", "Bloco ANSI repetido"))
+        app.bug_store.file(_build_report("sessao-1", "prompt_line_collision", "Prompt colado"))
+        result = app._handle_bugs_command("/bugs stats")
+        assert result is True
+        payload = app.show_muted_message.call_args[0][0]
+        assert "por categoria:" in payload
+        assert "render_repeat_block" in payload
+        assert "prompt_line_collision" in payload
+    finally:
+        app.bug_store.close()
+
+
+def test_render_bug_detector_detects_long_gap(tmp_path):
+    events_path = tmp_path / "render-sessao-1.jsonl"
+    events = [
+        {"ts": "2026-05-20T00:00:00.000+00:00", "event": "print", "preview": "msg1"},
+        {"ts": "2026-05-20T00:01:00.000+00:00", "event": "print", "preview": "msg2"},
+    ]
+    events_path.write_text("".join(json.dumps(item, ensure_ascii=False) + "\n" for item in events), encoding="utf-8")
+
+    detector = RenderBugDetector(gap_threshold_seconds=30.0)
+    reports = detector.analyze_session(
+        session_id="sessao-1",
+        events_path=events_path,
+        ansi_path=None,
+        agent="codex",
+    )
+
+    categories = {report.category for report in reports}
+    assert "render_long_gap" in categories
+
+
+def test_render_bug_detector_detects_rapid_burst(tmp_path):
+    events_path = tmp_path / "render-sessao-1.jsonl"
+    events = [
+        {"ts": "2026-05-20T00:00:00.000+00:00", "event": "print", "preview": "msg1"},
+        {"ts": "2026-05-20T00:00:00.200+00:00", "event": "print", "preview": "msg2"},
+        {"ts": "2026-05-20T00:00:00.400+00:00", "event": "print", "preview": "msg3"},
+        {"ts": "2026-05-20T00:00:00.600+00:00", "event": "print", "preview": "msg4"},
+        {"ts": "2026-05-20T00:00:00.800+00:00", "event": "print", "preview": "msg5"},
+    ]
+    events_path.write_text("".join(json.dumps(item, ensure_ascii=False) + "\n" for item in events), encoding="utf-8")
+
+    detector = RenderBugDetector(rapid_window_seconds=2.0, rapid_count_threshold=5)
+    reports = detector.analyze_session(
+        session_id="sessao-1",
+        events_path=events_path,
+        ansi_path=None,
+        agent="codex",
+    )
+
+    categories = {report.category for report in reports}
+    assert "render_rapid_burst" in categories

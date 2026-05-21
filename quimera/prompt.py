@@ -240,11 +240,11 @@ class PromptBuilder:
         bug_session_id = shared_state.get("session_id") or session_id
         if not bug_session_id:
             return ""
-        data_root = self.session_state.get("workspace_data_root") if isinstance(self.session_state, dict) else None
-        if not data_root:
+        tmp_root = self.session_state.get("workspace_tmp_root") if isinstance(self.session_state, dict) else None
+        if not tmp_root:
             return ""
         try:
-            store = BugStore(Path(data_root) / "logs")
+            store = BugStore(Path(tmp_root) / "data" / "logs")
         except Exception:
             return ""
         try:

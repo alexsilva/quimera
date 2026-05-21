@@ -1584,6 +1584,8 @@ class ProtocolTests(unittest.TestCase):
         temp_root = Path(self.enterContext(tempfile.TemporaryDirectory()))
 
         class FakeTmp:
+            root = temp_root
+
             def render_log_path_for(self, session_id):
                 return temp_root / f"render-{session_id}.jsonl"
 
@@ -1658,6 +1660,8 @@ class ProtocolTests(unittest.TestCase):
         temp_root = Path(self.enterContext(tempfile.TemporaryDirectory()))
 
         class FakeTmp:
+            root = temp_root
+
             def render_log_path_for(self, session_id):
                 return temp_root / f"render-{session_id}.jsonl"
 
@@ -1721,6 +1725,8 @@ class ProtocolTests(unittest.TestCase):
         temp_root = Path(self.enterContext(tempfile.TemporaryDirectory()))
 
         class FakeTmp:
+            root = temp_root
+
             def render_log_path_for(self, session_id):
                 return temp_root / f"render-{session_id}.jsonl"
 
@@ -1784,6 +1790,8 @@ class ProtocolTests(unittest.TestCase):
         temp_root = Path(self.enterContext(tempfile.TemporaryDirectory()))
 
         class FakeTmp:
+            root = temp_root
+
             def render_log_path_for(self, session_id):
                 return temp_root / f"render-{session_id}.jsonl"
 

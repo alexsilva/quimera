@@ -305,8 +305,17 @@ class RenderBugDetector:
         re.IGNORECASE,
     )
 
-    def __init__(self, repeat_threshold: int = 1):
+    def __init__(
+        self,
+        repeat_threshold: int = 1,
+        gap_threshold_seconds: float = 30.0,
+        rapid_window_seconds: float = 2.0,
+        rapid_count_threshold: int = 5,
+    ):
         self.repeat_threshold = max(1, int(repeat_threshold))
+        self.gap_threshold_seconds = float(gap_threshold_seconds)
+        self.rapid_window_seconds = float(rapid_window_seconds)
+        self.rapid_count_threshold = max(1, int(rapid_count_threshold))
 
     def analyze_session(
         self,
@@ -329,8 +338,15 @@ class RenderBugDetector:
                 reports.extend(self._scan_ansi_file(session_id=session_id, path=ansi_file, agent=agent))
         return reports
 
+    def _parse_ts(self, ts: str) -> datetime | None:
+        try:
+            return datetime.fromisoformat(ts)
+        except (ValueError, TypeError):
+            return None
+
     def _scan_events_file(self, *, session_id: str, path: Path, agent: str) -> list[BugReport]:
         reports: list[BugReport] = []
+        events_with_ts: list[tuple[int, str, str, str, dict]] = []
         with path.open("r", encoding="utf-8") as handle:
             for index, line in enumerate(handle, start=1):
                 raw = line.strip()
@@ -344,51 +360,150 @@ class RenderBugDetector:
                     continue
                 event = str(payload.get("event", "") or "")
                 ts = str(payload.get("ts", "") or "")
-                if event == "ansi_duplicate_suppressed":
-                    repeats = int(payload.get("repeats", 0) or 0)
-                    if repeats >= self.repeat_threshold:
-                        summary = "Bloco ANSI repetido suprimido"
-                        reports.append(
-                            self._build_report(
-                                session_id=session_id,
-                                category="render_repeat_block",
-                                summary=summary,
-                                severity="medium",
-                                confidence=min(0.99, 0.65 + (repeats * 0.05)),
-                                agent=agent,
-                                evidence=BugEvidenceRef(
-                                    kind="render_jsonl",
-                                    path=str(path),
-                                    line=index,
-                                    ts=ts,
-                                    event=event,
-                                    preview=f"{summary} ({repeats}x)",
-                                ),
-                            )
+                preview = str(payload.get("preview", "") or "")
+                events_with_ts.append((index, event, ts, preview, payload))
+
+        for index, event, ts, preview, payload in events_with_ts:
+            if event == "ansi_duplicate_suppressed":
+                repeats = int(payload.get("repeats", 0) or 0)
+                if repeats >= self.repeat_threshold:
+                    summary = "Bloco ANSI repetido suprimido"
+                    reports.append(
+                        self._build_report(
+                            session_id=session_id,
+                            category="render_repeat_block",
+                            summary=summary,
+                            severity="medium",
+                            confidence=min(0.99, 0.65 + (repeats * 0.05)),
+                            agent=agent,
+                            evidence=BugEvidenceRef(
+                                kind="render_jsonl",
+                                path=str(path),
+                                line=index,
+                                ts=ts,
+                                event=event,
+                                preview=f"{summary} ({repeats}x)",
+                            ),
                         )
-                if event == "print":
-                    preview = str(payload.get("preview", "") or "")
-                    if self._PROMPT_COLLISION_PATTERN.search(preview):
-                        summary = "Saída operacional colada na linha do prompt"
-                        reports.append(
-                            self._build_report(
-                                session_id=session_id,
-                                category="prompt_line_collision",
-                                summary=summary,
-                                severity="high",
-                                confidence=0.9,
-                                agent=agent,
-                                evidence=BugEvidenceRef(
-                                    kind="render_jsonl",
-                                    path=str(path),
-                                    line=index,
-                                    ts=ts,
-                                    event=event,
-                                    preview=preview[:180],
-                                ),
-                            )
+                    )
+            if event == "print":
+                if self._PROMPT_COLLISION_PATTERN.search(preview):
+                    summary = "Saída operacional colada na linha do prompt"
+                    reports.append(
+                        self._build_report(
+                            session_id=session_id,
+                            category="prompt_line_collision",
+                            summary=summary,
+                            severity="high",
+                            confidence=0.9,
+                            agent=agent,
+                            evidence=BugEvidenceRef(
+                                kind="render_jsonl",
+                                path=str(path),
+                                line=index,
+                                ts=ts,
+                                event=event,
+                                preview=preview[:180],
+                            ),
                         )
+                    )
+
+        self._detect_long_gaps(session_id, path, events_with_ts, agent, reports)
+        self._detect_rapid_burst(session_id, path, events_with_ts, agent, reports)
         return reports
+
+    def _detect_long_gaps(
+        self,
+        session_id: str,
+        path: Path,
+        events: list[tuple[int, str, str, str, dict]],
+        agent: str,
+        reports: list[BugReport],
+    ) -> None:
+        parsed: list[tuple[int, str, str, datetime]] = []
+        for index, event, ts, preview, payload in events:
+            dt = self._parse_ts(ts)
+            if dt is not None:
+                parsed.append((index, event, ts, dt))
+        if len(parsed) < 2:
+            return
+        for i in range(1, len(parsed)):
+            prev_idx, prev_evt, prev_ts, prev_dt = parsed[i - 1]
+            curr_idx, curr_evt, curr_ts, curr_dt = parsed[i]
+            gap = (curr_dt - prev_dt).total_seconds()
+            if gap >= self.gap_threshold_seconds:
+                summary = f"Gap de {gap:.0f}s entre eventos de render"
+                reports.append(
+                    self._build_report(
+                        session_id=session_id,
+                        category="render_long_gap",
+                        summary=summary,
+                        severity="medium",
+                        confidence=min(0.95, 0.5 + (gap / 120)),
+                        agent=agent,
+                        evidence=BugEvidenceRef(
+                            kind="render_jsonl",
+                            path=str(path),
+                            line=curr_idx,
+                            ts=curr_ts,
+                            event=curr_evt,
+                            preview=f"gap={gap:.1f}s after {prev_evt}",
+                        ),
+                    )
+                )
+
+    def _detect_rapid_burst(
+        self,
+        session_id: str,
+        path: Path,
+        events: list[tuple[int, str, str, str, dict]],
+        agent: str,
+        reports: list[BugReport],
+    ) -> None:
+        parsed: list[tuple[int, str, str, datetime]] = []
+        for index, event, ts, preview, payload in events:
+            dt = self._parse_ts(ts)
+            if dt is not None:
+                parsed.append((index, event, ts, dt))
+        if len(parsed) < self.rapid_count_threshold:
+            return
+        window = self.rapid_window_seconds
+        threshold = self.rapid_count_threshold
+        i = 0
+        reported_lines: set[int] = set()
+        while i < len(parsed):
+            j = i + 1
+            while j < len(parsed):
+                dt_i = parsed[i][3]
+                dt_j = parsed[j][3]
+                if (dt_j - dt_i).total_seconds() > window:
+                    break
+                j += 1
+            count = j - i
+            if count >= threshold and parsed[i][1] == "print":
+                line_idx = parsed[i][0]
+                if line_idx not in reported_lines:
+                    reported_lines.add(line_idx)
+                    summary = f"Rajada de {count} prints em {window:.1f}s"
+                    reports.append(
+                        self._build_report(
+                            session_id=session_id,
+                            category="render_rapid_burst",
+                            summary=summary,
+                            severity="low",
+                            confidence=min(0.9, 0.4 + (count * 0.05)),
+                            agent=agent,
+                            evidence=BugEvidenceRef(
+                                kind="render_jsonl",
+                                path=str(path),
+                                line=line_idx,
+                                ts=parsed[i][2],
+                                event="print",
+                                preview=f"{count} events in {window:.1f}s window",
+                            ),
+                        )
+                    )
+            i = max(i + 1, j - threshold + 1)
 
     def _scan_ansi_file(self, *, session_id: str, path: Path, agent: str) -> list[BugReport]:
         payload = path.read_text(encoding="utf-8", errors="replace")
@@ -433,6 +548,258 @@ class RenderBugDetector:
             summary=summary,
             severity=severity,
             confidence=confidence,
+            fingerprint=fingerprint,
+            evidence_refs=[evidence],
+            agent=agent,
+        )
+
+
+class AgentRuntimeBugDetector:
+    """Detector de bugs orientado a métricas de agentes e pressão de prompt."""
+
+    def __init__(
+        self,
+        *,
+        min_failures: int = 2,
+        min_tool_calls: int = 3,
+        latency_threshold_seconds: float = 45.0,
+        prompt_total_chars_threshold: int = 60000,
+        prompt_threshold_hits: int = 2,
+    ):
+        self.min_failures = max(1, int(min_failures))
+        self.min_tool_calls = max(1, int(min_tool_calls))
+        self.latency_threshold_seconds = max(1.0, float(latency_threshold_seconds))
+        self.prompt_total_chars_threshold = max(1000, int(prompt_total_chars_threshold))
+        self.prompt_threshold_hits = max(1, int(prompt_threshold_hits))
+
+    def analyze(
+        self,
+        *,
+        session_id: str,
+        agent_metrics: dict | None,
+        prompt_metrics_path: Path | None = None,
+    ) -> list[BugReport]:
+        reports: list[BugReport] = []
+        reports.extend(
+            self._scan_agent_metrics(
+                session_id=session_id,
+                agent_metrics=agent_metrics or {},
+            )
+        )
+        if prompt_metrics_path is not None:
+            path = Path(prompt_metrics_path)
+            if path.is_file():
+                reports.extend(self._scan_prompt_metrics_file(session_id=session_id, path=path))
+        return reports
+
+    def _scan_agent_metrics(self, *, session_id: str, agent_metrics: dict) -> list[BugReport]:
+        reports: list[BugReport] = []
+        for raw_agent, raw_metrics in agent_metrics.items():
+            if not isinstance(raw_metrics, dict):
+                continue
+            agent = str(raw_agent or "").strip() or "unknown"
+            succeeded = max(0, _coerce_int(raw_metrics.get("succeeded", 0), 0))
+            failed = max(0, _coerce_int(raw_metrics.get("failed", 0), 0))
+            attempts = succeeded + failed
+            latency_total = max(0.0, _coerce_float(raw_metrics.get("latency", 0.0), 0.0))
+            avg_latency = (latency_total / attempts) if attempts > 0 else 0.0
+            tool_calls_total = max(0, _coerce_int(raw_metrics.get("tool_calls_total", 0), 0))
+            tool_calls_failed = max(0, _coerce_int(raw_metrics.get("tool_calls_failed", 0), 0))
+            invalid_tool_calls = max(0, _coerce_int(raw_metrics.get("invalid_tool_calls", 0), 0))
+            tool_loop_abortions = max(0, _coerce_int(raw_metrics.get("tool_loop_abortions", 0), 0))
+
+            if failed >= self.min_failures and attempts > 0:
+                failure_rate = failed / attempts
+                if failure_rate >= 0.5:
+                    summary = f"Agente {agent} com taxa de falha elevada"
+                    description = (
+                        f"failed={failed} succeeded={succeeded} "
+                        f"failure_rate={failure_rate:.2f}"
+                    )
+                    reports.append(
+                        self._build_report(
+                            session_id=session_id,
+                            category="agent_failure_rate_high",
+                            summary=summary,
+                            severity="high" if failure_rate >= 0.8 else "medium",
+                            confidence=min(0.99, 0.7 + (failure_rate * 0.2)),
+                            description=description,
+                            evidence=BugEvidenceRef(
+                                kind="agent_metrics",
+                                path="session_state.agent_metrics",
+                                preview=description,
+                            ),
+                            agent=agent,
+                        )
+                    )
+
+            if attempts > 0 and avg_latency >= self.latency_threshold_seconds:
+                summary = f"Agente {agent} com latência média elevada"
+                description = (
+                    f"avg_latency={avg_latency:.2f}s threshold={self.latency_threshold_seconds:.2f}s "
+                    f"attempts={attempts}"
+                )
+                reports.append(
+                    self._build_report(
+                        session_id=session_id,
+                        category="agent_latency_high",
+                        summary=summary,
+                        severity="medium",
+                        confidence=0.75,
+                        description=description,
+                        evidence=BugEvidenceRef(
+                            kind="agent_metrics",
+                            path="session_state.agent_metrics",
+                            preview=description,
+                        ),
+                        agent=agent,
+                    )
+                )
+
+            if tool_calls_total >= self.min_tool_calls:
+                failure_ratio = tool_calls_failed / tool_calls_total if tool_calls_total else 0.0
+                if tool_calls_failed >= 2 and failure_ratio >= 0.5:
+                    summary = f"Agente {agent} com erro recorrente em ferramentas"
+                    description = (
+                        f"tool_calls_total={tool_calls_total} "
+                        f"tool_calls_failed={tool_calls_failed} ratio={failure_ratio:.2f}"
+                    )
+                    reports.append(
+                        self._build_report(
+                            session_id=session_id,
+                            category="agent_tool_error_burst",
+                            summary=summary,
+                            severity="medium",
+                            confidence=min(0.98, 0.7 + (failure_ratio * 0.2)),
+                            description=description,
+                            evidence=BugEvidenceRef(
+                                kind="agent_metrics",
+                                path="session_state.agent_metrics",
+                                preview=description,
+                            ),
+                            agent=agent,
+                        )
+                    )
+
+            if invalid_tool_calls >= 2:
+                summary = f"Agente {agent} com chamadas de ferramenta inválidas"
+                description = f"invalid_tool_calls={invalid_tool_calls}"
+                reports.append(
+                    self._build_report(
+                        session_id=session_id,
+                        category="agent_invalid_tool_calls",
+                        summary=summary,
+                        severity="low",
+                        confidence=0.8,
+                        description=description,
+                        evidence=BugEvidenceRef(
+                            kind="agent_metrics",
+                            path="session_state.agent_metrics",
+                            preview=description,
+                        ),
+                        agent=agent,
+                    )
+                )
+
+            if tool_loop_abortions >= 2:
+                summary = f"Agente {agent} com abortos de tool loop"
+                description = f"tool_loop_abortions={tool_loop_abortions}"
+                reports.append(
+                    self._build_report(
+                        session_id=session_id,
+                        category="agent_tool_loop_abort",
+                        summary=summary,
+                        severity="medium",
+                        confidence=0.85,
+                        description=description,
+                        evidence=BugEvidenceRef(
+                            kind="agent_metrics",
+                            path="session_state.agent_metrics",
+                            preview=description,
+                        ),
+                        agent=agent,
+                    )
+                )
+        return reports
+
+    def _scan_prompt_metrics_file(self, *, session_id: str, path: Path) -> list[BugReport]:
+        threshold_hits: dict[str, dict] = {}
+        with path.open("r", encoding="utf-8") as handle:
+            for index, line in enumerate(handle, start=1):
+                raw = line.strip()
+                if not raw:
+                    continue
+                try:
+                    payload = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(payload, dict):
+                    continue
+                agent = str(payload.get("agent", "") or "").strip() or "unknown"
+                total_chars = _coerce_int(payload.get("total_chars", 0), 0)
+                if total_chars < self.prompt_total_chars_threshold:
+                    continue
+                entry = threshold_hits.setdefault(
+                    agent,
+                    {"count": 0, "max_chars": 0, "line": index},
+                )
+                entry["count"] += 1
+                entry["max_chars"] = max(entry["max_chars"], total_chars)
+                if entry["line"] <= 0:
+                    entry["line"] = index
+
+        reports: list[BugReport] = []
+        for agent, info in threshold_hits.items():
+            hit_count = _coerce_int(info.get("count", 0), 0)
+            if hit_count < self.prompt_threshold_hits:
+                continue
+            max_chars = _coerce_int(info.get("max_chars", 0), 0)
+            first_line = _coerce_int(info.get("line", 0), 0) or None
+            summary = f"Prompt acima do orçamento recorrente para {agent}"
+            description = (
+                f"hits={hit_count} threshold={self.prompt_total_chars_threshold} "
+                f"max_total_chars={max_chars}"
+            )
+            reports.append(
+                self._build_report(
+                    session_id=session_id,
+                    category="agent_prompt_budget_pressure",
+                    summary=summary,
+                    severity="medium",
+                    confidence=0.82,
+                    description=description,
+                    evidence=BugEvidenceRef(
+                        kind="metrics_jsonl",
+                        path=str(path),
+                        line=first_line,
+                        preview=description,
+                    ),
+                    agent=agent,
+                )
+            )
+        return reports
+
+    @staticmethod
+    def _build_report(
+        *,
+        session_id: str,
+        category: str,
+        summary: str,
+        severity: str,
+        confidence: float,
+        description: str,
+        evidence: BugEvidenceRef,
+        agent: str = "",
+    ) -> BugReport:
+        fingerprint = make_bug_fingerprint(session_id, category, summary)
+        return BugReport(
+            id=f"bug_{fingerprint[:12]}",
+            session_id=session_id,
+            category=category,
+            summary=summary,
+            severity=severity,
+            confidence=confidence,
+            description=description,
             fingerprint=fingerprint,
             evidence_refs=[evidence],
             agent=agent,

@@ -15,7 +15,8 @@ class _DummyContextManager:
 
 def test_prompt_builder_includes_bug_context_when_open_bugs_exist(tmp_path):
     session_id = "sessao-bugs"
-    store = BugStore(tmp_path / "logs")
+    logs_dir = tmp_path / "data" / "logs"
+    store = BugStore(logs_dir)
     try:
         summary = "Saída operacional colada na linha do prompt"
         fingerprint = make_bug_fingerprint(session_id, "prompt_line_collision", summary)
@@ -43,7 +44,7 @@ def test_prompt_builder_includes_bug_context_when_open_bugs_exist(tmp_path):
     builder = PromptBuilder(
         context_manager=_DummyContextManager(),
         session_state={
-            "workspace_data_root": str(tmp_path),
+            "workspace_tmp_root": str(tmp_path),
         },
     )
     section = builder._build_evidence_section({"session_id": session_id}, session_id)
@@ -54,7 +55,7 @@ def test_prompt_builder_includes_bug_context_when_open_bugs_exist(tmp_path):
 def test_prompt_builder_ignores_bug_store_failures(tmp_path):
     builder = PromptBuilder(
         context_manager=_DummyContextManager(),
-        session_state={"workspace_data_root": str(tmp_path)},
+        session_state={"workspace_tmp_root": str(tmp_path)},
     )
     with patch("quimera.prompt.BugStore", side_effect=OSError("perm denied")):
         section = builder._build_evidence_section({"session_id": "sessao-bugs"}, "sessao-bugs")

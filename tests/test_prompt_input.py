@@ -401,6 +401,14 @@ class TestCoreCommandArgumentResolver:
         assert result == ["chatgpt", "codex"]
         app.system_layer.list_connected_agents.assert_called_once_with()
 
+    def test_returns_bugs_subcommands_for_bugs_command(self):
+        """Para /bugs, retorna ações suportadas de diagnóstico."""
+        from quimera.app.core import QuimeraApp
+
+        app = QuimeraApp.__new__(QuimeraApp)
+        result = app._command_argument_resolver("/bugs", "")
+        assert result == ["list", "show", "close", "analyze", "stats"]
+
     def test_returns_empty_for_disconnect_without_connections(self):
         """Sem conexões persistidas, /disconnect não sugere argumentos."""
         from quimera.app.core import QuimeraApp
