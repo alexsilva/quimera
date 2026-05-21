@@ -145,6 +145,11 @@ class InputGate:
             return None
 
         def _toolbar():
+            def _clip(value: str, max_len: int) -> str:
+                if len(value) <= max_len:
+                    return value
+                return value[: max_len - 3].rstrip() + "..."
+
             try:
                 context = resolver() or {}
             except Exception:
@@ -153,7 +158,6 @@ class InputGate:
             responder = str(context.get("responder", "")).strip()
             model = str(context.get("model", "")).strip()
             theme = str(context.get("theme", "")).strip()
-            threads = str(context.get("threads", "")).strip()
             parallel = str(context.get("parallel", "")).strip()
             turns = str(context.get("turns", "")).strip()
             open_bugs = str(context.get("open_bugs", "")).strip()
@@ -161,34 +165,36 @@ class InputGate:
             mode = str(context.get("mode", "")).strip()
             branch = str(context.get("branch", "")).strip()
             elapsed = str(context.get("elapsed", "")).strip()
-            if not any([responder, model, theme, threads, parallel, turns,
-                        open_bugs, active_agents, mode, branch, elapsed]):
+            session_id = str(context.get("session", "")).strip()
+            if not any([responder, model, theme, parallel, turns,
+                        open_bugs, active_agents, mode, branch, elapsed, session_id]):
                 return ""
 
             parts = []
-            if turns:
-                parts.append(f"<style fg='#888888'>{html.escape(turns)}</style>")
-            if theme:
-                parts.append(f"tema:{html.escape(theme)}")
+            # Primary: who responds + model
             if responder:
                 parts.append(f"<b>{html.escape(responder)}</b>")
             if model:
-                parts.append(html.escape(model))
+                parts.append(html.escape(_clip(model, 48)))
+            # Activity: agents running + parallel slots
+            if active_agents:
+                parts.append(f"<style fg='#88cc88'>{html.escape(_clip(active_agents, 48))}</style>")
             if parallel:
                 parts.append(f"<b>{html.escape(parallel)}</b>")
-            elif threads:
-                parts.append(f"<b>{html.escape(threads)}</b>")
-            if mode:
-                parts.append(f"<i>{html.escape(mode)}</i>")
-            if active_agents:
-                parts.append(f"<style fg='#88cc88'>{html.escape(active_agents)}</style>")
+            # Issues
             if open_bugs:
                 parts.append(f"<style fg='#cc4444'>⚠ {html.escape(open_bugs)}</style>")
+            # Context: mode, branch, time, counters
+            if mode:
+                parts.append(f"<i>{html.escape(mode)}</i>")
             if branch:
                 parts.append(f"<style fg='#888888'>br:{html.escape(branch)}</style>")
             if elapsed:
                 parts.append(f"<style fg='#888888'>{html.escape(elapsed)}</style>")
-            session_id = str(context.get("session", "")).strip()
+            if turns:
+                parts.append(f"<style fg='#888888'>{html.escape(turns)}</style>")
+            if theme:
+                parts.append(f"<style fg='#888888'>tema:{html.escape(_clip(theme, 18))}</style>")
             if session_id:
                 parts.append(f"<style fg='#888888'>sess:{html.escape(session_id)}</style>")
             return HTML(" | ".join(parts))

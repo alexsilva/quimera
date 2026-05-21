@@ -129,6 +129,8 @@ class QuimeraApp:
             "capacity": max(0, self.threads),
             "active_agents": (),
         }
+        self._toolbar_bug_count_cache = {"session_id": "", "count": 0, "ts": 0.0}
+        self._toolbar_bug_count_ttl_sec = 1.0
         self.agent_failures = defaultdict(int)
         self._agent_failures_lock = threading.Lock()
         self.workspace = workspace if workspace is not None else Workspace(cwd)
@@ -1325,7 +1327,6 @@ class QuimeraApp:
         ctx = {
             "responder": self._resolve_next_responder_label(),
             "model": self._resolve_active_model_label(),
-            "cwd": str(getattr(workspace, "cwd", Path.cwd())),
         }
         branch = getattr(workspace, "branch", None)
         if branch and isinstance(branch, str):
@@ -1340,20 +1341,26 @@ class QuimeraApp:
         ctx["theme"] = theme_name
         active_mode = getattr(self, "execution_mode", None)
         if active_mode is not None:
-            ctx["mode"] = active_mode.name
-        if self.threads > 1:
-            ctx["threads"] = str(self.threads)
+            ctx["mode"] = getattr(active_mode, "name", None) or ""
         parallel_state = self._get_parallel_toolbar_state()
         capacity = int(parallel_state.get("capacity", max(0, self.threads)) or 0)
         active = int(parallel_state.get("active", 0) or 0)
         queued = int(parallel_state.get("queued", 0) or 0)
-        slots_label = f"slots:{active}/{capacity}"
-        if queued:
-            slots_label = f"{slots_label} · fila:{queued}"
-        ctx["parallel"] = slots_label
+        if active > 0 or queued > 0 or capacity > 1:
+            slots_label = f"{active}/{capacity}"
+            if queued:
+                slots_label = f"{slots_label} · fila:{queued}"
+            ctx["parallel"] = slots_label
         active_agents = parallel_state.get("active_agents", ())
         if active_agents:
-            ctx["active_agents"] = ", ".join(str(a) for a in active_agents)
+            normalized_agents = [str(a).strip() for a in active_agents if str(a).strip()]
+            if normalized_agents:
+                visible_agents = normalized_agents[:3]
+                extra_agents = len(normalized_agents) - len(visible_agents)
+                label = ", ".join(visible_agents)
+                if extra_agents > 0:
+                    label = f"{label} +{extra_agents}"
+                ctx["active_agents"] = label
         history = getattr(self, "history", None)
         if history is not None:
             ctx["turns"] = str(len(history))
@@ -1363,18 +1370,34 @@ class QuimeraApp:
             ctx["session"] = session_id[:8]  # Show first 8 chars for brevity
         bug_store = getattr(self, "bug_store", None)
         if bug_store is not None:
-            try:
-                session_id = getattr(self.storage, "session_id", "")
-                open_bugs = bug_store.query(
-                    session_id=session_id, status="open", limit=100
-                ) if session_id else bug_store.query(status="open", limit=100)
-                if open_bugs:
-                    ctx["open_bugs"] = str(len(open_bugs))
-            except Exception:
-                pass
-        exec_mode = getattr(getattr(self, "execution_mode", None), "name", None)
-        if exec_mode:
-            ctx["mode"] = str(exec_mode)
+            open_bug_count = None
+            cache = getattr(self, "_toolbar_bug_count_cache", None)
+            cache_ttl = float(getattr(self, "_toolbar_bug_count_ttl_sec", 1.0) or 1.0)
+            now_monotonic = time.monotonic()
+            if isinstance(cache, dict):
+                cached_session = str(cache.get("session_id", ""))
+                cached_ts = float(cache.get("ts", 0.0) or 0.0)
+                if cached_session == str(session_id or "") and (now_monotonic - cached_ts) < cache_ttl:
+                    cached_count = cache.get("count", 0)
+                    try:
+                        open_bug_count = int(cached_count)
+                    except Exception:
+                        open_bug_count = 0
+            if open_bug_count is None:
+                try:
+                    open_bugs = bug_store.query(
+                        session_id=session_id, status="open", limit=100
+                    ) if session_id else bug_store.query(status="open", limit=100)
+                    open_bug_count = len(open_bugs or [])
+                    self._toolbar_bug_count_cache = {
+                        "session_id": str(session_id or ""),
+                        "count": open_bug_count,
+                        "ts": now_monotonic,
+                    }
+                except Exception:
+                    open_bug_count = 0
+            if open_bug_count > 0:
+                ctx["open_bugs"] = str(open_bug_count)
         return ctx
 
     def _set_parallel_toolbar_state(

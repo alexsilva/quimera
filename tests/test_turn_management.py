@@ -1127,7 +1127,7 @@ class TestParallelToolbarState(unittest.TestCase):
 
         context = app._build_input_toolbar_context()
         self.assertIn("parallel", context)
-        self.assertEqual(context["parallel"], "slots:1/2 · fila:1")
+        self.assertEqual(context["parallel"], "1/2 · fila:1")
 
     def test_toolbar_ignores_stale_snapshot_active(self):
         """O snapshot zerado de active não deve sobrescrever o inflight count real."""

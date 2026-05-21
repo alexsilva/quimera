@@ -347,7 +347,7 @@ class TestInputContextAndWelcome(unittest.TestCase):
         context = app._build_input_toolbar_context()
         self.assertEqual(context["responder"], "unknown")
         self.assertEqual(context["model"], "unknown")
-        self.assertIn("cwd", context)
+        self.assertNotIn("cwd", context)
 
     def test_build_input_toolbar_context_exposes_parallel_status_when_threads_enabled(self):
         from quimera.app.core import QuimeraApp
@@ -368,8 +368,8 @@ class TestInputContextAndWelcome(unittest.TestCase):
         app._build_input_toolbar_context = QuimeraApp._build_input_toolbar_context.__get__(app, QuimeraApp)
 
         context = app._build_input_toolbar_context()
-        self.assertEqual(context["threads"], "2")
-        self.assertEqual(context["parallel"], "slots:1/2 · fila:2")
+        self.assertNotIn("threads", context)
+        self.assertEqual(context["parallel"], "1/2 · fila:2")
 
     def test_build_input_toolbar_context_defaults_capacity_to_thread_count(self):
         from quimera.app.core import QuimeraApp
@@ -390,7 +390,7 @@ class TestInputContextAndWelcome(unittest.TestCase):
         app._build_input_toolbar_context = QuimeraApp._build_input_toolbar_context.__get__(app, QuimeraApp)
 
         context = app._build_input_toolbar_context()
-        self.assertEqual(context["parallel"], "slots:0/2")
+        self.assertEqual(context["parallel"], "0/2")
 
     def test_build_input_toolbar_context_exposes_turns_when_history_available(self):
         from quimera.app.core import QuimeraApp
@@ -453,6 +453,35 @@ class TestInputContextAndWelcome(unittest.TestCase):
         self.assertEqual(context.get("turns"), "1")
         self.assertNotIn("open_bugs", context)
 
+    def test_build_input_toolbar_context_caches_open_bugs_between_redraws(self):
+        from quimera.app.core import QuimeraApp
+
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.workspace = MagicMock(cwd=Path("/tmp/quimera-project"), tasks_db=Path("/tmp/quimera_test_tasks.db"))
+        app.active_agents = []
+        app.threads = 1
+        app._parallel_toolbar_lock = threading.Lock()
+        app._parallel_toolbar_state = {"active": 0, "queued": 0, "capacity": 0, "active_agents": ()}
+        app._pending_input_for = None
+        app.storage = MagicMock(session_id="sessao-12345678")
+        app.bug_store = MagicMock()
+        app.bug_store.query.return_value = [MagicMock(), MagicMock()]
+        app._toolbar_bug_count_cache = {"session_id": "", "count": 0, "ts": 0.0}
+        app._toolbar_bug_count_ttl_sec = 30.0
+        app._resolve_active_model_label = QuimeraApp._resolve_active_model_label.__get__(app, QuimeraApp)
+        app._resolve_next_responder_label = QuimeraApp._resolve_next_responder_label.__get__(app, QuimeraApp)
+        app._get_parallel_toolbar_state = QuimeraApp._get_parallel_toolbar_state.__get__(app, QuimeraApp)
+        app._build_input_toolbar_context = QuimeraApp._build_input_toolbar_context.__get__(app, QuimeraApp)
+
+        first = app._build_input_toolbar_context()
+        second = app._build_input_toolbar_context()
+
+        self.assertEqual(first.get("open_bugs"), "2")
+        self.assertEqual(second.get("open_bugs"), "2")
+        app.bug_store.query.assert_called_once_with(
+            session_id="sessao-12345678", status="open", limit=100
+        )
+
     def test_build_input_toolbar_context_exposes_mode_when_set(self):
         from quimera.app.core import QuimeraApp
         from quimera.modes import ExecutionMode
@@ -509,6 +538,29 @@ class TestInputContextAndWelcome(unittest.TestCase):
 
         context = app._build_input_toolbar_context()
         self.assertEqual(context.get("active_agents"), "codex, claude")
+
+    def test_build_input_toolbar_context_compacts_many_active_agents(self):
+        from quimera.app.core import QuimeraApp
+
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.workspace = MagicMock(cwd=Path("/tmp/quimera-project"), tasks_db=Path("/tmp/quimera_test_tasks.db"))
+        app.active_agents = []
+        app.threads = 4
+        app._parallel_toolbar_lock = threading.Lock()
+        app._parallel_toolbar_state = {
+            "active": 3,
+            "queued": 0,
+            "capacity": 4,
+            "active_agents": ("codex", "claude", "qwen", "nemotron"),
+        }
+        app._pending_input_for = None
+        app._resolve_active_model_label = QuimeraApp._resolve_active_model_label.__get__(app, QuimeraApp)
+        app._resolve_next_responder_label = QuimeraApp._resolve_next_responder_label.__get__(app, QuimeraApp)
+        app._get_parallel_toolbar_state = QuimeraApp._get_parallel_toolbar_state.__get__(app, QuimeraApp)
+        app._build_input_toolbar_context = QuimeraApp._build_input_toolbar_context.__get__(app, QuimeraApp)
+
+        context = app._build_input_toolbar_context()
+        self.assertEqual(context.get("active_agents"), "codex, claude, qwen +1")
 
     def test_build_input_toolbar_context_exposes_branch_when_set(self):
         from quimera.app.core import QuimeraApp

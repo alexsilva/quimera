@@ -58,7 +58,7 @@ class TestBuildToolbar:
         )
         toolbar = gate._build_toolbar()
         assert callable(toolbar)
-        assert "tema:chat" in str(toolbar())
+        assert "<style fg='#888888'>tema:chat</style>" in str(toolbar())
 
     @pytest.mark.skipif(not _PT_AVAILABLE, reason="prompt_toolkit não disponível")
     def test_toolbar_includes_turns_when_context_available(self):
@@ -124,6 +124,30 @@ class TestBuildToolbar:
         assert "claude" in content
 
     @pytest.mark.skipif(not _PT_AVAILABLE, reason="prompt_toolkit não disponível")
+    def test_toolbar_clips_long_model_name(self):
+        gate = InputGate(
+            toolbar_context_resolver=lambda: {
+                "model": "very-long-model-name-" * 4,
+            }
+        )
+        toolbar = gate._build_toolbar()
+        assert callable(toolbar)
+        content = str(toolbar())
+        assert "..." in content
+
+    @pytest.mark.skipif(not _PT_AVAILABLE, reason="prompt_toolkit não disponível")
+    def test_toolbar_clips_long_active_agents_list(self):
+        gate = InputGate(
+            toolbar_context_resolver=lambda: {
+                "active_agents": "codex-super-long-name, claude-extended, qwen-very-long, deepseek-extra, minimax-pro, nemotron-ultimate",
+            }
+        )
+        toolbar = gate._build_toolbar()
+        assert callable(toolbar)
+        content = str(toolbar())
+        assert "..." in content
+
+    @pytest.mark.skipif(not _PT_AVAILABLE, reason="prompt_toolkit não disponível")
     def test_toolbar_includes_all_fields_in_order(self):
         gate = InputGate(
             toolbar_context_resolver=lambda: {
@@ -131,7 +155,7 @@ class TestBuildToolbar:
                 "model": "claude-sonnet",
                 "mode": "planning",
                 "theme": "chat",
-                "parallel": "slots:1/2",
+                "parallel": "1/2",
                 "open_bugs": "2",
                 "turns": "5",
                 "session": "abc12345",
@@ -140,8 +164,10 @@ class TestBuildToolbar:
         toolbar = gate._build_toolbar()
         assert callable(toolbar)
         content = str(toolbar())
-        # turns deve vir primeiro
-        assert content.index("5") < content.index("claude")
+        # responder deve vir antes de turns (nova ordem)
+        assert content.index("claude") < content.index("5")
+        # parallel deve vir antes de bugs
+        assert content.index("1/2") < content.index("⚠")
         # responder presente
         assert "claude" in content
 
@@ -156,6 +182,19 @@ class TestBuildToolbar:
         assert callable(toolbar)
         content = str(toolbar())
         assert content != ""
+
+    @pytest.mark.skipif(not _PT_AVAILABLE, reason="prompt_toolkit não disponível")
+    def test_toolbar_empty_with_only_session_returns_nonempty(self):
+        gate = InputGate(
+            toolbar_context_resolver=lambda: {
+                "session": "abc12345",
+            }
+        )
+        toolbar = gate._build_toolbar()
+        assert callable(toolbar)
+        content = str(toolbar())
+        assert content != ""
+        assert "sess:abc12345" in content
 
     @pytest.mark.skipif(not _PT_AVAILABLE, reason="prompt_toolkit não disponível")
     def test_toolbar_includes_branch_when_context_available(self):
