@@ -374,7 +374,7 @@ class TestSlashCommandCompleterArgumentResolver:
     def test_no_space_delegates_to_command_resolver(self):
         """Sem espaço, comportamento padrão de completar comandos slash."""
         from quimera.app.prompt_input import _SlashCommandCompleter
-        cmd_resolver = MagicMock(return_value=["/context", "/context-branch", "/help"])
+        cmd_resolver = MagicMock(return_value=["/context", "/help"])
         arg_resolver = MagicMock()
         completer = _SlashCommandCompleter(cmd_resolver, argument_resolver=arg_resolver)
 
@@ -387,7 +387,6 @@ class TestSlashCommandCompleterArgumentResolver:
         arg_resolver.assert_not_called()
         texts = [r.text for r in results]
         assert "/context" in texts
-        assert "/context-branch" in texts
 
     def test_non_slash_returns_empty(self):
         """Texto sem / não aciona nenhum resolver."""
@@ -471,41 +470,25 @@ class TestCoreCommandArgumentResolver:
         result = resolver(None, "/unknown", "")
         assert result == []
 
-    def test_returns_branches_for_context_branch(self, tmp_path):
-        """Para /context-branch, retorna branches do diretório data/context."""
+    def test_returns_subcommands_for_context(self):
+        """Para /context, retorna subcomandos edit, branch e show."""
         from quimera.app.core import QuimeraApp
-        from quimera.workspace import Workspace
-
-        ws_root = tmp_path / "test_ws"
-        ws_root.mkdir(parents=True, exist_ok=True)
-        ws = Workspace(ws_root)
-        ctx_root = ws._root / "data" / "context"
-        ctx_root.mkdir(parents=True, exist_ok=True)
-        (ctx_root / "feature_x").mkdir(exist_ok=True)
-        (ctx_root / "feature_y").mkdir(exist_ok=True)
 
         app = QuimeraApp.__new__(QuimeraApp)
-        app.workspace = ws
 
-        result = app._command_argument_resolver("/context-branch", "")
-        assert "feature_x" in result
-        assert "feature_y" in result
+        result = app._command_argument_resolver("/context", "")
+        assert result == ["show", "edit", "branch"]
 
-    def test_includes_active_branch(self, tmp_path):
-        """A branch ativa do workspace também aparece nas sugestões."""
+    def test_returns_agents_for_prompt(self):
+        """Para /prompt, retorna agentes ativos."""
         from quimera.app.core import QuimeraApp
-        from quimera.workspace import Workspace
-
-        ws = Workspace(tmp_path)
-        ws._branch = "current_feature"
+        from unittest.mock import MagicMock
 
         app = QuimeraApp.__new__(QuimeraApp)
-        app.workspace = ws
-        # Garantir que o ctx_dir existe para não gerar erro
-        (ws._root / "data" / "context").mkdir(parents=True, exist_ok=True)
+        app.agent_pool = ["codex", "claude"]
 
-        result = app._command_argument_resolver("/context-branch", "")
-        assert "current_feature" in result
+        result = app._command_argument_resolver("/prompt", "")
+        assert result == ["claude", "codex"]
 
     def test_returns_connected_agents_for_disconnect(self):
         """/disconnect sugere agentes com conexão persistida."""

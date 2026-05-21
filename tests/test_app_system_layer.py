@@ -13,6 +13,7 @@ from quimera.constants import (
     CMD_CONTEXT,
     CMD_CONTEXT_BRANCH,
     CMD_CONTEXT_EDIT,
+    CMD_PROMPT,
     CMD_RELOAD,
     CMD_RESET_STATE,
 )
@@ -349,11 +350,27 @@ def test_resolve_prompt_target_covers_default_exact_and_alias_paths():
     app.active_agents = ["codex"]
     assert layer._resolve_prompt_target("/prompt") == "codex"
 
+    # robustez: /prompt show codex também resolve
+    assert layer._resolve_prompt_target("/prompt show codex") == "codex"
+    assert layer._resolve_prompt_target("/prompt codex") == "codex"
+    assert layer._resolve_prompt_target("/prompt /codex") == "codex"
+
     app.active_agents = ["Alpha"]
     assert layer._resolve_prompt_target("/prompt /alpha") == "Alpha"
 
     app.active_agents = ["ghost", "Alpha"]
     assert layer._resolve_prompt_target("/prompt /a") == "Alpha"
+
+
+def test_resolve_prompt_target_prompts_when_ambiguous():
+    app = make_app()
+    app.active_agents = ["codex", "claude"]
+    layer = AppSystemLayer(app)
+
+    with patch.object(layer, "_prompt_text", return_value="claude") as mock_prompt:
+        assert layer._resolve_prompt_target("/prompt") == "claude"
+        mock_prompt.assert_called_once()
+        assert "codex, claude" in mock_prompt.call_args[0][0]
 
 
 def test_resolve_connect_target_variants_and_validation_fallback():
@@ -748,12 +765,36 @@ def test_handle_command_context_variants():
     layer = AppSystemLayer(app)
 
     assert layer.handle_command(CMD_CONTEXT) is True
-    assert layer.handle_command(CMD_CONTEXT_EDIT) is True
-    assert layer.handle_command(f"{CMD_CONTEXT_BRANCH} feat-x") is True
+    assert layer.handle_command(f"{CMD_CONTEXT} edit") is True
+    assert layer.handle_command(f"{CMD_CONTEXT} branch feat-x") is True
 
     app.context_manager.show.assert_called_once()
     app.context_manager.edit.assert_called_once()
-    app.context_manager.handle_context_branch.assert_called_once_with(f"{CMD_CONTEXT_BRANCH} feat-x")
+    app.context_manager.handle_context_branch.assert_called_once_with(f"{CMD_CONTEXT} branch feat-x")
+
+
+def test_handle_command_context_backward_compat():
+    """Hífenes ainda funcionam: /context-edit e /context-branch."""
+    app = make_app()
+    layer = AppSystemLayer(app)
+
+    assert layer.handle_command(CMD_CONTEXT_EDIT) is True
+    assert layer.handle_command(f"{CMD_CONTEXT_BRANCH} main") is True
+
+    app.context_manager.edit.assert_called_once()
+    app.context_manager.handle_context_branch.assert_called_once_with(f"{CMD_CONTEXT_BRANCH} main")
+
+
+def test_handle_command_prompt_preview():
+    """/prompt [agente] exibe preview do prompt."""
+    app = make_app()
+    app.renderer.show_prompt_preview = Mock()
+    layer = AppSystemLayer(app)
+
+    with patch.object(layer, "_resolve_prompt_target", return_value="codex"):
+        with patch.object(layer, "_build_prompt_preview_message", return_value="preview"):
+            assert layer.handle_command(f"{CMD_PROMPT} codex") is True
+            app.renderer.show_prompt_preview.assert_called_once_with("codex", "preview")
 
 
 def test_handle_command_returns_false_for_unknown_command():

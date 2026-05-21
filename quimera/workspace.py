@@ -135,7 +135,7 @@ class Workspace:
         """Define manualmente a branch para o contexto persistente.
 
         O nome é sanitizado (troca '/' por '_') e armazenado.
-        Use '/context-branch <nome>' no chat.
+        Use '/context branch <nome>' no chat.
         """
         sanitized = branch.replace("/", "_").strip()
         self._branch = sanitized if sanitized else "_default"
@@ -166,6 +166,14 @@ class Workspace:
         """Contexto persistente isolado por branch (definida manualmente via set_branch)."""
         branch = self._branch or "_default"
         path = self._root / "data" / "context" / branch / "persistent.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
+
+    @property
+    def prompt_persistent(self) -> Path:
+        """Template de prompt isolado por branch."""
+        branch = self._branch or "_default"
+        path = self._root / "data" / "prompts" / branch / "prompt.md"
         path.parent.mkdir(parents=True, exist_ok=True)
         return path
 

@@ -5,7 +5,7 @@ import shutil
 import subprocess
 import unicodedata
 from datetime import datetime
-from .constants import CMD_CONTEXT_BRANCH
+from .constants import CMD_CONTEXT
 
 
 class ContextManager:
@@ -32,8 +32,11 @@ class ContextManager:
         return self.base_context_file
     
     def handle_context_branch(self, command: str) -> bool:
-        """Processa o comando /context-branch [branch]."""
-        parts = command[len(CMD_CONTEXT_BRANCH):].strip().split()
+        """Processa o comando /context branch [branch]."""
+        rest = command[len(CMD_CONTEXT):].strip()
+        parts = shlex.split(rest) if rest else []
+        if parts and parts[0] == "branch":
+            parts = parts[1:]
         workspace = self.workspace
         if workspace is None:
             self.renderer.show_warning("Workspace não disponível.")

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import shlex
+import subprocess
 import threading
 from contextlib import nullcontext
 
@@ -17,10 +18,10 @@ from ..constants import (
     CMD_BUGS,
     CMD_CLEAR,
     CMD_CONNECT,
-    CMD_DISCONNECT,
-    CMD_CONTEXT,
     CMD_CONTEXT_BRANCH,
     CMD_CONTEXT_EDIT,
+    CMD_DISCONNECT,
+    CMD_CONTEXT,
     CMD_HELP,
     CMD_PROMPT,
     CMD_RELOAD,
@@ -421,15 +422,35 @@ class AppSystemLayer:
 
     def _resolve_prompt_target(self, command: str) -> str | None:
         """Resolve o agente alvo para preview de prompt."""
-        raw_target = command[len(CMD_PROMPT):].strip().lower()
+        raw_target = command[len(CMD_PROMPT):].strip()
+
+        # Aceita prefixo 'show ' para robustez e compatibilidade com confusão comum
+        if raw_target.lower().startswith("show "):
+            raw_target = raw_target[len("show "):].strip()
+        elif raw_target.lower() == "show":
+            raw_target = ""
+
         active_agents = self._get_active_agents()
 
         if not raw_target:
-            if DEFAULT_FIRST_AGENT in active_agents:
-                return DEFAULT_FIRST_AGENT
-            return active_agents[0] if active_agents else None
+            if not active_agents:
+                return None
+            if len(active_agents) > 1:
+                # Solicita o agente interativamente como solicitado pelo usuário
+                choices = ", ".join(active_agents)
+                agent_name = self._prompt_text(f"Escolha o agente para o preview ({choices})", active_agents[0])
+                if not agent_name:
+                    return None
+                raw_target = agent_name.strip()
+            else:
+                if DEFAULT_FIRST_AGENT in active_agents:
+                    return DEFAULT_FIRST_AGENT
+                return active_agents[0]
 
-        normalized = raw_target[1:] if raw_target.startswith("/") else raw_target
+        normalized = raw_target.lower()
+        if normalized.startswith("/"):
+            normalized = normalized[1:]
+
         for agent_name in active_agents:
             if normalized == agent_name.lower():
                 return agent_name
@@ -613,17 +634,31 @@ class AppSystemLayer:
                 self._display.show_warning_message("[aprovação] mecanismo de aprovação não disponível.")
             return True
 
-        if command == CMD_CONTEXT:
-            if self.context_manager is not None:
-                self.context_manager.show()
-            return True
-
-        if command == CMD_CONTEXT_EDIT:
+        if command == CMD_CONTEXT_EDIT or command.startswith(f"{CMD_CONTEXT_EDIT} "):
             if self.context_manager is not None:
                 self.context_manager.edit()
             return True
 
         if command == CMD_CONTEXT_BRANCH or command.startswith(f"{CMD_CONTEXT_BRANCH} "):
-            return bool(self.context_manager and self.context_manager.handle_context_branch(command))
+            if self.context_manager is not None:
+                self.context_manager.handle_context_branch(command)
+            return True
+
+        if command == CMD_CONTEXT or command.startswith(f"{CMD_CONTEXT} "):
+            if self.context_manager is None:
+                return True
+            parts = command[len(CMD_CONTEXT):].strip().split()
+            sub = parts[0] if parts else None
+            if sub is None or sub == "show":
+                self.context_manager.show()
+            elif sub == "edit":
+                self.context_manager.edit()
+            elif sub == "branch":
+                self.context_manager.handle_context_branch(command)
+            else:
+                self._display.show_warning_message(
+                    "Uso: /context [show|edit|branch [nome]]"
+                )
+            return True
 
         return False

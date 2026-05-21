@@ -67,7 +67,7 @@ from ..bugs import (
     make_bug_fingerprint,
 )
 from ..constants import (
-    CMD_AGENTS, CMD_ALIASES, CMD_BUGS, CMD_CLEAR, CMD_CONNECT, CMD_DISCONNECT, CMD_CONTEXT, CMD_CONTEXT_BRANCH, CMD_CONTEXT_EDIT, CMD_EDIT, CMD_EXIT,
+    CMD_AGENTS, CMD_ALIASES, CMD_BUGS, CMD_CLEAR, CMD_CONNECT, CMD_DISCONNECT, CMD_CONTEXT, CMD_EDIT, CMD_EXIT,
     CMD_APPROVE, CMD_APPROVE_ALL, CMD_FILE_PREFIX, CMD_HELP,
     CMD_PROMPT, CMD_RESET_STATE, CMD_TASK,
     MSG_CHAT_STARTED, MSG_SESSION_LOG, MSG_SESSION_STATUS, MSG_MIGRATION,
@@ -584,8 +584,6 @@ class QuimeraApp:
             CMD_CONNECT,
             CMD_DISCONNECT,
             CMD_CONTEXT,
-            CMD_CONTEXT_BRANCH,
-            CMD_CONTEXT_EDIT,
             CMD_EDIT,
             CMD_EXIT,
             CMD_FILE_PREFIX,
@@ -614,8 +612,10 @@ class QuimeraApp:
 
     def _command_argument_resolver(self, command: str, partial: str) -> list[str]:
         """Resolve sugestões de argumentos para comandos com autocomplete contextual."""
-        if command == CMD_CONTEXT_BRANCH:
-            return self.workspace.list_branches()
+        if command == CMD_CONTEXT:
+            return ["show", "edit", "branch"]
+        if command == CMD_PROMPT:
+            return sorted(self.agent_pool)
         if command == CMD_DISCONNECT:
             return self.system_layer.list_connected_agents()
         if command == CMD_BUGS:
