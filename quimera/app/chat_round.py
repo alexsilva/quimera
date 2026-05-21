@@ -585,7 +585,7 @@ class ChatRoundOrchestrator:
                 self._handle_cancelled()
                 return
             expected_ack = current_handoff.get("handoff_id") if isinstance(current_handoff, dict) else None
-            secondary_response, next_target, next_handoff, _, _, ack_id = self._parse_response(secondary_response)
+            secondary_response, next_target, next_handoff, _, needs_human_input, ack_id = self._parse_response(secondary_response)
             if expected_ack and ack_id and ack_id != expected_ack:
                 logger.warning(
                     "[ACK] mismatch: expected=%s, received=%s from agent=%s",
@@ -595,6 +595,10 @@ class ChatRoundOrchestrator:
             if secondary_response is not None:
                 self._session_services.persist_message(current_target, secondary_response)
                 collected_responses.append((current_target, secondary_response))
+            if needs_human_input:
+                self._set_pending_input_for(current_target)
+                self._show_system(f"Responda para {current_target.upper()}:")
+                return
 
             if not secondary_response and not (next_target and next_handoff):
                 fallback_response = None
@@ -633,13 +637,17 @@ class ChatRoundOrchestrator:
                     if self._is_cancelled():
                         self._handle_cancelled()
                         return
-                    fallback_response, fallback_next_target, fallback_next_handoff, _, _, ack_id = self._parse_response(
+                    fallback_response, fallback_next_target, fallback_next_handoff, _, fallback_needs_human_input, ack_id = self._parse_response(
                         fallback_response
                     )
                     self._dispatch_services.print_response(fallback_agent, fallback_response)
                     if fallback_response is not None:
                         self._session_services.persist_message(fallback_agent, fallback_response)
                         collected_responses.append((fallback_agent, fallback_response))
+                    if fallback_needs_human_input:
+                        self._set_pending_input_for(fallback_agent)
+                        self._show_system(f"Responda para {fallback_agent.upper()}:")
+                        return
                     if fallback_response or (fallback_next_target and fallback_next_handoff):
                         fallback_target = fallback_agent
                         break
@@ -733,10 +741,14 @@ class ChatRoundOrchestrator:
             if self._is_cancelled():
                 self._handle_cancelled()
                 return
-            final_response, _, _, _, _, _ = self._parse_response(final_response)
+            final_response, _, _, _, needs_human_input, _ = self._parse_response(final_response)
             self._dispatch_services.print_response(first_agent, final_response)
             if final_response is not None:
                 self._session_services.persist_message(first_agent, final_response)
+            if needs_human_input:
+                self._set_pending_input_for(first_agent)
+                self._show_system(f"Responda para {first_agent.upper()}:")
+                return
         else:
             logger.warning(
                 "[HANDOFF] id=%s failed: secondary agent %s returned no response",

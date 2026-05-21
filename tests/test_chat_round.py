@@ -589,6 +589,46 @@ class TestProcessHandoff(unittest.TestCase):
 
         app.behavior_metrics.record_synthesis.assert_called_with("claude")
 
+    def test_handoff_needs_input_sets_pending_and_stops_chain(self):
+        """NEEDS_INPUT em agente delegado deve pausar cadeia e pedir resposta ao usuário."""
+        app = _make_app()
+        handoff = _make_handoff("task x")
+        app.dispatch_services.call_agent = Mock(return_value="Preciso de dado")
+        app.parse_response = Mock(return_value=("Preciso de dado", None, None, False, True, None))
+        orchestrator = _make_orchestrator(app)
+
+        orchestrator._process_handoff("claude", "codex", handoff)
+
+        self.assertEqual(app._pending_input_for, "codex")
+        app.renderer.show_system.assert_called_with("Responda para CODEX:")
+        self.assertEqual(app.dispatch_services.call_agent.call_count, 1)
+
+    def test_handoff_synthesis_needs_input_sets_pending_for_origin(self):
+        """NEEDS_INPUT na síntese deve solicitar resposta para o agente de origem."""
+        app = _make_app()
+        handoff = _make_handoff("task x")
+        call_count = [0]
+
+        def fake_call(*args, **kwargs):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return "codex respondeu"
+            return "preciso validar com você"
+
+        def fake_parse(resp):
+            if resp == "codex respondeu":
+                return ("codex respondeu", None, None, False, False, None)
+            return ("preciso validar com você", None, None, False, True, None)
+
+        app.dispatch_services.call_agent = Mock(side_effect=fake_call)
+        app.parse_response = Mock(side_effect=fake_parse)
+        orchestrator = _make_orchestrator(app)
+
+        orchestrator._process_handoff("claude", "codex", handoff)
+
+        self.assertEqual(app._pending_input_for, "claude")
+        app.renderer.show_system.assert_called_with("Responda para CLAUDE:")
+
     def test_user_cancelled_during_synthesis(self):
         """_user_cancelled durante síntese deve resetar e retornar."""
         app = _make_app()

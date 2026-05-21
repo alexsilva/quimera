@@ -58,7 +58,8 @@ class TestBuildToolbar:
         )
         toolbar = gate._build_toolbar()
         assert callable(toolbar)
-        assert "<style fg='#888888'>tema:chat</style>" in str(toolbar())
+        assert "<style fg='#7a7a7a'>tema:chat</style>" in str(toolbar())
+        assert "bg='#262626'" in str(toolbar())
 
     @pytest.mark.skipif(not _PT_AVAILABLE, reason="prompt_toolkit não disponível")
     def test_toolbar_includes_turns_when_context_available(self):
@@ -165,7 +166,7 @@ class TestBuildToolbar:
         assert callable(toolbar)
         content = str(toolbar())
         # responder deve vir antes de turns (nova ordem)
-        assert content.index("claude") < content.index("5")
+        assert content.index("claude") < content.index("'>5<")
         # parallel deve vir antes de bugs
         assert content.index("1/2") < content.index("⚠")
         # responder presente

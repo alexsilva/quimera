@@ -403,6 +403,27 @@ class TestTurnCycle(unittest.TestCase):
         scheduled_callbacks[0]()
         self.assertEqual(rendered_messages, [("codex", "mensagem do agente")])
 
+    def test_drain_ui_events_text_without_agent_is_rendered_as_system_message(self):
+        """Evento TEXT sem agente não deve renderizar card 'Unknown'."""
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.renderer = Mock()
+        app.show_muted_message = Mock()
+        app._output_lock = threading.Lock()
+        app._nonblocking_input_status_lock = threading.Lock()
+        app._nonblocking_input_status = "idle"
+        app._prompt_owning_thread_id = None
+
+        ui_queue = queue.Queue()
+        ui_queue.put(RenderEvent(RenderEvent.TEXT, "Responda para CODEX:", agent=None))
+
+        with patch("quimera.app.core.sys.stdin") as mock_stdin:
+            mock_stdin.isatty.return_value = True
+            QuimeraApp._drain_ui_events(app, ui_queue)
+
+        app.show_muted_message.assert_called_once_with("Responda para CODEX:")
+        app.renderer.show_message.assert_not_called()
+        app.renderer.show_no_response.assert_not_called()
+
     def test_run_threaded_keyboard_interrupt_without_local_cancel_still_shuts_down(self):
         """Ctrl+C no input ocioso em modo threaded deve continuar encerrando o chat."""
         app = QuimeraApp.__new__(QuimeraApp)

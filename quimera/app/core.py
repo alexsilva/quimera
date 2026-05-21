@@ -1990,12 +1990,21 @@ class QuimeraApp:
                     self.show_muted_message(event.payload)
                 elif event_type == RenderEvent.TEXT:
                     no_response = (event.metadata or {}).get("no_response", False)
+                    agent_name = str(event.agent or "").strip()
+
+                    # Eventos TEXT sem agente válido não devem aparecer como
+                    # "🤖 Unknown"; trata como mensagem neutra de sistema.
+                    if not agent_name:
+                        payload = str(event.payload or "").strip()
+                        if payload:
+                            self.show_muted_message(payload)
+                        continue
 
                     def _render_text_event() -> None:
                         if no_response:
-                            self.renderer.show_no_response(event.agent)
+                            self.renderer.show_no_response(agent_name)
                         else:
-                            self.renderer.show_message(event.agent, event.payload)
+                            self.renderer.show_message(agent_name, event.payload)
 
                     if self._should_render_ui_event_above_prompt():
                         if not self._run_ui_event_above_prompt(_render_text_event):

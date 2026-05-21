@@ -173,31 +173,40 @@ class InputGate:
             parts = []
             # Primary: who responds + model
             if responder:
-                parts.append(f"<b>{html.escape(responder)}</b>")
+                parts.append(
+                    f"<b><style fg='#8fd3ff'>{html.escape(responder)}</style></b>"
+                )
             if model:
-                parts.append(html.escape(_clip(model, 48)))
+                parts.append(f"<style fg='#b7bcc5'>{html.escape(_clip(model, 48))}</style>")
             # Activity: agents running + parallel slots
             if active_agents:
-                parts.append(f"<style fg='#88cc88'>{html.escape(_clip(active_agents, 48))}</style>")
+                parts.append(f"<style fg='#79d279'>{html.escape(_clip(active_agents, 48))}</style>")
             if parallel:
-                parts.append(f"<b>{html.escape(parallel)}</b>")
+                parts.append(
+                    f"<b><style fg='#ffd787'>{html.escape(parallel)}</style></b>"
+                )
             # Issues
             if open_bugs:
-                parts.append(f"<style fg='#cc4444'>⚠ {html.escape(open_bugs)}</style>")
+                parts.append(
+                    f"<b><style fg='#ff9f9f'>⚠ {html.escape(open_bugs)}</style></b>"
+                )
             # Context: mode, branch, time, counters
             if mode:
-                parts.append(f"<i>{html.escape(mode)}</i>")
+                parts.append(f"<i><style fg='#c3a6ff'>{html.escape(_clip(mode, 18))}</style></i>")
             if branch:
-                parts.append(f"<style fg='#888888'>br:{html.escape(branch)}</style>")
+                parts.append(f"<style fg='#7a7a7a'>br:{html.escape(_clip(branch, 24))}</style>")
             if elapsed:
-                parts.append(f"<style fg='#888888'>{html.escape(elapsed)}</style>")
+                parts.append(f"<style fg='#7a7a7a'>{html.escape(elapsed)}</style>")
             if turns:
-                parts.append(f"<style fg='#888888'>{html.escape(turns)}</style>")
+                parts.append(f"<style fg='#7a7a7a'>{html.escape(turns)}</style>")
             if theme:
-                parts.append(f"<style fg='#888888'>tema:{html.escape(_clip(theme, 18))}</style>")
+                parts.append(f"<style fg='#7a7a7a'>tema:{html.escape(_clip(theme, 18))}</style>")
             if session_id:
-                parts.append(f"<style fg='#888888'>sess:{html.escape(session_id)}</style>")
-            return HTML(" | ".join(parts))
+                parts.append(f"<style fg='#5f5f5f'>sess:{html.escape(_clip(session_id, 12))}</style>")
+            separator = "<style fg='#5f5f5f'> · </style>"
+            # Keep a subtle, consistent toolbar strip across sessions.
+            content = separator.join(parts)
+            return HTML(f"<style bg='#262626'>{content}</style>")
 
         return _toolbar
 
