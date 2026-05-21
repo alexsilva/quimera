@@ -1332,10 +1332,15 @@ class QuimeraApp:
         if branch and isinstance(branch, str):
             ctx["branch"] = branch
         elapsed = time.monotonic() - getattr(self, "_session_started_at", time.monotonic())
-        if elapsed >= 60:
+        if elapsed >= 3600:
+            mins = int(elapsed // 60)
+            ctx["elapsed"] = f"{mins // 60}h {mins % 60:02d}m"
+        elif elapsed >= 60:
             mins = int(elapsed // 60)
             secs = int(elapsed % 60)
-            ctx["elapsed"] = f"{mins}m{secs:02d}s" if mins < 60 else f"{mins // 60}h{mins % 60:02d}m"
+            ctx["elapsed"] = f"{mins}m {secs:02d}s"
+        else:
+            ctx["elapsed"] = f"{int(elapsed)}s"
         renderer = getattr(self, "renderer", None)
         theme_name = getattr(renderer, "theme_name", "") if renderer else ""
         ctx["theme"] = theme_name
@@ -1349,7 +1354,7 @@ class QuimeraApp:
         if active > 0 or queued > 0 or capacity > 1:
             slots_label = f"{active}/{capacity}"
             if queued:
-                slots_label = f"{slots_label} · fila:{queued}"
+                slots_label = f"{slots_label} · 📥 {queued}"
             ctx["parallel"] = slots_label
         active_agents = parallel_state.get("active_agents", ())
         if active_agents:
@@ -1367,7 +1372,7 @@ class QuimeraApp:
         # Add session ID to toolbar context
         session_id = getattr(getattr(self, "storage", None), "session_id", "")
         if session_id:
-            ctx["session"] = session_id[:8]  # Show first 8 chars for brevity
+            ctx["session"] = session_id
         bug_store = getattr(self, "bug_store", None)
         if bug_store is not None:
             open_bug_count = None

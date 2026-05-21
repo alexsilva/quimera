@@ -58,7 +58,7 @@ class TestBuildToolbar:
         )
         toolbar = gate._build_toolbar()
         assert callable(toolbar)
-        assert "<style fg='#909090'>◈chat</style>" in str(toolbar())
+        assert "<style fg='#b0b0b0'> ◈ chat </style>" in str(toolbar())
         assert "bg='#1d1d1d'" in str(toolbar())
         assert "▎" in str(toolbar())
         assert "▕" in str(toolbar())
@@ -74,7 +74,7 @@ class TestBuildToolbar:
         assert callable(toolbar)
         content = str(toolbar())
         assert "5" in content
-        assert "turns" not in content
+        assert " ↺ 5 " in content
 
     @pytest.mark.skipif(not _PT_AVAILABLE, reason="prompt_toolkit não disponível")
     def test_toolbar_includes_open_bugs_when_context_available(self):
@@ -86,20 +86,19 @@ class TestBuildToolbar:
         toolbar = gate._build_toolbar()
         assert callable(toolbar)
         content = str(toolbar())
-        assert "3" in content
+        assert " ⚠ 3 " in content
 
     @pytest.mark.skipif(not _PT_AVAILABLE, reason="prompt_toolkit não disponível")
     def test_toolbar_includes_parallel_status_when_context_available(self):
         gate = InputGate(
             toolbar_context_resolver=lambda: {
-                "parallel": "paralelo:1/1 · fila:2",
+                "parallel": "paralelo:1/1 · 📥 2",
             }
         )
         toolbar = gate._build_toolbar()
         assert callable(toolbar)
         content = str(toolbar())
-        assert "paralelo:1/1" in content
-        assert "fila:2" in content
+        assert " ⇉ paralelo:1/1 · 📥 2 " in content
 
     @pytest.mark.skipif(not _PT_AVAILABLE, reason="prompt_toolkit não disponível")
     def test_toolbar_includes_mode_when_context_available(self):
@@ -111,7 +110,7 @@ class TestBuildToolbar:
         toolbar = gate._build_toolbar()
         assert callable(toolbar)
         content = str(toolbar())
-        assert "planning" in content
+        assert " ◆ planning " in content
 
     @pytest.mark.skipif(not _PT_AVAILABLE, reason="prompt_toolkit não disponível")
     def test_toolbar_includes_active_agents_when_context_available(self):
@@ -123,8 +122,8 @@ class TestBuildToolbar:
         toolbar = gate._build_toolbar()
         assert callable(toolbar)
         content = str(toolbar())
-        assert "codex" in content
-        assert "claude" in content
+        assert " ⚡ codex, claude " in content
+
 
     @pytest.mark.skipif(not _PT_AVAILABLE, reason="prompt_toolkit não disponível")
     def test_toolbar_clips_long_model_name(self):
@@ -168,7 +167,7 @@ class TestBuildToolbar:
         assert callable(toolbar)
         content = str(toolbar())
         # responder deve vir antes de turns (nova ordem)
-        assert content.index("claude") < content.index("'>5<")
+        assert content.index("claude") < content.index(" ↺ 5 ")
         # parallel deve vir antes de bugs
         assert content.index("1/2") < content.index("⚠")
         # responder presente
@@ -197,7 +196,7 @@ class TestBuildToolbar:
         assert callable(toolbar)
         content = str(toolbar())
         assert content != ""
-        assert "sess:abc12345" in content
+        assert " 🆔 abc12345 " in content
 
     @pytest.mark.skipif(not _PT_AVAILABLE, reason="prompt_toolkit não disponível")
     def test_toolbar_includes_branch_when_context_available(self):
@@ -209,19 +208,20 @@ class TestBuildToolbar:
         toolbar = gate._build_toolbar()
         assert callable(toolbar)
         content = str(toolbar())
-        assert "br:feature-x" in content
+        assert " ⎇ feature-x " in content
 
     @pytest.mark.skipif(not _PT_AVAILABLE, reason="prompt_toolkit não disponível")
     def test_toolbar_includes_elapsed_when_context_available(self):
         gate = InputGate(
             toolbar_context_resolver=lambda: {
-                "elapsed": "12m34s",
+                "elapsed": "12m 34s",
             }
         )
         toolbar = gate._build_toolbar()
         assert callable(toolbar)
         content = str(toolbar())
-        assert "12m34s" in content
+        assert " ⏱ 12m 34s " in content
+
 
     @pytest.mark.skipif(not _PT_AVAILABLE, reason="prompt_toolkit não disponível")
     def test_toolbar_empty_with_only_elapsed_returns_nonempty(self):

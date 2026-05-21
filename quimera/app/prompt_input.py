@@ -174,41 +174,42 @@ class InputGate:
             # Primary: who responds + model
             if responder:
                 parts.append(
-                    f"<b><style fg='#8fd3ff'>{html.escape(responder)}</style></b>"
+                    f"<b><style fg='#8fd3ff'> {html.escape(responder)}</style></b>"
                 )
             if model:
-                parts.append(f"<style fg='#b7bcc5'>{html.escape(_clip(model, 48))}</style>")
+                parts.append(f"<style fg='#b7bcc5'> {html.escape(_clip(model, 48))}</style>")
             # Activity: agents running + parallel slots
             if active_agents:
-                parts.append(f"<style fg='#79d279'>{html.escape(_clip(active_agents, 48))}</style>")
+                parts.append(f"<style fg='#79d279'> ⚡ {html.escape(_clip(active_agents, 48))} </style>")
             if parallel:
                 parts.append(
-                    f"<b><style fg='#ffd787'>{html.escape(parallel)}</style></b>"
+                    f"<b><style fg='#ffd787'> ⇉ {html.escape(parallel)} </style></b>"
                 )
             # Issues
             if open_bugs:
                 parts.append(
-                    f"<b><style fg='#ff9f9f'>⚠ {html.escape(open_bugs)}</style></b>"
+                    f"<b><style fg='#ff9f9f'> ⚠ {html.escape(open_bugs)} </style></b>"
                 )
             # Context: mode, branch, time, counters
             if mode:
-                parts.append(f"<i><style fg='#c3a6ff'>{html.escape(_clip(mode, 18))}</style></i>")
+                parts.append(f"<i><style fg='#c3a6ff'> ◆ {html.escape(_clip(mode, 18))} </style></i>")
             if branch:
-                parts.append(f"<style fg='#909090'>br:{html.escape(_clip(branch, 24))}</style>")
+                parts.append(f"<style fg='#b0b0b0'> ⎇ {html.escape(_clip(branch, 24))} </style>")
             if elapsed:
-                parts.append(f"<style fg='#909090'>{html.escape(elapsed)}</style>")
+                parts.append(f"<style fg='#b0b0b0'> ⏱ {html.escape(elapsed)} </style>")
             if turns:
-                parts.append(f"<style fg='#909090'>{html.escape(turns)}</style>")
+                parts.append(f"<style fg='#b0b0b0'> ↺ {html.escape(turns)} </style>")
             if theme:
-                parts.append(f"<style fg='#909090'>◈{html.escape(_clip(theme, 18))}</style>")
+                parts.append(f"<style fg='#b0b0b0'> ◈ {html.escape(_clip(theme, 18))} </style>")
             if session_id:
-                parts.append(f"<style fg='#808080'>sess:{html.escape(_clip(session_id, 12))}</style>")
-            separator = "<style fg='#666666'> · </style>"
+                parts.append(f"<style fg='#909090'> 🆔 {html.escape(_clip(session_id, 12))} </style>")
+            separator = "<style fg='#666666'>·</style>"
             content = separator.join(parts)
             # Subtle frame around the full toolbar line for stronger container shape.
-            left_edge = "<style fg='#555555' bg='#1d1d1d'>▎</style>"
-            right_edge = "<style fg='#555555' bg='#1d1d1d'>▕</style>"
-            return HTML(f"<style bg='#1d1d1d'>{left_edge} {content} {right_edge}</style>")
+            # Adicionado padding extra (espaços) para evitar que ícones nas pontas sejam cortados.
+            left_edge = "<style fg='#666666' bg='#1d1d1d'>▎</style>"
+            right_edge = "<style fg='#666666' bg='#1d1d1d'>▕</style>"
+            return HTML(f"<style bg='#1d1d1d'> {left_edge} {content} {right_edge} </style>")
 
         return _toolbar
 
@@ -281,6 +282,7 @@ class InputGate:
                 key_bindings=self._build_key_bindings(),
                 complete_while_typing=False,
                 vi_mode=False,
+                refresh_interval=1.0,
             )
 
         return input(prompt)

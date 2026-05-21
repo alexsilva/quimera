@@ -369,7 +369,7 @@ class TestInputContextAndWelcome(unittest.TestCase):
 
         context = app._build_input_toolbar_context()
         self.assertNotIn("threads", context)
-        self.assertEqual(context["parallel"], "1/2 · fila:2")
+        self.assertEqual(context["parallel"], "1/2 · 📥 2")
 
     def test_build_input_toolbar_context_defaults_capacity_to_thread_count(self):
         from quimera.app.core import QuimeraApp
