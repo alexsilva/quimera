@@ -808,6 +808,131 @@ class AgentRuntimeBugDetector:
         )
 
 
+_TIMELESS_CATEGORIES = frozenset({
+    "slot_leak_suspect",
+    "interrupt_shutdown_traceback",
+    "agent_prompt_budget_pressure",
+})
+
+
+class BugCorrelator:
+    """Correla relatórios de diferentes detectores na mesma janela temporal.
+
+    Agrupa anomalias de render com falhas de agente que ocorrem próximas no
+    tempo e produz bugs compostos de severidade mais alta, consolidando
+    evidências de ambas as fontes.
+    """
+
+    def __init__(self, window_seconds: float = 60.0):
+        self.window_seconds = max(5.0, float(window_seconds))
+
+    def correlate(
+        self,
+        reports: list[BugReport],
+        *,
+        session_id: str,
+    ) -> list[BugReport]:
+        if len(reports) < 2:
+            return []
+
+        tagged: list[tuple[datetime | None, BugReport]] = []
+        for r in reports:
+            tagged.append((self._pick_dt(r), r))
+
+        valid: list[tuple[datetime, BugReport]] = []
+        for dt, r in tagged:
+            if dt is not None and r.category not in _TIMELESS_CATEGORIES:
+                valid.append((dt, r))
+
+        if len(valid) < 2:
+            return []
+
+        valid.sort(key=lambda x: x[0])
+        clusters = self._cluster(valid)
+        return self._build_correlation_bugs(clusters, session_id)
+
+    @staticmethod
+    def _pick_dt(report: BugReport) -> datetime | None:
+        for ref in report.evidence_refs:
+            if ref.ts:
+                try:
+                    return datetime.fromisoformat(ref.ts)
+                except (ValueError, TypeError):
+                    continue
+        try:
+            return datetime.fromisoformat(report.last_seen_at)
+        except (ValueError, TypeError):
+            return None
+
+    def _cluster(
+        self,
+        valid: list[tuple[datetime, BugReport]],
+    ) -> list[list[BugReport]]:
+        clusters: list[list[BugReport]] = []
+        current: list[tuple[datetime, BugReport]] = []
+        for dt, r in valid:
+            if not current:
+                current.append((dt, r))
+            elif (dt - current[0][0]).total_seconds() <= self.window_seconds:
+                current.append((dt, r))
+            else:
+                clusters.append([item[1] for item in current])
+                current = [(dt, r)]
+        if current:
+            clusters.append([item[1] for item in current])
+        return clusters
+
+    def _build_correlation_bugs(
+        self,
+        clusters: list[list[BugReport]],
+        session_id: str,
+    ) -> list[BugReport]:
+        results: list[BugReport] = []
+        for cluster in clusters:
+            if len(cluster) < 2:
+                continue
+            cats = {r.category for r in cluster}
+            render_anomalies = {c for c in cats if c.startswith("render_")}
+            agent_failures = {c for c in cats if c.startswith("agent_")}
+            if not render_anomalies or not agent_failures:
+                continue
+
+            seen_ids: set[int] = set()
+            evidence: list[BugEvidenceRef] = []
+            for r in cluster:
+                for ref in r.evidence_refs:
+                    rid = id(ref)
+                    if rid not in seen_ids:
+                        seen_ids.add(rid)
+                        evidence.append(ref)
+
+            sorted_cats = sorted(cats)
+            summary = (
+                f"Correlação: anomalia de render e falha de agente "
+                f"na janela de {self.window_seconds:.0f}s"
+            )
+            fingerprint = make_bug_fingerprint(
+                session_id, "render_agent_correlation", "|".join(sorted_cats)
+            )
+            corr = BugReport(
+                id=f"corr_{fingerprint[:12]}",
+                session_id=session_id,
+                category="render_agent_correlation",
+                summary=summary,
+                severity="high",
+                confidence=min(0.95, 0.5 + len(cats) * 0.08),
+                description=f"Categorias correlacionadas: {', '.join(sorted_cats)}",
+                fingerprint=fingerprint,
+                evidence_refs=evidence[:8],
+                agent=",".join(sorted({r.agent for r in cluster if r.agent})),
+                first_seen_at=cluster[0].first_seen_at,
+                last_seen_at=cluster[-1].last_seen_at,
+                count=sum(r.count for r in cluster),
+            )
+            results.append(corr)
+        return results
+
+
 def format_bug_context(reports: list[BugReport]) -> str:
     if not reports:
         return ""

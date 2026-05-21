@@ -59,6 +59,7 @@ from ..env_config import EnvConfig
 from ..metrics import BehaviorMetricsTracker
 from ..bugs import (
     AgentRuntimeBugDetector,
+    BugCorrelator,
     BugEvidenceRef,
     BugReport,
     BugStore,
@@ -137,9 +138,11 @@ class QuimeraApp:
         self.config = ConfigManager(self.workspace.config_file)
         _active_theme = theme if theme is not None else self.config.theme
         self.storage = SessionStorage(self.workspace.logs_dir)
+        self._session_started_at = time.monotonic()
         self.bug_store = BugStore(self.workspace.tmp.root / "data" / "logs")
         self.bug_detector = RenderBugDetector(repeat_threshold=2)
         self.agent_bug_detector = AgentRuntimeBugDetector()
+        self.bug_correlator = BugCorrelator(window_seconds=60.0)
         session_id = self.storage.session_id
         render_log_path = self._resolve_workspace_render_log_path(session_id)
         render_ansi_path = self._resolve_workspace_render_ansi_path(session_id)
@@ -755,6 +758,7 @@ class QuimeraApp:
     def _run_render_bug_detector(self) -> None:
         detector = getattr(self, "bug_detector", None)
         agent_detector = getattr(self, "agent_bug_detector", None)
+        correlator = getattr(self, "bug_correlator", None)
         bug_store = getattr(self, "bug_store", None)
         workspace = getattr(self, "workspace", None)
         storage = getattr(self, "storage", None)
@@ -767,6 +771,7 @@ class QuimeraApp:
         ansi_path = self._resolve_workspace_render_ansi_path(session_id)
         metrics_path = self._resolve_workspace_metrics_path(session_id)
         try:
+            all_reports: list[BugReport] = []
             if detector is not None and (events_path is not None or ansi_path is not None):
                 reports = detector.analyze_session(
                     session_id=session_id,
@@ -775,6 +780,7 @@ class QuimeraApp:
                 )
                 for report in reports:
                     bug_store.file(report)
+                all_reports.extend(reports)
             if agent_detector is not None:
                 session_state = getattr(self, "session_state", {}) or {}
                 agent_metrics = session_state.get("agent_metrics", {})
@@ -784,6 +790,10 @@ class QuimeraApp:
                     prompt_metrics_path=metrics_path,
                 )
                 for report in reports:
+                    bug_store.file(report)
+                all_reports.extend(reports)
+            if correlator is not None and len(all_reports) >= 2:
+                for report in correlator.correlate(all_reports, session_id=session_id):
                     bug_store.file(report)
         except Exception:
             logger.debug("falha ao analisar bugs de debug", exc_info=True)
@@ -1317,19 +1327,54 @@ class QuimeraApp:
             "model": self._resolve_active_model_label(),
             "cwd": str(getattr(workspace, "cwd", Path.cwd())),
         }
+        branch = getattr(workspace, "branch", None)
+        if branch and isinstance(branch, str):
+            ctx["branch"] = branch
+        elapsed = time.monotonic() - getattr(self, "_session_started_at", time.monotonic())
+        if elapsed >= 60:
+            mins = int(elapsed // 60)
+            secs = int(elapsed % 60)
+            ctx["elapsed"] = f"{mins}m{secs:02d}s" if mins < 60 else f"{mins // 60}h{mins % 60:02d}m"
         renderer = getattr(self, "renderer", None)
         theme_name = getattr(renderer, "theme_name", "") if renderer else ""
         ctx["theme"] = theme_name
+        active_mode = getattr(self, "execution_mode", None)
+        if active_mode is not None:
+            ctx["mode"] = active_mode.name
         if self.threads > 1:
             ctx["threads"] = str(self.threads)
-            parallel_state = self._get_parallel_toolbar_state()
-            capacity = int(parallel_state.get("capacity", max(0, self.threads)) or 0)
-            active = int(parallel_state.get("active", 0) or 0)
-            queued = int(parallel_state.get("queued", 0) or 0)
-            slots_label = f"slots:{active}/{capacity}"
-            if queued:
-                slots_label = f"{slots_label} · fila:{queued}"
-            ctx["parallel"] = slots_label
+        parallel_state = self._get_parallel_toolbar_state()
+        capacity = int(parallel_state.get("capacity", max(0, self.threads)) or 0)
+        active = int(parallel_state.get("active", 0) or 0)
+        queued = int(parallel_state.get("queued", 0) or 0)
+        slots_label = f"slots:{active}/{capacity}"
+        if queued:
+            slots_label = f"{slots_label} · fila:{queued}"
+        ctx["parallel"] = slots_label
+        active_agents = parallel_state.get("active_agents", ())
+        if active_agents:
+            ctx["active_agents"] = ", ".join(str(a) for a in active_agents)
+        history = getattr(self, "history", None)
+        if history is not None:
+            ctx["turns"] = str(len(history))
+        # Add session ID to toolbar context
+        session_id = getattr(getattr(self, "storage", None), "session_id", "")
+        if session_id:
+            ctx["session"] = session_id[:8]  # Show first 8 chars for brevity
+        bug_store = getattr(self, "bug_store", None)
+        if bug_store is not None:
+            try:
+                session_id = getattr(self.storage, "session_id", "")
+                open_bugs = bug_store.query(
+                    session_id=session_id, status="open", limit=100
+                ) if session_id else bug_store.query(status="open", limit=100)
+                if open_bugs:
+                    ctx["open_bugs"] = str(len(open_bugs))
+            except Exception:
+                pass
+        exec_mode = getattr(getattr(self, "execution_mode", None), "name", None)
+        if exec_mode:
+            ctx["mode"] = str(exec_mode)
         return ctx
 
     def _set_parallel_toolbar_state(
@@ -1511,6 +1556,12 @@ class QuimeraApp:
                 for report in reports:
                     if bug_store.file(report) is not None:
                         filed += 1
+                if len(reports) >= 2:
+                    correlator = getattr(self, "bug_correlator", None)
+                    if correlator is not None:
+                        for report in correlator.correlate(reports, session_id=session_id):
+                            if bug_store.file(report) is not None:
+                                filed += 1
                 self.show_system_message(
                     f"[bugs] análise ({mode}) concluída: {len(reports)} sinal(is), "
                     f"{filed} registro(s) processado(s)."
@@ -1985,6 +2036,10 @@ class QuimeraApp:
         self._suppress_tty_control_echo()
         show_banner = getattr(self.renderer, "show_banner", self.renderer.show_system)
         show_banner(self._build_welcome_message())
+        workspace = getattr(self, "workspace", None)
+        project_path = str(getattr(workspace, "cwd", Path.cwd()))
+        _show_neutral = getattr(self.renderer, "show_system_neutral", self.renderer.show_system)
+        _show_neutral(f"Projeto: {project_path}")
         _show_neutral = getattr(self.renderer, "show_system_neutral", self.renderer.show_system)
         restore_notice = getattr(self.storage, "pop_restore_notice", lambda: None)()
         if restore_notice:

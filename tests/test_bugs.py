@@ -9,6 +9,7 @@ from unittest.mock import Mock
 
 from quimera.bugs import (
     AgentRuntimeBugDetector,
+    BugCorrelator,
     BugEvidenceRef,
     BugReport,
     BugStore,
@@ -215,6 +216,86 @@ def test_file_bug_persists_without_event_sink(tmp_path):
         assert reports[0].category == "agent_failure_burst"
     finally:
         app.bug_store.close()
+
+
+def test_bug_correlator_produces_combined_bug_when_render_and_agent_failure_overlap():
+    session_id = "sessao-correl"
+    ts = "2026-05-20T12:00:00.000+00:00"
+    render_report = BugReport(
+        id="bug_render",
+        session_id=session_id,
+        category="render_repeat_block",
+        summary="Bloco ANSI repetido suprimido",
+        severity="medium",
+        confidence=0.8,
+        agent="codex",
+        fingerprint=make_bug_fingerprint(session_id, "render_repeat_block", "Bloco ANSI repetido suprimido"),
+        evidence_refs=[BugEvidenceRef(kind="render_jsonl", ts=ts, line=1)],
+    )
+    agent_report = BugReport(
+        id="bug_agent",
+        session_id=session_id,
+        category="agent_failure_rate_high",
+        summary="Agente codex com taxa de falha elevada",
+        severity="high",
+        confidence=0.9,
+        agent="codex",
+        fingerprint=make_bug_fingerprint(session_id, "agent_failure_rate_high", "Agente codex com taxa de falha elevada"),
+        evidence_refs=[BugEvidenceRef(kind="agent_metrics", ts=ts)],
+    )
+    correlator = BugCorrelator(window_seconds=60.0)
+    results = correlator.correlate([render_report, agent_report], session_id=session_id)
+    assert len(results) == 1
+    corr = results[0]
+    assert corr.category == "render_agent_correlation"
+    assert corr.severity == "high"
+    assert len(corr.evidence_refs) >= 2
+    assert "codex" in corr.agent
+
+
+def test_bug_correlator_returns_empty_with_single_report():
+    session_id = "sessao-single"
+    report = BugReport(
+        id="bug_render",
+        session_id=session_id,
+        category="render_repeat_block",
+        summary="Bloco",
+        fingerprint=make_bug_fingerprint(session_id, "render_repeat_block", "Bloco"),
+    )
+    correlator = BugCorrelator(window_seconds=60.0)
+    assert correlator.correlate([report], session_id=session_id) == []
+
+
+def test_bug_correlator_ignores_timeless_categories():
+    session_id = "sessao-timeless"
+    ts = "2026-05-20T12:00:00.000+00:00"
+    render_rpt = BugReport(
+        id="r1", session_id=session_id, category="render_repeat_block",
+        summary="Bloco", fingerprint=make_bug_fingerprint(session_id, "render_repeat_block", "Bloco"),
+        evidence_refs=[BugEvidenceRef(kind="render_jsonl", ts=ts)],
+    )
+    timeless = BugReport(
+        id="r2", session_id=session_id, category="slot_leak_suspect",
+        summary="Slot", fingerprint=make_bug_fingerprint(session_id, "slot_leak_suspect", "Slot"),
+    )
+    correlator = BugCorrelator(window_seconds=60.0)
+    assert correlator.correlate([render_rpt, timeless], session_id=session_id) == []
+
+
+def test_bug_correlator_respects_window_boundary():
+    session_id = "sessao-window"
+    render_rpt = BugReport(
+        id="r1", session_id=session_id, category="render_repeat_block",
+        summary="Bloco", fingerprint=make_bug_fingerprint(session_id, "render_repeat_block", "Bloco"),
+        evidence_refs=[BugEvidenceRef(kind="render_jsonl", ts="2026-05-20T12:00:00.000+00:00")],
+    )
+    agent_rpt = BugReport(
+        id="r2", session_id=session_id, category="agent_failure_rate_high",
+        summary="Falha", fingerprint=make_bug_fingerprint(session_id, "agent_failure_rate_high", "Falha"),
+        evidence_refs=[BugEvidenceRef(kind="agent_metrics", ts="2026-05-20T13:00:00.000+00:00")],
+    )
+    correlator = BugCorrelator(window_seconds=60.0)
+    assert correlator.correlate([render_rpt, agent_rpt], session_id=session_id) == []
 
 
 def test_handle_bugs_command_handles_store_errors_without_crashing():

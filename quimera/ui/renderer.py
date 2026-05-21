@@ -398,7 +398,10 @@ class TerminalRenderer:
                 return main
             active_count = len(parts)
             if active_count > 1:
-                toolbar_text = f"[dim]{active_count} agentes · Ctrl+C para cancelar · T para tema[/dim]"
+                labels = " · ".join(
+                    markup_escape(st["label"]) for st in _stream_states.values()
+                )
+                toolbar_text = f"[dim]{labels} · Ctrl+C para cancelar · T para tema[/dim]"
             else:
                 only_state = next(iter(_stream_states.values()))
                 toolbar_text = (

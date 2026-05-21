@@ -126,6 +126,11 @@ class Workspace:
         """Subtree temporária em ``/tmp/quimera/{cwd_hash}/`` — logs de sessão, nunca dados persistentes."""
         return self._tmp
 
+    @property
+    def branch(self) -> str | None:
+        """Branch de contexto ativa, ou ``None`` se nenhuma foi definida."""
+        return self._branch
+
     def set_branch(self, branch: str) -> None:
         """Define manualmente a branch para o contexto persistente.
 

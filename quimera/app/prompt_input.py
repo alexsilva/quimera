@@ -152,26 +152,45 @@ class InputGate:
 
             responder = str(context.get("responder", "")).strip()
             model = str(context.get("model", "")).strip()
-            cwd = str(context.get("cwd", "")).strip()
             theme = str(context.get("theme", "")).strip()
             threads = str(context.get("threads", "")).strip()
             parallel = str(context.get("parallel", "")).strip()
-            if not responder and not model and not cwd and not theme and not threads and not parallel:
+            turns = str(context.get("turns", "")).strip()
+            open_bugs = str(context.get("open_bugs", "")).strip()
+            active_agents = str(context.get("active_agents", "")).strip()
+            mode = str(context.get("mode", "")).strip()
+            branch = str(context.get("branch", "")).strip()
+            elapsed = str(context.get("elapsed", "")).strip()
+            if not any([responder, model, theme, threads, parallel, turns,
+                        open_bugs, active_agents, mode, branch, elapsed]):
                 return ""
 
             parts = []
+            if turns:
+                parts.append(f"<style fg='#888888'>{html.escape(turns)}</style>")
             if theme:
-                parts.append(f"<b>tema:{html.escape(theme)}</b>")
+                parts.append(f"tema:{html.escape(theme)}")
+            if responder:
+                parts.append(f"<b>{html.escape(responder)}</b>")
+            if model:
+                parts.append(html.escape(model))
             if parallel:
                 parts.append(f"<b>{html.escape(parallel)}</b>")
             elif threads:
                 parts.append(f"<b>{html.escape(threads)}</b>")
-            if responder:
-                parts.append(html.escape(responder))
-            if model:
-                parts.append(html.escape(model))
-            if cwd:
-                parts.append(html.escape(cwd))
+            if mode:
+                parts.append(f"<i>{html.escape(mode)}</i>")
+            if active_agents:
+                parts.append(f"<style fg='#88cc88'>{html.escape(active_agents)}</style>")
+            if open_bugs:
+                parts.append(f"<style fg='#cc4444'>⚠ {html.escape(open_bugs)}</style>")
+            if branch:
+                parts.append(f"<style fg='#888888'>br:{html.escape(branch)}</style>")
+            if elapsed:
+                parts.append(f"<style fg='#888888'>{html.escape(elapsed)}</style>")
+            session_id = str(context.get("session", "")).strip()
+            if session_id:
+                parts.append(f"<style fg='#888888'>sess:{html.escape(session_id)}</style>")
             return HTML(" | ".join(parts))
 
         return _toolbar

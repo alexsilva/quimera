@@ -1939,7 +1939,8 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(app.renderer.events[0][0], "show_system")
         self.assertEqual(app.renderer.events[1][0], "show_system")
         self.assertEqual(app.renderer.events[2][0], "show_system")
-        self.assertEqual(app.renderer.events[3], ("flush", None))
+        self.assertEqual(app.renderer.events[3][0], "show_system")
+        self.assertEqual(app.renderer.events[4], ("flush", None))
 
     def test_run_shows_render_audit_path_only_in_debug_mode(self):
         class RecordingRenderer(DummyRenderer):

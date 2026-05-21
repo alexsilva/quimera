@@ -35,12 +35,11 @@ class TestBuildToolbar:
             assert gate._build_placeholder() is None
 
     @pytest.mark.skipif(not _PT_AVAILABLE, reason="prompt_toolkit não disponível")
-    def test_toolbar_includes_responder_model_and_cwd_when_context_available(self):
+    def test_toolbar_includes_responder_model_when_context_available(self):
         gate = InputGate(
             toolbar_context_resolver=lambda: {
                 "responder": "claude",
                 "model": "gpt-5",
-                "cwd": "/tmp/projeto",
             }
         )
         toolbar = gate._build_toolbar()
@@ -49,7 +48,6 @@ class TestBuildToolbar:
         assert "claude" in str(content)
         assert "responde:" not in str(content)
         assert "gpt-5" in str(content)
-        assert "/tmp/projeto" in str(content)
 
     @pytest.mark.skipif(not _PT_AVAILABLE, reason="prompt_toolkit não disponível")
     def test_toolbar_includes_theme_when_context_available(self):
@@ -63,6 +61,31 @@ class TestBuildToolbar:
         assert "tema:chat" in str(toolbar())
 
     @pytest.mark.skipif(not _PT_AVAILABLE, reason="prompt_toolkit não disponível")
+    def test_toolbar_includes_turns_when_context_available(self):
+        gate = InputGate(
+            toolbar_context_resolver=lambda: {
+                "turns": "5",
+            }
+        )
+        toolbar = gate._build_toolbar()
+        assert callable(toolbar)
+        content = str(toolbar())
+        assert "5" in content
+        assert "turns" not in content
+
+    @pytest.mark.skipif(not _PT_AVAILABLE, reason="prompt_toolkit não disponível")
+    def test_toolbar_includes_open_bugs_when_context_available(self):
+        gate = InputGate(
+            toolbar_context_resolver=lambda: {
+                "open_bugs": "3",
+            }
+        )
+        toolbar = gate._build_toolbar()
+        assert callable(toolbar)
+        content = str(toolbar())
+        assert "3" in content
+
+    @pytest.mark.skipif(not _PT_AVAILABLE, reason="prompt_toolkit não disponível")
     def test_toolbar_includes_parallel_status_when_context_available(self):
         gate = InputGate(
             toolbar_context_resolver=lambda: {
@@ -74,6 +97,101 @@ class TestBuildToolbar:
         content = str(toolbar())
         assert "paralelo:1/1" in content
         assert "fila:2" in content
+
+    @pytest.mark.skipif(not _PT_AVAILABLE, reason="prompt_toolkit não disponível")
+    def test_toolbar_includes_mode_when_context_available(self):
+        gate = InputGate(
+            toolbar_context_resolver=lambda: {
+                "mode": "planning",
+            }
+        )
+        toolbar = gate._build_toolbar()
+        assert callable(toolbar)
+        content = str(toolbar())
+        assert "planning" in content
+
+    @pytest.mark.skipif(not _PT_AVAILABLE, reason="prompt_toolkit não disponível")
+    def test_toolbar_includes_active_agents_when_context_available(self):
+        gate = InputGate(
+            toolbar_context_resolver=lambda: {
+                "active_agents": "codex, claude",
+            }
+        )
+        toolbar = gate._build_toolbar()
+        assert callable(toolbar)
+        content = str(toolbar())
+        assert "codex" in content
+        assert "claude" in content
+
+    @pytest.mark.skipif(not _PT_AVAILABLE, reason="prompt_toolkit não disponível")
+    def test_toolbar_includes_all_fields_in_order(self):
+        gate = InputGate(
+            toolbar_context_resolver=lambda: {
+                "responder": "claude",
+                "model": "claude-sonnet",
+                "mode": "planning",
+                "theme": "chat",
+                "parallel": "slots:1/2",
+                "open_bugs": "2",
+                "turns": "5",
+                "session": "abc12345",
+            }
+        )
+        toolbar = gate._build_toolbar()
+        assert callable(toolbar)
+        content = str(toolbar())
+        # turns deve vir primeiro
+        assert content.index("5") < content.index("claude")
+        # responder presente
+        assert "claude" in content
+
+    @pytest.mark.skipif(not _PT_AVAILABLE, reason="prompt_toolkit não disponível")
+    def test_toolbar_empty_with_only_mode_returns_nonempty(self):
+        gate = InputGate(
+            toolbar_context_resolver=lambda: {
+                "mode": "planning",
+            }
+        )
+        toolbar = gate._build_toolbar()
+        assert callable(toolbar)
+        content = str(toolbar())
+        assert content != ""
+
+    @pytest.mark.skipif(not _PT_AVAILABLE, reason="prompt_toolkit não disponível")
+    def test_toolbar_includes_branch_when_context_available(self):
+        gate = InputGate(
+            toolbar_context_resolver=lambda: {
+                "branch": "feature-x",
+            }
+        )
+        toolbar = gate._build_toolbar()
+        assert callable(toolbar)
+        content = str(toolbar())
+        assert "br:feature-x" in content
+
+    @pytest.mark.skipif(not _PT_AVAILABLE, reason="prompt_toolkit não disponível")
+    def test_toolbar_includes_elapsed_when_context_available(self):
+        gate = InputGate(
+            toolbar_context_resolver=lambda: {
+                "elapsed": "12m34s",
+            }
+        )
+        toolbar = gate._build_toolbar()
+        assert callable(toolbar)
+        content = str(toolbar())
+        assert "12m34s" in content
+
+    @pytest.mark.skipif(not _PT_AVAILABLE, reason="prompt_toolkit não disponível")
+    def test_toolbar_empty_with_only_elapsed_returns_nonempty(self):
+        gate = InputGate(
+            toolbar_context_resolver=lambda: {
+                "elapsed": "5m00s",
+            }
+        )
+        toolbar = gate._build_toolbar()
+        assert callable(toolbar)
+        content = str(toolbar())
+        assert content != ""
 
 
 class TestKeyBindings:
