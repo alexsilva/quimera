@@ -315,7 +315,6 @@ class QuimeraApp:
             if isinstance(handler, PromptAwareStderrHandler):
                 handler.bind_callbacks(
                     output_lock=self._output_lock,
-                    clear_prompt=self._clear_user_prompt_line_if_needed,
                     redisplay_prompt=self._redisplay_user_prompt_if_needed,
                     show_error=self.show_error_message,
                     show_warning=self.show_warning_message,
@@ -390,7 +389,6 @@ class QuimeraApp:
             get_record_failure=lambda: self.record_failure,
             get_session_metrics=lambda: self.session_metrics,
             get_debug_prompt_metrics=lambda: self.debug_prompt_metrics,
-            get_clear_prompt_line=lambda: self._clear_user_prompt_line_if_needed,
             get_redisplay_prompt=lambda: self._redisplay_user_prompt_if_needed,
             get_output_lock=lambda: self._output_lock,
             get_counter_lock=lambda: self._counter_lock,
@@ -426,7 +424,6 @@ class QuimeraApp:
             get_execution_mode=lambda: self.execution_mode,
             refresh_task_state=self.task_services.refresh_task_shared_state,
             debug_prompt_metrics=self.debug_prompt_metrics,
-            clear_prompt_line=self._clear_user_prompt_line_if_needed,
             redisplay_prompt=self._redisplay_user_prompt_if_needed,
             output_lock=self._output_lock,
             counter_lock=self._counter_lock,
@@ -470,7 +467,6 @@ class QuimeraApp:
         self._display_service = DisplayService(
             renderer=self.renderer,
             input_status_getter=lambda: getattr(self, "_nonblocking_input_status", "idle"),
-            clear_prompt_line=self._clear_user_prompt_line_if_needed,
             redisplay_prompt=self._redisplay_user_prompt_if_needed,
             output_lock=self._output_lock,
             prompt_owner_thread_id_getter=lambda: getattr(self, "_prompt_owning_thread_id", None),
@@ -966,6 +962,7 @@ class QuimeraApp:
 
     def _redisplay_user_prompt_if_needed(self, clear_first: bool = True) -> None:
         """Executa redisplay user prompt if needed."""
+        _ = clear_first  # Mantido por compatibilidade de assinatura.
         stdin = sys.stdin
         if stdin is None or not stdin.isatty():
             return
@@ -974,46 +971,21 @@ class QuimeraApp:
             if self._nonblocking_input_status != "reading":
                 return
         try:
-            prompt = getattr(self, "_nonblocking_prompt_text", "")
-            line_buffer = ""
             input_gate = getattr(self, "input_gate", None)
-            if input_gate is not None and hasattr(input_gate, "get_line_buffer"):
+            redisplay = getattr(input_gate, "redisplay", None)
+            if callable(redisplay):
                 try:
-                    line_buffer = input_gate.get_line_buffer()
+                    redisplay()
                 except Exception:
-                    line_buffer = ""
-            full_line = f"{prompt}{line_buffer}"
-            if len(full_line) > 0:
-                if clear_first:
-                    self._clear_user_prompt_line_if_needed()
-                sys.stdout.write(full_line)
-                sys.stdout.flush()
-                if input_gate is not None and hasattr(input_gate, "redisplay"):
-                    try:
-                        input_gate.redisplay()
-                    except Exception:
-                        pass
+                    pass
         except Exception:
             pass
-
-    def _clear_user_prompt_line_if_needed(self) -> None:
-        """Executa clear user prompt line if needed."""
-        stdin = sys.stdin
-        if stdin is None or not stdin.isatty():
-            return
-        status_lock = getattr(self, "_nonblocking_input_status_lock", nullcontext())
-        with status_lock:
-            if self._nonblocking_input_status != "reading":
-                return
-        sys.stdout.write("\r\x1b[2K")
-        sys.stdout.flush()
 
     def clear_terminal_screen(self) -> None:
         """Limpa a viewport e o scrollback do terminal, reposicionando o cursor."""
         stdout = sys.stdout
         if stdout is None or not stdout.isatty():
             return
-        self._clear_user_prompt_line_if_needed()
         stdout.write("\x1b[3J\x1b[2J\x1b[H")
         stdout.flush()
 
@@ -2013,7 +1985,6 @@ class QuimeraApp:
 
                     if self._should_render_ui_event_above_prompt():
                         if not self._run_ui_event_above_prompt(_render_text_event):
-                            self._clear_user_prompt_line_if_needed()
                             _render_text_event()
                             self._redisplay_user_prompt_if_needed(clear_first=False)
                         continue
@@ -2030,7 +2001,6 @@ class QuimeraApp:
 
                     if self._should_render_ui_event_above_prompt():
                         if not self._run_ui_event_above_prompt(_render_handoff_event):
-                            self._clear_user_prompt_line_if_needed()
                             _render_handoff_event()
                             self._redisplay_user_prompt_if_needed(clear_first=False)
                         continue
@@ -2042,14 +2012,11 @@ class QuimeraApp:
 
                     if self._should_render_ui_event_above_prompt():
                         if not self._run_ui_event_above_prompt(_render_turn_summary_event):
-                            self._clear_user_prompt_line_if_needed()
                             _render_turn_summary_event()
                             self._redisplay_user_prompt_if_needed(clear_first=False)
                         continue
                     _render_turn_summary_event()
                 elif event_type == RenderEvent.REDISPLAY:
-                    if hasattr(self, "_clear_user_prompt_line_if_needed"):
-                        self._clear_user_prompt_line_if_needed()
                     flush = getattr(self.renderer, "flush", None)
                     if callable(flush):
                         flush()

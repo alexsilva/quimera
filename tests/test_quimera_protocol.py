@@ -217,8 +217,6 @@ def build_task_services(app):
         app.round_index = 0
     if not hasattr(app, "debug_prompt_metrics"):
         app.debug_prompt_metrics = False
-    if not hasattr(app, "_clear_user_prompt_line_if_needed"):
-        app._clear_user_prompt_line_if_needed = None
     if not hasattr(app, "_redisplay_user_prompt_if_needed"):
         app._redisplay_user_prompt_if_needed = None
     if not hasattr(app, "_output_lock"):
@@ -276,7 +274,6 @@ def build_task_services(app):
         get_session_metrics=lambda: app.session_metrics,
         get_round_index=lambda: app.round_index,
         get_debug_prompt_metrics=lambda: app.debug_prompt_metrics,
-        get_clear_prompt_line=lambda: app._clear_user_prompt_line_if_needed,
         get_redisplay_prompt=lambda: app._redisplay_user_prompt_if_needed,
         get_output_lock=lambda: app._output_lock,
         get_counter_lock=lambda: app._counter_lock,
@@ -728,7 +725,6 @@ class ProtocolTests(unittest.TestCase):
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
         app._output_lock = threading.Lock()
-        app._clear_user_prompt_line_if_needed = Mock()
         app._redisplay_user_prompt_if_needed = Mock()
         app._nonblocking_input_status = "idle"
         app._deferred_system_messages = []
@@ -779,7 +775,6 @@ class ProtocolTests(unittest.TestCase):
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
         app._output_lock = threading.Lock()
-        app._clear_user_prompt_line_if_needed = Mock()
         app._redisplay_user_prompt_if_needed = Mock()
         app._nonblocking_input_status = "idle"
         app._deferred_system_messages = []
@@ -960,7 +955,6 @@ class ProtocolTests(unittest.TestCase):
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
         app._output_lock = threading.Lock()
-        app._clear_user_prompt_line_if_needed = Mock()
         app._redisplay_user_prompt_if_needed = Mock()
         app._nonblocking_input_status = "idle"
         app._deferred_system_messages = []
@@ -1059,7 +1053,6 @@ class ProtocolTests(unittest.TestCase):
 
     def test_clear_terminal_screen_clears_scrollback_and_repositions_cursor(self):
         app = QuimeraApp.__new__(QuimeraApp)
-        app._clear_user_prompt_line_if_needed = Mock()
 
         stdout = Mock()
         stdout.isatty.return_value = True
@@ -1067,7 +1060,6 @@ class ProtocolTests(unittest.TestCase):
         with patch("sys.stdout", stdout):
             QuimeraApp.clear_terminal_screen(app)
 
-        app._clear_user_prompt_line_if_needed.assert_called_once_with()
         stdout.write.assert_called_once_with("\x1b[3J\x1b[2J\x1b[H")
         stdout.flush.assert_called_once_with()
 
@@ -3577,7 +3569,7 @@ class PluginTests(unittest.TestCase):
         finally:
             prompt_handler.bind_app(previous_app)
 
-    def test_show_system_message_clears_prompt_only_once_before_redisplay(self):
+    def test_show_system_message_uses_prompt_toolkit_redisplay_without_manual_clear(self):
         app = QuimeraApp.__new__(QuimeraApp)
         materialize_internal_services(app)
         app.renderer = DummyRenderer()
@@ -3595,9 +3587,10 @@ class PluginTests(unittest.TestCase):
             app.show_system_message("erro: timeout")
 
         clear_calls = [call_args for call_args in mock_write.call_args_list if call_args == call("\r\x1b[2K")]
-        self.assertEqual(len(clear_calls), 1)
+        self.assertEqual(len(clear_calls), 0)
+        app.input_gate.redisplay.assert_called_once_with()
 
-    def test_print_response_clears_prompt_before_agent_output_and_redisplays_once(self):
+    def test_print_response_uses_prompt_toolkit_redisplay_without_manual_prompt_rewrite(self):
         app = QuimeraApp.__new__(QuimeraApp)
         materialize_internal_services(app)
         app._output_lock = threading.Lock()
@@ -3617,8 +3610,8 @@ class PluginTests(unittest.TestCase):
 
         app.renderer.show_message.assert_called_once_with("claude", "resposta final")
         clear_calls = [call_args for call_args in mock_write.call_args_list if call_args == call("\r\x1b[2K")]
-        self.assertEqual(len(clear_calls), 1)
-        self.assertIn(call("Alex: oi"), mock_write.call_args_list)
+        self.assertEqual(len(clear_calls), 0)
+        self.assertNotIn(call("Alex: oi"), mock_write.call_args_list)
         app.input_gate.redisplay.assert_called_once_with()
 
     def test_show_system_message_defers_task_output_while_tty_reader_is_active(self):

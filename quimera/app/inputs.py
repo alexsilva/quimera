@@ -135,9 +135,6 @@ class AppInputServices:
             self._set_input_status("idle")
             self._set_prompt_text("")
             self._set_prompt_owner(None)
-            # Limpa qualquer resíduo visual da linha de prompt
-            sys.stdout.write("\r\x1b[2K")
-            sys.stdout.flush()
 
     def resume_nonblocking(self):
         """Restaura o estado não-bloqueante após input bloqueante."""

@@ -1,7 +1,7 @@
 """Testes de não-regressão de UI.
 
 Cobre três eixos críticos:
-1. Prompt redraw — limpeza e redesenho do prompt do usuário.
+1. Prompt redraw — redesenho do prompt do usuário.
 2. Long messages — textos/inputs longos não travam nem corrompem saída.
 3. Stream/summary sequence — ordenação e isolamento entre agentes e fluxo stream→resumo.
 """
@@ -42,6 +42,7 @@ class TestPromptRedraw:
         app.input_gate = MagicMock()
         app.input_gate.get_line_buffer.return_value = ""
         app.input_gate.is_active.return_value = False
+        app.input_gate.has_session.return_value = False
         return app
 
     def test_no_redraw_when_status_is_idle(self):
@@ -80,8 +81,8 @@ class TestPromptRedraw:
             app.input_gate.get_line_buffer.return_value = long_buffer
             app._redisplay_user_prompt_if_needed()  # não deve lançar
 
-    def test_clear_first_false_skips_clear_but_writes_line(self):
-        """clear_first=False → não emite \\r\\x1b[2K mas ainda escreve o prompt."""
+    def test_clear_first_false_uses_prompt_toolkit_redisplay_only(self):
+        """clear_first=False mantém redraw apenas via redisplay, sem escrita manual."""
         app = self._make_app(status="reading")
         stdin = io.StringIO("")
         stdin.isatty = lambda: True
@@ -92,24 +93,25 @@ class TestPromptRedraw:
             app._redisplay_user_prompt_if_needed(clear_first=False)
         written = [c.args[0] for c in mock_write.call_args_list]
         assert "\r\x1b[2K" not in written
-        assert any("Você: oi" in w for w in written)
+        assert not any("Você: oi" in w for w in written)
+        app.input_gate.redisplay.assert_called_once()
 
-    def test_clear_prompt_not_emitted_when_status_idle(self):
-        """_clear_user_prompt_line_if_needed não emite escape quando status é idle."""
-        app = self._make_app(status="idle")
-        stdin = io.StringIO("")
-        stdin.isatty = lambda: True
-        with patch("sys.stdin", stdin), \
-             patch("sys.stdout.write") as mock_write, \
-             patch("sys.stdout.flush"):
-            app._clear_user_prompt_line_if_needed()
-        assert call("\r\x1b[2K") not in mock_write.call_args_list
-
-    def test_prompt_toolkit_active_redisplay_keeps_manual_prompt_rewrite(self):
-        """Com prompt_toolkit ativo, o fluxo atual mantém escrita manual + redisplay."""
+    def test_prompt_toolkit_session_redisplay_skips_manual_prompt_rewrite(self):
+        """Com sessão prompt_toolkit, o redraw deve ser só via redisplay."""
         app = self._make_app(status="reading")
-        app.input_gate.is_active.return_value = True
-        app.input_gate.get_line_buffer.return_value = "oi"
+        class _PromptToolkitGate:
+            def __init__(self):
+                self.redisplay = MagicMock()
+
+            @staticmethod
+            def has_session() -> bool:
+                return True
+
+            @staticmethod
+            def get_line_buffer() -> str:
+                return "oi"
+
+        app.input_gate = _PromptToolkitGate()
         stdin = io.StringIO("")
         stdin.isatty = lambda: True
         with patch("sys.stdin", stdin), \
@@ -117,7 +119,8 @@ class TestPromptRedraw:
              patch("sys.stdout.flush"):
             app._redisplay_user_prompt_if_needed()
         written = [c.args[0] for c in mock_write.call_args_list]
-        assert any("Você: oi" in w for w in written)
+        assert not any("Você: oi" in w for w in written)
+        assert "\r\x1b[2K" not in written
         app.input_gate.redisplay.assert_called_once()
 
 

@@ -866,7 +866,6 @@ class TestPrintResponse:
     def test_print_response_with_text_shows_message(self, dispatch_app):
         ds = AppDispatchServices.from_app(dispatch_app)
         dispatch_app._redisplay_user_prompt_if_needed = MagicMock()
-        dispatch_app._clear_user_prompt_line_if_needed = MagicMock()
         ds.print_response("agent1", "hello")
         dispatch_app.renderer.show_message.assert_called_once_with("agent1", "hello")
         dispatch_app.renderer.show_no_response.assert_not_called()
@@ -875,7 +874,6 @@ class TestPrintResponse:
     def test_print_response_without_text_shows_no_response(self, dispatch_app):
         ds = AppDispatchServices.from_app(dispatch_app)
         dispatch_app._redisplay_user_prompt_if_needed = MagicMock()
-        dispatch_app._clear_user_prompt_line_if_needed = MagicMock()
         ds.print_response("agent1", None)
         dispatch_app.renderer.show_no_response.assert_called_once_with("agent1")
         dispatch_app.renderer.show_message.assert_not_called()

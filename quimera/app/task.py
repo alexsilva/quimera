@@ -51,7 +51,6 @@ class _BackgroundDispatchAppProxy:
         get_session_metrics: Callable[[], Any],
         get_round_index: Callable[[], int],
         get_debug_prompt_metrics: Callable[[], bool],
-        get_clear_prompt_line: Callable[[], Callable[[], None] | None],
         get_redisplay_prompt: Callable[[], Callable[[], None] | None],
         get_output_lock: Callable[[], Any],
         get_counter_lock: Callable[[], Any],
@@ -65,7 +64,6 @@ class _BackgroundDispatchAppProxy:
         self._get_session_metrics = get_session_metrics
         self._get_round_index = get_round_index
         self._get_debug_prompt_metrics = get_debug_prompt_metrics
-        self._get_clear_prompt_line = get_clear_prompt_line
         self._get_redisplay_prompt = get_redisplay_prompt
         self._get_output_lock = get_output_lock
         self._get_counter_lock = get_counter_lock
@@ -109,11 +107,6 @@ class _BackgroundDispatchAppProxy:
     @property
     def debug_prompt_metrics(self):
         return self._get_debug_prompt_metrics()
-
-    def _clear_user_prompt_line_if_needed(self):
-        callback = self._get_clear_prompt_line()
-        if callable(callback):
-            callback()
 
     def _redisplay_user_prompt_if_needed(self, **kw):
         callback = self._get_redisplay_prompt()
@@ -209,7 +202,6 @@ class AppTaskServices:
         get_record_failure: Callable[[], Callable[[str], None] | None] = None,
         get_session_metrics: Callable[[], Any] = None,
         get_debug_prompt_metrics: Callable[[], bool] = None,
-        get_clear_prompt_line: Callable[[], Callable[[], None] | None] = None,
         get_redisplay_prompt: Callable[[], Callable[[], None] | None] = None,
         get_output_lock: Callable[[], Any] = None,
         get_counter_lock: Callable[[], Any] = None,
@@ -260,7 +252,6 @@ class AppTaskServices:
         - ``get_session_metrics``: retorna o coletor atual de métricas de sessão.
         - ``get_round_index``: retorna o round index atual.
         - ``get_debug_prompt_metrics``: informa se métricas de prompt estão ativas.
-        - ``get_clear_prompt_line``: retorna o callback atual para limpar o prompt.
         - ``get_redisplay_prompt``: retorna o callback atual para redesenhar o prompt.
         - ``get_output_lock``: retorna o lock atual de output.
         - ``get_counter_lock``: retorna o lock atual de contadores.
@@ -312,7 +303,6 @@ class AppTaskServices:
         self._get_record_failure = get_record_failure
         self._get_session_metrics = get_session_metrics
         self._get_debug_prompt_metrics = get_debug_prompt_metrics
-        self._get_clear_prompt_line = get_clear_prompt_line
         self._get_redisplay_prompt = get_redisplay_prompt
         self._get_output_lock = get_output_lock
         self._get_counter_lock = get_counter_lock
@@ -670,7 +660,6 @@ class AppTaskServices:
             get_session_metrics=self._get_session_metrics,
             get_round_index=self._get_round_index,
             get_debug_prompt_metrics=self._get_debug_prompt_metrics,
-            get_clear_prompt_line=self._get_clear_prompt_line,
             get_redisplay_prompt=self._get_redisplay_prompt,
             get_output_lock=self._get_output_lock,
             get_counter_lock=self._get_counter_lock,

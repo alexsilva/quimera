@@ -34,7 +34,6 @@ class AppDispatchServices:
         get_execution_mode=None,
         refresh_task_state=None,
         debug_prompt_metrics=False,
-        clear_prompt_line=None,
         redisplay_prompt=None,
         output_lock=None,
         counter_lock=None,
@@ -79,7 +78,6 @@ class AppDispatchServices:
         self._get_execution_mode = get_execution_mode
         self._refresh_task_state = refresh_task_state
         self._debug_prompt_metrics = debug_prompt_metrics
-        self._clear_prompt_line = clear_prompt_line
         self._redisplay_prompt = redisplay_prompt
         self._output_lock = output_lock
         self._counter_lock = counter_lock
@@ -118,7 +116,6 @@ class AppDispatchServices:
             )(),
             get_round_index=lambda: getattr(app, 'round_index', 0),
             debug_prompt_metrics=lambda: getattr(app, 'debug_prompt_metrics', False),
-            clear_prompt_line=lambda: getattr(app, '_clear_user_prompt_line_if_needed', lambda: None)(),
             redisplay_prompt=lambda **kw: getattr(app, '_redisplay_user_prompt_if_needed', lambda **kw_: None)(**kw),
             output_lock=lambda: getattr(app, '_output_lock', None),
             counter_lock=lambda: getattr(app, '_counter_lock', None),
@@ -216,7 +213,6 @@ class AppDispatchServices:
         plugin_resolver = self._get_agent_plugin
         refresh_task_state = self._refresh_task_state
         debug_prompt_metrics = self._call(self._debug_prompt_metrics)
-        clear_prompt_line = self._clear_prompt_line
         redisplay_prompt = self._redisplay_prompt
         output_lock = self._call(self._output_lock)
         counter_lock = self._call(self._counter_lock)
@@ -251,7 +247,6 @@ class AppDispatchServices:
             increment_call_index=self._increment_call_index,
             get_round_index=self._round_index,
             debug_prompt_metrics=debug_prompt_metrics,
-            clear_prompt_line=clear_prompt_line,
             redisplay_prompt=redisplay_prompt,
             update_session=_update_session,
             output_lock=output_lock,
@@ -496,12 +491,9 @@ class AppDispatchServices:
             return
         # fallback — comportamento original
         output_lock = self._call(self._output_lock)
-        clear_prompt_line = self._clear_prompt_line
         redisplay_prompt = self._redisplay_prompt
         renderer = self._call(self._renderer)
         with (output_lock if output_lock is not None else nullcontext()):
-            if clear_prompt_line is not None:
-                clear_prompt_line()
             if response is not None:
                 show_message = getattr(renderer, "show_message", None) if renderer else None
                 if callable(show_message):

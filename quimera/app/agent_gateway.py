@@ -44,7 +44,6 @@ class AgentGateway:
         increment_call_index,
         get_round_index,
         debug_prompt_metrics=False,
-        clear_prompt_line=None,
         redisplay_prompt=None,
         update_session=None,
         output_lock=None,
@@ -63,7 +62,6 @@ class AgentGateway:
         self._increment_call_index = increment_call_index
         self._get_round_index = get_round_index
         self._debug_prompt_metrics = debug_prompt_metrics
-        self._clear_prompt_line = clear_prompt_line or (lambda: None)
         self._redisplay_prompt = redisplay_prompt or (lambda **kw: None)
         self._update_session = update_session or (lambda *a: None)
         self._output_lock = output_lock
@@ -167,7 +165,6 @@ class AgentGateway:
             else:
                 renderer = self._renderer
                 with (output_lock if output_lock is not None else nullcontext()):
-                    self._clear_prompt_line()
                     flush = getattr(renderer, "flush", None)
                     if callable(flush):
                         flush()

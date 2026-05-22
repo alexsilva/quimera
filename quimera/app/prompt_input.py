@@ -313,6 +313,10 @@ class InputGate:
         if callable(invalidate):
             invalidate()
 
+    def has_session(self) -> bool:
+        """Indica se o input é gerenciado por uma sessão prompt_toolkit."""
+        return self._session is not None
+
     def is_active(self) -> bool:
         """Returns True if the prompt_toolkit session is currently waiting for input."""
         if self._session is None or not _PT_AVAILABLE:

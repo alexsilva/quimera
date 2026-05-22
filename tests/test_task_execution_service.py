@@ -75,8 +75,6 @@ def build_task_services(app):
         app.round_index = 0
     if not hasattr(app, "debug_prompt_metrics"):
         app.debug_prompt_metrics = False
-    if not hasattr(app, "_clear_user_prompt_line_if_needed"):
-        app._clear_user_prompt_line_if_needed = None
     if not hasattr(app, "_redisplay_user_prompt_if_needed"):
         app._redisplay_user_prompt_if_needed = None
     if not hasattr(app, "_output_lock"):
@@ -134,7 +132,6 @@ def build_task_services(app):
         get_session_metrics=lambda: app.session_metrics,
         get_round_index=lambda: app.round_index,
         get_debug_prompt_metrics=lambda: app.debug_prompt_metrics,
-        get_clear_prompt_line=lambda: app._clear_user_prompt_line_if_needed,
         get_redisplay_prompt=lambda: app._redisplay_user_prompt_if_needed,
         get_output_lock=lambda: app._output_lock,
         get_counter_lock=lambda: app._counter_lock,

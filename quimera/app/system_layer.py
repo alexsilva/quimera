@@ -117,7 +117,6 @@ class AppSystemLayer:
         set_selected_agents=None,
         clear_screen=None,
         input_status_getter=None,
-        clear_prompt_line=None,
         redisplay_prompt=None,
         output_lock=None,
         prompt_owner_thread_id_getter=None,
@@ -165,9 +164,6 @@ class AppSystemLayer:
                 input_status_getter = input_status_getter or (
                     lambda: getattr(app, "_nonblocking_input_status", "idle")
                 )
-                clear_prompt_line = clear_prompt_line or getattr(
-                    app, "_clear_user_prompt_line_if_needed", None
-                )
                 redisplay_prompt = redisplay_prompt or getattr(
                     app, "_redisplay_user_prompt_if_needed", None
                 )
@@ -199,7 +195,6 @@ class AppSystemLayer:
             self._display = DisplayService(
                 renderer=renderer,
                 input_status_getter=input_status_getter,
-                clear_prompt_line=clear_prompt_line,
                 redisplay_prompt=redisplay_prompt,
                 output_lock=output_lock,
                 prompt_owner_thread_id_getter=prompt_owner_thread_id_getter,

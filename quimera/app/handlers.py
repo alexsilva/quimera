@@ -9,7 +9,6 @@ from typing import Callable
 class AppCallbacks:
     """Callbacks e estado necessário para o handler."""
     output_lock: "logging._LockType | None"
-    clear_prompt: "Callable[[], None]"
     redisplay_prompt: "Callable[[bool], None]"
     show_error: "Callable[[str], None]"
     show_warning: "Callable[[str], None]"
@@ -43,7 +42,6 @@ class PromptAwareStderrHandler(logging.StreamHandler):
 
         self.bind_callbacks(
             output_lock=getattr(app, "_output_lock", None),
-            clear_prompt=getattr(app, "_clear_user_prompt_line_if_needed", _noop),
             redisplay_prompt=getattr(app, "_redisplay_user_prompt_if_needed", _noop),
             show_error=getattr(app, "show_error_message", _noop),
             show_warning=getattr(app, "show_warning_message", _noop),
@@ -55,7 +53,6 @@ class PromptAwareStderrHandler(logging.StreamHandler):
             self,
             *,
             output_lock: "logging._LockType | None",
-            clear_prompt: "Callable[[], None]",
             redisplay_prompt: "Callable[[bool], None]",
             show_error: "Callable[[str], None]",
             show_warning: "Callable[[str], None]",
@@ -65,7 +62,6 @@ class PromptAwareStderrHandler(logging.StreamHandler):
         """Executa bind de callbacks."""
         self._callbacks = AppCallbacks(
             output_lock=output_lock,
-            clear_prompt=clear_prompt,
             redisplay_prompt=redisplay_prompt,
             show_error=show_error,
             show_warning=show_warning,
@@ -110,7 +106,6 @@ class PromptAwareStderrHandler(logging.StreamHandler):
             self.stream = sys.stdout
 
         with callbacks.output_lock:
-            callbacks.clear_prompt()
             super().emit(record)
             self.flush()
             callbacks.redisplay_prompt(clear_first=False)

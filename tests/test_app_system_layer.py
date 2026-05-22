@@ -73,7 +73,6 @@ def make_app(renderer=None):
         _approval_handler=None,
     )
 
-    app._clear_user_prompt_line_if_needed = Mock()
     app._redisplay_user_prompt_if_needed = Mock()
     app.get_agent_plugin = Mock(return_value=None)
     app.get_available_plugins = Mock(return_value=[])
@@ -149,7 +148,6 @@ def test_show_system_message_standard_path_flushes_and_redraws():
 
     assert app.renderer.system_messages == ["mensagem"]
     assert app.renderer.flush_calls == 1
-    app._clear_user_prompt_line_if_needed.assert_called_once()
     app._redisplay_user_prompt_if_needed.assert_called_once_with(clear_first=False)
 
 
@@ -173,7 +171,6 @@ def test_show_system_message_prefers_quick_flush_on_prompt_owner_thread():
 
     assert renderer.system_messages == ["mensagem"]
     assert renderer.flush_quick_calls == 1
-    app._clear_user_prompt_line_if_needed.assert_called_once()
     app._redisplay_user_prompt_if_needed.assert_called_once_with(clear_first=False)
 
 

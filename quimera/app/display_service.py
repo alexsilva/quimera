@@ -36,7 +36,6 @@ class DisplayService:
         self,
         renderer=None,
         input_status_getter=None,
-        clear_prompt_line=None,
         redisplay_prompt=None,
         output_lock=None,
         prompt_owner_thread_id_getter=None,
@@ -46,7 +45,6 @@ class DisplayService:
     ):
         self.renderer = renderer
         self.input_status_getter = input_status_getter or (lambda: "idle")
-        self.clear_prompt_line = clear_prompt_line or (lambda: None)
         self.redisplay_prompt = redisplay_prompt or (lambda clear_first=True: None)
         self.output_lock = output_lock or nullcontext()
         self.prompt_owner_thread_id_getter = prompt_owner_thread_id_getter or (lambda: None)
@@ -277,8 +275,6 @@ class DisplayService:
         with self._get_output_lock():
             current_thread_id = self.prompt_owner_thread_id_getter()
             is_owning = current_thread_id is None or current_thread_id == threading.get_ident()
-            if is_owning:
-                self.clear_prompt_line()
             renderer.show_system(message)
             self._flush_renderer(renderer, prefer_quick=is_owning)
             if is_owning:
@@ -297,8 +293,6 @@ class DisplayService:
         with self._get_output_lock():
             current_thread_id = self.prompt_owner_thread_id_getter()
             is_owning = current_thread_id is not None and current_thread_id == threading.get_ident()
-            if is_owning:
-                self.clear_prompt_line()
             show_system_neutral = getattr(renderer, "show_system_neutral", None)
             if callable(show_system_neutral):
                 show_system_neutral(message)
@@ -321,8 +315,6 @@ class DisplayService:
         with self._get_output_lock():
             current_thread_id = self.prompt_owner_thread_id_getter()
             is_owning = current_thread_id is not None and current_thread_id == threading.get_ident()
-            if is_owning:
-                self.clear_prompt_line()
             show_warning = getattr(renderer, "show_warning", None)
             if callable(show_warning):
                 show_warning(message)
@@ -345,8 +337,6 @@ class DisplayService:
         with self._get_output_lock():
             current_thread_id = self.prompt_owner_thread_id_getter()
             is_owning = current_thread_id is not None and current_thread_id == threading.get_ident()
-            if is_owning:
-                self.clear_prompt_line()
             show_error = getattr(renderer, "show_error", None)
             if callable(show_error):
                 show_error(message)
