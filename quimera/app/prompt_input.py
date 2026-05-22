@@ -174,10 +174,10 @@ class InputGate:
             # Primary: who responds + model
             if responder:
                 parts.append(
-                    f"<b><style fg='#8fd3ff'> {html.escape(responder)}</style></b>"
+                    f"<b><style fg='#8fd3ff'> {html.escape(responder)} </style></b>"
                 )
             if model:
-                parts.append(f"<style fg='#b7bcc5'> {html.escape(_clip(model, 48))}</style>")
+                parts.append(f"<style fg='#b7bcc5'> {html.escape(_clip(model, 48))} </style>")
             # Activity: agents running + parallel slots
             if active_agents:
                 parts.append(f"<style fg='#79d279'> ⚡ {html.escape(_clip(active_agents, 48))} </style>")
