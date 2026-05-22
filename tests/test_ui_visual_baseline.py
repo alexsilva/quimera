@@ -20,7 +20,7 @@ def _render_baseline_sample(*, theme: str, density: str, width: int) -> str:
         "Sessão ativa: /home/alex/PycharmProjects/quimera/data/logs/2026-04-30/"
         "sessao-2026-04-30-222821.jsonl"
     )
-    renderer.show_plain("Alex: validar baseline visual oficial")
+    renderer.show_plain("Você: validar baseline visual oficial")
     renderer.show_message(
         "codex",
         "Implementação concluída.\nAjustes de wrapping e alinhamento preservados.",

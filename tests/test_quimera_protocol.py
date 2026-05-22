@@ -3607,6 +3607,7 @@ class PluginTests(unittest.TestCase):
         app.renderer = Mock()
         app.input_gate = Mock()
         app.input_gate.get_line_buffer.return_value = "oi"
+        app.input_gate.is_active.return_value = False
 
         stdin = io.StringIO("")
         stdin.isatty = lambda: True

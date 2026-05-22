@@ -34,13 +34,14 @@ def renderer():
 class TestPromptRedraw:
     """Garante que o redraw do prompt ocorre apenas quando adequado."""
 
-    def _make_app(self, status="reading", prompt="Alex: "):
+    def _make_app(self, status="reading", prompt="Você: "):
         from quimera.app.core import QuimeraApp
         app = QuimeraApp.__new__(QuimeraApp)
         app._nonblocking_input_status = status
         app._nonblocking_prompt_text = prompt
         app.input_gate = MagicMock()
         app.input_gate.get_line_buffer.return_value = ""
+        app.input_gate.is_active.return_value = False
         return app
 
     def test_no_redraw_when_status_is_idle(self):
@@ -91,7 +92,7 @@ class TestPromptRedraw:
             app._redisplay_user_prompt_if_needed(clear_first=False)
         written = [c.args[0] for c in mock_write.call_args_list]
         assert "\r\x1b[2K" not in written
-        assert any("Alex: oi" in w for w in written)
+        assert any("Você: oi" in w for w in written)
 
     def test_clear_prompt_not_emitted_when_status_idle(self):
         """_clear_user_prompt_line_if_needed não emite escape quando status é idle."""
@@ -103,6 +104,21 @@ class TestPromptRedraw:
              patch("sys.stdout.flush"):
             app._clear_user_prompt_line_if_needed()
         assert call("\r\x1b[2K") not in mock_write.call_args_list
+
+    def test_prompt_toolkit_active_redisplay_avoids_manual_prompt_rewrite(self):
+        """Com prompt_toolkit ativo, redraw usa redisplay sem reescrever 'Você: ...' manualmente."""
+        app = self._make_app(status="reading")
+        app.input_gate.is_active.return_value = True
+        app.input_gate.get_line_buffer.return_value = "oi"
+        stdin = io.StringIO("")
+        stdin.isatty = lambda: True
+        with patch("sys.stdin", stdin), \
+             patch("sys.stdout.write") as mock_write, \
+             patch("sys.stdout.flush"):
+            app._redisplay_user_prompt_if_needed()
+        written = [c.args[0] for c in mock_write.call_args_list]
+        assert not any("Você: oi" in w for w in written)
+        app.input_gate.redisplay.assert_called_once()
 
 
 # ===========================================================================
