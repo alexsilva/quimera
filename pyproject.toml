@@ -8,12 +8,12 @@ version = "0.1.0"
 requires-python = ">=3.10"
 dependencies = [
     "rich>=14.0",
+    "prompt-toolkit>=3.0",
 ]
 
 [project.optional-dependencies]
 ollama = ["openai>=1.0"]
 api = ["openai>=1.0"]
-interactive = ["prompt-toolkit>=3.0"]
 
 [project.scripts]
 quimera = "quimera.cli:main"
