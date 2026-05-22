@@ -164,6 +164,18 @@ class TestProcessMainFlow(unittest.TestCase):
         self.assertEqual(app._pending_input_for, "claude")
         app.session_services.maybe_auto_summarize.assert_not_called()
 
+    def test_needs_human_input_threaded_mode_keeps_default_routing(self):
+        """Com threads>1, NEEDS_INPUT não deve forçar 'Responda para ...'."""
+        app = _make_app(threads=2)
+        app.dispatch_services.call_agent = Mock(return_value="Qual sua escolha?")
+        app.parse_response = Mock(return_value=("Qual sua escolha?", None, None, False, True, None))
+
+        app.chat_round_orchestrator.process("hello")
+
+        self.assertIsNone(app._pending_input_for)
+        app.renderer.show_system.assert_not_called()
+        app.session_services.maybe_auto_summarize.assert_not_called()
+
     def test_fallback_skips_none_response(self):
         """Fallback deve continuar ao próximo candidato quando também retorna None."""
         app = _make_app(active_agents=["claude", "codex", "deepseek"])
@@ -601,6 +613,20 @@ class TestProcessHandoff(unittest.TestCase):
 
         self.assertEqual(app._pending_input_for, "codex")
         app.renderer.show_system.assert_called_with("Responda para CODEX:")
+        self.assertEqual(app.dispatch_services.call_agent.call_count, 1)
+
+    def test_handoff_needs_input_threaded_mode_keeps_default_routing(self):
+        """Com threads>1, NEEDS_INPUT em handoff não deve fixar agente de resposta."""
+        app = _make_app(threads=2)
+        handoff = _make_handoff("task x")
+        app.dispatch_services.call_agent = Mock(return_value="Preciso de dado")
+        app.parse_response = Mock(return_value=("Preciso de dado", None, None, False, True, None))
+        orchestrator = _make_orchestrator(app)
+
+        orchestrator._process_handoff("claude", "codex", handoff)
+
+        self.assertIsNone(app._pending_input_for)
+        app.renderer.show_system.assert_not_called()
         self.assertEqual(app.dispatch_services.call_agent.call_count, 1)
 
     def test_handoff_synthesis_needs_input_sets_pending_for_origin(self):

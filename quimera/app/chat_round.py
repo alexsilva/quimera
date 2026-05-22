@@ -146,6 +146,13 @@ class ChatRoundOrchestrator:
         elif self._set_pending_input_for_fn is not None:
             self._set_pending_input_for_fn(value)
 
+    def _handle_needs_human_input(self, agent: str) -> None:
+        """Em paralelo, não força binding de resposta para um único agente."""
+        if self._threads > 1:
+            return
+        self._set_pending_input_for(agent)
+        self._show_system(f"Responda para {agent.upper()}:")
+
     def _snapshot_history(self) -> list:
         history = None
         if self._session_state is not None:
@@ -439,8 +446,7 @@ class ChatRoundOrchestrator:
         if needs_human_input:
             if response:
                 self._show_agent_message(first_agent, response)
-            self._set_pending_input_for(first_agent)
-            self._show_system(f"Responda para {first_agent.upper()}:")
+            self._handle_needs_human_input(first_agent)
             return
         self._dispatch_services.print_response(first_agent, response)
         if response is not None:
@@ -596,8 +602,7 @@ class ChatRoundOrchestrator:
                 self._session_services.persist_message(current_target, secondary_response)
                 collected_responses.append((current_target, secondary_response))
             if needs_human_input:
-                self._set_pending_input_for(current_target)
-                self._show_system(f"Responda para {current_target.upper()}:")
+                self._handle_needs_human_input(current_target)
                 return
 
             if not secondary_response and not (next_target and next_handoff):
@@ -645,8 +650,7 @@ class ChatRoundOrchestrator:
                         self._session_services.persist_message(fallback_agent, fallback_response)
                         collected_responses.append((fallback_agent, fallback_response))
                     if fallback_needs_human_input:
-                        self._set_pending_input_for(fallback_agent)
-                        self._show_system(f"Responda para {fallback_agent.upper()}:")
+                        self._handle_needs_human_input(fallback_agent)
                         return
                     if fallback_response or (fallback_next_target and fallback_next_handoff):
                         fallback_target = fallback_agent
@@ -746,8 +750,7 @@ class ChatRoundOrchestrator:
             if final_response is not None:
                 self._session_services.persist_message(first_agent, final_response)
             if needs_human_input:
-                self._set_pending_input_for(first_agent)
-                self._show_system(f"Responda para {first_agent.upper()}:")
+                self._handle_needs_human_input(first_agent)
                 return
         else:
             logger.warning(
@@ -812,8 +815,7 @@ class ChatRoundOrchestrator:
                 if response is not None:
                     self._session_services.persist_message(agent, response)
                 if needs_human_input:
-                    self._set_pending_input_for(agent)
-                    self._show_system(f"Responda para {agent.upper()}:")
+                    self._handle_needs_human_input(agent)
                     break
                 if route_target == agent:
                     logger.warning(
