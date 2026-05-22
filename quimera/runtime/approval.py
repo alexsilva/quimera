@@ -134,6 +134,8 @@ class ConsoleApprovalHandler(ApprovalHandler):
         self._interactive_lock.acquire(blocking=True)
 
         try:
+            if self._cancel_event and self._cancel_event.is_set():
+                return False
             self._show(f"\n[aprovação] {tool_name} :: {summary}")
             if self._input_gate is not None:
                 if self._cancel_event and self._cancel_event.is_set():

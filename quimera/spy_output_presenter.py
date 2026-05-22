@@ -474,6 +474,12 @@ class SpyOutputPresenter:
             self._show(agent, event)
             return
 
+        # Eventos "raw" são stdout bruto sem formatter estruturado (ex: Claude CLI).
+        # Em SUMMARY, o conteúdo já será exibido pelo card final via show_message().
+        # Exibir inline aqui causaria double rendering (inline + card).
+        if event.kind == "raw":
+            return
+
         if event.kind != "response":
             self.flush(agent)
             self._show(agent, event)
