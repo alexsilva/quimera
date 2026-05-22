@@ -105,8 +105,8 @@ class TestPromptRedraw:
             app._clear_user_prompt_line_if_needed()
         assert call("\r\x1b[2K") not in mock_write.call_args_list
 
-    def test_prompt_toolkit_active_redisplay_avoids_manual_prompt_rewrite(self):
-        """Com prompt_toolkit ativo, redraw usa redisplay sem reescrever 'Você: ...' manualmente."""
+    def test_prompt_toolkit_active_redisplay_keeps_manual_prompt_rewrite(self):
+        """Com prompt_toolkit ativo, o fluxo atual mantém escrita manual + redisplay."""
         app = self._make_app(status="reading")
         app.input_gate.is_active.return_value = True
         app.input_gate.get_line_buffer.return_value = "oi"
@@ -117,7 +117,7 @@ class TestPromptRedraw:
              patch("sys.stdout.flush"):
             app._redisplay_user_prompt_if_needed()
         written = [c.args[0] for c in mock_write.call_args_list]
-        assert not any("Você: oi" in w for w in written)
+        assert any("Você: oi" in w for w in written)
         app.input_gate.redisplay.assert_called_once()
 
 

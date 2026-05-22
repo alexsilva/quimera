@@ -77,8 +77,8 @@ def test_final_prompt_contract_has_sections_once_in_order_and_without_duplicatio
         '<execution_state title="Estado de execução atual">',
         '<shared_state title="Estado compartilhado">',
         '<handoff title="Mensagem direta do outro agente">',
-        '<recent_conversation title="Conversa recente">',
         '<persistent_context title="Contexto persistente do workspace">',
+        '<recent_conversation title="Conversa recente">',
         '<current_turn title="Pedido atual de ALEX">',
     ]
 
