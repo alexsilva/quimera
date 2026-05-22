@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, MINYEAR
 from pathlib import Path
 
 SHARED_STATE_TTL_HOURS = 24
+HISTORY_TTL_HOURS = 72
 
 _SESSION_TIMESTAMP_RE = re.compile(r"sessao-(\d{4}-\d{2}-\d{2}-\d{6})\.json$")
 
@@ -76,6 +77,9 @@ class SessionStorage:
     def load_last_session(self):
         """Restaura o snapshot mais recente salvo em JSON, se existir."""
         self._pending_restore_notice = None
+        now = datetime.now()
+        history_ttl = timedelta(hours=HISTORY_TTL_HOURS)
+        shared_state_ttl = timedelta(hours=SHARED_STATE_TTL_HOURS)
         json_files = sorted(
             self._logs_dir.rglob("sessao-*.json"),
             key=self._session_sort_key,
@@ -94,40 +98,41 @@ class SessionStorage:
 
             # Process this session
             if isinstance(data, list):
-                # Old format (list) - always include
-                messages = data
-                shared_state = {}
+                # Formato legado (lista pura): sem cwd, sem saved_at — descartado.
+                continue
             elif isinstance(data, dict):
-                # New format (dict) - check cwd for workspace isolation
+                # New format (dict) - check cwd for workspace isolation.
                 saved_cwd = data.get("cwd")
                 if saved_cwd is not None and saved_cwd != current_cwd:
-                    # Session from different workspace, skip
+                    # Session from different workspace, skip.
                     continue
                 messages = data.get("messages", [])
                 shared_state = data.get("shared_state", {})
+                saved_at_raw = data.get("saved_at")
+                if not saved_at_raw:
+                    # Snapshots sem saved_at não são confiáveis para restauração.
+                    continue
+                try:
+                    snapshot_time = self._normalize_sort_datetime(datetime.fromisoformat(saved_at_raw))
+                except (ValueError, TypeError):
+                    continue
             else:
                 continue
+
+            if not isinstance(shared_state, dict):
+                shared_state = {}
+
+            if now - snapshot_time > history_ttl:
+                # Ordenação é decrescente por tempo: snapshots seguintes serão ainda mais antigos.
+                break
+
+            if shared_state and now - snapshot_time > shared_state_ttl:
+                shared_state = {}
 
             if messages:
                 self._pending_restore_notice = (
                     f"[memória] histórico restaurado de {json_file.parent.name}/{json_file.name} ({len(messages)} mensagens)\n"
                 )
-            if not isinstance(shared_state, dict):
-                shared_state = {}
-
-            # Descarta shared_state se o snapshot for mais antigo que o TTL
-            # Snapshots sem saved_at são considerados expirados por segurança
-            saved_at_raw = data.get("saved_at") if isinstance(data, dict) else None
-            if shared_state and not saved_at_raw:
-                shared_state = {}
-            elif shared_state and saved_at_raw:
-                try:
-                    saved_at = datetime.fromisoformat(saved_at_raw)
-                    saved_at = self._normalize_sort_datetime(saved_at)
-                    if datetime.now() - saved_at > timedelta(hours=SHARED_STATE_TTL_HOURS):
-                        shared_state = {}
-                except (ValueError, TypeError):
-                    shared_state = {}
 
             return {"messages": messages, "shared_state": shared_state}
 

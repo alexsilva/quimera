@@ -15,13 +15,16 @@ class SessionStorageTests(unittest.TestCase):
     def test_load_last_session_defers_restore_notice_until_consumed(self):
         with tempfile.TemporaryDirectory() as tmp:
             logs_dir = Path(tmp)
-            day_dir = logs_dir / "2026-04-17"
+            now = datetime.now()
+            date_str = now.strftime("%Y-%m-%d")
+            day_dir = logs_dir / date_str
             day_dir.mkdir()
-            snapshot = day_dir / "sessao-2026-04-17-090000.json"
+            snapshot = day_dir / f"sessao-{now.strftime('%Y-%m-%d-%H%M%S')}.json"
             snapshot.write_text(
                 json.dumps(
                     {
-                        "session_id": "sessao-2026-04-17-090000",
+                        "session_id": snapshot.stem,
+                        "saved_at": (now - timedelta(minutes=10)).isoformat(timespec="seconds"),
                         "messages": [{"role": "human", "content": "oi"}],
                         "shared_state": {},
                     }
@@ -38,16 +41,18 @@ class SessionStorageTests(unittest.TestCase):
             self.assertIn("[memória] histórico restaurado de", notice)
             self.assertIsNone(storage.pop_restore_notice())
 
-    def test_load_last_session_discards_shared_state_for_legacy_snapshot_without_saved_at(self):
+    def test_load_last_session_discards_dict_snapshot_without_saved_at(self):
         with tempfile.TemporaryDirectory() as tmp:
             logs_dir = Path(tmp)
-            day_dir = logs_dir / "2026-04-17"
+            now = datetime.now()
+            date_str = now.strftime("%Y-%m-%d")
+            day_dir = logs_dir / date_str
             day_dir.mkdir()
-            snapshot = day_dir / "sessao-2026-04-17-101010.json"
+            snapshot = day_dir / f"sessao-{now.strftime('%Y-%m-%d-%H%M%S')}.json"
             snapshot.write_text(
                 json.dumps(
                     {
-                        "session_id": "sessao-2026-04-17-101010",
+                        "session_id": snapshot.stem,
                         "messages": [{"role": "human", "content": "oi"}],
                         "shared_state": {"next_step": "stale"},
                     }
@@ -59,19 +64,21 @@ class SessionStorageTests(unittest.TestCase):
 
             restored = storage.load_last_session()
 
-            self.assertEqual(restored["messages"], [{"role": "human", "content": "oi"}])
+            self.assertEqual(restored["messages"], [])
             self.assertEqual(restored["shared_state"], {})
 
     def test_load_last_session_discards_shared_state_when_saved_at_is_invalid(self):
         with tempfile.TemporaryDirectory() as tmp:
             logs_dir = Path(tmp)
-            day_dir = logs_dir / "2026-04-17"
+            now = datetime.now()
+            date_str = now.strftime("%Y-%m-%d")
+            day_dir = logs_dir / date_str
             day_dir.mkdir()
-            snapshot = day_dir / "sessao-2026-04-17-111111.json"
+            snapshot = day_dir / f"sessao-{now.strftime('%Y-%m-%d-%H%M%S')}.json"
             snapshot.write_text(
                 json.dumps(
                     {
-                        "session_id": "sessao-2026-04-17-111111",
+                        "session_id": snapshot.stem,
                         "saved_at": "not-a-date",
                         "messages": [{"role": "human", "content": "oi"}],
                         "shared_state": {"next_step": "stale"},
@@ -84,19 +91,22 @@ class SessionStorageTests(unittest.TestCase):
 
             restored = storage.load_last_session()
 
+            self.assertEqual(restored["messages"], [])
             self.assertEqual(restored["shared_state"], {})
 
     def test_load_last_session_keeps_recent_shared_state(self):
         with tempfile.TemporaryDirectory() as tmp:
             logs_dir = Path(tmp)
-            day_dir = logs_dir / "2026-04-17"
+            now = datetime.now()
+            date_str = now.strftime("%Y-%m-%d")
+            day_dir = logs_dir / date_str
             day_dir.mkdir()
-            snapshot = day_dir / "sessao-2026-04-17-121212.json"
+            snapshot = day_dir / f"sessao-{now.strftime('%Y-%m-%d-%H%M%S')}.json"
             snapshot.write_text(
                 json.dumps(
                     {
-                        "session_id": "sessao-2026-04-17-121212",
-                        "saved_at": (datetime.now() - timedelta(hours=1)).isoformat(timespec="seconds"),
+                        "session_id": snapshot.stem,
+                        "saved_at": (now - timedelta(hours=1)).isoformat(timespec="seconds"),
                         "messages": [{"role": "human", "content": "oi"}],
                         "shared_state": {"next_step": "continuar"},
                     }
@@ -109,6 +119,32 @@ class SessionStorageTests(unittest.TestCase):
             restored = storage.load_last_session()
 
             self.assertEqual(restored["shared_state"], {"next_step": "continuar"})
+
+    def test_load_last_session_discards_old_history_by_ttl(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            logs_dir = Path(tmp)
+            now = datetime.now()
+            date_str = now.strftime("%Y-%m-%d")
+            day_dir = logs_dir / date_str
+            day_dir.mkdir()
+            snapshot = day_dir / f"sessao-{now.strftime('%Y-%m-%d-%H%M%S')}.json"
+            snapshot.write_text(
+                json.dumps(
+                    {
+                        "session_id": snapshot.stem,
+                        "saved_at": (now - timedelta(hours=120)).isoformat(timespec="seconds"),
+                        "messages": [{"role": "human", "content": "não deveria restaurar"}],
+                        "shared_state": {"next_step": "stale"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            storage = SessionStorage(logs_dir)
+            restored = storage.load_last_session()
+
+            self.assertEqual(restored["messages"], [])
+            self.assertEqual(restored["shared_state"], {})
 
 
 if __name__ == "__main__":
