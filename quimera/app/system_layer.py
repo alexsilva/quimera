@@ -343,7 +343,7 @@ class AppSystemLayer:
             f"- session_state_chars: {metrics['session_state_chars']}",
             f"- persistent_chars: {persistent_chars}",
             f"- request_chars: {metrics['request_chars']}",
-            f"- facts_chars: {metrics['facts_chars']}",
+            f"- execution_state_chars: {metrics['execution_state_chars']}",
             f"- shared_state_chars: {metrics['shared_state_chars']}",
             f"- history_chars: {metrics['history_chars']}",
             f"- handoff_chars: {metrics['handoff_chars']}",

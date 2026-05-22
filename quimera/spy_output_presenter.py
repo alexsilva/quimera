@@ -8,7 +8,6 @@ import quimera.plugins as plugins
 from quimera.agent_events import SpyEvent
 from quimera.constants import Visibility
 from quimera.evidence import Evidence, EvidenceStore, PatternRegistry
-from quimera.agents.text_filters import _is_interrupt_echo
 
 
 class SpyOutputPresenter:
@@ -419,7 +418,8 @@ class SpyOutputPresenter:
             return formatter(line)
 
         text = line.strip()
-        if _is_interrupt_echo(text):
+        from quimera.agents.text_filters import _is_interrupt_echo as _check_interrupt
+        if _check_interrupt(text):
             return []
         if not text:
             return []
@@ -509,7 +509,8 @@ class SpyOutputPresenter:
     def _show(self, agent: str | None, event: SpyEvent) -> None:
         """Renderiza um evento já processado, evitando duplicatas consecutivas."""
         rendered = event.text
-        if _is_interrupt_echo(rendered):
+        from quimera.agents.text_filters import _is_interrupt_echo as _check_interrupt
+        if _check_interrupt(rendered):
             return
         if event.kind == "clear":
             if agent and hasattr(self.renderer, "clear_agent_transient"):

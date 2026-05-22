@@ -128,16 +128,14 @@ class PromptBuilder:
                 request_index = self.memory_selector.find_request_index(history, request)
             else:
                 request_index, request = self.memory_selector.select_request(history)
-            fact_indexes, facts = self.memory_selector.select_facts(history, current_agent=agent)
             recent_conversation = self.memory_selector.build_conversation_block(
                 history,
-                skip_indexes={idx for idx in [request_index, *fact_indexes] if idx is not None},
+                skip_indexes={idx for idx in [request_index] if idx is not None},
                 current_agent=agent,
             )
             shared_state_json, completed_task_results = self.shared_state_presenter.present(shared_state)
         else:
             request_index, request = None, ""
-            fact_indexes, facts = [], ""
             recent_conversation = ""
             shared_state_json, completed_task_results = "", ""
 
@@ -146,6 +144,7 @@ class PromptBuilder:
             feedback = self.metrics_tracker.generate_feedback(agent)
             if feedback:
                 metrics = feedback
+        execution_state = self._build_execution_state_block(shared_state)
         execution_mode_prompt = self.execution_mode_presenter.present(execution_mode)
         evidence_section = self._build_evidence_section(shared_state, session_id)
         template = get_prompt_template(normalized_prompt_kind)
@@ -169,7 +168,6 @@ class PromptBuilder:
             metrics_path=metrics_path,
             context=context,
             request=request,
-            facts=facts,
             shared_state_json=shared_state_json,
             completed_task_results=completed_task_results,
             handoff_present=handoff_fields["handoff_present"],
@@ -182,6 +180,7 @@ class PromptBuilder:
             handoff_chain=handoff_fields["handoff_chain"],
             handoff_raw=handoff_fields["handoff_raw"],
             state_update_enabled=True,
+            execution_state=execution_state,
             recent_conversation=recent_conversation,
             metrics=metrics,
             execution_mode_prompt=execution_mode_prompt,
@@ -198,7 +197,7 @@ class PromptBuilder:
                 current_dir=current_dir,
                 context=context,
                 request=request,
-                facts=facts,
+                execution_state=execution_state,
                 shared_state_json=shared_state_json,
                 completed_task_results=completed_task_results,
                 recent_conversation=recent_conversation,
@@ -210,6 +209,26 @@ class PromptBuilder:
             return full_prompt, metrics
 
         return full_prompt
+
+    def _build_execution_state_block(self, shared_state) -> str:
+        if not isinstance(shared_state, dict):
+            return ""
+        lines = []
+        for key, label in [
+            ("goal_canonical", "Objetivo"),
+            ("current_step", "Passo atual"),
+            ("acceptance_criteria", "Critérios de aceite"),
+            ("next_step", "Próximo passo"),
+            ("allowed_scope", "Escopo permitido"),
+            ("non_goals", "Não escopo"),
+        ]:
+            value = shared_state.get(key)
+            if not value:
+                continue
+            if isinstance(value, list):
+                value = "; ".join(str(v) for v in value)
+            lines.append(f"- {label}: {value}")
+        return "\n".join(lines) if lines else ""
 
     def _build_evidence_section(self, shared_state, session_id: str) -> str:
         evidence_section = self._build_evidence_context(shared_state, session_id)

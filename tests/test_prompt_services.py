@@ -50,35 +50,7 @@ class TestMemorySelector:
         assert selector.find_request_index(history, "segunda") == 2
         assert selector.find_request_index(history, "inexistente") is None
 
-    def test_select_facts_skips_human_and_current_agent(self):
-        selector = MemorySelector(history_window=10)
-        history = [
-            {"role": "human", "content": "pergunta"},
-            {"role": "claude", "content": "resposta claude"},
-            {"role": "codex", "content": "resposta codex"},
-            {"role": "human", "content": "outra pergunta"},
-        ]
-        indexes, facts = selector.select_facts(history, current_agent="claude")
-        assert "resposta codex" in facts
-        assert "resposta claude" not in facts
-        assert "pergunta" not in facts
 
-    def test_select_facts_respects_max_items(self):
-        selector = MemorySelector(history_window=10)
-        history = [
-            {"role": "agent1", "content": f"msg {i}"}
-            for i in range(10)
-        ]
-        indexes, facts = selector.select_facts(history, max_items=3, current_agent="claude")
-        count = facts.count("[AGENT1]")
-        assert count == 3
-
-    def test_select_facts_returns_empty_for_no_candidates(self):
-        selector = MemorySelector(history_window=10)
-        history = [{"role": "human", "content": "pergunta"}]
-        indexes, facts = selector.select_facts(history, current_agent="claude")
-        assert indexes == []
-        assert facts == ""
 
     def test_should_skip_fact_blocks_diff_markers(self):
         assert MemorySelector.should_skip_fact("diff --git a/app.py b/app.py")

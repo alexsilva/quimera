@@ -743,7 +743,7 @@ class ProtocolTests(unittest.TestCase):
                 "session_state_chars": 20,
                 "persistent_chars": 30,
                 "request_chars": 40,
-                "facts_chars": 50,
+                "execution_state_chars": 50,
                 "shared_state_chars": 60,
                 "history_chars": 70,
                 "handoff_chars": 0,
@@ -794,7 +794,7 @@ class ProtocolTests(unittest.TestCase):
                 "session_state_chars": 2,
                 "persistent_chars": 3,
                 "request_chars": 4,
-                "facts_chars": 5,
+                "execution_state_chars": 5,
                 "shared_state_chars": 6,
                 "history_chars": 7,
                 "handoff_chars": 0,
@@ -824,7 +824,7 @@ class ProtocolTests(unittest.TestCase):
             "session_state_chars": 1,
             "persistent_chars": 1,
             "request_chars": 1,
-            "facts_chars": 1,
+            "execution_state_chars": 1,
             "shared_state_chars": 1,
             "history_chars": 1,
             "handoff_chars": 0,
@@ -857,7 +857,7 @@ class ProtocolTests(unittest.TestCase):
             "session_state_chars": 1,
             "persistent_chars": 1,
             "request_chars": 1,
-            "facts_chars": 1,
+            "execution_state_chars": 1,
             "shared_state_chars": 1,
             "history_chars": 1,
             "handoff_chars": 0,
@@ -890,7 +890,7 @@ class ProtocolTests(unittest.TestCase):
             "session_state_chars": 1,
             "persistent_chars": 1,
             "request_chars": 1,
-            "facts_chars": 1,
+            "execution_state_chars": 1,
             "shared_state_chars": 1,
             "history_chars": 1,
             "handoff_chars": 0,
@@ -1326,7 +1326,10 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn("[>>>]: Primeiro pedido", conversation)
         self.assertIn("</recent_conversation>", conversation)
 
-    def test_prompt_includes_recent_facts_block(self):
+    def test_prompt_keeps_recent_agent_messages_in_conversation(self):
+        # Após o fix de deduplicação, mensagens de outros agentes já aparecem em
+        # recent_conversation (ordem canônica). O bloco recent_agent_messages não
+        # deve renderizar para não duplicar o conteúdo.
         builder = PromptBuilder(DummyContextManager(), history_window=5)
         history = [
             {"role": "human", "content": "Investigue"},
@@ -1336,12 +1339,13 @@ class ProtocolTests(unittest.TestCase):
 
         prompt = builder.build(AGENT_CLAUDE, history)
 
-        self.assertIn('<recent_agent_messages title="Mensagens recentes de outros agentes (referência auxiliar — não canônico sem evidência)">', prompt)
-        self.assertIn("</recent_agent_messages>", prompt)
-        self.assertIn("[CODEX] Teste falhou em test_x", prompt)
-        self.assertNotIn("[CLAUDE] Arquivo alterado: app.py", prompt)
+        # Mensagem de outro agente deve estar na conversa recente canônica
+        self.assertIn("[CODEX]: Teste falhou em test_x", prompt)
+        self.assertIn("<recent_conversation", prompt)
+        # Bloco redundante não deve aparecer (mensagem já está em recent_conversation)
+        self.assertNotIn("<recent_agent_messages", prompt)
 
-    def test_prompt_skips_meta_lock_messages_from_facts_block(self):
+    def test_prompt_skips_meta_lock_messages_from_recent_conversation(self):
         builder = PromptBuilder(DummyContextManager(), history_window=5)
         history = [
             {"role": "human", "content": "Mude o foco"},
@@ -1352,7 +1356,7 @@ class ProtocolTests(unittest.TestCase):
         prompt = builder.build(AGENT_CLAUDE, history)
 
         self.assertNotIn('<recent_agent_messages title=', prompt)
-        self.assertNotIn("[CLAUDE] Arquivo alterado: app.py", prompt)
+        self.assertNotIn("[CLAUDE]: Arquivo alterado: app.py", prompt)
         self.assertNotIn("goal_canonical continua ativo", prompt)
         self.assertNotIn("não redefina o objetivo", prompt)
         conversation = prompt.split('<recent_conversation title="Conversa recente">\n', 1)[1]
@@ -1386,7 +1390,7 @@ class ProtocolTests(unittest.TestCase):
         conversation = prompt.split('<recent_conversation title="Conversa recente">\n', 1)[1]
         self.assertIn("[CLAUDE]: Eu já tinha isolado a causa no parser.", conversation)
 
-    def test_prompt_does_not_repeat_recent_facts_in_conversation(self):
+    def test_prompt_keeps_recent_messages_in_conversation_for_continuity(self):
         builder = PromptBuilder(DummyContextManager(), history_window=5)
         history = [
             {"role": "human", "content": "Investigue"},
@@ -1397,8 +1401,8 @@ class ProtocolTests(unittest.TestCase):
         prompt = builder.build(AGENT_CLAUDE, history)
 
         conversation = prompt.split('<recent_conversation title="Conversa recente">\n', 1)[1]
-        self.assertNotIn("[CODEX]: Teste falhou em test_x", conversation)
-        self.assertIn("[sem itens residuais na conversa recente]", conversation)
+        self.assertIn("[CODEX]: Teste falhou em test_x", conversation)
+        self.assertNotIn("[sem itens residuais na conversa recente]", conversation)
 
     def test_prompt_lists_only_active_agents(self):
         builder = PromptBuilder(
@@ -5508,7 +5512,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         prompt = builder.build(AGENT_CODEX, history)
 
         self.assertIn('<current_turn title="Pedido atual de ALEX">', prompt)
-        self.assertIn("[CLAUDE] Resposta anterior", prompt)
+        self.assertIn("[CLAUDE]: Resposta anterior", prompt)
 
     def test_refresh_task_shared_state_adds_completed_task_results(self):
         app = QuimeraApp.__new__(QuimeraApp)
@@ -5616,7 +5620,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         self.assertIn("</recent_conversation>", prompt)
         self.assertTrue(metrics["primary"])
         self.assertGreater(metrics["total_chars"], 0)
-        self.assertIn("facts_chars", metrics)
+        self.assertIn("execution_state_chars", metrics)
 
     def test_prompt_wraps_core_sections_with_consistent_boundaries(self):
         class ContextManagerWithData(DummyContextManager):

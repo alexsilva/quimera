@@ -11,7 +11,6 @@ from quimera.plugins.codex import _format_codex_spy_event
 from quimera.prompt import PromptBuilder
 from quimera.prompt_kinds import PromptKind
 from quimera.prompt_templates import PromptTemplate
-from quimera.spy_output_presenter import SpyOutputPresenter
 from quimera.ui import TerminalRenderer
 
 
@@ -63,6 +62,8 @@ def test_final_prompt_contract_has_sections_once_in_order_and_without_duplicatio
         history=history,
         handoff="Revise apenas os testes do prompt.",
         shared_state={
+            "goal_canonical": "Melhorar qualidade do prompt",
+            "current_step": "Remover blocos duplicados",
             "working_dir": "/tmp/test",
             "workspace_root": "/tmp/test",
             "ignored_internal_note": "não deve aparecer",
@@ -73,11 +74,11 @@ def test_final_prompt_contract_has_sections_once_in_order_and_without_duplicatio
         '<header title="Identificação">',
         '<session_state title="Estado da sessão">',
         '<rules title="Suas regras">',
+        '<execution_state title="Estado de execução atual">',
         '<shared_state title="Estado compartilhado">',
         '<handoff title="Mensagem direta do outro agente">',
-        '<recent_agent_messages title="Mensagens recentes de outros agentes (referência auxiliar — não canônico sem evidência)">',
-        '<persistent_context title="Contexto persistente do workspace">',
         '<recent_conversation title="Conversa recente">',
+        '<persistent_context title="Contexto persistente do workspace">',
         '<current_turn title="Pedido atual de ALEX">',
     ]
 
@@ -90,9 +91,6 @@ def test_final_prompt_contract_has_sections_once_in_order_and_without_duplicatio
 
     assert "Persistent context content" in prompt
     assert "Revise os testes finais" in _extract_block(prompt, "current_turn")
-    facts_block = _extract_block(prompt, "recent_agent_messages")
-    assert "[CLAUDE] Resposta anterior" in facts_block
-    assert "[GEMINI] Outro ponto relevante" in facts_block
 
     shared_state_block = _extract_block(prompt, "shared_state")
     assert '"working_dir": "/tmp/test"' in shared_state_block
@@ -105,8 +103,8 @@ def test_final_prompt_contract_has_sections_once_in_order_and_without_duplicatio
     conversation_block = _extract_block(prompt, "recent_conversation")
     assert "[ALEX]: Contexto inicial" in conversation_block
     assert "[ALEX]: Revise os testes finais" not in conversation_block
-    assert "[CLAUDE]: Resposta anterior" not in conversation_block
-    assert "[GEMINI]: Outro ponto relevante" not in conversation_block
+    assert "[CLAUDE]: Resposta anterior" in conversation_block
+    assert "[GEMINI]: Outro ponto relevante" in conversation_block
     assert "\n\n\n" not in prompt
 
 
@@ -379,6 +377,8 @@ def test_prompt_renders_evidence_context_when_session_has_entries(tmp_path):
 
 
 def test_prompt_evidence_pipeline_is_identical_across_compact_and_wide_tool_rendering(tmp_path):
+    from quimera.spy_output_presenter import SpyOutputPresenter
+
     def _collect_evidence_section(session_id: str, width: int) -> tuple[str, str]:
         renderer = TerminalRenderer(theme="rule")
         renderer._console = Console(width=width, record=True, force_terminal=False)
@@ -521,8 +521,8 @@ def test_safe_format_replaces_missing_keys_with_empty_string(tmp_path):
     assert result == "hello world and"
 
 
-def test_collect_recent_facts_skips_empty_content():
-    """Mensagens com content vazio não devem aparecer no bloco de fatos recentes."""
+def test_conversation_block_skips_empty_content():
+    """Mensagens com content vazio não devem aparecer na conversa recente."""
     builder = PromptBuilder(context_manager=_make_context_manager(""))
     history = [
         {"role": "claude", "content": ""},
@@ -533,13 +533,13 @@ def test_collect_recent_facts_skips_empty_content():
 
     prompt = builder.build(agent="outro", history=history)
 
-    facts_block = _extract_block(prompt, "recent_agent_messages")
-    assert "resposta válida" in facts_block
-    assert "[CLAUDE]" not in facts_block
+    conversation_block = _extract_block(prompt, "recent_conversation")
+    assert "resposta válida" in conversation_block
+    assert "[ALEX]" not in conversation_block
 
 
-def test_collect_recent_facts_respects_max_items():
-    """Bloco de fatos recentes deve ser limitado a max_items (padrão 4)."""
+def test_conversation_block_shows_all_messages():
+    """Bloco de conversa recente mostra todas as mensagens não puladas."""
     builder = PromptBuilder(context_manager=_make_context_manager(""))
     history = [
         {"role": "agent1", "content": f"mensagem {i}"}
@@ -548,12 +548,12 @@ def test_collect_recent_facts_respects_max_items():
 
     prompt = builder.build(agent="claude", history=history)
 
-    facts_block = _extract_block(prompt, "recent_agent_messages")
-    count = facts_block.count("[AGENT1]")
-    assert count <= 4
+    conversation_block = _extract_block(prompt, "recent_conversation")
+    count = conversation_block.count("[AGENT1]")
+    assert count == 10
 
 
-def test_collect_recent_facts_skips_diff_like_tool_output_claims():
+def test_conversation_block_skips_diff_like_tool_output():
     builder = PromptBuilder(context_manager=_make_context_manager(""))
     history = [
         {"role": "codex", "content": "diff --git a/app.py b/app.py\n+++ b/app.py\n@@ -1,1 +1,2 @@"},
@@ -563,12 +563,12 @@ def test_collect_recent_facts_skips_diff_like_tool_output_claims():
 
     prompt = builder.build(agent="outro", history=history)
 
-    facts_block = _extract_block(prompt, "recent_agent_messages")
-    assert "diff --git" not in facts_block
-    assert "Teste falhou em test_x" in facts_block
+    conversation_block = _extract_block(prompt, "recent_conversation")
+    assert "diff --git" not in conversation_block
+    assert "Teste falhou em test_x" in conversation_block
 
 
-def test_collect_recent_facts_skips_protocol_control_markers():
+def test_conversation_block_skips_protocol_control_markers():
     builder = PromptBuilder(context_manager=_make_context_manager(""))
     history = [
         {"role": "codex", "content": '{"type": "handoff", "route": "claude", "content": "revisar testes"}'},
@@ -578,7 +578,6 @@ def test_collect_recent_facts_skips_protocol_control_markers():
 
     prompt = builder.build(agent="outro", history=history)
 
-    assert '<recent_agent_messages title=' not in prompt
     conversation_block = _extract_block(prompt, "recent_conversation")
     assert "[sem itens residuais na conversa recente]" in conversation_block
 

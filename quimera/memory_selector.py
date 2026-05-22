@@ -41,34 +41,6 @@ class MemorySelector:
                 return index
         return None
 
-    def select_facts(self, history, max_items=4, current_agent=None):
-        """Seleciona mensagens relevantes (não-humano) da janela de história."""
-        facts = []
-        fact_indexes = []
-        window_start = max(0, len(history) - self.history_window)
-        current_agent_lower = (current_agent or "").strip().lower()
-        for index in range(len(history) - 1, window_start - 1, -1):
-            message = history[index]
-            role = message.get("role")
-            if role == "human":
-                continue
-            if current_agent_lower and str(role).strip().lower() == current_agent_lower:
-                continue
-            content = (message.get("content") or "").strip()
-            if not content:
-                continue
-            if self.should_skip_fact(content):
-                continue
-            facts.append(f"[{self._display_role(role)}] {content}")
-            fact_indexes.append(index)
-            if len(facts) >= max_items:
-                break
-        if not facts:
-            return [], ""
-        facts.reverse()
-        fact_indexes.reverse()
-        return fact_indexes, "\n".join(facts)
-
     @staticmethod
     def _is_pure_protocol_envelope(content):
         stripped = content.strip()

@@ -91,6 +91,12 @@ Sempre mescle com o estado existente, nunca substitua completamente.
 <!-- ENDIF:route_agents -->
 </rules>
 
+<!-- IF:execution_state -->
+<execution_state title="Estado de execução atual">
+{execution_state}
+</execution_state>
+<!-- ENDIF:execution_state -->
+
 <!-- IF:execution_mode_prompt -->
 <execution_mode title="Modo de execução ativo">
 {execution_mode_prompt}
@@ -156,23 +162,17 @@ CHAIN:
 </handoff>
 <!-- ENDIF:handoff_present -->
 
-<!-- IF:facts -->
-<recent_agent_messages title="Mensagens recentes de outros agentes (referência auxiliar — não canônico sem evidência)">
-{facts}
-</recent_agent_messages>
-<!-- ENDIF:facts -->
+<!-- IF:recent_conversation -->
+<recent_conversation title="Conversa recente">
+{recent_conversation}
+</recent_conversation>
+<!-- ENDIF:recent_conversation -->
 
 <!-- IF:context -->
 <persistent_context title="Contexto persistente do workspace">
 {context}
 </persistent_context>
 <!-- ENDIF:context -->
-
-<!-- IF:recent_conversation -->
-<recent_conversation title="Conversa recente">
-{recent_conversation}
-</recent_conversation>
-<!-- ENDIF:recent_conversation -->
 
 <!-- IF:request -->
 <current_turn title="Pedido atual de {user_name}">

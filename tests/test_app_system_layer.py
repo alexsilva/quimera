@@ -561,7 +561,7 @@ def _make_dummy_metrics():
         "session_state_chars": 0,
         "persistent_chars": 0,
         "request_chars": 0,
-        "facts_chars": 0,
+        "execution_state_chars": 0,
         "shared_state_chars": 0,
         "history_chars": 0,
         "handoff_chars": 0,
