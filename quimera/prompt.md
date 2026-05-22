@@ -162,17 +162,17 @@ CHAIN:
 </handoff>
 <!-- ENDIF:handoff_present -->
 
-<!-- IF:recent_conversation -->
-<recent_conversation title="Conversa recente">
-{recent_conversation}
-</recent_conversation>
-<!-- ENDIF:recent_conversation -->
-
 <!-- IF:context -->
 <persistent_context title="Contexto persistente do workspace">
 {context}
 </persistent_context>
 <!-- ENDIF:context -->
+
+<!-- IF:recent_conversation -->
+<recent_conversation title="Conversa recente">
+{recent_conversation}
+</recent_conversation>
+<!-- ENDIF:recent_conversation -->
 
 <!-- IF:request -->
 <current_turn title="Pedido atual de {user_name}">

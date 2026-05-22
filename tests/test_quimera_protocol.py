@@ -1326,10 +1326,9 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn("[>>>]: Primeiro pedido", conversation)
         self.assertIn("</recent_conversation>", conversation)
 
-    def test_prompt_keeps_recent_agent_messages_in_conversation(self):
-        # Após o fix de deduplicação, mensagens de outros agentes já aparecem em
-        # recent_conversation (ordem canônica). O bloco recent_agent_messages não
-        # deve renderizar para não duplicar o conteúdo.
+    def test_prompt_keeps_agent_messages_in_recent_conversation(self):
+        # Mensagens de outros agentes aparecem em recent_conversation (ordem
+        # canônica). O bloco auxiliar não deve renderizar para não duplicar.
         builder = PromptBuilder(DummyContextManager(), history_window=5)
         history = [
             {"role": "human", "content": "Investigue"},

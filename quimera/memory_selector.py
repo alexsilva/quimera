@@ -53,35 +53,38 @@ class MemorySelector:
             '"type": "ack"',
         ))
 
+    _BLOCKED_SUBSTRINGS = frozenset({
+        "goal_canonical",
+        "prompt_state",
+        "objetivo fixo",
+        "não redefina o objetivo",
+        "nao redefina o objetivo",
+        "fatos observados recentes",
+        # Diff markers
+        "git diff",
+        "diff --git ",
+        "```diff",
+        "+++ b/",
+        "--- a/",
+        "arquivo alterado:",
+        # Protocol / control markers
+        ROUTE_PREFIX.lower(),
+        "[ack:",
+        NEEDS_INPUT_MARKER.lower(),
+        EXTEND_MARKER.lower(),
+        STATE_UPDATE_START.lower(),
+        STATE_UPDATE_END.lower(),
+    })
+
     @staticmethod
     def should_skip_fact(content):
         """Indica se o conteúdo deve ser excluído da área de fatos/contexto."""
+        if not (content or "").strip():
+            return True
         if MemorySelector._is_pure_protocol_envelope(content):
             return True
         lowered = content.lower()
-        blocked_markers = (
-            "goal_canonical",
-            "prompt_state",
-            "objetivo fixo",
-            "não redefina o objetivo",
-            "nao redefina o objetivo",
-            "[state_update]",
-            "fatos observados recentes",
-            "git diff",
-            "diff --git ",
-            "```diff",
-            "+++ b/",
-            "--- a/",
-            "@@ ",
-            "arquivo alterado:",
-            ROUTE_PREFIX.lower(),
-            "[ack:",
-            NEEDS_INPUT_MARKER.lower(),
-            EXTEND_MARKER.lower(),
-            STATE_UPDATE_START.lower(),
-            STATE_UPDATE_END.lower(),
-        )
-        return any(marker in lowered for marker in blocked_markers)
+        return any(marker in lowered for marker in MemorySelector._BLOCKED_SUBSTRINGS)
 
     def build_conversation_block(self, history, skip_indexes=None, current_agent=None):
         """Compila bloco formatado com mensagens da janela, pulando índices específicos."""
