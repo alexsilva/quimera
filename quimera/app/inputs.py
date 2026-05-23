@@ -208,62 +208,6 @@ def read_user_input(
         raise
 
 
-def read_user_input_nonblocking_tty(app, prompt: str, input_fn=input) -> str | None:
-    """Lê user input nonblocking tty."""
-    if app._nonblocking_input_queue is None:
-        app._nonblocking_input_queue = queue.Queue()
-
-    try:
-        status, value = app._nonblocking_input_queue.get_nowait()
-    except queue.Empty:
-        thread = app._nonblocking_input_thread
-        if thread is None or not thread.is_alive():
-            start_nonblocking_input_reader(app, prompt, input_fn=input_fn)
-        else:
-            # Amortece o polling sem adicionar atraso perceptível ao retorno do prompt.
-            time.sleep(0.01)
-        return None
-
-    app._nonblocking_input_status = "idle"
-    app._nonblocking_input_thread = None
-    app._nonblocking_prompt_text = ""
-    app.system_layer.flush_deferred_messages()
-    if status == "line":
-        return value
-    if status == "interrupt":
-        raise KeyboardInterrupt()
-    return None
-
-
-def start_nonblocking_input_reader(app, prompt: str, input_fn=input) -> None:
-    """Executa start nonblocking input reader."""
-    if app._nonblocking_input_queue is None:
-        app._nonblocking_input_queue = queue.Queue()
-
-    app._nonblocking_input_status = "reading"
-    app._nonblocking_prompt_text = prompt
-
-    def _reader() -> None:
-        # Set the prompt owning thread ID to this thread's ID
-        app._prompt_owning_thread_id = threading.get_ident()
-        try:
-            value = input_fn(prompt)
-        except EOFError:
-            app._nonblocking_input_queue.put(("eof", None))
-        except KeyboardInterrupt:
-            app._nonblocking_input_queue.put(("interrupt", None))
-        except Exception:
-            app._nonblocking_input_queue.put(("error", None))
-        else:
-            app._nonblocking_input_queue.put(("line", value))
-        finally:
-            # Clear the prompt owning thread ID
-            app._prompt_owning_thread_id = None
-
-    app._nonblocking_input_thread = threading.Thread(target=_reader, daemon=True)
-    app._nonblocking_input_thread.start()
-
-
 def read_user_input_with_timeout(prompt: str, timeout: int, input_fn=input):
     """Lê user input with timeout."""
     stdin = _stdin()
