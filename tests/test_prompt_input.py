@@ -1,14 +1,12 @@
 """Tests for quimera.app.prompt_input — T-008: migração de input."""
 from __future__ import annotations
 
-import threading
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from quimera.app.prompt_input import (
     InputGate,
-    _PT_AVAILABLE,
 )
 
 
@@ -17,24 +15,6 @@ from quimera.app.prompt_input import (
 # ---------------------------------------------------------------------------
 
 class TestBuildToolbar:
-    def test_toolbar_none_without_prompt_toolkit(self):
-        gate = InputGate.__new__(InputGate)
-        gate._renderer = None
-        gate._lock = threading.Lock()
-        gate._session = None
-        with patch("quimera.app.prompt_input._PT_AVAILABLE", False):
-            assert gate._build_toolbar() is None
-
-    def test_placeholder_none_without_prompt_toolkit(self):
-        gate = InputGate.__new__(InputGate)
-        gate._renderer = None
-        gate._toolbar_context_resolver = None
-        gate._lock = threading.Lock()
-        gate._session = None
-        with patch("quimera.app.prompt_input._PT_AVAILABLE", False):
-            assert gate._build_placeholder() is None
-
-    @pytest.mark.skipif(not _PT_AVAILABLE, reason="prompt_toolkit não disponível")
     def test_toolbar_includes_responder_model_when_context_available(self):
         gate = InputGate(
             toolbar_context_resolver=lambda: {
@@ -49,7 +29,6 @@ class TestBuildToolbar:
         assert "responde:" not in str(content)
         assert "gpt-5" in str(content)
 
-    @pytest.mark.skipif(not _PT_AVAILABLE, reason="prompt_toolkit não disponível")
     def test_toolbar_includes_theme_when_context_available(self):
         gate = InputGate(
             toolbar_context_resolver=lambda: {
@@ -63,7 +42,6 @@ class TestBuildToolbar:
         assert "▎" in str(toolbar())
         assert "▕" in str(toolbar())
 
-    @pytest.mark.skipif(not _PT_AVAILABLE, reason="prompt_toolkit não disponível")
     def test_toolbar_includes_turns_when_context_available(self):
         gate = InputGate(
             toolbar_context_resolver=lambda: {
@@ -76,7 +54,6 @@ class TestBuildToolbar:
         assert "5" in content
         assert " ↺ 5 " in content
 
-    @pytest.mark.skipif(not _PT_AVAILABLE, reason="prompt_toolkit não disponível")
     def test_toolbar_includes_open_bugs_when_context_available(self):
         gate = InputGate(
             toolbar_context_resolver=lambda: {
@@ -88,7 +65,6 @@ class TestBuildToolbar:
         content = str(toolbar())
         assert " ⚠ 3 " in content
 
-    @pytest.mark.skipif(not _PT_AVAILABLE, reason="prompt_toolkit não disponível")
     def test_toolbar_includes_parallel_status_when_context_available(self):
         gate = InputGate(
             toolbar_context_resolver=lambda: {
@@ -100,7 +76,6 @@ class TestBuildToolbar:
         content = str(toolbar())
         assert " ⇉ paralelo:1/1 · 📥 2 " in content
 
-    @pytest.mark.skipif(not _PT_AVAILABLE, reason="prompt_toolkit não disponível")
     def test_toolbar_includes_mode_when_context_available(self):
         gate = InputGate(
             toolbar_context_resolver=lambda: {
@@ -112,7 +87,6 @@ class TestBuildToolbar:
         content = str(toolbar())
         assert " ◆ planning " in content
 
-    @pytest.mark.skipif(not _PT_AVAILABLE, reason="prompt_toolkit não disponível")
     def test_toolbar_includes_active_agents_when_context_available(self):
         gate = InputGate(
             toolbar_context_resolver=lambda: {
@@ -124,8 +98,6 @@ class TestBuildToolbar:
         content = str(toolbar())
         assert " ⚡ codex, claude " in content
 
-
-    @pytest.mark.skipif(not _PT_AVAILABLE, reason="prompt_toolkit não disponível")
     def test_toolbar_clips_long_model_name(self):
         gate = InputGate(
             toolbar_context_resolver=lambda: {
@@ -137,7 +109,6 @@ class TestBuildToolbar:
         content = str(toolbar())
         assert "..." in content
 
-    @pytest.mark.skipif(not _PT_AVAILABLE, reason="prompt_toolkit não disponível")
     def test_toolbar_clips_long_active_agents_list(self):
         gate = InputGate(
             toolbar_context_resolver=lambda: {
@@ -149,7 +120,6 @@ class TestBuildToolbar:
         content = str(toolbar())
         assert "..." in content
 
-    @pytest.mark.skipif(not _PT_AVAILABLE, reason="prompt_toolkit não disponível")
     def test_toolbar_includes_all_fields_in_order(self):
         gate = InputGate(
             toolbar_context_resolver=lambda: {
@@ -173,7 +143,6 @@ class TestBuildToolbar:
         # responder presente
         assert "claude" in content
 
-    @pytest.mark.skipif(not _PT_AVAILABLE, reason="prompt_toolkit não disponível")
     def test_toolbar_empty_with_only_mode_returns_nonempty(self):
         gate = InputGate(
             toolbar_context_resolver=lambda: {
@@ -185,7 +154,6 @@ class TestBuildToolbar:
         content = str(toolbar())
         assert content != ""
 
-    @pytest.mark.skipif(not _PT_AVAILABLE, reason="prompt_toolkit não disponível")
     def test_toolbar_empty_with_only_session_returns_nonempty(self):
         gate = InputGate(
             toolbar_context_resolver=lambda: {
@@ -198,7 +166,6 @@ class TestBuildToolbar:
         assert content != ""
         assert " 🆔 abc12345 " in content
 
-    @pytest.mark.skipif(not _PT_AVAILABLE, reason="prompt_toolkit não disponível")
     def test_toolbar_includes_branch_when_context_available(self):
         gate = InputGate(
             toolbar_context_resolver=lambda: {
@@ -210,7 +177,6 @@ class TestBuildToolbar:
         content = str(toolbar())
         assert " ⎇ feature-x " in content
 
-    @pytest.mark.skipif(not _PT_AVAILABLE, reason="prompt_toolkit não disponível")
     def test_toolbar_includes_elapsed_when_context_available(self):
         gate = InputGate(
             toolbar_context_resolver=lambda: {
@@ -222,8 +188,6 @@ class TestBuildToolbar:
         content = str(toolbar())
         assert " ⏱ 12m 34s " in content
 
-
-    @pytest.mark.skipif(not _PT_AVAILABLE, reason="prompt_toolkit não disponível")
     def test_toolbar_empty_with_only_elapsed_returns_nonempty(self):
         gate = InputGate(
             toolbar_context_resolver=lambda: {
@@ -237,18 +201,10 @@ class TestBuildToolbar:
 
 
 class TestKeyBindings:
-    def test_key_bindings_none_without_prompt_toolkit(self):
-        gate = InputGate.__new__(InputGate)
-        gate._theme_cycle_handler = lambda: None
-        with patch("quimera.app.prompt_input._PT_AVAILABLE", False):
-            assert gate._build_key_bindings() is None
-
-    @pytest.mark.skipif(not _PT_AVAILABLE, reason="prompt_toolkit não disponível")
     def test_key_bindings_none_without_theme_handler(self):
         gate = InputGate()
         assert gate._build_key_bindings() is None
 
-    @pytest.mark.skipif(not _PT_AVAILABLE, reason="prompt_toolkit não disponível")
     def test_ctrl_t_binding_calls_handler_and_invalidates_prompt(self):
         gate = InputGate()
         handler = MagicMock()
@@ -306,34 +262,19 @@ class TestFlushRenderer:
 # ---------------------------------------------------------------------------
 
 class TestInputGateCall:
-    def test_fallback_to_builtin_input_when_no_session(self):
-        gate = InputGate.__new__(InputGate)
-        gate._renderer = None
-        gate._lock = threading.Lock()
-        gate._session = None
-
-        with patch("builtins.input", return_value="resposta") as mock_input:
-            result = gate(">>> ")
-        mock_input.assert_called_once_with(">>> ")
-        assert result == "resposta"
-
     def test_flush_called_before_prompt(self):
         renderer = MagicMock()
-        gate = InputGate.__new__(InputGate)
-        gate._renderer = renderer
-        gate._lock = threading.Lock()
-        gate._session = None
-
+        gate = InputGate(renderer=renderer)
+        gate._session = MagicMock()
+    
         calls = []
         renderer.flush.side_effect = lambda: calls.append("flush")
+        gate._session.prompt.side_effect = lambda *a, **kw: calls.append("prompt") or "x"
+    
+        gate(">>> ")
+    
+        assert calls == ["flush", "prompt"], "flush deve ocorrer antes do prompt"
 
-        with patch("builtins.input", side_effect=lambda p: calls.append("input") or "x"):
-            gate(">>> ")
-
-        assert calls[0] == "flush", "flush deve ocorrer antes do input"
-        assert "input" in calls
-
-    @pytest.mark.skipif(not _PT_AVAILABLE, reason="prompt_toolkit não disponível")
     def test_uses_session_when_available(self):
         gate = InputGate()
         gate._session = MagicMock()
@@ -343,7 +284,6 @@ class TestInputGateCall:
         assert result == "via session"
         gate._session.prompt.assert_called_once()
 
-    @pytest.mark.skipif(not _PT_AVAILABLE, reason="prompt_toolkit não disponível")
     def test_session_receives_toolbar_and_placeholder(self):
         gate = InputGate()
         gate._session = MagicMock()
@@ -458,7 +398,7 @@ class TestInputGateArgumentResolver:
         assert gate._build_completer() is None
 
     def test_build_completer_includes_argument_resolver(self):
-        """_build_completer retorna _SlashCommandCompleter com argument_resolver."""
+        """_build_completer retorna _SlashCommandCompleter with argument_resolver."""
         from quimera.app.prompt_input import _SlashCommandCompleter
         arg_resolver = MagicMock()
         gate = InputGate(

@@ -230,13 +230,13 @@ class AppSystemLayer:
     @property
     def _display(self):
         try:
-            return object.__getattribute__(self, '_AppSystemLayer__display')
+            return self.__display
         except AttributeError:
             raise RuntimeError("DisplayService não inicializado")
 
     @_display.setter
     def _display(self, value):
-        object.__setattr__(self, '_AppSystemLayer__display', value)
+        self.__display = value
 
     def _get_renderer(self):
         return self._display._get_renderer()

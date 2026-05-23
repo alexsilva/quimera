@@ -8,21 +8,24 @@ from __future__ import annotations
 import asyncio
 import atexit
 import html
-import threading
+import re
+import shutil
 from pathlib import Path
 
-try:
-    from prompt_toolkit import PromptSession
-    from prompt_toolkit.application import run_in_terminal
-    from prompt_toolkit.completion import Completer, Completion
-    from prompt_toolkit.formatted_text import HTML
-    from prompt_toolkit.history import FileHistory, InMemoryHistory
-    from prompt_toolkit.key_binding import KeyBindings
-    _PT_AVAILABLE = True
-except ImportError:
-    _PT_AVAILABLE = False
-    Completer = object
-    run_in_terminal = None
+from prompt_toolkit import PromptSession
+from prompt_toolkit.application import run_in_terminal
+from prompt_toolkit.completion import Completer, Completion
+from prompt_toolkit.formatted_text import HTML
+from prompt_toolkit.history import FileHistory, InMemoryHistory
+from prompt_toolkit.key_binding import KeyBindings
+
+
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _visible_len(html_str: str) -> int:
+    """Comprimento visível de uma string HTML (sem tags)."""
+    return len(_HTML_TAG_RE.sub("", html_str))
 
 
 class _SlashCommandCompleter(Completer):
@@ -68,8 +71,8 @@ class InputGate:
     """Gate único de input com PromptSession singleton, toolbar e coordenação com terminal.
 
     - Quando prompt_toolkit estiver disponível: exibe toolbar contextual
-      e placeholder cinza no campo vazio.
-    - Quando não estiver disponível: fallback transparente para input().
+       e placeholder cinza no campo vazio.
+     - Se a sessão não estiver disponível, faz fallback para input() padrão.
     - Antes de exibir o prompt, drena eventos pendentes do renderer,
       garantindo que o output acima do prompt esteja estável.
     - Evita patch_stdout(): o renderer é flushado antes do prompt, então
@@ -77,17 +80,12 @@ class InputGate:
 
     def __init__(self, renderer=None, toolbar_context_resolver=None, history_file=None, command_resolver=None, argument_resolver=None):
         self._session: PromptSession | None = None
-        self._readline_history = None
         self._renderer = renderer
         self._toolbar_context_resolver = toolbar_context_resolver
         self._command_resolver = command_resolver
         self._argument_resolver = argument_resolver
         self._theme_cycle_handler = None
         self._history_file = Path(history_file).expanduser() if history_file else None
-        self._lock = threading.Lock()
-        if not _PT_AVAILABLE:
-            self._init_readline()
-            return
 
         history = InMemoryHistory()
         if self._history_file is not None:
@@ -97,23 +95,6 @@ class InputGate:
             except Exception:
                 history = InMemoryHistory()
         self._session = PromptSession(history=history)
-
-    def _init_readline(self) -> None:
-        """Configura histórico readline como fallback."""
-        try:
-            import readline as _readline
-        except ImportError:
-            return
-        if self._history_file is not None:
-            try:
-                self._history_file.parent.mkdir(parents=True, exist_ok=True)
-                try:
-                    _readline.read_history_file(str(self._history_file))
-                except FileNotFoundError:
-                    pass
-                atexit.register(_readline.write_history_file, str(self._history_file))
-            except Exception:
-                pass
 
     def set_toolbar_context_resolver(self, resolver) -> None:
         """Define callback para resolver contexto dinâmico da toolbar."""
@@ -138,8 +119,6 @@ class InputGate:
         cada redesenho — necessário para que Ctrl+T atualize o nome do tema
         em tempo real via event.app.invalidate().
         """
-        if not _PT_AVAILABLE:
-            return None
         resolver = self._toolbar_context_resolver
         if not callable(resolver):
             return None
@@ -204,9 +183,16 @@ class InputGate:
             if session_id:
                 parts.append(f"<style fg='#909090'> 🆔 {html.escape(_clip(session_id, 12))} </style>")
             separator = "<style fg='#666666'>·</style>"
+            # Clipa partes da direita (menor prioridade) até o conteúdo caber no terminal.
+            # Reserva 4 colunas para bordas + padding da toolbar.
+            term_cols = shutil.get_terminal_size(fallback=(80, 24)).columns
+            budget = max(20, term_cols - 4)
+            while len(parts) > 1:
+                candidate = separator.join(parts)
+                if _visible_len(candidate) + 4 <= budget:
+                    break
+                parts.pop()
             content = separator.join(parts)
-            # Subtle frame around the full toolbar line for stronger container shape.
-            # Adicionado padding extra (espaços) para evitar que ícones nas pontas sejam cortados.
             left_edge = "<style fg='#666666' bg='#1d1d1d'>▎</style>"
             right_edge = "<style fg='#666666' bg='#1d1d1d'>▕</style>"
             return HTML(f"<style bg='#1d1d1d'> {left_edge} {content} {right_edge} </style>")
@@ -215,22 +201,16 @@ class InputGate:
 
     def _build_placeholder(self):
         """Placeholder cinza exibido quando o campo de input está vazio."""
-        if not _PT_AVAILABLE:
-            return None
         return HTML('<style fg="#606060">mensagem...</style>')
 
     def _build_completer(self):
         """Completer de comandos slash para o PromptSession."""
-        if not _PT_AVAILABLE:
-            return None
         if not callable(self._command_resolver):
             return None
         return _SlashCommandCompleter(self._command_resolver, self._argument_resolver)
 
     def _build_key_bindings(self):
         """Monta key bindings adicionais para troca de tema."""
-        if not _PT_AVAILABLE:
-            return None
         handler = self._theme_cycle_handler
         if not callable(handler):
             return None
@@ -266,10 +246,11 @@ class InputGate:
 
     def __call__(self, prompt: str) -> str:
         """Lê input do usuário.
-
+ 
         Flusha o renderer antes de exibir o prompt, eliminando a necessidade
         de patch_stdout(). Usa session.prompt() diretamente com toolbar,
         placeholder e completer — tudo nativo do PromptSession, funcionando.
+        Se a sessão não estiver disponível, faz fallback para input() padrão.
         """
         self._flush_renderer()
 
@@ -284,8 +265,9 @@ class InputGate:
                 vi_mode=False,
                 refresh_interval=1.0,
             )
-
-        return input(prompt)
+        else:
+            # Fallback para input() padrão quando prompt_toolkit não está disponível
+            return input(prompt)
 
     def get_line_buffer(self) -> str:
         """Retorna o buffer atual de edição quando disponível."""
@@ -313,13 +295,9 @@ class InputGate:
         if callable(invalidate):
             invalidate()
 
-    def has_session(self) -> bool:
-        """Indica se o input é gerenciado por uma sessão prompt_toolkit."""
-        return self._session is not None
-
     def is_active(self) -> bool:
         """Returns True if the prompt_toolkit session is currently waiting for input."""
-        if self._session is None or not _PT_AVAILABLE:
+        if self._session is None:
             return False
         app = getattr(self._session, "app", None)
         if app is None:
@@ -331,7 +309,7 @@ class InputGate:
         if not callable(callback):
             return False
         session = self._session
-        if session is None or not _PT_AVAILABLE or run_in_terminal is None:
+        if session is None:
             return False
         app = getattr(session, "app", None)
         if app is None or not getattr(app, "_is_running", False):

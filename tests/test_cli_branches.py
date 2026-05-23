@@ -60,18 +60,10 @@ def _patch_main_basics(monkeypatch, *, agent_names=None, theme_names=None):
 
 
 def test_read_input_uses_prompt_toolkit_when_tty(monkeypatch):
-    monkeypatch.setattr(cli, "_HAS_PROMPT_TOOLKIT", True)
     monkeypatch.setattr(cli, "_pt_prompt", lambda _text: "  valor  ")
     monkeypatch.setattr(cli.sys, "stdout", SimpleNamespace(isatty=lambda: True))
 
     assert cli._read_input("Prompt") == "valor"
-
-
-def test_read_input_falls_back_to_builtin_input(monkeypatch):
-    monkeypatch.setattr(cli, "_HAS_PROMPT_TOOLKIT", False)
-    monkeypatch.setattr("builtins.input", lambda _text: "  fallback  ")
-
-    assert cli._read_input("Prompt") == "fallback"
 
 
 def test_prompt_text_uses_default_when_empty(monkeypatch):
@@ -104,22 +96,6 @@ def test_prompt_bool_uses_default_when_empty(monkeypatch):
 def test_prompt_bool_accepts_negative_forms(monkeypatch):
     monkeypatch.setattr(cli, "_read_input", lambda _text: "não")
     assert cli._prompt_bool("Confirma", default=True) is False
-
-
-def test_cli_import_fallback_without_prompt_toolkit():
-    real_import = builtins.__import__
-
-    def _import(name, *args, **kwargs):
-        if name.startswith("prompt_toolkit.shortcuts"):
-            raise ImportError("prompt_toolkit missing")
-        return real_import(name, *args, **kwargs)
-
-    spec = importlib.util.spec_from_file_location("quimera.cli_no_pt", cli.__file__)
-    module = importlib.util.module_from_spec(spec)
-    with patch("builtins.__import__", side_effect=_import):
-        spec.loader.exec_module(module)
-
-    assert module._HAS_PROMPT_TOOLKIT is False
 
 
 def test_cli_import_fallback_without_ui_dependencies():

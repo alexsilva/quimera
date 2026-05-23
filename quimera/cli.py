@@ -6,7 +6,6 @@ import os
 import shlex
 import sys
 from pathlib import Path
-from typing import List
 
 try:
     from prompt_toolkit.shortcuts import prompt as _pt_prompt
@@ -43,7 +42,7 @@ except ImportError:
     AgentClient = None
 
 
-def _expand_patterns(agents: List[str], available: List[str]) -> List[str]:
+def _expand_patterns(agents: list[str], available: list[str]) -> list[str]:
     """Executa expand patterns."""
     result = []
     seen = set()
@@ -64,8 +63,8 @@ def _expand_patterns(agents: List[str], available: List[str]) -> List[str]:
 
 
 def _read_input(prompt_text: str) -> str:
-    """Lê entrada interativa usando prompt_toolkit se disponível, senão input()."""
-    if _HAS_PROMPT_TOOLKIT and sys.stdout.isatty():
+    """Lê entrada interativa usando prompt_toolkit se for um TTY, senão input()."""
+    if sys.stdout.isatty():
         return _pt_prompt(prompt_text).strip()
     return input(prompt_text).strip()
 

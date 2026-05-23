@@ -13,41 +13,8 @@ def _make_gate(**kwargs):
 
 
 # ---------------------------------------------------------------------------
-# ImportError fallback (lines 20-22)
+# InputGate
 # ---------------------------------------------------------------------------
-
-class TestImportFallback:
-    def test_pt_unavailable_sets_flag(self):
-        import quimera.app.prompt_input as mod
-        # _PT_AVAILABLE may be True or False depending on env; just check it exists
-        assert hasattr(mod, "_PT_AVAILABLE")
-
-    def test_pt_unavailable_completer_is_object(self, monkeypatch):
-        # Simulate ImportError branch by re-importing with mocked builtins
-        import importlib
-        import quimera.app.prompt_input as mod
-        if not mod._PT_AVAILABLE:
-            assert mod.Completer is object
-
-    def test_importerror_branch_sets_fallback_symbols(self):
-        import builtins
-        import importlib.util
-        import quimera.app.prompt_input as mod
-
-        real_import = builtins.__import__
-
-        def _import(name, *args, **kwargs):
-            if name.startswith("prompt_toolkit"):
-                raise ImportError("prompt_toolkit unavailable")
-            return real_import(name, *args, **kwargs)
-
-        spec = importlib.util.spec_from_file_location("prompt_input_no_pt", mod.__file__)
-        fallback_module = importlib.util.module_from_spec(spec)
-        with patch("builtins.__import__", side_effect=_import):
-            spec.loader.exec_module(fallback_module)
-
-        assert fallback_module._PT_AVAILABLE is False
-        assert fallback_module.Completer is object
 
 
 # ---------------------------------------------------------------------------
@@ -120,74 +87,26 @@ class TestSlashCommandCompleter:
 
 class TestInputGateConstruction:
     def test_basic_construction(self):
-        with patch("quimera.app.prompt_input._PT_AVAILABLE", True):
-            with patch("quimera.app.prompt_input.PromptSession") as MockPS:
-                with patch("quimera.app.prompt_input.InMemoryHistory") as MockHist:
-                    gate = _make_gate()
-                    MockPS.assert_called_once()
-                    assert gate._session is MockPS.return_value
+        with patch("quimera.app.prompt_input.PromptSession") as MockPS:
+            with patch("quimera.app.prompt_input.InMemoryHistory") as MockHist:
+                gate = _make_gate()
+                MockPS.assert_called_once()
+                assert gate._session is MockPS.return_value
 
     def test_construction_with_history_file(self, tmp_path):
         hist_file = str(tmp_path / "hist.txt")
-        with patch("quimera.app.prompt_input._PT_AVAILABLE", True):
-            with patch("quimera.app.prompt_input.PromptSession") as MockPS:
-                with patch("quimera.app.prompt_input.FileHistory") as MockFH:
-                    gate = _make_gate(history_file=hist_file)
-                    MockFH.assert_called_once_with(hist_file)
+        with patch("quimera.app.prompt_input.PromptSession") as MockPS:
+            with patch("quimera.app.prompt_input.FileHistory") as MockFH:
+                gate = _make_gate(history_file=hist_file)
+                MockFH.assert_called_once_with(hist_file)
 
     def test_construction_history_file_exception_falls_back(self, tmp_path):
         hist_file = str(tmp_path / "hist.txt")
-        with patch("quimera.app.prompt_input._PT_AVAILABLE", True):
-            with patch("quimera.app.prompt_input.FileHistory", side_effect=OSError("fail")):
-                with patch("quimera.app.prompt_input.InMemoryHistory") as MockHist:
-                    with patch("quimera.app.prompt_input.PromptSession") as MockPS:
-                        gate = _make_gate(history_file=hist_file)
-                        MockHist.assert_called()
-
-    def test_construction_pt_unavailable_calls_init_readline(self):
-        with patch("quimera.app.prompt_input._PT_AVAILABLE", False):
-            gate = _make_gate()
-            assert gate._session is None
-
-
-# ---------------------------------------------------------------------------
-# InputGate — _init_readline (lines 98-113)
-# ---------------------------------------------------------------------------
-
-class TestInputGateReadline:
-    def test_init_readline_no_history_file(self):
-        with patch("quimera.app.prompt_input._PT_AVAILABLE", False):
-            gate = _make_gate()
-            # no history_file — should complete without error
-            assert gate._history_file is None
-
-    def test_init_readline_with_history_file(self, tmp_path):
-        hist_file = str(tmp_path / "subdir" / "hist.txt")
-        with patch("quimera.app.prompt_input._PT_AVAILABLE", False):
-            with patch("quimera.app.prompt_input.PromptSession", create=True):
-                gate = _make_gate(history_file=hist_file)
-            assert gate._session is None
-
-    def test_init_readline_import_error(self):
-        with patch("quimera.app.prompt_input._PT_AVAILABLE", False):
-            real_import = __import__
-
-            def _import(name, *args, **kwargs):
-                if name == "readline":
-                    raise ImportError("no readline")
-                return real_import(name, *args, **kwargs)
-
-            with patch("builtins.__import__", side_effect=_import):
-                # Should not raise
-                gate = _make_gate()
-
-    def test_init_readline_history_file_exception(self, tmp_path):
-        hist_file = str(tmp_path / "hist.txt")
-        with patch("quimera.app.prompt_input._PT_AVAILABLE", False):
-            with patch("pathlib.Path.mkdir", side_effect=OSError("fail")):
-                gate = _make_gate(history_file=hist_file)
-                # exception suppressed, no crash
-
+        with patch("quimera.app.prompt_input.FileHistory", side_effect=OSError("fail")):
+            with patch("quimera.app.prompt_input.InMemoryHistory") as MockHist:
+                with patch("quimera.app.prompt_input.PromptSession") as MockPS:
+                    gate = _make_gate(history_file=hist_file)
+                    MockHist.assert_called()
 
 # ---------------------------------------------------------------------------
 # InputGate — setters (lines 115-129)
@@ -224,75 +143,54 @@ class TestInputGateSetters:
 # ---------------------------------------------------------------------------
 
 class TestBuildToolbar:
-    def test_pt_unavailable_returns_none(self):
-        with patch("quimera.app.prompt_input._PT_AVAILABLE", False):
-            gate = _make_gate()
-            assert gate._build_toolbar() is None
-
     def test_no_resolver_returns_none(self):
-        with patch("quimera.app.prompt_input._PT_AVAILABLE", True):
-            with patch("quimera.app.prompt_input.PromptSession"):
-                with patch("quimera.app.prompt_input.InMemoryHistory"):
-                    gate = _make_gate()
-                    gate._toolbar_context_resolver = None
-                    assert gate._build_toolbar() is None
+        with patch("quimera.app.prompt_input.PromptSession"):
+            with patch("quimera.app.prompt_input.InMemoryHistory"):
+                gate = _make_gate()
+                gate._toolbar_context_resolver = None
+                assert gate._build_toolbar() is None
 
     def test_resolver_returns_toolbar_callable(self):
-        with patch("quimera.app.prompt_input._PT_AVAILABLE", True):
-            with patch("quimera.app.prompt_input.PromptSession"):
-                with patch("quimera.app.prompt_input.InMemoryHistory"):
-                    gate = _make_gate(toolbar_context_resolver=lambda: {
-                        "responder": "claude", "model": "gpt4", "cwd": "/tmp", "theme": "dark"
-                    })
-                    toolbar_fn = gate._build_toolbar()
-                    assert callable(toolbar_fn)
-                    result = toolbar_fn()
-                    # result is an HTML object or string
-                    assert result is not None
+        with patch("quimera.app.prompt_input.PromptSession"):
+            with patch("quimera.app.prompt_input.InMemoryHistory"):
+                gate = _make_gate(toolbar_context_resolver=lambda: {
+                    "responder": "claude", "model": "gpt4", "cwd": "/tmp", "theme": "dark"
+                })
+                toolbar_fn = gate._build_toolbar()
+                assert callable(toolbar_fn)
+                result = toolbar_fn()
+                # result is an HTML object or string
+                assert result is not None
 
     def test_toolbar_includes_parallel_context_when_available(self):
-        with patch("quimera.app.prompt_input._PT_AVAILABLE", True):
-            with patch("quimera.app.prompt_input.PromptSession"):
-                with patch("quimera.app.prompt_input.InMemoryHistory"):
-                    gate = _make_gate(toolbar_context_resolver=lambda: {
-                        "theme": "line",
-                        "parallel": "paralelo:1/1 · fila:2",
-                        "responder": "claude",
-                    })
-                    toolbar_fn = gate._build_toolbar()
-                    result = str(toolbar_fn())
-                    assert "paralelo:1/1" in result
-                    assert "fila:2" in result
+        with patch("quimera.app.prompt_input.PromptSession"):
+            with patch("quimera.app.prompt_input.InMemoryHistory"):
+                gate = _make_gate(toolbar_context_resolver=lambda: {
+                    "theme": "line",
+                    "parallel": "paralelo:1/1 · fila:2",
+                    "responder": "claude",
+                })
+                toolbar_fn = gate._build_toolbar()
+                result = str(toolbar_fn())
+                assert "paralelo:1/1" in result
+                assert "fila:2" in result
 
     def test_toolbar_empty_context_returns_empty_string(self):
-        with patch("quimera.app.prompt_input._PT_AVAILABLE", True):
-            with patch("quimera.app.prompt_input.PromptSession"):
-                with patch("quimera.app.prompt_input.InMemoryHistory"):
-                    gate = _make_gate(toolbar_context_resolver=lambda: {})
-                    toolbar_fn = gate._build_toolbar()
-                    result = toolbar_fn()
-                    assert result == ""
+        with patch("quimera.app.prompt_input.PromptSession"):
+            with patch("quimera.app.prompt_input.InMemoryHistory"):
+                gate = _make_gate(toolbar_context_resolver=lambda: {})
+                toolbar_fn = gate._build_toolbar()
+                result = toolbar_fn()
+                assert result == ""
 
     def test_toolbar_resolver_exception_returns_empty_string(self):
-        with patch("quimera.app.prompt_input._PT_AVAILABLE", True):
-            with patch("quimera.app.prompt_input.PromptSession"):
-                with patch("quimera.app.prompt_input.InMemoryHistory"):
-                    def bad(): raise RuntimeError("boom")
-                    gate = _make_gate(toolbar_context_resolver=bad)
-                    toolbar_fn = gate._build_toolbar()
-                    result = toolbar_fn()
-                    assert result == ""
-
-
-# ---------------------------------------------------------------------------
-# InputGate — _build_placeholder (line 173)
-# ---------------------------------------------------------------------------
-
-class TestBuildPlaceholder:
-    def test_pt_unavailable_returns_none(self):
-        with patch("quimera.app.prompt_input._PT_AVAILABLE", False):
-            gate = _make_gate()
-            assert gate._build_placeholder() is None
+        with patch("quimera.app.prompt_input.PromptSession"):
+            with patch("quimera.app.prompt_input.InMemoryHistory"):
+                def bad(): raise RuntimeError("boom")
+                gate = _make_gate(toolbar_context_resolver=bad)
+                toolbar_fn = gate._build_toolbar()
+                result = toolbar_fn()
+                assert result == ""
 
 
 # ---------------------------------------------------------------------------
@@ -300,27 +198,20 @@ class TestBuildPlaceholder:
 # ---------------------------------------------------------------------------
 
 class TestBuildCompleter:
-    def test_pt_unavailable_returns_none(self):
-        with patch("quimera.app.prompt_input._PT_AVAILABLE", False):
-            gate = _make_gate()
-            assert gate._build_completer() is None
-
     def test_no_resolver_returns_none(self):
-        with patch("quimera.app.prompt_input._PT_AVAILABLE", True):
-            with patch("quimera.app.prompt_input.PromptSession"):
-                with patch("quimera.app.prompt_input.InMemoryHistory"):
-                    gate = _make_gate()
-                    gate._command_resolver = None
-                    assert gate._build_completer() is None
+        with patch("quimera.app.prompt_input.PromptSession"):
+            with patch("quimera.app.prompt_input.InMemoryHistory"):
+                gate = _make_gate()
+                gate._command_resolver = None
+                assert gate._build_completer() is None
 
     def test_with_resolver_returns_completer(self):
-        with patch("quimera.app.prompt_input._PT_AVAILABLE", True):
-            with patch("quimera.app.prompt_input.PromptSession"):
-                with patch("quimera.app.prompt_input.InMemoryHistory"):
-                    gate = _make_gate(command_resolver=lambda: ["/foo"])
-                    result = gate._build_completer()
-                    from quimera.app.prompt_input import _SlashCommandCompleter
-                    assert isinstance(result, _SlashCommandCompleter)
+        with patch("quimera.app.prompt_input.PromptSession"):
+            with patch("quimera.app.prompt_input.InMemoryHistory"):
+                gate = _make_gate(command_resolver=lambda: ["/foo"])
+                result = gate._build_completer()
+                from quimera.app.prompt_input import _SlashCommandCompleter
+                assert isinstance(result, _SlashCommandCompleter)
 
 
 # ---------------------------------------------------------------------------
@@ -328,72 +219,63 @@ class TestBuildCompleter:
 # ---------------------------------------------------------------------------
 
 class TestBuildKeyBindings:
-    def test_pt_unavailable_returns_none(self):
-        with patch("quimera.app.prompt_input._PT_AVAILABLE", False):
-            gate = _make_gate()
-            assert gate._build_key_bindings() is None
-
     def test_no_handler_returns_none(self):
-        with patch("quimera.app.prompt_input._PT_AVAILABLE", True):
-            with patch("quimera.app.prompt_input.PromptSession"):
-                with patch("quimera.app.prompt_input.InMemoryHistory"):
-                    gate = _make_gate()
-                    gate._theme_cycle_handler = None
-                    assert gate._build_key_bindings() is None
+        with patch("quimera.app.prompt_input.PromptSession"):
+            with patch("quimera.app.prompt_input.InMemoryHistory"):
+                gate = _make_gate()
+                gate._theme_cycle_handler = None
+                assert gate._build_key_bindings() is None
 
     def test_with_handler_returns_keybindings(self):
-        with patch("quimera.app.prompt_input._PT_AVAILABLE", True):
-            with patch("quimera.app.prompt_input.PromptSession"):
-                with patch("quimera.app.prompt_input.InMemoryHistory"):
-                    with patch("quimera.app.prompt_input.KeyBindings") as MockKB:
-                        called = []
-                        gate = _make_gate()
-                        gate.set_theme_cycle_handler(lambda: called.append(1))
-                        result = gate._build_key_bindings()
-                        assert result is MockKB.return_value
-
-    def test_cycle_theme_calls_handler(self):
-        with patch("quimera.app.prompt_input._PT_AVAILABLE", True):
-            with patch("quimera.app.prompt_input.PromptSession"):
-                with patch("quimera.app.prompt_input.InMemoryHistory"):
+        with patch("quimera.app.prompt_input.PromptSession"):
+            with patch("quimera.app.prompt_input.InMemoryHistory"):
+                with patch("quimera.app.prompt_input.KeyBindings") as MockKB:
                     called = []
                     gate = _make_gate()
                     gate.set_theme_cycle_handler(lambda: called.append(1))
-                    # Simulate the internal _cycle_theme function
-                    event = MagicMock()
-                    # Reach the _cycle_theme by calling _build_key_bindings and extracting it
-                    # We test indirectly: the KeyBindings.add is called correctly
-                    kb_mock = MagicMock()
-                    with patch("quimera.app.prompt_input.KeyBindings", return_value=kb_mock):
-                        gate._build_key_bindings()
-                        # kb_mock.add should have been called with "c-t", "escape", "t", "f6"
-                        assert kb_mock.add.call_count >= 1
+                    result = gate._build_key_bindings()
+                    assert result is MockKB.return_value
+
+    def test_cycle_theme_calls_handler(self):
+        with patch("quimera.app.prompt_input.PromptSession"):
+            with patch("quimera.app.prompt_input.InMemoryHistory"):
+                called = []
+                gate = _make_gate()
+                gate.set_theme_cycle_handler(lambda: called.append(1))
+                # Simulate the internal _cycle_theme function
+                event = MagicMock()
+                # Reach the _cycle_theme by calling _build_key_bindings and extracting it
+                # We test indirectly: the KeyBindings.add is called correctly
+                kb_mock = MagicMock()
+                with patch("quimera.app.prompt_input.KeyBindings", return_value=kb_mock):
+                    gate._build_key_bindings()
+                    # kb_mock.add should have been called with "c-t", "escape", "t", "f6"
+                    assert kb_mock.add.call_count >= 1
 
     def test_cycle_theme_handler_exception_suppressed(self):
-        with patch("quimera.app.prompt_input._PT_AVAILABLE", True):
-            with patch("quimera.app.prompt_input.PromptSession"):
-                with patch("quimera.app.prompt_input.InMemoryHistory"):
-                    def bad_handler(): raise RuntimeError("crash")
-                    gate = _make_gate()
-                    gate.set_theme_cycle_handler(bad_handler)
-                    kb_mock = MagicMock()
-                    # Capture the _cycle_theme closure
-                    captured_fn = []
+        with patch("quimera.app.prompt_input.PromptSession"):
+            with patch("quimera.app.prompt_input.InMemoryHistory"):
+                def bad_handler(): raise RuntimeError("crash")
+                gate = _make_gate()
+                gate.set_theme_cycle_handler(bad_handler)
+                kb_mock = MagicMock()
+                # Capture the _cycle_theme closure
+                captured_fn = []
 
-                    def capture_add(*args, **kwargs):
-                        def decorator(fn):
-                            captured_fn.append(fn)
-                            return fn
-                        return decorator
+                def capture_add(*args, **kwargs):
+                    def decorator(fn):
+                        captured_fn.append(fn)
+                        return fn
+                    return decorator
 
-                    kb_mock.add.side_effect = capture_add
-                    with patch("quimera.app.prompt_input.KeyBindings", return_value=kb_mock):
-                        gate._build_key_bindings()
-                    if captured_fn:
-                        event = MagicMock()
-                        # Should not raise
-                        captured_fn[0](event)
-                        event.app.invalidate.assert_called()
+                kb_mock.add.side_effect = capture_add
+                with patch("quimera.app.prompt_input.KeyBindings", return_value=kb_mock):
+                    gate._build_key_bindings()
+                if captured_fn:
+                    event = MagicMock()
+                    # Should not raise
+                    captured_fn[0](event)
+                    event.app.invalidate.assert_called()
 
 
 # ---------------------------------------------------------------------------
@@ -425,24 +307,15 @@ class TestFlushRenderer:
 
 class TestInputGateCall:
     def test_calls_session_prompt_when_available(self):
-        with patch("quimera.app.prompt_input._PT_AVAILABLE", True):
-            with patch("quimera.app.prompt_input.PromptSession") as MockPS:
-                with patch("quimera.app.prompt_input.InMemoryHistory"):
-                    session = MagicMock()
-                    session.prompt.return_value = "hello"
-                    MockPS.return_value = session
-                    gate = _make_gate()
-                    result = gate("> ")
-                    assert result == "hello"
-                    session.prompt.assert_called_once()
-
-    def test_fallback_to_input_when_no_session(self):
-        with patch("quimera.app.prompt_input._PT_AVAILABLE", False):
-            gate = _make_gate()
-            gate._session = None
-            with patch("builtins.input", return_value="typed"):
+        with patch("quimera.app.prompt_input.PromptSession") as MockPS:
+            with patch("quimera.app.prompt_input.InMemoryHistory"):
+                session = MagicMock()
+                session.prompt.return_value = "hello"
+                MockPS.return_value = session
+                gate = _make_gate()
                 result = gate("> ")
-                assert result == "typed"
+                assert result == "hello"
+                session.prompt.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -543,7 +416,7 @@ class TestRunInTerminalMessage:
         def callback():
             called.append(True)
 
-        with patch("quimera.app.prompt_input._PT_AVAILABLE", True), patch(
+        with patch(
             "quimera.app.prompt_input.run_in_terminal",
             side_effect=lambda fn, **kwargs: fn(),
         ) as mock_run:
