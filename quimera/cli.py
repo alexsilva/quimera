@@ -13,6 +13,7 @@ try:
 except ImportError:
     _HAS_PROMPT_TOOLKIT = False
 
+from .connection_configurator import ConnectionConfigurator
 from .constants import Visibility
 from . import plugins as _plugins
 from .plugins.base import (
@@ -94,57 +95,11 @@ def _prompt_bool(label: str, default: bool = False) -> bool:
 
 def _configure_connection_interactively(plugin, driver_hint: str | None = None):
     """Coleta configuração de conexão de forma interativa."""
-    current = plugin.effective_connection()
-    current_driver = "cli" if isinstance(current, CliConnection) else "openai"
-    driver = (driver_hint or _prompt_text("Driver", current_driver)).strip().lower()
-    while driver not in {"cli", "openai"}:
-        print("Driver inválido. Use 'cli' ou 'openai'.")
-        driver = _prompt_text("Driver", current_driver).strip().lower()
-
-    if driver == "cli":
-        cli_defaults = current if isinstance(current, CliConnection) else CliConnection(cmd=list(plugin.cmd))
-        cmd_default = shlex.join(cli_defaults.cmd) if cli_defaults.cmd else ""
-        cmd_text = _prompt_text("Comando", cmd_default)
-        if not cmd_text:
-            raise SystemExit("Configuração cancelada: comando CLI vazio.")
-        return CliConnection(
-            cmd=shlex.split(cmd_text),
-            prompt_as_arg=_prompt_bool("Enviar prompt como argumento", cli_defaults.prompt_as_arg),
-            output_format=cli_defaults.output_format,
-        )
-
-    api_defaults = current if isinstance(current, OpenAIConnection) else OpenAIConnection(
-        model=plugin.model or "gpt-4o",
-        base_url=plugin.base_url or "https://api.openai.com/v1",
-        api_key_env=plugin.api_key_env or "OPENAI_API_KEY",
-        provider=plugin.driver if plugin.driver != "cli" else "openai_compat",
-        supports_native_tools=plugin.supports_tools,
-        extra_body=getattr(current, "extra_body", None),
-    )
-    provider_default = api_defaults.provider if api_defaults.provider != "openai" else "openai_compat"
-    extra_body_raw = _prompt_text("extra_body (JSON, enter para ignorar)", "").strip()
-    extra_body = None
-    if extra_body_raw:
-        try:
-            extra_body = json.loads(extra_body_raw)
-            # Se o JSON for vazio ({}), trata como "limpar extra_body"
-            if extra_body == {}:
-                extra_body = None
-        except json.JSONDecodeError as exc:
-            print(f"JSON inválido: {exc}. extra_body será ignorado.")
-            extra_body = api_defaults.extra_body
-    else:
-        # Enter vazio = preserva o valor anterior
-        extra_body = api_defaults.extra_body
-    conn = OpenAIConnection(
-        model=_prompt_text("Modelo", api_defaults.model) or api_defaults.model,
-        base_url=_prompt_text("Base URL", api_defaults.base_url) or api_defaults.base_url,
-        api_key_env=_prompt_text("Variável da API key", api_defaults.api_key_env) or api_defaults.api_key_env,
-        provider=provider_default,
-        supports_native_tools=api_defaults.supports_native_tools,
-        extra_body=extra_body,
-    )
-    return conn
+    configurator = ConnectionConfigurator(_prompt_text, _prompt_bool, print)
+    try:
+        return configurator.configure(plugin, driver_hint=driver_hint)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
 
 
 def _parse_extra_body_arg(raw: str | None) -> dict | None:

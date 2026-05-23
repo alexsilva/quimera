@@ -31,6 +31,7 @@ from ..constants import (
     build_agents_help,
     build_help,
 )
+from ..connection_configurator import ConnectionConfigurator
 from ..plugins import remove_connection
 from .. import plugins as _plugins
 from ..plugins.base import (
@@ -355,65 +356,13 @@ class AppSystemLayer:
 
         Retorna (connection, base_plugin_name | None).
         """
-        base_name = self._prompt_text("Plugin base (enter para ignorar)", "").strip().lower()
-        if base_name:
-            base_plugin = _plugins.get(base_name)
-            if base_plugin is None:
-                raise ValueError(f"Plugin base '{base_name}' não encontrado.")
-            model_id = self._prompt_text("Modelo", "").strip()
-            if not model_id:
-                raise ValueError("Configuração cancelada: modelo vazio.")
-            return base_plugin.configure_with_model(model_id), base_plugin.name
-
-        current = plugin.effective_connection()
-        current_driver = "cli" if isinstance(current, CliConnection) else "openai"
-        driver = self._prompt_text("Driver", current_driver).strip().lower()
-        while driver not in {"cli", "openai"}:
-            self._display.show_warning_message("Driver inválido. Use 'cli' ou 'openai'.")
-            driver = self._prompt_text("Driver", current_driver).strip().lower()
-
-        if driver == "cli":
-            cli_defaults = current if isinstance(current, CliConnection) else CliConnection(cmd=list(plugin.cmd))
-            cmd_default = " ".join(cli_defaults.cmd) if cli_defaults.cmd else ""
-            cmd_text = self._prompt_text("Comando", cmd_default)
-            if not cmd_text:
-                raise ValueError("Configuração cancelada: comando CLI vazio.")
-            return CliConnection(
-                cmd=shlex.split(cmd_text),
-                prompt_as_arg=self._prompt_bool("Enviar prompt como argumento", cli_defaults.prompt_as_arg),
-                output_format=cli_defaults.output_format,
-            ), None
-
-        api_defaults = current if isinstance(current, OpenAIConnection) else OpenAIConnection(
-            model=plugin.model or "gpt-4o",
-            base_url=plugin.base_url or "https://api.openai.com/v1",
-            api_key_env=plugin.api_key_env or "OPENAI_API_KEY",
-            provider=plugin.driver if plugin.driver != "cli" else "openai_compat",
-            supports_native_tools=plugin.supports_tools,
-            extra_body=getattr(current, "extra_body", None),
+        configurator = ConnectionConfigurator(
+            self._prompt_text,
+            self._prompt_bool,
+            self._display.show_warning_message,
+            get_plugin=_plugins.get,
         )
-        provider_default = api_defaults.provider if api_defaults.provider != "openai" else "openai_compat"
-        extra_body_raw = self._prompt_text("extra_body (JSON, enter para ignorar)", "").strip()
-        extra_body = None
-        if extra_body_raw:
-            try:
-                extra_body = json.loads(extra_body_raw)
-                if extra_body == {}:
-                    extra_body = None
-            except json.JSONDecodeError as exc:
-                self._display.show_warning_message(f"JSON inválido: {exc}. extra_body será ignorado.")
-                extra_body = api_defaults.extra_body
-        else:
-            extra_body = api_defaults.extra_body
-        conn = OpenAIConnection(
-            model=self._prompt_text("Modelo", api_defaults.model) or api_defaults.model,
-            base_url=self._prompt_text("Base URL", api_defaults.base_url) or api_defaults.base_url,
-            api_key_env=self._prompt_text("Variável da API key", api_defaults.api_key_env) or api_defaults.api_key_env,
-            provider=provider_default,
-            supports_native_tools=api_defaults.supports_native_tools,
-            extra_body=extra_body,
-        )
-        return conn, None
+        return configurator.configure_with_base(plugin)
 
     def _resolve_prompt_target(self, command: str) -> str | None:
         """Resolve o agente alvo para preview de prompt."""
