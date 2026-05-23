@@ -1,407 +1,395 @@
-# Quimera — Arquitetura de Referência
+# Quimera — Arquitetura Atual
 
-> Documento de design. Descreve o estado atual, os problemas estruturais, e a arquitetura alvo.
-> Toda mudança de arquitetura deve ser validada contra este documento antes de ser implementada.
-
----
-
-## 1. Diagnóstico do estado atual
-
-### 1.1 Monolito implícito
-
-`QuimeraApp` (`app/core.py`) contém e instancia diretamente:
-
-```
-QuimeraApp
-  ├── renderer          (TerminalRenderer)
-  ├── event_sink        (EventSink)
-  ├── system_layer      (AppSystemLayer)        ← recebe self (app)
-  ├── protocol          (AppProtocol)           ← recebe self (app)
-  ├── session_metrics   (SessionMetricsService)
-  ├── task_services     (AppTaskServices)       ← recebe self (app)
-  ├── dispatch_services (AppDispatchServices)   ← recebe self (app)
-  ├── session_services  (AppSessionServices)    ← recebe self (app)
-  ├── input_gate        (InputGate)
-  ├── input_services    (AppInputServices)      ← recebe self (app)
-  ├── chat_round_orchestrator (ChatRoundOrchestrator) ← recebe self (app)
-  ├── context_manager   (ContextManager)
-  ├── agent_client      (AgentClient)
-  ├── storage           (SessionStorage)
-  ├── config            (ConfigManager)
-  ├── prompt_builder    (PromptBuilder)
-  └── turn_manager      (TurnManager)
-```
-
-Cada serviço que recebe `app` acessa `app.renderer`, `app.storage`, `app.history`, etc.
-diretamente — sem contrato formal. Isso cria acoplamento total.
-
-### 1.2 Problemas concretos
-
-| Problema | Manifestação |
-|---|---|
-| Acoplamento total | Qualquer serviço pode alterar qualquer estado de `app` |
-| Threading frágil | Worker thread chama `renderer` diretamente → disputa pelo terminal |
-| `_process_chat_queue` não sobrevive a exceções | Worker morre silenciosamente, trava o spin loop |
-| `turn_manager.next_turn()` antes de `chat_queue.put()` | Janela de corrida entre turno e entrega da mensagem |
-| `renderer.flush()` com timeout de 5s chamado de múltiplas threads | `TimeoutError` pode matar o worker |
-| Locks expostos como atributos públicos de `app` | Qualquer serviço usa `app._lock`, `app._output_lock`, etc. |
-| Construção lazy com `getattr` defensivo | `_get_gateway()`, `_get_tool_loop()` constroem dependências na hora errada |
+> Documento que descreve o estado real da arquitetura do Quimera, incluindo estrutura de módulos, dependências, modelo de threading e dívida técnica conhecida.
 
 ---
 
-## 2. Princípios da arquitetura alvo
+## 1. Visão Geral
 
-1. **Cada classe recebe só o que precisa** — sem passar `app` inteiro.
-2. **Renderer é exclusivo da main thread** — workers produzem eventos em fila; renderer consome.
-3. **Estado compartilhado via contentor thread-safe** — não via atributos dispersos em `app`.
-4. **Contratos explícitos (Protocol)** — interfaces definem o que cada camada expõe.
-5. **Worker thread nunca morre silenciosamente** — exceções são capturadas, logadas e turno é restaurado.
-6. **Migração incremental** — a arquitetura alvo não exige reescrita total; cada componente pode ser migrado isoladamente.
+O Quimera é um orquestrador multiagente terminal-based que permite aos usuários interagirem com diversos agentes de IA (Claude, Codex, Gemini, Ollama, OpenCode, etc.) através de uma interface unificada. O sistema executa tarefas em paralelo, gerencia estado de sessão, fornece uma interface rica com suporte a markup, temas e auditoria, e oferece um runtime de execução de tools em ambiente sandboxed.
+
+A arquitetura é organizada em torno de um loop principal de eventos em `quimera/app/core.py`, com separação parcial de responsabilidades entre camadas. Existem acoplamentos residuais significativos e algumas violações de fronteira conhecidas (documentadas na seção 7.5).
 
 ---
 
-## 3. Mapa de camadas
-
-```
-┌─────────────────────────────────────────────────────┐
-│  PRESENTATION (main thread only)                    │
-│  TerminalRenderer · InputGate · EventSink           │
-├─────────────────────────────────────────────────────┤
-│  APPLICATION                                        │
-│  ChatRoundOrchestrator · AppSystemLayer             │
-│  AppDispatchServices · AppTaskServices              │
-│  AppProtocol · ChatWorkerPool                       │
-├─────────────────────────────────────────────────────┤
-│  DOMAIN                                             │
-│  TurnManager · SessionState · History               │
-│  SharedState · TaskRepository                       │
-├─────────────────────────────────────────────────────┤
-│  INFRASTRUCTURE                                     │
-│  AgentClient · SessionStorage · PluginRegistry      │
-│  PromptBuilder · ContextManager · Workspace         │
-└─────────────────────────────────────────────────────┘
-```
-
-**Regra de dependência:** camadas só podem importar das camadas abaixo.
-Application → Domain → Infrastructure. Presentation → Application.
-**Nenhuma camada importa de `core.py`.**
-
----
-
-## 4. Modelo de threading
-
-### 4.1 Problema central
-
-O modelo atual (`threads > 1`) cria um worker thread que chama o renderer diretamente.
-O renderer não é thread-safe para output concorrente — ele assume um "dono" do terminal
-via `_output_lock` e `_prompt_owning_thread_id`.
-
-### 4.2 Arquitetura alvo: Producer / Consumer
-
-```
-Main Thread                         Worker Thread(s)
-──────────────                      ──────────────────
-InputGate.read()                    ChatWorker._run()
-  │                                   │
-  └─► input_queue.put(msg)            └─► call_agent(...)
-                                          │
-Main loop picks up                        └─► ui_event_queue.put(RenderEvent)
-  │
-  ├─► process_input_queue()          ← dequeue de mensagens do usuário
-  │
-  └─► process_ui_event_queue()       ← dequeue de eventos de render
-        │
-        └─► renderer.show_*(...)     ← único ponto de escrita no terminal
-```
-
-**Invariantes:**
-- `renderer.show_*()` é chamado **somente** no main thread.
-- Worker threads se comunicam com o main thread **somente** via `ui_event_queue`.
-- `TurnManager` permanece como sincronizador entre main e worker.
-
-### 4.3 `ui_event_queue` — tipos de eventos
-
-```python
-@dataclass
-class RenderEvent:
-    """Evento de UI produzido por worker, consumido pelo main thread."""
-    kind: str          # "system" | "agent_msg" | "warning" | "error" | "status"
-    content: str
-    agent: str | None = None
-    metadata: dict | None = None
-```
-
-### 4.4 Escopo real de M3: produtores que chamam renderer diretamente
-
-Criar `ui_event_queue` só em `core.py` **não fecha** o invariante "renderer exclusivo da main thread".
-Os pontos abaixo também precisam ser adaptados para enfileirar `RenderEvent` em vez de chamar renderer:
-
-| Arquivo | Linha | O que faz |
-|---|---|---|
-| `app/dispatch.py` | ~130 | `show_system_neutral` para progresso de tool hop |
-| `app/dispatch.py` | ~349 | imprime resposta do agente direto no renderer |
-| `app/agent_gateway.py` | ~148 | `flush()` e redisplay do prompt após chamada |
-| `app/chat_round.py` | ~126 | chamada direta ao renderer em alguns fluxos |
-| `app/chat_round.py` | ~223 | chamada direta ao renderer em alguns fluxos |
-
-O critério de saída de M3 é: `grep -rn "renderer\." app/dispatch.py app/agent_gateway.py app/chat_round.py` retorna zero chamadas a `show_*`.
-
-### 4.5 Watchdog para fan-out paralelo e stalls internos
-
-O `is_alive()` do worker detecta morte do thread, mas não detecta **stall interno** — se `future.result()` em `chat_round.py:463` travar, o worker continua "alive" porém preso.
-
-Política obrigatória:
-- Toda chamada `future.result()` deve usar `timeout` explícito.
-- Em caso de `TimeoutError`, cancelar o `Future`, enfileirar `RenderEvent("error", ...)` e restaurar o turno.
-- O worker deve emitir **heartbeat** periódico via `ui_event_queue` para que o main loop possa detectar inatividade.
-
-```python
-try:
-    result = future.result(timeout=AGENT_TIMEOUT_SECS)
-except TimeoutError:
-    future.cancel()
-    self._ui_queue.put(RenderEvent("error", "Agente não respondeu no prazo"))
-    self._turn_manager.reset()
-    return
-```
-
-### 4.6 Worker thread resiliente
-
-```python
-class ChatWorker:
-    def _run(self, msg: str) -> None:
-        try:
-            result = self._process(msg)
-            self._ui_queue.put(RenderEvent("agent_msg", result))
-        except UserCancelledError:
-            pass
-        except Exception as exc:
-            logger.exception("chat worker error")
-            self._ui_queue.put(RenderEvent("error", str(exc)))
-        finally:
-            self._turn_manager.reset()   # garante retorno ao turno humano
-```
-
-### 4.7 Segundo canal cross-thread: `EventSink` e tasks em background
-
-Mesmo após M3 migrar o fluxo de chat, há um segundo canal que gera UI fora da main thread:
-
-- `app/event_sink.py:40` executa handlers **inline** no thread chamador.
-- `app/core.py:448` registra handlers que chamam `show_muted_message` / `show_warning_message`.
-- `app/task_repository.py:42` publica eventos de task a partir de threads de executor.
-
-**Consequência:** task executors em background continuam chamando `renderer` fora da main thread, violando o invariante da seção 4.2 mesmo após M3.
-
-**Correção necessária:** `EventSink.publish()` deve enfileirar em `ui_event_queue` em vez de chamar handlers inline quando chamado fora da main thread:
-
-```python
-def publish(self, event: str, payload=None):
-    if threading.current_thread() is threading.main_thread():
-        self._dispatch(event, payload)   # direto — já é main thread
-    else:
-        self._ui_queue.put(RenderEvent("event", payload, metadata={"event": event}))
-```
-
-O `_drain_ui_events()` do main loop trata o caso `kind="event"` chamando `_dispatch` de forma segura.
-
----
-
-## 5. Contentor de estado compartilhado (`SessionState`)
-
-Em vez de atributos espalhados em `app`, um único objeto thread-safe:
-
-```python
-class SessionState:
-    """Estado mutável compartilhado entre main thread e workers (read-heavy)."""
-
-    def __init__(self):
-        self._lock = threading.RLock()
-        self._data: dict = {}
-
-    def get(self, key: str, default=None):
-        with self._lock:
-            return self._data.get(key, default)
-
-    def update(self, **kwargs):
-        with self._lock:
-            self._data.update(kwargs)
-
-    # Atalhos tipados
-    @property
-    def history(self) -> list:
-        return self.get("history", [])
-
-    def append_history(self, msg: dict) -> None:
-        with self._lock:
-            self._data.setdefault("history", []).append(msg)
-```
-
-Workers recebem `SessionState` — não `app`.
-
----
-
-## 6. Interfaces (Protocols)
-
-Cada camada expõe um Protocol, não a classe concreta:
-
-```python
-from typing import Protocol, runtime_checkable
-
-@runtime_checkable
-class IRenderer(Protocol):
-    def show_system(self, msg: str) -> None: ...
-    def show_agent(self, agent: str, msg: str) -> None: ...
-    def show_error(self, msg: str) -> None: ...
-    def show_warning(self, msg: str) -> None: ...
-
-@runtime_checkable
-class ISessionStorage(Protocol):
-    def session_id(self) -> str: ...
-    def append_log(self, role: str, content: str) -> None: ...
-    def load_last_session(self) -> dict: ...
-
-@runtime_checkable
-class IAgentClient(Protocol):
-    def call(self, agent: str, prompt: str, history: list) -> str: ...
-    def cancel(self) -> None: ...
-
-@runtime_checkable
-class IPluginResolver(Protocol):
-    def get(self, name: str): ...
-    def active_agents(self) -> list[str]: ...
-```
-
----
-
-## 7. Responsabilidade de cada componente
-
-| Componente | Camada | Responsabilidade | Não deve |
-|---|---|---|---|
-| `TerminalRenderer` | Presentation | Renderizar no terminal; nunca bloquear | Ser chamado de worker threads |
-| `InputGate` | Presentation | Ler input do usuário; gerir toolbar | Processar lógica de negócio |
-| `EventSink` | Presentation | Distribuir eventos de UI da fila | Produzir eventos |
-| `TurnManager` | Domain | Sincronizar turno humano ↔ agente | Ter lógica de negócio |
-| `SessionState` | Domain | Estado mutável thread-safe | Ter lógica de negócio |
-| `TaskRepository` | Domain | CRUD de tasks; acesso ao DB | Chamar agentes |
-| `ChatRoundOrchestrator` | Application | Orquestrar rodada multiagente | Renderizar diretamente |
-| `AppDispatchServices` | Application | Chamar AgentGateway; toolloop | Acessar terminal |
-| `AppTaskServices` | Application | Gerenciar ciclo de vida de tasks | Acessar storage diretamente |
-| `AppSystemLayer` | Application | Processar comandos `/cmd` | Ter estado de sessão |
-| `AgentClient` | Infrastructure | Chamar backend do agente | Conhecer UI |
-| `PluginRegistry` | Infrastructure | Resolver plugins por nome | Conhecer Application |
-| `SessionStorage` | Infrastructure | Persistir histórico e logs | Conhecer renderer |
-| `PromptBuilder` | Infrastructure | Montar prompt final | Chamar agentes |
-
----
-
-## 8. Estrutura de arquivos alvo
+## 2. Estrutura de Diretórios
 
 ```
 quimera/
-  domain/
-    turn.py              # TurnManager (já existe em app/turn.py → mover)
-    session_state.py     # SessionState (novo)
-    history.py           # lógica de trim/restore de histórico
-    task_repository.py   # (mover de app/task_repository.py)
-  application/
-    chat_round.py        # ChatRoundOrchestrator (já existe → desacoplar de app)
-    dispatch.py          # AppDispatchServices (já existe → remover acesso a app)
-    task_services.py     # AppTaskServices
-    system_layer.py      # AppSystemLayer
-    worker.py            # ChatWorker (novo — thread segura)
-  presentation/
-    renderer.py          # TerminalRenderer (já existe em ui/)
-    input_gate.py        # InputGate (já existe em app/)
-    event_sink.py        # EventSink + RenderEvent (consumidor do ui_event_queue)
-  infrastructure/
-    agent_client.py      # AgentClient (já existe em agents/)
-    storage.py           # SessionStorage (já existe)
-    plugin_registry.py   # PluginRegistry (já existe em plugins/base.py)
-    prompt_builder.py    # PromptBuilder (já existe)
-  app/
-    core.py              # QuimeraApp — apenas composição e ciclo principal (main loop)
-    interfaces.py        # Todos os Protocol (IRenderer, IStorage, IAgentClient, ...)
+├── app/                              # Camada de aplicação (orquestração principal)
+│   ├── core.py                       # Loop principal, estado e coordenação (~2300 linhas)
+│   ├── chat_round.py                 # Lógica de uma rodada de chat (humano → agente → resultado)
+│   ├── dispatch.py                   # Despacho de chamadas para agentes e tools
+│   ├── task.py                       # Ponto de entrada de tarefas (coordenação de alto nível)
+│   ├── task_execution_service.py     # Execução de tasks com pool de workers
+│   ├── task_review_service.py        # Revisão de resultados de tasks por outro agente
+│   ├── task_failover_policy.py       # Políticas de failover e retry de tasks
+│   ├── task_repository.py            # Acesso ao banco de dados de tasks (SQLite)
+│   ├── task_prompt_factory.py        # Criação de prompts específicos para tasks
+│   ├── task_classifiers.py           # Classificação de resultados (ACCEPT/RETRY/REPLAN/REJECT)
+│   ├── task_router.py                # Roteamento de tasks para o agente adequado
+│   ├── task_utils.py                 # Utilitários de suporte a tasks
+│   ├── task_events.py                # Definição de eventos do ciclo de vida de tasks
+│   ├── agent_call_service.py         # Serviço de chamada a agentes (retry, timeout)
+│   ├── agent_gateway.py              # Interface de baixo nível para AgentClient
+│   ├── agent_pool.py                 # Gerenciamento de pool de agentes disponíveis
+│   ├── worker.py                     # Worker thread de chat (isola exceções, recupera turno)
+│   ├── tool_loop.py                  # Loop de execução de tools com timeout
+│   ├── protocol.py                   # Parsing/geração do protocolo de handoff entre agentes
+│   ├── event_sink.py                 # Sistema de publish-subscribe de eventos internos
+│   ├── render_event.py               # Definição de eventos de renderização
+│   ├── handlers.py                   # Handlers de eventos de UI
+│   ├── display_service.py            # Serviço auxiliar de renderização (formatos, estilos)
+│   ├── system_layer.py               # Processamento de comandos de sistema (/task, /help, ...)
+│   ├── session.py                    # Gerenciamento de histórico e recuperação de sessão
+│   ├── session_metrics.py            # Métricas de sessão (turnos, latências, etc.)
+│   ├── turn.py                       # Gerenciamento de turno (humano ↔ agente)
+│   ├── inputs.py                     # Integração com InputGate (prompt_toolkit)
+│   ├── prompt_input.py               # InputGate: wrapper sobre prompt_toolkit.PromptSession
+│   ├── interfaces.py                 # Protocolos/interfaces entre camadas
+│   └── config.py                     # Configuração de nível de aplicação
+│
+├── runtime/                          # Executor de tools e runtime de agentes
+│   ├── tasks.py                      # Definição da interface de tasks de runtime
+│   ├── task_runner.py                # Execução de uma task individual
+│   ├── task_executor.py              # Pool de execução de tasks do runtime
+│   ├── task_reviewer.py              # Revisão de resultados no runtime
+│   ├── task_planning.py              # Planejamento e decomposição de tasks
+│   ├── executor.py                   # Executor genérico de operações do runtime
+│   ├── parser.py                     # Parser de blocos de tool retornados por agentes
+│   ├── streaming.py                  # Suporte a streaming de respostas de agentes
+│   ├── registry.py                   # Registro de tools disponíveis no runtime
+│   ├── tool_hops.py                  # Encadeamento de chamadas de tools (multi-hop)
+│   ├── approval.py                   # Aprovação interativa de ações do runtime
+│   ├── approve_summary.py            # Resumo de aprovações pendentes
+│   ├── policy.py                     # Políticas de execução (permissões, sandboxing)
+│   ├── models.py                     # Modelos de dados do runtime (Task, Result, etc.)
+│   ├── errors.py                     # Exceções específicas do runtime
+│   ├── config.py                     # Configuração do runtime (timeouts, limites)
+│   ├── drivers/                      # Drivers de execução de agentes
+│   │   ├── repl.py                   # Driver REPL (processo interativo persistente)
+│   │   ├── openai_compat.py          # Driver compatível com API OpenAI
+│   │   └── tool_schemas.py           # Schemas JSON de tools para drivers de API
+│   └── tools/                        # Implementações de tools individuais
+│       ├── shell.py                  # Tool de execução shell
+│       ├── files.py                  # Tool de acesso ao filesystem
+│       ├── web.py                    # Tool de acesso à web
+│       ├── patch.py                  # Tool de aplicação de patches
+│       └── tasks.py                  # Tool de criação/consulta de tasks
+│
+├── agents/                           # Infraestrutura de comunicação com agentes LLM
+│   ├── client.py                     # Cliente unificado para agentes (CLI, API, plugin)
+│   ├── parsers.py                    # Parsers de saída de agentes (JSON, markdown, etc.)
+│   ├── process_runner.py             # Execução e gerenciamento de subprocessos de agentes
+│   ├── signal_guard.py               # Proteção contra sinais durante chamadas de agentes
+│   ├── text_filters.py               # Filtros de texto (strip de ruído, normalização)
+│   └── warm_pool.py                  # Pool de processos pré-aquecidos de agentes
+│
+├── plugins/                          # Sistema de plugins por agente
+│   ├── base.py                       # Registro central (AgentPlugin, _plugin_registry)
+│   ├── claude.py                     # Plugin para Claude (Anthropic CLI)
+│   ├── codex.py                      # Plugin para Codex (OpenAI CLI)
+│   ├── gemini.py                     # Plugin para Gemini (Google CLI)
+│   ├── ollama.py                     # Plugin para Ollama (LLMs locais)
+│   ├── opencode.py                   # Plugin para OpenCode (vários backends)
+│   ├── mock.py                       # Plugin mock para testes
+│   └── spy_utils.py                  # Utilitários de espionagem/observação de plugins
+│
+├── ui/                               # Camada de apresentação
+│   ├── renderer.py                   # TerminalRenderer (Rich + Rich.Live, ~1200 linhas)
+│   └── audit.py                      # Logger de auditoria de eventos de renderização
+│
+├── domain/                           # Modelos de domínio (independentes de framework)
+│   └── session_state.py              # SessionState thread-safe (RLock), estado da sessão
+│
+├── evidence/                         # Sistema de evidências (rastreamento de contexto)
+│   ├── models.py                     # Modelos de evidência (EvidenceItem, etc.)
+│   ├── store.py                      # Armazenamento e recuperação de evidências
+│   ├── parser.py                     # Parser de blocos de evidência no texto
+│   └── formatter.py                  # Formatação de evidências para o prompt
+│
+├── sandbox/                          # Isolamento de execução
+│   └── bwrap.py                      # Sandbox via bubblewrap (bwrap), paths RW/RO
+│
+├── prompt.py                         # Injeção do bloco de execução no prompt (goal-driven)
+├── prompt_budget.py                  # Orçamento de tokens: trunca seções por prioridade
+├── prompt_templates.py               # Templates de prompt (seções, marcadores)
+├── prompt_kinds.py                   # Tipos de prompt (chat, task, review, etc.)
+├── context.py                        # Montagem dinâmica do contexto para prompts
+├── shared_state.py                   # Dicionário de estado compartilhado entre agentes
+├── storage.py                        # Persistência de sessão (logs, histórico em arquivo)
+├── workspace.py                      # Representação do workspace do usuário
+├── session_summary.py                # Sumarização de sessão para manter contexto compacto
+├── bugs.py                           # Detecção, correlação e reporte de bugs de runtime
+├── agent_events.py                   # Definição de eventos de agentes (AgentEvent, etc.)
+├── handoff_presenter.py              # Formatação de handoffs para exibição
+├── shared_state_presenter.py         # Formatação do shared state para exibição
+├── execution_mode_presenter.py       # Formatação do modo de execução ativo
+├── spy_output_presenter.py           # Formatação de saída de spy (debug de agentes)
+├── memory_selector.py                # Seleção de memória relevante para o prompt
+├── themes.py                         # Definição e carregamento de temas visuais
+├── config.py                         # Configuração global do projeto
+├── constants.py                      # Constantes (prompts de sistema, comandos, prefixos)
+├── modes.py                          # Modos de operação (debug, produção, etc.)
+├── metrics.py                        # Rastreamento de métricas de comportamento
+├── env_config.py                     # Carregamento de variáveis de ambiente
+├── paths.py                          # Resolução de paths (workspace, dados, config)
+└── cli.py                            # Ponto de entrada CLI (argparse, bootstrap)
 ```
 
 ---
 
-## 9. Ciclo principal (`run()`) alvo
+## 3. Camadas e Responsabilidades
 
-```python
-def run(self):
-    self._show_banner()
-    ui_queue: queue.Queue[RenderEvent] = queue.Queue()
-    worker_pool = ChatWorkerPool(
-        session_state=self._session_state,
-        agent_client=self._agent_client,
-        ui_queue=ui_queue,
-        turn_manager=self._turn_manager,
-    )
-    try:
-        while True:
-            # 1. Drena eventos de UI produzidos por workers
-            self._drain_ui_events(ui_queue)
+### 3.1 Camada de Aplicação (`app/`)
 
-            # 2. Se não é turno do humano, aguarda (com watchdog no worker)
-            if not self._turn_manager.is_human_turn:
-                if not worker_pool.is_alive():
-                    self._turn_manager.reset()  # worker morreu: recupera
-                self._turn_manager.wait_for_human_turn(timeout=0.01)
-                continue
+- **`core.py`**: Orquestrador central. Loop principal, estado da aplicação, coordenação de componentes, despacho para agentes e tasks. Arquivo grande (~2300 linhas) com responsabilidades sobrepostas — candidato prioritário a decomposição.
+- **`chat_round.py`**: Encapsula a lógica de uma rodada de chat completa (leitura de input → chamada ao agente → processamento de resultado → update de estado).
+- **`dispatch.py`**: Chama agentes via `AgentClient` e executa tools via `ToolLoop`. Gerencia o ciclo de vida de chamadas e resultados.
+- **`task*.py`**: Conjunto de serviços que implementam o ciclo de vida de tasks: criação, classificação, atribuição, execução, revisão, failover e notificação.
+- **`prompt_input.py`** (`InputGate`): Wrapper sobre `prompt_toolkit.PromptSession`. Gerencia o prompt interativo do usuário, toolbar dinâmica, histórico e coordenação com o renderer. Fallback para `input()` built-in apenas quando `_session` é `None` (contextos de teste).
+- **`inputs.py`**: Integração de alto nível com `InputGate`, exposta ao `core.py`.
+- **`event_sink.py`**: Publish-subscribe interno. Eventos publicados de worker threads são enfileirados na `ui_event_queue`; publicados da main thread são processados diretamente.
+- **`system_layer.py`**: Processa comandos `/cmd` do usuário. Contém adaptadores legados (`_LegacyPluginResolver`, `_LegacyAgentPoolAdapter`) indicando migração de contrato incompleta.
+- **`protocol.py`**: Define e parseia o formato de handoff entre agentes (`type`, `route`, `content`, `metadata`).
+- **`interfaces.py`**: Protocolos (typing) que tentam estabelecer contratos entre camadas — ainda subutilizados.
 
-            # 3. Lê input (não bloqueante)
-            user = self._input_gate.read(timeout=0)
-            if user is None:
-                if not sys.stdin.isatty():
-                    break
-                continue
+### 3.2 Camada de Runtime (`runtime/`)
 
-            if user == CMD_EXIT:
-                break
+Executor de tools e agentes em ambiente potencialmente sandboxed.
 
-            # 4. Comandos de sistema não geram turno de agente
-            if self._system_layer.handle(user):
-                continue
+- **`drivers/`**: Drivers de execução de agentes. `repl.py` gerencia processos interativos persistentes; `openai_compat.py` suporta a API OpenAI; `tool_schemas.py` define schemas JSON para uso em API mode.
+- **`tools/`**: Implementações individuais de tools: shell, filesystem, web, patch, tasks.
+- **`task_planning.py`**: Decompõe goals em tasks individuais.
+- **`approval.py`**: Solicita aprovação interativa do usuário antes de ações potencialmente destrutivas.
+- **`policy.py`**: Define o que pode ou não ser executado (permissões de sandbox).
 
-            # 5. Entrega mensagem para o worker e alterna turno
-            worker_pool.submit(user)
-            self._turn_manager.next_turn()  # só após submit — sem janela de corrida
+### 3.3 Camada de Agentes (`agents/`)
 
-    finally:
-        worker_pool.shutdown()
-        self._session_services.save()
-```
+- **`client.py`**: Interface unificada para todos os backends (CLI local, API remota, plugin). Suporta streaming.
+- **`warm_pool.py`**: Pool de processos pré-iniciados para reduzir latência de cold start.
+- **`process_runner.py`**: Gerencia subprocessos de agentes (stdin/stdout/stderr, timeout, sinalização).
 
-**Diferenças críticas em relação ao `run()` atual:**
-- `drain_ui_events()` é o único ponto que chama `renderer` no loop.
-- `submit()` ocorre **antes** de `next_turn()` — elimina a janela de corrida presente em `core.py:1059`.
-- Se o worker morreu, `is_alive()` detecta e `reset()` evita o travamento eterno.
+### 3.4 Camada de Plugins (`plugins/`)
 
-> **Nota:** `is_alive()` detecta morte do worker, mas não detecta **stall interno** (ex: `future.result()` preso no fan-out paralelo de `chat_round.py:463`). Ver seção 4.5.
+- **`base.py`**: Define `AgentPlugin` (dataclass com metadados: `name`, `driver`, `supports_task_execution`, `runtime_rw_paths`, etc.) e `_plugin_registry`.
+- Plugins concretos (`claude.py`, `codex.py`, `gemini.py`, `ollama.py`, `opencode.py`): cada um registra um `AgentPlugin` com configuração específica do backend.
+- `mock.py`: Plugin para testes unitários.
+
+### 3.5 Camada de Apresentação (`ui/`)
+
+- **`renderer.py`** (`TerminalRenderer`): Renderizador terminal usando `Rich` e `Rich.Live`. Gerencia buffer de streaming, temas, scrollback e atualizações em tempo real. Deve ser acessado **apenas** da main thread.
+- **`audit.py`**: Registra eventos de renderização para depuração.
+
+### 3.6 Domínio (`domain/`)
+
+- **`session_state.py`** (`SessionState`): Container thread-safe (`threading.RLock`) para o estado corrente da sessão. Compartilhado entre main thread e workers.
+
+### 3.7 Evidências (`evidence/`)
+
+Sistema de rastreamento de contexto verificável. Evidências são extraídas das respostas dos agentes, armazenadas em `store.py` e injetadas no prompt via `formatter.py` para fornecer contexto verificável nas próximas rodadas.
+
+### 3.8 Sandbox (`sandbox/`)
+
+- **`bwrap.py`**: Integração com `bubblewrap` (bwrap) para isolamento de processos. Define paths de leitura/escrita permitidos por agente via `AgentPlugin.runtime_rw_paths`.
+
+### 3.9 Módulos Raiz de Prompt
+
+| Módulo | Responsabilidade |
+|---|---|
+| `prompt.py` | Injeta bloco de execução goal-driven no topo do prompt quando `goal_canonical` está ativo |
+| `prompt_budget.py` | Gerencia orçamento de tokens: trunca seções por prioridade quando necessário |
+| `prompt_templates.py` | Templates base: seções obrigatórias/opcionais, marcadores XML |
+| `prompt_kinds.py` | Tipos de prompt por contexto (chat, task, review, handoff) |
+| `context.py` | Monta o contexto dinâmico: histórico, shared state, instruções |
+
+### 3.10 Outros Módulos Raiz
+
+| Módulo | Responsabilidade |
+|---|---|
+| `shared_state.py` | Dicionário de estado compartilhado entre agentes durante execução |
+| `storage.py` | Persistência de sessão em arquivo (logs, histórico) |
+| `workspace.py` | Representação do workspace: arquivos relevantes, CWD do projeto |
+| `session_summary.py` | Sumariza histórico longo para caber no contexto dos agentes |
+| `bugs.py` | Detecta, correlaciona e reporta bugs de runtime (burst de falhas, timeouts) |
+| `themes.py` | Carrega e aplica temas visuais ao renderer e toolbar |
+| `constants.py` | Constantes de sistema: prompts goal-driven, regras de revisão, comandos |
+| `paths.py` | Resolve paths de dados (`~/.local/share/quimera/...`), config e workspace |
+| `agent_events.py` | Tipos de eventos emitidos pelos agentes durante execução |
+| `*_presenter.py` | Formatadores de seções específicas do prompt (handoff, shared state, etc.) |
 
 ---
 
-## 10. Plano de migração incremental
+## 4. Modelo de Threading e Concorrência
 
-As etapas abaixo podem ser feitas independentemente, sem reescrita total:
+### 4.1 Main Thread (UI Thread)
 
-| Etapa | O que fazer | Critério de saída |
+- Executa o loop principal (`core.py:run()`).
+- Lê input do usuário via `InputGate` (wrapper sobre `prompt_toolkit`).
+- Drena a `ui_event_queue` e atualiza o `TerminalRenderer` — acesso exclusivo.
+- Gerencia o `TurnManager` (alternância humano ↔ agente).
+- Processa comandos de sistema via `AppSystemLayer`.
+
+### 4.2 Worker Threads
+
+- Usados para operações bloqueantes:
+  - Chamadas a agentes de IA (`AgentClient`).
+  - Execução de tools de runtime (shell, web, filesystem).
+  - Execução e revisão de tasks.
+- Principais implementações:
+  - `ChatWorker` (`app/worker.py`): workers de chat.
+  - `TaskExecutionService` (`app/task_execution_service.py`): pool para tasks.
+  - `ToolLoop` (`app/tool_loop.py`): execução individual com timeout.
+- Comunicam com a main thread apenas via:
+  - `ui_event_queue` (`queue.Queue`): eventos de renderização.
+  - `EventSink`: callbacks registrados da main thread.
+
+### 4.3 Sincronização
+
+| Mecanismo | Localização | Uso |
 |---|---|---|
-| **M1** | Criar `app/interfaces.py` com todos os Protocols | Arquivo existe; nenhum import quebrado |
-| **M2** | Extrair `SessionState` de `app` para `domain/session_state.py` | `app.history`, `app.shared_state` passam a delegar para `SessionState` |
-| **M3** | Criar `RenderEvent` e `ui_event_queue`; adaptar produtores em `dispatch`, `agent_gateway`, `chat_round` e `event_sink` | `grep -rn "renderer\." app/dispatch.py app/agent_gateway.py app/chat_round.py` retorna zero; `EventSink` usa fila fora da main thread |
-| **M4** | Substituir `_process_chat_queue` por `ChatWorker` resiliente com timeout em `future.result()` e heartbeat | Worker sobrevive a exceções; stall no fan-out paralelo gera erro em vez de travamento |
-| **M5** | Remover acesso a `app` dos serviços — injetar dependências explícitas | `grep -r "self\.app\." app/` retorna zero resultados |
-| **M6** | Mover arquivos para estrutura `domain/application/infrastructure/` | Imports atualizados; testes passando |
+| `ui_event_queue` | `core.py` | Worker → main thread (eventos de UI) |
+| `EventSink` | `app/event_sink.py` | Publish-subscribe interno |
+| `TurnManager` | `app/turn.py` | Alternância de turno com lock |
+| `SessionState` | `domain/session_state.py` | Estado compartilhado com `threading.RLock` |
 
-Pré-requisito de M5: seções 8 e 9 do TODO.md concluídas (violações de fronteira eliminadas).
+### 4.4 Problemas Conhecidos de Threading
+
+- `TerminalRenderer` não é thread-safe. Apesar da `ui_event_queue`, alguns caminhos em `display_service.py` e `agent_gateway.py` ainda chamam métodos do renderer diretamente de worker threads.
+- Conflito entre `rich.Live` e `prompt_toolkit`: dois renderers escrevendo sequências ANSI no mesmo terminal sem coordenação. Em eventos de resize (`SIGWINCH`), os handlers dos dois sistemas intercalam, corrompendo cursor e scroll.
+- A toolbar do `prompt_toolkit` (`refresh_interval=1.0`) só atualiza a cada segundo, causando atraso perceptível após resize ou mudança de tema.
+- **Extrapolação da toolbar**: o conteúdo da toolbar pode ultrapassar a largura do terminal quando há muitos campos (session_id, theme, model, turns, etc.) — o `prompt_toolkit` não faz clipping automático.
 
 ---
 
-## 11. O que NÃO mudar
+## 5. Fluxo de Controle Principal
 
-- `TurnManager` — está correto; só precisa ser movido para `domain/`.
-- `AgentGateway` — já recebe dependências injetadas; não passa `app`.
-- `PluginRegistry` — API pública estável.
-- Protocolo multi-agente (handoff) — lógica de negócio, não arquitetura.
-- Formato de persistência (`SessionStorage`) — compatibilidade com sessões existentes.
+O loop em `quimera/app/core.py:run()` segue este fluxo:
+
+1. **Inicialização**: carrega configuração, plugins, estado de sessão; cria renderer, InputGate, TurnManager, pool de workers, `ui_event_queue`.
+2. **Loop principal**:
+   - Drena `ui_event_queue` → atualiza renderer.
+   - Se não for turno do humano: aguarda com timeout (verifica worker vivo).
+   - Lê input via `InputGate`.
+   - Se comando `/cmd`: processa via `AppSystemLayer`.
+   - Se mensagem: submete ao worker, avança turno.
+   - Exceções no loop: capturadas, logadas, turno retorna ao humano.
+3. **Encerramento**: graceful shutdown de workers, salva sessão e métricas.
+
+---
+
+## 6. Pontos de Integração e Dependências Chave
+
+### 6.1 Integração com Agentes
+
+- `agents/client.py` abstrai todos os backends: CLI local (`claude`, `codex`, `gemini`), API (OpenAI-compat), driver REPL persistente.
+- `plugins/` define metadados por agente: capacidades, paths de sandbox, driver, tipos de task suportados.
+- `agents/warm_pool.py` mantém processos pré-aquecidos para reduzir latência.
+
+### 6.2 Sistema de Tasks
+
+Fluxo: `/task` → `TaskRepository` (criação) → `task_classifiers` (tipo) → `task_router` (agente) → `task_execution_service` (execução em worker) → `task_review_service` (revisão opcional) → `task_failover_policy` (retry/reject) → notificação via `ui_event_queue`.
+
+### 6.3 Construção de Prompt
+
+O prompt final é montado com estas seções em ordem de prioridade:
+
+1. `<rules>`: regras de conduta e goal-driven execution (de `constants.py` + `prompt.py`).
+2. `<execution_state>`: estado de execução atual (goal, step, criteria) — injetado por `prompt.py`.
+3. `<shared_state>`: estado compartilhado entre agentes (`shared_state_presenter.py`).
+4. `<evidence>`: evidências acumuladas (`evidence/formatter.py`).
+5. `<recent_conversation>`: últimas trocas de mensagens.
+6. `<persistent_context>`: resumo acumulado de sessão (`session_summary.py`).
+7. `<current_turn>`: mensagem atual.
+
+Orçamento de tokens gerenciado por `prompt_budget.py`: trunca seções de menor prioridade primeiro.
+
+### 6.4 Protocolo de Handoff entre Agentes
+
+Formato definido em `app/protocol.py`:
+
+```json
+{
+  "type": "handoff",
+  "route": "nome-do-agente",
+  "content": "descrição da tarefa",
+  "metadata": {"context": "...", "expected": "..."}
+}
+```
+
+Handoffs em sequência usam `"handoffs": [...]`. O sistema atualiza `shared_state` e histórico automaticamente.
+
+### 6.5 Arquitetura Orientada a Goals
+
+`constants.py` define os prompts: `PROMPT_GOAL_LOCK`, `PROMPT_STEP_LOCK`, `PROMPT_ACCEPTANCE_CRITERIA`, `PROMPT_REVIEWER_RULE` (ACCEPT/RETRY/REPLAN/REJECT). `prompt.py` injeta o bloco de execução quando `shared_state` contém `goal_canonical`.
+
+---
+
+## 7. Dívida Técnica e Problemas Conhecidos
+
+### 7.1 Acoplamento e Responsabilidades Sobrepostas
+
+- `core.py` (~2300 linhas): loop de I/O, gerenciamento de estado, dispatch, tasks — difícil de testar e evoluir isoladamente.
+- Muitos serviços em `app/` recebem a instância inteira de `app` e acessam atributos diretamente, em vez de dependências injetadas.
+- `interfaces.py` define Protocolos mas poucos componentes os usam; a maioria depende de classes concretas.
+
+### 7.2 Problemas de Renderização (Terminal)
+
+- **Conflito `rich.Live` × `prompt_toolkit`**: dois renderers escrevendo ANSI sem coordenação. Durante streaming, `Live.update()` é chamado sem `run_in_terminal`, competindo com o prompt.
+- **Resize (`SIGWINCH`)**: handlers dos dois sistemas intercalam sequências VT, corrompendo cursor e scroll.
+- **Toolbar extrapolando**: conteúdo sem clipping ultrapassa a largura do terminal em sessões com muitos campos.
+- **`refresh_interval=1.0`**: atualização da toolbar atrasada em até 1s após resize.
+
+### 7.3 Violações de Fronteira de Camadas (Em Progresso)
+
+Imports diretos de `plugins/` em módulos que não deveriam conhecer a camada de plugins:
+
+| Módulo | Violação | Status |
+|---|---|---|
+| `sandbox/bwrap.py` | importa `AgentPlugin` de `plugins.base` | Pendente (8c) |
+| `runtime/task_planning.py` | importa `AgentPlugin` de `plugins.base` | Pendente (8a) |
+| `runtime/drivers/repl.py` | chama `_plugin_registry.all_plugins()` diretamente | Pendente (8b) |
+| `app/core.py` | `call_agent_for_parallel` exposto via wrapper desnecessário | Pendente (8e) |
+| `ui/renderer.py` | consulta `quimera.plugins.get(...)` para metadados | Pendente (8d) |
+
+Ordem de resolução: 8c → 8a → 8b → 8e → 8d.
+
+### 7.4 Lookups de Plugin Distribuídos (Pós-Seção 8)
+
+Após fechar as violações acima, consolidar lookups de `quimera.plugins.get(...)` que ainda ocorrem dispersos:
+
+| Arquivo | Problema |
+|---|---|
+| `app/dispatch.py:184` | lookup direto de plugin |
+| `app/task.py:71` | lookup direto de plugin |
+| `app/system_layer.py:103` | lookup direto de plugin |
+| `app/chat_round.py:239` | lookup direto de plugin |
+
+Objetivo: centralizar em `core.py` ou num `PluginRegistry` encapsulado.
+
+### 7.5 Outros Problemas
+
+- **Adaptadores legados em `system_layer.py`**: `_LegacyPluginResolver` e `_LegacyAgentPoolAdapter` indicam migração de contrato incompleta.
+- **Cobertura de testes**: 2177 passando. Lacunas em testes de integração de tasks (criação → execução → revisão), concorrência e cenários de falha.
+- **Logging**: feito via `print` estruturado; sem níveis de gravidade padronizados ou saída JSON.
+- **`renderer.py`** (~1200 linhas): beneficiaria divisão em módulos menores.
+
+---
+
+## 8. Resumo
+
+### Pontos Fortes
+
+- Separação conceitual entre camadas: apresentação, aplicação, domínio, infraestrutura.
+- Input 100% via `prompt_toolkit`; sem redraw manual legado.
+- Sistema de tasks maduro: revisão, failover, roteamento por especialidade.
+- Arquitetura orientada a goals com critérios de aceitação e regras de revisão.
+- Sistema de evidências para rastreamento de contexto verificável.
+- Boa cobertura de testes unitários (2177 testes).
+
+### Problemas Prioritários
+
+1. **Threading/renderização**: conflito `rich.Live` × `prompt_toolkit` causa corrupção de terminal em resize e durante streaming.
+2. **Violações de fronteira** (seção 7.3): imports proibidos entre camadas dificultam evolução isolada.
+3. **`core.py` monolítico**: concentra responsabilidades demais — decomposição direcionada necessária.
+4. **Lookups de plugin distribuídos** (seção 7.4): cada módulo resolve metadados por conta própria.
