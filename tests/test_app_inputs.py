@@ -136,14 +136,14 @@ class TestAppInputServices:
 class TestReadUserInput:
     def test_timeout_positive_returns_value(self, mock_app, input_kwargs):
         from quimera.app.inputs import read_user_input
-        with patch("quimera.app.inputs.read_user_input_with_timeout") as mock_r:
+        with patch("quimera.app.inputs._tty.read_user_input_with_timeout") as mock_r:
             mock_r.return_value = "ok"
             result = read_user_input(mock_app.renderer, ">", 30, input_fn=MagicMock(), **input_kwargs)
             assert result == "ok"
 
     def test_timeout_positive_returns_none(self, mock_app, input_kwargs):
         from quimera.app.inputs import read_user_input
-        with patch("quimera.app.inputs.read_user_input_with_timeout") as mock_r:
+        with patch("quimera.app.inputs._tty.read_user_input_with_timeout") as mock_r:
             mock_r.return_value = None
             result = read_user_input(mock_app.renderer, ">", 30, input_fn=MagicMock(), **input_kwargs)
             assert result is None
@@ -151,7 +151,7 @@ class TestReadUserInput:
 
     def test_timeout_zero_stdin_none(self, mock_app, input_kwargs):
         from quimera.app.inputs import read_user_input
-        with patch("quimera.app.inputs._stdin", return_value=None):
+        with patch("quimera.app.inputs._tty._stdin", return_value=None):
             result = read_user_input(mock_app.renderer, ">", 0, input_fn=MagicMock(), **input_kwargs)
             assert result is None
 
@@ -160,7 +160,7 @@ class TestReadUserInput:
         mock_stdin = MagicMock()
         mock_stdin.isatty.return_value = True
         mock_input_fn = MagicMock(return_value="line")
-        with patch("quimera.app.inputs._stdin", return_value=mock_stdin):
+        with patch("quimera.app.inputs._tty._stdin", return_value=mock_stdin):
             result = read_user_input(mock_app.renderer, ">", 0, input_fn=mock_input_fn, **input_kwargs)
             assert result == "line"
             assert mock_app._nonblocking_input_status == "idle"
@@ -172,7 +172,7 @@ class TestReadUserInput:
         mock_stdin = MagicMock()
         mock_stdin.isatty.return_value = True
         mock_input_fn = MagicMock(side_effect=KeyboardInterrupt)
-        with patch("quimera.app.inputs._stdin", return_value=mock_stdin):
+        with patch("quimera.app.inputs._tty._stdin", return_value=mock_stdin):
             with pytest.raises(KeyboardInterrupt):
                 read_user_input(mock_app.renderer, ">", 0, input_fn=mock_input_fn, **input_kwargs)
             assert mock_app._nonblocking_input_status == "idle"
@@ -182,7 +182,7 @@ class TestReadUserInput:
         mock_stdin = MagicMock()
         mock_stdin.isatty.return_value = False
         mock_stdin.readline.return_value = "line\n"
-        with patch("quimera.app.inputs._stdin", return_value=mock_stdin):
+        with patch("quimera.app.inputs._tty._stdin", return_value=mock_stdin):
             with patch("select.select", return_value=([True], [], [])):
                 result = read_user_input(mock_app.renderer, ">", 0, input_fn=MagicMock(), **input_kwargs)
                 assert result == "line"
@@ -191,7 +191,7 @@ class TestReadUserInput:
         from quimera.app.inputs import read_user_input
         mock_stdin = MagicMock()
         mock_stdin.isatty.return_value = False
-        with patch("quimera.app.inputs._stdin", return_value=mock_stdin):
+        with patch("quimera.app.inputs._tty._stdin", return_value=mock_stdin):
             with patch("select.select", return_value=([], [], [])):
                 with patch("time.sleep"):
                     result = read_user_input(mock_app.renderer, ">", 0, input_fn=MagicMock(), **input_kwargs)
@@ -201,7 +201,7 @@ class TestReadUserInput:
         from quimera.app.inputs import read_user_input
         mock_stdin = MagicMock()
         mock_stdin.isatty.return_value = False
-        with patch("quimera.app.inputs._stdin", return_value=mock_stdin):
+        with patch("quimera.app.inputs._tty._stdin", return_value=mock_stdin):
             with patch("select.select", side_effect=Exception):
                 result = read_user_input(mock_app.renderer, ">", 0, input_fn=MagicMock(), **input_kwargs)
                 assert result is None
@@ -211,7 +211,7 @@ class TestReadUserInput:
         mock_stdin = MagicMock()
         mock_stdin.isatty.return_value = False
         mock_stdin.readline.return_value = ""
-        with patch("quimera.app.inputs._stdin", return_value=mock_stdin):
+        with patch("quimera.app.inputs._tty._stdin", return_value=mock_stdin):
             with patch("select.select", return_value=([True], [], [])):
                 result = read_user_input(mock_app.renderer, ">", 0, input_fn=MagicMock(), **input_kwargs)
                 assert result is None
@@ -240,7 +240,7 @@ class TestReadUserInput:
         from quimera.app.inputs import read_user_input
         mock_stdin = MagicMock()
         mock_stdin.isatty.side_effect = RuntimeError("boom")
-        with patch("quimera.app.inputs._stdin", return_value=mock_stdin):
+        with patch("quimera.app.inputs._tty._stdin", return_value=mock_stdin):
             result = read_user_input(mock_app.renderer, ">", 0, input_fn=MagicMock(), **input_kwargs)
             assert result is None
 
@@ -251,7 +251,7 @@ class TestReadUserInputWithTimeout:
         mock_stdin = MagicMock()
         mock_stdin.isatty.return_value = False
         mock_stdin.readline.return_value = "line\n"
-        with patch("quimera.app.inputs._stdin", return_value=mock_stdin):
+        with patch("quimera.app.inputs._tty._stdin", return_value=mock_stdin):
             with patch("select.select", return_value=([True], [], [])):
                 result = read_user_input_with_timeout(">", 5, input_fn=MagicMock())
                 assert result == "line"
@@ -260,7 +260,7 @@ class TestReadUserInputWithTimeout:
         from quimera.app.inputs import read_user_input_with_timeout
         mock_stdin = MagicMock()
         mock_stdin.isatty.return_value = False
-        with patch("quimera.app.inputs._stdin", return_value=mock_stdin):
+        with patch("quimera.app.inputs._tty._stdin", return_value=mock_stdin):
             with patch("select.select", return_value=([], [], [])):
                 result = read_user_input_with_timeout(">", 5, input_fn=MagicMock())
                 assert result is None
@@ -270,7 +270,7 @@ class TestReadUserInputWithTimeout:
         mock_stdin = MagicMock()
         mock_stdin.isatty.return_value = False
         mock_stdin.readline.return_value = ""
-        with patch("quimera.app.inputs._stdin", return_value=mock_stdin):
+        with patch("quimera.app.inputs._tty._stdin", return_value=mock_stdin):
             with patch("select.select", return_value=([True], [], [])):
                 result = read_user_input_with_timeout(">", 5, input_fn=MagicMock())
                 assert result is None
@@ -279,7 +279,7 @@ class TestReadUserInputWithTimeout:
         from quimera.app.inputs import read_user_input_with_timeout
         mock_stdin = MagicMock()
         mock_stdin.isatty.return_value = False
-        with patch("quimera.app.inputs._stdin", return_value=mock_stdin):
+        with patch("quimera.app.inputs._tty._stdin", return_value=mock_stdin):
             with patch("select.select", side_effect=Exception):
                 result = read_user_input_with_timeout(">", 5, input_fn=MagicMock())
                 assert result is None
@@ -289,7 +289,7 @@ class TestReadUserInputWithTimeout:
         from quimera.app.inputs import read_user_input_with_timeout
         mock_stdin = MagicMock()
         mock_stdin.isatty.return_value = True
-        with patch("quimera.app.inputs._stdin", return_value=mock_stdin):
+        with patch("quimera.app.inputs._tty._stdin", return_value=mock_stdin):
             result = read_user_input_with_timeout(">", 5, input_fn=lambda p: "hello")
             assert result == "hello"
 
@@ -297,7 +297,7 @@ class TestReadUserInputWithTimeout:
         from quimera.app.inputs import read_user_input_with_timeout
         mock_stdin = MagicMock()
         mock_stdin.isatty.return_value = True
-        with patch("quimera.app.inputs._stdin", return_value=mock_stdin):
+        with patch("quimera.app.inputs._tty._stdin", return_value=mock_stdin):
             with patch("queue.Queue.get", side_effect=queue.Empty):
                 result = read_user_input_with_timeout(">", 5, input_fn=MagicMock())
                 assert result is None

@@ -3272,10 +3272,10 @@ class PluginTests(unittest.TestCase):
         stdin.isatty.return_value = False
         stdin.readline.return_value = "mensagem\n"
 
-        with patch("quimera.app.inputs._stdin", return_value=stdin), patch(
-            "quimera.app.inputs.select.select",
+        with patch("quimera.app.inputs._tty._stdin", return_value=stdin), patch(
+            "quimera.app.inputs._tty.select.select",
             return_value=([stdin], [], []),
-        ), patch("quimera.app.inputs.threading.Thread") as mock_thread:
+        ), patch("quimera.app.inputs._tty.threading.Thread") as mock_thread:
             result = read_user_input_with_timeout("Você: ", timeout=1)
 
         self.assertEqual(result, "mensagem")
@@ -3285,10 +3285,10 @@ class PluginTests(unittest.TestCase):
         stdin = Mock()
         stdin.isatty.return_value = False
 
-        with patch("quimera.app.inputs._stdin", return_value=stdin), patch(
-            "quimera.app.inputs.select.select",
+        with patch("quimera.app.inputs._tty._stdin", return_value=stdin), patch(
+            "quimera.app.inputs._tty.select.select",
             return_value=([], [], []),
-        ), patch("quimera.app.inputs.threading.Thread") as mock_thread:
+        ), patch("quimera.app.inputs._tty.threading.Thread") as mock_thread:
             result = read_user_input_with_timeout("Você: ", timeout=1)
 
         self.assertIsNone(result)
@@ -3350,7 +3350,7 @@ class PluginTests(unittest.TestCase):
             return None
 
         with patch.dict("os.environ", {"EDITOR": "fake-editor"}), patch(
-            "quimera.app.inputs.subprocess.run",
+            "quimera.editor.subprocess.run",
             side_effect=_fake_editor_run,
         ):
             content = read_from_editor(app.renderer, output_lock=app._output_lock)
@@ -3374,7 +3374,7 @@ class PluginTests(unittest.TestCase):
             return None
 
         with patch.dict("os.environ", {"EDITOR": "fake-editor"}), patch(
-            "quimera.app.inputs.subprocess.run",
+            "quimera.editor.subprocess.run",
             side_effect=_fake_editor_run,
         ):
             content = read_from_editor(app.renderer, output_lock=app._output_lock)
@@ -3391,9 +3391,9 @@ class PluginTests(unittest.TestCase):
             return None
 
         with patch.dict("os.environ", {"EDITOR": "fake-editor"}), patch(
-            "quimera.app.inputs.subprocess.run",
+            "quimera.editor.subprocess.run",
             side_effect=_fake_editor_run,
-        ), patch("quimera.app.inputs.sys.stdout") as mock_stdout:
+        ), patch("quimera.editor.sys.stdout") as mock_stdout:
             read_from_editor(app.renderer, output_lock=app._output_lock)
 
         writes = [c.args[0] for c in mock_stdout.write.call_args_list]
@@ -3422,9 +3422,9 @@ class PluginTests(unittest.TestCase):
             return None
 
         with patch.dict("os.environ", {"EDITOR": "fake-editor"}), patch(
-            "quimera.app.inputs.subprocess.run",
+            "quimera.editor.subprocess.run",
             side_effect=_fake_editor_run,
-        ), patch("quimera.app.inputs.sys.stdout"):
+        ), patch("quimera.editor.sys.stdout"):
             content = read_from_editor(app.renderer, output_lock=app._output_lock)
 
         self.assertEqual(content, expected)

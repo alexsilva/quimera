@@ -1,20 +1,24 @@
-"""Componentes de `quimera.app.inputs`."""
+"""Serviços de entrada do aplicativo."""
 from __future__ import annotations
 
-import os
 import queue
-import select
-import shlex
-import shutil
-import subprocess
-import sys
-import tempfile
 import threading
 import time
-from contextlib import nullcontext
-from pathlib import Path
 
-from .interfaces import IRenderer
+from ..interfaces import IRenderer
+from ._tty import _stdin, read_user_input, read_user_input_with_timeout
+from ._editor import read_from_editor
+from ._file import _normalize_loaded_content, read_from_file
+
+__all__ = [
+    "AppInputServices",
+    "read_user_input",
+    "read_user_input_with_timeout",
+    "read_from_editor",
+    "read_from_file",
+    "_normalize_loaded_content",
+    "_stdin",
+]
 
 
 class AppInputServices:
@@ -58,7 +62,6 @@ class AppInputServices:
             stdin = _stdin()
             if stdin is not None and stdin.isatty():
                 return self._read_nonblocking_tty(prompt)
-        # Usa input_resolver() para obter o callable de input atual (InputGate ou input).
         return read_user_input(
             self._renderer,
             prompt,
@@ -143,152 +146,3 @@ class AppInputServices:
             self._set_prompt_text("")
             self._set_prompt_owner(threading.get_ident())
             self._suspended = False
-
-
-def read_user_input(
-    renderer: IRenderer,
-    prompt,
-    timeout: int,
-    *,
-    input_fn=input,
-    set_input_status=lambda _v: None,
-    set_prompt_text=lambda _v: None,
-    set_prompt_owner=lambda _v: None,
-    set_prompt_visible=lambda _v: None,
-    flush_deferred_messages=lambda: None,
-) -> str | None:
-    """Lê user input."""
-    if timeout and timeout > 0:
-        value = read_user_input_with_timeout(prompt, timeout, input_fn=input_fn)
-        if value is None:
-            renderer.show_system(f"*idle* ({timeout}s sem activity)")
-            return None
-        return value
-
-    if timeout == 0:
-        try:
-            stdin = _stdin()
-            if stdin is None:
-                return None
-            if stdin.isatty():
-                set_input_status("reading")
-                set_prompt_text(prompt)
-                set_prompt_owner(threading.get_ident())
-                flush_deferred_messages()
-                try:
-                    return input_fn(prompt)
-                except KeyboardInterrupt:
-                    print()
-                    raise
-                finally:
-                    set_input_status("idle")
-                    set_prompt_text("")
-                    set_prompt_owner(None)
-                    flush_deferred_messages()
-            if select.select([stdin], [], [], 0)[0]:
-                line = stdin.readline()
-                if line == "":
-                    return None
-                return line.rstrip("\r\n")
-            time.sleep(0.01)
-            return None
-        except Exception:
-            return None
-
-    try:
-        set_prompt_visible(False)
-        return input_fn(prompt)
-    except EOFError:
-        if timeout == 0:
-            return None
-        raise
-    except KeyboardInterrupt:
-        set_prompt_visible(False)
-        print()
-        raise
-
-
-def read_user_input_with_timeout(prompt: str, timeout: int, input_fn=input):
-    """Lê user input with timeout."""
-    stdin = _stdin()
-    if stdin is not None and not stdin.isatty():
-        try:
-            ready, _, _ = select.select([stdin], [], [], timeout)
-        except Exception:
-            return None
-        if not ready:
-            return None
-        line = stdin.readline()
-        if line == "":
-            return None
-        return line.rstrip("\r\n")
-
-    result_queue = queue.Queue()
-
-    def _reader():
-        try:
-            result_queue.put(input_fn(prompt))
-        except Exception:
-            result_queue.put(None)
-
-    thread = threading.Thread(target=_reader, daemon=True)
-    thread.start()
-    try:
-        return result_queue.get(timeout=timeout)
-    except queue.Empty:
-        return None
-
-
-def read_from_editor(renderer: IRenderer, output_lock=None):
-    """Lê from editor."""
-    editor_env = os.environ.get("EDITOR", "")
-    if editor_env:
-        editor_parts = shlex.split(editor_env)
-    else:
-        fallbacks = ["nano", "vim", "vi"]
-        editor_parts = next(([editor] for editor in fallbacks if shutil.which(editor)), None)
-        if not editor_parts:
-            renderer.show_error("\nNenhum editor encontrado. Defina $EDITOR ou instale nano/vim.\n")
-            return None
-
-    with tempfile.NamedTemporaryFile(suffix=".md", delete=False) as tmp:
-        tmp_path = tmp.name
-
-    with (output_lock if output_lock is not None else nullcontext()):
-        try:
-            subprocess.run([*editor_parts, tmp_path], check=True)
-            sys.stdout.write("\n")
-            sys.stdout.flush()
-            content = Path(tmp_path).read_text(encoding="utf-8")
-        except FileNotFoundError:
-            renderer.show_error(f"\nEditor não encontrado: {editor_parts[0]}\n")
-            return None
-        except subprocess.CalledProcessError as exc:
-            renderer.show_error(f"\nEditor encerrou com erro (código {exc.returncode}).\n")
-            return None
-        finally:
-            Path(tmp_path).unlink(missing_ok=True)
-    return _normalize_loaded_content(content)
-
-
-def read_from_file(renderer: IRenderer, path_str):
-    """Lê from file."""
-    path = Path(path_str).expanduser()
-    if not path.exists():
-        renderer.show_error(f"\nArquivo não encontrado: {path}\n")
-        return None
-    content = path.read_text(encoding="utf-8")
-    return _normalize_loaded_content(content)
-
-
-def _normalize_loaded_content(content: str) -> str | None:
-    """Normaliza conteúdo de /edit e /file sem perder linhas úteis."""
-    normalized = (content or "").replace("\r\n", "\n").replace("\r", "\n").rstrip("\n")
-    if not normalized.strip():
-        return None
-    return normalized
-
-
-def _stdin():
-    """Executa stdin."""
-    return sys.stdin

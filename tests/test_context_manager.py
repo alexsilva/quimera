@@ -139,7 +139,7 @@ def test_edit_no_editor_found(mock_which, mock_get, temp_files, renderer):
     base, session = temp_files
     cm = ContextManager(base, session, renderer)
     cm.edit()
-    renderer.show_error.assert_called_with("\nNenhum editor disponível. Instale nano, vim ou vi.\n")
+    renderer.show_error.assert_called_with("\nNenhum editor encontrado. Defina $EDITOR ou instale nano/vim.\n")
 
 
 @patch('os.environ.get')

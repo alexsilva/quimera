@@ -1,11 +1,10 @@
 """Componentes de `quimera.context`."""
-import os
 import shlex
-import shutil
 import subprocess
 import unicodedata
 from datetime import datetime
 from .constants import CMD_CONTEXT
+from .editor import Editor
 
 
 class ContextManager:
@@ -166,27 +165,7 @@ class ContextManager:
 
     def edit(self):
         """Executa edit."""
-        editor_env = os.environ.get("EDITOR")
-        if editor_env:
-            editor_parts = shlex.split(editor_env)
-        else:
-            fallback = next(
-                (e for e in ("nano", "vim", "vi") if shutil.which(e)),
-                None,
-            )
-            if not fallback:
-                self.renderer.show_error("\nNenhum editor disponível. Instale nano, vim ou vi.\n")
-                return
-            editor_parts = [fallback]
-
-        try:
-            subprocess.run(editor_parts + [str(self._base_context_path())], check=True)
-        except FileNotFoundError:
-            self.renderer.show_error(f"\nEditor não encontrado: {editor_parts[0]}\n")
-        except subprocess.CalledProcessError as exc:
-            self.renderer.show_error(
-                f"\nFalha ao abrir o contexto no editor (código {exc.returncode}).\n"
-            )
+        Editor(self.renderer).open_file(self._base_context_path())
 
     def update_with_summary(self, summary):
         """Substitui ou cria a seção de resumo curado da última sessão em arquivo local."""
