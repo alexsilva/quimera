@@ -18,7 +18,7 @@ from .handlers import PromptAwareStderrHandler
 from ..domain.session_state import SessionState
 from .chat_round import ChatRoundContext, ChatRoundOrchestrator
 from .bootstrapper import AppBootstrapper
-from .chat_processor import ChatProcessor
+from .chat_processor import run_chat_loop
 from .protocol import AppProtocol
 from .render_event import RenderEvent
 from .session import AppSessionServices, compute_history_hard_limit, trim_history_messages
@@ -81,7 +81,7 @@ from ..constants import (
 )
 from ..modes import MODES
 from ..shared_state import AGENT_STATE_KEYS, bootstrap_state_key_stamps, expire_stale_keys
-from .app_bug_services import AppBugServices
+from .bug_services import BugServices
 from .command_router import CommandRouter
 from .config import logger
 
@@ -547,7 +547,7 @@ class QuimeraApp:
             redisplay_user_prompt=self._redisplay_user_prompt_if_needed,
             output_lock=self._output_lock,
         )
-        self.bug_services = AppBugServices(
+        self.bug_services = BugServices(
             bug_store=self.bug_store,
             bug_detector=self.bug_detector,
             agent_bug_detector=self.agent_bug_detector,
@@ -571,11 +571,11 @@ class QuimeraApp:
         )
         self._ui_subscriptions = self._ui_event_handler.wire_event_ui()
 
-    def _ensure_bug_services(self) -> AppBugServices:
+    def _ensure_bug_services(self) -> BugServices:
         try:
             return object.__getattribute__(self, "bug_services")
         except AttributeError:
-            bs = AppBugServices(
+            bs = BugServices(
                 bug_store=getattr(self, "bug_store", None),
                 bug_detector=getattr(self, "bug_detector", None),
                 agent_bug_detector=getattr(self, "agent_bug_detector", None),
@@ -1635,12 +1635,8 @@ class QuimeraApp:
 
     def run(self):
         """Executa o loop interativo do chat multiagente."""
-        processor = getattr(self, "chat_processor", None)
-        if processor is None:
-            processor = ChatProcessor(
-                self,
-                chat_worker_cls=ChatWorker,
-                turn_manager_cls=TurnManager,
-            )
-            self.chat_processor = processor
-        processor.run()
+        run_chat_loop(
+            self,
+            chat_worker_cls=ChatWorker,
+            turn_manager_cls=TurnManager,
+        )

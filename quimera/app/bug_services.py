@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class AppBugServices:
+class BugServices:
     """Gerencia persistência, detecção automática e comandos de bugs."""
 
     def __init__(
