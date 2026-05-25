@@ -34,6 +34,7 @@ from .dispatch import AppDispatchServices
 from .inputs import AppInputServices
 from .interfaces import PluginResolverAdapter
 from .prompt_input import InputGate
+from .runtime_state import AppRuntimeState
 from .task import AppTaskServices, create_executor
 from .task_classifiers import classify_task_execution_result, classify_task_review_result, parse_task_command
 from .display_service import DisplayService
@@ -97,6 +98,48 @@ def normalize_agent_name(agent):
 class QuimeraApp:
     """Orquestra comandos locais, roteamento entre agentes e ciclo da sessão."""
     _SESSION_LOG_DISPLAY_MAX_CHARS = 96
+
+    def _ensure_runtime_state(self):
+        try:
+            return object.__getattribute__(self, "runtime_state")
+        except AttributeError:
+            rs = AppRuntimeState()
+            object.__setattr__(self, "runtime_state", rs)
+            return rs
+
+    _BACKWARD_MAP = {
+        "_nonblocking_input_status": "nonblocking_input_status",
+        "_nonblocking_input_thread": "nonblocking_input_thread",
+        "_nonblocking_input_queue": "nonblocking_input_queue",
+        "_nonblocking_input_status_lock": "nonblocking_input_status_lock",
+        "_nonblocking_prompt_visible": "nonblocking_prompt_visible",
+        "_nonblocking_prompt_text": "nonblocking_prompt_text",
+        "_prompt_owning_thread_id": "prompt_owning_thread_id",
+        "_chat_inflight_lock": "chat_inflight_lock",
+        "_chat_inflight_count": "chat_inflight_count",
+        "_chat_queue": "chat_queue",
+        "_chat_executor": "chat_executor",
+        "_chat_slot_semaphore": "chat_slot_semaphore",
+    }
+
+    def __getattr__(self, name: str):
+        if name == "runtime_state":
+            return self._ensure_runtime_state()
+        runtime_name = self._BACKWARD_MAP.get(name)
+        if runtime_name is not None:
+            rs = self._ensure_runtime_state()
+            return getattr(rs, runtime_name)
+        raise AttributeError(
+            f"'{type(self).__name__}' object has no attribute '{name}'"
+        )
+
+    def __setattr__(self, name: str, value):
+        runtime_name = self._BACKWARD_MAP.get(name)
+        if runtime_name is not None:
+            rs = self._ensure_runtime_state()
+            setattr(rs, runtime_name, value)
+            return
+        object.__setattr__(self, name, value)
 
     def __init__(self,
                  cwd: Path,
@@ -185,11 +228,11 @@ class QuimeraApp:
         self.input_services = AppInputServices(
             self.renderer,
             input_resolver=lambda: self.input_gate,
-            get_input_status=lambda: getattr(self, '_nonblocking_input_status', 'idle'),
-            set_input_status=lambda v: setattr(self, '_nonblocking_input_status', v),
-            set_prompt_text=lambda v: setattr(self, '_nonblocking_prompt_text', v),
-            set_prompt_owner=lambda v: setattr(self, '_prompt_owning_thread_id', v),
-            set_prompt_visible=lambda v: setattr(self, '_nonblocking_prompt_visible', v),
+            get_input_status=lambda: self.runtime_state.nonblocking_input_status,
+            set_input_status=lambda v: setattr(self.runtime_state, 'nonblocking_input_status', v),
+            set_prompt_text=lambda v: setattr(self.runtime_state, 'nonblocking_prompt_text', v),
+            set_prompt_owner=lambda v: setattr(self.runtime_state, 'prompt_owning_thread_id', v),
+            set_prompt_visible=lambda v: setattr(self.runtime_state, 'nonblocking_prompt_visible', v),
             flush_deferred_messages=lambda: self.system_layer.flush_deferred_messages(),
             output_lock=getattr(self, '_output_lock', None),
         )
@@ -301,18 +344,9 @@ class QuimeraApp:
         self._history_lock = threading.Lock()
         self._output_lock = threading.Lock()
         self._counter_lock = threading.Lock()
-        self._nonblocking_prompt_visible = False
-        self._nonblocking_prompt_text = ""
+        self.runtime_state = AppRuntimeState()
         self._deferred_system_messages: list[str] = []
         self._MAX_DEFERRED_SYSTEM_MESSAGES = 20
-        self._nonblocking_input_thread: threading.Thread | None = None
-        self._nonblocking_input_queue: "queue.Queue | None" = None
-        self._nonblocking_input_status = "idle"
-        self._nonblocking_input_status_lock = threading.Lock()
-        self._prompt_owning_thread_id: int | None = None
-        self._chat_inflight_lock = threading.Lock()
-        self._chat_inflight_count = 0
-        self._chat_queue = None
         self.turn_manager = TurnManager()
         for handler in logger.handlers:
             if isinstance(handler, PromptAwareStderrHandler):
@@ -322,7 +356,7 @@ class QuimeraApp:
                     show_error=self.show_error_message,
                     show_warning=self.show_warning_message,
                     show_system=self.show_system_message,
-                    is_reading=lambda: self._nonblocking_input_status
+                    is_reading=lambda: self.runtime_state.nonblocking_input_status
                 )
         is_new_session = not history_restored and not summary_loaded
 
@@ -469,10 +503,10 @@ class QuimeraApp:
         self.agent_client.tool_executor = self.tool_executor
         self._display_service = DisplayService(
             renderer=self.renderer,
-            input_status_getter=lambda: getattr(self, "_nonblocking_input_status", "idle"),
+            input_status_getter=lambda: self.runtime_state.nonblocking_input_status,
             redisplay_prompt=self._redisplay_user_prompt_if_needed,
             output_lock=self._output_lock,
-            prompt_owner_thread_id_getter=lambda: getattr(self, "_prompt_owning_thread_id", None),
+            prompt_owner_thread_id_getter=lambda: self.runtime_state.prompt_owning_thread_id,
             run_above_active_prompt=self.input_gate.run_in_terminal_message,
         )
         self.system_layer = AppSystemLayer(
@@ -928,9 +962,9 @@ class QuimeraApp:
         stdin = sys.stdin
         if stdin is None or not stdin.isatty():
             return
-        status_lock = getattr(self, "_nonblocking_input_status_lock", nullcontext())
+        status_lock = getattr(self.runtime_state, "nonblocking_input_status_lock", nullcontext())
         with status_lock:
-            if self._nonblocking_input_status != "reading":
+            if self.runtime_state.nonblocking_input_status != "reading":
                 return
         try:
             input_gate = getattr(self, "input_gate", None)
@@ -1369,7 +1403,7 @@ class QuimeraApp:
             snapshot = dict(self._parallel_toolbar_state)
         active = self._get_chat_inflight_count()
         snapshot["active"] = active
-        chat_queue = getattr(self, "_chat_queue", None)
+        chat_queue = getattr(self.runtime_state, "chat_queue", None)
         if chat_queue is not None:
             try:
                 queued_from_queue = max(0, int(chat_queue.qsize()))
@@ -1746,53 +1780,27 @@ class QuimeraApp:
                 self.turn_manager.next_turn()
 
     def _get_chat_inflight_count(self) -> int:
-        lock = getattr(self, "_chat_inflight_lock", None)
-        if lock is None:
-            return int(getattr(self, "_chat_inflight_count", 0) or 0)
-        with lock:
-            return int(getattr(self, "_chat_inflight_count", 0) or 0)
+        return self.runtime_state.get_chat_inflight_count()
 
     def _increment_chat_inflight(self) -> int:
-        lock = getattr(self, "_chat_inflight_lock", None)
-        if lock is None:
-            current = int(getattr(self, "_chat_inflight_count", 0) or 0) + 1
-            self._chat_inflight_count = current
-            self._refresh_parallel_toolbar()
-            return current
-        with lock:
-            current = int(getattr(self, "_chat_inflight_count", 0) or 0) + 1
-            self._chat_inflight_count = current
-        self._refresh_parallel_toolbar()
-        return current
+        return self.runtime_state.increment_chat_inflight(self._refresh_parallel_toolbar)
 
     def _decrement_chat_inflight(self) -> int:
-        lock = getattr(self, "_chat_inflight_lock", None)
-        if lock is None:
-            current = max(0, int(getattr(self, "_chat_inflight_count", 0) or 0) - 1)
-            self._chat_inflight_count = current
-            self._refresh_parallel_toolbar()
-            return current
-        with lock:
-            current = max(0, int(getattr(self, "_chat_inflight_count", 0) or 0) - 1)
-            self._chat_inflight_count = current
-        self._refresh_parallel_toolbar()
-        return current
+        return self.runtime_state.decrement_chat_inflight(self._refresh_parallel_toolbar)
 
     def _release_chat_slot(self) -> None:
-        slot_semaphore = getattr(self, "_chat_slot_semaphore", None)
-        if slot_semaphore is not None:
-            slot_semaphore.release()
+        self.runtime_state.release_chat_slot()
 
     def _should_render_ui_event_above_prompt(self) -> bool:
         """Retorna True quando há prompt ativo controlado por outra thread."""
         stdin = sys.stdin
         if stdin is None or not stdin.isatty():
             return False
-        status_lock = getattr(self, "_nonblocking_input_status_lock", nullcontext())
+        status_lock = getattr(self.runtime_state, "nonblocking_input_status_lock", nullcontext())
         with status_lock:
-            if self._nonblocking_input_status != "reading":
+            if self.runtime_state.nonblocking_input_status != "reading":
                 return False
-        owner_thread_id = getattr(self, "_prompt_owning_thread_id", None)
+        owner_thread_id = getattr(self.runtime_state, "prompt_owning_thread_id", None)
         if owner_thread_id is None:
             return False
         return owner_thread_id != threading.get_ident()
@@ -2059,8 +2067,8 @@ class QuimeraApp:
                 thread_name_prefix="quimera-chat-prompt",
             )
             chat_slot_semaphore = threading.Semaphore(async_capacity)
-            self._chat_executor = chat_executor
-            self._chat_slot_semaphore = chat_slot_semaphore
+            self.runtime_state.chat_executor = chat_executor
+            self.runtime_state.chat_slot_semaphore = chat_slot_semaphore
             chat_queue = queue.Queue()
             chat_worker = ChatWorker(
                 chat_queue=chat_queue,
@@ -2069,7 +2077,7 @@ class QuimeraApp:
                 turn_manager=self.turn_manager,
             )
             chat_worker.start()
-            self._chat_queue = chat_queue
+            self.runtime_state.chat_queue = chat_queue
 
         _pending_async_slot = False
         try:
@@ -2087,13 +2095,13 @@ class QuimeraApp:
                     chat_worker = None
                     chat_queue = None
                     threaded_chat = False
-                    self._chat_inflight_count = 0
-                    self._chat_queue = None
+                    self.runtime_state.chat_inflight_count = 0
+                    self.runtime_state.chat_queue = None
                     if chat_executor is not None:
                         chat_executor.shutdown(wait=False, cancel_futures=True)
                         chat_executor = None
-                        self._chat_executor = None
-                    self._chat_slot_semaphore = None
+                        self.runtime_state.chat_executor = None
+                    self.runtime_state.chat_slot_semaphore = None
                     self._refresh_parallel_toolbar()
                     if hasattr(self, "turn_manager"):
                         self.turn_manager.reset()
@@ -2205,12 +2213,12 @@ class QuimeraApp:
                     severity="high",
                     confidence=0.9,
                 )
-                lock = getattr(self, "_chat_inflight_lock", None)
+                lock = getattr(self.runtime_state, "chat_inflight_lock", None)
                 if lock is not None:
                     with lock:
-                        self._chat_inflight_count = 0
+                        self.runtime_state.chat_inflight_count = 0
                 else:
-                    self._chat_inflight_count = 0
+                    self.runtime_state.chat_inflight_count = 0
             try:
                 if threaded_chat and chat_queue is not None:
                     chat_queue.put(None)
@@ -2227,9 +2235,9 @@ class QuimeraApp:
                         chat_executor.shutdown(wait=True, cancel_futures=False)
             except KeyboardInterrupt:
                 pass
-            self._chat_executor = None
-            self._chat_slot_semaphore = None
-            self._chat_queue = None
+            self.runtime_state.chat_executor = None
+            self.runtime_state.chat_slot_semaphore = None
+            self.runtime_state.chat_queue = None
             self._refresh_parallel_toolbar()
             try:
                 self.session_services.shutdown(interrupted=interrupted_shutdown)
