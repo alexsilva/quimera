@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, Mock, patch
 
 from quimera.app.agent_pool import AgentPool
-from quimera.app.chat_round import ChatRoundOrchestrator
+from quimera.app.chat_round import ChatRoundContext, ChatRoundOrchestrator
 from quimera.app.core import QuimeraApp, TurnManager
 from quimera.app.render_event import RenderEvent
 from quimera.app.worker import ChatWorker
@@ -77,6 +77,73 @@ def _make_app(active_agents=None):
     app._generate_handoff_id = lambda task, target: f"gen-{target}"
 
     return app
+
+
+class TestChatRoundContextBridge(unittest.TestCase):
+    def test_core_passes_explicit_chat_round_context(self):
+        app = _make_app(active_agents=["claude", "codex"])
+        app._chat_state = {"history": []}
+        app._ui_event_queue = queue.Queue()
+        app.show_system_message = Mock()
+        app.task_services = Mock()
+        app.chat_round_orchestrator.process = Mock()
+
+        QuimeraApp._do_process_chat_message(app, "mensagem")
+
+        app.chat_round_orchestrator.process.assert_called_once()
+        _, kwargs = app.chat_round_orchestrator.process.call_args
+        ctx = kwargs["ctx"]
+        self.assertIsInstance(ctx, ChatRoundContext)
+        self.assertIs(ctx.session_services, app.session_services)
+        self.assertIs(ctx.task_services, app.task_services)
+        self.assertIs(ctx.renderer, app.renderer)
+        self.assertIs(ctx.session_state, app._chat_state)
+        self.assertIs(ctx.dispatch_services, app.dispatch_services)
+        self.assertIs(ctx.show_system_message, app.show_system_message)
+        self.assertIs(ctx.ui_queue, app._ui_event_queue)
+
+    def test_orchestrator_process_applies_runtime_context(self):
+        orchestrator = ChatRoundOrchestrator(
+            dispatch_services=Mock(),
+            parse_routing=lambda _user: (None, None, False),
+            agent_pool=AgentPool(["claude"]),
+            session_services=Mock(),
+            parse_response=lambda response: (response, None, None, False, False, None),
+            threads=1,
+            renderer=DummyRenderer(),
+        )
+        new_session_services = Mock()
+        new_task_services = Mock()
+        new_renderer = DummyRenderer()
+        new_dispatch = Mock()
+        new_ui_queue = queue.Queue()
+        new_state = {"history": []}
+        parse_routing = lambda _user: (None, None, False)
+        parse_response = lambda response: (response, None, None, False, False, None)
+        show_system = Mock()
+
+        ctx = ChatRoundContext(
+            session_services=new_session_services,
+            task_services=new_task_services,
+            renderer=new_renderer,
+            session_state=new_state,
+            parse_routing=parse_routing,
+            parse_response=parse_response,
+            dispatch_services=new_dispatch,
+            show_system_message=show_system,
+            ui_queue=new_ui_queue,
+        )
+        orchestrator.process("mensagem", ctx=ctx)
+
+        self.assertIs(orchestrator._session_services, new_session_services)
+        self.assertIs(orchestrator._task_services, new_task_services)
+        self.assertIs(orchestrator._renderer, new_renderer)
+        self.assertIs(orchestrator._session_state_dict, new_state)
+        self.assertIs(orchestrator._parse_routing, parse_routing)
+        self.assertIs(orchestrator._parse_response, parse_response)
+        self.assertIs(orchestrator._dispatch_services, new_dispatch)
+        self.assertIs(orchestrator._show_system_message, show_system)
+        self.assertIs(orchestrator._ui_queue, new_ui_queue)
 
 
 # ---------------------------------------------------------------------------

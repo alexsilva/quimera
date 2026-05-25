@@ -3,12 +3,30 @@ from __future__ import annotations
 
 import inspect
 import threading
+from dataclasses import dataclass
+from typing import Any
 
 from ..constants import HANDOFF_SYNTHESIS_MSG, MSG_EMPTY_INPUT, USER_ROLE
 from ..prompt_kinds import PromptKind
 from .config import logger
 from .render_event import RenderEvent
 from ..domain.session_state import SessionState
+
+
+@dataclass(frozen=True)
+class ChatRoundContext:
+    """Contexto explícito de dependências injetáveis na rodada de chat."""
+
+    session_services: Any | None = None
+    task_services: Any | None = None
+    renderer: Any | None = None
+    session_state: SessionState | dict | None = None
+    parse_routing: Any | None = None
+    parse_response: Any | None = None
+    dispatch_services: Any | None = None
+    show_system_message: Any | None = None
+    ui_queue: Any | None = None
+
 
 class ChatRoundOrchestrator:
     """Executa o fluxo completo de uma rodada de chat."""
@@ -347,8 +365,34 @@ class ChatRoundOrchestrator:
         if self._turn_manager is not None:
             self._turn_manager.reset()
 
-    def process(self, user):
+    def _apply_runtime_context(self, ctx: ChatRoundContext) -> None:
+        if ctx.session_services is not None:
+            self._session_services = ctx.session_services
+        if ctx.task_services is not None:
+            self._task_services = ctx.task_services
+        if ctx.renderer is not None:
+            self._renderer = ctx.renderer
+        if ctx.session_state is not None:
+            if isinstance(ctx.session_state, SessionState):
+                self._session_state = ctx.session_state
+                self._session_state_dict = None
+            else:
+                self._session_state = None
+                self._session_state_dict = ctx.session_state
+        if ctx.parse_routing is not None:
+            self._parse_routing = ctx.parse_routing
+        if ctx.parse_response is not None:
+            self._parse_response = ctx.parse_response
+        if ctx.dispatch_services is not None:
+            self._dispatch_services = ctx.dispatch_services
+        if ctx.show_system_message is not None:
+            self._show_system_message = ctx.show_system_message
+        self._ui_queue = ctx.ui_queue
+
+    def process(self, user, *, ctx: ChatRoundContext | None = None):
         """Implementação real do processamento de mensagens do chat."""
+        if ctx is not None:
+            self._apply_runtime_context(ctx)
         self._cancel_notice_tls.shown = False
         self._set_parallel_toolbar_state(
             active=0,

@@ -17,7 +17,7 @@ from pathlib import Path
 from .agent_pool import AgentPool, AgentPoolView
 from .handlers import PromptAwareStderrHandler
 from ..domain.session_state import SessionState
-from .chat_round import ChatRoundOrchestrator
+from .chat_round import ChatRoundContext, ChatRoundOrchestrator
 from .bootstrapper import AppBootstrapper
 from .protocol import AppProtocol
 from .render_event import RenderEvent
@@ -1634,18 +1634,18 @@ class QuimeraApp:
     def _do_process_chat_message(self, user):
         """Fachada compatível para a implementação da rodada de chat."""
         orchestrator = self.chat_round_orchestrator
-        if orchestrator is not None:
-            orchestrator._session_services = getattr(self, "session_services", None)
-            orchestrator._task_services = getattr(self, "task_services", None)
-            orchestrator._renderer = getattr(self, "renderer", None)
-            orchestrator._session_state = getattr(self, "_chat_state", None)
-            orchestrator._parse_routing = self.parse_routing
-            orchestrator._parse_response = self.parse_response
-            orchestrator._dispatch_services = getattr(self, "dispatch_services", None)
-            orchestrator._show_system_message = getattr(self, "show_system_message", None)
-        else:
-            orchestrator = self.chat_round_orchestrator
-        orchestrator.process(user)
+        ctx = ChatRoundContext(
+            session_services=getattr(self, "session_services", None),
+            task_services=getattr(self, "task_services", None),
+            renderer=getattr(self, "renderer", None),
+            session_state=getattr(self, "_chat_state", None),
+            parse_routing=self.parse_routing,
+            parse_response=self.parse_response,
+            dispatch_services=getattr(self, "dispatch_services", None),
+            show_system_message=getattr(self, "show_system_message", None),
+            ui_queue=getattr(self, "_ui_event_queue", None),
+        )
+        orchestrator.process(user, ctx=ctx)
 
     @staticmethod
     def _generate_handoff_id(task, target, timestamp=None):
@@ -2037,8 +2037,6 @@ class QuimeraApp:
         self._ui_event_queue = _ui_event_queue
         if hasattr(self, "dispatch_services") and self.dispatch_services is not None:
             self.dispatch_services._ui_queue = _ui_event_queue
-        if hasattr(self, "chat_round_orchestrator") and self.chat_round_orchestrator is not None:
-            self.chat_round_orchestrator._ui_queue = _ui_event_queue
         if hasattr(self, "event_sink") and self.event_sink is not None:
             self.event_sink._ui_queue = _ui_event_queue
         if not hasattr(self, "turn_manager") or self.turn_manager is None:
