@@ -50,13 +50,14 @@ class Editor:
     def _suspend_renderer_output(self):
         suspend = getattr(self._renderer, "suspend_output", None)
         resume = getattr(self._renderer, "resume_output", None)
-        suspended = False
+        suspend_attempted = False
         try:
             if callable(suspend):
-                suspended = bool(suspend())
+                suspend_attempted = True
+                suspend()
             yield
         finally:
-            if suspended and callable(resume):
+            if suspend_attempted and callable(resume):
                 resume()
 
     def compose(self, initial_content: str = "") -> str | None:

@@ -654,6 +654,9 @@ class TerminalRenderer:
 
     def suspend_output(self, timeout: float = 2.0) -> bool:
         """Suspende temporariamente prints no terminal (ex.: editor externo ativo)."""
+        # Ativa o bloqueio imediatamente para evitar vazamento de linhas enquanto
+        # o evento de controle ainda aguarda processamento na fila do writer.
+        self._output_suspended.set()
         done = threading.Event()
         self._queue.put(OutputControlEvent(suspend=True, done=done))
         return done.wait(timeout=timeout)
@@ -662,7 +665,12 @@ class TerminalRenderer:
         """Retoma prints no terminal e drena saídas deferidas."""
         done = threading.Event()
         self._queue.put(OutputControlEvent(suspend=False, done=done))
-        return done.wait(timeout=timeout)
+        resumed = done.wait(timeout=timeout)
+        if not resumed:
+            # Evita ficar preso em estado suspenso indefinidamente caso o writer
+            # esteja travado ou atrasado além do timeout.
+            self._output_suspended.clear()
+        return resumed
 
     # ------------------------------------------------------------------
     # Helpers internos

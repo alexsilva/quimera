@@ -123,6 +123,19 @@ def test_edit_with_editor_env(mock_run, mock_get, temp_files, renderer):
 
 
 @patch('os.environ.get')
+@patch('subprocess.run')
+def test_edit_resumes_output_even_when_suspend_ack_times_out(mock_run, mock_get, temp_files, renderer):
+    mock_get.return_value = "code --wait"
+    renderer.suspend_output.return_value = False
+    base, session = temp_files
+    cm = ContextManager(base, session, renderer)
+    cm.edit()
+    mock_run.assert_called_once_with(["code", "--wait", str(base)], check=True)
+    renderer.suspend_output.assert_called_once()
+    renderer.resume_output.assert_called_once()
+
+
+@patch('os.environ.get')
 @patch('shutil.which')
 @patch('subprocess.run')
 def test_edit_fallback_editor(mock_run, mock_which, mock_get, temp_files, renderer):

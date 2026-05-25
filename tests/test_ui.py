@@ -230,6 +230,14 @@ class TestTerminalRenderer:
         mock_renderer.flush(timeout=1.0)
         assert mock_renderer._console.print.call_count > 0
 
+    def test_suspend_output_sets_flag_before_writer_ack(self, mock_renderer):
+        """Mesmo sem ack do writer, o bloqueio deve ser aplicado imediatamente."""
+        mock_renderer._output_suspended.clear()
+        with patch.object(mock_renderer._queue, "put", autospec=True):
+            assert mock_renderer.suspend_output(timeout=0.01) is False
+        assert mock_renderer._output_suspended.is_set() is True
+        mock_renderer._output_suspended.clear()
+
     def test_show_banner_with_rich_preserves_ascii_layout(self, mock_renderer):
         """Banner deve evitar wrap para não distorcer logo ASCII."""
         banner = " / __ \\\\__  __(_)___\n/ / / / / / / / __"
