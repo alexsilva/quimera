@@ -218,6 +218,18 @@ class TestTerminalRenderer:
         assert rendered_line.plain.startswith("⚙ System message")
         assert any(span.start == 2 and span.style == "dim" for span in rendered_line.spans)
 
+    def test_suspend_and_resume_output_defers_prints(self, mock_renderer):
+        """Durante suspensão externa, prints ficam deferidos até retomar."""
+        assert mock_renderer.suspend_output(timeout=1.0) is True
+
+        mock_renderer.show_plain("mensagem deferida")
+        mock_renderer.flush(timeout=1.0)
+        assert mock_renderer._console.print.call_count == 0
+
+        assert mock_renderer.resume_output(timeout=1.0) is True
+        mock_renderer.flush(timeout=1.0)
+        assert mock_renderer._console.print.call_count > 0
+
     def test_show_banner_with_rich_preserves_ascii_layout(self, mock_renderer):
         """Banner deve evitar wrap para não distorcer logo ASCII."""
         banner = " / __ \\\\__  __(_)___\n/ / / / / / / / __"

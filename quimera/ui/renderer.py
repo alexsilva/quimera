@@ -229,6 +229,12 @@ class NoopEvent:
     force_flush: bool = False
 
 
+@dataclass
+class OutputControlEvent:
+    suspend: bool
+    done: threading.Event | None = None
+
+
 def _coerce_agent_name(agent: Any) -> str:
     """Normaliza identificador de agente para uso seguro na UI."""
     if isinstance(agent, str):
@@ -346,6 +352,7 @@ class TerminalRenderer:
         # Hooks de integração com prompt_toolkit (configurados via set_prompt_integration)
         self._is_prompt_active_fn = None  # () -> bool
         self._run_above_prompt_fn = None  # (callable) -> bool
+        self._output_suspended = threading.Event()
 
         # Fila com backpressure (item 3): produtor bloqueia se fila cheia
         self._queue: _queue_module.Queue = _queue_module.Queue(maxsize=512)
@@ -466,6 +473,9 @@ class TerminalRenderer:
 
         def _cprint(renderable, **kwargs):
             """Imprime via Live ativo, run_in_terminal (se prompt ativo) ou direto ao console."""
+            if self._output_suspended.is_set():
+                _deferred_post_prompt.append((renderable, kwargs))
+                return
             if _ul[0] is not None:
                 _ul[0].console.print(renderable, **kwargs)
                 return
@@ -484,6 +494,8 @@ class TerminalRenderer:
             Só imprime se houver Live ou run_above disponível — caso contrário
             mantém deferido para evitar colar saída na linha do prompt.
             Use force=True (ex: flush()) para forçar o dreno mesmo sem run_above."""
+            if self._output_suspended.is_set():
+                return
             run_above = self._run_above_prompt_fn
             while _deferred_post_prompt:
                 _r, _k = _deferred_post_prompt.popleft()
@@ -611,6 +623,16 @@ class TerminalRenderer:
                     _flush_deferred(force=event.force_flush)
                     event.done.set()
 
+                elif isinstance(event, OutputControlEvent):
+                    if event.suspend:
+                        self._output_suspended.set()
+                        _close_live()
+                    else:
+                        self._output_suspended.clear()
+                        _flush_deferred(force=True)
+                    if event.done is not None:
+                        event.done.set()
+
             except Exception:
                 _log.exception("writer thread: erro ao processar evento %r", event)
 
@@ -629,6 +651,18 @@ class TerminalRenderer:
             return True
         except TimeoutError:
             return False
+
+    def suspend_output(self, timeout: float = 2.0) -> bool:
+        """Suspende temporariamente prints no terminal (ex.: editor externo ativo)."""
+        done = threading.Event()
+        self._queue.put(OutputControlEvent(suspend=True, done=done))
+        return done.wait(timeout=timeout)
+
+    def resume_output(self, timeout: float = 2.0) -> bool:
+        """Retoma prints no terminal e drena saídas deferidas."""
+        done = threading.Event()
+        self._queue.put(OutputControlEvent(suspend=False, done=done))
+        return done.wait(timeout=timeout)
 
     # ------------------------------------------------------------------
     # Helpers internos

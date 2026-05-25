@@ -6,7 +6,7 @@ import shlex
 import shutil
 import sys
 import tempfile
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 
 from . import process_factory as subprocess
@@ -46,6 +46,19 @@ class Editor:
             return None
         return [fallback]
 
+    @contextmanager
+    def _suspend_renderer_output(self):
+        suspend = getattr(self._renderer, "suspend_output", None)
+        resume = getattr(self._renderer, "resume_output", None)
+        suspended = False
+        try:
+            if callable(suspend):
+                suspended = bool(suspend())
+            yield
+        finally:
+            if suspended and callable(resume):
+                resume()
+
     def compose(self, initial_content: str = "") -> str | None:
         """Abre editor com arquivo temporário; retorna conteúdo digitado."""
         parts = self._resolve()
@@ -59,11 +72,12 @@ class Editor:
             tmp_path = tmp.name
 
         try:
-            with (self._output_lock if self._output_lock is not None else nullcontext()):
-                subprocess.run([*parts, tmp_path], check=True)
-                sys.stdout.write("\n")
-                sys.stdout.flush()
-                content = Path(tmp_path).read_text(encoding="utf-8")
+            with self._suspend_renderer_output():
+                with (self._output_lock if self._output_lock is not None else nullcontext()):
+                    subprocess.run([*parts, tmp_path], check=True)
+                    sys.stdout.write("\n")
+                    sys.stdout.flush()
+                    content = Path(tmp_path).read_text(encoding="utf-8")
             return _normalize(content)
         except FileNotFoundError:
             self._renderer.show_error(f"\nEditor não encontrado: {parts[0]}\n")
@@ -82,7 +96,11 @@ class Editor:
         if parts is None:
             return False
         try:
-            subprocess.run([*parts, str(path)], check=True)
+            with self._suspend_renderer_output():
+                with (self._output_lock if self._output_lock is not None else nullcontext()):
+                    subprocess.run([*parts, str(path)], check=True)
+                    sys.stdout.write("\n")
+                    sys.stdout.flush()
             return True
         except FileNotFoundError:
             self._renderer.show_error(f"\nEditor não encontrado: {parts[0]}\n")

@@ -41,6 +41,7 @@ from .display_service import DisplayService
 from .system_layer import AppSystemLayer
 from .turn import TurnManager
 from .event_sink import EventSink
+from .ui_event_handler import UiEventHandler
 from .worker import ChatWorker
 from .task_events import (
     BugFiled,
@@ -205,7 +206,6 @@ class QuimeraApp:
         metrics_file = infrastructure.metrics_file
         self.renderer = infrastructure.renderer
         self.event_sink = infrastructure.event_sink
-        self._wire_event_ui()
         self.user_name = self.config.user_name
         self.visibility = Visibility(visibility)
         self.session_metrics = SessionMetricsService()
@@ -533,6 +533,41 @@ class QuimeraApp:
         )
         # Set up task executors for autonomous task execution
         self._setup_task_executors()
+        self._ui_event_handler = UiEventHandler(
+            renderer=self.renderer,
+            input_gate=self.input_gate,
+            runtime_state=self.runtime_state,
+            system_layer=self.system_layer,
+            event_sink=self.event_sink,
+            show_muted_message=self.show_muted_message,
+            show_system_message=self.show_system_message,
+            show_warning_message=self.show_warning_message,
+            show_error_message=self.show_error_message,
+            redisplay_user_prompt=self._redisplay_user_prompt_if_needed,
+            output_lock=self._output_lock,
+        )
+        self._ui_subscriptions = self._ui_event_handler.wire_event_ui()
+
+    def _ensure_ui_event_handler(self):
+        """Retorna _ui_event_handler, criando lazy se necessário (ex.: __new__ em testes)."""
+        handler = getattr(self, '_ui_event_handler', None)
+        if handler is not None:
+            return handler
+        handler = UiEventHandler(
+            renderer=getattr(self, 'renderer', None),
+            input_gate=getattr(self, 'input_gate', None),
+            runtime_state=self._ensure_runtime_state(),
+            system_layer=getattr(self, 'system_layer', None),
+            event_sink=getattr(self, 'event_sink', None),
+            show_muted_message=self.show_muted_message,
+            show_system_message=self.show_system_message,
+            show_warning_message=self.show_warning_message,
+            show_error_message=self.show_error_message,
+            redisplay_user_prompt=self._redisplay_user_prompt_if_needed,
+            output_lock=getattr(self, '_output_lock', nullcontext()),
+        )
+        object.__setattr__(self, '_ui_event_handler', handler)
+        return handler
 
     def _ensure_agent_pool(self) -> AgentPool:
         """Materializa o pool ao acessar instâncias criadas via ``__new__``."""
@@ -874,55 +909,8 @@ class QuimeraApp:
 
     def _wire_event_ui(self) -> None:
         """Conecta eventos de domínio à renderização UI."""
-        def _on_task_started(event):
-            self.show_muted_message(f"[task {event.task_id}] {event.assigned_to}: iniciando")
-
-        def _on_task_completed(event):
-            line = f"[task {event.task_id}] concluída"
-            if event.reviewed_by:
-                line = f"{line} | aprovada por {event.reviewed_by}"
-            summary = summarize_task_feedback(event.result)
-            if summary:
-                line = f"{line}: {summary}"
-            self.show_muted_message(line)
-
-        def _on_task_failed(event):
-            system_layer = getattr(self, "system_layer", None)
-            if system_layer is not None and hasattr(system_layer, "show_warning_message"):
-                system_layer.show_warning_message(f"[task {event.task_id}] falhou: {event.reason or 'sem motivo'}")
-            else:
-                self.renderer.show_warning(f"[task {event.task_id}] falhou: {event.reason or 'sem motivo'}")
-
-        def _on_task_proposed(event):
-            self.show_system_message(f"[task {event.task_id}] proposta: {event.description[:60]}")
-
-        def _on_task_submitted(event):
-            self.show_muted_message(f"[task {event.task_id}] submetida para revisão")
-
-        def _on_task_requeued(event):
-            system_layer = getattr(self, "system_layer", None)
-            if system_layer is not None and hasattr(system_layer, "show_warning_message"):
-                system_layer.show_warning_message(f"[task {event.task_id}] requeue (tentativa {event.attempt})")
-            else:
-                self.renderer.show_warning(f"[task {event.task_id}] requeue (tentativa {event.attempt})")
-
-        def _on_bug_filed(event):
-            severity_icon = {"critical": "🔴", "high": "🟠", "medium": "🟡", "low": "🟢"}.get(
-                event.severity.lower(), "⚪"
-            )
-            self.show_muted_message(
-                f"{severity_icon} [bug {event.bug_id}] {event.category}: {event.summary}"
-            )
-
-        self._ui_subscriptions = [
-            self.event_sink.subscribe(TaskStarted, _on_task_started),
-            self.event_sink.subscribe(TaskCompleted, _on_task_completed),
-            self.event_sink.subscribe(TaskFailed, _on_task_failed),
-            self.event_sink.subscribe(TaskProposed, _on_task_proposed),
-            self.event_sink.subscribe(TaskSubmittedForReview, _on_task_submitted),
-            self.event_sink.subscribe(TaskRequeued, _on_task_requeued),
-            self.event_sink.subscribe(BugFiled, _on_bug_filed),
-        ]
+        handler = self._ensure_ui_event_handler()
+        self._ui_subscriptions = handler.wire_event_ui()
 
     def _setup_task_executors(self):
         """Set up task executors for explicit human-created task execution."""
@@ -1769,39 +1757,11 @@ class QuimeraApp:
 
     def _should_render_ui_event_above_prompt(self) -> bool:
         """Retorna True quando há prompt ativo controlado por outra thread."""
-        stdin = sys.stdin
-        if stdin is None or not stdin.isatty():
-            return False
-        status_lock = getattr(self.runtime_state, "nonblocking_input_status_lock", nullcontext())
-        with status_lock:
-            if self.runtime_state.nonblocking_input_status != "reading":
-                return False
-        owner_thread_id = getattr(self.runtime_state, "prompt_owning_thread_id", None)
-        if owner_thread_id is None:
-            return False
-        return owner_thread_id != threading.get_ident()
+        return self._ensure_ui_event_handler()._should_render_ui_event_above_prompt()
 
     def _run_ui_event_above_prompt(self, callback) -> bool:
         """Tenta renderizar callback acima do prompt ativo via InputGate."""
-        if not callable(callback):
-            return False
-        input_gate = getattr(self, "input_gate", None)
-        run_in_terminal_message = getattr(input_gate, "run_in_terminal_message", None)
-        if not callable(run_in_terminal_message):
-            return False
-        output_lock = getattr(self, "_output_lock", nullcontext())
-
-        def _render_callback() -> None:
-            with output_lock:
-                callback()
-                flush = getattr(self.renderer, "flush", None)
-                if callable(flush):
-                    flush()
-
-        try:
-            return bool(run_in_terminal_message(_render_callback))
-        except Exception:
-            return False
+        return self._ensure_ui_event_handler()._run_ui_event_above_prompt(callback)
 
     def _handle_local_processing_interrupt(self) -> None:
         """Cancela só o processamento atual e devolve o chat ao input."""
@@ -1902,81 +1862,7 @@ class QuimeraApp:
 
     def _drain_ui_events(self, ui_queue: "queue.Queue") -> None:
         """Consome todos os RenderEvents pendentes na fila e chama renderer na main thread."""
-        while True:
-            try:
-                event: RenderEvent = ui_queue.get_nowait()
-            except queue.Empty:
-                break
-            try:
-                event_type = event.type
-                if event_type == RenderEvent.SYSTEM:
-                    self.show_muted_message(event.payload)
-                elif event_type == RenderEvent.TEXT:
-                    no_response = (event.metadata or {}).get("no_response", False)
-                    agent_name = str(event.agent or "").strip()
-
-                    # Eventos TEXT sem agente válido não devem aparecer como
-                    # "🤖 Unknown"; trata como mensagem neutra de sistema.
-                    if not agent_name:
-                        payload = str(event.payload or "").strip()
-                        if payload:
-                            self.show_muted_message(payload)
-                        continue
-
-                    def _render_text_event() -> None:
-                        if no_response:
-                            self.renderer.show_no_response(agent_name)
-                        else:
-                            self.renderer.show_message(agent_name, event.payload)
-
-                    if self._should_render_ui_event_above_prompt():
-                        if not self._run_ui_event_above_prompt(_render_text_event):
-                            _render_text_event()
-                            self._redisplay_user_prompt_if_needed(clear_first=False)
-                        continue
-                    _render_text_event()
-                elif event_type == RenderEvent.WARNING:
-                    self.show_warning_message(event.payload)
-                elif event_type == RenderEvent.ERROR:
-                    self.show_error_message(event.payload)
-                elif event_type == RenderEvent.HANDOFF:
-                    meta = event.metadata or {}
-
-                    def _render_handoff_event() -> None:
-                        self.renderer.show_handoff(event.agent, meta.get("to"), task=meta.get("task"))
-
-                    if self._should_render_ui_event_above_prompt():
-                        if not self._run_ui_event_above_prompt(_render_handoff_event):
-                            _render_handoff_event()
-                            self._redisplay_user_prompt_if_needed(clear_first=False)
-                        continue
-                    _render_handoff_event()
-                elif event_type == RenderEvent.TURN_SUMMARY:
-
-                    def _render_turn_summary_event() -> None:
-                        self.renderer.show_turn_summary(event.agent, event.payload)
-
-                    if self._should_render_ui_event_above_prompt():
-                        if not self._run_ui_event_above_prompt(_render_turn_summary_event):
-                            _render_turn_summary_event()
-                            self._redisplay_user_prompt_if_needed(clear_first=False)
-                        continue
-                    _render_turn_summary_event()
-                elif event_type == RenderEvent.REDISPLAY:
-                    flush = getattr(self.renderer, "flush", None)
-                    if callable(flush):
-                        flush()
-                    if hasattr(self, "_redisplay_user_prompt_if_needed"):
-                        self._redisplay_user_prompt_if_needed(clear_first=False)
-                elif event_type == RenderEvent.EVENT:
-                    meta = event.metadata or {}
-                    event_obj = meta.get("event_obj")
-                    if event_obj is not None and hasattr(self, "event_sink"):
-                        self.event_sink._dispatch(event_obj)
-            except Exception:
-                logger.exception("_drain_ui_events: erro ao processar evento type=%s", event.type)
-            finally:
-                ui_queue.task_done()
+        self._ensure_ui_event_handler().drain_ui_events(ui_queue)
 
     def run(self):
         """Executa o loop interativo do chat multiagente."""
