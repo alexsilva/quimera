@@ -18,9 +18,17 @@ from .agent_pool import AgentPool, AgentPoolView
 from .handlers import PromptAwareStderrHandler
 from ..domain.session_state import SessionState
 from .chat_round import ChatRoundOrchestrator
+from .bootstrapper import AppBootstrapper
 from .protocol import AppProtocol
 from .render_event import RenderEvent
 from .session import AppSessionServices, compute_history_hard_limit, trim_history_messages
+from .session_paths import (
+    resolve_render_debug_log_path,
+    resolve_session_log_path,
+    resolve_workspace_metrics_path,
+    resolve_workspace_render_ansi_path,
+    resolve_workspace_render_log_path,
+)
 from .session_metrics import SessionMetricsService
 from .dispatch import AppDispatchServices
 from .inputs import AppInputServices
@@ -86,20 +94,6 @@ def normalize_agent_name(agent):
     return agent
 
 
-def _call_path_getter(source, getter_name: str, session_id: str):
-    getter = getattr(source, getter_name, None)
-    if callable(getter) and session_id:
-        try:
-            value = getter(session_id)
-        except Exception:
-            return None
-        if isinstance(value, (str, Path)):
-            normalized = str(value).strip()
-            if normalized and normalized != ".":
-                return Path(normalized)
-    return None
-
-
 class QuimeraApp:
     """Orquestra comandos locais, roteamento entre agentes e ciclo da sessão."""
     _SESSION_LOG_DISPLAY_MAX_CHARS = 96
@@ -133,32 +127,41 @@ class QuimeraApp:
         self._toolbar_bug_count_ttl_sec = 1.0
         self.agent_failures = defaultdict(int)
         self._agent_failures_lock = threading.Lock()
-        self.workspace = workspace if workspace is not None else Workspace(cwd)
-        EnvConfig(self.workspace.env_file).apply_to_environ()
         self.auto_approve_mutations = auto_approve_mutations
         self._plugin_registry = plugin_registry
-        self.config = ConfigManager(self.workspace.config_file)
-        _active_theme = theme if theme is not None else self.config.theme
-        self.storage = SessionStorage(self.workspace.logs_dir)
-        self._session_started_at = time.monotonic()
-        self.bug_store = BugStore(self.workspace.tmp.root / "data" / "logs")
-        self.bug_detector = RenderBugDetector(repeat_threshold=2)
-        self.agent_bug_detector = AgentRuntimeBugDetector()
-        self.bug_correlator = BugCorrelator(window_seconds=60.0)
-        session_id = self.storage.session_id
-        render_log_path = self._resolve_workspace_render_log_path(session_id)
-        render_ansi_path = self._resolve_workspace_render_ansi_path(session_id)
-        metrics_file = self._resolve_workspace_metrics_path(session_id) if debug else None
-        render_audit_logger = (
-            RenderAuditLogger(render_log_path, render_ansi_path) if debug else None
-        )
-        self.renderer = TerminalRenderer(
-            theme=_active_theme,
+        infrastructure = AppBootstrapper(
+            cwd,
+            debug=debug,
+            theme=theme,
+            workspace=workspace,
+            workspace_cls=Workspace,
+            env_config_cls=EnvConfig,
+            config_manager_cls=ConfigManager,
+            session_storage_cls=SessionStorage,
+            bug_store_cls=BugStore,
+            render_bug_detector_cls=RenderBugDetector,
+            agent_runtime_bug_detector_cls=AgentRuntimeBugDetector,
+            bug_correlator_cls=BugCorrelator,
+            render_audit_logger_cls=RenderAuditLogger,
+            terminal_renderer_cls=TerminalRenderer,
+            event_sink_cls=EventSink,
+        ).build_infrastructure(
             get_plugin_style=self._resolve_plugin_style,
-            density=self.config.density,
-            audit_logger=render_audit_logger,
         )
-        self.event_sink = EventSink()
+        self.workspace = infrastructure.workspace
+        self.config = infrastructure.config
+        self.storage = infrastructure.storage
+        self._session_started_at = time.monotonic()
+        self.bug_store = infrastructure.bug_store
+        self.bug_detector = infrastructure.bug_detector
+        self.agent_bug_detector = infrastructure.agent_bug_detector
+        self.bug_correlator = infrastructure.bug_correlator
+        session_id = self.storage.session_id
+        render_log_path = infrastructure.render_log_path
+        render_ansi_path = infrastructure.render_ansi_path
+        metrics_file = infrastructure.metrics_file
+        self.renderer = infrastructure.renderer
+        self.event_sink = infrastructure.event_sink
         self._wire_event_ui()
         self.user_name = self.config.user_name
         self.visibility = Visibility(visibility)
@@ -837,68 +840,27 @@ class QuimeraApp:
 
     def _resolve_session_log_path(self) -> str | Path:
         """Retorna o log persistente da sessão usado como histórico canônico do chat."""
-        workspace = getattr(self, "workspace", None)
-        storage = getattr(self, "storage", None)
-        get_log_file = getattr(storage, "get_log_file", None)
-        if callable(get_log_file):
-            log_file = get_log_file()
-            if log_file:
-                return log_file
-        logs_dir = getattr(workspace, "logs_dir", None)
-        session_id = getattr(storage, "session_id", None)
-        if logs_dir and session_id:
-            return Path(logs_dir) / f"{session_id}.jsonl"
-        return ""
+        return resolve_session_log_path(
+            getattr(self, "storage", None),
+            getattr(self, "workspace", None),
+        )
 
     def _resolve_render_debug_log_path(self) -> str | Path:
         """Retorna o log de auditoria de render, somente em modo debug."""
-        if not getattr(self, "debug_prompt_metrics", False):
-            return ""
-        storage = getattr(self, "storage", None)
-        session_id = getattr(storage, "session_id", None)
-        if session_id:
-            resolved = self._resolve_workspace_render_log_path(session_id)
-            return resolved if resolved is not None else ""
-        return ""
+        return resolve_render_debug_log_path(
+            getattr(self, "storage", None),
+            getattr(self, "workspace", None),
+            bool(getattr(self, "debug_prompt_metrics", False)),
+        )
 
     def _resolve_workspace_render_log_path(self, session_id: str):
-        workspace = getattr(self, "workspace", None)
-        if workspace is None:
-            return None
-        workspace_tmp = getattr(workspace, "tmp", None)
-        path = _call_path_getter(workspace_tmp, "render_log_path_for", session_id)
-        if path:
-            return path
-        path = _call_path_getter(workspace, "render_log_path_for", session_id)
-        if path:
-            return path
-        return None
+        return resolve_workspace_render_log_path(getattr(self, "workspace", None), session_id)
 
     def _resolve_workspace_render_ansi_path(self, session_id: str):
-        workspace = getattr(self, "workspace", None)
-        if workspace is None:
-            return None
-        workspace_tmp = getattr(workspace, "tmp", None)
-        path = _call_path_getter(workspace_tmp, "render_ansi_path_for", session_id)
-        if path:
-            return path
-        path = _call_path_getter(workspace, "render_ansi_path_for", session_id)
-        if path:
-            return path
-        return None
+        return resolve_workspace_render_ansi_path(getattr(self, "workspace", None), session_id)
 
     def _resolve_workspace_metrics_path(self, session_id: str):
-        workspace = getattr(self, "workspace", None)
-        if workspace is None:
-            return None
-        workspace_tmp = getattr(workspace, "tmp", None)
-        path = _call_path_getter(workspace_tmp, "metrics_path_for", session_id)
-        if path:
-            return path
-        path = _call_path_getter(workspace, "metrics_path_for", session_id)
-        if path:
-            return path
-        return None
+        return resolve_workspace_metrics_path(getattr(self, "workspace", None), session_id)
 
     def _wire_event_ui(self) -> None:
         """Conecta eventos de domínio à renderização UI."""
