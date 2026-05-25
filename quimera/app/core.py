@@ -23,9 +23,13 @@ from .protocol import AppProtocol
 from .render_event import RenderEvent
 from .session import AppSessionServices, compute_history_hard_limit, trim_history_messages
 from .session_bootstrap import (
-    resolve_render_debug_log_path,
     resolve_session_log_path,
+    resolve_render_debug_log_path,
+    resolve_workspace_render_log_path,
+    resolve_workspace_render_ansi_path,
+    resolve_workspace_metrics_path,
 )
+from .toolbar import ToolbarManager
 from .session_metrics import SessionMetricsService
 from .dispatch import AppDispatchServices
 from .inputs import AppInputServices
@@ -105,20 +109,17 @@ class QuimeraApp:
             object.__setattr__(self, "runtime_state", rs)
             return rs
 
-    _BACKWARD_MAP = {
-        "_nonblocking_input_status": "nonblocking_input_status",
-        "_nonblocking_input_thread": "nonblocking_input_thread",
-        "_nonblocking_input_queue": "nonblocking_input_queue",
-        "_nonblocking_input_status_lock": "nonblocking_input_status_lock",
-        "_nonblocking_prompt_visible": "nonblocking_prompt_visible",
-        "_nonblocking_prompt_text": "nonblocking_prompt_text",
-        "_prompt_owning_thread_id": "prompt_owning_thread_id",
-        "_chat_inflight_lock": "chat_inflight_lock",
-        "_chat_inflight_count": "chat_inflight_count",
-        "_chat_queue": "chat_queue",
-        "_chat_executor": "chat_executor",
-        "_chat_slot_semaphore": "chat_slot_semaphore",
-    }
+    def _ensure_toolbar(self):
+        try:
+            return object.__getattribute__(self, "toolbar")
+        except AttributeError:
+            threads = getattr(self, "threads", 1)
+            tb = ToolbarManager(threads=threads)
+            legacy_state = getattr(self, "_parallel_toolbar_state", None)
+            if legacy_state is not None:
+                tb._parallel_toolbar_state.update(legacy_state)
+            object.__setattr__(self, "toolbar", tb)
+            return tb
 
     def __getattr__(self, name: str):
         if name == "runtime_state":
@@ -127,20 +128,13 @@ class QuimeraApp:
             return self._ensure_bug_services()
         if name == "command_router":
             return self._ensure_command_router()
-        runtime_name = self._BACKWARD_MAP.get(name)
-        if runtime_name is not None:
-            rs = self._ensure_runtime_state()
-            return getattr(rs, runtime_name)
+        if name == "toolbar":
+            return self._ensure_toolbar()
         raise AttributeError(
             f"'{type(self).__name__}' object has no attribute '{name}'"
         )
 
     def __setattr__(self, name: str, value):
-        runtime_name = self._BACKWARD_MAP.get(name)
-        if runtime_name is not None:
-            rs = self._ensure_runtime_state()
-            setattr(rs, runtime_name, value)
-            return
         object.__setattr__(self, name, value)
 
     def __init__(self,
@@ -161,15 +155,7 @@ class QuimeraApp:
         self.selected_agents = list(agents) if agents else []
         self.agent_pool = AgentPool(self.selected_agents)
         self.threads = int(threads) if threads is not None else 1
-        self._parallel_toolbar_lock = threading.Lock()
-        self._parallel_toolbar_state = {
-            "active": 0,
-            "queued": 0,
-            "capacity": max(0, self.threads),
-            "active_agents": (),
-        }
-        self._toolbar_bug_count_cache = {"session_id": "", "count": 0, "ts": 0.0}
-        self._toolbar_bug_count_ttl_sec = 1.0
+        self.toolbar = ToolbarManager(threads=self.threads)
         self.agent_failures = defaultdict(int)
         self._agent_failures_lock = threading.Lock()
         self.auto_approve_mutations = auto_approve_mutations
@@ -1243,8 +1229,8 @@ class QuimeraApp:
         bug_store = getattr(self, "bug_store", None)
         if bug_store is not None:
             open_bug_count = None
-            cache = getattr(self, "_toolbar_bug_count_cache", None)
-            cache_ttl = float(getattr(self, "_toolbar_bug_count_ttl_sec", 1.0) or 1.0)
+            cache = getattr(self._ensure_toolbar(), "toolbar_bug_count_cache", None)
+            cache_ttl = float(getattr(self._ensure_toolbar(), "toolbar_bug_count_ttl_sec", 1.0) or 1.0)
             now_monotonic = time.monotonic()
             if isinstance(cache, dict):
                 cached_session = str(cache.get("session_id", ""))
@@ -1261,7 +1247,7 @@ class QuimeraApp:
                         session_id=session_id, status="open", limit=100
                     ) if session_id else bug_store.query(status="open", limit=100)
                     open_bug_count = len(open_bugs or [])
-                    self._toolbar_bug_count_cache = {
+                    self._ensure_toolbar().toolbar_bug_count_cache = {
                         "session_id": str(session_id or ""),
                         "count": open_bug_count,
                         "ts": now_monotonic,
@@ -1281,6 +1267,15 @@ class QuimeraApp:
         active_agents: list[str] | tuple[str, ...] | None = None,
     ) -> None:
         """Atualiza o snapshot de paralelismo exibido na toolbar do prompt."""
+        try:
+            toolbar = object.__getattribute__(self, "toolbar")
+        except AttributeError:
+            toolbar = None
+        setter = getattr(toolbar, "_set_parallel_toolbar_state", None) if toolbar is not None else None
+        if callable(setter):
+            setter(active=active, queued=queued, capacity=capacity, active_agents=active_agents)
+            return
+
         with self._parallel_toolbar_lock:
             if active is not None:
                 self._parallel_toolbar_state["active"] = max(0, int(active))
@@ -1298,8 +1293,16 @@ class QuimeraApp:
         e deriva ``queued`` do tamanho da fila do chat quando disponível,
         garantindo que a toolbar reflita a ocupação real em runtime.
         """
-        with self._parallel_toolbar_lock:
-            snapshot = dict(self._parallel_toolbar_state)
+        try:
+            toolbar = object.__getattribute__(self, "toolbar")
+        except AttributeError:
+            toolbar = None
+        getter = getattr(toolbar, "_get_parallel_toolbar_state", None) if toolbar is not None else None
+        if callable(getter):
+            snapshot = dict(getter() or {})
+        else:
+            with self._parallel_toolbar_lock:
+                snapshot = dict(self._parallel_toolbar_state)
         active = self._get_chat_inflight_count()
         snapshot["active"] = active
         chat_queue = getattr(self.runtime_state, "chat_queue", None)
@@ -1594,7 +1597,8 @@ class QuimeraApp:
 
     def _submit_async_chat_message(self, user):
         """Submete um prompt já reservado para a pool de execução do chat."""
-        chat_executor = getattr(self, "_chat_executor", None)
+        runtime_state = self._ensure_runtime_state()
+        chat_executor = getattr(runtime_state, "chat_executor", None)
         if chat_executor is None:
             raise RuntimeError("chat executor não inicializado")
         try:
@@ -1608,7 +1612,8 @@ class QuimeraApp:
 
     def _process_sync_chat_message_with_slot(self, user):
         """Executa um prompt no thread principal ocupando um slot de concorrência."""
-        slot_semaphore = getattr(self, "_chat_slot_semaphore", None)
+        runtime_state = self._ensure_runtime_state()
+        slot_semaphore = getattr(runtime_state, "chat_slot_semaphore", None)
         if slot_semaphore is not None:
             slot_semaphore.acquire()
         self._increment_chat_inflight()

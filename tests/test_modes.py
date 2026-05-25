@@ -358,8 +358,8 @@ class TestInputContextAndWelcome(unittest.TestCase):
         app.threads = 2
         app._parallel_toolbar_lock = threading.Lock()
         app._parallel_toolbar_state = {"active": 1, "queued": 2, "capacity": 2, "active_agents": ("codex",)}
-        app._chat_inflight_count = 1
-        app._chat_inflight_lock = threading.Lock()
+        app.runtime_state.chat_inflight_count = 1
+        app.runtime_state.chat_inflight_lock = threading.Lock()
         app._pending_input_for = None
         app._resolve_active_model_label = QuimeraApp._resolve_active_model_label.__get__(app, QuimeraApp)
         app._resolve_next_responder_label = QuimeraApp._resolve_next_responder_label.__get__(app, QuimeraApp)
@@ -380,8 +380,8 @@ class TestInputContextAndWelcome(unittest.TestCase):
         app.threads = 2
         app._parallel_toolbar_lock = threading.Lock()
         app._parallel_toolbar_state = {"active": 0, "queued": 0, "active_agents": ()}
-        app._chat_inflight_count = 0
-        app._chat_inflight_lock = threading.Lock()
+        app.runtime_state.chat_inflight_count = 0
+        app.runtime_state.chat_inflight_lock = threading.Lock()
         app._pending_input_for = None
         app._resolve_active_model_label = QuimeraApp._resolve_active_model_label.__get__(app, QuimeraApp)
         app._resolve_next_responder_label = QuimeraApp._resolve_next_responder_label.__get__(app, QuimeraApp)

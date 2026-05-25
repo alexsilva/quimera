@@ -46,7 +46,7 @@ class PromptAwareStderrHandler(logging.StreamHandler):
             show_error=getattr(app, "show_error_message", _noop),
             show_warning=getattr(app, "show_warning_message", _noop),
             show_system=getattr(app, "show_system_message", _noop),
-            is_reading=lambda: getattr(app, "_nonblocking_input_status", None),
+            is_reading=lambda: _get_runtime_or_legacy_input_status(app),
         )
 
     def bind_callbacks(
@@ -109,3 +109,10 @@ class PromptAwareStderrHandler(logging.StreamHandler):
             super().emit(record)
             self.flush()
             callbacks.redisplay_prompt(clear_first=False)
+
+
+def _get_runtime_or_legacy_input_status(app) -> str | None:
+    runtime_state = getattr(app, "runtime_state", None)
+    if runtime_state is not None:
+        return getattr(runtime_state, "nonblocking_input_status", None)
+    return getattr(app, "_nonblocking_input_status", None)

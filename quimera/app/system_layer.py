@@ -101,6 +101,13 @@ class _LegacyAgentPoolAdapter:
         return name in self.agents
 
 
+def _get_runtime_or_legacy_attr(app, runtime_name: str, legacy_name: str, default=None):
+    runtime_state = getattr(app, "runtime_state", None)
+    if runtime_state is not None:
+        return getattr(runtime_state, runtime_name, default)
+    return getattr(app, legacy_name, default)
+
+
 class AppSystemLayer:
     """Encapsula comandos de sistema e delega display para ``DisplayService``."""
 
@@ -162,14 +169,24 @@ class AppSystemLayer:
                 )
                 clear_screen = clear_screen or (lambda: getattr(app, "clear_terminal_screen", lambda: None)())
                 input_status_getter = input_status_getter or (
-                    lambda: getattr(app, "_nonblocking_input_status", "idle")
+                    lambda: _get_runtime_or_legacy_attr(
+                        app,
+                        runtime_name="nonblocking_input_status",
+                        legacy_name="_nonblocking_input_status",
+                        default="idle",
+                    )
                 )
                 redisplay_prompt = redisplay_prompt or getattr(
                     app, "_redisplay_user_prompt_if_needed", None
                 )
                 output_lock = output_lock or (lambda: getattr(app, "_output_lock", nullcontext()))
                 prompt_owner_thread_id_getter = prompt_owner_thread_id_getter or (
-                    lambda: getattr(app, "_prompt_owning_thread_id", None)
+                    lambda: _get_runtime_or_legacy_attr(
+                        app,
+                        runtime_name="prompt_owning_thread_id",
+                        legacy_name="_prompt_owning_thread_id",
+                        default=None,
+                    )
                 )
                 if run_above_active_prompt is None:
                     input_gate = getattr(app, "input_gate", None)

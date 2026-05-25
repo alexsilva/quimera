@@ -341,11 +341,11 @@ def materialize_internal_services(app):
         app.input_services = AppInputServices(
             app.renderer,
             input_resolver=lambda: input,
-            get_input_status=lambda: getattr(app, "_nonblocking_input_status", "idle"),
-            set_input_status=lambda v: setattr(app, "_nonblocking_input_status", v),
-            set_prompt_text=lambda v: setattr(app, "_nonblocking_prompt_text", v),
-            set_prompt_owner=lambda v: setattr(app, "_prompt_owning_thread_id", v),
-            set_prompt_visible=lambda v: setattr(app, "_nonblocking_prompt_visible", v),
+            get_input_status=lambda: getattr(app.runtime_state, "nonblocking_input_status", "idle"),
+            set_input_status=lambda v: setattr(app.runtime_state, "nonblocking_input_status", v),
+            set_prompt_text=lambda v: setattr(app.runtime_state, "nonblocking_prompt_text", v),
+            set_prompt_owner=lambda v: setattr(app.runtime_state, "prompt_owning_thread_id", v),
+            set_prompt_visible=lambda v: setattr(app.runtime_state, "nonblocking_prompt_visible", v),
             flush_deferred_messages=lambda: app.system_layer.flush_deferred_messages(),
             output_lock=getattr(app, "_output_lock", None),
         )
@@ -730,7 +730,7 @@ class ProtocolTests(unittest.TestCase):
         app.renderer = DummyRenderer()
         app._output_lock = threading.Lock()
         app._redisplay_user_prompt_if_needed = Mock()
-        app._nonblocking_input_status = "idle"
+        app.runtime_state.nonblocking_input_status = "idle"
         app._deferred_system_messages = []
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
         app.history = [{"role": "human", "content": "Pedido atual"}]
@@ -780,7 +780,7 @@ class ProtocolTests(unittest.TestCase):
         app.renderer = DummyRenderer()
         app._output_lock = threading.Lock()
         app._redisplay_user_prompt_if_needed = Mock()
-        app._nonblocking_input_status = "idle"
+        app.runtime_state.nonblocking_input_status = "idle"
         app._deferred_system_messages = []
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
         app.history = []
@@ -960,7 +960,7 @@ class ProtocolTests(unittest.TestCase):
         app.renderer = DummyRenderer()
         app._output_lock = threading.Lock()
         app._redisplay_user_prompt_if_needed = Mock()
-        app._nonblocking_input_status = "idle"
+        app.runtime_state.nonblocking_input_status = "idle"
         app._deferred_system_messages = []
         plugin = AgentPlugin(
             name="chatgpt",
@@ -3230,11 +3230,11 @@ class PluginTests(unittest.TestCase):
         materialize_internal_services(app)
         app.renderer = DummyRenderer()
         app._deferred_system_messages = []
-        app._nonblocking_prompt_visible = False
-        app._nonblocking_input_queue = None
-        app._nonblocking_input_thread = None
-        app._nonblocking_input_status = "idle"
-        app._nonblocking_prompt_text = ""
+        app.runtime_state.nonblocking_prompt_visible = False
+        app.runtime_state.nonblocking_input_queue = None
+        app.runtime_state.nonblocking_input_thread = None
+        app.runtime_state.nonblocking_input_status = "idle"
+        app.runtime_state.nonblocking_prompt_text = ""
 
         stdin = io.StringIO("")
         stdin.isatty = lambda: True
@@ -3249,27 +3249,27 @@ class PluginTests(unittest.TestCase):
         materialize_internal_services(app)
         app.renderer = DummyRenderer()
         app._deferred_system_messages = []
-        app._nonblocking_prompt_visible = False
-        app._nonblocking_input_queue = None
-        app._nonblocking_input_thread = None
-        app._nonblocking_input_status = "idle"
-        app._nonblocking_prompt_text = ""
+        app.runtime_state.nonblocking_prompt_visible = False
+        app.runtime_state.nonblocking_input_queue = None
+        app.runtime_state.nonblocking_input_thread = None
+        app.runtime_state.nonblocking_input_status = "idle"
+        app.runtime_state.nonblocking_prompt_text = ""
 
         stdin = io.StringIO("")
         stdin.isatty = lambda: True
 
         def _input_with_assertions(prompt):
             self.assertEqual(prompt, "Alex: ")
-            self.assertEqual(app._nonblocking_input_status, "reading")
-            self.assertEqual(app._nonblocking_prompt_text, "Alex: ")
+            self.assertEqual(app.runtime_state.nonblocking_input_status, "reading")
+            self.assertEqual(app.runtime_state.nonblocking_prompt_text, "Alex: ")
             return "mensagem"
 
         with patch("sys.stdin", stdin), patch("builtins.input", side_effect=_input_with_assertions):
             result = app.read_user_input("Alex: ", timeout=0)
 
         self.assertEqual(result, "mensagem")
-        self.assertEqual(app._nonblocking_input_status, "idle")
-        self.assertEqual(app._nonblocking_prompt_text, "")
+        self.assertEqual(app.runtime_state.nonblocking_input_status, "idle")
+        self.assertEqual(app.runtime_state.nonblocking_prompt_text, "")
 
     def test_read_user_input_with_timeout_polls_stdin_without_spawning_thread(self):
         stdin = Mock()
@@ -3303,11 +3303,11 @@ class PluginTests(unittest.TestCase):
         materialize_internal_services(app)
         app.renderer = DummyRenderer()
         app._deferred_system_messages = ["[task 7] claude:\nresultado final"]
-        app._nonblocking_prompt_visible = False
-        app._nonblocking_input_queue = None
-        app._nonblocking_input_thread = None
-        app._nonblocking_input_status = "reading"
-        app._nonblocking_prompt_text = "Você: "
+        app.runtime_state.nonblocking_prompt_visible = False
+        app.runtime_state.nonblocking_input_queue = None
+        app.runtime_state.nonblocking_input_thread = None
+        app.runtime_state.nonblocking_input_status = "reading"
+        app.runtime_state.nonblocking_prompt_text = "Você: "
         app._output_lock = threading.Lock()
 
         stdin = io.StringIO("")
@@ -3317,8 +3317,8 @@ class PluginTests(unittest.TestCase):
             value = app.read_user_input("Você: ", timeout=0)
 
         self.assertEqual(value, "oi")
-        self.assertEqual(app._nonblocking_input_status, "idle")
-        self.assertEqual(app._nonblocking_prompt_text, "")
+        self.assertEqual(app.runtime_state.nonblocking_input_status, "idle")
+        self.assertEqual(app.runtime_state.nonblocking_prompt_text, "")
         self.assertEqual(app._deferred_system_messages, [])
         self.assertEqual(app.renderer.system_messages, ["[task 7] claude:\nresultado final"])
 
@@ -3327,11 +3327,11 @@ class PluginTests(unittest.TestCase):
         materialize_internal_services(app)
         app.renderer = DummyRenderer()
         app._deferred_system_messages = []
-        app._nonblocking_prompt_visible = False
-        app._nonblocking_input_queue = None
-        app._nonblocking_input_thread = None
-        app._nonblocking_input_status = "idle"
-        app._nonblocking_prompt_text = ""
+        app.runtime_state.nonblocking_prompt_visible = False
+        app.runtime_state.nonblocking_input_queue = None
+        app.runtime_state.nonblocking_input_thread = None
+        app.runtime_state.nonblocking_input_status = "idle"
+        app.runtime_state.nonblocking_prompt_text = ""
 
         stdin = io.StringIO("")
         stdin.isatty = lambda: True
@@ -3439,8 +3439,8 @@ class PluginTests(unittest.TestCase):
         app.renderer = DummyRenderer()
         app._output_lock = threading.Lock()
         app._deferred_system_messages = []
-        app._nonblocking_input_status = "reading"
-        app._nonblocking_prompt_text = "Alex: "
+        app.runtime_state.nonblocking_input_status = "reading"
+        app.runtime_state.nonblocking_prompt_text = "Alex: "
         app.input_gate = Mock()
         app.input_gate.get_line_buffer.return_value = ""
 
@@ -3459,8 +3459,8 @@ class PluginTests(unittest.TestCase):
         app.renderer = DummyRenderer()
         app._output_lock = threading.Lock()
         app._deferred_system_messages = []
-        app._nonblocking_input_status = "reading"
-        app._nonblocking_prompt_text = "Alex: "
+        app.runtime_state.nonblocking_input_status = "reading"
+        app.runtime_state.nonblocking_prompt_text = "Alex: "
         app.input_gate = Mock()
         app.input_gate.get_line_buffer.return_value = ""
 
@@ -3475,8 +3475,8 @@ class PluginTests(unittest.TestCase):
 
     def test_redisplay_user_prompt_does_not_sleep_while_redrawing_after_agent_output(self):
         app = QuimeraApp.__new__(QuimeraApp)
-        app._nonblocking_input_status = "reading"
-        app._nonblocking_prompt_text = "Alex: "
+        app.runtime_state.nonblocking_input_status = "reading"
+        app.runtime_state.nonblocking_prompt_text = "Alex: "
         app.input_gate = Mock()
         app.input_gate.get_line_buffer.return_value = "digitando"
 
@@ -3497,8 +3497,8 @@ class PluginTests(unittest.TestCase):
         materialize_internal_services(app)
         app._output_lock = threading.Lock()
         app._deferred_system_messages = []
-        app._nonblocking_input_status = "reading"
-        app._nonblocking_prompt_text = "Alex: "
+        app.runtime_state.nonblocking_input_status = "reading"
+        app.runtime_state.nonblocking_prompt_text = "Alex: "
 
         renderer = Mock()
         app.renderer = renderer
@@ -3519,8 +3519,8 @@ class PluginTests(unittest.TestCase):
         app = QuimeraApp.__new__(QuimeraApp)
         app._output_lock = threading.Lock()
         app._deferred_system_messages = []
-        app._nonblocking_input_status = "reading"
-        app._nonblocking_prompt_text = "Alex: "
+        app.runtime_state.nonblocking_input_status = "reading"
+        app.runtime_state.nonblocking_prompt_text = "Alex: "
         app.input_gate = Mock()
         app.input_gate.get_line_buffer.return_value = ""
 
@@ -3548,8 +3548,8 @@ class PluginTests(unittest.TestCase):
         app.renderer = DummyRenderer()
         app._output_lock = threading.Lock()
         app._deferred_system_messages = []
-        app._nonblocking_input_status = "reading"
-        app._nonblocking_prompt_text = "Alex: "
+        app.runtime_state.nonblocking_input_status = "reading"
+        app.runtime_state.nonblocking_prompt_text = "Alex: "
         app.input_gate = Mock()
         app.input_gate.get_line_buffer.return_value = ""
 
@@ -3579,8 +3579,8 @@ class PluginTests(unittest.TestCase):
         app.renderer = DummyRenderer()
         app._output_lock = threading.Lock()
         app._deferred_system_messages = []
-        app._nonblocking_input_status = "reading"
-        app._nonblocking_prompt_text = "Alex: "
+        app.runtime_state.nonblocking_input_status = "reading"
+        app.runtime_state.nonblocking_prompt_text = "Alex: "
         app.input_gate = Mock()
         app.input_gate.get_line_buffer.return_value = "oi"
 
@@ -3599,8 +3599,8 @@ class PluginTests(unittest.TestCase):
         materialize_internal_services(app)
         app._output_lock = threading.Lock()
         app._deferred_system_messages = []
-        app._nonblocking_input_status = "reading"
-        app._nonblocking_prompt_text = "Alex: "
+        app.runtime_state.nonblocking_input_status = "reading"
+        app.runtime_state.nonblocking_prompt_text = "Alex: "
         app.renderer = Mock()
         app.input_gate = Mock()
         app.input_gate.get_line_buffer.return_value = "oi"
@@ -3624,7 +3624,7 @@ class PluginTests(unittest.TestCase):
         app.renderer = DummyRenderer()
         app._output_lock = threading.Lock()
         app._deferred_system_messages = []
-        app._nonblocking_input_status = "reading"
+        app.runtime_state.nonblocking_input_status = "reading"
 
         app.show_system_message("[task 7] claude:\nresultado final")
 

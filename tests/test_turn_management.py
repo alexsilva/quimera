@@ -390,11 +390,11 @@ class TestTurnCycle(unittest.TestCase):
         app._build_input_prompt = lambda: "User: "
         app.show_muted_message = MagicMock()
         app._refresh_parallel_toolbar = Mock()
-        app._chat_inflight_count = 0
-        app._chat_inflight_lock = threading.Lock()
-        app._chat_queue = None
-        app._chat_slot_semaphore = None
-        app._chat_executor = None
+        app.runtime_state.chat_inflight_count = 0
+        app.runtime_state.chat_inflight_lock = threading.Lock()
+        app.runtime_state.chat_queue = None
+        app.runtime_state.chat_slot_semaphore = None
+        app.runtime_state.chat_executor = None
 
         reads = iter(["mensagem", KeyboardInterrupt(), CMD_EXIT])
         read_calls = []
@@ -453,9 +453,9 @@ class TestTurnCycle(unittest.TestCase):
         app.renderer = Renderer()
         app.input_gate = InputGate()
         app._output_lock = threading.Lock()
-        app._nonblocking_input_status_lock = threading.Lock()
-        app._nonblocking_input_status = "reading"
-        app._prompt_owning_thread_id = object()
+        app.runtime_state.nonblocking_input_status_lock = threading.Lock()
+        app.runtime_state.nonblocking_input_status = "reading"
+        app.runtime_state.prompt_owning_thread_id = object()
 
         ui_queue = queue.Queue()
         ui_queue.put(RenderEvent(RenderEvent.TEXT, "mensagem do agente", agent="codex"))
@@ -476,9 +476,9 @@ class TestTurnCycle(unittest.TestCase):
         app.renderer = Mock()
         app.show_muted_message = Mock()
         app._output_lock = threading.Lock()
-        app._nonblocking_input_status_lock = threading.Lock()
-        app._nonblocking_input_status = "idle"
-        app._prompt_owning_thread_id = None
+        app.runtime_state.nonblocking_input_status_lock = threading.Lock()
+        app.runtime_state.nonblocking_input_status = "idle"
+        app.runtime_state.prompt_owning_thread_id = None
 
         ui_queue = queue.Queue()
         ui_queue.put(RenderEvent(RenderEvent.TEXT, "Responda para CODEX:", agent=None))
@@ -525,8 +525,8 @@ class TestTurnCycle(unittest.TestCase):
         app = QuimeraApp.__new__(QuimeraApp)
         app.turn_manager = TurnManager()
         app.turn_manager.next_turn()
-        app._chat_inflight_count = 2
-        app._chat_inflight_lock = threading.Lock()
+        app.runtime_state.chat_inflight_count = 2
+        app.runtime_state.chat_inflight_lock = threading.Lock()
         app.agent_client = Mock(_user_cancelled=False, _cancel_event=None)
         app._do_process_chat_message = Mock()
 
@@ -604,8 +604,8 @@ class TestTurnCycle(unittest.TestCase):
         app.session_services = Mock()
         app.agent_client = Mock()
         app.turn_manager = TurnManager()
-        app._chat_inflight_count = 0
-        app._chat_inflight_lock = threading.Lock()
+        app.runtime_state.chat_inflight_count = 0
+        app.runtime_state.chat_inflight_lock = threading.Lock()
         app._build_input_prompt = lambda: "User: "
         reads = iter(["m1", "m2", "m3", CMD_EXIT])
         app.read_user_input = lambda prompt, timeout: next(reads)
@@ -1121,18 +1121,13 @@ class TestParallelToolbarState(unittest.TestCase):
 
     def _make_minimal_app(self, threads=2):
         """Cria um stub de QuimeraApp com os atributos necessários para toolbar."""
+        from quimera.app.toolbar import ToolbarManager
         app = QuimeraApp.__new__(QuimeraApp)
         app.threads = threads
-        app._parallel_toolbar_lock = threading.Lock()
-        app._parallel_toolbar_state = {
-            "active": 0,
-            "queued": 0,
-            "capacity": threads,
-            "active_agents": (),
-        }
-        app._chat_inflight_count = 0
-        app._chat_inflight_lock = threading.Lock()
-        app._chat_queue = None
+        app.toolbar = ToolbarManager(threads=threads)
+        app.runtime_state.chat_inflight_count = 0
+        app.runtime_state.chat_inflight_lock = threading.Lock()
+        app.runtime_state.chat_queue = None
         app.input_gate = MagicMock()
         app._get_chat_inflight_count = QuimeraApp._get_chat_inflight_count.__get__(app, QuimeraApp)
         app._get_parallel_toolbar_state = QuimeraApp._get_parallel_toolbar_state.__get__(app, QuimeraApp)
@@ -1144,7 +1139,7 @@ class TestParallelToolbarState(unittest.TestCase):
     def test_slot_async_acquired_shows_active_1_of_2(self):
         """Quando um slot async é adquirido, a toolbar deve mostrar active=1/capacity."""
         app = self._make_minimal_app(threads=2)
-        app._chat_queue = queue.Queue()
+        app.runtime_state.chat_queue = queue.Queue()
 
         app._increment_chat_inflight()
 
@@ -1156,7 +1151,7 @@ class TestParallelToolbarState(unittest.TestCase):
     def test_two_simultaneous_prompts_show_active_2_of_2(self):
         """Dois prompts simultâneos devem mostrar active=2/capacity=2."""
         app = self._make_minimal_app(threads=2)
-        app._chat_queue = queue.Queue()
+        app.runtime_state.chat_queue = queue.Queue()
 
         app._increment_chat_inflight()
         app._increment_chat_inflight()
@@ -1168,7 +1163,7 @@ class TestParallelToolbarState(unittest.TestCase):
     def test_slot_release_returns_active_to_0_of_2(self):
         """Liberação de todos os slots deve voltar active para 0."""
         app = self._make_minimal_app(threads=2)
-        app._chat_queue = queue.Queue()
+        app.runtime_state.chat_queue = queue.Queue()
 
         app._increment_chat_inflight()
         app._increment_chat_inflight()
@@ -1182,30 +1177,25 @@ class TestParallelToolbarState(unittest.TestCase):
     def test_queued_reflects_chat_queue_size(self):
         """Quando há mensagens na fila do chat, queued deve refletir o tamanho."""
         app = self._make_minimal_app(threads=2)
-        app._chat_queue = queue.Queue()
-        app._chat_queue.put("msg1")
-        app._chat_queue.put("msg2")
+        app.runtime_state.chat_queue = queue.Queue()
+        app.runtime_state.chat_queue.put("msg1")
+        app.runtime_state.chat_queue.put("msg2")
 
         state = app._get_parallel_toolbar_state()
         self.assertEqual(state["queued"], 2)
 
     def test_toolbar_context_parallel_label_with_active_and_queued(self):
         """_build_input_toolbar_context deve gerar label correta com slots e fila."""
+        from quimera.app.toolbar import ToolbarManager
         app = QuimeraApp.__new__(QuimeraApp)
         app.workspace = MagicMock(cwd=Path("/tmp/proj"), tasks_db=Path("/tmp/quimera_test_tasks.db"))
         app.active_agents = []
         app.threads = 2
-        app._parallel_toolbar_lock = threading.Lock()
-        app._parallel_toolbar_state = {
-            "active": 0,
-            "queued": 0,
-            "capacity": 2,
-            "active_agents": (),
-        }
-        app._chat_inflight_count = 1
-        app._chat_inflight_lock = threading.Lock()
-        app._chat_queue = queue.Queue()
-        app._chat_queue.put("pending_msg")
+        app.toolbar = ToolbarManager(threads=2)
+        app.runtime_state.chat_inflight_count = 1
+        app.runtime_state.chat_inflight_lock = threading.Lock()
+        app.runtime_state.chat_queue = queue.Queue()
+        app.runtime_state.chat_queue.put("pending_msg")
         app._pending_input_for = None
         app._resolve_active_model_label = QuimeraApp._resolve_active_model_label.__get__(app, QuimeraApp)
         app._resolve_next_responder_label = QuimeraApp._resolve_next_responder_label.__get__(app, QuimeraApp)
@@ -1220,7 +1210,7 @@ class TestParallelToolbarState(unittest.TestCase):
     def test_toolbar_ignores_stale_snapshot_active(self):
         """O snapshot zerado de active não deve sobrescrever o inflight count real."""
         app = self._make_minimal_app(threads=2)
-        app._chat_queue = queue.Queue()
+        app.runtime_state.chat_queue = queue.Queue()
 
         app._increment_chat_inflight()
         app._increment_chat_inflight()
@@ -1229,8 +1219,8 @@ class TestParallelToolbarState(unittest.TestCase):
         self.assertEqual(state["active"], 2)
 
         chat_round_resets_snapshot_to_zero = {"active": 0, "queued": 0, "capacity": 2, "active_agents": ()}
-        with app._parallel_toolbar_lock:
-            app._parallel_toolbar_state.update(chat_round_resets_snapshot_to_zero)
+        with app.toolbar._parallel_toolbar_lock:
+            app.toolbar._parallel_toolbar_state.update(chat_round_resets_snapshot_to_zero)
 
         state_after_reset = app._get_parallel_toolbar_state()
         self.assertEqual(state_after_reset["active"], 2)
