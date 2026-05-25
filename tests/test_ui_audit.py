@@ -1,6 +1,9 @@
 import json
 from unittest.mock import patch
 
+from quimera.agent_events import SpyEvent
+from quimera.constants import Visibility
+from quimera.spy_output_presenter import SpyOutputPresenter
 from quimera.ui import RenderAuditLogger, TerminalRenderer
 
 
@@ -178,3 +181,50 @@ def test_ansi_dedup_does_not_suppress_short_payload(tmp_path):
     events = _read_jsonl(events_path)
     dedup_events = [e for e in events if e.get("event") == "ansi_duplicate_suppressed"]
     assert len(dedup_events) == 0
+
+
+def test_renderer_audit_logs_transient_updates_and_chunk_previews(tmp_path):
+    log_dir = tmp_path / "render"
+    events_path = log_dir / "render-transient-test.jsonl"
+    ansi_path = log_dir / "render-transient-test.ansi"
+    with patch("quimera.ui._is_interactive_terminal", return_value=True):
+        renderer = TerminalRenderer(audit_logger=RenderAuditLogger(events_path, ansi_path), theme="line")
+        try:
+            renderer.update_agent_transient("codex", "pensando: validar renderer")
+            renderer.clear_agent_transient("codex")
+            renderer.flush()
+        finally:
+            renderer.close(timeout=1.0)
+
+    events = _read_jsonl(events_path)
+    transient_updates = [e for e in events if e.get("event") == "transient_update"]
+    assert transient_updates
+    assert transient_updates[0].get("agent") == "codex"
+    assert "pensando: validar renderer" in str(transient_updates[0].get("preview", ""))
+
+    stream_chunks = [e for e in events if e.get("event") == "stream_chunk"]
+    assert stream_chunks
+    previews = stream_chunks[0].get("previews")
+    assert isinstance(previews, list)
+    assert any("pensando: validar renderer" in str(item) for item in previews)
+
+
+def test_spy_presenter_events_are_logged_in_render_audit(tmp_path):
+    log_dir = tmp_path / "render"
+    events_path = log_dir / "render-spy-event-test.jsonl"
+    ansi_path = log_dir / "render-spy-event-test.ansi"
+    renderer = TerminalRenderer(audit_logger=RenderAuditLogger(events_path, ansi_path), theme="line")
+    presenter = SpyOutputPresenter(renderer, Visibility.SUMMARY)
+    try:
+        presenter.emit("codex", SpyEvent(kind="context", text="raciocínio em progresso", transient=True))
+        renderer.flush()
+    finally:
+        renderer.close(timeout=1.0)
+
+    events = _read_jsonl(events_path)
+    spy_events = [e for e in events if e.get("event") == "spy_event"]
+    assert spy_events
+    assert spy_events[0].get("agent") == "codex"
+    assert spy_events[0].get("kind") == "context"
+    assert spy_events[0].get("transient") is True
+    assert "raciocínio em progresso" in str(spy_events[0].get("preview", ""))

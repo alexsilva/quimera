@@ -132,6 +132,21 @@ def _preview_chunk(chunk: Any) -> str:
             return _preview_text(text)
         diff = chunk.get("diff")
         if diff:
+            try:
+                normalized = _normalize_stream_diff(diff)
+            except Exception:
+                normalized = []
+            parts = []
+            for item in normalized:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("op") not in {"append", "replace"}:
+                    continue
+                part_text = item.get("text")
+                if part_text:
+                    parts.append(str(part_text))
+            if parts:
+                return _preview_text(" | ".join(parts))
             return _preview_text(diff)
     return _preview_text(chunk)
 
@@ -357,6 +372,12 @@ class TerminalRenderer:
         if self._audit_logger is not None:
             self._audit_logger.close()
 
+    def log_debug_event(self, event: str, **payload) -> None:
+        """Expõe auditoria estruturada para camadas superiores (ex.: SpyOutputPresenter)."""
+        if self._audit_logger is None:
+            return
+        self._audit_logger.log_event(event, **payload)
+
     def __del__(self):
         try:
             if self._writer_thread.is_alive():
@@ -483,9 +504,7 @@ class TerminalRenderer:
                     break
 
         def _audit_event(event_name: str, **payload) -> None:
-            if self._audit_logger is None:
-                return
-            self._audit_logger.log_event(event_name, **payload)
+            self.log_debug_event(event_name, **payload)
 
         def _next_event():
             if _local_pending:
@@ -555,6 +574,8 @@ class TerminalRenderer:
                             agent=agent,
                             chunk_count=len(chunks),
                             preview=_preview_chunk(chunks[-1]),
+                            previews=[_preview_chunk(chunk) for chunk in chunks[:5]],
+                            previews_truncated=len(chunks) > 5,
                         )
                         _refresh()
 
@@ -876,6 +897,12 @@ class TerminalRenderer:
             return
 
         prompt_active = bool(self._is_prompt_active_fn and self._is_prompt_active_fn())
+        self.log_debug_event(
+            "transient_update",
+            agent=agent,
+            prompt_active=prompt_active,
+            preview=_preview_text(clean_message),
+        )
         if prompt_active:
             now = time.monotonic()
             with self._lock:
@@ -932,6 +959,7 @@ class TerminalRenderer:
         """Limpa o bloco transitório do agente, se ativo."""
         if not self._console or not agent:
             return
+        self.log_debug_event("transient_clear", agent=agent)
         pending_message = ""
         suppressed = 0
         last_emitted_message = ""

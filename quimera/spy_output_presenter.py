@@ -432,6 +432,24 @@ class SpyOutputPresenter:
         if agent:
             self.emit(agent, SpyEvent(kind="context", text="iniciando execução", transient=True))
 
+    def _audit_spy_event(self, agent: str | None, event: SpyEvent) -> None:
+        """Registra evento estruturado do pipeline de spy para debug pós-execução."""
+        logger = getattr(self.renderer, "log_debug_event", None)
+        if not callable(logger):
+            return
+        preview = event.text.strip().replace("\r", "\\r").replace("\n", "\\n")
+        if len(preview) > 200:
+            preview = preview[:197] + "..."
+        logger(
+            "spy_event",
+            agent=(agent or ""),
+            visibility=str(getattr(self.visibility, "value", self.visibility)),
+            kind=event.kind,
+            transient=bool(event.transient),
+            final=bool(event.final),
+            preview=preview,
+        )
+
     def consume_stdout(self, agent: str | None, line: str) -> bool:
         """Processa e emite uma linha de stdout."""
         self._raw_output_lines.append(line)
@@ -442,6 +460,7 @@ class SpyOutputPresenter:
 
     def emit(self, agent: str | None, event: SpyEvent) -> None:
         """Renderiza um evento conforme a visibilidade configurada."""
+        self._audit_spy_event(agent, event)
         timeline = self._timeline_text(event) if self.visibility == Visibility.FULL else None
         self._record_tool_event(event)
 
