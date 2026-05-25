@@ -50,6 +50,8 @@ class ToolRuntimeConfig:
 
     def __post_init__(self) -> None:
         """Executa post init."""
+        if not isinstance(self.workspace_root, Path):
+            raise TypeError(f"workspace_root deve ser Path, não {type(self.workspace_root).__name__}")
         self.workspace_root = self.workspace_root.resolve()
         if not self.allowed_read_roots:
             self.allowed_read_roots = [self.workspace_root]

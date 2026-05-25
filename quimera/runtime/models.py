@@ -55,6 +55,12 @@ class ToolCall:
     call_id: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        if not isinstance(self.name, str) or not self.name.strip():
+            raise ToolValidationError("ToolCall.name deve ser uma string não vazia", field="name")
+        if not isinstance(self.arguments, dict):
+            raise ToolValidationError("ToolCall.arguments deve ser um dict", field="arguments")
+
 
 @dataclass(slots=True)
 class ToolResult:

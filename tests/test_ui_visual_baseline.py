@@ -54,3 +54,25 @@ def test_ui_visual_baseline(theme: str, density: str, width: int):
     expected = baseline_path.read_text(encoding="utf-8")
     rendered = _render_baseline_sample(theme=theme, density=density, width=width)
     assert rendered == expected
+
+
+# =========================================================================
+# Fase 0 — Guardrails: contratos públicos de UI
+# =========================================================================
+
+
+def test_renderer_baseline_dir_exists():
+    """O diretório de baselines visuais existe e contém baselines."""
+    assert BASELINE_DIR.exists()
+    assert BASELINE_DIR.is_dir()
+
+
+def test_required_baseline_files_exist():
+    """Todos os arquivos de baseline necessários estão presentes."""
+    for theme in BASELINE_THEMES:
+        for density in BASELINE_DENSITIES:
+            for width in BASELINE_WIDTHS:
+                path = BASELINE_DIR / f"{theme}-{density}-{width}.txt"
+                assert path.exists(), f"Baseline ausente: {path}"
+                content = path.read_text(encoding="utf-8")
+                assert len(content) > 0, f"Baseline vazia: {path}"

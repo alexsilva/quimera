@@ -112,6 +112,8 @@ class PatchTool:
 
     def __init__(self, config: ToolRuntimeConfig) -> None:
         """Inicializa uma instância de PatchTool."""
+        if not isinstance(config, ToolRuntimeConfig):
+            raise TypeError(f"config deve ser ToolRuntimeConfig, não {type(config).__name__}")
         self.config = config
 
     def _resolve(self, raw_path: str) -> Path:

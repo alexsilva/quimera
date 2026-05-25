@@ -33,7 +33,7 @@ from quimera.config import DEFAULT_HISTORY_WINDOW
 from quimera.constants import CMD_AGENTS, CMD_CLEAR, CMD_CONNECT, CMD_DISCONNECT, CMD_HELP, CMD_PROMPT, EXTEND_MARKER, MSG_SHUTDOWN, TaskStatus, TaskType, Visibility, build_agents_help, build_help
 from quimera.plugins import AgentPlugin
 from quimera.plugins.base import PluginRegistry
-from quimera.runtime.models import TaskRecord
+from quimera.runtime.models import TaskRecord, ToolCall
 from quimera.plugins.base import OpenAIConnection
 from quimera.handoff_presenter import HandoffPresenter
 from quimera.prompt import PromptBuilder
@@ -6396,6 +6396,114 @@ class AppProtocolDirectTests(unittest.TestCase):
         )
         self.assertIsNone(target)
         self.assertIsNone(handoff)
+
+
+# =========================================================================
+# Fase 0 — Guardrails: smoke tests de run() e contratos públicos
+# =========================================================================
+
+
+class TestRunSmoke(unittest.TestCase):
+    """Smoke tests mínimos para QuimeraApp.run()."""
+
+    def test_run_requires_renderer(self):
+        """run() levanta RuntimeError se renderer não foi inicializado."""
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.renderer = None
+        app.session_services = Mock()
+        with self.assertRaises(RuntimeError) as ctx:
+            app.run()
+        self.assertIn("renderer", str(ctx.exception))
+
+    def test_run_requires_session_services(self):
+        """run() levanta RuntimeError se session_services não foi inicializado."""
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.renderer = DummyRenderer()
+        app.session_services = None
+        with self.assertRaises(RuntimeError) as ctx:
+            app.run()
+        self.assertIn("session_services", str(ctx.exception))
+
+    def test_run_exit_immediately(self):
+        """run() com /exit imediatamente faz shutdown limpo."""
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.history = []
+        app.user_name = "Test"
+        app.execution_mode = None
+        app.debug_prompt_metrics = False
+        app.renderer = DummyRenderer()
+        app.storage = DummyStorage()
+        app.session_state = {
+            "session_id": "sessao-guardrail-test",
+            "history_count": 0,
+            "summary_loaded": False,
+        }
+        app.agent_client = DummyAgentClient()
+        app.threads = 1
+        app.read_user_input = Mock(side_effect=["/exit"])
+        app.session_services = Mock()
+        app.session_services.shutdown = Mock()
+        app.run()
+        app.session_services.shutdown.assert_called_once()
+
+
+class TestToolCallGuardrails(unittest.TestCase):
+    """Guardrails de contrato público para ToolCall."""
+
+    def test_tool_call_rejects_empty_name(self):
+        """ToolCall com name vazio levanta ToolValidationError."""
+        from quimera.runtime.errors import ToolValidationError
+        with self.assertRaises(ToolValidationError) as ctx:
+            ToolCall(name="", arguments={})
+        self.assertIn("name", str(ctx.exception))
+
+    def test_tool_call_rejects_non_dict_arguments(self):
+        """ToolCall com arguments não-dict levanta ToolValidationError."""
+        from quimera.runtime.errors import ToolValidationError
+        with self.assertRaises(ToolValidationError) as ctx:
+            ToolCall(name="read_file", arguments=None)
+        self.assertIn("arguments", str(ctx.exception))
+
+    def test_tool_call_accepts_valid(self):
+        """ToolCall com name e arguments válidos é criado."""
+        call = ToolCall(name="read_file", arguments={"path": "."})
+        self.assertEqual(call.name, "read_file")
+        self.assertEqual(call.arguments, {"path": "."})
+
+
+class TestToolRuntimeConfigGuardrails(unittest.TestCase):
+    """Guardrails de contrato público para ToolRuntimeConfig."""
+
+    def test_config_rejects_non_path_workspace_root(self):
+        """ToolRuntimeConfig com workspace_root não-Path levanta TypeError."""
+        from pathlib import Path
+        with self.assertRaises(TypeError) as ctx:
+            ToolRuntimeConfig(workspace_root="/tmp")
+        self.assertIn("workspace_root", str(ctx.exception))
+
+    def test_config_accepts_valid_path(self):
+        """ToolRuntimeConfig com Path válido funciona."""
+        from pathlib import Path
+        config = ToolRuntimeConfig(workspace_root=Path("/tmp"))
+        self.assertEqual(config.workspace_root, Path("/tmp").resolve())
+
+
+class TestPatchToolGuardrails(unittest.TestCase):
+    """Guardrails de contrato público para PatchTool."""
+
+    def test_patch_tool_rejects_invalid_config(self):
+        """PatchTool.__init__ com config não-ToolRuntimeConfig levanta TypeError."""
+        with self.assertRaises(TypeError) as ctx:
+            from quimera.runtime.tools.patch import PatchTool
+            PatchTool(config="not a config")
+        self.assertIn("config", str(ctx.exception))
+
+    def test_patch_tool_accepts_valid_config(self):
+        """PatchTool com ToolRuntimeConfig válido é criado."""
+        from quimera.runtime.tools.patch import PatchTool
+        config = ToolRuntimeConfig(workspace_root=Path("/tmp"))
+        tool = PatchTool(config)
+        self.assertIs(tool.config, config)
 
 
 if __name__ == "__main__":

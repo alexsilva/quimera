@@ -395,7 +395,7 @@ class QuimeraApp:
             get_session_services=lambda: self.session_services,
             get_max_retries=lambda: self.MAX_RETRIES,
             get_retry_backoff_seconds=lambda: self.RETRY_BACKOFF_SECONDS,
-            get_rate_limit_backoff_seconds=lambda: self.RATE_LIMIT_BACKOFF_SECONDS,
+            get_rate_limit_backoff_seconds=lambda: getattr(self, 'RATE_LIMIT_BACKOFF_SECONDS', 30),
             call_agent=self.call_agent,
             parse_response=self.parse_response,
             classify_task_execution_result=self.classify_task_execution_result,
@@ -2034,6 +2034,10 @@ class QuimeraApp:
 
     def run(self):
         """Executa o loop interativo do chat multiagente."""
+        if not hasattr(self, "renderer") or self.renderer is None:
+            raise RuntimeError("QuimeraApp.renderer não foi inicializado")
+        if not hasattr(self, "session_services") or self.session_services is None:
+            raise RuntimeError("QuimeraApp.session_services não foi inicializado")
         agent_client = getattr(self, "agent_client", None)
         if agent_client:
             agent_client._user_cancelled = False
@@ -2068,6 +2072,7 @@ class QuimeraApp:
             flush()
 
         _ui_event_queue: queue.Queue = queue.Queue()
+        self._ui_event_queue = _ui_event_queue
         if hasattr(self, "dispatch_services") and self.dispatch_services is not None:
             self.dispatch_services._ui_queue = _ui_event_queue
         if hasattr(self, "chat_round_orchestrator") and self.chat_round_orchestrator is not None:

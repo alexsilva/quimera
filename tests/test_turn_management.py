@@ -1232,5 +1232,74 @@ class TestTTYControlEcho(unittest.TestCase):
         self.assertIsNone(app._tty_echoctl_attrs)
 
 
+# =========================================================================
+# Fase 0 — Guardrails: contratos públicos de TurnManager
+# =========================================================================
+
+
+class TestTurnManagerGuardrails(unittest.TestCase):
+    """Guardrails mínimos para TurnManager."""
+
+    def test_initial_state_is_human(self):
+        """TurnManager recém-criado está em turno humano."""
+        tm = TurnManager()
+        self.assertTrue(tm.is_human_turn)
+        self.assertFalse(tm.is_ai_turn)
+
+    def test_next_turn_alternates(self):
+        """next_turn alterna entre humano e IA repetidamente."""
+        tm = TurnManager()
+        for _ in range(10):
+            prev_human = tm.is_human_turn
+            tm.next_turn()
+            self.assertEqual(tm.is_human_turn, not prev_human)
+
+    def test_reset_restores_human_turn(self):
+        """reset() retorna para turno humano independente do estado atual."""
+        tm = TurnManager()
+        tm.next_turn()
+        self.assertTrue(tm.is_ai_turn)
+        tm.reset()
+        self.assertTrue(tm.is_human_turn)
+
+    def test_reset_after_multiple_turns(self):
+        """reset() a partir de qualquer estado volta para humano."""
+        tm = TurnManager()
+        tm.next_turn()
+        tm.next_turn()
+        tm.next_turn()
+        self.assertTrue(tm.is_ai_turn)
+        tm.reset()
+        self.assertTrue(tm.is_human_turn)
+
+    def test_wait_for_human_turn_timeout_returns_false(self):
+        """wait_for_human_turn com timeout retorna False se turno não chegou."""
+        tm = TurnManager()
+        tm.next_turn()
+        result = tm.wait_for_human_turn(timeout=0.001)
+        self.assertFalse(result)
+
+    def test_wait_for_human_turn_when_already_human(self):
+        """wait_for_human_turn retorna True imediatamente se já é turno humano."""
+        tm = TurnManager()
+        result = tm.wait_for_human_turn(timeout=0)
+        self.assertTrue(result)
+
+    def test_is_ai_turn_property(self):
+        """is_ai_turn reflete corretamente o inverso de is_human_turn."""
+        tm = TurnManager()
+        self.assertEqual(tm.is_ai_turn, not tm.is_human_turn)
+        tm.next_turn()
+        self.assertEqual(tm.is_ai_turn, not tm.is_human_turn)
+
+    def test_turn_manager_reentrant_next_turn(self):
+        """next_turn pode ser chamado múltiplas vezes sem travamento."""
+        tm = TurnManager()
+        for _ in range(100):
+            tm.next_turn()
+        # Após número par de alternâncias, volta ao estado inicial
+        self.assertTrue(tm.is_human_turn)
+
+
 if __name__ == "__main__":
     unittest.main()

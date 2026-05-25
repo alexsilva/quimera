@@ -50,6 +50,7 @@ class TestAppHistory(unittest.TestCase):
         tmp_root = Path("/tmp/quimera_test_workspace_tmp")
         with patch("quimera.app.core.Workspace") as mock_ws:
             mock_ws_instance = MagicMock()
+            mock_ws_instance.cwd = Path("/tmp/quimera_test_cwd")
             mock_ws_instance.history_file = self.history_file
             mock_ws_instance.root = Path("/tmp/quimera_test_workspace")
             mock_ws_instance.tasks_db = Path("/tmp/quimera_test_tasks.db")
@@ -94,6 +95,7 @@ class TestAppHistory(unittest.TestCase):
         tmp_root = Path("/tmp/quimera_test_workspace_tmp")
         with patch("quimera.app.core.Workspace") as mock_ws:
             mock_ws_instance = MagicMock()
+            mock_ws_instance.cwd = Path("/tmp/quimera_test_cwd")
             mock_ws_instance.history_file = self.history_file
             mock_ws_instance.root = Path("/tmp/quimera_test_workspace")
             mock_ws_instance.tasks_db = Path("/tmp/quimera_test_tasks.db")
@@ -147,6 +149,7 @@ class TestAppHistory(unittest.TestCase):
 
         with patch("quimera.app.core.Workspace") as mock_ws:
             mock_ws_instance = MagicMock()
+            mock_ws_instance.cwd = Path("/tmp/quimera_test_cwd")
             mock_ws_instance.history_file = self.history_file
             mock_ws_instance.root = Path("/tmp/quimera_test_workspace")
             mock_ws_instance.tasks_db = Path("/tmp/quimera_test_tasks.db")

@@ -76,6 +76,8 @@ MODES: dict[str, ExecutionMode] = {
 }
 
 
-def get_mode(command: str) -> ExecutionMode | None:
+def get_mode(command: str | None) -> ExecutionMode | None:
     """Retorna o ExecutionMode para o comando /modo, ou None se não reconhecido."""
+    if not isinstance(command, str) or not command.strip():
+        return None
     return MODES.get(command.lower())

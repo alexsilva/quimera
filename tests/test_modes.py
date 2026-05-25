@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from quimera.modes import MODES, get_mode
+from quimera.modes import MODES, ExecutionMode, get_mode
 from quimera.runtime.config import ToolRuntimeConfig
 from quimera.runtime.models import ToolCall
 from quimera.runtime.policy import ToolPolicy, ToolPolicyError
@@ -742,3 +742,52 @@ class TestCliRuntimeModelResolution(unittest.TestCase):
                 model = plugin.resolve_runtime_model(cwd="/tmp/projeto")
 
         self.assertEqual(model, "claude-sonnet-4-6")
+
+
+# =========================================================================
+# Fase 0 — Guardrails: contratos públicos de modes
+# =========================================================================
+
+
+class TestModeGuardrails(unittest.TestCase):
+    """Guardrails mínimos para o módulo modes."""
+
+    def test_get_mode_none_returns_none(self):
+        """get_mode(None) retorna None sem levantar."""
+        self.assertIsNone(get_mode(None))
+
+    def test_get_mode_whitespace_returns_none(self):
+        """get_mode com espaços retorna None."""
+        self.assertIsNone(get_mode("   "))
+
+    def test_all_modes_have_unique_names(self):
+        """Cada modo tem name único."""
+        names = [m.name for m in MODES.values()]
+        self.assertEqual(len(names), len(set(names)))
+
+    def test_execution_mode_defaults(self):
+        """ExecutionMode default tem valores esperados."""
+        mode = ExecutionMode(name="test")
+        self.assertEqual(mode.name, "test")
+        self.assertFalse(mode.read_only_fs)
+        self.assertTrue(mode.allow_network)
+        self.assertEqual(mode.blocked_tools, [])
+        self.assertEqual(mode.prompt_addon, "")
+
+    def test_planning_mode_allows_shell(self):
+        """/planning permite shell, só bloqueia write_file/apply_patch."""
+        mode = get_mode("/planning")
+        self.assertNotIn("run_shell", mode.blocked_tools)
+        self.assertNotIn("exec_command", mode.blocked_tools)
+
+    def test_review_mode_rejects_execution(self):
+        """/review bloqueia execução além de escrita."""
+        mode = get_mode("/review")
+        self.assertIn("run_shell", mode.blocked_tools)
+        self.assertIn("exec_command", mode.blocked_tools)
+
+    def test_get_mode_preserves_registered_keys(self):
+        """Todos os modos registrados em MODES são acessíveis via get_mode."""
+        for key in MODES:
+            self.assertIsNotNone(get_mode(key))
+            self.assertEqual(get_mode(key).name, MODES[key].name)
