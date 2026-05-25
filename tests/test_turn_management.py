@@ -1245,9 +1245,8 @@ class TestParallelToolbarState(unittest.TestCase):
 class TestTTYControlEcho(unittest.TestCase):
 
     def test_suppress_and_restore_tty_control_echo(self):
-        app = QuimeraApp.__new__(QuimeraApp)
-        app._tty_echoctl_fd = None
-        app._tty_echoctl_attrs = None
+        from quimera.app.tty_control import TtyController
+        ctrl = TtyController()
 
         stdin_mock = Mock()
         stdin_mock.isatty.return_value = True
@@ -1259,34 +1258,33 @@ class TestTTYControlEcho(unittest.TestCase):
         original_attrs = [0, 0, 0, 0x200, 0, 0, [b"\x03"]]
         fake_termios.tcgetattr.return_value = list(original_attrs)
 
-        with patch("quimera.app.core.sys.stdin", stdin_mock), patch.dict(sys.modules, {"termios": fake_termios}):
-            QuimeraApp._suppress_tty_control_echo(app)
-            self.assertEqual(app._tty_echoctl_fd, 9)
-            self.assertEqual(app._tty_echoctl_attrs, original_attrs)
+        with patch("quimera.app.tty_control.sys.stdin", stdin_mock), patch.dict(sys.modules, {"termios": fake_termios}):
+            ctrl.suppress_control_echo()
+            self.assertEqual(ctrl._echoctl_fd, 9)
+            self.assertEqual(ctrl._echoctl_attrs, original_attrs)
             fake_termios.tcsetattr.assert_called_with(9, fake_termios.TCSANOW, [0, 0, 0, 0, 0, 0, [b"\x03"]])
 
-            QuimeraApp._restore_tty_control_echo(app)
-            self.assertIsNone(app._tty_echoctl_fd)
-            self.assertIsNone(app._tty_echoctl_attrs)
+            ctrl.restore_control_echo()
+            self.assertIsNone(ctrl._echoctl_fd)
+            self.assertIsNone(ctrl._echoctl_attrs)
             self.assertEqual(fake_termios.tcsetattr.call_count, 2)
             fake_termios.tcsetattr.assert_called_with(9, fake_termios.TCSADRAIN, original_attrs)
 
     def test_suppress_skips_when_not_tty(self):
-        app = QuimeraApp.__new__(QuimeraApp)
-        app._tty_echoctl_fd = None
-        app._tty_echoctl_attrs = None
+        from quimera.app.tty_control import TtyController
+        ctrl = TtyController()
 
         stdin_mock = Mock()
         stdin_mock.isatty.return_value = False
         fake_termios = Mock()
 
-        with patch("quimera.app.core.sys.stdin", stdin_mock), patch.dict(sys.modules, {"termios": fake_termios}):
-            QuimeraApp._suppress_tty_control_echo(app)
+        with patch("quimera.app.tty_control.sys.stdin", stdin_mock), patch.dict(sys.modules, {"termios": fake_termios}):
+            ctrl.suppress_control_echo()
 
         fake_termios.tcgetattr.assert_not_called()
         fake_termios.tcsetattr.assert_not_called()
-        self.assertIsNone(app._tty_echoctl_fd)
-        self.assertIsNone(app._tty_echoctl_attrs)
+        self.assertIsNone(ctrl._echoctl_fd)
+        self.assertIsNone(ctrl._echoctl_attrs)
 
 
 # =========================================================================

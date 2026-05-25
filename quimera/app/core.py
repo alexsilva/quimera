@@ -1542,49 +1542,6 @@ class QuimeraApp:
         self.show_muted_message("[cancelado] pelo usuário")
         self._refresh_parallel_toolbar()
 
-    def _suppress_tty_control_echo(self) -> None:
-        """Desativa eco visual de controles (^C/^Z) enquanto o chat está ativo."""
-        stdin = getattr(sys, "stdin", None)
-        if stdin is None or not getattr(stdin, "isatty", lambda: False)():
-            return
-        try:
-            import termios  # pylint: disable=import-outside-toplevel
-        except Exception:
-            return
-        if not hasattr(termios, "ECHOCTL"):
-            return
-        try:
-            fd = stdin.fileno()
-            attrs = termios.tcgetattr(fd)
-        except Exception:
-            return
-        lflag = attrs[3]
-        if (lflag & termios.ECHOCTL) == 0:
-            return
-        updated = list(attrs)
-        updated[3] = lflag & ~termios.ECHOCTL
-        try:
-            termios.tcsetattr(fd, termios.TCSANOW, updated)
-        except Exception:
-            return
-        self._tty_echoctl_fd = fd
-        self._tty_echoctl_attrs = attrs
-
-    def _restore_tty_control_echo(self) -> None:
-        """Restaura flags de TTY alteradas por _suppress_tty_control_echo()."""
-        fd = getattr(self, "_tty_echoctl_fd", None)
-        attrs = getattr(self, "_tty_echoctl_attrs", None)
-        if fd is None or attrs is None:
-            return
-        try:
-            import termios  # pylint: disable=import-outside-toplevel
-            termios.tcsetattr(fd, termios.TCSADRAIN, attrs)
-        except Exception:
-            pass
-        finally:
-            self._tty_echoctl_fd = None
-            self._tty_echoctl_attrs = None
-
     def _process_async_chat_message(self, user):
         """Processa um prompt vindo da fila assíncrona e libera o slot ao final."""
         try:

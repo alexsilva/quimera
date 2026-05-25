@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from .config import logger
+from .tty_control import TtyController
 from .session_bootstrap import (
     resolve_render_debug_log_path,
     resolve_session_log_path,
@@ -24,6 +25,9 @@ from ..constants import (
     MSG_SESSION_STATUS,
     MSG_SHUTDOWN,
 )
+
+
+_tty = TtyController()
 
 
 def run_chat_loop(
@@ -41,7 +45,7 @@ def run_chat_loop(
     agent_client = getattr(app, "agent_client", None)
     if agent_client:
         agent_client._user_cancelled = False
-    app._suppress_tty_control_echo()
+    _tty.suppress_control_echo()
     show_banner = getattr(app.renderer, "show_banner", app.renderer.show_system)
     show_banner(app._build_welcome_message())
     workspace = getattr(app, "workspace", None)
@@ -282,7 +286,7 @@ def run_chat_loop(
                     bug_store.close()
                 except Exception:
                     pass
-            app._restore_tty_control_echo()
+            _tty.restore_control_echo()
 
 
 def _join_executor_threads(executor, timeout=2.0):
