@@ -304,7 +304,7 @@ class TestAgentClientWarmPool:
             mock_plugin = MagicMock()
             mock_plugin.cmd = ["codex"]
             mock_plugin.prompt_as_arg = False
-            mock_plugin.output_format = None
+            mock_plugin.supports_warm_pool = True
             mock_get.return_value = mock_plugin
 
             client.call("codex", "hello")
@@ -327,7 +327,7 @@ class TestAgentClientWarmPool:
             mock_plugin = MagicMock()
             mock_plugin.cmd = ["codex"]
             mock_plugin.prompt_as_arg = False
-            mock_plugin.output_format = None
+            mock_plugin.supports_warm_pool = True
             mock_get.return_value = mock_plugin
 
             client.call("codex", "hello")
@@ -361,12 +361,39 @@ class TestAgentClientWarmPool:
             mock_plugin = MagicMock()
             mock_plugin.cmd = ["codex"]
             mock_plugin.prompt_as_arg = False
-            mock_plugin.output_format = None
+            mock_plugin.supports_warm_pool = True
             mock_get.return_value = mock_plugin
 
             client.call("codex", "hello")
 
         mock_schedule.assert_called_once()
+
+    def test_call_opencode_does_not_schedule_warm_and_discards_stale_slot(self, renderer):
+        """OpenCode não deve manter processo pré-aquecido ocioso."""
+        client = AgentClient(renderer)
+        stale_slot = MagicMock()
+        with patch("quimera.plugins.get") as mock_get, \
+             patch.object(client._warm_pool, "take", side_effect=[stale_slot]) as mock_take, \
+             patch.object(client._warm_pool, "schedule_warm") as mock_schedule, \
+             patch.object(client, "run", return_value="ok"):
+            mock_plugin = MagicMock()
+            mock_plugin.cmd = ["opencode", "--model=x", "run", "--format=json"]
+            mock_plugin.prompt_as_arg = False
+            mock_plugin.supports_warm_pool = False
+            mock_get.return_value = mock_plugin
+
+            client.call("opencode", "hello")
+
+        mock_take.assert_called_once()
+        stale_slot.discard.assert_called_once()
+        mock_schedule.assert_not_called()
+
+    def test_should_use_warm_pool_disables_opencode(self):
+        opencode_plugin = MagicMock(supports_warm_pool=False)
+        codex_plugin = MagicMock(supports_warm_pool=True)
+        assert AgentClient._should_use_warm_pool(opencode_plugin, ["opencode"]) is False
+        assert AgentClient._should_use_warm_pool(codex_plugin, ["/usr/local/bin/opencode"]) is True
+        assert AgentClient._should_use_warm_pool(codex_plugin, ["codex"]) is True
 
     def test_close_shuts_down_warm_pool(self, renderer):
         """close() propaga shutdown para o WarmPool."""

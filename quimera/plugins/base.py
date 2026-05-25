@@ -183,6 +183,7 @@ def set_connection_override(agent_name: str, connection: Connection, persist: bo
                 "supports_code_editing": plugin.supports_code_editing,
                 "supports_long_context": plugin.supports_long_context,
                 "supports_task_execution": plugin.supports_task_execution,
+                "supports_warm_pool": plugin.supports_warm_pool,
                 "base_tier": plugin.base_tier,
                 "runtime_rw_paths": list(plugin.runtime_rw_paths),
             }
@@ -241,6 +242,7 @@ class AgentPlugin:
     supports_code_editing: bool = False
     supports_long_context: bool = False
     supports_task_execution: bool = True
+    supports_warm_pool: bool = True
     base_tier: int = 2  # 1: weak, 2: standard, 3: premium
     # API driver fields (driver != "cli" ignora cmd e usa a API diretamente)
     driver: str = "cli"  # "cli" | "openai_compat"
@@ -412,6 +414,7 @@ def _dynamic_plugin_metadata(name: str) -> dict:
         "supports_code_editing": True,
         "supports_long_context": True,
         "supports_task_execution": True,
+        "supports_warm_pool": True,
         "base_tier": 2,
     }
 

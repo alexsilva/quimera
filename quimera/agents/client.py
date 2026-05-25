@@ -507,6 +507,16 @@ class AgentClient:
             getattr(plugin, "output_format", None),
         )
 
+    @staticmethod
+    def _should_use_warm_pool(plugin, cmd: list[str]) -> bool:
+        """Retorna se o plugin permite processo pré-aquecido para execução CLI."""
+        if not cmd:
+            return False
+        plugin_hook = getattr(type(plugin), "should_use_warm_pool", None)
+        if callable(plugin_hook):
+            return bool(plugin_hook(plugin, cmd))
+        return bool(getattr(plugin, "supports_warm_pool", True))
+
     # ------------------------------------------------------------------
     # call() — ponto de entrada principal
     # ------------------------------------------------------------------
@@ -556,9 +566,22 @@ class AgentClient:
         else:
             _extra_env = run_kwargs.get("extra_env")
             _effective_cmd, _effective_cwd = self._build_effective_cmd(cmd, agent, run_kwargs.get("cwd"))
-            _slot = self._warm_pool.take(_effective_cmd, _effective_cwd, _extra_env)
+            _use_warm_pool = self._should_use_warm_pool(plugin, cmd)
+            _slot = self._warm_pool.take(_effective_cmd, _effective_cwd, _extra_env) if _use_warm_pool else None
+            if not _use_warm_pool:
+                # Se houver um slot antigo para esse comando, descarta para evitar
+                # processos ociosos extras no gerenciador.
+                _stale_slot = self._warm_pool.take(_effective_cmd, _effective_cwd, _extra_env)
+                if _stale_slot is not None:
+                    _stale_slot.discard()
             raw = self.run(cmd, input_text=prompt, _primed_proc=_slot.proc if _slot else None, **run_kwargs)
-            self._warm_pool.schedule_warm(_effective_cmd, self._build_run_env(_extra_env), _effective_cwd, _extra_env)
+            if _use_warm_pool:
+                self._warm_pool.schedule_warm(
+                    _effective_cmd,
+                    self._build_run_env(_extra_env),
+                    _effective_cwd,
+                    _extra_env,
+                )
         fmt = output_format
         if fmt == "stream-json" and raw is not None:
             return parse_stream_json(raw, agent, self.tool_event_callback)

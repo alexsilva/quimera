@@ -18,13 +18,13 @@ def _format_opencode_spy_event(line: str) -> list[SpyEvent]:
     part = event.get("part", {}) or {}
     ptype = part.get("type")
 
+    # O OpenCode pode emitir múltiplos step_start/step_finish durante uma única execução
+    # (por subetapas). Exibir isso no spy gera ruído repetitivo de "iniciando/concluída".
+    # O início/fim global já é coberto pelo pipeline comum do AgentClient.
     if etype == "step_start" or ptype == "step-start":
-        return [SpyEvent(kind="context", text="iniciando execução", transient=True)]
+        return []
     if etype == "step_finish" or ptype == "step-finish":
-        reason = (part.get("reason") or "").strip().lower()
-        if reason in {"error", "failed", "fail"}:
-            return [SpyEvent(kind="context", text="execução falhou", transient=True)]
-        return [SpyEvent(kind="context", text="execução concluída", transient=True)]
+        return []
 
     if etype == "text" or ptype == "text":
         return format_agent_message_lines(part.get("text") or "")
@@ -72,6 +72,7 @@ register(AgentPlugin(
     has_builtin_tools=True,
     supports_code_editing=True,
     supports_long_context=False,
+    supports_warm_pool=False,
     base_tier=2,
     stderr_noise_patterns=_BUN_STDERR_NOISE_PATTERNS,
 ))

@@ -1209,7 +1209,7 @@ def test_format_claude_spy_event_summarizes_assistant_and_result():
     assert result == [SpyEvent(kind="context", text="execução concluída", transient=True)]
 
 
-def test_format_opencode_spy_event_summarizes_text_and_result():
+def test_format_opencode_spy_event_ignores_step_boundary_status_and_summarizes_text():
     started = _format_opencode_spy_event('{"type":"step_start","part":{"type":"step-start"}}')
     message = _format_opencode_spy_event(
         '{"type":"text","part":{"type":"text","text":"message 1\\nclear\\nmessage 2"}}'
@@ -1217,13 +1217,13 @@ def test_format_opencode_spy_event_summarizes_text_and_result():
     result = _format_opencode_spy_event(
         '{"type":"step_finish","part":{"type":"step-finish","reason":"stop"}}'
     )
-    assert started == [SpyEvent(kind="context", text="iniciando execução", transient=True)]
+    assert started == []
     assert message == [
         SpyEvent(kind="response", text="message 1", transient=True),
         SpyEvent(kind="clear", text="", transient=True),
         SpyEvent(kind="response", text="message 2", transient=True),
     ]
-    assert result == [SpyEvent(kind="context", text="execução concluída", transient=True)]
+    assert result == []
 
 
 def test_format_opencode_spy_event_reports_tool_calls_as_tool_messages():
