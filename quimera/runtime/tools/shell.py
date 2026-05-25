@@ -3,12 +3,13 @@ from __future__ import annotations
 
 import os
 import pty
-import subprocess
 import threading
 import time
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from quimera import process_factory as subprocess
 
 from . import files as file_tools
 from ..config import ToolRuntimeConfig
@@ -24,7 +25,7 @@ class CommandSession:
     """Representa um processo interativo ainda acessível por session_id."""
 
     session_id: int
-    process: subprocess.Popen
+    process: subprocess.ProcessHandle
     command: str
     cwd: Path
     started_at: float
@@ -78,7 +79,7 @@ class ShellTool:
         proc = subprocess.run(
             command,
             shell=True,
-            cwd=self.config.workspace_root,
+            cwd=str(self.config.workspace_root),
             capture_output=True,
             text=True,
             timeout=self.config.command_timeout_seconds,
@@ -259,14 +260,14 @@ class ShellTool:
             shell: str,
             login: bool,
             tty: bool,
-    ) -> tuple[subprocess.Popen, int | None]:
+    ) -> tuple[subprocess.ProcessHandle, int | None]:
         """Cria o subprocesso usado por exec_command."""
         shell_args = [shell, "-lc" if login else "-c", command]
         if tty:
             master_fd, slave_fd = pty.openpty()
             process = subprocess.Popen(
                 shell_args,
-                cwd=workdir,
+                cwd=str(workdir),
                 stdin=slave_fd,
                 stdout=slave_fd,
                 stderr=slave_fd,
@@ -274,20 +275,12 @@ class ShellTool:
             )
             os.close(slave_fd)
             return process, master_fd
-        process = subprocess.Popen(
-            shell_args,
-            cwd=workdir,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1,
-        )
+        process = subprocess.popen_text(shell_args, cwd=str(workdir))
         return process, None
 
     def _create_session(
             self,
-            process: subprocess.Popen,
+            process: subprocess.ProcessHandle,
             *,
             command: str,
             cwd: Path,

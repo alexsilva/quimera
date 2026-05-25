@@ -4,11 +4,12 @@ from __future__ import annotations
 import os
 import shlex
 import shutil
-import subprocess
 import sys
 import tempfile
 from contextlib import nullcontext
 from pathlib import Path
+
+from . import process_factory as subprocess
 
 
 def _normalize(text: str) -> str | None:

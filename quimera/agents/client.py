@@ -3,7 +3,6 @@ import json
 import logging
 import os
 import queue
-import subprocess
 import threading
 import time
 from collections import deque
@@ -14,6 +13,7 @@ from pathlib import Path
 import quimera.plugins as plugins
 from quimera.constants import MAX_STDERR_LINES, Visibility
 from quimera.plugins.base import CliConnection, OpenAIConnection
+from quimera import process_factory as subprocess
 from quimera.sandbox.bwrap import build_bwrap_cmd
 from quimera.spy_output_presenter import SpyOutputPresenter
 from quimera.runtime.drivers.openai_compat import OpenAICompatDriver
@@ -228,13 +228,8 @@ class AgentClient:
             if _primed_proc is not None:
                 _logger.debug("[warm-pool] processo pré-aquecido expirou: %s", cmd[0])
             try:
-                proc = subprocess.Popen(
+                proc = subprocess.popen_text(
                     effective_cmd,
-                    stdin=subprocess.PIPE,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    bufsize=1,
                     env=env,
                     cwd=effective_cwd,
                     start_new_session=True,

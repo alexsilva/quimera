@@ -1,7 +1,9 @@
 """Pool de processos CLI pré-aquecidos para eliminar cold-start em agentes stdin."""
 import logging
-import subprocess
 import threading
+
+from quimera import process_factory as subprocess
+
 
 _logger = logging.getLogger(__name__)
 
@@ -11,7 +13,7 @@ class _WarmSlot:
 
     __slots__ = ("proc", "cmd_key")
 
-    def __init__(self, proc: subprocess.Popen, cmd_key: tuple) -> None:
+    def __init__(self, proc: subprocess.ProcessHandle, cmd_key: tuple) -> None:
         self.proc = proc
         self.cmd_key = cmd_key
 
@@ -111,13 +113,8 @@ class WarmPool:
     def _do_warm(self, cmd: list, env: dict, cwd: str | None, key: tuple) -> None:
         """Inicia um processo em background e armazena o slot (chamado em thread)."""
         try:
-            proc = subprocess.Popen(
+            proc = subprocess.popen_text(
                 cmd,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                bufsize=1,
                 env=env,
                 cwd=cwd,
                 start_new_session=True,

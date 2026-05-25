@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import re
 import shlex
-import subprocess
 import threading
 from contextlib import nullcontext
 

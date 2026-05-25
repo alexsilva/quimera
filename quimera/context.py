@@ -1,10 +1,11 @@
 """Componentes de `quimera.context`."""
 import shlex
-import subprocess
 import unicodedata
 from datetime import datetime
+
 from .constants import CMD_CONTEXT
 from .editor import Editor
+from . import process_factory as subprocess
 
 
 class ContextManager:
@@ -44,11 +45,10 @@ class ContextManager:
             branch = parts[0]
         else:
             try:
-                branch = subprocess.check_output(
+                branch = subprocess.read_text(
                     ["git", "rev-parse", "--abbrev-ref", "HEAD"],
                     cwd=str(workspace.cwd),
                     stderr=subprocess.DEVNULL,
-                    text=True,
                 ).strip()
             except subprocess.CalledProcessError:
                 self.renderer.show_warning("Não foi possível detectar a branch via git.")

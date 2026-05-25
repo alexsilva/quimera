@@ -3350,7 +3350,7 @@ class PluginTests(unittest.TestCase):
             return None
 
         with patch.dict("os.environ", {"EDITOR": "fake-editor"}), patch(
-            "quimera.editor.subprocess.run",
+            "quimera.process_factory.run",
             side_effect=_fake_editor_run,
         ):
             content = read_from_editor(app.renderer, output_lock=app._output_lock)
@@ -3374,7 +3374,7 @@ class PluginTests(unittest.TestCase):
             return None
 
         with patch.dict("os.environ", {"EDITOR": "fake-editor"}), patch(
-            "quimera.editor.subprocess.run",
+            "quimera.process_factory.run",
             side_effect=_fake_editor_run,
         ):
             content = read_from_editor(app.renderer, output_lock=app._output_lock)
@@ -3391,7 +3391,7 @@ class PluginTests(unittest.TestCase):
             return None
 
         with patch.dict("os.environ", {"EDITOR": "fake-editor"}), patch(
-            "quimera.editor.subprocess.run",
+            "quimera.process_factory.run",
             side_effect=_fake_editor_run,
         ), patch("quimera.editor.sys.stdout") as mock_stdout:
             read_from_editor(app.renderer, output_lock=app._output_lock)
@@ -3422,7 +3422,7 @@ class PluginTests(unittest.TestCase):
             return None
 
         with patch.dict("os.environ", {"EDITOR": "fake-editor"}), patch(
-            "quimera.editor.subprocess.run",
+            "quimera.process_factory.run",
             side_effect=_fake_editor_run,
         ), patch("quimera.editor.sys.stdout"):
             content = read_from_editor(app.renderer, output_lock=app._output_lock)

@@ -3,12 +3,13 @@ from __future__ import annotations
 
 import json
 import logging
-import subprocess
 import tempfile
 import time
 from html import unescape
 import urllib.parse
 from pathlib import Path
+
+from quimera import process_factory as subprocess
 
 from ..config import ToolRuntimeConfig
 from ..models import ToolCall, ToolResult
