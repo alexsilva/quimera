@@ -28,6 +28,10 @@ from quimera.app.protocol import AppProtocol, ProtocolEnvelope
 from quimera.app.session_metrics import SessionMetricsService
 from quimera.app.task_events import TaskCompleted
 from quimera.app.event_sink import EventSink
+from quimera.app.session_bootstrap import (
+    resolve_render_debug_log_path,
+    resolve_session_log_path,
+)
 from quimera.cli import main as cli_main
 from quimera.config import DEFAULT_HISTORY_WINDOW
 from quimera.constants import CMD_AGENTS, CMD_CLEAR, CMD_CONNECT, CMD_DISCONNECT, CMD_HELP, CMD_PROMPT, EXTEND_MARKER, MSG_SHUTDOWN, TaskStatus, TaskType, Visibility, build_agents_help, build_help
@@ -2063,7 +2067,7 @@ class ProtocolTests(unittest.TestCase):
             tmp=SimpleNamespace(render_log_path_for=lambda _session_id: Path("/tmp/quimera/render.jsonl")),
         )
 
-        log_path = app._resolve_session_log_path()
+        log_path = resolve_session_log_path(app.storage, app.workspace)
 
         self.assertEqual(
             log_path,
@@ -2080,11 +2084,11 @@ class ProtocolTests(unittest.TestCase):
         )
         app.debug_prompt_metrics = False
 
-        self.assertEqual(app._resolve_render_debug_log_path(), "")
+        self.assertEqual(resolve_render_debug_log_path(app.storage, app.workspace, app.debug_prompt_metrics), "")
 
         app.debug_prompt_metrics = True
         self.assertEqual(
-            app._resolve_render_debug_log_path(),
+            resolve_render_debug_log_path(app.storage, app.workspace, app.debug_prompt_metrics),
             Path("/tmp/quimera/render-sessao-2026-03-27-123456.jsonl"),
         )
 
@@ -2102,7 +2106,7 @@ class ProtocolTests(unittest.TestCase):
         app.debug_prompt_metrics = True
 
         self.assertEqual(
-            app._resolve_render_debug_log_path(),
+            resolve_render_debug_log_path(app.storage, app.workspace, app.debug_prompt_metrics),
             Path("/tmp/quimera/render-sessao-2026-03-27-123456.jsonl"),
         )
 
@@ -2114,7 +2118,7 @@ class ProtocolTests(unittest.TestCase):
         )
         app.debug_prompt_metrics = True
 
-        self.assertEqual(app._resolve_render_debug_log_path(), "")
+        self.assertEqual(resolve_render_debug_log_path(app.storage, app.workspace, app.debug_prompt_metrics), "")
 
     def test_resolve_render_debug_log_path_ignores_dot_path(self):
         app = QuimeraApp.__new__(QuimeraApp)
@@ -2128,7 +2132,7 @@ class ProtocolTests(unittest.TestCase):
         app.debug_prompt_metrics = True
 
         self.assertEqual(
-            app._resolve_render_debug_log_path(),
+            resolve_render_debug_log_path(app.storage, app.workspace, app.debug_prompt_metrics),
             Path("/tmp/quimera/render-sessao-2026-03-27-123456.jsonl"),
         )
 

@@ -22,7 +22,7 @@ from .bootstrapper import AppBootstrapper
 from .protocol import AppProtocol
 from .render_event import RenderEvent
 from .session import AppSessionServices, compute_history_hard_limit, trim_history_messages
-from .session_paths import (
+from .session_bootstrap import (
     resolve_render_debug_log_path,
     resolve_session_log_path,
     resolve_workspace_metrics_path,
@@ -802,9 +802,9 @@ class QuimeraApp:
         session_id = getattr(storage, "session_id", "")
         if not session_id:
             return
-        events_path = self._resolve_workspace_render_log_path(session_id)
-        ansi_path = self._resolve_workspace_render_ansi_path(session_id)
-        metrics_path = self._resolve_workspace_metrics_path(session_id)
+        events_path = resolve_workspace_render_log_path(workspace, session_id)
+        ansi_path = resolve_workspace_render_ansi_path(workspace, session_id)
+        metrics_path = resolve_workspace_metrics_path(workspace, session_id)
         try:
             all_reports: list[BugReport] = []
             if detector is not None and (events_path is not None or ansi_path is not None):
@@ -871,30 +871,6 @@ class QuimeraApp:
             path_text = f"~{path_text[len(home_dir):]}"
         path_text = self._shorten_middle(path_text, self._SESSION_LOG_DISPLAY_MAX_CHARS)
         return MSG_SESSION_LOG.format(path_text)
-
-    def _resolve_session_log_path(self) -> str | Path:
-        """Retorna o log persistente da sessão usado como histórico canônico do chat."""
-        return resolve_session_log_path(
-            getattr(self, "storage", None),
-            getattr(self, "workspace", None),
-        )
-
-    def _resolve_render_debug_log_path(self) -> str | Path:
-        """Retorna o log de auditoria de render, somente em modo debug."""
-        return resolve_render_debug_log_path(
-            getattr(self, "storage", None),
-            getattr(self, "workspace", None),
-            bool(getattr(self, "debug_prompt_metrics", False)),
-        )
-
-    def _resolve_workspace_render_log_path(self, session_id: str):
-        return resolve_workspace_render_log_path(getattr(self, "workspace", None), session_id)
-
-    def _resolve_workspace_render_ansi_path(self, session_id: str):
-        return resolve_workspace_render_ansi_path(getattr(self, "workspace", None), session_id)
-
-    def _resolve_workspace_metrics_path(self, session_id: str):
-        return resolve_workspace_metrics_path(getattr(self, "workspace", None), session_id)
 
     def _wire_event_ui(self) -> None:
         """Conecta eventos de domínio à renderização UI."""
@@ -1522,8 +1498,8 @@ class QuimeraApp:
                     if detector is None:
                         self.show_warning_message("[bugs] detector de render não disponível.")
                         return True
-                    events_path = self._resolve_workspace_render_log_path(session_id)
-                    ansi_path = self._resolve_workspace_render_ansi_path(session_id)
+                    events_path = resolve_workspace_render_log_path(self.workspace, session_id)
+                    ansi_path = resolve_workspace_render_ansi_path(self.workspace, session_id)
                     if events_path is None and ansi_path is None:
                         self.show_warning_message("[bugs] logs de render não encontrados para a sessão.")
                         return True
@@ -1540,7 +1516,7 @@ class QuimeraApp:
                         return True
                     session_state = getattr(self, "session_state", {}) or {}
                     agent_metrics = session_state.get("agent_metrics", {})
-                    metrics_path = self._resolve_workspace_metrics_path(session_id)
+                    metrics_path = resolve_workspace_metrics_path(self.workspace, session_id)
                     reports.extend(
                         agent_detector.analyze(
                             session_id=session_id,
@@ -2031,10 +2007,12 @@ class QuimeraApp:
         )
         # Em startup normal, prioriza banner limpo; paths de diagnóstico só em debug.
         if getattr(self, "debug_prompt_metrics", False):
-            session_log_path = self._resolve_session_log_path()
+            session_log_path = resolve_session_log_path(self.storage, self.workspace)
             if session_log_path:
                 _show_neutral(self._format_session_log_message(session_log_path))
-            render_debug_log_path = self._resolve_render_debug_log_path()
+            render_debug_log_path = resolve_render_debug_log_path(
+                self.storage, self.workspace, self.debug_prompt_metrics
+            )
             if render_debug_log_path:
                 _show_neutral(f"Audit de render:\n  {render_debug_log_path}\n")
         flush = getattr(self.renderer, "flush", None)
