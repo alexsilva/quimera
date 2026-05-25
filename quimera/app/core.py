@@ -25,9 +25,6 @@ from .session import AppSessionServices, compute_history_hard_limit, trim_histor
 from .session_bootstrap import (
     resolve_render_debug_log_path,
     resolve_session_log_path,
-    resolve_workspace_metrics_path,
-    resolve_workspace_render_ansi_path,
-    resolve_workspace_render_log_path,
 )
 from .session_metrics import SessionMetricsService
 from .dispatch import AppDispatchServices
@@ -44,7 +41,6 @@ from .event_sink import EventSink
 from .ui_event_handler import UiEventHandler
 from .worker import ChatWorker
 from .task_events import (
-    BugFiled,
     TaskStarted,
     TaskCompleted,
     TaskFailed,
@@ -74,18 +70,19 @@ from ..bugs import (
     BugReport,
     BugStore,
     RenderBugDetector,
-    make_bug_fingerprint,
 )
 from ..constants import (
     CMD_AGENTS, CMD_ALIASES, CMD_BUGS, CMD_CLEAR, CMD_CONNECT, CMD_DISCONNECT, CMD_CONTEXT, CMD_EDIT, CMD_EXIT,
     CMD_APPROVE, CMD_APPROVE_ALL, CMD_FILE_PREFIX, CMD_HELP,
     CMD_PROMPT, CMD_RESET_STATE, CMD_TASK,
     MSG_CHAT_STARTED, MSG_SESSION_LOG, MSG_SESSION_STATUS, MSG_MIGRATION,
-    MSG_SHUTDOWN, MSG_DOUBLE_PREFIX,
+    MSG_SHUTDOWN,
     Visibility,
 )
-from ..modes import MODES, get_mode
+from ..modes import MODES
 from ..shared_state import AGENT_STATE_KEYS, bootstrap_state_key_stamps, expire_stale_keys
+from .app_bug_services import AppBugServices
+from .command_router import CommandRouter
 from .config import logger
 
 
@@ -126,6 +123,10 @@ class QuimeraApp:
     def __getattr__(self, name: str):
         if name == "runtime_state":
             return self._ensure_runtime_state()
+        if name == "bug_services":
+            return self._ensure_bug_services()
+        if name == "command_router":
+            return self._ensure_command_router()
         runtime_name = self._BACKWARD_MAP.get(name)
         if runtime_name is not None:
             rs = self._ensure_runtime_state()
@@ -546,7 +547,65 @@ class QuimeraApp:
             redisplay_user_prompt=self._redisplay_user_prompt_if_needed,
             output_lock=self._output_lock,
         )
+        self.bug_services = AppBugServices(
+            bug_store=self.bug_store,
+            bug_detector=self.bug_detector,
+            agent_bug_detector=self.agent_bug_detector,
+            bug_correlator=self.bug_correlator,
+            workspace=self.workspace,
+            storage=self.storage,
+            renderer=self.renderer,
+            event_sink=self.event_sink,
+            show_system_message=self.show_system_message,
+            show_warning_message=self.show_warning_message,
+            show_muted_message=self.show_muted_message,
+        )
+        self.command_router = CommandRouter(
+            agent_pool=self.agent_pool,
+            renderer=self.renderer,
+            get_active_agent_plugins=self.get_active_agent_plugins,
+            set_execution_mode=self._set_execution_mode,
+            normalize_agent_name=self._normalize_agent_name,
+            selected_agents=self.selected_agents,
+            get_available_plugins=self.get_available_plugins,
+        )
         self._ui_subscriptions = self._ui_event_handler.wire_event_ui()
+
+    def _ensure_bug_services(self) -> AppBugServices:
+        try:
+            return object.__getattribute__(self, "bug_services")
+        except AttributeError:
+            bs = AppBugServices(
+                bug_store=getattr(self, "bug_store", None),
+                bug_detector=getattr(self, "bug_detector", None),
+                agent_bug_detector=getattr(self, "agent_bug_detector", None),
+                bug_correlator=getattr(self, "bug_correlator", None),
+                workspace=getattr(self, "workspace", None),
+                storage=getattr(self, "storage", None),
+                renderer=getattr(self, "renderer", None),
+                event_sink=getattr(self, "event_sink", None),
+                show_system_message=self.show_system_message,
+                show_warning_message=self.show_warning_message,
+                show_muted_message=self.show_muted_message,
+            )
+            object.__setattr__(self, "bug_services", bs)
+            return bs
+
+    def _ensure_command_router(self) -> CommandRouter:
+        try:
+            return object.__getattribute__(self, "command_router")
+        except AttributeError:
+            cr = CommandRouter(
+                agent_pool=self._ensure_agent_pool(),
+                renderer=getattr(self, "renderer", None),
+                get_active_agent_plugins=self.get_active_agent_plugins,
+                set_execution_mode=self._set_execution_mode,
+                normalize_agent_name=self._normalize_agent_name,
+                selected_agents=getattr(self, "selected_agents", []),
+                get_available_plugins=self.get_available_plugins,
+            )
+            object.__setattr__(self, "command_router", cr)
+            return cr
 
     def _ensure_ui_event_handler(self):
         """Retorna _ui_event_handler, criando lazy se necessário (ex.: __new__ em testes)."""
@@ -786,87 +845,21 @@ class QuimeraApp:
         agent: str = "",
         evidence_refs: list[BugEvidenceRef] | None = None,
     ) -> BugReport | None:
-        bug_store = getattr(self, "bug_store", None)
-        if bug_store is None or not session_id or not category or not summary:
-            return None
-        fingerprint = make_bug_fingerprint(session_id, category, summary)
-        report = BugReport(
-            id=f"bug_{fingerprint[:12]}",
+        return self.bug_services.file_bug(
             session_id=session_id,
             category=category,
             summary=summary,
             severity=severity,
             confidence=confidence,
             description=description,
-            fingerprint=fingerprint,
-            evidence_refs=list(evidence_refs or []),
             agent=agent,
+            evidence_refs=evidence_refs,
         )
-        try:
-            filed_report = bug_store.file(report)
-        except Exception:
-            logger.debug("falha ao persistir bug report", exc_info=True)
-            return None
-        if filed_report is not None:
-            event_sink = getattr(self, "event_sink", None)
-            publish = getattr(event_sink, "publish", None)
-            if callable(publish):
-                try:
-                    bug_event = BugFiled(
-                        task_id=0,  # Bug events don't have a specific task ID
-                        job_id=0,   # Bug events don't have a specific job ID
-                        bug_id=filed_report.id,
-                        category=filed_report.category,
-                        summary=filed_report.summary,
-                        severity=filed_report.severity,
-                    )
-                    publish(bug_event)
-                except Exception:
-                    logger.debug("falha ao publicar BugFiled", exc_info=True)
-        return filed_report
 
     def _run_render_bug_detector(self) -> None:
-        detector = getattr(self, "bug_detector", None)
-        agent_detector = getattr(self, "agent_bug_detector", None)
-        correlator = getattr(self, "bug_correlator", None)
-        bug_store = getattr(self, "bug_store", None)
-        workspace = getattr(self, "workspace", None)
-        storage = getattr(self, "storage", None)
-        if bug_store is None or workspace is None or storage is None:
-            return
-        session_id = getattr(storage, "session_id", "")
-        if not session_id:
-            return
-        events_path = resolve_workspace_render_log_path(workspace, session_id)
-        ansi_path = resolve_workspace_render_ansi_path(workspace, session_id)
-        metrics_path = resolve_workspace_metrics_path(workspace, session_id)
-        try:
-            all_reports: list[BugReport] = []
-            if detector is not None and (events_path is not None or ansi_path is not None):
-                reports = detector.analyze_session(
-                    session_id=session_id,
-                    events_path=events_path,
-                    ansi_path=ansi_path,
-                )
-                for report in reports:
-                    bug_store.file(report)
-                all_reports.extend(reports)
-            if agent_detector is not None:
-                session_state = getattr(self, "session_state", {}) or {}
-                agent_metrics = session_state.get("agent_metrics", {})
-                reports = agent_detector.analyze(
-                    session_id=session_id,
-                    agent_metrics=agent_metrics if isinstance(agent_metrics, dict) else {},
-                    prompt_metrics_path=metrics_path,
-                )
-                for report in reports:
-                    bug_store.file(report)
-                all_reports.extend(reports)
-            if correlator is not None and len(all_reports) >= 2:
-                for report in correlator.correlate(all_reports, session_id=session_id):
-                    bug_store.file(report)
-        except Exception:
-            logger.debug("falha ao analisar bugs de debug", exc_info=True)
+        session_state = getattr(self, "session_state", {}) or {}
+        agent_metrics = session_state.get("agent_metrics", {})
+        self.bug_services.run_render_bug_detector(agent_metrics=agent_metrics)
 
     @staticmethod
     def _unique_encodings(*encodings):
@@ -969,66 +962,8 @@ class QuimeraApp:
         else:
             self.tool_executor.policy.blocked_tools = []
 
-    def parse_routing(self, user_input):
-        """Extrai o agente inicial e rejeita prefixos duplicados na mesma entrada.
-
-        Detecta comandos de modo (/planning, /analysis, etc.) e os aplica antes
-        do roteamento normal. Retorna (agent, message, explicit) onde explicit=True
-        indica que o usuário usou /claude ou /codex explicitamente.
-        """
-        stripped = user_input.lstrip()
-        lowered = stripped.lower()
-
-        # Detecta comandos de modo: /planning, /analysis, /design, /review, /execute
-        first_token = lowered.split()[0] if lowered.split() else ""
-        mode = get_mode(first_token)
-        if mode is not None:
-            self._set_execution_mode(mode)
-            rest = stripped[len(first_token):].lstrip()
-            mode_message = (
-                f"[modo] {mode.name} ativado — restrições anteriores removidas; "
-                "ferramentas bloqueadas: nenhuma"
-                if mode.name == "execute"
-                else f"[modo] {mode.name} ativado — ferramentas bloqueadas: "
-                     f"{', '.join(mode.blocked_tools) or 'nenhuma'}"
-            )
-            if rest:
-                self.renderer.show_system(mode_message)
-                return self.parse_routing(rest)
-            self.renderer.show_system(mode_message)
-            if not self.agent_pool:
-                self.agent_pool.set([self._normalize_agent_name(a) for a in self.selected_agents])
-            return None, "", False
-
-        active_plugins = self.get_active_agent_plugins()
-        for p in active_plugins:
-            prefixes = [p.prefix, *(getattr(p, "aliases", None) or [])]
-            agent = p.name
-            for prefix in prefixes:
-                if lowered == prefix:
-                    return agent, "", True
-                if lowered.startswith(f"{prefix} "):
-                    message = stripped[len(prefix):].lstrip()
-                    lowered_message = message.lower()
-                    other_prefixes = []
-                    for op in active_plugins:
-                        if op.name == agent:
-                            continue
-                        other_prefixes.extend([op.prefix, *(getattr(op, "aliases", None) or [])])
-                    if any(lowered_message == op or lowered_message.startswith(f"{op} ") for op in other_prefixes):
-                        self.renderer.show_warning(MSG_DOUBLE_PREFIX)
-                        return None, None, False
-                    return agent, message, True
-
-        if not self.agent_pool:
-            logger.warning("no active agents, resetting to default")
-            logger.debug("selected_agents=%r", self.selected_agents)
-            logger.debug("available=%r", self.get_available_plugins())
-            self.agent_pool.set(self.selected_agents or [p.name for p in self.get_available_plugins()])
-            logger.debug("after fallback active_agents=%r", self.agent_pool.agents)
-            if not self.agent_pool:
-                raise RuntimeError("No agents available")
-        return self.agent_pool.primary, user_input, False
+    def parse_routing(self, user_input: str) -> tuple[str | None, str | None, bool]:
+        return self.command_router.parse_routing(user_input)
 
     @staticmethod
     def _merge_state_value(current, incoming):
@@ -1395,176 +1330,10 @@ class QuimeraApp:
         return self.input_services.read_user_input(prompt, timeout)
 
     def _handle_bugs_command(self, command: str) -> bool:
-        """Processa operações de bug report via `/bugs`."""
-        raw = str(command or "").strip()
-        parts = raw.split()
-        action = parts[1].lower() if len(parts) >= 2 else "list"
-        bug_store = getattr(self, "bug_store", None)
-        if bug_store is None:
-            self.show_warning_message("[bugs] bug store não disponível.")
-            return True
-        try:
-            if action == "list":
-                session_id = parts[2] if len(parts) >= 3 else getattr(self.storage, "session_id", "")
-                reports = bug_store.query(session_id=session_id, status="open", limit=20) if session_id else bug_store.query(status="open", limit=20)
-                if not reports:
-                    self.show_system_message("[bugs] nenhum bug aberto.")
-                    return True
-                lines = [f"[bugs] abertos ({len(reports)}):"]
-                for report in reports:
-                    lines.append(f"- {report.id} | {report.severity} | {report.category} | count={report.count}")
-                self.show_muted_message("\n".join(lines))
-                return True
-
-            if action == "show":
-                if len(parts) < 3:
-                    self.show_warning_message("Uso: /bugs show <bug_id>")
-                    return True
-                bug_id = parts[2].strip()
-                reports = bug_store.query(limit=500)
-                target = next((item for item in reports if item.id == bug_id), None)
-                if target is None:
-                    self.show_warning_message(f"[bugs] bug não encontrado: {bug_id}")
-                    return True
-                lines = [
-                    f"[bugs] detalhes do bug {target.id}:",
-                    f"  sessão: {target.session_id}",
-                    f"  categoria: {target.category}",
-                    f"  resumo: {target.summary}",
-                    f"  severidade: {target.severity}",
-                    f"  confiança: {target.confidence:.2f}",
-                    f"  status: {target.status}",
-                    f"  contagem: {target.count}",
-                    f"  agente: {target.agent or '(desconhecido)'}",
-                    f"  primeira ocorrência: {target.first_seen_at}",
-                    f"  última ocorrência: {target.last_seen_at}",
-                ]
-                if target.description:
-                    lines.append(f"  descrição: {target.description}")
-                if target.evidence_refs:
-                    evidence = target.evidence_refs[0]
-                    location = evidence.path
-                    if evidence.line is not None:
-                        location = f"{location}:{evidence.line}"
-                    elif evidence.offset is not None:
-                        location = f"{location}:offset={evidence.offset}"
-                    lines.append(f"  evidência: {evidence.kind} | {location}")
-                    if evidence.preview:
-                        lines.append(f"  preview: {evidence.preview[:200]}")
-                self.show_muted_message("\n".join(lines))
-                return True
-
-            if action == "close":
-                if len(parts) < 3:
-                    self.show_warning_message("Uso: /bugs close <bug_id>")
-                    return True
-                bug_id = parts[2].strip()
-                closed = bug_store.close_bug(bug_id)
-                if closed is None:
-                    self.show_warning_message(f"[bugs] bug não encontrado: {bug_id}")
-                    return True
-                self.show_system_message(f"[bugs] bug fechado: {closed.id}")
-                return True
-
-            if action == "analyze":
-                detector = getattr(self, "bug_detector", None)
-                agent_detector = getattr(self, "agent_bug_detector", None)
-                if detector is None and agent_detector is None:
-                    self.show_warning_message("[bugs] detectores não disponíveis.")
-                    return True
-                mode = "all"
-                session_arg_index = 2
-                if len(parts) >= 3 and parts[2].lower() in {"render", "agents", "all"}:
-                    mode = parts[2].lower()
-                    session_arg_index = 3
-                session_id = parts[session_arg_index] if len(parts) > session_arg_index else getattr(self.storage, "session_id", "")
-                if not session_id:
-                    self.show_warning_message("[bugs] session_id inválido para análise.")
-                    return True
-                reports: list[BugReport] = []
-                if mode in {"render", "all"}:
-                    if detector is None:
-                        self.show_warning_message("[bugs] detector de render não disponível.")
-                        return True
-                    events_path = resolve_workspace_render_log_path(self.workspace, session_id)
-                    ansi_path = resolve_workspace_render_ansi_path(self.workspace, session_id)
-                    if events_path is None and ansi_path is None:
-                        self.show_warning_message("[bugs] logs de render não encontrados para a sessão.")
-                        return True
-                    reports.extend(
-                        detector.analyze_session(
-                            session_id=session_id,
-                            events_path=events_path,
-                            ansi_path=ansi_path,
-                        )
-                    )
-                if mode in {"agents", "all"}:
-                    if agent_detector is None:
-                        self.show_warning_message("[bugs] detector de agentes não disponível.")
-                        return True
-                    session_state = getattr(self, "session_state", {}) or {}
-                    agent_metrics = session_state.get("agent_metrics", {})
-                    metrics_path = resolve_workspace_metrics_path(self.workspace, session_id)
-                    reports.extend(
-                        agent_detector.analyze(
-                            session_id=session_id,
-                            agent_metrics=agent_metrics if isinstance(agent_metrics, dict) else {},
-                            prompt_metrics_path=metrics_path,
-                        )
-                    )
-                filed = 0
-                for report in reports:
-                    if bug_store.file(report) is not None:
-                        filed += 1
-                if len(reports) >= 2:
-                    correlator = getattr(self, "bug_correlator", None)
-                    if correlator is not None:
-                        for report in correlator.correlate(reports, session_id=session_id):
-                            if bug_store.file(report) is not None:
-                                filed += 1
-                self.show_system_message(
-                    f"[bugs] análise ({mode}) concluída: {len(reports)} sinal(is), "
-                    f"{filed} registro(s) processado(s)."
-                )
-                return True
-
-            if action == "stats":
-                session_id = parts[2] if len(parts) >= 3 else getattr(self.storage, "session_id", "")
-                reports = (
-                    bug_store.query(session_id=session_id, status="open", limit=500)
-                    if session_id
-                    else bug_store.query(status="open", limit=500)
-                )
-                if not reports:
-                    self.show_system_message("[bugs] nenhum bug aberto.")
-                    return True
-                by_category: dict[str, int] = {}
-                by_severity: dict[str, int] = {}
-                by_agent: dict[str, int] = {}
-                for report in reports:
-                    by_category[report.category] = by_category.get(report.category, 0) + 1
-                    sev = str(report.severity or "unknown")
-                    by_severity[sev] = by_severity.get(sev, 0) + 1
-                    agent_key = str(report.agent or "unknown")
-                    by_agent[agent_key] = by_agent.get(agent_key, 0) + 1
-                lines = [f"[bugs] stats ({len(reports)} abertos):", "por severidade:"]
-                for severity, count in sorted(by_severity.items(), key=lambda item: (-item[1], item[0])):
-                    lines.append(f"- {severity}: {count}")
-                lines.append("por categoria:")
-                for category, count in sorted(by_category.items(), key=lambda item: (-item[1], item[0])):
-                    lines.append(f"- {category}: {count}")
-                lines.append("por agente:")
-                for agent_name, count in sorted(by_agent.items(), key=lambda item: (-item[1], item[0])):
-                    lines.append(f"- {agent_name}: {count}")
-                self.show_muted_message("\n".join(lines))
-                return True
-        except Exception:
-            logger.exception("falha ao processar comando /bugs: %s", raw)
-            self.show_warning_message("[bugs] falha interna ao processar comando.")
-            return True
-
-        self.show_warning_message("Uso: /bugs [list|show|close|analyze|stats] [args]")
-        return True
+        return self.bug_services.handle_bugs_command(
+            command,
+            app_session_state=getattr(self, "session_state", None)
+        )
 
     def handle_command(self, user_input: str) -> bool:
         """Fachada compatível para comandos slash."""
