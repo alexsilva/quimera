@@ -89,24 +89,24 @@ class TestAgentStyle:
         """Test returns style from injected get_plugin_style callable."""
         def get_plugin_style(agent):
             if agent == "testagent":
-                return ("cyan", "🤖 TestAgent")
+                return ("cyan", "🤖  TestAgent")
             return None
 
         color, label = _agent_style("testagent", get_plugin_style=get_plugin_style)
         assert color == "cyan"
-        assert label == "🤖 TestAgent"
+        assert label == "🤖  TestAgent"
 
     def test_fallback_for_unknown_agent(self):
         """Test fallback when get_plugin_style returns None."""
         color, label = _agent_style("unknownagent")
         assert color == "white"
-        assert label == "🤖 Unknownagent"
+        assert label == "🤖  Unknownagent"
 
     def test_fallback_for_none_agent(self):
         """Test fallback is safe when agent is None."""
         color, label = _agent_style(None)
         assert color == "white"
-        assert label == "🤖 Unknown"
+        assert label == "🤖  Unknown"
 
 
 class TestTerminalRenderer:
@@ -144,7 +144,7 @@ class TestTerminalRenderer:
         renderer = TerminalRenderer()
         renderer._console = Console(width=80, record=True, force_terminal=False)
 
-        with patch("quimera.ui._agent_style", return_value=("blue", "🔷 Codex")):
+        with patch("quimera.ui._agent_style", return_value=("blue", "🔷  Codex")):
             renderer.show_message("codex", Panel(Text("conteudo interno"), title="Titulo"))
 
         renderer.flush()
@@ -245,12 +245,12 @@ class TestTerminalRenderer:
         renderer = TerminalRenderer()
         renderer._console = Console(width=60, record=True, force_terminal=False)
 
-        with patch("quimera.ui._agent_style", return_value=("blue", "🔷 Codex")):
+        with patch("quimera.ui._agent_style", return_value=("blue", "🔷  Codex")):
             renderer.show_plain("execução concluída", agent="codex")
 
         renderer.flush()
         rendered = renderer._console.export_text()
-        assert "🔷 Codex execução concluída" in rendered
+        assert "🔷  Codex execução concluída" in rendered
         renderer.close(timeout=1.0)
 
     def test_show_plain_with_agent_strips_crlf_edges(self):
@@ -258,12 +258,12 @@ class TestTerminalRenderer:
         renderer = TerminalRenderer()
         renderer._console = Console(width=60, record=True, force_terminal=False)
 
-        with patch("quimera.ui._agent_style", return_value=("blue", "🔷 Codex")):
+        with patch("quimera.ui._agent_style", return_value=("blue", "🔷  Codex")):
             renderer.show_plain("\r\nexecução concluída\r\n", agent="codex")
 
         renderer.flush()
         rendered = renderer._console.export_text()
-        assert "🔷 Codex execução concluída" in rendered
+        assert "🔷  Codex execução concluída" in rendered
         renderer.close(timeout=1.0)
 
     def test_show_plain_without_agent(self, renderer_no_rich, capsys):
@@ -444,7 +444,7 @@ class TestTerminalRenderer:
         renderer._console = Console(width=100, record=True, force_terminal=False)
         renderer.set_prompt_integration(lambda: True, None)
 
-        with patch("quimera.ui._agent_style", return_value=("cyan", "🔷 Codex")), patch(
+        with patch("quimera.ui._agent_style", return_value=("cyan", "🔷  Codex")), patch(
             "quimera.ui.renderer.time.monotonic",
             side_effect=[0.0, 0.3, 2.1],
         ):
@@ -454,8 +454,8 @@ class TestTerminalRenderer:
 
         renderer.flush()
         rendered = renderer._console.export_text()
-        assert "🔷 Codex mensagem 1" in rendered
-        assert "🔷 Codex … mensagem 3" in rendered
+        assert "🔷  Codex mensagem 1" in rendered
+        assert "🔷  Codex … mensagem 3" in rendered
         assert "mensagem 2" not in rendered
         renderer.close(timeout=1.0)
 
@@ -464,7 +464,7 @@ class TestTerminalRenderer:
         renderer._console = Console(width=100, record=True, force_terminal=False)
         renderer.set_prompt_integration(lambda: True, None)
 
-        with patch("quimera.ui._agent_style", return_value=("cyan", "🔷 Codex")), patch(
+        with patch("quimera.ui._agent_style", return_value=("cyan", "🔷  Codex")), patch(
             "quimera.ui.renderer.time.monotonic",
             side_effect=[0.0, 0.2, 0.4],
         ):
@@ -475,9 +475,9 @@ class TestTerminalRenderer:
 
         renderer.flush()
         rendered = renderer._console.export_text()
-        assert "🔷 Codex mensagem 1" in rendered
-        assert "🔷 Codex mensagem 3" in rendered
-        assert "🔷 Codex … mensagem 3" not in rendered
+        assert "🔷  Codex mensagem 1" in rendered
+        assert "🔷  Codex mensagem 3" in rendered
+        assert "🔷  Codex … mensagem 3" not in rendered
         renderer.close(timeout=1.0)
 
     def test_clear_agent_transient_flushes_latest_suppressed_prompt_snapshot(self):
@@ -485,7 +485,7 @@ class TestTerminalRenderer:
         renderer._console = Console(width=100, record=True, force_terminal=False)
         renderer.set_prompt_integration(lambda: True, None)
 
-        with patch("quimera.ui._agent_style", return_value=("cyan", "🔷 Codex")), patch(
+        with patch("quimera.ui._agent_style", return_value=("cyan", "🔷  Codex")), patch(
             "quimera.ui.renderer.time.monotonic",
             side_effect=[0.0, 0.2],
         ):
@@ -495,8 +495,8 @@ class TestTerminalRenderer:
 
         renderer.flush()
         rendered = renderer._console.export_text()
-        assert "🔷 Codex mensagem 1" in rendered
-        assert "🔷 Codex … mensagem 2" in rendered
+        assert "🔷  Codex mensagem 1" in rendered
+        assert "🔷  Codex … mensagem 2" in rendered
         renderer.close(timeout=1.0)
 
     def test_start_message_stream_disables_auto_refresh(self, mock_renderer):

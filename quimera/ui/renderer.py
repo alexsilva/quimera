@@ -247,7 +247,7 @@ def _agent_style(agent: str, get_plugin_style=None):
         result = get_plugin_style(agent_name.lower())
         if result:
             return result
-    return ("white", f"🤖 {agent_name.capitalize()}")
+    return ("white", f"🤖  {agent_name.capitalize()}")
 
 
 class _NullStatus:

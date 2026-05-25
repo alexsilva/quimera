@@ -4,7 +4,7 @@ logs/2026-04-30/sessao-2026-04-30-222821
 .jsonl
 · Você: validar baseline visual oficial
 
-🤖 Codex
+🤖  Codex
 ╭──────────────────────────────────────╮
 │ Implementação concluída. Ajustes de  │
 │ wrapping e alinhamento preservados.  │

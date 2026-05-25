@@ -3040,15 +3040,15 @@ class PluginTests(unittest.TestCase):
 
     def test_agent_style_returns_plugin_style(self):
         def get_style(agent):
-            return ("magenta", "🤖 Stub") if agent == "stub" else None
+            return ("magenta", "🤖  Stub") if agent == "stub" else None
 
-        self.assertEqual(_agent_style("stub", get_plugin_style=get_style), ("magenta", "🤖 Stub"))
+        self.assertEqual(_agent_style("stub", get_plugin_style=get_style), ("magenta", "🤖  Stub"))
 
     def test_agent_style_fallback_for_unknown(self):
         with patch("quimera.plugins.base._registry", PluginRegistry()):
             color, label = _agent_style("unknown")
             self.assertEqual(color, "white")
-            self.assertEqual(label, "🤖 Unknown")
+            self.assertEqual(label, "🤖  Unknown")
 
     def test_agent_client_call_uses_plugin_cmd(self):
         stub = AgentPlugin(name="stub", prefix="/stub", cmd=["stub", "-x"], style=("white", "Stub"))

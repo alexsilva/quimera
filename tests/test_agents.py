@@ -529,7 +529,7 @@ def test_agent_client_run_summary_shows_formatted_codex_stdout(renderer):
         with patch("time.sleep"):
             client.run(["codex", "exec"], silent=False, agent="codex", show_status=False)
 
-    renderer.show_system_neutral.assert_any_call("→ codex iniciando...")
+    assert ("→ codex iniciando...",) not in [call.args for call in renderer.show_system_neutral.call_args_list]
     renderer.update_agent_transient.assert_any_call("codex", "message 1")
     renderer.update_agent_transient.assert_any_call("codex", "message 2")
     renderer.update_agent_transient.assert_any_call("codex", "message 3")

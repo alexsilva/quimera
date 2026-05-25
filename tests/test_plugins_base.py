@@ -200,7 +200,7 @@ def _make_plugin(**kwargs) -> AgentPlugin:
 
 def test_render_style():
     p = _make_plugin(icon="🚀", style=("red", "Rocket"))
-    assert p.render_style == ("red", "🚀 Rocket")
+    assert p.render_style == ("red", "🚀  Rocket")
 
 
 def test_configure_with_model_not_cli():

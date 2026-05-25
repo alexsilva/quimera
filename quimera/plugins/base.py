@@ -261,7 +261,7 @@ class AgentPlugin:
     def render_style(self) -> Tuple[str, str]:
         """Retorna o estilo pronto para renderização na UI."""
         color, label = self.style
-        return (color, f"{self.icon} {label}")
+        return (color, f"{self.icon}  {label}")
 
     def configure_with_model(self, model_id: str) -> "CliConnection":
         """Retorna nova CliConnection com model_id substituído no placeholder --model=."""
