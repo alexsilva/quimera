@@ -141,7 +141,7 @@ def _format_claude_spy_event(line: str) -> list[SpyEvent]:
                 messages.append(SpyEvent(kind="response", text=text, final=True))
         elif btype == "tool_use":
             tool_name = block.get("name") or "ferramenta"
-            messages.append(SpyEvent(kind="tool", text=f"usando {tool_name}"))
+            messages.append(SpyEvent(kind="tool", text=f"usando {tool_name}", transient=True))
     return messages
 
 

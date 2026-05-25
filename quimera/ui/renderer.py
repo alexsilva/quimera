@@ -431,11 +431,17 @@ class TerminalRenderer:
             if _ul[0] is not None:
                 _ul[0].update(_get_renderable(), refresh=True)
 
-        def _stop_if_empty():
-            if _ul[0] is not None and not _stream_states:
+        def _close_live():
+            """Encerra o Live ativo com refresh final vazio — garante que toolbar não congela."""
+            if _ul[0] is not None:
+                _ul[0].update(Text(""), refresh=True)
                 _ul[0].stop()
                 _ul[0] = None
                 self._stream_live_active.clear()
+
+        def _stop_if_empty():
+            if not _stream_states:
+                _close_live()
 
         def _cprint(renderable, **kwargs):
             """Imprime via Live ativo, run_in_terminal (se prompt ativo) ou direto ao console."""
@@ -490,9 +496,7 @@ class TerminalRenderer:
             event = _next_event()
             if event is _STOP:
                 _flush_deferred(force=True)
-                if _ul[0]:
-                    _ul[0].stop()
-                    self._stream_live_active.clear()
+                _close_live()
                 break
 
             # Resiliência: exceção em qualquer evento não mata o writer

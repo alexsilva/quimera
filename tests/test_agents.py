@@ -852,7 +852,8 @@ def test_agent_client_run_spy_shows_claude_stdout_context(renderer):
             result = client.run(["claude", "-p"], silent=False, agent="claude", show_status=False)
 
     assert result == '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read"},{"type":"text","text":"Vou inspecionar o arquivo antes de sugerir a mudança."}]}}\n{"type":"result","result":"ok","is_error":false}'
-    renderer.show_plain.assert_any_call("usando Read", agent="claude")
+    renderer.update_agent_transient.assert_any_call("claude", "iniciando execução")
+    renderer.update_agent_transient.assert_any_call("claude", "usando Read")
     renderer.show_plain.assert_any_call("Vou inspecionar o arquivo antes de sugerir a mudança.",
                                         agent="claude")
     renderer.update_agent_transient.assert_any_call("claude", "execução concluída")
@@ -1202,7 +1203,7 @@ def test_format_claude_spy_event_summarizes_assistant_and_result():
     )
     result = _format_claude_spy_event('{"type":"result","result":"ok","is_error":false}')
     assert assistant == [
-        SpyEvent(kind="tool", text="usando Bash"),
+        SpyEvent(kind="tool", text="usando Bash", transient=True),
         SpyEvent(kind="response", text="Vou validar com um teste focado antes de concluir.", final=True),
     ]
     assert result == [SpyEvent(kind="context", text="execução concluída", transient=True)]

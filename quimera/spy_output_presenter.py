@@ -425,7 +425,12 @@ class SpyOutputPresenter:
             return []
         if len(text) > 200:
             text = text[:197] + "..."
-        return [SpyEvent(kind="raw", text=text)]
+        return [SpyEvent(kind="context", text=text, transient=True)]
+
+    def notify_agent_started(self, agent: str | None) -> None:
+        """Emite evento transitório de início de execução para todos os CLIs."""
+        if agent:
+            self.emit(agent, SpyEvent(kind="context", text="iniciando execução", transient=True))
 
     def consume_stdout(self, agent: str | None, line: str) -> bool:
         """Processa e emite uma linha de stdout."""
@@ -467,6 +472,8 @@ class SpyOutputPresenter:
 
         if event.kind == "context":
             self.current_status_label = event.text
+            if event.transient:
+                self._show(agent, event)
             return
 
         if event.kind == "diff":

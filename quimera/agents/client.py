@@ -383,6 +383,7 @@ class AgentClient:
                             _lbl = self._spy_output_presenter.compose_status_label(cmd[0])
                             _update_status_once(f"[dim]{_lbl}... {elapsed}s[/dim]")
 
+                    self._spy_output_presenter.notify_agent_started(agent)
                     termination = runner.watch(log_queue=log_queue, on_item=_on_item, on_tick=_on_tick)
                     self.rate_limit_detected = runner.rate_limit_detected
                     self.rate_limit_detected_at = runner.rate_limit_detected_at
