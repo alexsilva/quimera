@@ -35,6 +35,7 @@ class ToolExecutor:
         self.registry = registry or ToolRegistry()
         self.policy = policy or ToolPolicy(config)
         self._tool_preview_callback = None
+        self._call_agent_fn = None
         self._register_builtin_tools()
 
     def _register_builtin_tools(self) -> None:
@@ -60,6 +61,7 @@ class ToolExecutor:
         self.registry.register("web_fetch", web_tool.web_fetch)
         self.registry.register("list_jobs", task_tools.list_jobs)
         self.registry.register("get_job", task_tools.get_job)
+        self.registry.register("call_agent", self._handle_agent_dispatch)
 
     @property
     def approval_handler(self):
@@ -126,6 +128,71 @@ class ToolExecutor:
         Assinatura esperada: fn(tool_name: str, arguments: dict) -> None
         """
         self._tool_preview_callback = fn
+
+    def set_call_agent_fn(self, fn) -> None:
+        """Injeta callable para despachar tarefas a outro agente.
+
+        Assinatura esperada: fn(agent_name: str, **options) -> str | None
+        """
+        self._call_agent_fn = fn
+
+    def is_call_agent_available(self) -> bool:
+        """Indica se a tool call_agent está operável no contexto atual."""
+        return callable(self._call_agent_fn)
+
+    def _handle_agent_dispatch(self, call: ToolCall) -> ToolResult:
+        """Dispatch a task to another Quimera agent via MCP tool."""
+        if not self.is_call_agent_available():
+            return ToolResult(
+                ok=False,
+                tool_name=call.name,
+                error="Agent dispatch not available in this context",
+            )
+        arguments = call.arguments if isinstance(call.arguments, dict) else {}
+        agent_name_raw = arguments.get("agent_name")
+        task_raw = arguments.get("task")
+        context_raw = arguments.get("context")
+
+        agent_name = str(agent_name_raw).strip() if isinstance(agent_name_raw, str) else ""
+        task = str(task_raw).strip() if isinstance(task_raw, str) else ""
+        context = ""
+        if context_raw is not None:
+            context = str(context_raw).strip() if isinstance(context_raw, str) else str(context_raw)
+
+        if not agent_name or not task:
+            return ToolResult(
+                ok=False,
+                tool_name=call.name,
+                error="Both 'agent_name' and 'task' are required",
+            )
+        handoff = {
+            "task": task,
+            "context": context,
+        }
+        try:
+            result = self._call_agent_fn(
+                agent_name,
+                handoff=handoff,
+                handoff_only=True,
+                protocol_mode="handoff",
+                primary=False,
+                silent=True,
+                show_output=False,
+                persist_history=True,
+            )
+            if result is None:
+                return ToolResult(
+                    ok=False,
+                    tool_name=call.name,
+                    error=f"Agent '{agent_name}' returned no response",
+                )
+            return ToolResult(ok=True, tool_name=call.name, content=str(result))
+        except Exception as e:
+            return ToolResult(
+                ok=False,
+                tool_name=call.name,
+                error=str(e),
+            )
 
     def execute(self, call: ToolCall) -> ToolResult:
         """Executa um ToolCall com política de aprovação.

@@ -170,6 +170,19 @@ class ToolPolicy:
         """Executa validate get job."""
         return
 
+    def _validate_call_agent(self, call: ToolCall) -> None:
+        """Valida a delegação de tarefa para outro agente."""
+        agent_name = call.arguments.get("agent_name")
+        task = call.arguments.get("task")
+        if not isinstance(agent_name, str) or not agent_name.strip():
+            raise ToolPolicyError("call_agent requer 'agent_name' string não vazia")
+        if not isinstance(task, str) or not task.strip():
+            raise ToolPolicyError("call_agent requer 'task' string não vazia")
+
+        context = call.arguments.get("context")
+        if context is not None and not isinstance(context, str):
+            raise ToolPolicyError("call_agent requer 'context' string quando fornecido")
+
     def _validate_approve_task(self, call: ToolCall) -> None:
         """Executa validate approve task."""
         raise ToolPolicyError("approve_task foi desativada no chat; tasks humanas já nascem roteadas")

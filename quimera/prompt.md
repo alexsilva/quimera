@@ -31,9 +31,7 @@ Agentes de IA nesta conversa: {agents}
   Se {user_name} retomar o que outro agente acabou de dizer, trate como continuação direta do mesmo chat.
 - Use [NEEDS_INPUT] para perguntar ao {user_name} quando necessário.
 <!-- IF:mcp_enabled -->
-- MCP da sessão está ativo ({mcp_socket_path}).
-- Não inicie servidor MCP externo/manualmente.
-- Use o servidor MCP `quimera` já injetado pelo runtime.
+- MCP da sessão está ativo (dê preferência ao executar ferramentas).
 <!-- ENDIF:mcp_enabled -->
 
 <!-- IF:handoff_only -->

@@ -381,6 +381,36 @@ TOOL_SCHEMAS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "call_agent",
+            "description": (
+                "Delega uma tarefa para outro agente do Quimera. "
+                "Use quando precisar de especialidade específica "
+                "(ex: codex para codificação, claude para revisão, "
+                "gemini para arquitetura, opencode-big-pickle para edição)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent_name": {
+                        "type": "string",
+                        "description": "Nome do agente alvo (ex: codex, claude, gemini, opencode-big-pickle).",
+                    },
+                    "task": {
+                        "type": "string",
+                        "description": "Descrição clara do que o agente deve fazer.",
+                    },
+                    "context": {
+                        "type": "string",
+                        "description": "Contexto adicional relevante (opcional).",
+                    },
+                },
+                "required": ["agent_name", "task"],
+            },
+        },
+    },
 ]
 
 _TASK_TOOL_NAMES = {"list_tasks", "list_jobs", "get_job"}
@@ -413,6 +443,13 @@ def resolve_tool_schemas(tool_executor=None) -> list[dict]:
         schemas = [
             schema for schema in schemas
             if schema["function"]["name"] not in blocked_names
+        ]
+
+    is_call_agent_available = getattr(tool_executor, "is_call_agent_available", None)
+    if callable(is_call_agent_available) and not is_call_agent_available():
+        schemas = [
+            schema for schema in schemas
+            if schema["function"]["name"] != "call_agent"
         ]
 
     return schemas

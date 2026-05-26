@@ -491,6 +491,7 @@ class QuimeraApp:
         self.tool_executor = self.task_services.build_tool_executor(require_approval_for_mutations=not self.auto_approve_mutations)
         # Injeta o executor nos drivers de API do agent_client.
         self.agent_client.tool_executor = self.tool_executor
+        self.tool_executor.set_call_agent_fn(self.dispatch_services.call_agent)
         self._display_service = DisplayService(
             renderer=self.renderer,
             input_status_getter=self.input_gate.is_active,

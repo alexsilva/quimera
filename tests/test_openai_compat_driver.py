@@ -93,7 +93,7 @@ def test_schema_names_match_registered_tools():
     expected = {
         "list_files", "read_file", "write_file", "apply_patch", "grep_search", "run_shell",
         "exec_command", "write_stdin", "close_command_session", "list_tasks", "list_jobs",
-        "get_job", "remove_file", "web_search", "web_fetch",
+        "get_job", "remove_file", "web_search", "web_fetch", "call_agent",
     }
     actual = {s["function"]["name"] for s in TOOL_SCHEMAS}
     assert actual == expected
@@ -128,6 +128,7 @@ def test_resolve_tool_schemas_hides_blocked_tools_from_active_mode():
     mock_executor = MagicMock()
     mock_executor.config = SimpleNamespace(db_path="/tmp/tasks.db")
     mock_executor.policy = SimpleNamespace(blocked_tools=["run_shell", "exec_command", "apply_patch"])
+    mock_executor.is_call_agent_available.return_value = True
     mock_executor.registry.names.return_value = [s["function"]["name"] for s in TOOL_SCHEMAS]
 
     actual = {s["function"]["name"] for s in resolve_tool_schemas(mock_executor)}
@@ -136,6 +137,17 @@ def test_resolve_tool_schemas_hides_blocked_tools_from_active_mode():
     assert "apply_patch" not in actual
     assert "read_file" in actual
     assert "list_files" in actual
+
+
+def test_resolve_tool_schemas_hides_call_agent_when_not_bound():
+    mock_executor = MagicMock()
+    mock_executor.config = SimpleNamespace(db_path="/tmp/tasks.db")
+    mock_executor.policy = SimpleNamespace(blocked_tools=[])
+    mock_executor.is_call_agent_available.return_value = False
+    mock_executor.registry.names.return_value = [s["function"]["name"] for s in TOOL_SCHEMAS]
+
+    actual = {s["function"]["name"] for s in resolve_tool_schemas(mock_executor)}
+    assert "call_agent" not in actual
 
 
 def test_required_args_are_lists():
@@ -547,6 +559,7 @@ def test_run_tools_system_prompt_guides_tool_usage():
         "remove_file",
         "web_search",
         "web_fetch",
+        "call_agent",
     }
 
 

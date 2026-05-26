@@ -435,3 +435,65 @@ def test_set_spinner_callbacks_no_op_when_handler_is_none_like():
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=Path("/tmp")), handler)
     # Já testado, mas reforçando: não deve lançar exceção
     executor.set_spinner_callbacks(MagicMock(), MagicMock())
+
+
+def test_executor_call_agent_dispatches_with_handoff_mode(tmp_path):
+    """call_agent delega com contrato alinhado ao fluxo de handoff interno."""
+    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
+    dispatch = MagicMock(return_value="delegated ok")
+    executor.set_call_agent_fn(dispatch)
+
+    result = executor.execute(
+        ToolCall(
+            name="call_agent",
+            arguments={
+                "agent_name": "codex",
+                "task": "ajuste de bug",
+                "context": "arquivo quimera/runtime/executor.py",
+            },
+        )
+    )
+
+    assert result.ok is True
+    assert result.content == "delegated ok"
+    dispatch.assert_called_once_with(
+        "codex",
+        handoff={
+            "task": "ajuste de bug",
+            "context": "arquivo quimera/runtime/executor.py",
+        },
+        handoff_only=True,
+        protocol_mode="handoff",
+        primary=False,
+        silent=True,
+        show_output=False,
+        persist_history=True,
+    )
+
+
+def test_executor_call_agent_fails_when_dispatch_not_injected(tmp_path):
+    """call_agent retorna erro explícito quando não há callback de dispatch."""
+    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
+
+    result = executor.execute(
+        ToolCall(name="call_agent", arguments={"agent_name": "codex", "task": "x"})
+    )
+
+    assert result.ok is False
+    assert "not available" in (result.error or "")
+
+
+def test_executor_call_agent_policy_rejects_invalid_context_type(tmp_path):
+    """Policy exige context string quando fornecido."""
+    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
+    executor.set_call_agent_fn(MagicMock(return_value="ok"))
+
+    result = executor.execute(
+        ToolCall(
+            name="call_agent",
+            arguments={"agent_name": "codex", "task": "x", "context": {"invalid": True}},
+        )
+    )
+
+    assert result.ok is False
+    assert "context" in (result.error or "")
