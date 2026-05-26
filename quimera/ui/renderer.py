@@ -443,7 +443,8 @@ class TerminalRenderer:
             if _ul[0] is None and self._console:
                 # Não inicia Live quando prompt_toolkit está ativo — os dois controladores
                 # de terminal conflitam e corrompem o display.
-                if _prompt_active():
+                # Também não inicia se a saída está suspensa (ex.: editor externo aberto).
+                if _prompt_active() or self._output_suspended.is_set():
                     return
                 _ul[0] = _public_ui_module().Live(
                     _get_renderable(),
@@ -456,7 +457,7 @@ class TerminalRenderer:
                 self._stream_live_active.set()
 
         def _refresh():
-            if _ul[0] is not None:
+            if _ul[0] is not None and not self._output_suspended.is_set():
                 _ul[0].update(_get_renderable(), refresh=True)
 
         def _close_live():
