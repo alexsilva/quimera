@@ -1,8 +1,29 @@
 """Componentes de `quimera.runtime.tools.handoff`."""
 from __future__ import annotations
 
+from typing import Protocol
+
 from ..config import ToolRuntimeConfig
 from ..models import ToolCall, ToolResult
+
+
+class _CallAgentFnProto(Protocol):
+    """Protocolo para a função de despacho de tarefas entre agentes."""
+
+    def __call__(
+        self,
+        agent: str,
+        *,
+        handoff: dict[str, object] | None = None,
+        handoff_only: bool = True,
+        protocol_mode: str = "handoff",
+        primary: bool = False,
+        silent: bool = True,
+        show_output: bool = False,
+        persist_history: bool = True,
+        history_snapshot: list | None = None,
+        max_retries: int = 1,
+    ) -> str | None: ...
 
 
 class HandoffTools:
@@ -13,10 +34,10 @@ class HandoffTools:
     def __init__(self, config: ToolRuntimeConfig) -> None:
         """Inicializa uma instância de HandoffTools."""
         self.config = config
-        self._call_agent_fn = None
+        self._call_agent_fn: _CallAgentFnProto | None = None
         self._active_agents_provider = None
 
-    def set_call_agent_fn(self, fn) -> None:
+    def set_call_agent_fn(self, fn: _CallAgentFnProto) -> None:
         """Injeta callable para despachar tarefas a outro agente."""
         self._call_agent_fn = fn
 
