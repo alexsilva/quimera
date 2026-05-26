@@ -725,7 +725,6 @@ class QuimeraApp:
         for plugin in self.get_available_plugins():
             if plugin.prefix:
                 commands.add(plugin.prefix)
-            commands.update(alias for alias in (plugin.aliases or []) if alias)
         return sorted(commands)
 
     def _command_argument_resolver(self, command: str, partial: str) -> list[str]:

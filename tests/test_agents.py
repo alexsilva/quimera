@@ -79,7 +79,7 @@ def test_codex_plugin_reads_prompt_from_stdin():
     plugin = get_plugin("codex")
     assert plugin is not None
     assert plugin.prompt_as_arg is False
-    assert "/code" in plugin.aliases
+    assert plugin.aliases == []
 
 
 def test_codex_plugin_resumes_last_session_in_workspace():

@@ -679,16 +679,16 @@ class ProtocolTests(unittest.TestCase):
         self.assertIsNone(message)
         self.assertTrue(app.renderer.warnings)
 
-    def test_parse_routing_accepts_code_alias_for_codex(self):
+    def test_parse_routing_treats_unknown_prefix_as_plain_message(self):
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
 
         agent, message, explicit = app.parse_routing("/code revise isso")
 
-        self.assertEqual(agent, AGENT_CODEX)
-        self.assertEqual(message, "revise isso")
-        self.assertTrue(explicit)
+        self.assertEqual(agent, AGENT_CLAUDE)
+        self.assertEqual(message, "/code revise isso")
+        self.assertFalse(explicit)
 
     def test_handle_command_shows_help(self):
         app = QuimeraApp.__new__(QuimeraApp)
@@ -775,7 +775,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn("- total_chars: 280", content)
         self.assertIn("PROMPT FINAL:\nPROMPT GERADO", content)
 
-    def test_handle_command_shows_prompt_preview_for_agent_alias(self):
+    def test_handle_command_shows_prompt_preview_for_exact_agent_prefix(self):
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
         app._output_lock = threading.Lock()
@@ -804,7 +804,7 @@ class ProtocolTests(unittest.TestCase):
         )
 
         app.system_layer = AppSystemLayer(app)
-        handled = app.system_layer.handle_command("/prompt /code")
+        handled = app.system_layer.handle_command("/prompt /codex")
 
         self.assertTrue(handled)
         app.prompt_builder.build.assert_called_once()

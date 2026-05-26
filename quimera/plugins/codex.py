@@ -231,7 +231,6 @@ class CodexPlugin(AgentPlugin):
 register(CodexPlugin(
     name="codex",
     prefix="/codex",
-    aliases=["/code"],
     icon="🔷",
     runtime_rw_paths=[str(Path.home() / ".codex")],
     cmd=["codex", "exec", "--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check", "--json"],
