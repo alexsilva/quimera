@@ -14,9 +14,8 @@ def test_rate_limit_backoff_seconds_default(tmp_path: Path):
 
 
 def test_rate_limit_backoff_seconds_can_be_set(tmp_path: Path, monkeypatch):
-    """Test that RATE_LIMIT_BACKOFF_SECONDS can be set on the app instance."""
+    """Test that RATE_LIMIT_BACKOFF_SECONDS can be set on the app instance before init."""
+    monkeypatch.setattr(QuimeraApp, 'RATE_LIMIT_BACKOFF_SECONDS', 60, raising=False)
     app = QuimeraApp(cwd=tmp_path)
-    # Set the attribute on the instance
-    app.RATE_LIMIT_BACKOFF_SECONDS = 60
     backoff_seconds = app.task_services._get_rate_limit_backoff_seconds()
     assert backoff_seconds == 60

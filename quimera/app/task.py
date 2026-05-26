@@ -56,8 +56,8 @@ class _BackgroundDispatchAppProxy:
         get_counter_lock: Callable[[], Any],
         get_shared_state_lock: Callable[[], Any],
         get_session_services: Callable[[], Any],
-        get_max_retries: Callable[[], int],
-        get_retry_backoff_seconds: Callable[[], int],
+        max_retries: int = 2,
+        retry_backoff_seconds: int = 1,
         get_rate_limit_backoff_seconds: Callable[[], int],
     ) -> None:
         self.task_services = task_services
@@ -69,8 +69,8 @@ class _BackgroundDispatchAppProxy:
         self._get_counter_lock = get_counter_lock
         self._get_shared_state_lock = get_shared_state_lock
         self._get_session_services = get_session_services
-        self._get_max_retries = get_max_retries
-        self._get_retry_backoff_seconds = get_retry_backoff_seconds
+        self._max_retries = max_retries
+        self._retry_backoff_seconds = retry_backoff_seconds
         self._get_rate_limit_backoff_seconds = get_rate_limit_backoff_seconds
 
     @property
@@ -135,11 +135,11 @@ class _BackgroundDispatchAppProxy:
 
     @property
     def MAX_RETRIES(self):
-        return self._get_max_retries()
+        return self._max_retries
 
     @property
     def RETRY_BACKOFF_SECONDS(self):
-        return self._get_retry_backoff_seconds()
+        return self._retry_backoff_seconds
 
     @property
     def RATE_LIMIT_BACKOFF_SECONDS(self):
@@ -206,8 +206,8 @@ class AppTaskServices:
         get_output_lock: Callable[[], Any] = None,
         get_counter_lock: Callable[[], Any] = None,
         get_session_services: Callable[[], Any] = None,
-        get_max_retries: Callable[[], int],
-        get_retry_backoff_seconds: Callable[[], int],
+        max_retries: int = 2,
+        retry_backoff_seconds: int = 1,
         get_rate_limit_backoff_seconds: Callable[[], int],
         call_agent: Callable[..., Any],
         parse_response: Callable[[Any], tuple[Any, Any, Any, Any, Any, Any]],
@@ -257,8 +257,8 @@ class AppTaskServices:
         - ``get_counter_lock``: retorna o lock atual de contadores.
         - ``get_shared_state_lock``: retorna o lock atual do shared state.
         - ``get_session_services``: retorna os serviços atuais de sessão.
-        - ``get_max_retries``: retorna o limite atual de retries.
-        - ``get_retry_backoff_seconds``: retorna o backoff padrão de retry.
+        - ``max_retries``: limite de retries.
+        - ``retry_backoff_seconds``: backoff padrão de retry.
         - ``get_rate_limit_backoff_seconds``: retorna o backoff para rate limit.
         - ``call_agent``: executa chamada de agente para handoffs paralelos.
         - ``parse_response``: parseia a resposta crua de agente.
@@ -307,8 +307,8 @@ class AppTaskServices:
         self._get_output_lock = get_output_lock
         self._get_counter_lock = get_counter_lock
         self._get_session_services = get_session_services
-        self._get_max_retries = get_max_retries
-        self._get_retry_backoff_seconds = get_retry_backoff_seconds
+        self._max_retries = max_retries
+        self._retry_backoff_seconds = retry_backoff_seconds
         self._get_rate_limit_backoff_seconds = get_rate_limit_backoff_seconds
         self._call_agent = call_agent
         self._parse_response = parse_response
@@ -665,8 +665,8 @@ class AppTaskServices:
             get_counter_lock=self._get_counter_lock,
             get_shared_state_lock=self._get_shared_state_lock,  # method reference
             get_session_services=self._get_session_services,
-            get_max_retries=self._get_max_retries,
-            get_retry_backoff_seconds=self._get_retry_backoff_seconds,
+            max_retries=self._max_retries,
+            retry_backoff_seconds=self._retry_backoff_seconds,
             get_rate_limit_backoff_seconds=self._get_rate_limit_backoff_seconds,
         )
         return AppDispatchServices.from_app(
