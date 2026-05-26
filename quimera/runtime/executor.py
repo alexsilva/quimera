@@ -114,8 +114,11 @@ class ToolExecutor:
         """
         normalized_call = self._normalize_call(call)
         try:
-            self.policy.validate(normalized_call)
-            permission_error = self.policy.check_path_permission(normalized_call)
+            if self.policy.requires_validation(normalized_call):
+                self.policy.validate(normalized_call)
+            permission_error = None
+            if self.policy.requires_path_permission(normalized_call):
+                permission_error = self.policy.check_path_permission(normalized_call)
             needs_approval = self.policy.requires_approval(normalized_call)
             return permission_error is not None or bool(needs_approval)
         except Exception:
@@ -204,10 +207,13 @@ class ToolExecutor:
         """
         normalized_call = self._normalize_call(call)
         try:
-            self.policy.validate(normalized_call)
+            if self.policy.requires_validation(normalized_call):
+                self.policy.validate(normalized_call)
 
             # Verifica se precisa de aprovação (mutação ou permissão)
-            permission_error = self.policy.check_path_permission(normalized_call)
+            permission_error = None
+            if self.policy.requires_path_permission(normalized_call):
+                permission_error = self.policy.check_path_permission(normalized_call)
             needs_approval = self.policy.requires_approval(normalized_call)
             has_permission_issue = permission_error is not None
 

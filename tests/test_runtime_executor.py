@@ -483,17 +483,44 @@ def test_executor_call_agent_fails_when_dispatch_not_injected(tmp_path):
     assert "not available" in (result.error or "")
 
 
-def test_executor_call_agent_policy_rejects_invalid_context_type(tmp_path):
-    """Policy exige context string quando fornecido."""
+def test_executor_call_agent_would_not_require_approval(tmp_path):
+    """call_agent não deve ser marcado como exigindo aprovação."""
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
-    executor.set_call_agent_fn(MagicMock(return_value="ok"))
+    call = ToolCall(name="call_agent", arguments={"agent_name": "codex", "task": "x"})
 
-    result = executor.execute(
-        ToolCall(
-            name="call_agent",
-            arguments={"agent_name": "codex", "task": "x", "context": {"invalid": True}},
+    with patch.object(executor.policy, "validate", side_effect=AssertionError("policy should not run")):
+        assert executor.would_require_approval(call) is False
+
+
+def test_policy_phase_methods_for_call_agent(tmp_path):
+    """call_agent deve pular validação/path/approval pelo contrato de phases."""
+    policy = ToolPolicy(ToolRuntimeConfig(workspace_root=tmp_path))
+    call_agent = ToolCall(name="call_agent", arguments={"agent_name": "codex", "task": "x"})
+    read_file = ToolCall(name="read_file", arguments={"path": "x.txt"})
+
+    assert policy.requires_validation(call_agent) is False
+    assert policy.requires_path_permission(call_agent) is False
+    assert policy.requires_approval(call_agent) is False
+
+    assert policy.requires_validation(read_file) is True
+    assert policy.requires_path_permission(read_file) is True
+
+
+def test_executor_call_agent_bypasses_policy_and_approval(tmp_path):
+    """call_agent bypassa policy/approval e delega diretamente."""
+    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
+    dispatch = MagicMock(return_value="ok")
+    executor.set_call_agent_fn(dispatch)
+
+    with patch.object(executor.policy, "validate", side_effect=AssertionError("policy should not run")):
+        result = executor.execute(
+            ToolCall(
+                name="call_agent",
+                arguments={"agent_name": "codex", "task": "x", "context": {"invalid": True}},
+            )
         )
-    )
 
-    assert result.ok is False
-    assert "context" in (result.error or "")
+    assert result.ok is True
+    assert result.content == "ok"
+    executor.approval_handler.approve.assert_not_called()
+    dispatch.assert_called_once()

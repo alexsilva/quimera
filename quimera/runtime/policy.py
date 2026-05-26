@@ -39,6 +39,7 @@ class PathPermissionError(ToolPolicyError):
 class ToolPolicy:
     """Implementa `ToolPolicy`."""
     _SHELL_CHAIN_OPERATORS = (";", "&&", "||", "`", "$(")
+    _POLICY_BYPASS_TOOLS = {"call_agent"}
 
     def __init__(self, config: ToolRuntimeConfig) -> None:
         """Inicializa uma instância de ToolPolicy."""
@@ -57,8 +58,18 @@ class ToolPolicy:
             raise ToolPolicyError(f"Sem política para a ferramenta: {call.name}")
         validator(call)
 
+    def requires_validation(self, call: ToolCall) -> bool:
+        """Retorna True quando a tool deve passar por validação de policy."""
+        return call.name not in self._POLICY_BYPASS_TOOLS
+
+    def requires_path_permission(self, call: ToolCall) -> bool:
+        """Retorna True quando a tool precisa validar permissão de path."""
+        return call.name in {"read_file", "list_files", "grep_search", "remove_file"}
+
     def requires_approval(self, call: ToolCall) -> bool:
         """Executa requires approval."""
+        if call.name in self._POLICY_BYPASS_TOOLS:
+            return False
         if call.name in {
             "write_file",
             "apply_patch",
@@ -74,7 +85,7 @@ class ToolPolicy:
 
     def check_path_permission(self, call: ToolCall) -> PathPermissionError | None:
         """Check if the tool needs user permission to access a path outside allowed roots."""
-        if call.name not in {"read_file", "list_files", "grep_search", "remove_file"}:
+        if not self.requires_path_permission(call):
             return None
 
         raw = call.arguments.get("path", ".")
