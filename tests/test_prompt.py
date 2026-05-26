@@ -174,7 +174,7 @@ def test_prompt_includes_mcp_runtime_instruction_when_enabled():
     prompt = builder.build(agent="codex", history=[{"role": "human", "content": "teste MCP"}])
     rules_block = _extract_block(prompt, "rules")
 
-    assert "MCP da sessão está ativo (/tmp/quimera.sock)." in rules_block
+    assert "MCP da sessão está ativo." in rules_block
     assert "Não inicie servidor MCP externo/manualmente." in rules_block
     assert "Use o servidor MCP `quimera` já injetado pelo runtime" in rules_block
 
@@ -329,10 +329,11 @@ def test_prompt_includes_updated_handoff_contract_in_route_rules():
 
     prompt = builder.build(agent="codex", history=[{"role": "human", "content": "delegue"}])
 
-    assert '"handoffs"' in prompt
-    assert "_pending_handoffs" in prompt
-    assert "Não use `routes`, `_pending_handoffs` nem `[ROUTE:agente]`." in prompt
-    assert '"metadata":{"context":"...","expected":"..."}' in prompt
+    assert "tool `call_agent`" in prompt
+    assert '"agent_name":"agente"' in prompt
+    assert '"task":"descrição da tarefa"' in prompt
+    assert '"fallback_agents":["agente_b"]' in prompt
+    assert '"handoffs":[{"agent_name":"agente_c"' in prompt
 
 
 def test_handoff_only_prompt_includes_updated_handoff_contract():
@@ -348,10 +349,10 @@ def test_handoff_only_prompt_includes_updated_handoff_contract():
         from_agent="codex",
     )
 
-    assert '"handoffs"' in prompt
-    assert "_pending_handoffs" in prompt
-    assert "Handoff simples:" in prompt
-    assert "handoff em sequência com tarefas independentes:" in prompt
+    assert "tool `call_agent` (handoff via MCP)" in prompt
+    assert "Delegação padrão:" in prompt
+    assert "fallback_agents" in prompt
+    assert "handoffs" in prompt
 
 
 def test_prompt_shared_state():

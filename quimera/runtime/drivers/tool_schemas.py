@@ -406,6 +406,34 @@ TOOL_SCHEMAS = [
                         "type": "string",
                         "description": "Contexto adicional relevante (opcional).",
                     },
+                    "fallback_agents": {
+                        "type": "array",
+                        "description": (
+                            "Lista opcional de agentes de fallback, tentados em sequência "
+                            "se o agente alvo principal estiver indisponível/sem resposta."
+                        ),
+                        "items": {"type": "string"},
+                    },
+                    "handoffs": {
+                        "type": "array",
+                        "description": (
+                            "Delegações adicionais opcionais executadas em sequência. "
+                            "Cada item deve conter agent_name, task e context opcional."
+                        ),
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "agent_name": {"type": "string"},
+                                "task": {"type": "string"},
+                                "context": {"type": "string"},
+                                "fallback_agents": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                },
+                            },
+                            "required": ["agent_name", "task"],
+                        },
+                    },
                 },
                 "required": ["agent_name", "task"],
             },

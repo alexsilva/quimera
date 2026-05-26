@@ -421,9 +421,9 @@ class BehaviorMetricsTracker:
         if metrics.invalid_handoff_rate > 0.3:
             feedback_parts.append(
                 f"- ALTA TAXA DE HANDOFF INVÁLIDO ({metrics.invalid_handoff_rate:.0%}):\n"
-                '  Verifique o envelope JSON {"type":"handoff","route":"agente","content":"task: ..."}.\n'
-                '  Para múltiplas delegações em sequência, use {"type":"handoff","handoffs":[{"route":"agente1","content":"task: tarefa 1"},{"route":"agente2","content":"task: tarefa 2"}]}.\n'
-                "  Cada item de handoffs é uma tarefa independente; não use routes nem [ROUTE:agente].\n"
+                "  Use a tool `call_agent` (MCP) para delegar, com `agent_name`, `task` e `context`.\n"
+                "  Para múltiplas delegações, faça chamadas independentes (uma tarefa por chamada).\n"
+
                 "  Se faltar contexto suficiente, isso indica falha no roteamento inicial; não improvise, delegue.\n"
                 "  Só tente executar quando a tarefa e o contexto estiverem claros."
             )

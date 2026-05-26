@@ -484,7 +484,6 @@ class QuimeraApp:
             show_system_message=self.show_system_message,
             renderer=self.renderer,
             merge_staging_to_workspace=self._merge_staging_to_workspace,
-            generate_handoff_id=self._generate_handoff_id,
         )
         self.idle_timeout_seconds = idle_timeout_seconds if idle_timeout_seconds is not None else self.config.idle_timeout_seconds
 
@@ -492,6 +491,7 @@ class QuimeraApp:
         # Injeta o executor nos drivers de API do agent_client.
         self.agent_client.tool_executor = self.tool_executor
         self.tool_executor.set_call_agent_fn(self.dispatch_services.call_agent)
+        self.tool_executor.set_active_agents_provider(lambda: list(self.agent_pool.agents))
         self._display_service = DisplayService(
             renderer=self.renderer,
             input_status_getter=self.input_gate.is_active,
@@ -1429,20 +1429,11 @@ class QuimeraApp:
         )
         orchestrator.process(user, ctx=ctx)
 
-    @staticmethod
-    def _generate_handoff_id(task, target, timestamp=None):
-        """Executa generate handoff id."""
-        return AppProtocol.generate_handoff_id(task, target, timestamp=timestamp)
-
-    def parse_handoff_payload(self, payload, target=None):
-        """Interpreta handoff payload."""
-        return self.protocol.parse_handoff_payload(payload, target=target)
-
-    def parse_response(self, response):
+    def parse_response(self, response, **_kwargs):
         """Interpreta response."""
         if getattr(self.protocol, "_shared_state", None) is not self.shared_state:
             self.protocol._shared_state = self.shared_state
-        current_lock = getattr(self, "_shared_state_lock", None) or getattr(self, "_lock", None)
+        current_lock = getattr(self, "_lock", None) or getattr(self, "_lock", None)
         if current_lock is not None and getattr(self.protocol, "_lock", None) is not current_lock:
             self.protocol._lock = current_lock
         return self.protocol.parse_response(response)

@@ -228,6 +228,21 @@ def test_build_tool_system_prompt_avoids_unavailable_tool_guidance():
     assert "começar exatamente com '*** Begin Patch'" not in prompt
 
 
+def test_build_tool_system_prompt_prefers_call_agent_for_delegation():
+    prompt = _build_tool_system_prompt(["read_file", "call_agent"], "/tmp/workspace")
+
+    assert "Para delegação entre agentes, use a tool `call_agent`" in prompt
+    assert "use `fallback_agents` para failover sequencial" in prompt
+    assert "e `handoffs` para múltiplos passos no mesmo envio" in prompt
+    assert "Se precisar delegar e `call_agent` não estiver disponível" not in prompt
+
+
+def test_build_tool_system_prompt_reports_limitation_without_call_agent():
+    prompt = _build_tool_system_prompt(["read_file"], "/tmp/workspace")
+
+    assert "Se precisar delegar e `call_agent` não estiver disponível" in prompt
+
+
 def test_build_tool_system_prompt_includes_shell_policy_rules():
     prompt = _build_tool_system_prompt(
         ["run_shell", "exec_command"],
@@ -538,6 +553,8 @@ def test_run_tools_system_prompt_guides_tool_usage():
     assert "começar exatamente com '*** Begin Patch'" in system_message["content"]
     assert "não repita o mesmo payload inválido" in system_message["content"]
     assert "não invente envelopes JSON para chamadas de ferramenta" in system_message["content"]
+    assert "Para delegação entre agentes, use a tool `call_agent`" in system_message["content"]
+    assert "use `fallback_agents` para failover sequencial" in system_message["content"]
     assert "read_file usa 'path', não 'file_path'" in system_message["content"]
     assert "use exatamente 'run_shell' para uma execução simples ou 'exec_command' para sessão interativa" in \
            system_message["content"]

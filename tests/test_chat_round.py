@@ -5,7 +5,6 @@ from unittest.mock import MagicMock, Mock, patch
 
 from quimera.app.agent_pool import AgentPool
 from quimera.app.chat_round import ChatRoundOrchestrator
-from quimera.prompt_kinds import PromptKind
 
 
 # ---------------------------------------------------------------------------
@@ -50,8 +49,6 @@ def _make_app(active_agents=None, threads=1):
 
     app.turn_manager = Mock()
     app.turn_manager.reset = Mock()
-    app._generate_handoff_id = lambda task, target: f"gen-{target}"
-
     app.agent_client = Mock()
     app.agent_client._user_cancelled = False
 
@@ -93,17 +90,8 @@ def _make_orchestrator(app):
         get_pending_input_for=lambda: app._pending_input_for,
         set_pending_input_for=lambda v: setattr(app, '_pending_input_for', v),
         merge_staging_to_workspace=getattr(app, '_merge_staging_to_workspace', None),
-        generate_handoff_id=getattr(app, '_generate_handoff_id', lambda t, tg: f"gen-{tg}"),
     )
 
-
-def _make_handoff(task="Faça X", handoff_id="id-001", chain=None, priority="normal"):
-    return {
-        "handoff_id": handoff_id,
-        "task": task,
-        "priority": priority,
-        "chain": chain or [],
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -193,29 +181,6 @@ class TestProcessMainFlow(unittest.TestCase):
 
         # Chamado: claude (None), codex (None), deepseek (ok)
         self.assertEqual(app.dispatch_services.call_agent.call_count, 3)
-
-    def test_self_handoff_ignored_in_main_flow(self):
-        """Handoff para si mesmo deve ser ignorado no fluxo principal."""
-        app = _make_app()
-        handoff = _make_handoff("task x")
-        app.dispatch_services.call_agent = Mock(return_value="ok")
-        app.parse_response = Mock(return_value=("ok", "claude", handoff, False, False, None))
-
-        app.chat_round_orchestrator.process("hello")
-
-        # _process_handoff NÃO deve ser chamado; como route_target == first_agent, é anulado
-        app.renderer.show_handoff.assert_not_called()
-
-    def test_unknown_agent_handoff_ignored_in_main_flow(self):
-        """Handoff para agente desconhecido deve ser ignorado no fluxo principal."""
-        app = _make_app(active_agents=["claude", "codex"])
-        handoff = _make_handoff("task x")
-        app.dispatch_services.call_agent = Mock(return_value="ok")
-        app.parse_response = Mock(return_value=("ok", "agente-inexistente", handoff, False, False, None))
-
-        app.chat_round_orchestrator.process("hello")
-
-        app.renderer.show_handoff.assert_not_called()
 
     def test_process_does_not_dispatch_other_agents_for_same_prompt(self):
         """Uma mensagem sem handoff aciona apenas o agente reservado para o prompt."""
@@ -382,304 +347,6 @@ class TestProcessMainFlow(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# _process_handoff
-# ---------------------------------------------------------------------------
-
-class TestProcessHandoff(unittest.TestCase):
-
-    def test_self_handoff_in_chain_breaks(self):
-        """Handoff para si mesmo dentro da cadeia deve interromper com warning."""
-        app = _make_app()
-        handoff = _make_handoff("task x")
-        orchestrator = _make_orchestrator(app)
-
-        # current_from == current_target → self-handoff
-        orchestrator._process_handoff("claude", "claude", handoff)
-
-        app.renderer.show_warning.assert_called()
-
-    def test_circular_delegation_breaks(self):
-        """Delegação circular detectada na chain deve interromper com warning."""
-        app = _make_app()
-        handoff = _make_handoff("task x", chain=["codex"])  # codex já na chain
-        orchestrator = _make_orchestrator(app)
-
-        orchestrator._process_handoff("claude", "codex", handoff)
-
-        app.renderer.show_warning.assert_called()
-
-    def test_circular_delegation_records_behavior_metrics(self):
-        """behavior_metrics.record_handoff_received deve ser chamado com is_circular=True."""
-        app = _make_app()
-        app.behavior_metrics = Mock()
-        handoff = _make_handoff("task x", chain=["codex"])
-        orchestrator = _make_orchestrator(app)
-
-        orchestrator._process_handoff("claude", "codex", handoff)
-
-        app.behavior_metrics.record_handoff_received.assert_called_once_with("codex", is_circular=True)
-
-    def test_unknown_agent_in_chain_breaks(self):
-        """Agente desconhecido na cadeia deve interromper com warning."""
-        app = _make_app(active_agents=["claude", "codex"])
-        handoff = _make_handoff("task x")
-        orchestrator = _make_orchestrator(app)
-
-        orchestrator._process_handoff("claude", "fantasma", handoff)
-
-        app.renderer.show_warning.assert_called()
-
-    def test_behavior_metrics_record_sent_received(self):
-        """behavior_metrics deve registrar sent/received em cada hop."""
-        app = _make_app()
-        app.behavior_metrics = Mock()
-        handoff = _make_handoff("task x")
-        app.dispatch_services.call_agent = Mock(return_value="codex respondeu")
-        app.parse_response = Mock(return_value=("codex respondeu", None, None, False, False, None))
-        orchestrator = _make_orchestrator(app)
-
-        orchestrator._process_handoff("claude", "codex", handoff)
-
-        app.behavior_metrics.record_handoff_sent.assert_called_with("claude")
-        app.behavior_metrics.record_handoff_received.assert_any_call("codex")
-
-    def test_handoff_dispatch_uses_task_executor_prompt(self):
-        """Handoff vindo do chat deve chamar o destino com prompt isolado de executor."""
-        app = _make_app()
-        handoff = _make_handoff("task x")
-        app.dispatch_services.call_agent = Mock(return_value="codex respondeu")
-        app.parse_response = Mock(return_value=("codex respondeu", None, None, False, False, None))
-        orchestrator = _make_orchestrator(app)
-
-        orchestrator._process_handoff("claude", "codex", handoff)
-
-        first_call = app.dispatch_services.call_agent.call_args_list[0]
-        self.assertEqual(first_call.args[0], "codex")
-        self.assertTrue(first_call.kwargs["handoff_only"])
-        self.assertEqual(first_call.kwargs["prompt_kind"], PromptKind.TASK_EXECUTOR)
-
-    def test_user_cancelled_during_handoff(self):
-        """_user_cancelled após chamada ao agente secundário deve resetar e retornar."""
-        app = _make_app()
-        handoff = _make_handoff("task x")
-        app.dispatch_services.call_agent = Mock(return_value="resp")
-        app.parse_response = Mock(return_value=("resp", None, None, False, False, None))
-        app.agent_client._user_cancelled = True
-        orchestrator = _make_orchestrator(app)
-
-        orchestrator._process_handoff("claude", "codex", handoff)
-
-        app.turn_manager.reset.assert_called()
-
-    def test_ack_mismatch_logs_warning(self):
-        """Mismatch de ACK deve ser logado (sem falha)."""
-        app = _make_app()
-        handoff = _make_handoff("task x", handoff_id="expected-id")
-        app.dispatch_services.call_agent = Mock(return_value="resp")
-        # ack_id diferente do handoff_id
-        app.parse_response = Mock(return_value=("resp", None, None, False, False, "wrong-id"))
-        orchestrator = _make_orchestrator(app)
-
-        # Não deve levantar exceção
-        orchestrator._process_handoff("claude", "codex", handoff)
-
-    def test_no_fallback_breaks(self):
-        """Sem candidatos de fallback, deve interromper a cadeia."""
-        app = _make_app(active_agents=["claude", "codex"])
-        handoff = _make_handoff("task x")
-        app.dispatch_services.call_agent = Mock(return_value=None)
-        app.parse_response = Mock(return_value=(None, None, None, False, False, None))
-        orchestrator = _make_orchestrator(app)
-
-        # Executa sem levantar exceção; codex não responde e não há fallback
-        orchestrator._process_handoff("claude", "codex", handoff)
-
-        # Deve ter chamado call_agent para codex (e nada mais pois sem fallback)
-        calls = [c.args[0] for c in app.dispatch_services.call_agent.call_args_list]
-        self.assertIn("codex", calls)
-
-    def test_fallback_succeeds_in_handoff_chain(self):
-        """Quando agente alvo falha, fallback candidate deve ser tentado e usar sua resposta."""
-        app = _make_app(active_agents=["claude", "codex", "deepseek"])
-        handoff = _make_handoff("task x")
-        call_count = [0]
-
-        def fake_call(*args, **kwargs):
-            call_count[0] += 1
-            if call_count[0] == 1:
-                return None  # codex falha
-            if call_count[0] == 2:
-                return "deepseek respondeu"  # fallback deepseek funciona
-            return "síntese"  # síntese pelo claude
-
-        app.dispatch_services.call_agent = Mock(side_effect=fake_call)
-        parse_count = [0]
-
-        def fake_parse(resp):
-            parse_count[0] += 1
-            if parse_count[0] == 1:
-                return (None, None, None, False, False, None)  # codex sem resposta
-            if parse_count[0] == 2:
-                return ("deepseek respondeu", None, None, False, False, None)  # fallback ok
-            return ("síntese", None, None, False, False, None)
-
-        app.parse_response = Mock(side_effect=fake_parse)
-        orchestrator = _make_orchestrator(app)
-
-        orchestrator._process_handoff("claude", "codex", handoff)
-
-        # deepseek deve ter sido chamado como fallback
-        calls = [c.args[0] for c in app.dispatch_services.call_agent.call_args_list]
-        self.assertIn("deepseek", calls)
-
-    def test_user_cancelled_during_fallback(self):
-        """_user_cancelled durante fallback deve resetar e retornar."""
-        app = _make_app(active_agents=["claude", "codex", "deepseek"])
-        handoff = _make_handoff("task x")
-        call_count = [0]
-
-        def fake_call(*args, **kwargs):
-            call_count[0] += 1
-            if call_count[0] == 1:
-                return None  # codex falha
-            # fallback deepseek: marca cancelado
-            app.agent_client._user_cancelled = True
-            return "deepseek respondeu"
-
-        app.dispatch_services.call_agent = Mock(side_effect=fake_call)
-
-        def fake_parse(resp):
-            if resp is None:
-                return (None, None, None, False, False, None)
-            return (resp, None, None, False, False, None)
-
-        app.parse_response = Mock(side_effect=fake_parse)
-        orchestrator = _make_orchestrator(app)
-
-        orchestrator._process_handoff("claude", "codex", handoff)
-
-        app.turn_manager.reset.assert_called()
-
-    def test_max_hops_exceeded_shows_system_message(self):
-        """Quando max_hops é excedido, exibe mensagem de sistema."""
-        app = _make_app(active_agents=["claude", "codex"])
-        handoff = _make_handoff("task x")
-        # HANDOFF_MAX_HOPS_FACTOR=0 → max_hops = max(1, 2*0) = 1
-        # Após 1 hop, o while não itera mais e exibe mensagem de limite
-        orchestrator = _make_orchestrator(app)
-        orchestrator.HANDOFF_MAX_HOPS_FACTOR = 0
-
-        next_h = _make_handoff("next task", handoff_id="id-002")
-        app.dispatch_services.call_agent = Mock(return_value="resp")
-        app.parse_response = Mock(return_value=("resp", "codex", next_h, False, False, None))
-
-        orchestrator._process_handoff("claude", "codex", handoff)
-
-        shown = [str(c) for c in app.renderer.show_system.call_args_list]
-        self.assertTrue(any("limite" in m for m in shown))
-
-    def test_behavior_metrics_record_synthesis(self):
-        """behavior_metrics.record_synthesis deve ser chamado antes da síntese."""
-        app = _make_app()
-        app.behavior_metrics = Mock()
-        handoff = _make_handoff("task x")
-        app.dispatch_services.call_agent = Mock(return_value="codex respondeu")
-        parse_count = [0]
-
-        def fake_parse(resp):
-            parse_count[0] += 1
-            if parse_count[0] == 1:
-                # Primeira parse (resposta do codex): sem next handoff
-                return ("codex respondeu", None, None, False, False, None)
-            # Síntese do claude
-            return ("síntese final", None, None, False, False, None)
-
-        app.parse_response = Mock(side_effect=fake_parse)
-        orchestrator = _make_orchestrator(app)
-
-        orchestrator._process_handoff("claude", "codex", handoff)
-
-        app.behavior_metrics.record_synthesis.assert_called_with("claude")
-
-    def test_handoff_needs_input_sets_pending_and_stops_chain(self):
-        """NEEDS_INPUT em agente delegado deve pausar cadeia e pedir resposta ao usuário."""
-        app = _make_app()
-        handoff = _make_handoff("task x")
-        app.dispatch_services.call_agent = Mock(return_value="Preciso de dado")
-        app.parse_response = Mock(return_value=("Preciso de dado", None, None, False, True, None))
-        orchestrator = _make_orchestrator(app)
-
-        orchestrator._process_handoff("claude", "codex", handoff)
-
-        self.assertEqual(app._pending_input_for, "codex")
-        app.renderer.show_system.assert_called_with("Responda para CODEX:")
-        self.assertEqual(app.dispatch_services.call_agent.call_count, 1)
-
-    def test_handoff_needs_input_threaded_mode_keeps_default_routing(self):
-        """Com threads>1, NEEDS_INPUT em handoff não deve fixar agente de resposta."""
-        app = _make_app(threads=2)
-        handoff = _make_handoff("task x")
-        app.dispatch_services.call_agent = Mock(return_value="Preciso de dado")
-        app.parse_response = Mock(return_value=("Preciso de dado", None, None, False, True, None))
-        orchestrator = _make_orchestrator(app)
-
-        orchestrator._process_handoff("claude", "codex", handoff)
-
-        self.assertIsNone(app._pending_input_for)
-        app.renderer.show_system.assert_not_called()
-        self.assertEqual(app.dispatch_services.call_agent.call_count, 1)
-
-    def test_handoff_synthesis_needs_input_sets_pending_for_origin(self):
-        """NEEDS_INPUT na síntese deve solicitar resposta para o agente de origem."""
-        app = _make_app()
-        handoff = _make_handoff("task x")
-        call_count = [0]
-
-        def fake_call(*args, **kwargs):
-            call_count[0] += 1
-            if call_count[0] == 1:
-                return "codex respondeu"
-            return "preciso validar com você"
-
-        def fake_parse(resp):
-            if resp == "codex respondeu":
-                return ("codex respondeu", None, None, False, False, None)
-            return ("preciso validar com você", None, None, False, True, None)
-
-        app.dispatch_services.call_agent = Mock(side_effect=fake_call)
-        app.parse_response = Mock(side_effect=fake_parse)
-        orchestrator = _make_orchestrator(app)
-
-        orchestrator._process_handoff("claude", "codex", handoff)
-
-        self.assertEqual(app._pending_input_for, "claude")
-        app.renderer.show_system.assert_called_with("Responda para CLAUDE:")
-
-    def test_user_cancelled_during_synthesis(self):
-        """_user_cancelled durante síntese deve resetar e retornar."""
-        app = _make_app()
-        handoff = _make_handoff("task x")
-        call_count = [0]
-
-        def fake_call(*args, **kwargs):
-            call_count[0] += 1
-            if call_count[0] == 1:
-                return "codex respondeu"
-            # Segunda chamada é a síntese — marca como cancelado
-            app.agent_client._user_cancelled = True
-            return "síntese"
-
-        app.dispatch_services.call_agent = Mock(side_effect=fake_call)
-        # parse só é chamado para a resposta do codex; síntese é abortada antes
-        app.parse_response = Mock(return_value=("codex respondeu", None, None, False, False, None))
-        orchestrator = _make_orchestrator(app)
-
-        orchestrator._process_handoff("claude", "codex", handoff)
-
-        app.turn_manager.reset.assert_called()
-
-
-# ---------------------------------------------------------------------------
 # _process_standard_flow
 # ---------------------------------------------------------------------------
 
@@ -777,24 +444,6 @@ class TestShowSystem(unittest.TestCase):
 
 class TestCoverageGaps(unittest.TestCase):
 
-    def test_process_dispatches_to_process_handoff(self):
-        """process() deve chamar _process_handoff quando handoff é válido."""
-        app = _make_app(active_agents=["claude", "codex"])
-        handoff = _make_handoff("task x")
-        app.dispatch_services.call_agent = Mock(return_value="ok")
-        app.parse_response = Mock(return_value=("ok", "codex", handoff, False, False, None))
-
-        # Mocar _process_handoff para evitar side effects
-        with patch.object(ChatRoundOrchestrator, "_process_handoff") as mock_ph:
-            app.chat_round_orchestrator.process("hello")
-            mock_ph.assert_called_once_with(
-                "claude",
-                "codex",
-                handoff,
-                request_override="hello",
-                history_snapshot=None,
-            )
-
     def test_process_standard_flow_explicit_without_parallel_slots_skips_followers(self):
         """explicit=True com threads=1 não deve executar followers."""
         app = _make_app(active_agents=["claude", "codex"], threads=1)
@@ -816,73 +465,6 @@ class TestCoverageGaps(unittest.TestCase):
 
         app.dispatch_services.call_agent.assert_not_called()
         app.task_services.call_agent_for_parallel.assert_not_called()
-
-    def test_handoff_chain_propagates_existing_chain(self):
-        """Propagação de chain deve incluir agentes do next_handoff.chain não duplicados."""
-        app = _make_app(active_agents=["claude", "codex", "deepseek"])
-        handoff = _make_handoff("task x")
-        call_count = [0]
-
-        next_h = _make_handoff("next task", handoff_id="id-002", chain=["deepseek"])
-
-        def fake_call(*args, **kwargs):
-            call_count[0] += 1
-            return "resp"
-
-        def fake_parse(resp):
-            if call_count[0] == 1:
-                # primeira chamada: retorna next handoff com chain já preenchida
-                return ("resp", "deepseek", next_h, False, False, None)
-            # Segunda chamada (deepseek): finaliza
-            return ("final", None, None, False, False, None)
-
-        app.dispatch_services.call_agent = Mock(side_effect=fake_call)
-        app.parse_response = Mock(side_effect=fake_parse)
-        orchestrator = _make_orchestrator(app)
-
-        # Não deve levantar exceção; lines 297-298 são executadas
-        orchestrator._process_handoff("claude", "codex", handoff)
-
-    def test_process_handoff_executes_target_then_returns_synthesis_to_origin(self):
-        """No chat, o handoff deve ser executado pelo alvo antes da síntese voltar ao agente de origem."""
-        app = _make_app(active_agents=["claude", "codex"])
-        app.parse_routing = Mock(return_value=("claude", "analisa isso", False))
-
-        handoff = {
-            "task": "Revisar implementação",
-            "context": "Validar o fluxo",
-            "expected": "Resumo curto",
-            "handoff_id": "h1",
-            "chain": [],
-        }
-
-        app.dispatch_services.call_agent = Mock(side_effect=["r1", "r2", "r3"])
-        app.parse_response = Mock(side_effect=[
-            ("resposta claude", "codex", handoff, False, False, None),
-            ("resposta codex", None, None, False, False, "h1"),
-            ("síntese claude", None, None, False, False, None),
-        ])
-
-        app.chat_round_orchestrator.process("analisa isso")
-
-        calls = app.dispatch_services.call_agent.call_args_list
-        self.assertEqual([call.args[0] for call in calls], ["claude", "codex", "claude"])
-
-        first_call = calls[0]
-        self.assertEqual(first_call.kwargs["protocol_mode"], "standard")
-        self.assertNotIn("handoff_only", first_call.kwargs)
-
-        handoff_call = calls[1]
-        self.assertEqual(handoff_call.kwargs["handoff"]["task"], "Revisar implementação")
-        self.assertTrue(handoff_call.kwargs["handoff_only"])
-        self.assertEqual(handoff_call.kwargs["from_agent"], "claude")
-        self.assertEqual(handoff_call.kwargs["protocol_mode"], "handoff")
-        self.assertEqual(handoff_call.kwargs["prompt_kind"], PromptKind.TASK_EXECUTOR)
-
-        synthesis_call = calls[2]
-        self.assertFalse(synthesis_call.kwargs.get("handoff_only", False))
-        self.assertEqual(synthesis_call.kwargs["protocol_mode"], "handoff")
-        self.assertIn("resposta codex", synthesis_call.kwargs["handoff"])
 
     def test_standard_flow_keeps_toolbar_idle_even_with_extra_threads(self):
         """A toolbar permanece ociosa quando não há fan-out dentro do prompt."""

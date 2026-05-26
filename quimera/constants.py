@@ -117,15 +117,6 @@ MSG_MEMORY_FAILED = "[memória] não foi possível gerar o resumo."
 MSG_SHUTDOWN = "Encerrando chat."
 MSG_DOUBLE_PREFIX = "\nUse apenas um prefixo por vez: /claude ou /codex\n"
 MSG_EMPTY_INPUT = "\nUse /{} <mensagem>\n"
-HANDOFF_SYNTHESIS_MSG = (
-    "Você delegou a seguinte subtarefa ao {agent}:\n\n{task}\n\n"
-    "Resposta do {agent} à sua delegação:\n\n{response}\n\n"
-    "Sintetize uma resposta final para o humano que integre sua análise com a resposta do {agent}. "
-    "NÃO repita a resposta do {agent} — incorpore-a na sua conclusão. Avance o diálogo.\n"
-    "Se a resposta do {agent} foi incompleta ou inesperada, indique isso ao humano e sugira o próximo passo.\n"
-    "Ao finalizar, indique explicitamente o próximo passo: continuar com outra tarefa, pedir input humano, ou finalizar.\n"
-    "Se a tarefa estiver completa, diga isso explicitamente em vez de deixar em aberto.\n"
-)
 
 ## Tools Schema
 TOOL_SCHEMA = {

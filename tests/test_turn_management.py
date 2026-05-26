@@ -72,7 +72,6 @@ def _make_app(active_agents=None):
         set_summary_agent_preference=lambda v: setattr(app, '_summary_agent_preference_val', v),
         get_pending_input_for=lambda: app._pending_input_for_val,
         set_pending_input_for=lambda v: setattr(app, '_pending_input_for_val', v),
-        generate_handoff_id=lambda task, target: f"gen-{target}",
     )
     app._generate_handoff_id = lambda task, target: f"gen-{target}"
 
@@ -937,7 +936,7 @@ class TestSingleAgentPerTurn(unittest.TestCase):
         self.assertEqual(app.dispatch_services.call_agent.call_count, 1)
 
     def test_handoff_triggers_secondary_agent(self):
-        """Handoff JSON no fluxo padrão ainda aciona o agente secundário."""
+        """Envelope textual de handoff não aciona delegação no fluxo MCP-first."""
         app = _make_app(active_agents=["claude", "codex"])
         app.parse_routing = Mock(return_value=("claude", "analisa", False))
 
@@ -964,10 +963,10 @@ class TestSingleAgentPerTurn(unittest.TestCase):
 
         QuimeraApp._do_process_chat_message(app, "analisa")
 
-        # 3 chamadas: claude (primary) → codex (handoff) → claude (síntese)
-        self.assertEqual(app.dispatch_services.call_agent.call_count, 3)
+        # Sem handoff textual: permanece apenas no agente primário.
+        self.assertEqual(app.dispatch_services.call_agent.call_count, 1)
         agents_called = [c[0][0] for c in app.dispatch_services.call_agent.call_args_list]
-        self.assertEqual(agents_called, ["claude", "codex", "claude"])
+        self.assertEqual(agents_called, ["claude"])
 
     def test_self_handoff_is_ignored(self):
         """Handoff de um agente para si mesmo deve ser ignorado — não gera nova chamada."""
@@ -991,7 +990,7 @@ class TestSingleAgentPerTurn(unittest.TestCase):
         self.assertEqual(app.dispatch_services.call_agent.call_count, 1)
 
     def test_handoff_secondary_can_delegate_to_third_before_synthesis(self):
-        """Se o secundário delega de novo, o terceiro responde em handoff_only antes da síntese."""
+        """Sem handoff textual, route_target/handoff retornados pelo parser são ignorados."""
         app = _make_app(active_agents=["claude", "codex", "opencode-qwen"])
         app.parse_routing = Mock(return_value=("claude", "analisa", False))
 
@@ -1019,15 +1018,9 @@ class TestSingleAgentPerTurn(unittest.TestCase):
 
         QuimeraApp._do_process_chat_message(app, "analisa")
 
-        self.assertEqual(app.dispatch_services.call_agent.call_count, 4)
+        self.assertEqual(app.dispatch_services.call_agent.call_count, 1)
         calls = app.dispatch_services.call_agent.call_args_list
-        self.assertEqual([c[0][0] for c in calls], ["claude", "codex", "opencode-qwen", "claude"])
-
-        self.assertTrue(calls[1][1]["handoff_only"])
-        self.assertEqual(calls[1][1]["from_agent"], "claude")
-        self.assertTrue(calls[2][1]["handoff_only"])
-        self.assertEqual(calls[2][1]["handoff"]["task"], "Valida edge cases")
-        self.assertIn("resposta qwen", calls[3][1]["handoff"])
+        self.assertEqual([c[0][0] for c in calls], ["claude"])
 
     def test_handoff_circular_chain_does_not_loop(self):
         """Tentativa de ciclo em handoff não deve entrar em loop infinito."""
@@ -1112,7 +1105,7 @@ class TestSingleAgentPerTurn(unittest.TestCase):
         app.show_system_message.assert_called_once_with("Responda para CLAUDE:")
 
     def test_handoff_without_body_continues_chain(self):
-        """Agente que responde só com handoff JSON (sem body) não cai em fallback."""
+        """Sem handoff textual, fluxo não encadeia delegação por route_target/handoff."""
         app = _make_app(active_agents=["claude", "codex", "opencode-qwen"])
         app.parse_routing = Mock(return_value=("claude", "analisa", False))
 
@@ -1143,10 +1136,8 @@ class TestSingleAgentPerTurn(unittest.TestCase):
 
         calls = app.dispatch_services.call_agent.call_args_list
         agents_called = [c[0][0] for c in calls]
-        # Deve chamar: claude → codex → opencode-qwen → claude (síntese)
-        self.assertEqual(agents_called, ["claude", "codex", "opencode-qwen", "claude"])
-        # Não deve ter tentado fallback (apenas 4 chamadas esperadas)
-        self.assertEqual(app.dispatch_services.call_agent.call_count, 4)
+        self.assertEqual(agents_called, ["claude"])
+        self.assertEqual(app.dispatch_services.call_agent.call_count, 1)
 
     def test_handoff_to_unknown_agent_is_ignored(self):
         """Handoff para agente não conectado deve ser ignorado silenciosamente."""
@@ -1171,7 +1162,7 @@ class TestSingleAgentPerTurn(unittest.TestCase):
         self.assertEqual(agents_called, ["claude"])
 
     def test_sequential_handoffs_accumulate_all_delegate_responses_for_synthesis(self):
-        """handoffs em sequência devem sintetizar com o resultado de todos os agentes delegados."""
+        """Sem handoff textual, resposta vazia no primário cai em failover padrão."""
         app = _make_app(active_agents=["claude", "codex", "opencode-qwen"])
         app.parse_routing = Mock(return_value=("claude", "analisa", False))
 
@@ -1204,10 +1195,7 @@ class TestSingleAgentPerTurn(unittest.TestCase):
         QuimeraApp._do_process_chat_message(app, "analisa")
 
         calls = app.dispatch_services.call_agent.call_args_list
-        self.assertEqual([c[0][0] for c in calls], ["claude", "codex", "opencode-qwen", "claude"])
-        synthesis_handoff = calls[3][1]["handoff"]
-        self.assertIn("CODEX:\nresposta codex", synthesis_handoff)
-        self.assertIn("OPENCODE-QWEN:\nresposta qwen", synthesis_handoff)
+        self.assertEqual([c[0][0] for c in calls], ["claude", "codex"])
 
     def test_consecutive_turns_route_to_different_agents(self):
         """Duas falas seguidas do humano podem ir para agentes diferentes (roteamento aleatório)."""

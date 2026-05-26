@@ -11,6 +11,7 @@ from .tools.patch import PatchTool
 from .tools.shell import ShellTool
 from .tools.web import WebTool
 from .tools.tasks import TaskTools
+from .tools.handoff import HandoffTools
 from .approve_summary import ApproveSummary
 
 
@@ -35,7 +36,8 @@ class ToolExecutor:
         self.registry = registry or ToolRegistry()
         self.policy = policy or ToolPolicy(config)
         self._tool_preview_callback = None
-        self._call_agent_fn = None
+        self._task_tools = TaskTools(self.config)
+        self._handoff_tools = HandoffTools(self.config)
         self._register_builtin_tools()
 
     def _register_builtin_tools(self) -> None:
@@ -44,7 +46,6 @@ class ToolExecutor:
         patch_tool = PatchTool(self.config)
         shell_tool = ShellTool(self.config)
         web_tool = WebTool(self.config)
-        task_tools = TaskTools(self.config)
         self.registry.register("list_files", file_tools.list_files)
         self.registry.register("read_file", file_tools.read_file)
         self.registry.register("write_file", file_tools.write_file)
@@ -56,12 +57,12 @@ class ToolExecutor:
         self.registry.register("write_stdin", shell_tool.write_stdin)
         self.registry.register("close_command_session", shell_tool.close_command_session)
         # Task-related read-only tools
-        self.registry.register("list_tasks", task_tools.list_tasks)
+        self.registry.register("list_tasks", self._task_tools.list_tasks)
         self.registry.register("web_search", web_tool.web_search)
         self.registry.register("web_fetch", web_tool.web_fetch)
-        self.registry.register("list_jobs", task_tools.list_jobs)
-        self.registry.register("get_job", task_tools.get_job)
-        self.registry.register("call_agent", self._handle_agent_dispatch)
+        self.registry.register("list_jobs", self._task_tools.list_jobs)
+        self.registry.register("get_job", self._task_tools.get_job)
+        self.registry.register("call_agent", self._handoff_tools.call_agent)
 
     @property
     def approval_handler(self):
@@ -137,65 +138,15 @@ class ToolExecutor:
 
         Assinatura esperada: fn(agent_name: str, **options) -> str | None
         """
-        self._call_agent_fn = fn
+        self._handoff_tools.set_call_agent_fn(fn)
+
+    def set_active_agents_provider(self, fn) -> None:
+        """Injeta provider que retorna agentes ativos no momento da delegação."""
+        self._handoff_tools.set_active_agents_provider(fn)
 
     def is_call_agent_available(self) -> bool:
         """Indica se a tool call_agent está operável no contexto atual."""
-        return callable(self._call_agent_fn)
-
-    def _handle_agent_dispatch(self, call: ToolCall) -> ToolResult:
-        """Dispatch a task to another Quimera agent via MCP tool."""
-        if not self.is_call_agent_available():
-            return ToolResult(
-                ok=False,
-                tool_name=call.name,
-                error="Agent dispatch not available in this context",
-            )
-        arguments = call.arguments if isinstance(call.arguments, dict) else {}
-        agent_name_raw = arguments.get("agent_name")
-        task_raw = arguments.get("task")
-        context_raw = arguments.get("context")
-
-        agent_name = str(agent_name_raw).strip() if isinstance(agent_name_raw, str) else ""
-        task = str(task_raw).strip() if isinstance(task_raw, str) else ""
-        context = ""
-        if context_raw is not None:
-            context = str(context_raw).strip() if isinstance(context_raw, str) else str(context_raw)
-
-        if not agent_name or not task:
-            return ToolResult(
-                ok=False,
-                tool_name=call.name,
-                error="Both 'agent_name' and 'task' are required",
-            )
-        handoff = {
-            "task": task,
-            "context": context,
-        }
-        try:
-            result = self._call_agent_fn(
-                agent_name,
-                handoff=handoff,
-                handoff_only=True,
-                protocol_mode="handoff",
-                primary=False,
-                silent=True,
-                show_output=False,
-                persist_history=True,
-            )
-            if result is None:
-                return ToolResult(
-                    ok=False,
-                    tool_name=call.name,
-                    error=f"Agent '{agent_name}' returned no response",
-                )
-            return ToolResult(ok=True, tool_name=call.name, content=str(result))
-        except Exception as e:
-            return ToolResult(
-                ok=False,
-                tool_name=call.name,
-                error=str(e),
-            )
+        return self._handoff_tools.is_call_agent_available()
 
     def execute(self, call: ToolCall) -> ToolResult:
         """Executa um ToolCall com política de aprovação.

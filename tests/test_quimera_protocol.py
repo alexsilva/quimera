@@ -63,7 +63,7 @@ def _extract_block(prompt: str, tag: str) -> str:
     return match.group(1)
 
 
-def _make_protocol(app):
+def _make_protocol(app, **_kwargs):
     return AppProtocol(
         lock=getattr(app, '_shared_state_lock', None) or getattr(app, '_lock', threading.Lock()),
         shared_state=getattr(app, 'shared_state', {}),
@@ -378,7 +378,6 @@ def materialize_internal_services(app):
             get_pending_input_for=lambda: getattr(app, "_pending_input_for", None),
             set_pending_input_for=lambda v: setattr(app, "_pending_input_for", v),
             merge_staging_to_workspace=getattr(app, "_merge_staging_to_workspace", None),
-            generate_handoff_id=getattr(app, "_generate_handoff_id", lambda t, tg: f"gen-{tg}"),
         )
     if not hasattr(app, "execution_mode"):
         app.execution_mode = None
@@ -520,84 +519,6 @@ class ProtocolTests(unittest.TestCase):
         self.assertIsNone(target)
         self.assertIsNone(handoff)
         self.assertFalse(extend)
-
-    def test_parse_response_extracts_internal_handoff(self):
-        app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = _make_protocol(app)
-        app.shared_state = {}
-
-        response, target, message, extend, _, _ = app.parse_response(
-            "Resposta visivel\n"
-            '{"type": "handoff", "route": "codex", '
-            '"content": "Revise este argumento.", '
-            '"metadata": {"context": "Analisar risco no parser atual.", '
-            '"expected": "2 bullets objetivos"}}'
-        )
-
-        self.assertEqual(response, "Resposta visivel")
-        self.assertEqual(target, AGENT_CODEX)
-        self.assertEqual(message["task"], "Revise este argumento.")
-        self.assertEqual(message["context"], "Analisar risco no parser atual.")
-        self.assertEqual(message["expected"], "2 bullets objetivos")
-        self.assertEqual(message["priority"], "normal")
-        self.assertFalse(extend)
-
-    def test_parse_response_handoff_with_handoffs_array(self):
-        app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = _make_protocol(app)
-        app.shared_state = {}
-
-        response, target, message, extend, _, _ = app.parse_response(
-            "Resposta visivel\n"
-            '{"type": "handoff", "handoffs": ['
-            '{"route": "codex", "content": "Revise este argumento.", '
-            '"metadata": {"context": "Risco no parser atual.", "expected": "2 bullets"}}, '
-            '{"route": "claude", "content": "Valide a síntese."}'
-            ']}'
-        )
-
-        self.assertEqual(response, "Resposta visivel")
-        self.assertEqual(target, AGENT_CODEX)
-        self.assertEqual(message["task"], "Revise este argumento.")
-        self.assertEqual(message["context"], "Risco no parser atual.")
-        self.assertEqual(message["expected"], "2 bullets")
-        self.assertEqual(message["_pending_handoffs"][0]["route"], "claude")
-        self.assertFalse(extend)
-
-    def test_parse_response_invalid_handoff_missing_route(self):
-        """Handoff envelope without route/handoffs is rejected."""
-        app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = _make_protocol(app)
-        app.shared_state = {}
-
-        response, target, message, extend, _, _ = app.parse_response(
-            "Resposta visivel\n"
-            '{"type": "handoff", "content": "task: algo"}'
-        )
-
-        self.assertEqual(response, "Resposta visivel")
-        self.assertIsNone(target)
-        self.assertIsNone(message)
-        self.assertFalse(extend)
-
-    def test_parse_handoff_payload_task_only(self):
-        app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = _make_protocol(app)
-        result = app.parse_handoff_payload("task: Revise este código")
-        self.assertEqual(result["task"], "Revise este código")
-        self.assertIsNone(result["context"])
-        self.assertIsNone(result["expected"])
-        self.assertEqual(result["priority"], "normal")
-        self.assertIn("handoff_id", result)
-
-    def test_parse_handoff_payload_task_and_context(self):
-        app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = _make_protocol(app)
-        result = app.parse_handoff_payload("task: Revise este código | context: Verificar performance")
-        self.assertEqual(result["task"], "Revise este código")
-        self.assertEqual(result["context"], "Verificar performance")
-        self.assertIsNone(result["expected"])
-        self.assertEqual(result["priority"], "normal")
 
     def test_parse_response_extracts_state_update_before_debate(self):
         import threading
@@ -1279,8 +1200,8 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn("TASK:\nRevisar parser", prompt)
         self.assertIn("EXPECTED:\n1 parágrafo curto", prompt)
         self.assertNotIn("segundo agente nesta rodada", prompt)
-        self.assertIn('"handoff"', prompt)
-        self.assertIn('"route": "agente"', prompt)
+        self.assertIn("tool `call_agent`", prompt)
+        self.assertIn('"agent_name":"agente"', prompt)
         self.assertNotIn("Não delegue de volta", prompt)
 
     def test_prompt_includes_handoff_when_present(self):
@@ -2199,175 +2120,6 @@ class ProtocolTests(unittest.TestCase):
                 (AGENT_CLAUDE, "claude aprofunda"),
                 (AGENT_CODEX, "codex fecha"),
             ],
-        )
-
-    def test_run_passes_handoff_to_target_agent(self):
-        app = QuimeraApp.__new__(QuimeraApp)
-        materialize_internal_services(app)
-        app.history = []
-        app.user_name = "Você"
-        app.round_index = 0
-        app.session_call_index = 0
-        app.debug_prompt_metrics = False
-        app.renderer = DummyRenderer()
-        app.storage = DummyStorage()
-        app.context_manager = None
-        app.agent_client = DummyAgentClient()
-        app.prompt_builder = None
-        app.session_state = {
-            "session_id": "sessao-2026-03-27-123456",
-            "history_count": 0,
-            "summary_loaded": False,
-        }
-        persisted = []
-        printed = []
-        calls = []
-
-        app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
-        app.threads = 1
-        app.handle_command = lambda user: False
-        app.parse_routing = lambda user: (AGENT_CLAUDE, "oi", False)
-        app.parse_response = QuimeraApp.parse_response.__get__(app, QuimeraApp)
-        app.shared_state = {}
-        app.dispatch_services.print_response = lambda agent, response: printed.append((agent, response))
-        app.session_services = Mock()
-        app.session_services.persist_message = lambda role, content: persisted.append((role, content))
-        app.read_user_input = Mock(side_effect=["mensagem", "/exit"])
-        responses = iter(
-            [
-                'claude responde\n'
-                '{"type": "handoff", "route": "codex", '
-                '"content": "Revise este argumento.", '
-                '"metadata": {"context": "Analisar risco no parser atual.", '
-                '"expected": "2 bullets objetivos"}}',
-                "codex comenta",
-                "claude sintetiza",
-            ]
-        )
-
-        def fake_call(
-                agent,
-                is_first_speaker=False,
-                handoff=None,
-                primary=True,
-                protocol_mode="standard",
-                handoff_only=False,
-                from_agent=None,
-                prompt_kind=None,
-        ):
-            calls.append((agent, is_first_speaker, handoff, handoff_only, from_agent))
-            return next(responses)
-
-        app.dispatch_services.call_agent = fake_call
-
-        app.run()
-
-        self.assertEqual(len(calls), 3)
-        self.assertEqual(calls[0], (AGENT_CLAUDE, True, None, False, None))
-        handoff_to_codex = calls[1][2]
-        self.assertEqual(handoff_to_codex["task"], "Revise este argumento.")
-        self.assertEqual(handoff_to_codex["context"], "Analisar risco no parser atual.")
-        self.assertEqual(handoff_to_codex["expected"], "2 bullets objetivos")
-        self.assertEqual(calls[1][1], False)
-        self.assertTrue(calls[1][3])  # handoff_only
-        self.assertEqual(calls[1][4], AGENT_CLAUDE)  # from_agent
-        self.assertEqual(calls[2][1], False)
-        self.assertFalse(calls[2][3])
-        self.assertIsNone(calls[2][4])
-
-    def test_run_passes_handoff_even_with_explicit_prefix(self):
-        app = QuimeraApp.__new__(QuimeraApp)
-        materialize_internal_services(app)
-        app.history = []
-        app.user_name = "Você"
-        app.round_index = 0
-        app.session_call_index = 0
-        app.debug_prompt_metrics = False
-        app.renderer = DummyRenderer()
-        app.storage = DummyStorage()
-        app.context_manager = None
-        app.agent_client = DummyAgentClient()
-        app.prompt_builder = None
-        app.session_state = {
-            "session_id": "sessao-2026-03-27-123456",
-            "history_count": 0,
-            "summary_loaded": False,
-        }
-        persisted = []
-        printed = []
-        calls = []
-
-        app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
-        app.threads = 1
-        app.handle_command = lambda user: False
-        app.parse_routing = lambda user: (AGENT_CLAUDE, "oi", True)
-        app.parse_response = QuimeraApp.parse_response.__get__(app, QuimeraApp)
-        app.shared_state = {}
-        app.dispatch_services.print_response = lambda agent, response: printed.append((agent, response))
-        app.session_services = Mock()
-        app.session_services.persist_message = lambda role, content: persisted.append((role, content))
-        app.read_user_input = Mock(side_effect=["/claude mensagem", "/exit"])
-        responses = iter(
-            [
-                'claude responde\n'
-                '{"type": "handoff", "route": "codex", '
-                '"content": "Revise este argumento.", '
-                '"metadata": {"context": "Analisar risco no parser atual.", '
-                '"expected": "2 bullets objetivos"}}',
-                "codex comenta",
-                "claude sintetiza",
-            ]
-        )
-
-        def fake_call(
-                agent,
-                is_first_speaker=False,
-                handoff=None,
-                primary=True,
-                protocol_mode="standard",
-                handoff_only=False,
-                from_agent=None,
-                prompt_kind=None,
-        ):
-            calls.append((agent, is_first_speaker, handoff, handoff_only, from_agent))
-            return next(responses)
-
-        app.dispatch_services.call_agent = fake_call
-
-        app.run()
-
-        self.assertEqual(len(calls), 3)
-        self.assertEqual(calls[0], (AGENT_CLAUDE, True, None, False, None))
-        handoff_to_codex = calls[1][2]
-        self.assertEqual(handoff_to_codex["task"], "Revise este argumento.")
-        self.assertEqual(handoff_to_codex["context"], "Analisar risco no parser atual.")
-        self.assertEqual(handoff_to_codex["expected"], "2 bullets objetivos")
-        self.assertEqual(calls[1][1], False)
-        self.assertTrue(calls[1][3])
-        self.assertEqual(calls[1][4], AGENT_CLAUDE)
-        self.assertEqual(calls[2][1], False)
-        self.assertFalse(calls[2][3])
-        self.assertIsNone(calls[2][4])
-        self.assertEqual(
-            printed,
-            [
-                (AGENT_CLAUDE, "claude responde"),
-                (AGENT_CODEX, "codex comenta"),
-                (AGENT_CLAUDE, "claude sintetiza"),
-            ],
-        )
-        self.assertEqual(
-            persisted,
-            [
-                ("human", "oi"),
-                (AGENT_CLAUDE, "claude responde"),
-                (AGENT_CODEX, "codex comenta"),
-                (AGENT_CLAUDE, "claude sintetiza"),
-            ],
-        )
-        self.assertEqual(
-            app.renderer.handoffs,
-            [(AGENT_CLAUDE, AGENT_CODEX, "Revise este argumento.")],
         )
 
     def test_run_blocks_agent_task_creation_via_tool_in_normal_flow(self):
@@ -3694,40 +3446,6 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(list(app.agent_failures.keys()), [AGENT_CLAUDE])
         app.session_metrics.record_agent_metric.assert_called_once_with(app, AGENT_CLAUDE, "failed", 0)
 
-    def test_parse_handoff_payload_with_priority(self):
-        app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = _make_protocol(app)
-        result = app.parse_handoff_payload("task: Corrigir bug crítico | priority: urgent")
-        self.assertEqual(result["task"], "Corrigir bug crítico")
-        self.assertEqual(result["priority"], "urgent")
-        self.assertIn("handoff_id", result)
-
-    def test_parse_handoff_payload_invalid_priority_defaults_to_normal(self):
-        app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = _make_protocol(app)
-        result = app.parse_handoff_payload("task: Algo qualquer | priority: invalido")
-        self.assertEqual(result["priority"], "normal")
-
-    def test_parse_handoff_payload_generates_unique_ids(self):
-        app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = _make_protocol(app)
-        r1 = app.parse_handoff_payload("task: Tarefa 1")
-        r2 = app.parse_handoff_payload("task: Tarefa 2")
-        self.assertNotEqual(r1["handoff_id"], r2["handoff_id"])
-
-    def test_handoff_format_includes_priority_when_urgent(self):
-        builder = PromptBuilder(DummyContextManager(), history_window=3)
-        handoff = {
-            "task": "Corrigir bug",
-            "context": "Parser quebrado",
-            "expected": "Patch",
-            "priority": "urgent",
-            "handoff_id": "abc123",
-        }
-        fields = HandoffPresenter.present(handoff, from_agent="claude")
-        self.assertEqual(fields["handoff_priority"], "URGENT")
-        self.assertEqual(fields["handoff_id"], "abc123")
-
     def test_handoff_format_omits_priority_when_normal(self):
         builder = PromptBuilder(DummyContextManager(), history_window=3)
         handoff = {
@@ -4723,72 +4441,6 @@ class PluginTests(unittest.TestCase):
         requeue_task.assert_not_called()
         fail_task.assert_called_once_with(1, reason="communication failed")
 
-    def test_parse_response_extracts_ack_marker(self):
-        app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = _make_protocol(app)
-        app.shared_state = {}
-
-        response, target, handoff, extend, needs_input, ack_id = app.parse_response(
-            "[ACK:abc123def456]\nTarefa concluída com sucesso."
-        )
-
-        self.assertEqual(response, "Tarefa concluída com sucesso.")
-        self.assertEqual(ack_id, "abc123def456")
-        self.assertIsNone(target)
-        self.assertIsNone(handoff)
-        self.assertFalse(extend)
-        self.assertFalse(needs_input)
-
-    def test_parse_response_without_ack(self):
-        app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = _make_protocol(app)
-        app.shared_state = {}
-
-        response, _, _, _, _, ack_id = app.parse_response("Resposta sem ACK")
-
-        self.assertIsNone(ack_id)
-        self.assertEqual(response, "Resposta sem ACK")
-
-    def test_handoff_chain_propagation(self):
-        """Test that handoff chain is propagated correctly."""
-        app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = _make_protocol(app)
-        result = app.parse_handoff_payload("task: Test task")
-        self.assertEqual(result["chain"], [])
-
-        # Simulate chain propagation
-        result["chain"] = ["claude"]
-        result["chain"].append("codex")
-        self.assertEqual(result["chain"], ["claude", "codex"])
-
-    def test_handoff_id_uses_real_target(self):
-        """Test that handoff_id includes target in its generation."""
-        app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = _make_protocol(app)
-        # Generate IDs with same timestamp to verify target affects the hash
-        ts = 1234567890.0
-        id1 = app._generate_handoff_id("Test task", "codex", timestamp=ts)
-        id2 = app._generate_handoff_id("Test task", "claude", timestamp=ts)
-        id3 = app._generate_handoff_id("Test task", "codex", timestamp=ts)
-        # Same task + same target + same timestamp = same ID
-        self.assertEqual(id1, id3)
-        # Same task + different target = different ID
-        self.assertNotEqual(id1, id2)
-
-    def test_ack_mismatch_logged_on_validation(self):
-        """Test that ACK mismatch is detected when ack_id != handoff_id."""
-        app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = _make_protocol(app)
-        app.shared_state = {}
-        app.renderer = DummyRenderer()
-
-        # Simulate a handoff with handoff_id="abc123" but agent responds with ACK:def456
-        response_text = "[ACK:def456]\nTarefa concluída."
-        response, _, _, _, _, ack_id = app.parse_response(response_text)
-
-        self.assertEqual(ack_id, "def456")
-        self.assertEqual(response, "Tarefa concluída.")
-
     def test_per_agent_metrics_tracking(self):
         """Test that per-agent metrics are tracked correctly."""
         app = QuimeraApp.__new__(QuimeraApp)
@@ -5039,8 +4691,8 @@ class PluginTests(unittest.TestCase):
         """Route rule deve estar inline no template principal."""
         main = prompt_template._load()
 
-        self.assertIn("handoff", main)
-        self.assertIn("\"route\": \"agente\"", main)
+        self.assertIn("call_agent", main)
+        self.assertIn("agent_name", main)
         self.assertIn("task", main)
         self.assertIn("obrigatório", main)
         self.assertIn("não improvise", main)
@@ -5112,104 +4764,6 @@ class FallbackChainTests(unittest.TestCase):
         self.assertIn((AGENT_CODEX, "codex assumiu e respondeu"), printed)
         self.assertIn((AGENT_CODEX, "codex assumiu e respondeu"), persisted)
         self.assertEqual(app.summary_agent_preference, AGENT_CODEX)
-
-    def test_fallback_tries_next_agent_when_secondary_fails(self):
-        """Quando o agente secundário não responde, o sistema deve tentar o próximo disponível."""
-        app = QuimeraApp.__new__(QuimeraApp)
-        materialize_internal_services(app)
-        app.history = []
-        app.user_name = "Você"
-        app.round_index = 0
-        app.session_call_index = 0
-        app.debug_prompt_metrics = False
-        app.renderer = DummyRenderer()
-        app.storage = DummyStorage()
-        app.context_manager = None
-        app.agent_client = DummyAgentClient()
-        app.prompt_builder = None
-        app.session_state = {
-            "session_id": "test-fallback",
-            "history_count": 0,
-            "summary_loaded": False,
-        }
-        persisted = []
-        printed = []
-        calls = []
-
-        app.active_agents = [AGENT_CLAUDE, AGENT_CODEX, "ollama-qwen"]
-        app.threads = 1
-        app.handle_command = lambda user: False
-        app.parse_routing = lambda user: (AGENT_CLAUDE, "oi", False)
-        app.parse_response = QuimeraApp.parse_response.__get__(app, QuimeraApp)
-        app.shared_state = {}
-        app.dispatch_services.print_response = lambda agent, response: printed.append((agent, response))
-        app.session_services = Mock()
-        app.session_services.persist_message = lambda role, content: persisted.append((role, content))
-        app.read_user_input = Mock(side_effect=["mensagem", "/exit"])
-        responses = iter([
-            # Claude responde e delega para codex
-            'claude responde\n'
-            '{"type": "handoff", "route": "codex", '
-            '"content": "Revise este código"}',
-            # Codex NÃO responde (None)
-            None,
-            # Fallback: qwen responde
-            "qwen faz o fallback",
-            # Claude sintetiza com a resposta do qwen
-            "claude sintetiza com qwen",
-        ])
-
-        def fake_call(
-                agent,
-                is_first_speaker=False,
-                handoff=None,
-                primary=True,
-                protocol_mode="standard",
-                handoff_only=False,
-                from_agent=None,
-                prompt_kind=None,
-        ):
-            calls.append((agent, is_first_speaker, handoff, handoff_only, from_agent))
-            return next(responses)
-
-        app.dispatch_services.call_agent = fake_call
-        app.run()
-
-        # Deve ter 4 chamadas: claude inicial, codex (falha), qwen (fallback), claude (síntese)
-        self.assertEqual(len(calls), 4)
-        # Segunda chamada é para codex (handoff)
-        self.assertEqual(calls[1][0], AGENT_CODEX)
-        self.assertTrue(calls[1][3])  # handoff_only
-        # Terceira chamada é para ollama-qwen (fallback)
-        self.assertEqual(calls[2][0], "ollama-qwen")
-        self.assertTrue(calls[2][3])  # handoff_only
-        # Quarta chamada é claude sintetizando
-        self.assertEqual(calls[3][0], AGENT_CLAUDE)
-        # Verifica que ollama-qwen imprimiu e persistiu
-        self.assertIn(("ollama-qwen", "qwen faz o fallback"), printed)
-
-    def test_fallback_skips_original_agent_and_chain(self):
-        """Fallback não deve tentar o agente original nem os já na cadeia."""
-        app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = _make_protocol(app)
-        app.shared_state = {}
-
-        # Simula handoff com chain
-        result = app.parse_handoff_payload("task: Test", target="codex")
-        result["chain"] = ["claude"]
-
-        # Fallback candidates devem excluir claude (chain) e codex (target original)
-        app.active_agents = ["claude", "codex", "ollama-qwen"]
-        chain = result["chain"]
-        route_target = "codex"
-        first_agent = "claude"
-
-        fallback_candidates = [
-            a for a in app.active_agents
-            if a != first_agent and a != route_target and a not in chain
-        ]
-
-        self.assertEqual(fallback_candidates, ["ollama-qwen"])
 
     def test_no_fallback_when_no_candidates(self):
         """Se não há candidatos de fallback, o sistema não deve tentar."""
@@ -5338,7 +4892,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         """HANDOFF_RULE deve estar inline no template e mencionar ACK."""
         main = prompt_template._load()
         self.assertIn("ACK", main)
-        self.assertIn("handoff em sequência", main)
+        self.assertIn("call_agent", main)
         self.assertIn("arquivos", main)
 
     def test_behavior_metrics_tracker_integrated_with_app(self):
@@ -5416,7 +4970,6 @@ class MetricsFeedbackTests(unittest.TestCase):
     def test_handoff_rule_is_concise(self):
         """HANDOFF_RULE deve estar inline no template e ser conciso."""
         main = prompt_template._load()
-        self.assertIn("ACK", main)
         self.assertIn("continue do ponto já avançado", main.lower())
 
     def test_base_rules_are_concise(self):
@@ -5913,22 +5466,6 @@ class AppProtocolDirectTests(unittest.TestCase):
         self.assertNotIn("goal_canonical", app.shared_state)
         self.assertIn("current_step", app.shared_state)
 
-    # --- parse_handoff_payload ---
-
-    def test_parse_handoff_payload_no_match_returns_none(self):
-        proto = AppProtocol(lock=threading.Lock(), shared_state={})
-        result = proto.parse_handoff_payload("completely invalid payload no task keyword", target="codex")
-        self.assertIsNone(result)
-
-    def test_parse_handoff_payload_empty_task_returns_none(self):
-        proto = AppProtocol(lock=threading.Lock(), shared_state={})
-        proto.HANDOFF_PAYLOAD_PATTERN = re.compile(
-            r"^\s*task:\s*([^\n]*?)\s*(?:context:\s*([^\n]*?))?\s*(?:expected:\s*([^\n]*?))?\s*(?:priority:\s*([^\n]*?))?\s*$",
-            re.IGNORECASE,
-        )
-        result = proto.parse_handoff_payload("task:", target="codex")
-        self.assertIsNone(result)
-
     # --- parse_response ---
 
     def test_parse_response_none_returns_all_none(self):
@@ -5946,29 +5483,96 @@ class AppProtocolDirectTests(unittest.TestCase):
         self.assertNotIn(NEEDS_INPUT_MARKER, response)
 
     def test_parse_response_json_envelope_no_response_content(self):
-        """Envelope JSON puro de handoff não vaza content como resposta visível."""
+        """Envelope JSON puro de handoff é tratado como texto (MCP-first)."""
         app = self._make_app()
         proto = _make_protocol(app)
-        result = proto.parse_response(
+        response, route_target, handoff, extend, needs_input, ack_id = proto.parse_response(
             '{"type": "handoff", "route": "codex", "content": "task: fazer algo"}'
         )
-        self.assertIsNone(result[0])
-        self.assertEqual(result[1], "codex")
-        self.assertIsNotNone(result[2])
+        self.assertEqual(
+            response,
+            '{"type": "handoff", "route": "codex", "content": "task: fazer algo"}',
+        )
+        self.assertIsNone(route_target)
+        self.assertIsNone(handoff)
+        self.assertFalse(extend)
+        self.assertFalse(needs_input)
+        self.assertIsNone(ack_id)
 
     def test_parse_response_json_envelope_handoffs_array_no_surrounding_text(self):
-        """Envelope JSON com handoffs[] e sem texto ao redor."""
+        """Envelope JSON com handoffs[] também fica como texto no modo MCP-first."""
         app = self._make_app()
         proto = _make_protocol(app)
-        result = proto.parse_response(
+        response, route_target, handoff, _, _, _ = proto.parse_response(
             '{"type": "handoff", "handoffs": ['
             '{"route": "codex", "content": "task: fazer algo"}, '
             '{"route": "claude", "content": "task: validar"}'
             ']}'
         )
-        self.assertIsNone(result[0])
-        self.assertEqual(result[1], "codex")
-        self.assertEqual(result[2]["_pending_handoffs"][0]["route"], "claude")
+        self.assertIn('"type": "handoff"', response)
+        self.assertIsNone(route_target)
+        self.assertIsNone(handoff)
+
+    def test_parse_response_json_handoff_ignored_when_textual_handoff_disabled(self):
+        """Envelope handoff legado não rota nem dispara handoff."""
+        app = self._make_app()
+        proto = _make_protocol(app)
+
+        response, route_target, handoff, extend, needs_input, ack_id = proto.parse_response(
+            '{"type": "handoff", "route": "codex", "content": "task: fazer algo"}'
+        )
+
+        self.assertEqual(
+            response,
+            '{"type": "handoff", "route": "codex", "content": "task: fazer algo"}',
+        )
+        self.assertIsNone(route_target)
+        self.assertIsNone(handoff)
+        self.assertFalse(extend)
+        self.assertFalse(needs_input)
+        self.assertIsNone(ack_id)
+
+    def test_parse_response_json_handoff_is_always_ignored_for_routing(self):
+        """Não existe mais modo textual: handoff JSON nunca vira route_target."""
+        app = self._make_app()
+        proto = _make_protocol(app)
+
+        response, route_target, handoff, extend, needs_input, ack_id = proto.parse_response(
+            '{"type": "handoff", "route": "codex", "content": "task: fazer algo"}'
+        )
+
+        self.assertIsNotNone(response)
+        self.assertIsNone(route_target)
+        self.assertIsNone(handoff)
+        self.assertFalse(extend)
+        self.assertFalse(needs_input)
+        self.assertIsNone(ack_id)
+
+    def test_parse_response_state_update_works_in_mcp_mode(self):
+        """state_update continua aplicado no modo MCP-first."""
+        app = self._make_app()
+        proto = _make_protocol(app)
+
+        proto.parse_response(
+            '{"type": "state_update", "content": "", "state_updates": {"goal_canonical": "corrigir parser"}}'
+        )
+        self.assertEqual(app.shared_state, {"goal_canonical": "corrigir parser"})
+
+    def test_parse_response_ack_works_in_mcp_mode(self):
+        """ack continua extraído no modo MCP-first."""
+        app = self._make_app()
+        proto = _make_protocol(app)
+
+        response, route_target, handoff, extend, needs_input, ack_id = proto.parse_response(
+            '{"type": "ack", "content": "done", "handoff_id": "abc123"}'
+        )
+
+        self.assertEqual(ack_id, "abc123")
+        self.assertEqual(response, "done")
+        self.assertIsNone(route_target)
+        self.assertIsNone(handoff)
+        self.assertFalse(extend)
+        self.assertFalse(needs_input)
 
 
     # --- ProtocolEnvelope dataclass ---
@@ -6093,11 +5697,12 @@ class AppProtocolDirectTests(unittest.TestCase):
         response, route_target, handoff, extend, needs_input, ack_id = (
             proto.parse_response('{"type": "handoff", "content": "task: refactor", "route": "codex"}')
         )
-        self.assertEqual(route_target, "codex")
-        self.assertIsNotNone(handoff)
-        self.assertEqual(handoff["task"], "task: refactor")
-        self.assertEqual(handoff["chain"], [])
-        self.assertIsNone(response)
+        self.assertEqual(
+            response,
+            '{"type": "handoff", "content": "task: refactor", "route": "codex"}',
+        )
+        self.assertIsNone(route_target)
+        self.assertIsNone(handoff)
         self.assertFalse(extend)
         self.assertFalse(needs_input)
         self.assertIsNone(ack_id)
@@ -6133,7 +5738,7 @@ class AppProtocolDirectTests(unittest.TestCase):
         self.assertIsNone(result)
 
     def test_parse_response_embedded_envelope_with_text_before(self):
-        """Texto antes de envelope JSON — parser encontra envelope embutido."""
+        """Texto antes de envelope handoff é preservado sem rotear."""
         text = (
             'Aqui está minha análise\n'
             '{"type": "handoff", "content": "task: refactor", "route": "codex"}'
@@ -6143,16 +5748,15 @@ class AppProtocolDirectTests(unittest.TestCase):
         response, route_target, handoff, extend, needs_input, ack_id = (
             proto.parse_response(text)
         )
-        self.assertEqual(route_target, "codex")
-        self.assertIsNotNone(handoff)
-        self.assertEqual(handoff["task"], "task: refactor")
+        self.assertIsNone(route_target)
+        self.assertIsNone(handoff)
         self.assertEqual(response, "Aqui está minha análise")
         self.assertIsNone(ack_id)
         self.assertFalse(extend)
         self.assertFalse(needs_input)
 
     def test_parse_response_embedded_envelope_with_handoffs(self):
-        """Envelope JSON com handoffs[] embutido em texto."""
+        """Envelope handoffs[] embutido é removido do texto, sem rotear."""
         text = (
             'Análise\n'
             '{"type": "handoff", "handoffs": ['
@@ -6165,16 +5769,14 @@ class AppProtocolDirectTests(unittest.TestCase):
         response, route_target, handoff, extend, needs_input, ack_id = (
             proto.parse_response(text)
         )
-        self.assertEqual(route_target, "gemini")
-        self.assertIsNotNone(handoff)
-        self.assertEqual(handoff["task"], "task: analyze this")
-        self.assertEqual(handoff["_pending_handoffs"][0]["route"], "codex")
+        self.assertIsNone(route_target)
+        self.assertIsNone(handoff)
         self.assertEqual(response, "Análise")
 
     # --- Embedded envelope tests ---
 
     def test_parse_response_embedded_envelope_text_before_and_after(self):
-        """Envelope JSON embutido com texto antes e depois."""
+        """Envelope handoff embutido mantém texto antes/depois sem rotear."""
         text = (
             'Análise inicial\n'
             '{"type": "handoff", "content": "task: revise", "route": "gemini"}\n'
@@ -6183,14 +5785,14 @@ class AppProtocolDirectTests(unittest.TestCase):
         app = self._make_app()
         proto = _make_protocol(app)
         response, route_target, handoff, _, _, _ = proto.parse_response(text)
-        self.assertEqual(route_target, "gemini")
-        self.assertEqual(handoff["task"], "task: revise")
+        self.assertIsNone(route_target)
+        self.assertIsNone(handoff)
         self.assertIn("Análise inicial", response)
         self.assertIn("Observação final", response)
         self.assertNotIn("task: revise", response)
 
     def test_parse_response_embedded_envelope_text_after_only(self):
-        """Envelope JSON com texto apenas depois."""
+        """Envelope handoff com texto só depois não roteia."""
         text = (
             '{"type": "handoff", "content": "task: check", "route": "codex"}\n'
             'Resultado da análise'
@@ -6198,8 +5800,8 @@ class AppProtocolDirectTests(unittest.TestCase):
         app = self._make_app()
         proto = _make_protocol(app)
         response, route_target, handoff, _, _, _ = proto.parse_response(text)
-        self.assertEqual(route_target, "codex")
-        self.assertEqual(handoff["task"], "task: check")
+        self.assertIsNone(route_target)
+        self.assertIsNone(handoff)
         self.assertEqual(response, "Resultado da análise")
 
     def test_parse_response_embedded_envelope_empty_content_rejected(self):
@@ -6285,7 +5887,7 @@ class AppProtocolDirectTests(unittest.TestCase):
     # --- Gap 2: envelope com content vazio ---
 
     def test_parse_response_json_envelope_empty_content_handoff(self):
-        """Handoff envelope com content vazio é rejeitado — não cria route/handoff."""
+        """Handoff envelope com content vazio segue como texto no modo MCP-first."""
         app = self._make_app()
         proto = _make_protocol(app)
         response, route_target, handoff, extend, needs_input, ack_id = (
@@ -6293,10 +5895,10 @@ class AppProtocolDirectTests(unittest.TestCase):
         )
         self.assertIsNone(route_target)
         self.assertIsNone(handoff)
-        self.assertIsNone(response)
+        self.assertEqual(response, '{"type": "handoff", "content": "", "route": "codex"}')
 
     def test_parse_response_json_envelope_whitespace_content_handoff(self):
-        """Handoff envelope com content só whitespace é rejeitado."""
+        """Handoff envelope com whitespace segue como texto no modo MCP-first."""
         app = self._make_app()
         proto = _make_protocol(app)
         response, route_target, handoff, extend, needs_input, ack_id = (
@@ -6304,7 +5906,7 @@ class AppProtocolDirectTests(unittest.TestCase):
         )
         self.assertIsNone(route_target)
         self.assertIsNone(handoff)
-        self.assertIsNone(response)
+        self.assertEqual(response, '{"type": "handoff", "content": "   ", "route": "codex"}')
 
     # --- ProtocolEnvelope com handoffs ---
 
@@ -6364,28 +5966,29 @@ class AppProtocolDirectTests(unittest.TestCase):
         self.assertIn("missing 'route'", msg)
 
     def test_parse_response_handoffs_array_single_item_has_no_pending(self):
-        """handoffs com 1 item não cria _pending_handoffs."""
+        """handoffs com 1 item não roteia no modo MCP-first."""
         app = self._make_app()
         proto = _make_protocol(app)
         response, target, handoff, _, _, _ = proto.parse_response(
             '{"type": "handoff", "handoffs": [{"route": "codex", "content": "task: single target"}]}'
         )
-        self.assertIsNone(response)
-        self.assertEqual(target, "codex")
-        self.assertNotIn("_pending_handoffs", handoff)
+        self.assertIn('"type": "handoff"', response)
+        self.assertIsNone(target)
+        self.assertIsNone(handoff)
 
     def test_parse_response_handoffs_rejected_empty_content(self):
-        """handoffs + content vazio — rejeitado."""
+        """handoffs + content vazio continua sem rotear (texto puro)."""
         app = self._make_app()
         proto = _make_protocol(app)
         response, target, handoff, _, _, _ = proto.parse_response(
             '{"type": "handoff", "handoffs": [{"route": "codex", "content": ""}]}'
         )
+        self.assertIn('"type": "handoff"', response)
         self.assertIsNone(target)
         self.assertIsNone(handoff)
 
     def test_parse_response_rejects_legacy_routes_field(self):
-        """type=handoff com routes legado é rejeitado."""
+        """type=handoff com routes legado não roteia e segue como texto."""
         app = self._make_app()
         proto = _make_protocol(app)
         response, target, handoff, _, _, _ = proto.parse_response(
@@ -6393,15 +5996,19 @@ class AppProtocolDirectTests(unittest.TestCase):
         )
         self.assertIsNone(target)
         self.assertIsNone(handoff)
-        self.assertIsNone(response)
+        self.assertEqual(
+            response,
+            '{"type": "handoff", "routes": ["codex"], "content": "task: something"}',
+        )
 
     def test_parse_response_rejected_missing_route_and_handoffs_value(self):
-        """type=handoff sem route e sem handoffs — rejeitado."""
+        """type=handoff sem route/handoffs não roteia e segue como texto."""
         app = self._make_app()
         proto = _make_protocol(app)
         response, target, handoff, _, _, _ = proto.parse_response(
             '{"type": "handoff", "content": "task: something"}'
         )
+        self.assertEqual(response, '{"type": "handoff", "content": "task: something"}')
         self.assertIsNone(target)
         self.assertIsNone(handoff)
 

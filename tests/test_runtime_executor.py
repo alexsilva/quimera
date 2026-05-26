@@ -468,6 +468,8 @@ def test_executor_call_agent_dispatches_with_handoff_mode(tmp_path):
         silent=True,
         show_output=False,
         persist_history=True,
+        history_snapshot=[],
+        max_retries=1,
     )
 
 
@@ -516,7 +518,7 @@ def test_executor_call_agent_bypasses_policy_and_approval(tmp_path):
         result = executor.execute(
             ToolCall(
                 name="call_agent",
-                arguments={"agent_name": "codex", "task": "x", "context": {"invalid": True}},
+                arguments={"agent_name": "codex", "task": "x", "context": "ctx"},
             )
         )
 
@@ -524,3 +526,138 @@ def test_executor_call_agent_bypasses_policy_and_approval(tmp_path):
     assert result.content == "ok"
     executor.approval_handler.approve.assert_not_called()
     dispatch.assert_called_once()
+
+
+def test_executor_call_agent_rejects_non_string_context(tmp_path):
+    """call_agent valida `context` localmente mesmo com bypass de policy."""
+    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
+    dispatch = MagicMock(return_value="ok")
+    executor.set_call_agent_fn(dispatch)
+
+    with patch.object(executor.policy, "validate", side_effect=AssertionError("policy should not run")):
+        result = executor.execute(
+            ToolCall(
+                name="call_agent",
+                arguments={"agent_name": "codex", "task": "x", "context": {"invalid": True}},
+            )
+        )
+
+    assert result.ok is False
+    assert "context" in (result.error or "").lower()
+    executor.approval_handler.approve.assert_not_called()
+    dispatch.assert_not_called()
+
+
+def test_executor_call_agent_uses_fallback_agents_sequentially(tmp_path):
+    """call_agent tenta fallback em sequência quando alvo principal falha."""
+    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
+
+    def dispatch(agent_name, **_kwargs):
+        if agent_name == "codex":
+            return None
+        if agent_name == "claude":
+            return "ok from claude"
+        return None
+
+    spy = MagicMock(side_effect=dispatch)
+    executor.set_call_agent_fn(spy)
+
+    result = executor.execute(
+        ToolCall(
+            name="call_agent",
+            arguments={
+                "agent_name": "codex",
+                "task": "x",
+                "fallback_agents": ["claude", "opencode-qwen3-6-plus-free"],
+            },
+        )
+    )
+
+    assert result.ok is True
+    assert result.content == "ok from claude"
+    assert [c.args[0] for c in spy.call_args_list] == ["codex", "claude"]
+
+
+def test_executor_call_agent_supports_multiple_sequential_handoffs(tmp_path):
+    """call_agent suporta handoffs múltiplos em sequência no mesmo payload."""
+    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
+
+    def dispatch(agent_name, **kwargs):
+        handoff = kwargs.get("handoff") or {}
+        return f"{agent_name}:{handoff.get('task')}"
+
+    spy = MagicMock(side_effect=dispatch)
+    executor.set_call_agent_fn(spy)
+
+    result = executor.execute(
+        ToolCall(
+            name="call_agent",
+            arguments={
+                "agent_name": "codex",
+                "task": "task-1",
+                "handoffs": [
+                    {"agent_name": "claude", "task": "task-2"},
+                    {"agent_name": "opencode-qwen3-6-plus-free", "task": "task-3"},
+                ],
+            },
+        )
+    )
+
+    assert result.ok is True
+    assert "[codex] codex:task-1" in (result.content or "")
+    assert "[claude] claude:task-2" in (result.content or "")
+    assert "[opencode-qwen3-6-plus-free] opencode-qwen3-6-plus-free:task-3" in (result.content or "")
+    assert [c.args[0] for c in spy.call_args_list] == [
+        "codex",
+        "claude",
+        "opencode-qwen3-6-plus-free",
+    ]
+
+
+def test_executor_call_agent_rejects_agents_outside_active_pool(tmp_path):
+    """call_agent deve rejeitar alvos que não estão no pool ativo da sessão."""
+    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
+    dispatch = MagicMock(return_value="ok")
+    executor.set_call_agent_fn(dispatch)
+    executor.set_active_agents_provider(lambda: ["codex", "claude"])
+
+    result = executor.execute(
+        ToolCall(
+            name="call_agent",
+            arguments={
+                "agent_name": "opencode-big-pickle",
+                "task": "x",
+                "fallback_agents": ["claude"],
+            },
+        )
+    )
+
+    assert result.ok is False
+    assert "not active in current pool" in (result.error or "")
+    dispatch.assert_not_called()
+
+
+def test_executor_call_agent_truncates_long_context_and_task(tmp_path):
+    """call_agent deve limitar tamanho de task/context para reduzir payload."""
+    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
+    dispatch = MagicMock(return_value="ok")
+    executor.set_call_agent_fn(dispatch)
+
+    long_task = "t" * 3000
+    long_context = "c" * 8000
+    result = executor.execute(
+        ToolCall(
+            name="call_agent",
+            arguments={
+                "agent_name": "codex",
+                "task": long_task,
+                "context": long_context,
+            },
+        )
+    )
+
+    assert result.ok is True
+    kwargs = dispatch.call_args.kwargs
+    handoff = kwargs["handoff"]
+    assert len(handoff["task"]) == 1200
+    assert len(handoff["context"]) == 4000
