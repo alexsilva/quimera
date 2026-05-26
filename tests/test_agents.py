@@ -1,3 +1,4 @@
+import json
 import queue
 import threading
 from pathlib import Path
@@ -20,7 +21,7 @@ from quimera.plugins import get as get_plugin
 from quimera.plugins.base import CliConnection
 from quimera.plugins.claude import _format_claude_spy_event
 from quimera.plugins.codex import _format_codex_spy_event
-from quimera.plugins.opencode import _format_opencode_spy_event
+from quimera.plugins.opencode import OpenCodePlugin, _format_opencode_spy_event
 from quimera.plugins.spy_utils import format_command_output_preview
 from quimera.spy_output_presenter import SpyOutputPresenter
 from quimera.evidence import EvidenceStore
@@ -100,7 +101,9 @@ def test_codex_plugin_applies_resume_to_cli_override():
     plugin = get_plugin("codex")
     assert plugin is not None
     original_override = plugin._connection_override
+    original_mcp_socket = plugin._mcp_socket_path
     try:
+        plugin.set_mcp_socket_path(None)
         plugin._connection_override = CliConnection(
             cmd=["codex", "exec", "--json"],
             prompt_as_arg=False,
@@ -109,6 +112,86 @@ def test_codex_plugin_applies_resume_to_cli_override():
         assert plugin.effective_cmd() == ["codex", "exec", "resume", "--last", "--json", "-"]
     finally:
         plugin._connection_override = original_override
+        plugin.set_mcp_socket_path(original_mcp_socket)
+
+
+def test_codex_plugin_injects_mcp_server_before_stdin_sentinel():
+    plugin = get_plugin("codex")
+    assert plugin is not None
+    original_mcp_socket = plugin._mcp_socket_path
+    try:
+        plugin.set_mcp_socket_path("/tmp/quimera.sock")
+        expected_args = json.dumps(
+            ["-m", "quimera.runtime.mcp_server", "--connect-socket", "/tmp/quimera.sock"],
+            ensure_ascii=False,
+        )
+        assert plugin.effective_cmd() == [
+            "codex",
+            "exec",
+            "resume",
+            "--last",
+            "--dangerously-bypass-approvals-and-sandbox",
+            "--skip-git-repo-check",
+            "--json",
+            "-c",
+            'mcp_servers.quimera.command="python"',
+            "-c",
+            f"mcp_servers.quimera.args={expected_args}",
+            "-",
+        ]
+    finally:
+        plugin.set_mcp_socket_path(original_mcp_socket)
+
+
+def test_codex_plugin_does_not_duplicate_existing_mcp_override():
+    plugin = get_plugin("codex")
+    assert plugin is not None
+    original_override = plugin._connection_override
+    original_mcp_socket = plugin._mcp_socket_path
+    try:
+        plugin.set_mcp_socket_path("/tmp/quimera.sock")
+        plugin._connection_override = CliConnection(
+            cmd=[
+                "codex",
+                "exec",
+                "--json",
+                "-c",
+                'mcp_servers.quimera.command="python"',
+            ],
+            prompt_as_arg=True,
+            output_format="codex-json",
+        )
+        assert plugin.effective_cmd() == [
+            "codex",
+            "exec",
+            "resume",
+            "--last",
+            "--json",
+            "-c",
+            'mcp_servers.quimera.command="python"',
+        ]
+    finally:
+        plugin._connection_override = original_override
+        plugin.set_mcp_socket_path(original_mcp_socket)
+
+
+def test_claude_plugin_injects_mcp_server():
+    plugin = get_plugin("claude")
+    assert plugin is not None
+    original_mcp_socket = plugin._mcp_socket_path
+    try:
+        plugin.set_mcp_socket_path("/tmp/quimera.sock")
+        assert plugin.effective_cmd() == [
+            "claude",
+            "--permission-mode=bypassPermissions",
+            "--output-format=stream-json",
+            "--verbose",
+            "-p",
+            "--mcp-server",
+            "name=quimera,type=unix,path=/tmp/quimera.sock",
+        ]
+    finally:
+        plugin.set_mcp_socket_path(original_mcp_socket)
 
 
 def test_agent_client_run_success(renderer):
@@ -1195,6 +1278,54 @@ def test_opencode_plugin_exposes_spy_stdout_formatter_and_json_output():
     assert plugin.spy_stdout_formatter is _format_opencode_spy_event
     assert plugin.output_format == "opencode-json"
     assert "--format=json" in plugin.cmd
+
+
+def test_opencode_plugin_injects_mcp_via_env_var():
+    plugin = get_plugin("opencode")
+    assert isinstance(plugin, OpenCodePlugin)
+    original_mcp_socket = plugin._mcp_socket_path
+    try:
+        plugin.set_mcp_socket_path("/tmp/quimera.sock")
+        env = plugin.env_for_cli()
+        config_raw = env.get("OPENCODE_CONFIG_CONTENT")
+        assert config_raw is not None
+        config = json.loads(config_raw)
+        assert config["mcp"]["quimera"]["type"] == "local"
+        assert config["mcp"]["quimera"]["command"] == [
+            "python", "-m", "quimera.runtime.mcp_server",
+            "--connect-socket", "/tmp/quimera.sock",
+        ]
+        assert config["mcp"]["quimera"]["enabled"] is True
+    finally:
+        plugin.set_mcp_socket_path(original_mcp_socket)
+
+
+def test_opencode_plugin_omits_mcp_env_when_no_socket():
+    plugin = get_plugin("opencode")
+    original_mcp_socket = plugin._mcp_socket_path
+    try:
+        plugin.set_mcp_socket_path(None)
+        assert plugin.env_for_cli() == {}
+    finally:
+        plugin.set_mcp_socket_path(original_mcp_socket)
+
+
+def test_opencode_plugin_env_for_cli_independent_of_connection_override():
+    """env_for_cli() é chamada pelo AgentClient independente de _connection_override."""
+    plugin = get_plugin("opencode")
+    original_mcp_socket = plugin._mcp_socket_path
+    original_override = plugin._connection_override
+    try:
+        plugin.set_mcp_socket_path("/tmp/quimera.sock")
+        plugin._connection_override = CliConnection(
+            cmd=["opencode", "run"],
+            prompt_as_arg=True,
+        )
+        env = plugin.env_for_cli()
+        assert "OPENCODE_CONFIG_CONTENT" in env
+    finally:
+        plugin._connection_override = original_override
+        plugin.set_mcp_socket_path(original_mcp_socket)
 
 
 def test_format_claude_spy_event_summarizes_assistant_and_result():

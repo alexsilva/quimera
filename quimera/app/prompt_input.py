@@ -10,6 +10,7 @@ import atexit
 import html
 import re
 import shutil
+import sys
 import threading
 from pathlib import Path
 
@@ -256,11 +257,13 @@ class InputGate:
 
     def __call__(self, prompt: str) -> str:
         """Lê input do usuário.
- 
+  
         Flusha o renderer antes de exibir o prompt, eliminando a necessidade
         de patch_stdout(). Usa session.prompt() diretamente com toolbar,
         placeholder e completer — tudo nativo do PromptSession, funcionando.
         Se a sessão não estiver disponível, faz fallback para input() padrão.
+        Se o prompt_toolkit já estiver rodando (ex: em outra thread), captura
+        o AssertionError e cai no input() padrão.
         """
         self._set_active_state(True)
         try:
@@ -354,3 +357,49 @@ class InputGate:
         except Exception:
             return False
         return True
+
+    def read_input_in_terminal(self, prompt: str, timeout: float = 300.0) -> str | None:
+        """Lê uma linha via run_in_terminal — seguro de chamar de qualquer thread.
+
+        Suspende o prompt_toolkit ativo, restaura o terminal para cooked mode,
+        exibe o prompt e lê a resposta do usuário. Seguro de chamar de threads
+        de background (ex: servidor MCP) enquanto a main thread está no prompt.
+
+        Returns:
+            String com a resposta do usuário, ou None se timeout/erro.
+        """
+        session = self._session
+        if session is None:
+            return None
+        app = getattr(session, "app", None)
+        if app is None or not getattr(app, "_is_running", False):
+            return None
+        loop = getattr(app, "loop", None)
+        if loop is None or loop.is_closed():
+            return None
+
+        result: list[str | None] = [None]
+        done = threading.Event()
+
+        def _read_sync() -> None:
+            self._flush_renderer()
+            sys.stdout.write(prompt)
+            sys.stdout.flush()
+            try:
+                line = sys.stdin.readline()
+                result[0] = line.rstrip("\n\r")
+            except EOFError:
+                result[0] = ""
+            finally:
+                done.set()
+
+        async def _coro() -> None:
+            await run_in_terminal(_read_sync, in_executor=True)
+
+        try:
+            asyncio.run_coroutine_threadsafe(_coro(), loop)
+        except Exception:
+            return None
+
+        done.wait(timeout=timeout)
+        return result[0]

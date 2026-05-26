@@ -1650,6 +1650,8 @@ class ProtocolTests(unittest.TestCase):
             self.assertEqual(session_state.get("summary_loaded"), "sim")
             self.assertIn("current_job_id", session_state)
             self.assertRegex(session_state.get("os_info", ""), r"^\S.+\S$")
+            self.assertIs(session_state.get("mcp_enabled"), False)
+            self.assertEqual(session_state.get("mcp_socket_path"), "")
         finally:
             app._stop_task_executors()
         self.assertIsInstance(session_state["current_job_id"], int)

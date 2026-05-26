@@ -554,7 +554,11 @@ class AgentClient:
             )
         self._spy_output_presenter.set_turn_runtime("cli")
         cmd, prompt_as_arg, output_format = self._resolve_plugin_cli_attrs(plugin, connection)
-        extra_env = connection.env if isinstance(connection, CliConnection) else None
+        extra_env = dict(connection.env or {}) if isinstance(connection, CliConnection) else {}
+        env_hook = getattr(plugin, "env_for_cli", None)
+        if callable(env_hook):
+            extra_env.update(env_hook())
+        extra_env = extra_env or None
         cwd = connection.cwd if isinstance(connection, CliConnection) else None
         run_kwargs = {"silent": silent, "agent": agent, "show_status": show_status}
         if extra_env is not None:
@@ -646,6 +650,11 @@ class AgentClient:
                     get_approval_scope = getattr(effective_tool_executor, "get_thread_approval_scope", None)
                     if callable(get_approval_scope):
                         approval_scope = get_approval_scope()
+                if effective_tool_executor is not None:
+                    set_tool_preview = getattr(effective_tool_executor, "set_tool_preview_callback", None)
+                    if callable(set_tool_preview):
+                        set_tool_preview(lambda name, args: _logger.info(
+                            "Tool call: %s :: %s", name, ApproveSummary.build(name, args)))
                 # Injeta callbacks de spinner no executor para que o approval handler
                 # possa pausar o Live do Rich antes de input() bloqueante, evitando
                 # race condition entre o refresh do spinner e a leitura do stdin.

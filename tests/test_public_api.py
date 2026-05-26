@@ -1,4 +1,7 @@
+import logging
+
 import quimera.app as app_module
+import quimera.app.config as app_config
 from quimera.app.config import logger
 from quimera.app.core import QuimeraApp
 from quimera.app.handlers import PromptAwareStderrHandler
@@ -16,3 +19,11 @@ def test_quimera_app_public_api_surface_is_stable():
     assert hasattr(app_module, "QuimeraApp")
     assert hasattr(app_module, "logger")
     assert hasattr(app_module, "PromptAwareStderrHandler")
+
+
+def test_runtime_mcp_logger_uses_app_handler():
+    mcp_logger = logging.getLogger("quimera.runtime.mcp_server")
+
+    assert app_config.handler in mcp_logger.handlers
+    assert mcp_logger.propagate is False
+    assert mcp_logger.level == app_config.numeric_level

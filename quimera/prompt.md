@@ -30,6 +30,11 @@ Agentes de IA nesta conversa: {agents}
 - Mensagens de outros agentes fazem parte deste chat, salvo conflito com {user_name} ou com o objetivo ativo.
   Se {user_name} retomar o que outro agente acabou de dizer, trate como continuação direta do mesmo chat.
 - Use [NEEDS_INPUT] para perguntar ao {user_name} quando necessário.
+<!-- IF:mcp_enabled -->
+- MCP da sessão está ativo ({mcp_socket_path}).
+- Não inicie servidor MCP externo/manualmente.
+- Use o servidor MCP `quimera` já injetado pelo runtime.
+<!-- ENDIF:mcp_enabled -->
 
 <!-- IF:handoff_only -->
 - Você recebeu uma subtarefa delegada por outro agente. Continue do ponto já avançado e responda diretamente à tarefa.

@@ -14,6 +14,7 @@ class AppCallbacks:
     show_warning: "Callable[[str], None]"
     show_system: "Callable[[str], None]"
     is_reading: "Callable[[], bool | str | None]"
+    show_muted: "Callable[[str], None] | None" = None
 
 
 class PromptAwareStderrHandler(logging.StreamHandler):
@@ -46,6 +47,7 @@ class PromptAwareStderrHandler(logging.StreamHandler):
             show_error=getattr(app, "show_error_message", _noop),
             show_warning=getattr(app, "show_warning_message", _noop),
             show_system=getattr(app, "show_system_message", _noop),
+            show_muted=getattr(app, "show_muted_message", _noop),
             is_reading=lambda: _is_prompt_active_from_app(app),
         )
 
@@ -57,6 +59,7 @@ class PromptAwareStderrHandler(logging.StreamHandler):
             show_error: "Callable[[str], None]",
             show_warning: "Callable[[str], None]",
             show_system: "Callable[[str], None]",
+            show_muted: "Callable[[str], None] | None" = None,
             is_reading: "Callable[[], bool | str | None]"
     ) -> None:
         """Executa bind de callbacks."""
@@ -66,6 +69,7 @@ class PromptAwareStderrHandler(logging.StreamHandler):
             show_error=show_error,
             show_warning=show_warning,
             show_system=show_system,
+            show_muted=show_muted,
             is_reading=is_reading
         )
 
@@ -96,6 +100,11 @@ class PromptAwareStderrHandler(logging.StreamHandler):
         if _is_operational_noise:
             super().emit(record)
             return
+
+        if record.name == "quimera.runtime.mcp_server":
+            if callable(callbacks.show_muted):
+                callbacks.show_muted(message)
+                return
 
         if callable(callbacks.show_system):
             callbacks.show_system(message)

@@ -126,9 +126,11 @@ class ConsoleApprovalHandler(ApprovalHandler):
         de um prompt de aprovação, esta chamada retorna False imediatamente
         sem bloquear o executor, evitando prompts de aprovação concorrentes.
 
-        Quando input_gate está disponível, delega a ele — o InputGate já coordena
-        com o renderer via RichPromptSession, dispensando suspend/resume.
-        Caso contrário, usa o caminho legado com input_fn/suspend/resume.
+        Quando input_gate está disponível E a chamada vem da thread principal,
+        delega a ele — o InputGate coordena com o renderer via RichPromptSession,
+        dispensando suspend/resume.
+        Em threads de background (ex: servidor MCP), usa o caminho básico com
+        input() e suspend/resume do renderer para evitar conflito com prompt_toolkit.
         """
         # Lock bloqueante: se outra thread já está num prompt, aguarda.
         self._interactive_lock.acquire(blocking=True)
@@ -137,7 +139,18 @@ class ConsoleApprovalHandler(ApprovalHandler):
             if self._cancel_event and self._cancel_event.is_set():
                 return False
             self._show(f"\n[aprovação] {tool_name} :: {summary}")
-            if self._input_gate is not None:
+
+            is_main = threading.current_thread() is threading.main_thread()
+            # input_gate usa prompt_toolkit: seguro na thread principal.
+            use_input_gate = self._input_gate is not None and is_main
+            # Threads de background com pt ativo: delegar ao pt via run_in_terminal.
+            use_input_gate_xthread = (
+                not is_main
+                and self._input_gate is not None
+                and self._input_gate.is_active()
+            )
+
+            if use_input_gate:
                 if self._cancel_event and self._cancel_event.is_set():
                     return False
                 thread_id = threading.get_ident()
@@ -160,10 +173,28 @@ class ConsoleApprovalHandler(ApprovalHandler):
                     resume_fn = self._resume_spinner_fn.get(thread_id)
                     if resume_fn:
                         resume_fn()
+            elif use_input_gate_xthread:
+                # Background thread + prompt_toolkit ativo: usa run_in_terminal
+                # para suspender o app, restaurar o terminal e ler do usuário sem
+                # conflitar com o raw mode do pt nem duplicar a saída.
+                raw = self._input_gate.read_input_in_terminal(
+                    "  Executar? [y/N/a=todas]: "
+                )
+                if raw is None:
+                    self._show(
+                        "  [aprovação] sem resposta — negando automaticamente"
+                    )
+                    return False
+                answer = raw.strip().lower()
             else:
+                renderer = self._renderer
+                _suspend_output = getattr(renderer, "suspend_output", None)
+                _resume_output = getattr(renderer, "resume_output", None)
                 input_fn = self._input_fn if self._input_fn is not None else input
                 if self._suspend_fn:
                     self._suspend_fn()
+                if callable(_suspend_output):
+                    _suspend_output()
                 thread_id = threading.get_ident()
                 suspend_fn = self._suspend_spinner_fn.get(thread_id)
                 if suspend_fn:
@@ -189,6 +220,8 @@ class ConsoleApprovalHandler(ApprovalHandler):
                     resume_fn = self._resume_spinner_fn.get(thread_id)
                     if resume_fn:
                         resume_fn()
+                    if callable(_resume_output):
+                        _resume_output()
                     if self._resume_fn:
                         self._resume_fn()
             if answer in {"a", "all", "todas"}:

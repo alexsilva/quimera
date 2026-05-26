@@ -155,6 +155,52 @@ def test_prompt_omits_render_debug_block_when_inactive():
     assert '<debug_state title="Debug de render ativo">' not in prompt
 
 
+def test_prompt_includes_mcp_runtime_instruction_when_enabled():
+    session_state = {
+        "session_id": "test-session",
+        "current_job_id": 123,
+        "workspace_root": "/tmp/test",
+        "current_dir": ".",
+        "mcp_enabled": True,
+        "mcp_socket_path": "/tmp/quimera.sock",
+    }
+
+    builder = PromptBuilder(
+        context_manager=_make_context_manager(""),
+        session_state=session_state,
+        user_name="ALEX",
+    )
+
+    prompt = builder.build(agent="codex", history=[{"role": "human", "content": "teste MCP"}])
+    rules_block = _extract_block(prompt, "rules")
+
+    assert "MCP da sessão está ativo (/tmp/quimera.sock)." in rules_block
+    assert "Não inicie servidor MCP externo/manualmente." in rules_block
+    assert "Use o servidor MCP `quimera` já injetado pelo runtime" in rules_block
+
+
+def test_prompt_omits_mcp_runtime_instruction_when_disabled():
+    session_state = {
+        "session_id": "test-session",
+        "current_job_id": 123,
+        "workspace_root": "/tmp/test",
+        "current_dir": ".",
+        "mcp_enabled": False,
+    }
+
+    builder = PromptBuilder(
+        context_manager=_make_context_manager(""),
+        session_state=session_state,
+        user_name="ALEX",
+    )
+
+    prompt = builder.build(agent="codex", history=[{"role": "human", "content": "teste MCP"}])
+    rules_block = _extract_block(prompt, "rules")
+
+    assert "MCP da sessão está ativo" not in rules_block
+    assert "Não inicie servidor MCP externo/manualmente." not in rules_block
+
+
 def test_prompt_template_loads_file_lazily(tmp_path):
     template_path = tmp_path / "prompt.md"
     template = PromptTemplate(template_path)

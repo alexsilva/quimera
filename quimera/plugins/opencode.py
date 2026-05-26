@@ -1,9 +1,10 @@
 """Componentes de `quimera.plugins.opencode`."""
 import json
 from pathlib import Path
+from typing import Optional
 
 from quimera.agent_events import SpyEvent
-from quimera.plugins.base import AgentPlugin, register
+from quimera.plugins.base import AgentPlugin, CliConnection, Connection, register
 from quimera.plugins.spy_utils import format_agent_message_lines
 
 
@@ -56,8 +57,43 @@ _BUN_STDERR_NOISE_PATTERNS = (
     r"^\s*at /?bunfs/",       # frame direto sem função: "  at /$bunfs/..."
 )
 
-# Plugin base genérico: cmd sem modelo fixo — usado como template para --base.
-register(AgentPlugin(
+class OpenCodePlugin(AgentPlugin):
+    """Plugin do OpenCode com suporte a MCP via OPENCODE_CONFIG_CONTENT."""
+
+    def mcp_server_args(self, socket_path: str) -> list[str]:
+        """OpenCode não aceita MCP via CLI args."""
+        return []
+
+    def _mcp_config_content(self, socket_path: str) -> Optional[str]:
+        """Gera JSON de config para ativar MCP do Quimera."""
+        if not (socket_path or "").strip():
+            return None
+        config = {
+            "mcp": {
+                "quimera": {
+                    "type": "local",
+                    "command": [
+                        "python", "-m", "quimera.runtime.mcp_server",
+                        "--connect-socket", socket_path,
+                    ],
+                    "enabled": True,
+                }
+            }
+        }
+        return json.dumps(config)
+
+    def env_for_cli(self) -> dict:
+        """Injeta OPENCODE_CONFIG_CONTENT quando o MCP local está ativo."""
+        socket_path = (self._mcp_socket_path or "").strip()
+        if not socket_path:
+            return {}
+        config_content = self._mcp_config_content(socket_path)
+        if not config_content:
+            return {}
+        return {"OPENCODE_CONFIG_CONTENT": config_content}
+
+
+register(OpenCodePlugin(
     name="opencode",
     prefix="/opencode",
     icon="⚙️",

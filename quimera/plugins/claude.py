@@ -146,6 +146,10 @@ def _format_claude_spy_event(line: str) -> list[SpyEvent]:
 
 
 class ClaudePlugin(AgentPlugin):
+    def mcp_server_args(self, socket_path: str) -> list[str]:
+        """Retorna flags para conectar o Claude ao MCP local do Quimera."""
+        return ["--mcp-server", f"name=quimera,type=unix,path={socket_path}"]
+
     def resolve_runtime_model(self, *, cwd: str | None = None) -> str | None:
         cli_model = super().resolve_runtime_model(cwd=cwd)
         if cli_model:

@@ -109,6 +109,8 @@ class PromptBuilder:
         render_log_path = ""
         render_ansi_path = ""
         metrics_path = ""
+        mcp_enabled = False
+        mcp_socket_path = ""
         if self.session_state and primary:
             session_id = self.session_state.get("session_id", "desconhecida")
             current_job_id = self.session_state.get("current_job_id", "desconhecido")
@@ -119,6 +121,8 @@ class PromptBuilder:
             render_log_path = self.session_state.get("render_log_path", "")
             render_ansi_path = self.session_state.get("render_ansi_path", "")
             metrics_path = self.session_state.get("metrics_path", "")
+            mcp_enabled = bool(self.session_state.get("mcp_enabled", False))
+            mcp_socket_path = self.session_state.get("mcp_socket_path", "")
 
         handoff_fields = self.handoff_presenter.present(handoff, from_agent)
         if is_chat_prompt:
@@ -166,6 +170,8 @@ class PromptBuilder:
             render_log_path=render_log_path,
             render_ansi_path=render_ansi_path,
             metrics_path=metrics_path,
+            mcp_enabled=mcp_enabled,
+            mcp_socket_path=mcp_socket_path,
             context=context,
             request=request,
             shared_state_json=shared_state_json,

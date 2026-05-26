@@ -23,7 +23,8 @@ class TestConsoleApprovalHandlerSerialLock:
             gate_lock.wait(5)  # trava até a main thread liberar
             return "n"
 
-        handler = ConsoleApprovalHandler(input_gate=slow_gate)
+        # Background threads use input_fn path (not input_gate/prompt_toolkit).
+        handler = ConsoleApprovalHandler(input_fn=slow_gate)
 
         results = []
         errors = []
@@ -115,8 +116,9 @@ class TestConsoleApprovalHandlerInputGateCancelDuringPrompt:
             can_continue.wait(5)
             return "n"
 
+        # Background threads use input_fn path (not input_gate/prompt_toolkit).
         handler = ConsoleApprovalHandler(
-            input_gate=gate_with_block,
+            input_fn=gate_with_block,
             cancel_event=cancel_event,
         )
 
@@ -176,7 +178,8 @@ class TestConsoleApprovalHandlerParallelApproval:
             proceed.wait(5)
             return "n"
 
-        handler = ConsoleApprovalHandler(input_gate=blocking_gate)
+        # Background threads use input_fn path (not input_gate/prompt_toolkit).
+        handler = ConsoleApprovalHandler(input_fn=blocking_gate)
         results = []
         threads = []
 

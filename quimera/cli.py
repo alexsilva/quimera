@@ -31,6 +31,7 @@ from .plugins.base import (
 from . import themes as _themes
 from .app import QuimeraApp
 from .app.prompt_input import InputGate
+from .runtime.mcp_server import MCPServer
 from .config import ConfigManager
 from .runtime.drivers.repl import DriverRepl
 from .workspace import Workspace
@@ -100,6 +101,14 @@ def _configure_connection_interactively(plugin, driver_hint: str | None = None):
         return configurator.configure(plugin, driver_hint=driver_hint)
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
+
+
+def _configure_mcp_socket_for_plugins(socket_path: str | None) -> None:
+    """Propaga o socket MCP atual para plugins que suportam injeção de args."""
+    for plugin in _plugins.all_plugins():
+        setter = getattr(plugin, "set_mcp_socket_path", None)
+        if callable(setter):
+            setter(socket_path)
 
 
 def _parse_extra_body_arg(raw: str | None) -> dict | None:
@@ -237,6 +246,16 @@ def main():
                         help="JSON com parâmetros extras para o corpo da requisição (ex: '{\"thinking\":{\"type\":\"disabled\"}}')")
     parser.add_argument("--list-connections", dest="list_connections", action="store_true",
                         help="Lista conexões persistidas")
+    parser.add_argument(
+        "--mcp",
+        dest="mcp_socket",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="SOCKET",
+        help="Inicia servidor MCP em background sobre socket Unix. "
+             "Usa <workspace.tmp>/mcp.sock se SOCKET não for informado.",
+    )
 
     args, unknown = parser.parse_known_args()
 
@@ -349,6 +368,7 @@ def main():
                      workspace=workspace,
                      visibility=visibility,
                      theme=args.theme)
+    _configure_mcp_socket_for_plugins(None)
 
     if args.interactive_test:
         if TerminalRenderer is None or AgentClient is None:
@@ -378,5 +398,18 @@ def main():
         renderer.show_plain("\n--- RESULTADO LIMPO ---\n")
         renderer.show_plain(result)
         return
+
+    if args.mcp_socket is not None:
+        socket_path = args.mcp_socket or str(workspace.tmp.root / "mcp.sock")
+        mcp = MCPServer(app.tool_executor)
+        mcp.start_background(socket_path)
+        _configure_mcp_socket_for_plugins(socket_path)
+        app.mcp_socket_path = socket_path
+
+        prompt_builder = getattr(app, "prompt_builder", None)
+        prompt_session_state = getattr(prompt_builder, "session_state", None)
+        if isinstance(prompt_session_state, dict):
+            prompt_session_state["mcp_enabled"] = True
+            prompt_session_state["mcp_socket_path"] = socket_path
 
     app.run()

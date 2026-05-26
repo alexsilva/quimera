@@ -17,6 +17,7 @@ class _FakeWorkspace:
     def __init__(self, cwd):
         self.cwd = cwd
         self.config_file = Path("/tmp/quimera-test-config.json")
+        self.tmp = SimpleNamespace(root=Path("/tmp/quimera-test-tmp"))
 
 
 class _FakeConfig:
@@ -45,6 +46,8 @@ class _FakeApp:
         self.cwd = cwd
         self.kwargs = kwargs
         self.ran = False
+        self.tool_executor = object()
+        self.workspace = kwargs.get("workspace")
         _FakeApp.last_instance = self
 
     def run(self):
@@ -585,3 +588,55 @@ def test_main_ignores_stdin_reconfigure_errors_and_still_runs(monkeypatch):
 
     assert _FakeApp.last_instance is not None
     assert _FakeApp.last_instance.ran is True
+
+
+def test_main_mcp_uses_workspace_tmp_and_configures_plugins(monkeypatch):
+    _patch_main_basics(monkeypatch)
+    monkeypatch.setattr(sys, "argv", ["quimera", "--mcp"])
+    monkeypatch.setattr(cli.sys, "stderr", io.StringIO())
+
+    with (
+        patch("quimera.cli.MCPServer") as mock_mcp_cls,
+        patch("quimera.cli._configure_mcp_socket_for_plugins") as mock_cfg,
+    ):
+        mock_mcp = mock_mcp_cls.return_value
+        cli.main()
+
+    mock_mcp.start_background.assert_called_once_with("/tmp/quimera-test-tmp/mcp.sock")
+    assert mock_cfg.call_args_list[0].args == (None,)
+    assert mock_cfg.call_args_list[1].args == ("/tmp/quimera-test-tmp/mcp.sock",)
+
+
+def test_main_mcp_uses_explicit_socket_path(monkeypatch):
+    _patch_main_basics(monkeypatch)
+    monkeypatch.setattr(sys, "argv", ["quimera", "--mcp", "/tmp/custom-mcp.sock"])
+    monkeypatch.setattr(cli.sys, "stderr", io.StringIO())
+
+    with patch("quimera.cli.MCPServer") as mock_mcp_cls:
+        mock_mcp = mock_mcp_cls.return_value
+        cli.main()
+
+    mock_mcp.start_background.assert_called_once_with("/tmp/custom-mcp.sock")
+
+
+def test_main_mcp_updates_prompt_builder_session_state(monkeypatch):
+    class _FakeAppWithPromptBuilder(_FakeApp):
+        def __init__(self, cwd, **kwargs):
+            super().__init__(cwd, **kwargs)
+            self.prompt_builder = SimpleNamespace(session_state={"session_id": "sessao-teste"})
+
+    monkeypatch.setattr(cli, "Workspace", _FakeWorkspace)
+    monkeypatch.setattr(cli, "ConfigManager", _FakeConfig)
+    monkeypatch.setattr(cli, "QuimeraApp", _FakeAppWithPromptBuilder)
+    monkeypatch.setattr(cli._plugins, "all_names", lambda: ["claude"])
+    monkeypatch.setattr(cli._themes, "names", lambda: ["default"])
+    monkeypatch.setattr(sys, "argv", ["quimera", "--mcp", "/tmp/custom-mcp.sock"])
+    monkeypatch.setattr(cli.sys, "stderr", io.StringIO())
+
+    with patch("quimera.cli.MCPServer"):
+        cli.main()
+
+    app = _FakeAppWithPromptBuilder.last_instance
+    assert app is not None
+    assert app.prompt_builder.session_state["mcp_enabled"] is True
+    assert app.prompt_builder.session_state["mcp_socket_path"] == "/tmp/custom-mcp.sock"

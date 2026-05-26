@@ -179,6 +179,30 @@ def _format_codex_spy_event(line: str) -> list[SpyEvent]:
 class CodexPlugin(AgentPlugin):
     """Plugin do Codex com retomada automática da última sessão por workspace."""
 
+    def mcp_server_args(self, socket_path: str) -> list[str]:
+        """Retorna overrides de config para registrar MCP via stdio no Codex."""
+        proxy_cmd = ["-m", "quimera.runtime.mcp_server", "--connect-socket", socket_path]
+        args_toml = json.dumps(proxy_cmd, ensure_ascii=False)
+        return [
+            "-c",
+            'mcp_servers.quimera.command="python"',
+            "-c",
+            f"mcp_servers.quimera.args={args_toml}",
+        ]
+
+    def _with_mcp_server_args(self, cmd: list[str]) -> list[str]:
+        """Anexa configuração MCP sem duplicar override já existente."""
+        base_cmd = list(cmd)
+        socket_path = (self._mcp_socket_path or "").strip()
+        if not socket_path:
+            return base_cmd
+        if any("mcp_servers.quimera." in str(part) for part in base_cmd):
+            return base_cmd
+        mcp_args = self.mcp_server_args(socket_path)
+        if base_cmd and base_cmd[-1] == "-":
+            return [*base_cmd[:-1], *mcp_args, base_cmd[-1]]
+        return [*base_cmd, *mcp_args]
+
     def effective_cmd(self) -> list[str]:
         """Prefere `codex exec resume --last` sem mover a lógica para fora do plugin."""
         connection = self.effective_connection()
@@ -190,12 +214,12 @@ class CodexPlugin(AgentPlugin):
             prompt_as_arg = self.prompt_as_arg
 
         if cmd[:2] != ["codex", "exec"] or (len(cmd) >= 3 and cmd[2] == "resume"):
-            return cmd
+            return self._with_mcp_server_args(cmd)
 
         resumed = ["codex", "exec", "resume", "--last", *cmd[2:]]
         if not prompt_as_arg:
             resumed.append("-")
-        return resumed
+        return self._with_mcp_server_args(resumed)
 
     def resolve_runtime_model(self, *, cwd: str | None = None) -> str | None:
         cli_model = super().resolve_runtime_model(cwd=cwd)

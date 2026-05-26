@@ -258,6 +258,8 @@ class AgentPlugin:
     _connection_override: Optional[Connection] = field(default=None, repr=False)
     # Base plugin name (usado para herança de formatter/rw_paths em plugins dinâmicos)
     _base_plugin_name: Optional[str] = field(default=None, repr=False)
+    # Socket MCP do servidor local do Quimera (quando habilitado por --mcp).
+    _mcp_socket_path: Optional[str] = field(default=None, repr=False)
 
     @property
     def render_style(self) -> Tuple[str, str]:
@@ -309,8 +311,45 @@ class AgentPlugin:
         """Retorna o comando CLI efetivo."""
         connection = self.effective_connection()
         if isinstance(connection, CliConnection):
-            return list(connection.cmd)
-        return list(self.cmd)
+            return self._with_mcp_server_args(connection.cmd)
+        return self._with_mcp_server_args(self.cmd)
+
+    def set_mcp_socket_path(self, socket_path: Optional[str]) -> None:
+        """Configura socket MCP injetado pelo runtime para esse plugin."""
+        normalized = (socket_path or "").strip()
+        self._mcp_socket_path = normalized or None
+
+    def env_for_cli(self) -> dict:
+        """Retorna variáveis de ambiente extras a injetar no subprocess CLI.
+
+        Chamado pelo AgentClient imediatamente antes de lançar o processo.
+        Subclasses sobrescrevem para comportamento dinâmico de runtime.
+        Não deve modificar os.environ — apenas retornar um dict plano.
+        """
+        return {}
+
+    def mcp_server_args(self, socket_path: str) -> list[str]:
+        """Retorna args CLI para conectar no MCP local (default: sem suporte)."""
+        _ = socket_path
+        return []
+
+    def _with_mcp_server_args(self, cmd: list[str]) -> list[str]:
+        """Anexa argumentos de MCP quando o plugin fornece integração."""
+        base_cmd = list(cmd)
+        socket_path = (self._mcp_socket_path or "").strip()
+        if not socket_path:
+            return base_cmd
+        if any(
+            part == "--mcp-server" or str(part).startswith("--mcp-server=")
+            for part in base_cmd
+        ):
+            return base_cmd
+        mcp_args = self.mcp_server_args(socket_path)
+        if not mcp_args:
+            return base_cmd
+        if base_cmd and base_cmd[-1] == "-":
+            return [*base_cmd[:-1], *mcp_args, base_cmd[-1]]
+        return [*base_cmd, *mcp_args]
 
     def resolve_runtime_model(self, *, cwd: Optional[str] = None) -> Optional[str]:
         """Resolve modelo em runtime para CLIs; plugins podem sobrescrever."""

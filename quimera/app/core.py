@@ -343,6 +343,7 @@ class QuimeraApp:
                     show_error=self.show_error_message,
                     show_warning=self.show_warning_message,
                     show_system=self.show_system_message,
+                    show_muted=self.show_muted_message,
                     is_reading=self.input_gate.is_active
                 )
         is_new_session = not history_restored and not summary_loaded
@@ -369,6 +370,8 @@ class QuimeraApp:
             "render_log_path": str(render_log_path) if debug else "",
             "render_ansi_path": str(render_ansi_path) if debug else "",
             "metrics_path": str(metrics_file) if metrics_file else "",
+            "mcp_enabled": False,
+            "mcp_socket_path": "",
         }
         self.prompt_builder = PromptBuilder(
             self.context_manager,
