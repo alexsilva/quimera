@@ -48,10 +48,14 @@ class _FakeApp:
         self.ran = False
         self.tool_executor = object()
         self.workspace = kwargs.get("workspace")
+        self.mcp_socket_calls: list[str | None] = []
         _FakeApp.last_instance = self
 
     def run(self):
         self.ran = True
+
+    def configure_mcp_socket(self, socket_path: str | None) -> None:
+        self.mcp_socket_calls.append(socket_path)
 
 
 def _patch_main_basics(monkeypatch, *, agent_names=None, theme_names=None):
@@ -598,15 +602,12 @@ def test_main_mcp_uses_workspace_tmp_and_configures_plugins(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["quimera", "--mcp"])
     monkeypatch.setattr(cli.sys, "stderr", io.StringIO())
 
-    with (
-        patch("quimera.cli.MCPServer") as mock_mcp_cls,
-        patch("quimera.cli._configure_mcp_socket_for_plugins") as mock_cfg,
-    ):
+    with patch("quimera.cli.MCPServer") as mock_mcp_cls:
         mock_mcp = mock_mcp_cls.return_value
         cli.main()
 
     mock_mcp.start_background.assert_called_once_with("/tmp/quimera-test-tmp/mcp.sock")
-    mock_cfg.assert_called_once_with("/tmp/quimera-test-tmp/mcp.sock")
+    assert _FakeApp.last_instance.mcp_socket_calls == ["/tmp/quimera-test-tmp/mcp.sock"]
 
 
 def test_main_no_mcp_disables_mcp(monkeypatch):
@@ -614,14 +615,11 @@ def test_main_no_mcp_disables_mcp(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["quimera", "--no-mcp"])
     monkeypatch.setattr(cli.sys, "stderr", io.StringIO())
 
-    with (
-        patch("quimera.cli.MCPServer") as mock_mcp_cls,
-        patch("quimera.cli._configure_mcp_socket_for_plugins") as mock_cfg,
-    ):
+    with patch("quimera.cli.MCPServer") as mock_mcp_cls:
         cli.main()
 
     mock_mcp_cls.assert_not_called()
-    mock_cfg.assert_called_once_with(None)
+    assert _FakeApp.last_instance.mcp_socket_calls == [None]
 
 
 def test_main_mcp_uses_explicit_socket_path(monkeypatch):

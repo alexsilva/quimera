@@ -103,14 +103,6 @@ def _configure_connection_interactively(plugin, driver_hint: str | None = None):
         raise SystemExit(str(exc)) from exc
 
 
-def _configure_mcp_socket_for_plugins(socket_path: str | None) -> None:
-    """Propaga o socket MCP atual para plugins que suportam injeção de args."""
-    for plugin in _plugins.all_plugins():
-        setter = getattr(plugin, "set_mcp_socket_path", None)
-        if callable(setter):
-            setter(socket_path)
-
-
 def _parse_extra_body_arg(raw: str | None) -> dict | None:
     """Converte --extra-body de string JSON para dict, com mensagem de erro."""
     if raw is None:
@@ -405,12 +397,12 @@ def main():
         return
 
     if args.no_mcp:
-        _configure_mcp_socket_for_plugins(None)
+        app.configure_mcp_socket(None)
     else:
         socket_path = args.mcp_socket or str(workspace.tmp.root / "mcp.sock")
         mcp = MCPServer(app.tool_executor)
         mcp.start_background(socket_path)
-        _configure_mcp_socket_for_plugins(socket_path)
+        app.configure_mcp_socket(socket_path)
         app.mcp_socket_path = socket_path
 
         prompt_builder = getattr(app, "prompt_builder", None)
