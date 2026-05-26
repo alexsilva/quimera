@@ -750,7 +750,7 @@ class AppTaskServices:
 
     def _build_task_router(self) -> TaskRouter:
         return TaskRouter(
-            **{"active" "_agents": list(self._get_agent_pool_agents() or [])},
+            active_agents=list(self._get_agent_pool_agents() or []),
             get_agent_plugin=self._get_agent_plugin,
             get_available_plugins=self._get_available_plugins,
             repository=self._build_task_repository(),
@@ -758,7 +758,7 @@ class AppTaskServices:
 
     def _build_task_failover_policy(self) -> TaskFailoverPolicy:
         return TaskFailoverPolicy(
-            **{"active" "_agents": self._get_agent_pool_agents},
+            active_agents=self._get_agent_pool_agents,
             get_agent_plugin=self._get_agent_plugin,
             repository=self._build_task_repository(),
         )
