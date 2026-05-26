@@ -1337,6 +1337,40 @@ def test_dynamic_plugin_with_opencode_base_inherits_env_for_cli():
     assert "OPENCODE_CONFIG_CONTENT" in env
 
 
+def test_agent_client_call_dynamic_opencode_base_passes_env_for_cli_to_run(renderer):
+    client = AgentClient(renderer)
+    plugin = register_dynamic_plugin("opencode-dyn-call-test", metadata={"base": "opencode"})
+    assert isinstance(plugin, OpenCodePlugin)
+
+    original_mcp_socket = plugin._mcp_socket_path
+    original_override = plugin._connection_override
+    try:
+        plugin.set_mcp_socket_path("/tmp/quimera.sock")
+        plugin._connection_override = CliConnection(
+            cmd=["opencode", "run"],
+            env={"BASE_ENV": "1"},
+        )
+
+        with patch("quimera.plugins.get", return_value=plugin), patch.object(client, "run") as mock_run:
+            mock_run.return_value = "ok"
+            result = client.call("opencode-dyn-call-test", "prompt")
+
+        assert result == "ok"
+        called_kwargs = mock_run.call_args.kwargs
+        assert called_kwargs["extra_env"]["BASE_ENV"] == "1"
+
+        config_raw = called_kwargs["extra_env"].get("OPENCODE_CONFIG_CONTENT")
+        assert config_raw is not None
+        config = json.loads(config_raw)
+        assert config["mcp"]["quimera"]["command"] == [
+            "python", "-m", "quimera.runtime.mcp_server",
+            "--connect-socket", "/tmp/quimera.sock",
+        ]
+    finally:
+        plugin._connection_override = original_override
+        plugin.set_mcp_socket_path(original_mcp_socket)
+
+
 def test_format_claude_spy_event_summarizes_assistant_and_result():
     assistant = _format_claude_spy_event(
         '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash"},{"type":"text","text":"Vou validar com um teste focado antes de concluir."}]}}'
