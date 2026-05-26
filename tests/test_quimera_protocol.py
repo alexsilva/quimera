@@ -486,7 +486,7 @@ class ProtocolTests(unittest.TestCase):
             def run(self):
                 captured["ran"] = True
 
-            def configure_mcp_socket(self, socket_path: str | None) -> None:
+            def configure_mcp_socket(self, socket_path: str | None, token: str | None = None) -> None:
                 pass
 
         with patch("quimera.cli.QuimeraApp", FakeApp), patch("sys.argv", ["quimera", "--visibility", "full"]):

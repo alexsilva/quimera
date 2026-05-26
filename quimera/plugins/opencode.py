@@ -68,14 +68,16 @@ class OpenCodePlugin(AgentPlugin):
         """Gera JSON de config para ativar MCP do Quimera."""
         if not (socket_path or "").strip():
             return None
+        proxy_cmd: list[str] = [
+            "python", "-m", "quimera.runtime.mcp_server",
+            "--connect-socket", socket_path,
+        ]
+        proxy_cmd += self._build_token_args()
         config = {
             "mcp": {
                 "quimera": {
                     "type": "local",
-                    "command": [
-                        "python", "-m", "quimera.runtime.mcp_server",
-                        "--connect-socket", socket_path,
-                    ],
+                    "command": proxy_cmd,
                     "enabled": True,
                 }
             }

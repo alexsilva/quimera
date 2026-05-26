@@ -3,6 +3,7 @@ import argparse
 import json
 import locale
 import os
+import secrets
 import shlex
 import sys
 from pathlib import Path
@@ -399,10 +400,12 @@ def main():
     if args.no_mcp:
         app.configure_mcp_socket(None)
     else:
-        socket_path = args.mcp_socket or str(workspace.tmp.root / "mcp.sock")
-        mcp = MCPServer(app.tool_executor)
+        mcp_token = secrets.token_urlsafe(32)
+        rand_suffix = secrets.token_hex(8)
+        socket_path = args.mcp_socket or str(workspace.tmp.root / f"mcp-{rand_suffix}.sock")
+        mcp = MCPServer(app.tool_executor, auth_token=mcp_token)
         mcp.start_background(socket_path)
-        app.configure_mcp_socket(socket_path)
+        app.configure_mcp_socket(socket_path, mcp_token)
         app.mcp_socket_path = socket_path
 
         prompt_builder = getattr(app, "prompt_builder", None)

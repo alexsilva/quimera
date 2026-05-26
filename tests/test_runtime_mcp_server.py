@@ -403,8 +403,9 @@ class TestInputRobustness:
 def test_main_connect_socket_usa_modo_proxy(monkeypatch):
     captured = {}
 
-    def _fake_proxy(path, *, stdin=None, stdout=None):
+    def _fake_proxy(path, *, token=None, stdin=None, stdout=None):
         captured["path"] = path
+        captured["token"] = token
         captured["stdin"] = stdin
         captured["stdout"] = stdout
 
@@ -415,3 +416,323 @@ def test_main_connect_socket_usa_modo_proxy(monkeypatch):
 
     mcp_server.main()
     assert captured["path"] == "/tmp/quimera.sock"
+    assert captured["token"] is None
+
+
+def test_main_connect_socket_com_token_cli(monkeypatch):
+    captured = {}
+
+    def _fake_proxy(path, *, token=None, stdin=None, stdout=None):
+        captured["token"] = token
+
+    monkeypatch.setattr("quimera.runtime.mcp_server._proxy_stdio_to_socket", _fake_proxy)
+    monkeypatch.setattr(sys, "argv", ["mcp_server", "--connect-socket", "/tmp/s.sock", "--token", "mytoken"])
+
+    from quimera.runtime import mcp_server
+    mcp_server.main()
+    assert captured["token"] == "mytoken"
+
+
+def test_main_connect_socket_token_via_env(monkeypatch):
+    captured = {}
+
+    def _fake_proxy(path, *, token=None, stdin=None, stdout=None):
+        captured["token"] = token
+
+    monkeypatch.setattr("quimera.runtime.mcp_server._proxy_stdio_to_socket", _fake_proxy)
+    monkeypatch.setattr(sys, "argv", ["mcp_server", "--connect-socket", "/tmp/s.sock"])
+    monkeypatch.setenv("QUIMERA_MCP_TOKEN", "envtoken")
+
+    from quimera.runtime import mcp_server
+    mcp_server.main()
+    assert captured["token"] == "envtoken"
+
+
+# ---------------------------------------------------------------------------
+# Autenticação via socket
+# ---------------------------------------------------------------------------
+
+def _wait_for_socket(path: str, timeout: float = 1.0) -> None:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if os.path.exists(path):
+            try:
+                s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                s.connect(path)
+                s.close()
+                return
+            except OSError:
+                pass
+        time.sleep(0.02)
+
+
+def _unix_socket_exchange_with_prelude(path: str, prelude: str | None, *msgs) -> list[dict]:
+    """Conecta ao socket, envia prelude opcional e mensagens MCP."""
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.connect(path)
+    payload = ""
+    if prelude is not None:
+        payload += prelude + "\n"
+    payload += "".join(json.dumps(m) + "\n" for m in msgs)
+    s.sendall(payload.encode("utf-8"))
+    s.shutdown(socket.SHUT_WR)
+    chunks = []
+    while True:
+        data = s.recv(4096)
+        if not data:
+            break
+        chunks.append(data)
+    s.close()
+    raw = b"".join(chunks).decode("utf-8")
+    return [json.loads(line) for line in raw.splitlines() if line.strip()]
+
+
+class TestSocketAuth:
+    def test_sem_token_aceita_conexao_sem_prelude(self, tmp_path):
+        """MCPServer(auth_token=None) deve aceitar conexão sem autenticação."""
+        sock_path = str(tmp_path / "mcp_noauth.sock")
+        server = MCPServer(_make_executor())
+        server.start_background(sock_path)
+        _wait_for_socket(sock_path)
+
+        responses = _unix_socket_exchange(sock_path, {"jsonrpc": "2.0", "id": 1, "method": "ping"})
+        assert len(responses) == 1
+        assert responses[0]["result"] == {}
+
+    def test_com_token_aceita_conexao_com_token_correto(self, tmp_path):
+        """MCPServer(auth_token='abc') deve aceitar conexão com token correto."""
+        sock_path = str(tmp_path / "mcp_auth_ok.sock")
+        server = MCPServer(_make_executor(), auth_token="abc")
+        server.start_background(sock_path)
+        _wait_for_socket(sock_path)
+
+        prelude = json.dumps({"quimera_auth_token": "abc"})
+        responses = _unix_socket_exchange_with_prelude(
+            sock_path, prelude, {"jsonrpc": "2.0", "id": 1, "method": "ping"}
+        )
+        assert len(responses) == 1
+        assert responses[0]["result"] == {}
+
+    def test_com_token_rejeita_conexao_sem_prelude(self, tmp_path):
+        """MCPServer(auth_token='abc') deve fechar conexão sem prelude."""
+        sock_path = str(tmp_path / "mcp_auth_nopre.sock")
+        server = MCPServer(_make_executor(), auth_token="abc")
+        server.start_background(sock_path)
+        _wait_for_socket(sock_path)
+
+        # Envia direto sem prelude — conexão deve ser encerrada, resposta vazia
+        responses = _unix_socket_exchange(sock_path, {"jsonrpc": "2.0", "id": 1, "method": "ping"})
+        assert responses == []
+
+    def test_com_token_rejeita_json_invalido_no_prelude(self, tmp_path):
+        """MCPServer deve rejeitar prelude com JSON malformado."""
+        sock_path = str(tmp_path / "mcp_auth_badjson.sock")
+        server = MCPServer(_make_executor(), auth_token="abc")
+        server.start_background(sock_path)
+        _wait_for_socket(sock_path)
+
+        responses = _unix_socket_exchange_with_prelude(
+            sock_path, "isto nao e json", {"jsonrpc": "2.0", "id": 1, "method": "ping"}
+        )
+        assert responses == []
+
+    def test_com_token_rejeita_token_errado(self, tmp_path):
+        """MCPServer deve rejeitar prelude com token diferente do esperado."""
+        sock_path = str(tmp_path / "mcp_auth_wrong.sock")
+        server = MCPServer(_make_executor(), auth_token="abc")
+        server.start_background(sock_path)
+        _wait_for_socket(sock_path)
+
+        prelude = json.dumps({"quimera_auth_token": "WRONG"})
+        responses = _unix_socket_exchange_with_prelude(
+            sock_path, prelude, {"jsonrpc": "2.0", "id": 1, "method": "ping"}
+        )
+        assert responses == []
+
+    def test_proxy_envia_prelude_antes_das_mensagens(self, tmp_path):
+        """_proxy_stdio_to_socket com token deve enviar auth antes das mensagens MCP."""
+        sock_path = str(tmp_path / "mcp_proxy_auth.sock")
+        server = MCPServer(_make_executor(), auth_token="secrettoken")
+        server.start_background(sock_path)
+        _wait_for_socket(sock_path)
+
+        request_line = json.dumps({"jsonrpc": "2.0", "id": 42, "method": "ping"}) + "\n"
+        inp = io.StringIO(request_line)
+        out = io.StringIO()
+        _proxy_stdio_to_socket(sock_path, token="secrettoken", stdin=inp, stdout=out)
+
+        responses = [json.loads(l) for l in out.getvalue().splitlines() if l.strip()]
+        assert len(responses) == 1
+        assert responses[0]["id"] == 42
+        assert responses[0]["result"] == {}
+
+    def test_socket_criado_com_permissao_0600(self, tmp_path):
+        """O socket Unix deve ter permissão 0o600 após o bind."""
+        sock_path = str(tmp_path / "mcp_perms.sock")
+        server = MCPServer(_make_executor())
+        server.start_background(sock_path)
+        _wait_for_socket(sock_path)
+
+        mode = os.stat(sock_path).st_mode & 0o777
+        assert mode == 0o600
+
+
+# ---------------------------------------------------------------------------
+# Testes de plugin com token
+# ---------------------------------------------------------------------------
+
+class TestPluginTokenIntegration:
+    def test_codex_inclui_token_no_proxy_args(self):
+        from quimera.plugins.codex import CodexPlugin
+        plugin = CodexPlugin(name="codex", prefix="/codex", style=("blue", "Codex"),
+                             cmd=["codex", "exec"])
+        object.__setattr__(plugin, "_mcp_socket_path", "/tmp/test.sock")
+        object.__setattr__(plugin, "_mcp_token", "mytoken")
+
+        args = plugin.mcp_server_args("/tmp/test.sock")
+        args_json = next(v for i, v in enumerate(args) if args[i - 1] == "-c" and "mcp_servers.quimera.args=" in v)
+        proxy_cmd = json.loads(args_json.split("=", 1)[1])
+        assert "--token" in proxy_cmd
+        assert "mytoken" in proxy_cmd
+
+    def test_codex_sem_token_nao_inclui_token_arg(self):
+        from quimera.plugins.codex import CodexPlugin
+        plugin = CodexPlugin(name="codex", prefix="/codex", style=("blue", "Codex"),
+                             cmd=["codex", "exec"])
+        object.__setattr__(plugin, "_mcp_socket_path", "/tmp/test.sock")
+        object.__setattr__(plugin, "_mcp_token", None)
+
+        args = plugin.mcp_server_args("/tmp/test.sock")
+        args_json = next(v for i, v in enumerate(args) if args[i - 1] == "-c" and "mcp_servers.quimera.args=" in v)
+        proxy_cmd = json.loads(args_json.split("=", 1)[1])
+        assert "--token" not in proxy_cmd
+
+    def test_claude_inclui_token_no_mcp_config(self):
+        from quimera.plugins.claude import ClaudePlugin
+        plugin = ClaudePlugin(name="claude", prefix="/claude", style=("magenta", "Claude"),
+                              cmd=["claude", "-p"])
+        object.__setattr__(plugin, "_mcp_token", "claudetoken")
+
+        args = plugin.mcp_server_args("/tmp/test.sock")
+        config_json = args[1]  # "--mcp-config", <json>
+        config = json.loads(config_json)
+        proxy_args = config["mcpServers"]["quimera"]["args"]
+        assert "--token" in proxy_args
+        assert "claudetoken" in proxy_args
+
+    def test_claude_sem_token_nao_inclui_token_arg(self):
+        from quimera.plugins.claude import ClaudePlugin
+        plugin = ClaudePlugin(name="claude", prefix="/claude", style=("magenta", "Claude"),
+                              cmd=["claude", "-p"])
+        object.__setattr__(plugin, "_mcp_token", None)
+
+        args = plugin.mcp_server_args("/tmp/test.sock")
+        config = json.loads(args[1])
+        proxy_args = config["mcpServers"]["quimera"]["args"]
+        assert "--token" not in proxy_args
+
+    def test_opencode_inclui_token_na_config(self):
+        from quimera.plugins.opencode import OpenCodePlugin
+        plugin = OpenCodePlugin(name="opencode", prefix="/opencode", style=("blue", "OpenCode"),
+                                cmd=["opencode", "run"])
+        object.__setattr__(plugin, "_mcp_socket_path", "/tmp/test.sock")
+        object.__setattr__(plugin, "_mcp_token", "opencodetoken")
+
+        env = plugin.env_for_cli()
+        config = json.loads(env["OPENCODE_CONFIG_CONTENT"])
+        cmd = config["mcp"]["quimera"]["command"]
+        assert "--token" in cmd
+        assert "opencodetoken" in cmd
+
+    def test_opencode_sem_token_nao_inclui_token_arg(self):
+        from quimera.plugins.opencode import OpenCodePlugin
+        plugin = OpenCodePlugin(name="opencode", prefix="/opencode", style=("blue", "OpenCode"),
+                                cmd=["opencode", "run"])
+        object.__setattr__(plugin, "_mcp_socket_path", "/tmp/test.sock")
+        object.__setattr__(plugin, "_mcp_token", None)
+
+        env = plugin.env_for_cli()
+        config = json.loads(env["OPENCODE_CONFIG_CONTENT"])
+        cmd = config["mcp"]["quimera"]["command"]
+        assert "--token" not in cmd
+
+    def test_set_mcp_socket_config_configura_path_e_token(self):
+        from quimera.plugins.base import AgentPlugin
+        plugin = AgentPlugin(name="test", prefix="/test", style=("white", "Test"))
+        plugin.set_mcp_socket_config("/tmp/test.sock", "mytoken")
+        assert plugin._mcp_socket_path == "/tmp/test.sock"
+        assert plugin._mcp_token == "mytoken"
+
+    def test_set_mcp_socket_config_com_token_vazio_define_none(self):
+        from quimera.plugins.base import AgentPlugin
+        plugin = AgentPlugin(name="test", prefix="/test", style=("white", "Test"))
+        plugin.set_mcp_socket_config("/tmp/test.sock", "  ")
+        assert plugin._mcp_token is None
+
+    def test_configure_mcp_socket_usa_set_mcp_socket_config_quando_disponivel(self):
+        """configure_mcp_socket usa set_mcp_socket_config quando o plugin tem o método."""
+        from unittest.mock import MagicMock, patch
+        plugin = MagicMock()
+        plugin.set_mcp_socket_config = MagicMock()
+        plugin.set_mcp_socket_path = MagicMock()
+
+        from quimera.app.core import QuimeraApp
+        app = object.__new__(QuimeraApp)
+        app.get_active_agent_plugins = lambda: [plugin]
+
+        app.configure_mcp_socket("/tmp/test.sock", "tok")
+        plugin.set_mcp_socket_config.assert_called_once_with("/tmp/test.sock", "tok")
+        plugin.set_mcp_socket_path.assert_not_called()
+
+    def test_configure_mcp_socket_fallback_para_set_mcp_socket_path(self):
+        """configure_mcp_socket cai para set_mcp_socket_path quando set_mcp_socket_config ausente."""
+        from unittest.mock import MagicMock
+        plugin = MagicMock(spec=["set_mcp_socket_path"])
+        plugin.set_mcp_socket_path = MagicMock()
+
+        from quimera.app.core import QuimeraApp
+        app = object.__new__(QuimeraApp)
+        app.get_active_agent_plugins = lambda: [plugin]
+
+        app.configure_mcp_socket("/tmp/test.sock", "tok")
+        plugin.set_mcp_socket_path.assert_called_once_with("/tmp/test.sock")
+
+    def test_com_token_aceita_conexao_com_token_correto_e_responde_a_initialize(self, tmp_path):
+        """MCPServer(auth_token='abc') deve aceitar token correto e responder a initialize."""
+        sock_path = str(tmp_path / "mcp_auth_initialize.sock")
+        server = MCPServer(_make_executor(), auth_token="abc")
+        server.start_background(sock_path)
+        _wait_for_socket(sock_path)
+
+        prelude = json.dumps({"quimera_auth_token": "abc"})
+        responses = _unix_socket_exchange_with_prelude(
+            sock_path,
+            prelude,
+            {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+        )
+        assert len(responses) == 1
+        assert responses[0]["id"] == 1
+        assert responses[0]["result"]["protocolVersion"] == MCPServer.PROTOCOL_VERSION
+
+    def test_set_mcp_socket_path_none_limpa_token(self):
+        """set_mcp_socket_path(None) deve limpar _mcp_token para evitar vazamento de estado."""
+        from quimera.plugins.base import AgentPlugin
+        plugin = AgentPlugin(name="test", prefix="/test", style=("white", "Test"))
+        plugin.set_mcp_socket_config("/tmp/test.sock", "mytoken")
+        assert plugin._mcp_token == "mytoken"
+        plugin.set_mcp_socket_path(None)
+        assert plugin._mcp_socket_path is None
+        assert plugin._mcp_token is None
+
+    def test_build_token_args_retorna_lista_com_token(self):
+        """_build_token_args deve retornar ['--token', token] quando token está definido."""
+        from quimera.plugins.base import AgentPlugin
+        plugin = AgentPlugin(name="test", prefix="/test", style=("white", "Test"))
+        object.__setattr__(plugin, "_mcp_token", "tok123")
+        assert plugin._build_token_args() == ["--token", "tok123"]
+
+    def test_build_token_args_retorna_lista_vazia_sem_token(self):
+        """_build_token_args deve retornar [] quando token é None."""
+        from quimera.plugins.base import AgentPlugin
+        plugin = AgentPlugin(name="test", prefix="/test", style=("white", "Test"))
+        assert plugin._build_token_args() == []

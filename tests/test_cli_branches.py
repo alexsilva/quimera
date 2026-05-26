@@ -54,7 +54,7 @@ class _FakeApp:
     def run(self):
         self.ran = True
 
-    def configure_mcp_socket(self, socket_path: str | None) -> None:
+    def configure_mcp_socket(self, socket_path: str | None, token: str | None = None) -> None:
         self.mcp_socket_calls.append(socket_path)
 
 
@@ -594,7 +594,9 @@ def test_main_ignores_stdin_reconfigure_errors_and_still_runs(monkeypatch):
 
     assert _FakeApp.last_instance is not None
     assert _FakeApp.last_instance.ran is True
-    mock_mcp.start_background.assert_called_once_with("/tmp/quimera-test-tmp/mcp.sock")
+    called_path = mock_mcp.start_background.call_args[0][0]
+    assert called_path.startswith("/tmp/quimera-test-tmp/mcp-")
+    assert called_path.endswith(".sock")
 
 
 def test_main_mcp_uses_workspace_tmp_and_configures_plugins(monkeypatch):
@@ -606,8 +608,10 @@ def test_main_mcp_uses_workspace_tmp_and_configures_plugins(monkeypatch):
         mock_mcp = mock_mcp_cls.return_value
         cli.main()
 
-    mock_mcp.start_background.assert_called_once_with("/tmp/quimera-test-tmp/mcp.sock")
-    assert _FakeApp.last_instance.mcp_socket_calls == ["/tmp/quimera-test-tmp/mcp.sock"]
+    called_path = mock_mcp.start_background.call_args[0][0]
+    assert called_path.startswith("/tmp/quimera-test-tmp/mcp-")
+    assert called_path.endswith(".sock")
+    assert _FakeApp.last_instance.mcp_socket_calls == [called_path]
 
 
 def test_main_no_mcp_disables_mcp(monkeypatch):

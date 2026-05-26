@@ -43,8 +43,18 @@ def _openai_schema_to_mcp(schema: dict) -> dict:
     }
 
 
-def _proxy_stdio_to_socket(path: str, *, stdin: IO | None = None, stdout: IO | None = None) -> None:
-    """Faz bridge entre stdio e um servidor MCP em socket Unix."""
+def _proxy_stdio_to_socket(
+    path: str,
+    *,
+    token: str | None = None,
+    stdin: IO | None = None,
+    stdout: IO | None = None,
+) -> None:
+    """Faz bridge entre stdio e um servidor MCP em socket Unix.
+
+    Se *token* for fornecido, envia a linha de autenticação antes de repassar
+    stdin/stdout, conforme o protocolo de auth do MCPServer.
+    """
     inp = stdin or sys.stdin
     out = stdout or sys.stdout
 
@@ -53,6 +63,12 @@ def _proxy_stdio_to_socket(path: str, *, stdin: IO | None = None, stdout: IO | N
     with sock:
         sock_in = sock.makefile("r", encoding="utf-8", errors="replace")
         sock_out = sock.makefile("w", encoding="utf-8")
+
+        normalized_token = (token or "").strip() or None
+        if normalized_token:
+            auth_line = json.dumps({"quimera_auth_token": normalized_token}) + "\n"
+            sock_out.write(auth_line)
+            sock_out.flush()
 
         def _pump_stdin_to_socket() -> None:
             try:
@@ -91,10 +107,19 @@ class MCPServer:
     SERVER_NAME = "quimera"
     SERVER_VERSION = "0.1.0"
 
-    def __init__(self, tool_executor) -> None:
-        """Inicializa uma instância de MCPServer."""
+    def __init__(self, tool_executor, *, auth_token: str | None = None) -> None:
+        """Inicializa uma instância de MCPServer.
+
+        Args:
+            tool_executor: Executor de ferramentas a expor via MCP.
+            auth_token: Token de autenticação por sessão. Quando definido, toda
+                conexão via socket Unix deve enviar uma linha JSON de autenticação
+                antes de qualquer mensagem MCP.
+        """
         self._executor = tool_executor
         self._write_lock = threading.Lock()
+        normalized = (auth_token or "").strip()
+        self._auth_token: str | None = normalized or None
 
     # ------------------------------------------------------------------
     # I/O
@@ -199,6 +224,47 @@ class MCPServer:
         return {"jsonrpc": "2.0", "id": msg_id, "error": {"code": code, "message": message}}
 
     # ------------------------------------------------------------------
+    # Autenticação de socket
+    # ------------------------------------------------------------------
+
+    _AUTH_READLINE_TIMEOUT: float = 5.0  # segundos para receber prelude de auth
+
+    def _authenticate_socket_connection(self, inp: IO) -> bool:
+        """Valida a linha de autenticação na abertura de uma conexão socket.
+
+        Retorna True imediatamente se auth_token não estiver configurado.
+        Caso contrário, lê a primeira linha (com timeout) e valida o token
+        sem logar seu valor.
+        """
+        if not self._auth_token:
+            return True
+        # Aplica timeout apenas se o stream tiver socket subjacente acessível.
+        raw_sock = getattr(inp, "buffer", None)
+        raw_sock = getattr(raw_sock, "raw", None)
+        underlying = getattr(raw_sock, "_sock", None) if raw_sock else None
+        if underlying is None:
+            # Fallback: tenta obter via name (socket fileno não aplicável a StringIO em testes)
+            underlying = getattr(inp, "_sock", None)
+        if underlying is not None:
+            try:
+                underlying.settimeout(self._AUTH_READLINE_TIMEOUT)
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            first_line = inp.readline()
+            if not first_line:
+                _logger.warning("MCP auth: conexão encerrada antes da autenticação")
+                return False
+            payload = json.loads(first_line.strip())
+            if payload.get("quimera_auth_token") == self._auth_token:
+                return True
+            _logger.warning("MCP auth: token inválido — conexão recusada")
+            return False
+        except Exception:  # noqa: BLE001
+            _logger.warning("MCP auth: prelude inválido — conexão recusada")
+            return False
+
+    # ------------------------------------------------------------------
     # Socket Unix
     # ------------------------------------------------------------------
 
@@ -208,6 +274,8 @@ class MCPServer:
             with conn:
                 inp = conn.makefile("r", encoding="utf-8", errors="replace")
                 out = conn.makefile("w", encoding="utf-8")
+                if not self._authenticate_socket_connection(inp):
+                    return
                 self.serve(stdin=inp, stdout=out)
         except Exception:
             _logger.debug("Conexão MCP encerrada com erro", exc_info=True)
@@ -226,6 +294,10 @@ class MCPServer:
         srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
             srv.bind(path)
+            try:
+                os.chmod(path, 0o600)
+            except OSError as exc:
+                _logger.warning("MCP socket: não foi possível definir permissão 0600 em %s: %s", path, exc)
             srv.listen(5)
             while True:
                 try:
@@ -308,12 +380,19 @@ def main() -> None:
         default=None,
         help="Conecta no socket Unix informado e faz bridge stdio <-> socket.",
     )
+    parser.add_argument(
+        "--token",
+        dest="token",
+        default=None,
+        help="Token de autenticação para o socket MCP (ou use QUIMERA_MCP_TOKEN).",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(stream=sys.stderr, level=logging.WARNING,
                         format="%(levelname)s mcp_server: %(message)s")
     if args.connect_socket:
-        _proxy_stdio_to_socket(args.connect_socket)
+        token = args.token or os.environ.get("QUIMERA_MCP_TOKEN") or None
+        _proxy_stdio_to_socket(args.connect_socket, token=token)
         return
 
     executor = _build_standalone_executor()

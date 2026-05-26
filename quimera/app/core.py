@@ -766,12 +766,16 @@ class QuimeraApp:
             return list(reg.all_plugins())
         return list(plugins.all_plugins())
 
-    def configure_mcp_socket(self, socket_path: str | None) -> None:
-        """Propaga o socket MCP para os plugins dos agentes ativos na sessão."""
+    def configure_mcp_socket(self, socket_path: str | None, token: str | None = None) -> None:
+        """Propaga o socket MCP e token para os plugins dos agentes ativos na sessão."""
         for plugin in self.get_active_agent_plugins():
-            setter = getattr(plugin, "set_mcp_socket_path", None)
-            if callable(setter):
-                setter(socket_path)
+            config_setter = getattr(plugin, "set_mcp_socket_config", None)
+            if callable(config_setter):
+                config_setter(socket_path, token)
+            else:
+                path_setter = getattr(plugin, "set_mcp_socket_path", None)
+                if callable(path_setter):
+                    path_setter(socket_path)
 
     def get_active_agent_plugins(self) -> list:
         """Retorna os plugins válidos dos agentes ativos na sessão."""

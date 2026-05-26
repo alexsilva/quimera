@@ -260,6 +260,8 @@ class AgentPlugin:
     _base_plugin_name: Optional[str] = field(default=None, repr=False)
     # Socket MCP do servidor local do Quimera (quando habilitado por --mcp).
     _mcp_socket_path: Optional[str] = field(default=None, repr=False)
+    # Token de autenticação gerado por sessão (não persistir, não logar).
+    _mcp_token: Optional[str] = field(default=None, repr=False)
 
     @property
     def render_style(self) -> Tuple[str, str]:
@@ -315,9 +317,32 @@ class AgentPlugin:
         return self._with_mcp_server_args(self.cmd)
 
     def set_mcp_socket_path(self, socket_path: Optional[str]) -> None:
-        """Configura socket MCP injetado pelo runtime para esse plugin."""
+        """Configura socket MCP injetado pelo runtime para esse plugin.
+
+        Ao remover o socket (path None/vazio), o token também é limpo para
+        evitar vazamento de estado entre reconfigurações.
+        """
         normalized = (socket_path or "").strip()
         self._mcp_socket_path = normalized or None
+        if self._mcp_socket_path is None:
+            self._mcp_token = None
+
+    def set_mcp_socket_config(self, socket_path: Optional[str], token: Optional[str]) -> None:
+        """Configura socket MCP e token de autenticação para esse plugin."""
+        self.set_mcp_socket_path(socket_path)
+        normalized = (token or "").strip()
+        self._mcp_token = normalized or None
+
+    def _build_token_args(self) -> List[str]:
+        """Retorna ['--token', <token>] se houver token, ou lista vazia.
+
+        Centraliza a lógica de inclusão do token no comando do proxy MCP,
+        eliminando duplicação em Codex, Claude e OpenCode.
+        """
+        token = (self._mcp_token or "").strip()
+        if token:
+            return ["--token", token]
+        return []
 
     def env_for_cli(self) -> dict:
         """Retorna variáveis de ambiente extras a injetar no subprocess CLI.

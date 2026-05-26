@@ -148,12 +148,14 @@ def _format_claude_spy_event(line: str) -> list[SpyEvent]:
 class ClaudePlugin(AgentPlugin):
     def mcp_server_args(self, socket_path: str) -> list[str]:
         """Retorna flags para conectar o Claude ao MCP local do Quimera."""
+        proxy_args: list[str] = ["-m", "quimera.runtime.mcp_server", "--connect-socket", socket_path]
+        proxy_args += self._build_token_args()
         config = {
             "mcpServers": {
                 "quimera": {
                     "type": "stdio",
                     "command": "python",
-                    "args": ["-m", "quimera.runtime.mcp_server", "--connect-socket", socket_path],
+                    "args": proxy_args,
                 }
             }
         }

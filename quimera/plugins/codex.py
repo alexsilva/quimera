@@ -181,7 +181,8 @@ class CodexPlugin(AgentPlugin):
 
     def mcp_server_args(self, socket_path: str) -> list[str]:
         """Retorna overrides de config para registrar MCP via stdio no Codex."""
-        proxy_cmd = ["-m", "quimera.runtime.mcp_server", "--connect-socket", socket_path]
+        proxy_cmd: list[str] = ["-m", "quimera.runtime.mcp_server", "--connect-socket", socket_path]
+        proxy_cmd += self._build_token_args()
         args_toml = json.dumps(proxy_cmd, ensure_ascii=False)
         return [
             "-c",

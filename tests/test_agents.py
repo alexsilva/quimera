@@ -176,20 +176,23 @@ def test_codex_plugin_does_not_duplicate_existing_mcp_override():
 
 
 def test_claude_plugin_injects_mcp_server():
+    import json as _json
     plugin = get_plugin("claude")
     assert plugin is not None
     original_mcp_socket = plugin._mcp_socket_path
     try:
         plugin.set_mcp_socket_path("/tmp/quimera.sock")
-        assert plugin.effective_cmd() == [
-            "claude",
-            "--permission-mode=bypassPermissions",
-            "--output-format=stream-json",
-            "--verbose",
-            "-p",
-            "--mcp-server",
-            "name=quimera,type=unix,path=/tmp/quimera.sock",
-        ]
+        cmd = plugin.effective_cmd()
+        base = ["claude", "--permission-mode=bypassPermissions", "--output-format=stream-json", "--verbose", "-p"]
+        assert cmd[:len(base)] == base
+        assert "--mcp-config" in cmd
+        idx = cmd.index("--mcp-config")
+        config = _json.loads(cmd[idx + 1])
+        assert "mcpServers" in config
+        assert "quimera" in config["mcpServers"]
+        proxy_args = config["mcpServers"]["quimera"]["args"]
+        assert "--connect-socket" in proxy_args
+        assert "/tmp/quimera.sock" in proxy_args
     finally:
         plugin.set_mcp_socket_path(original_mcp_socket)
 
