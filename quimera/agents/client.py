@@ -495,7 +495,9 @@ class AgentClient:
     def _resolve_plugin_cli_attrs(plugin, connection) -> tuple[list[str], bool, str | None]:
         """Resolve atributos CLI com fallback para plugins simplificados em testes."""
         if isinstance(connection, CliConnection):
-            return list(connection.cmd), connection.prompt_as_arg, connection.output_format
+            cmd_resolver = getattr(plugin, "effective_cmd", None)
+            cmd = cmd_resolver() if callable(cmd_resolver) else list(connection.cmd)
+            return cmd, connection.prompt_as_arg, connection.output_format
         cmd_resolver = getattr(plugin, "effective_cmd", None)
         prompt_resolver = getattr(plugin, "effective_prompt_as_arg", None)
         output_resolver = getattr(plugin, "effective_output_format", None)

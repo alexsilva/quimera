@@ -340,7 +340,7 @@ class AgentPlugin:
         if not socket_path:
             return base_cmd
         if any(
-            part == "--mcp-server" or str(part).startswith("--mcp-server=")
+            part in ("--mcp-server", "--mcp-config") or str(part).startswith(("--mcp-server=", "--mcp-config="))
             for part in base_cmd
         ):
             return base_cmd
@@ -476,16 +476,18 @@ def register_dynamic_plugin(
 
     # Inherit non-serializable fields (spy formatter) from a named base plugin
     base_name = plugin_data.pop("base", None)
+    plugin_cls: type[AgentPlugin] = AgentPlugin
     if base_name:
         base = target_registry.get(base_name)
         if base is not None:
+            plugin_cls = type(base)
             plugin_data.setdefault("spy_stdout_formatter", base.spy_stdout_formatter)
             plugin_data.setdefault("has_builtin_tools", base.has_builtin_tools)
             plugin_data.setdefault("runtime_rw_paths", list(base.runtime_rw_paths))
 
     prefix = plugin_data.pop("prefix", f"/{normalized}")
     style = tuple(plugin_data.pop("style", ("bright_cyan", _humanize_agent_name(normalized))))
-    plugin = AgentPlugin(name=normalized, prefix=prefix, style=style, **plugin_data)
+    plugin = plugin_cls(name=normalized, prefix=prefix, style=style, **plugin_data)
 
     # Re-attach base reference so set_connection_override can persist it
     if base_name:

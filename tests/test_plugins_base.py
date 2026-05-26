@@ -31,6 +31,11 @@ from quimera.plugins.base import (
 )
 
 
+class _EnvAwarePlugin(AgentPlugin):
+    def env_for_cli(self) -> dict:
+        return {"DYNAMIC_ENV_HOOK": "ok"}
+
+
 # ---------------------------------------------------------------------------
 # extract_model_from_cli_cmd
 # ---------------------------------------------------------------------------
@@ -135,6 +140,19 @@ def test_register_dynamic_plugin_inherits_base():
     assert plugin.has_builtin_tools is True
     assert "/tmp" in plugin.runtime_rw_paths
     assert plugin._base_plugin_name == "baseagent"
+
+
+def test_register_dynamic_plugin_inherits_base_class():
+    base = _EnvAwarePlugin(
+        name="envbase",
+        prefix="/envbase",
+        style=("blue", "Env Base"),
+    )
+    register(base)
+    plugin = register_dynamic_plugin("dyntest5", metadata={"base": "envbase"})
+
+    assert isinstance(plugin, _EnvAwarePlugin)
+    assert plugin.env_for_cli() == {"DYNAMIC_ENV_HOOK": "ok"}
 
 
 # ---------------------------------------------------------------------------

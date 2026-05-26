@@ -18,7 +18,7 @@ from quimera.agents import (
 from quimera.agents.process_runner import ProcessRunner
 from quimera.constants import MAX_STDERR_LINES, Visibility
 from quimera.plugins import get as get_plugin
-from quimera.plugins.base import CliConnection
+from quimera.plugins.base import CliConnection, register_dynamic_plugin
 from quimera.plugins.claude import _format_claude_spy_event
 from quimera.plugins.codex import _format_codex_spy_event
 from quimera.plugins.opencode import OpenCodePlugin, _format_opencode_spy_event
@@ -1326,6 +1326,15 @@ def test_opencode_plugin_env_for_cli_independent_of_connection_override():
     finally:
         plugin._connection_override = original_override
         plugin.set_mcp_socket_path(original_mcp_socket)
+
+
+def test_dynamic_plugin_with_opencode_base_inherits_env_for_cli():
+    plugin = register_dynamic_plugin("opencode-dyn-test", metadata={"base": "opencode"})
+    assert isinstance(plugin, OpenCodePlugin)
+
+    plugin.set_mcp_socket_path("/tmp/quimera.sock")
+    env = plugin.env_for_cli()
+    assert "OPENCODE_CONFIG_CONTENT" in env
 
 
 def test_format_claude_spy_event_summarizes_assistant_and_result():
