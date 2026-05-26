@@ -481,6 +481,7 @@ class ProtocolTests(unittest.TestCase):
             def __init__(self, cwd, **kwargs):
                 captured["cwd"] = cwd
                 captured.update(kwargs)
+                self.tool_executor = object()
 
             def run(self):
                 captured["ran"] = True

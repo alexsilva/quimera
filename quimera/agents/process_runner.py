@@ -25,6 +25,7 @@ class ProcessRunner:
     CANCELLED = "cancelled"
     TIMEOUT = "timeout"
     RATE_LIMIT = "rate_limit"
+    WALL_TIMEOUT = "wall_timeout"
 
     def __init__(
         self,
@@ -34,6 +35,7 @@ class ProcessRunner:
         result_holder: dict,
         cancel_event: threading.Event,
         timeout,
+        max_wall_clock: float | None = 600.0,
     ):
         self.proc = proc
         self.stdout_thread = stdout_thread
@@ -41,6 +43,7 @@ class ProcessRunner:
         self.result_holder = result_holder
         self._cancel_event = cancel_event
         self._timeout = timeout
+        self._max_wall_clock = max_wall_clock
         self.rate_limit_detected = False
         self.rate_limit_detected_at: float | None = None
         self._rate_checked = 0
@@ -139,6 +142,15 @@ class ProcessRunner:
             if on_tick is not None and elapsed != last_tick_elapsed:
                 on_tick(elapsed)
                 last_tick_elapsed = elapsed
+
+            if self._max_wall_clock is not None and elapsed > self._max_wall_clock:
+                _logger.warning(
+                    "wall-clock timeout after %ds (limit %ss)", elapsed, self._max_wall_clock,
+                )
+                terminate_process_group(self.proc)
+                self.stdout_thread.join(2)
+                self.stderr_thread.join(2)
+                return self.WALL_TIMEOUT
 
             reason = self._check_timeout(elapsed, time.time())
             if reason is not None:

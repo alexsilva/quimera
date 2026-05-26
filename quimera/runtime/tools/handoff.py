@@ -1,10 +1,13 @@
 """Componentes de `quimera.runtime.tools.handoff`."""
 from __future__ import annotations
 
+import logging
 from typing import Protocol
 
 from ..config import ToolRuntimeConfig
 from ..models import ToolCall, ToolResult
+
+logger = logging.getLogger(__name__)
 
 
 class _CallAgentFnProto(Protocol):
@@ -61,7 +64,8 @@ class HandoffTools:
             return set()
         try:
             raw_agents = provider() or []
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("_resolve_active_agents: falha ao consultar provider: %s", exc)
             return set()
         active: set[str] = set()
         for item in raw_agents:
@@ -203,39 +207,40 @@ class HandoffTools:
                     }
                 )
 
-        active_agents = self._resolve_active_agents()
-        if active_agents:
-            invalid_targets: list[str] = []
-            for step in steps:
-                targets = [step["agent_name"], *step["fallback_agents"]]
-                for target in targets:
-                    normalized_target = self._normalize_agent_identity(target)
-                    if normalized_target and normalized_target not in active_agents:
-                        invalid_targets.append(target)
-            if invalid_targets:
-                invalid_label = ", ".join(dict.fromkeys(invalid_targets))
-                active_label = ", ".join(sorted(active_agents))
-                return ToolResult(
-                    ok=False,
-                    tool_name=call.name,
-                    error=f"Agents not active in current pool: {invalid_label}. Active agents: {active_label}",
-                )
-
         try:
             step_outputs: list[str] = []
             for step in steps:
+                # Re-validate active agents for each step to handle agents that may have become inactive
+                active_agents = self._resolve_active_agents()
+                if active_agents:
+                    invalid_targets: list[str] = []
+                    targets = [step["agent_name"], *step["fallback_agents"]]
+                    for target in targets:
+                        normalized_target = self._normalize_agent_identity(target)
+                        if normalized_target and normalized_target not in active_agents:
+                            invalid_targets.append(target)
+                    if invalid_targets:
+                        invalid_label = ", ".join(dict.fromkeys(invalid_targets))
+                        active_label = ", ".join(sorted(active_agents))
+                        return ToolResult(
+                            ok=False,
+                            tool_name=call.name,
+                            error=f"Agents not active in current pool: {invalid_label}. Active agents: {active_label}",
+                        )
+
                 attempt_targets = [step["agent_name"], *step["fallback_agents"]]
                 step_result = None
                 last_error = None
                 selected_agent = None
                 for target_agent in attempt_targets:
+                    normalized_target_agent = self._normalize_agent_identity(target_agent)
                     handoff = {
                         "task": step["task"],
                         "context": step["context"],
                     }
                     try:
                         result = self._call_agent_fn(
-                            target_agent,
+                            normalized_target_agent,
                             handoff=handoff,
                             handoff_only=True,
                             protocol_mode="handoff",
@@ -243,14 +248,22 @@ class HandoffTools:
                             silent=True,
                             show_output=False,
                             persist_history=True,
-                            history_snapshot=[],
+                            history_snapshot=None,
                             max_retries=1,
                         )
                     except Exception as dispatch_error:  # noqa: BLE001
                         last_error = str(dispatch_error)
+                        logger.warning(
+                            "call_agent: dispatch to '%s' failed after %d attempt(s): %s",
+                            target_agent, len(step_outputs) + 1, last_error,
+                        )
                         continue
                     if result is None:
                         last_error = f"Agent '{target_agent}' returned no response"
+                        logger.warning(
+                            "call_agent: dispatch to '%s' returned no response after %d attempt(s)",
+                            target_agent, len(step_outputs) + 1,
+                        )
                         continue
                     selected_agent = target_agent
                     step_result = str(result)

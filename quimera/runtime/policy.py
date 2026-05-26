@@ -181,18 +181,7 @@ class ToolPolicy:
         """Executa validate get job."""
         return
 
-    def _validate_call_agent(self, call: ToolCall) -> None:
-        """Valida a delegação de tarefa para outro agente."""
-        agent_name = call.arguments.get("agent_name")
-        task = call.arguments.get("task")
-        if not isinstance(agent_name, str) or not agent_name.strip():
-            raise ToolPolicyError("call_agent requer 'agent_name' string não vazia")
-        if not isinstance(task, str) or not task.strip():
-            raise ToolPolicyError("call_agent requer 'task' string não vazia")
 
-        context = call.arguments.get("context")
-        if context is not None and not isinstance(context, str):
-            raise ToolPolicyError("call_agent requer 'context' string quando fornecido")
 
     def _validate_approve_task(self, call: ToolCall) -> None:
         """Executa validate approve task."""
@@ -229,12 +218,12 @@ class ToolPolicy:
             raise ToolPolicyError("write_stdin requer 'session_id'")
         try:
             int(call.arguments["session_id"])
-        except Exception as exc:  # noqa: BLE001
+        except (ValueError, TypeError) as exc:
             raise ToolPolicyError("write_stdin requer um session_id inteiro") from exc
         if "yield_time_ms" in call.arguments:
             try:
                 int(call.arguments["yield_time_ms"])
-            except Exception as exc:  # noqa: BLE001
+            except (ValueError, TypeError) as exc:
                 raise ToolPolicyError("write_stdin requer yield_time_ms inteiro") from exc
 
     def _validate_close_command_session(self, call: ToolCall) -> None:
@@ -243,7 +232,7 @@ class ToolPolicy:
             raise ToolPolicyError("close_command_session requer 'session_id'")
         try:
             int(call.arguments["session_id"])
-        except Exception as exc:  # noqa: BLE001
+        except (ValueError, TypeError) as exc:
             raise ToolPolicyError("close_command_session requer um session_id inteiro") from exc
 
     def _validate_shell_command(self, command: str, *, tool_name: str) -> None:

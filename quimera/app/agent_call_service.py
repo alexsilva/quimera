@@ -113,7 +113,7 @@ class AgentCallService:
                 raise
 
         if last_error:
-            logger.error("[AGENT_CALL] all retries exhausted for agent=%s", agent)
+            logger.error("[AGENT_CALL] all retries exhausted for agent=%s: %s", agent, str(last_error))
         return None
 
     def _compute_backoff(self, attempt: int) -> float:

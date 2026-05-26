@@ -323,6 +323,15 @@ class AgentClient:
                         cmd[0],
                     )
                     return None
+                if termination == ProcessRunner.WALL_TIMEOUT:
+                    self._agent_running = False
+                    self._current_proc = None
+                    self._stop_esc_monitor()
+                    _logger.warning(
+                        "[erro] wall-clock timeout for %s (limit %ds)",
+                        cmd[0], runner._max_wall_clock,
+                    )
+                    return None
 
                 debug_output = self._get_capped_stdout(result_holder)
                 if debug_output:
@@ -406,6 +415,13 @@ class AgentClient:
                         wall_limit = self.timeout * 5
                         self._show_error(
                             f"[erro] idle timeout after {wall_limit}s without stdout for {cmd[0]}")
+                        return None
+                    if termination == ProcessRunner.WALL_TIMEOUT:
+                        self._agent_running = False
+                        self._current_proc = None
+                        self._stop_esc_monitor()
+                        self._show_error(
+                            f"[erro] wall-clock timeout for {cmd[0]} (limit {runner._max_wall_clock}s)")
                         return None
 
             self._spy_output_presenter.flush(agent)

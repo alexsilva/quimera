@@ -247,14 +247,21 @@ def main():
     parser.add_argument("--list-connections", dest="list_connections", action="store_true",
                         help="Lista conexões persistidas")
     parser.add_argument(
+        "--no-mcp",
+        dest="no_mcp",
+        action="store_true",
+        default=False,
+        help="Desativa o servidor MCP (por padrão ele é iniciado automaticamente).",
+    )
+    parser.add_argument(
         "--mcp",
         dest="mcp_socket",
         nargs="?",
         const="",
         default=None,
         metavar="SOCKET",
-        help="Inicia servidor MCP em background sobre socket Unix. "
-             "Usa <workspace.tmp>/mcp.sock se SOCKET não for informado.",
+        help="Caminho do socket Unix para o servidor MCP. "
+             "Usa <workspace.tmp>/mcp.sock se não informado.",
     )
 
     args, unknown = parser.parse_known_args()
@@ -368,8 +375,6 @@ def main():
                      workspace=workspace,
                      visibility=visibility,
                      theme=args.theme)
-    _configure_mcp_socket_for_plugins(None)
-
     if args.interactive_test:
         if TerminalRenderer is None or AgentClient is None:
             raise RuntimeError("Modo interativo não disponível nesta versão")
@@ -399,7 +404,9 @@ def main():
         renderer.show_plain(result)
         return
 
-    if args.mcp_socket is not None:
+    if args.no_mcp:
+        _configure_mcp_socket_for_plugins(None)
+    else:
         socket_path = args.mcp_socket or str(workspace.tmp.root / "mcp.sock")
         mcp = MCPServer(app.tool_executor)
         mcp.start_background(socket_path)

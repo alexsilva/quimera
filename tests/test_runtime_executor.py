@@ -468,7 +468,7 @@ def test_executor_call_agent_dispatches_with_handoff_mode(tmp_path):
         silent=True,
         show_output=False,
         persist_history=True,
-        history_snapshot=[],
+        history_snapshot=None,
         max_retries=1,
     )
 
@@ -635,6 +635,45 @@ def test_executor_call_agent_rejects_agents_outside_active_pool(tmp_path):
     assert result.ok is False
     assert "not active in current pool" in (result.error or "")
     dispatch.assert_not_called()
+
+
+def test_executor_call_agent_rejects_inactive_agent_between_handoff_steps(tmp_path):
+    """call_agent rejeita step intermediário quando agente não está mais no pool ativo."""
+    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
+
+    def dispatch(agent_name, **kwargs):
+        handoff = kwargs.get("handoff") or {}
+        return f"{agent_name}:{handoff.get('task')}"
+
+    spy = MagicMock(side_effect=dispatch)
+    executor.set_call_agent_fn(spy)
+
+    active = ["codex"]
+
+    def active_provider():
+        return list(active)
+
+    executor.set_active_agents_provider(active_provider)
+
+    result = executor.execute(
+        ToolCall(
+            name="call_agent",
+            arguments={
+                "agent_name": "codex",
+                "task": "task-1",
+                "handoffs": [
+                    {"agent_name": "opencode-big-pickle", "task": "task-2"},
+                ],
+            },
+        )
+    )
+
+    assert result.ok is False
+    assert "not active in current pool" in (result.error or "")
+    assert "opencode-big-pickle" in (result.error or "")
+    # First step should have been dispatched, second should not
+    assert spy.call_count == 1
+    assert spy.call_args[0][0] == "codex"
 
 
 def test_executor_call_agent_truncates_long_context_and_task(tmp_path):

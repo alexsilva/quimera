@@ -584,10 +584,13 @@ def test_main_ignores_stdin_reconfigure_errors_and_still_runs(monkeypatch):
     monkeypatch.setattr(cli.os, "device_encoding", lambda _fd: None)
     monkeypatch.setattr(sys, "argv", ["quimera"])
 
-    cli.main()
+    with patch("quimera.cli.MCPServer") as mock_mcp_cls:
+        mock_mcp = mock_mcp_cls.return_value
+        cli.main()
 
     assert _FakeApp.last_instance is not None
     assert _FakeApp.last_instance.ran is True
+    mock_mcp.start_background.assert_called_once_with("/tmp/quimera-test-tmp/mcp.sock")
 
 
 def test_main_mcp_uses_workspace_tmp_and_configures_plugins(monkeypatch):
@@ -603,8 +606,22 @@ def test_main_mcp_uses_workspace_tmp_and_configures_plugins(monkeypatch):
         cli.main()
 
     mock_mcp.start_background.assert_called_once_with("/tmp/quimera-test-tmp/mcp.sock")
-    assert mock_cfg.call_args_list[0].args == (None,)
-    assert mock_cfg.call_args_list[1].args == ("/tmp/quimera-test-tmp/mcp.sock",)
+    mock_cfg.assert_called_once_with("/tmp/quimera-test-tmp/mcp.sock")
+
+
+def test_main_no_mcp_disables_mcp(monkeypatch):
+    _patch_main_basics(monkeypatch)
+    monkeypatch.setattr(sys, "argv", ["quimera", "--no-mcp"])
+    monkeypatch.setattr(cli.sys, "stderr", io.StringIO())
+
+    with (
+        patch("quimera.cli.MCPServer") as mock_mcp_cls,
+        patch("quimera.cli._configure_mcp_socket_for_plugins") as mock_cfg,
+    ):
+        cli.main()
+
+    mock_mcp_cls.assert_not_called()
+    mock_cfg.assert_called_once_with(None)
 
 
 def test_main_mcp_uses_explicit_socket_path(monkeypatch):

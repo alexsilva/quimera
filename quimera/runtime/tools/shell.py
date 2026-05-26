@@ -40,6 +40,7 @@ class CommandSession:
     _stdout_total: int = 0
     _stderr_total: int = 0
     lock: threading.Lock = field(default_factory=threading.Lock)
+    reader_threads: list[threading.Thread] = field(default_factory=list)
 
 
 class ShellTool:
@@ -360,7 +361,9 @@ class ShellTool:
                             pass
                         session.tty_master_fd = None
 
-            threading.Thread(target=_tty_reader, daemon=True).start()
+            thread = threading.Thread(target=_tty_reader, daemon=True)
+            session.reader_threads.append(thread)
+            thread.start()
             return
 
         def _reader(stream, buffer_attr: str, counter_attr: str) -> None:
@@ -376,16 +379,19 @@ class ShellTool:
                 if stream is not None:
                     stream.close()
 
-        threading.Thread(
+        stdout_thread = threading.Thread(
             target=_reader,
             args=(session.process.stdout, "stdout_buffer", "_stdout_total"),
             daemon=True,
-        ).start()
-        threading.Thread(
+        )
+        stderr_thread = threading.Thread(
             target=_reader,
             args=(session.process.stderr, "stderr_buffer", "_stderr_total"),
             daemon=True,
-        ).start()
+        )
+        session.reader_threads.extend([stdout_thread, stderr_thread])
+        stdout_thread.start()
+        stderr_thread.start()
 
     def _collect_session_result(
             self,
@@ -524,6 +530,10 @@ class ShellTool:
             session = self._sessions.pop(session_id, None)
         if session is None:
             return
+        # Join reader threads to ensure they finish before cleanup
+        for thread in session.reader_threads:
+            if thread.is_alive():
+                thread.join(timeout=1.0)
         self._cleanup_session_resources(session)
 
     @staticmethod
