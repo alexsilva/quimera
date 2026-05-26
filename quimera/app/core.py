@@ -215,7 +215,7 @@ class QuimeraApp:
         self.input_services = AppInputServices(
             self.renderer,
             input_resolver=lambda: self.input_gate,
-            get_input_status=lambda: self.runtime_state.nonblocking_input_status,
+            get_input_status=self.input_gate.is_active,
             set_input_status=lambda v: setattr(self.runtime_state, 'nonblocking_input_status', v),
             set_prompt_text=lambda v: setattr(self.runtime_state, 'nonblocking_prompt_text', v),
             set_prompt_owner=lambda v: setattr(self.runtime_state, 'prompt_owning_thread_id', v),
@@ -343,7 +343,7 @@ class QuimeraApp:
                     show_error=self.show_error_message,
                     show_warning=self.show_warning_message,
                     show_system=self.show_system_message,
-                    is_reading=lambda: self.runtime_state.nonblocking_input_status
+                    is_reading=self.input_gate.is_active
                 )
         is_new_session = not history_restored and not summary_loaded
 
@@ -490,10 +490,10 @@ class QuimeraApp:
         self.agent_client.tool_executor = self.tool_executor
         self._display_service = DisplayService(
             renderer=self.renderer,
-            input_status_getter=lambda: self.runtime_state.nonblocking_input_status,
+            input_status_getter=self.input_gate.is_active,
             redisplay_prompt=self._redisplay_user_prompt_if_needed,
             output_lock=self._output_lock,
-            prompt_owner_thread_id_getter=lambda: self.runtime_state.prompt_owning_thread_id,
+            prompt_owner_thread_id_getter=self.input_gate.get_owner_thread_id,
             run_above_active_prompt=self.input_gate.run_in_terminal_message,
         )
         self.system_layer = AppSystemLayer(
@@ -905,12 +905,19 @@ class QuimeraApp:
         stdin = sys.stdin
         if stdin is None or not stdin.isatty():
             return
-        status_lock = getattr(self.runtime_state, "nonblocking_input_status_lock", nullcontext())
-        with status_lock:
-            if self.runtime_state.nonblocking_input_status != "reading":
-                return
+        input_gate = getattr(self, "input_gate", None)
+        is_active_fn = getattr(input_gate, "is_active", None)
+        prompt_active = False
+        if callable(is_active_fn):
+            try:
+                active_state = is_active_fn()
+                if isinstance(active_state, bool):
+                    prompt_active = active_state
+            except Exception:
+                prompt_active = False
+        if not prompt_active:
+            return
         try:
-            input_gate = getattr(self, "input_gate", None)
             redisplay = getattr(input_gate, "redisplay", None)
             if callable(redisplay):
                 try:

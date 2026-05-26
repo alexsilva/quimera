@@ -10,6 +10,7 @@ import atexit
 import html
 import re
 import shutil
+import threading
 from pathlib import Path
 
 from prompt_toolkit import PromptSession
@@ -86,6 +87,9 @@ class InputGate:
         self._argument_resolver = argument_resolver
         self._theme_cycle_handler = None
         self._history_file = Path(history_file).expanduser() if history_file else None
+        self._active_lock = threading.Lock()
+        self._active = False
+        self._owner_thread_id: int | None = None
 
         history = InMemoryHistory()
         if self._history_file is not None:
@@ -95,6 +99,12 @@ class InputGate:
             except Exception:
                 history = InMemoryHistory()
         self._session = PromptSession(history=history)
+
+    def _set_active_state(self, active: bool) -> None:
+        """Atualiza estado do prompt ativo de forma thread-safe."""
+        with self._active_lock:
+            self._active = active
+            self._owner_thread_id = threading.get_ident() if active else None
 
     def set_toolbar_context_resolver(self, resolver) -> None:
         """Define callback para resolver contexto dinâmico da toolbar."""
@@ -252,22 +262,25 @@ class InputGate:
         placeholder e completer — tudo nativo do PromptSession, funcionando.
         Se a sessão não estiver disponível, faz fallback para input() padrão.
         """
-        self._flush_renderer()
+        self._set_active_state(True)
+        try:
+            self._flush_renderer()
 
-        if self._session is not None:
-            return self._session.prompt(
-                prompt,
-                bottom_toolbar=self._build_toolbar(),
-                placeholder=self._build_placeholder(),
-                completer=self._build_completer(),
-                key_bindings=self._build_key_bindings(),
-                complete_while_typing=False,
-                vi_mode=False,
-                refresh_interval=1.0,
-            )
-        else:
+            if self._session is not None:
+                return self._session.prompt(
+                    prompt,
+                    bottom_toolbar=self._build_toolbar(),
+                    placeholder=self._build_placeholder(),
+                    completer=self._build_completer(),
+                    key_bindings=self._build_key_bindings(),
+                    complete_while_typing=False,
+                    vi_mode=False,
+                    refresh_interval=1.0,
+                )
             # Fallback para input() padrão quando prompt_toolkit não está disponível
             return input(prompt)
+        finally:
+            self._set_active_state(False)
 
     def get_line_buffer(self) -> str:
         """Retorna o buffer atual de edição quando disponível."""
@@ -297,12 +310,23 @@ class InputGate:
 
     def is_active(self) -> bool:
         """Returns True if the prompt_toolkit session is currently waiting for input."""
+        with self._active_lock:
+            if self._active:
+                return True
         if self._session is None:
             return False
         app = getattr(self._session, "app", None)
         if app is None:
             return False
-        return bool(getattr(app, "_is_running", False))
+        running = getattr(app, "_is_running", False)
+        if isinstance(running, bool):
+            return running
+        return False
+
+    def get_owner_thread_id(self) -> int | None:
+        """Retorna a thread que atualmente possui o prompt interativo."""
+        with self._active_lock:
+            return self._owner_thread_id
 
     def run_in_terminal_message(self, callback) -> bool:
         """Agenda callback acima do prompt ativo quando prompt_toolkit está rodando."""

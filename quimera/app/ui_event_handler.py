@@ -116,6 +116,21 @@ class UiEventHandler:
         stdin = sys.stdin
         if stdin is None or not stdin.isatty():
             return False
+        input_gate = self._input_gate
+        if input_gate is not None:
+            is_active = getattr(input_gate, "is_active", None)
+            get_owner_thread_id = getattr(input_gate, "get_owner_thread_id", None)
+            if callable(is_active) and callable(get_owner_thread_id):
+                try:
+                    active_state = is_active()
+                    if not isinstance(active_state, bool) or not active_state:
+                        return False
+                    owner_thread_id = get_owner_thread_id()
+                except Exception:
+                    owner_thread_id = None
+                if not isinstance(owner_thread_id, int):
+                    return False
+                return owner_thread_id != threading.get_ident()
         status_lock = getattr(self._runtime_state, "nonblocking_input_status_lock", nullcontext())
         with status_lock:
             if self._runtime_state.nonblocking_input_status != "reading":
@@ -171,11 +186,17 @@ class UiEventHandler:
                             self._show_muted_message(payload)
                         continue
 
-                    def _render_text_event() -> None:
-                        if no_response:
-                            self._renderer.show_no_response(agent_name)
+                    payload = event.payload
+
+                    def _render_text_event(
+                        _no_response=no_response,
+                        _agent_name=agent_name,
+                        _payload=payload,
+                    ) -> None:
+                        if _no_response:
+                            self._renderer.show_no_response(_agent_name)
                         else:
-                            self._renderer.show_message(agent_name, event.payload)
+                            self._renderer.show_message(_agent_name, _payload)
 
                     if self._should_render_ui_event_above_prompt():
                         if not self._run_ui_event_above_prompt(_render_text_event):
@@ -189,9 +210,16 @@ class UiEventHandler:
                     self._show_error_message(event.payload)
                 elif event_type == RenderEvent.HANDOFF:
                     meta = event.metadata or {}
+                    handoff_agent = event.agent
+                    handoff_to = meta.get("to")
+                    handoff_task = meta.get("task")
 
-                    def _render_handoff_event() -> None:
-                        self._renderer.show_handoff(event.agent, meta.get("to"), task=meta.get("task"))
+                    def _render_handoff_event(
+                        _agent=handoff_agent,
+                        _to=handoff_to,
+                        _task=handoff_task,
+                    ) -> None:
+                        self._renderer.show_handoff(_agent, _to, task=_task)
 
                     if self._should_render_ui_event_above_prompt():
                         if not self._run_ui_event_above_prompt(_render_handoff_event):
@@ -200,9 +228,14 @@ class UiEventHandler:
                         continue
                     _render_handoff_event()
                 elif event_type == RenderEvent.TURN_SUMMARY:
+                    summary_agent = event.agent
+                    summary_payload = event.payload
 
-                    def _render_turn_summary_event() -> None:
-                        self._renderer.show_turn_summary(event.agent, event.payload)
+                    def _render_turn_summary_event(
+                        _agent=summary_agent,
+                        _payload=summary_payload,
+                    ) -> None:
+                        self._renderer.show_turn_summary(_agent, _payload)
 
                     if self._should_render_ui_event_above_prompt():
                         if not self._run_ui_event_above_prompt(_render_turn_summary_event):

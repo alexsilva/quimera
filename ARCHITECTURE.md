@@ -8,7 +8,7 @@
 
 O Quimera é um orquestrador multiagente terminal-based que permite aos usuários interagirem com diversos agentes de IA (Claude, Codex, Gemini, Ollama, OpenCode, etc.) através de uma interface unificada. O sistema executa tarefas em paralelo, gerencia estado de sessão, fornece uma interface rica com suporte a markup, temas e auditoria, e oferece um runtime de execução de tools em ambiente sandboxed.
 
-A arquitetura é organizada em torno de um loop principal de eventos em `quimera/app/core.py`, com separação parcial de responsabilidades entre camadas. Existem acoplamentos residuais significativos e algumas violações de fronteira conhecidas (documentadas na seção 7.5).
+A arquitetura é organizada em torno de um loop principal de eventos em `quimera/app/core.py`, com separação crescente de responsabilidades entre camadas. O desmonte incremental do monólito original extraiu módulos como `runtime_state`, `session_bootstrap`, `tty_control`, `toolbar`, `bug_services`, `command_router`, `chat_processor` e `ui_event_handler`. As violações de fronteira documentadas anteriormente foram resolvidas (seções 7.3 e 7.4).
 
 ---
 
@@ -17,7 +17,15 @@ A arquitetura é organizada em torno de um loop principal de eventos em `quimera
 ```
 quimera/
 ├── app/                              # Camada de aplicação (orquestração principal)
-│   ├── core.py                       # Loop principal, estado e coordenação (~2300 linhas)
+│   ├── core.py                       # Loop principal, estado e coordenação (~1611 linhas)
+│   ├── runtime_state.py              # AppRuntimeState: estado de runtime (input, chat, slots)
+│   ├── session_bootstrap.py          # Bootstrap/inicialização da sessão (paths, debug, bugs)
+│   ├── tty_control.py                # Controle de TTY (suspend/resume do renderer)
+│   ├── toolbar.py                    # ToolbarManager: toolbar dinâmica do prompt_toolkit
+│   ├── bug_services.py               # BugServices: detecção e correlação de bugs de runtime
+│   ├── command_router.py             # Roteamento de comandos slash (/task, /help, etc.)
+│   ├── chat_processor.py             # ChatProcessor: processamento de uma rodada de chat
+│   ├── ui_event_handler.py           # UIEventHandler: processamento de eventos de UI
 │   ├── chat_round.py                 # Lógica de uma rodada de chat (humano → agente → resultado)
 │   ├── dispatch.py                   # Despacho de chamadas para agentes e tools
 │   ├── task.py                       # Ponto de entrada de tarefas (coordenação de alto nível)
@@ -143,14 +151,22 @@ quimera/
 
 ### 3.1 Camada de Aplicação (`app/`)
 
-- **`core.py`**: Orquestrador central. Loop principal, estado da aplicação, coordenação de componentes, despacho para agentes e tasks. Arquivo grande (~2300 linhas) com responsabilidades sobrepostas — candidato prioritário a decomposição.
+- **`core.py`**: Orquestrador central. Loop principal, estado da aplicação, coordenação de componentes, despacho para agentes e tasks. Reduzido de ~2300 para ~1611 linhas após extração de módulos especializados (ver abaixo).
+- **`runtime_state.py`** (`AppRuntimeState`): Container de estado de runtime: status de input não-bloqueante, contadores de chat, semáforo de slots, executor de threads. Substitui o `_BACKWARD_MAP` legado que redirecionava atributos privados.
+- **`session_bootstrap.py`**: Inicialização da sessão: resolução de paths (logs, bugs, debug), análise de bugs de sessão anterior. Extraído de `core.py` para isolar lógica de startup.
+- **`tty_control.py`**: Controle de TTY: suspend e resume do renderer durante operações bloqueantes (editor, aprovação interativa). Coordena `TerminalRenderer` + `InputGate`.
+- **`toolbar.py`** (`ToolbarManager`): Geração e atualização da toolbar dinâmica do `prompt_toolkit`. Renderiza estado atual (agentes, turno, tema, métricas).
+- **`bug_services.py`** (`BugServices`): Detecção, correlação e reporte de bugs de runtime (burst de falhas, timeouts). Extraído de `AppBugServices` via rename + flatten.
+- **`command_router.py`**: Roteamento de comandos slash internos. Mantém o mapeamento de `/cmd` → handler sem exposição direta ao `core.py`.
+- **`chat_processor.py`** (`ChatProcessor`): Processamento de uma rodada de chat completa: input → agente → resultado → update de estado. Orquestra workers e sincronização.
+- **`ui_event_handler.py`** (`UIEventHandler`): Processamento de eventos da fila de UI (`ui_event_queue`). Usa `InputGate.is_active()` como fonte primária para decidir se o prompt deve ser redesenhado.
 - **`chat_round.py`**: Encapsula a lógica de uma rodada de chat completa (leitura de input → chamada ao agente → processamento de resultado → update de estado).
 - **`dispatch.py`**: Chama agentes via `AgentClient` e executa tools via `ToolLoop`. Gerencia o ciclo de vida de chamadas e resultados.
 - **`task*.py`**: Conjunto de serviços que implementam o ciclo de vida de tasks: criação, classificação, atribuição, execução, revisão, failover e notificação.
-- **`prompt_input.py`** (`InputGate`): Wrapper sobre `prompt_toolkit.PromptSession`. Gerencia o prompt interativo do usuário, toolbar dinâmica, histórico e coordenação com o renderer. Fallback para `input()` built-in apenas quando `_session` é `None` (contextos de teste).
+- **`prompt_input.py`** (`InputGate`): Wrapper sobre `prompt_toolkit.PromptSession`. Gerencia o prompt interativo do usuário, histórico e coordenação com o renderer. `InputGate.is_active()` é a fonte primária de verdade para estado de prompt ativo (substituiu `nonblocking_input_status` como árbitro principal). Fallback para `input()` built-in apenas quando `_session` é `None` (contextos de teste).
 - **`inputs.py`**: Integração de alto nível com `InputGate`, exposta ao `core.py`.
 - **`event_sink.py`**: Publish-subscribe interno. Eventos publicados de worker threads são enfileirados na `ui_event_queue`; publicados da main thread são processados diretamente.
-- **`system_layer.py`**: Processa comandos `/cmd` do usuário. Contém adaptadores legados (`_LegacyPluginResolver`, `_LegacyAgentPoolAdapter`) indicando migração de contrato incompleta.
+- **`system_layer.py`**: Processa comandos `/cmd` do usuário. Adaptadores legados (`_LegacyPluginResolver`, `_LegacyAgentPoolAdapter`) mantidos para compatibilidade de migração.
 - **`protocol.py`**: Define e parseia o formato de handoff entre agentes (`type`, `route`, `content`, `metadata`).
 - **`interfaces.py`**: Protocolos (typing) que tentam estabelecer contratos entre camadas — ainda subutilizados.
 
@@ -252,6 +268,8 @@ Sistema de rastreamento de contexto verificável. Evidências são extraídas da
 | `EventSink` | `app/event_sink.py` | Publish-subscribe interno |
 | `TurnManager` | `app/turn.py` | Alternância de turno com lock |
 | `SessionState` | `domain/session_state.py` | Estado compartilhado com `threading.RLock` |
+| `InputGate.is_active()` | `app/prompt_input.py` | Árbitro primário de estado de prompt ativo (substitui `nonblocking_input_status` como fonte de verdade) |
+| `AppRuntimeState` | `app/runtime_state.py` | Estado de runtime (slots, contadores, semáforo) — sem mais atributos privados via `_BACKWARD_MAP` |
 
 ### 4.4 Problemas Conhecidos de Threading
 
@@ -329,7 +347,7 @@ Handoffs em sequência usam `"handoffs": [...]`. O sistema atualiza `shared_stat
 
 ### 7.1 Acoplamento e Responsabilidades Sobrepostas
 
-- `core.py` (~2300 linhas): loop de I/O, gerenciamento de estado, dispatch, tasks — difícil de testar e evoluir isoladamente.
+- `core.py` (~1611 linhas, reduzido de ~2300): loop de I/O, gerenciamento de estado, dispatch, tasks. Decomposição em andamento — 8 módulos extraídos até o momento.
 - Muitos serviços em `app/` recebem a instância inteira de `app` e acessam atributos diretamente, em vez de dependências injetadas.
 - `interfaces.py` define Protocolos mas poucos componentes os usam; a maioria depende de classes concretas.
 
@@ -340,37 +358,26 @@ Handoffs em sequência usam `"handoffs": [...]`. O sistema atualiza `shared_stat
 - **Toolbar extrapolando**: conteúdo sem clipping ultrapassa a largura do terminal em sessões com muitos campos.
 - **`refresh_interval=1.0`**: atualização da toolbar atrasada em até 1s após resize.
 
-### 7.3 Violações de Fronteira de Camadas (Em Progresso)
+### 7.3 Violações de Fronteira de Camadas (Resolvidas)
 
-Imports diretos de `plugins/` em módulos que não deveriam conhecer a camada de plugins:
+Imports diretos de `plugins/` que existiam em módulos da camada de runtime/sandbox foram eliminados:
 
 | Módulo | Violação | Status |
 |---|---|---|
-| `sandbox/bwrap.py` | importa `AgentPlugin` de `plugins.base` | Pendente (8c) |
-| `runtime/task_planning.py` | importa `AgentPlugin` de `plugins.base` | Pendente (8a) |
-| `runtime/drivers/repl.py` | chama `_plugin_registry.all_plugins()` diretamente | Pendente (8b) |
-| `app/core.py` | `call_agent_for_parallel` exposto via wrapper desnecessário | Pendente (8e) |
-| `ui/renderer.py` | consulta `quimera.plugins.get(...)` para metadados | Pendente (8d) |
+| `sandbox/bwrap.py` | importava `AgentPlugin` de `plugins.base` | **Resolvido** (8c) |
+| `runtime/task_planning.py` | importava `AgentPlugin` de `plugins.base` | **Resolvido** (8a) |
+| `runtime/drivers/repl.py` | chamava `_plugin_registry.all_plugins()` diretamente | **Resolvido** (8b) |
+| `app/core.py` | `call_agent_for_parallel` exposto via wrapper desnecessário | **Resolvido** (8e) |
+| `ui/renderer.py` | consultava `quimera.plugins.get(...)` para metadados | **Resolvido** (8d) |
 
-Ordem de resolução: 8c → 8a → 8b → 8e → 8d.
+### 7.4 Lookups de Plugin Distribuídos (Resolvidos)
 
-### 7.4 Lookups de Plugin Distribuídos (Pós-Seção 8)
-
-Após fechar as violações acima, consolidar lookups de `quimera.plugins.get(...)` que ainda ocorrem dispersos:
-
-| Arquivo | Problema |
-|---|---|
-| `app/dispatch.py:184` | lookup direto de plugin |
-| `app/task.py:71` | lookup direto de plugin |
-| `app/system_layer.py:103` | lookup direto de plugin |
-| `app/chat_round.py:239` | lookup direto de plugin |
-
-Objetivo: centralizar em `core.py` ou num `PluginRegistry` encapsulado.
+Os lookups dispersos de `quimera.plugins.get(...)` em `app/dispatch.py`, `app/task.py`, `app/system_layer.py` e `app/chat_round.py` foram resolvidos. Lookups remanescentes em `cli.py`, `agents/client.py` e `agents/text_filters.py` são legítimos — essas camadas têm acesso intencional ao registro de plugins.
 
 ### 7.5 Outros Problemas
 
 - **Adaptadores legados em `system_layer.py`**: `_LegacyPluginResolver` e `_LegacyAgentPoolAdapter` indicam migração de contrato incompleta.
-- **Cobertura de testes**: 2177 passando. Lacunas em testes de integração de tasks (criação → execução → revisão), concorrência e cenários de falha.
+- **Cobertura de testes**: 2209 passando. Lacunas em testes de integração de tasks (criação → execução → revisão), concorrência e cenários de falha.
 - **Logging**: feito via `print` estruturado; sem níveis de gravidade padronizados ou saída JSON.
 - **`renderer.py`** (~1200 linhas): beneficiaria divisão em módulos menores.
 
@@ -381,15 +388,17 @@ Objetivo: centralizar em `core.py` ou num `PluginRegistry` encapsulado.
 ### Pontos Fortes
 
 - Separação conceitual entre camadas: apresentação, aplicação, domínio, infraestrutura.
-- Input 100% via `prompt_toolkit`; sem redraw manual legado.
+- Input 100% via `prompt_toolkit`; `InputGate.is_active()` como árbitro único de estado de prompt ativo.
+- `_BACKWARD_MAP` removido: estado de runtime acessado diretamente via `AppRuntimeState`.
+- Decomposição de `core.py` em andamento: 8 módulos extraídos, ~689 linhas reduzidas.
+- Violações de fronteira entre camadas (seções 7.3 e 7.4) resolvidas.
 - Sistema de tasks maduro: revisão, failover, roteamento por especialidade.
 - Arquitetura orientada a goals com critérios de aceitação e regras de revisão.
 - Sistema de evidências para rastreamento de contexto verificável.
-- Boa cobertura de testes unitários (2177 testes).
+- Boa cobertura de testes unitários (2209 testes).
 
 ### Problemas Prioritários
 
-1. **Threading/renderização**: conflito `rich.Live` × `prompt_toolkit` causa corrupção de terminal em resize e durante streaming.
-2. **Violações de fronteira** (seção 7.3): imports proibidos entre camadas dificultam evolução isolada.
-3. **`core.py` monolítico**: concentra responsabilidades demais — decomposição direcionada necessária.
-4. **Lookups de plugin distribuídos** (seção 7.4): cada módulo resolve metadados por conta própria.
+1. **Threading/renderização**: conflito `rich.Live` × `prompt_toolkit` pode causar corrupção de terminal em resize durante streaming. A suspensão do renderer foi estabilizada para o fluxo do editor (`tty_control.py`), mas o caminho geral ainda não usa `run_in_terminal`.
+2. **`core.py` ainda grande**: ~1611 linhas com ~40 lambdas `lambda: self.*` no `__init__` — acoplamento alto que dificulta extração adicional.
+3. **Adaptadores legados em `system_layer.py`**: `_LegacyPluginResolver` e `_LegacyAgentPoolAdapter` indicam migração de contrato incompleta.

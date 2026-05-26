@@ -41,7 +41,7 @@ class TestPromptRedraw:
         app.runtime_state.nonblocking_prompt_text = prompt
         app.input_gate = MagicMock()
         app.input_gate.get_line_buffer.return_value = ""
-        app.input_gate.is_active.return_value = False
+        app.input_gate.is_active.return_value = status == "reading"
         app.input_gate.has_session.return_value = False
         return app
 
@@ -105,6 +105,10 @@ class TestPromptRedraw:
 
             @staticmethod
             def has_session() -> bool:
+                return True
+
+            @staticmethod
+            def is_active() -> bool:
                 return True
 
             @staticmethod

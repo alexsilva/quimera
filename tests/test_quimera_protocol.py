@@ -3479,6 +3479,7 @@ class PluginTests(unittest.TestCase):
         app.runtime_state.nonblocking_prompt_text = "Alex: "
         app.input_gate = Mock()
         app.input_gate.get_line_buffer.return_value = "digitando"
+        app.input_gate.is_active.return_value = True
 
         stdin = io.StringIO("")
         stdin.isatty = lambda: True
@@ -3583,6 +3584,7 @@ class PluginTests(unittest.TestCase):
         app.runtime_state.nonblocking_prompt_text = "Alex: "
         app.input_gate = Mock()
         app.input_gate.get_line_buffer.return_value = "oi"
+        app.input_gate.is_active.return_value = True
 
         stdin = io.StringIO("")
         stdin.isatty = lambda: True
@@ -3604,7 +3606,7 @@ class PluginTests(unittest.TestCase):
         app.renderer = Mock()
         app.input_gate = Mock()
         app.input_gate.get_line_buffer.return_value = "oi"
-        app.input_gate.is_active.return_value = False
+        app.input_gate.is_active.return_value = True
 
         stdin = io.StringIO("")
         stdin.isatty = lambda: True

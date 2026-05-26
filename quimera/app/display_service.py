@@ -79,7 +79,7 @@ class DisplayService:
 
     def _should_suppress_active_prompt_message(self, message: str) -> bool:
         """Suprime status transitório de task para evitar churn no prompt."""
-        if self.input_status_getter() != "reading":
+        if not self._is_prompt_active():
             return False
         if "\n" in message or not message.startswith("[task "):
             return False
@@ -88,7 +88,7 @@ class DisplayService:
     def _should_defer_active_prompt_message(self, message: str) -> bool:
         """Adia mensagens de task enquanto o input TTY estiver ativo."""
         return (
-            self.input_status_getter() == "reading"
+            self._is_prompt_active()
             and message.startswith("[task ")
             and "\n" not in message
             and ": concluída" not in message
@@ -184,9 +184,16 @@ class DisplayService:
 
         return list(last_msg_by_task.values()) if last_msg_by_task else list(deferred)
 
+    def _is_input_reading(self) -> bool:
+        """Normaliza leitura de estado de prompt ativo (bool moderno ou string legada)."""
+        status = self.input_status_getter()
+        if isinstance(status, bool):
+            return status
+        return status == "reading"
+
     def _is_prompt_active(self) -> bool:
         """Retorna se há um prompt interativo ativo no momento."""
-        return self.input_status_getter() == "reading"
+        return self._is_input_reading()
 
     def _is_prompt_owner_thread(self) -> bool:
         """Retorna se a thread atual é a dona do prompt interativo."""

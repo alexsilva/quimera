@@ -317,6 +317,26 @@ class TestInputGateCall:
                 assert result == "hello"
                 session.prompt.assert_called_once()
 
+    def test_tracks_active_owner_during_prompt_call(self):
+        with patch("quimera.app.prompt_input.PromptSession") as MockPS:
+            with patch("quimera.app.prompt_input.InMemoryHistory"):
+                session = MagicMock()
+                observed = {}
+
+                def _prompt(_prompt_text, **_kwargs):
+                    observed["active"] = gate.is_active()
+                    observed["owner"] = gate.get_owner_thread_id()
+                    return "ok"
+
+                session.prompt.side_effect = _prompt
+                MockPS.return_value = session
+                gate = _make_gate()
+                assert gate("> ") == "ok"
+                assert observed["active"] is True
+                assert observed["owner"] is not None
+                assert gate.is_active() is False
+                assert gate.get_owner_thread_id() is None
+
 
 # ---------------------------------------------------------------------------
 # InputGate — get_line_buffer (lines 243-255)

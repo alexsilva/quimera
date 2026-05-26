@@ -108,6 +108,62 @@ def _get_runtime_or_legacy_attr(app, runtime_name: str, legacy_name: str, defaul
     return getattr(app, legacy_name, default)
 
 
+def _get_input_gate_status(app) -> bool | None:
+    input_gate = getattr(app, "input_gate", None)
+    if input_gate is None:
+        return None
+    is_active = getattr(input_gate, "is_active", None)
+    if not callable(is_active):
+        return None
+    try:
+        status = is_active()
+    except Exception:
+        return None
+    if isinstance(status, bool):
+        return status
+    return None
+
+
+def _get_input_gate_owner_thread_id(app):
+    input_gate = getattr(app, "input_gate", None)
+    if input_gate is None:
+        return None
+    getter = getattr(input_gate, "get_owner_thread_id", None)
+    if not callable(getter):
+        return None
+    try:
+        owner = getter()
+    except Exception:
+        return None
+    if isinstance(owner, int):
+        return owner
+    return None
+
+
+def _resolve_input_status_from_app(app):
+    gate_status = _get_input_gate_status(app)
+    if gate_status is not None:
+        return gate_status
+    return _get_runtime_or_legacy_attr(
+        app,
+        runtime_name="nonblocking_input_status",
+        legacy_name="_nonblocking_input_status",
+        default="idle",
+    )
+
+
+def _resolve_prompt_owner_thread_id_from_app(app):
+    gate_owner_thread_id = _get_input_gate_owner_thread_id(app)
+    if gate_owner_thread_id is not None:
+        return gate_owner_thread_id
+    return _get_runtime_or_legacy_attr(
+        app,
+        runtime_name="prompt_owning_thread_id",
+        legacy_name="_prompt_owning_thread_id",
+        default=None,
+    )
+
+
 class AppSystemLayer:
     """Encapsula comandos de sistema e delega display para ``DisplayService``."""
 
@@ -169,24 +225,14 @@ class AppSystemLayer:
                 )
                 clear_screen = clear_screen or (lambda: getattr(app, "clear_terminal_screen", lambda: None)())
                 input_status_getter = input_status_getter or (
-                    lambda: _get_runtime_or_legacy_attr(
-                        app,
-                        runtime_name="nonblocking_input_status",
-                        legacy_name="_nonblocking_input_status",
-                        default="idle",
-                    )
+                    lambda: _resolve_input_status_from_app(app)
                 )
                 redisplay_prompt = redisplay_prompt or getattr(
                     app, "_redisplay_user_prompt_if_needed", None
                 )
                 output_lock = output_lock or (lambda: getattr(app, "_output_lock", nullcontext()))
                 prompt_owner_thread_id_getter = prompt_owner_thread_id_getter or (
-                    lambda: _get_runtime_or_legacy_attr(
-                        app,
-                        runtime_name="prompt_owning_thread_id",
-                        legacy_name="_prompt_owning_thread_id",
-                        default=None,
-                    )
+                    lambda: _resolve_prompt_owner_thread_id_from_app(app)
                 )
                 if run_above_active_prompt is None:
                     input_gate = getattr(app, "input_gate", None)

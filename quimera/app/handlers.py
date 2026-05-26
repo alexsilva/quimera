@@ -13,7 +13,7 @@ class AppCallbacks:
     show_error: "Callable[[str], None]"
     show_warning: "Callable[[str], None]"
     show_system: "Callable[[str], None]"
-    is_reading: "Callable[[], str | None]"
+    is_reading: "Callable[[], bool | str | None]"
 
 
 class PromptAwareStderrHandler(logging.StreamHandler):
@@ -46,7 +46,7 @@ class PromptAwareStderrHandler(logging.StreamHandler):
             show_error=getattr(app, "show_error_message", _noop),
             show_warning=getattr(app, "show_warning_message", _noop),
             show_system=getattr(app, "show_system_message", _noop),
-            is_reading=lambda: _get_runtime_or_legacy_input_status(app),
+            is_reading=lambda: _is_prompt_active_from_app(app),
         )
 
     def bind_callbacks(
@@ -57,7 +57,7 @@ class PromptAwareStderrHandler(logging.StreamHandler):
             show_error: "Callable[[str], None]",
             show_warning: "Callable[[str], None]",
             show_system: "Callable[[str], None]",
-            is_reading: "Callable[[], str | None]"
+            is_reading: "Callable[[], bool | str | None]"
     ) -> None:
         """Executa bind de callbacks."""
         self._callbacks = AppCallbacks(
@@ -76,7 +76,7 @@ class PromptAwareStderrHandler(logging.StreamHandler):
             super().emit(record)
             return
 
-        if callbacks.is_reading() == "reading" and record.levelno < logging.WARNING:
+        if _is_prompt_reading(callbacks.is_reading()) and record.levelno < logging.WARNING:
             return
 
         formatter = self.formatter or logging.Formatter("%(message)s")
@@ -109,6 +109,26 @@ class PromptAwareStderrHandler(logging.StreamHandler):
             super().emit(record)
             self.flush()
             callbacks.redisplay_prompt(clear_first=False)
+
+
+def _is_prompt_reading(value: bool | str | None) -> bool:
+    if isinstance(value, bool):
+        return value
+    return value == "reading"
+
+
+def _is_prompt_active_from_app(app) -> bool | str | None:
+    input_gate = getattr(app, "input_gate", None)
+    if input_gate is not None:
+        is_active = getattr(input_gate, "is_active", None)
+        if callable(is_active):
+            try:
+                status = is_active()
+                if isinstance(status, bool):
+                    return status
+            except Exception:
+                pass
+    return _get_runtime_or_legacy_input_status(app)
 
 
 def _get_runtime_or_legacy_input_status(app) -> str | None:

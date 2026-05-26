@@ -18,7 +18,7 @@ O Quimera coordena agentes (CLI e OpenAI-compatible), mantém estado compartilha
 - `quimera/runtime/task_planning.py`: classificação de task e scoring de roteamento.
 - `quimera/runtime/tasks.py`: persistência de jobs/tasks em SQLite.
 - `quimera/plugins/`: catálogo de agentes e metadados de capacidade.
-- `quimera/ui.py`: renderização terminal (temas, densidade, stream e resumo).
+- `quimera/ui/`: renderização terminal (temas, densidade, stream e resumo).
 
 ## Requisitos
 

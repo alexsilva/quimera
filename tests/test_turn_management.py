@@ -470,6 +470,121 @@ class TestTurnCycle(unittest.TestCase):
         scheduled_callbacks[0]()
         self.assertEqual(rendered_messages, [("codex", "mensagem do agente")])
 
+    def test_drain_ui_events_keeps_text_callback_payload_isolated_when_scheduled(self):
+        """Callbacks TEXT agendados devem preservar payload/agent da iteração de origem."""
+        app = QuimeraApp.__new__(QuimeraApp)
+        rendered_messages = []
+        no_response_calls = []
+        scheduled_callbacks = []
+
+        class Renderer:
+            def show_message(self, agent, payload):
+                rendered_messages.append((agent, payload))
+
+            def show_no_response(self, agent):
+                no_response_calls.append(agent)
+
+            def flush(self):
+                return None
+
+        class InputGate:
+            def run_in_terminal_message(self, callback):
+                scheduled_callbacks.append(callback)
+                return True
+
+        app.renderer = Renderer()
+        app.input_gate = InputGate()
+        app._output_lock = threading.Lock()
+        app.runtime_state.nonblocking_input_status_lock = threading.Lock()
+        app.runtime_state.nonblocking_input_status = "reading"
+        app.runtime_state.prompt_owning_thread_id = object()
+
+        ui_queue = queue.Queue()
+        ui_queue.put(RenderEvent(RenderEvent.TEXT, "primeira", agent="codex"))
+        ui_queue.put(
+            RenderEvent(
+                RenderEvent.TEXT,
+                "segunda",
+                agent="claude",
+                metadata={"no_response": True},
+            )
+        )
+
+        with patch("quimera.app.core.sys.stdin") as mock_stdin:
+            mock_stdin.isatty.return_value = True
+            QuimeraApp._drain_ui_events(app, ui_queue)
+
+        self.assertEqual(len(scheduled_callbacks), 2)
+        self.assertEqual(rendered_messages, [])
+        self.assertEqual(no_response_calls, [])
+
+        scheduled_callbacks[0]()
+        scheduled_callbacks[1]()
+
+        self.assertEqual(rendered_messages, [("codex", "primeira")])
+        self.assertEqual(no_response_calls, ["claude"])
+
+    def test_drain_ui_events_keeps_handoff_callback_payload_isolated_when_scheduled(self):
+        """Callbacks HANDOFF agendados devem manter metadata da iteração correta."""
+        app = QuimeraApp.__new__(QuimeraApp)
+        handoff_calls = []
+        scheduled_callbacks = []
+
+        class Renderer:
+            def show_handoff(self, from_agent, to_agent, task=None):
+                handoff_calls.append((from_agent, to_agent, task))
+
+            def flush(self):
+                return None
+
+        class InputGate:
+            def run_in_terminal_message(self, callback):
+                scheduled_callbacks.append(callback)
+                return True
+
+        app.renderer = Renderer()
+        app.input_gate = InputGate()
+        app._output_lock = threading.Lock()
+        app.runtime_state.nonblocking_input_status_lock = threading.Lock()
+        app.runtime_state.nonblocking_input_status = "reading"
+        app.runtime_state.prompt_owning_thread_id = object()
+
+        ui_queue = queue.Queue()
+        ui_queue.put(
+            RenderEvent(
+                RenderEvent.HANDOFF,
+                "",
+                agent="codex",
+                metadata={"to": "claude", "task": "T1"},
+            )
+        )
+        ui_queue.put(
+            RenderEvent(
+                RenderEvent.HANDOFF,
+                "",
+                agent="claude",
+                metadata={"to": "gemini", "task": "T2"},
+            )
+        )
+
+        with patch("quimera.app.core.sys.stdin") as mock_stdin:
+            mock_stdin.isatty.return_value = True
+            QuimeraApp._drain_ui_events(app, ui_queue)
+
+        self.assertEqual(len(scheduled_callbacks), 2)
+        self.assertEqual(handoff_calls, [])
+
+        scheduled_callbacks[0]()
+        scheduled_callbacks[1]()
+
+        self.assertEqual(
+            handoff_calls,
+            [
+                ("codex", "claude", "T1"),
+                ("claude", "gemini", "T2"),
+            ],
+        )
+
     def test_drain_ui_events_text_without_agent_is_rendered_as_system_message(self):
         """Evento TEXT sem agente não deve renderizar card 'Unknown'."""
         app = QuimeraApp.__new__(QuimeraApp)
