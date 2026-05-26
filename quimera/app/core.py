@@ -808,7 +808,9 @@ class QuimeraApp:
         session_metrics = getattr(self, "session_metrics", None)
         if session_metrics is not None:
             session_metrics.record_agent_metric(self, agent_name, "failed", 0)
-        if failures >= 2:
+        # Emite bug apenas na transição para o estado de burst (2 falhas consecutivas),
+        # evitando duplicação de log/evento para a mesma sequência contínua de falhas.
+        if failures == 2:
             self._file_bug(
                 session_id=getattr(self.storage, "session_id", ""),
                 category="agent_failure_burst",

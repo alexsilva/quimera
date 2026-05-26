@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 import json
+import threading
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -216,6 +218,24 @@ def test_file_bug_persists_without_event_sink(tmp_path):
         assert reports[0].category == "agent_failure_burst"
     finally:
         app.bug_store.close()
+
+
+def test_record_failure_files_agent_failure_burst_only_once_per_streak():
+    app = QuimeraApp.__new__(QuimeraApp)
+    app.agent_failures = defaultdict(int)
+    app._agent_failures_lock = threading.Lock()
+    app.agent_pool = []
+    app.tasks_db_path = ""
+    app.session_metrics = None
+    app.storage = SimpleNamespace(session_id="sessao-1")
+    app._normalize_agent_name = lambda agent: str(agent)
+    app._file_bug = Mock()
+
+    app.record_failure("opencode-ring-2-6-1t-free")  # 1
+    app.record_failure("opencode-ring-2-6-1t-free")  # 2 -> deve emitir bug
+    app.record_failure("opencode-ring-2-6-1t-free")  # 3 -> não deve emitir de novo
+
+    assert app._file_bug.call_count == 1
 
 
 def test_bug_correlator_produces_combined_bug_when_render_and_agent_failure_overlap():
