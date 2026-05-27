@@ -315,7 +315,13 @@ class TestServeSocket:
         t.start()
         for _ in range(50):
             if os.path.exists(sock_path):
-                break
+                try:
+                    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                    s.connect(sock_path)
+                    s.close()
+                    break
+                except OSError:
+                    pass
             time.sleep(0.02)
 
         results = []

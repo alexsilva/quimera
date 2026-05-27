@@ -12,7 +12,6 @@ from .task_events import (
     TaskFailed,
     TaskProposed,
     TaskRequeued,
-    TaskStarted,
     TaskSubmittedForReview,
 )
 from .task_utils import summarize_task_feedback
@@ -56,9 +55,6 @@ class UiEventHandler:
 
     def wire_event_ui(self) -> list:
         """Conecta eventos de domínio aos callbacks de UI. Retorna lista de subscriptions."""
-        def _on_task_started(event):
-            self._show_muted_message(f"[task {event.task_id}] {event.assigned_to}: iniciando")
-
         def _on_task_completed(event):
             line = f"[task {event.task_id}] concluída"
             if event.reviewed_by:
@@ -97,7 +93,6 @@ class UiEventHandler:
             )
 
         self._subscriptions = [
-            self._event_sink.subscribe(TaskStarted, _on_task_started),
             self._event_sink.subscribe(TaskCompleted, _on_task_completed),
             self._event_sink.subscribe(TaskFailed, _on_task_failed),
             self._event_sink.subscribe(TaskProposed, _on_task_proposed),
