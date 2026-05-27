@@ -415,6 +415,8 @@ class AgentClient:
 
                 with status_cm as status:
                     _last_status_text = [None]
+                    _first_stdout_seen = [False]
+                    _last_wait_feedback_second = [0]
 
                     def _update_status_once(text: str) -> None:
                         if status is None or text == _last_status_text[0]:
@@ -433,6 +435,7 @@ class AgentClient:
                         if not cleaned.strip():
                             return
                         if stream_type == "stdout":
+                            _first_stdout_seen[0] = True
                             if self.visibility in {Visibility.SUMMARY, Visibility.FULL}:
                                 self._show_formatted_stdout(agent, cleaned)
                             return
@@ -463,6 +466,15 @@ class AgentClient:
                         if status is not None:
                             _lbl = self._spy_output_presenter.compose_status_label(cmd[0])
                             _update_status_once(f"[dim]{_lbl}... {elapsed}s[/dim]")
+                        if (
+                            agent
+                            and self.visibility in {Visibility.SUMMARY, Visibility.FULL}
+                            and not _first_stdout_seen[0]
+                            and elapsed >= 2
+                            and elapsed != _last_wait_feedback_second[0]
+                        ):
+                            self.renderer.update_agent_transient(agent, f"aguardando resposta... {elapsed}s")
+                            _last_wait_feedback_second[0] = elapsed
 
                     self._spy_output_presenter.notify_agent_started(agent)
                     termination = runner.watch(log_queue=log_queue, on_item=_on_item, on_tick=_on_tick)

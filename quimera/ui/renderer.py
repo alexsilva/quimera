@@ -965,7 +965,16 @@ class TerminalRenderer:
                     snapshot["last_emitted_message"] = clean_message
                     emit_line = True
                 else:
+                    last_emitted_message = str(snapshot.get("last_emitted_message") or "")
                     should_emit = (now - float(last_render_at)) >= _PROMPT_TRANSIENT_SNAPSHOT_INTERVAL_SEC
+                    # Não segurar o primeiro conteúdo útil após "iniciando execução":
+                    # melhora percepção de latência sem voltar a floodar snapshots.
+                    if (
+                        not should_emit
+                        and last_emitted_message.casefold() == "iniciando execução"
+                        and clean_message.casefold() != last_emitted_message.casefold()
+                    ):
+                        should_emit = True
                     if should_emit:
                         suppressed = int(snapshot.get("suppressed") or 0)
                         display_message = f"… {clean_message}" if suppressed > 0 else clean_message

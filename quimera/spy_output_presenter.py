@@ -563,5 +563,8 @@ class SpyOutputPresenter:
         if event.kind == "tool":
             self.renderer.show_plain(rendered, agent=agent, muted=True)
         else:
-            self.renderer.show_plain(rendered, agent=agent)
+            if agent:
+                self.renderer.show_plain(rendered, agent=agent, muted=True)
+            else:
+                self.renderer.show_plain(rendered, agent=agent)
         self.last_message = dedupe_key

@@ -504,6 +504,25 @@ class TestTerminalRenderer:
         assert "🔷  Codex … mensagem 3" in rendered
         renderer.close(timeout=1.0)
 
+    def test_update_agent_transient_prompt_active_emits_first_message_after_start_immediately(self):
+        renderer = TerminalRenderer()
+        renderer._console = Console(width=100, record=True, force_terminal=False)
+        renderer.set_prompt_integration(lambda: True, None)
+
+        with patch("quimera.ui._agent_style", return_value=("cyan", "🔷  Codex")), patch(
+            "quimera.ui.renderer.time.monotonic",
+            side_effect=[0.0, 0.1],
+        ):
+            renderer.update_agent_transient("codex", "iniciando execução")
+            renderer.update_agent_transient("codex", "primeiro chunk")
+
+        renderer.flush()
+        rendered = renderer._console.export_text()
+        assert "🔷  Codex iniciando execução" in rendered
+        assert "🔷  Codex primeiro chunk" in rendered
+        assert "🔷  Codex … primeiro chunk" not in rendered
+        renderer.close(timeout=1.0)
+
     def test_clear_agent_transient_resets_prompt_snapshot_buffer(self):
         renderer = TerminalRenderer()
         renderer._console = Console(width=100, record=True, force_terminal=False)

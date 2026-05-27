@@ -717,6 +717,29 @@ def test_agent_client_run_summary_shows_formatted_codex_stdout(renderer):
     renderer.show_plain.assert_any_call("execução concluída", agent="codex", muted=True)
 
 
+def test_agent_client_run_summary_emits_wait_feedback_before_first_stdout(renderer):
+    client = AgentClient(renderer, visibility=Visibility.SUMMARY)
+    with patch("subprocess.Popen") as mock_popen:
+        mock_proc = MagicMock()
+        mock_proc.stdout = iter([])
+        mock_proc.stderr = iter([])
+        mock_proc.returncode = 0
+        mock_proc.stdin = MagicMock()
+        mock_popen.return_value = mock_proc
+
+        def _watch(_self, log_queue=None, on_item=None, on_tick=None):
+            if on_tick is not None:
+                on_tick(1)
+                on_tick(2)
+            return ProcessRunner.COMPLETED
+
+        with patch.object(ProcessRunner, "watch", autospec=True, side_effect=_watch):
+            client.run(["codex", "exec"], silent=False, agent="codex", show_status=False)
+
+    renderer.update_agent_transient.assert_any_call("codex", "iniciando execução")
+    renderer.update_agent_transient.assert_any_call("codex", "aguardando resposta... 2s")
+
+
 def test_agent_client_run_summary_flushes_compacted_responses_before_context(renderer):
     client = AgentClient(renderer, visibility=Visibility.SUMMARY)
     status = MagicMock()
@@ -797,8 +820,8 @@ def test_agent_client_run_summary_shows_diff_output_and_keeps_next_operation_cle
     assert any("codex | $ git status --short" in str(c) for c in status.update.call_args_list)
     assert ("$ git status --short",) not in [call.args for call in renderer.show_plain.call_args_list]
     assert ("✓ git diff -- quimera/agents.py",) not in [call.args for call in renderer.show_plain.call_args_list]
-    renderer.show_plain.assert_any_call("diff --git a/quimera/agents.py b/quimera/agents.py", agent="codex")
-    renderer.show_plain.assert_any_call("+nova linha", agent="codex")
+    renderer.show_plain.assert_any_call("diff --git a/quimera/agents.py b/quimera/agents.py", agent="codex", muted=True)
+    renderer.show_plain.assert_any_call("+nova linha", agent="codex", muted=True)
     assert client.last_spy_turn_detail is not None
     assert client.last_spy_turn_detail["tools"]
     # summary delegada ao renderer via show_turn_summary (MagicMock tem o método)
@@ -819,8 +842,8 @@ def test_spy_output_presenter_keeps_next_operation_clean_after_diff_preview(rend
         presenter.emit("codex", event)
     presenter.emit("codex", SpyEvent(kind="tool", text="$ git status --short"))
 
-    renderer.show_plain.assert_any_call("diff --git a/quimera/agents.py b/quimera/agents.py", agent="codex")
-    renderer.show_plain.assert_any_call("+nova linha", agent="codex")
+    renderer.show_plain.assert_any_call("diff --git a/quimera/agents.py b/quimera/agents.py", agent="codex", muted=True)
+    renderer.show_plain.assert_any_call("+nova linha", agent="codex", muted=True)
     assert ("✓ git diff -- quimera/agents.py",) not in [call.args for call in renderer.show_plain.call_args_list]
     assert ("$ git status --short",) not in [call.args for call in renderer.show_plain.call_args_list]
     assert presenter.current_status_label == "$ git status --short"
@@ -1045,7 +1068,7 @@ def test_agent_client_run_spy_shows_claude_stdout_context(renderer):
     renderer.update_agent_transient.assert_any_call("claude", "iniciando execução")
     renderer.update_agent_transient.assert_any_call("claude", "usando Read")
     renderer.show_plain.assert_any_call("Vou inspecionar o arquivo antes de sugerir a mudança.",
-                                        agent="claude")
+                                        agent="claude", muted=True)
     renderer.update_agent_transient.assert_any_call("claude", "execução concluída")
     renderer.clear_agent_transient.assert_any_call("claude")
 
