@@ -85,3 +85,17 @@ class TestPluginRegistryInjection:
         app = QuimeraApp(tmp_path, plugin_registry=empty_registry)
         assert app.get_agent_plugin("") is None
         assert app.get_agent_plugin(None) is None
+
+    def test_available_commands_uses_only_selected_agents_prefixes(self, tmp_path):
+        """Autocomplete não deve incluir prefixo de plugin base fora do agent_pool."""
+        registry = PluginRegistry()
+        codex_plugin = AgentPlugin(name="codex", prefix="/codex", style=("blue", "Codex"))
+        opencode_plugin = AgentPlugin(name="opencode", prefix="/opencode", style=("blue", "OpenCode"))
+        registry.register(codex_plugin)
+        registry.register(opencode_plugin)
+
+        app = QuimeraApp(tmp_path, plugin_registry=registry, agents=["codex"])
+        commands = app._available_commands()
+
+        assert "/codex" in commands
+        assert "/opencode" not in commands

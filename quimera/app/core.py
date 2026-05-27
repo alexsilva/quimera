@@ -724,8 +724,9 @@ class QuimeraApp:
     def _available_commands(self) -> list[str]:
         """Retorna todos os comandos disponíveis para autocomplete."""
         commands = set(self._available_internal_commands())
-        for plugin in self.get_available_plugins():
-            if plugin.prefix:
+        for agent_name in self.agent_pool:
+            plugin = self.get_agent_plugin(agent_name)
+            if plugin and plugin.prefix:
                 commands.add(plugin.prefix)
         return sorted(commands)
 
