@@ -699,15 +699,32 @@ def test_handle_command_connect_passes_injected_registry_to_set_override():
     assert set_override.call_args.kwargs["registry"] is app._plugin_registry
 
 
+def test_handle_command_reload_preserves_session_agents():
+    app = make_app()
+    app.active_agents = ["existing_agent"]
+    app.selected_agents = ["existing_agent", "ghost"]
+    layer = AppSystemLayer(app)
+
+    with patch("quimera.app.system_layer.reload_plugins", return_value=["existing_agent", "new_agent"]):
+        assert layer.handle_command(CMD_RELOAD) is True
+
+    assert app.active_agents == ["existing_agent"]
+    assert app.selected_agents == ["existing_agent"]
+    assert app.renderer.system_messages[-1] == "Plugins recarregados: 2 plugin(s)"
+
+
 def test_handle_command_reload_and_reset_state_paths():
     app = make_app()
+    app.active_agents = ["a", "stale"]
+    app.selected_agents = ["a", "ghost"]
     layer = AppSystemLayer(app)
 
     with patch("quimera.app.system_layer.reload_plugins", return_value=["a", "b"]):
         assert layer.handle_command(CMD_RELOAD) is True
 
-    assert app.active_agents == ["a", "b"]
-    assert app.selected_agents == ["a", "b"]
+    assert app.active_agents == ["a"]
+    assert app.selected_agents == ["a"]
+    assert app.renderer.system_messages[-1] == "Plugins recarregados: 2 plugin(s)"
 
     assert layer.handle_command(CMD_RESET_STATE) is True
     app.reset_shared_state.assert_called_once()

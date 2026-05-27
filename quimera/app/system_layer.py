@@ -591,10 +591,14 @@ class AppSystemLayer:
             return True
 
         if command == CMD_RELOAD:
-            names = reload_plugins(registry=self.plugin_registry)
-            self.agent_pool.set(names)
-            self.set_selected_agents(names)
-            self._display.show_system(f"Plugins recarregados: {len(names)} agentes disponíveis")
+            current_agents = list(self.agent_pool.agents)
+            current_selected_agents = list(self.get_selected_agents() or [])
+            all_names = reload_plugins(registry=self.plugin_registry)
+            surviving = [a for a in current_agents if a in all_names]
+            surviving_selected = [a for a in current_selected_agents if a in surviving]
+            self.agent_pool.set(surviving)
+            self.set_selected_agents(surviving_selected)
+            self._display.show_system(f"Plugins recarregados: {len(all_names)} plugin(s)")
             return True
 
         if command == CMD_PROMPT or command.startswith(f"{CMD_PROMPT} "):
