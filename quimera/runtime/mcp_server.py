@@ -245,7 +245,12 @@ class MCPServer:
         if underlying is None:
             # Fallback: tenta obter via name (socket fileno não aplicável a StringIO em testes)
             underlying = getattr(inp, "_sock", None)
+        previous_timeout = None
         if underlying is not None:
+            try:
+                previous_timeout = underlying.gettimeout()
+            except Exception:  # noqa: BLE001
+                previous_timeout = None
             try:
                 underlying.settimeout(self._AUTH_READLINE_TIMEOUT)
             except Exception:  # noqa: BLE001
@@ -263,6 +268,14 @@ class MCPServer:
         except Exception:  # noqa: BLE001
             _logger.warning("MCP auth: prelude inválido — conexão recusada")
             return False
+        finally:
+            # O timeout de auth deve valer só para o prelude.
+            # Se mantido, conexões MCP long-lived quebram após poucos segundos de ociosidade.
+            if underlying is not None:
+                try:
+                    underlying.settimeout(previous_timeout)
+                except Exception:  # noqa: BLE001
+                    pass
 
     # ------------------------------------------------------------------
     # Socket Unix

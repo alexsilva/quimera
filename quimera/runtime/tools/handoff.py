@@ -248,7 +248,9 @@ class HandoffTools:
                             silent=True,
                             show_output=False,
                             persist_history=True,
-                            history_snapshot=None,
+                            # Evita reenviar todo o histórico da conversa principal
+                            # para o subagente em handoff MCP (reduz latência/timeout).
+                            history_snapshot=[],
                             max_retries=1,
                         )
                     except Exception as dispatch_error:  # noqa: BLE001

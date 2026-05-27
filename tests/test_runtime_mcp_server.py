@@ -566,6 +566,36 @@ class TestSocketAuth:
         assert responses[0]["id"] == 42
         assert responses[0]["result"] == {}
 
+    def test_timeout_de_auth_nao_deve_fechar_conexao_apos_autenticar(self, tmp_path):
+        """Timeout usado no prelude não deve permanecer ativo no stream MCP."""
+        sock_path = str(tmp_path / "mcp_auth_timeout_scope.sock")
+        server = MCPServer(_make_executor(), auth_token="abc")
+        server._AUTH_READLINE_TIMEOUT = 0.05
+        server.start_background(sock_path)
+        _wait_for_socket(sock_path)
+
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.connect(sock_path)
+        try:
+            stream = s.makefile("rw", encoding="utf-8")
+            stream.write(json.dumps({"quimera_auth_token": "abc"}) + "\n")
+            stream.write(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "ping"}) + "\n")
+            stream.flush()
+
+            first = stream.readline()
+            assert first
+            assert json.loads(first)["result"] == {}
+
+            # Aguarda mais que o timeout de auth; conexão deve seguir viva.
+            time.sleep(0.15)
+            stream.write(json.dumps({"jsonrpc": "2.0", "id": 2, "method": "ping"}) + "\n")
+            stream.flush()
+            second = stream.readline()
+            assert second
+            assert json.loads(second)["result"] == {}
+        finally:
+            s.close()
+
     def test_socket_criado_com_permissao_0600(self, tmp_path):
         """O socket Unix deve ter permissão 0o600 após o bind."""
         sock_path = str(tmp_path / "mcp_perms.sock")

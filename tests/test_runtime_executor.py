@@ -468,7 +468,7 @@ def test_executor_call_agent_dispatches_with_handoff_mode(tmp_path):
         silent=True,
         show_output=False,
         persist_history=True,
-        history_snapshot=None,
+        history_snapshot=[],
         max_retries=1,
     )
 
