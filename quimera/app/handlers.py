@@ -15,6 +15,7 @@ class AppCallbacks:
     show_system: "Callable[[str], None]"
     is_reading: "Callable[[], bool | str | None]"
     show_muted: "Callable[[str], None] | None" = None
+    debug_enabled: "Callable[[], bool] | None" = None
 
 
 class PromptAwareStderrHandler(logging.StreamHandler):
@@ -49,6 +50,7 @@ class PromptAwareStderrHandler(logging.StreamHandler):
             show_system=getattr(app, "show_system_message", _noop),
             show_muted=getattr(app, "show_muted_message", _noop),
             is_reading=lambda: _is_prompt_active_from_app(app),
+            debug_enabled=lambda: bool(getattr(app, "debug_prompt_metrics", False)),
         )
 
     def bind_callbacks(
@@ -60,7 +62,8 @@ class PromptAwareStderrHandler(logging.StreamHandler):
             show_warning: "Callable[[str], None]",
             show_system: "Callable[[str], None]",
             show_muted: "Callable[[str], None] | None" = None,
-            is_reading: "Callable[[], bool | str | None]"
+            is_reading: "Callable[[], bool | str | None]" = lambda: False,
+            debug_enabled: "Callable[[], bool] | None" = None,
     ) -> None:
         """Executa bind de callbacks."""
         self._callbacks = AppCallbacks(
@@ -70,7 +73,8 @@ class PromptAwareStderrHandler(logging.StreamHandler):
             show_warning=show_warning,
             show_system=show_system,
             show_muted=show_muted,
-            is_reading=is_reading
+            is_reading=is_reading,
+            debug_enabled=debug_enabled,
         )
 
     def emit(self, record):
@@ -80,8 +84,17 @@ class PromptAwareStderrHandler(logging.StreamHandler):
             super().emit(record)
             return
 
-        if _is_prompt_reading(callbacks.is_reading()) and record.levelno < logging.WARNING:
-            return
+        prompt_reading = _is_prompt_reading(callbacks.is_reading())
+        debug_enabled = False
+        if callable(callbacks.debug_enabled):
+            try:
+                debug_enabled = bool(callbacks.debug_enabled())
+            except Exception:
+                debug_enabled = False
+        if prompt_reading and record.levelno < logging.WARNING:
+            # Em debug, logs do servidor MCP devem aparecer mesmo com prompt ativo.
+            if not (debug_enabled and record.name == "quimera.runtime.mcp_server"):
+                return
 
         formatter = self.formatter or logging.Formatter("%(message)s")
         message = formatter.format(record)

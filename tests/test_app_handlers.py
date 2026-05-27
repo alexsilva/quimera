@@ -29,3 +29,49 @@ def test_prompt_aware_stderr_handler_routes_warning_to_app_callback():
     app.show_warning_message.assert_called_once()
     rendered = app.show_warning_message.call_args[0][0]
     assert "retry for agent=claude" in rendered
+
+
+def test_prompt_aware_stderr_handler_suppresses_mcp_info_while_prompt_reading_without_debug():
+    handler = PromptAwareStderrHandler()
+    app = SimpleNamespace(
+        _nonblocking_input_status="reading",
+        debug_prompt_metrics=False,
+        show_muted_message=Mock(),
+    )
+    handler.bind_app(app)
+
+    record = logging.LogRecord(
+        name="quimera.runtime.mcp_server",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg="MCP tools/call done tool=call_agent ok=True duration_ms=10",
+        args=(),
+        exc_info=None,
+    )
+
+    handler.emit(record)
+    app.show_muted_message.assert_not_called()
+
+
+def test_prompt_aware_stderr_handler_shows_mcp_info_while_prompt_reading_in_debug():
+    handler = PromptAwareStderrHandler()
+    app = SimpleNamespace(
+        _nonblocking_input_status="reading",
+        debug_prompt_metrics=True,
+        show_muted_message=Mock(),
+    )
+    handler.bind_app(app)
+
+    record = logging.LogRecord(
+        name="quimera.runtime.mcp_server",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg="MCP tools/call done tool=call_agent ok=True duration_ms=10",
+        args=(),
+        exc_info=None,
+    )
+
+    handler.emit(record)
+    app.show_muted_message.assert_called_once()

@@ -401,8 +401,17 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    logging.basicConfig(stream=sys.stderr, level=logging.WARNING,
-                        format="%(levelname)s mcp_server: %(message)s")
+    level_name = (
+        os.environ.get("QUIMERA_MCP_LOG_LEVEL")
+        or os.environ.get("QUIMERA_LOG_LEVEL")
+        or "WARNING"
+    ).upper()
+    level = getattr(logging, level_name, logging.WARNING)
+    logging.basicConfig(
+        stream=sys.stderr,
+        level=level,
+        format="%(levelname)s mcp_server: %(message)s",
+    )
     if args.connect_socket:
         token = args.token or os.environ.get("QUIMERA_MCP_TOKEN") or None
         _proxy_stdio_to_socket(args.connect_socket, token=token)

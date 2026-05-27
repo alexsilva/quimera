@@ -448,6 +448,25 @@ def test_main_connect_socket_token_via_env(monkeypatch):
     assert captured["token"] == "envtoken"
 
 
+def test_main_connect_socket_respeita_quimera_mcp_log_level(monkeypatch):
+    captured = {}
+
+    def _fake_proxy(path, *, token=None, stdin=None, stdout=None):
+        captured["path"] = path
+
+    monkeypatch.setattr("quimera.runtime.mcp_server._proxy_stdio_to_socket", _fake_proxy)
+    monkeypatch.setattr(sys, "argv", ["mcp_server", "--connect-socket", "/tmp/s.sock"])
+    monkeypatch.setenv("QUIMERA_MCP_LOG_LEVEL", "INFO")
+
+    from quimera.runtime import mcp_server
+    with patch.object(mcp_server.logging, "basicConfig") as mock_basic_config:
+        mcp_server.main()
+
+    assert captured["path"] == "/tmp/s.sock"
+    kwargs = mock_basic_config.call_args.kwargs
+    assert kwargs["level"] == logging.INFO
+
+
 # ---------------------------------------------------------------------------
 # Autenticação via socket
 # ---------------------------------------------------------------------------

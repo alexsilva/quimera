@@ -344,7 +344,8 @@ class QuimeraApp:
                     show_warning=self.show_warning_message,
                     show_system=self.show_system_message,
                     show_muted=self.show_muted_message,
-                    is_reading=self.input_gate.is_active
+                    is_reading=self.input_gate.is_active,
+                    debug_enabled=lambda: bool(self.debug_prompt_metrics),
                 )
         is_new_session = not history_restored and not summary_loaded
 
