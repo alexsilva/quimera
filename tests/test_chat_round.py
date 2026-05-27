@@ -397,6 +397,7 @@ class TestProcessStandardFlow(unittest.TestCase):
             [call.args[0] for call in app.dispatch_services.call_agent.call_args_list],
             ["codex", "claude", "codex"],
         )
+        app.renderer.show_system.assert_called_once_with("[debate] iniciado: claude ↔ codex")
         app.task_services.call_agent_for_parallel.assert_not_called()
         self.assertEqual(app.agent_pool.agents, ["claude", "codex"])
 

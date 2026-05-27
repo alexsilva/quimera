@@ -510,6 +510,10 @@ class ChatRoundOrchestrator:
                 "[standard-flow] extend marker received; running sequential follow-up from %s",
                 first_agent,
             )
+            if other_agents:
+                self._show_system(f"[debate] iniciado: {first_agent} ↔ {other_agents[0]}")
+            else:
+                self._show_system(f"[debate] iniciado: {first_agent}")
             remaining = [other_agents[0], first_agent, other_agents[0]] if other_agents else []
             for index, agent in enumerate(remaining):
                 self._set_parallel_toolbar_state(
