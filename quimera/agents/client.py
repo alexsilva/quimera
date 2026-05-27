@@ -86,12 +86,71 @@ class AgentClient:
         self.rate_limit_detected_at: float | None = None
         self._warm_pool = WarmPool()
 
-    def _show_error(self, message: str) -> None:
+    def _show_error(
+        self,
+        message: str,
+        *,
+        agent: str | None = None,
+        command_name: str | None = None,
+        error_kind: str | None = None,
+        return_code: int | None = None,
+    ) -> None:
+        has_structured = not all(v is None for v in (agent, command_name, error_kind, return_code))
+        if has_structured:
+            try:
+                self.renderer.show_error(
+                    message,
+                    agent=agent,
+                    command_name=command_name,
+                    error_kind=error_kind,
+                    return_code=return_code,
+                )
+            except TypeError:
+                rendered_message = self._format_error_for_reporter(
+                    message,
+                    agent=agent,
+                    command_name=command_name,
+                    error_kind=error_kind,
+                    return_code=return_code,
+                )
+                self.renderer.show_error(rendered_message)
+            return
+
         reporter = self.error_reporter
         if callable(reporter):
-            reporter(message)
+            rendered_message = self._format_error_for_reporter(
+                message,
+                agent=agent,
+                command_name=command_name,
+                error_kind=error_kind,
+                return_code=return_code,
+            )
+            reporter(rendered_message)
             return
         self.renderer.show_error(message)
+
+    @staticmethod
+    def _agent_subject(agent: str | None, command_name: str) -> str:
+        return (agent or "").strip() or command_name
+
+    @classmethod
+    def _format_error_for_reporter(
+        cls,
+        message: str,
+        *,
+        agent: str | None = None,
+        command_name: str | None = None,
+        error_kind: str | None = None,
+        return_code: int | None = None,
+    ) -> str:
+        subject = cls._agent_subject(agent, command_name or "unknown")
+        if error_kind == "agent_exit" and return_code is not None:
+            return f"[erro] agente {subject} retornou código {return_code}"
+        if error_kind == "agent_comm":
+            return f"[erro] falha ao comunicar com {subject}: {message}"
+        if error_kind == "agent_invalid_output":
+            return f"[erro] agente {subject} não retornou saída válida"
+        return message
 
     def _show_muted(self, message: str) -> None:
         reporter = self.muted_reporter
@@ -426,15 +485,15 @@ class AgentClient:
 
             self._spy_output_presenter.flush(agent)
             proc.wait()
-            if not silent and self.visibility == Visibility.SUMMARY:
-                status_word = "concluído" if proc.returncode == 0 else f"falhou (código {proc.returncode})"
-                self._show_muted(f"← {cmd[0]} {status_word}")
-            self._agent_running = False
-            self._current_proc = None
-            self._stop_esc_monitor()
-
+            if not silent and self.visibility == Visibility.SUMMARY and proc.returncode == 0:
+                self._show_muted(f"← {cmd[0]} concluído")
             if result_holder["error"]:
-                self._show_error(f"[erro] falha ao comunicar com {cmd[0]}: {result_holder['error']}")
+                self._show_error(
+                    str(result_holder["error"]),
+                    agent=agent,
+                    command_name=cmd[0],
+                    error_kind="agent_comm",
+                )
                 return None
 
             output = self._get_capped_stdout(result_holder).strip()
@@ -451,18 +510,29 @@ class AgentClient:
             self._spy_output_presenter.reset()
 
         if proc.returncode != 0:
-            self._show_error(f"[erro] agente {cmd[0]} retornou código {proc.returncode}")
+            self._show_error(
+                f"[erro] retornou código {proc.returncode}",
+                agent=agent,
+                command_name=cmd[0],
+                error_kind="agent_exit",
+                return_code=proc.returncode,
+            )
             if error and stderr_lines_shown <= MAX_STDERR_LINES:
                 tail = "\n".join(error.splitlines()[-5:])
-                self._show_error(tail)
+                self.renderer.show_plain(tail, agent=agent)
             return None
 
         if not output:
             if error:
-                self._show_error(f"[erro] agente {cmd[0]} não retornou saída válida")
+                self._show_error(
+                    "",
+                    agent=agent,
+                    command_name=cmd[0],
+                    error_kind="agent_invalid_output",
+                )
                 if stderr_lines_shown <= MAX_STDERR_LINES:
                     tail = "\n".join(error.splitlines()[-5:])
-                    self._show_error(tail)
+                    self.renderer.show_plain(tail, agent=agent)
             return None
 
         return output

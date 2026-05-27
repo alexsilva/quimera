@@ -1115,15 +1115,47 @@ class TerminalRenderer:
             prefix = f"{agent}: " if agent else ""
             print(f"{prefix}{clean_message}")
 
-    def show_error(self, message):
+    def show_error(self, message, agent=None, command_name=None, error_kind=None, return_code=None):
         """Exibe error."""
         clean_message = strip_ansi(str(message)).strip("\r\n")
+        subject = _coerce_agent_name(agent) if agent else strip_ansi(str(command_name or "")).strip()
+        if error_kind == "agent_exit" and return_code is not None:
+            clean_message = (
+                f"[erro] retornou código {return_code}"
+                if agent
+                else f"[erro] agente {subject or 'unknown'} retornou código {return_code}"
+            )
+        elif error_kind == "agent_comm":
+            clean_message = (
+                f"[erro] falha ao comunicar: {clean_message}"
+                if agent
+                else f"[erro] falha ao comunicar com {subject or 'unknown'}: {clean_message}"
+            )
+        elif error_kind == "agent_invalid_output":
+            clean_message = (
+                "[erro] não retornou saída válida"
+                if agent
+                else f"[erro] agente {subject or 'unknown'} não retornou saída válida"
+            )
+
         if self._console:
             style, icon = ROLE_STYLES["error"]
-            line = Text.assemble((f"{icon} ", style), (clean_message, "red"))
+            if agent:
+                agent_style, label = self._agent_style(agent)
+                line = Text.assemble(
+                    (f"{label} ", f"bold {agent_style}"),
+                    (f"{icon} ", style),
+                    (clean_message, "red"),
+                )
+            else:
+                line = Text.assemble((f"{icon} ", style), (clean_message, "red"))
             self._print(line)
         else:
-            print(clean_message)
+            if agent:
+                _, label = self._agent_style(agent)
+                print(f"{label} ✗ {clean_message}")
+            else:
+                print(clean_message)
 
     def show_warning(self, message):
         """Exibe warning."""

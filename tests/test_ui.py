@@ -302,6 +302,31 @@ class TestTerminalRenderer:
         captured = capsys.readouterr()
         assert "Error message" in captured.out
 
+    def test_show_error_agent_exit_without_rich_with_agent_label(self, renderer_no_rich, capsys):
+        """Test show_error renders agent label before error icon for agent exits."""
+        with patch("quimera.ui._agent_style", return_value=("magenta", "🔮  Claude")):
+            renderer_no_rich.show_error(
+                "",
+                agent="claude",
+                command_name="claude",
+                error_kind="agent_exit",
+                return_code=1,
+            )
+        captured = capsys.readouterr()
+        assert "🔮  Claude ✗ [erro] retornou código 1" in captured.out
+
+    def test_show_error_agent_exit_without_rich_without_agent(self, renderer_no_rich, capsys):
+        """Test show_error keeps command fallback when agent id is missing."""
+        renderer_no_rich.show_error(
+            "",
+            agent=None,
+            command_name="cmd",
+            error_kind="agent_exit",
+            return_code=1,
+        )
+        captured = capsys.readouterr()
+        assert "[erro] agente cmd retornou código 1" in captured.out
+
     def test_show_warning_with_rich(self, mock_renderer):
         """Test show_warning with Rich."""
         mock_renderer.show_warning("Warning message")

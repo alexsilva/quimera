@@ -116,8 +116,13 @@ class AgentsCoverageTests(unittest.TestCase):
         proc.returncode = 0
         with patch("subprocess.Popen", return_value=proc):
             self.assertIsNone(client.run(["cmd"], silent=True))
-        error_message = self.renderer.show_error.call_args[0][0]
-        self.assertIn("falha ao comunicar com cmd: read error", error_message)
+        self.renderer.show_error.assert_any_call(
+            "read error",
+            agent=None,
+            command_name="cmd",
+            error_kind="agent_comm",
+            return_code=None,
+        )
 
     def test_run_streaming_shows_output_and_truncates_stderr(self):
         client = AgentClient(self.renderer, visibility=Visibility.SUMMARY)
@@ -138,13 +143,16 @@ class AgentsCoverageTests(unittest.TestCase):
         proc.returncode = 1
         with patch("subprocess.Popen", return_value=proc):
             self.assertIsNone(client.run(["cmd"], silent=True))
-        self.assertGreaterEqual(self.renderer.show_error.call_count, 2)
+        self.assertEqual(self.renderer.show_error.call_count, 1)
+        self.assertGreaterEqual(self.renderer.show_plain.call_count, 1)
 
     def test_call_uses_plugin_and_prompt_mode(self):
         client = AgentClient(self.renderer)
         plugin = MagicMock()
         plugin.cmd = ["mock-agent"]
         plugin.prompt_as_arg = False
+        plugin.effective_cmd.return_value = ["mock-agent"]
+        plugin.effective_prompt_as_arg.return_value = False
         with patch("quimera.plugins.get", return_value=plugin), patch.object(client, "run", return_value="ok") as run:
             self.assertEqual(client.call("mock", "hello"), "ok")
         run.assert_called_once_with(
@@ -161,6 +169,8 @@ class AgentsCoverageTests(unittest.TestCase):
         plugin = MagicMock()
         plugin.cmd = ["mock-agent"]
         plugin.prompt_as_arg = True
+        plugin.effective_cmd.return_value = ["mock-agent"]
+        plugin.effective_prompt_as_arg.return_value = True
         with patch("quimera.plugins.get", return_value=plugin), patch.object(client, "run", return_value="ok") as run:
             self.assertEqual(client.call("mock", "hello"), "ok")
         run.assert_called_once_with(

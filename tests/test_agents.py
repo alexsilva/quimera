@@ -275,7 +275,13 @@ def test_agent_client_run_failure_return_code(renderer):
 
         result = client.run(["fail"], silent=True)
         assert result is None
-        renderer.show_error.assert_called()
+        renderer.show_error.assert_any_call(
+            "[erro] retornou código 1",
+            agent=None,
+            command_name="fail",
+            error_kind="agent_exit",
+            return_code=1,
+        )
 
 
 def test_agent_client_run_failure_uses_error_reporter_when_provided(renderer):
@@ -291,9 +297,60 @@ def test_agent_client_run_failure_uses_error_reporter_when_provided(renderer):
         result = client.run(["fail"], silent=True)
 
     assert result is None
-    error_reporter.assert_any_call("[erro] agente fail retornou código 1")
-    assert error_reporter.call_count >= 1
-    renderer.show_error.assert_not_called()
+    renderer.show_error.assert_called_once_with(
+        "[erro] retornou código 1",
+        agent=None,
+        command_name="fail",
+        error_kind="agent_exit",
+        return_code=1,
+    )
+    renderer.show_plain.assert_called_once_with("Error detail", agent=None)
+
+
+def test_agent_client_run_failure_uses_plugin_label_when_agent_is_known(renderer):
+    error_reporter = MagicMock()
+    client = AgentClient(renderer, error_reporter=error_reporter)
+    with patch("subprocess.Popen") as mock_popen:
+        mock_proc = MagicMock()
+        mock_proc.stdout = []
+        mock_proc.stderr = ["Error detail\n"]
+        mock_proc.returncode = 1
+        mock_popen.return_value = mock_proc
+
+        result = client.run(["claude"], silent=True, agent="claude")
+
+    assert result is None
+    renderer.show_error.assert_called_once_with(
+        "[erro] retornou código 1",
+        agent="claude",
+        command_name="claude",
+        error_kind="agent_exit",
+        return_code=1,
+    )
+    renderer.show_plain.assert_called_once_with("Error detail", agent="claude")
+
+
+def test_agent_client_run_failure_uses_agent_name_when_plugin_is_unknown(renderer):
+    error_reporter = MagicMock()
+    client = AgentClient(renderer, error_reporter=error_reporter)
+    with patch("subprocess.Popen") as mock_popen:
+        mock_proc = MagicMock()
+        mock_proc.stdout = []
+        mock_proc.stderr = ["Error detail\n"]
+        mock_proc.returncode = 1
+        mock_popen.return_value = mock_proc
+
+        result = client.run(["real-binary-name"], silent=True, agent="agente-logico")
+
+    assert result is None
+    renderer.show_error.assert_called_once_with(
+        "[erro] retornou código 1",
+        agent="agente-logico",
+        command_name="real-binary-name",
+        error_kind="agent_exit",
+        return_code=1,
+    )
+    renderer.show_plain.assert_called_once_with("Error detail", agent="agente-logico")
 
 
 def test_agent_client_call(renderer):
@@ -302,6 +359,8 @@ def test_agent_client_call(renderer):
         mock_plugin = MagicMock()
         mock_plugin.cmd = ["mock-agent"]
         mock_plugin.prompt_as_arg = False
+        mock_plugin.effective_cmd.return_value = ["mock-agent"]
+        mock_plugin.effective_prompt_as_arg.return_value = False
         mock_get.return_value = mock_plugin
 
         with patch.object(client, "run") as mock_run:
@@ -318,6 +377,8 @@ def test_agent_client_call_prompt_as_arg(renderer):
         mock_plugin = MagicMock()
         mock_plugin.cmd = ["mock-agent"]
         mock_plugin.prompt_as_arg = True
+        mock_plugin.effective_cmd.return_value = ["mock-agent"]
+        mock_plugin.effective_prompt_as_arg.return_value = True
         mock_get.return_value = mock_plugin
 
         with patch.object(client, "run") as mock_run:
@@ -338,6 +399,8 @@ def test_agent_client_call_does_not_duplicate_mode_prompt(renderer):
         mock_plugin = MagicMock()
         mock_plugin.cmd = ["mock-agent"]
         mock_plugin.prompt_as_arg = False
+        mock_plugin.effective_cmd.return_value = ["mock-agent"]
+        mock_plugin.effective_prompt_as_arg.return_value = False
         mock_get.return_value = mock_plugin
 
         with patch.object(client, "run") as mock_run:
@@ -468,7 +531,8 @@ def test_agent_client_run_failure_with_tail(renderer):
 
         result = client.run(["fail"], silent=True)
         assert result is None
-        assert renderer.show_error.call_count >= 2
+        assert renderer.show_error.call_count == 1
+        assert renderer.show_plain.call_count >= 1
 
 
 def test_agent_client_run_caps_stdout_buffer_to_recent_output(renderer):
@@ -1066,9 +1130,13 @@ def test_agent_client_thread_exceptions(renderer):
         # This will set result_holder["error"]
         result = client.run(["cmd"], silent=True)
         assert result is None
-        # Check that show_error was called with the expected message
-        args, _ = renderer.show_error.call_args
-        assert "falha ao comunicar com cmd: Read error" in args[0]
+        renderer.show_error.assert_any_call(
+            "Read error",
+            agent=None,
+            command_name="cmd",
+            error_kind="agent_comm",
+            return_code=None,
+        )
 
 
 def test_synthetic_tool_result(renderer):
