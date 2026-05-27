@@ -484,7 +484,7 @@ class TestTerminalRenderer:
 
         assert mock_live.update.call_count >= 1
 
-    def test_update_agent_transient_prompt_active_emits_compact_snapshots(self):
+    def test_update_agent_transient_prompt_active_renders_periodic_snapshots(self):
         renderer = TerminalRenderer()
         renderer._console = Console(width=100, record=True, force_terminal=False)
         renderer.set_prompt_integration(lambda: True, None)
@@ -500,8 +500,8 @@ class TestTerminalRenderer:
         renderer.flush()
         rendered = renderer._console.export_text()
         assert "🔷  Codex mensagem 1" in rendered
-        assert "🔷  Codex … mensagem 3" in rendered
         assert "mensagem 2" not in rendered
+        assert "🔷  Codex … mensagem 3" in rendered
         renderer.close(timeout=1.0)
 
     def test_clear_agent_transient_resets_prompt_snapshot_buffer(self):
@@ -521,6 +521,7 @@ class TestTerminalRenderer:
         renderer.flush()
         rendered = renderer._console.export_text()
         assert "🔷  Codex mensagem 1" in rendered
+        assert "🔷  Codex … mensagem 2" in rendered
         assert "🔷  Codex mensagem 3" in rendered
         assert "🔷  Codex … mensagem 3" not in rendered
         renderer.close(timeout=1.0)

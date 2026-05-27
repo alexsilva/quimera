@@ -163,6 +163,16 @@ class AgentClient:
             return
         self.renderer.show_system(message)
 
+    @staticmethod
+    def _is_tool_call_text(text: str) -> bool:
+        cleaned = text.strip()
+        return (
+            cleaned.startswith("tool:")
+            or cleaned.startswith("$ ")
+            or cleaned.startswith("✓ ")
+            or cleaned.startswith("✗ ")
+        )
+
     def reset_cancel_notices(self) -> None:
         """Permite exibir novamente avisos de cancelamento em um novo ciclo."""
         with self._cancel_notice_lock:
@@ -431,14 +441,20 @@ class AgentClient:
                         self._spy_output_presenter.flush(agent)
                         if stream_type == "stderr" and self.visibility != Visibility.FULL:
                             if stderr_lines_shown < MAX_STDERR_LINES:
-                                self.renderer.show_plain(cleaned, agent=agent)
+                                if self._is_tool_call_text(cleaned):
+                                    self.renderer.show_plain(cleaned, agent=agent, muted=True)
+                                else:
+                                    self.renderer.show_plain(cleaned, agent=agent)
                                 stderr_lines_shown += 1
                             elif stderr_lines_shown == MAX_STDERR_LINES:
                                 self.renderer.show_plain(
                                     f"... (stderr truncado, máximo {MAX_STDERR_LINES} linhas)", agent=agent)
                                 stderr_lines_shown += 1
                         else:
-                            self.renderer.show_plain(cleaned, agent=agent)
+                            if self._is_tool_call_text(cleaned):
+                                self.renderer.show_plain(cleaned, agent=agent, muted=True)
+                            else:
+                                self.renderer.show_plain(cleaned, agent=agent)
 
                     _elapsed = [0]  # mutable cell for on_item closure
 
@@ -486,7 +502,10 @@ class AgentClient:
             self._spy_output_presenter.flush(agent)
             proc.wait()
             if not silent and self.visibility == Visibility.SUMMARY and proc.returncode == 0:
-                self._show_muted(f"← {cmd[0]} concluído")
+                if agent:
+                    self.renderer.show_plain("execução concluída", agent=agent, muted=True)
+                else:
+                    self._show_muted(f"← {cmd[0]} concluído")
             if result_holder["error"]:
                 self._show_error(
                     str(result_holder["error"]),
@@ -519,7 +538,10 @@ class AgentClient:
             )
             if error and stderr_lines_shown <= MAX_STDERR_LINES:
                 tail = "\n".join(error.splitlines()[-5:])
-                self.renderer.show_plain(tail, agent=agent)
+                if self._is_tool_call_text(tail):
+                    self.renderer.show_plain(tail, agent=agent, muted=True)
+                else:
+                    self.renderer.show_plain(tail, agent=agent)
             return None
 
         if not output:
@@ -532,7 +554,10 @@ class AgentClient:
                 )
                 if stderr_lines_shown <= MAX_STDERR_LINES:
                     tail = "\n".join(error.splitlines()[-5:])
-                    self.renderer.show_plain(tail, agent=agent)
+                    if self._is_tool_call_text(tail):
+                        self.renderer.show_plain(tail, agent=agent, muted=True)
+                    else:
+                        self.renderer.show_plain(tail, agent=agent)
             return None
 
         return output

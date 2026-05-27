@@ -23,7 +23,7 @@ _UNICODE_CONTROL_RE = re.compile(
 _RENDER_MODES = {"plain", "markdown", "auto"}
 _PREVIEW_LIMIT = 160
 _SEQUENTIAL_STATUS_REFRESH_PER_SECOND = 4
-_PROMPT_TRANSIENT_SNAPSHOT_INTERVAL_SEC = 1.0
+_PROMPT_TRANSIENT_SNAPSHOT_INTERVAL_SEC = 0.5
 
 
 def strip_ansi(text: str) -> str:
@@ -948,6 +948,8 @@ class TerminalRenderer:
         )
         if prompt_active:
             now = time.monotonic()
+            emit_line = False
+            display_message = clean_message
             with self._lock:
                 snapshot = self._prompt_transient_snapshots.get(agent, {
                     "last_render_at": None,
@@ -956,32 +958,36 @@ class TerminalRenderer:
                     "last_emitted_message": "",
                 })
                 last_render_at = snapshot.get("last_render_at")
-                should_emit = (
-                    last_render_at is None
-                    or (now - float(last_render_at)) >= _PROMPT_TRANSIENT_SNAPSHOT_INTERVAL_SEC
-                )
-                if should_emit:
-                    suppressed = int(snapshot.get("suppressed") or 0)
+                if last_render_at is None:
                     snapshot["last_render_at"] = now
                     snapshot["suppressed"] = 0
                     snapshot["pending_message"] = ""
                     snapshot["last_emitted_message"] = clean_message
+                    emit_line = True
                 else:
-                    snapshot["suppressed"] = int(snapshot.get("suppressed") or 0) + 1
-                    snapshot["pending_message"] = clean_message
-                    self._prompt_transient_snapshots[agent] = snapshot
-                    return
+                    should_emit = (now - float(last_render_at)) >= _PROMPT_TRANSIENT_SNAPSHOT_INTERVAL_SEC
+                    if should_emit:
+                        suppressed = int(snapshot.get("suppressed") or 0)
+                        display_message = f"… {clean_message}" if suppressed > 0 else clean_message
+                        snapshot["last_render_at"] = now
+                        snapshot["suppressed"] = 0
+                        snapshot["pending_message"] = ""
+                        snapshot["last_emitted_message"] = clean_message
+                        emit_line = True
+                    else:
+                        snapshot["suppressed"] = int(snapshot.get("suppressed") or 0) + 1
+                        snapshot["pending_message"] = clean_message
                 self._prompt_transient_snapshots[agent] = snapshot
-            display_message = f"… {clean_message}" if suppressed > 0 else clean_message
-            style, label = self._agent_style(agent)
-            line = Text.assemble(
-                (label, f"bold {style}"),
-                (" "),
-                (display_message, "dim"),
-            )
-            line.no_wrap = False
-            line.overflow = "fold"
-            self._print(line)
+            if emit_line:
+                style, label = self._agent_style(agent)
+                line = Text.assemble(
+                    (label, f"bold {style}"),
+                    (" "),
+                    (display_message, "dim"),
+                )
+                line.no_wrap = False
+                line.overflow = "fold"
+                self._print(line)
             return
 
         with self._lock:
@@ -1089,7 +1095,7 @@ class TerminalRenderer:
         else:
             print(f"{icon} {clean_message}")
 
-    def show_plain(self, message, agent=None):
+    def show_plain(self, message, agent=None, muted=False):
         """Exibe plain."""
         if agent:
             self.clear_agent_transient(agent)
@@ -1097,17 +1103,25 @@ class TerminalRenderer:
         if self._console:
             if agent:
                 style, label = self._agent_style(agent)
-                line = Text.assemble(
-                    (label, f"bold {style}"),
-                    (" "),
-                    (clean_message,),
-                )
+                segments = [(label, f"bold {style}"), (" ")]
+                if muted:
+                    segments.append((clean_message, "dim"))
+                else:
+                    segments.append((clean_message,))
+                line = Text.assemble(*segments)
             else:
-                line = Text.assemble(
-                    ("·", "dim"),
-                    (" "),
-                    (clean_message, "dim"),
-                )
+                if muted:
+                    line = Text.assemble(
+                        ("·", "dim"),
+                        (" "),
+                        (clean_message, "dim"),
+                    )
+                else:
+                    line = Text.assemble(
+                        ("·", "dim"),
+                        (" "),
+                        (clean_message,),
+                    )
             line.no_wrap = False
             line.overflow = "fold"
             self._print(line)

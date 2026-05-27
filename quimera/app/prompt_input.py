@@ -278,7 +278,6 @@ class InputGate:
                     key_bindings=self._build_key_bindings(),
                     complete_while_typing=False,
                     vi_mode=False,
-                    refresh_interval=1.0,
                 )
             # Fallback para input() padrão quando prompt_toolkit não está disponível
             return input(prompt)

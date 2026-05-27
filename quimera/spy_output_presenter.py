@@ -211,6 +211,13 @@ class SpyOutputPresenter:
             return f"[{self._clock(None)}] TOOL_END id={tool_call_id} status={status}{duration}"
         return None
 
+    @staticmethod
+    def _is_terminal_completion_context(event: SpyEvent) -> bool:
+        """Identifica contexto transitório de conclusão já coberto pela linha final persistente."""
+        if event.kind != "context" or not event.transient:
+            return False
+        return event.text.strip().lower() == "execução concluída"
+
     def build_turn_detail(self) -> dict:
         """Monta o detalhe estruturado (JSON-friendly) do turno atual."""
         tools = []
@@ -492,6 +499,9 @@ class SpyOutputPresenter:
         if event.kind == "context":
             self.current_status_label = event.text
             if event.transient:
+                if self._is_terminal_completion_context(event):
+                    self.current_status_label = ""
+                    return
                 self._show(agent, event)
             return
 
@@ -550,5 +560,8 @@ class SpyOutputPresenter:
             self.renderer.update_agent_transient(agent, rendered)
             self.last_message = dedupe_key
             return
-        self.renderer.show_plain(rendered, agent=agent)
+        if event.kind == "tool":
+            self.renderer.show_plain(rendered, agent=agent, muted=True)
+        else:
+            self.renderer.show_plain(rendered, agent=agent)
         self.last_message = dedupe_key

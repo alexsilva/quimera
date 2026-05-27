@@ -663,8 +663,8 @@ def test_agent_client_run_spy_shows_stderr_lines(renderer):
             result = client.run(["codex", "exec"], silent=False, agent="codex", show_status=False)
 
     assert "agent_message" in result
-    renderer.show_plain.assert_any_call("tool: exec_command", agent="codex")
-    renderer.show_plain.assert_any_call("tool: apply_patch", agent="codex")
+    renderer.show_plain.assert_any_call("tool: exec_command", agent="codex", muted=True)
+    renderer.show_plain.assert_any_call("tool: apply_patch", agent="codex", muted=True)
 
 
 def test_agent_client_run_spy_shows_codex_stdout_context(renderer):
@@ -687,7 +687,7 @@ def test_agent_client_run_spy_shows_codex_stdout_context(renderer):
 
     assert "agent_message" in result
     renderer.update_agent_transient.assert_any_call("codex", "Vou checar o estado do repositório antes de editar")
-    renderer.show_plain.assert_any_call("$ git status", agent="codex")
+    renderer.show_plain.assert_any_call("$ git status", agent="codex", muted=True)
     # exit_code=0 é silencioso — nenhum [ok] emitido
     renderer.update_agent_transient.assert_any_call(
         "codex", "Encontrei alterações locais e vou seguir sem revertê-las."
@@ -714,7 +714,7 @@ def test_agent_client_run_summary_shows_formatted_codex_stdout(renderer):
     renderer.update_agent_transient.assert_any_call("codex", "message 2")
     renderer.update_agent_transient.assert_any_call("codex", "message 3")
     renderer.clear_agent_transient.assert_called_with("codex")
-    renderer.show_system_neutral.assert_any_call("← codex concluído")
+    renderer.show_plain.assert_any_call("execução concluída", agent="codex", muted=True)
 
 
 def test_agent_client_run_summary_flushes_compacted_responses_before_context(renderer):
@@ -1011,7 +1011,17 @@ def test_spy_output_presenter_summary_keeps_tool_failure_persistent(renderer):
     presenter.emit("codex", SpyEvent(kind="tool", text="$ pytest -q"))
     presenter.emit("codex", SpyEvent(kind="tool", text="✗ pytest -q (exit 1)"))
 
-    renderer.show_plain.assert_called_once_with("✗ pytest -q (exit 1)", agent="codex")
+    renderer.show_plain.assert_called_once_with("✗ pytest -q (exit 1)", agent="codex", muted=True)
+    assert presenter.current_status_label == ""
+
+
+def test_spy_output_presenter_summary_skips_transient_terminal_completion(renderer):
+    presenter = SpyOutputPresenter(renderer, Visibility.SUMMARY)
+
+    presenter.emit("codex", SpyEvent(kind="context", text="execução concluída", transient=True))
+
+    renderer.update_agent_transient.assert_not_called()
+    renderer.show_plain.assert_not_called()
     assert presenter.current_status_label == ""
 
 
