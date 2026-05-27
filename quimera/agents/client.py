@@ -367,9 +367,9 @@ class AgentClient:
                             if self.visibility in {Visibility.SUMMARY, Visibility.FULL}:
                                 self._show_formatted_stdout(agent, cleaned)
                             return
-                        self._spy_output_presenter.flush(agent)
                         if stream_type == "stderr" and _should_ignore_stderr_line(agent, line):
                             return
+                        self._spy_output_presenter.flush(agent)
                         if stream_type == "stderr" and self.visibility != Visibility.FULL:
                             if stderr_lines_shown < MAX_STDERR_LINES:
                                 self.renderer.show_plain(cleaned, agent=agent)

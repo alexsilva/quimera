@@ -41,6 +41,14 @@ def test_should_ignore_codex_stdin_noise():
     assert _should_ignore_stderr_line("codex", "Reading additional input from stdin...\n") is True
     assert _should_ignore_stderr_line("codex", "\x1b[2mReading additional input from stdin...\x1b[0m\r\n") is True
     assert _should_ignore_stderr_line("codex", "Reading prompt from stdin...\n") is True
+    assert (
+        _should_ignore_stderr_line(
+            "codex",
+            "2026-05-27T00:14:34.911494Z ERROR codex_core::util: "
+            "Orphan function call output for call id: call_K6xlRm0c9JyUe9iBNv9Txgcl\n",
+        )
+        is True
+    )
     assert _should_ignore_stderr_line("claude", "Reading additional input from stdin...\n") is False
     assert _should_ignore_stderr_line("codex", "real error\n") is False
 
@@ -223,6 +231,28 @@ def test_agent_client_run_silent_does_not_log_codex_stdin_noise(renderer):
 
         assert result == "Success"
         mock_logger.warning.assert_not_called()
+
+
+def test_agent_client_run_ignores_codex_orphan_function_call_noise(renderer):
+    client = AgentClient(renderer)
+    with patch("subprocess.Popen") as mock_popen:
+        mock_proc = MagicMock()
+        mock_proc.stdout = iter(["ok\n"])
+        mock_proc.stderr = iter([
+            "2026-05-27T00:14:34.911494Z ERROR codex_core::util: "
+            "Orphan function call output for call id: call_K6xlRm0c9JyUe9iBNv9Txgcl\n"
+        ])
+        mock_proc.returncode = 0
+        mock_proc.stdin = MagicMock()
+        mock_popen.return_value = mock_proc
+
+        with patch("time.sleep"):
+            result = client.run(["codex", "exec"], silent=False, show_status=False, agent="codex")
+
+    assert result == "ok"
+    for args, _kwargs in renderer.show_plain.call_args_list:
+        joined = " ".join(str(part) for part in args)
+        assert "Orphan function call output for call id" not in joined
 
 
 def test_agent_client_run_os_error(renderer):

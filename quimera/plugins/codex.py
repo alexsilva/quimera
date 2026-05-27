@@ -12,6 +12,10 @@ from quimera.plugins.spy_utils import (
     truncate_spy_text,
 )
 
+_CODEX_STDERR_NOISE_PATTERNS = (
+    r"\bOrphan function call output for call id:\s*call_[A-Za-z0-9]+\b",
+)
+
 
 def _extract_model_from_codex_config(config_path: Path | None = None) -> str | None:
     """Lê o modelo padrão do Codex em ~/.codex/config.toml."""
@@ -251,4 +255,5 @@ register(CodexPlugin(
         "Reading additional input from stdin...",
         "Reading prompt from stdin...",
     }),
+    stderr_noise_patterns=_CODEX_STDERR_NOISE_PATTERNS,
 ))
