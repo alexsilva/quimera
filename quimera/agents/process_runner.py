@@ -35,7 +35,7 @@ class ProcessRunner:
         result_holder: dict,
         cancel_event: threading.Event,
         timeout,
-        max_wall_clock: float | None = 600.0,
+        max_wall_clock: float | None = 1200.0,
     ):
         self.proc = proc
         self.stdout_thread = stdout_thread

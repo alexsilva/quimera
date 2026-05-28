@@ -377,6 +377,8 @@ class TerminalRenderer:
 
         # Último texto combinado enfileirado — usado para dedup no prompt ativo.
         self._last_combined_text: str | None = None
+        # True enquanto há exatamente um TransientWindowEvent na fila — evita inundação.
+        self._transient_tw_pending = False
 
         # Flag: writer thread tem um Live ativo (sinaliza threads externas)
         self._stream_live_active = threading.Event()
@@ -716,6 +718,8 @@ class TerminalRenderer:
                             return
                         p = lines[0]  # lê estado real da tela no momento da execução
                         if p > 0:
+                            _th = shutil.get_terminal_size(fallback=(80, 24)).lines
+                            p = min(p, max(1, _th - 2))
                             sys.stdout.write(f"\033[{p}A\033[J")
                         sys.stdout.write(t)
                         sys.stdout.write("\n")
@@ -724,10 +728,11 @@ class TerminalRenderer:
 
                     run_above = self._run_above_prompt_fn
                     if run_above is not None:
-                        if not run_above(_replace):
-                            _prev_lines[0] = 0
+                        run_above(_replace)
                     elif self._console:
                         self._console.print(text)
+                    with self._lock:
+                        self._transient_tw_pending = False
 
                 elif isinstance(event, TransientClearEvent):
                     if event.buf_version < self._transient_buf_version:
@@ -1081,8 +1086,9 @@ class TerminalRenderer:
                     _win_limit = max(1, _term_lines // 3)
                     combined = combined[-_win_limit:]
                     combined_text = '\n'.join(combined)
-                    if combined and combined_text != self._last_combined_text:
+                    if combined and combined_text != self._last_combined_text and not self._transient_tw_pending:
                         self._last_combined_text = combined_text
+                        self._transient_tw_pending = True
                         enqueue_event = TransientWindowEvent(combined_text, len(combined), buf_version)
                 else:
                     style, label = self._agent_style(agent)
