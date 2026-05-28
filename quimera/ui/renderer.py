@@ -4,7 +4,7 @@ import logging
 import os
 import queue as _queue_module
 import re
-import time
+import shutil
 import sys as _sys_module
 import sys
 import threading
@@ -23,7 +23,6 @@ _UNICODE_CONTROL_RE = re.compile(
 _RENDER_MODES = {"plain", "markdown", "auto"}
 _PREVIEW_LIMIT = 160
 _SEQUENTIAL_STATUS_REFRESH_PER_SECOND = 4
-_PROMPT_TRANSIENT_SNAPSHOT_INTERVAL_SEC = 0.5
 _SCROLLING_WINDOW_SIZE = 10
 
 
@@ -241,6 +240,20 @@ class OutputControlEvent:
     done: threading.Event | None = None
 
 
+@dataclass
+class TransientWindowEvent:
+    """Substitui a janela transient no modo prompt ativo com substituição in-place."""
+    text: str
+    count: int
+    buf_version: int = 0
+
+
+@dataclass
+class TransientClearEvent:
+    """Limpa a janela transient no modo prompt ativo."""
+    buf_version: int = 0
+
+
 def _coerce_agent_name(agent: Any) -> str:
     """Normaliza identificador de agente para uso seguro na UI."""
     if isinstance(agent, str):
@@ -350,12 +363,20 @@ class TerminalRenderer:
         self._active_stream_agents = set()
         # Streams transitórios de progresso (substituídos visualmente no mesmo bloco)
         self._transient_stream_agents = set()
-        # Fallback em prompt ativo: snapshots compactos de "pensando" por agente.
-        self._prompt_transient_snapshots: dict[str, dict[str, Any]] = {}
-        # Buffer rolling para feed rolável do agente (threads=0, prompt inativo)
+        # Buffer rolling para feed rolável do agente.
+        # Em prompt inativo alimenta o Live; em prompt ativo controla dedupe/memória,
+        # deixando o scrollback natural do terminal fazer a rolagem visual.
         self._rolling_buffers: dict[str, list[str]] = {}
         # Lock protege _completed_streams, _active_stream_agents e _statuses
         self._lock = threading.RLock()
+
+        # Versão monotônica do buffer rolling — incrementada a cada mutação.
+        # Eventos TransientWindowEvent/TransientClearEvent carregam o valor
+        # do snapshot; o writer descarta eventos com versão defasada.
+        self._transient_buf_version = 0
+
+        # Último texto combinado enfileirado — usado para dedup no prompt ativo.
+        self._last_combined_text: str | None = None
 
         # Flag: writer thread tem um Live ativo (sinaliza threads externas)
         self._stream_live_active = threading.Event()
@@ -416,6 +437,7 @@ class TerminalRenderer:
         _ul: list = [None]  # _ul[0] = Live unificado ativo (ou None)
         _local_pending: collections.deque = collections.deque()  # buffer de "unget" para coalescing
         _deferred_post_prompt: collections.deque = collections.deque()  # prints deferidos enquanto prompt ativo
+        _prev_lines: list = [0]  # [int] — só as closures atualizam; evita divergência em closures descartadas
 
         def _prompt_active() -> bool:
             try:
@@ -504,7 +526,13 @@ class TerminalRenderer:
             run_above = self._run_above_prompt_fn
             if run_above is not None:
                 _r, _k = renderable, dict(kwargs)
-                if run_above(lambda: self._console.print(_r, **_k)):
+                def _clear_and_print(_r=_r, _k=_k, lines=_prev_lines):
+                    p = lines[0]
+                    if p > 0:
+                        sys.stdout.write(f"\033[{p}A\033[J")
+                        lines[0] = 0
+                    self._console.print(_r, **_k)
+                if run_above(_clear_and_print):
                     _flush_deferred()
                     return
             _deferred_post_prompt.append((renderable, kwargs))
@@ -527,7 +555,13 @@ class TerminalRenderer:
                     # falharia porque prompt_toolkit ainda não está rodando.
                     self._console.print(_r, **_k)
                 elif run_above is not None:
-                    if not run_above(lambda: self._console.print(_r, **_k)):
+                    def _clear_and_print(_r=_r, _k=_k, lines=_prev_lines):
+                        p = lines[0]
+                        if p > 0:
+                            sys.stdout.write(f"\033[{p}A\033[J")
+                            lines[0] = 0
+                        self._console.print(_r, **_k)
+                    if not run_above(_clear_and_print):
                         _deferred_post_prompt.appendleft((_r, _k))
                         break
                 else:
@@ -655,6 +689,62 @@ class TerminalRenderer:
                         _flush_deferred(force=True)
                     if event.done is not None:
                         event.done.set()
+
+                elif isinstance(event, TransientWindowEvent):
+                    # Coalescing: drena eventos consecutivos — o mais recente substitui os anteriores
+                    while True:
+                        try:
+                            _next = self._queue.get_nowait()
+                        except _queue_module.Empty:
+                            break
+                        if isinstance(_next, TransientWindowEvent):
+                            event = _next  # contém combined completo, substitui
+                        else:
+                            _local_pending.appendleft(_next)
+                            break
+
+                    if event.buf_version < self._transient_buf_version:
+                        continue
+                    text, count = event.text, event.count
+
+                    if not text:
+                        continue
+
+                    def _replace(buf_v=event.buf_version, t=text, c=count, lines=_prev_lines):
+                        if buf_v < self._transient_buf_version:
+                            # Closure descartada: screen não foi alterada, não atualiza contador
+                            return
+                        p = lines[0]  # lê estado real da tela no momento da execução
+                        if p > 0:
+                            sys.stdout.write(f"\033[{p}A\033[J")
+                        sys.stdout.write(t)
+                        sys.stdout.write("\n")
+                        sys.stdout.flush()
+                        lines[0] = c  # atualiza somente quando realmente escreveu
+
+                    run_above = self._run_above_prompt_fn
+                    if run_above is not None:
+                        if not run_above(_replace):
+                            _prev_lines[0] = 0
+                    elif self._console:
+                        self._console.print(text)
+
+                elif isinstance(event, TransientClearEvent):
+                    if event.buf_version < self._transient_buf_version:
+                        continue
+
+                    def _clear(buf_v=event.buf_version, lines=_prev_lines):
+                        if buf_v < self._transient_buf_version:
+                            return
+                        p = lines[0]
+                        lines[0] = 0  # atualiza antes de escrever para refletir estado real
+                        if p > 0:
+                            sys.stdout.write(f"\033[{p}A\033[J")
+                            sys.stdout.flush()
+
+                    run_above = self._run_above_prompt_fn
+                    if run_above is not None:
+                        run_above(_clear)
 
             except Exception:
                 _log.exception("writer thread: erro ao processar evento %r", event)
@@ -969,52 +1059,42 @@ class TerminalRenderer:
             preview=_preview_text(clean_message),
         )
         if prompt_active:
-            now = time.monotonic()
-            emit_line = False
-            display_message = clean_message
             with self._lock:
-                snapshot = self._prompt_transient_snapshots.get(agent, {
-                    "last_render_at": None,
-                    "suppressed": 0,
-                    "pending_message": "",
-                    "last_emitted_message": "",
-                })
-                last_render_at = snapshot.get("last_render_at")
-                if last_render_at is None:
-                    snapshot["last_render_at"] = now
-                    snapshot["suppressed"] = 0
-                    snapshot["pending_message"] = ""
-                    snapshot["last_emitted_message"] = clean_message
-                    emit_line = True
+                buf = self._rolling_buffers.setdefault(agent, [])
+                if buf and buf[-1] == clean_message:
+                    return
+                buf.append(clean_message)
+                _term_lines = shutil.get_terminal_size(fallback=(80, 24)).lines
+                buf[:] = buf[-max(_SCROLLING_WINDOW_SIZE, _term_lines // 3):]
+                self._transient_buf_version += 1
+                buf_version = self._transient_buf_version
+
+                enqueue_event = None
+                if self._run_above_prompt_fn:
+                    all_bufs = dict(self._rolling_buffers)
+                    combined = []
+                    for agt, msgs in sorted(all_bufs.items()):
+                        _, label = self._agent_style(agt)
+                        for msg in msgs:
+                            combined.append(f"{label} {msg}")
+                    _term_lines = shutil.get_terminal_size(fallback=(80, 24)).lines
+                    _win_limit = max(1, _term_lines // 3)
+                    combined = combined[-_win_limit:]
+                    combined_text = '\n'.join(combined)
+                    if combined and combined_text != self._last_combined_text:
+                        self._last_combined_text = combined_text
+                        enqueue_event = TransientWindowEvent(combined_text, len(combined), buf_version)
                 else:
-                    last_emitted_message = str(snapshot.get("last_emitted_message") or "")
-                    should_emit = (now - float(last_render_at)) >= _PROMPT_TRANSIENT_SNAPSHOT_INTERVAL_SEC
-                    # Não segurar o primeiro conteúdo útil após "iniciando execução":
-                    # melhora percepção de latência sem voltar a floodar snapshots.
-                    if (
-                        not should_emit
-                        and last_emitted_message.casefold() == "iniciando execução"
-                        and clean_message.casefold() != last_emitted_message.casefold()
-                    ):
-                        should_emit = True
-                    if should_emit:
-                        suppressed = int(snapshot.get("suppressed") or 0)
-                        display_message = f"… {clean_message}" if suppressed > 0 else clean_message
-                        snapshot["last_render_at"] = now
-                        snapshot["suppressed"] = 0
-                        snapshot["pending_message"] = ""
-                        snapshot["last_emitted_message"] = clean_message
-                        emit_line = True
-                    else:
-                        snapshot["suppressed"] = int(snapshot.get("suppressed") or 0) + 1
-                        snapshot["pending_message"] = clean_message
-                self._prompt_transient_snapshots[agent] = snapshot
-            if emit_line:
-                style, label = self._agent_style(agent)
+                    style, label = self._agent_style(agent)
+
+            # Outside lock — operações de fila
+            if enqueue_event is not None:
+                self._queue.put(enqueue_event)
+            elif not self._run_above_prompt_fn:
                 line = Text.assemble(
                     (label, f"bold {style}"),
                     (" "),
-                    (display_message, "dim"),
+                    (clean_message, "dim"),
                 )
                 line.no_wrap = False
                 line.overflow = "fold"
@@ -1048,29 +1128,45 @@ class TerminalRenderer:
         if not self._console or not agent:
             return
         self.log_debug_event("transient_clear", agent=agent)
-        pending_message = ""
-        suppressed = 0
-        last_emitted_message = ""
+
+        prompt_active = bool(self._is_prompt_active_fn and self._is_prompt_active_fn())
+
         with self._lock:
-            self._rolling_buffers.pop(agent, None)
-            snapshot = self._prompt_transient_snapshots.pop(agent, None) or {}
-            pending_message = str(snapshot.get("pending_message") or "").strip()
-            suppressed = int(snapshot.get("suppressed") or 0)
-            last_emitted_message = str(snapshot.get("last_emitted_message") or "")
-            if agent not in self._transient_stream_agents:
-                if pending_message and pending_message != last_emitted_message:
-                    style, label = self._agent_style(agent)
-                    display_message = f"… {pending_message}" if suppressed > 0 else pending_message
-                    line = Text.assemble(
-                        (label, f"bold {style}"),
-                        (" "),
-                        (display_message, "dim"),
-                    )
-                    line.no_wrap = False
-                    line.overflow = "fold"
-                    self._print(line)
-                return
-            self._transient_stream_agents.discard(agent)
+            removed = self._rolling_buffers.pop(agent, None)
+            is_transient_agent = agent in self._transient_stream_agents
+            if is_transient_agent:
+                self._transient_stream_agents.discard(agent)
+            if removed is not None:
+                self._transient_buf_version += 1
+            buf_version = self._transient_buf_version
+
+            event = None
+            if prompt_active and self._run_above_prompt_fn:
+                all_bufs = dict(self._rolling_buffers)
+                if not all_bufs:
+                    event = TransientClearEvent(buf_version)
+                else:
+                    combined = []
+                    for agt, msgs in sorted(all_bufs.items()):
+                        _, label = self._agent_style(agt)
+                        for msg in msgs:
+                            combined.append(f"{label} {msg}")
+                    _term_lines = shutil.get_terminal_size(fallback=(80, 24)).lines
+                    _win_limit = max(1, _term_lines // 3)
+                    combined = combined[-_win_limit:]
+                    if not combined:
+                        event = TransientClearEvent(buf_version)
+                    else:
+                        combined_text = '\n'.join(combined)
+                        self._last_combined_text = combined_text
+                        event = TransientWindowEvent(combined_text, len(combined), buf_version)
+
+        if event is not None:
+            self._queue.put(event)
+            return
+
+        if not is_transient_agent:
+            return
         self.abort_message_stream(agent)
 
     def update_agent_elapsed(self, agent: str, elapsed: float) -> None:

@@ -484,15 +484,12 @@ class TestTerminalRenderer:
 
         assert mock_live.update.call_count >= 1
 
-    def test_update_agent_transient_prompt_active_renders_periodic_snapshots(self):
+    def test_update_agent_transient_prompt_active_renders_each_feed_item(self):
         renderer = TerminalRenderer()
         renderer._console = Console(width=100, record=True, force_terminal=False)
         renderer.set_prompt_integration(lambda: True, None)
 
-        with patch("quimera.ui._agent_style", return_value=("cyan", "🔷  Codex")), patch(
-            "quimera.ui.renderer.time.monotonic",
-            side_effect=[0.0, 0.3, 2.1],
-        ):
+        with patch("quimera.ui._agent_style", return_value=("cyan", "🔷  Codex")):
             renderer.update_agent_transient("codex", "mensagem 1")
             renderer.update_agent_transient("codex", "mensagem 2")
             renderer.update_agent_transient("codex", "mensagem 3")
@@ -500,8 +497,24 @@ class TestTerminalRenderer:
         renderer.flush()
         rendered = renderer._console.export_text()
         assert "🔷  Codex mensagem 1" in rendered
-        assert "mensagem 2" not in rendered
-        assert "🔷  Codex … mensagem 3" in rendered
+        assert "🔷  Codex mensagem 2" in rendered
+        assert "🔷  Codex mensagem 3" in rendered
+        renderer.close(timeout=1.0)
+
+    def test_update_agent_transient_prompt_active_deduplicates_consecutive_items(self):
+        renderer = TerminalRenderer()
+        renderer._console = Console(width=100, record=True, force_terminal=False)
+        renderer.set_prompt_integration(lambda: True, None)
+
+        with patch("quimera.ui._agent_style", return_value=("cyan", "🔷  Codex")):
+            renderer.update_agent_transient("codex", "$ git status")
+            renderer.update_agent_transient("codex", "$ git status")
+            renderer.update_agent_transient("codex", "analisando resultado")
+
+        renderer.flush()
+        rendered = renderer._console.export_text()
+        assert rendered.count("🔷  Codex $ git status") == 1
+        assert "🔷  Codex analisando resultado" in rendered
         renderer.close(timeout=1.0)
 
     def test_update_agent_transient_prompt_active_emits_first_message_after_start_immediately(self):
@@ -509,10 +522,7 @@ class TestTerminalRenderer:
         renderer._console = Console(width=100, record=True, force_terminal=False)
         renderer.set_prompt_integration(lambda: True, None)
 
-        with patch("quimera.ui._agent_style", return_value=("cyan", "🔷  Codex")), patch(
-            "quimera.ui.renderer.time.monotonic",
-            side_effect=[0.0, 0.1],
-        ):
+        with patch("quimera.ui._agent_style", return_value=("cyan", "🔷  Codex")):
             renderer.update_agent_transient("codex", "iniciando execução")
             renderer.update_agent_transient("codex", "primeiro chunk")
 
@@ -523,15 +533,12 @@ class TestTerminalRenderer:
         assert "🔷  Codex … primeiro chunk" not in rendered
         renderer.close(timeout=1.0)
 
-    def test_clear_agent_transient_resets_prompt_snapshot_buffer(self):
+    def test_clear_agent_transient_resets_prompt_feed_buffer(self):
         renderer = TerminalRenderer()
         renderer._console = Console(width=100, record=True, force_terminal=False)
         renderer.set_prompt_integration(lambda: True, None)
 
-        with patch("quimera.ui._agent_style", return_value=("cyan", "🔷  Codex")), patch(
-            "quimera.ui.renderer.time.monotonic",
-            side_effect=[0.0, 0.2, 0.4],
-        ):
+        with patch("quimera.ui._agent_style", return_value=("cyan", "🔷  Codex")):
             renderer.update_agent_transient("codex", "mensagem 1")
             renderer.update_agent_transient("codex", "mensagem 2")
             renderer.clear_agent_transient("codex")
@@ -540,20 +547,16 @@ class TestTerminalRenderer:
         renderer.flush()
         rendered = renderer._console.export_text()
         assert "🔷  Codex mensagem 1" in rendered
-        assert "🔷  Codex … mensagem 2" in rendered
+        assert "🔷  Codex mensagem 2" in rendered
         assert "🔷  Codex mensagem 3" in rendered
-        assert "🔷  Codex … mensagem 3" not in rendered
         renderer.close(timeout=1.0)
 
-    def test_clear_agent_transient_flushes_latest_suppressed_prompt_snapshot(self):
+    def test_clear_agent_transient_keeps_already_printed_prompt_feed_items(self):
         renderer = TerminalRenderer()
         renderer._console = Console(width=100, record=True, force_terminal=False)
         renderer.set_prompt_integration(lambda: True, None)
 
-        with patch("quimera.ui._agent_style", return_value=("cyan", "🔷  Codex")), patch(
-            "quimera.ui.renderer.time.monotonic",
-            side_effect=[0.0, 0.2],
-        ):
+        with patch("quimera.ui._agent_style", return_value=("cyan", "🔷  Codex")):
             renderer.update_agent_transient("codex", "mensagem 1")
             renderer.update_agent_transient("codex", "mensagem 2")
             renderer.clear_agent_transient("codex")
@@ -561,7 +564,77 @@ class TestTerminalRenderer:
         renderer.flush()
         rendered = renderer._console.export_text()
         assert "🔷  Codex mensagem 1" in rendered
-        assert "🔷  Codex … mensagem 2" in rendered
+        assert "🔷  Codex mensagem 2" in rendered
+        renderer.close(timeout=1.0)
+
+    def test_update_agent_transient_multiple_agents_all_visible_in_combined_feed(self):
+        renderer = TerminalRenderer()
+        renderer._console = Console(width=100, record=True, force_terminal=False)
+        renderer.set_prompt_integration(lambda: True, None)
+
+        def mock_style(agent, get_plugin_style=None):
+            styles = {"codex": ("cyan", "🔷  Codex"), "gemini": ("green", "🟢  Gemini")}
+            return styles.get(agent, ("white", agent))
+
+        with patch("quimera.ui._agent_style", side_effect=mock_style):
+            renderer.update_agent_transient("codex", "codex msg 1")
+            renderer.update_agent_transient("gemini", "gemini msg 1")
+            renderer.update_agent_transient("codex", "codex msg 2")
+            renderer.update_agent_transient("gemini", "gemini msg 2")
+
+        renderer.flush()
+        rendered = renderer._console.export_text()
+        assert "🔷  Codex codex msg 2" in rendered
+        assert "🟢  Gemini gemini msg 2" in rendered
+        renderer.close(timeout=1.0)
+
+    def test_cprint_with_run_above_resets_prev_lines_so_next_transient_is_correct(self):
+        """_clear_and_print deve resetar _prev_lines[0]=0 ao executar via run_above.
+        Sem o fix, o próximo TransientWindowEvent usaria p=N stale e emitiria
+        \\033[NA\\033[J apagando a resposta final já impressa."""
+        import sys
+
+        renderer = TerminalRenderer()
+        renderer._console = Console(width=100, record=True, force_terminal=False)
+
+        def run_above_fn(fn):
+            fn()
+            return True
+
+        renderer.set_prompt_integration(lambda: True, run_above_fn)
+
+        cursor_ups = []
+        original_write = sys.stdout.write
+
+        def capture(s):
+            # Captura apenas sequências de cursor-up (\\033[NA)
+            import re
+            for m in re.findall(r"\033\[(\d+)A", s):
+                cursor_ups.append(int(m))
+            return original_write(s)
+
+        with patch("quimera.ui._agent_style", return_value=("cyan", "🔷  Codex")):
+            with patch.object(sys.stdout, "write", side_effect=capture):
+                # Passo 1: janela transitória estabelece prev_lines > 0
+                renderer.update_agent_transient("codex", "executando passo 1")
+                renderer.flush()
+
+                # Passo 2: _cprint via run_above deve limpar overlay e resetar prev_lines=0
+                renderer._print("Resposta final")
+                renderer.flush()
+
+                # Passo 3: próximo transitório deve usar prev_lines=0 (não o valor stale)
+                renderer.update_agent_transient("codex", "executando passo 2")
+                renderer.flush()
+
+        # Se o fix funciona: após _cprint resetar prev_lines=0, o passo 3 usa p=0 →
+        # sem cursor-up para a segunda transient. Sem o fix: p=N stale → cursor-up com N.
+        # O único cursor-up permitido é o da limpeza em _clear_and_print (passo 2),
+        # com valor ≤ 2 (1 msg + trailing \n = 2 linhas).
+        assert all(n <= 2 for n in cursor_ups), (
+            f"cursor-ups inesperados: {cursor_ups} — overlay double-clear detectado"
+        )
+
         renderer.close(timeout=1.0)
 
     def test_start_message_stream_disables_auto_refresh(self, mock_renderer):
