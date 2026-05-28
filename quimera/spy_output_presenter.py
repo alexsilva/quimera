@@ -432,7 +432,7 @@ class SpyOutputPresenter:
             return []
         if len(text) > 200:
             text = text[:197] + "..."
-        return [SpyEvent(kind="context", text=text, transient=True)]
+        return [SpyEvent(kind="response", text=text, transient=True)]
 
     def notify_agent_started(self, agent: str | None) -> None:
         """Emite evento transitório de início de execução para todos os CLIs."""
@@ -526,6 +526,7 @@ class SpyOutputPresenter:
 
         self.flush(agent)
         self._show(agent, event)
+        self.current_status_label = ""
 
     def flush(self, agent: str | None) -> None:
         """Emite o evento agrupado pendente, se existir."""

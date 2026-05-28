@@ -24,6 +24,7 @@ _RENDER_MODES = {"plain", "markdown", "auto"}
 _PREVIEW_LIMIT = 160
 _SEQUENTIAL_STATUS_REFRESH_PER_SECOND = 4
 _PROMPT_TRANSIENT_SNAPSHOT_INTERVAL_SEC = 0.5
+_SCROLLING_WINDOW_SIZE = 10
 
 
 def strip_ansi(text: str) -> str:
@@ -351,6 +352,8 @@ class TerminalRenderer:
         self._transient_stream_agents = set()
         # Fallback em prompt ativo: snapshots compactos de "pensando" por agente.
         self._prompt_transient_snapshots: dict[str, dict[str, Any]] = {}
+        # Buffer rolling para feed rolável do agente (threads=0, prompt inativo)
+        self._rolling_buffers: dict[str, list[str]] = {}
         # Lock protege _completed_streams, _active_stream_agents e _statuses
         self._lock = threading.RLock()
 
@@ -1028,9 +1031,17 @@ class TerminalRenderer:
             if should_start:
                 self._transient_stream_agents.add(agent)
 
+            # Rolling buffer: adiciona apenas se diferente da última entrada
+            buf = self._rolling_buffers.setdefault(agent, [])
+            if buf and buf[-1] == clean_message:
+                return
+            buf.append(clean_message)
+            buf[:] = buf[-_SCROLLING_WINDOW_SIZE:]
+            display_content = "\n".join(buf)
+
         if should_start:
             self.start_message_stream(agent)
-        self.update_message_stream(agent, {"diff": [{"op": "replace", "text": clean_message}]})
+        self.update_message_stream(agent, {"diff": [{"op": "replace", "text": display_content}]})
 
     def clear_agent_transient(self, agent) -> None:
         """Limpa o bloco transitório do agente, se ativo."""
@@ -1041,6 +1052,7 @@ class TerminalRenderer:
         suppressed = 0
         last_emitted_message = ""
         with self._lock:
+            self._rolling_buffers.pop(agent, None)
             snapshot = self._prompt_transient_snapshots.pop(agent, None) or {}
             pending_message = str(snapshot.get("pending_message") or "").strip()
             suppressed = int(snapshot.get("suppressed") or 0)
