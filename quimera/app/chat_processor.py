@@ -30,6 +30,22 @@ from ..constants import (
 _tty = TtyController()
 
 
+class _WakeupQueue(queue.Queue):
+    """Queue que notifica um Event a cada put(), permitindo espera bloqueante no consumidor."""
+
+    def __init__(self, wakeup_event: threading.Event):
+        super().__init__()
+        self._wakeup_event = wakeup_event
+
+    def put(self, item, block=True, timeout=None):
+        super().put(item, block=block, timeout=timeout)
+        self._wakeup_event.set()
+
+    def put_nowait(self, item):
+        super().put_nowait(item)
+        self._wakeup_event.set()
+
+
 def run_chat_loop(
     app,
     *,
@@ -79,7 +95,8 @@ def run_chat_loop(
     if callable(flush):
         flush()
 
-    _ui_event_queue: queue.Queue = queue.Queue()
+    _ui_wakeup = threading.Event()
+    _ui_event_queue: queue.Queue = _WakeupQueue(_ui_wakeup)
     app._ui_event_queue = _ui_event_queue
     if hasattr(app, "dispatch_services") and app.dispatch_services is not None:
         app.dispatch_services._ui_queue = _ui_event_queue
@@ -91,6 +108,8 @@ def run_chat_loop(
     threaded_chat = app.threads > 1
     if hasattr(app, "input_services") and app.input_services is not None:
         app.input_services.set_nonblocking_tty(threaded_chat)
+        if threaded_chat:
+            app.input_services.set_wakeup_event(_ui_wakeup)
     chat_queue = None
     chat_worker = None
     chat_executor = None

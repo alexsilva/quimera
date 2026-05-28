@@ -173,9 +173,13 @@ class AppInputServices:
         self._nonblocking_tty = False
         self._input_queue: queue.Queue | None = None
         self._input_thread: threading.Thread | None = None
+        self._wakeup_event: threading.Event | None = None
 
     def set_nonblocking_tty(self, enabled: bool) -> None:
         self._nonblocking_tty = enabled
+
+    def set_wakeup_event(self, event: threading.Event | None) -> None:
+        self._wakeup_event = event
 
     def read_user_input(self, prompt, timeout: int) -> str | None:
         if timeout == 0 and self._nonblocking_tty:
@@ -202,6 +206,9 @@ class AppInputServices:
         except queue.Empty:
             if self._input_thread is None or not self._input_thread.is_alive():
                 self._start_input_reader(prompt)
+            elif self._wakeup_event is not None:
+                self._wakeup_event.wait(timeout=0.01)
+                self._wakeup_event.clear()
             else:
                 time.sleep(0.01)
             return None
