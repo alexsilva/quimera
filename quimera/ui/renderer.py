@@ -230,6 +230,11 @@ class NoopEvent:
 
 
 @dataclass
+class ToolbarTickEvent:
+    """Dispara refresh da toolbar para atualizar contador de tempo."""
+
+
+@dataclass
 class OutputControlEvent:
     suspend: bool
     done: threading.Event | None = None
@@ -335,6 +340,9 @@ class TerminalRenderer:
         self._live = None
         self._statuses = {}
 
+        # Tempo decorrido por agente (atualizado via _on_tick, lido na toolbar)
+        self._agent_elapsed: dict[str, float] = {}
+
         # Streams completados: agent -> final_content (atualizado sync antes de live_stop)
         self._completed_streams = {}
         # Agents com stream ativo (atualizado sync, protegido por _lock)
@@ -427,17 +435,25 @@ class TerminalRenderer:
             active_count = len(parts)
             if active_count > 1:
                 labels = " · ".join(
-                    markup_escape(st["label"]) for st in _stream_states.values()
+                    _agent_toolbar_label(agent, st["label"])
+                    for agent, st in _stream_states.items()
                 )
                 toolbar_text = f"[dim]{labels} · Ctrl+C para cancelar · T para tema[/dim]"
             else:
-                only_state = next(iter(_stream_states.values()))
+                only_agent, only_state = next(iter(_stream_states.items()))
+                label_text = _agent_toolbar_label(only_agent, only_state["label"])
                 toolbar_text = (
-                    f"[bold {only_state['style']}]{markup_escape(only_state['label'])}[/] "
+                    f"[bold {only_state['style']}]{label_text}[/] "
                     f"[dim]· Ctrl+C para cancelar · T para tema[/dim]"
                 )
             infobar = Rule(toolbar_text, characters="·", style="dim")
             return Group(main, infobar)
+
+        def _agent_toolbar_label(agent_name: str, base_label: str) -> str:
+            elapsed = self._get_agent_elapsed(agent_name)
+            if elapsed is not None:
+                return f"{markup_escape(base_label)} [{int(elapsed)}s]"
+            return markup_escape(base_label)
 
         def _ensure_live():
             if _ul[0] is None and self._console:
@@ -623,6 +639,9 @@ class TerminalRenderer:
                 elif isinstance(event, NoopEvent):
                     _flush_deferred(force=event.force_flush)
                     event.done.set()
+
+                elif isinstance(event, ToolbarTickEvent):
+                    _refresh()
 
                 elif isinstance(event, OutputControlEvent):
                     if event.suspend:
@@ -1041,6 +1060,25 @@ class TerminalRenderer:
                 return
             self._transient_stream_agents.discard(agent)
         self.abort_message_stream(agent)
+
+    def update_agent_elapsed(self, agent: str, elapsed: float) -> None:
+        """Armazena o tempo decorrido do agente para exibição na toolbar."""
+        with self._lock:
+            self._agent_elapsed[agent] = elapsed
+
+    def clear_agent_elapsed(self, agent: str) -> None:
+        """Remove o tempo decorrido do agente."""
+        with self._lock:
+            self._agent_elapsed.pop(agent, None)
+
+    def _get_agent_elapsed(self, agent: str) -> float | None:
+        """Retorna o tempo decorrido do agente ou None."""
+        with self._lock:
+            return self._agent_elapsed.get(agent)
+
+    def request_toolbar_refresh(self) -> None:
+        """Enfileira evento para refresh periódico da toolbar."""
+        self._queue.put(ToolbarTickEvent())
 
     # ------------------------------------------------------------------
     # Exibição de tipos especiais

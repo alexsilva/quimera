@@ -1,6 +1,8 @@
 """Componentes de `quimera.runtime.executor`."""
 from __future__ import annotations
 
+from typing import Callable
+
 from .config import ToolRuntimeConfig
 from .models import ToolCall, ToolResult
 from .parser import ToolCallParseError, extract_tool_call
@@ -36,9 +38,17 @@ class ToolExecutor:
         self.registry = registry or ToolRegistry()
         self.policy = policy or ToolPolicy(config)
         self._tool_preview_callback = None
+        self._tool_progress_callback = None
         self._task_tools = TaskTools(self.config)
         self._handoff_tools = HandoffTools(self.config)
         self._register_builtin_tools()
+
+    def set_tool_progress_callback(self, fn) -> None:
+        """Registra um callback para reporte de progresso durante a execução de tools.
+        Assinatura esperada: fn(message: str) -> None
+        """
+        self._tool_progress_callback = fn
+        self._handoff_tools.set_progress_callback(fn)
 
     def _register_builtin_tools(self) -> None:
         """Executa register builtin tools."""
@@ -148,7 +158,7 @@ class ToolExecutor:
         """Indica se a tool call_agent está operável no contexto atual."""
         return self._handoff_tools.is_call_agent_available()
 
-    def execute(self, call: ToolCall) -> ToolResult:
+    def execute(self, call: ToolCall, progress_callback: Callable[[str], None] | None = None) -> ToolResult:
         """Executa um ToolCall com política de aprovação.
 
         Se aprovação for necessária, bloqueia no approval_handler
@@ -158,6 +168,10 @@ class ToolExecutor:
         """
         normalized_call = self._normalize_call(call)
         try:
+            # Sincroniza callback de progresso se fornecido (prioridade sobre o global)
+            effective_progress_callback = progress_callback or self._tool_progress_callback
+            if effective_progress_callback:
+                self._handoff_tools.set_progress_callback(effective_progress_callback)
             if self.policy.requires_validation(normalized_call):
                 self.policy.validate(normalized_call)
 

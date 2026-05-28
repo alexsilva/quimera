@@ -82,6 +82,7 @@ class AgentGateway:
         prompt_kind=PromptKind.CHAT,
         history_snapshot=None,
         request_override=None,
+        progress_callback=None,
     ):
         """Monta o prompt final e executa a chamada ao backend do agente."""
         agent_client = self._agent_client
@@ -157,7 +158,13 @@ class AgentGateway:
             logger.debug("[GATEWAY] agent=%s cancelled by user before backend call, aborting", agent)
             return None
 
-        result = agent_client.call(agent, prompt, silent=silent, on_text_chunk=_on_text_chunk)
+        result = agent_client.call(
+            agent,
+            prompt,
+            silent=silent,
+            on_text_chunk=_on_text_chunk,
+            progress_callback=progress_callback,
+        )
 
         if _stream_buffer or result:
             if self._ui_queue is not None:

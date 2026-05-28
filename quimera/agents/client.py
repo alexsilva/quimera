@@ -281,8 +281,19 @@ class AgentClient:
     # run() — execução de subprocess
     # ------------------------------------------------------------------
 
-    def run(self, cmd, input_text=None, silent=False, agent=None, show_status=True, extra_env=None, cwd=None, _primed_proc=None):
-        """Executa run."""
+    def run(
+        self,
+        cmd,
+        input_text=None,
+        silent=False,
+        agent=None,
+        show_status=True,
+        extra_env=None,
+        cwd=None,
+        _primed_proc=None,
+        progress_callback=None,
+    ):
+        """Executa um comando (agente CLI) e retorna o stdout completo."""
         self._cancel_event.clear()
         self.rate_limit_detected = False
         self.rate_limit_detected_at = None
@@ -317,7 +328,7 @@ class AgentClient:
             "stderr": deque(maxlen=MAX_STDERR_LINES * 2),
             "error": None,
         }
-        log_queue = queue.Queue(maxsize=self._MAX_LOG_QUEUE_ITEMS) if not silent else None
+        log_queue = queue.Queue(maxsize=self._MAX_LOG_QUEUE_ITEMS) if not silent or (show_status and progress_callback) else None
         stderr_lines_shown = 0
         self._spy_output_presenter.reset()
 
@@ -366,7 +377,11 @@ class AgentClient:
 
         try:
             if silent:
-                termination = runner.watch()
+                def _on_tick_silent(elapsed):
+                    if progress_callback:
+                        progress_callback(f"aguardando resposta de {agent or cmd[0]}... {elapsed}s")
+
+                termination = runner.watch(on_tick=_on_tick_silent)
                 self.rate_limit_detected = runner.rate_limit_detected
                 self.rate_limit_detected_at = runner.rate_limit_detected_at
 
@@ -411,37 +426,33 @@ class AgentClient:
 
             else:
                 assert log_queue is not None
-                status_cm = self.renderer.running_status("", agent=agent) if (show_status and not silent) else nullcontext(None)
-
-                with status_cm as status:
-                    _last_status_text = [None]
+                with nullcontext(None) as status:
                     _first_stdout_seen = [False]
-                    _last_wait_feedback_second = [0]
-
-                    def _update_status_once(text: str) -> None:
-                        if status is None or text == _last_status_text[0]:
-                            return
-                        status.update(text)
-                        _last_status_text[0] = text
 
                     def _on_item(stream_type, line):
                         nonlocal stderr_lines_shown
                         if stream_type == "stderr" and _is_rate_limit_signal(line):
                             runner.notify_rate_limit()
-                        if status is not None:
-                            _lbl = self._spy_output_presenter.compose_status_label(cmd[0])
-                            _update_status_once(f"[dim]{_lbl}... {_elapsed[0]}s[/dim]")
                         cleaned = _strip_spinner(line.rstrip("\n"))
                         if not cleaned.strip():
+                            if show_status:
+                                _lbl = self._spy_output_presenter.compose_status_label(cmd[0])
+                                self.renderer.update_agent_transient(agent or cmd[0], _lbl)
                             return
                         if stream_type == "stdout":
                             _first_stdout_seen[0] = True
                             if self.visibility in {Visibility.SUMMARY, Visibility.FULL}:
                                 self._show_formatted_stdout(agent, cleaned)
+                            if show_status and self._spy_output_presenter.current_status_label:
+                                _lbl = self._spy_output_presenter.compose_status_label(cmd[0])
+                                self.renderer.update_agent_transient(agent or cmd[0], _lbl)
                             return
                         if stream_type == "stderr" and _should_ignore_stderr_line(agent, line):
                             return
                         self._spy_output_presenter.flush(agent)
+                        if show_status:
+                            _lbl = self._spy_output_presenter.compose_status_label(cmd[0])
+                            self.renderer.update_agent_transient(agent or cmd[0], _lbl)
                         if stream_type == "stderr" and self.visibility != Visibility.FULL:
                             if stderr_lines_shown < MAX_STDERR_LINES:
                                 if self._is_tool_call_text(cleaned):
@@ -463,21 +474,15 @@ class AgentClient:
 
                     def _on_tick(elapsed):
                         _elapsed[0] = elapsed
-                        if status is not None:
-                            _lbl = self._spy_output_presenter.compose_status_label(cmd[0])
-                            _update_status_once(f"[dim]{_lbl}... {elapsed}s[/dim]")
-                        if (
-                            agent
-                            and self.visibility in {Visibility.SUMMARY, Visibility.FULL}
-                            and not _first_stdout_seen[0]
-                            and elapsed >= 2
-                            and elapsed != _last_wait_feedback_second[0]
-                        ):
-                            self.renderer.update_agent_transient(agent, f"aguardando resposta... {elapsed}s")
-                            _last_wait_feedback_second[0] = elapsed
+                        self.renderer.update_agent_elapsed(agent or cmd[0], elapsed)
+                        self.renderer.request_toolbar_refresh()
+                        if progress_callback:
+                            progress_callback(f"aguardando resposta de {agent or cmd[0]}...")
 
                     self._spy_output_presenter.notify_agent_started(agent)
                     termination = runner.watch(log_queue=log_queue, on_item=_on_item, on_tick=_on_tick)
+                    self.renderer.clear_agent_transient(agent or cmd[0])
+                    self.renderer.clear_agent_elapsed(agent or cmd[0])
                     self.rate_limit_detected = runner.rate_limit_detected
                     self.rate_limit_detected_at = runner.rate_limit_detected_at
 
@@ -655,6 +660,7 @@ class AgentClient:
         quiet=False,
         on_text_chunk=None,
         allow_tools=True,
+        progress_callback=None,
     ):
         """Resolve o comando do agente e delega a execução."""
         self._user_cancelled = False
@@ -676,6 +682,7 @@ class AgentClient:
                 quiet=quiet,
                 on_text_chunk=on_text_chunk,
                 allow_tools=allow_tools,
+                progress_callback=progress_callback,
             )
         self._spy_output_presenter.set_turn_runtime("cli")
         cmd, prompt_as_arg, output_format = self._resolve_plugin_cli_attrs(plugin, connection)
@@ -685,7 +692,12 @@ class AgentClient:
             extra_env.update(env_hook())
         extra_env = extra_env or None
         cwd = connection.cwd if isinstance(connection, CliConnection) else None
-        run_kwargs = {"silent": silent, "agent": agent, "show_status": show_status}
+        run_kwargs = {
+            "silent": silent,
+            "agent": agent,
+            "show_status": show_status,
+            "progress_callback": progress_callback,
+        }
         if extra_env is not None:
             run_kwargs["extra_env"] = extra_env
         if cwd is not None:
@@ -729,6 +741,7 @@ class AgentClient:
         quiet=False,
         on_text_chunk=None,
         allow_tools=True,
+        progress_callback=None,
     ):
         """Executa agentes com driver de API (ex: openai_compat para Ollama)."""
         connection = self._resolve_plugin_connection(plugin)
@@ -855,8 +868,11 @@ class AgentClient:
                         self._show_cancelled_once()
                         return None
                     time.sleep(0.25)
+                    _api_elapsed = time.time() - _api_start
+                    if progress_callback:
+                        progress_callback(f"aguardando resposta da API ({connection.model})... {int(_api_elapsed)}s")
+
                     if self.timeout is not None and self.timeout > 0:
-                        _api_elapsed = time.time() - _api_start
                         wall_limit = self.timeout * 5
                         if _api_elapsed > wall_limit:
                             self._cancel_event.set()

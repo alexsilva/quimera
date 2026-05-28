@@ -343,7 +343,7 @@ class OpenAICompatDriver:
         self._client = OpenAI(
             base_url=base_url,
             api_key=api_key,
-            timeout=float(timeout) if timeout else 120.0,
+            timeout=float(timeout) if timeout else 300.0,
         )
         self.tool_use_reliability = str(tool_use_reliability or "medium").lower()
         self.extra_body = dict(extra_body) if extra_body else None

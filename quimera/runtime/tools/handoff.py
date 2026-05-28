@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Protocol
+from typing import Protocol, Callable
 
 from ..config import ToolRuntimeConfig
 from ..models import ToolCall, ToolResult
@@ -26,6 +26,7 @@ class _CallAgentFnProto(Protocol):
         persist_history: bool = True,
         history_snapshot: list | None = None,
         max_retries: int = 1,
+        progress_callback: Callable[[str], None] | None = None,
     ) -> str | None: ...
 
 
@@ -39,6 +40,7 @@ class HandoffTools:
         self.config = config
         self._call_agent_fn: _CallAgentFnProto | None = None
         self._active_agents_provider = None
+        self._progress_callback: Callable[[str], None] | None = None
 
     def set_call_agent_fn(self, fn: _CallAgentFnProto) -> None:
         """Injeta callable para despachar tarefas a outro agente."""
@@ -47,6 +49,10 @@ class HandoffTools:
     def set_active_agents_provider(self, fn) -> None:
         """Injeta provider que retorna agentes ativos no momento da delegação."""
         self._active_agents_provider = fn
+
+    def set_progress_callback(self, fn: Callable[[str], None] | None) -> None:
+        """Injeta callback para reporte de progresso."""
+        self._progress_callback = fn
 
     def is_call_agent_available(self) -> bool:
         """Indica se a tool call_agent está operável no contexto atual."""
@@ -245,13 +251,14 @@ class HandoffTools:
                             handoff_only=True,
                             protocol_mode="handoff",
                             primary=False,
-                            silent=True,
+                            silent=False,
                             show_output=False,
                             persist_history=True,
                             # Evita reenviar todo o histórico da conversa principal
                             # para o subagente em handoff MCP (reduz latência/timeout).
                             history_snapshot=[],
-                            max_retries=1,
+                            max_retries=3,
+                            progress_callback=self._progress_callback,
                         )
                     except Exception as dispatch_error:  # noqa: BLE001
                         last_error = str(dispatch_error)

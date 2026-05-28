@@ -135,7 +135,7 @@ class MCPServer:
     # Despacho de métodos
     # ------------------------------------------------------------------
 
-    def _handle(self, msg: dict) -> dict | None:
+    def _handle(self, msg: dict, out: IO) -> dict | None:
         method = msg.get("method", "")
         msg_id = msg.get("id")
         params = msg.get("params") or {}
@@ -163,7 +163,7 @@ class MCPServer:
             return self._handle_tools_list(msg_id)
 
         if method == "tools/call":
-            return self._handle_tools_call(msg_id, params)
+            return self._handle_tools_call(msg_id, params, out=out)
 
         # Método desconhecido: só responde se há id (requests, não notificações).
         if msg_id is not None:
@@ -175,9 +175,10 @@ class MCPServer:
         tools = [_openai_schema_to_mcp(s) for s in schemas]
         return self._ok(msg_id, {"tools": tools})
 
-    def _handle_tools_call(self, msg_id: Any, params: dict) -> dict:
+    def _handle_tools_call(self, msg_id: Any, params: dict, out: IO) -> dict:
         tool_name = params.get("name", "")
         arguments = params.get("arguments") or {}
+        progress_token = params.get("progressToken")
 
         if not tool_name:
             return self._err(msg_id, -32602, "tools/call: 'name' é obrigatório")
@@ -186,9 +187,24 @@ class MCPServer:
         started_at = time.perf_counter()
         _logger.info("MCP tools/call start tool=%s arg_keys=%s", tool_name, arg_keys)
 
+        def _progress_callback(msg: str) -> None:
+            # Emite log no stderr (visível em muitos clientes MCP)
+            _logger.info("MCP progress [%s]: %s", tool_name, msg)
+            # Se o cliente enviou progressToken, emite notificação formal
+            if progress_token:
+                self._write({
+                    "jsonrpc": "2.0",
+                    "method": "notifications/progress",
+                    "params": {
+                        "token": progress_token,
+                        "progress": 0,  # incremental best-effort
+                        "total": 0,
+                    }
+                }, out)
+
         try:
             call = ToolCall(name=tool_name, arguments=arguments)
-            result = self._executor.execute(call)
+            result = self._executor.execute(call, progress_callback=_progress_callback)
         except Exception as exc:
             duration_ms = int((time.perf_counter() - started_at) * 1000)
             _logger.exception("MCP tools/call error tool=%s duration_ms=%d", tool_name, duration_ms)
@@ -362,7 +378,7 @@ class MCPServer:
                 continue
 
             try:
-                response = self._handle(msg)
+                response = self._handle(msg, out=out)
             except Exception as exc:
                 _logger.exception("Erro inesperado no handler MCP")
                 msg_id = msg.get("id")

@@ -5,7 +5,7 @@ plugin = AgentPlugin(
     name="gemini",
     prefix="/gemini",
     icon="🧭",
-    cmd=["gemini", "--approval-mode=yolo", "--skip-trust", "-p"],
+    cmd=["agy", "--dangerously-skip-permissions", "-p"],
     style=("cyan", "Gemini"),
     prompt_as_arg=True,
     capabilities=["code_review", "documentation", "general_reasoning", "code_editing", "complex_refactoring",
@@ -16,6 +16,7 @@ plugin = AgentPlugin(
     has_builtin_tools=True,
     tool_use_reliability="high",
     supports_code_editing=True,
-    supports_long_context=True, base_tier=3,
+    supports_long_context=True,
+    base_tier=3,
 )
 register(plugin)

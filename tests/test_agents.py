@@ -368,7 +368,7 @@ def test_agent_client_call(renderer):
             result = client.call("mock", "prompt")
             assert result == "output"
             mock_run.assert_called_with(["mock-agent"], input_text="prompt", _primed_proc=None,
-                                        silent=False, agent="mock", show_status=True)
+                                        silent=False, agent="mock", show_status=True, progress_callback=None)
 
 
 def test_agent_client_call_prompt_as_arg(renderer):
@@ -386,7 +386,7 @@ def test_agent_client_call_prompt_as_arg(renderer):
             result = client.call("mock", "prompt")
             assert result == "output"
             mock_run.assert_called_with(["mock-agent", "prompt"], input_text=None, silent=False, agent="mock",
-                                        show_status=True)
+                                        show_status=True, progress_callback=None)
 
 
 def test_agent_client_call_does_not_duplicate_mode_prompt(renderer):
@@ -408,8 +408,7 @@ def test_agent_client_call_does_not_duplicate_mode_prompt(renderer):
             result = client.call("mock", initial_prompt)
             assert result == "output"
             mock_run.assert_called_with(["mock-agent"], input_text=initial_prompt, _primed_proc=None,
-                                        silent=False, agent="mock", show_status=True)
-
+                                        silent=False, agent="mock", show_status=True, progress_callback=None)
 
 def test_agent_client_log_metrics(renderer, tmp_path):
     metrics_file = tmp_path / "metrics.jsonl"
@@ -618,15 +617,10 @@ def test_agent_client_run_streaming_with_status_and_stderr(renderer):
         mock_proc.stdin = MagicMock()
         mock_popen.return_value = mock_proc
 
-        mock_status = MagicMock()
-        renderer.running_status.return_value = mock_status
-
         with patch("time.sleep"):
             result = client.run(["echo"], silent=False, show_status=True)
             assert "out1" in result
             renderer.show_plain.assert_any_call("err1", agent=ANY)
-            mock_status.__enter__.assert_called()
-            mock_status.__exit__.assert_called()
 
 
 def test_agent_client_run_suppresses_codex_stdin_noise(renderer):
@@ -717,36 +711,8 @@ def test_agent_client_run_summary_shows_formatted_codex_stdout(renderer):
     renderer.show_plain.assert_any_call("execução concluída", agent="codex", muted=True)
 
 
-def test_agent_client_run_summary_emits_wait_feedback_before_first_stdout(renderer):
-    client = AgentClient(renderer, visibility=Visibility.SUMMARY)
-    with patch("subprocess.Popen") as mock_popen:
-        mock_proc = MagicMock()
-        mock_proc.stdout = iter([])
-        mock_proc.stderr = iter([])
-        mock_proc.returncode = 0
-        mock_proc.stdin = MagicMock()
-        mock_popen.return_value = mock_proc
-
-        def _watch(_self, log_queue=None, on_item=None, on_tick=None):
-            if on_tick is not None:
-                on_tick(1)
-                on_tick(2)
-            return ProcessRunner.COMPLETED
-
-        with patch.object(ProcessRunner, "watch", autospec=True, side_effect=_watch):
-            client.run(["codex", "exec"], silent=False, agent="codex", show_status=False)
-
-    renderer.update_agent_transient.assert_any_call("codex", "iniciando execução")
-    renderer.update_agent_transient.assert_any_call("codex", "aguardando resposta... 2s")
-
-
 def test_agent_client_run_summary_flushes_compacted_responses_before_context(renderer):
     client = AgentClient(renderer, visibility=Visibility.SUMMARY)
-    status = MagicMock()
-    status_cm = MagicMock()
-    status_cm.__enter__.return_value = status
-    status_cm.__exit__.return_value = None
-    renderer.running_status.return_value = status_cm
     with patch("subprocess.Popen") as mock_popen:
         mock_proc = MagicMock()
         mock_proc.stdout = iter([
@@ -763,17 +729,12 @@ def test_agent_client_run_summary_flushes_compacted_responses_before_context(ren
 
     renderer.update_agent_transient.assert_any_call("codex", "linha 1")
     renderer.update_agent_transient.assert_any_call("codex", "linha 2")
-    assert any("codex | $ git status" in str(c) for c in status.update.call_args_list)
+    assert any("codex | $ git status" in str(c) for c in renderer.update_agent_transient.call_args_list)
     assert ("$ git status",) not in [call.args for call in renderer.show_plain.call_args_list]
 
 
 def test_agent_client_run_summary_keeps_completed_tool_line_transient(renderer):
     client = AgentClient(renderer, visibility=Visibility.SUMMARY)
-    status = MagicMock()
-    status_cm = MagicMock()
-    status_cm.__enter__.return_value = status
-    status_cm.__exit__.return_value = None
-    renderer.running_status.return_value = status_cm
     with patch("subprocess.Popen") as mock_popen:
         mock_proc = MagicMock()
         mock_proc.stdout = iter([
@@ -788,18 +749,13 @@ def test_agent_client_run_summary_keeps_completed_tool_line_transient(renderer):
         with patch("time.sleep"):
             client.run(["codex", "exec"], silent=False, agent="codex", show_status=True)
 
-    assert any("codex | $ git diff -- quimera/agents.py" in str(c) for c in status.update.call_args_list)
+    assert any("codex | $ git diff -- quimera/agents.py" in str(c) for c in renderer.update_agent_transient.call_args_list)
     assert ("✓ git diff -- quimera/agents.py",) not in [call.args for call in renderer.show_plain.call_args_list]
     assert ("$ git diff -- quimera/agents.py",) not in [call.args for call in renderer.show_plain.call_args_list]
 
 
 def test_agent_client_run_summary_shows_diff_output_and_keeps_next_operation_clean(renderer):
     client = AgentClient(renderer, visibility=Visibility.SUMMARY)
-    status = MagicMock()
-    status_cm = MagicMock()
-    status_cm.__enter__.return_value = status
-    status_cm.__exit__.return_value = None
-    renderer.running_status.return_value = status_cm
     with patch("subprocess.Popen") as mock_popen:
         mock_proc = MagicMock()
         mock_proc.stdout = iter([
@@ -817,7 +773,7 @@ def test_agent_client_run_summary_shows_diff_output_and_keeps_next_operation_cle
 
     client.flush_pending_summary()
 
-    assert any("codex | $ git status --short" in str(c) for c in status.update.call_args_list)
+    assert any("codex | $ git status --short" in str(c) for c in renderer.update_agent_transient.call_args_list)
     assert ("$ git status --short",) not in [call.args for call in renderer.show_plain.call_args_list]
     assert ("✓ git diff -- quimera/agents.py",) not in [call.args for call in renderer.show_plain.call_args_list]
     renderer.show_plain.assert_any_call("diff --git a/quimera/agents.py b/quimera/agents.py", agent="codex", muted=True)

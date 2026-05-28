@@ -410,7 +410,7 @@ class AppDispatchServices:
         persist_history = dispatch_options.pop("persist_history", True)
         show_output = dispatch_options.pop("show_output", True)
         dispatch_options.pop("quiet", False)
-        dispatch_options.pop("progress_callback", None)
+        progress_callback = dispatch_options.pop("progress_callback", None)
         handoff = dispatch_options.get("handoff")
         handoff_id = handoff.get("handoff_id") if isinstance(handoff, dict) else None
         logger.debug(
@@ -424,7 +424,11 @@ class AppDispatchServices:
 
         def _call_fn(a):
             return self.call_agent_low_level(
-                a, silent=silent, show_output=show_output, **dispatch_options,
+                a,
+                silent=silent,
+                show_output=show_output,
+                progress_callback=progress_callback,
+                **dispatch_options,
             )
 
         def _resolve_fn(a, response):
@@ -458,6 +462,7 @@ class AppDispatchServices:
             prompt_kind=PromptKind.CHAT,
             history_snapshot=None,
             request_override=None,
+            progress_callback=None,
     ):
         """Monta o prompt final e executa a chamada ao backend do agente."""
         result = self._get_gateway().call(
@@ -473,6 +478,7 @@ class AppDispatchServices:
             prompt_kind=prompt_kind,
             history_snapshot=history_snapshot,
             request_override=request_override,
+            progress_callback=progress_callback,
         )
         self._update_spy_telemetry(agent)
         return result
