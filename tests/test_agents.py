@@ -729,7 +729,7 @@ def test_agent_client_run_summary_flushes_compacted_responses_before_context(ren
 
     renderer.update_agent_transient.assert_any_call("codex", "linha 1")
     renderer.update_agent_transient.assert_any_call("codex", "linha 2")
-    assert any("codex | $ git status" in str(c) for c in renderer.update_agent_transient.call_args_list)
+    assert any("$ git status" in str(c) for c in renderer.update_agent_transient.call_args_list)
     assert ("$ git status",) not in [call.args for call in renderer.show_plain.call_args_list]
 
 
@@ -749,7 +749,7 @@ def test_agent_client_run_summary_keeps_completed_tool_line_transient(renderer):
         with patch("time.sleep"):
             client.run(["codex", "exec"], silent=False, agent="codex", show_status=True)
 
-    assert any("codex | $ git diff -- quimera/agents.py" in str(c) for c in renderer.update_agent_transient.call_args_list)
+    assert any("$ git diff -- quimera/agents.py" in str(c) for c in renderer.update_agent_transient.call_args_list) or any("✓ git diff -- quimera/agents.py" in str(c) for c in renderer.update_agent_transient.call_args_list)
     assert ("✓ git diff -- quimera/agents.py",) not in [call.args for call in renderer.show_plain.call_args_list]
     assert ("$ git diff -- quimera/agents.py",) not in [call.args for call in renderer.show_plain.call_args_list]
 
@@ -773,7 +773,7 @@ def test_agent_client_run_summary_shows_diff_output_and_keeps_next_operation_cle
 
     client.flush_pending_summary()
 
-    assert any("codex | $ git status --short" in str(c) for c in renderer.update_agent_transient.call_args_list)
+    assert any("$ git status --short" in str(c) for c in renderer.update_agent_transient.call_args_list)
     assert ("$ git status --short",) not in [call.args for call in renderer.show_plain.call_args_list]
     assert ("✓ git diff -- quimera/agents.py",) not in [call.args for call in renderer.show_plain.call_args_list]
     renderer.show_plain.assert_any_call("diff --git a/quimera/agents.py b/quimera/agents.py", agent="codex", muted=True)

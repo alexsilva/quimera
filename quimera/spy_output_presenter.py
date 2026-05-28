@@ -482,9 +482,9 @@ class SpyOutputPresenter:
             return
 
         if event.kind == "tool":
-            self.flush(agent)
             payload = event.text.strip()
             if payload.startswith("✗ "):
+                self.flush(agent)
                 self._show(agent, event)
                 self.current_status_label = ""
                 return
@@ -494,6 +494,7 @@ class SpyOutputPresenter:
                 return
 
             self.current_status_label = payload
+            self._show(agent, SpyEvent(kind="tool", text=event.text, transient=True, data=event.data))
             return
 
         if event.kind == "context":

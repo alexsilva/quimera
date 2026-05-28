@@ -443,9 +443,6 @@ class AgentClient:
                             _first_stdout_seen[0] = True
                             if self.visibility in {Visibility.SUMMARY, Visibility.FULL}:
                                 self._show_formatted_stdout(agent, cleaned)
-                            if show_status and self._spy_output_presenter.current_status_label:
-                                _lbl = self._spy_output_presenter.compose_status_label(cmd[0])
-                                self.renderer.update_agent_transient(agent or cmd[0], _lbl)
                             return
                         if stream_type == "stderr" and _should_ignore_stderr_line(agent, line):
                             return
