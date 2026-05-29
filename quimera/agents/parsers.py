@@ -10,6 +10,7 @@ _logger = logging.getLogger(__name__)
 def parse_stream_json(raw: str, agent: str, tool_event_callback=None) -> str | None:
     """Parseia output em stream-json do CLI, extrai texto final e dispara callbacks de tool."""
     result_text = None
+    text_parts: list[str] = []
     for line in raw.splitlines():
         line = line.strip()
         if not line:
@@ -20,18 +21,40 @@ def parse_stream_json(raw: str, agent: str, tool_event_callback=None) -> str | N
             continue
         etype = event.get("type")
         if etype == "result":
-            if event.get("is_error"):
-                _logger.warning("[stream-json] agent=%s reported error: %s", agent, event.get("result"))
+            if event.get("is_error") or event.get("status") == "error":
+                _logger.warning("[stream-json] agent=%s reported error: %s", agent, event.get("result") or event.get("error"))
                 return None
-            result_text = event.get("result") or ""
+            val = event.get("result")
+            if val is not None:
+                result_text = val
+        elif etype == "message" and event.get("role") == "assistant":
+            content = event.get("content")
+            if isinstance(content, str):
+                text_parts.append(content)
+            elif isinstance(content, list):
+                for block in content:
+                    if block.get("type") == "text":
+                        text_parts.append(block.get("text") or "")
+        elif etype == "tool_use":
+            if tool_event_callback:
+                tool_name = event.get("tool_name", "unknown")
+                _logger.debug("[stream-json] agent=%s used tool=%s", agent, tool_name)
+                tool_event_callback(agent, result=_SyntheticToolResult(ok=True))
         elif etype == "assistant":
             content = event.get("message", {}).get("content", [])
             for block in content:
-                if block.get("type") == "tool_use" and tool_event_callback:
+                if block.get("type") == "text":
+                    text_parts.append(block.get("text") or "")
+                elif block.get("type") == "tool_use" and tool_event_callback:
                     tool_name = block.get("name", "unknown")
                     _logger.debug("[stream-json] agent=%s used tool=%s", agent, tool_name)
                     tool_event_callback(agent, result=_SyntheticToolResult(ok=True))
-    return result_text
+
+    if result_text is not None:
+        return result_text
+    if text_parts:
+        return "".join(text_parts).strip() or None
+    return None
 
 
 def parse_codex_json(raw: str, agent: str, tool_event_callback=None) -> str | None:

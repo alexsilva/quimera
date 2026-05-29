@@ -12,6 +12,8 @@ _RATE_LIMIT_RE = re.compile(
     \brate[\s-]?limit(?:ed|ing)?\b
     | \btoo\ many\ requests\b
     | \bthrottl(?:e|ed|ing)?\b
+    | \bexhausted\ your\ capacity\b
+    | \bquota\ will\ reset\b
     | \b(?:http|status|status code|code)\b[^\n]{0,20}\b429\b
     | \b429\b[^\n]{0,20}\btoo\ many\ requests\b
     """,
