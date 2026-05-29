@@ -670,7 +670,7 @@ class TestCallAgent:
         assert result == "result"
         # Verifica que handoff foi passado
         mock_ll.assert_called_once_with(
-            "agent1", silent=False, show_output=True, handoff={"handoff_id": "h123"}
+            "agent1", silent=False, show_output=True, progress_callback=None, handoff={"handoff_id": "h123"}
         )
 
     def test_exception_at_resolve_retries(self, dispatch_app):
@@ -724,7 +724,7 @@ class TestCallAgentLowLevel:
 
     def test_on_text_chunk_starts_stream(self, ll_app):
         """chunks são bufferizados e entregues via show_message"""
-        def _call(agent, prompt, silent=False, on_text_chunk=None):
+        def _call(agent, prompt, silent=False, on_text_chunk=None, progress_callback=None):
             if on_text_chunk:
                 on_text_chunk("hello")
                 on_text_chunk(" world")
@@ -737,7 +737,7 @@ class TestCallAgentLowLevel:
 
     def test_stream_result_none_shows_buffered(self, ll_app):
         """stream com result None — gateway não renderiza, caller faz"""
-        def _call(agent, prompt, silent=False, on_text_chunk=None):
+        def _call(agent, prompt, silent=False, on_text_chunk=None, progress_callback=None):
             if on_text_chunk:
                 on_text_chunk("hello")
             return None
@@ -797,7 +797,7 @@ class TestCallAgentLowLevel:
         """_redisplay_user_prompt_if_needed chamado após finish"""
         ll_app._redisplay_user_prompt_if_needed = MagicMock()
 
-        def _call(agent, prompt, silent=False, on_text_chunk=None):
+        def _call(agent, prompt, silent=False, on_text_chunk=None, progress_callback=None):
             if on_text_chunk:
                 on_text_chunk("hello")
             return "response"
@@ -813,7 +813,7 @@ class TestCallAgentLowLevel:
         assert kwargs.get("primary") is False
 
     def test_show_output_false_ignores_text_chunks(self, ll_app):
-        def _call(agent, prompt, silent=False, on_text_chunk=None):
+        def _call(agent, prompt, silent=False, on_text_chunk=None, progress_callback=None):
             if on_text_chunk:
                 on_text_chunk("hello")
             return "response"

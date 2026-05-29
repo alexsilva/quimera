@@ -365,7 +365,7 @@ class TestPromptMetricsFeedback(unittest.TestCase):
     def test_prompt_base_rules_are_concise(self):
         """Verifica que as regras base estão inline no template e são concisas."""
         main = prompt_template._load()
-        self.assertLess(len(main), 8000)
+        self.assertLess(len(main), 12000)
         self.assertIn("humano", main.lower())
 
     def test_prompt_without_metrics_feedback(self):

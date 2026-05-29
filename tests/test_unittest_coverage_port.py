@@ -162,6 +162,7 @@ class AgentsCoverageTests(unittest.TestCase):
             silent=False,
             agent="mock",
             show_status=True,
+            progress_callback=None,
         )
 
     def test_call_uses_prompt_as_arg_and_unknown_agent_errors(self):
@@ -179,6 +180,7 @@ class AgentsCoverageTests(unittest.TestCase):
             silent=False,
             agent="mock",
             show_status=True,
+            progress_callback=None,
         )
         with patch("quimera.plugins.get", return_value=None):
             self.assertIsNone(client.call("missing", "hello"))

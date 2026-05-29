@@ -833,7 +833,7 @@ class TestTurnCycle(unittest.TestCase):
             if not hasattr(queue_factory, "calls"):
                 queue_factory.calls = 0
             queue_factory.calls += 1
-            if queue_factory.calls == 2:
+            if queue_factory.calls == 1:
                 return ObservedQueue()
             return original_queue_cls(*args, **kwargs)
 
@@ -851,7 +851,7 @@ class TestTurnCycle(unittest.TestCase):
             def join(self, timeout=None):
                 return None
 
-        with patch("quimera.app.core.queue.Queue", side_effect=queue_factory), patch(
+        with patch("quimera.app.chat_processor.queue.Queue", side_effect=queue_factory), patch(
             "quimera.app.core.ChatWorker", return_value=IdleWorker()
         ):
             QuimeraApp.run(app)

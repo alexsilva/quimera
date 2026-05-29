@@ -215,7 +215,7 @@ class TestToolsCall:
         mcp_logger.addHandler(caplog.handler)
 
         try:
-            with caplog.at_level(logging.INFO, logger="quimera.runtime.mcp_server"):
+            with caplog.at_level(logging.DEBUG, logger="quimera.runtime.mcp_server"):
                 _exchange(server, {
                     "jsonrpc": "2.0", "id": 14, "method": "tools/call",
                     "params": {"name": "read_file", "arguments": {"path": "foo.py"}},

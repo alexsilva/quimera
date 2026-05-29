@@ -174,9 +174,9 @@ def test_prompt_includes_mcp_runtime_instruction_when_enabled():
     prompt = builder.build(agent="codex", history=[{"role": "human", "content": "teste MCP"}])
     rules_block = _extract_block(prompt, "rules")
 
-    assert "MCP da sessão está ativo." in rules_block
-    assert "Não inicie servidor MCP externo/manualmente." in rules_block
-    assert "Use o servidor MCP `quimera` já injetado pelo runtime" in rules_block
+    assert "MCP bridge da sessão ativado." in rules_block
+    assert "Use comandos via MCP `quimera` para se comunicar com o runtime." in rules_block
+    assert "Dê preferência ao MCP ao executar ferramentas." in rules_block
 
 
 def test_prompt_omits_mcp_runtime_instruction_when_disabled():

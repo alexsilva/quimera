@@ -3613,7 +3613,7 @@ class PluginTests(unittest.TestCase):
             has_builtin_tools=True,
         ))
 
-        def fake_call(agent, prompt, silent=False, on_text_chunk=None):
+        def fake_call(agent, prompt, silent=False, on_text_chunk=None, progress_callback=None):
             self.assertIsNotNone(on_text_chunk)
             on_text_chunk("parcial")
             return "resposta final"

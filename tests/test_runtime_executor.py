@@ -465,11 +465,12 @@ def test_executor_call_agent_dispatches_with_handoff_mode(tmp_path):
         handoff_only=True,
         protocol_mode="handoff",
         primary=False,
-        silent=True,
+        silent=False,
         show_output=False,
         persist_history=True,
         history_snapshot=[],
-        max_retries=1,
+        max_retries=3,
+        progress_callback=None,
     )
 
 
