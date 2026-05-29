@@ -209,7 +209,76 @@ Sistema de rastreamento de contexto verificável. Evidências são extraídas da
 
 - **`bwrap.py`**: Integração com `bubblewrap` (bwrap) para isolamento de processos. Define paths de leitura/escrita permitidos por agente via `AgentPlugin.runtime_rw_paths`.
 
-### 3.9 Módulos Raiz de Prompt
+### 3.9 Sistema MCP (Model Context Protocol)
+
+O Quimera implementa o protocolo MCP (`2024-11-05`) para expor as ferramentas do runtime a agentes compatíveis. O servidor MCP é iniciado por sessão em um socket Unix com autenticação por token.
+
+#### 3.9.1 Componentes
+
+| Módulo | Arquivo | Responsabilidade |
+|---|---|---|
+| **MCPServer** | `runtime/mcp_server.py` | Servidor JSON-RPC 2.0 sobre stdio. Métodos: `initialize`, `initialized`, `ping`, `tools/list`, `tools/call` |
+| **ToolExecutor** | `runtime/executor.py` | Executa tools com validação de política, aprovação e resolução de aliases |
+| **ToolRegistry** | `runtime/registry.py` | Registro nome → handler (dict simples) |
+| **HandoffTools** | `runtime/tools/handoff.py` | Implementa `call_agent` — delegação cross-MCP entre agentes |
+| **Proxy stdio→socket** | `runtime/mcp_server.py:_proxy_stdio_to_socket` | Ponte transparente entre stdio do agente e socket Unix do servidor |
+| **Plugin MCP injection** | `plugins/{claude,codex,opencode}.py` | Cada plugin injeta config MCP no formato nativo do agente |
+| **Tool schemas** | `runtime/drivers/tool_schemas.py` | Fonte única de schemas: `resolve_tool_schemas()` filtra por registro/política |
+| **Prompt conditionals** | `prompt.md`, `task_prompt.md` | Blocos `<!-- IF:mcp_enabled -->` ativam instruções MCP nos prompts |
+| **Config bridge** | `app/core.py:configure_mcp_socket()` | Propaga socket_path e token para todos os plugins ativos |
+
+#### 3.9.2 Fluxo de Inicialização
+
+```
+CLI (--mcp padrão)
+  ├── Gera token: secrets.token_urlsafe(32)
+  ├── Gera socket path: workspace.tmp.root / f"mcp-{rand}.sock"
+  ├── Cria MCPServer(tool_executor, auth_token=mcp_token)
+  ├── mcp.start_background(socket_path)        → thread daemon
+  ├── app.configure_mcp_socket(socket_path, token) → propaga para plugins
+  └── session_state["mcp_enabled"] = True      → ativa blocos no prompt
+```
+
+#### 3.9.3 Injeção por Plugin
+
+| Plugin | Formato | Exemplo |
+|---|---|---|
+| **Codex** | `-c mcp_servers.quimera.command=python -c mcp_servers.quimera.args=[...]` | Argumentos CLI no estilo TOML |
+| **Claude** | `--mcp-config {"mcpServers":{"quimera":{"type":"stdio","command":"python","args":[...]}}}` | JSON injetado como argumento |
+| **OpenCode** | `OPENCODE_CONFIG_CONTENT={"mcp":{"quimera":{"type":"local","command":[...],"enabled":true}}}` | Variável de ambiente |
+| **Gemini** | Sem suporte a MCP | — |
+
+#### 3.9.4 Autenticação
+
+Cada conexão socket envia uma linha JSON como primeiro frame:
+```json
+{"quimera_auth_token": "<token-sessao>"}
+```
+O servidor valida com timeout de 5s. Token inválido → conexão fechada.
+
+#### 3.9.5 Cross-MCP (call_agent)
+
+A ferramenta `call_agent` é o mecanismo central de interoperabilidade entre agentes no pool:
+
+- **Disponibilidade**: verifica se `_call_agent_fn` foi injetado pelo `ToolExecutor.set_call_agent_fn()`.
+- **Parâmetros**: `agent_name` (obrigatório), `task` (obrigatório), `context`, `fallback_agents`, `handoffs`.
+- **Validação**: agente alvo deve estar no pool ativo. `handoffs` suporta cadeias multi-passo.
+- **Execução**: dispatch via `dispatch_services.call_agent()` com `protocol_mode="handoff"`, `silent=False`.
+- **Truncamento**: task limitada a 1200 caracteres, contexto a 4000.
+
+#### 3.9.6 MCP-First Mode
+
+Em `app/protocol.py:232`, quando MCP está ativo, envelopes textuais legados (`<handoff>...</handoff>`) são ignorados — agentes devem usar exclusivamente `call_agent`. Isso evita dupla delegação.
+
+#### 3.9.7 Ferramentas Expostas via tools/list
+
+15 tools definidas em `TOOL_SCHEMAS`, filtradas por:
+1. Registro no executor (intersecção com handlers registrados)
+2. Configuração (tools de task ocultas sem db_path)
+3. Política (tools bloqueadas removidas)
+4. Disponibilidade de `call_agent` (oculta se fn não injetada)
+
+### 3.10 Módulos Raiz de Prompt
 
 | Módulo | Responsabilidade |
 |---|---|
@@ -219,7 +288,7 @@ Sistema de rastreamento de contexto verificável. Evidências são extraídas da
 | `prompt_kinds.py` | Tipos de prompt por contexto (chat, task, review, handoff) |
 | `context.py` | Monta o contexto dinâmico: histórico, shared state, instruções |
 
-### 3.10 Outros Módulos Raiz
+### 3.11 Outros Módulos Raiz
 
 | Módulo | Responsabilidade |
 |---|---|
@@ -245,6 +314,13 @@ Sistema de rastreamento de contexto verificável. Evidências são extraídas da
 - Drena a `ui_event_queue` e atualiza o `TerminalRenderer` — acesso exclusivo.
 - Gerencia o `TurnManager` (alternância humano ↔ agente).
 - Processa comandos de sistema via `AppSystemLayer`.
+
+### 4.1.5 MCP Server Thread
+
+- O `MCPServer` roda em uma thread daemon (iniciada via `start_background()` em `cli.py`).
+- Aceita conexões socket Unix concorrentes.
+- Cada conexão executa o loop JSON-RPC na thread do `accept()`.
+- O `ToolExecutor` (compartilhado com a main thread) é chamado dentro dessas threads — o executor é thread-safe via `threading.Lock`.
 
 ### 4.2 Worker Threads
 
@@ -284,7 +360,7 @@ Sistema de rastreamento de contexto verificável. Evidências são extraídas da
 
 O loop em `quimera/app/core.py:run()` segue este fluxo:
 
-1. **Inicialização**: carrega configuração, plugins, estado de sessão; cria renderer, InputGate, TurnManager, pool de workers, `ui_event_queue`.
+1. **Inicialização**: carrega configuração, plugins, estado de sessão; cria renderer, InputGate, TurnManager, pool de workers, `ui_event_queue`. O servidor MCP é iniciado em `cli.py` antes de `app.run()` — gera token de autenticação, cria socket Unix, inicia MCPServer em background e propaga configuração para todos os plugins ativos.
 2. **Loop principal**:
    - Drena `ui_event_queue` → atualiza renderer.
    - Se não for turno do humano: aguarda com timeout (verifica worker vivo).
@@ -301,8 +377,10 @@ O loop em `quimera/app/core.py:run()` segue este fluxo:
 ### 6.1 Integração com Agentes
 
 - `agents/client.py` abstrai todos os backends: CLI local (`claude`, `codex`, `gemini`), API (OpenAI-compat), driver REPL persistente.
-- `plugins/` define metadados por agente: capacidades, paths de sandbox, driver, tipos de task suportados.
+- `plugins/` define metadados por agente: capacidades, paths de sandbox, driver, tipos de task suportados, e mecanismo de injeção MCP via `mcp_server_args()`.
 - `agents/warm_pool.py` mantém processos pré-aquecidos para reduzir latência.
+- `runtime/mcp_server.py` expõe as ferramentas do runtime via protocolo MCP, permitindo que agentes executem tools sem depender do parser textual de tool calls.
+- `plugins/{claude,codex,opencode}.py` cada um implementa `mcp_server_args(socket_path)` para injetar a configuração MCP no formato nativo do agente (JSON, CLI args, env vars).
 
 ### 6.2 Sistema de Tasks
 
@@ -324,6 +402,32 @@ Orçamento de tokens gerenciado por `prompt_budget.py`: trunca seções de menor
 
 ### 6.4 Protocolo de Handoff entre Agentes
 
+O Quimera suporta dois mecanismos de handoff:
+
+#### 6.4.1 Handoff via MCP (call_agent) — Preferencial
+
+Quando o MCP está ativo (padrão), os agentes usam a tool `call_agent` exposta via protocolo MCP. Definido em `runtime/tools/handoff.py`:
+
+```json
+{
+  "name": "call_agent",
+  "arguments": {
+    "agent_name": "codex",
+    "task": "Implementar função de parser",
+    "context": "contexto opcional",
+    "fallback_agents": ["claude"],
+    "handoffs": [{"agent_name": "claude", "task": "Revise o resultado"}]
+  }
+}
+```
+
+- **Disponibilidade**: depende de `_call_agent_fn` injetado pelo app (`ToolExecutor.set_call_agent_fn()`).
+- **Validação**: o alvo é verificado contra `_resolve_active_agents()` no pool.
+- **Failover**: `fallback_agents` tentado em sequência se o primário falhar.
+- **Cadeias**: `handoffs` executa passos adicionais, cada um com seu próprio fallback.
+
+#### 6.4.2 Handoff Textual Legado
+
 Formato definido em `app/protocol.py`:
 
 ```json
@@ -336,6 +440,8 @@ Formato definido em `app/protocol.py`:
 ```
 
 Handoffs em sequência usam `"handoffs": [...]`. O sistema atualiza `shared_state` e histórico automaticamente.
+
+**Nota**: Quando MCP está ativo, o protocolo opera em **MCP-first mode** — envelopes textuais legados (`<handoff>...</handoff>`) são ignorados pelo parser, evitando dupla delegação.
 
 ### 6.5 Arquitetura Orientada a Goals
 

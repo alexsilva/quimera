@@ -1,6 +1,8 @@
 # AGENTS - Detalhes e Capacidades
 
-O Quimera organiza os agentes por **Tiers** e **Especialidades**.
+O Quimera organiza os agentes por **Tiers** e **Especialidades**. Todos os agentes compartilham o mesmo servidor MCP da sessão, que expõe as ferramentas do runtime via protocolo MCP (`2024-11-05`).
+
+O sistema **Cross-MCP** permite que agentes deleguem tarefas entre si através da tool `call_agent` — qualquer agente MCP-capaz pode chamar qualquer outro agente do pool, com suporte a fallback e cadeias de delegação (`handoffs`).
 
 ## Tier 3: Orquestradores de Alto Nível
 
@@ -8,21 +10,24 @@ O Quimera organiza os agentes por **Tiers** e **Especialidades**.
 - **Foco**: Arquitetura, design de sistemas, refatoração de larga escala.
 - **Diferenciais**: Longo contexto, suporte a ferramentas de shell e manipulação de arquivos robusta.
 - **Uso Recomendado**: "Redesenhe este sistema de logs para suportar persistência SQLite", "Implemente este novo protocolo entre agentes".
+- **MCP**: Sem suporte — não possui driver MCP injetável.
 
 ### Claude (`/claude`)
 - **Foco**: Arquitetura, revisão de código, documentação e desenvolvimento geral.
 - **Diferenciais**: Longo contexto, raciocínio detalhado e alta precisão em tarefas de engenharia.
 - **Uso Recomendado**: "Revise este módulo e proponha melhorias", "Documente o protocolo de tasks".
+- **MCP**: Suporte completo — injeção via `--mcp-config` JSON.
 
 ## Tier 2: Engenheiros de Software
 
 ### Codex (`/codex`)
 - **Foco**: Geração de código, testes e bug investigation.
 - **Diferenciais**: Forte em `code_edit`, `test_execution` e `bug_investigation`.
+- **MCP**: Suporte completo — injeção via `-c mcp_servers.quimera.*` argumentos CLI.
 
 ## Tier 1: Especialistas OpenCode
 
-A família OpenCode oferece modelos especializados para tarefas menores, otimizando custo e eficiência.
+A família OpenCode oferece modelos especializados para tarefas menores, otimizando custo e eficiência. Todos os agentes OpenCode têm suporte a MCP — injeção via variável de ambiente `OPENCODE_CONFIG_CONTENT`.
 
 | Agente | Prefixo | Especialidade | Preferência |
 |---|---|---|---|

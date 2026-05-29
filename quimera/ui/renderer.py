@@ -841,7 +841,7 @@ class TerminalRenderer:
     def _spacing(self):
         """Imprime linha em branco entre turnos; no-op em modo compact."""
         if self._density != "compact":
-            self._print("", kind="generic")
+            self._print("", kind="spacing")
 
     def _build_turn_header(self, theme_name: str, label: str, style: str):
         """Monta cabeçalho de turno por tema."""

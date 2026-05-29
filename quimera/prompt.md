@@ -21,6 +21,7 @@ Agentes de IA nesta conversa: {agents}
 - Stream ANSI bruto: {render_ansi_path}
 - Métricas da sessão: {metrics_path}
 - Quando o problema for visual, leia esses arquivos antes de concluir.
+- Antes de investigar, leia o <bug_context> acima — bugs automáticos já detectados podem apontar direto para a causa.
 
 Eventos chave no JSONL e o que diagnosticam:
 | event | campos relevantes | diagnostica |
@@ -36,13 +37,34 @@ Eventos chave no JSONL e o que diagnosticam:
 | stream_start/stop/abort | agent, render_mode | sequência de streaming |
 | stream_chunk | agent, chunk_count | taxa de chegada de chunks |
 | ansi_duplicate_suppressed | repeats, payload_bytes | bursts ANSI repetidos |
+| transient_update | agent, prompt_active, preview | atualização de progresso do agente (fora do writer thread) |
+| spy_event | agent, visibility, kind, transient, final | pipeline de spy/output do agente |
+| print (spacing) | kind | espaçamento entre seções |
+
+Procedimento padrão para diagnóstico visual:
+1. Conte eventos por tipo: python3 -c "import collections,json; c=collections.Counter(json.loads(l)['event'] for l in open('{render_log_path}') if l.strip()); print(dict(c))"
+2. Cadeia transient_replace: extraia prev_lines+new_lines ordenados — ghosting se prev_lines de N não for new_lines de N-1
+3. queue_depth: python3 -c "import json; [print(l) for l in open('{render_log_path}') if 'queue_depth' in l]" — se só size=0, sem backpressure
+4. print kinds: agrupe por kind — se generic aparecer com prompt_active=true, é colagem
+5. Suspeita de ghosting? Leia o ANSI bruto em {render_ansi_path} — procure \033[A sem \033[J correspondente
+
+Tabela reversa — Sintoma → Evento:
+| Sintoma do usuário | O que olhar no JSONL | Campo decisivo |
+|---|---|---|
+| "texto pisca / flicker" | queue_depth, transient_coalesced | size>0 ou count>10 |
+| "linha fantasma / ghosting" | transient_replace | prev_lines != new_lines do evento anterior |
+| "prompt quebrado / colado" | print | prompt_active=true |
+| "rolagem sumiu" | transient_replace | prev_lines > term_lines - 2 |
+| "texto repetido" | ansi_duplicate_suppressed | repeats |
+| "overlay não sai" | transient_clear | prev_lines não volta a 0 |
 
 Diagnóstico rápido:
-- prev_lines > term_lines - 2 em transient_replace → cursor-up apagou tudo
-- coalesced > 10 sistematicamente → produtores floodando TWEs (causa flickering)
-- queue_depth > 20 → writer atrasado, flickering em rajadas
-- prev_lines em transient_replace diferente do new_lines do evento anterior → ghosting
-- kind="error" com prompt_active=true → mensagem de erro colou no prompt
+- prev_lines > term_lines - 2 em transient_replace -> cursor-up apagou tudo
+- coalesced > 10 sistematicamente -> produtores floodando TWEs (causa flickering)
+- queue_depth > 20 -> writer atrasado, flickering em rajadas
+- prev_lines em transient_replace diferente do new_lines do evento anterior -> ghosting
+- kind=error com prompt_active=true -> mensagem de erro colou no prompt
+- kind=spacing indica espaçamento entre seções -- normal em transições de agente
 </debug_state>
 <!-- ENDIF:render_debug_active -->
 
