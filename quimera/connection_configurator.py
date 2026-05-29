@@ -64,43 +64,113 @@ class ConnectionConfigurator:
 
     def _configure_cli(self, plugin, current):
         cli_defaults = current if isinstance(current, CliConnection) else CliConnection(cmd=list(plugin.cmd))
+
+        # Prompt output_format showing current value as default
+        output_fmt_default = cli_defaults.output_format or ""
+        output_fmt = self._prompt_text(
+            "Formato de saída (enter para manter o atual)",
+            output_fmt_default,
+        ).strip()
+        if not output_fmt:
+            output_fmt = cli_defaults.output_format  # keep previous (may be None)
+        elif output_fmt.lower() in ("nenhum", "none", ""):
+            output_fmt = None
+
+        # Prompt cmd showing current value as default
         cmd_default = shlex.join(cli_defaults.cmd) if cli_defaults.cmd else ""
         cmd_text = self._prompt_text("Comando", cmd_default)
         if not cmd_text:
+            if cli_defaults.cmd:
+                return cli_defaults
             raise ValueError("Configuração cancelada: comando CLI vazio.")
-        return CliConnection(
+
+        new_conn = CliConnection(
             cmd=shlex.split(cmd_text),
             prompt_as_arg=self._prompt_bool("Enviar prompt como argumento", cli_defaults.prompt_as_arg),
-            output_format=cli_defaults.output_format,
+            output_format=output_fmt,
+            env=cli_defaults.env,
+            cwd=cli_defaults.cwd,
         )
+        # Preserve existing connection if unchanged to avoid unnecessary reloads
+        if isinstance(current, CliConnection) and new_conn == current:
+            return current
+        return new_conn
 
     def _configure_openai(self, plugin, current):
-        api_defaults = current if isinstance(current, OpenAIConnection) else OpenAIConnection(
-            model=plugin.model or "gpt-4o",
-            base_url=plugin.base_url or "https://api.openai.com/v1",
-            api_key_env=plugin.api_key_env or "OPENAI_API_KEY",
-            provider=plugin.driver if plugin.driver != "cli" else "openai_compat",
-            supports_native_tools=plugin.supports_tools,
-            extra_body=getattr(current, "extra_body", None),
-        )
-        provider_default = api_defaults.provider if api_defaults.provider != "openai" else "openai_compat"
-        extra_body_raw = self._prompt_text("extra_body (JSON, enter para ignorar)", "").strip()
+        # Build defaults based on current connection or plugin defaults
+        if isinstance(current, OpenAIConnection):
+            api_defaults = current
+        else:
+            raw_provider = plugin.driver if plugin.driver != "cli" else "openai_compat"
+            provider_normalized = "openai_compat" if raw_provider == "openai" else raw_provider
+            api_defaults = OpenAIConnection(
+                model=plugin.model or "gpt-4o",
+                base_url=plugin.base_url or "https://api.openai.com/v1",
+                api_key_env=plugin.api_key_env or "OPENAI_API_KEY",
+                provider=provider_normalized,
+                supports_native_tools=plugin.supports_tools,
+                extra_body=getattr(plugin, "extra_body", None),
+            )
+
+        # --- Provider ---
+        provider_default = api_defaults.provider
+        provider = self._prompt_text("Provider", provider_default).strip().lower()
+        if not provider:
+            provider = provider_default
+
+        # --- Model ---
+        model = self._prompt_text("Modelo", api_defaults.model) or api_defaults.model
+
+        # --- Base URL ---
+        base_url = self._prompt_text("Base URL", api_defaults.base_url) or api_defaults.base_url
+
+        # --- API Key env var ---
+        api_key_env = self._prompt_text("Variável da API key", api_defaults.api_key_env) or api_defaults.api_key_env
+
+        # --- extra_body (JSON) ---
+        current_extra_str = ""
+        if api_defaults.extra_body:
+            current_extra_str = json.dumps(api_defaults.extra_body, ensure_ascii=False)
+        extra_body_raw = self._prompt_text(
+            "extra_body (JSON, enter para manter o atual)",
+            current_extra_str,
+        ).strip()
         extra_body = None
         if extra_body_raw:
-            try:
-                extra_body = json.loads(extra_body_raw)
-                if extra_body == {}:
-                    extra_body = None
-            except json.JSONDecodeError as exc:
-                self._warn(f"JSON inválido: {exc}. extra_body será ignorado.")
+            # If user typed exactly the current value, keep the original object
+            if extra_body_raw == current_extra_str and api_defaults.extra_body is not None:
                 extra_body = api_defaults.extra_body
+            else:
+                try:
+                    extra_body = json.loads(extra_body_raw)
+                    if extra_body == {}:
+                        extra_body = None
+                except json.JSONDecodeError as exc:
+                    self._warn(f"JSON inválido: {exc}. Mantendo valor atual.")
+                    extra_body = api_defaults.extra_body
         else:
             extra_body = api_defaults.extra_body
-        return OpenAIConnection(
-            model=self._prompt_text("Modelo", api_defaults.model) or api_defaults.model,
-            base_url=self._prompt_text("Base URL", api_defaults.base_url) or api_defaults.base_url,
-            api_key_env=self._prompt_text("Variável da API key", api_defaults.api_key_env) or api_defaults.api_key_env,
-            provider=provider_default,
-            supports_native_tools=api_defaults.supports_native_tools,
+
+        # --- supports_native_tools ---
+        supports_tools = self._prompt_bool("Suporte a ferramentas nativas", api_defaults.supports_native_tools)
+
+        # --- max_connections ---
+        try:
+            mc_raw = self._prompt_text("Máximo de conexões concorrentes", str(api_defaults.max_connections)).strip()
+            max_connections = int(mc_raw) if mc_raw else api_defaults.max_connections
+        except (ValueError, TypeError):
+            max_connections = api_defaults.max_connections
+
+        new_conn = OpenAIConnection(
+            model=model,
+            base_url=base_url,
+            api_key_env=api_key_env,
+            provider=provider,
+            supports_native_tools=supports_tools,
             extra_body=extra_body,
+            max_connections=max_connections,
         )
+        # Preserve existing connection if unchanged to avoid unnecessary reloads
+        if isinstance(current, OpenAIConnection) and new_conn == current:
+            return current
+        return new_conn

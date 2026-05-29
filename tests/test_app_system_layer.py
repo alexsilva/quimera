@@ -466,7 +466,8 @@ def test_configure_connection_interactively_returns_base_plugin_connection_when_
 
 def test_configure_connection_interactively_cli_reprompts_invalid_driver_and_rejects_empty_cmd():
     app = make_app()
-    app.read_user_input = Mock(side_effect=["", "invalido", "cli", ""])
+    # plugin_base, driver(invalid), driver(valid), output_format, cmd(empty→ValueError)
+    app.read_user_input = Mock(side_effect=["", "invalido", "cli", "", ""])
     layer = AppSystemLayer(app)
     plugin = make_plugin()
     plugin.cmd = []
@@ -479,7 +480,8 @@ def test_configure_connection_interactively_cli_reprompts_invalid_driver_and_rej
 
 def test_configure_connection_interactively_cli_returns_connection_when_valid():
     app = make_app()
-    app.read_user_input = Mock(side_effect=["", "cli", "codex run", "s"])
+    # plugin_base, driver, output_format, cmd, prompt_as_arg
+    app.read_user_input = Mock(side_effect=["", "cli", "", "codex run", "s"])
     layer = AppSystemLayer(app)
     plugin = make_plugin()
     plugin.cmd = []
@@ -494,7 +496,8 @@ def test_configure_connection_interactively_cli_returns_connection_when_valid():
 
 def test_configure_connection_interactively_openai_empty_object_clears_extra_body():
     app = make_app()
-    app.read_user_input = Mock(side_effect=["", "openai", "{}", "", "", ""])
+    # plugin_base, driver, provider, model, base_url, api_key_env, extra_body("{}"=clear), supports_tools, max_connections
+    app.read_user_input = Mock(side_effect=["", "openai", "", "", "", "", "{}", "", ""])
     layer = AppSystemLayer(app)
     plugin = make_plugin()
     object.__setattr__(
@@ -512,7 +515,8 @@ def test_configure_connection_interactively_openai_empty_object_clears_extra_bod
 
 def test_configure_connection_interactively_openai_invalid_json_keeps_previous_extra_body():
     app = make_app()
-    app.read_user_input = Mock(side_effect=["", "openai", "{", "", "", ""])
+    # plugin_base, driver, provider, model, base_url, api_key_env, extra_body("{"=invalid), supports_tools, max_connections
+    app.read_user_input = Mock(side_effect=["", "openai", "", "", "", "", "{", "", ""])
     layer = AppSystemLayer(app)
     plugin = make_plugin()
     object.__setattr__(
@@ -530,7 +534,8 @@ def test_configure_connection_interactively_openai_invalid_json_keeps_previous_e
 
 def test_configure_connection_interactively_openai_blank_input_preserves_extra_body():
     app = make_app()
-    app.read_user_input = Mock(side_effect=["", "openai", "", "", "", ""])
+    # plugin_base, driver, provider, model, base_url, api_key_env, extra_body(empty=preserve), supports_tools, max_connections
+    app.read_user_input = Mock(side_effect=["", "openai", "", "", "", "", "", "", ""])
     layer = AppSystemLayer(app)
     plugin = make_plugin()
     object.__setattr__(

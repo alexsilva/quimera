@@ -132,7 +132,8 @@ def test_configure_connection_interactively_cli_branch(monkeypatch):
         supports_tools=False,
         effective_connection=lambda: CliConnection(cmd=["codex"], prompt_as_arg=False, output_format="text"),
     )
-    answers = iter(["codex --ask"])
+    # output_format (empty=keep), cmd
+    answers = iter(["", "codex --ask"])
     monkeypatch.setattr(cli, "_prompt_text", lambda *_args, **_kwargs: next(answers))
     monkeypatch.setattr(cli, "_prompt_bool", lambda *_args, **_kwargs: True)
 
@@ -172,13 +173,16 @@ def test_configure_connection_interactively_openai_invalid_driver_then_json_erro
         [
             "invalid",        # driver inicial inválido
             "openai",         # retry do driver
-            "{invalid json}", # extra_body_raw inválido
+            "",               # provider (aceita default "openai_compat")
             "",               # model (usa default)
             "",               # base_url (usa default)
             "",               # api_key_env (usa default)
+            "{invalid json}", # extra_body_raw inválido
+            "",               # max_connections (usa default)
         ]
     )
     monkeypatch.setattr(cli, "_prompt_text", lambda *_args, **_kwargs: next(answers))
+    monkeypatch.setattr(cli, "_prompt_bool", lambda *_args, **_kwargs: True)
 
     with patch("builtins.print") as mock_print:
         conn = cli._configure_connection_interactively(plugin)
@@ -213,19 +217,22 @@ def test_configure_connection_interactively_openai_empty_json_clears_extra_body(
     )
     answers = iter(
         [
-            "{}",   # extra_body_raw: limpa
+            "",     # provider (aceita default "openai")
             "",     # model: mantém default
             "",     # base_url
             "",     # api_key_env
+            "{}",   # extra_body_raw: limpa (empty object → None)
+            "",     # max_connections
         ]
     )
     monkeypatch.setattr(cli, "_prompt_text", lambda *_args, **_kwargs: next(answers))
+    monkeypatch.setattr(cli, "_prompt_bool", lambda *_args, **_kwargs: True)
 
     conn = cli._configure_connection_interactively(plugin, driver_hint="openai")
 
     assert isinstance(conn, OpenAIConnection)
     assert conn.extra_body is None
-    assert conn.provider == "openai_compat"
+    assert conn.provider == "openai"
 
 
 def test_configure_connection_interactively_openai_empty_input_preserves_extra_body(monkeypatch):
@@ -248,13 +255,16 @@ def test_configure_connection_interactively_openai_empty_input_preserves_extra_b
     )
     answers = iter(
         [
-            "",   # extra_body_raw vazio: preserva atual
+            "",   # provider (aceita default "openai_compat")
             "",   # model
             "",   # base_url
             "",   # api_key_env
+            "",   # extra_body_raw vazio: preserva atual
+            "",   # max_connections
         ]
     )
     monkeypatch.setattr(cli, "_prompt_text", lambda *_args, **_kwargs: next(answers))
+    monkeypatch.setattr(cli, "_prompt_bool", lambda *_args, **_kwargs: True)
 
     conn = cli._configure_connection_interactively(plugin, driver_hint="openai")
 
