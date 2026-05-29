@@ -814,7 +814,7 @@ class TestRenderOrdering:
         assert "codex" not in r._completed_streams
 
     def test_coalescing_keeps_order_for_interleaved_agent_events(self, recording_renderer):
-        """Chunk batch mantém ordem quando há evento de outro agente no meio."""
+        """Cross-agent coalescing: chunks de agentes distintos são batched num único refresh."""
         r = recording_renderer
         lives = []
 
@@ -849,10 +849,11 @@ class TestRenderOrdering:
 
         assert len(lives) == 1
         snapshots = [_as_text(renderable) for renderable in lives[0].renderables]
-        i_a12 = next(i for i, snap in enumerate(snapshots) if "A1A2" in snap)
-        i_b1 = next(i for i, snap in enumerate(snapshots) if "B1" in snap and "A1A2A3" not in snap)
-        i_a123 = next(i for i, snap in enumerate(snapshots) if "A1A2A3" in snap)
-        assert i_a12 < i_b1 < i_a123
+        # Conteúdo final: codex acumulou A1A2A3 e claude acumulou B1 no mesmo snapshot
+        assert any("A1A2A3" in snap and "B1" in snap for snap in snapshots)
+        # Cross-agent coalescing reduz refreshes: A1A2 e A3 sempre juntos (sem batch intermediário)
+        no_intermediate = not any("A1A2" in snap and "A1A2A3" not in snap and "B1" in snap for snap in snapshots)
+        assert no_intermediate
 
 
 class TestStreamingDiffHelpers:
