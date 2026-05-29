@@ -900,6 +900,10 @@ class AgentClient:
                 set_cancel_event = getattr(effective_tool_executor, "set_approval_cancel_event", None)
                 if callable(set_cancel_event):
                     set_cancel_event(None)
+                # Limpa callbacks de spinner para não manter referência a Live encerrado
+                clear_spinner = getattr(effective_tool_executor, "set_spinner_callbacks", None)
+                if callable(clear_spinner):
+                    clear_spinner(None, None)
             self._agent_running = False
             self._stop_esc_monitor()
 

@@ -80,6 +80,8 @@ class ConsoleApprovalHandler(ApprovalHandler):
         self._resume_fn = resume_fn
         self._suspend_spinner_fn = {}
         self._resume_spinner_fn = {}
+        self._suspend_spinner_fn_default = None
+        self._resume_spinner_fn_default = None
         self._approve_all_callback = None
         self._cancel_event = cancel_event
         self._cancel_poll_interval = max(float(cancel_poll_interval), 0.01)
@@ -92,10 +94,16 @@ class ConsoleApprovalHandler(ApprovalHandler):
         Esses callbacks são injetados por _call_api (client.py) para evitar
         que o refresh do Rich Console.status() compita com input() bloqueante
         durante a aprovação. Chamados em _approve_interactive.
+
+        Armazena tanto por thread (compatibilidade) quanto como fallback global,
+        pois em thread=0 os callbacks são registrados pela main thread mas o
+        approve() é chamado da thread do driver — IDs diferentes.
         """
         thread_id = threading.get_ident()
         self._suspend_spinner_fn[thread_id] = suspend_spinner_fn
         self._resume_spinner_fn[thread_id] = resume_spinner_fn
+        self._suspend_spinner_fn_default = suspend_spinner_fn
+        self._resume_spinner_fn_default = resume_spinner_fn
 
     def set_approve_all_callback(self, callback):
         """Define callback chamado quando o usuário digita 'a' (approve all).
@@ -154,7 +162,10 @@ class ConsoleApprovalHandler(ApprovalHandler):
                 if self._cancel_event and self._cancel_event.is_set():
                     return False
                 thread_id = threading.get_ident()
-                suspend_fn = self._suspend_spinner_fn.get(thread_id)
+                suspend_fn = (
+                    self._suspend_spinner_fn.get(thread_id)
+                    or self._suspend_spinner_fn_default
+                )
                 if suspend_fn:
                     suspend_fn()
                 try:
@@ -170,7 +181,10 @@ class ConsoleApprovalHandler(ApprovalHandler):
                     return False
                 finally:
                     thread_id = threading.get_ident()
-                    resume_fn = self._resume_spinner_fn.get(thread_id)
+                    resume_fn = (
+                        self._resume_spinner_fn.get(thread_id)
+                        or self._resume_spinner_fn_default
+                    )
                     if resume_fn:
                         resume_fn()
             elif use_input_gate_xthread:
@@ -196,7 +210,10 @@ class ConsoleApprovalHandler(ApprovalHandler):
                 if callable(_suspend_output):
                     _suspend_output()
                 thread_id = threading.get_ident()
-                suspend_fn = self._suspend_spinner_fn.get(thread_id)
+                suspend_fn = (
+                    self._suspend_spinner_fn.get(thread_id)
+                    or self._suspend_spinner_fn_default
+                )
                 if suspend_fn:
                     suspend_fn()
                 try:
@@ -217,7 +234,10 @@ class ConsoleApprovalHandler(ApprovalHandler):
                     return False
                 finally:
                     thread_id = threading.get_ident()
-                    resume_fn = self._resume_spinner_fn.get(thread_id)
+                    resume_fn = (
+                        self._resume_spinner_fn.get(thread_id)
+                        or self._resume_spinner_fn_default
+                    )
                     if resume_fn:
                         resume_fn()
                     if callable(_resume_output):
