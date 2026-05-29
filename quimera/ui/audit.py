@@ -97,10 +97,32 @@ class RenderAuditLogger:
         self._events_handle.flush()
         self._suppressed_ansi_burst_repeats = 0
 
+    def start_queue_sampler(self, queue, interval: float = 1.0) -> None:
+        """Amostra o tamanho da fila do writer a cada `interval` segundos (ativado por --debug)."""
+        stop_event = threading.Event()
+        self._sampler_stop = stop_event
+
+        def _sample():
+            _last_active = False
+            while not stop_event.wait(interval):
+                size = queue.qsize()
+                if size > 0:
+                    self.log_event("queue_depth", size=size)
+                    _last_active = True
+                elif _last_active:
+                    self.log_event("queue_depth", size=0)
+                    _last_active = False
+
+        t = threading.Thread(target=_sample, daemon=True, name="audit-queue-sampler")
+        t.start()
+
     def close(self) -> None:
         with self._lock:
             if self._closed:
                 return
+            sampler_stop = getattr(self, "_sampler_stop", None)
+            if sampler_stop is not None:
+                sampler_stop.set()
             self._flush_suppressed_ansi_burst_locked()
             self._events_handle.close()
             self._ansi_handle.close()

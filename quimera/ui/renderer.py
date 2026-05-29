@@ -197,6 +197,7 @@ _STOP = object()
 class PrintEvent:
     renderable: Any
     kwargs: dict = field(default_factory=dict)
+    kind: str = "generic"
 
 
 @dataclass
@@ -392,6 +393,8 @@ class TerminalRenderer:
         self._queue: _queue_module.Queue = _queue_module.Queue(maxsize=512)
         self._writer_thread = threading.Thread(target=self._writer_loop, daemon=True)
         self._writer_thread.start()
+        if self._audit_logger is not None:
+            self._audit_logger.start_queue_sampler(self._queue)
 
     # ------------------------------------------------------------------
     # Ciclo de vida (item 1)
@@ -593,6 +596,7 @@ class TerminalRenderer:
                     if preview:
                         _audit_event(
                             "print",
+                            kind=event.kind,
                             prompt_active=_prompt_active(),
                             preview=preview,
                         )
@@ -694,6 +698,7 @@ class TerminalRenderer:
 
                 elif isinstance(event, TransientWindowEvent):
                     # Coalescing: drena eventos consecutivos — o mais recente substitui os anteriores
+                    _coalesced = 0
                     while True:
                         try:
                             _next = self._queue.get_nowait()
@@ -701,9 +706,13 @@ class TerminalRenderer:
                             break
                         if isinstance(_next, TransientWindowEvent):
                             event = _next  # contém combined completo, substitui
+                            _coalesced += 1
                         else:
                             _local_pending.appendleft(_next)
                             break
+
+                    if _coalesced > 0:
+                        _audit_event("transient_coalesced", count=_coalesced, buf_version=event.buf_version)
 
                     if event.buf_version < self._transient_buf_version:
                         continue
@@ -712,15 +721,24 @@ class TerminalRenderer:
                     if not text:
                         continue
 
-                    def _replace(buf_v=event.buf_version, t=text, c=count, lines=_prev_lines):
+                    def _replace(buf_v=event.buf_version, t=text, c=count, lines=_prev_lines, coalesced=_coalesced):
                         if buf_v < self._transient_buf_version:
                             # Closure descartada: screen não foi alterada, não atualiza contador
                             return
                         p = lines[0]  # lê estado real da tela no momento da execução
-                        if p > 0:
-                            _th = shutil.get_terminal_size(fallback=(80, 24)).lines
-                            p = min(p, max(1, _th - 2))
-                            sys.stdout.write(f"\033[{p}A\033[J")
+                        _th = shutil.get_terminal_size(fallback=(80, 24)).lines
+                        clamped_p = min(p, max(1, _th - 2)) if p > 0 else 0
+                        _audit_event(
+                            "transient_replace",
+                            buf_version=buf_v,
+                            prev_lines=p,
+                            cursor_up=clamped_p,
+                            new_lines=c,
+                            coalesced=coalesced,
+                            term_lines=_th,
+                        )
+                        if clamped_p > 0:
+                            sys.stdout.write(f"\033[{clamped_p}A\033[J")
                         sys.stdout.write(t)
                         sys.stdout.write("\n")
                         sys.stdout.flush()
@@ -743,6 +761,7 @@ class TerminalRenderer:
                             return
                         p = lines[0]
                         lines[0] = 0  # atualiza antes de escrever para refletir estado real
+                        _audit_event("transient_clear", buf_version=buf_v, prev_lines=p)
                         if p > 0:
                             sys.stdout.write(f"\033[{p}A\033[J")
                             sys.stdout.flush()
@@ -815,14 +834,14 @@ class TerminalRenderer:
         """Retorna (color, label) para o agente."""
         return _public_ui_module()._agent_style(agent, self._get_plugin_style)
 
-    def _print(self, renderable, **kwargs):
+    def _print(self, renderable, kind: str = "generic", **kwargs):
         """Enfileira um evento de print para o writer thread."""
-        self._queue.put(PrintEvent(renderable, kwargs))
+        self._queue.put(PrintEvent(renderable, kwargs, kind=kind))
 
     def _spacing(self):
         """Imprime linha em branco entre turnos; no-op em modo compact."""
         if self._density != "compact":
-            self._print("")
+            self._print("", kind="generic")
 
     def _build_turn_header(self, theme_name: str, label: str, style: str):
         """Monta cabeçalho de turno por tema."""
@@ -983,7 +1002,7 @@ class TerminalRenderer:
                 include_footer_rule=True,
                 render_mode=render_mode,
             )
-            self._print(block)
+            self._print(block, kind="message")
         else:
             print(f"\n{label}: {clean_content}\n")
 
@@ -1104,7 +1123,7 @@ class TerminalRenderer:
                 )
                 line.no_wrap = False
                 line.overflow = "fold"
-                self._print(line)
+                self._print(line, kind="agent_update")
             return
 
         with self._lock:
@@ -1133,8 +1152,6 @@ class TerminalRenderer:
         """Limpa o bloco transitório do agente, se ativo."""
         if not self._console or not agent:
             return
-        self.log_debug_event("transient_clear", agent=agent)
-
         prompt_active = bool(self._is_prompt_active_fn and self._is_prompt_active_fn())
 
         with self._lock:
@@ -1211,7 +1228,7 @@ class TerminalRenderer:
                 (": ", "dim"),
                 (message, "dim"),
             )
-            self._print(line)
+            self._print(line, kind="agent_update")
         else:
             print(f"{label}: {message}")
 
@@ -1223,8 +1240,8 @@ class TerminalRenderer:
             # Logo ASCII precisa manter geometria original; wrap automático deforma.
             line.no_wrap = True
             line.overflow = "ignore"
-            self._print(line)
-            self._print(Rule(style="dim cyan"))
+            self._print(line, kind="banner")
+            self._print(Rule(style="dim cyan"), kind="banner")
         else:
             print(clean_message)
 
@@ -1236,13 +1253,13 @@ class TerminalRenderer:
             line = Text.assemble((f"{icon} ", f"dim {style}"), (clean_message, f"dim {style}"))
             line.no_wrap = False
             line.overflow = "fold"
-            self._print(line)
+            self._print(line, kind="system")
         else:
             print(clean_message)
 
     def show_newline(self):
         """Print a blank newline through the writer thread (thread-safe)."""
-        self._print("")
+        self._print("", kind="generic")
 
     def show_system_neutral(self, message):
         """Exibe mensagem de sistema com ícone padrão e texto em estilo neutro (dim)."""
@@ -1252,7 +1269,7 @@ class TerminalRenderer:
             line = Text.assemble((f"{icon} ", "dim"), (clean_message, "dim"))
             line.no_wrap = False
             line.overflow = "fold"
-            self._print(line)
+            self._print(line, kind="system_neutral")
         else:
             print(f"{icon} {clean_message}")
 
@@ -1285,7 +1302,7 @@ class TerminalRenderer:
                     )
             line.no_wrap = False
             line.overflow = "fold"
-            self._print(line)
+            self._print(line, kind="plain")
         else:
             prefix = f"{agent}: " if agent else ""
             print(f"{prefix}{clean_message}")
@@ -1324,7 +1341,7 @@ class TerminalRenderer:
                 )
             else:
                 line = Text.assemble((f"{icon} ", style), (clean_message, "red"))
-            self._print(line)
+            self._print(line, kind="error")
         else:
             if agent:
                 _, label = self._agent_style(agent)
@@ -1338,7 +1355,7 @@ class TerminalRenderer:
         if self._console:
             style, icon = ROLE_STYLES["warning"]
             line = Text.assemble((f"{icon} ", style), (clean_message, "yellow"))
-            self._print(line)
+            self._print(line, kind="warning")
         else:
             print(clean_message)
 
@@ -1402,7 +1419,7 @@ class TerminalRenderer:
             if task:
                 title_parts.append((f"· {task}", "dim"))
             title = Text.assemble(*title_parts)
-            self._print(Rule(title, style="dim", characters="─"))
+            self._print(Rule(title, style="dim", characters="─"), kind="handoff")
         else:
             arrow = f"{from_label} → {to_label}"
             if task:
@@ -1420,7 +1437,7 @@ class TerminalRenderer:
                 border_style=f"dim {style}",
                 padding=(1, 2),
             )
-            self._print(renderable)
+            self._print(renderable, kind="prompt_preview")
         else:
             sys.stderr.write(content + "\n")
             sys.stderr.flush()

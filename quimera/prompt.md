@@ -21,6 +21,28 @@ Agentes de IA nesta conversa: {agents}
 - Stream ANSI bruto: {render_ansi_path}
 - Métricas da sessão: {metrics_path}
 - Quando o problema for visual, leia esses arquivos antes de concluir.
+
+Eventos chave no JSONL e o que diagnosticam:
+| event | campos relevantes | diagnostica |
+|---|---|---|
+| transient_replace | prev_lines, cursor_up, new_lines, coalesced, term_lines | ghosting / come texto do topo |
+| transient_clear | buf_version, prev_lines | limpeza incorreta do overlay |
+| transient_coalesced | count, buf_version | flooding de TWEs (causa flickering) |
+| queue_depth | size | backpressure / render atrasado |
+| print | kind, prompt_active, preview | corrupção de layout por tipo de mensagem |
+| print (agent_update) | kind | atualização de progresso/rolling do agente |
+| print (handoff) | kind | transição de handoff entre agentes |
+| print (prompt_preview) | kind | preview do prompt de depuração |
+| stream_start/stop/abort | agent, render_mode | sequência de streaming |
+| stream_chunk | agent, chunk_count | taxa de chegada de chunks |
+| ansi_duplicate_suppressed | repeats, payload_bytes | bursts ANSI repetidos |
+
+Diagnóstico rápido:
+- prev_lines > term_lines - 2 em transient_replace → cursor-up apagou tudo
+- coalesced > 10 sistematicamente → produtores floodando TWEs (causa flickering)
+- queue_depth > 20 → writer atrasado, flickering em rajadas
+- prev_lines em transient_replace diferente do new_lines do evento anterior → ghosting
+- kind="error" com prompt_active=true → mensagem de erro colou no prompt
 </debug_state>
 <!-- ENDIF:render_debug_active -->
 

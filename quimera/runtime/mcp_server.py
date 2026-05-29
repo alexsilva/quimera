@@ -185,11 +185,11 @@ class MCPServer:
 
         arg_keys = sorted(str(key) for key in arguments.keys()) if isinstance(arguments, dict) else []
         started_at = time.perf_counter()
-        _logger.info("MCP tools/call start tool=%s arg_keys=%s", tool_name, arg_keys)
+        _logger.debug("MCP tools/call start tool=%s arg_keys=%s", tool_name, arg_keys)
 
         def _progress_callback(msg: str) -> None:
             # Emite log no stderr (visível em muitos clientes MCP)
-            _logger.info("MCP progress [%s]: %s", tool_name, msg)
+            _logger.debug("MCP progress [%s]: %s", tool_name, msg)
             # Se o cliente enviou progressToken, emite notificação formal
             if progress_token:
                 self._write({
@@ -211,7 +211,8 @@ class MCPServer:
             return self._err(msg_id, -32603, f"Internal error: {exc}")
 
         duration_ms = int((time.perf_counter() - started_at) * 1000)
-        _logger.info(
+        _log = _logger.info if (not result.ok or duration_ms > 500) else _logger.debug
+        _log(
             "MCP tools/call done tool=%s ok=%s duration_ms=%d",
             tool_name,
             result.ok,
