@@ -29,8 +29,40 @@ MAX_TOOL_HOPS = DEFAULT_MAX_TOOL_HOPS
 
 try:
     from openai import OpenAI
+    from openai import (
+        AuthenticationError as _OAIAuthError,
+        NotFoundError as _OAINotFoundError,
+        BadRequestError as _OAIBadRequestError,
+        RateLimitError as _OAIRateLimitError,
+    )
 except ImportError:
     OpenAI = None  # type: ignore[assignment,misc]
+    _OAIAuthError = Exception  # type: ignore[assignment,misc]
+    _OAINotFoundError = Exception  # type: ignore[assignment,misc]
+    _OAIBadRequestError = Exception  # type: ignore[assignment,misc]
+    _OAIRateLimitError = Exception  # type: ignore[assignment,misc]
+
+
+def _fatal_api_error_message(exc: Exception) -> str | None:
+    """
+    Retorna mensagem amigável para erros fatais da API OpenAI-compatible.
+    Erros fatais não devem ser retryados — o modelo/chave/request é inválido.
+    Retorna None se o erro não for considerado fatal (pode ser transitório).
+    """
+    if isinstance(exc, _OAINotFoundError):
+        body = getattr(exc, "body", None) or {}
+        provider = ""
+        if isinstance(body, dict):
+            meta = body.get("error", {}).get("metadata", {}) if isinstance(body.get("error"), dict) else {}
+            provider_name = meta.get("provider_name", "") if isinstance(meta, dict) else ""
+            if provider_name:
+                provider = f" (provider: {provider_name})"
+        return f"Erro fatal: modelo não encontrado{provider}. Verifique o nome do modelo configurado."
+    if isinstance(exc, _OAIAuthError):
+        return "Erro fatal: falha de autenticação na API. Verifique a chave de API configurada."
+    if isinstance(exc, _OAIBadRequestError):
+        return f"Erro fatal: requisição inválida — {exc}"
+    return None
 
 _logger = logging.getLogger(__name__)
 
@@ -433,6 +465,9 @@ class OpenAICompatDriver:
                         )
                     except Exception as exc:
                         _logger.error("OpenAICompatDriver: API error on hop %d: %s", hop, exc)
+                        fatal_msg = _fatal_api_error_message(exc)
+                        if fatal_msg is not None:
+                            return fatal_msg
                         return None
 
                     if not tool_calls:
@@ -553,6 +588,10 @@ class OpenAICompatDriver:
             **( {"extra_body": self.extra_body} if self.extra_body else {} ),
             stream=False,
         )
+        if not response.choices:
+            raise ValueError(
+                f"API retornou choices vazio ou None (model={self.model!r}): {response!r}"
+            )
         choice = response.choices[0]
         text = (choice.message.content or "").strip()
         tool_calls: list[dict] = []

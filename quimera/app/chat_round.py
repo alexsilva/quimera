@@ -333,7 +333,6 @@ class ChatRoundOrchestrator:
         if bool(getattr(self._cancel_notice_tls, "shown", False)):
             return
         self._cancel_notice_tls.shown = True
-        self._show_system("[cancelado] fluxo interrompido.")
         if self._turn_manager is not None:
             self._turn_manager.reset()
 

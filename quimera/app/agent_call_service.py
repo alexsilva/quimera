@@ -56,7 +56,7 @@ class AgentCallService:
 
         for attempt in range(1, effective_max_retries + 1):
             if is_user_cancelled():
-                logger.info(
+                logger.debug(
                     "[AGENT_CALL] agent=%s cancelled by user before retry %d/%d, aborting",
                     agent, attempt, effective_max_retries,
                 )
@@ -66,7 +66,7 @@ class AgentCallService:
                 response = call_fn(agent)
                 if response is None:
                     if is_user_cancelled():
-                        logger.info("[AGENT_CALL] agent=%s cancelled by user, aborting", agent)
+                        logger.debug("[AGENT_CALL] agent=%s cancelled by user, aborting", agent)
                         return None
                     if attempt < effective_max_retries:
                         backoff = self._compute_backoff(attempt)
@@ -82,7 +82,7 @@ class AgentCallService:
                 result = resolve_fn(agent, response)
                 if result is None:
                     if is_user_cancelled():
-                        logger.info("[AGENT_CALL] agent=%s cancelled by user, aborting", agent)
+                        logger.debug("[AGENT_CALL] agent=%s cancelled by user, aborting", agent)
                         return None
                     if attempt < effective_max_retries:
                         backoff = self._compute_backoff(attempt)
@@ -99,7 +99,7 @@ class AgentCallService:
 
             except Exception as exc:
                 if is_user_cancelled():
-                    logger.info("[AGENT_CALL] agent=%s cancelled by user, aborting", agent)
+                    logger.debug("[AGENT_CALL] agent=%s cancelled by user, aborting", agent)
                     return None
                 last_error = exc
                 if attempt < effective_max_retries:

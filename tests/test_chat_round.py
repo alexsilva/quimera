@@ -274,14 +274,14 @@ class TestProcessMainFlow(unittest.TestCase):
         app.dispatch_services.print_response.assert_not_called()
 
     def test_handle_cancelled_is_idempotent_for_shared_cancel(self):
-        """Mesmo cancelamento compartilhado não deve repetir aviso de fluxo interrompido."""
+        """Mesmo cancelamento compartilhado não deve chamar turn_manager.reset mais de uma vez."""
         app = _make_app(active_agents=["codex", "claude"], threads=2)
         orchestrator = app.chat_round_orchestrator
 
         orchestrator._handle_cancelled()
         orchestrator._handle_cancelled()
 
-        app.renderer.show_system.assert_called_once_with("[cancelado] fluxo interrompido.")
+        app.renderer.show_system.assert_not_called()
         app.turn_manager.reset.assert_called_once()
 
     def test_main_flow_failover_message_uses_latest_failed_agent(self):
@@ -321,7 +321,6 @@ class TestProcessMainFlow(unittest.TestCase):
         app.chat_round_orchestrator.process("status")
 
         shown_messages = [call.args[0] for call in app.renderer.show_system.call_args_list if call.args]
-        self.assertIn("[cancelado] fluxo interrompido.", shown_messages)
         self.assertFalse(any(msg.startswith("[fallback]") for msg in shown_messages))
         app.turn_manager.reset.assert_called_once()
 
