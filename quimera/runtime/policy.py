@@ -38,8 +38,10 @@ class PathPermissionError(ToolPolicyError):
 
 class ToolPolicy:
     """Implementa `ToolPolicy`."""
-    _SHELL_CHAIN_OPERATORS = (";", "&&", "||", "`", "$(")
+    _SHELL_CHAIN_OPERATORS = (";", "&&", "||", "|", "`", "$(")
     _POLICY_BYPASS_TOOLS = {"call_agent"}
+    # Comandos que aceitam paths de arquivo como argumento — sujeitos à validação de workspace
+    _FILE_PATH_CMDS: frozenset[str] = frozenset({"cat", "head", "tail", "less", "grep", "sed", "find", "ls"})
 
     def __init__(self, config: ToolRuntimeConfig) -> None:
         """Inicializa uma instância de ToolPolicy."""
@@ -171,7 +173,17 @@ class ToolPolicy:
 
     def _validate_list_tasks(self, call: ToolCall) -> None:
         """Executa validate list tasks."""
-        pass
+        # Exige ao menos um filtro para evitar DoS por listagem sem limites
+        filt = call.arguments.get("filters") or {}
+        has_top_level_filter = any(
+            call.arguments.get(k) is not None
+            for k in ("job_id", "status", "assigned_to", "id")
+        )
+        has_dict_filter = isinstance(filt, dict) and bool(filt)
+        if not has_top_level_filter and not has_dict_filter:
+            raise ToolPolicyError(
+                "list_tasks exige ao menos um filtro (job_id, status, assigned_to, id ou filters)"
+            )
 
     def _validate_list_jobs(self, call: ToolCall) -> None:
         """Executa validate list jobs."""
@@ -247,11 +259,24 @@ class ToolPolicy:
             if pattern.lower() in lowered:
                 raise ToolPolicyError(f"Comando bloqueado pela denylist: {pattern}")
         try:
-            first_token = shlex.split(command)[0]
+            tokens = shlex.split(command)
+            first_token = tokens[0]
         except Exception as exc:  # noqa: BLE001
             raise ToolPolicyError(f"Comando inválido: {command}") from exc
         if first_token not in self.config.shell_allowlist:
             raise ToolPolicyError(f"Comando fora da allowlist: {first_token}")
+        if first_token in self._FILE_PATH_CMDS:
+            self._validate_shell_file_paths(tokens[1:])
+
+    def _validate_shell_file_paths(self, args: list[str]) -> None:
+        """Valida que paths absolutos em argumentos de comandos de leitura ficam dentro do workspace."""
+        for arg in args:
+            expanded = Path(arg).expanduser()
+            if not expanded.is_absolute():
+                continue
+            resolved = expanded.resolve()
+            if not is_path_inside(resolved, self.config.workspace_root):
+                raise ToolPolicyError(f"Caminho fora do workspace: {arg}")
 
     def _resolve_workspace_path(self, raw_path: str) -> Path:
         """Resolve workspace path."""

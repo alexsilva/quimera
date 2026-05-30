@@ -74,7 +74,15 @@ class TaskTools:
         filt = self._build_filters(call.arguments)
         try:
             tasks = _list_tasks(filt, db_path=self.config.db_path)
-            return ToolResult(ok=True, tool_name=call.name, content=json.dumps(tasks))
+            max_results = int(call.arguments.get("max_results", self.config.max_task_results))
+            truncated = len(tasks) > max_results
+            tasks = tasks[:max_results]
+            return ToolResult(
+                ok=True,
+                tool_name=call.name,
+                content=json.dumps(tasks),
+                truncated=truncated,
+            )
         except Exception as exc:  # noqa: BLE001
             return ToolResult(ok=False, tool_name=call.name, error=str(exc))
 

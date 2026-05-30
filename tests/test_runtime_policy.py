@@ -166,7 +166,7 @@ def test_policy_requires_approval(policy):
 
 def test_policy_other_validations(policy):
     # Just to hit the pass/return lines
-    policy.validate(ToolCall(name="list_tasks", arguments={}))
+    policy.validate(ToolCall(name="list_tasks", arguments={"job_id": 1}))
     policy.validate(ToolCall(name="list_jobs", arguments={}))
     policy.validate(ToolCall(name="get_job", arguments={}))
 
@@ -367,7 +367,7 @@ def test_policy_exec_command_with_workdir_outside_workspace(policy):
 
 def test_policy_shell_chain_operators_all(policy):
     """Todos os operadores de encadeamento são bloqueados."""
-    for op in [";", "&&", "||", "`", "$("]:
+    for op in [";", "&&", "||", "|", "`", "$("]:
         call = ToolCall(name="run_shell", arguments={"command": f"ls {op} cat"})
         with pytest.raises(ToolPolicyError, match="operador de encadeamento proibido"):
             policy.validate(call)
@@ -458,6 +458,51 @@ def test_policy_check_path_permission_rejects_prefix_sibling(tmp_path):
     call = ToolCall(name="list_files", arguments={"path": "../workspace2"})
     result = policy.check_path_permission(call)
     assert result is not None
+
+
+# ── shell file-path validation ──────────────────────────────
+
+def test_policy_shell_file_cmd_absolute_outside_workspace(policy):
+    """cat com path absoluto fora do workspace é bloqueado."""
+    call = ToolCall(name="run_shell", arguments={"command": "cat /etc/passwd"})
+    with pytest.raises(ToolPolicyError, match="fora do workspace"):
+        policy.validate(call)
+
+
+def test_policy_shell_file_cmd_tilde_outside_workspace(policy):
+    """cat com ~ expandindo para fora do workspace é bloqueado."""
+    call = ToolCall(name="run_shell", arguments={"command": "cat ~/.ssh/id_rsa"})
+    with pytest.raises(ToolPolicyError, match="fora do workspace"):
+        policy.validate(call)
+
+
+def test_policy_shell_file_cmd_absolute_inside_workspace(tmp_path):
+    """cat com path absoluto dentro do workspace é permitido."""
+    config = ToolRuntimeConfig(workspace_root=tmp_path)
+    pol = ToolPolicy(config)
+    target = tmp_path / "file.txt"
+    target.write_text("data")
+    call = ToolCall(name="run_shell", arguments={"command": f"cat {target}"})
+    pol.validate(call)
+
+
+def test_policy_shell_file_cmd_relative_path_allowed(policy):
+    """cat com path relativo passa (resolve dentro do workdir do processo)."""
+    call = ToolCall(name="run_shell", arguments={"command": "cat requirements.txt"})
+    policy.validate(call)
+
+
+def test_policy_shell_non_file_cmd_absolute_path_ignored(policy):
+    """Comandos fora de _FILE_PATH_CMDS não têm validação de path."""
+    # 'echo' está na allowlist mas não em _FILE_PATH_CMDS
+    call = ToolCall(name="run_shell", arguments={"command": "echo /etc/passwd"})
+    policy.validate(call)
+
+
+def test_policy_shell_file_cmd_flag_not_validated(policy):
+    """Flags (tokens iniciados com -) não são tratadas como paths."""
+    call = ToolCall(name="run_shell", arguments={"command": "ls -la"})
+    policy.validate(call)
 
 
 # ── is_path_inside ─────────────────────────────────────────

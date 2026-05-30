@@ -15,6 +15,7 @@ class ToolRuntimeConfig:
     max_output_chars: int = 1_000_000
     max_file_read_chars: int = 20_000
     max_search_results: int = 100
+    max_task_results: int = 500
     require_approval_for_mutations: bool = True
     require_approval_for_task_creation: bool = True
     allowed_read_roots: list[Path] = field(default_factory=list)

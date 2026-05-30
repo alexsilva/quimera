@@ -366,7 +366,7 @@ class PolicyCoverageTests(unittest.TestCase):
         self.tmpdir.cleanup()
 
     def test_policy_validation_paths_and_disabled_tools(self):
-        self.policy.validate(ToolCall(name="list_tasks", arguments={}))
+        self.policy.validate(ToolCall(name="list_tasks", arguments={"job_id": 1}))
         self.policy.validate(ToolCall(name="list_jobs", arguments={}))
         self.policy.validate(ToolCall(name="get_job", arguments={}))
         self.policy.validate(ToolCall(name="list_files", arguments={"path": "."}))
