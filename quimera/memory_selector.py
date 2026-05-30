@@ -2,7 +2,6 @@ from .config import DEFAULT_HISTORY_WINDOW, DEFAULT_USER_NAME
 from .constants import (
     EXTEND_MARKER,
     NEEDS_INPUT_MARKER,
-    ROUTE_PREFIX,
     STATE_UPDATE_END,
     STATE_UPDATE_START,
 )
@@ -68,7 +67,6 @@ class MemorySelector:
         "--- a/",
         "arquivo alterado:",
         # Protocol / control markers
-        ROUTE_PREFIX.lower(),
         "[ack:",
         NEEDS_INPUT_MARKER.lower(),
         EXTEND_MARKER.lower(),

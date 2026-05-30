@@ -434,7 +434,7 @@ def test_parallel_calls_use_background_dispatch_when_available(tmp_path, monkeyp
         0,
     )
 
-    assert result == ("codex", "background-response", None, None, False, False)
+    assert result == ("codex", "background-response", False, False)
     assert dispatch.calls == [
         (
             "codex",
@@ -506,8 +506,8 @@ def test_parallel_calls_create_dedicated_background_dispatch_and_close_it(tmp_pa
         cancel_event=second_cancel,
     )
 
-    assert first == ("codex", "background-response", None, None, False, False)
-    assert second == ("codex", "background-response", None, None, False, False)
+    assert first == ("codex", "background-response", False, False)
+    assert second == ("codex", "background-response", False, False)
     assert len(created) == 2
     assert len(closed) == 2
     assert created[0] is not created[1]

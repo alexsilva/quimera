@@ -766,7 +766,7 @@ class AppTaskServices:
 
 def call_agent_for_parallel_with_client(
     call_agent: Callable[..., Any],
-    parse_response: Callable[[Any], tuple[Any, Any, Any, Any, Any, Any]],
+    parse_response: Callable[[Any], tuple[Any, ...]],
     agent,
     handoff,
     protocol_mode,
@@ -779,8 +779,8 @@ def call_agent_for_parallel_with_client(
     set_staging_root(staging_root / str(index))
     try:
         raw = call_agent(agent, handoff=handoff, primary=False, protocol_mode=protocol_mode, silent=True, show_output=False)
-        response, route_target, parsed_handoff, extend, needs_input, _ = parse_response(raw)
-        return agent, response, route_target, parsed_handoff, extend, needs_input
+        response, _, _, extend, needs_input, _ = parse_response(raw)
+        return agent, response, extend, needs_input
     finally:
         set_staging_root(None)
 

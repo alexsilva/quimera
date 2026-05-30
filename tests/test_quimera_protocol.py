@@ -2892,13 +2892,11 @@ class PluginTests(unittest.TestCase):
         import tempfile
         staging_root = Path(self.enterContext(tempfile.TemporaryDirectory()))
 
-        agent, response, route_target, handoff, extend, needs_input = call_agent_for_parallel(
+        agent, response, extend, needs_input = call_agent_for_parallel(
             app, "agent1", None, "standard", staging_root, 0
         )
         self.assertEqual(agent, "agent1")
         self.assertEqual(response, "Resposta mock")
-        self.assertIsNone(route_target)
-        self.assertIsNone(handoff)
         self.assertFalse(extend)
 
     def test_run_thread_mode_accepts_new_human_input_while_agent_is_running(self):
@@ -5585,7 +5583,6 @@ class AppProtocolDirectTests(unittest.TestCase):
         env = ProtocolEnvelope(type="handoff", content="hello")
         self.assertEqual(env.type, "handoff")
         self.assertEqual(env.content, "hello")
-        self.assertIsNone(env.route)
         self.assertIsNone(env.state_updates)
         self.assertIsNone(env.metadata)
         self.assertIsNone(env.handoff_id)
@@ -5594,14 +5591,12 @@ class AppProtocolDirectTests(unittest.TestCase):
         env = ProtocolEnvelope(
             type="handoff",
             content="task: do something",
-            route="codex",
             state_updates={"key": "val"},
             metadata={"version": 1},
             handoff_id="abc123",
         )
         self.assertEqual(env.type, "handoff")
         self.assertEqual(env.content, "task: do something")
-        self.assertEqual(env.route, "codex")
         self.assertEqual(env.state_updates, {"key": "val"})
         self.assertEqual(env.metadata, {"version": 1})
         self.assertEqual(env.handoff_id, "abc123")
@@ -5615,7 +5610,6 @@ class AppProtocolDirectTests(unittest.TestCase):
         self.assertIsInstance(env, ProtocolEnvelope)
         self.assertEqual(env.type, "handoff")
         self.assertEqual(env.content, "task: refactor")
-        self.assertEqual(env.route, "codex")
 
     def test_parse_envelope_valid_state_update(self):
         env = AppProtocol.parse_envelope(
@@ -5652,46 +5646,6 @@ class AppProtocolDirectTests(unittest.TestCase):
     def test_parse_envelope_empty_string_returns_none(self):
         result = AppProtocol.parse_envelope("")
         self.assertIsNone(result)
-
-    # --- validate_handoff_envelope ---
-
-    def test_validate_handoff_envelope_valid(self):
-        env = ProtocolEnvelope(type="handoff", content="task: refactor xyz", route="codex")
-        is_valid, msg = AppProtocol.validate_handoff_envelope(env)
-        self.assertTrue(is_valid)
-        self.assertEqual(msg, "")
-
-    def test_validate_handoff_envelope_non_envelope(self):
-        is_valid, msg = AppProtocol.validate_handoff_envelope(None)
-        self.assertFalse(is_valid)
-        self.assertIn("ProtocolEnvelope", msg)
-
-        is_valid, msg = AppProtocol.validate_handoff_envelope({"type": "handoff"})
-        self.assertFalse(is_valid)
-        self.assertIn("ProtocolEnvelope", msg)
-
-    def test_validate_handoff_envelope_wrong_type(self):
-        env = ProtocolEnvelope(type="state_update", content="stuff", route="codex")
-        is_valid, msg = AppProtocol.validate_handoff_envelope(env)
-        self.assertFalse(is_valid)
-        self.assertIn("expected type='handoff'", msg)
-
-    def test_validate_handoff_envelope_missing_route(self):
-        env = ProtocolEnvelope(type="handoff", content="task: do it")
-        is_valid, msg = AppProtocol.validate_handoff_envelope(env)
-        self.assertFalse(is_valid)
-        self.assertIn("missing 'route'", msg)
-
-    def test_validate_handoff_envelope_empty_content(self):
-        env = ProtocolEnvelope(type="handoff", content="", route="codex")
-        is_valid, msg = AppProtocol.validate_handoff_envelope(env)
-        self.assertFalse(is_valid)
-        self.assertIn("missing 'content'", msg)
-
-        env = ProtocolEnvelope(type="handoff", content="   ", route="codex")
-        is_valid, msg = AppProtocol.validate_handoff_envelope(env)
-        self.assertFalse(is_valid)
-        self.assertIn("missing 'content'", msg)
 
     # --- parse_response com envelope JSON ---
 
@@ -5872,7 +5826,7 @@ class AppProtocolDirectTests(unittest.TestCase):
         )
         self.assertIsNotNone(result)
         env, before, after = result
-        self.assertEqual(env.route, "codex")
+        self.assertEqual(env.type, "handoff")
         self.assertEqual(before, "")
         self.assertEqual(after, "")
 
@@ -5886,7 +5840,7 @@ class AppProtocolDirectTests(unittest.TestCase):
         result = AppProtocol._find_envelope_in_text(text)
         self.assertIsNotNone(result)
         env, before, after = result
-        self.assertEqual(env.route, "gemini")
+        self.assertEqual(env.type, "handoff")
 
     # --- Gap 2: envelope com content vazio ---
 
@@ -5911,63 +5865,6 @@ class AppProtocolDirectTests(unittest.TestCase):
         self.assertIsNone(route_target)
         self.assertIsNone(handoff)
         self.assertEqual(response, '{"type": "handoff", "content": "   ", "route": "codex"}')
-
-    # --- ProtocolEnvelope com handoffs ---
-
-    def test_protocol_envelope_with_handoffs_field(self):
-        env = ProtocolEnvelope(
-            type="handoff",
-            content="",
-            handoffs=[
-                {"route": "codex", "content": "task: multi"},
-                {"route": "claude", "content": "task: review"},
-            ],
-        )
-        self.assertEqual(env.type, "handoff")
-        self.assertEqual(env.handoffs[0]["route"], "codex")
-        self.assertIsNone(env.route)
-
-    def test_parse_envelope_with_handoffs_array(self):
-        env = AppProtocol.parse_envelope(
-            '{"type": "handoff", "handoffs": ['
-            '{"route": "codex", "content": "task: refactor"}, '
-            '{"route": "claude", "content": "task: review"}'
-            ']}'
-        )
-        self.assertIsInstance(env, ProtocolEnvelope)
-        self.assertEqual(env.handoffs[0]["route"], "codex")
-        self.assertEqual(env.handoffs[1]["route"], "claude")
-        self.assertIsNone(env.route)
-
-    def test_parse_envelope_ignores_invalid_handoff_items(self):
-        """Itens inválidos em handoffs[] não entram no envelope normalizado."""
-        env = AppProtocol.parse_envelope(
-            '{"type": "handoff", "handoffs": ['
-            '{"route": "codex", "content": "task"}, '
-            '{"route": 123, "content": "ignorar"}, '
-            '{"route": "claude"}'
-            ']}'
-        )
-        self.assertEqual(env.handoffs, [{"route": "codex", "content": "task"}])
-
-    def test_validate_handoff_envelope_with_handoffs(self):
-        env = ProtocolEnvelope(
-            type="handoff",
-            content="",
-            handoffs=[
-                {"route": "codex", "content": "task: multi"},
-                {"route": "claude", "content": "task: review"},
-            ],
-        )
-        is_valid, msg = AppProtocol.validate_handoff_envelope(env)
-        self.assertTrue(is_valid)
-        self.assertEqual(msg, "")
-
-    def test_validate_handoff_envelope_missing_route_and_handoffs(self):
-        env = ProtocolEnvelope(type="handoff", content="task: something")
-        is_valid, msg = AppProtocol.validate_handoff_envelope(env)
-        self.assertFalse(is_valid)
-        self.assertIn("missing 'route'", msg)
 
     def test_parse_response_handoffs_array_single_item_has_no_pending(self):
         """handoffs com 1 item não roteia no modo MCP-first."""

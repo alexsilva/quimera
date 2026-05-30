@@ -44,7 +44,7 @@ def _make_app(active_agents=None, threads=1):
     app.session_services.maybe_auto_summarize = Mock()
     app.task_services = Mock()
     app.task_services.call_agent_for_parallel = Mock(
-        return_value=("codex", "resposta", None, None, False, False)
+        return_value=("codex", "resposta", False, False)
     )
 
     app.turn_manager = Mock()

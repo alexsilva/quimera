@@ -17,9 +17,6 @@ from . import logger
 class ProtocolEnvelope:
     type: str
     content: str
-    route: str | None = None
-    handoffs: list[dict] | None = None
-    legacy_routes_present: bool = False
     state_updates: dict | None = None
     metadata: dict | None = None
     handoff_id: str | None = None
@@ -160,58 +157,13 @@ class AppProtocol:
         if not isinstance(data, dict) or "type" not in data:
             return None
 
-        handoffs_raw = data.get("handoffs")
-        handoffs = None
-        if isinstance(handoffs_raw, list):
-            handoffs = []
-            for item in handoffs_raw:
-                if not isinstance(item, dict):
-                    continue
-                route = item.get("route")
-                content = item.get("content")
-                if not isinstance(route, str) or not isinstance(content, str):
-                    continue
-                route = route.strip()
-                content = content.strip()
-                if not route or not content:
-                    continue
-                normalized = {"route": route, "content": content}
-                if isinstance(item.get("metadata"), dict):
-                    normalized["metadata"] = item["metadata"]
-                if isinstance(item.get("handoff_id"), str) and item["handoff_id"].strip():
-                    normalized["handoff_id"] = item["handoff_id"].strip()
-                handoffs.append(normalized)
-
         return ProtocolEnvelope(
             type=str(data["type"]),
             content=str(data.get("content", "")),
-            route=str(data["route"]) if data.get("route") else None,
-            handoffs=handoffs,
-            legacy_routes_present="routes" in data,
             state_updates=data.get("state_updates"),
             metadata=data.get("metadata"),
             handoff_id=str(data["handoff_id"]) if data.get("handoff_id") else None,
         )
-
-    @classmethod
-    def validate_handoff_envelope(cls, envelope):
-        """Valida envelope textual de handoff legado (compatibilidade de API)."""
-        if not isinstance(envelope, ProtocolEnvelope):
-            return False, "not a ProtocolEnvelope"
-        if envelope.type != "handoff":
-            return False, f"expected type='handoff', got '{envelope.type}'"
-        if envelope.handoffs:
-            for item in envelope.handoffs:
-                if not item.get("route"):
-                    return False, "handoff item missing 'route' target"
-                if not item.get("content") or not item["content"].strip():
-                    return False, "handoff item missing 'content' (task description)"
-            return True, ""
-        if not envelope.route:
-            return False, "handoff missing 'route' target"
-        if not envelope.content or not envelope.content.strip():
-            return False, "handoff missing 'content' (task description)"
-        return True, ""
 
     def parse_response(self, response, **_kwargs):
         """Extrai marcadores de controle e retorna estado estruturado."""
