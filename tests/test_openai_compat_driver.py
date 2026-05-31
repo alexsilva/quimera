@@ -1533,7 +1533,7 @@ def test_existing_plugins_still_register():
     claude = plugins.get("claude")
     assert claude is not None
     assert claude.driver == "cli"
-    assert claude.cmd == ["claude", "--permission-mode=bypassPermissions", "--output-format=stream-json", "--verbose",
+    assert claude.cmd == ["claude", "--permission-mode=dontAsk", "--output-format=stream-json", "--verbose",
                           "-p"]
 
     mock = plugins.get("mock")

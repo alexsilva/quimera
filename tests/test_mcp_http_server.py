@@ -14,11 +14,10 @@ import pytest
 
 from quimera.runtime.mcp import (
     MCP_HTTPServer,
-    _MCPHTTPRequestHandler,
-    _SSEQueueOutput,
     create_server,
     MCPServer,
 )
+from quimera.runtime.mcp.http_server import _SSEQueueOutput
 from quimera.runtime.models import ToolResult
 
 
@@ -284,7 +283,7 @@ class TestMessage:
                 body=body,
                 headers={"Content-Type": "application/json"},
             )
-            assert resp.status == 202
+            assert resp.status == 200
             result = json.loads(resp.data)
             assert result["id"] == 1
             assert result["result"] == {}
@@ -346,9 +345,12 @@ class TestMessage:
                 body=body,
                 headers={"Content-Type": "application/json"},
             )
-            assert resp.status == 400
+            assert resp.status == 200
             result = json.loads(resp.data)
-            assert result["error"]["code"] == -32600
+            assert isinstance(result, list)
+            assert len(result) == 3
+            for item in result:
+                assert item["error"]["code"] == -32600
         finally:
             httpd.shutdown()
 
@@ -356,7 +358,7 @@ class TestMessage:
         httpd = _start_http_server()
         try:
             body = json.dumps({
-                "jsonrpc": "2.0", "method": "initialized"
+                "jsonrpc": "2.0", "method": "notifications/initialized"
             }).encode("utf-8")
             resp = _http_request(
                 httpd.host, httpd.port, "POST", "/message",
@@ -429,9 +431,13 @@ class TestSSEIntegration:
 
             body_part = chunks.decode("utf-8", errors="replace")
             http_body = body_part.split("\r\n\r\n", 1)[-1]
+            endpoint_path = None
             for line in http_body.split("\n"):
                 if "data:" in line and "/message?" in line:
-                    endpoint_path = line.split("data:", 1)[-1].strip()
+                    raw = line.split("data:", 1)[-1].strip()
+                    from urllib.parse import urlparse
+                    parsed = urlparse(raw)
+                    endpoint_path = parsed.path + "?" + parsed.query if parsed.query else parsed.path
                     break
 
             assert endpoint_path, "endpoint_path not found"

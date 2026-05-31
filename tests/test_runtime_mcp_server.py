@@ -14,7 +14,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from quimera.runtime.mcp import MCPServer, _openai_schema_to_mcp, _proxy_stdio_to_socket
+from quimera.runtime.mcp import MCPServer
+from quimera.runtime.mcp.server import _openai_schema_to_mcp, _proxy_stdio_to_socket
 from quimera.runtime.models import ToolCall, ToolResult
 
 
@@ -107,7 +108,7 @@ class TestInitialize:
 class TestInitialized:
     def test_nao_produz_resposta(self):
         server = _make_server()
-        responses = _exchange(server, {"jsonrpc": "2.0", "method": "initialized"})
+        responses = _exchange(server, {"jsonrpc": "2.0", "method": "notifications/initialized"})
         assert responses == []
 
 
@@ -377,14 +378,15 @@ class TestSocketProxy:
 
 
 class TestInputRobustness:
-    def test_linha_json_invalida_e_ignorada(self):
+    def test_linha_json_invalida_retorna_parse_error(self):
         server = _make_server()
         inp = io.StringIO("isto nao e json\n" + json.dumps({"jsonrpc": "2.0", "id": 1, "method": "ping"}) + "\n")
         out = io.StringIO()
         server.serve(stdin=inp, stdout=out)
         responses = [json.loads(l) for l in out.getvalue().splitlines() if l.strip()]
-        assert len(responses) == 1
-        assert responses[0]["result"] == {}
+        assert len(responses) == 2
+        assert responses[0].get("error", {}).get("code") == -32700
+        assert responses[1]["result"] == {}
 
     def test_linha_em_branco_e_ignorada(self):
         server = _make_server()

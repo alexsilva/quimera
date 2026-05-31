@@ -28,6 +28,8 @@ from quimera.runtime.mcp.server import MCPServer
 
 _logger = logging.getLogger(__name__)
 
+_MAX_BODY_SIZE = 1024 * 1024  # 1MB
+
 _QUIMERA_MCP_HTTP_HOST = "QUIMERA_MCP_HTTP_HOST"
 _QUIMERA_MCP_HTTP_PORT = "QUIMERA_MCP_HTTP_PORT"
 _DEFAULT_HOST = "127.0.0.1"
@@ -135,7 +137,8 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
             self.send_header("Connection", "keep-alive")
             self.end_headers()
 
-            endpoint_url = f"/message?sessionId={session_id}"
+            host = self.headers.get("Host", "localhost")
+            endpoint_url = f"http://{host}/message?sessionId={session_id}"
             self.wfile.write(
                 f"event: endpoint\ndata: {endpoint_url}\n\n".encode("utf-8")
             )
@@ -169,6 +172,9 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
 
     def _handle_message(self) -> None:
         content_length = int(self.headers.get("Content-Length", 0))
+        if content_length > _MAX_BODY_SIZE:
+            self._send_error_response(413, -32600, "Request body too large")
+            return
         body = self.rfile.read(content_length).decode("utf-8") if content_length else ""
 
         parsed = urlparse(self.path)
@@ -184,9 +190,9 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
             self._send_error_response(400, -32700, f"Parse error: {exc}")
             return
 
-        if not isinstance(msg, dict):
+        if not isinstance(msg, (dict, list)):
             self._send_error_response(
-                400, -32600, "Invalid Request: body must be a JSON object"
+                400, -32600, "Invalid Request: body must be a JSON object or array"
             )
             return
 
@@ -200,29 +206,37 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
             out = StringIO()
 
         try:
-            response = mcp_server._mcp._handle(msg, out=out)
+            mcp_server._mcp._process_message(msg, out=out)
         except Exception as exc:
             _logger.exception("MCP HTTP: error handling message")
-            response = mcp_server._mcp._err(
-                msg.get("id"), -32603, f"Internal error: {exc}"
+            error_resp = mcp_server._mcp._err(
+                msg.get("id") if isinstance(msg, dict) else None,
+                -32603, f"Internal error: {exc}",
             )
-
-        if response is not None:
-            if isinstance(out, _SSEQueueOutput):
-                out.write(json.dumps(response, ensure_ascii=False) + "\n")
-            body_bytes = json.dumps(
-                response, ensure_ascii=False
-            ).encode("utf-8")
-            self.send_response(202)
+            body_bytes = json.dumps(error_resp).encode("utf-8")
+            self.send_response(500)
             self._send_cors()
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body_bytes)))
             self.end_headers()
             self.wfile.write(body_bytes)
-        else:
-            self.send_response(202)
-            self._send_cors()
-            self.end_headers()
+            return
+
+        if isinstance(out, StringIO):
+            raw = out.getvalue()
+            if raw:
+                body_bytes = raw.encode("utf-8")
+                self.send_response(200)
+                self._send_cors()
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body_bytes)))
+                self.end_headers()
+                self.wfile.write(body_bytes)
+                return
+
+        self.send_response(202)
+        self._send_cors()
+        self.end_headers()
 
     def _send_error_response(
         self, status: int, code: int, message: str

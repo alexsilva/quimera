@@ -14,6 +14,7 @@ Uso programático:
 from __future__ import annotations
 
 import argparse
+import base64
 import concurrent.futures
 import json
 import logging
@@ -123,9 +124,21 @@ class MCPServer:
         self._auth_token: str | None = normalized or None
         self._cancel_events: dict[Any, threading.Event] = {}
         self._cancel_lock = threading.Lock()
+        self._pending_calls: list[dict] = []
+        self._pending_lock = threading.Lock()
+        self._used_ids: set[Any] = set()
+        self._used_ids_lock = threading.Lock()
+        self._progress_seq = 0
+        self._progress_seq_lock = threading.Lock()
+        self._batch_outputs: set[int] = set()
+        self._batch_outputs_lock = threading.Lock()
         self._thread_pool = concurrent.futures.ThreadPoolExecutor(
             max_workers=4, thread_name_prefix="mcp-tool"
         )
+
+    def shutdown(self) -> None:
+        """Encerra o pool de threads, aguardando tarefas em execução."""
+        self._thread_pool.shutdown(wait=True)
 
     # ------------------------------------------------------------------
     # I/O
@@ -141,12 +154,21 @@ class MCPServer:
     # Despacho de métodos
     # ------------------------------------------------------------------
 
-    def _handle(self, msg: dict, out: IO) -> dict | None:
+    def _handle(self, msg: dict, out: IO, blocking: bool = False) -> dict | None:
         method = msg.get("method", "")
         msg_id = msg.get("id")
         params = msg.get("params") or {}
 
+        if msg_id is not None:
+            with self._used_ids_lock:
+                if msg_id in self._used_ids:
+                    return self._err(msg_id, -32600, "Duplicate request ID")
+                self._used_ids.add(msg_id)
+
         if method == "initialize":
+            client_version = params.get("protocolVersion", "")
+            if client_version and client_version != self.PROTOCOL_VERSION:
+                return self._err(msg_id, -32602, f"Unsupported protocol version: {client_version}")
             return self._ok(msg_id, {
                 "protocolVersion": self.PROTOCOL_VERSION,
                 "serverInfo": {
@@ -161,7 +183,7 @@ class MCPServer:
                 },
             })
 
-        if method == "initialized":
+        if method == "notifications/initialized":
             return None
 
         if method == "ping":
@@ -171,7 +193,7 @@ class MCPServer:
             return self._handle_tools_list(msg_id, params)
 
         if method == "tools/call":
-            return self._handle_tools_call(msg_id, params, out=out)
+            return self._handle_tools_call(msg_id, params, out=out, blocking=blocking)
 
         if method == "notifications/cancelled":
             self._handle_cancelled(params)
@@ -188,7 +210,7 @@ class MCPServer:
         return None
 
     def _handle_cancelled(self, params: dict) -> None:
-        cancel_id = params.get("id")
+        cancel_id = params.get("requestId")
         if cancel_id is None:
             return
         with self._cancel_lock:
@@ -201,19 +223,26 @@ class MCPServer:
         schemas = resolve_tool_schemas(self._executor)
         tools = [_openai_schema_to_mcp(s) for s in schemas]
         cursor = params.get("cursor")
-        result: dict[str, Any] = {"tools": tools}
-        if cursor is not None:
-            _logger.debug("MCP tools/list cursor=%s (ignorado — sem paginação real)", cursor)
-            tools = []
-            result["tools"] = tools
-        elif len(tools) > 10:
-            result["nextCursor"] = "page_2"
+        page = 0
+        if isinstance(cursor, str):
+            try:
+                decoded = base64.urlsafe_b64decode(cursor).decode()
+                page = int(decoded.split(":")[1])
+            except (ValueError, IndexError, Exception):
+                return self._err(msg_id, -32602, "Invalid cursor")
+        start = page * 10
+        end = start + 10
+        result: dict[str, Any] = {"tools": tools[start:end]}
+        if end < len(tools):
+            next_bytes = f"page:{page + 1}".encode()
+            result["nextCursor"] = base64.urlsafe_b64encode(next_bytes).decode()
         return self._ok(msg_id, result)
 
-    def _handle_tools_call(self, msg_id: Any, params: dict, out: IO) -> dict:
+    def _handle_tools_call(self, msg_id: Any, params: dict, out: IO, blocking: bool = False) -> dict | None:
         tool_name = params.get("name", "")
         arguments = params.get("arguments") or {}
-        progress_token = params.get("progressToken")
+        meta = params.get("_meta") or {}
+        progress_token = meta.get("progressToken") if isinstance(meta, dict) else None
 
         if not tool_name:
             return self._err(msg_id, -32602, "tools/call: 'name' é obrigatório")
@@ -222,20 +251,19 @@ class MCPServer:
         started_at = time.perf_counter()
         _logger.debug("MCP tools/call start tool=%s arg_keys=%s", tool_name, arg_keys)
 
-        _progress_counter = 0
-
         def _progress_callback(msg: str) -> None:
-            nonlocal _progress_counter
-            _progress_counter += 1
             _logger.debug("MCP progress [%s]: %s", tool_name, msg)
             if progress_token:
+                with self._progress_seq_lock:
+                    self._progress_seq += 1
+                    seq = self._progress_seq
                 self._write({
                     "jsonrpc": "2.0",
                     "method": "notifications/progress",
                     "params": {
-                        "token": progress_token,
-                        "progress": _progress_counter,
-                        "total": 100,
+                        "progressToken": progress_token,
+                        "progress": seq,
+                        "message": msg,
                     }
                 }, out)
 
@@ -249,22 +277,63 @@ class MCPServer:
             _progress_callback,
         )
 
-        result = None
-        try:
-            result = future.result(timeout=3600)
+        call_info = {
+            "msg_id": msg_id,
+            "future": future,
+            "out": out,
+            "started_at": started_at,
+            "tool_name": tool_name,
+            "cancel_event": cancel_event,
+        }
+        with self._pending_lock:
+            self._pending_calls.append(call_info)
+
+        if blocking:
+            return self._resolve_tool_response(call_info)
+
+        return None
+
+    def _resolve_tool_response(self, call: dict, wait_timeout: float = 600) -> dict | None:
+        """Resolve a resposta de uma tool call (bloqueante). Retorna o dict de resposta ou None se não concluída."""
+        future = call["future"]
+        msg_id = call["msg_id"]
+        tool_name = call["tool_name"]
+        started_at = call["started_at"]
+        cancel_event = call["cancel_event"]
+
+        if not future.done():
+            try:
+                future.result(timeout=wait_timeout)
+            except concurrent.futures.TimeoutError:
+                with self._cancel_lock:
+                    self._cancel_events.pop(msg_id, None)
+                return self._err(msg_id, -32603, "Tool execution timed out")
+
+        if cancel_event.is_set():
+            _logger.debug("MCP tools/call cancelled tool=%s — no response sent", tool_name)
             with self._cancel_lock:
                 self._cancel_events.pop(msg_id, None)
-        except concurrent.futures.TimeoutError:
+            return None
+
+        elapsed = time.perf_counter() - started_at
+        if elapsed >= wait_timeout:
+            _logger.debug("MCP tools/call timeout tool=%s", tool_name)
             with self._cancel_lock:
                 self._cancel_events.pop(msg_id, None)
             cancel_event.set()
             return self._err(msg_id, -32603, "Tool execution timed out")
+
+        try:
+            result = future.result(timeout=0)
         except Exception as exc:
             with self._cancel_lock:
                 self._cancel_events.pop(msg_id, None)
             duration_ms = int((time.perf_counter() - started_at) * 1000)
             _logger.exception("MCP tools/call error tool=%s duration_ms=%d", tool_name, duration_ms)
             return self._err(msg_id, -32603, f"Internal error: {exc}")
+
+        with self._cancel_lock:
+            self._cancel_events.pop(msg_id, None)
 
         duration_ms = int((time.perf_counter() - started_at) * 1000)
         _log = _logger.info if (not result.ok or duration_ms > 500) else _logger.debug
@@ -286,17 +355,56 @@ class MCPServer:
             "isError": not result.ok,
         })
 
+    def _flush_pending(self, out: IO) -> None:
+        with self._batch_outputs_lock:
+            if id(out) in self._batch_outputs:
+                return
+        with self._pending_lock:
+            owned = [c for c in self._pending_calls if c["out"] is out]
+
+        if not owned:
+            return
+
+        to_remove = []
+        for call in owned:
+            if not call["future"].done():
+                continue
+            response = self._resolve_tool_response(call)
+            if response is not None:
+                self._write(response, call["out"])
+            to_remove.append(call)
+
+        if to_remove:
+            with self._pending_lock:
+                for call in to_remove:
+                    try:
+                        self._pending_calls.remove(call)
+                    except ValueError:
+                        pass
+
+    def _drain_all_pending(self, out: IO) -> None:
+        deadline = time.perf_counter() + 610
+        while time.perf_counter() < deadline:
+            self._flush_pending(out)
+            with self._pending_lock:
+                remaining = any(c["out"] is out for c in self._pending_calls)
+            if not remaining:
+                break
+            time.sleep(0.05)
+
     # ------------------------------------------------------------------
     # Helpers de resposta JSON-RPC 2.0
     # ------------------------------------------------------------------
 
     @staticmethod
     def _build_content(text: str, content_type: str = "text") -> list[dict]:
-        """Constrói array de content para resposta tools/call.
-
-        Suporta extensão futura para image, resource, audio conforme spec MCP.
-        """
-        return [{"type": content_type, "text": text}]
+        if content_type == "image":
+            return [{"type": "image", "data": text, "mimeType": "image/png"}]
+        if content_type == "resource":
+            return [{"type": "resource", "resource": {"text": text, "mimeType": "text/plain", "uri": "resource://quimera"}}]
+        if content_type == "audio":
+            return [{"type": "audio", "data": text, "mimeType": "audio/wav"}]
+        return [{"type": "text", "text": text}]
 
     def _ok(self, msg_id: Any, result: dict) -> dict:
         return {"jsonrpc": "2.0", "id": msg_id, "result": result}
@@ -417,21 +525,7 @@ class MCPServer:
     def _process_message(self, msg: Any, out: IO) -> None:
         """Processa uma mensagem ou lote JSON-RPC e escreve respostas."""
         if isinstance(msg, list):
-            responses = []
-            for item in msg:
-                if not isinstance(item, dict):
-                    continue
-                try:
-                    resp = self._handle(item, out=out)
-                except Exception as exc:
-                    _logger.exception("Erro inesperado no handler MCP batch")
-                    item_id = item.get("id")
-                    resp = self._err(item_id, -32603, f"Internal error: {exc}") if item_id is not None else None
-                if resp is not None:
-                    responses.append(resp)
-            if responses:
-                self._write(responses if len(responses) > 1 else responses[0], out)
-            return
+            return self._process_batch(msg, out)
 
         if not isinstance(msg, dict):
             return
@@ -446,10 +540,71 @@ class MCPServer:
         if response is not None:
             self._write(response, out)
 
+    def _process_batch(self, msg: list, out: IO) -> None:
+        """Processa lote JSON-RPC: submete tools/call concorrentemente, resolve em bloco."""
+        with self._batch_outputs_lock:
+            self._batch_outputs.add(id(out))
+        try:
+            self._process_batch_impl(msg, out)
+        finally:
+            with self._batch_outputs_lock:
+                self._batch_outputs.discard(id(out))
+
+    def _process_batch_impl(self, msg: list, out: IO) -> None:
+        responses: list[dict | None] = [None] * len(msg)
+        pending_ids: dict[Any, int] = {}  # msg_id -> list index
+
+        for idx, item in enumerate(msg):
+            if not isinstance(item, dict):
+                responses[idx] = self._err(None, -32600, "Invalid Request")
+                continue
+            try:
+                item_id = item.get("id")
+                if item.get("method") == "tools/call":
+                    self._handle(item, out=out, blocking=False)
+                    if item_id is not None:
+                        pending_ids[item_id] = idx
+                else:
+                    resp = self._handle(item, out=out)
+                    responses[idx] = resp
+            except Exception as exc:
+                _logger.exception("Erro inesperado no handler MCP batch")
+                item_id = item.get("id")
+                responses[idx] = self._err(item_id, -32603, f"Internal error: {exc}") if item_id is not None else None
+
+        if pending_ids:
+            self._resolve_batch_calls(out, responses, pending_ids)
+
+        non_null = [r for r in responses if r is not None]
+        if non_null:
+            self._write(non_null, out)
+
+    def _resolve_batch_calls(self, out: IO, responses: list, pending_ids: dict) -> None:
+        """Aguarda e coleta respostas de tools/call submetidas em lote."""
+        with self._pending_lock:
+            owned = [c for c in self._pending_calls if c["out"] is out]
+
+        futures = [c["future"] for c in owned]
+        if futures:
+            concurrent.futures.wait(futures, timeout=610)
+
+        for call in owned:
+            resp = self._resolve_tool_response(call)
+            idx = pending_ids.get(call["msg_id"])
+            if idx is not None and resp is not None:
+                responses[idx] = resp
+            with self._pending_lock:
+                try:
+                    self._pending_calls.remove(call)
+                except ValueError:
+                    pass
+
     def serve(self, stdin: IO | None = None, stdout: IO | None = None) -> None:
         """Processa mensagens MCP até EOF no stdin.
 
         Suporta mensagens individuais (dict) e lotes (list) JSON-RPC 2.0.
+        Tools/call é executado de forma assíncrona: o loop continua
+        processando novas mensagens enquanto a tool roda em background.
 
         Args:
             stdin: stream de entrada (padrão: sys.stdin).
@@ -457,6 +612,19 @@ class MCPServer:
         """
         inp = stdin or sys.stdin
         out = stdout or sys.stdout
+
+        flusher_active = [True]
+
+        def _periodic_flush() -> None:
+            while flusher_active[0]:
+                time.sleep(0.05)
+                try:
+                    self._flush_pending(out)
+                except Exception:
+                    _logger.debug("MCP flush error", exc_info=True)
+
+        flush_thread = threading.Thread(target=_periodic_flush, daemon=True)
+        flush_thread.start()
 
         for raw_line in inp:
             line = raw_line.strip()
@@ -467,9 +635,13 @@ class MCPServer:
                 msg = json.loads(line)
             except json.JSONDecodeError as exc:
                 _logger.debug("JSON inválido ignorado: %s — %s", line[:80], exc)
+                self._write({"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": f"Parse error: {exc}"}}, out)
                 continue
 
             self._process_message(msg, out)
+
+        flusher_active[0] = False
+        self._drain_all_pending(out)
 
 
 # ---------------------------------------------------------------------------
