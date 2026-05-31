@@ -193,7 +193,30 @@ class ToolPolicy:
         """Executa validate get job."""
         return
 
+    def _validate_todo_write(self, call: ToolCall) -> None:
+        """Executa validate todo write."""
+        items = call.arguments.get("todos")
+        if not isinstance(items, list) or not items:
+            raise ToolPolicyError("todo_write requer 'todos' como lista não vazia")
+        for i, item in enumerate(items):
+            if not isinstance(item, dict):
+                raise ToolPolicyError(f"todo_write: item {i} deve ser um dicionário")
+            if not item.get("content"):
+                raise ToolPolicyError(f"todo_write: item {i} requer 'content' não vazio")
+            status = item.get("status")
+            if status and status not in ("pending", "in_progress", "done", "cancelled"):
+                raise ToolPolicyError(
+                    f"todo_write: status inválido '{status}' em item {i}"
+                )
+            priority = item.get("priority")
+            if priority and priority not in ("high", "medium", "low"):
+                raise ToolPolicyError(
+                    f"todo_write: priority inválida '{priority}' em item {i}"
+                )
 
+    def _validate_todo_list(self, call: ToolCall) -> None:
+        """Executa validate todo list."""
+        pass
 
     def _validate_approve_task(self, call: ToolCall) -> None:
         """Executa validate approve task."""

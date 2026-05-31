@@ -169,6 +169,51 @@ def test_policy_other_validations(policy):
     policy.validate(ToolCall(name="list_tasks", arguments={"job_id": 1}))
     policy.validate(ToolCall(name="list_jobs", arguments={}))
     policy.validate(ToolCall(name="get_job", arguments={}))
+    policy.validate(ToolCall(name="todo_list", arguments={}))
+    policy.validate(
+        ToolCall(name="todo_write", arguments={"todos": [{"content": "task"}]})
+    )
+
+
+def test_policy_todo_write_empty_todos(policy):
+    call = ToolCall(name="todo_write", arguments={"todos": []})
+    with pytest.raises(ToolPolicyError, match="lista não vazia"):
+        policy.validate(call)
+
+
+def test_policy_todo_write_missing_todos(policy):
+    call = ToolCall(name="todo_write", arguments={})
+    with pytest.raises(ToolPolicyError, match="lista não vazia"):
+        policy.validate(call)
+
+
+def test_policy_todo_write_invalid_item_type(policy):
+    call = ToolCall(name="todo_write", arguments={"todos": ["not a dict"]})
+    with pytest.raises(ToolPolicyError, match="deve ser um dicionário"):
+        policy.validate(call)
+
+
+def test_policy_todo_write_missing_content(policy):
+    call = ToolCall(name="todo_write", arguments={"todos": [{"priority": "high"}]})
+    with pytest.raises(ToolPolicyError, match="requer 'content' não vazio"):
+        policy.validate(call)
+
+
+def test_policy_todo_write_invalid_status(policy):
+    call = ToolCall(name="todo_write", arguments={"todos": [{"content": "x", "status": "invalid"}]})
+    with pytest.raises(ToolPolicyError, match="status inválido"):
+        policy.validate(call)
+
+
+def test_policy_todo_write_invalid_priority(policy):
+    call = ToolCall(name="todo_write", arguments={"todos": [{"content": "x", "priority": "urgent"}]})
+    with pytest.raises(ToolPolicyError, match="priority inválida"):
+        policy.validate(call)
+
+
+def test_policy_todo_write_valid(policy):
+    call = ToolCall(name="todo_write", arguments={"todos": [{"content": "task"}]})
+    policy.validate(call)
 
 
 def test_policy_web_fetch_accepts_url(policy):
@@ -286,7 +331,7 @@ def test_policy_requires_approval_for_all_mutational_tools(policy):
 
 def test_policy_does_not_require_approval_for_read_tools(policy):
     """Ferramentas de leitura não requerem aprovação."""
-    readonly = ["read_file", "list_files", "grep_search", "list_tasks", "list_jobs", "get_job"]
+    readonly = ["read_file", "list_files", "grep_search", "list_tasks", "list_jobs", "get_job", "todo_list"]
     for tool_name in readonly:
         assert policy.requires_approval(ToolCall(name=tool_name, arguments={})) is False, \
             f"{tool_name} NÃO deveria requerer aprovação"

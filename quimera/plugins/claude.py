@@ -173,7 +173,7 @@ plugin = ClaudePlugin(
     prefix="/claude",
     icon="🔮",
     runtime_rw_paths=_claude_runtime_rw_paths(),
-    cmd=["claude", "--permission-mode=bypassPermissions", "--output-format=stream-json", "--verbose", "-p"],
+    cmd=["claude", "--permission-mode=dontAsk", "--output-format=stream-json", "--verbose", "-p"],
     output_format="stream-json",
     style=("magenta", "Claude"),
     capabilities=["architecture", "code_review", "planning", "documentation", "code_editing"],
