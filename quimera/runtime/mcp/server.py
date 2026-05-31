@@ -226,8 +226,8 @@ class MCPServer:
                 page = int(decoded.split(":")[1])
             except (ValueError, IndexError, Exception):
                 return self._err(msg_id, -32602, "Invalid cursor")
-        start = page * 10
-        end = start + 10
+        start = page * 100
+        end = start + 100
         result: dict[str, Any] = {"tools": tools[start:end]}
         if end < len(tools):
             next_bytes = f"page:{page + 1}".encode()
