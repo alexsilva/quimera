@@ -199,8 +199,11 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
         mcp_server: MCP_HTTPServer = self.server.mcp_http_server
 
         out: StringIO | _SSEQueueOutput
-        if session_id and session_id in mcp_server._sse_clients:
-            sse_queue = mcp_server._sse_clients[session_id]
+        sse_queue = None
+        if session_id:
+            with mcp_server._sse_lock:
+                sse_queue = mcp_server._sse_clients.get(session_id)
+        if sse_queue is not None:
             out = _SSEQueueOutput(sse_queue)
         else:
             out = StringIO()
@@ -326,6 +329,7 @@ class MCP_HTTPServer:
     def shutdown(self) -> None:
         """Para o servidor HTTP e sinaliza todas as conexões SSE."""
         self._mcp._stop_background_flush()
+        self._mcp.shutdown()
         if self._httpd:
             self._httpd.shutdown()
         with self._sse_lock:
