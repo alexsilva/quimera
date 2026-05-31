@@ -490,15 +490,25 @@ class TestErrorIsolation:
 class TestProtocolVersion:
     """Testa negociação de protocol version (initialize)."""
 
-    def test_rejects_incompatible_version(self):
-        """Initialize com versão incompatível retorna erro."""
+    def test_accepts_any_client_version(self):
+        """Initialize com qualquer versão de cliente é aceito; servidor retorna a sua versão."""
         server = _make_server()
         [resp] = _exchange(server, {
             "jsonrpc": "2.0", "id": 1, "method": "initialize",
-            "params": {"protocolVersion": "2025-01-01"},
+            "params": {"protocolVersion": "2025-03-26"},
         })
-        assert "error" in resp
-        assert resp["error"]["code"] == -32602
+        assert "result" in resp, f"esperado result, obteve: {resp}"
+        assert resp["result"]["protocolVersion"] == MCPServer.PROTOCOL_VERSION
+
+    def test_accepts_older_client_version(self):
+        """Initialize com versão mais antiga também é aceito."""
+        server = _make_server()
+        [resp] = _exchange(server, {
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": "2024-01-01"},
+        })
+        assert "result" in resp
+        assert resp["result"]["protocolVersion"] == MCPServer.PROTOCOL_VERSION
 
 
 class TestDuplicateRequestID:
