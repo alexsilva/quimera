@@ -94,7 +94,7 @@ def test_schema_names_match_registered_tools():
         "list_files", "read_file", "write_file", "apply_patch", "grep_search", "run_shell",
         "exec_command", "write_stdin", "close_command_session", "list_tasks", "list_jobs",
         "get_job", "remove_file", "web_search", "web_fetch", "call_agent",
-        "todowrite", "todolist",
+        "todo_write", "todo_list",
     }
     actual = {s["function"]["name"] for s in TOOL_SCHEMAS}
     assert actual == expected
@@ -578,8 +578,8 @@ def test_run_tools_system_prompt_guides_tool_usage():
         "web_search",
         "web_fetch",
         "call_agent",
-        "todowrite",
-        "todolist",
+        "todo_write",
+        "todo_list",
     }
 
 

@@ -384,7 +384,7 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
-            "name": "todowrite",
+            "name": "todo_write",
             "description": "Cria ou atualiza itens de TODO session-scoped. Mantém exatamente um in_progress por job.",
             "parameters": {
                 "type": "object",
@@ -429,7 +429,7 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
-            "name": "todolist",
+            "name": "todo_list",
             "description": "Lista todos os itens TODO da sessão atual.",
             "parameters": {
                 "type": "object",

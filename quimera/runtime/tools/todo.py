@@ -100,7 +100,7 @@ class TodoTools:
     def _resolve_job_id(self) -> int | None:
         return resolve_current_job_id()
 
-    def todowrite(self, call: ToolCall) -> ToolResult:
+    def todo_write(self, call: ToolCall) -> ToolResult:
         job_id = self._resolve_job_id()
         if job_id is None:
             return ToolResult(
@@ -132,7 +132,7 @@ class TodoTools:
         except Exception as exc:  # noqa: BLE001
             return ToolResult(ok=False, tool_name=call.name, error=str(exc))
 
-    def todolist(self, call: ToolCall) -> ToolResult:
+    def todo_list(self, call: ToolCall) -> ToolResult:
         job_id = self._resolve_job_id()
         if job_id is None:
             return ToolResult(
