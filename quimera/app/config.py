@@ -6,7 +6,7 @@ import sys
 from .handlers import PromptAwareStderrHandler
 
 logger = logging.getLogger("quimera.staging")
-mcp_server_logger = logging.getLogger("quimera.runtime.mcp_server")
+mcp_server_logger = logging.getLogger("quimera.runtime.mcp.server")
 log_level = os.environ.get("QUIMERA_LOG_LEVEL", "INFO").upper()
 numeric_level = getattr(logging, log_level, logging.INFO)
 

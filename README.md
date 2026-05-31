@@ -204,7 +204,7 @@ Quando o MCP está ativo, o parser de protocolo (`app/protocol.py`) ignora envel
 O servidor MCP pode ser executado independentemente:
 
 ```bash
-python -m quimera.runtime.mcp_server
+python -m quimera.runtime.mcp
 ```
 
 Conecta a um workspace via `QUIMERA_WORKSPACE` e expõe todas as ferramentas sem aprovação interativa (modo headless).

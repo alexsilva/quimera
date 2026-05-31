@@ -1,4 +1,4 @@
-"""Testes para quimera.runtime.mcp_server.MCPServer."""
+"""Testes para quimera.runtime.mcp.server.MCPServer."""
 from __future__ import annotations
 
 import io
@@ -14,7 +14,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from quimera.runtime.mcp_server import MCPServer, _openai_schema_to_mcp, _proxy_stdio_to_socket
+from quimera.runtime.mcp import MCPServer, _openai_schema_to_mcp, _proxy_stdio_to_socket
 from quimera.runtime.models import ToolCall, ToolResult
 
 
@@ -130,7 +130,7 @@ class TestPing:
 class TestToolsList:
     def test_retorna_lista_de_tools(self):
         server = _make_server()
-        with patch("quimera.runtime.mcp_server.resolve_tool_schemas") as mock_resolve:
+        with patch("quimera.runtime.mcp.server.resolve_tool_schemas") as mock_resolve:
             mock_resolve.return_value = [
                 {"type": "function", "function": {"name": "read_file", "description": "desc", "parameters": {}}},
             ]
@@ -143,7 +143,7 @@ class TestToolsList:
 
     def test_tools_vazio_quando_executor_sem_tools(self):
         server = _make_server()
-        with patch("quimera.runtime.mcp_server.resolve_tool_schemas", return_value=[]):
+        with patch("quimera.runtime.mcp.server.resolve_tool_schemas", return_value=[]):
             [resp] = _exchange(server, {"jsonrpc": "2.0", "id": 6, "method": "tools/list"})
         assert resp["result"]["tools"] == []
 
@@ -211,11 +211,11 @@ class TestToolsCall:
         result = ToolResult(ok=True, tool_name="read_file", content="ok")
         executor = _make_executor(call_result=result)
         server = _make_server(executor)
-        mcp_logger = logging.getLogger("quimera.runtime.mcp_server")
+        mcp_logger = logging.getLogger("quimera.runtime.mcp.server")
         mcp_logger.addHandler(caplog.handler)
 
         try:
-            with caplog.at_level(logging.DEBUG, logger="quimera.runtime.mcp_server"):
+            with caplog.at_level(logging.DEBUG, logger="quimera.runtime.mcp.server"):
                 _exchange(server, {
                     "jsonrpc": "2.0", "id": 14, "method": "tools/call",
                     "params": {"name": "read_file", "arguments": {"path": "foo.py"}},
@@ -223,7 +223,7 @@ class TestToolsCall:
         finally:
             mcp_logger.removeHandler(caplog.handler)
 
-        messages = [record.message for record in caplog.records if record.name == "quimera.runtime.mcp_server"]
+        messages = [record.message for record in caplog.records if record.name == "quimera.runtime.mcp.server"]
         assert any("MCP tools/call start tool=read_file" in message for message in messages)
         assert any("MCP tools/call done tool=read_file ok=True" in message for message in messages)
 
@@ -415,10 +415,10 @@ def test_main_connect_socket_usa_modo_proxy(monkeypatch):
         captured["stdin"] = stdin
         captured["stdout"] = stdout
 
-    monkeypatch.setattr("quimera.runtime.mcp_server._proxy_stdio_to_socket", _fake_proxy)
+    monkeypatch.setattr("quimera.runtime.mcp.server._proxy_stdio_to_socket", _fake_proxy)
     monkeypatch.setattr(sys, "argv", ["mcp_server", "--connect-socket", "/tmp/quimera.sock"])
 
-    from quimera.runtime import mcp_server
+    from quimera.runtime.mcp import server as mcp_server
 
     mcp_server.main()
     assert captured["path"] == "/tmp/quimera.sock"
@@ -431,10 +431,10 @@ def test_main_connect_socket_com_token_cli(monkeypatch):
     def _fake_proxy(path, *, token=None, stdin=None, stdout=None):
         captured["token"] = token
 
-    monkeypatch.setattr("quimera.runtime.mcp_server._proxy_stdio_to_socket", _fake_proxy)
+    monkeypatch.setattr("quimera.runtime.mcp.server._proxy_stdio_to_socket", _fake_proxy)
     monkeypatch.setattr(sys, "argv", ["mcp_server", "--connect-socket", "/tmp/s.sock", "--token", "mytoken"])
 
-    from quimera.runtime import mcp_server
+    from quimera.runtime.mcp import server as mcp_server
     mcp_server.main()
     assert captured["token"] == "mytoken"
 
@@ -445,11 +445,11 @@ def test_main_connect_socket_token_via_env(monkeypatch):
     def _fake_proxy(path, *, token=None, stdin=None, stdout=None):
         captured["token"] = token
 
-    monkeypatch.setattr("quimera.runtime.mcp_server._proxy_stdio_to_socket", _fake_proxy)
+    monkeypatch.setattr("quimera.runtime.mcp.server._proxy_stdio_to_socket", _fake_proxy)
     monkeypatch.setattr(sys, "argv", ["mcp_server", "--connect-socket", "/tmp/s.sock"])
     monkeypatch.setenv("QUIMERA_MCP_TOKEN", "envtoken")
 
-    from quimera.runtime import mcp_server
+    from quimera.runtime.mcp import server as mcp_server
     mcp_server.main()
     assert captured["token"] == "envtoken"
 
@@ -460,11 +460,11 @@ def test_main_connect_socket_respeita_quimera_mcp_log_level(monkeypatch):
     def _fake_proxy(path, *, token=None, stdin=None, stdout=None):
         captured["path"] = path
 
-    monkeypatch.setattr("quimera.runtime.mcp_server._proxy_stdio_to_socket", _fake_proxy)
+    monkeypatch.setattr("quimera.runtime.mcp.server._proxy_stdio_to_socket", _fake_proxy)
     monkeypatch.setattr(sys, "argv", ["mcp_server", "--connect-socket", "/tmp/s.sock"])
     monkeypatch.setenv("QUIMERA_MCP_LOG_LEVEL", "INFO")
 
-    from quimera.runtime import mcp_server
+    from quimera.runtime.mcp import server as mcp_server
     with patch.object(mcp_server.logging, "basicConfig") as mock_basic_config:
         mcp_server.main()
 

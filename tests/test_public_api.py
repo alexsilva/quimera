@@ -22,7 +22,7 @@ def test_quimera_app_public_api_surface_is_stable():
 
 
 def test_runtime_mcp_logger_uses_app_handler():
-    mcp_logger = logging.getLogger("quimera.runtime.mcp_server")
+    mcp_logger = logging.getLogger("quimera.runtime.mcp.server")
 
     assert app_config.handler in mcp_logger.handlers
     assert mcp_logger.propagate is False

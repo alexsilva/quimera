@@ -41,7 +41,7 @@ def test_prompt_aware_stderr_handler_suppresses_mcp_info_while_prompt_reading_wi
     handler.bind_app(app)
 
     record = logging.LogRecord(
-        name="quimera.runtime.mcp_server",
+        name="quimera.runtime.mcp.server",
         level=logging.INFO,
         pathname=__file__,
         lineno=1,
@@ -64,7 +64,7 @@ def test_prompt_aware_stderr_handler_shows_mcp_info_while_prompt_reading_in_debu
     handler.bind_app(app)
 
     record = logging.LogRecord(
-        name="quimera.runtime.mcp_server",
+        name="quimera.runtime.mcp.server",
         level=logging.INFO,
         pathname=__file__,
         lineno=1,

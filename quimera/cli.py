@@ -32,7 +32,7 @@ from .plugins.base import (
 from . import themes as _themes
 from .app import QuimeraApp
 from .app.prompt_input import InputGate
-from .runtime.mcp_server import MCPServer
+from .runtime.mcp import MCPServer
 from .config import ConfigManager
 from .runtime.drivers.repl import DriverRepl
 from .workspace import Workspace

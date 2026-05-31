@@ -69,7 +69,7 @@ class OpenCodePlugin(AgentPlugin):
         if not (socket_path or "").strip():
             return None
         proxy_cmd: list[str] = [
-            "python", "-m", "quimera.runtime.mcp_server",
+            "python", "-m", "quimera.runtime.mcp",
             "--connect-socket", socket_path,
         ]
         proxy_cmd += self._build_token_args()

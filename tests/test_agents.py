@@ -130,7 +130,7 @@ def test_codex_plugin_injects_mcp_server_before_stdin_sentinel():
     try:
         plugin.set_mcp_socket_path("/tmp/quimera.sock")
         expected_args = json.dumps(
-            ["-m", "quimera.runtime.mcp_server", "--connect-socket", "/tmp/quimera.sock"],
+            ["-m", "quimera.runtime.mcp", "--connect-socket", "/tmp/quimera.sock"],
             ensure_ascii=False,
         )
         assert plugin.effective_cmd() == [
@@ -191,7 +191,7 @@ def test_claude_plugin_injects_mcp_server():
     try:
         plugin.set_mcp_socket_path("/tmp/quimera.sock")
         cmd = plugin.effective_cmd()
-        base = ["claude", "--permission-mode=bypassPermissions", "--output-format=stream-json", "--verbose", "-p"]
+        base = ["claude", "--permission-mode=dontAsk", "--output-format=stream-json", "--verbose", "-p"]
         assert cmd[:len(base)] == base
         assert "--mcp-config" in cmd
         idx = cmd.index("--mcp-config")
@@ -1382,7 +1382,7 @@ def test_opencode_plugin_injects_mcp_via_env_var():
         config = json.loads(config_raw)
         assert config["mcp"]["quimera"]["type"] == "local"
         assert config["mcp"]["quimera"]["command"] == [
-            "python", "-m", "quimera.runtime.mcp_server",
+            "python", "-m", "quimera.runtime.mcp",
             "--connect-socket", "/tmp/quimera.sock",
         ]
         assert config["mcp"]["quimera"]["enabled"] is True
@@ -1453,7 +1453,7 @@ def test_agent_client_call_dynamic_opencode_base_passes_env_for_cli_to_run(rende
         assert config_raw is not None
         config = json.loads(config_raw)
         assert config["mcp"]["quimera"]["command"] == [
-            "python", "-m", "quimera.runtime.mcp_server",
+            "python", "-m", "quimera.runtime.mcp",
             "--connect-socket", "/tmp/quimera.sock",
         ]
     finally:

@@ -93,7 +93,7 @@ class PromptAwareStderrHandler(logging.StreamHandler):
                 debug_enabled = False
         if prompt_reading and record.levelno < logging.WARNING:
             # Em debug, logs do servidor MCP devem aparecer mesmo com prompt ativo.
-            if not (debug_enabled and record.name == "quimera.runtime.mcp_server"):
+            if not (debug_enabled and record.name == "quimera.runtime.mcp.server"):
                 return
 
         formatter = self.formatter or logging.Formatter("%(message)s")
@@ -114,7 +114,7 @@ class PromptAwareStderrHandler(logging.StreamHandler):
             super().emit(record)
             return
 
-        if record.name == "quimera.runtime.mcp_server":
+        if record.name == "quimera.runtime.mcp.server":
             if callable(callbacks.show_muted):
                 callbacks.show_muted(message)
                 return
