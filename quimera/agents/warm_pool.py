@@ -1,4 +1,5 @@
 """Pool de processos CLI pré-aquecidos para eliminar cold-start em agentes stdin."""
+import json
 import logging
 import threading
 
@@ -50,8 +51,8 @@ class WarmPool:
 
     @staticmethod
     def _make_key(cmd: list, cwd: str | None, extra_env: dict | None) -> tuple:
-        frozen_extra = tuple(sorted(extra_env.items())) if extra_env else ()
-        return (tuple(cmd), cwd, frozen_extra)
+        extra_key = json.dumps(extra_env, sort_keys=True, default=str) if extra_env else ""
+        return (tuple(cmd), cwd, extra_key)
 
     # ------------------------------------------------------------------
     # API pública
