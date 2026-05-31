@@ -245,16 +245,18 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
     def _send_error_response(
         self, status: int, code: int, message: str
     ) -> None:
-        self.send_response(status)
-        self._send_cors()
-        self.send_header("Content-Type", "application/json")
-        self.end_headers()
         error_resp = {
             "jsonrpc": "2.0",
             "id": None,
             "error": {"code": code, "message": message},
         }
-        self.wfile.write(json.dumps(error_resp).encode("utf-8"))
+        body_bytes = json.dumps(error_resp).encode("utf-8")
+        self.send_response(status)
+        self._send_cors()
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body_bytes)))
+        self.end_headers()
+        self.wfile.write(body_bytes)
 
 
 class MCP_HTTPServer:
@@ -312,6 +314,7 @@ class MCP_HTTPServer:
         except KeyboardInterrupt:
             pass
         finally:
+            self._mcp._stop_background_flush()
             server.server_close()
             _logger.info("MCP HTTP+SSE server stopped")
 

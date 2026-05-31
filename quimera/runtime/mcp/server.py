@@ -365,6 +365,12 @@ class MCPServer:
         for call in owned:
             if not call["future"].done():
                 continue
+            # Marca atomicamente como "em resolução" para evitar double-write
+            # quando background flush e _drain_all_pending rodam concorrentemente.
+            with self._pending_lock:
+                if call.get("_resolving"):
+                    continue
+                call["_resolving"] = True
             response = self._resolve_tool_response(call)
             if response is not None:
                 self._write(response, call["out"])
