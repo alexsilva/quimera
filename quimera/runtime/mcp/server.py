@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import collections
 import concurrent.futures
 import json
 import logging
@@ -126,8 +127,6 @@ class MCPServer:
         self._cancel_lock = threading.Lock()
         self._pending_calls: list[dict] = []
         self._pending_lock = threading.Lock()
-        self._used_ids: set[Any] = set()
-        self._used_ids_lock = threading.Lock()
         self._progress_seq = 0
         self._progress_seq_lock = threading.Lock()
         self._batch_outputs: set[int] = set()
@@ -154,21 +153,20 @@ class MCPServer:
     # Despacho de métodos
     # ------------------------------------------------------------------
 
-    def _handle(self, msg: dict, out: IO, blocking: bool = False) -> dict | None:
+    def _handle(self, msg: dict, out: IO, blocking: bool = False,
+                used_ids: dict | None = None) -> dict | None:
         method = msg.get("method", "")
         msg_id = msg.get("id")
         params = msg.get("params") or {}
 
-        if msg_id is not None:
-            with self._used_ids_lock:
-                if msg_id in self._used_ids:
-                    return self._err(msg_id, -32600, "Duplicate request ID")
-                self._used_ids.add(msg_id)
+        if msg_id is not None and used_ids is not None:
+            if msg_id in used_ids:
+                return self._err(msg_id, -32600, "Duplicate request ID")
+            used_ids[msg_id] = None
+            if len(used_ids) > 10_000:
+                used_ids.popitem(last=False)
 
         if method == "initialize":
-            client_version = params.get("protocolVersion", "")
-            if client_version and client_version != self.PROTOCOL_VERSION:
-                return self._err(msg_id, -32602, f"Unsupported protocol version: {client_version}")
             return self._ok(msg_id, {
                 "protocolVersion": self.PROTOCOL_VERSION,
                 "serverInfo": {
@@ -177,8 +175,6 @@ class MCPServer:
                 },
                 "capabilities": {
                     "tools": {},
-                    "resources": {},
-                    "prompts": {},
                     "logging": {},
                 },
             })
@@ -382,6 +378,41 @@ class MCPServer:
                     except ValueError:
                         pass
 
+    def _flush_all_pending(self) -> None:
+        """Faz flush de todos os pending calls para todos os `out` registrados."""
+        with self._pending_lock:
+            outs = list({id(c["out"]): c["out"] for c in self._pending_calls}.values())
+        for out in outs:
+            try:
+                self._flush_pending(out)
+            except Exception:
+                _logger.debug("MCP flush_all error", exc_info=True)
+
+    def _start_background_flush(self) -> None:
+        """Inicia thread de flush periódico em background (idempotente).
+
+        Necessário quando o MCPServer é usado sem `serve()` (ex: HTTP+SSE),
+        para entregar respostas de tools/call assíncronas via SSE.
+        """
+        if getattr(self, "_bg_flush_active", False):
+            return
+        self._bg_flush_active = True
+
+        def _loop() -> None:
+            while self._bg_flush_active:
+                time.sleep(0.05)
+                try:
+                    self._flush_all_pending()
+                except Exception:
+                    _logger.debug("MCP bg flush error", exc_info=True)
+
+        t = threading.Thread(target=_loop, daemon=True, name="mcp-bg-flush")
+        t.start()
+
+    def _stop_background_flush(self) -> None:
+        """Para a thread de flush periódico em background."""
+        self._bg_flush_active = False
+
     def _drain_all_pending(self, out: IO) -> None:
         deadline = time.perf_counter() + 610
         while time.perf_counter() < deadline:
@@ -522,16 +553,17 @@ class MCPServer:
     # Loop principal
     # ------------------------------------------------------------------
 
-    def _process_message(self, msg: Any, out: IO) -> None:
+    def _process_message(self, msg: Any, out: IO,
+                         used_ids: dict | None = None) -> None:
         """Processa uma mensagem ou lote JSON-RPC e escreve respostas."""
         if isinstance(msg, list):
-            return self._process_batch(msg, out)
+            return self._process_batch(msg, out, used_ids=used_ids)
 
         if not isinstance(msg, dict):
             return
 
         try:
-            response = self._handle(msg, out=out)
+            response = self._handle(msg, out=out, used_ids=used_ids)
         except Exception as exc:
             _logger.exception("Erro inesperado no handler MCP")
             msg_id = msg.get("id")
@@ -540,17 +572,19 @@ class MCPServer:
         if response is not None:
             self._write(response, out)
 
-    def _process_batch(self, msg: list, out: IO) -> None:
+    def _process_batch(self, msg: list, out: IO,
+                       used_ids: dict | None = None) -> None:
         """Processa lote JSON-RPC: submete tools/call concorrentemente, resolve em bloco."""
         with self._batch_outputs_lock:
             self._batch_outputs.add(id(out))
         try:
-            self._process_batch_impl(msg, out)
+            self._process_batch_impl(msg, out, used_ids=used_ids)
         finally:
             with self._batch_outputs_lock:
                 self._batch_outputs.discard(id(out))
 
-    def _process_batch_impl(self, msg: list, out: IO) -> None:
+    def _process_batch_impl(self, msg: list, out: IO,
+                            used_ids: dict | None = None) -> None:
         responses: list[dict | None] = [None] * len(msg)
         pending_ids: dict[Any, int] = {}  # msg_id -> list index
 
@@ -561,11 +595,11 @@ class MCPServer:
             try:
                 item_id = item.get("id")
                 if item.get("method") == "tools/call":
-                    self._handle(item, out=out, blocking=False)
+                    self._handle(item, out=out, blocking=False, used_ids=used_ids)
                     if item_id is not None:
                         pending_ids[item_id] = idx
                 else:
-                    resp = self._handle(item, out=out)
+                    resp = self._handle(item, out=out, used_ids=used_ids)
                     responses[idx] = resp
             except Exception as exc:
                 _logger.exception("Erro inesperado no handler MCP batch")
@@ -626,6 +660,8 @@ class MCPServer:
         flush_thread = threading.Thread(target=_periodic_flush, daemon=True)
         flush_thread.start()
 
+        used_ids: dict[Any, None] = collections.OrderedDict()
+
         for raw_line in inp:
             line = raw_line.strip()
             if not line:
@@ -638,7 +674,7 @@ class MCPServer:
                 self._write({"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": f"Parse error: {exc}"}}, out)
                 continue
 
-            self._process_message(msg, out)
+            self._process_message(msg, out, used_ids=used_ids)
 
         flusher_active[0] = False
         self._drain_all_pending(out)

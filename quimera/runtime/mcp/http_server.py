@@ -207,6 +207,10 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
 
         try:
             mcp_server._mcp._process_message(msg, out=out)
+            # Para requisições sem canal SSE, aguarda conclusão de tools/call
+            # assíncronas antes de ler o StringIO (evita resposta vazia).
+            if isinstance(out, StringIO):
+                mcp_server._mcp._drain_all_pending(out)
         except Exception as exc:
             _logger.exception("MCP HTTP: error handling message")
             error_resp = mcp_server._mcp._err(
@@ -297,6 +301,7 @@ class MCP_HTTPServer:
         )
         server.mcp_http_server = self
         self._httpd = server
+        self._mcp._start_background_flush()
         _logger.info(
             "MCP HTTP+SSE server listening on http://%s:%d",
             self._host,
@@ -317,6 +322,7 @@ class MCP_HTTPServer:
 
     def shutdown(self) -> None:
         """Para o servidor HTTP e sinaliza todas as conexões SSE."""
+        self._mcp._stop_background_flush()
         if self._httpd:
             self._httpd.shutdown()
         with self._sse_lock:

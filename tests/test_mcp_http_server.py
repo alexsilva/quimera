@@ -525,6 +525,122 @@ class TestCreateServer:
 
 
 # ---------------------------------------------------------------------------
+# tools/call via HTTP
+# ---------------------------------------------------------------------------
+
+class TestToolsCallHTTP:
+    def test_tools_call_no_session_returns_result_synchronously(self):
+        """POST /message com tools/call sem sessionId retorna resultado direto (200)."""
+        result = ToolResult(ok=True, tool_name="read_file", content="conteudo http")
+        executor = _make_executor(call_result=result)
+        httpd = _start_http_server(_make_mcp_server(executor))
+        try:
+            body = json.dumps({
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": {"name": "read_file", "arguments": {"path": "foo.py"}},
+            }).encode("utf-8")
+            resp = _http_request(
+                httpd.host, httpd.port, "POST", "/message",
+                body=body,
+                headers={"Content-Type": "application/json"},
+            )
+            assert resp.status == 200
+            result_data = json.loads(resp.data)
+            assert result_data["id"] == 1
+            assert result_data["result"]["isError"] is False
+            assert result_data["result"]["content"][0]["text"] == "conteudo http"
+        finally:
+            httpd.shutdown()
+
+    def test_tools_call_no_session_error_result(self):
+        """tools/call com erro retorna isError: true (não JSON-RPC error)."""
+        result = ToolResult(ok=False, tool_name="read_file", error="Arquivo não encontrado")
+        executor = _make_executor(call_result=result)
+        httpd = _start_http_server(_make_mcp_server(executor))
+        try:
+            body = json.dumps({
+                "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                "params": {"name": "read_file", "arguments": {}},
+            }).encode("utf-8")
+            resp = _http_request(
+                httpd.host, httpd.port, "POST", "/message",
+                body=body,
+                headers={"Content-Type": "application/json"},
+            )
+            assert resp.status == 200
+            result_data = json.loads(resp.data)
+            assert result_data["result"]["isError"] is True
+            assert "Arquivo não encontrado" in result_data["result"]["content"][0]["text"]
+        finally:
+            httpd.shutdown()
+
+    def test_tools_call_via_sse_delivers_result_to_sse_channel(self):
+        """tools/call via SSE: resultado chega pelo canal SSE (202 no POST)."""
+        import time as _time
+        result = ToolResult(ok=True, tool_name="read_file", content="sse result")
+        executor = _make_executor(call_result=result)
+        mcp = _make_mcp_server(executor)
+        httpd = MCP_HTTPServer(mcp, host="127.0.0.1", port=0)
+        httpd.start_background()
+        _wait_for_server(httpd.host, httpd.port)
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(5)
+            s.connect((httpd.host, httpd.port))
+            s.sendall(b"GET /sse HTTP/1.1\r\nHost: localhost\r\n\r\n")
+
+            # Lê até receber event: endpoint
+            chunks = b""
+            while b"event: endpoint" not in chunks:
+                data = s.recv(4096)
+                assert data, "SSE connection closed unexpectedly"
+                chunks += data
+
+            body_part = chunks.decode("utf-8", errors="replace")
+            http_body = body_part.split("\r\n\r\n", 1)[-1]
+            endpoint_path = None
+            for line in http_body.split("\n"):
+                if "data:" in line and "/message?" in line:
+                    from urllib.parse import urlparse
+                    raw = line.split("data:", 1)[-1].strip()
+                    parsed = urlparse(raw)
+                    endpoint_path = parsed.path + "?" + parsed.query
+                    break
+
+            assert endpoint_path, "endpoint_path não encontrado"
+
+            # Envia tools/call via POST com sessionId
+            call_body = json.dumps({
+                "jsonrpc": "2.0", "id": 10, "method": "tools/call",
+                "params": {"name": "read_file", "arguments": {}},
+            }).encode("utf-8")
+            conn = HTTPConnection(httpd.host, httpd.port, timeout=5)
+            conn.request("POST", endpoint_path, body=call_body,
+                         headers={"Content-Type": "application/json"})
+            post_resp = conn.getresponse()
+            assert post_resp.status == 202
+            post_resp.read()
+            conn.close()
+
+            # Aguarda resultado via SSE
+            deadline = _time.time() + 5
+            while _time.time() < deadline:
+                data = s.recv(4096)
+                if not data:
+                    break
+                chunks += data
+                if b'"id": 10' in chunks or b'"id":10' in chunks:
+                    break
+
+            s.close()
+            assert b"event: message" in chunks
+            assert b'"id": 10' in chunks or b'"id":10' in chunks
+            assert b"sse result" in chunks
+        finally:
+            httpd.shutdown()
+
+
+# ---------------------------------------------------------------------------
 # Shutdown
 # ---------------------------------------------------------------------------
 
