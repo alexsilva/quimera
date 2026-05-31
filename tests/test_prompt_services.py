@@ -267,6 +267,7 @@ class TestSharedStatePresenter:
             "spy_last_turn_detail": {"agent": "claude"},
             "completed_task_results": "[task 1] ok",
             "internal_note": "segredo",
+            "agent_todos": [],
         }
 
         json_str, results = SharedStatePresenter.present(state)

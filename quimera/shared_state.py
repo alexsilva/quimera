@@ -25,6 +25,7 @@ SYSTEM_STATE_KEYS = {
     "spy_last_turn_detail",
     "working_dir",
     "workspace_root",
+    "agent_todos",
 }
 
 LIST_STATE_KEYS = {
@@ -46,7 +47,7 @@ STRING_STATE_KEYS = {
 PROMPT_HIDDEN_KEYS = AGENT_STATE_KEYS
 
 TASK_REFERENCE_KEYS = AGENT_STATE_KEYS | {"task_overview"}
-PROMPT_REFERENCE_KEYS = {"task_overview", "working_dir", "workspace_root"}
+PROMPT_REFERENCE_KEYS = {"task_overview", "working_dir", "workspace_root", "agent_todos"}
 
 
 def normalize_state_key(key) -> str:

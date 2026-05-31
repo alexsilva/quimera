@@ -14,6 +14,7 @@ from .tools.shell import ShellTool
 from .tools.web import WebTool
 from .tools.tasks import TaskTools
 from .tools.handoff import HandoffTools
+from .tools.todo import TodoTools
 from .approve_summary import ApproveSummary
 
 
@@ -41,6 +42,7 @@ class ToolExecutor:
         self._tool_progress_callback = None
         self._task_tools = TaskTools(self.config)
         self._handoff_tools = HandoffTools(self.config)
+        self._todo_tools = TodoTools(self.config)
         self._register_builtin_tools()
 
     def set_tool_progress_callback(self, fn) -> None:
@@ -73,6 +75,8 @@ class ToolExecutor:
         self.registry.register("list_jobs", self._task_tools.list_jobs)
         self.registry.register("get_job", self._task_tools.get_job)
         self.registry.register("call_agent", self._handoff_tools.call_agent)
+        self.registry.register("todowrite", self._todo_tools.todowrite)
+        self.registry.register("todolist", self._todo_tools.todolist)
 
     @property
     def approval_handler(self):

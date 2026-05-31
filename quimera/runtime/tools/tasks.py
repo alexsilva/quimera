@@ -2,11 +2,11 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 
 from ..config import ToolRuntimeConfig
 from ..models import ToolCall, ToolResult
+from ._helpers import resolve_current_job_id
 from ..tasks import (
     list_tasks as _list_tasks,
     list_jobs as _list_jobs,
@@ -25,12 +25,7 @@ class TaskTools:
         """Resolve job id."""
         job_id = raw_job_id
         if job_id is None:
-            env_val = os.environ.get("QUIMERA_CURRENT_JOB_ID")
-            if env_val is not None:
-                try:
-                    job_id = int(env_val)
-                except ValueError:
-                    job_id = None
+            job_id = resolve_current_job_id()
         if job_id is None and allow_recent_fallback:
             try:
                 recent_jobs = _list_jobs({"status": "planning"}, db_path=self.config.db_path)

@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from .config import logger
+from ..runtime.tools.todo import TodoRegistry
 from .tty_control import TtyController
 from .session_bootstrap import (
     resolve_render_debug_log_path,
@@ -294,6 +295,8 @@ def run_chat_loop(
         app._refresh_parallel_toolbar()
         try:
             app.session_services.shutdown(interrupted=interrupted_shutdown)
+            if hasattr(app, "current_job_id") and app.current_job_id is not None:
+                TodoRegistry.cleanup(app.current_job_id)
             app.agent_client.close()
             renderer = getattr(app, "renderer", None)
             if renderer is not None and hasattr(renderer, "close"):

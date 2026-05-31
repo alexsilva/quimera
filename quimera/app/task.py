@@ -28,6 +28,7 @@ from ..runtime.task_planning import classify_task
 from .config import logger
 from .dispatch import AppDispatchServices
 from ..domain.session_state import SessionState
+from ..runtime.tools.todo import TodoRegistry
 from .task_classifiers import classify_task_execution_result, classify_task_review_result, parse_task_command
 from .task_execution_service import TaskExecutionService
 from .task_failover_policy import TaskFailoverPolicy
@@ -454,6 +455,9 @@ class AppTaskServices:
                 background_dispatch.close()
             except Exception:
                 pass
+        job_id = self._get_current_job_id()
+        if job_id is not None:
+            TodoRegistry.cleanup(job_id)
 
     # ── Overview / estado compartilhado ─────────────────────────────────
 
@@ -507,6 +511,11 @@ class AppTaskServices:
         if not isinstance(shared_state, dict) or current_job_id is None or not self._get_tasks_db_path():
             return
         shared_state["task_overview"] = self.build_task_overview()
+        try:
+            shared_state["agent_todos"] = TodoRegistry.get_active_as_dicts(current_job_id)
+        except Exception as exc:
+            logger.warning("agent_todos falhou: %s", exc)
+            shared_state["agent_todos"] = []
         repo = self._build_task_repository()
         completed_tasks = repo.list_tasks(
             {"job_id": current_job_id, "status": "completed"}

@@ -384,6 +384,63 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "todowrite",
+            "description": "Cria ou atualiza itens de TODO session-scoped. Mantém exatamente um in_progress por job.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "todos": {
+                        "type": "array",
+                        "description": "Lista de itens TODO para criar ou atualizar. Cada item deve conter 'content' e pode opcionalmente incluir 'id' para atualização, 'status' e 'priority'.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {
+                                    "type": "integer",
+                                    "description": "ID do item existente para atualização (opcional).",
+                                },
+                                "content": {
+                                    "type": "string",
+                                    "description": "Descrição da tarefa.",
+                                },
+                                "status": {
+                                    "type": "string",
+                                    "enum": ["pending", "in_progress", "done", "cancelled"],
+                                    "description": "Status do item. 'in_progress' move qualquer outro in_progress para pending.",
+                                },
+                                "priority": {
+                                    "type": "string",
+                                    "enum": ["high", "medium", "low"],
+                                    "description": "Prioridade do item.",
+                                },
+                            },
+                            "required": ["content"],
+                        },
+                    },
+                    "agent": {
+                        "type": "string",
+                        "description": "Nome do agente (opcional, auto-detectado se omitido).",
+                    },
+                },
+                "required": ["todos"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "todolist",
+            "description": "Lista todos os itens TODO da sessão atual.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "call_agent",
             "description": (
                 "Delega uma tarefa para outro agente do Quimera. "
