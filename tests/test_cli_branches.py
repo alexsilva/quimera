@@ -1,6 +1,7 @@
 import io
 import builtins
 import importlib.util
+import os
 import sys
 from argparse import Namespace
 from pathlib import Path
@@ -49,6 +50,9 @@ class _FakeApp:
         self.tool_executor = object()
         self.workspace = kwargs.get("workspace")
         self.mcp_socket_calls: list[str | None] = []
+        self.mcp_socket_tokens: list[str | None] = []
+        self.mcp_http_calls: list[str | None] = []
+        self.mcp_http_tokens: list[str | None] = []
         _FakeApp.last_instance = self
 
     def run(self):
@@ -56,6 +60,11 @@ class _FakeApp:
 
     def configure_mcp_socket(self, socket_path: str | None, token: str | None = None) -> None:
         self.mcp_socket_calls.append(socket_path)
+        self.mcp_socket_tokens.append(token)
+
+    def configure_mcp_http(self, url: str | None, token: str | None = None) -> None:
+        self.mcp_http_calls.append(url)
+        self.mcp_http_tokens.append(token)
 
 
 def _patch_main_basics(monkeypatch, *, agent_names=None, theme_names=None):
@@ -598,7 +607,7 @@ def test_main_ignores_stdin_reconfigure_errors_and_still_runs(monkeypatch):
     monkeypatch.setattr(cli.os, "device_encoding", lambda _fd: None)
     monkeypatch.setattr(sys, "argv", ["quimera"])
 
-    with patch("quimera.cli.MCPServer") as mock_mcp_cls:
+    with patch("quimera.runtime.mcp.session.MCPServer") as mock_mcp_cls:
         mock_mcp = mock_mcp_cls.return_value
         cli.main()
 
@@ -611,10 +620,10 @@ def test_main_ignores_stdin_reconfigure_errors_and_still_runs(monkeypatch):
 
 def test_main_mcp_uses_workspace_tmp_and_configures_plugins(monkeypatch):
     _patch_main_basics(monkeypatch)
-    monkeypatch.setattr(sys, "argv", ["quimera", "--mcp"])
+    monkeypatch.setattr(sys, "argv", ["quimera", "--mcp-socket"])
     monkeypatch.setattr(cli.sys, "stderr", io.StringIO())
 
-    with patch("quimera.cli.MCPServer") as mock_mcp_cls:
+    with patch("quimera.runtime.mcp.session.MCPServer") as mock_mcp_cls:
         mock_mcp = mock_mcp_cls.return_value
         cli.main()
 
@@ -629,7 +638,7 @@ def test_main_no_mcp_disables_mcp(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["quimera", "--no-mcp"])
     monkeypatch.setattr(cli.sys, "stderr", io.StringIO())
 
-    with patch("quimera.cli.MCPServer") as mock_mcp_cls:
+    with patch("quimera.runtime.mcp.session.MCPServer") as mock_mcp_cls:
         cli.main()
 
     mock_mcp_cls.assert_not_called()
@@ -638,10 +647,10 @@ def test_main_no_mcp_disables_mcp(monkeypatch):
 
 def test_main_mcp_uses_explicit_socket_path(monkeypatch):
     _patch_main_basics(monkeypatch)
-    monkeypatch.setattr(sys, "argv", ["quimera", "--mcp", "/tmp/custom-mcp.sock"])
+    monkeypatch.setattr(sys, "argv", ["quimera", "--mcp-socket", "/tmp/custom-mcp.sock"])
     monkeypatch.setattr(cli.sys, "stderr", io.StringIO())
 
-    with patch("quimera.cli.MCPServer") as mock_mcp_cls:
+    with patch("quimera.runtime.mcp.session.MCPServer") as mock_mcp_cls:
         mock_mcp = mock_mcp_cls.return_value
         cli.main()
 
@@ -659,13 +668,102 @@ def test_main_mcp_updates_prompt_builder_session_state(monkeypatch):
     monkeypatch.setattr(cli, "QuimeraApp", _FakeAppWithPromptBuilder)
     monkeypatch.setattr(cli._plugins, "all_names", lambda: ["claude"])
     monkeypatch.setattr(cli._themes, "names", lambda: ["default"])
-    monkeypatch.setattr(sys, "argv", ["quimera", "--mcp", "/tmp/custom-mcp.sock"])
+    monkeypatch.setattr(sys, "argv", ["quimera", "--mcp-socket", "/tmp/custom-mcp.sock"])
     monkeypatch.setattr(cli.sys, "stderr", io.StringIO())
 
-    with patch("quimera.cli.MCPServer"):
+    with patch("quimera.runtime.mcp.session.MCPServer"):
         cli.main()
 
     app = _FakeAppWithPromptBuilder.last_instance
     assert app is not None
     assert app.prompt_builder.session_state["mcp_enabled"] is True
     assert app.prompt_builder.session_state["mcp_socket_path"] == "/tmp/custom-mcp.sock"
+
+
+def test_main_mcp_http_configures_http_transport(monkeypatch):
+    _patch_main_basics(monkeypatch)
+    monkeypatch.setattr(sys, "argv", ["quimera", "--mcp-http", "--mcp-host", "127.0.0.1", "--mcp-port", "9090"])
+    monkeypatch.setattr(cli.sys, "stderr", io.StringIO())
+
+    with patch("quimera.runtime.mcp.session.MCPServer") as mock_mcp_cls, patch("quimera.runtime.mcp.session.MCP_HTTPServer") as mock_http_cls:
+        mock_mcp = mock_mcp_cls.return_value
+        mock_http = mock_http_cls.return_value
+        cli.main()
+
+    mock_http_cls.assert_called_once_with(mock_mcp, host="127.0.0.1", port=9090)
+    mock_http.start_background.assert_called_once_with()
+    assert _FakeApp.last_instance.mcp_http_calls == ["http://127.0.0.1:9090/mcp"]
+    assert _FakeApp.last_instance.mcp_socket_path is None
+
+
+def test_main_rejects_multiple_mcp_transports(monkeypatch):
+    _patch_main_basics(monkeypatch)
+    monkeypatch.setattr(sys, "argv", ["quimera", "--mcp-http", "--mcp-socket"])
+    stderr = io.StringIO()
+    monkeypatch.setattr(cli.sys, "stderr", stderr)
+
+    with pytest.raises(SystemExit):
+        cli.main()
+
+    assert "use apenas um transporte MCP" in stderr.getvalue()
+
+
+def test_main_mcp_http_uses_token_from_env(monkeypatch):
+    _patch_main_basics(monkeypatch)
+    monkeypatch.setenv("QUIMERA_MCP_TOKEN", "remote-token")
+    monkeypatch.setattr(sys, "argv", ["quimera", "--mcp-http", "--mcp-port", "9090"])
+    monkeypatch.setattr(cli.sys, "stderr", io.StringIO())
+
+    with patch("quimera.runtime.mcp.session.MCPServer") as mock_mcp_cls, patch("quimera.runtime.mcp.session.MCP_HTTPServer"):
+        cli.main()
+
+    assert mock_mcp_cls.call_args.kwargs["auth_token"] == "remote-token"
+    assert _FakeApp.last_instance.mcp_http_tokens == ["remote-token"]
+
+
+def test_main_mcp_socket_uses_custom_token_env(monkeypatch):
+    _patch_main_basics(monkeypatch)
+    monkeypatch.setenv("MY_MCP_TOKEN", "socket-token")
+    monkeypatch.setattr(sys, "argv", ["quimera", "--mcp-socket", "--mcp-token-env", "MY_MCP_TOKEN"])
+    monkeypatch.setattr(cli.sys, "stderr", io.StringIO())
+
+    with patch("quimera.runtime.mcp.session.MCPServer") as mock_mcp_cls:
+        cli.main()
+
+    assert mock_mcp_cls.call_args.kwargs["auth_token"] == "socket-token"
+    assert _FakeApp.last_instance.mcp_socket_tokens == ["socket-token"]
+
+
+def test_main_mcp_http_uses_token_loaded_from_app_env_file(monkeypatch, tmp_path):
+    class _FakeWorkspaceWithEnv(_FakeWorkspace):
+        def __init__(self, cwd):
+            super().__init__(cwd)
+            self.env_file = tmp_path / ".env"
+            self.env_file.write_text("QUIMERA_MCP_TOKEN=env-file-token\n", encoding="utf-8")
+            self.tmp = SimpleNamespace(root=tmp_path / "tmp")
+
+    class _FakeAppLoadsEnv(_FakeApp):
+        def __init__(self, cwd, **kwargs):
+            workspace = kwargs.get("workspace")
+            if workspace is not None and hasattr(workspace, "env_file"):
+                from quimera.env_config import EnvConfig
+                EnvConfig(workspace.env_file).apply_to_environ()
+            super().__init__(cwd, **kwargs)
+
+    monkeypatch.delenv("QUIMERA_MCP_TOKEN", raising=False)
+    monkeypatch.setattr(cli, "Workspace", _FakeWorkspaceWithEnv)
+    monkeypatch.setattr(cli, "ConfigManager", _FakeConfig)
+    monkeypatch.setattr(cli, "QuimeraApp", _FakeAppLoadsEnv)
+    monkeypatch.setattr(cli._plugins, "all_names", lambda: ["claude"])
+    monkeypatch.setattr(cli._themes, "names", lambda: ["default"])
+    monkeypatch.setattr(sys, "argv", ["quimera", "--mcp-http", "--mcp-port", "9090"])
+    monkeypatch.setattr(cli.sys, "stderr", io.StringIO())
+
+    try:
+        with patch("quimera.runtime.mcp.session.MCPServer") as mock_mcp_cls, patch("quimera.runtime.mcp.session.MCP_HTTPServer"):
+            cli.main()
+
+        assert mock_mcp_cls.call_args.kwargs["auth_token"] == "env-file-token"
+        assert _FakeAppLoadsEnv.last_instance.mcp_http_tokens == ["env-file-token"]
+    finally:
+        os.environ.pop("QUIMERA_MCP_TOKEN", None)

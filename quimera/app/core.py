@@ -780,6 +780,13 @@ class QuimeraApp:
                 if callable(path_setter):
                     path_setter(socket_path)
 
+    def configure_mcp_http(self, url: str | None, token: str | None = None) -> None:
+        """Propaga endpoint MCP HTTP para plugins dos agentes ativos na sessão."""
+        for plugin in self.get_active_agent_plugins():
+            config_setter = getattr(plugin, "set_mcp_http_config", None)
+            if callable(config_setter):
+                config_setter(url, token)
+
     def get_active_agent_plugins(self) -> list:
         """Retorna os plugins válidos dos agentes ativos na sessão."""
         active_plugins = []

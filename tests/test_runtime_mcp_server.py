@@ -793,3 +793,85 @@ class TestPluginTokenIntegration:
         from quimera.plugins.base import AgentPlugin
         plugin = AgentPlugin(name="test", prefix="/test", style=("white", "Test"))
         assert plugin._build_token_args() == []
+
+class TestLatestMCPFeatures:
+    def test_initialize_anuncia_spec_latest_e_capacidades_completas(self):
+        server = _make_server()
+        [resp] = _exchange(server, {
+            "jsonrpc": "2.0", "id": 50, "method": "initialize",
+            "params": {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "test"}},
+        })
+        result = resp["result"]
+        assert result["protocolVersion"] == MCPServer.PROTOCOL_VERSION
+        assert "resources" in result["capabilities"]
+        assert "prompts" in result["capabilities"]
+        assert "completions" in result["capabilities"]
+        assert result["capabilities"]["tools"]["listChanged"] is True
+
+    def test_resources_list_read_templates_e_subscribe(self, tmp_path):
+        (tmp_path / "README.md").write_text("# hello", encoding="utf-8")
+        executor = _make_executor()
+        executor.config.workspace_root = tmp_path
+        server = _make_server(executor)
+
+        [listed] = _exchange(server, {"jsonrpc": "2.0", "id": 51, "method": "resources/list"})
+        uris = [r["uri"] for r in listed["result"]["resources"]]
+        assert "quimera://workspace" in uris
+        assert (tmp_path / "README.md").as_uri() in uris
+
+        [read] = _exchange(server, {
+            "jsonrpc": "2.0", "id": 52, "method": "resources/read",
+            "params": {"uri": (tmp_path / "README.md").as_uri()},
+        })
+        assert read["result"]["contents"][0]["text"] == "# hello"
+
+        [templates] = _exchange(server, {"jsonrpc": "2.0", "id": 53, "method": "resources/templates/list"})
+        assert templates["result"]["resourceTemplates"][0]["uriTemplate"] == "file:///{path}"
+
+        [sub] = _exchange(server, {"jsonrpc": "2.0", "id": 54, "method": "resources/subscribe", "params": {"uri": "quimera://workspace"}})
+        assert sub["result"] == {}
+
+    def test_prompts_list_get_e_completion(self):
+        server = _make_server()
+        [listed] = _exchange(server, {"jsonrpc": "2.0", "id": 55, "method": "prompts/list"})
+        names = [p["name"] for p in listed["result"]["prompts"]]
+        assert "quimera-task" in names
+
+        [prompt] = _exchange(server, {
+            "jsonrpc": "2.0", "id": 56, "method": "prompts/get",
+            "params": {"name": "quimera-task", "arguments": {"task": "implemente x"}},
+        })
+        assert prompt["result"]["messages"][0]["role"] == "user"
+        assert "implemente x" in prompt["result"]["messages"][0]["content"]["text"]
+
+        [completion] = _exchange(server, {
+            "jsonrpc": "2.0", "id": 57, "method": "completion/complete",
+            "params": {"ref": {"type": "ref/prompt", "name": "quimera-task"}, "argument": {"name": "name", "value": "task"}},
+        })
+        assert "quimera-task" in completion["result"]["completion"]["values"]
+
+class TestPluginHTTPIntegration:
+    def test_claude_codex_opencode_recebem_config_http(self):
+        from quimera.plugins.claude import ClaudePlugin
+        from quimera.plugins.codex import CodexPlugin
+        from quimera.plugins.opencode import OpenCodePlugin
+
+        claude = ClaudePlugin(name="c", prefix="/c", style=("x", "C"))
+        claude.set_mcp_http_config("http://127.0.0.1:9090/mcp", "tok")
+        claude_args = claude.mcp_http_server_args("http://127.0.0.1:9090/mcp")
+        assert "--mcp-config" in claude_args
+        assert "http://127.0.0.1:9090/mcp" in claude_args[-1]
+        assert "Bearer tok" in claude_args[-1]
+
+        codex = CodexPlugin(name="x", prefix="/x", style=("x", "X"), cmd=["codex", "exec", "-"])
+        codex.set_mcp_http_config("http://127.0.0.1:9090/mcp", "tok")
+        codex_cmd = codex.effective_cmd()
+        assert any('mcp_servers.quimera.url="http://127.0.0.1:9090/mcp"' == part for part in codex_cmd)
+        assert any("Bearer tok" in part for part in codex_cmd)
+
+        opencode = OpenCodePlugin(name="o", prefix="/o", style=("x", "O"))
+        opencode.set_mcp_http_config("http://127.0.0.1:9090/mcp", "tok")
+        env = opencode.env_for_cli()
+        assert "OPENCODE_CONFIG_CONTENT" in env
+        assert '"type": "remote"' in env["OPENCODE_CONFIG_CONTENT"]
+        assert "Bearer tok" in env["OPENCODE_CONFIG_CONTENT"]
