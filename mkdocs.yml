@@ -1,0 +1,34 @@
+site_name: Quimera
+site_description: Guia completo do orquestrador multiagente Quimera
+repo_url: https://github.com/alexsilva/quimera
+docs_dir: docs
+site_dir: site
+theme:
+  name: mkdocs
+  language: pt
+nav:
+  - Início: index.md
+  - Guia:
+      - Visão geral: guia/visao-geral.md
+      - Instalação e execução: guia/instalacao.md
+      - Uso no chat: guia/uso-no-chat.md
+      - Agentes e conexões: guia/agentes.md
+      - Tasks, roteamento e review: guia/tasks.md
+      - MCP e ferramentas: guia/mcp-e-ferramentas.md
+      - Estado, memória e evidências: guia/estado-e-memoria.md
+      - Configuração e operação: guia/configuracao.md
+  - Referência:
+      - CLI: referencia/cli.md
+      - Comandos slash: referencia/comandos.md
+      - Dependências: referencia/dependencias.md
+      - Estrutura de dados: referencia/estrutura-de-dados.md
+      - Solução de problemas: referencia/troubleshooting.md
+  - Desenvolvimento:
+      - Arquitetura interna: desenvolvimento/arquitetura.md
+      - Fluxos de execução: desenvolvimento/fluxos.md
+      - Testes e qualidade: desenvolvimento/testes.md
+markdown_extensions:
+  - admonition
+  - tables
+  - toc:
+      permalink: true
