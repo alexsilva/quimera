@@ -260,6 +260,7 @@ class AgentPlugin:
     _base_plugin_name: Optional[str] = field(default=None, repr=False)
     # Socket MCP do servidor local do Quimera (quando habilitado por --mcp).
     _mcp_socket_path: Optional[str] = field(default=None, repr=False)
+    _mcp_http_url: Optional[str] = field(default=None, repr=False)
     # Token de autenticação gerado por sessão (não persistir, não logar).
     _mcp_token: Optional[str] = field(default=None, repr=False)
 
@@ -324,7 +325,9 @@ class AgentPlugin:
         """
         normalized = (socket_path or "").strip()
         self._mcp_socket_path = normalized or None
-        if self._mcp_socket_path is None:
+        if self._mcp_socket_path is not None:
+            self._mcp_http_url = None
+        if self._mcp_socket_path is None and self._mcp_http_url is None:
             self._mcp_token = None
 
     def set_mcp_socket_config(self, socket_path: Optional[str], token: Optional[str]) -> None:
@@ -332,6 +335,15 @@ class AgentPlugin:
         self.set_mcp_socket_path(socket_path)
         normalized = (token or "").strip()
         self._mcp_token = normalized or None
+
+    def set_mcp_http_config(self, url: Optional[str], token: Optional[str]) -> None:
+        """Configura endpoint HTTP MCP para esse plugin."""
+        normalized = (url or "").strip()
+        self._mcp_http_url = normalized or None
+        if self._mcp_http_url is not None:
+            self._mcp_socket_path = None
+        normalized_token = (token or "").strip()
+        self._mcp_token = normalized_token or None
 
     def _build_token_args(self) -> List[str]:
         """Retorna ['--token', <token>] se houver token, ou lista vazia.
@@ -358,18 +370,24 @@ class AgentPlugin:
         _ = socket_path
         return []
 
+    def mcp_http_server_args(self, url: str) -> list[str]:
+        """Retorna args CLI para conectar em MCP HTTP (default: sem suporte)."""
+        _ = url
+        return []
+
     def _with_mcp_server_args(self, cmd: list[str]) -> list[str]:
         """Anexa argumentos de MCP quando o plugin fornece integração."""
         base_cmd = list(cmd)
+        http_url = (self._mcp_http_url or "").strip()
         socket_path = (self._mcp_socket_path or "").strip()
-        if not socket_path:
+        if not http_url and not socket_path:
             return base_cmd
         if any(
             part in ("--mcp-server", "--mcp-config") or str(part).startswith(("--mcp-server=", "--mcp-config="))
             for part in base_cmd
         ):
             return base_cmd
-        mcp_args = self.mcp_server_args(socket_path)
+        mcp_args = self.mcp_http_server_args(http_url) if http_url else self.mcp_server_args(socket_path)
         if not mcp_args:
             return base_cmd
         if base_cmd and base_cmd[-1] == "-":

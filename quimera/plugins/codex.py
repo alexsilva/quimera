@@ -195,15 +195,28 @@ class CodexPlugin(AgentPlugin):
             f"mcp_servers.quimera.args={args_toml}",
         ]
 
+    def mcp_http_server_args(self, url: str) -> list[str]:
+        args = [
+            "-c",
+            f'mcp_servers.quimera.url="{url}"',
+            "-c",
+            'mcp_servers.quimera.transport="http"',
+        ]
+        token = (self._mcp_token or "").strip()
+        if token:
+            args.extend(["-c", f'mcp_servers.quimera.headers.Authorization="Bearer {token}"'])
+        return args
+
     def _with_mcp_server_args(self, cmd: list[str]) -> list[str]:
         """Anexa configuração MCP sem duplicar override já existente."""
         base_cmd = list(cmd)
+        http_url = (self._mcp_http_url or "").strip()
         socket_path = (self._mcp_socket_path or "").strip()
-        if not socket_path:
+        if not http_url and not socket_path:
             return base_cmd
         if any("mcp_servers.quimera." in str(part) for part in base_cmd):
             return base_cmd
-        mcp_args = self.mcp_server_args(socket_path)
+        mcp_args = self.mcp_http_server_args(http_url) if http_url else self.mcp_server_args(socket_path)
         if base_cmd and base_cmd[-1] == "-":
             return [*base_cmd[:-1], *mcp_args, base_cmd[-1]]
         return [*base_cmd, *mcp_args]

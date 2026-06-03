@@ -80,8 +80,11 @@ def run_chat_loop(
             summary_loaded=app._format_yes_no(app.session_state["summary_loaded"]),
         )
     )
+    mcp_http_url = getattr(app, "mcp_http_url", None)
     mcp_socket_path = getattr(app, "mcp_socket_path", None)
-    if mcp_socket_path:
+    if mcp_http_url:
+        _show_neutral(f"MCP HTTP server iniciado em {mcp_http_url}")
+    elif mcp_socket_path:
         _show_neutral(f"MCP server iniciado em {mcp_socket_path}")
     if getattr(app, "debug_prompt_metrics", False):
         session_log_path = resolve_session_log_path(app.storage, app.workspace)

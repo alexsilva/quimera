@@ -211,31 +211,32 @@ Sistema de rastreamento de contexto verificável. Evidências são extraídas da
 
 ### 3.9 Sistema MCP (Model Context Protocol)
 
-O Quimera implementa o protocolo MCP (`2024-11-05`) para expor as ferramentas do runtime a agentes compatíveis. O servidor MCP é iniciado por sessão em um socket Unix com autenticação por token.
+O Quimera implementa o protocolo MCP (`2025-11-25`, com negociação para versões anteriores) para expor as ferramentas do runtime a agentes compatíveis. O servidor MCP é iniciado por sessão em um socket Unix com autenticação por token.
 
 #### 3.9.1 Componentes
 
 | Módulo | Arquivo | Responsabilidade |
 |---|---|---|
-| **MCPServer** | `runtime/mcp_server.py` | Servidor JSON-RPC 2.0 sobre stdio. Métodos: `initialize`, `initialized`, `ping`, `tools/list`, `tools/call` |
+| **MCPServer** | `runtime/mcp/server.py` | Servidor JSON-RPC 2.0 sobre stdio/socket/HTTP. Métodos principais: lifecycle, `ping`, tools, resources, prompts, completion e logging |
 | **ToolExecutor** | `runtime/executor.py` | Executa tools com validação de política, aprovação e resolução de aliases |
 | **ToolRegistry** | `runtime/registry.py` | Registro nome → handler (dict simples) |
 | **HandoffTools** | `runtime/tools/handoff.py` | Implementa `call_agent` — delegação cross-MCP entre agentes |
-| **Proxy stdio→socket** | `runtime/mcp_server.py:_proxy_stdio_to_socket` | Ponte transparente entre stdio do agente e socket Unix do servidor |
+| **Proxy stdio→socket** | `runtime/mcp/server.py:_proxy_stdio_to_socket` | Ponte transparente entre stdio do agente e socket Unix do servidor |
 | **Plugin MCP injection** | `plugins/{claude,codex,opencode}.py` | Cada plugin injeta config MCP no formato nativo do agente |
 | **Tool schemas** | `runtime/drivers/tool_schemas.py` | Fonte única de schemas: `resolve_tool_schemas()` filtra por registro/política |
 | **Prompt conditionals** | `prompt.md`, `task_prompt.md` | Blocos `<!-- IF:mcp_enabled -->` ativam instruções MCP nos prompts |
-| **Config bridge** | `app/core.py:configure_mcp_socket()` | Propaga socket_path e token para todos os plugins ativos |
+| **Config bridge** | `app/core.py:configure_mcp_socket()` / `configure_mcp_http()` | Propaga socket/http endpoint e token para todos os plugins ativos |
 
 #### 3.9.2 Fluxo de Inicialização
 
 ```
-CLI (--mcp padrão)
-  ├── Gera token: secrets.token_urlsafe(32)
-  ├── Gera socket path: workspace.tmp.root / f"mcp-{rand}.sock"
+CLI (socket padrão)
+  ├── Usa token de `--mcp-token-env`/`QUIMERA_MCP_TOKEN` quando definido; caso contrário gera token com secrets.token_urlsafe(32)
+  ├── Socket padrão: workspace.tmp.root / f"mcp-{rand}.sock"; `--mcp-socket [path]` permite selecionar/definir path
+  ├── HTTP opcional: `--mcp-http --mcp-host 127.0.0.1 --mcp-port 9090` expõe `/mcp`; `--mcp-token-env` permite token fixo para clientes remotos
   ├── Cria MCPServer(tool_executor, auth_token=mcp_token)
-  ├── mcp.start_background(socket_path)        → thread daemon
-  ├── app.configure_mcp_socket(socket_path, token) → propaga para plugins
+  ├── inicia socket ou MCP_HTTPServer em background
+  ├── app.configure_mcp_socket(...) ou app.configure_mcp_http(...) → propaga para plugins
   └── session_state["mcp_enabled"] = True      → ativa blocos no prompt
 ```
 
@@ -272,7 +273,7 @@ Em `app/protocol.py:232`, quando MCP está ativo, envelopes textuais legados (`<
 
 #### 3.9.7 Ferramentas Expostas via tools/list
 
-15 tools definidas em `TOOL_SCHEMAS`, filtradas por:
+Tools definidas em `TOOL_SCHEMAS`, filtradas por:
 1. Registro no executor (intersecção com handlers registrados)
 2. Configuração (tools de task ocultas sem db_path)
 3. Política (tools bloqueadas removidas)
@@ -360,7 +361,7 @@ Em `app/protocol.py:232`, quando MCP está ativo, envelopes textuais legados (`<
 
 O loop em `quimera/app/core.py:run()` segue este fluxo:
 
-1. **Inicialização**: carrega configuração, plugins, estado de sessão; cria renderer, InputGate, TurnManager, pool de workers, `ui_event_queue`. O servidor MCP é iniciado em `cli.py` antes de `app.run()` — gera token de autenticação, cria socket Unix, inicia MCPServer em background e propaga configuração para todos os plugins ativos.
+1. **Inicialização**: carrega configuração, plugins, estado de sessão; cria renderer, InputGate, TurnManager, pool de workers, `ui_event_queue`. O servidor MCP é iniciado em `cli.py` antes de `app.run()` — resolve token de autenticação por env ou gera token aleatório, cria socket Unix, inicia MCPServer em background e propaga configuração para todos os plugins ativos.
 2. **Loop principal**:
    - Drena `ui_event_queue` → atualiza renderer.
    - Se não for turno do humano: aguarda com timeout (verifica worker vivo).
@@ -379,7 +380,7 @@ O loop em `quimera/app/core.py:run()` segue este fluxo:
 - `agents/client.py` abstrai todos os backends: CLI local (`claude`, `codex`, `gemini`), API (OpenAI-compat), driver REPL persistente.
 - `plugins/` define metadados por agente: capacidades, paths de sandbox, driver, tipos de task suportados, e mecanismo de injeção MCP via `mcp_server_args()`.
 - `agents/warm_pool.py` mantém processos pré-aquecidos para reduzir latência.
-- `runtime/mcp_server.py` expõe as ferramentas do runtime via protocolo MCP, permitindo que agentes executem tools sem depender do parser textual de tool calls.
+- `runtime/mcp/server.py` expõe as ferramentas do runtime via protocolo MCP, permitindo que agentes executem tools sem depender do parser textual de tool calls.
 - `plugins/{claude,codex,opencode}.py` cada um implementa `mcp_server_args(socket_path)` para injetar a configuração MCP no formato nativo do agente (JSON, CLI args, env vars).
 
 ### 6.2 Sistema de Tasks

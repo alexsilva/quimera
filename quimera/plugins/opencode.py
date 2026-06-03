@@ -84,8 +84,22 @@ class OpenCodePlugin(AgentPlugin):
         }
         return json.dumps(config)
 
+    def _mcp_http_config_content(self, url: str) -> Optional[str]:
+        if not (url or "").strip():
+            return None
+        server = {"type": "remote", "url": url, "enabled": True}
+        token = (self._mcp_token or "").strip()
+        if token:
+            server["headers"] = {"Authorization": f"Bearer {token}"}
+            server["oauth"] = False
+        return json.dumps({"mcp": {"quimera": server}})
+
     def env_for_cli(self) -> dict:
-        """Injeta OPENCODE_CONFIG_CONTENT quando o MCP local está ativo."""
+        """Injeta OPENCODE_CONFIG_CONTENT quando o MCP local ou HTTP está ativo."""
+        http_url = (self._mcp_http_url or "").strip()
+        if http_url:
+            config_content = self._mcp_http_config_content(http_url)
+            return {"OPENCODE_CONFIG_CONTENT": config_content} if config_content else {}
         socket_path = (self._mcp_socket_path or "").strip()
         if not socket_path:
             return {}

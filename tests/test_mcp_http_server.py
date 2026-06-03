@@ -663,3 +663,61 @@ class TestShutdown:
         mcp = _make_mcp_server()
         httpd = MCP_HTTPServer(mcp)
         httpd.shutdown()
+
+class TestStreamableHTTP:
+    def test_mcp_post_initialize_cria_sessao_e_exige_header_de_versao_depois(self):
+        httpd = _start_http_server(_make_mcp_server())
+        try:
+            body = json.dumps({
+                "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "test"}},
+            }).encode("utf-8")
+            resp = _http_request(httpd.host, httpd.port, "POST", "/mcp", body=body, headers={"Content-Type": "application/json"})
+            assert resp.status == 200
+            assert resp.header("MCP-Session-Id")
+            assert json.loads(resp.data)["result"]["protocolVersion"] == "2025-11-25"
+
+            bad = _http_request(httpd.host, httpd.port, "POST", "/mcp", body=json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}).encode(), headers={"Content-Type": "application/json", "MCP-Session-Id": resp.header("MCP-Session-Id")})
+            assert bad.status == 400
+
+            ok = _http_request(httpd.host, httpd.port, "POST", "/mcp", body=json.dumps({"jsonrpc": "2.0", "id": 3, "method": "tools/list"}).encode(), headers={"Content-Type": "application/json", "MCP-Session-Id": resp.header("MCP-Session-Id"), "MCP-Protocol-Version": "2025-11-25"})
+            assert ok.status == 200
+            assert "tools" in json.loads(ok.data)["result"]
+        finally:
+            httpd.shutdown()
+
+    def test_mcp_http_respeita_bearer_token(self):
+        mcp = MCPServer(_make_executor(), auth_token="secret")
+        httpd = _start_http_server(mcp)
+        try:
+            body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-11-25"}}).encode()
+            denied = _http_request(httpd.host, httpd.port, "POST", "/mcp", body=body, headers={"Content-Type": "application/json"})
+            assert denied.status == 401
+            allowed = _http_request(httpd.host, httpd.port, "POST", "/mcp", body=body, headers={"Content-Type": "application/json", "Authorization": "Bearer secret"})
+            assert allowed.status == 200
+        finally:
+            httpd.shutdown()
+
+    def test_mcp_http_aplica_token_em_sse_e_message_legados(self):
+        mcp = MCPServer(_make_executor(), auth_token="secret")
+        httpd = _start_http_server(mcp)
+        try:
+            denied_sse = _http_request(httpd.host, httpd.port, "GET", "/sse")
+            assert denied_sse.status == 401
+
+            body = json.dumps({"jsonrpc": "2.0", "id": 7, "method": "ping"}).encode()
+            denied_message = _http_request(
+                httpd.host, httpd.port, "POST", "/message",
+                body=body, headers={"Content-Type": "application/json"},
+            )
+            assert denied_message.status == 401
+
+            allowed_message = _http_request(
+                httpd.host, httpd.port, "POST", "/message",
+                body=body,
+                headers={"Content-Type": "application/json", "X-Quimera-MCP-Token": "secret"},
+            )
+            assert allowed_message.status == 200
+            assert json.loads(allowed_message.data)["result"] == {}
+        finally:
+            httpd.shutdown()

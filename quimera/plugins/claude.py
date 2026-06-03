@@ -161,6 +161,13 @@ class ClaudePlugin(AgentPlugin):
         }
         return ["--mcp-config", json.dumps(config)]
 
+    def mcp_http_server_args(self, url: str) -> list[str]:
+        config = {"mcpServers": {"quimera": {"type": "http", "url": url}}}
+        token = (self._mcp_token or "").strip()
+        if token:
+            config["mcpServers"]["quimera"]["headers"] = {"Authorization": f"Bearer {token}"}
+        return ["--mcp-config", json.dumps(config)]
+
     def resolve_runtime_model(self, *, cwd: str | None = None) -> str | None:
         cli_model = super().resolve_runtime_model(cwd=cwd)
         if cli_model:

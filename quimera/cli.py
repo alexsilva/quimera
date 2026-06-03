@@ -3,7 +3,6 @@ import argparse
 import json
 import locale
 import os
-import secrets
 import shlex
 import sys
 from pathlib import Path
@@ -32,7 +31,7 @@ from .plugins.base import (
 from . import themes as _themes
 from .app import QuimeraApp
 from .app.prompt_input import InputGate
-from .runtime.mcp import MCPServer
+from .runtime.mcp import start_embedded_mcp
 from .config import ConfigManager
 from .runtime.drivers.repl import DriverRepl
 from .workspace import Workspace
@@ -247,17 +246,55 @@ def main():
         help="Desativa o servidor MCP (por padrão ele é iniciado automaticamente).",
     )
     parser.add_argument(
+        "--mcp-socket",
+        dest="mcp_socket",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="PATH",
+        help="Ativa MCP via socket Unix (padrão) e opcionalmente define o path do socket.",
+    )
+    parser.add_argument(
         "--mcp",
         dest="mcp_socket",
         nargs="?",
         const="",
         default=None,
-        metavar="SOCKET",
-        help="Caminho do socket Unix para o servidor MCP. "
-             "Usa <workspace.tmp>/mcp.sock se não informado.",
+        metavar="PATH",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--mcp-http",
+        dest="mcp_http",
+        action="store_true",
+        default=False,
+        help="Expõe o MCP embutido via Streamable HTTP em /mcp em vez do socket Unix padrão.",
+    )
+    parser.add_argument(
+        "--mcp-port",
+        dest="mcp_port",
+        type=int,
+        default=9090,
+        help="Porta do servidor MCP HTTP quando --mcp-http está ativo (padrão: 9090).",
+    )
+    parser.add_argument(
+        "--mcp-host",
+        dest="mcp_host",
+        default="127.0.0.1",
+        help="Host do servidor MCP HTTP quando --mcp-http está ativo (padrão: 127.0.0.1).",
+    )
+    parser.add_argument(
+        "--mcp-token-env",
+        dest="mcp_token_env",
+        default="QUIMERA_MCP_TOKEN",
+        metavar="VAR",
+        help="Variável de ambiente com token MCP fixo para clientes externos (padrão: QUIMERA_MCP_TOKEN). Se ausente, gera token aleatório por sessão.",
     )
 
     args, unknown = parser.parse_known_args()
+
+    if args.mcp_http and args.mcp_socket is not None:
+        parser.error("use apenas um transporte MCP: --mcp-socket [PATH] ou --mcp-http")
 
     if "--spy" in unknown:
         parser.error("--spy foi removido; use --visibility quiet|summary|full")
@@ -397,21 +434,15 @@ def main():
         renderer.show_plain(result)
         return
 
-    if args.no_mcp:
-        app.configure_mcp_socket(None)
-    else:
-        mcp_token = secrets.token_urlsafe(32)
-        rand_suffix = secrets.token_hex(8)
-        socket_path = args.mcp_socket or str(workspace.tmp.root / f"mcp-{rand_suffix}.sock")
-        mcp = MCPServer(app.tool_executor, auth_token=mcp_token)
-        mcp.start_background(socket_path)
-        app.configure_mcp_socket(socket_path, mcp_token)
-        app.mcp_socket_path = socket_path
-
-        prompt_builder = getattr(app, "prompt_builder", None)
-        prompt_session_state = getattr(prompt_builder, "session_state", None)
-        if isinstance(prompt_session_state, dict):
-            prompt_session_state["mcp_enabled"] = True
-            prompt_session_state["mcp_socket_path"] = socket_path
+    start_embedded_mcp(
+        app,
+        workspace,
+        enabled=not args.no_mcp,
+        transport="http" if args.mcp_http else "socket",
+        socket_path=args.mcp_socket,
+        http_host=args.mcp_host,
+        http_port=args.mcp_port,
+        token_env=args.mcp_token_env,
+    )
 
     app.run()

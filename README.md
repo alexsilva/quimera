@@ -15,7 +15,7 @@ O Quimera coordena agentes (CLI e OpenAI-compatible), mantém estado compartilha
 - `quimera/cli.py`: entrada principal da aplicação e flags de execução.
 - `quimera/app/`: loop interativo, protocolo de handoff, comandos slash e orquestração de rodada.
 - `quimera/runtime/`: drivers, parser de tool calls, políticas e execução de ferramentas.
-- `quimera/runtime/mcp_server.py`: servidor MCP (Model Context Protocol) — expõe tools do runtime via JSON-RPC 2.0 sobre stdio/socket Unix.
+- `quimera/runtime/mcp/server.py`: servidor MCP (Model Context Protocol) — expõe tools do runtime via JSON-RPC 2.0 sobre stdio/socket Unix.
 - `quimera/runtime/task_planning.py`: classificação de task e scoring de roteamento.
 - `quimera/runtime/tasks.py`: persistência de jobs/tasks em SQLite.
 - `quimera/runtime/tools/handoff.py`: `call_agent` — delegação entre agentes via MCP (cross-MCP).
@@ -77,8 +77,9 @@ Principais flags:
 - `--connect <agente>`: cria/edita conexão persistida do agente.
 - `--list-connections`: lista conexões persistidas.
 - `--driver-repl <plugin>`: REPL para testar driver `openai_compat`.
-- `--mcp` / `--no-mcp`: ativa/desativa servidor MCP (padrão: ativado).
-- `--mcp-socket <path>`: caminho personalizado para o socket Unix do MCP.
+- `--mcp-socket [path]` / `--mcp-http`: seleciona socket Unix ou HTTP; sem flags, usa socket Unix.
+- `--no-mcp`: desativa o servidor MCP.
+- `--mcp-http --mcp-host 127.0.0.1 --mcp-port 9090`: usa MCP HTTP embutido em vez do socket Unix.
 
 Ajuda completa:
 
@@ -123,7 +124,7 @@ Detalhes de capacidades por tier/especialidade: [AGENTS.md](./AGENTS.md).
 
 ## Sistema MCP (Model Context Protocol)
 
-O Quimera implementa o protocolo MCP (`2024-11-05`) via JSON-RPC 2.0, expondo as ferramentas do runtime para agentes compatíveis. Um servidor MCP é iniciado por sessão em um socket Unix com autenticação por token aleatório.
+O Quimera implementa o protocolo MCP (`2025-11-25`, com compatibilidade de negociação para versões anteriores) via JSON-RPC 2.0, expondo ferramentas, resources, prompts e completion do runtime para agentes compatíveis. Por padrão, um servidor MCP é iniciado por sessão em um socket Unix com autenticação por token (fixo via env ou aleatório por sessão).
 
 ### Arquitetura MCP
 
@@ -134,7 +135,7 @@ Agente (Codex/Claude/OpenCode)
 Proxy stdio→socket (plugin do agente)
   │  conexão Unix socket com token de autenticação
   ▼
-MCPServer (quimera/runtime/mcp_server.py)
+MCPServer (quimera/runtime/mcp/server.py)
   │  tools/list → resolve_tool_schemas()
   │  tools/call → ToolExecutor.execute()
   ▼
@@ -145,9 +146,13 @@ ToolRegistry → handlers (read_file, run_shell, call_agent, ...)
 
 Por padrão o MCP é ativado automaticamente. Controles via CLI:
 
-- `--mcp` (padrão): ativa servidor MCP.
+- `--mcp-socket [path]`: seleciona explicitamente o transporte socket Unix e opcionalmente define o path.
+- padrão sem flags MCP: inicia o transporte socket Unix com path temporário por workspace.
 - `--no-mcp`: desativa completamente.
-- `--mcp-socket <path>`: caminho personalizado para o socket Unix.
+- `--mcp-http`: seleciona o transporte Streamable HTTP em `/mcp`.
+- `--mcp-port <porta>`: porta do servidor HTTP MCP (padrão: `9090`).
+- `--mcp-host <host>`: host do servidor HTTP MCP (padrão: `127.0.0.1`).
+- `--mcp-token-env <VAR>`: variável de ambiente usada como token MCP fixo para clientes externos (padrão: `QUIMERA_MCP_TOKEN`; se vazia, token aleatório por sessão).
 
 ### Injeção por plugin
 
@@ -155,14 +160,22 @@ Cada agente recebe a configuração MCP no formato que seu CLI/API entende:
 
 | Agente | Formato de injeção | Mecanismo |
 |---|---|---|
-| **Claude** | `--mcp-config` JSON (`mcpServers.quimera`) | Argumento CLI |
-| **Codex** | `-c mcp_servers.quimera.*` (TOML-style) | Argumento CLI |
-| **OpenCode** | `OPENCODE_CONFIG_CONTENT` env var | Variável de ambiente |
+| **Claude** | socket: `--mcp-config` stdio; HTTP: `type=http`, `url=http://.../mcp` | Argumento CLI |
+| **Codex** | socket: `-c mcp_servers.quimera.command/args`; HTTP: `-c mcp_servers.quimera.url/transport/headers.*` | Argumento CLI |
+| **OpenCode** | socket: `type=local`; HTTP: `type=remote`, `url`, `headers` | `OPENCODE_CONFIG_CONTENT` |
 | **Gemini** | Sem suporte a MCP | — |
 
-### Ferramentas expostas via MCP
+### Features expostas via MCP
 
-As 15 ferramentas do runtime (`TOOL_SCHEMAS` em `runtime/drivers/tool_schemas.py`) são filtradas dinamicamente por registro, política e disponibilidade:
+O servidor anuncia as capabilities MCP mais recentes usadas pelo Quimera:
+
+- `tools` com `tools/list`, `tools/call` e `notifications/tools/list_changed`;
+- `resources` com `resources/list`, `resources/read`, `resources/templates/list`, `resources/subscribe` e `resources/unsubscribe`;
+- `prompts` com `prompts/list` e `prompts/get`;
+- `completions` com `completion/complete`;
+- `logging` com `logging/setLevel`.
+
+As ferramentas do runtime (`TOOL_SCHEMAS` em `runtime/drivers/tool_schemas.py`) são filtradas dinamicamente por registro, política e disponibilidade:
 
 - `list_files`, `read_file`, `write_file`, `remove_file`, `apply_patch`
 - `grep_search`, `run_shell`, `exec_command`, `write_stdin`, `close_command_session`
@@ -193,11 +206,43 @@ Características:
 - **Failover automático**: `fallback_agents` é tentado se o primário falhar.
 - **Cadeias de delegação**: `handoffs` permite múltiplos passos em uma chamada.
 - **Validação de agentes ativos**: o alvo é verificado contra o pool antes da execução.
-- **Token de autenticação**: cada sessão gera um `secrets.token_urlsafe(32)` único.
+- **Token de autenticação**: usa `QUIMERA_MCP_TOKEN`/`--mcp-token-env` quando configurado; caso contrário cada sessão gera um `secrets.token_urlsafe(32)` único.
 
 ### MCP-First Mode
 
 Quando o MCP está ativo, o parser de protocolo (`app/protocol.py`) ignora envelopes textuais legados (`<handoff>...</handoff>`) — agentes usam exclusivamente a tool `call_agent` via MCP, evitando dupla delegação.
+
+### MCP HTTP embutido
+
+Para iniciar o app com MCP Streamable HTTP embutido em vez do socket Unix padrão:
+
+```bash
+python quimera.py --mcp-http --mcp-host 127.0.0.1 --mcp-port 9090
+```
+
+Nesse modo, agentes compatíveis recebem `http://127.0.0.1:9090/mcp` na inicialização, com o mesmo token da sessão enviado como `Authorization: Bearer <token>` (ou `X-Quimera-MCP-Token` para clientes simples).
+
+Para conectar um cliente remoto, defina um token conhecido no ambiente antes de iniciar o Quimera e envie esse mesmo valor no header HTTP:
+
+```bash
+export QUIMERA_MCP_TOKEN=um-token-longo-e-aleatorio
+python quimera.py --mcp-http --mcp-host 0.0.0.0 --mcp-port 9090
+
+# Cliente remoto:
+curl -H "Authorization: Bearer um-token-longo-e-aleatorio" \
+     -H "MCP-Protocol-Version: 2025-11-25" \
+     http://HOST:9090/mcp
+```
+
+Se `QUIMERA_MCP_TOKEN` (ou a variável apontada por `--mcp-token-env`) não estiver definida, o Quimera gera um token aleatório por sessão e apenas os plugins locais iniciados por ele recebem esse valor. O socket Unix continua sendo o padrão para preservar compatibilidade com o fluxo local existente.
+
+Também funciona colocar o token no arquivo `.env` global do Quimera, carregado antes da inicialização do MCP:
+
+```env
+QUIMERA_MCP_TOKEN=um-token-longo-e-aleatorio
+```
+
+Esse `.env` fica em `~/.local/share/quimera/.env` (fallback: `/tmp/quimera/.env`), não no `.env` do diretório do projeto.
 
 ### Uso standalone
 
@@ -298,7 +343,7 @@ Config global:
 
 Variáveis de ambiente MCP:
 
-- `QUIMERA_MCP_TOKEN`: token de autenticação para modo standalone.
+- `QUIMERA_MCP_TOKEN`: token de autenticação para modo standalone e para o MCP embutido quando usado com `--mcp-token-env` padrão.
 - `QUIMERA_MCP_LOG_LEVEL`: nível de log do servidor MCP (padrão: `QUIMERA_LOG_LEVEL` ou `WARNING`).
 - `QUIMERA_WORKSPACE`: diretório raiz do workspace para modo MCP standalone.
 
@@ -322,7 +367,7 @@ pytest -q tests/test_public_api.py tests/test_runtime_task_planning.py tests/tes
 Testes MCP:
 
 ```bash
-pytest -q tests/test_runtime_mcp_server.py tests/test_agents.py
+pytest -q tests/test_runtime_mcp_server.py tests/test_mcp_http_server.py tests/test_agents.py
 ```
 
 Execução completa:

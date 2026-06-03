@@ -1,6 +1,6 @@
 """MCPServer: servidor MCP sobre stdio que expõe ferramentas do ToolExecutor.
 
-Implementa o protocolo MCP (Model Context Protocol) versão 2024-11-05
+Implementa o protocolo MCP (Model Context Protocol) versão 2025-11-25
 via JSON-RPC 2.0 sobre stdio. Sem dependências externas.
 
 Uso como módulo standalone:
@@ -106,7 +106,8 @@ class MCPServer:
       - ping
     """
 
-    PROTOCOL_VERSION = "2024-11-05"
+    PROTOCOL_VERSION = "2025-11-25"
+    SUPPORTED_PROTOCOL_VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
     SERVER_NAME = "quimera"
     SERVER_VERSION = "0.1.0"
 
@@ -134,6 +135,7 @@ class MCPServer:
         self._thread_pool = concurrent.futures.ThreadPoolExecutor(
             max_workers=4, thread_name_prefix="mcp-tool"
         )
+        self._resource_subscriptions: set[str] = set()
 
     def shutdown(self) -> None:
         """Encerra o pool de threads, aguardando tarefas em execução."""
@@ -154,7 +156,12 @@ class MCPServer:
     # ------------------------------------------------------------------
 
     def _handle(self, msg: dict, out: IO, blocking: bool = False,
-                used_ids: dict | None = None) -> dict | None:
+                used_ids: dict | None = None, state: dict | None = None) -> dict | None:
+        validation_error = self._validate_jsonrpc_message(msg)
+        msg_id = msg.get("id") if isinstance(msg, dict) else None
+        if validation_error is not None:
+            return self._err(msg_id, -32600, validation_error)
+
         method = msg.get("method", "")
         msg_id = msg.get("id")
         params = msg.get("params") or {}
@@ -167,23 +174,22 @@ class MCPServer:
                 used_ids.popitem(last=False)
 
         if method == "initialize":
-            return self._ok(msg_id, {
-                "protocolVersion": self.PROTOCOL_VERSION,
-                "serverInfo": {
-                    "name": self.SERVER_NAME,
-                    "version": self.SERVER_VERSION,
-                },
-                "capabilities": {
-                    "tools": {},
-                    "logging": {},
-                },
-            })
+            return self._handle_initialize(msg_id, params, state)
 
         if method == "notifications/initialized":
+            if state is not None:
+                state["initialized"] = True
+            return None
+
+        if method == "notifications/cancelled":
+            self._handle_cancelled(params)
             return None
 
         if method == "ping":
             return self._ok(msg_id, {})
+
+        if state is not None and state.get("strict_lifecycle") and not state.get("initialize_seen"):
+            return self._err(msg_id, -32002, "Server not initialized")
 
         if method == "tools/list":
             return self._handle_tools_list(msg_id, params)
@@ -191,19 +197,231 @@ class MCPServer:
         if method == "tools/call":
             return self._handle_tools_call(msg_id, params, out=out, blocking=blocking)
 
-        if method == "notifications/cancelled":
-            self._handle_cancelled(params)
-            return None
+        if method == "resources/list":
+            return self._handle_resources_list(msg_id, params)
+        if method == "resources/read":
+            return self._handle_resources_read(msg_id, params)
+        if method == "resources/templates/list":
+            return self._handle_resource_templates_list(msg_id, params)
+        if method == "resources/subscribe":
+            return self._handle_resources_subscribe(msg_id, params)
+        if method == "resources/unsubscribe":
+            return self._handle_resources_unsubscribe(msg_id, params)
+        if method == "prompts/list":
+            return self._handle_prompts_list(msg_id, params)
+        if method == "prompts/get":
+            return self._handle_prompts_get(msg_id, params)
+        if method == "completion/complete":
+            return self._handle_completion_complete(msg_id, params)
 
         if method == "logging/setLevel":
-            level = params.get("level", "INFO")
-            logging.getLogger().setLevel(getattr(logging, level.upper(), logging.INFO))
-            _logger.info("MCP log level set to %s via logging/setLevel", level)
-            return self._ok(msg_id, {})
+            return self._handle_logging_set_level(msg_id, params)
 
         if msg_id is not None:
             return self._err(msg_id, -32601, f"Method not found: {method}")
         return None
+
+
+    def _validate_jsonrpc_message(self, msg: dict) -> str | None:
+        if not isinstance(msg, dict):
+            return "Invalid Request"
+        if msg.get("jsonrpc") != "2.0":
+            return "Invalid Request: jsonrpc must be '2.0'"
+        if "method" not in msg or not isinstance(msg.get("method"), str):
+            return "Invalid Request: method is required"
+        if "id" in msg:
+            msg_id = msg.get("id")
+            if msg_id is None or isinstance(msg_id, bool) or not isinstance(msg_id, (str, int)):
+                return "Invalid Request: id must be a string or integer"
+        params = msg.get("params")
+        if params is not None and not isinstance(params, dict):
+            return "Invalid Request: params must be an object"
+        return None
+
+    def _handle_initialize(self, msg_id: Any, params: dict, state: dict | None) -> dict:
+        requested = str(params.get("protocolVersion") or self.PROTOCOL_VERSION)
+        selected = self.PROTOCOL_VERSION
+        if state is not None:
+            state["initialize_seen"] = True
+            state["protocol_version"] = selected
+            state["client_capabilities"] = params.get("capabilities") or {}
+            state["client_info"] = params.get("clientInfo") or {}
+        return self._ok(msg_id, {
+            "protocolVersion": selected,
+            "serverInfo": {
+                "name": self.SERVER_NAME,
+                "title": "Quimera MCP Server",
+                "version": self.SERVER_VERSION,
+                "description": "Quimera runtime tools, resources and prompts",
+            },
+            "instructions": "Use Quimera tools for workspace-safe inspection, execution and cross-agent handoff.",
+            "capabilities": {
+                "tools": {"listChanged": True},
+                "resources": {"subscribe": True, "listChanged": True},
+                "prompts": {"listChanged": True},
+                "completions": {},
+                "logging": {},
+            },
+        })
+
+    def _handle_logging_set_level(self, msg_id: Any, params: dict) -> dict:
+        level = str(params.get("level", "info")).upper()
+        valid = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+        if level not in valid:
+            return self._err(msg_id, -32602, f"Invalid logging level: {level.lower()}")
+        logging.getLogger().setLevel(getattr(logging, level))
+        _logger.info("MCP log level set to %s via logging/setLevel", level)
+        return self._ok(msg_id, {})
+
+    def _workspace_root(self) -> Path:
+        root = getattr(getattr(self._executor, "config", None), "workspace_root", None)
+        return Path(root or os.getcwd()).resolve()
+
+    def _resource_entries(self) -> list[dict]:
+        root = self._workspace_root()
+        entries = [
+            {"uri": "quimera://workspace", "name": "workspace", "title": "Quimera Workspace", "description": str(root), "mimeType": "text/plain"},
+            {"uri": "quimera://prompts/chat", "name": "chat-prompt", "title": "Chat Prompt Template", "description": "Base chat prompt used by Quimera", "mimeType": "text/markdown"},
+            {"uri": "quimera://prompts/task", "name": "task-prompt", "title": "Task Prompt Template", "description": "Prompt used for explicit /task execution", "mimeType": "text/markdown"},
+            {"uri": "quimera://prompts/reviewer", "name": "task-reviewer-prompt", "title": "Task Reviewer Prompt Template", "description": "Prompt used for cross-agent task review", "mimeType": "text/markdown"},
+        ]
+        for rel in ("README.md", "AGENTS.md", "ARCHITECTURE.md"):
+            path = root / rel
+            if path.exists():
+                entries.append({"uri": path.as_uri(), "name": rel, "title": rel, "description": f"Workspace file {rel}", "mimeType": "text/markdown"})
+        return entries
+
+    def _paginate(self, items: list, params: dict, key: str, page_size: int = 100) -> dict:
+        cursor = params.get("cursor")
+        page = 0
+        if isinstance(cursor, str):
+            try:
+                decoded = base64.urlsafe_b64decode(cursor.encode()).decode()
+                page = int(decoded.split(":", 1)[1])
+            except Exception:
+                return {"__error__": "Invalid cursor"}
+        start = page * page_size
+        end = start + page_size
+        result = {key: items[start:end]}
+        if end < len(items):
+            result["nextCursor"] = base64.urlsafe_b64encode(f"page:{page + 1}".encode()).decode()
+        return result
+
+    def _handle_resources_list(self, msg_id: Any, params: dict) -> dict:
+        result = self._paginate(self._resource_entries(), params, "resources")
+        if "__error__" in result:
+            return self._err(msg_id, -32602, result["__error__"])
+        return self._ok(msg_id, result)
+
+    def _handle_resource_templates_list(self, msg_id: Any, params: dict) -> dict:
+        templates = [{
+            "uriTemplate": "file:///{path}",
+            "name": "workspace-file",
+            "title": "Workspace file",
+            "description": "Read a file under the Quimera workspace by relative path",
+            "mimeType": "text/plain",
+        }]
+        result = self._paginate(templates, params, "resourceTemplates")
+        if "__error__" in result:
+            return self._err(msg_id, -32602, result["__error__"])
+        return self._ok(msg_id, result)
+
+    def _read_prompt_resource(self, name: str) -> str | None:
+        root = Path(__file__).resolve().parents[2]
+        mapping = {
+            "chat": root / "prompt.md",
+            "task": root / "task_prompt.md",
+            "reviewer": root / "task_reviewer_prompt.md",
+        }
+        path = mapping.get(name)
+        if path and path.exists():
+            return path.read_text(encoding="utf-8")
+        return None
+
+    def _handle_resources_read(self, msg_id: Any, params: dict) -> dict:
+        uri = str(params.get("uri") or "")
+        if not uri:
+            return self._err(msg_id, -32602, "resources/read: 'uri' is required")
+        if uri == "quimera://workspace":
+            text = str(self._workspace_root())
+            return self._ok(msg_id, {"contents": [{"uri": uri, "mimeType": "text/plain", "text": text}]})
+        if uri.startswith("quimera://prompts/"):
+            text = self._read_prompt_resource(uri.rsplit("/", 1)[-1])
+            if text is None:
+                return self._err(msg_id, -32602, f"Unknown resource: {uri}")
+            return self._ok(msg_id, {"contents": [{"uri": uri, "mimeType": "text/markdown", "text": text}]})
+        if uri.startswith("file://"):
+            try:
+                path = Path(uri.removeprefix("file://")).resolve()
+                path.relative_to(self._workspace_root())
+                text = path.read_text(encoding="utf-8")
+            except Exception as exc:
+                return self._err(msg_id, -32602, f"Cannot read resource: {exc}")
+            return self._ok(msg_id, {"contents": [{"uri": uri, "mimeType": "text/plain", "text": text}]})
+        return self._err(msg_id, -32602, f"Unknown resource: {uri}")
+
+    def _handle_resources_subscribe(self, msg_id: Any, params: dict) -> dict:
+        uri = str(params.get("uri") or "")
+        if not uri:
+            return self._err(msg_id, -32602, "resources/subscribe: 'uri' is required")
+        self._resource_subscriptions.add(uri)
+        return self._ok(msg_id, {})
+
+    def _handle_resources_unsubscribe(self, msg_id: Any, params: dict) -> dict:
+        uri = str(params.get("uri") or "")
+        if not uri:
+            return self._err(msg_id, -32602, "resources/unsubscribe: 'uri' is required")
+        self._resource_subscriptions.discard(uri)
+        return self._ok(msg_id, {})
+
+    def _prompt_entries(self) -> list[dict]:
+        return [
+            {"name": "quimera-chat", "title": "Quimera chat", "description": "Base prompt for a normal Quimera chat turn", "arguments": [{"name": "message", "description": "User message to append", "required": False}]},
+            {"name": "quimera-task", "title": "Quimera task", "description": "Prompt for explicit /task execution", "arguments": [{"name": "task", "description": "Task description", "required": True}, {"name": "context", "description": "Optional context", "required": False}]},
+            {"name": "quimera-review", "title": "Quimera review", "description": "Prompt for reviewing another agent result", "arguments": [{"name": "task", "description": "Original task", "required": True}, {"name": "result", "description": "Candidate result", "required": True}]},
+        ]
+
+    def _handle_prompts_list(self, msg_id: Any, params: dict) -> dict:
+        result = self._paginate(self._prompt_entries(), params, "prompts")
+        if "__error__" in result:
+            return self._err(msg_id, -32602, result["__error__"])
+        return self._ok(msg_id, result)
+
+    def _handle_prompts_get(self, msg_id: Any, params: dict) -> dict:
+        name = str(params.get("name") or "")
+        args = params.get("arguments") or {}
+        if not isinstance(args, dict):
+            return self._err(msg_id, -32602, "prompts/get: 'arguments' must be an object")
+        mapping = {"quimera-chat": "chat", "quimera-task": "task", "quimera-review": "reviewer"}
+        key = mapping.get(name)
+        if key is None:
+            return self._err(msg_id, -32602, f"Unknown prompt: {name}")
+        if name in {"quimera-task", "quimera-review"} and not args.get("task"):
+            return self._err(msg_id, -32602, "Missing required argument: task")
+        if name == "quimera-review" and not args.get("result"):
+            return self._err(msg_id, -32602, "Missing required argument: result")
+        template = self._read_prompt_resource(key) or ""
+        suffix = "\n\n" + "\n".join(f"{k}: {v}" for k, v in args.items() if v) if args else ""
+        return self._ok(msg_id, {
+            "description": next(p["description"] for p in self._prompt_entries() if p["name"] == name),
+            "messages": [{"role": "user", "content": {"type": "text", "text": template + suffix}}],
+        })
+
+    def _handle_completion_complete(self, msg_id: Any, params: dict) -> dict:
+        ref = params.get("ref") or {}
+        argument = params.get("argument") or {}
+        if not isinstance(ref, dict) or not isinstance(argument, dict):
+            return self._err(msg_id, -32602, "completion/complete: invalid params")
+        value = str(argument.get("value") or "").lower()
+        candidates: list[str]
+        if ref.get("type") == "ref/prompt":
+            candidates = [p["name"] for p in self._prompt_entries()] + ["message", "task", "context", "result"]
+        elif ref.get("type") == "ref/resource":
+            candidates = [r["uri"] for r in self._resource_entries()] + ["README.md", "AGENTS.md", "ARCHITECTURE.md"]
+        else:
+            return self._err(msg_id, -32602, "completion/complete: unsupported ref type")
+        values = [c for c in candidates if value in c.lower()][:100]
+        return self._ok(msg_id, {"completion": {"values": values, "total": len(values), "hasMore": False}})
 
     def _handle_cancelled(self, params: dict) -> None:
         cancel_id = params.get("requestId")
@@ -242,6 +460,14 @@ class MCPServer:
 
         if not tool_name:
             return self._err(msg_id, -32602, "tools/call: 'name' é obrigatório")
+        if not isinstance(arguments, dict):
+            return self._err(msg_id, -32602, "tools/call: 'arguments' must be an object")
+        try:
+            available_tools = set(self._executor.registry.names())
+        except Exception:
+            available_tools = set()
+        if available_tools and tool_name not in available_tools:
+            return self._err(msg_id, -32602, f"Unknown tool: {tool_name}")
 
         arg_keys = sorted(str(key) for key in arguments.keys()) if isinstance(arguments, dict) else []
         started_at = time.perf_counter()
@@ -562,14 +788,25 @@ class MCPServer:
     def _process_message(self, msg: Any, out: IO,
                          used_ids: dict | None = None) -> None:
         """Processa uma mensagem ou lote JSON-RPC e escreve respostas."""
+        state = getattr(out, "_mcp_state", None)
+        if state is None:
+            state = {"initialize_seen": False, "initialized": False, "strict_lifecycle": False}
+            try:
+                setattr(out, "_mcp_state", state)
+            except Exception:
+                pass
         if isinstance(msg, list):
-            return self._process_batch(msg, out, used_ids=used_ids)
+            if not msg:
+                self._write(self._err(None, -32600, "Invalid Request: empty batch"), out)
+                return
+            return self._process_batch(msg, out, used_ids=used_ids, state=state)
 
         if not isinstance(msg, dict):
+            self._write(self._err(None, -32600, "Invalid Request"), out)
             return
 
         try:
-            response = self._handle(msg, out=out, used_ids=used_ids)
+            response = self._handle(msg, out=out, used_ids=used_ids, state=state)
         except Exception as exc:
             _logger.exception("Erro inesperado no handler MCP")
             msg_id = msg.get("id")
@@ -579,18 +816,18 @@ class MCPServer:
             self._write(response, out)
 
     def _process_batch(self, msg: list, out: IO,
-                       used_ids: dict | None = None) -> None:
+                       used_ids: dict | None = None, state: dict | None = None) -> None:
         """Processa lote JSON-RPC: submete tools/call concorrentemente, resolve em bloco."""
         with self._batch_outputs_lock:
             self._batch_outputs.add(id(out))
         try:
-            self._process_batch_impl(msg, out, used_ids=used_ids)
+            self._process_batch_impl(msg, out, used_ids=used_ids, state=state)
         finally:
             with self._batch_outputs_lock:
                 self._batch_outputs.discard(id(out))
 
     def _process_batch_impl(self, msg: list, out: IO,
-                            used_ids: dict | None = None) -> None:
+                            used_ids: dict | None = None, state: dict | None = None) -> None:
         responses: list[dict | None] = [None] * len(msg)
         pending_ids: dict[Any, int] = {}  # msg_id -> list index
 
@@ -601,11 +838,11 @@ class MCPServer:
             try:
                 item_id = item.get("id")
                 if item.get("method") == "tools/call":
-                    self._handle(item, out=out, blocking=False, used_ids=used_ids)
+                    self._handle(item, out=out, blocking=False, used_ids=used_ids, state=state)
                     if item_id is not None:
                         pending_ids[item_id] = idx
                 else:
-                    resp = self._handle(item, out=out, used_ids=used_ids)
+                    resp = self._handle(item, out=out, used_ids=used_ids, state=state)
                     responses[idx] = resp
             except Exception as exc:
                 _logger.exception("Erro inesperado no handler MCP batch")

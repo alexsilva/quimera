@@ -19,6 +19,7 @@ import os
 import queue
 import threading
 import uuid
+import secrets
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import StringIO
 from typing import Any
@@ -72,9 +73,9 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
 
     def _send_cors(self) -> None:
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
         self.send_header(
-            "Access-Control-Allow-Headers", "Content-Type, Authorization"
+            "Access-Control-Allow-Headers", "Content-Type, Authorization, MCP-Protocol-Version, MCP-Session-Id, X-Quimera-MCP-Token"
         )
 
     # ------------------------------------------------------------------
@@ -87,18 +88,40 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self) -> None:
-        if self.path == "/health":
+        parsed = urlparse(self.path)
+        if parsed.path == "/health":
             return self._handle_health()
-        if self.path == "/sse":
+        if parsed.path == "/sse":
             return self._handle_sse()
+        if parsed.path == "/mcp":
+            return self._handle_mcp_stream()
         self.send_response(404)
         self._send_cors()
         self.end_headers()
 
     def do_POST(self) -> None:
-        if self.path.startswith("/message"):
+        parsed = urlparse(self.path)
+        if parsed.path == "/mcp":
+            return self._handle_mcp_post()
+        if parsed.path.startswith("/message"):
             return self._handle_message()
         self.send_response(404)
+        self._send_cors()
+        self.end_headers()
+
+    def do_DELETE(self) -> None:
+        parsed = urlparse(self.path)
+        if parsed.path != "/mcp":
+            self.send_response(404); self._send_cors(); self.end_headers(); return
+        if not self._is_authorized():
+            self._send_error_response(401, -32001, "Unauthorized")
+            return
+        mcp_server: MCP_HTTPServer = self.server.mcp_http_server
+        session_id = self.headers.get("MCP-Session-Id")
+        if session_id:
+            with mcp_server._sse_lock:
+                mcp_server._http_sessions.pop(session_id, None)
+        self.send_response(204)
         self._send_cors()
         self.end_headers()
 
@@ -122,6 +145,9 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
     # ------------------------------------------------------------------
 
     def _handle_sse(self) -> None:
+        if not self._is_authorized():
+            self._send_error_response(401, -32001, "Unauthorized")
+            return
         session_id = str(uuid.uuid4())
         sse_queue: queue.Queue = queue.Queue()
 
@@ -135,6 +161,7 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-cache")
             self.send_header("Connection", "keep-alive")
+            self.send_header("MCP-Protocol-Version", MCPServer.PROTOCOL_VERSION)
             self.end_headers()
 
             host = self.headers.get("Host", "localhost")
@@ -170,7 +197,80 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
     # POST /message
     # ------------------------------------------------------------------
 
+    def _is_authorized(self) -> bool:
+        token = (getattr(self.server.mcp_http_server._mcp, "_auth_token", None) or "").strip()
+        if not token:
+            return True
+        auth = self.headers.get("Authorization", "")
+        x_token = self.headers.get("X-Quimera-MCP-Token", "")
+        return auth == f"Bearer {token}" or x_token == token
+
+    def _handle_mcp_stream(self) -> None:
+        if not self._is_authorized():
+            self._send_error_response(401, -32001, "Unauthorized")
+            return
+        # Streamable HTTP GET: keep a server-to-client SSE stream for a session.
+        return self._handle_sse()
+
+    def _handle_mcp_post(self) -> None:
+        if not self._is_authorized():
+            self._send_error_response(401, -32001, "Unauthorized")
+            return
+        proto = self.headers.get("MCP-Protocol-Version")
+        content_length = int(self.headers.get("Content-Length", 0))
+        if content_length > _MAX_BODY_SIZE:
+            self._send_error_response(413, -32600, "Request body too large")
+            return
+        body = self.rfile.read(content_length).decode("utf-8") if content_length else ""
+        try:
+            msg = json.loads(body) if body else {}
+        except json.JSONDecodeError as exc:
+            self._send_error_response(400, -32700, f"Parse error: {exc}")
+            return
+        is_initialize = isinstance(msg, dict) and msg.get("method") == "initialize"
+        if proto and proto not in MCPServer.SUPPORTED_PROTOCOL_VERSIONS:
+            self._send_error_response(400, -32602, f"Unsupported MCP-Protocol-Version: {proto}")
+            return
+        if not is_initialize and proto is None:
+            # Latest spec requires this header on subsequent HTTP requests.
+            self._send_error_response(400, -32602, "Missing MCP-Protocol-Version header")
+            return
+        if not isinstance(msg, (dict, list)):
+            self._send_error_response(400, -32600, "Invalid Request: body must be a JSON object or array")
+            return
+        mcp_server: MCP_HTTPServer = self.server.mcp_http_server
+        session_id = self.headers.get("MCP-Session-Id")
+        if is_initialize and not session_id:
+            session_id = secrets.token_urlsafe(24)
+        out = StringIO()
+        if session_id:
+            state = mcp_server._http_sessions.setdefault(session_id, {"initialize_seen": False, "initialized": False, "strict_lifecycle": True})
+            setattr(out, "_mcp_state", state)
+        try:
+            mcp_server._mcp._process_message(msg, out=out)
+            mcp_server._mcp._drain_all_pending(out)
+        except Exception as exc:
+            _logger.exception("MCP HTTP: error handling /mcp")
+            error_resp = mcp_server._mcp._err(msg.get("id") if isinstance(msg, dict) else None, -32603, f"Internal error: {exc}")
+            raw = json.dumps(error_resp) + "\n"
+        else:
+            raw = out.getvalue()
+        body_bytes = raw.encode("utf-8") if raw else b""
+        self.send_response(200 if raw else 202)
+        self._send_cors()
+        self.send_header("Content-Type", "application/json")
+        if session_id:
+            self.send_header("MCP-Session-Id", session_id)
+        self.send_header("MCP-Protocol-Version", MCPServer.PROTOCOL_VERSION)
+        self.send_header("Content-Length", str(len(body_bytes)))
+        self.end_headers()
+        if body_bytes:
+            self.wfile.write(body_bytes)
+
     def _handle_message(self) -> None:
+        if not self._is_authorized():
+            self._send_error_response(401, -32001, "Unauthorized")
+            return
         content_length = int(self.headers.get("Content-Length", 0))
         if content_length > _MAX_BODY_SIZE:
             self._send_error_response(413, -32600, "Request body too large")
@@ -284,6 +384,7 @@ class MCP_HTTPServer:
             os.environ.get(_QUIMERA_MCP_HTTP_PORT, str(_DEFAULT_PORT))
         )
         self._sse_clients: dict[str, queue.Queue] = {}
+        self._http_sessions: dict[str, dict] = {}
         self._sse_lock = threading.Lock()
         self._httpd: ThreadingHTTPServer | None = None
 
