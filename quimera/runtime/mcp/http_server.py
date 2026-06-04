@@ -196,6 +196,14 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
         mcp_server: MCP_HTTPServer = self.server.mcp_http_server
         with mcp_server._sse_lock:
             mcp_server._sse_clients[session_id] = sse_queue
+        mcp_server._http_sessions[session_id] = {
+            "initialize_seen": False,
+            "initialized": False,
+            "strict_lifecycle": False,
+            "session_id": session_id,
+            "trusted_run_id": f"http:{uuid.uuid4()}",
+            "http_profile": mcp_server._http_profile,
+        }
 
         try:
             self.send_response(200)
@@ -233,6 +241,7 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
         finally:
             with mcp_server._sse_lock:
                 mcp_server._sse_clients.pop(session_id, None)
+            mcp_server._http_sessions.pop(session_id, None)
 
     # ------------------------------------------------------------------
     # POST /message
@@ -281,14 +290,37 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
             return
         mcp_server: MCP_HTTPServer = self.server.mcp_http_server
         session_id = self.headers.get("MCP-Session-Id")
-        if is_initialize and not session_id:
+        if is_initialize:
+            if session_id:
+                self._send_error_response(400, -32602, "MCP-Session-Id must not be sent during initialize")
+                return
             session_id = secrets.token_urlsafe(24)
-        out = StringIO()
-        if session_id:
-            state = mcp_server._http_sessions.setdefault(session_id, {"initialize_seen": False, "initialized": False, "strict_lifecycle": True})
+            state = {
+                "initialize_seen": False,
+                "initialized": False,
+                "strict_lifecycle": True,
+                "session_id": session_id,
+                "trusted_run_id": f"http:{uuid.uuid4()}",
+                "http_profile": mcp_server._http_profile,
+            }
+            mcp_server._http_sessions[session_id] = state
+        elif session_id:
+            state = mcp_server._http_sessions.get(session_id)
+            if state is None:
+                self._send_error_response(400, -32602, "Unknown MCP-Session-Id")
+                return
             state["session_id"] = session_id
             state["http_profile"] = mcp_server._http_profile
-            setattr(out, "_mcp_state", state)
+        else:
+            state = {
+                "initialize_seen": False,
+                "initialized": False,
+                "strict_lifecycle": True,
+                "trusted_run_id": f"http:{uuid.uuid4()}",
+                "http_profile": mcp_server._http_profile,
+            }
+        out = StringIO()
+        setattr(out, "_mcp_state", state)
         try:
             mcp_server._mcp._process_message(msg, out=out, transport="http_mcp")
             mcp_server._mcp._drain_all_pending(out)
@@ -344,16 +376,24 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
         out: StringIO | _SSEQueueOutput
         sse_queue = None
         if session_id:
+            state = mcp_server._http_sessions.get(session_id)
+            if state is None:
+                self._send_error_response(400, -32602, "Unknown sessionId")
+                return
             with mcp_server._sse_lock:
                 sse_queue = mcp_server._sse_clients.get(session_id)
+        else:
+            state = {
+                "initialize_seen": False,
+                "initialized": False,
+                "strict_lifecycle": False,
+                "trusted_run_id": f"http:{uuid.uuid4()}",
+                "http_profile": mcp_server._http_profile,
+            }
         if sse_queue is not None:
             out = _SSEQueueOutput(sse_queue)
         else:
             out = StringIO()
-        state = mcp_server._http_sessions.setdefault(
-            session_id or f"http:{id(out)}",
-            {"initialize_seen": False, "initialized": False, "strict_lifecycle": False},
-        )
         if session_id:
             state["session_id"] = session_id
         state["http_profile"] = mcp_server._http_profile

@@ -24,6 +24,7 @@ import socket
 import sys
 import threading
 import time
+import uuid
 from collections.abc import Iterable
 from pathlib import Path
 from typing import IO, Any
@@ -504,7 +505,7 @@ class MCPServer:
         trusted_context = TrustedToolExecutionContext(
             agent_name=state.get("agent_name"),
             parent_agent=state.get("parent_agent"),
-            run_id=state.get("trusted_run_id") or session_id or f"mcp:{id(out)}",
+            run_id=state.get("trusted_run_id") or f"{real_transport}:{uuid.uuid4()}",
             parent_run_id=state.get("parent_run_id"),
             job_id=state.get("job_id"),
             task_id=state.get("task_id"),
@@ -861,6 +862,9 @@ class MCPServer:
             state["transport"] = transport
         else:
             state.setdefault("transport", "internal_mcp")
+        if not state.get("trusted_run_id"):
+            namespace = "http" if state.get("transport") == "http_mcp" else "stdio"
+            state["trusted_run_id"] = f"{namespace}:{uuid.uuid4()}"
         if isinstance(msg, list):
             if not msg:
                 self._write(self._err(None, -32600, "Invalid Request: empty batch"), out)

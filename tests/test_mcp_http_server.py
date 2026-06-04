@@ -889,6 +889,9 @@ class TestStreamableHTTP:
             resp = _http_request(httpd.host, httpd.port, "POST", "/mcp", body=body, headers={"Content-Type": "application/json"})
             assert resp.status == 200
             assert resp.header("MCP-Session-Id")
+            session_id = resp.header("MCP-Session-Id")
+            assert httpd._http_sessions[session_id]["trusted_run_id"].startswith("http:")
+            assert httpd._http_sessions[session_id]["trusted_run_id"] != session_id
             assert json.loads(resp.data)["result"]["protocolVersion"] == "2025-11-25"
 
             bad = _http_request(httpd.host, httpd.port, "POST", "/mcp", body=json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}).encode(), headers={"Content-Type": "application/json", "MCP-Session-Id": resp.header("MCP-Session-Id")})
@@ -933,5 +936,73 @@ class TestStreamableHTTP:
             )
             assert allowed_message.status == 200
             assert json.loads(allowed_message.data)["result"] == {}
+        finally:
+            httpd.shutdown()
+
+class TestHTTPTrustedSessions:
+    def test_message_without_session_does_not_grow_http_sessions(self):
+        result = ToolResult(ok=True, tool_name="read_file", content="ok")
+        executor = _make_executor(call_result=result)
+        httpd = _start_http_server(_make_mcp_server(executor))
+        try:
+            before = len(httpd._http_sessions)
+            body = json.dumps({
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": {"name": "read_file", "arguments": {"path": "foo.py"}},
+            }).encode("utf-8")
+            for _ in range(5):
+                resp = _http_request(
+                    httpd.host, httpd.port, "POST", "/message",
+                    body=body,
+                    headers={"Content-Type": "application/json"},
+                )
+                assert resp.status == 200
+            assert len(httpd._http_sessions) == before
+        finally:
+            httpd.shutdown()
+
+    def test_mcp_rejects_unknown_session_id(self):
+        httpd = _start_http_server(_make_mcp_server())
+        try:
+            body = json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}).encode()
+            resp = _http_request(
+                httpd.host, httpd.port, "POST", "/mcp",
+                body=body,
+                headers={
+                    "Content-Type": "application/json",
+                    "MCP-Session-Id": "attacker-session",
+                    "MCP-Protocol-Version": "2025-11-25",
+                },
+            )
+            assert resp.status == 400
+            assert b"Unknown MCP-Session-Id" in resp.data
+        finally:
+            httpd.shutdown()
+
+    def test_message_rejects_unknown_session_id(self):
+        httpd = _start_http_server(_make_mcp_server())
+        try:
+            body = json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}).encode()
+            resp = _http_request(
+                httpd.host, httpd.port, "POST", "/message?sessionId=attacker-session",
+                body=body,
+                headers={"Content-Type": "application/json"},
+            )
+            assert resp.status == 400
+            assert b"Unknown sessionId" in resp.data
+        finally:
+            httpd.shutdown()
+
+    def test_initialize_rejects_client_supplied_session_id(self):
+        httpd = _start_http_server(_make_mcp_server())
+        try:
+            body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}).encode()
+            resp = _http_request(
+                httpd.host, httpd.port, "POST", "/mcp",
+                body=body,
+                headers={"Content-Type": "application/json", "MCP-Session-Id": "chosen-by-client"},
+            )
+            assert resp.status == 400
+            assert b"must not be sent" in resp.data
         finally:
             httpd.shutdown()

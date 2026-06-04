@@ -220,6 +220,8 @@ def test_approval_scope_remaining_uses_is_consumed_atomically(tmp_path):
         ApprovalScope(
             id="one-shot",
             run_id="run-1",
+            transport="internal_mcp",
+            server_origin="tool_executor",
             tool_name="write_file",
             path=target_path,
             risk=RiskLevel.WRITE,
@@ -354,6 +356,8 @@ def test_approval_scope_expires(tmp_path):
             ApprovalScope(
                 id="short",
                 run_id="run-1",
+                transport="internal_mcp",
+                server_origin="tool_executor",
                 tool_name="write_file",
                 path=target_path,
                 risk=RiskLevel.WRITE,
@@ -388,6 +392,8 @@ def test_approve_all_scope_does_not_leak_to_another_run(tmp_path):
         ApprovalScope(
             id="run-only",
             run_id="run-1",
+            transport="internal_mcp",
+            server_origin="tool_executor",
             risk=RiskLevel.SHELL,
             expires_at=time.time() + 60,
             remaining_uses=1,
@@ -493,3 +499,103 @@ def test_call_agent_rejects_all_reserved_fields(tmp_path):
         )
         assert result.ok is False
         assert field in str(result.error)
+
+
+def test_write_stdin_same_session_is_serialized(tmp_path):
+    approval = MagicMock()
+    approval.approve.return_value = True
+    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), approval)
+    intervals = []
+    guard = threading.Lock()
+
+    def handler(call):
+        start = time.monotonic()
+        time.sleep(0.05)
+        end = time.monotonic()
+        with guard:
+            intervals.append((call.name, start, end))
+        return ToolResult(ok=True, tool_name=call.name, content="ok")
+
+    executor.registry.register("write_stdin", handler)
+    calls = [ToolCall(name="write_stdin", arguments={"session_id": 7, "chars": "x"}) for _ in range(2)]
+    threads = [threading.Thread(target=executor.execute, args=(call,)) for call in calls]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert len(intervals) == 2
+    first, second = sorted((start, end) for _, start, end in intervals)
+    assert first[1] <= second[0]
+
+
+def test_close_command_session_does_not_run_parallel_with_write_stdin(tmp_path):
+    approval = MagicMock()
+    approval.approve.return_value = True
+    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), approval)
+    intervals = []
+    guard = threading.Lock()
+
+    def handler(call):
+        start = time.monotonic()
+        time.sleep(0.05)
+        end = time.monotonic()
+        with guard:
+            intervals.append((call.name, start, end))
+        return ToolResult(ok=True, tool_name=call.name, content="ok")
+
+    executor.registry.register("write_stdin", handler)
+    executor.registry.register("close_command_session", handler)
+    calls = [
+        ToolCall(name="write_stdin", arguments={"session_id": 9, "chars": "x"}),
+        ToolCall(name="close_command_session", arguments={"session_id": 9}),
+    ]
+    threads = [threading.Thread(target=executor.execute, args=(call,)) for call in calls]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert len(intervals) == 2
+    first, second = sorted((start, end) for _, start, end in intervals)
+    assert first[1] <= second[0]
+
+
+def test_call_agent_scope_limits_caller_and_target_agent(tmp_path):
+    approval = MagicMock()
+    approval.approve.return_value = False
+    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), approval)
+    executor.set_call_agent_fn(MagicMock(return_value="ok"))
+    executor.approval_broker.approve_scope(
+        ApprovalScope(
+            id="claude-to-codex",
+            run_id="run-1",
+            transport="internal_mcp",
+            server_origin="tool_executor",
+            tool_name="call_agent",
+            agent_name="claude",
+            target_agent_name="codex",
+            risk=RiskLevel.DELEGATION,
+            expires_at=time.time() + 60,
+            remaining_uses=1,
+        )
+    )
+
+    codex = executor.execute(
+        ToolCall(
+            name="call_agent",
+            arguments={"agent_name": "codex", "task": "x"},
+            metadata=_trusted(run_id="run-1", agent_name="claude", delegation_budget=0),
+        )
+    )
+    gemini = executor.execute(
+        ToolCall(
+            name="call_agent",
+            arguments={"agent_name": "gemini", "task": "x"},
+            metadata=_trusted(run_id="run-1", agent_name="claude", delegation_budget=0),
+        )
+    )
+
+    assert codex.ok is True
+    assert gemini.ok is False
+    approval.approve.assert_called_once()
