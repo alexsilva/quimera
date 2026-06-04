@@ -162,7 +162,7 @@ class ClaudePlugin(AgentPlugin):
         return ["--mcp-config", json.dumps(config)]
 
     def mcp_http_server_args(self, url: str) -> list[str]:
-        """MCP HTTP externo não é injetado em comandos CLI locais do Claude."""
+        """Retorna uma lista vazia de argumentos MCP HTTP para o Claude CLI."""
         _ = url
         return []
 

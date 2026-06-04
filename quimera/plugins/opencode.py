@@ -85,7 +85,7 @@ class OpenCodePlugin(AgentPlugin):
         return json.dumps(config)
 
     def env_for_cli(self) -> dict:
-        """Injeta OPENCODE_CONFIG_CONTENT apenas para o MCP socket interno."""
+        """Retorna variáveis de ambiente do OpenCode para conectar ao MCP socket."""
         socket_path = (self._mcp_socket_path or "").strip()
         if not socket_path:
             return {}
