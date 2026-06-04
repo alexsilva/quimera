@@ -1,6 +1,7 @@
 """Testes para quimera.runtime.mcp.http_server.MCP_HTTPServer."""
 from __future__ import annotations
 
+import io
 import json
 import os
 import queue
@@ -24,6 +25,8 @@ from quimera.runtime.mcp.http_server import (
     _SSEQueueOutput,
 )
 from quimera.runtime.mcp.session import parse_http_allowed_tools
+from quimera.runtime.config import ToolRuntimeConfig
+from quimera.runtime.executor import ToolExecutor
 from quimera.runtime.models import ToolResult
 
 
@@ -638,6 +641,82 @@ class TestToolsCallHTTP:
             assert httpd.allowed_tools == DEFAULT_HTTP_READ_ONLY_TOOLS
         finally:
             httpd.shutdown()
+
+
+    def test_profile_allowlists_filter_http_tools_for_external_clients(self):
+        executor = _make_executor(tool_names=[
+            "read_file", "grep_search", "web_search", "web_fetch",
+            "call_agent", "run_shell", "write_file", "apply_patch",
+        ])
+        cases = {
+            "read-local": {"read_file", "grep_search"},
+            "read": {"read_file", "grep_search", "web_search", "web_fetch"},
+            "agent": {"read_file", "grep_search", "web_search", "web_fetch", "call_agent"},
+        }
+        for profile, expected_subset in cases.items():
+            httpd = MCP_HTTPServer(
+                _make_mcp_server(executor),
+                host="127.0.0.1",
+                port=0,
+                allowed_tools=parse_http_allowed_tools(profile),
+            )
+            httpd.start_background()
+            _wait_for_server(httpd.host, httpd.port)
+            try:
+                body = json.dumps({
+                    "jsonrpc": "2.0", "id": 33, "method": "tools/list",
+                }).encode("utf-8")
+                resp = _http_request(
+                    httpd.host, httpd.port, "POST", "/message",
+                    body=body, headers={"Content-Type": "application/json"},
+                )
+                tool_names = {tool["name"] for tool in json.loads(resp.data)["result"]["tools"]}
+                assert expected_subset <= tool_names
+                if profile == "read-local":
+                    assert "web_search" not in tool_names
+                    assert "web_fetch" not in tool_names
+                if profile != "agent":
+                    assert "call_agent" not in tool_names
+                assert "run_shell" not in tool_names
+                assert "write_file" not in tool_names
+                assert "apply_patch" not in tool_names
+            finally:
+                httpd.shutdown()
+
+    def test_internal_mcp_server_lists_sensitive_tools_without_http_allowlist(self):
+        executor = _make_executor(tool_names=["read_file", "run_shell", "write_file", "apply_patch"])
+        server = _make_mcp_server(executor)
+        inp = io.StringIO(json.dumps({"jsonrpc": "2.0", "id": 34, "method": "tools/list"}) + "\n")
+        out = io.StringIO()
+
+        server.serve(stdin=inp, stdout=out)
+
+        response = json.loads(out.getvalue())
+        tool_names = {tool["name"] for tool in response["result"]["tools"]}
+        assert {"run_shell", "write_file", "apply_patch"} <= tool_names
+
+    def test_sensitive_internal_tool_calls_still_go_through_tool_policy_and_approval(self, tmp_path):
+        approval = MagicMock()
+        approval.approve.return_value = False
+        executor = ToolExecutor(
+            ToolRuntimeConfig(workspace_root=tmp_path),
+            approval_handler=approval,
+        )
+        server = _make_mcp_server(executor)
+        inp = io.StringIO(json.dumps({
+            "jsonrpc": "2.0",
+            "id": 35,
+            "method": "tools/call",
+            "params": {"name": "run_shell", "arguments": {"command": "pwd"}},
+        }) + "\n")
+        out = io.StringIO()
+
+        server.serve(stdin=inp, stdout=out)
+
+        approval.approve.assert_called_once()
+        response = json.loads(out.getvalue())
+        assert response["result"]["isError"] is True
+        assert "Execução negada" in response["result"]["content"][0]["text"]
 
     def test_tools_call_blocks_tools_outside_default_allowlist(self):
         executor = _make_executor(tool_names=["read_file", "run_shell"])
