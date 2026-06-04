@@ -851,27 +851,22 @@ class TestLatestMCPFeatures:
         assert "quimera-task" in completion["result"]["completion"]["values"]
 
 class TestPluginHTTPIntegration:
-    def test_claude_codex_opencode_recebem_config_http(self):
+    def test_http_config_is_legacy_and_not_injected_without_socket(self):
         from quimera.plugins.claude import ClaudePlugin
         from quimera.plugins.codex import CodexPlugin
         from quimera.plugins.opencode import OpenCodePlugin
 
-        claude = ClaudePlugin(name="c", prefix="/c", style=("x", "C"))
+        claude = ClaudePlugin(name="c", prefix="/c", style=("x", "C"), cmd=["claude", "-"])
         claude.set_mcp_http_config("http://127.0.0.1:9090/mcp", "tok")
-        claude_args = claude.mcp_http_server_args("http://127.0.0.1:9090/mcp")
-        assert "--mcp-config" in claude_args
-        assert "http://127.0.0.1:9090/mcp" in claude_args[-1]
-        assert "Bearer tok" in claude_args[-1]
+        assert claude.effective_cmd() == ["claude", "-"]
+        assert claude.mcp_http_server_args("http://127.0.0.1:9090/mcp") == []
 
         codex = CodexPlugin(name="x", prefix="/x", style=("x", "X"), cmd=["codex", "exec", "-"])
         codex.set_mcp_http_config("http://127.0.0.1:9090/mcp", "tok")
         codex_cmd = codex.effective_cmd()
-        assert any('mcp_servers.quimera.url="http://127.0.0.1:9090/mcp"' == part for part in codex_cmd)
-        assert any("Bearer tok" in part for part in codex_cmd)
+        assert not any("mcp_servers.quimera.url" in str(part) for part in codex_cmd)
+        assert not any("mcp_servers.quimera.transport" in str(part) for part in codex_cmd)
 
         opencode = OpenCodePlugin(name="o", prefix="/o", style=("x", "O"))
         opencode.set_mcp_http_config("http://127.0.0.1:9090/mcp", "tok")
-        env = opencode.env_for_cli()
-        assert "OPENCODE_CONFIG_CONTENT" in env
-        assert '"type": "remote"' in env["OPENCODE_CONFIG_CONTENT"]
-        assert "Bearer tok" in env["OPENCODE_CONFIG_CONTENT"]
+        assert opencode.env_for_cli() == {}

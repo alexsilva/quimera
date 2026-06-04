@@ -205,6 +205,104 @@ def test_claude_plugin_injects_mcp_server():
         plugin.set_mcp_socket_path(original_mcp_socket)
 
 
+
+def test_base_agent_plugin_prefers_socket_when_socket_and_http_are_set():
+    from quimera.plugins.base import AgentPlugin
+
+    class _SocketPlugin(AgentPlugin):
+        def mcp_server_args(self, socket_path: str) -> list[str]:
+            return ["--mcp-socket", socket_path]
+
+        def mcp_http_server_args(self, url: str) -> list[str]:
+            return ["--mcp-http", url]
+
+    plugin = _SocketPlugin(name="base-test", prefix="/base-test", style=("white", "Base"), cmd=["agent", "-"])
+    plugin.set_mcp_socket_config("/tmp/quimera.sock", "internal-token")
+    plugin.set_mcp_http_config("https://external.example/mcp", "external-token")
+
+    cmd = plugin.effective_cmd()
+
+    assert cmd == ["agent", "--mcp-socket", "/tmp/quimera.sock", "-"]
+    assert "--mcp-http" not in cmd
+    assert plugin._build_token_args() == ["--token", "internal-token"]
+
+
+def test_claude_plugin_prefers_socket_when_socket_and_http_are_set():
+    import json as _json
+    plugin = get_plugin("claude")
+    assert plugin is not None
+    original_mcp_socket = plugin._mcp_socket_path
+    original_mcp_http = plugin._mcp_http_url
+    original_token = plugin._mcp_token
+    try:
+        plugin.set_mcp_socket_config("/tmp/quimera.sock", "internal-token")
+        plugin.set_mcp_http_config("https://external.example/mcp", "external-token")
+        cmd = plugin.effective_cmd()
+        idx = cmd.index("--mcp-config")
+        config_raw = cmd[idx + 1]
+        config = _json.loads(config_raw)
+        server = config["mcpServers"]["quimera"]
+        assert server["type"] == "stdio"
+        assert server["command"] == "python"
+        assert "--connect-socket" in server["args"]
+        assert "/tmp/quimera.sock" in server["args"]
+        assert "internal-token" in server["args"]
+        assert "type=http" not in config_raw
+        assert "https://external.example/mcp" not in config_raw
+    finally:
+        plugin._mcp_socket_path = original_mcp_socket
+        plugin._mcp_http_url = original_mcp_http
+        plugin._mcp_token = original_token
+
+
+def test_codex_plugin_prefers_socket_when_socket_and_http_are_set():
+    plugin = get_plugin("codex")
+    assert plugin is not None
+    original_mcp_socket = plugin._mcp_socket_path
+    original_mcp_http = plugin._mcp_http_url
+    original_token = plugin._mcp_token
+    try:
+        plugin.set_mcp_socket_config("/tmp/quimera.sock", "internal-token")
+        plugin.set_mcp_http_config("https://external.example/mcp", "external-token")
+        cmd = plugin.effective_cmd()
+        joined = "\n".join(cmd)
+        assert 'mcp_servers.quimera.command="python"' in cmd
+        assert "--connect-socket" in joined
+        assert "/tmp/quimera.sock" in joined
+        assert "internal-token" in joined
+        assert "mcp_servers.quimera.url" not in joined
+        assert "mcp_servers.quimera.transport" not in joined
+        assert "https://external.example/mcp" not in joined
+    finally:
+        plugin._mcp_socket_path = original_mcp_socket
+        plugin._mcp_http_url = original_mcp_http
+        plugin._mcp_token = original_token
+
+
+def test_opencode_plugin_prefers_local_socket_env_when_socket_and_http_are_set():
+    plugin = get_plugin("opencode")
+    assert isinstance(plugin, OpenCodePlugin)
+    original_mcp_socket = plugin._mcp_socket_path
+    original_mcp_http = plugin._mcp_http_url
+    original_token = plugin._mcp_token
+    try:
+        plugin.set_mcp_socket_config("/tmp/quimera.sock", "internal-token")
+        plugin.set_mcp_http_config("https://external.example/mcp", "external-token")
+        env = plugin.env_for_cli()
+        config_raw = env["OPENCODE_CONFIG_CONTENT"]
+        config = json.loads(config_raw)
+        server = config["mcp"]["quimera"]
+        assert server["type"] == "local"
+        assert "--connect-socket" in server["command"]
+        assert "/tmp/quimera.sock" in server["command"]
+        assert "internal-token" in server["command"]
+        assert '"type": "remote"' not in config_raw
+        assert "https://external.example/mcp" not in config_raw
+    finally:
+        plugin._mcp_socket_path = original_mcp_socket
+        plugin._mcp_http_url = original_mcp_http
+        plugin._mcp_token = original_token
+
 def test_agent_client_run_success(renderer):
     client = AgentClient(renderer)
     with patch("subprocess.Popen") as mock_popen:
