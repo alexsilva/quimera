@@ -14,7 +14,7 @@ from .tools.web import WebTool
 from .tools.tasks import TaskTools
 from .tools.handoff import HandoffTools
 from .tools.todo import TodoTools
-from .approve_summary import ApproveSummary
+from .approval_broker import ApprovalBroker
 
 
 class ToolExecutor:
@@ -39,6 +39,7 @@ class ToolExecutor:
         self.policy = policy or ToolPolicy(config)
         self._tool_preview_callback = None
         self._tool_progress_callback = None
+        self.approval_broker = ApprovalBroker(config, approval_handler)
         self._task_tools = TaskTools(self.config)
         self._handoff_tools = HandoffTools(self.config)
         self._todo_tools = TodoTools(self.config)
@@ -134,7 +135,11 @@ class ToolExecutor:
             if self.policy.requires_path_permission(normalized_call):
                 permission_error = self.policy.check_path_permission(normalized_call)
             needs_approval = self.policy.requires_approval(normalized_call)
-            return permission_error is not None or bool(needs_approval)
+            return self.approval_broker.should_request_approval(
+                normalized_call,
+                needs_policy_approval=bool(needs_approval),
+                permission_error=permission_error,
+            )
         except Exception:
             # Se validation falha, consideramos que precisa de aprovação
             # (seguro: mostra approval mesmo que não precise, nunca o contrário)
@@ -185,29 +190,26 @@ class ToolExecutor:
             needs_approval = self.policy.requires_approval(normalized_call)
             has_permission_issue = permission_error is not None
 
-            if has_permission_issue or needs_approval:
-                # Bloqueia no handler de aprovação (pode ser interativo)
-                approved = self._approval_handler.approve(
+            approved = self.approval_broker.approve(
+                normalized_call,
+                needs_policy_approval=bool(needs_approval),
+                permission_error=permission_error,
+            )
+            if not approved:
+                return ToolResult(
+                    ok=False,
                     tool_name=normalized_call.name,
-                    summary=(
-                        f"Permissão necessária para acessar: {permission_error.resolved_path}"
-                        if has_permission_issue
-                        else ApproveSummary.build(normalized_call.name, normalized_call.arguments)
-                    ),
+                    error="Execução negada pelo usuário",
                 )
-                if not approved:
-                    return ToolResult(
-                        ok=False,
-                        tool_name=normalized_call.name,
-                        error="Execução negada pelo usuário",
-                    )
-            else:
-                # Tool sem approval: exibe preview informativo se houver callback
+
+            if not (has_permission_issue or needs_approval):
+                # Tool sem approval humano: exibe preview informativo se houver callback
                 if self._tool_preview_callback is not None:
                     self._tool_preview_callback(normalized_call.name, normalized_call.arguments)
 
             handler = self.registry.get(normalized_call.name)
-            return handler(normalized_call)
+            with self.approval_broker.execution_guard(normalized_call):
+                return handler(normalized_call)
         except ToolPolicyError as exc:
             return ToolResult(ok=False, tool_name=normalized_call.name, error=str(exc))
         except Exception as exc:  # noqa: BLE001

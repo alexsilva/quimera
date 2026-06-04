@@ -288,7 +288,7 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
             state = mcp_server._http_sessions.setdefault(session_id, {"initialize_seen": False, "initialized": False, "strict_lifecycle": True})
             setattr(out, "_mcp_state", state)
         try:
-            mcp_server._mcp._process_message(msg, out=out)
+            mcp_server._mcp._process_message(msg, out=out, transport="http_mcp")
             mcp_server._mcp._drain_all_pending(out)
         except Exception as exc:
             _logger.exception("MCP HTTP: error handling /mcp")
@@ -350,7 +350,7 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
             out = StringIO()
 
         try:
-            mcp_server._mcp._process_message(msg, out=out)
+            mcp_server._mcp._process_message(msg, out=out, transport="http_mcp")
             # Para requisições sem canal SSE, aguarda conclusão de tools/call
             # assíncronas antes de ler o StringIO (evita resposta vazia).
             if isinstance(out, StringIO):

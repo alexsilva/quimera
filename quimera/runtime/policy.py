@@ -39,7 +39,7 @@ class PathPermissionError(ToolPolicyError):
 class ToolPolicy:
     """Implementa `ToolPolicy`."""
     _SHELL_CHAIN_OPERATORS = (";", "&&", "||", "|", "`", "$(")
-    _POLICY_BYPASS_TOOLS = {"call_agent"}
+    _POLICY_BYPASS_TOOLS: set[str] = set()
     # Comandos que aceitam paths de arquivo como argumento — sujeitos à validação de workspace
     _FILE_PATH_CMDS: frozenset[str] = frozenset({"cat", "head", "tail", "less", "grep", "sed", "find", "ls"})
 
@@ -70,8 +70,6 @@ class ToolPolicy:
 
     def requires_approval(self, call: ToolCall) -> bool:
         """Executa requires approval."""
-        if call.name in self._POLICY_BYPASS_TOOLS:
-            return False
         if call.name in {
             "write_file",
             "apply_patch",
@@ -81,6 +79,7 @@ class ToolPolicy:
             "close_command_session",
             "remove_file",
             "write_stdin",
+            "call_agent",
         }:
             return self.config.require_approval_for_mutations
         return False
@@ -99,6 +98,22 @@ class ToolPolicy:
                 return None
 
         return PathPermissionError(raw, path)
+
+
+    def _validate_call_agent(self, call: ToolCall) -> None:
+        """Valida delegação cross-agent antes do ApprovalBroker."""
+        agent_name = call.arguments.get("agent_name")
+        task = call.arguments.get("task")
+        if not isinstance(agent_name, str) or not agent_name.strip():
+            raise ToolPolicyError("call_agent requer 'agent_name' não vazio")
+        if not isinstance(task, str) or not task.strip():
+            raise ToolPolicyError("call_agent requer 'task' não vazia")
+        context = call.arguments.get("context")
+        if context is not None and not isinstance(context, str):
+            raise ToolPolicyError("call_agent.context deve ser string quando fornecido")
+        fallback_agents = call.arguments.get("fallback_agents", [])
+        if fallback_agents is not None and not isinstance(fallback_agents, list):
+            raise ToolPolicyError("call_agent.fallback_agents deve ser uma lista")
 
     def _validate_list_files(self, call: ToolCall) -> None:
         """Executa validate list files."""
@@ -288,6 +303,8 @@ class ToolPolicy:
             raise ToolPolicyError(f"Comando inválido: {command}") from exc
         if first_token not in self.config.shell_allowlist:
             raise ToolPolicyError(f"Comando fora da allowlist: {first_token}")
+        if first_token == "git" and len(tokens) > 1 and tokens[1] in {"push"}:
+            raise ToolPolicyError("Comando bloqueado: git push exige confirmação forte fora do shell MCP")
         if first_token in self._FILE_PATH_CMDS:
             self._validate_shell_file_paths(tokens[1:])
 
