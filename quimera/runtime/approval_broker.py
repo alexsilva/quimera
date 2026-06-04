@@ -88,10 +88,6 @@ class TrustedToolExecutionContext:
         return f"thread:{threading.get_ident()}"
 
 
-# Backward-compatible public name, but it now means trusted context.
-ToolExecutionContext = TrustedToolExecutionContext
-
-
 @dataclass(slots=True)
 class ApprovalRequest:
     """Pedido de aprovação auditable."""
