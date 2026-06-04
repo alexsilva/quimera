@@ -1,5 +1,6 @@
 """Componentes de `quimera.app.core`."""
 import inspect
+import json
 import os
 import platform
 import queue
@@ -9,6 +10,7 @@ import sys
 import threading
 import time
 from collections import defaultdict
+from datetime import datetime, timezone
 from contextlib import nullcontext
 from importlib import metadata
 from pathlib import Path
@@ -84,7 +86,7 @@ from ..constants import (
     Visibility,
 )
 from ..modes import MODES
-from ..shared_state import AGENT_STATE_KEYS, bootstrap_state_key_stamps, expire_stale_keys
+from ..shared_state import bootstrap_state_key_stamps, clear_agent_state_for_session_start, expire_stale_keys
 from .bug_services import BugServices
 from .command_router import CommandRouter
 from .config import logger
@@ -152,6 +154,11 @@ class QuimeraApp:
                  plugin_registry: PluginRegistry | None = None,
                  ):
         """Inicializa uma instância de QuimeraApp."""
+        self._lock = threading.Lock()
+        self._history_lock = threading.Lock()
+        self._output_lock = threading.Lock()
+        self._counter_lock = threading.Lock()
+        self._shared_state_lock = threading.Lock()
         self.selected_agents = list(agents) if agents else []
         self.agent_pool = AgentPool(self.selected_agents)
         self.threads = int(threads) if threads is not None else 1
@@ -221,7 +228,7 @@ class QuimeraApp:
             set_prompt_owner=lambda v: setattr(self.runtime_state, 'prompt_owning_thread_id', v),
             set_prompt_visible=lambda v: setattr(self.runtime_state, 'nonblocking_prompt_visible', v),
             flush_deferred_messages=lambda: self.system_layer.flush_deferred_messages(),
-            output_lock=getattr(self, '_output_lock', None),
+            output_lock=self._output_lock,
         )
         self.input_gate.set_toolbar_context_resolver(self._build_input_toolbar_context)
         self.input_gate.set_theme_cycle_handler(self._cycle_renderer_theme)
@@ -301,18 +308,13 @@ class QuimeraApp:
         self.agent_client.tool_event_callback = self._record_tool_event
         self.debug_prompt_metrics = debug
         self.shared_state = last_session["shared_state"]
-        # Sessão nova: limpa estado de agentes para evitar objetivo "grudado".
         self._turn_stamps: dict = {}
-        if not history_restored:
-            for key in AGENT_STATE_KEYS:
-                self.shared_state.pop(key, None)
-            self.shared_state.pop("_current_turn", None)
+        clear_agent_state_for_session_start(self.shared_state, history_restored=history_restored)
         bootstrap_state_key_stamps(
             self.shared_state,
             self._turn_stamps,
             current_turn=int(self.shared_state.get("_current_turn", 0) or 0),
         )
-        self._shared_state_lock = threading.Lock()
         self._chat_state = SessionState(
             history=self.history,
             shared_state=self.shared_state,
@@ -320,7 +322,6 @@ class QuimeraApp:
             shared_state_lock=self._shared_state_lock,
         )
         self._chat_state.summary_agent_preference = self.agent_pool.primary
-        self._lock = threading.Lock()
         self.protocol = AppProtocol(
             lock=self._shared_state_lock,
             shared_state=self.shared_state,
@@ -328,9 +329,6 @@ class QuimeraApp:
             decisions_log_path=self.workspace.decisions_log,
             turn_stamps=self._turn_stamps,
         )
-        self._history_lock = threading.Lock()
-        self._output_lock = threading.Lock()
-        self._counter_lock = threading.Lock()
         self.runtime_state = AppRuntimeState()
         self._deferred_system_messages: list[str] = []
         self._MAX_DEFERRED_SYSTEM_MESSAGES = 20
@@ -354,6 +352,7 @@ class QuimeraApp:
         runtime_tasks.init_db(self.tasks_db_path)
         self.current_job_id = runtime_tasks.add_job(f"Session {session_id}", db_path=self.tasks_db_path)
         self.session_state["current_job_id"] = self.current_job_id
+        self._previous_current_job_id_env = os.environ.get("QUIMERA_CURRENT_JOB_ID")
         os.environ["QUIMERA_CURRENT_JOB_ID"] = str(self.current_job_id)
 
         session_state = {
@@ -1454,9 +1453,6 @@ class QuimeraApp:
         """Interpreta response."""
         if getattr(self.protocol, "_shared_state", None) is not self.shared_state:
             self.protocol._shared_state = self.shared_state
-        current_lock = getattr(self, "_lock", None) or getattr(self, "_lock", None)
-        if current_lock is not None and getattr(self.protocol, "_lock", None) is not current_lock:
-            self.protocol._lock = current_lock
         return self.protocol.parse_response(response)
 
     def _advance_shared_state_turn(self) -> None:
@@ -1494,29 +1490,66 @@ class QuimeraApp:
             self.storage.save_history(self.history, shared_state=self.shared_state)
 
     def _merge_staging_to_workspace(self, staging_root: Path):
-        """Mescla arquivos do staging para o workspace em ordem de índice."""
+        """Mescla arquivos do staging para o workspace em ordem de índice com auditoria."""
 
         if not staging_root.exists():
             logger.debug("merge: staging_root does not exist, skipping")
-            return
+            return []
 
+        workspace_root = self.workspace.cwd.resolve()
+        manifest = []
         index_dirs = sorted(staging_root.iterdir(), key=lambda p: int(p.name) if p.name.isdigit() else 999)
-        total_merged = 0
 
         for index_dir in index_dirs:
-            if not index_dir.is_dir():
+            if not index_dir.is_dir() or index_dir.is_symlink():
                 continue
             for src in index_dir.rglob("*"):
+                if src.is_symlink():
+                    raise ValueError(f"merge blocked symlink source: {src}")
                 if not src.is_file():
                     continue
                 rel_path = src.relative_to(index_dir)
                 dest = self.workspace.cwd / rel_path
+                dest_resolved = dest.resolve(strict=False)
+                if not dest_resolved.is_relative_to(workspace_root):
+                    raise ValueError(f"merge blocked destination outside workspace: {rel_path}")
+                if dest.exists() and dest.is_symlink():
+                    raise ValueError(f"merge blocked symlink destination: {dest}")
+                overwritten = dest.exists()
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(src, dest)
-                total_merged += 1
-                logger.debug("merged: %s -> %s", src, dest)
+                entry = {
+                    "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                    "source": str(src),
+                    "destination": str(dest_resolved),
+                    "relative_path": rel_path.as_posix(),
+                    "overwritten": overwritten,
+                }
+                manifest.append(entry)
+                logger.info(
+                    "merge %s: %s -> %s",
+                    "overwrote" if overwritten else "created",
+                    src,
+                    dest_resolved,
+                )
 
-        logger.info("merge completed: %d files to %s", total_merged, self.workspace.cwd)
+        manifest_path = getattr(self.workspace, "state_dir", None)
+        if manifest and manifest_path is not None:
+            manifest_file = manifest_path / "staging_merge_manifest.jsonl"
+            manifest_file.parent.mkdir(parents=True, exist_ok=True)
+            with manifest_file.open("a", encoding="utf-8") as fh:
+                for entry in manifest:
+                    fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        logger.info("merge completed: %d files to %s", len(manifest), workspace_root)
+        return manifest
+
+    def _restore_current_job_env(self) -> None:
+        """Restaura QUIMERA_CURRENT_JOB_ID para evitar vazamento entre sessões."""
+        previous = getattr(self, "_previous_current_job_id_env", None)
+        if previous is None:
+            os.environ.pop("QUIMERA_CURRENT_JOB_ID", None)
+        else:
+            os.environ["QUIMERA_CURRENT_JOB_ID"] = previous
 
     def _process_chat_message(self, user):
         """Executa process chat message com controle de turno."""

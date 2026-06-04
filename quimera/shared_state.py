@@ -18,6 +18,13 @@ AGENT_STATE_KEYS = {
     "next_step",
 }
 
+VOLATILE_AGENT_STATE_KEYS = {
+    "goal",
+    "goal_canonical",
+    "current_step",
+    "next_step",
+}
+
 # Campos de runtime escritos apenas pelo sistema.
 SYSTEM_STATE_KEYS = {
     "task_overview",
@@ -143,3 +150,19 @@ def expire_stale_keys(shared_state: dict, turn_stamps: dict, current_turn: int, 
             turn_stamps.pop(key, None)
             expired.append(key)
     return expired
+
+
+def clear_agent_state_for_session_start(shared_state: dict, *, history_restored: bool) -> list[str]:
+    """Remove estado ativo que não deve iniciar uma nova execução interativa."""
+    if not isinstance(shared_state, dict):
+        return []
+    keys = VOLATILE_AGENT_STATE_KEYS if history_restored else AGENT_STATE_KEYS
+    removed = []
+    for key in keys:
+        if key in shared_state:
+            shared_state.pop(key, None)
+            removed.append(key)
+    if not history_restored and "_current_turn" in shared_state:
+        shared_state.pop("_current_turn", None)
+        removed.append("_current_turn")
+    return removed

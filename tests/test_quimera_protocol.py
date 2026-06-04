@@ -1577,10 +1577,11 @@ class ProtocolTests(unittest.TestCase):
             self.assertRegex(session_state.get("os_info", ""), r"^\S.+\S$")
             self.assertIs(session_state.get("mcp_enabled"), False)
             self.assertEqual(session_state.get("mcp_socket_path"), "")
+            self.assertIs(app.input_services._output_lock, app._output_lock)
         finally:
             app._stop_task_executors()
         self.assertIsInstance(session_state["current_job_id"], int)
-        self.assertEqual(app.shared_state, {"goal": "continuar"})
+        self.assertEqual(app.shared_state, {})
 
     def test_app_uses_default_history_window_from_config(self):
         temp_root = Path(self.enterContext(tempfile.TemporaryDirectory()))
@@ -5515,8 +5516,8 @@ class AppProtocolDirectTests(unittest.TestCase):
         self.assertIsNone(route_target)
         self.assertIsNone(handoff)
 
-    def test_parse_response_json_handoff_ignored_when_textual_handoff_disabled(self):
-        """Envelope handoff legado não rota nem dispara handoff."""
+    def test_parse_response_json_handoff_is_plain_content(self):
+        """JSON type=handoff não rota nem dispara delegação."""
         app = self._make_app()
         proto = _make_protocol(app)
 
@@ -5603,13 +5604,11 @@ class AppProtocolDirectTests(unittest.TestCase):
 
     # --- parse_envelope ---
 
-    def test_parse_envelope_valid_handoff(self):
+    def test_parse_envelope_handoff_is_not_supported(self):
         env = AppProtocol.parse_envelope(
             '{"type": "handoff", "content": "task: refactor", "route": "codex"}'
         )
-        self.assertIsInstance(env, ProtocolEnvelope)
-        self.assertEqual(env.type, "handoff")
-        self.assertEqual(env.content, "task: refactor")
+        self.assertIsNone(env)
 
     def test_parse_envelope_valid_state_update(self):
         env = AppProtocol.parse_envelope(
@@ -5695,8 +5694,8 @@ class AppProtocolDirectTests(unittest.TestCase):
         result = AppProtocol.parse_envelope(text)
         self.assertIsNone(result)
 
-    def test_parse_response_embedded_envelope_with_text_before(self):
-        """Texto antes de envelope handoff é preservado sem rotear."""
+    def test_parse_response_embedded_handoff_json_with_text_before(self):
+        """JSON type=handoff é conteúdo comum e não roteia."""
         text = (
             'Aqui está minha análise\n'
             '{"type": "handoff", "content": "task: refactor", "route": "codex"}'
@@ -5708,13 +5707,13 @@ class AppProtocolDirectTests(unittest.TestCase):
         )
         self.assertIsNone(route_target)
         self.assertIsNone(handoff)
-        self.assertEqual(response, "Aqui está minha análise")
+        self.assertEqual(response, text)
         self.assertIsNone(ack_id)
         self.assertFalse(extend)
         self.assertFalse(needs_input)
 
-    def test_parse_response_embedded_envelope_with_handoffs(self):
-        """Envelope handoffs[] embutido é removido do texto, sem rotear."""
+    def test_parse_response_embedded_handoff_array_json_is_plain_text(self):
+        """JSON type=handoff com handoffs[] é conteúdo comum."""
         text = (
             'Análise\n'
             '{"type": "handoff", "handoffs": ['
@@ -5729,12 +5728,12 @@ class AppProtocolDirectTests(unittest.TestCase):
         )
         self.assertIsNone(route_target)
         self.assertIsNone(handoff)
-        self.assertEqual(response, "Análise")
+        self.assertEqual(response, text)
 
     # --- Embedded envelope tests ---
 
-    def test_parse_response_embedded_envelope_text_before_and_after(self):
-        """Envelope handoff embutido mantém texto antes/depois sem rotear."""
+    def test_parse_response_embedded_handoff_json_text_before_and_after(self):
+        """JSON type=handoff embutido permanece no conteúdo e não roteia."""
         text = (
             'Análise inicial\n'
             '{"type": "handoff", "content": "task: revise", "route": "gemini"}\n'
@@ -5747,10 +5746,10 @@ class AppProtocolDirectTests(unittest.TestCase):
         self.assertIsNone(handoff)
         self.assertIn("Análise inicial", response)
         self.assertIn("Observação final", response)
-        self.assertNotIn("task: revise", response)
+        self.assertIn("task: revise", response)
 
-    def test_parse_response_embedded_envelope_text_after_only(self):
-        """Envelope handoff com texto só depois não roteia."""
+    def test_parse_response_embedded_handoff_json_text_after_only(self):
+        """JSON type=handoff com texto depois permanece no conteúdo."""
         text = (
             '{"type": "handoff", "content": "task: check", "route": "codex"}\n'
             'Resultado da análise'
@@ -5760,10 +5759,10 @@ class AppProtocolDirectTests(unittest.TestCase):
         response, route_target, handoff, _, _, _ = proto.parse_response(text)
         self.assertIsNone(route_target)
         self.assertIsNone(handoff)
-        self.assertEqual(response, "Resultado da análise")
+        self.assertEqual(response, text)
 
-    def test_parse_response_embedded_envelope_empty_content_rejected(self):
-        """Envelope embutido com content vazio — rejeitado, sem route/handoff."""
+    def test_parse_response_embedded_handoff_json_empty_content_plain_text(self):
+        """JSON type=handoff com content vazio permanece conteúdo comum."""
         text = (
             'texto antes\n'
             '{"type": "handoff", "content": "", "route": "codex"}'
@@ -5773,10 +5772,10 @@ class AppProtocolDirectTests(unittest.TestCase):
         response, route_target, handoff, _, _, _ = proto.parse_response(text)
         self.assertIsNone(route_target)
         self.assertIsNone(handoff)
-        self.assertEqual(response, "texto antes")
+        self.assertEqual(response, text)
 
-    def test_parse_response_embedded_envelope_whitespace_content_rejected(self):
-        """Envelope embutido com content só whitespace — rejeitado."""
+    def test_parse_response_embedded_handoff_json_whitespace_content_plain_text(self):
+        """JSON type=handoff com content whitespace permanece conteúdo comum."""
         text = (
             'texto antes\n'
             '{"type": "handoff", "content": "   ", "route": "codex"}'
@@ -5786,7 +5785,7 @@ class AppProtocolDirectTests(unittest.TestCase):
         response, route_target, handoff, _, _, _ = proto.parse_response(text)
         self.assertIsNone(route_target)
         self.assertIsNone(handoff)
-        self.assertEqual(response, "texto antes")
+        self.assertEqual(response, text)
 
     def test_parse_response_embedded_envelope_state_update(self):
         """Envelope embutido do tipo state_update aplica estado."""
@@ -5819,28 +5818,22 @@ class AppProtocolDirectTests(unittest.TestCase):
         result = AppProtocol._find_envelope_in_text("texto normal sem json")
         self.assertIsNone(result)
 
-    def test_find_envelope_in_text_only_envelope(self):
-        """_find_envelope_in_text encontra envelope mesmo sem texto ao redor."""
+    def test_find_envelope_in_text_ignores_handoff_json(self):
+        """_find_envelope_in_text só reconhece envelopes de protocolo suportados."""
         result = AppProtocol._find_envelope_in_text(
             '{"type": "handoff", "content": "task", "route": "codex"}'
         )
-        self.assertIsNotNone(result)
-        env, before, after = result
-        self.assertEqual(env.type, "handoff")
-        self.assertEqual(before, "")
-        self.assertEqual(after, "")
+        self.assertIsNone(result)
 
-    def test_find_envelope_in_text_nested_braces(self):
-        """_find_envelope_in_text lida com chaves aninhadas no JSON."""
+    def test_find_envelope_in_text_nested_braces_unsupported_type(self):
+        """JSON type=handoff com chaves aninhadas não é envelope de protocolo."""
         text = (
             'texto\n'
             '{"type": "handoff", "content": "nested {braces}", "route": "gemini"}\n'
             'fim'
         )
         result = AppProtocol._find_envelope_in_text(text)
-        self.assertIsNotNone(result)
-        env, before, after = result
-        self.assertEqual(env.type, "handoff")
+        self.assertIsNone(result)
 
     # --- Gap 2: envelope com content vazio ---
 
@@ -5888,8 +5881,8 @@ class AppProtocolDirectTests(unittest.TestCase):
         self.assertIsNone(target)
         self.assertIsNone(handoff)
 
-    def test_parse_response_rejects_legacy_routes_field(self):
-        """type=handoff com routes legado não roteia e segue como texto."""
+    def test_parse_response_handoff_routes_field_is_plain_content(self):
+        """type=handoff com routes não roteia e segue como texto."""
         app = self._make_app()
         proto = _make_protocol(app)
         response, target, handoff, _, _, _ = proto.parse_response(

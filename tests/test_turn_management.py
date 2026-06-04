@@ -963,7 +963,7 @@ class TestSingleAgentPerTurn(unittest.TestCase):
 
         QuimeraApp._do_process_chat_message(app, "analisa")
 
-        # Sem handoff textual: permanece apenas no agente primário.
+        # Retornos delegativos do parser são ignorados: permanece apenas no agente primário.
         self.assertEqual(app.dispatch_services.call_agent.call_count, 1)
         agents_called = [c[0][0] for c in app.dispatch_services.call_agent.call_args_list]
         self.assertEqual(agents_called, ["claude"])
@@ -990,7 +990,7 @@ class TestSingleAgentPerTurn(unittest.TestCase):
         self.assertEqual(app.dispatch_services.call_agent.call_count, 1)
 
     def test_handoff_secondary_can_delegate_to_third_before_synthesis(self):
-        """Sem handoff textual, route_target/handoff retornados pelo parser são ignorados."""
+        """Retornos route_target/handoff do parser são ignorados; delegação real vem de call_agent."""
         app = _make_app(active_agents=["claude", "codex", "opencode-qwen"])
         app.parse_routing = Mock(return_value=("claude", "analisa", False))
 
@@ -1105,7 +1105,7 @@ class TestSingleAgentPerTurn(unittest.TestCase):
         app.show_system_message.assert_called_once_with("Responda para CLAUDE:")
 
     def test_handoff_without_body_continues_chain(self):
-        """Sem handoff textual, fluxo não encadeia delegação por route_target/handoff."""
+        """O fluxo não encadeia delegação por route_target/handoff retornado pelo parser."""
         app = _make_app(active_agents=["claude", "codex", "opencode-qwen"])
         app.parse_routing = Mock(return_value=("claude", "analisa", False))
 
@@ -1162,7 +1162,7 @@ class TestSingleAgentPerTurn(unittest.TestCase):
         self.assertEqual(agents_called, ["claude"])
 
     def test_sequential_handoffs_accumulate_all_delegate_responses_for_synthesis(self):
-        """Sem handoff textual, resposta vazia no primário cai em failover padrão."""
+        """Resposta vazia no primário cai em failover padrão sem delegação por parser."""
         app = _make_app(active_agents=["claude", "codex", "opencode-qwen"])
         app.parse_routing = Mock(return_value=("claude", "analisa", False))
 

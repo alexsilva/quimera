@@ -13,7 +13,7 @@ O Quimera coordena agentes (CLI e OpenAI-compatible), mantém estado compartilha
 ## Arquitetura em alto nível
 
 - `quimera/cli.py`: entrada principal da aplicação e flags de execução.
-- `quimera/app/`: loop interativo, protocolo de handoff, comandos slash e orquestração de rodada.
+- `quimera/app/`: loop interativo, protocolo de respostas/estado, comandos slash e orquestração de rodada.
 - `quimera/runtime/`: drivers, parser de tool calls, políticas e execução de ferramentas.
 - `quimera/runtime/mcp/server.py`: servidor MCP (Model Context Protocol) — expõe tools do runtime via JSON-RPC 2.0 sobre stdio/socket Unix.
 - `quimera/runtime/task_planning.py`: classificação de task e scoring de roteamento.
@@ -209,9 +209,9 @@ Características:
 - **Validação de agentes ativos**: o alvo é verificado contra o pool antes da execução.
 - **Token de autenticação**: usa `QUIMERA_MCP_TOKEN`/`--mcp-token-env` quando configurado; caso contrário cada sessão gera um `secrets.token_urlsafe(32)` único.
 
-### MCP-First Mode
+### Delegação entre agentes via MCP
 
-Quando o MCP está ativo, o parser de protocolo (`app/protocol.py`) ignora envelopes textuais legados (`<handoff>...</handoff>`) — agentes usam exclusivamente a tool `call_agent` via MCP, evitando dupla delegação.
+Delegação entre agentes acontece pela tool MCP `call_agent`. Agentes MCP-capazes chamam essa ferramenta para acionar outro agente do pool da sessão, com validação do alvo, contexto estruturado, fallback opcional e cadeias de delegação declaradas nos argumentos da tool.
 
 ### MCP HTTP embutido
 
@@ -321,7 +321,7 @@ Observações importantes:
 
 ## Ferramentas de runtime
 
-Ferramentas suportadas pelo runtime (expostas via MCP e/ou parser textual):
+Ferramentas suportadas pelo runtime (expostas via MCP e, para tools locais não delegativas, pelos mecanismos de tool call do runtime):
 
 - leitura/inspeção: `list_files`, `read_file`, `grep_search`
 - edição: `apply_patch`, `write_file`, `remove_file`
