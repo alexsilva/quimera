@@ -170,9 +170,23 @@ def test_session_state_history_transactions_preserve_reference_and_return_snapsh
     assert history == trimmed_snapshot
     assert trimmed_snapshot is not history
 
+    dropped, append_snapshot = state.append_history_trimmed_and_snapshot(
+        {"role": "assistant", "content": "m4"},
+        2,
+    )
+
+    assert dropped == 1
+    assert history is original_ref
+    assert append_snapshot == [
+        {"role": "human", "content": "m3"},
+        {"role": "assistant", "content": "m4"},
+    ]
+    assert history == append_snapshot
+    assert append_snapshot is not history
+
     matched, final_snapshot = state.replace_history_if_prefix_matches(
-        trimmed_snapshot,
-        len(trimmed_snapshot),
+        append_snapshot,
+        len(append_snapshot),
         [{"role": "system", "content": "summary"}],
     )
 
@@ -181,6 +195,43 @@ def test_session_state_history_transactions_preserve_reference_and_return_snapsh
     assert final_snapshot == [{"role": "system", "content": "summary"}]
     assert history == final_snapshot
     assert final_snapshot is not history
+
+
+def test_persist_message_returned_snapshot_is_atomic_with_append_and_trim():
+    history = []
+    state = SessionState(history=history, shared_state={"goal": "atomic"})
+
+    class InterleavingStorage(_Storage):
+        def append_log(self, role, content):
+            super().append_log(role, content)
+            state.append_history({"role": "assistant", "content": "concurrent message"})
+
+    storage = InterleavingStorage()
+    service = AppSessionServices(
+        session_state=state,
+        storage=storage,
+        renderer=_Renderer(),
+        agent_pool=SimpleNamespace(primary="codex"),
+        context_manager=_ContextManager(),
+        session_summarizer=Mock(),
+        task_services=Mock(stop_task_executors=Mock()),
+        prompt_builder=SimpleNamespace(history_window=2),
+    )
+
+    snapshot = service.persist_message(
+        "human",
+        "message for this round",
+        return_history_snapshot=True,
+    )
+
+    assert snapshot == [{"role": "human", "content": "message for this round"}]
+    assert storage.saved_history == snapshot
+    assert storage.saved_shared_state == {"goal": "atomic"}
+    assert history == [
+        {"role": "human", "content": "message for this round"},
+        {"role": "assistant", "content": "concurrent message"},
+    ]
+    assert snapshot is not history
 
 
 def test_session_summarize_preserves_concurrent_persisted_message():

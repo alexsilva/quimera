@@ -70,23 +70,27 @@ class AppSessionServices:
         self._last_save_time: float = 0.0
         self._unsaved_messages: int = 0
 
-    def _enforce_history_limit(self) -> int:
-        """Aplica o teto do histórico mesmo quando o resumo automático não roda."""
+    def _history_hard_limit(self) -> int:
+        """Calcula o limite defensivo atual para o histórico em memória."""
         prompt_builder = self._prompt_builder
-        limit = compute_history_hard_limit(
+        return compute_history_hard_limit(
             getattr(prompt_builder, "history_window", None) if prompt_builder else None,
             self._auto_summarize_threshold,
         )
-        dropped, _ = self._session_state.trim_history(limit)
+
+    def _enforce_history_limit(self) -> int:
+        """Aplica o teto do histórico mesmo quando o resumo automático não roda."""
+        dropped, _ = self._session_state.trim_history(self._history_hard_limit())
         return dropped
 
     def persist_message(self, role, content, *, return_history_snapshot: bool = False):
         """Persiste mensagem no histórico, log e snapshot."""
-        self._session_state.append_history({"role": role, "content": content})
+        _, history_snapshot = self._session_state.append_history_trimmed_and_snapshot(
+            {"role": role, "content": content},
+            self._history_hard_limit(),
+        )
         self._storage.append_log(role, content)
-        self._enforce_history_limit()
 
-        history_snapshot = None
         with self._counter_lock:
             self._unsaved_messages += 1
             now = time.monotonic()
@@ -94,8 +98,6 @@ class AppSessionServices:
                 self._unsaved_messages >= _SAVE_DEBOUNCE_MESSAGES
                 or (now - self._last_save_time) >= _SAVE_DEBOUNCE_SECONDS
             )
-            if should_save or return_history_snapshot:
-                history_snapshot = self._session_state.history_snapshot()
             if should_save:
                 self._storage.save_history(
                     history_snapshot,
