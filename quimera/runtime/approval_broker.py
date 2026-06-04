@@ -45,7 +45,7 @@ class TrustedToolExecutionContext:
 
     @classmethod
     def native(cls) -> "TrustedToolExecutionContext":
-        return cls(run_id=f"thread:{threading.get_ident()}")
+        return cls(run_id=f"native:{uuid.uuid4()}", transport="native_tool_call", server_origin="tool_executor")
 
     @classmethod
     def from_trusted_metadata(
@@ -65,7 +65,7 @@ class TrustedToolExecutionContext:
             return cls(
                 agent_name=_clean(raw.get("agent_name")),
                 parent_agent=_clean(raw.get("parent_agent")),
-                run_id=_clean(raw.get("run_id")) or f"thread:{threading.get_ident()}",
+                run_id=_clean(raw.get("run_id")) or f"native:{uuid.uuid4()}",
                 parent_run_id=_clean(raw.get("parent_run_id")),
                 job_id=raw.get("job_id"),
                 task_id=raw.get("task_id"),
@@ -105,6 +105,7 @@ class ApprovalRequest:
     path: str | None = None
     command: str | None = None
     reason: str | None = None
+    target_agent_name: str | None = None
     created_at: float = field(default_factory=time.time)
 
     @property
@@ -116,6 +117,7 @@ class ApprovalRequest:
             self.path or "",
             self.command or "",
             self.context.agent_name or "",
+            self.target_agent_name or "",
         )
 
     @property
@@ -135,8 +137,11 @@ class ApprovalScope:
 
     id: str
     run_id: str
+    transport: str | None = None
+    server_origin: str | None = None
     tool_name: str | None = None
     agent_name: str | None = None
+    target_agent_name: str | None = None
     path: str | None = None
     risk: RiskLevel | None = None
     expires_at: float | None = None
@@ -151,9 +156,15 @@ class ApprovalScope:
             return False
         if self.run_id != request.context.run_id:
             return False
+        if self.transport is not None and self.transport != request.context.transport:
+            return False
+        if self.server_origin is not None and self.server_origin != request.context.server_origin:
+            return False
         if self.tool_name is not None and self.tool_name != request.tool_name:
             return False
         if self.agent_name is not None and self.agent_name != request.context.agent_name:
+            return False
+        if self.target_agent_name is not None and self.target_agent_name != request.target_agent_name:
             return False
         if self.path is not None and self.path != request.path:
             return False
@@ -221,6 +232,7 @@ class ApprovalBroker:
         risk = self.classify(call)
         path = self._extract_path(call, permission_error=permission_error)
         command = _extract_command(call)
+        target_agent_name = _clean(call.arguments.get("agent_name")) if call.name == "call_agent" else None
         effective_reason = reason or ("path_permission" if permission_error is not None else None)
         summary = self._summary(
             call,
@@ -241,6 +253,7 @@ class ApprovalBroker:
             path=path,
             command=command,
             reason=effective_reason,
+            target_agent_name=target_agent_name,
         )
 
     def should_request_approval(
@@ -304,9 +317,12 @@ class ApprovalBroker:
     ) -> ApprovalScope:
         scope = ApprovalScope(
             id=f"equiv:{request.id}",
-            run_id=request.context.run_id or f"thread:{threading.get_ident()}",
+            run_id=request.context.run_id or f"native:{uuid.uuid4()}",
+            transport=request.context.transport,
+            server_origin=request.context.server_origin,
             tool_name=request.tool_name,
             agent_name=request.context.agent_name,
+            target_agent_name=request.target_agent_name,
             path=request.path,
             risk=request.risk,
             expires_at=time.time() + ttl_seconds,
@@ -364,6 +380,10 @@ class ApprovalBroker:
     def _validate_scope(self, scope: ApprovalScope) -> None:
         if not scope.run_id:
             raise ValueError("ApprovalScope requer run_id confiável")
+        if not scope.transport:
+            raise ValueError("ApprovalScope requer transport explícito")
+        if not scope.server_origin:
+            raise ValueError("ApprovalScope requer server_origin explícito")
         if scope.expires_at is None or scope.expires_at <= time.time():
             raise ValueError("ApprovalScope requer expires_at futuro")
         if scope.remaining_uses is None or scope.remaining_uses <= 0:
@@ -374,8 +394,8 @@ class ApprovalBroker:
             raise ValueError("ApprovalScope requer tool_name ou approve_all_in_run explícito")
         if scope.tool_name in {"write_file", "remove_file", "apply_patch"} and not scope.path:
             raise ValueError("ApprovalScope de mutação de arquivo requer path")
-        if scope.tool_name == "call_agent" and not scope.agent_name:
-            raise ValueError("ApprovalScope de call_agent requer agent_name")
+        if scope.tool_name == "call_agent" and (not scope.agent_name or not scope.target_agent_name):
+            raise ValueError("ApprovalScope de call_agent requer agent_name e target_agent_name")
 
     def _prune_scopes(self) -> None:
         with self._scope_lock:
@@ -391,6 +411,9 @@ class ApprovalBroker:
     def _serialization_key(self, call: ToolCall) -> str | None:
         if call.name in {"run_shell", "run_shell_command", "exec_command"}:
             return f"workspace:{self.config.workspace_root}"
+        if call.name in {"write_stdin", "close_command_session"}:
+            session_id = call.arguments.get("session_id")
+            return f"command-session:{session_id}" if session_id is not None else "command-session:unknown"
         if call.name in {"write_file", "remove_file"}:
             path = self._extract_path(call)
             return f"path:{path}" if path else f"workspace:{self.config.workspace_root}"
@@ -518,6 +541,7 @@ class ApprovalBroker:
                 "session_id": request.context.session_id,
                 "server_origin": request.context.server_origin,
                 "http_profile": request.context.http_profile,
+                "target_agent_name": request.target_agent_name,
                 "path": request.path,
                 "command": request.command,
                 "decision": decision,
