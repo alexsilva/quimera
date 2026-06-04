@@ -268,27 +268,27 @@ def main():
         dest="mcp_http",
         action="store_true",
         default=False,
-        help="Expõe o MCP embutido via Streamable HTTP em /mcp em vez do socket Unix padrão.",
+        help="Habilita MCP HTTP externo adicional em /mcp; agentes locais continuam usando o socket Unix interno.",
     )
     parser.add_argument(
         "--mcp-port",
         dest="mcp_port",
         type=int,
         default=9090,
-        help="Porta do servidor MCP HTTP quando --mcp-http está ativo (padrão: 9090).",
+        help="Porta do servidor MCP HTTP externo quando --mcp-http está ativo (padrão: 9090).",
     )
     parser.add_argument(
         "--mcp-host",
         dest="mcp_host",
         default="127.0.0.1",
-        help="Host do servidor MCP HTTP quando --mcp-http está ativo (padrão: 127.0.0.1).",
+        help="Host do servidor MCP HTTP externo quando --mcp-http está ativo (padrão: 127.0.0.1).",
     )
     parser.add_argument(
         "--mcp-token-env",
         dest="mcp_token_env",
         default="QUIMERA_MCP_TOKEN",
         metavar="VAR",
-        help="Variável de ambiente com token MCP fixo para clientes externos (padrão: QUIMERA_MCP_TOKEN). Se ausente, gera token aleatório por sessão.",
+        help="Variável de ambiente com token MCP fixo para clientes HTTP externos (padrão: QUIMERA_MCP_TOKEN). Se ausente, gera token externo aleatório por sessão.",
     )
     parser.add_argument(
         "--mcp-http-allow-tools",
@@ -299,9 +299,6 @@ def main():
     )
 
     args, unknown = parser.parse_known_args()
-
-    if args.mcp_http and args.mcp_socket is not None:
-        parser.error("use apenas um transporte MCP: --mcp-socket [PATH] ou --mcp-http")
 
     if "--spy" in unknown:
         parser.error("--spy foi removido; use --visibility quiet|summary|full")
@@ -445,12 +442,13 @@ def main():
         app,
         workspace,
         enabled=not args.no_mcp,
-        transport="http" if args.mcp_http else "socket",
+        transport="socket",
         socket_path=args.mcp_socket,
         http_host=args.mcp_host,
         http_port=args.mcp_port,
         token_env=args.mcp_token_env,
         http_allowed_tools=args.mcp_http_allow_tools,
+        external_http_enabled=args.mcp_http,
     )
 
     app.run()

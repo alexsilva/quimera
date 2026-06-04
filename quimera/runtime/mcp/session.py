@@ -24,6 +24,14 @@ class EmbeddedMCPRuntime:
     """Estado retornado pela inicialização do MCP embutido."""
 
     enabled: bool
+    internal_mcp_server: MCPServer | None = None
+    internal_mcp_socket_path: str | None = None
+    internal_mcp_token: str | None = None
+    external_mcp_server: MCPServer | None = None
+    external_mcp_http_server: MCP_HTTPServer | None = None
+    external_mcp_http_url: str | None = None
+    external_mcp_token: str | None = None
+    external_mcp_allowed_tools: frozenset[str] | None = None
     transport: MCPTransport | None = None
     token: str | None = None
     mcp_server: MCPServer | None = None
@@ -39,9 +47,13 @@ def _prompt_session_state(app: Any) -> dict | None:
     return session_state if isinstance(session_state, dict) else None
 
 
-def _resolve_token(token_env: str | None) -> str:
+def _resolve_external_token(token_env: str | None) -> str:
     env_name = token_env or ""
     return (os.environ.get(env_name) or "").strip() or secrets.token_urlsafe(32)
+
+
+def _resolve_internal_token() -> str:
+    return secrets.token_urlsafe(32)
 
 
 def parse_http_allowed_tools(value: str | Iterable[str] | None) -> frozenset[str] | None:
@@ -83,87 +95,94 @@ def start_embedded_mcp(
     http_port: int = 9090,
     token_env: str | None = "QUIMERA_MCP_TOKEN",
     http_allowed_tools: str | Iterable[str] | None = DEFAULT_HTTP_TOOL_PROFILE,
+    external_http_enabled: bool = False,
 ) -> EmbeddedMCPRuntime:
-    """Inicia e propaga o MCP embutido para a sessão do Quimera.
+    """Inicia o MCP interno obrigatório e, opcionalmente, o MCP HTTP externo.
 
-    A função centraliza a lógica de startup do MCP para manter a CLI apenas
-    como camada de parsing/validação de argumentos.
-
-    Args:
-        app: Instância de QuimeraApp, ou objeto compatível, com ``tool_executor``
-            e métodos ``configure_mcp_socket``/``configure_mcp_http``.
-        workspace: Workspace atual, usado para gerar o socket temporário padrão.
-        enabled: Quando falso, desativa MCP na aplicação e não inicia servidor.
-        transport: ``"socket"`` para Unix socket ou ``"http"`` para Streamable HTTP.
-        socket_path: Path opcional do socket Unix. Se omitido no transporte socket,
-            um path temporário é gerado no workspace.
-        http_host: Host de bind do MCP HTTP.
-        http_port: Porta de bind do MCP HTTP.
-        token_env: Nome da variável de ambiente com token fixo de autenticação.
-            Se ausente ou vazia, gera token aleatório por sessão.
-        http_allowed_tools: Perfil/allowlist do transporte HTTP. Use
-            ``"read-local"`` para leitura sem rede, ``"read"`` (padrão) para
-            leitura com web, ``"agent"`` para acrescentar ``call_agent``,
-            ``"all"`` para expor todas, ou CSV/iterável com nomes explícitos.
-
-    Returns:
-        Estado do runtime MCP iniciado, incluindo servidor, token e endpoint.
+    O socket Unix interno é o canal principal para agentes locais e sempre expõe
+    todas as ferramentas registradas no ``ToolExecutor``. O HTTP externo é uma
+    instância separada de ``MCPServer`` para clientes remotos, com allowlist
+    aplicada somente nessa instância.
     """
     session_state = _prompt_session_state(app)
 
     if not enabled:
         app.configure_mcp_socket(None)
+        configure_http = getattr(app, "configure_mcp_http", None)
+        if callable(configure_http):
+            configure_http(None)
         if isinstance(session_state, dict):
             session_state["mcp_enabled"] = False
             session_state["mcp_socket_path"] = ""
             session_state["mcp_http_url"] = ""
+            session_state["mcp_internal_socket_path"] = ""
+            session_state["mcp_external_http_url"] = ""
         setattr(app, "mcp_socket_path", None)
         setattr(app, "mcp_http_url", None)
+        setattr(app, "internal_mcp_socket_path", None)
+        setattr(app, "external_mcp_http_url", None)
         return EmbeddedMCPRuntime(enabled=False)
 
     if transport not in {"socket", "http"}:
         raise ValueError(f"Transporte MCP inválido: {transport!r}")
+    external_http_enabled = external_http_enabled or transport == "http"
 
-    mcp_token = _resolve_token(token_env)
-    mcp = MCPServer(app.tool_executor, auth_token=mcp_token)
-
-    if transport == "http":
-        allowed_tools = parse_http_allowed_tools(http_allowed_tools)
-        http_server = MCP_HTTPServer(
-            mcp, host=http_host, port=http_port, allowed_tools=allowed_tools
-        )
-        http_server.start_background()
-        http_url = f"http://{http_host}:{http_port}/mcp"
-        app.configure_mcp_http(http_url, mcp_token)
-        setattr(app, "mcp_http_url", http_url)
-        setattr(app, "mcp_socket_path", None)
-        if isinstance(session_state, dict):
-            session_state["mcp_enabled"] = True
-            session_state["mcp_socket_path"] = ""
-            session_state["mcp_http_url"] = http_url
-        return EmbeddedMCPRuntime(
-            enabled=True,
-            transport="http",
-            token=mcp_token,
-            mcp_server=mcp,
-            http_server=http_server,
-            http_url=http_url,
-            allowed_tools=allowed_tools,
-        )
-
+    internal_mcp_token = _resolve_internal_token()
+    internal_mcp_server = MCPServer(app.tool_executor, auth_token=internal_mcp_token)
     resolved_socket_path = socket_path or _default_socket_path(workspace)
-    mcp.start_background(resolved_socket_path)
-    app.configure_mcp_socket(resolved_socket_path, mcp_token)
+    internal_mcp_server.start_background(resolved_socket_path)
+    app.configure_mcp_socket(resolved_socket_path, internal_mcp_token)
     setattr(app, "mcp_socket_path", resolved_socket_path)
-    setattr(app, "mcp_http_url", None)
+    setattr(app, "internal_mcp_socket_path", resolved_socket_path)
+
+    external_mcp_server = None
+    external_mcp_http_server = None
+    external_mcp_http_url = None
+    external_mcp_token = None
+    external_mcp_allowed_tools = None
+
+    if external_http_enabled:
+        external_mcp_token = _resolve_external_token(token_env)
+        external_mcp_server = MCPServer(app.tool_executor, auth_token=external_mcp_token)
+        external_mcp_allowed_tools = parse_http_allowed_tools(http_allowed_tools)
+        external_mcp_http_server = MCP_HTTPServer(
+            external_mcp_server,
+            host=http_host,
+            port=http_port,
+            allowed_tools=external_mcp_allowed_tools,
+        )
+        external_mcp_http_server.start_background()
+        external_mcp_http_url = f"http://{http_host}:{http_port}/mcp"
+        # Intencionalmente não propagamos HTTP aos plugins locais: eles devem
+        # preferir o socket interno mesmo quando o HTTP externo está ativo.
+        setattr(app, "mcp_http_url", external_mcp_http_url)
+        setattr(app, "external_mcp_http_url", external_mcp_http_url)
+    else:
+        setattr(app, "mcp_http_url", None)
+        setattr(app, "external_mcp_http_url", None)
+
     if isinstance(session_state, dict):
         session_state["mcp_enabled"] = True
         session_state["mcp_socket_path"] = resolved_socket_path
-        session_state["mcp_http_url"] = ""
+        session_state["mcp_http_url"] = external_mcp_http_url or ""
+        session_state["mcp_internal_socket_path"] = resolved_socket_path
+        session_state["mcp_external_http_url"] = external_mcp_http_url or ""
+
     return EmbeddedMCPRuntime(
         enabled=True,
+        internal_mcp_server=internal_mcp_server,
+        internal_mcp_socket_path=resolved_socket_path,
+        internal_mcp_token=internal_mcp_token,
+        external_mcp_server=external_mcp_server,
+        external_mcp_http_server=external_mcp_http_server,
+        external_mcp_http_url=external_mcp_http_url,
+        external_mcp_token=external_mcp_token,
+        external_mcp_allowed_tools=external_mcp_allowed_tools,
         transport="socket",
-        token=mcp_token,
-        mcp_server=mcp,
+        token=internal_mcp_token,
+        mcp_server=internal_mcp_server,
+        http_server=external_mcp_http_server,
         socket_path=resolved_socket_path,
+        http_url=external_mcp_http_url,
+        allowed_tools=external_mcp_allowed_tools,
     )

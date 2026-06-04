@@ -149,13 +149,13 @@ Ferramentas são executadas por chamadas estruturadas: MCP para agentes CLI/MCP-
 
 Por padrão o MCP é ativado automaticamente. Controles via CLI:
 
-- `--mcp-socket [path]`: seleciona explicitamente o transporte socket Unix e opcionalmente define o path.
-- padrão sem flags MCP: inicia o transporte socket Unix com path temporário por workspace.
-- `--no-mcp`: desativa completamente.
-- `--mcp-http`: seleciona o transporte Streamable HTTP em `/mcp`.
-- `--mcp-port <porta>`: porta do servidor HTTP MCP (padrão: `9090`).
-- `--mcp-host <host>`: host do servidor HTTP MCP (padrão: `127.0.0.1`).
-- `--mcp-token-env <VAR>`: variável de ambiente usada como token MCP fixo para clientes externos (padrão: `QUIMERA_MCP_TOKEN`; se vazia, token aleatório por sessão).
+- `--mcp-socket [path]`: customiza o caminho do socket Unix interno. Sem `path`, usa um arquivo temporário por workspace.
+- padrão sem flags MCP: inicia o MCP interno via socket Unix com path temporário por workspace.
+- `--no-mcp`: desativa completamente o MCP interno e qualquer HTTP externo.
+- `--mcp-http`: habilita um MCP HTTP externo adicional em `/mcp`; não substitui o socket interno usado pelos agentes locais.
+- `--mcp-port <porta>`: porta do servidor HTTP MCP externo (padrão: `9090`).
+- `--mcp-host <host>`: host do servidor HTTP MCP externo (padrão: `127.0.0.1`).
+- `--mcp-token-env <VAR>`: variável de ambiente usada como token MCP fixo para clientes externos (padrão: `QUIMERA_MCP_TOKEN`; se vazia, token externo aleatório por sessão). O socket interno usa seu próprio token de sessão.
 - `--mcp-http-allow-tools <read-local|read|agent|all|CSV>`: perfil/allowlist de tools expostas no MCP HTTP externo. O padrão `read` publica tools de leitura com rede (`list_files`, `read_file`, `grep_search`, `list_tasks`, `list_jobs`, `get_job`, `web_search`, `web_fetch`, `todo_list`); use `read-local` para remover ferramentas com acesso à rede (`web_search`, `web_fetch`), `agent` para acrescentar `call_agent` sem liberar shell/escrita (`run_shell`, `exec_command`, `write_file`, `remove_file`, `apply_patch`), `all` somente em redes confiáveis isoladas, ou nomes separados por vírgula.
 
 ### Injeção por plugin
@@ -164,9 +164,9 @@ Cada agente recebe a configuração MCP no formato que seu CLI/API entende:
 
 | Agente | Formato de injeção | Mecanismo |
 |---|---|---|
-| **Claude** | socket: `--mcp-config` stdio; HTTP: `type=http`, `url=http://.../mcp` | Argumento CLI |
-| **Codex** | socket: `-c mcp_servers.quimera.command/args`; HTTP: `-c mcp_servers.quimera.url/transport/headers.*` | Argumento CLI |
-| **OpenCode** | socket: `type=local`; HTTP: `type=remote`, `url`, `headers` | `OPENCODE_CONFIG_CONTENT` |
+| **Claude** | socket interno: `--mcp-config` stdio | Argumento CLI |
+| **Codex** | socket interno: `-c mcp_servers.quimera.command/args` | Argumento CLI |
+| **OpenCode** | socket interno: `type=local` | `OPENCODE_CONFIG_CONTENT` |
 | **Gemini** | Sem suporte a MCP | — |
 
 ### Features expostas via MCP
@@ -210,21 +210,25 @@ Características:
 - **Failover automático**: `fallback_agents` é tentado se o primário falhar.
 - **Cadeias de delegação**: `handoffs` permite múltiplos passos em uma chamada.
 - **Validação de agentes ativos**: o alvo é verificado contra o pool antes da execução.
-- **Token de autenticação**: usa `QUIMERA_MCP_TOKEN`/`--mcp-token-env` quando configurado; caso contrário cada sessão gera um `secrets.token_urlsafe(32)` único.
+- **Token de autenticação**: o socket interno usa token de sessão gerado pelo Quimera; o HTTP externo usa `QUIMERA_MCP_TOKEN`/`--mcp-token-env` quando configurado ou gera um token externo aleatório por sessão.
 
 ### Delegação entre agentes via MCP
 
 Delegação entre agentes acontece pela tool MCP `call_agent`. Agentes MCP-capazes chamam essa ferramenta para acionar outro agente do pool da sessão, com validação do alvo, contexto estruturado, fallback opcional e cadeias de delegação declaradas nos argumentos da tool.
 
-### MCP HTTP embutido
+### MCP interno e MCP HTTP externo
 
-Para iniciar o app com MCP Streamable HTTP embutido em vez do socket Unix padrão:
+O MCP interno via socket Unix é core do Quimera: ele inicia por padrão, é entregue a Claude, Codex, OpenCode e agentes locais similares, e expõe todas as ferramentas registradas no `ToolExecutor`. Ferramentas sensíveis continuam protegidas por `ToolPolicy`, permissões de path e fluxo de approval no executor.
+
+O MCP HTTP é uma extensão externa opcional para clientes remotos como Grok ou outros chats. Ele usa uma instância separada de `MCPServer`, com token externo, CORS configurável e allowlist aplicada apenas ao HTTP. A allowlist HTTP nunca reduz as ferramentas disponíveis para o socket interno.
+
+Para iniciar o app com MCP interno + Streamable HTTP externo:
 
 ```bash
 python quimera.py --mcp-http --mcp-host 127.0.0.1 --mcp-port 9090
 ```
 
-Nesse modo, agentes compatíveis recebem `http://127.0.0.1:9090/mcp` na inicialização, com o mesmo token da sessão enviado como `Authorization: Bearer <token>` (ou `X-Quimera-MCP-Token` para clientes simples). Por segurança, o transporte HTTP externo usa o perfil `read` por padrão; prefira `read-local` para exposição externa quando o cliente não precisa de `web_search`/`web_fetch`, ou `agent` quando a delegação `call_agent` for necessária sem liberar shell/escrita. O perfil `all` remove a allowlist e não é recomendado para Internet.
+Nesse modo, agentes locais continuam recebendo o socket interno, enquanto clientes externos usam `http://127.0.0.1:9090/mcp` com `Authorization: Bearer <token externo>` (ou `X-Quimera-MCP-Token` para clientes simples). Por segurança, o transporte HTTP externo usa o perfil `read` por padrão; prefira `read-local` para exposição externa quando o cliente não precisa de `web_search`/`web_fetch`, ou `agent` quando o cliente externo precisa delegar via `call_agent` sem liberar shell/escrita diretamente. O perfil `all` remove a allowlist e não é recomendado para Internet.
 
 Perfis embutidos:
 
@@ -284,7 +288,7 @@ curl -X POST https://quimera.example.com/mcp \
      -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
 ```
 
-Se `QUIMERA_MCP_TOKEN` (ou a variável apontada por `--mcp-token-env`) não estiver definida, o Quimera gera um token aleatório por sessão e apenas os plugins locais iniciados por ele recebem esse valor. O socket Unix continua sendo o padrão para preservar compatibilidade com o fluxo local existente.
+Se `QUIMERA_MCP_TOKEN` (ou a variável apontada por `--mcp-token-env`) não estiver definida, o Quimera gera um token externo aleatório por sessão. Os plugins locais não recebem o endpoint HTTP externo; eles continuam usando o socket Unix interno e seu token interno de sessão.
 
 Também funciona colocar o token no arquivo `.env` global do Quimera, carregado antes da inicialização do MCP:
 
