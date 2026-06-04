@@ -102,6 +102,20 @@ class ToolPolicy:
 
     def _validate_call_agent(self, call: ToolCall) -> None:
         """Valida delegação cross-agent antes do ApprovalBroker."""
+        reserved = {
+            "allowlisted",
+            "approval_budget",
+            "approval_scope_id",
+            "transport",
+            "run_id",
+            "parent_run_id",
+        }
+        present_reserved = sorted(reserved.intersection(call.arguments))
+        if present_reserved:
+            raise ToolPolicyError(
+                "call_agent recebeu campos reservados não confiáveis: "
+                + ", ".join(present_reserved)
+            )
         agent_name = call.arguments.get("agent_name")
         task = call.arguments.get("task")
         if not isinstance(agent_name, str) or not agent_name.strip():
