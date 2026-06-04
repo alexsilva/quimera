@@ -1,7 +1,6 @@
 """Componentes de `quimera.app.protocol`."""
 import json
 import re
-from dataclasses import dataclass
 
 from ..constants import EXTEND_MARKER, NEEDS_INPUT_MARKER, STATE_UPDATE_START
 from ..shared_state import (
@@ -12,14 +11,6 @@ from ..shared_state import (
 )
 from . import logger
 
-
-@dataclass
-class ProtocolEnvelope:
-    type: str
-    content: str
-    state_updates: dict | None = None
-    metadata: dict | None = None
-    handoff_id: str | None = None
 
 
 class AppProtocol:
@@ -123,51 +114,6 @@ class AppProtocol:
                 stamp_state_keys(self._turn_stamps, stamped_keys, current_turn)
         return True
 
-    @staticmethod
-    def _find_envelope_in_text(text):
-        """Procura envelope JSON embutido em texto com conteúdo ao redor."""
-        brace_depth = 0
-        start = -1
-        for i, ch in enumerate(text):
-            if ch == "{":
-                if brace_depth == 0:
-                    start = i
-                brace_depth += 1
-            elif ch == "}":
-                brace_depth -= 1
-                if brace_depth == 0 and start >= 0:
-                    candidate = text[start : i + 1]
-                    envelope = AppProtocol.parse_envelope(candidate)
-                    if envelope is not None:
-                        before = text[:start]
-                        after = text[i + 1 :]
-                        return envelope, before, after
-        return None
-
-    @staticmethod
-    def parse_envelope(text):
-        """Tenta parsear como JSON envelope; retorna None se não for válido."""
-        text = text.strip()
-        if not (text.startswith("{") and text.endswith("}")):
-            return None
-        try:
-            data = json.loads(text)
-        except json.JSONDecodeError:
-            return None
-        if not isinstance(data, dict) or "type" not in data:
-            return None
-        envelope_type = str(data["type"])
-        if envelope_type not in {"state_update", "ack"}:
-            return None
-
-        return ProtocolEnvelope(
-            type=envelope_type,
-            content=str(data.get("content", "")),
-            state_updates=data.get("state_updates"),
-            metadata=data.get("metadata"),
-            handoff_id=str(data["handoff_id"]) if data.get("handoff_id") else None,
-        )
-
     def parse_response(self, response, **_kwargs):
         """Extrai marcadores de controle e retorna estado estruturado."""
         if response is None:
@@ -175,27 +121,16 @@ class AppProtocol:
 
         ack_id = None
 
-        embedded = self._find_envelope_in_text(response)
-        if embedded is not None:
-            envelope, before_text, after_text = embedded
-            if envelope.type == "state_update" and envelope.state_updates:
-                self.apply_state_update(json.dumps(envelope.state_updates))
-            if envelope.type == "ack" and envelope.handoff_id:
-                ack_id = envelope.handoff_id
+        if STATE_UPDATE_START in response:
+            for state_match in self.STATE_UPDATE_PATTERN.finditer(response):
+                self.apply_state_update(state_match.group(1))
+            response = self.STATE_UPDATE_PATTERN.sub("", response).strip()
 
-            parts = [p.strip() for p in [before_text, after_text] if p.strip()]
-            response = "\n".join(parts) if parts else envelope.content
-        else:
-            if STATE_UPDATE_START in response:
-                for state_match in self.STATE_UPDATE_PATTERN.finditer(response):
-                    self.apply_state_update(state_match.group(1))
-                response = self.STATE_UPDATE_PATTERN.sub("", response).strip()
-
-            ack_match = self.ACK_PATTERN.search(response)
-            if ack_match:
-                ack_id = ack_match.group(1)
-                response = self.ACK_PATTERN.sub("", response, count=1).strip()
-                logger.info("[ACK] received ack_id=%s", ack_id)
+        ack_match = self.ACK_PATTERN.search(response)
+        if ack_match:
+            ack_id = ack_match.group(1)
+            response = self.ACK_PATTERN.sub("", response, count=1).strip()
+            logger.info("[ACK] received ack_id=%s", ack_id)
 
         if response is None:
             return None, None, None, False, False, ack_id

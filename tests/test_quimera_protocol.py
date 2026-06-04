@@ -24,7 +24,7 @@ from quimera.app.session import AppSessionServices
 from quimera.app.system_layer import AppSystemLayer
 from quimera.app.task import AppTaskServices, call_agent_for_parallel
 from quimera.app.task_classifiers import classify_task_execution_result, classify_task_review_result
-from quimera.app.protocol import AppProtocol, ProtocolEnvelope
+from quimera.app.protocol import AppProtocol
 from quimera.app.session_metrics import SessionMetricsService
 from quimera.app.task_events import TaskCompleted
 from quimera.app.event_sink import EventSink
@@ -38,6 +38,7 @@ from quimera.constants import CMD_AGENTS, CMD_CLEAR, CMD_CONNECT, CMD_DISCONNECT
 from quimera.plugins import AgentPlugin
 from quimera.plugins.base import PluginRegistry
 from quimera.runtime.models import TaskRecord, ToolCall
+from quimera.domain.session_state import SessionState
 from quimera.plugins.base import OpenAIConnection
 from quimera.handoff_presenter import HandoffPresenter
 from quimera.prompt import PromptBuilder
@@ -307,17 +308,24 @@ def _make_session_services(app):
     if prompt_builder is None and not hasattr(app, "prompt_builder"):
         prompt_builder = SimpleNamespace(history_window=None)
 
+    session_state = getattr(app, "_chat_state", None)
+    if session_state is None:
+        session_state = SessionState(
+            history=app.history,
+            shared_state=getattr(app, "shared_state", {}),
+            session_meta=getattr(app, "session_state", {}),
+            shared_state_lock=getattr(app, "_shared_state_lock", threading.Lock()),
+        )
+
     return AppSessionServices(
-        history=app.history,
+        session_state=session_state,
         storage=getattr(app, "storage", DummyStorage()),
         renderer=getattr(app, "renderer", DummyRenderer()),
         agent_pool=agent_pool,
-        lock=getattr(app, "_lock", threading.Lock()),
         context_manager=getattr(app, "context_manager", Mock()),
         session_summarizer=getattr(app, "session_summarizer", Mock()),
         task_services=getattr(app, "task_services", Mock()),
         prompt_builder=prompt_builder,
-        shared_state=getattr(app, "shared_state", {}),
         auto_summarize_threshold=getattr(app, "auto_summarize_threshold", None),
         summary_agent_preference=getattr(app, "summary_agent_preference", None),
         agent_client=getattr(app, "agent_client", None),
@@ -5404,23 +5412,29 @@ class AppProtocolDirectTests(unittest.TestCase):
         self.assertFalse(needs_input)
         self.assertIsNone(ack_id)
 
-    def test_parse_response_state_update_works_in_mcp_mode(self):
-        """state_update continua aplicado no modo MCP-first."""
+    def test_parse_response_json_state_update_is_plain_text(self):
+        """JSON state_update solto é conteúdo comum; use [STATE_UPDATE] para estado."""
         app = self._make_app()
         proto = _make_protocol(app)
+        text = '{"type": "state_update", "content": "", "state_updates": {"goal_canonical": "corrigir parser"}}'
 
-        proto.parse_response(
-            '{"type": "state_update", "content": "", "state_updates": {"goal_canonical": "corrigir parser"}}'
-        )
-        self.assertEqual(app.shared_state, {"goal_canonical": "corrigir parser"})
+        response, route_target, handoff, extend, needs_input, ack_id = proto.parse_response(text)
 
-    def test_parse_response_ack_works_in_mcp_mode(self):
-        """ack continua extraído no modo MCP-first."""
+        self.assertEqual(response, text)
+        self.assertEqual(app.shared_state, {})
+        self.assertIsNone(route_target)
+        self.assertIsNone(handoff)
+        self.assertFalse(extend)
+        self.assertFalse(needs_input)
+        self.assertIsNone(ack_id)
+
+    def test_parse_response_ack_marker_works_in_mcp_mode(self):
+        """[ACK:id] continua extraído para o fluxo de delegação."""
         app = self._make_app()
         proto = _make_protocol(app)
 
         response, route_target, handoff, extend, needs_input, ack_id = proto.parse_response(
-            '{"type": "ack", "content": "done", "handoff_id": "abc123"}'
+            '[ACK:abc123] done'
         )
 
         self.assertEqual(ack_id, "abc123")
@@ -5430,74 +5444,6 @@ class AppProtocolDirectTests(unittest.TestCase):
         self.assertFalse(extend)
         self.assertFalse(needs_input)
 
-
-    # --- ProtocolEnvelope dataclass ---
-
-    def test_protocol_envelope_defaults(self):
-        env = ProtocolEnvelope(type="handoff", content="hello")
-        self.assertEqual(env.type, "handoff")
-        self.assertEqual(env.content, "hello")
-        self.assertIsNone(env.state_updates)
-        self.assertIsNone(env.metadata)
-        self.assertIsNone(env.handoff_id)
-
-    def test_protocol_envelope_all_fields(self):
-        env = ProtocolEnvelope(
-            type="handoff",
-            content="task: do something",
-            state_updates={"key": "val"},
-            metadata={"version": 1},
-            handoff_id="abc123",
-        )
-        self.assertEqual(env.type, "handoff")
-        self.assertEqual(env.content, "task: do something")
-        self.assertEqual(env.state_updates, {"key": "val"})
-        self.assertEqual(env.metadata, {"version": 1})
-        self.assertEqual(env.handoff_id, "abc123")
-
-    # --- parse_envelope ---
-
-    def test_parse_envelope_handoff_is_not_supported(self):
-        env = AppProtocol.parse_envelope(
-            '{"type": "handoff", "content": "task: refactor", "route": "codex"}'
-        )
-        self.assertIsNone(env)
-
-    def test_parse_envelope_valid_state_update(self):
-        env = AppProtocol.parse_envelope(
-            '{"type": "state_update", "content": "", "state_updates": {"goal_canonical": "test"}}'
-        )
-        self.assertIsInstance(env, ProtocolEnvelope)
-        self.assertEqual(env.type, "state_update")
-        self.assertEqual(env.state_updates, {"goal_canonical": "test"})
-
-    def test_parse_envelope_valid_ack(self):
-        env = AppProtocol.parse_envelope(
-            '{"type": "ack", "content": "done", "handoff_id": "abc123"}'
-        )
-        self.assertIsInstance(env, ProtocolEnvelope)
-        self.assertEqual(env.type, "ack")
-        self.assertEqual(env.handoff_id, "abc123")
-
-    def test_parse_envelope_not_json_returns_none(self):
-        result = AppProtocol.parse_envelope("plain text without braces")
-        self.assertIsNone(result)
-
-    def test_parse_envelope_malformed_json_returns_none(self):
-        result = AppProtocol.parse_envelope('{"type": "handoff" broken')
-        self.assertIsNone(result)
-
-    def test_parse_envelope_missing_type_returns_none(self):
-        result = AppProtocol.parse_envelope('{"content": "no type field"}')
-        self.assertIsNone(result)
-
-    def test_parse_envelope_not_dict_returns_none(self):
-        result = AppProtocol.parse_envelope('["array", "not", "dict"]')
-        self.assertIsNone(result)
-
-    def test_parse_envelope_empty_string_returns_none(self):
-        result = AppProtocol.parse_envelope("")
-        self.assertIsNone(result)
 
     # --- parse_response com envelope JSON ---
 
@@ -5517,35 +5463,28 @@ class AppProtocolDirectTests(unittest.TestCase):
         self.assertFalse(needs_input)
         self.assertIsNone(ack_id)
 
-    def test_parse_response_json_envelope_state_update(self):
+    def test_parse_response_json_envelope_state_update_is_plain_text(self):
         app = self._make_app()
         proto = _make_protocol(app)
-        proto.parse_response(
-            '{"type": "state_update", "content": "", "state_updates": {"goal_canonical": "corrigir parser","mode":"test"}}'
-        )
-        self.assertEqual(app.shared_state, {"goal_canonical": "corrigir parser"})
-
-    def test_parse_response_json_envelope_ack(self):
-        app = self._make_app()
-        proto = _make_protocol(app)
-        response, route_target, handoff, extend, needs_input, ack_id = (
-            proto.parse_response('{"type": "ack", "content": "done", "handoff_id": "abc123"}')
-        )
-        self.assertEqual(ack_id, "abc123")
-        self.assertEqual(response, "done")
+        text = '{"type": "state_update", "content": "", "state_updates": {"goal_canonical": "corrigir parser","mode":"test"}}'
+        response, route_target, handoff, extend, needs_input, ack_id = proto.parse_response(text)
+        self.assertEqual(response, text)
+        self.assertEqual(app.shared_state, {})
         self.assertIsNone(route_target)
+        self.assertIsNone(handoff)
+        self.assertFalse(extend)
+        self.assertFalse(needs_input)
+        self.assertIsNone(ack_id)
 
-    def test_parse_envelope_text_before_json_returns_none(self):
-        """parse_envelope retorna None se há texto antes do JSON."""
-        text = 'aqui\n{"type": "handoff", "content": "task: refactor", "route": "codex"}'
-        result = AppProtocol.parse_envelope(text)
-        self.assertIsNone(result)
-
-    def test_parse_envelope_text_after_json_returns_none(self):
-        """parse_envelope retorna None se há texto após o JSON."""
-        text = '{"type": "handoff", "content": "task: refactor"}\ne mais texto'
-        result = AppProtocol.parse_envelope(text)
-        self.assertIsNone(result)
+    def test_parse_response_json_envelope_ack_is_plain_text(self):
+        app = self._make_app()
+        proto = _make_protocol(app)
+        text = '{"type": "ack", "content": "done", "handoff_id": "abc123"}'
+        response, route_target, handoff, extend, needs_input, ack_id = proto.parse_response(text)
+        self.assertEqual(response, text)
+        self.assertIsNone(ack_id)
+        self.assertIsNone(route_target)
+        self.assertIsNone(handoff)
 
     def test_parse_response_embedded_handoff_json_with_text_before(self):
         """JSON type=handoff é conteúdo comum e não roteia."""
@@ -5640,22 +5579,21 @@ class AppProtocolDirectTests(unittest.TestCase):
         self.assertIsNone(handoff)
         self.assertEqual(response, text)
 
-    def test_parse_response_embedded_envelope_state_update(self):
-        """Envelope embutido do tipo state_update aplica estado."""
-        import threading
+    def test_parse_response_embedded_json_state_update_is_plain_text(self):
+        """JSON state_update embutido não aplica estado fora de [STATE_UPDATE]."""
         text = (
             'relatório\n'
             '{"type": "state_update", "content": "", "state_updates": {"goal":"embedded","mode":"ignored"}}'
         )
         app = self._make_app()
-        app._lock = threading.Lock()
         proto = _make_protocol(app)
-        response, _, _, _, _, _ = proto.parse_response(text)
-        self.assertEqual(app.shared_state, {"goal": "embedded"})
-        self.assertEqual(response, "relatório")
+        response, _, _, _, _, ack_id = proto.parse_response(text)
+        self.assertEqual(app.shared_state, {})
+        self.assertEqual(response, text)
+        self.assertIsNone(ack_id)
 
-    def test_parse_response_embedded_envelope_ack(self):
-        """Envelope embutido do tipo ack extrai ack_id."""
+    def test_parse_response_embedded_json_ack_is_plain_text(self):
+        """JSON ack embutido não extrai ack_id; use [ACK:id]."""
         text = (
             'processando\n'
             '{"type": "ack", "content": "done", "handoff_id": "xyz789"}'
@@ -5663,30 +5601,8 @@ class AppProtocolDirectTests(unittest.TestCase):
         app = self._make_app()
         proto = _make_protocol(app)
         response, _, _, _, _, ack_id = proto.parse_response(text)
-        self.assertEqual(ack_id, "xyz789")
-        self.assertEqual(response, "processando")
-
-    def test_find_envelope_in_text_no_envelope(self):
-        """_find_envelope_in_text retorna None quando não há envelope."""
-        result = AppProtocol._find_envelope_in_text("texto normal sem json")
-        self.assertIsNone(result)
-
-    def test_find_envelope_in_text_ignores_handoff_json(self):
-        """_find_envelope_in_text só reconhece envelopes de protocolo suportados."""
-        result = AppProtocol._find_envelope_in_text(
-            '{"type": "handoff", "content": "task", "route": "codex"}'
-        )
-        self.assertIsNone(result)
-
-    def test_find_envelope_in_text_nested_braces_unsupported_type(self):
-        """JSON type=handoff com chaves aninhadas não é envelope de protocolo."""
-        text = (
-            'texto\n'
-            '{"type": "handoff", "content": "nested {braces}", "route": "gemini"}\n'
-            'fim'
-        )
-        result = AppProtocol._find_envelope_in_text(text)
-        self.assertIsNone(result)
+        self.assertIsNone(ack_id)
+        self.assertEqual(response, text)
 
     # --- Gap 2: envelope com content vazio ---
 

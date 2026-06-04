@@ -428,16 +428,14 @@ class QuimeraApp:
             classify_task_review_result=classify_task_review_result,
         )
         self.session_services = AppSessionServices(
-            history=self.history,
+            session_state=self._chat_state,
             storage=self.storage,
             renderer=self.renderer,
             agent_pool=self.agent_pool,
-            lock=self._lock,
             context_manager=self.context_manager,
             session_summarizer=self.session_summarizer,
             task_services=self.task_services,
             prompt_builder=self.prompt_builder,
-            shared_state=self.shared_state,
             auto_summarize_threshold=self.auto_summarize_threshold,
             summary_agent_preference=self.summary_agent_preference,
             agent_client=self.agent_client,

@@ -1,5 +1,6 @@
 import os
 import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -9,6 +10,7 @@ import pytest
 from quimera.app import QuimeraApp
 from quimera.app.protocol import AppProtocol
 from quimera.app.session import AppSessionServices
+from quimera.domain.session_state import SessionState
 from quimera.shared_state import clear_agent_state_for_session_start
 
 
@@ -168,16 +170,14 @@ def test_session_summarize_preserves_concurrent_persisted_message():
 
     summarizer = Summarizer()
     service = AppSessionServices(
-        history=history,
+        session_state=SessionState(history=history, shared_state={}, shared_state_lock=lock),
         storage=storage,
         renderer=renderer,
         agent_pool=SimpleNamespace(primary="codex"),
-        lock=lock,
         context_manager=context,
         session_summarizer=summarizer,
         task_services=Mock(stop_task_executors=Mock()),
         prompt_builder=SimpleNamespace(history_window=2),
-        shared_state={},
         auto_summarize_threshold=4,
     )
     summarizer.service = service
@@ -212,16 +212,14 @@ def test_session_summarize_does_not_save_summary_when_snapshot_changes():
 
     summarizer = Summarizer()
     service = AppSessionServices(
-        history=history,
+        session_state=SessionState(history=history, shared_state={}, shared_state_lock=lock),
         storage=storage,
         renderer=renderer,
         agent_pool=SimpleNamespace(primary="codex"),
-        lock=lock,
         context_manager=context,
         session_summarizer=summarizer,
         task_services=Mock(stop_task_executors=Mock()),
         prompt_builder=SimpleNamespace(history_window=2),
-        shared_state={},
         auto_summarize_threshold=4,
     )
     summarizer.service = service
@@ -233,6 +231,51 @@ def test_session_summarize_does_not_save_summary_when_snapshot_changes():
     assert len(history) == original_length
     assert history[0] == {"role": "human", "content": "mutado durante resumo"}
     assert "[memória] histórico mudou durante o resumo — truncamento adiado" in renderer.system_messages
+
+
+def test_session_shutdown_summarizes_stable_history_snapshot_after_pending_save():
+    history = [{"role": "human", "content": "before shutdown"}]
+    shared_state = {"goal": "persist me"}
+    storage = _Storage()
+    renderer = _Renderer()
+    context = _ContextManager()
+
+    class Summarizer:
+        def __init__(self):
+            self.service = None
+            self.messages_seen = None
+
+        def summarize(self, messages, existing_summary=None, preferred_agent=None):
+            self.messages_seen = messages
+            self.service.persist_message("assistant", "mutated during shutdown summary")
+            return "shutdown summary"
+
+    summarizer = Summarizer()
+    service = AppSessionServices(
+        session_state=SessionState(history=history, shared_state=shared_state),
+        storage=storage,
+        renderer=renderer,
+        agent_pool=SimpleNamespace(primary="codex"),
+        context_manager=context,
+        session_summarizer=summarizer,
+        task_services=Mock(stop_task_executors=Mock()),
+        prompt_builder=SimpleNamespace(history_window=2),
+    )
+    summarizer.service = service
+    service._unsaved_messages = 1
+    service._last_save_time = time.monotonic()
+
+    service.shutdown()
+
+    assert storage.saved_history == [{"role": "human", "content": "before shutdown"}]
+    assert storage.saved_shared_state == {"goal": "persist me"}
+    assert summarizer.messages_seen == [{"role": "human", "content": "before shutdown"}]
+    assert summarizer.messages_seen is not history
+    assert history == [
+        {"role": "human", "content": "before shutdown"},
+        {"role": "assistant", "content": "mutated during shutdown summary"},
+    ]
+    assert context.saved_summary == "shutdown summary"
 
 def test_restored_session_clears_volatile_agent_goal_state_only():
     shared_state = {
