@@ -325,8 +325,6 @@ class AgentPlugin:
         """
         normalized = (socket_path or "").strip()
         self._mcp_socket_path = normalized or None
-        if self._mcp_socket_path is not None:
-            self._mcp_http_url = None
         if self._mcp_socket_path is None and self._mcp_http_url is None:
             self._mcp_token = None
 
@@ -337,13 +335,18 @@ class AgentPlugin:
         self._mcp_token = normalized or None
 
     def set_mcp_http_config(self, url: Optional[str], token: Optional[str]) -> None:
-        """Configura endpoint HTTP MCP para esse plugin."""
+        """Configura endpoint HTTP MCP legado.
+
+        Agentes CLI locais não usam este endpoint; eles sempre preferem o
+        socket interno configurado por ``set_mcp_socket_config``. O token HTTP
+        só é armazenado quando não há socket ativo, evitando sobrescrever o
+        token interno dos agentes locais em fluxos de compatibilidade.
+        """
         normalized = (url or "").strip()
         self._mcp_http_url = normalized or None
-        if self._mcp_http_url is not None:
-            self._mcp_socket_path = None
-        normalized_token = (token or "").strip()
-        self._mcp_token = normalized_token or None
+        if self._mcp_socket_path is None:
+            normalized_token = (token or "").strip()
+            self._mcp_token = normalized_token or None
 
     def _build_token_args(self) -> List[str]:
         """Retorna ['--token', <token>] se houver token, ou lista vazia.
@@ -371,23 +374,22 @@ class AgentPlugin:
         return []
 
     def mcp_http_server_args(self, url: str) -> list[str]:
-        """Retorna args CLI para conectar em MCP HTTP (default: sem suporte)."""
+        """Retorna args MCP HTTP legado; não usado por comandos CLI locais."""
         _ = url
         return []
 
     def _with_mcp_server_args(self, cmd: list[str]) -> list[str]:
         """Anexa argumentos de MCP quando o plugin fornece integração."""
         base_cmd = list(cmd)
-        http_url = (self._mcp_http_url or "").strip()
         socket_path = (self._mcp_socket_path or "").strip()
-        if not http_url and not socket_path:
+        if not socket_path:
             return base_cmd
         if any(
             part in ("--mcp-server", "--mcp-config") or str(part).startswith(("--mcp-server=", "--mcp-config="))
             for part in base_cmd
         ):
             return base_cmd
-        mcp_args = self.mcp_http_server_args(http_url) if http_url else self.mcp_server_args(socket_path)
+        mcp_args = self.mcp_server_args(socket_path)
         if not mcp_args:
             return base_cmd
         if base_cmd and base_cmd[-1] == "-":
