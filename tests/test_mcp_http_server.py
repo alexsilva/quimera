@@ -17,7 +17,13 @@ from quimera.runtime.mcp import (
     create_server,
     MCPServer,
 )
-from quimera.runtime.mcp.http_server import DEFAULT_HTTP_READ_ONLY_TOOLS, _SSEQueueOutput
+from quimera.runtime.mcp.http_server import (
+    DEFAULT_HTTP_READ_ONLY_TOOLS,
+    HTTP_AGENT_TOOLS,
+    HTTP_READ_LOCAL_TOOLS,
+    _SSEQueueOutput,
+)
+from quimera.runtime.mcp.session import parse_http_allowed_tools
 from quimera.runtime.models import ToolResult
 
 
@@ -219,6 +225,7 @@ class TestSSE:
             body = chunks.split(b"\r\n\r\n", 1)[-1] if b"\r\n\r\n" in chunks else chunks
             assert b"event: endpoint" in body
             assert b"/message?sessionId=" in body
+            assert b"data: http://" not in body
         finally:
             httpd.shutdown()
 
@@ -265,6 +272,39 @@ class TestOptions:
             assert "MCP-Session-Id" in expose_headers
             methods = resp.header("access-control-allow-methods") or ""
             assert "GET" in methods
+        finally:
+            httpd.shutdown()
+
+    @patch.dict(os.environ, {"QUIMERA_MCP_HTTP_CORS_ORIGINS": "https://app.example, https://admin.example"})
+    def test_cors_uses_configured_origin_allowlist(self):
+        httpd = _start_http_server()
+        try:
+            resp = _http_request(
+                httpd.host,
+                httpd.port,
+                "OPTIONS",
+                "/health",
+                headers={"Origin": "https://app.example"},
+            )
+            assert resp.status == 204
+            assert resp.header("access-control-allow-origin") == "https://app.example"
+            assert resp.header("vary") == "Origin"
+        finally:
+            httpd.shutdown()
+
+    @patch.dict(os.environ, {"QUIMERA_MCP_HTTP_CORS_ORIGINS": "https://app.example"})
+    def test_cors_omits_unconfigured_origin(self):
+        httpd = _start_http_server()
+        try:
+            resp = _http_request(
+                httpd.host,
+                httpd.port,
+                "OPTIONS",
+                "/health",
+                headers={"Origin": "https://evil.example"},
+            )
+            assert resp.status == 204
+            assert resp.header("access-control-allow-origin") is None
         finally:
             httpd.shutdown()
 
@@ -553,6 +593,28 @@ class TestToolsCallHTTP:
             assert result_data["result"]["content"][0]["text"] == "conteudo http"
         finally:
             httpd.shutdown()
+
+
+    def test_read_local_profile_excludes_network_tools(self):
+        assert parse_http_allowed_tools("read-local") == HTTP_READ_LOCAL_TOOLS
+        assert "web_search" not in HTTP_READ_LOCAL_TOOLS
+        assert "web_fetch" not in HTTP_READ_LOCAL_TOOLS
+
+    def test_read_profile_keeps_network_read_tools(self):
+        tools = parse_http_allowed_tools("read")
+        assert tools == DEFAULT_HTTP_READ_ONLY_TOOLS
+        assert "web_search" in tools
+        assert "web_fetch" in tools
+
+    def test_agent_profile_adds_call_agent_without_dangerous_write_or_shell_tools(self):
+        tools = parse_http_allowed_tools("agent")
+        assert tools == HTTP_AGENT_TOOLS
+        assert "call_agent" in tools
+        for blocked in {"run_shell", "exec_command", "write_file", "remove_file", "apply_patch"}:
+            assert blocked not in tools
+
+    def test_all_profile_disables_allowlist(self):
+        assert parse_http_allowed_tools("all") is None
 
     def test_tools_list_uses_default_read_only_allowlist(self):
         executor = _make_executor(tool_names=["read_file", "run_shell", "grep_search"])

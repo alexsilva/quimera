@@ -294,8 +294,8 @@ def main():
         "--mcp-http-allow-tools",
         dest="mcp_http_allow_tools",
         default="read",
-        metavar="read|all|CSV",
-        help="Allowlist de tools para MCP HTTP externo: read (padrão), all ou lista CSV de nomes.",
+        metavar="read-local|read|agent|all|CSV",
+        help="Allowlist de tools para MCP HTTP externo: read-local (sem rede), read (padrão), agent, all ou lista CSV de nomes.",
     )
 
     args, unknown = parser.parse_known_args()

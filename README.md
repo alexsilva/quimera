@@ -156,7 +156,7 @@ Por padrão o MCP é ativado automaticamente. Controles via CLI:
 - `--mcp-port <porta>`: porta do servidor HTTP MCP (padrão: `9090`).
 - `--mcp-host <host>`: host do servidor HTTP MCP (padrão: `127.0.0.1`).
 - `--mcp-token-env <VAR>`: variável de ambiente usada como token MCP fixo para clientes externos (padrão: `QUIMERA_MCP_TOKEN`; se vazia, token aleatório por sessão).
-- `--mcp-http-allow-tools <read|all|CSV>`: allowlist de tools expostas no MCP HTTP externo. O padrão `read` publica apenas tools de leitura (`list_files`, `read_file`, `grep_search`, `list_tasks`, `list_jobs`, `get_job`, `web_search`, `web_fetch`, `todo_list`); use `all` somente em redes confiáveis ou informe nomes separados por vírgula.
+- `--mcp-http-allow-tools <read-local|read|agent|all|CSV>`: perfil/allowlist de tools expostas no MCP HTTP externo. O padrão `read` publica tools de leitura com rede (`list_files`, `read_file`, `grep_search`, `list_tasks`, `list_jobs`, `get_job`, `web_search`, `web_fetch`, `todo_list`); use `read-local` para remover ferramentas com acesso à rede (`web_search`, `web_fetch`), `agent` para acrescentar `call_agent` sem liberar shell/escrita (`run_shell`, `exec_command`, `write_file`, `remove_file`, `apply_patch`), `all` somente em redes confiáveis isoladas, ou nomes separados por vírgula.
 
 ### Injeção por plugin
 
@@ -224,17 +224,45 @@ Para iniciar o app com MCP Streamable HTTP embutido em vez do socket Unix padrã
 python quimera.py --mcp-http --mcp-host 127.0.0.1 --mcp-port 9090
 ```
 
-Nesse modo, agentes compatíveis recebem `http://127.0.0.1:9090/mcp` na inicialização, com o mesmo token da sessão enviado como `Authorization: Bearer <token>` (ou `X-Quimera-MCP-Token` para clientes simples). Por segurança, o transporte HTTP externo publica somente tools de leitura por padrão; ajuste com `--mcp-http-allow-tools all` ou `--mcp-http-allow-tools read_file,grep_search` quando necessário. As respostas CORS expõem `MCP-Session-Id` via `Access-Control-Expose-Headers` para clientes web conseguirem reutilizar a sessão Streamable HTTP.
+Nesse modo, agentes compatíveis recebem `http://127.0.0.1:9090/mcp` na inicialização, com o mesmo token da sessão enviado como `Authorization: Bearer <token>` (ou `X-Quimera-MCP-Token` para clientes simples). Por segurança, o transporte HTTP externo usa o perfil `read` por padrão; prefira `read-local` para exposição externa quando o cliente não precisa de `web_search`/`web_fetch`, ou `agent` quando a delegação `call_agent` for necessária sem liberar shell/escrita. O perfil `all` remove a allowlist e não é recomendado para Internet.
 
-Para conectar um cliente remoto, defina um token conhecido no ambiente antes de iniciar o Quimera e envie esse mesmo valor no header HTTP:
+Perfis embutidos:
+
+| Perfil | Tools expostas | Uso recomendado |
+|---|---|---|
+| `read-local` | `list_files`, `read_file`, `grep_search`, `list_tasks`, `list_jobs`, `get_job`, `todo_list` | Exposição externa mais restrita, sem ferramentas com acesso à rede. |
+| `read` | Tudo de `read-local` + `web_search`, `web_fetch` | Leitura com pesquisa/fetch web quando a rede é necessária. |
+| `agent` | Tudo de `read` + `call_agent` | Delegação entre agentes sem liberar `run_shell`, `exec_command`, `write_file`, `remove_file` ou `apply_patch`. |
+| `all` | Sem filtro de allowlist | Apenas desenvolvimento local ou rede privada muito confiável. |
+
+CORS é configurável por `QUIMERA_MCP_HTTP_CORS_ORIGINS` (lista separada por vírgulas). O padrão é `*` para desenvolvimento local; em uso externo, defina origens explícitas. As respostas CORS expõem `MCP-Session-Id` via `Access-Control-Expose-Headers` para clientes web conseguirem reutilizar a sessão Streamable HTTP.
+
+Para publicar atrás de um reverse proxy HTTPS, mantenha o Quimera escutando localmente ou em rede privada, termine TLS no proxy e preserve `Authorization`. O endpoint SSE legado (`/sse`) anuncia `/message?...` como URL relativa, evitando forçar `http://` quando o acesso externo é HTTPS.
+
+Exemplo seguro para cliente remoto somente leitura local, sem ferramentas de rede:
 
 ```bash
-export QUIMERA_MCP_TOKEN=um-token-longo-e-aleatorio
-python quimera.py --mcp-http --mcp-host 0.0.0.0 --mcp-port 9090
+export QUIMERA_MCP_TOKEN='substitua-por-um-token-longo-e-aleatorio'
+export QUIMERA_MCP_HTTP_CORS_ORIGINS='https://app.example.com'
+python quimera.py --mcp-http --mcp-host 127.0.0.1 --mcp-port 9090 \
+  --mcp-http-allow-tools read-local
+```
 
-# Cliente remoto: initialize via POST /mcp. Use -i para ver MCP-Session-Id.
-curl -i -X POST http://HOST:9090/mcp \
-     -H "Authorization: Bearer um-token-longo-e-aleatorio" \
+Exemplo com delegação entre agentes, ainda sem shell/escrita:
+
+```bash
+export QUIMERA_MCP_TOKEN='substitua-por-um-token-longo-e-aleatorio'
+export QUIMERA_MCP_HTTP_CORS_ORIGINS='https://ops.example.com'
+python quimera.py --mcp-http --mcp-host 0.0.0.0 --mcp-port 9090 \
+  --mcp-http-allow-tools agent
+```
+
+Cliente remoto: defina um token conhecido no ambiente antes de iniciar o Quimera e envie esse mesmo valor no header HTTP:
+
+```bash
+# initialize via POST /mcp. Use -i para ver MCP-Session-Id.
+curl -i -X POST https://quimera.example.com/mcp \
+     -H "Authorization: Bearer substitua-por-um-token-longo-e-aleatorio" \
      -H "Content-Type: application/json" \
      -d '{
        "jsonrpc":"2.0",
@@ -248,8 +276,8 @@ curl -i -X POST http://HOST:9090/mcp \
      }'
 
 # Próxima chamada: reutilize MCP-Session-Id e envie MCP-Protocol-Version.
-curl -X POST http://HOST:9090/mcp \
-     -H "Authorization: Bearer um-token-longo-e-aleatorio" \
+curl -X POST https://quimera.example.com/mcp \
+     -H "Authorization: Bearer substitua-por-um-token-longo-e-aleatorio" \
      -H "Content-Type: application/json" \
      -H "MCP-Protocol-Version: 2025-11-25" \
      -H "MCP-Session-Id: <valor-retornado-no-initialize>" \

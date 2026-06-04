@@ -34,20 +34,40 @@ _MAX_BODY_SIZE = 1024 * 1024  # 1MB
 
 _QUIMERA_MCP_HTTP_HOST = "QUIMERA_MCP_HTTP_HOST"
 _QUIMERA_MCP_HTTP_PORT = "QUIMERA_MCP_HTTP_PORT"
+_QUIMERA_MCP_HTTP_CORS_ORIGINS = "QUIMERA_MCP_HTTP_CORS_ORIGINS"
 _DEFAULT_HOST = "127.0.0.1"
 _DEFAULT_PORT = 8080
 
-DEFAULT_HTTP_READ_ONLY_TOOLS = frozenset({
+HTTP_READ_LOCAL_TOOLS = frozenset({
     "list_files",
     "read_file",
     "grep_search",
     "list_tasks",
     "list_jobs",
     "get_job",
-    "web_search",
-    "web_fetch",
     "todo_list",
 })
+
+HTTP_READ_TOOLS = frozenset({
+    *HTTP_READ_LOCAL_TOOLS,
+    "web_search",
+    "web_fetch",
+})
+
+HTTP_AGENT_TOOLS = frozenset({
+    *HTTP_READ_TOOLS,
+    "call_agent",
+})
+
+HTTP_TOOL_PROFILES: dict[str, frozenset[str] | None] = {
+    "read-local": HTTP_READ_LOCAL_TOOLS,
+    "read": HTTP_READ_TOOLS,
+    "agent": HTTP_AGENT_TOOLS,
+    "all": None,
+}
+
+DEFAULT_HTTP_READ_ONLY_TOOLS = HTTP_READ_TOOLS
+DEFAULT_HTTP_TOOL_PROFILE = "read"
 
 
 class _SSEQueueOutput:
@@ -85,7 +105,12 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
     # ------------------------------------------------------------------
 
     def _send_cors(self) -> None:
-        self.send_header("Access-Control-Allow-Origin", "*")
+        mcp_server: MCP_HTTPServer = self.server.mcp_http_server
+        cors_origin = mcp_server._cors_origin_for(self.headers.get("Origin"))
+        if cors_origin:
+            self.send_header("Access-Control-Allow-Origin", cors_origin)
+            if cors_origin != "*":
+                self.send_header("Vary", "Origin")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
         self.send_header(
             "Access-Control-Allow-Headers", "Content-Type, Authorization, MCP-Protocol-Version, MCP-Session-Id, X-Quimera-MCP-Token"
@@ -181,8 +206,7 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
             self.send_header("MCP-Protocol-Version", MCPServer.PROTOCOL_VERSION)
             self.end_headers()
 
-            host = self.headers.get("Host", "localhost")
-            endpoint_url = f"http://{host}/message?sessionId={session_id}"
+            endpoint_url = f"/message?sessionId={session_id}"
             self.wfile.write(
                 f"event: endpoint\ndata: {endpoint_url}\n\n".encode("utf-8")
             )
@@ -396,9 +420,11 @@ class MCP_HTTPServer:
         host: str = "",
         port: int = 0,
         allowed_tools: Iterable[str] | None = DEFAULT_HTTP_READ_ONLY_TOOLS,
+        cors_origins: str | Iterable[str] | None = None,
     ) -> None:
         self._mcp = mcp_server
         self._mcp.set_allowed_tools(allowed_tools)
+        self._cors_origins = self._normalize_cors_origins(cors_origins)
         self._host = host or os.environ.get(
             _QUIMERA_MCP_HTTP_HOST, _DEFAULT_HOST
         )
@@ -409,6 +435,36 @@ class MCP_HTTPServer:
         self._http_sessions: dict[str, dict] = {}
         self._sse_lock = threading.Lock()
         self._httpd: ThreadingHTTPServer | None = None
+
+
+    @staticmethod
+    def _normalize_cors_origins(
+        cors_origins: str | Iterable[str] | None,
+    ) -> frozenset[str]:
+        if cors_origins is None:
+            raw = os.environ.get(_QUIMERA_MCP_HTTP_CORS_ORIGINS, "*")
+            items: Iterable[str] = raw.split(",")
+        elif isinstance(cors_origins, str):
+            items = cors_origins.split(",")
+        else:
+            items = cors_origins
+        normalized = frozenset(
+            str(origin).strip() for origin in items if str(origin).strip()
+        )
+        return normalized or frozenset({"*"})
+
+    @property
+    def cors_origins(self) -> frozenset[str]:
+        """Origens CORS permitidas; ``{"*"}`` mantém o padrão de desenvolvimento."""
+        return self._cors_origins
+
+    def _cors_origin_for(self, request_origin: str | None) -> str | None:
+        if "*" in self._cors_origins:
+            return "*"
+        origin = (request_origin or "").strip()
+        if origin and origin in self._cors_origins:
+            return origin
+        return None
 
     @property
     def allowed_tools(self) -> frozenset[str] | None:
@@ -471,6 +527,7 @@ def create_server(
     host: str = "",
     port: int = 0,
     allowed_tools: Iterable[str] | None = DEFAULT_HTTP_READ_ONLY_TOOLS,
+    cors_origins: str | Iterable[str] | None = None,
 ) -> MCP_HTTPServer:
     """Cria uma instância de MCP_HTTPServer sem iniciá-la.
 
@@ -480,10 +537,16 @@ def create_server(
         port: Porta para bind (padrão: QUIMERA_MCP_HTTP_PORT ou 8080).
         allowed_tools: Allowlist de tools expostas via HTTP. Por padrão,
             publica apenas tools de leitura; use ``None`` para expor todas.
+        cors_origins: Origens CORS permitidas. Quando omitido, lê
+            ``QUIMERA_MCP_HTTP_CORS_ORIGINS`` e usa ``*`` como padrão de desenvolvimento.
 
     Returns:
         MCP_HTTPServer configurado mas não iniciado.
     """
     return MCP_HTTPServer(
-        mcp_server, host=host, port=port, allowed_tools=allowed_tools
+        mcp_server,
+        host=host,
+        port=port,
+        allowed_tools=allowed_tools,
+        cors_origins=cors_origins,
     )
