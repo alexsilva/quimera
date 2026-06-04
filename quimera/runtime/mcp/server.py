@@ -497,6 +497,22 @@ class MCPServer:
         arguments = params.get("arguments") or {}
         meta = params.get("_meta") or {}
         progress_token = meta.get("progressToken") if isinstance(meta, dict) else None
+        state = getattr(out, "_mcp_state", {}) or {}
+        call_metadata = dict(meta) if isinstance(meta, dict) else {}
+        for key in (
+            "agent_name",
+            "parent_agent",
+            "run_id",
+            "parent_run_id",
+            "job_id",
+            "task_id",
+            "approval_scope_id",
+        ):
+            if key not in call_metadata and key in params:
+                call_metadata[key] = params[key]
+        call_metadata.setdefault("transport", state.get("transport", "internal_mcp"))
+        if state.get("session_id") and "run_id" not in call_metadata:
+            call_metadata["run_id"] = state.get("session_id")
 
         if not tool_name:
             return self._err(msg_id, -32602, "tools/call: 'name' é obrigatório")
@@ -537,7 +553,7 @@ class MCPServer:
 
         future = self._thread_pool.submit(
             self._executor.execute,
-            ToolCall(name=tool_name, arguments=arguments),
+            ToolCall(name=tool_name, arguments=arguments, metadata=call_metadata),
             _progress_callback,
         )
 
@@ -835,7 +851,7 @@ class MCPServer:
     # ------------------------------------------------------------------
 
     def _process_message(self, msg: Any, out: IO,
-                         used_ids: dict | None = None) -> None:
+                         used_ids: dict | None = None, transport: str | None = None) -> None:
         """Processa uma mensagem ou lote JSON-RPC e escreve respostas."""
         state = getattr(out, "_mcp_state", None)
         if state is None:
@@ -844,6 +860,10 @@ class MCPServer:
                 setattr(out, "_mcp_state", state)
             except Exception:
                 pass
+        if transport:
+            state["transport"] = transport
+        else:
+            state.setdefault("transport", "internal_mcp")
         if isinstance(msg, list):
             if not msg:
                 self._write(self._err(None, -32600, "Invalid Request: empty batch"), out)

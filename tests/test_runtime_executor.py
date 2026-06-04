@@ -427,46 +427,45 @@ def test_executor_call_agent_fails_when_dispatch_not_injected(tmp_path):
     assert "not available" in (result.error or "")
 
 
-def test_executor_call_agent_would_not_require_approval(tmp_path):
-    """call_agent não deve ser marcado como exigindo aprovação."""
+def test_executor_call_agent_internal_would_not_require_human_approval(tmp_path):
+    """call_agent interno passa por policy/broker, mas é auto-aprovado dentro do budget."""
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
     call = ToolCall(name="call_agent", arguments={"agent_name": "codex", "task": "x"})
 
-    with patch.object(executor.policy, "validate", side_effect=AssertionError("policy should not run")):
-        assert executor.would_require_approval(call) is False
+    assert executor.would_require_approval(call) is False
 
 
 def test_policy_phase_methods_for_call_agent(tmp_path):
-    """call_agent deve pular validação/path/approval pelo contrato de phases."""
+    """call_agent agora passa por policy/approval broker como risco de delegação."""
     policy = ToolPolicy(ToolRuntimeConfig(workspace_root=tmp_path))
     call_agent = ToolCall(name="call_agent", arguments={"agent_name": "codex", "task": "x"})
     read_file = ToolCall(name="read_file", arguments={"path": "x.txt"})
 
-    assert policy.requires_validation(call_agent) is False
+    assert policy.requires_validation(call_agent) is True
     assert policy.requires_path_permission(call_agent) is False
-    assert policy.requires_approval(call_agent) is False
+    assert policy.requires_approval(call_agent) is True
 
     assert policy.requires_validation(read_file) is True
     assert policy.requires_path_permission(read_file) is True
 
 
-def test_executor_call_agent_bypasses_policy_and_approval(tmp_path):
-    """call_agent bypassa policy/approval e delega diretamente."""
+def test_executor_call_agent_goes_through_broker_without_human_prompt_when_internal(tmp_path):
+    """call_agent não bypassa policy, mas delegação interna é auto-aprovada no broker."""
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
     dispatch = MagicMock(return_value="ok")
     executor.set_call_agent_fn(dispatch)
 
-    with patch.object(executor.policy, "validate", side_effect=AssertionError("policy should not run")):
-        result = executor.execute(
-            ToolCall(
-                name="call_agent",
-                arguments={"agent_name": "codex", "task": "x", "context": "ctx"},
-            )
+    result = executor.execute(
+        ToolCall(
+            name="call_agent",
+            arguments={"agent_name": "codex", "task": "x", "context": "ctx"},
         )
+    )
 
     assert result.ok is True
     assert result.content == "ok"
     executor.approval_handler.approve.assert_not_called()
+    assert executor.approval_broker.audit_log[-1]["event"] == "auto_approved"
     dispatch.assert_called_once()
 
 
@@ -476,13 +475,12 @@ def test_executor_call_agent_rejects_non_string_context(tmp_path):
     dispatch = MagicMock(return_value="ok")
     executor.set_call_agent_fn(dispatch)
 
-    with patch.object(executor.policy, "validate", side_effect=AssertionError("policy should not run")):
-        result = executor.execute(
-            ToolCall(
-                name="call_agent",
-                arguments={"agent_name": "codex", "task": "x", "context": {"invalid": True}},
-            )
+    result = executor.execute(
+        ToolCall(
+            name="call_agent",
+            arguments={"agent_name": "codex", "task": "x", "context": {"invalid": True}},
         )
+    )
 
     assert result.ok is False
     assert "context" in (result.error or "").lower()
