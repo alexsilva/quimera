@@ -196,7 +196,7 @@ class CodexPlugin(AgentPlugin):
         ]
 
     def mcp_http_server_args(self, url: str) -> list[str]:
-        """MCP HTTP externo não é injetado em comandos CLI locais do Codex."""
+        """Retorna uma lista vazia de argumentos MCP HTTP para o Codex CLI."""
         _ = url
         return []
 

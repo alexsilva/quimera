@@ -335,13 +335,11 @@ class AgentPlugin:
         self._mcp_token = normalized or None
 
     def set_mcp_http_config(self, url: Optional[str], token: Optional[str]) -> None:
-        """Configura endpoint HTTP MCP legado.
-
-        Agentes CLI locais não usam este endpoint; eles sempre preferem o
-        socket interno configurado por ``set_mcp_socket_config``. O token HTTP
-        só é armazenado quando não há socket ativo, evitando sobrescrever o
-        token interno dos agentes locais em fluxos de compatibilidade.
-        """
+        """Armazena endpoint e token MCP HTTP quando não há socket MCP ativo."""
+        # Agentes CLI locais não usam este endpoint; eles sempre preferem o
+        # socket interno configurado por ``set_mcp_socket_config``. O token HTTP
+        # só é armazenado quando não há socket ativo, evitando sobrescrever o
+        # token interno dos agentes locais em fluxos de compatibilidade.
         normalized = (url or "").strip()
         self._mcp_http_url = normalized or None
         if self._mcp_socket_path is None:
@@ -374,7 +372,7 @@ class AgentPlugin:
         return []
 
     def mcp_http_server_args(self, url: str) -> list[str]:
-        """Retorna args MCP HTTP legado; não usado por comandos CLI locais."""
+        """Retorna a lista padrão vazia de argumentos CLI para MCP HTTP."""
         _ = url
         return []
 

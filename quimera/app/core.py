@@ -627,7 +627,7 @@ class QuimeraApp:
 
     @property
     def active_agents(self):
-        """Compatibilidade temporária com call sites legados baseados em lista."""
+        """Retorna uma visão em lista dos agentes ativos do pool da sessão."""
         return AgentPoolView(self._ensure_agent_pool())
 
     @active_agents.setter
@@ -779,11 +779,9 @@ class QuimeraApp:
                     path_setter(socket_path)
 
     def configure_mcp_http(self, url: str | None, token: str | None = None) -> None:
-        """Compatibilidade legada: não usado no fluxo normal dos agentes locais.
-
-        O MCP HTTP externo é apenas para clientes remotos; plugins CLI locais
-        devem receber o MCP socket interno via ``configure_mcp_socket``.
-        """
+        """Propaga endpoint e token MCP HTTP para plugins de agentes ativos."""
+        # O MCP HTTP externo é apenas para clientes remotos; plugins CLI locais
+        # devem receber o MCP socket interno via ``configure_mcp_socket``.
         for plugin in self.get_active_agent_plugins():
             config_setter = getattr(plugin, "set_mcp_http_config", None)
             if callable(config_setter):
