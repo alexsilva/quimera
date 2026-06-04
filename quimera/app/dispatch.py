@@ -8,13 +8,12 @@ from ..prompt_kinds import PromptKind
 from .agent_call_service import AgentCallService
 from .agent_gateway import AgentGateway, _is_user_cancelled
 from .render_event import RenderEvent
-from .tool_loop import ToolLoopService
 from .config import logger
 from ..domain.session_state import SessionState
 
 
 class AppDispatchServices:
-    """Coordena AgentGateway e ToolLoopService; mantém spy telemetry."""
+    """Coordena AgentGateway e mantém spy telemetry."""
 
     _MAX_SPY_TOOLS = 12
     _MAX_SPY_TEXT_CHARS = 280
@@ -95,7 +94,6 @@ class AppDispatchServices:
         self._get_tool_executor_fn = get_tool_executor
         self._get_call_agent_fn_override = get_call_agent_fn_override
         self._gateway = None
-        self._tool_loop = None
         self._agent_call_service = None
 
     @classmethod
@@ -202,11 +200,6 @@ class AppDispatchServices:
             self._gateway = self._build_gateway()
         return self._gateway
 
-    def _get_tool_loop(self) -> ToolLoopService:
-        if self._tool_loop is None:
-            self._tool_loop = self._build_tool_loop()
-        return self._tool_loop
-
     def _build_gateway(self) -> AgentGateway:
         prompt_builder = self._call(self._prompt_builder)
         renderer = self._call(self._renderer)
@@ -254,60 +247,6 @@ class AppDispatchServices:
             ui_queue=self._ui_queue,
         )
 
-    def _build_tool_loop(self) -> ToolLoopService:
-        ui_queue = self._ui_queue
-        plugin_resolver = self._get_agent_plugin
-        print_response_fn = self._print_response_fn
-        persist_message_fn = self._persist_message_fn
-        record_tool_event_fn = self._record_tool_event_fn
-
-        def _cancel_checker() -> bool:
-            if callable(self._cancel_checker_override):
-                return bool(self._cancel_checker_override())
-            return _is_user_cancelled(self._get_agent_client())
-
-        def _call_agent_fn(agent, **kwargs):
-            if self._get_call_agent_fn_override is not None:
-                override = self._get_call_agent_fn_override()
-                if override is not None:
-                    return override(agent, **kwargs)
-            return self.call_agent_low_level(agent, **kwargs)
-
-        def _record_tool_event_wrapper(agent, **kwargs):
-            if record_tool_event_fn:
-                record_tool_event_fn(agent, **kwargs)
-
-        def _reset_approve_all():
-            tool_executor = self._get_tool_executor()
-            if tool_executor is None:
-                return
-            approval_handler = getattr(tool_executor, "approval_handler", None)
-            if approval_handler is not None and hasattr(approval_handler, "reset_approve_all_after_cycle"):
-                approval_handler.reset_approve_all_after_cycle()
-
-        def _progress_callback(agent, tool_name, hop, max_hops, elapsed, ok, is_invalid):
-            status = "✓" if ok else "✗" if is_invalid else "○"
-            msg = f"[tool hop {hop}/{max_hops}] {agent} {status} {tool_name}"
-            if ui_queue is not None:
-                ui_queue.put(RenderEvent(RenderEvent.SYSTEM, msg))
-            else:
-                renderer = self._call(self._renderer)
-                if renderer is not None:
-                    show_system_neutral = getattr(renderer, "show_system_neutral", None)
-                    if callable(show_system_neutral):
-                        show_system_neutral(msg)
-
-        return ToolLoopService(
-            tool_executor=self._get_tool_executor(),
-            plugin_resolver=plugin_resolver,
-            call_agent_fn=_call_agent_fn,
-            print_response_fn=print_response_fn,
-            persist_message_fn=persist_message_fn,
-            cancel_checker=_cancel_checker,
-            record_tool_event=_record_tool_event_wrapper,
-            reset_approve_all=_reset_approve_all,
-            progress_callback=_progress_callback,
-        )
 
     # -------------------------------------------------------------------------
     # Agent call service (retry)
@@ -397,13 +336,16 @@ class AppDispatchServices:
             persist_history: bool = True,
             show_output: bool = True,
     ) -> str | None:
-        """Resolve respostas com loop de ferramentas até estabilizar a saída."""
-        return self._get_tool_loop().execute(
-            agent, response, silent=silent, persist_history=persist_history, show_output=show_output
-        )
+        """Retorna a resposta textual sem pós-processar chamadas de ferramenta.
+
+        Ferramentas são executadas apenas por interfaces estruturadas (MCP ou
+        tool calling nativo do driver), nunca por parsing do texto gerado.
+        Os parâmetros são preservados por compatibilidade com call sites.
+        """
+        return response
 
     def call_agent(self, agent, **options):
-        """Executa despacho com retry e resolução de ferramentas."""
+        """Executa despacho com retry e resolução textual sem tool parsing."""
         dispatch_options = dict(options)
         max_retries_override = dispatch_options.pop("max_retries", None)
         silent = dispatch_options.pop("silent", False)

@@ -57,7 +57,6 @@ from .task_events import (
 from .task_utils import summarize_task_feedback
 from .. import plugins
 from ..plugins.base import PluginRegistry, extract_model_from_cli_cmd
-from ..runtime.parser import strip_tool_block
 from ..runtime import tasks as runtime_tasks
 from ..ui import RenderAuditLogger, TerminalRenderer
 from ..context import ContextManager

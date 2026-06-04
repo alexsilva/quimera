@@ -474,6 +474,19 @@ def test_chat_with_tools_no_tool_calls_in_response():
     assert tool_calls == []
 
 
+def test_chat_with_tools_ignores_textual_function_like_tool_call():
+    driver, mock_client = _make_driver()
+    textual = '<function=read_file><parameter=path>secret.txt</function>'
+    mock_client.chat.completions.create.return_value = _make_non_streaming_response(
+        content=textual, tool_calls=None
+    )
+
+    text, tool_calls = driver._chat([], tools=TOOL_SCHEMAS)
+
+    assert "secret.txt" in text
+    assert tool_calls == []
+
+
 # ---------------------------------------------------------------------------
 # Testes de _execute_tool
 # ---------------------------------------------------------------------------

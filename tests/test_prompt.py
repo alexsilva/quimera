@@ -175,8 +175,8 @@ def test_prompt_includes_mcp_runtime_instruction_when_enabled():
     rules_block = _extract_block(prompt, "rules")
 
     assert "MCP bridge da sessão ativado." in rules_block
-    assert "Use comandos via MCP `quimera` para se comunicar com o runtime." in rules_block
-    assert "Dê preferência ao MCP ao executar ferramentas." in rules_block
+    assert "Use o servidor MCP `quimera` já injetado pelo runtime" in rules_block
+    assert "ToolExecutor" in rules_block
 
 
 def test_prompt_omits_mcp_runtime_instruction_when_disabled():
@@ -329,11 +329,11 @@ def test_prompt_includes_updated_handoff_contract_in_route_rules():
 
     prompt = builder.build(agent="codex", history=[{"role": "human", "content": "delegue"}])
 
-    assert "tool `call_agent`" in prompt
-    assert '"agent_name":"agente"' in prompt
-    assert '"task":"descrição da tarefa"' in prompt
-    assert '"fallback_agents":["agente_b"]' in prompt
-    assert '"handoffs":[{"agent_name":"agente_c"' in prompt
+    assert "tool estruturada `call_agent`" in prompt
+    assert "agent_name" in prompt
+    assert "task" in prompt
+    assert "fallback_agents" in prompt
+    assert "handoffs" in prompt
 
 
 def test_handoff_only_prompt_includes_updated_handoff_contract():
@@ -349,7 +349,7 @@ def test_handoff_only_prompt_includes_updated_handoff_contract():
         from_agent="codex",
     )
 
-    assert "tool `call_agent` (handoff via MCP)" in prompt
+    assert "tool estruturada `call_agent` via MCP" in prompt
     assert "Delegação padrão:" in prompt
     assert "fallback_agents" in prompt
     assert "handoffs" in prompt

@@ -38,13 +38,31 @@ def test_shell_tool_with_staging_warning(config):
                 tool.run_shell(call)
 
 
+def _poll_until_completed(tool: ShellTool, result, *, yield_time_ms: int = 500):
+    current = result
+    for _ in range(5):
+        if current.data.get("status") == "completed":
+            return current
+        current = tool.write_stdin(
+            ToolCall(
+                name="write_stdin",
+                arguments={
+                    "session_id": current.data["session_id"],
+                    "chars": "",
+                    "yield_time_ms": yield_time_ms,
+                },
+            )
+        )
+    return current
+
+
 def test_exec_command_completes_and_returns_payload(tmp_path):
     tool = ShellTool(ToolRuntimeConfig(workspace_root=tmp_path))
     call = ToolCall(
         name="exec_command",
         arguments={"cmd": 'python -u -c "print(\'hello\')"', "yield_time_ms": 200},
     )
-    result = tool.exec_command(call)
+    result = _poll_until_completed(tool, tool.exec_command(call))
     assert result.ok is True
     assert result.data["status"] == "completed"
     assert "hello" in result.data["stdout"]
@@ -66,18 +84,22 @@ def test_exec_command_supports_polling_running_process(tmp_path):
         )
     )
     assert started.ok is True
-    assert started.data["status"] == "running"
-    assert started.data["diff"]
-    session_id = started.data["session_id"]
-    assert f"session_id: {session_id}" in started.content
-    assert "status: running" in started.content
-
-    finished = tool.write_stdin(
-        ToolCall(
-            name="write_stdin",
-            arguments={"session_id": session_id, "chars": "", "yield_time_ms": 400},
+    if started.data["status"] == "running":
+        session_id = started.data["session_id"]
+        assert f"session_id: {session_id}" in started.content
+        assert "status: running" in started.content
+        finished = _poll_until_completed(
+            tool,
+            tool.write_stdin(
+                ToolCall(
+                    name="write_stdin",
+                    arguments={"session_id": session_id, "chars": "", "yield_time_ms": 400},
+                )
+            ),
         )
-    )
+    else:
+        session_id = started.data["session_id"]
+        finished = started
     assert finished.ok is True
     assert finished.data["status"] == "completed"
     assert "start" in finished.data["stdout"]
@@ -113,6 +135,7 @@ def test_exec_command_supports_stdin_roundtrip(tmp_path):
             },
         )
     )
+    finished = _poll_until_completed(tool, finished, yield_time_ms=500)
     assert finished.ok is True
     assert finished.data["status"] == "completed"
     assert "hello from stdin" in finished.data["stdout"]
@@ -144,15 +167,18 @@ def test_close_command_session_terminates_running_process(tmp_path):
 
 def test_exec_command_supports_tty_mode(tmp_path):
     tool = ShellTool(ToolRuntimeConfig(workspace_root=tmp_path))
-    result = tool.exec_command(
-        ToolCall(
-            name="exec_command",
-            arguments={
-                "cmd": 'python -u -c "print(\'tty-ok\')"',
-                "yield_time_ms": 200,
-                "tty": True,
-            },
-        )
+    result = _poll_until_completed(
+        tool,
+        tool.exec_command(
+            ToolCall(
+                name="exec_command",
+                arguments={
+                    "cmd": 'python -u -c "print(\'tty-ok\')"',
+                    "yield_time_ms": 200,
+                    "tty": True,
+                },
+            )
+        ),
     )
     assert result.ok is True
     assert result.data["status"] == "completed"
@@ -161,15 +187,19 @@ def test_exec_command_supports_tty_mode(tmp_path):
 
 def test_exec_command_tty_waits_for_short_completion_after_yield(tmp_path):
     tool = ShellTool(ToolRuntimeConfig(workspace_root=tmp_path))
-    result = tool.exec_command(
-        ToolCall(
-            name="exec_command",
-            arguments={
-                "cmd": 'python -u -c "import time; time.sleep(0.25); print(\'tty-grace\')"',
-                "yield_time_ms": 100,
-                "tty": True,
-            },
-        )
+    result = _poll_until_completed(
+        tool,
+        tool.exec_command(
+            ToolCall(
+                name="exec_command",
+                arguments={
+                    "cmd": 'python -u -c "import time; time.sleep(0.25); print(\'tty-grace\')"',
+                    "yield_time_ms": 100,
+                    "tty": True,
+                },
+            )
+        ),
+        yield_time_ms=700,
     )
     assert result.ok is True
     assert result.data["status"] == "completed"

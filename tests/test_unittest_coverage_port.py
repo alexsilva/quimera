@@ -16,7 +16,6 @@ from quimera.runtime.approval import ApprovalHandler, ConsoleApprovalHandler
 from quimera.runtime.config import ToolRuntimeConfig
 from quimera.runtime.executor import ToolExecutor
 from quimera.runtime.models import TaskRecord, ToolCall, ToolResult
-from quimera.runtime.parser import ToolCallParseError, _parse_json_object, extract_tool_call, strip_tool_block
 from quimera.runtime.policy import ToolPolicy, ToolPolicyError
 from quimera.runtime.registry import ToolRegistry
 from quimera.runtime.task_executor import TaskExecutor, create_executor
@@ -299,28 +298,6 @@ class RuntimeConfigAndModelsCoverageTests(unittest.TestCase):
         self.assertEqual(call.metadata, {})
 
 
-class ParserCoverageTests(unittest.TestCase):
-    def test_extract_and_strip_tool_blocks(self):
-        response = 'abc <tool function="test">{"x":1}</tool> def'
-        call = extract_tool_call(response)
-        self.assertEqual(call.name, "test")
-        self.assertEqual(call.arguments, {"x": 1})
-        self.assertEqual(strip_tool_block(response), "abc  def")
-
-    def test_parser_error_paths(self):
-        self.assertIsNone(extract_tool_call(None))
-        self.assertIsNone(extract_tool_call("plain text"))
-        with self.assertRaises(ToolCallParseError):
-            extract_tool_call('<tool function="read_file" arguments="{invalid json}" />')
-        with self.assertRaises(ToolCallParseError):
-            _parse_json_object("no braces")
-        with patch("json.JSONDecoder.raw_decode", return_value=(["bad"], 0)):
-            with self.assertRaises(ToolCallParseError):
-                extract_tool_call('<tool function="x">{}</tool>')
-        with self.assertRaises(ToolCallParseError):
-            extract_tool_call('<tool path="missing-function" />')
-
-
 class RegistryAndExecutorCoverageTests(unittest.TestCase):
     def setUp(self):
         self.config = ToolRuntimeConfig(workspace_root=Path("/tmp"))
@@ -339,7 +316,7 @@ class RegistryAndExecutorCoverageTests(unittest.TestCase):
         with self.assertRaisesRegex(KeyError, "Ferramenta não registrada: missing"):
             registry.get("missing")
 
-    def test_executor_denied_and_unexpected_error_and_parse_error(self):
+    def test_executor_denied_and_unexpected_error(self):
         executor = ToolExecutor(self.config, self.approval)
         self.approval.approve.return_value = False
         denied = executor.execute(ToolCall(name="write_file", arguments={"path": "a", "content": "b"}))
@@ -349,10 +326,7 @@ class RegistryAndExecutorCoverageTests(unittest.TestCase):
             result = executor.execute(ToolCall(name="list_files", arguments={"path": "."}))
         self.assertFalse(result.ok)
         self.assertIn("Falha inesperada: boom", result.error)
-        _, parse_result = executor.maybe_execute_from_response('<tool function="read_file" arguments="{invalid}" />')
-        self.assertEqual(parse_result.tool_name, "parse")
-        _, no_result = executor.maybe_execute_from_response("no tool")
-        self.assertIsNone(no_result)
+        self.assertFalse(any(name.startswith("maybe_execute") for name in dir(executor)))
 
 
 class PolicyCoverageTests(unittest.TestCase):

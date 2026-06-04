@@ -10,7 +10,6 @@ from typing import Tuple
 
 from ..constants import CMD_TASK
 from ..constants import NEEDS_INPUT_MARKER
-from ..runtime.parser import strip_tool_block
 from ..runtime.task_planning import normalize_task_description
 
 
@@ -23,7 +22,7 @@ def classify_task_execution_result(response: str | None) -> Tuple[bool, str]:
     """
     if response is None:
         return False, "sem resposta do agente"
-    text = strip_tool_block(response).strip()
+    text = response.strip()
     if not text:
         return False, "resposta vazia do agente"
     if NEEDS_INPUT_MARKER in text:
@@ -56,7 +55,7 @@ def classify_task_review_result(response: str | None) -> Tuple[bool, str, str]:
     if response is None:
         return False, "RETENTATIVA", "sem resposta do revisor"
 
-    text = strip_tool_block(response).strip()
+    text = response.strip()
     if not text:
         return False, "RETENTATIVA", "resposta vazia do revisor"
     if NEEDS_INPUT_MARKER in text:

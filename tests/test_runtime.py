@@ -10,7 +10,6 @@ from quimera.runtime.approval import ApprovalHandler
 from quimera.runtime.config import ToolRuntimeConfig
 from quimera.runtime.executor import ToolExecutor
 from quimera.runtime.models import ToolCall
-from quimera.runtime.parser import ToolCallParseError, extract_tool_call, strip_tool_block
 from quimera.runtime.policy import ToolPolicy, ToolPolicyError
 from quimera.runtime.task_executor import TaskExecutor
 from quimera.runtime.task_planning import choose_best_agent, classify_task_type
@@ -35,67 +34,6 @@ def _deny_all() -> ApprovalHandler:
     handler = MagicMock(spec=ApprovalHandler)
     handler.approve.return_value = False
     return handler
-
-
-# ---------------------------------------------------------------------------
-# Parser
-# ---------------------------------------------------------------------------
-
-class ParserTests(unittest.TestCase):
-    def test_extract_valid_tool_tag_with_body_json(self):
-        response = '<tool function="list_files">\n{"path": "."}\n</tool>'
-        call = extract_tool_call(response)
-        self.assertIsNotNone(call)
-        self.assertEqual(call.name, "list_files")
-        self.assertEqual(call.arguments, {"path": "."})
-
-    def test_extract_ignores_old_fence_format(self):
-        response = '```tool\n{"name": "read_file", "arguments": {"path": "foo.txt"}}\n```'
-        call = extract_tool_call(response)
-        self.assertIsNone(call)
-
-    def test_extract_returns_none_for_plain_text(self):
-        self.assertIsNone(extract_tool_call("resposta sem bloco de ferramenta"))
-
-    def test_extract_returns_none_for_empty(self):
-        self.assertIsNone(extract_tool_call(None))
-        self.assertIsNone(extract_tool_call(""))
-
-    def test_extract_valid_tool_tag(self):
-        response = '<tool function="run_shell" command="pwd" />'
-        call = extract_tool_call(response)
-        self.assertIsNotNone(call)
-        self.assertEqual(call.name, "run_shell")
-        self.assertEqual(call.arguments, {"command": "pwd"})
-
-    def test_extract_raises_on_invalid_json(self):
-        response = '<tool function="read_file" arguments="{not valid json}" />'
-        with self.assertRaises(ToolCallParseError):
-            extract_tool_call(response)
-
-    def test_extract_raises_on_missing_function(self):
-        response = '<tool path="foo.txt" />'
-        with self.assertRaises(ToolCallParseError):
-            extract_tool_call(response)
-
-    def test_strip_tool_tag(self):
-        response = 'Texto antes.\n<tool function="read_file" path="foo.txt" />\nTexto depois.'
-        stripped = strip_tool_block(response)
-        self.assertNotIn("<tool", stripped)
-        self.assertIn("Texto antes.", stripped)
-        self.assertIn("Texto depois.", stripped)
-
-    def test_extract_nested_arguments(self):
-        """JSON com objetos aninhados no corpo não deve falhar no parser."""
-        response = '<tool function="write_file">\n{"path": "a.txt", "options": {"encoding": "utf-8"}}\n</tool>'
-        call = extract_tool_call(response)
-        self.assertIsNotNone(call)
-        self.assertEqual(call.name, "write_file")
-        self.assertEqual(call.arguments["options"], {"encoding": "utf-8"})
-
-    def test_strip_noop_on_no_block(self):
-        response = "sem bloco"
-        self.assertEqual(strip_tool_block(response), "sem bloco")
 
 
 # ---------------------------------------------------------------------------
@@ -273,6 +211,11 @@ class ExecutorTests(unittest.TestCase):
         self.assertTrue(result.ok)
         self.assertIn("conteúdo", result.content)
 
+    def test_executor_has_no_text_response_tool_parser(self):
+        ex = self._executor()
+        names = [name for name in dir(ex) if "response" in name and name.startswith("maybe")]
+        self.assertEqual(names, [])
+
     def test_write_file(self):
         ex = self._executor(approve=True)
         result = ex.execute(ToolCall(name="write_file", arguments={"path": "novo.txt", "content": "olá"}))
@@ -303,28 +246,6 @@ class ExecutorTests(unittest.TestCase):
         ex = self._executor()
         result = ex.execute(ToolCall(name="run_shell", arguments={"command": "curl http://x.com"}))
         self.assertFalse(result.ok)
-
-    def test_maybe_execute_no_tool(self):
-        ex = self._executor()
-        raw, tool_result = ex.maybe_execute_from_response("resposta sem bloco")
-        self.assertEqual(raw, "resposta sem bloco")
-        self.assertIsNone(tool_result)
-
-    def test_maybe_execute_with_tool(self):
-        (self.tmp / "f.txt").write_text("abc")
-        ex = self._executor()
-        response = '<tool function="read_file" path="f.txt" />'
-        raw, tool_result = ex.maybe_execute_from_response(response)
-        self.assertIsNotNone(tool_result)
-        self.assertTrue(tool_result.ok)
-        self.assertIn("abc", tool_result.content)
-
-    def test_maybe_execute_ignores_json_block(self):
-        """Garante que bloco ```json não dispara execução."""
-        ex = self._executor()
-        response = '```json\n{"name": "read_file", "arguments": {"path": "f.txt"}}\n```'
-        raw, tool_result = ex.maybe_execute_from_response(response)
-        self.assertIsNone(tool_result)
 
     def test_list_tasks_accepts_top_level_filters(self):
         job_id = add_job("Job test", db_path=str(self.db_path))
