@@ -286,6 +286,8 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
         out = StringIO()
         if session_id:
             state = mcp_server._http_sessions.setdefault(session_id, {"initialize_seen": False, "initialized": False, "strict_lifecycle": True})
+            state["session_id"] = session_id
+            state["http_profile"] = mcp_server._http_profile
             setattr(out, "_mcp_state", state)
         try:
             mcp_server._mcp._process_message(msg, out=out, transport="http_mcp")
@@ -348,6 +350,14 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
             out = _SSEQueueOutput(sse_queue)
         else:
             out = StringIO()
+        state = mcp_server._http_sessions.setdefault(
+            session_id or f"http:{id(out)}",
+            {"initialize_seen": False, "initialized": False, "strict_lifecycle": False},
+        )
+        if session_id:
+            state["session_id"] = session_id
+        state["http_profile"] = mcp_server._http_profile
+        setattr(out, "_mcp_state", state)
 
         try:
             mcp_server._mcp._process_message(msg, out=out, transport="http_mcp")
@@ -424,6 +434,7 @@ class MCP_HTTPServer:
     ) -> None:
         self._mcp = mcp_server
         self._mcp.set_allowed_tools(allowed_tools)
+        self._http_profile = self._profile_name_for_allowed_tools(allowed_tools)
         self._cors_origins = self._normalize_cors_origins(cors_origins)
         self._host = host or os.environ.get(
             _QUIMERA_MCP_HTTP_HOST, _DEFAULT_HOST
@@ -436,6 +447,14 @@ class MCP_HTTPServer:
         self._sse_lock = threading.Lock()
         self._httpd: ThreadingHTTPServer | None = None
 
+
+    @staticmethod
+    def _profile_name_for_allowed_tools(allowed_tools: Iterable[str] | None) -> str:
+        normalized = MCPServer._normalize_allowed_tools(allowed_tools)
+        for name, tools in HTTP_TOOL_PROFILES.items():
+            if normalized == tools:
+                return name
+        return "custom"
 
     @staticmethod
     def _normalize_cors_origins(

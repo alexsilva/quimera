@@ -18,6 +18,7 @@ class ToolRuntimeConfig:
     max_task_results: int = 500
     require_approval_for_mutations: bool = True
     require_approval_for_task_creation: bool = True
+    delegation_budget_per_run: int = 8
     allowed_read_roots: list[Path] = field(default_factory=list)
     shell_allowlist: set[str] = field(
         default_factory=lambda: {

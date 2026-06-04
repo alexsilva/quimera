@@ -32,6 +32,7 @@ from quimera.runtime.approval import AutoApprovalHandler
 from quimera.runtime.config import ToolRuntimeConfig
 from quimera.runtime.executor import ToolExecutor
 from quimera.runtime.models import ToolCall
+from quimera.runtime.approval_broker import TrustedToolExecutionContext
 from quimera.runtime.drivers.tool_schemas import resolve_tool_schemas
 
 _logger = logging.getLogger(__name__)
@@ -498,21 +499,24 @@ class MCPServer:
         meta = params.get("_meta") or {}
         progress_token = meta.get("progressToken") if isinstance(meta, dict) else None
         state = getattr(out, "_mcp_state", {}) or {}
-        call_metadata = dict(meta) if isinstance(meta, dict) else {}
-        for key in (
-            "agent_name",
-            "parent_agent",
-            "run_id",
-            "parent_run_id",
-            "job_id",
-            "task_id",
-            "approval_scope_id",
-        ):
-            if key not in call_metadata and key in params:
-                call_metadata[key] = params[key]
-        call_metadata.setdefault("transport", state.get("transport", "internal_mcp"))
-        if state.get("session_id") and "run_id" not in call_metadata:
-            call_metadata["run_id"] = state.get("session_id")
+        real_transport = str(state.get("transport") or "internal_mcp")
+        session_id = state.get("session_id")
+        trusted_context = TrustedToolExecutionContext(
+            agent_name=state.get("agent_name"),
+            parent_agent=state.get("parent_agent"),
+            run_id=state.get("trusted_run_id") or session_id or f"mcp:{id(out)}",
+            parent_run_id=state.get("parent_run_id"),
+            job_id=state.get("job_id"),
+            task_id=state.get("task_id"),
+            transport=real_transport,
+            session_id=session_id,
+            server_origin="mcp_http" if real_transport == "http_mcp" else "mcp_stdio",
+            http_profile=state.get("http_profile"),
+            approval_scope_id=state.get("approval_scope_id"),
+            delegation_budget=state.get("delegation_budget"),
+            http_call_agent_auto_approve=bool(state.get("http_call_agent_auto_approve", False)),
+        )
+        call_metadata = {"trusted_context": trusted_context}
 
         if not tool_name:
             return self._err(msg_id, -32602, "tools/call: 'name' é obrigatório")
