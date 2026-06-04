@@ -220,7 +220,7 @@ Delegação entre agentes acontece pela tool MCP `call_agent`. Agentes MCP-capaz
 
 O MCP interno via socket Unix é core do Quimera: ele inicia por padrão, é entregue a Claude, Codex, OpenCode e agentes locais similares, e expõe todas as ferramentas registradas no `ToolExecutor`. Ferramentas sensíveis continuam protegidas por `ToolPolicy`, permissões de path e fluxo de approval no executor.
 
-O MCP HTTP é uma extensão externa opcional para clientes remotos como Grok ou outros chats. Ele usa uma instância separada de `MCPServer`, com token externo, CORS configurável e allowlist aplicada apenas ao HTTP. A allowlist HTTP nunca reduz as ferramentas disponíveis para o socket interno.
+O MCP HTTP é uma extensão externa opcional para clientes remotos. Ele usa uma instância separada de `MCPServer`, com token externo, CORS configurável e allowlist aplicada apenas ao HTTP. A allowlist HTTP nunca reduz as ferramentas disponíveis para o socket interno.
 
 Para iniciar o app com MCP interno + Streamable HTTP externo:
 
