@@ -67,6 +67,17 @@ class SessionState:
             self._history[:] = self._history[-limit:]
             return dropped, list(self._history)
 
+    def append_history_trimmed_and_snapshot(self, msg: dict, limit: int) -> tuple[int, list]:
+        """Adiciona mensagem, aplica limite e retorna snapshot em uma transação."""
+        with self._lock:
+            self._history.append(msg)
+            if isinstance(limit, int) and limit > 0 and len(self._history) > limit:
+                dropped = len(self._history) - limit
+                self._history[:] = self._history[-limit:]
+            else:
+                dropped = 0
+            return dropped, list(self._history)
+
     def replace_history_if_prefix_matches(
         self,
         expected_prefix: list,
