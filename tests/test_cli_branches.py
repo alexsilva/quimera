@@ -12,6 +12,7 @@ import pytest
 
 import quimera.cli as cli
 from quimera.plugins.base import CliConnection, OpenAIConnection
+from quimera.runtime.mcp.http_server import DEFAULT_HTTP_READ_ONLY_TOOLS
 
 
 class _FakeWorkspace:
@@ -690,7 +691,12 @@ def test_main_mcp_http_configures_http_transport(monkeypatch):
         mock_http = mock_http_cls.return_value
         cli.main()
 
-    mock_http_cls.assert_called_once_with(mock_mcp, host="127.0.0.1", port=9090)
+    mock_http_cls.assert_called_once_with(
+        mock_mcp,
+        host="127.0.0.1",
+        port=9090,
+        allowed_tools=DEFAULT_HTTP_READ_ONLY_TOOLS,
+    )
     mock_http.start_background.assert_called_once_with()
     assert _FakeApp.last_instance.mcp_http_calls == ["http://127.0.0.1:9090/mcp"]
     assert _FakeApp.last_instance.mcp_socket_path is None

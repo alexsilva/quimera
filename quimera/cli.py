@@ -290,6 +290,13 @@ def main():
         metavar="VAR",
         help="Variável de ambiente com token MCP fixo para clientes externos (padrão: QUIMERA_MCP_TOKEN). Se ausente, gera token aleatório por sessão.",
     )
+    parser.add_argument(
+        "--mcp-http-allow-tools",
+        dest="mcp_http_allow_tools",
+        default="read",
+        metavar="read|all|CSV",
+        help="Allowlist de tools para MCP HTTP externo: read (padrão), all ou lista CSV de nomes.",
+    )
 
     args, unknown = parser.parse_known_args()
 
@@ -443,6 +450,7 @@ def main():
         http_host=args.mcp_host,
         http_port=args.mcp_port,
         token_env=args.mcp_token_env,
+        http_allowed_tools=args.mcp_http_allow_tools,
     )
 
     app.run()

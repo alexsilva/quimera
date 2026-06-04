@@ -17,7 +17,7 @@ from quimera.runtime.mcp import (
     create_server,
     MCPServer,
 )
-from quimera.runtime.mcp.http_server import _SSEQueueOutput
+from quimera.runtime.mcp.http_server import DEFAULT_HTTP_READ_ONLY_TOOLS, _SSEQueueOutput
 from quimera.runtime.models import ToolResult
 
 
@@ -261,6 +261,8 @@ class TestOptions:
             )
             assert resp.status == 204
             assert resp.header("access-control-allow-origin") == "*"
+            expose_headers = resp.header("access-control-expose-headers") or ""
+            assert "MCP-Session-Id" in expose_headers
             methods = resp.header("access-control-allow-methods") or ""
             assert "GET" in methods
         finally:
@@ -549,6 +551,77 @@ class TestToolsCallHTTP:
             assert result_data["id"] == 1
             assert result_data["result"]["isError"] is False
             assert result_data["result"]["content"][0]["text"] == "conteudo http"
+        finally:
+            httpd.shutdown()
+
+    def test_tools_list_uses_default_read_only_allowlist(self):
+        executor = _make_executor(tool_names=["read_file", "run_shell", "grep_search"])
+        httpd = _start_http_server(_make_mcp_server(executor))
+        try:
+            body = json.dumps({
+                "jsonrpc": "2.0", "id": 3, "method": "tools/list",
+            }).encode("utf-8")
+            resp = _http_request(
+                httpd.host, httpd.port, "POST", "/message",
+                body=body,
+                headers={"Content-Type": "application/json"},
+            )
+            assert resp.status == 200
+            tool_names = {
+                tool["name"] for tool in json.loads(resp.data)["result"]["tools"]
+            }
+            assert "read_file" in tool_names
+            assert "grep_search" in tool_names
+            assert "run_shell" not in tool_names
+            assert httpd.allowed_tools == DEFAULT_HTTP_READ_ONLY_TOOLS
+        finally:
+            httpd.shutdown()
+
+    def test_tools_call_blocks_tools_outside_default_allowlist(self):
+        executor = _make_executor(tool_names=["read_file", "run_shell"])
+        httpd = _start_http_server(_make_mcp_server(executor))
+        try:
+            body = json.dumps({
+                "jsonrpc": "2.0", "id": 4, "method": "tools/call",
+                "params": {"name": "run_shell", "arguments": {"command": "pwd"}},
+            }).encode("utf-8")
+            resp = _http_request(
+                httpd.host, httpd.port, "POST", "/message",
+                body=body,
+                headers={"Content-Type": "application/json"},
+            )
+            assert resp.status == 200
+            result = json.loads(resp.data)
+            assert result["error"]["code"] == -32602
+            assert "Tool not allowed: run_shell" in result["error"]["message"]
+            executor.execute.assert_not_called()
+        finally:
+            httpd.shutdown()
+
+    def test_custom_allowlist_can_expose_run_shell(self):
+        executor = _make_executor(tool_names=["read_file", "run_shell"])
+        httpd = MCP_HTTPServer(
+            _make_mcp_server(executor),
+            host="127.0.0.1",
+            port=0,
+            allowed_tools={"run_shell"},
+        )
+        httpd.start_background()
+        _wait_for_server(httpd.host, httpd.port)
+        try:
+            body = json.dumps({
+                "jsonrpc": "2.0", "id": 5, "method": "tools/list",
+            }).encode("utf-8")
+            resp = _http_request(
+                httpd.host, httpd.port, "POST", "/message",
+                body=body,
+                headers={"Content-Type": "application/json"},
+            )
+            assert resp.status == 200
+            tool_names = {
+                tool["name"] for tool in json.loads(resp.data)["result"]["tools"]
+            }
+            assert tool_names == {"run_shell"}
         finally:
             httpd.shutdown()
 
