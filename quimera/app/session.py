@@ -56,6 +56,7 @@ class AppSessionServices:
         self._history = session_state.history
         self._shared_state = session_state.shared_state
         self._lock = session_state.history_lock
+        self._counter_lock = threading.Lock()
         self._storage = storage
         self._renderer = renderer
         self._agent_pool = agent_pool
@@ -76,29 +77,34 @@ class AppSessionServices:
             getattr(prompt_builder, "history_window", None) if prompt_builder else None,
             self._auto_summarize_threshold,
         )
-        history_snapshot = self._session_state.history_snapshot()
-        trimmed_history, dropped = trim_history_messages(history_snapshot, limit)
-        if dropped:
-            self._session_state.replace_history(trimmed_history)
+        dropped, _ = self._session_state.trim_history(limit)
         return dropped
 
     def persist_message(self, role, content, *, return_history_snapshot: bool = False):
         """Persiste mensagem no histórico, log e snapshot."""
-        with self._lock:
-            self._session_state.append_history({"role": role, "content": content})
-            self._storage.append_log(role, content)
-            self._enforce_history_limit()
+        self._session_state.append_history({"role": role, "content": content})
+        self._storage.append_log(role, content)
+        self._enforce_history_limit()
+
+        history_snapshot = None
+        with self._counter_lock:
             self._unsaved_messages += 1
             now = time.monotonic()
-            if self._unsaved_messages >= _SAVE_DEBOUNCE_MESSAGES or (now - self._last_save_time) >= _SAVE_DEBOUNCE_SECONDS:
+            should_save = (
+                self._unsaved_messages >= _SAVE_DEBOUNCE_MESSAGES
+                or (now - self._last_save_time) >= _SAVE_DEBOUNCE_SECONDS
+            )
+            if should_save or return_history_snapshot:
+                history_snapshot = self._session_state.history_snapshot()
+            if should_save:
                 self._storage.save_history(
-                    self._session_state.history_snapshot(),
+                    history_snapshot,
                     shared_state=self._session_state.shared_state_snapshot(),
                 )
                 self._last_save_time = now
                 self._unsaved_messages = 0
             if return_history_snapshot:
-                return self._session_state.history_snapshot()
+                return history_snapshot
         return None
 
     def maybe_auto_summarize(self, preferred_agent=None):
@@ -109,21 +115,20 @@ class AppSessionServices:
 
         prompt_builder = self._prompt_builder
         keep = prompt_builder.history_window if prompt_builder else 0
-        with self._lock:
-            history_snapshot = self._session_state.history_snapshot()
-            history_len = len(history_snapshot)
-            if history_len < threshold:
-                return
-            if history_len <= keep:
-                return
-            if history_len - keep < _MIN_SUMMARIZE_SURPLUS:
-                return
-            if keep > 0:
-                to_summarize = history_snapshot[:-keep]
-                recent = history_snapshot[-keep:]
-            else:
-                to_summarize = history_snapshot
-                recent = []
+        history_snapshot = self._session_state.history_snapshot()
+        history_len = len(history_snapshot)
+        if history_len < threshold:
+            return
+        if history_len <= keep:
+            return
+        if history_len - keep < _MIN_SUMMARIZE_SURPLUS:
+            return
+        if keep > 0:
+            to_summarize = history_snapshot[:-keep]
+            recent = history_snapshot[-keep:]
+        else:
+            to_summarize = history_snapshot
+            recent = []
 
         existing_summary = self._context_manager.load_session_summary()
 
@@ -137,20 +142,21 @@ class AppSessionServices:
             preferred_agent=summary_agent,
         )
         if summary:
-            with self._lock:
-                current_snapshot = self._session_state.history_snapshot()
-                if current_snapshot[:history_len] != history_snapshot:
-                    self._renderer.show_system(
-                        "[memória] histórico mudou durante o resumo — truncamento adiado"
-                    )
-                    return
-                appended = current_snapshot[history_len:]
-                self._session_state.replace_history(recent + appended)
-                self._storage.save_history(
-                    self._session_state.history_snapshot(),
-                    shared_state=self._session_state.shared_state_snapshot(),
+            matched, final_history = self._session_state.replace_history_if_prefix_matches(
+                history_snapshot,
+                history_len,
+                recent,
+            )
+            if not matched:
+                self._renderer.show_system(
+                    "[memória] histórico mudou durante o resumo — truncamento adiado"
                 )
-                current_len = len(self._session_state.history_snapshot())
+                return
+            self._storage.save_history(
+                final_history,
+                shared_state=self._session_state.shared_state_snapshot(),
+            )
+            current_len = len(final_history)
             self._context_manager.update_with_summary(summary)
             self._renderer.show_system(
                 f"[memória] histórico truncado para {current_len} mensagens recentes"
@@ -160,12 +166,14 @@ class AppSessionServices:
 
     def _flush_pending_history(self) -> None:
         """Garante persistência do histórico em memória antes do encerramento."""
-        with self._lock:
+        with self._counter_lock:
             if self._unsaved_messages <= 0:
                 return
+            history_snapshot = self._session_state.history_snapshot()
+            shared_state_snapshot = self._session_state.shared_state_snapshot()
             self._storage.save_history(
-                self._session_state.history_snapshot(),
-                shared_state=self._session_state.shared_state_snapshot(),
+                history_snapshot,
+                shared_state=shared_state_snapshot,
             )
             self._last_save_time = time.monotonic()
             self._unsaved_messages = 0
@@ -175,8 +183,7 @@ class AppSessionServices:
         self._task_services.stop_task_executors()
         self._flush_pending_history()
 
-        with self._lock:
-            history_snapshot = self._session_state.history_snapshot()
+        history_snapshot = self._session_state.history_snapshot()
 
         if not history_snapshot or interrupted:
             return
