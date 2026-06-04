@@ -42,7 +42,6 @@ quimera/
 │   ├── agent_gateway.py              # Interface de baixo nível para AgentClient
 │   ├── agent_pool.py                 # Gerenciamento de pool de agentes disponíveis
 │   ├── worker.py                     # Worker thread de chat (isola exceções, recupera turno)
-│   ├── tool_loop.py                  # Loop de execução de tools com timeout
 │   ├── protocol.py                   # Parsing/geração do protocolo de handoff entre agentes
 │   ├── event_sink.py                 # Sistema de publish-subscribe de eventos internos
 │   ├── render_event.py               # Definição de eventos de renderização
@@ -64,7 +63,6 @@ quimera/
 │   ├── task_reviewer.py              # Revisão de resultados no runtime
 │   ├── task_planning.py              # Planejamento e decomposição de tasks
 │   ├── executor.py                   # Executor genérico de operações do runtime
-│   ├── parser.py                     # Parser de blocos de tool retornados por agentes
 │   ├── streaming.py                  # Suporte a streaming de respostas de agentes
 │   ├── registry.py                   # Registro de tools disponíveis no runtime
 │   ├── tool_hops.py                  # Encadeamento de chamadas de tools (multi-hop)
@@ -332,7 +330,6 @@ Tools definidas em `TOOL_SCHEMAS`, filtradas por:
 - Principais implementações:
   - `ChatWorker` (`app/worker.py`): workers de chat.
   - `TaskExecutionService` (`app/task_execution_service.py`): pool para tasks.
-  - `ToolLoop` (`app/tool_loop.py`): execução individual com timeout.
 - Comunicam com a main thread apenas via:
   - `ui_event_queue` (`queue.Queue`): eventos de renderização.
   - `EventSink`: callbacks registrados da main thread.
@@ -380,7 +377,7 @@ O loop em `quimera/app/core.py:run()` segue este fluxo:
 - `agents/client.py` abstrai todos os backends: CLI local (`claude`, `codex`, `gemini`), API (OpenAI-compat), driver REPL persistente.
 - `plugins/` define metadados por agente: capacidades, paths de sandbox, driver, tipos de task suportados, e mecanismo de injeção MCP via `mcp_server_args()`.
 - `agents/warm_pool.py` mantém processos pré-aquecidos para reduzir latência.
-- `runtime/mcp/server.py` expõe as ferramentas do runtime via protocolo MCP, permitindo que agentes executem tools sem depender do parser textual de tool calls.
+- `runtime/mcp/server.py` expõe as ferramentas do runtime via protocolo MCP; o driver OpenAI-compatible também usa tool calling nativo quando disponível, e ambos convergem para `ToolExecutor.execute(ToolCall(...))`.
 - `plugins/{claude,codex,opencode}.py` cada um implementa `mcp_server_args(socket_path)` para injetar a configuração MCP no formato nativo do agente (JSON, CLI args, env vars).
 
 ### 6.2 Sistema de Tasks
@@ -414,7 +411,7 @@ Quando o MCP está ativo (padrão), os agentes usam a tool `call_agent` exposta 
   "name": "call_agent",
   "arguments": {
     "agent_name": "codex",
-    "task": "Implementar função de parser",
+    "task": "Implementar função de leitura",
     "context": "contexto opcional",
     "fallback_agents": ["claude"],
     "handoffs": [{"agent_name": "claude", "task": "Revise o resultado"}]
@@ -442,7 +439,6 @@ Formato definido em `app/protocol.py`:
 
 Handoffs em sequência usam `"handoffs": [...]`. O sistema atualiza `shared_state` e histórico automaticamente.
 
-**Nota**: Quando MCP está ativo, o protocolo opera em **MCP-first mode** — envelopes textuais legados (`<handoff>...</handoff>`) são ignorados pelo parser, evitando dupla delegação.
 
 ### 6.5 Arquitetura Orientada a Goals
 

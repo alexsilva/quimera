@@ -2,7 +2,7 @@
 
 Orquestrador multiagente para engenharia de software no terminal.
 
-O Quimera coordena agentes (CLI e OpenAI-compatible), mantém estado compartilhado por workspace, roteia tarefas com balanceamento de carga e executa tools com política de segurança.
+O Quimera coordena agentes (CLI e OpenAI-compatible), mantém estado compartilhado por workspace, roteia tarefas com balanceamento de carga e executa ferramentas estruturadas com política de segurança.
 
 ## Objetivo
 
@@ -14,7 +14,7 @@ O Quimera coordena agentes (CLI e OpenAI-compatible), mantém estado compartilha
 
 - `quimera/cli.py`: entrada principal da aplicação e flags de execução.
 - `quimera/app/`: loop interativo, protocolo de respostas/estado, comandos slash e orquestração de rodada.
-- `quimera/runtime/`: drivers, parser de tool calls, políticas e execução de ferramentas.
+- `quimera/runtime/`: drivers, modelos `ToolCall`/`ToolResult`, registry, políticas e execução segura de ferramentas.
 - `quimera/runtime/mcp/server.py`: servidor MCP (Model Context Protocol) — expõe tools do runtime via JSON-RPC 2.0 sobre stdio/socket Unix.
 - `quimera/runtime/task_planning.py`: classificação de task e scoring de roteamento.
 - `quimera/runtime/tasks.py`: persistência de jobs/tasks em SQLite.
@@ -137,10 +137,13 @@ Proxy stdio→socket (plugin do agente)
   ▼
 MCPServer (quimera/runtime/mcp/server.py)
   │  tools/list → resolve_tool_schemas()
-  │  tools/call → ToolExecutor.execute()
+  │  tools/call estruturado → ToolExecutor.execute()
   ▼
-ToolRegistry → handlers (read_file, run_shell, call_agent, ...)
+ToolPolicy/approval → ToolRegistry → handlers (read_file, run_shell, call_agent, ...)
 ```
+
+
+Ferramentas são executadas por chamadas estruturadas: MCP para agentes CLI/MCP-capazes e, quando o backend OpenAI-compatible oferece suporte nativo a tool calling, chamadas nativas do driver. Em ambos os caminhos, a execução concreta converge para `ToolExecutor.execute(ToolCall(...))`, com `ToolPolicy`, approval e `ToolRegistry` centralizando validação, permissão, auditoria e despacho para os handlers do runtime.
 
 ### Habilitação
 
@@ -193,7 +196,7 @@ O mecanismo central de interoperabilidade entre agentes é a ferramenta `call_ag
   "name": "call_agent",
   "arguments": {
     "agent_name": "codex",
-    "task": "Implementar função de parser",
+    "task": "Implementar função de leitura",
     "context": "contexto opcional",
     "fallback_agents": ["claude", "gemini"],
     "handoffs": [
@@ -321,7 +324,7 @@ Observações importantes:
 
 ## Ferramentas de runtime
 
-Ferramentas suportadas pelo runtime (expostas via MCP e, para tools locais não delegativas, pelos mecanismos de tool call do runtime):
+Ferramentas suportadas pelo runtime (expostas via MCP e, quando disponível, pelo tool calling nativo do driver OpenAI-compatible):
 
 - leitura/inspeção: `list_files`, `read_file`, `grep_search`
 - edição: `apply_patch`, `write_file`, `remove_file`

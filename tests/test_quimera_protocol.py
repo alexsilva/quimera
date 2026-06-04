@@ -1204,8 +1204,8 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn("TASK:\nRevisar parser", prompt)
         self.assertIn("EXPECTED:\n1 parágrafo curto", prompt)
         self.assertNotIn("segundo agente nesta rodada", prompt)
-        self.assertIn("tool `call_agent`", prompt)
-        self.assertIn('"agent_name":"agente"', prompt)
+        self.assertIn("tool estruturada `call_agent`", prompt)
+        self.assertIn("agent_name", prompt)
         self.assertNotIn("Não delegue de volta", prompt)
 
     def test_prompt_includes_handoff_when_present(self):
@@ -2224,16 +2224,22 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(
             printed,
             [
-                (AGENT_CLAUDE, "vou tentar abrir task sozinho"),
-                (AGENT_CLAUDE, "sem task criada"),
+                (
+                    AGENT_CLAUDE,
+                    'vou tentar abrir task sozinho\n'
+                    '<tool function="propose_task" description="rode os testes" />',
+                ),
             ],
         )
         self.assertEqual(
             persisted,
             [
                 ("human", "faça o teste pelo chat"),
-                (AGENT_CLAUDE, "vou tentar abrir task sozinho"),
-                (AGENT_CLAUDE, "sem task criada"),
+                (
+                    AGENT_CLAUDE,
+                    'vou tentar abrir task sozinho\n'
+                    '<tool function="propose_task" description="rode os testes" />',
+                ),
             ],
         )
         self.assertEqual(app.renderer.handoffs, [])
@@ -2875,7 +2881,6 @@ class PluginTests(unittest.TestCase):
         app.agent_client = Mock()
         app.agent_client.call.return_value = "Resposta mock"
         app.tool_executor = Mock()
-        app.tool_executor.maybe_execute_from_response.return_value = ("Resposta mock", None)
         app.history = []
         app.shared_state = {}
         app.renderer = Mock()
@@ -4515,170 +4520,18 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(summary["tool_errors_by_type"]["policy"], 1)
         self.assertEqual(summary["tool_loop_abort_reasons"]["invalid_tool_loop"], 1)
 
-    def test_resolve_agent_response_preserves_structured_tool_error_metadata(self):
-        """Dispatch deve preservar ToolError existente em vez de reclassificar por texto."""
+    def test_resolve_agent_response_leaves_textual_tool_like_content_untouched(self):
         from quimera.app.dispatch import AppDispatchServices
-        from quimera.runtime.errors import ToolValidationError
-        from quimera.runtime.models import ToolResult
-        from quimera.runtime.tool_hops import MAX_TOOL_HOPS_BY_RELIABILITY
 
         app = Mock()
-        app.tool_executor.maybe_execute_from_response.side_effect = [
-            (
-                "",
-                ToolResult(
-                    ok=False,
-                    tool_name="run_shell",
-                    error=ToolValidationError(
-                        "Campo inválido",
-                        field="command",
-                        hint="informe um comando não vazio",
-                    ),
-                ),
-            ),
-            ("resposta final", None),
-        ]
-        app.task_services.truncate_payload = lambda payload: payload
-        app.get_agent_plugin.return_value = Mock(tool_use_reliability="low")
-        app.session_services.persist_message = Mock()
-        app.print_response = Mock()
-        app.record_failure = Mock()
-        app._call_agent = Mock(return_value="resposta final")
-
+        app.tool_executor.execute = Mock(side_effect=AssertionError("text must not execute tools"))
         dispatch = AppDispatchServices.from_app(app)
-        result = dispatch.resolve_agent_response("codex", "resposta inicial", show_output=False)
 
-        self.assertEqual(result, "resposta final")
-        handoff = app._call_agent.call_args.kwargs["handoff"]
-        max_hops = MAX_TOOL_HOPS_BY_RELIABILITY["low"]
-        self.assertIn(f"max_tool_hops={max_hops}", handoff)
-        self.assertIn(f"remaining_tool_hops={max_hops - 1}", handoff)
-        self.assertIn("'error_type': 'validation'", handoff)
-        self.assertIn("'error_metadata': {'field': 'command', 'hint': 'informe um comando não vazio'}", handoff)
+        response = 'Resposta <tool function="read_file" path="secret.txt" /> final'
+        result = dispatch.resolve_agent_response("codex", response, show_output=False)
 
-    def test_resolve_agent_response_aborts_on_repeated_policy_error(self):
-        """Dispatch deve abortar quando a mesma assinatura de erro policy se repete consecutivamente."""
-        from quimera.app.dispatch import AppDispatchServices
-        from quimera.runtime.models import ToolResult
-        from quimera.runtime.tool_hops import get_invalid_tool_loop_threshold
-
-        app = Mock()
-        threshold = get_invalid_tool_loop_threshold("high")
-        app.tool_executor.maybe_execute_from_response.side_effect = [
-            (
-                "",
-                ToolResult(
-                    ok=False,
-                    tool_name="run_shell",
-                    error="Comando bloqueado: operador de encadeamento proibido: '&&'",
-                ),
-            )
-            for _ in range(threshold)
-        ]
-        app.task_services.truncate_payload = lambda payload: payload
-        app.get_agent_plugin.return_value = Mock(tool_use_reliability="high")
-        app.session_services.persist_message = Mock()
-        app.print_response = Mock()
-        app.record_failure = Mock()
-        app._call_agent = Mock(return_value="continuação")
-        app.session_metrics = Mock()
-
-        dispatch = AppDispatchServices.from_app(app)
-        result = dispatch.resolve_agent_response("codex", "resposta inicial", show_output=False)
-
-        self.assertEqual(result, "Falha: loop de ferramenta inválida detectado.")
-        abort_calls = [
-            call.kwargs
-            for call in app.session_metrics.record_tool_event.call_args_list
-            if call.kwargs.get("loop_abort")
-        ]
-        self.assertEqual(len(abort_calls), 1)
-        self.assertEqual(abort_calls[0]["reason"], "invalid_tool_loop")
-
-    def test_resolve_agent_response_allows_same_policy_signature_before_threshold(self):
-        """Dispatch não deve abortar antes do limite de repetição para a mesma assinatura."""
-        from quimera.app.dispatch import AppDispatchServices
-        from quimera.runtime.models import ToolResult
-        from quimera.runtime.tool_hops import get_invalid_tool_loop_threshold
-
-        app = Mock()
-        threshold = get_invalid_tool_loop_threshold("medium")
-        app.tool_executor.maybe_execute_from_response.side_effect = [
-            *[
-                (
-                    "",
-                    ToolResult(
-                        ok=False,
-                        tool_name="run_shell",
-                        error="Comando fora da allowlist: curl",
-                    ),
-                )
-                for _ in range(threshold - 1)
-            ],
-            ("", None),
-        ]
-        app.task_services.truncate_payload = lambda payload: payload
-        app.get_agent_plugin.return_value = Mock(tool_use_reliability="medium")
-        app.session_services.persist_message = Mock()
-        app.print_response = Mock()
-        app.record_failure = Mock()
-        app._call_agent = Mock(return_value="continuação")
-        app.session_metrics = Mock()
-
-        dispatch = AppDispatchServices.from_app(app)
-        result = dispatch.resolve_agent_response("codex", "resposta inicial", show_output=False)
-
-        self.assertEqual(result, "continuação")
-        abort_calls = [
-            call.kwargs
-            for call in app.session_metrics.record_tool_event.call_args_list
-            if call.kwargs.get("loop_abort")
-        ]
-        self.assertEqual(len(abort_calls), 0)
-
-    def test_resolve_agent_response_allows_different_policy_error_signatures(self):
-        """Dispatch não deve abortar quando o error_type=policy muda de assinatura."""
-        from quimera.app.dispatch import AppDispatchServices
-        from quimera.runtime.models import ToolResult
-
-        app = Mock()
-        app.tool_executor.maybe_execute_from_response.side_effect = [
-            (
-                "",
-                ToolResult(
-                    ok=False,
-                    tool_name="run_shell",
-                    error="Comando bloqueado: operador de encadeamento proibido: '&&'",
-                ),
-            ),
-            (
-                "",
-                ToolResult(
-                    ok=False,
-                    tool_name="run_shell",
-                    error="Comando bloqueado: operador de encadeamento proibido: ';'",
-                ),
-            ),
-            ("", None),
-        ]
-        app.task_services.truncate_payload = lambda payload: payload
-        app.get_agent_plugin.return_value = Mock(tool_use_reliability="high")
-        app.session_services.persist_message = Mock()
-        app.print_response = Mock()
-        app.record_failure = Mock()
-        app._call_agent = Mock(return_value="continuação")
-        app.session_metrics = Mock()
-
-        dispatch = AppDispatchServices.from_app(app)
-        result = dispatch.resolve_agent_response("codex", "resposta inicial", show_output=False)
-
-        self.assertEqual(result, "continuação")
-        abort_calls = [
-            call.kwargs
-            for call in app.session_metrics.record_tool_event.call_args_list
-            if call.kwargs.get("loop_abort")
-        ]
-        self.assertEqual(len(abort_calls), 0)
+        self.assertEqual(result, response)
+        app.tool_executor.execute.assert_not_called()
 
     def test_prompt_includes_proactivity_rules(self):
         """Prompt deve incluir NEEDS_INPUT e instruções de colaboração."""
@@ -4997,14 +4850,14 @@ class MetricsFeedbackTests(unittest.TestCase):
 
         prompt = build_tools_prompt()
 
-        self.assertIn('function="apply_patch"', prompt)
-        self.assertIn('function="list_files"', prompt)
-        self.assertIn('function="exec_command"', prompt)
+        self.assertIn('apply_patch: patch: str', prompt)
+        self.assertIn('list_files: path: str', prompt)
+        self.assertIn('exec_command: cmd: str', prompt)
         self.assertIn("- list_files:", prompt)
         self.assertIn("- read_file:", prompt)
         self.assertIn("- apply_patch:", prompt)
         self.assertIn("- run_shell:", prompt)
-        self.assertIn("| exemplo:", prompt)
+        self.assertNotIn("| exemplo:", prompt)
         self.assertNotIn("Ferramentas disponíveis", prompt)
         self.assertNotIn("a ferramenta não executa", prompt)
         self.assertNotIn("não escreva chamadas como list_files(...)", prompt)

@@ -76,15 +76,15 @@ Diagnóstico rápido:
 - Use [NEEDS_INPUT] para perguntar ao {user_name} quando necessário.
 <!-- IF:mcp_enabled -->
 - MCP bridge da sessão ativado.
-- Use comandos via MCP `quimera` para se comunicar com o runtime.
-- Dê preferência ao MCP ao executar ferramentas.
+- Use o servidor MCP `quimera` já injetado pelo runtime para chamadas estruturadas de ferramentas.
+- Todas as ferramentas passam pela camada segura do runtime (`ToolExecutor`, policy e approval).
 <!-- ENDIF:mcp_enabled -->
 
 <!-- IF:handoff_only -->
 - Você recebeu uma subtarefa delegada por outro agente. Continue do ponto já avançado e responda diretamente à tarefa.
 - Inicie com [ACK:<HANDOFF_ID>] para confirmar recebimento.
 - Se envolver sistema/arquivos: descubra path/comando antes de editar.
-- Se houver ganho real, você pode fazer 1 nova delegação usando a tool `call_agent` (handoff via MCP).
+- Se houver ganho real, você pode fazer 1 nova delegação usando a tool estruturada `call_agent` via MCP.
 - Delegação padrão: chame `call_agent` com `agent_name`, `task` e `context` (opcional).
 - Para manter comportamento sequencial: use `fallback_agents` (failover do mesmo passo) e `handoffs` (múltiplos passos no mesmo envio) quando necessário.
 - Para múltiplas delegações independentes, faça chamadas separadas de `call_agent`.
@@ -129,7 +129,7 @@ Sempre mescle com o estado existente, nunca substitua completamente.
 
 <!-- IF:route_agents -->
 - Agentes: {route_agents}
-- Formato PADRÃO: tool `call_agent` com `{{"agent_name":"agente","task":"descrição da tarefa","context":"...","fallback_agents":["agente_b"],"handoffs":[{{"agent_name":"agente_c","task":"...","context":"..."}}]}}`.
+- Delegação padrão: chame a tool estruturada `call_agent` com `agent_name`, `task`, `context`, `fallback_agents` e `handoffs` quando necessário.
 - Sequência: prefira `handoffs` para cadeia sequencial no mesmo envio; use chamadas separadas quando forem tarefas independentes.
 - `task` é obrigatório; inclua contexto e paths/comandos quando existirem.
 - Só delegue com ganho real: paralelizar, destravar etapa ou usar especialidade.

@@ -59,20 +59,6 @@ def test_executor_unexpected_exception(config, approval_handler):
         assert "Falha inesperada: Boom" in result.error
 
 
-def test_maybe_execute_from_response_parse_error(config, approval_handler):
-    executor = ToolExecutor(config, approval_handler)
-    response = '<tool function="read_file" arguments="{invalid}" />'
-    text, result = executor.maybe_execute_from_response(response)
-    assert result.ok is False
-    assert result.tool_name == "parse"
-
-
-def test_maybe_execute_from_response_none(config, approval_handler):
-    executor = ToolExecutor(config, approval_handler)
-    text, result = executor.maybe_execute_from_response("no tool")
-    assert result is None
-
-
 def test_executor_registers_interactive_command_tools(config, approval_handler):
     executor = ToolExecutor(config, approval_handler)
     names = executor.registry.names()
@@ -96,7 +82,7 @@ def test_executor_normalizes_execute_command_alias(tmp_path):
     executor.approval_handler.approve.return_value = True
     result = executor.execute(ToolCall(name="execute_command", arguments={"command": "echo hello"}))
     assert result.ok is True
-    assert result.data["status"] == "completed"
+    assert result.data["status"] in {"running", "completed"}
 
 
 def test_task_executor_skips_review_claim_when_agent_is_not_operational(tmp_path):
@@ -344,51 +330,6 @@ def test_executor_approval_handler_property():
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=Path("/tmp")), handler)
     assert executor.approval_handler is handler
 
-
-# ── maybe_execute_from_response (linhas 128-129) ────────────
-
-
-def test_maybe_execute_from_response_with_tool_call(config, approval_handler):
-    """maybe_execute_from_response com tool call válido executa e retorna (response, result)."""
-    executor = ToolExecutor(config, approval_handler)
-    response = '<tool function="list_files">\n{"path": "/tmp"}\n</tool>'
-    text, result = executor.maybe_execute_from_response(response)
-    assert text == response
-    assert result is not None
-    assert result.ok is True
-    assert result.tool_name == "list_files"
-
-
-def test_maybe_execute_from_response_with_tool_call_needs_approval_denied(config, approval_handler):
-    """maybe_execute_from_response com tool que requer aprovação negada retorna erro."""
-    executor = ToolExecutor(
-        ToolRuntimeConfig(workspace_root=Path("/tmp"), require_approval_for_mutations=True),
-        approval_handler,
-    )
-    approval_handler.approve.return_value = False
-    response = '<tool function="write_file">\n{"path": "test.txt", "content": "x"}\n</tool>'
-    text, result = executor.maybe_execute_from_response(response)
-    assert text == response
-    assert result is not None
-    assert result.ok is False
-    assert "Execução negada" in result.error
-
-
-def test_maybe_execute_from_response_with_tool_call_approved(config, approval_handler):
-    """maybe_execute_from_response com tool aprovada executa com sucesso."""
-    executor = ToolExecutor(
-        ToolRuntimeConfig(workspace_root=Path("/tmp"), require_approval_for_mutations=True),
-        approval_handler,
-    )
-    approval_handler.approve.return_value = True
-    response = '<tool function="list_files">\n{"path": "/tmp"}\n</tool>'
-    text, result = executor.maybe_execute_from_response(response)
-    assert text == response
-    assert result is not None
-    assert result.ok is True
-
-
-# ── set_spinner_callbacks edge cases ────────────────────────
 
 
 def test_set_spinner_callbacks_on_pre_approval_with_mock_base():

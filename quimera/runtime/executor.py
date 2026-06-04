@@ -5,7 +5,6 @@ from typing import Callable
 
 from .config import ToolRuntimeConfig
 from .models import ToolCall, ToolResult
-from .parser import ToolCallParseError, extract_tool_call
 from .policy import ToolPolicy, ToolPolicyError
 from .registry import ToolRegistry
 from .tools.files import FileTools
@@ -19,7 +18,7 @@ from .approve_summary import ApproveSummary
 
 
 class ToolExecutor:
-    """Executa um loop simples de tool calling com validação e aprovação."""
+    """Executa chamadas estruturadas de ferramentas com validação e aprovação."""
 
     _ALIASES = {
         "run": "run_shell",
@@ -213,17 +212,6 @@ class ToolExecutor:
             return ToolResult(ok=False, tool_name=normalized_call.name, error=str(exc))
         except Exception as exc:  # noqa: BLE001
             return ToolResult(ok=False, tool_name=normalized_call.name, error=f"Falha inesperada: {exc}")
-
-    def maybe_execute_from_response(self, response: str | None) -> tuple[str | None, ToolResult | None]:
-        """Tenta execute from response."""
-        try:
-            call = extract_tool_call(response)
-        except ToolCallParseError as exc:
-            return response, ToolResult(ok=False, tool_name="parse", error=str(exc))
-        if call is None:
-            return response, None
-        result = self.execute(call)
-        return response, result
 
     def _normalize_call(self, call: ToolCall) -> ToolCall:
         """Canoniza aliases conhecidos de tools para aumentar robustez com modelos menos estritos."""

@@ -7,7 +7,6 @@ from typing import Protocol
 
 from ..prompt_kinds import PromptKind
 from ..runtime.models import TaskRecord
-from ..runtime.parser import strip_tool_block
 
 
 class _DispatchServicesProto(Protocol):
@@ -141,7 +140,7 @@ class TaskRunner:
                 return False
 
             self.system_layer.show_muted_message(
-                f"[task {task_id}] {agent_name}:\n{strip_tool_block(response).strip()}"
+                f"[task {task_id}] {agent_name}:\n{response.strip()}"
             )
             ok, task_result = self.classify_task_execution_result(response)
             if not ok:

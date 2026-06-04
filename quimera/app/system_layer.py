@@ -43,7 +43,6 @@ from ..plugins.base import (
     reload_plugins,
     set_connection_override,
 )
-from ..runtime.parser import strip_tool_block
 
 
 class _NullPluginResolver:
@@ -507,7 +506,7 @@ class AppSystemLayer:
 
     def show_task_response(self, task_id: int, agent: str, response: str) -> None:
         """Exibe task response."""
-        text = strip_tool_block(response).strip()
+        text = response.strip()
         if text:
             self._display.show_muted_message(f"[task {task_id}] {agent}:\n{text}")
 

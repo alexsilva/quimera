@@ -125,7 +125,6 @@ TOOL_SCHEMA = {
         "parameters": {
             "path": {"type": "str", "description": "Caminho do diretório", "required": True}
         },
-        "example": '<tool function="list_files" path="." />'
     },
     "read_file": {
         "name": "read_file",
@@ -135,7 +134,6 @@ TOOL_SCHEMA = {
             "start_line": {"type": "int", "description": "Primeira linha (1-indexed, inclusiva)", "required": False},
             "end_line": {"type": "int", "description": "Última linha (1-indexed, inclusiva)", "required": False}
         },
-        "example": '<tool function="read_file" path="/src/app.py" />'
     },
     "write_file": {
         "name": "write_file",
@@ -147,7 +145,6 @@ TOOL_SCHEMA = {
                                  "description": "Use true apenas para sobrescrever arquivo existente por completo",
                                  "required": False},
         },
-        "example": '<tool function="write_file">{"path":"/src/new.py","content":"print(\\"hello\\")"}</tool>'
     },
     "apply_patch": {
         "name": "apply_patch",
@@ -156,7 +153,6 @@ TOOL_SCHEMA = {
             "patch": {"type": "str", "description": "Patch no formato *** Begin Patch ... *** End Patch",
                       "required": True}
         },
-        "example": '<tool function="apply_patch">{"patch":"*** Begin Patch\\n*** Update File: /src/app.py\\n@@\\n-old\\n+new\\n*** End Patch"}</tool>'
     },
     "grep_search": {
         "name": "grep_search",
@@ -165,7 +161,6 @@ TOOL_SCHEMA = {
             "pattern": {"type": "str", "description": "Substring literal a buscar (não suporta regex)", "required": True},
             "path": {"type": "str", "description": "Diretório base", "required": False},
         },
-        "example": '<tool function="grep_search" pattern="class User" path="/src" />'
     },
     "run_shell": {
         "name": "run_shell",
@@ -173,7 +168,6 @@ TOOL_SCHEMA = {
         "parameters": {
             "command": {"type": "str", "description": "Comando shell", "required": True}
         },
-        "example": '<tool function="run_shell" command="git status" />'
     },
     "exec_command": {
         "name": "exec_command",
@@ -185,7 +179,6 @@ TOOL_SCHEMA = {
                               "required": False},
             "tty": {"type": "bool", "description": "Executa em PTY simplificado", "required": False},
         },
-        "example": '<tool function="exec_command">{"cmd":"python -i","tty":true}</tool>'
     },
     "write_stdin": {
         "name": "write_stdin",
@@ -195,7 +188,6 @@ TOOL_SCHEMA = {
             "chars": {"type": "str", "description": "Texto a enviar; vazio faz apenas polling", "required": False},
             "yield_time_ms": {"type": "int", "description": "Espera por nova saída", "required": False},
         },
-        "example": '<tool function="write_stdin">{"session_id":7,"chars":"","yield_time_ms":1000}</tool>'
     },
     "close_command_session": {
         "name": "close_command_session",
@@ -203,7 +195,6 @@ TOOL_SCHEMA = {
         "parameters": {
             "session_id": {"type": "int", "description": "ID da sessão", "required": True},
         },
-        "example": '<tool function="close_command_session" session_id="7" />'
     },
     "list_tasks": {
         "name": "list_tasks",
@@ -213,7 +204,6 @@ TOOL_SCHEMA = {
             "status": {"type": "str", "description": "pending|in_progress|completed|failed|proposed|approved|rejected",
                        "required": False},
         },
-        "example": '<tool function="list_tasks" job_id="1" status="approved" />'
     },
     "list_jobs": {
         "name": "list_jobs",
@@ -222,7 +212,6 @@ TOOL_SCHEMA = {
             "status": {"type": "str", "description": "planning|active|completed|failed", "required": False},
             "created_by": {"type": "str", "description": "Filtrar por criador", "required": False},
         },
-        "example": '<tool function="list_jobs" status="planning" />'
     },
     "get_job": {
         "name": "get_job",
@@ -231,7 +220,6 @@ TOOL_SCHEMA = {
             "job_id": {"type": "int", "description": "ID do job (opcional se QUIMERA_CURRENT_JOB_ID definida)",
                        "required": False}
         },
-        "example": '<tool function="get_job" />'
     },
 }
 
@@ -246,8 +234,6 @@ def build_tools_prompt() -> str:
             line += f": {params}"
         if tool.get("description"):
             line += f" — {tool['description']}"
-        if tool.get("example"):
-            line += f" | exemplo: {tool['example']}"
         lines.append(line)
     return "\n".join(lines)
 

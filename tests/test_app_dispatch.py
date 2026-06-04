@@ -6,153 +6,6 @@ import re
 import threading
 
 from quimera.app.dispatch import AppDispatchServices
-from quimera.app.tool_loop import (
-    _coerce_tool_error,
-    _invalid_tool_signature,
-    _resolve_tool_error_type,
-)
-from quimera.runtime.errors import (
-    ToolError,
-    ToolValidationError,
-    ToolEnvironmentError,
-    ToolLogicError,
-    ToolRateLimitError,
-)
-
-
-# =============================================================================
-# Funções helpers livres
-# =============================================================================
-
-class TestCoerceToolError:
-    """_coerce_tool_error"""
-
-    def test_none_returns_none(self):
-        assert _coerce_tool_error(None) is None
-
-    def test_toolerror_returns_unchanged(self):
-        te = ToolError("msg")
-        assert _coerce_tool_error(te) is te
-
-    def test_string_validation_heuristic(self):
-        """'validação' → ToolValidationError"""
-        result = _coerce_tool_error("erro de validação: campo obrigatório")
-        assert isinstance(result, ToolValidationError)
-
-    def test_string_campo_heuristic(self):
-        """'campo' → ToolValidationError"""
-        result = _coerce_tool_error("campo inválido")
-        assert isinstance(result, ToolValidationError)
-
-    def test_string_formato_heuristic(self):
-        """'formato' → ToolValidationError"""
-        result = _coerce_tool_error("formato incorreto")
-        assert isinstance(result, ToolValidationError)
-
-    def test_string_arquivo_heuristic(self):
-        """'arquivo' → ToolEnvironmentError"""
-        result = _coerce_tool_error("arquivo não encontrado")
-        assert isinstance(result, ToolEnvironmentError)
-
-    def test_string_permissao_heuristic(self):
-        """'permissão' → ToolEnvironmentError"""
-        result = _coerce_tool_error("permissão negada")
-        assert isinstance(result, ToolEnvironmentError)
-
-    def test_string_nao_encontrado_heuristic(self):
-        """'não encontrado' → ToolEnvironmentError"""
-        result = _coerce_tool_error("recurso não encontrado")
-        assert isinstance(result, ToolEnvironmentError)
-
-    def test_string_regra_heuristic(self):
-        """'regra' → ToolLogicError"""
-        result = _coerce_tool_error("regra violada")
-        assert isinstance(result, ToolLogicError)
-
-    def test_string_logica_heuristic(self):
-        """'lógica' → ToolLogicError"""
-        result = _coerce_tool_error("erro lógica")
-        assert isinstance(result, ToolLogicError)
-
-    def test_string_contradiz_heuristic(self):
-        """'contradiz' → ToolLogicError"""
-        result = _coerce_tool_error("contradiz regra anterior")
-        assert isinstance(result, ToolLogicError)
-
-    def test_string_rate_limit_heuristic(self):
-        """'rate limit' → ToolRateLimitError"""
-        result = _coerce_tool_error("rate limit excedido")
-        assert isinstance(result, ToolRateLimitError)
-
-    def test_string_throttling_heuristic(self):
-        """'throttling' → ToolRateLimitError"""
-        result = _coerce_tool_error("throttling ativo")
-        assert isinstance(result, ToolRateLimitError)
-
-    def test_unknown_string_returns_unchanged(self):
-        """String sem heuristicas conhecidas retorna a string original"""
-        result = _coerce_tool_error("some random string")
-        assert result == "some random string"
-
-    def test_non_string_non_toolerror_returns_unchanged(self):
-        assert _coerce_tool_error(42) == 42
-        assert _coerce_tool_error([1, 2]) == [1, 2]
-
-
-class TestInvalidToolSignature:
-    """_invalid_tool_signature"""
-
-    def test_returns_tuple_of_three(self):
-        tool_result = MagicMock()
-        tool_result.error = "some error"
-        tool_result.tool_name = "test_tool"
-        sig = _invalid_tool_signature(tool_result, "policy")
-        assert len(sig) == 3
-        assert sig[0] == "policy"
-        assert sig[1] == "test_tool"
-        assert "some error" in sig[2]
-
-    def test_truncates_long_error_text(self):
-        tool_result = MagicMock()
-        tool_result.error = "x" * 500
-        tool_result.tool_name = ""
-        sig = _invalid_tool_signature(tool_result, "policy")
-        assert len(sig[2]) <= 256
-
-    def test_normalizes_whitespace(self):
-        tool_result = MagicMock()
-        tool_result.error = "  ERROR   MESSAGE  "
-        tool_result.tool_name = ""
-        sig = _invalid_tool_signature(tool_result, "policy")
-        assert "  " not in sig[2]
-
-    def test_lowercases_error(self):
-        tool_result = MagicMock()
-        tool_result.error = "ERROR text"
-        tool_result.tool_name = ""
-        sig = _invalid_tool_signature(tool_result, "policy")
-        assert sig[2] == "error text"
-
-
-class TestResolveToolErrorType:
-    """_resolve_tool_error_type"""
-
-    def test_error_type_attr_returns_it(self):
-        tr = MagicMock()
-        tr.error_type = "policy"
-        assert _resolve_tool_error_type(tr) == "policy"
-
-    def test_empty_error_type_returns_none(self):
-        tr = MagicMock()
-        tr.error_type = ""
-        assert _resolve_tool_error_type(tr) == "none"
-
-    def test_none_error_type_returns_none(self):
-        tr = MagicMock()
-        tr.error_type = None
-        assert _resolve_tool_error_type(tr) == "none"
-
-
 class TestSanitizeSpyTurnDetail:
     """_sanitize_spy_turn_detail — método de classe"""
 
@@ -270,198 +123,32 @@ def dispatch_app():
 class TestResolveAgentResponse:
     """Testes para AppDispatchServices.resolve_agent_response"""
 
-    def test_empty_response_returns_none(self, dispatch_app):
+    def test_empty_response_is_passed_through(self, dispatch_app):
         ds = AppDispatchServices.from_app(dispatch_app)
         assert ds.resolve_agent_response("agent1", None) is None
         assert ds.resolve_agent_response("agent1", "") == ""
 
-    def test_no_tool_result_returns_raw(self, dispatch_app):
-        dispatch_app.tool_executor.maybe_execute_from_response = MagicMock(
-            return_value=("raw", None)
+    def test_response_text_is_not_parsed_as_tool_call(self, dispatch_app):
+        dispatch_app.tool_executor.execute = MagicMock(
+            side_effect=AssertionError("textual tool tags must not execute")
         )
         ds = AppDispatchServices.from_app(dispatch_app)
-        result = ds.resolve_agent_response("agent1", "hello")
-        assert result == "hello"
 
-    def test_tool_result_with_error_coerced(self, dispatch_app):
-        """tool_result.error é string coerida para ToolError"""
-        tool_result = MagicMock()
-        tool_result.error = "erro de validação"
-        tool_result.ok = False
-        # Retorna tool_result no hop 0, depois sem tool no hop 1
-        dispatch_app.tool_executor.maybe_execute_from_response = MagicMock(
-            side_effect=[
-                ("some cmd", tool_result),
-                (None, None),
-            ]
-        )
-        # Para que não atinja threshold de loop
-        plugin = dispatch_app.get_agent_plugin("agent1")
-        plugin.tool_use_reliability = "high"
+        response = 'Texto <tool function="read_file" path="secret.txt" /> continua texto.'
+        result = ds.resolve_agent_response("agent1", response)
+
+        assert result == response
+        dispatch_app.tool_executor.execute.assert_not_called()
+
+    def test_passthrough_does_not_print_or_persist_visible_text(self, dispatch_app):
         ds = AppDispatchServices.from_app(dispatch_app)
-        result = ds.resolve_agent_response("agent1", "some cmd")
-        # Deve ter saido pelo segundo hop (sem tool)
-        assert result is not None
+        response = "resposta final"
 
-    def test_consecutive_invalid_loop_aborts(self, dispatch_app):
-        """consecutive_invalid_signature_count >= max → aborta com mensagem"""
-        tool_result = MagicMock()
-        tool_result.error = "erro de validação"
-        tool_result.ok = False
-        tool_result.error_type = "policy"
-        dispatch_app.tool_executor.maybe_execute_from_response = MagicMock(
-            return_value=("some cmd", tool_result)
-        )
-        plugin = dispatch_app.get_agent_plugin("agent1")
-        plugin.tool_use_reliability = "low"  # threshold baixo
-        ds = AppDispatchServices.from_app(dispatch_app)
-        result = ds.resolve_agent_response("agent1", "some cmd")
-        assert "loop de ferramenta inválida" in (result or "")
-
-    def test_max_tool_hops_hits_returns_abort_message(self, dispatch_app):
-        """Atinge max_tool_hops → retorna mensagem de limite"""
-        tool_result = MagicMock()
-        tool_result.error = None
-        tool_result.ok = True
-        tool_result.to_model_payload = MagicMock(return_value="{}")
-        dispatch_app.tool_executor.maybe_execute_from_response = MagicMock(
-            return_value=("some cmd", tool_result)
-        )
-        plugin = dispatch_app.get_agent_plugin("agent1")
-        plugin.tool_use_reliability = "low"  # max_tool_hops baixo
-        ds = AppDispatchServices.from_app(dispatch_app)
-        result = ds.resolve_agent_response("agent1", "some cmd")
-        assert "limite de execuções de ferramenta" in (result or "")
-
-    def test_visible_text_printed_and_persisted(self, dispatch_app):
-        """visible_text é printado e persistido"""
-        tool_result = MagicMock()
-        tool_result.error = None
-        tool_result.ok = True
-        tool_result.to_model_payload = MagicMock(return_value="{}")
-
-        def _maybe_exec(resp):
-            if hasattr(_maybe_exec, "called"):
-                return (None, None)
-            _maybe_exec.called = True
-            return (resp, tool_result)
-
-        dispatch_app.tool_executor.maybe_execute_from_response = MagicMock(side_effect=_maybe_exec)
-        plugin = dispatch_app.get_agent_plugin("agent1")
-        plugin.tool_use_reliability = "high"
-        ds = AppDispatchServices.from_app(dispatch_app)
-        ds.resolve_agent_response("agent1", "some text with tool", show_output=True, persist_history=True)
-        dispatch_app.print_response.assert_called()
-        dispatch_app.session_services.persist_message.assert_called()
-
-    def test_visible_text_show_output_false(self, dispatch_app):
-        """show_output=False → não printa"""
-        tool_result = MagicMock()
-        tool_result.error = None
-        tool_result.ok = True
-        tool_result.to_model_payload = MagicMock(return_value="{}")
-
-        def _maybe_exec(resp):
-            if hasattr(_maybe_exec, "called"):
-                return (None, None)
-            _maybe_exec.called = True
-            return (resp, tool_result)
-
-        dispatch_app.tool_executor.maybe_execute_from_response = MagicMock(side_effect=_maybe_exec)
-        plugin = dispatch_app.get_agent_plugin("agent1")
-        plugin.tool_use_reliability = "high"
-        ds = AppDispatchServices.from_app(dispatch_app)
-        ds.resolve_agent_response("agent1", "some text with tool", show_output=False)
+        assert ds.resolve_agent_response(
+            "agent1", response, show_output=True, persist_history=True
+        ) == response
         dispatch_app.print_response.assert_not_called()
-
-    def test_finally_resets_approve_all(self, dispatch_app):
-        """finally chama reset_approve_all_after_cycle"""
-        approval_handler = MagicMock()
-        dispatch_app.tool_executor.approval_handler = approval_handler
-        dispatch_app.tool_executor.maybe_execute_from_response = MagicMock(
-            return_value=("hello", None)
-        )
-        ds = AppDispatchServices.from_app(dispatch_app)
-        ds.resolve_agent_response("agent1", "hello")
-        approval_handler.reset_approve_all_after_cycle.assert_called_once()
-
-    def test_followup_handoff_is_truncated_when_too_large(self, dispatch_app):
-        tool_result = MagicMock()
-        tool_result.error = None
-        tool_result.ok = True
-        tool_result.to_model_payload = MagicMock(return_value=("x" * 9000))
-
-        dispatch_app.tool_executor.maybe_execute_from_response = MagicMock(
-            side_effect=[
-                ("tool output", tool_result),
-                (None, None),
-            ]
-        )
-        dispatch_app._call_agent = MagicMock(return_value="after-tool")
-        plugin = dispatch_app.get_agent_plugin("agent1")
-        plugin.tool_use_reliability = "high"
-        ds = AppDispatchServices.from_app(dispatch_app)
-        result = ds.resolve_agent_response("agent1", "initial")
-        assert result == "after-tool"
-        handoff_arg = dispatch_app._call_agent.call_args.kwargs["handoff"]
-        assert handoff_arg.startswith("(histórico truncado)...\n\n")
-
-    def test_call_agent_fallback(self, dispatch_app):
-        """app sem _call_agent usa call_agent_low_level"""
-        tool_result = MagicMock()
-        tool_result.error = None
-        tool_result.ok = True
-        tool_result.to_model_payload = MagicMock(return_value="{}")
-
-        def _maybe_exec(resp):
-            if hasattr(_maybe_exec, "called"):
-                return (None, None)
-            _maybe_exec.called = True
-            return (resp, tool_result)
-
-        dispatch_app.tool_executor.maybe_execute_from_response = MagicMock(side_effect=_maybe_exec)
-        plugin = dispatch_app.get_agent_plugin("agent1")
-        plugin.tool_use_reliability = "high"
-        # Remove _call_agent para forçar o fallback
-        if hasattr(dispatch_app, "_call_agent"):
-            del dispatch_app._call_agent
-        ds = AppDispatchServices.from_app(dispatch_app)
-        # O hop tool_result gera followup_handoff que chama call_agent_low_level
-        # Como call_agent_low_level não está mockado, ele vai tentar chamar de verdade
-        # Vamos mocká-lo para evitar erro
-        with patch.object(ds, "call_agent_low_level", return_value="response from low level"):
-            result = ds.resolve_agent_response("agent1", "some cmd")
-            assert result == "response from low level"
-
-    def test_user_cancelled_before_tool_hop_returns_none(self, dispatch_app):
-        dispatch_app.agent_client._user_cancelled = True
-        dispatch_app.tool_executor.maybe_execute_from_response = MagicMock(
-            side_effect=AssertionError("não deveria executar ferramenta após cancelamento")
-        )
-        ds = AppDispatchServices.from_app(dispatch_app)
-        result = ds.resolve_agent_response("agent1", "some cmd")
-        assert result is None
-        dispatch_app.tool_executor.maybe_execute_from_response.assert_not_called()
-
-    def test_user_cancelled_before_followup_tool_call_aborts(self, dispatch_app):
-        tool_result = MagicMock()
-        tool_result.error = None
-        tool_result.ok = True
-        tool_result.to_model_payload = MagicMock(return_value="{}")
-
-        def _maybe_exec(_):
-            dispatch_app.agent_client._user_cancelled = True
-            return ("tool output", tool_result)
-
-        dispatch_app.tool_executor.maybe_execute_from_response = MagicMock(side_effect=_maybe_exec)
-        dispatch_app._call_agent = MagicMock(return_value="não deveria chamar")
-        plugin = dispatch_app.get_agent_plugin("agent1")
-        plugin.tool_use_reliability = "high"
-
-        ds = AppDispatchServices.from_app(dispatch_app)
-        result = ds.resolve_agent_response("agent1", "some cmd")
-        assert result is None
-        dispatch_app._call_agent.assert_not_called()
+        dispatch_app.session_services.persist_message.assert_not_called()
 
 
 # =============================================================================

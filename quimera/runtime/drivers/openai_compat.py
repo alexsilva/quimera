@@ -49,7 +49,7 @@ def _fatal_api_error_message(exc: Exception) -> str | None:
     Erros fatais não devem ser retryados — o modelo/chave/request é inválido.
     Retorna None se o erro não for considerado fatal (pode ser transitório).
     """
-    if isinstance(exc, _OAINotFoundError):
+    if _OAINotFoundError is not Exception and isinstance(exc, _OAINotFoundError):
         body = getattr(exc, "body", None) or {}
         provider = ""
         if isinstance(body, dict):
@@ -58,9 +58,9 @@ def _fatal_api_error_message(exc: Exception) -> str | None:
             if provider_name:
                 provider = f" (provider: {provider_name})"
         return f"Erro fatal: modelo não encontrado{provider}. Verifique o nome do modelo configurado."
-    if isinstance(exc, _OAIAuthError):
+    if _OAIAuthError is not Exception and isinstance(exc, _OAIAuthError):
         return "Erro fatal: falha de autenticação na API. Verifique a chave de API configurada."
-    if isinstance(exc, _OAIBadRequestError):
+    if _OAIBadRequestError is not Exception and isinstance(exc, _OAIBadRequestError):
         return f"Erro fatal: requisição inválida — {exc}"
     return None
 
@@ -77,12 +77,6 @@ _MAX_TOOL_LOOP_MESSAGES = 24
 # Limite padrão de conexões concorrentes ao backend OpenAI-compatible.
 # Evita estouro de rate-limit quando múltiplos agentes chamam a API em paralelo.
 DEFAULT_MAX_CONNECTIONS = 4
-
-
-# Formato XML de text-tool-calls que alguns modelos emitem quando a API não suporta tool_calls:
-# <function=NAME><parameter=KEY>VALUE
-_TEXT_FUNC_CALL_RE = re.compile(r"<function=(\w+)>(.*?)</function>", re.DOTALL)
-_TEXT_PARAM_RE = re.compile(r"<parameter=(\w+)>")
 
 
 def _strip_thinking(
@@ -125,41 +119,10 @@ def _sanitize_assistant_text(
     session_id: str | None = None,
     base_dir: str | Path | None = None,
 ) -> str:
-    """Remove resíduos textuais de tool calling que alguns modelos deixam no content."""
+    """Remove resíduos sintáticos conhecidos que não fazem parte da resposta final."""
     text = _strip_thinking(text, agent_name=agent_name, session_id=session_id, base_dir=base_dir)
     text = _FUNCTION_RESIDUE_RE.sub("", text)
     return text.strip()
-
-
-def _parse_text_tool_calls(text: str) -> list[dict]:
-    """
-    Parseia tool calls em formato XML de texto emitidas diretamente no conteúdo.
-
-    Formato detectado (ex: qwen3-coder via Ollama sem suporte nativo a tool_calls):
-        <function=NAME><parameter=KEY1>VALUE1<parameter=KEY2>VALUE2</tool_call>
-    """
-    calls = []
-    for match in _TEXT_FUNC_CALL_RE.finditer(text):
-        name = match.group(1)
-        body = match.group(2)
-        parts = _TEXT_PARAM_RE.split(body)
-        arguments: dict = {}
-        # parts: ["pré", KEY1, "VALUE1", KEY2, "VALUE2", ...]
-        it = iter(parts[1:])
-        for key in it:
-            try:
-                raw_value = next(it)
-                # remover </parameter> se presente
-                value = re.sub(r"</parameter>", "", raw_value).strip()
-                arguments[key] = value
-            except StopIteration:
-                break
-        calls.append({
-            "id": f"text-tc-{len(calls):04d}",
-            "name": name,
-            "arguments": arguments,
-        })
-    return calls
 
 
 def _build_tool_system_prompt(
@@ -176,14 +139,13 @@ def _build_tool_system_prompt(
         f"Você tem acesso às seguintes ferramentas: {names_csv}. ",
         workspace_hint,
         "Use apenas ferramentas listadas e disponíveis nesta requisição. ",
-        "Quando decidir usar uma ferramenta, use o mecanismo de tool calling da API compatível ou o fallback textual já suportado; ",
-        "não invente envelopes JSON para chamadas de ferramenta; use o mecanismo de tool calling da API ou fallback textual; ",
+        "Quando decidir usar uma ferramenta, use o mecanismo nativo de tool calling da API compatível; ",
+        "não invente envelopes JSON para chamadas de ferramenta; ",
         "Não escreva chamadas de ferramenta como texto visível ao usuário; ",
         "use exatamente os nomes de argumentos definidos nos schemas das ferramentas; ",
         "se uma ferramenta retornar erro, ajuste a próxima chamada com base no erro e não repita o mesmo payload inválido; ",
         "não peça ao usuário para executar comandos manualmente se você pode fazer isso diretamente; ",
         "na resposta final, resuma arquivos alterados, evidência de validação e próximo passo; ",
-        "nunca exponha tags de tool calling como <function>, </function> ou </tool_call> na resposta final.",
     ]
 
     if "call_agent" in available:
@@ -576,9 +538,8 @@ class OpenAICompatDriver:
         """
         Chamada não-streaming quando há ferramentas.
 
-        Ollama em modo streaming não popula delta.tool_calls em vários modelos —
-        o modelo emite o call como texto. O modo não-streaming retorna
-        message.tool_calls estruturado de forma confiável.
+        O modo não-streaming permite receber message.tool_calls estruturados
+        dos endpoints compatíveis com OpenAI que suportam tool calling nativo.
         """
         response = self._client.chat.completions.create(
             model=self.model,
@@ -606,16 +567,7 @@ class OpenAICompatDriver:
                     )
                     arguments = {}
                 tool_calls.append({"id": tc.id, "name": tc.function.name, "arguments": arguments})
-        # Fallback: modelo emitiu tool calls em formato XML de texto em vez de usar a API
-        if not tool_calls and _TEXT_FUNC_CALL_RE.search(text):
-            parsed = _parse_text_tool_calls(text)
-            if parsed:
-                _logger.debug(
-                    "OpenAICompatDriver: %d text-format tool call(s) detectados em content (fallback)",
-                    len(parsed),
-                )
-                clean_text = _sanitize_assistant_text(_TEXT_FUNC_CALL_RE.sub("", text).strip())
-                return clean_text, parsed
+
 
         return _sanitize_assistant_text(text), tool_calls
 
