@@ -153,6 +153,36 @@ def test_merge_staging_to_workspace_records_overwrite(tmp_path):
     assert manifest[0]["overwritten"] is True
 
 
+
+def test_session_state_history_transactions_preserve_reference_and_return_snapshots():
+    history = [{"role": "human", "content": f"m{i}"} for i in range(4)]
+    original_ref = history
+    state = SessionState(history=history, shared_state={})
+
+    dropped, trimmed_snapshot = state.trim_history(2)
+
+    assert dropped == 2
+    assert history is original_ref
+    assert trimmed_snapshot == [
+        {"role": "human", "content": "m2"},
+        {"role": "human", "content": "m3"},
+    ]
+    assert history == trimmed_snapshot
+    assert trimmed_snapshot is not history
+
+    matched, final_snapshot = state.replace_history_if_prefix_matches(
+        trimmed_snapshot,
+        len(trimmed_snapshot),
+        [{"role": "system", "content": "summary"}],
+    )
+
+    assert matched is True
+    assert history is original_ref
+    assert final_snapshot == [{"role": "system", "content": "summary"}]
+    assert history == final_snapshot
+    assert final_snapshot is not history
+
+
 def test_session_summarize_preserves_concurrent_persisted_message():
     history = [{"role": "human", "content": f"m{i}"} for i in range(12)]
     storage = _Storage()

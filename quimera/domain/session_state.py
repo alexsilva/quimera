@@ -58,6 +58,34 @@ class SessionState:
         with self._lock:
             self._history[:] = list(messages)
 
+    def trim_history(self, limit: int) -> tuple[int, list]:
+        """Aplica limite ao histórico mantendo a referência e retorna snapshot final."""
+        with self._lock:
+            if not isinstance(limit, int) or limit <= 0 or len(self._history) <= limit:
+                return 0, list(self._history)
+            dropped = len(self._history) - limit
+            self._history[:] = self._history[-limit:]
+            return dropped, list(self._history)
+
+    def replace_history_if_prefix_matches(
+        self,
+        expected_prefix: list,
+        prefix_length: int,
+        replacement_prefix: list,
+    ) -> tuple[bool, list]:
+        """Substitui histórico se o prefixo esperado ainda estiver intacto.
+
+        Mensagens adicionadas após ``prefix_length`` são preservadas e um snapshot
+        do histórico atual/final é retornado junto com o resultado da comparação.
+        """
+        with self._lock:
+            current_snapshot = list(self._history)
+            if current_snapshot[:prefix_length] != expected_prefix:
+                return False, current_snapshot
+            appended = current_snapshot[prefix_length:]
+            self._history[:] = list(replacement_prefix) + appended
+            return True, list(self._history)
+
     @property
     def history_lock(self) -> threading.RLock:
         """Lock reentrante que protege operações transacionais no histórico."""
