@@ -207,9 +207,9 @@ def test_strip_thinking_persists_evidence_before_removal(tmp_path):
     assert evidences[0].session_id == "sessao-1"
 
 
-def test_sanitize_assistant_text_removes_function_residue():
+def test_sanitize_assistant_text_preserves_function_like_text():
     text = "<think>x</think></function>\nResposta final\n</tool_call>"
-    assert _sanitize_assistant_text(text) == "Resposta final"
+    assert _sanitize_assistant_text(text) == "</function>\nResposta final\n</tool_call>"
 
 
 def test_build_tool_system_prompt_includes_workspace_hint():
@@ -470,7 +470,7 @@ def test_chat_with_tools_no_tool_calls_in_response():
     )
 
     text, tool_calls = driver._chat([], tools=TOOL_SCHEMAS)
-    assert text == "Só texto, sem ferramentas."
+    assert text == "</function>\nSó texto, sem ferramentas."
     assert tool_calls == []
 
 
@@ -483,7 +483,7 @@ def test_chat_with_tools_ignores_textual_function_like_tool_call():
 
     text, tool_calls = driver._chat([], tools=TOOL_SCHEMAS)
 
-    assert "secret.txt" in text
+    assert text == textual
     assert tool_calls == []
 
 
@@ -539,12 +539,12 @@ def test_run_strips_thinking_block():
     assert result == "Resposta"
 
 
-def test_run_strips_tool_residue_from_final_response():
+def test_run_preserves_function_like_text_in_final_response():
     driver, mock_client = _make_driver()
     _setup_stream(mock_client, [_make_chunk(content="</function>Resposta final</tool_call>")])
 
     result = driver.run("prompt", tool_executor=None)
-    assert result == "Resposta final"
+    assert result == "</function>Resposta final</tool_call>"
 
 
 def test_run_tools_system_prompt_guides_tool_usage():

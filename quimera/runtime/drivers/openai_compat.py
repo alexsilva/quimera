@@ -68,7 +68,6 @@ _logger = logging.getLogger(__name__)
 
 # Remove blocos <think>...</think> ou <thinking>...</thinking> que modelos Qwen3 emitem.
 _THINK_RE = re.compile(r"<think(?:ing)?>.*?</think(?:ing)?>", re.DOTALL)
-_FUNCTION_RESIDUE_RE = re.compile(r"</?(?:function|tool_call)\b[^>]*>")
 
 # Trunca tool results para evitar explosão de memória no array messages.
 _MAX_TOOL_RESULT_CHARS = 32_000
@@ -119,10 +118,8 @@ def _sanitize_assistant_text(
     session_id: str | None = None,
     base_dir: str | Path | None = None,
 ) -> str:
-    """Remove resíduos sintáticos conhecidos que não fazem parte da resposta final."""
-    text = _strip_thinking(text, agent_name=agent_name, session_id=session_id, base_dir=base_dir)
-    text = _FUNCTION_RESIDUE_RE.sub("", text)
-    return text.strip()
+    """Remove apenas blocos de thinking; demais texto do assistente é preservado."""
+    return _strip_thinking(text, agent_name=agent_name, session_id=session_id, base_dir=base_dir).strip()
 
 
 def _build_tool_system_prompt(
