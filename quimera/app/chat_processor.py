@@ -308,6 +308,9 @@ def run_chat_loop(
             if hasattr(app, "behavior_metrics"):
                 app.behavior_metrics._flush_if_dirty()
         finally:
+            restore_job_env = getattr(app, "_restore_current_job_env", None)
+            if callable(restore_job_env):
+                restore_job_env()
             bug_store = getattr(app, "bug_store", None)
             if bug_store is not None and hasattr(bug_store, "close"):
                 try:

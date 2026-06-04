@@ -101,21 +101,29 @@ class AppSessionServices:
         threshold = self._auto_summarize_threshold
         if not isinstance(threshold, int) or threshold <= 0:
             return
-        if len(self._history) < threshold:
-            return
 
         prompt_builder = self._prompt_builder
         keep = prompt_builder.history_window if prompt_builder else 0
-        if len(self._history) <= keep:
-            return
-        if len(self._history) - keep < _MIN_SUMMARIZE_SURPLUS:
-            return
-        to_summarize = self._history[:-keep]
-        recent = self._history[-keep:]
+        with self._lock:
+            history_snapshot = list(self._history)
+            history_len = len(history_snapshot)
+            if history_len < threshold:
+                return
+            if history_len <= keep:
+                return
+            if history_len - keep < _MIN_SUMMARIZE_SURPLUS:
+                return
+            if keep > 0:
+                to_summarize = history_snapshot[:-keep]
+                recent = history_snapshot[-keep:]
+            else:
+                to_summarize = history_snapshot
+                recent = []
+
         existing_summary = self._context_manager.load_session_summary()
 
         self._renderer.show_system(
-            f"[memória] histórico com {len(self._history)} mensagens — gerando resumo automático..."
+            f"[memória] histórico com {history_len} mensagens — gerando resumo automático..."
         )
         summary_agent = preferred_agent or self._summary_agent_preference or self._agent_pool.primary
         summary = self._session_summarizer.summarize(
@@ -125,10 +133,18 @@ class AppSessionServices:
         )
         if summary:
             self._context_manager.update_with_summary(summary)
-            self._history[:] = recent
-            self._storage.save_history(self._history, shared_state=self._shared_state)
+            with self._lock:
+                if self._history[:history_len] != history_snapshot:
+                    self._renderer.show_system(
+                        "[memória] histórico mudou durante o resumo — truncamento adiado"
+                    )
+                    return
+                appended = list(self._history[history_len:])
+                self._history[:] = recent + appended
+                self._storage.save_history(self._history, shared_state=self._shared_state)
+                current_len = len(self._history)
             self._renderer.show_system(
-                f"[memória] histórico truncado para {len(self._history)} mensagens recentes"
+                f"[memória] histórico truncado para {current_len} mensagens recentes"
             )
         else:
             self._renderer.show_system("[memória] resumo automático falhou — histórico mantido")

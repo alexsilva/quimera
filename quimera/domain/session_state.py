@@ -44,9 +44,19 @@ class SessionState:
     def history(self) -> list:
         return self._history
 
+    def history_snapshot(self) -> list:
+        """Retorna uma cópia rasa thread-safe do histórico."""
+        with self._lock:
+            return list(self._history)
+
     def append_history(self, msg: dict) -> None:
         with self._lock:
             self._history.append(msg)
+
+    def replace_history(self, messages: list) -> None:
+        """Substitui o conteúdo do histórico mantendo a referência da lista."""
+        with self._lock:
+            self._history[:] = list(messages)
 
     # ------------------------------------------------------------------
     # shared_state  (lock separado — mais granular)
@@ -55,6 +65,11 @@ class SessionState:
     @property
     def shared_state(self) -> dict:
         return self._shared_state
+
+    def shared_state_snapshot(self) -> dict:
+        """Retorna uma cópia rasa do shared_state sob o lock dedicado."""
+        with self._shared_state_lock:
+            return dict(self._shared_state)
 
     @property
     def shared_state_lock(self) -> threading.Lock:

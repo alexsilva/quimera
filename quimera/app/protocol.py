@@ -156,9 +156,12 @@ class AppProtocol:
             return None
         if not isinstance(data, dict) or "type" not in data:
             return None
+        envelope_type = str(data["type"])
+        if envelope_type not in {"state_update", "ack"}:
+            return None
 
         return ProtocolEnvelope(
-            type=str(data["type"]),
+            type=envelope_type,
             content=str(data.get("content", "")),
             state_updates=data.get("state_updates"),
             metadata=data.get("metadata"),
@@ -180,14 +183,8 @@ class AppProtocol:
             if envelope.type == "ack" and envelope.handoff_id:
                 ack_id = envelope.handoff_id
 
-            if envelope.type == "handoff":
-                # MCP-first: envelope textual legado é ignorado.
-                parts = [p.strip() for p in [before_text, after_text] if p.strip()]
-                if parts:
-                    response = "\n".join(parts)
-            else:
-                parts = [p.strip() for p in [before_text, after_text] if p.strip()]
-                response = "\n".join(parts) if parts else envelope.content
+            parts = [p.strip() for p in [before_text, after_text] if p.strip()]
+            response = "\n".join(parts) if parts else envelope.content
         else:
             if STATE_UPDATE_START in response:
                 for state_match in self.STATE_UPDATE_PATTERN.finditer(response):

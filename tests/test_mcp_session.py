@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from quimera.runtime.mcp import EmbeddedMCPRuntime, start_embedded_mcp
+from quimera.runtime.mcp.http_server import DEFAULT_HTTP_READ_ONLY_TOOLS
 
 
 class _FakeApp:
@@ -86,7 +87,12 @@ def test_start_embedded_mcp_http_centraliza_startup(tmp_path, monkeypatch):
     assert runtime.transport == "http"
     assert runtime.http_url == "http://0.0.0.0:9090/mcp"
     mcp_cls.assert_called_once_with(app.tool_executor, auth_token="http-token")
-    http_cls.assert_called_once_with(mcp_cls.return_value, host="0.0.0.0", port=9090)
+    http_cls.assert_called_once_with(
+        mcp_cls.return_value,
+        host="0.0.0.0",
+        port=9090,
+        allowed_tools=DEFAULT_HTTP_READ_ONLY_TOOLS,
+    )
     http_cls.return_value.start_background.assert_called_once_with()
     assert app.http_configs == [("http://0.0.0.0:9090/mcp", "http-token")]
     assert app.mcp_socket_path is None
