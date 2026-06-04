@@ -58,6 +58,11 @@ class SessionState:
         with self._lock:
             self._history[:] = list(messages)
 
+    @property
+    def history_lock(self) -> threading.RLock:
+        """Lock reentrante que protege operações transacionais no histórico."""
+        return self._lock
+
     # ------------------------------------------------------------------
     # shared_state  (lock separado — mais granular)
     # ------------------------------------------------------------------
