@@ -132,7 +132,6 @@ class AppSessionServices:
             preferred_agent=summary_agent,
         )
         if summary:
-            self._context_manager.update_with_summary(summary)
             with self._lock:
                 if self._history[:history_len] != history_snapshot:
                     self._renderer.show_system(
@@ -143,6 +142,7 @@ class AppSessionServices:
                 self._history[:] = recent + appended
                 self._storage.save_history(self._history, shared_state=self._shared_state)
                 current_len = len(self._history)
+            self._context_manager.update_with_summary(summary)
             self._renderer.show_system(
                 f"[memória] histórico truncado para {current_len} mensagens recentes"
             )

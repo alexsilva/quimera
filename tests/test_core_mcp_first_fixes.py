@@ -192,6 +192,48 @@ def test_session_summarize_preserves_concurrent_persisted_message():
     assert storage.saved_history == history
 
 
+
+def test_session_summarize_does_not_save_summary_when_snapshot_changes():
+    history = [{"role": "human", "content": f"m{i}"} for i in range(12)]
+    original_length = len(history)
+    storage = _Storage()
+    renderer = _Renderer()
+    context = _ContextManager()
+    lock = threading.Lock()
+
+    class Summarizer:
+        def __init__(self):
+            self.service = None
+
+        def summarize(self, messages, existing_summary=None, preferred_agent=None):
+            with self.service._lock:
+                self.service._history[0] = {"role": "human", "content": "mutado durante resumo"}
+            return "resumo inconsistente"
+
+    summarizer = Summarizer()
+    service = AppSessionServices(
+        history=history,
+        storage=storage,
+        renderer=renderer,
+        agent_pool=SimpleNamespace(primary="codex"),
+        lock=lock,
+        context_manager=context,
+        session_summarizer=summarizer,
+        task_services=Mock(stop_task_executors=Mock()),
+        prompt_builder=SimpleNamespace(history_window=2),
+        shared_state={},
+        auto_summarize_threshold=4,
+    )
+    summarizer.service = service
+
+    service.maybe_auto_summarize()
+
+    assert context.saved_summary is None
+    assert storage.saved_history is None
+    assert len(history) == original_length
+    assert history[0] == {"role": "human", "content": "mutado durante resumo"}
+    assert "[memória] histórico mudou durante o resumo — truncamento adiado" in renderer.system_messages
+
 def test_restored_session_clears_volatile_agent_goal_state_only():
     shared_state = {
         "goal": "objetivo antigo",
