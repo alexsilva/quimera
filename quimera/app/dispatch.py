@@ -336,16 +336,16 @@ class AppDispatchServices:
             persist_history: bool = True,
             show_output: bool = True,
     ) -> str | None:
-        """Retorna a resposta textual sem pós-processar chamadas de ferramenta.
+        """Retorna a resposta do agente para o fluxo padrão da aplicação.
 
-        Ferramentas são executadas apenas por interfaces estruturadas (MCP ou
-        tool calling nativo do driver), nunca por parsing do texto gerado.
-        Os parâmetros são preservados por compatibilidade com call sites.
+        A execução de ferramentas pertence aos caminhos estruturados do runtime:
+        MCP e tool calling nativo do driver OpenAI-compatible. Os parâmetros são
+        preservados por compatibilidade com call sites.
         """
         return response
 
     def call_agent(self, agent, **options):
-        """Executa despacho com retry e resolução textual sem tool parsing."""
+        """Executa despacho com retry e finalização padrão da resposta."""
         dispatch_options = dict(options)
         max_retries_override = dispatch_options.pop("max_retries", None)
         silent = dispatch_options.pop("silent", False)
