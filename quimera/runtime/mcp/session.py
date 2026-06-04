@@ -10,6 +10,8 @@ from typing import Any, Literal
 
 from quimera.runtime.mcp.http_server import (
     DEFAULT_HTTP_READ_ONLY_TOOLS,
+    DEFAULT_HTTP_TOOL_PROFILE,
+    HTTP_TOOL_PROFILES,
     MCP_HTTPServer,
 )
 from quimera.runtime.mcp.server import MCPServer
@@ -45,17 +47,19 @@ def _resolve_token(token_env: str | None) -> str:
 def parse_http_allowed_tools(value: str | Iterable[str] | None) -> frozenset[str] | None:
     """Normaliza a configuração de allowlist do MCP HTTP.
 
-    ``None`` ou ``"read"`` usa o conjunto seguro de tools de leitura.
-    ``"all"`` desativa o filtro. Strings CSV e iteráveis viram allowlist explícita.
+    ``None`` ou ``"read"`` usa o perfil padrão de leitura com web.
+    Perfis disponíveis: ``"read-local"`` (sem rede), ``"read"`` (com web),
+    ``"agent"`` (leitura com web + ``call_agent``) e ``"all"`` (sem filtro).
+    Strings CSV e iteráveis viram allowlist explícita.
     """
     if value is None:
         return DEFAULT_HTTP_READ_ONLY_TOOLS
     if isinstance(value, str):
         normalized = value.strip().lower()
-        if not normalized or normalized == "read":
+        if not normalized:
             return DEFAULT_HTTP_READ_ONLY_TOOLS
-        if normalized == "all":
-            return None
+        if normalized in HTTP_TOOL_PROFILES:
+            return HTTP_TOOL_PROFILES[normalized]
         items = value.split(",")
     else:
         items = value
@@ -78,7 +82,7 @@ def start_embedded_mcp(
     http_host: str = "127.0.0.1",
     http_port: int = 9090,
     token_env: str | None = "QUIMERA_MCP_TOKEN",
-    http_allowed_tools: str | Iterable[str] | None = "read",
+    http_allowed_tools: str | Iterable[str] | None = DEFAULT_HTTP_TOOL_PROFILE,
 ) -> EmbeddedMCPRuntime:
     """Inicia e propaga o MCP embutido para a sessão do Quimera.
 
@@ -97,9 +101,10 @@ def start_embedded_mcp(
         http_port: Porta de bind do MCP HTTP.
         token_env: Nome da variável de ambiente com token fixo de autenticação.
             Se ausente ou vazia, gera token aleatório por sessão.
-        http_allowed_tools: Allowlist do transporte HTTP. Use ``"read"``
-            (padrão) para tools de leitura, ``"all"`` para expor todas, ou
-            CSV/iterável com nomes explícitos.
+        http_allowed_tools: Perfil/allowlist do transporte HTTP. Use
+            ``"read-local"`` para leitura sem rede, ``"read"`` (padrão) para
+            leitura com web, ``"agent"`` para acrescentar ``call_agent``,
+            ``"all"`` para expor todas, ou CSV/iterável com nomes explícitos.
 
     Returns:
         Estado do runtime MCP iniciado, incluindo servidor, token e endpoint.
