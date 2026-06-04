@@ -50,7 +50,7 @@ Workspace
 
 ## Runtime de ferramentas
 
-`ToolExecutor` recebe `ToolCall`, aplica configuração/política, chama handlers concretos e retorna resultados normalizados. Os schemas usados por MCP e drivers OpenAI-compatible vêm de `runtime/drivers/tool_schemas.py`.
+`ToolExecutor` recebe `ToolCall`, aplica configuração/política, chama handlers concretos e retorna resultados normalizados. Os schemas usados por MCP e drivers OpenAI-compatible vêm de `runtime/drivers/tool_schemas.py`. A arquitetura de aprovação, escopos temporários, contexto confiável e locks de concorrência está detalhada em [Aprovação e segurança de ferramentas](aprovacao.md).
 
 ## MCP
 

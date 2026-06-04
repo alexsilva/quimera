@@ -25,6 +25,7 @@ nav:
       - Solução de problemas: referencia/troubleshooting.md
   - Desenvolvimento:
       - Arquitetura interna: desenvolvimento/arquitetura.md
+      - Aprovação e segurança de ferramentas: desenvolvimento/aprovacao.md
       - Fluxos de execução: desenvolvimento/fluxos.md
       - Testes e qualidade: desenvolvimento/testes.md
 markdown_extensions:
