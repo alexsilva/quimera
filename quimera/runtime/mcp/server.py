@@ -24,6 +24,7 @@ import socket
 import sys
 import threading
 import time
+from collections.abc import Iterable
 from pathlib import Path
 from typing import IO, Any
 
@@ -111,7 +112,13 @@ class MCPServer:
     SERVER_NAME = "quimera"
     SERVER_VERSION = "0.1.0"
 
-    def __init__(self, tool_executor, *, auth_token: str | None = None) -> None:
+    def __init__(
+        self,
+        tool_executor,
+        *,
+        auth_token: str | None = None,
+        allowed_tools: Iterable[str] | None = None,
+    ) -> None:
         """Inicializa uma instância de MCPServer.
 
         Args:
@@ -119,11 +126,15 @@ class MCPServer:
             auth_token: Token de autenticação por sessão. Quando definido, toda
                 conexão via socket Unix deve enviar uma linha JSON de autenticação
                 antes de qualquer mensagem MCP.
+            allowed_tools: Allowlist opcional de ferramentas expostas via MCP.
+                Quando definido, ``tools/list`` filtra schemas e ``tools/call``
+                rejeita nomes fora da lista.
         """
         self._executor = tool_executor
         self._write_lock = threading.Lock()
         normalized = (auth_token or "").strip()
         self._auth_token: str | None = normalized or None
+        self._allowed_tools = self._normalize_allowed_tools(allowed_tools)
         self._cancel_events: dict[Any, threading.Event] = {}
         self._cancel_lock = threading.Lock()
         self._pending_calls: list[dict] = []
@@ -136,6 +147,29 @@ class MCPServer:
             max_workers=4, thread_name_prefix="mcp-tool"
         )
         self._resource_subscriptions: set[str] = set()
+
+    @staticmethod
+    def _normalize_allowed_tools(
+        allowed_tools: Iterable[str] | None,
+    ) -> frozenset[str] | None:
+        if allowed_tools is None:
+            return None
+        normalized = frozenset(
+            str(name).strip() for name in allowed_tools if str(name).strip()
+        )
+        return normalized or frozenset()
+
+    @property
+    def allowed_tools(self) -> frozenset[str] | None:
+        """Ferramentas permitidas via MCP; ``None`` significa sem filtro."""
+        return self._allowed_tools
+
+    def set_allowed_tools(self, allowed_tools: Iterable[str] | None) -> None:
+        """Atualiza a allowlist de ferramentas expostas por este servidor MCP."""
+        self._allowed_tools = self._normalize_allowed_tools(allowed_tools)
+
+    def is_tool_allowed(self, tool_name: str) -> bool:
+        return self._allowed_tools is None or tool_name in self._allowed_tools
 
     def shutdown(self) -> None:
         """Encerra o pool de threads, aguardando tarefas em execução."""
@@ -435,6 +469,12 @@ class MCPServer:
 
     def _handle_tools_list(self, msg_id: Any, params: dict) -> dict:
         schemas = resolve_tool_schemas(self._executor)
+        if self._allowed_tools is not None:
+            schemas = [
+                schema
+                for schema in schemas
+                if schema.get("function", {}).get("name") in self._allowed_tools
+            ]
         tools = [_openai_schema_to_mcp(s) for s in schemas]
         cursor = params.get("cursor")
         page = 0
@@ -468,6 +508,8 @@ class MCPServer:
             available_tools = set()
         if available_tools and tool_name not in available_tools:
             return self._err(msg_id, -32602, f"Unknown tool: {tool_name}")
+        if not self.is_tool_allowed(tool_name):
+            return self._err(msg_id, -32602, f"Tool not allowed: {tool_name}")
 
         arg_keys = sorted(str(key) for key in arguments.keys()) if isinstance(arguments, dict) else []
         started_at = time.perf_counter()

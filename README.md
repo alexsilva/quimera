@@ -153,6 +153,7 @@ Por padrão o MCP é ativado automaticamente. Controles via CLI:
 - `--mcp-port <porta>`: porta do servidor HTTP MCP (padrão: `9090`).
 - `--mcp-host <host>`: host do servidor HTTP MCP (padrão: `127.0.0.1`).
 - `--mcp-token-env <VAR>`: variável de ambiente usada como token MCP fixo para clientes externos (padrão: `QUIMERA_MCP_TOKEN`; se vazia, token aleatório por sessão).
+- `--mcp-http-allow-tools <read|all|CSV>`: allowlist de tools expostas no MCP HTTP externo. O padrão `read` publica apenas tools de leitura (`list_files`, `read_file`, `grep_search`, `list_tasks`, `list_jobs`, `get_job`, `web_search`, `web_fetch`, `todo_list`); use `all` somente em redes confiáveis ou informe nomes separados por vírgula.
 
 ### Injeção por plugin
 
@@ -220,7 +221,7 @@ Para iniciar o app com MCP Streamable HTTP embutido em vez do socket Unix padrã
 python quimera.py --mcp-http --mcp-host 127.0.0.1 --mcp-port 9090
 ```
 
-Nesse modo, agentes compatíveis recebem `http://127.0.0.1:9090/mcp` na inicialização, com o mesmo token da sessão enviado como `Authorization: Bearer <token>` (ou `X-Quimera-MCP-Token` para clientes simples).
+Nesse modo, agentes compatíveis recebem `http://127.0.0.1:9090/mcp` na inicialização, com o mesmo token da sessão enviado como `Authorization: Bearer <token>` (ou `X-Quimera-MCP-Token` para clientes simples). Por segurança, o transporte HTTP externo publica somente tools de leitura por padrão; ajuste com `--mcp-http-allow-tools all` ou `--mcp-http-allow-tools read_file,grep_search` quando necessário. As respostas CORS expõem `MCP-Session-Id` via `Access-Control-Expose-Headers` para clientes web conseguirem reutilizar a sessão Streamable HTTP.
 
 Para conectar um cliente remoto, defina um token conhecido no ambiente antes de iniciar o Quimera e envie esse mesmo valor no header HTTP:
 
@@ -228,10 +229,28 @@ Para conectar um cliente remoto, defina um token conhecido no ambiente antes de 
 export QUIMERA_MCP_TOKEN=um-token-longo-e-aleatorio
 python quimera.py --mcp-http --mcp-host 0.0.0.0 --mcp-port 9090
 
-# Cliente remoto:
-curl -H "Authorization: Bearer um-token-longo-e-aleatorio" \
+# Cliente remoto: initialize via POST /mcp. Use -i para ver MCP-Session-Id.
+curl -i -X POST http://HOST:9090/mcp \
+     -H "Authorization: Bearer um-token-longo-e-aleatorio" \
+     -H "Content-Type: application/json" \
+     -d '{
+       "jsonrpc":"2.0",
+       "id":1,
+       "method":"initialize",
+       "params":{
+         "protocolVersion":"2025-11-25",
+         "capabilities":{},
+         "clientInfo":{"name":"curl","version":"manual"}
+       }
+     }'
+
+# Próxima chamada: reutilize MCP-Session-Id e envie MCP-Protocol-Version.
+curl -X POST http://HOST:9090/mcp \
+     -H "Authorization: Bearer um-token-longo-e-aleatorio" \
+     -H "Content-Type: application/json" \
      -H "MCP-Protocol-Version: 2025-11-25" \
-     http://HOST:9090/mcp
+     -H "MCP-Session-Id: <valor-retornado-no-initialize>" \
+     -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
 ```
 
 Se `QUIMERA_MCP_TOKEN` (ou a variável apontada por `--mcp-token-env`) não estiver definida, o Quimera gera um token aleatório por sessão e apenas os plugins locais iniciados por ele recebem esse valor. O socket Unix continua sendo o padrão para preservar compatibilidade com o fluxo local existente.

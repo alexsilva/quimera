@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import os
 import secrets
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from quimera.runtime.mcp.http_server import MCP_HTTPServer
+from quimera.runtime.mcp.http_server import (
+    DEFAULT_HTTP_READ_ONLY_TOOLS,
+    MCP_HTTPServer,
+)
 from quimera.runtime.mcp.server import MCPServer
 
 MCPTransport = Literal["socket", "http"]
@@ -24,6 +28,7 @@ class EmbeddedMCPRuntime:
     http_server: MCP_HTTPServer | None = None
     socket_path: str | None = None
     http_url: str | None = None
+    allowed_tools: frozenset[str] | None = None
 
 
 def _prompt_session_state(app: Any) -> dict | None:
@@ -35,6 +40,27 @@ def _prompt_session_state(app: Any) -> dict | None:
 def _resolve_token(token_env: str | None) -> str:
     env_name = token_env or ""
     return (os.environ.get(env_name) or "").strip() or secrets.token_urlsafe(32)
+
+
+def parse_http_allowed_tools(value: str | Iterable[str] | None) -> frozenset[str] | None:
+    """Normaliza a configuração de allowlist do MCP HTTP.
+
+    ``None`` ou ``"read"`` usa o conjunto seguro de tools de leitura.
+    ``"all"`` desativa o filtro. Strings CSV e iteráveis viram allowlist explícita.
+    """
+    if value is None:
+        return DEFAULT_HTTP_READ_ONLY_TOOLS
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if not normalized or normalized == "read":
+            return DEFAULT_HTTP_READ_ONLY_TOOLS
+        if normalized == "all":
+            return None
+        items = value.split(",")
+    else:
+        items = value
+    tools = frozenset(str(item).strip() for item in items if str(item).strip())
+    return tools or DEFAULT_HTTP_READ_ONLY_TOOLS
 
 
 def _default_socket_path(workspace: Any) -> str:
@@ -52,6 +78,7 @@ def start_embedded_mcp(
     http_host: str = "127.0.0.1",
     http_port: int = 9090,
     token_env: str | None = "QUIMERA_MCP_TOKEN",
+    http_allowed_tools: str | Iterable[str] | None = "read",
 ) -> EmbeddedMCPRuntime:
     """Inicia e propaga o MCP embutido para a sessão do Quimera.
 
@@ -70,6 +97,9 @@ def start_embedded_mcp(
         http_port: Porta de bind do MCP HTTP.
         token_env: Nome da variável de ambiente com token fixo de autenticação.
             Se ausente ou vazia, gera token aleatório por sessão.
+        http_allowed_tools: Allowlist do transporte HTTP. Use ``"read"``
+            (padrão) para tools de leitura, ``"all"`` para expor todas, ou
+            CSV/iterável com nomes explícitos.
 
     Returns:
         Estado do runtime MCP iniciado, incluindo servidor, token e endpoint.
@@ -93,7 +123,10 @@ def start_embedded_mcp(
     mcp = MCPServer(app.tool_executor, auth_token=mcp_token)
 
     if transport == "http":
-        http_server = MCP_HTTPServer(mcp, host=http_host, port=http_port)
+        allowed_tools = parse_http_allowed_tools(http_allowed_tools)
+        http_server = MCP_HTTPServer(
+            mcp, host=http_host, port=http_port, allowed_tools=allowed_tools
+        )
         http_server.start_background()
         http_url = f"http://{http_host}:{http_port}/mcp"
         app.configure_mcp_http(http_url, mcp_token)
@@ -110,6 +143,7 @@ def start_embedded_mcp(
             mcp_server=mcp,
             http_server=http_server,
             http_url=http_url,
+            allowed_tools=allowed_tools,
         )
 
     resolved_socket_path = socket_path or _default_socket_path(workspace)

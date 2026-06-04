@@ -20,6 +20,7 @@ import queue
 import threading
 import uuid
 import secrets
+from collections.abc import Iterable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import StringIO
 from typing import Any
@@ -35,6 +36,18 @@ _QUIMERA_MCP_HTTP_HOST = "QUIMERA_MCP_HTTP_HOST"
 _QUIMERA_MCP_HTTP_PORT = "QUIMERA_MCP_HTTP_PORT"
 _DEFAULT_HOST = "127.0.0.1"
 _DEFAULT_PORT = 8080
+
+DEFAULT_HTTP_READ_ONLY_TOOLS = frozenset({
+    "list_files",
+    "read_file",
+    "grep_search",
+    "list_tasks",
+    "list_jobs",
+    "get_job",
+    "web_search",
+    "web_fetch",
+    "todo_list",
+})
 
 
 class _SSEQueueOutput:
@@ -76,6 +89,10 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
         self.send_header(
             "Access-Control-Allow-Headers", "Content-Type, Authorization, MCP-Protocol-Version, MCP-Session-Id, X-Quimera-MCP-Token"
+        )
+        self.send_header(
+            "Access-Control-Expose-Headers",
+            "MCP-Session-Id, MCP-Protocol-Version",
         )
 
     # ------------------------------------------------------------------
@@ -374,9 +391,14 @@ class MCP_HTTPServer:
     """
 
     def __init__(
-        self, mcp_server: MCPServer, host: str = "", port: int = 0
+        self,
+        mcp_server: MCPServer,
+        host: str = "",
+        port: int = 0,
+        allowed_tools: Iterable[str] | None = DEFAULT_HTTP_READ_ONLY_TOOLS,
     ) -> None:
         self._mcp = mcp_server
+        self._mcp.set_allowed_tools(allowed_tools)
         self._host = host or os.environ.get(
             _QUIMERA_MCP_HTTP_HOST, _DEFAULT_HOST
         )
@@ -387,6 +409,11 @@ class MCP_HTTPServer:
         self._http_sessions: dict[str, dict] = {}
         self._sse_lock = threading.Lock()
         self._httpd: ThreadingHTTPServer | None = None
+
+    @property
+    def allowed_tools(self) -> frozenset[str] | None:
+        """Allowlist efetiva de tools publicada por este transporte HTTP."""
+        return self._mcp.allowed_tools
 
     @property
     def host(self) -> str:
@@ -440,7 +467,10 @@ class MCP_HTTPServer:
 
 
 def create_server(
-    mcp_server: MCPServer, host: str = "", port: int = 0
+    mcp_server: MCPServer,
+    host: str = "",
+    port: int = 0,
+    allowed_tools: Iterable[str] | None = DEFAULT_HTTP_READ_ONLY_TOOLS,
 ) -> MCP_HTTPServer:
     """Cria uma instância de MCP_HTTPServer sem iniciá-la.
 
@@ -448,8 +478,12 @@ def create_server(
         mcp_server: Instância de MCPServer a ser exposta via HTTP.
         host: Host para bind (padrão: QUIMERA_MCP_HTTP_HOST ou 127.0.0.1).
         port: Porta para bind (padrão: QUIMERA_MCP_HTTP_PORT ou 8080).
+        allowed_tools: Allowlist de tools expostas via HTTP. Por padrão,
+            publica apenas tools de leitura; use ``None`` para expor todas.
 
     Returns:
         MCP_HTTPServer configurado mas não iniciado.
     """
-    return MCP_HTTPServer(mcp_server, host=host, port=port)
+    return MCP_HTTPServer(
+        mcp_server, host=host, port=port, allowed_tools=allowed_tools
+    )
