@@ -78,19 +78,36 @@ def _build_openai_messages_from_prompt(prompt: str) -> list[dict]:
     if not blocks:
         return [{"role": "user", "content": rendered}]
 
-    messages: list[dict] = []
+    system_messages: list[dict] = []
+    user_messages: list[tuple[str, dict]] = []
     cursor = 0
     for block in blocks:
         prefix = rendered[cursor:block.start].strip()
         if prefix:
-            messages.append(_context_system_message(prefix))
-        messages.append(_openai_message_for_prompt_block(block))
+            system_messages.append(_context_system_message(prefix))
+        message = _openai_message_for_prompt_block(block)
+        if message["role"] == "user":
+            user_messages.append((block.name, message))
+        else:
+            system_messages.append(message)
         cursor = block.end
 
     suffix = rendered[cursor:].strip()
     if suffix:
-        messages.append(_context_system_message(suffix))
-    return messages
+        system_messages.append(_context_system_message(suffix))
+
+    if not user_messages:
+        return system_messages
+
+    final_user_index = max(
+        (index for index, (name, _) in enumerate(user_messages) if name == "current_turn"),
+        default=len(user_messages) - 1,
+    )
+    final_user_message = user_messages[final_user_index][1]
+    earlier_user_messages = [
+        message for index, (_, message) in enumerate(user_messages) if index != final_user_index
+    ]
+    return [*system_messages, *earlier_user_messages, final_user_message]
 
 
 def _fatal_api_error_message(exc: Exception) -> str | None:

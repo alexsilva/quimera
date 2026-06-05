@@ -93,6 +93,14 @@ class PromptParser:
             closing = f"</{block_name}>"
             closing_start = rendered.find(closing, opening_end)
             if closing_start < 0:
+                tag_end = rendered.find(">", match.start())
+                if tag_end >= 0:
+                    inline_opening_end = tag_end + 1
+                    inline_closing_start = rendered.find(closing, inline_opening_end)
+                    if inline_closing_start >= 0:
+                        opening_end = inline_opening_end
+                        closing_start = inline_closing_start
+            if closing_start < 0:
                 cursor = opening_end
                 continue
             closing_end = closing_start + len(closing)
