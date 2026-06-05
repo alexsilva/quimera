@@ -82,6 +82,53 @@ def _available_agent_names(test_mode: bool = False) -> list[str]:
     return [name for name in names if name not in test_names]
 
 
+def _test_mode_uses_fake_openai(agents: list[str] | tuple[str, ...] | None) -> bool:
+    selected = {str(agent).strip().lower() for agent in (agents or [])}
+    return bool(selected & {"fake-openai", "fake-cli-handoff", "fake-openai-mcp-cli"})
+
+
+def _start_test_fake_openai_backend() -> object:
+    """Sobe backend OpenAI-compatible fake local e aplica override não persistente."""
+    import threading
+    from http.server import ThreadingHTTPServer
+
+    from .devtools.fake_agents import DEFAULT_HOST, DEFAULT_MODEL, FakeOpenAIHandler
+
+    httpd = ThreadingHTTPServer((DEFAULT_HOST, 0), FakeOpenAIHandler)
+    httpd.model = DEFAULT_MODEL  # type: ignore[attr-defined]
+    httpd.quiet = True  # type: ignore[attr-defined]
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True, name="quimera-fake-openai")
+    thread.start()
+    try:
+        host, port = httpd.server_address[:2]
+        base_url = f"http://{host}:{port}/v1"
+        set_connection_override(
+            "fake-openai",
+            OpenAIConnection(
+                model=DEFAULT_MODEL,
+                base_url=base_url,
+                api_key_env="QUIMERA_FAKE_API_KEY",
+                provider="openai_compat",
+                supports_native_tools=True,
+            ),
+            persist=False,
+        )
+    except Exception:
+        _stop_test_fake_openai_backend(httpd)
+        raise
+    return httpd
+
+
+def _stop_test_fake_openai_backend(httpd: object | None) -> None:
+    if httpd is None:
+        return
+    shutdown = getattr(httpd, "shutdown", None)
+    if callable(shutdown):
+        shutdown()
+    server_close = getattr(httpd, "server_close", None)
+    if callable(server_close):
+        server_close()
+
 def _expand_patterns(agents: list[str], available: list[str]) -> list[str]:
     """Executa expand patterns."""
     result = []
@@ -398,6 +445,9 @@ def main():
         _ensure_required_runtime_dependencies()
         if args.driver_repl in _test_plugin_names() and not args.test:
             parser.error(f"Plugin de teste '{args.driver_repl}' exige --test")
+        fake_openai_backend = None
+        if args.test and args.driver_repl == "fake-openai":
+            fake_openai_backend = _start_test_fake_openai_backend()
         working_dir = Path(args.working_dir).resolve() if args.working_dir else None
         try:
             repl = DriverRepl(
@@ -411,6 +461,8 @@ def main():
         except (RuntimeError, ValueError) as exc:
             print(str(exc), file=sys.stderr)
             raise SystemExit(2)
+        finally:
+            _stop_test_fake_openai_backend(fake_openai_backend)
         return
 
     agents = _expand_patterns(args.agents, agents_available)
@@ -448,55 +500,61 @@ def main():
     _ensure_required_runtime_dependencies()
 
     visibility = Visibility(args.visibility)
-    app = QuimeraApp(cwd,
-                     debug=args.debug,
-                     history_window=args.history_window,
-                     agents=agents, threads=args.threads,
-                     timeout=args.timeout,
-                     idle_timeout_seconds=args.idle_timeout,
-                     workspace=workspace,
-                     visibility=visibility,
-                     theme=args.theme)
-    if args.interactive_test:
-        if TerminalRenderer is None or AgentClient is None:
-            raise RuntimeError("Modo interativo não disponível nesta versão")
+    fake_openai_backend = None
+    if args.test and _test_mode_uses_fake_openai(agents):
+        fake_openai_backend = _start_test_fake_openai_backend()
+    try:
+        app = QuimeraApp(cwd,
+                         debug=args.debug,
+                         history_window=args.history_window,
+                         agents=agents, threads=args.threads,
+                         timeout=args.timeout,
+                         idle_timeout_seconds=args.idle_timeout,
+                         workspace=workspace,
+                         visibility=visibility,
+                         theme=args.theme)
+        if args.interactive_test:
+            if TerminalRenderer is None or AgentClient is None:
+                raise RuntimeError("Modo interativo não disponível nesta versão")
 
-        default_agent = agents[0] if args.agents != ["*"] and agents else "claude"
-        default_prompt = "Use uma ferramenta de shell para executar o comando `pwd` e me diga o diretório atual. Se a ferramenta pedir aprovação, mostre o prompt normalmente."
+            default_agent = agents[0] if args.agents != ["*"] and agents else "claude"
+            default_prompt = "Use uma ferramenta de shell para executar o comando `pwd` e me diga o diretório atual. Se a ferramenta pedir aprovação, mostre o prompt normalmente."
 
-        if args.test_agent:
-            agent_name = args.test_agent
-        else:
-            agent_name = default_agent
+            if args.test_agent:
+                agent_name = args.test_agent
+            else:
+                agent_name = default_agent
 
-        if args.test_prompt:
-            prompt = " ".join(args.test_prompt)
-        else:
-            prompt = default_prompt
+            if args.test_prompt:
+                prompt = " ".join(args.test_prompt)
+            else:
+                prompt = default_prompt
 
-        renderer = TerminalRenderer()
-        client = AgentClient(renderer)
-        try:
-            result = client.call(agent_name, prompt)
-        finally:
-            client.close()
+            renderer = TerminalRenderer()
+            client = AgentClient(renderer)
+            try:
+                result = client.call(agent_name, prompt)
+            finally:
+                client.close()
 
-        renderer.show_system(prompt)
-        renderer.show_plain("\n--- RESULTADO LIMPO ---\n")
-        renderer.show_plain(result)
-        return
+            renderer.show_system(prompt)
+            renderer.show_plain("\n--- RESULTADO LIMPO ---\n")
+            renderer.show_plain(result)
+            return
 
-    start_embedded_mcp(
-        app,
-        workspace,
-        enabled=not args.no_mcp,
-        transport="socket",
-        socket_path=args.mcp_socket,
-        http_host=args.mcp_host,
-        http_port=args.mcp_port,
-        token_env=args.mcp_token_env,
-        http_allowed_tools=args.mcp_http_allow_tools,
-        external_http_enabled=args.mcp_http,
-    )
+        start_embedded_mcp(
+            app,
+            workspace,
+            enabled=not args.no_mcp,
+            transport="socket",
+            socket_path=args.mcp_socket,
+            http_host=args.mcp_host,
+            http_port=args.mcp_port,
+            token_env=args.mcp_token_env,
+            http_allowed_tools=args.mcp_http_allow_tools,
+            external_http_enabled=args.mcp_http,
+        )
 
-    app.run()
+        app.run()
+    finally:
+        _stop_test_fake_openai_backend(fake_openai_backend)

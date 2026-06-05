@@ -583,8 +583,6 @@ def test_main_driver_repl_runtime_error_returns_exit_2(monkeypatch):
     assert exc.value.code == 2
     assert "falhou" in fake_stderr.getvalue()
 
-
-
 def test_main_excludes_fake_agents_without_test_mode(monkeypatch):
     _patch_main_basics(monkeypatch, agent_names=["claude", "fake-cli", "fake-cli-handoff", "fake-openai", "fake-openai-mcp-cli"])
     monkeypatch.setattr(sys, "argv", ["quimera"])
@@ -596,15 +594,62 @@ def test_main_excludes_fake_agents_without_test_mode(monkeypatch):
 
 
 def test_main_test_mode_uses_only_fake_agents(monkeypatch):
+    class FakeBackend:
+        stopped = False
+
+        def shutdown(self):
+            self.stopped = True
+
+        def server_close(self):
+            self.stopped = True
+
+    backend = FakeBackend()
     _patch_main_basics(monkeypatch, agent_names=["claude", "fake-cli", "fake-cli-handoff", "fake-openai", "fake-openai-mcp-cli"])
     monkeypatch.setattr(cli._plugins, "enable_test_plugins", lambda: cli._plugins.TEST_PLUGIN_NAMES)
+    monkeypatch.setattr(cli, "_start_test_fake_openai_backend", lambda: backend)
     monkeypatch.setattr(sys, "argv", ["quimera", "--test"])
 
     with patch("quimera.runtime.mcp.session.MCPServer"):
         cli.main()
 
     assert _FakeApp.last_instance.kwargs["agents"] == ["fake-cli", "fake-cli-handoff", "fake-openai", "fake-openai-mcp-cli"]
+    assert backend.stopped is True
 
+
+def test_main_test_mode_with_cli_only_fake_agent_does_not_start_openai_backend(monkeypatch):
+    _patch_main_basics(monkeypatch, agent_names=["fake-cli", "fake-openai"])
+    monkeypatch.setattr(cli._plugins, "enable_test_plugins", lambda: cli._plugins.TEST_PLUGIN_NAMES)
+    monkeypatch.setattr(cli, "_start_test_fake_openai_backend", lambda: (_ for _ in ()).throw(AssertionError("should not start")))
+    monkeypatch.setattr(sys, "argv", ["quimera", "--test", "--agents", "fake-cli"])
+
+    with patch("quimera.runtime.mcp.session.MCPServer"):
+        cli.main()
+
+    assert _FakeApp.last_instance.kwargs["agents"] == ["fake-cli"]
+
+
+def test_start_test_fake_openai_backend_uses_free_port_and_non_persistent_override(monkeypatch):
+    captured = {}
+
+    def fake_set_connection_override(agent_name, connection, persist=True):
+        captured["agent_name"] = agent_name
+        captured["connection"] = connection
+        captured["persist"] = persist
+
+    monkeypatch.setattr(cli, "set_connection_override", fake_set_connection_override)
+    backend = cli._start_test_fake_openai_backend()
+    try:
+        connection = captured["connection"]
+        assert captured["agent_name"] == "fake-openai"
+        assert captured["persist"] is False
+        assert connection.model == "quimera-fake-tools"
+        assert connection.base_url.startswith("http://127.0.0.1:")
+        assert connection.base_url.endswith("/v1")
+        assert connection.base_url != "http://127.0.0.1:8765/v1"
+        assert connection.api_key_env == "QUIMERA_FAKE_API_KEY"
+        assert connection.provider == "openai_compat"
+    finally:
+        cli._stop_test_fake_openai_backend(backend)
 
 
 def test_main_connect_fake_plugin_is_blocked_even_in_test_mode(monkeypatch):
@@ -615,6 +660,7 @@ def test_main_connect_fake_plugin_is_blocked_even_in_test_mode(monkeypatch):
         cli.main()
 
     assert exc.value.code == 2
+
 
 def test_main_fake_driver_repl_requires_test_mode(monkeypatch):
     _patch_main_basics(monkeypatch, agent_names=["claude"])

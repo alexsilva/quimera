@@ -84,13 +84,7 @@ python quimera.py --test --agents fake-cli --visibility full
 
 ### Backend OpenAI-compatible fake com tool calling
 
-Em um terminal, suba o servidor local:
-
-```bash
-python -m quimera.devtools.fake_agents openai-server --port 8765
-```
-
-Em outro terminal, use o plugin embutido `fake-openai` no REPL do driver. Esse caminho usa o driver `openai_compat`, cuja dependência `openai` faz parte da instalação base:
+Use o plugin embutido `fake-openai` no REPL do driver. Com `--test`, o app sobe automaticamente o backend OpenAI-compatible fake em uma porta livre e aplica o override somente no processo. Esse caminho usa o driver `openai_compat`, cuja dependência `openai` faz parte da instalação base:
 
 ```bash
 python quimera.py --test --driver-repl fake-openai --prompt "Leia o README usando ferramentas"
@@ -118,13 +112,7 @@ O plugin `fake-cli-handoff` valida o caminho entre dois agentes de execução di
 
 O plugin `fake-openai-mcp-cli` continua disponível para validar o caminho direto CLI -> OpenAI-compatible -> MCP, mas ele não exercita delegação entre agentes; para comprovar CLI -> `call_agent` -> OpenAI, prefira `fake-cli-handoff`.
 
-Em um terminal, suba o backend OpenAI-compatible fake:
-
-```bash
-python -m quimera.devtools.fake_agents openai-server --port 8765
-```
-
-Em outro terminal, rode o app com MCP habilitado (padrão) e o agente CLI MCP:
+Rode o app com MCP habilitado (padrão) e o agente CLI MCP. Não é necessário iniciar um servidor externo antes: `--test` sobe o backend fake em porta livre e aponta `fake-openai` para ele com override não persistente:
 
 ```bash
 python quimera.py --test --agents fake-cli-handoff fake-openai --visibility full
@@ -144,4 +132,10 @@ Também é possível executar o app inteiro com o agente OpenAI fake:
 python quimera.py --test --agents fake-openai --visibility full
 ```
 
-Esse modo permite que o operador humano atue como testador interativo: envie comandos no chat, observe previews/aprovações de tools e confira a resposta final com a evidência retornada pelo runtime.
+Se `--agents` não for informado, todos os fake agents entram como agentes disponíveis/padrão do modo de teste. Esse modo permite que o operador humano atue como testador interativo: envie comandos no chat, observe previews/aprovações de tools e confira a resposta final com a evidência retornada pelo runtime.
+
+O comando standalone permanece disponível apenas para debug manual e não é pré-requisito do modo `--test`:
+
+```bash
+python -m quimera.devtools.fake_agents openai-server
+```

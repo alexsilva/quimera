@@ -8,9 +8,14 @@ class FakeOpenAIMCPCliPlugin(AgentPlugin):
     """Plugin CLI fake que recebe MCP socket/token via ambiente."""
 
     def env_for_cli(self) -> dict:
+        from quimera import plugins
+
+        fake_openai = plugins.get("fake-openai")
+        base_url = (fake_openai.effective_base_url() if fake_openai is not None else None) or self.effective_base_url()
+        model = (fake_openai.effective_model() if fake_openai is not None else None) or self.effective_model()
         env = {
-            "QUIMERA_FAKE_OPENAI_BASE_URL": self.effective_base_url() or "http://127.0.0.1:8765/v1",
-            "QUIMERA_FAKE_OPENAI_MODEL": self.effective_model() or "quimera-fake-tools",
+            "QUIMERA_FAKE_OPENAI_BASE_URL": base_url or "http://127.0.0.1:8765/v1",
+            "QUIMERA_FAKE_OPENAI_MODEL": model or "quimera-fake-tools",
         }
         if self._mcp_socket_path:
             env["QUIMERA_FAKE_MCP_SOCKET"] = self._mcp_socket_path
