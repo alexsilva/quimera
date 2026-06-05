@@ -51,3 +51,15 @@ def reset_builtins_print(monkeypatch):
     real_print = builtins.print
     yield
     builtins.print = real_print
+
+
+@pytest.fixture(autouse=True)
+def bypass_cli_runtime_dependency_check(monkeypatch):
+    """Mantém testes existentes independentes das dependências instaladas no ambiente."""
+    try:
+        import quimera.cli as cli
+    except Exception:
+        yield
+        return
+    monkeypatch.setattr(cli, "_ensure_required_runtime_dependencies", lambda: None)
+    yield

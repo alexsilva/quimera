@@ -136,11 +136,14 @@ def _resolve_registry(registry=None):
     return registry if registry is not None else _registry
 
 
-def apply_connection_overrides(registry=None) -> None:
+def apply_connection_overrides(registry=None, exclude_names: set[str] | frozenset[str] | None = None) -> None:
     """Aplica conexões persistidas aos plugins registrados."""
     target_registry = _resolve_registry(registry)
+    excluded = {str(name).strip().lower() for name in (exclude_names or set())}
     overrides = get_connection_overrides()
     for name, conn_data in overrides.items():
+        if str(name).strip().lower() in excluded:
+            continue
         if target_registry.get(name) is None:
             try:
                 register_dynamic_plugin(name, metadata=conn_data.get("plugin"), registry=target_registry)

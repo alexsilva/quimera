@@ -19,6 +19,26 @@ class PromptBlock:
 class PromptParser:
     """Parseia seções de um arquivo de template de prompt."""
 
+    BLOCK_NAMES = frozenset({
+        "agent_metrics",
+        "completed_tasks",
+        "current_turn",
+        "debug_state",
+        "execution_mode",
+        "execution_state",
+        "handoff",
+        "header",
+        "persistent_context",
+        "recent_conversation",
+        "rules",
+        "session_state",
+        "shared_state",
+        "task_execution_rules",
+        "task_handoff",
+        "task_review",
+        "task_review_rules",
+    })
+
     _TRUE_STRINGS = {"1", "true", "yes", "on"}
     _FALSE_STRINGS = {"0", "false", "no", "off", ""}
 
@@ -44,35 +64,47 @@ class PromptParser:
 
     @classmethod
     def iter_blocks(cls, text: str, name: str | None = None) -> list[PromptBlock]:
-        """Lista blocos XML-like do prompt renderizado.
+        """Lista blocos top-level do prompt renderizado.
 
-        Os templates usam blocos textuais como ``<current_turn ...>``
-        em linha própria. Esta rotina entende essa sintaxe sem depender de regex
-        frágil com ``>`` dentro de atributos renderizados (ex.: usuário ``>>>``).
+        Os templates usam blocos textuais conhecidos como ``<current_turn ...>``
+        em linha própria. Ao reconhecer um bloco válido, o parser avança o cursor
+        para depois do fechamento dele, evitando interpretar HTML/XML/código
+        colado pelo usuário dentro do conteúdo como outro bloco do template.
         """
         rendered = str(text or "")
         wanted = str(name).strip() if name else None
+        if wanted is not None and wanted not in cls.BLOCK_NAMES:
+            return []
         tag_pattern = re.compile(r"(?m)^<(?P<name>[A-Za-z_][A-Za-z0-9_-]*)\b")
         blocks: list[PromptBlock] = []
-        for match in tag_pattern.finditer(rendered):
+        cursor = 0
+        while cursor < len(rendered):
+            match = tag_pattern.search(rendered, cursor)
+            if match is None:
+                break
             block_name = match.group("name")
-            if wanted is not None and block_name != wanted:
+            if block_name not in cls.BLOCK_NAMES:
+                cursor = match.end()
                 continue
             opening_end = cls._find_opening_tag_end(rendered, match.start())
             if opening_end < 0:
+                cursor = match.end()
                 continue
             closing = f"</{block_name}>"
             closing_start = rendered.find(closing, opening_end)
             if closing_start < 0:
+                cursor = opening_end
                 continue
             closing_end = closing_start + len(closing)
-            blocks.append(PromptBlock(
-                name=block_name,
-                opening=rendered[match.start():opening_end].strip(),
-                content=rendered[opening_end:closing_start].strip(),
-                start=match.start(),
-                end=closing_end,
-            ))
+            if wanted is None or block_name == wanted:
+                blocks.append(PromptBlock(
+                    name=block_name,
+                    opening=rendered[match.start():opening_end].strip(),
+                    content=rendered[opening_end:closing_start].strip(),
+                    start=match.start(),
+                    end=closing_end,
+                ))
+            cursor = closing_end
         return blocks
 
     @classmethod

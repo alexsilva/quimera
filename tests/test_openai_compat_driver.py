@@ -232,6 +232,29 @@ def test_build_openai_messages_from_prompt_uses_current_turn_as_active_user_mess
     assert "Execute pwd" not in messages[0]["content"]
 
 
+
+def test_build_openai_messages_keeps_current_turn_last_with_embedded_xml():
+    prompt = (
+        '<recent_conversation title="Conversa recente">\n'
+        'Histórico anterior\n'
+        '</recent_conversation>\n'
+        '<current_turn title="Pedido atual">\n'
+        'Analise este HTML/XML:\n'
+        '```html\n'
+        '<section>\n'
+        '<recent_conversation>não é histórico</recent_conversation>\n'
+        '</section>\n'
+        '```\n'
+        '</current_turn>\n'
+    )
+
+    messages = _build_openai_messages_from_prompt(prompt)
+
+    assert messages[-1]["role"] == "user"
+    assert "Analise este HTML/XML" in messages[-1]["content"]
+    assert "<recent_conversation>não é histórico</recent_conversation>" in messages[-1]["content"]
+    assert messages[-1]["content"].count("não é histórico") == 1
+
 def test_run_sends_quimera_current_turn_as_final_user_message_to_openai_api():
     driver, mock_client = _make_driver()
     _setup_stream(mock_client, [_make_chunk(content="ok")])

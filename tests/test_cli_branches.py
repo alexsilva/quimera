@@ -107,6 +107,17 @@ def test_required_dependency_check_reports_all_missing_packages(monkeypatch):
         "não encontradas. Reinstale o projeto com: pip install -e ."
     )
 
+
+def test_main_help_does_not_check_required_runtime_dependencies(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["quimera", "--help"])
+    monkeypatch.setattr(cli, "_ensure_required_runtime_dependencies", lambda: (_ for _ in ()).throw(AssertionError("should not run")))
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+
+    assert exc.value.code == 0
+    assert "usage: quimera" in capsys.readouterr().out
+
 def test_read_input_uses_prompt_toolkit_when_tty(monkeypatch):
     monkeypatch.setattr(cli, "_pt_prompt", lambda _text: "  valor  ")
     monkeypatch.setattr(cli.sys, "stdout", SimpleNamespace(isatty=lambda: True))
@@ -594,6 +605,16 @@ def test_main_test_mode_uses_only_fake_agents(monkeypatch):
 
     assert _FakeApp.last_instance.kwargs["agents"] == ["fake-cli", "fake-cli-handoff", "fake-openai", "fake-openai-mcp-cli"]
 
+
+
+def test_main_connect_fake_plugin_is_blocked_even_in_test_mode(monkeypatch):
+    _patch_main_basics(monkeypatch, agent_names=["fake-openai"])
+    monkeypatch.setattr(sys, "argv", ["quimera", "--test", "--connect", "fake-openai", "--driver", "openai", "--model", "m"])
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+
+    assert exc.value.code == 2
 
 def test_main_fake_driver_repl_requires_test_mode(monkeypatch):
     _patch_main_basics(monkeypatch, agent_names=["claude"])

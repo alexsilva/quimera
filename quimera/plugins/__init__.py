@@ -9,7 +9,6 @@ def enable_test_plugins() -> tuple[str, ...]:
     from .fake import register_fake_plugins
 
     register_fake_plugins()
-    apply_connection_overrides()
     return TEST_PLUGIN_NAMES
 
 
@@ -20,6 +19,6 @@ from . import ollama as _ollama  # noqa: F401
 from . import opencode as _opencode  # noqa: F401
 from .base import apply_connection_overrides  # noqa: F401
 
-apply_connection_overrides()
+apply_connection_overrides(exclude_names=set(TEST_PLUGIN_NAMES))
 
 __all__ = ["AgentPlugin", "register", "get", "all_names", "all_plugins", "enable_test_plugins", "TEST_PLUGIN_NAMES"]
