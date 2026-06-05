@@ -10,19 +10,20 @@ O projeto requer Python `>=3.10`.
 |---|---|
 | `rich>=14.0` | Renderização terminal, painéis, markdown e estilos. |
 | `prompt-toolkit>=3.0` | Input interativo, histórico e autocomplete quando disponível. |
+| `openai>=1.0` | Drivers OpenAI-compatible remotos e locais. |
+
+A CLI valida essas dependências base na inicialização e encerra antes de subir o app quando alguma delas está ausente.
 
 ## Extras do projeto
 
 | Extra | Pacotes | Uso |
 |---|---|---|
-| `api` | `openai>=1.0` | Drivers OpenAI-compatible remotos. |
-| `ollama` | `openai>=1.0` | Ollama local via API compatível com OpenAI. |
 | `docs` | `mkdocs>=1.6` | Build e servidor local desta documentação. |
 
-Instalação completa para desenvolvimento de docs e APIs:
+Instalação para desenvolvimento da documentação:
 
 ```bash
-pip install -e ".[api,ollama,docs]"
+pip install -e ".[docs]"
 ```
 
 ## Dependências externas não Python

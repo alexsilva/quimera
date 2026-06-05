@@ -43,10 +43,10 @@ cd quimera
 pip install -e .
 ```
 
-Opcional (drivers via API compatível e input interativo com histórico/completion):
+Opcional para documentação local:
 
 ```bash
-pip install -e ".[api,ollama,interactive]"
+pip install -e ".[docs]"
 ```
 
 ## Execução
@@ -106,6 +106,25 @@ python quimera.py --help
 - `/approve-all`: aprova automaticamente mutações subsequentes.
 - `/reset-state`: limpa `shared_state` sem apagar histórico.
 - `/clear`, `/help`, `/exit`.
+
+
+## Testes interativos locais
+
+O Quimera inclui agentes fake para validar o app sem provedores externos. Eles não entram no uso normal: use `--test` para ativar esse conjunto e deixar somente os fake na rodada:
+
+- `fake-cli`: agente CLI local determinístico (`python -m quimera.devtools.fake_agents cli`).
+- `fake-openai`: plugin OpenAI-compatible apontando para um servidor local fake com tool calling nativo.
+- `fake-cli-handoff`: agente CLI que usa MCP `call_agent` para delegar ao `fake-openai`.
+- `fake-openai-mcp-cli`: agente CLI que chama o backend OpenAI-compatible fake diretamente e executa tool calls via MCP do Quimera.
+
+Exemplo rápido:
+
+```bash
+python -m quimera.devtools.fake_agents openai-server --port 8765
+python quimera.py --test --agents fake-cli-handoff fake-openai --visibility full
+```
+
+Veja o guia completo em [docs/desenvolvimento/testes.md](./docs/desenvolvimento/testes.md#testador-interativo-local-com-agentes-fake).
 
 ## Agentes e plugins
 

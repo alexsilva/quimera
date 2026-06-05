@@ -9,15 +9,15 @@ requires-python = ">=3.10"
 dependencies = [
     "rich>=14.0",
     "prompt-toolkit>=3.0",
+    "openai>=1.0",
 ]
 
 [project.optional-dependencies]
-ollama = ["openai>=1.0"]
-api = ["openai>=1.0"]
 docs = ["mkdocs>=1.6"]
 
 [project.scripts]
 quimera = "quimera.cli:main"
+quimera-fake = "quimera.devtools.fake_agents:main"
 
 [tool.setuptools.packages.find]
 include = ["quimera*"]

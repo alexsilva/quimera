@@ -15,6 +15,9 @@ from quimera.plugins.base import CliConnection, OpenAIConnection
 from quimera.runtime.mcp.http_server import DEFAULT_HTTP_READ_ONLY_TOOLS
 
 
+_ORIGINAL_DEPENDENCY_CHECK = cli._ensure_required_runtime_dependencies
+
+
 class _FakeWorkspace:
     def __init__(self, cwd):
         self.cwd = cwd
@@ -68,13 +71,41 @@ class _FakeApp:
         self.mcp_http_tokens.append(token)
 
 
+@pytest.fixture(autouse=True)
+def _skip_required_dependency_check(monkeypatch):
+    monkeypatch.setattr(cli, "_ensure_required_runtime_dependencies", lambda: None)
+
+
 def _patch_main_basics(monkeypatch, *, agent_names=None, theme_names=None):
     monkeypatch.setattr(cli, "Workspace", _FakeWorkspace)
     monkeypatch.setattr(cli, "ConfigManager", _FakeConfig)
     monkeypatch.setattr(cli, "QuimeraApp", _FakeApp)
     monkeypatch.setattr(cli._plugins, "all_names", lambda: agent_names or ["claude"])
     monkeypatch.setattr(cli._themes, "names", lambda: theme_names or ["default"])
+    monkeypatch.setattr(cli, "_ensure_required_runtime_dependencies", lambda: None)
 
+
+
+def test_required_dependency_check_fails_fast_for_missing_openai(monkeypatch):
+    monkeypatch.setattr(cli.importlib.util, "find_spec", lambda name: None if name == "openai" else object())
+
+    with pytest.raises(SystemExit) as exc:
+        _ORIGINAL_DEPENDENCY_CHECK()
+
+    assert exc.value.code == "Instalação incompleta: dependência obrigatória 'openai' não encontrada. Reinstale o projeto com: pip install -e ."
+
+
+def test_required_dependency_check_reports_all_missing_packages(monkeypatch):
+    missing_modules = {"openai", "prompt_toolkit", "rich"}
+    monkeypatch.setattr(cli.importlib.util, "find_spec", lambda name: None if name in missing_modules else object())
+
+    with pytest.raises(SystemExit) as exc:
+        _ORIGINAL_DEPENDENCY_CHECK()
+
+    assert exc.value.code == (
+        "Instalação incompleta: dependências obrigatórias 'openai', 'prompt-toolkit', 'rich' "
+        "não encontradas. Reinstale o projeto com: pip install -e ."
+    )
 
 def test_read_input_uses_prompt_toolkit_when_tty(monkeypatch):
     monkeypatch.setattr(cli, "_pt_prompt", lambda _text: "  valor  ")
@@ -541,6 +572,37 @@ def test_main_driver_repl_runtime_error_returns_exit_2(monkeypatch):
     assert exc.value.code == 2
     assert "falhou" in fake_stderr.getvalue()
 
+
+
+def test_main_excludes_fake_agents_without_test_mode(monkeypatch):
+    _patch_main_basics(monkeypatch, agent_names=["claude", "fake-cli", "fake-cli-handoff", "fake-openai", "fake-openai-mcp-cli"])
+    monkeypatch.setattr(sys, "argv", ["quimera"])
+
+    with patch("quimera.runtime.mcp.session.MCPServer"):
+        cli.main()
+
+    assert _FakeApp.last_instance.kwargs["agents"] == ["claude"]
+
+
+def test_main_test_mode_uses_only_fake_agents(monkeypatch):
+    _patch_main_basics(monkeypatch, agent_names=["claude", "fake-cli", "fake-cli-handoff", "fake-openai", "fake-openai-mcp-cli"])
+    monkeypatch.setattr(cli._plugins, "enable_test_plugins", lambda: cli._plugins.TEST_PLUGIN_NAMES)
+    monkeypatch.setattr(sys, "argv", ["quimera", "--test"])
+
+    with patch("quimera.runtime.mcp.session.MCPServer"):
+        cli.main()
+
+    assert _FakeApp.last_instance.kwargs["agents"] == ["fake-cli", "fake-cli-handoff", "fake-openai", "fake-openai-mcp-cli"]
+
+
+def test_main_fake_driver_repl_requires_test_mode(monkeypatch):
+    _patch_main_basics(monkeypatch, agent_names=["claude"])
+    monkeypatch.setattr(sys, "argv", ["quimera", "--driver-repl", "fake-openai"])
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+
+    assert exc.value.code == 2
 
 def test_main_rejects_unknown_agents(monkeypatch):
     _patch_main_basics(monkeypatch, agent_names=["claude"])

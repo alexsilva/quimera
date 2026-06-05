@@ -5,16 +5,16 @@
 - Python **3.10 ou superior**.
 - `pip` e ambiente virtual recomendado.
 - CLIs dos agentes que você pretende usar, por exemplo `claude`, `codex`, `gemini` ou `opencode`.
-- Para drivers OpenAI-compatible, pacote `openai` instalado via extras e variáveis de API configuradas.
+- Para drivers OpenAI-compatible, variáveis de API configuradas conforme o provedor.
 
 Dependências Python base:
 
 - `rich>=14.0` para renderização terminal;
-- `prompt-toolkit>=3.0` para input interativo com histórico e autocomplete.
+- `prompt-toolkit>=3.0` para input interativo com histórico e autocomplete;
+- `openai>=1.0` para drivers OpenAI-compatible. Se qualquer dependência base estiver ausente (`rich`, `prompt-toolkit` ou `openai`), a CLI encerra antes de iniciar o app por instalação incompleta.
 
 Dependências opcionais:
 
-- `openai>=1.0` nos extras `api` e `ollama`;
 - `mkdocs>=1.6` no extra `docs` para esta documentação.
 
 ## Instalar em modo editável
@@ -27,10 +27,10 @@ source .venv/bin/activate
 pip install -e .
 ```
 
-Com suporte a APIs OpenAI-compatible e docs:
+Com suporte à documentação local:
 
 ```bash
-pip install -e ".[api,ollama,docs]"
+pip install -e ".[docs]"
 ```
 
 ## Executar

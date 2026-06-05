@@ -1,7 +1,19 @@
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
 from .prompt_kinds import PromptKind, coerce_prompt_kind
+
+
+@dataclass(frozen=True)
+class PromptBlock:
+    """Bloco nomeado de um prompt renderizado, como ``<current_turn>``."""
+
+    name: str
+    opening: str
+    content: str
+    start: int
+    end: int
 
 
 class PromptParser:
@@ -20,6 +32,59 @@ class PromptParser:
 
     def load(self) -> str:
         return self._source.read_text(encoding="utf-8").strip()
+
+    @staticmethod
+    def _find_opening_tag_end(text: str, start: int) -> int:
+        """Retorna o fim da linha/tag de abertura, preservando `>` dentro de títulos."""
+        newline = text.find("\n", start)
+        if newline >= 0:
+            return newline + 1
+        tag_end = text.find(">", start)
+        return tag_end + 1 if tag_end >= 0 else -1
+
+    @classmethod
+    def iter_blocks(cls, text: str, name: str | None = None) -> list[PromptBlock]:
+        """Lista blocos XML-like do prompt renderizado.
+
+        Os templates usam blocos textuais como ``<current_turn ...>``
+        em linha própria. Esta rotina entende essa sintaxe sem depender de regex
+        frágil com ``>`` dentro de atributos renderizados (ex.: usuário ``>>>``).
+        """
+        rendered = str(text or "")
+        wanted = str(name).strip() if name else None
+        tag_pattern = re.compile(r"(?m)^<(?P<name>[A-Za-z_][A-Za-z0-9_-]*)\b")
+        blocks: list[PromptBlock] = []
+        for match in tag_pattern.finditer(rendered):
+            block_name = match.group("name")
+            if wanted is not None and block_name != wanted:
+                continue
+            opening_end = cls._find_opening_tag_end(rendered, match.start())
+            if opening_end < 0:
+                continue
+            closing = f"</{block_name}>"
+            closing_start = rendered.find(closing, opening_end)
+            if closing_start < 0:
+                continue
+            closing_end = closing_start + len(closing)
+            blocks.append(PromptBlock(
+                name=block_name,
+                opening=rendered[match.start():opening_end].strip(),
+                content=rendered[opening_end:closing_start].strip(),
+                start=match.start(),
+                end=closing_end,
+            ))
+        return blocks
+
+    @classmethod
+    def extract_last_block(cls, text: str, name: str) -> tuple[str | None, str]:
+        """Extrai o último bloco nomeado e retorna ``(conteúdo, texto_sem_bloco)``."""
+        blocks = cls.iter_blocks(text, name=name)
+        if not blocks:
+            return None, str(text or "")
+        block = blocks[-1]
+        rendered = str(text or "")
+        without = (rendered[:block.start] + rendered[block.end:]).strip()
+        return block.content or None, without
 
     @classmethod
     def _resolve_condition_value(cls, value: object) -> bool:

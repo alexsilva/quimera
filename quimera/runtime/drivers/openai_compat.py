@@ -2,7 +2,7 @@
 Driver para endpoints compatíveis com a API OpenAI: Ollama, OpenRouter, LM Studio, etc.
 
 Suporta tool calling nativo e streaming interno (coleta tokens sem bloquear no timeout).
-A exibição da resposta final segue o pipeline normal do Quimera (show_message).
+A exibição da resposta final segue o pipeline normal do app (show_message).
 """
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Optional
 
 from ...evidence import Evidence, EvidenceStore
+from ...prompt_templates import PromptParser
 from ..streaming import apply_stream_diff, normalize_stream_diff
 from ..tool_hops import (
     DEFAULT_MAX_TOOL_HOPS,
@@ -41,6 +42,55 @@ except ImportError:
     _OAINotFoundError = Exception  # type: ignore[assignment,misc]
     _OAIBadRequestError = Exception  # type: ignore[assignment,misc]
     _OAIRateLimitError = Exception  # type: ignore[assignment,misc]
+
+
+_OPENAI_USER_MESSAGE_BLOCKS = frozenset({"current_turn", "task_handoff", "task_review", "handoff"})
+_OPENAI_HISTORY_MESSAGE_BLOCKS = frozenset({"recent_conversation"})
+
+
+def _system_message(title: str, content: str) -> dict:
+    normalized_title = str(title or "").strip()
+    normalized_content = str(content or "").strip()
+    body = f"{normalized_title}\n\n{normalized_content}" if normalized_title else normalized_content
+    return {"role": "system", "content": body.strip()}
+
+
+def _context_system_message(content: str, title: str = "Contexto operacional") -> dict:
+    return _system_message(title, content)
+
+
+def _history_system_message(content: str) -> dict:
+    return _system_message("Conversa recente", content)
+
+
+def _openai_message_for_prompt_block(block) -> dict:
+    if block.name in _OPENAI_USER_MESSAGE_BLOCKS:
+        return {"role": "user", "content": block.content}
+    if block.name in _OPENAI_HISTORY_MESSAGE_BLOCKS:
+        return _history_system_message(block.content)
+    return _context_system_message(block.content, title=block.opening)
+
+
+def _build_openai_messages_from_prompt(prompt: str) -> list[dict]:
+    """Converte o prompt renderizado em mensagens de API chat."""
+    rendered = str(prompt or "")
+    blocks = PromptParser.iter_blocks(rendered)
+    if not blocks:
+        return [{"role": "user", "content": rendered}]
+
+    messages: list[dict] = []
+    cursor = 0
+    for block in blocks:
+        prefix = rendered[cursor:block.start].strip()
+        if prefix:
+            messages.append(_context_system_message(prefix))
+        messages.append(_openai_message_for_prompt_block(block))
+        cursor = block.end
+
+    suffix = rendered[cursor:].strip()
+    if suffix:
+        messages.append(_context_system_message(suffix))
+    return messages
 
 
 def _fatal_api_error_message(exc: Exception) -> str | None:
@@ -327,8 +377,8 @@ class OpenAICompatDriver:
         self._semaphore = threading.Semaphore(max_connections)
         if OpenAI is None:
             raise ImportError(
-                "O pacote 'openai' é necessário para usar o driver openai_compat. "
-                "Instale com: pip install openai"
+                "O pacote 'openai' é dependência obrigatória da instalação. "
+                "Reinstale o projeto com: pip install -e ."
             )
         self.model = model
         self._client = OpenAI(
@@ -399,7 +449,7 @@ class OpenAICompatDriver:
                 tool_budget_index = len(messages) - 1
             else:
                 max_tool_hops = get_max_tool_hops(self.tool_use_reliability)
-            messages.append({"role": "user", "content": prompt})
+            messages.extend(_build_openai_messages_from_prompt(prompt))
 
             last_invalid_signature: tuple[str, str, str] | None = None
             consecutive_invalid_signature_count = 0
@@ -601,7 +651,7 @@ class OpenAICompatDriver:
         return text.strip(), []
 
     def _execute_tool(self, tc: dict, tool_executor) -> ToolResult:
-        """Executa um tool call via ToolExecutor do Quimera."""
+        """Executa um tool call via ToolExecutor."""
         tool_call = ToolCall(
             name=tc["name"],
             arguments=tc["arguments"],

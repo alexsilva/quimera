@@ -1,5 +1,6 @@
 """Componentes de `quimera.cli`."""
 import argparse
+import importlib.util
 import json
 import locale
 import os
@@ -42,6 +43,43 @@ try:
 except ImportError:
     TerminalRenderer = None
     AgentClient = None
+
+
+_REQUIRED_RUNTIME_DEPENDENCIES = {
+    "openai": "openai",
+    "prompt-toolkit": "prompt_toolkit",
+    "rich": "rich",
+}
+
+
+def _ensure_required_runtime_dependencies() -> None:
+    """Falha cedo quando dependências obrigatórias da instalação base estão ausentes."""
+    missing = [
+        package
+        for package, module_name in _REQUIRED_RUNTIME_DEPENDENCIES.items()
+        if importlib.util.find_spec(module_name) is None
+    ]
+    if missing:
+        names = ", ".join(f"'{name}'" for name in missing)
+        plural = "s" if len(missing) > 1 else ""
+        raise SystemExit(
+            f"Instalação incompleta: dependência{plural} obrigatória{plural} {names} não encontrada{plural}. "
+            "Reinstale o projeto com: pip install -e ."
+        )
+
+
+def _test_plugin_names() -> tuple[str, ...]:
+    return tuple(getattr(_plugins, "TEST_PLUGIN_NAMES", ()))
+
+
+def _available_agent_names(test_mode: bool = False) -> list[str]:
+    if test_mode and hasattr(_plugins, "enable_test_plugins"):
+        _plugins.enable_test_plugins()
+    names = _plugins.all_names()
+    test_names = set(_test_plugin_names())
+    if test_mode:
+        return [name for name in names if name in test_names]
+    return [name for name in names if name not in test_names]
 
 
 def _expand_patterns(agents: list[str], available: list[str]) -> list[str]:
@@ -162,6 +200,8 @@ def main():
         except (AttributeError, OSError, ValueError):
             pass
 
+    _ensure_required_runtime_dependencies()
+
     parser = argparse.ArgumentParser(prog="quimera")
     parser.add_argument("--name", metavar="NOME", nargs="+", default=None)
     parser.add_argument("--whoami", action="store_true")
@@ -185,6 +225,8 @@ def main():
     parser.add_argument("--timeout", type=int, default=120, help="Timeout em segundos para execução de agentes")
     parser.add_argument("--idle-timeout", dest="idle_timeout", type=int, default=120,
                         help="Idle timeout em segundos.")
+    parser.add_argument("--test", action="store_true",
+                        help="Ativa modo de teste: somente plugins fake entram na rodada")
     parser.add_argument("--interactive-test", action="store_true",
                         help="Modo de teste interativo para testes automatizados")
     parser.add_argument("test_agent", nargs="?", default=None,
@@ -306,6 +348,8 @@ def main():
     if args.history_window is not None and args.history_window <= 0:
         parser.error("--history-window deve ser maior que zero")
 
+    agents_available = _available_agent_names(test_mode=args.test)
+
     if args.list_connections:
         conns = load_connections()
         if not conns:
@@ -317,6 +361,8 @@ def main():
 
     if args.connect:
         agent_name = args.connect.strip().lower()
+        if agent_name in _test_plugin_names() and not args.test:
+            parser.error(f"Plugin de teste '{agent_name}' exige --test")
         plugin = _plugins.get(agent_name)
         if plugin is None:
             if not is_valid_agent_name(agent_name):
@@ -351,6 +397,8 @@ def main():
         return
 
     if args.driver_repl:
+        if args.driver_repl in _test_plugin_names() and not args.test:
+            parser.error(f"Plugin de teste '{args.driver_repl}' exige --test")
         working_dir = Path(args.working_dir).resolve() if args.working_dir else None
         try:
             repl = DriverRepl(
@@ -366,7 +414,6 @@ def main():
             raise SystemExit(2)
         return
 
-    agents_available = _plugins.all_names()
     agents = _expand_patterns(args.agents, agents_available)
     agents_unknown = [a for a in agents if a not in agents_available]
     if agents_unknown:

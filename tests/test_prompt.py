@@ -10,7 +10,7 @@ from quimera.modes import get_mode
 from quimera.plugins.codex import _format_codex_spy_event
 from quimera.prompt import PromptBuilder
 from quimera.prompt_kinds import PromptKind
-from quimera.prompt_templates import PromptTemplate
+from quimera.prompt_templates import PromptParser, PromptTemplate
 from quimera.ui import TerminalRenderer
 
 
@@ -553,6 +553,23 @@ def test_prompt_keeps_infra_shared_state_visible_even_with_goal_canonical():
     assert '"task_overview": {' in prompt
     assert '"job_id": 7' in prompt
     assert '<goal_lock title="Objetivo fixo (imutável)">' not in prompt
+
+
+def test_prompt_parser_extracts_blocks_with_prompt_symbol_in_title():
+    prompt = (
+        '<recent_conversation title="Conversa recente">\n'
+        'USER: Leia o README\n'
+        '</recent_conversation>\n'
+        '<current_turn title="Pedido atual de >>>">\n'
+        'Execute pwd via shell usando MCP\n'
+        '</current_turn>'
+    )
+
+    current_turn, remaining = PromptParser.extract_last_block(prompt, "current_turn")
+
+    assert current_turn == "Execute pwd via shell usando MCP"
+    assert "Leia o README" in remaining
+    assert "Execute pwd" not in remaining
 
 
 def test_safe_format_replaces_missing_keys_with_empty_string(tmp_path):
