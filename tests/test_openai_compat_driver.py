@@ -255,6 +255,21 @@ def test_build_openai_messages_keeps_current_turn_last_with_embedded_xml():
     assert "<recent_conversation>não é histórico</recent_conversation>" in messages[-1]["content"]
     assert messages[-1]["content"].count("não é histórico") == 1
 
+
+def test_build_openai_messages_keeps_current_turn_last_when_metrics_follow():
+    prompt = (
+        '<header title="Identificação">contexto</header>\n'
+        '<current_turn>pedido atual</current_turn>\n'
+        '<agent_metrics>métricas</agent_metrics>'
+    )
+
+    messages = _build_openai_messages_from_prompt(prompt)
+
+    assert messages[-1] == {"role": "user", "content": "pedido atual"}
+    assert all(message["role"] == "system" for message in messages[:-1])
+    assert "métricas" in messages[-2]["content"]
+
+
 def test_run_sends_quimera_current_turn_as_final_user_message_to_openai_api():
     driver, mock_client = _make_driver()
     _setup_stream(mock_client, [_make_chunk(content="ok")])
