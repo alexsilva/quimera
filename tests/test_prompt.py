@@ -775,3 +775,62 @@ def test_chat_prompt_still_uses_default_template():
     assert '<rules title="Suas regras">' in prompt
     assert '<current_turn title="Pedido atual de >>>">' in prompt
     assert '<recent_conversation title="Conversa recente">' in prompt
+
+
+def test_prompt_parser_ignores_xml_inside_current_turn():
+    rendered = (
+        '<current_turn title="Pedido atual">\n'
+        'Analise este XML:\n'
+        '<section>\n'
+        '<current_turn>não é bloco do template</current_turn>\n'
+        '</section>\n'
+        '</current_turn>\n'
+    )
+
+    blocks = PromptParser.iter_blocks(rendered)
+
+    assert [block.name for block in blocks] == ["current_turn"]
+    assert "<section>" in blocks[0].content
+    assert "não é bloco do template" in blocks[0].content
+
+
+def test_prompt_parser_ignores_html_xml_inside_markdown_code_block():
+    rendered = (
+        '<current_turn title="Pedido atual">\n'
+        '```html\n'
+        '<html>\n'
+        '<recent_conversation>não é bloco do template</recent_conversation>\n'
+        '</html>\n'
+        '```\n'
+        '</current_turn>\n'
+    )
+
+    blocks = PromptParser.iter_blocks(rendered)
+
+    assert [block.name for block in blocks] == ["current_turn"]
+    assert "<recent_conversation>não é bloco do template</recent_conversation>" in blocks[0].content
+
+
+def test_prompt_parser_reads_multiple_sequential_top_level_blocks():
+    rendered = (
+        '<recent_conversation title="Histórico">\n'
+        'Mensagem anterior\n'
+        '</recent_conversation>\n'
+        '<current_turn title="Pedido atual">\n'
+        'Pedido de agora\n'
+        '</current_turn>\n'
+        '<agent_metrics title="Métricas">\n'
+        'ok\n'
+        '</agent_metrics>\n'
+    )
+
+    blocks = PromptParser.iter_blocks(rendered)
+
+    assert [block.name for block in blocks] == ["recent_conversation", "current_turn", "agent_metrics"]
+    assert [block.content for block in blocks] == ["Mensagem anterior", "Pedido de agora", "ok"]
+
+
+def test_prompt_parser_returns_empty_list_when_no_template_blocks():
+    rendered = "Texto solto\n<section>HTML do usuário</section>\n```xml\n<foo>bar</foo>\n```"
+
+    assert PromptParser.iter_blocks(rendered) == []

@@ -200,8 +200,6 @@ def main():
         except (AttributeError, OSError, ValueError):
             pass
 
-    _ensure_required_runtime_dependencies()
-
     parser = argparse.ArgumentParser(prog="quimera")
     parser.add_argument("--name", metavar="NOME", nargs="+", default=None)
     parser.add_argument("--whoami", action="store_true")
@@ -361,8 +359,8 @@ def main():
 
     if args.connect:
         agent_name = args.connect.strip().lower()
-        if agent_name in _test_plugin_names() and not args.test:
-            parser.error(f"Plugin de teste '{agent_name}' exige --test")
+        if agent_name in _test_plugin_names():
+            parser.error(f"Plugin de teste '{agent_name}' não aceita --connect persistente; use --test com configuração local do processo")
         plugin = _plugins.get(agent_name)
         if plugin is None:
             if not is_valid_agent_name(agent_name):
@@ -397,6 +395,7 @@ def main():
         return
 
     if args.driver_repl:
+        _ensure_required_runtime_dependencies()
         if args.driver_repl in _test_plugin_names() and not args.test:
             parser.error(f"Plugin de teste '{args.driver_repl}' exige --test")
         working_dir = Path(args.working_dir).resolve() if args.working_dir else None
@@ -445,6 +444,8 @@ def main():
         config.set_history_window(args.set_history_window)
         print(f"History window definida: {args.set_history_window}")
         return
+
+    _ensure_required_runtime_dependencies()
 
     visibility = Visibility(args.visibility)
     app = QuimeraApp(cwd,

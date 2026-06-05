@@ -7,7 +7,7 @@ import time
 import urllib.request
 from http.server import ThreadingHTTPServer
 
-from quimera.plugins.base import PluginRegistry
+from quimera.plugins.base import OpenAIConnection, PluginRegistry, apply_connection_overrides, set_connection_override
 from quimera.plugins.fake import register_fake_plugins
 from quimera.devtools.fake_agents import FakeOpenAIHandler, _build_completion, _extract_quimera_current_turn
 from quimera.runtime.approval import AutoApprovalHandler
@@ -207,3 +207,50 @@ def test_mcp_handoff_cli_calls_call_agent_via_mcp(tmp_path):
         assert "delegado para fake-openai" in completed.stdout
     finally:
         mcp.shutdown()
+
+
+def test_fake_openai_ignores_persisted_connection_overrides_in_test_registry(tmp_path):
+    conn_file = tmp_path / "connections.json"
+    conn_file.write_text(json.dumps({
+        "fake-openai": {
+            "type": "openai",
+            "model": "external-model",
+            "base_url": "https://external.example/v1",
+            "api_key_env": "EXTERNAL_API_KEY",
+            "provider": "openai_compat",
+            "supports_native_tools": True,
+        }
+    }), encoding="utf-8")
+    registry = PluginRegistry()
+    names = register_fake_plugins(registry)
+
+    from unittest.mock import patch
+    with patch("quimera.plugins.base._get_connections_file", return_value=conn_file):
+        apply_connection_overrides(registry=registry, exclude_names=set(names))
+
+    connection = registry.get("fake-openai").effective_connection()
+    assert connection.model == "quimera-fake-tools"
+    assert connection.base_url == "http://127.0.0.1:8765/v1"
+    assert connection.api_key_env == "QUIMERA_FAKE_API_KEY"
+
+
+def test_fake_openai_allows_explicit_non_persistent_process_override(tmp_path):
+    conn_file = tmp_path / "connections.json"
+    registry = PluginRegistry()
+    register_fake_plugins(registry)
+    override = OpenAIConnection(
+        model="local-process-model",
+        base_url="http://127.0.0.1:9999/v1",
+        api_key_env="LOCAL_PROCESS_KEY",
+        provider="openai_compat",
+    )
+
+    from unittest.mock import patch
+    with patch("quimera.plugins.base._get_connections_file", return_value=conn_file):
+        set_connection_override("fake-openai", override, persist=False, registry=registry)
+
+    connection = registry.get("fake-openai").effective_connection()
+    assert connection.model == "local-process-model"
+    assert connection.base_url == "http://127.0.0.1:9999/v1"
+    assert connection.api_key_env == "LOCAL_PROCESS_KEY"
+    assert not conn_file.exists()
