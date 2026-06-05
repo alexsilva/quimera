@@ -450,6 +450,7 @@ class FakeOpenAIHandler(BaseHTTPRequestHandler):
 def run_mcp_handoff_cli_agent(args: argparse.Namespace) -> int:
     """Executa um CLI fake que delega para outro agente via call_agent no MCP."""
     prompt = _read_prompt(args)
+    task = _extract_quimera_current_turn(prompt)
     target_agent = (args.target_agent or os.environ.get("QUIMERA_FAKE_HANDOFF_TARGET") or "fake-openai").strip()
     socket_path = args.mcp_socket or os.environ.get("QUIMERA_FAKE_MCP_SOCKET") or ""
     token = args.mcp_token or os.environ.get("QUIMERA_FAKE_MCP_TOKEN") or None
@@ -464,9 +465,10 @@ def run_mcp_handoff_cli_agent(args: argparse.Namespace) -> int:
 
     arguments = {
         "agent_name": target_agent,
-        "task": prompt,
+        "task": task,
         "context": (
             "Delegação iniciada por um agente CLI fake via MCP. "
+            "O campo task contém o pedido atual extraído do prompt renderizado recebido pelo agente CLI. "
             "O agente de destino deve usar suas próprias ferramentas quando necessário."
         ),
     }
