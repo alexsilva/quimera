@@ -120,9 +120,10 @@ O Quimera inclui agentes fake para validar o app sem provedores externos. Eles n
 Exemplo rápido:
 
 ```bash
-python -m quimera.devtools.fake_agents openai-server --port 8765
 python quimera.py --test --agents fake-cli-handoff fake-openai --visibility full
 ```
+
+Com `--test`, o app registra os fake plugins, inicia automaticamente o backend OpenAI-compatible fake em uma porta livre e aplica overrides somente no processo. O comando `python -m quimera.devtools.fake_agents openai-server` continua disponível apenas para debug manual.
 
 Veja o guia completo em [docs/desenvolvimento/testes.md](./docs/desenvolvimento/testes.md#testador-interativo-local-com-agentes-fake).
 

@@ -15,6 +15,8 @@ def find_base_writable(candidates: list) -> Path:
     for candidate in candidates:
         try:
             candidate.mkdir(parents=True, exist_ok=True)
+            if candidate.stat().st_mode & 0o222 == 0:
+                continue
             probe = candidate / ".write_probe"
             probe.write_text("", encoding="utf-8")
             probe.unlink(missing_ok=True)

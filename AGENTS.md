@@ -86,15 +86,12 @@ Quando trabalhar neste projeto e precisar comprovar fluxos interativos sem prove
 
 Fluxo recomendado para validar chamadas OpenAI-compatible com ferramentas via MCP:
 
-1. Suba o backend fake em um terminal:
-   ```bash
-   python -m quimera.devtools.fake_agents openai-server --port 8765
-   ```
-2. Em outro terminal, rode o app somente com agentes fake:
+1. Rode o app em modo de teste. O próprio `--test` registra os fake plugins, sobe o backend OpenAI-compatible fake em uma porta livre e aplica override não persistente para o processo:
    ```bash
    python quimera.py --test --agents fake-cli-handoff fake-openai --visibility full
    ```
-3. Envie um prompt como `Execute pwd via shell usando o agente OpenAI` e confira no output `MCP conectado`, `MCP tool_call: call_agent`, a execução do agente `fake-openai`, a aprovação/execução da ferramenta solicitada por ele e `MCP tool_result: OK`.
+2. Envie um prompt como `Execute pwd via shell usando o agente OpenAI` e confira no output `MCP conectado`, `MCP tool_call: call_agent`, a execução do agente `fake-openai`, a aprovação/execução da ferramenta solicitada por ele e `MCP tool_result: OK`.
+3. Use `python -m quimera.devtools.fake_agents openai-server` apenas como ferramenta manual de debug; ela não é pré-requisito para `python quimera.py --test`.
 
 Para testar o driver diretamente, também use `--test`:
 

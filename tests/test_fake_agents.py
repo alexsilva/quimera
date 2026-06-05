@@ -6,6 +6,7 @@ import threading
 import time
 import urllib.request
 from http.server import ThreadingHTTPServer
+from unittest.mock import patch
 
 from quimera.plugins.base import OpenAIConnection, PluginRegistry, apply_connection_overrides, set_connection_override
 from quimera.plugins.fake import register_fake_plugins
@@ -254,3 +255,21 @@ def test_fake_openai_allows_explicit_non_persistent_process_override(tmp_path):
     assert connection.base_url == "http://127.0.0.1:9999/v1"
     assert connection.api_key_env == "LOCAL_PROCESS_KEY"
     assert not conn_file.exists()
+
+
+def test_fake_openai_mcp_cli_env_uses_fake_openai_process_override():
+    registry = PluginRegistry()
+    register_fake_plugins(registry)
+    override = OpenAIConnection(
+        model="local-process-model",
+        base_url="http://127.0.0.1:43210/v1",
+        api_key_env="LOCAL_PROCESS_KEY",
+        provider="openai_compat",
+    )
+    set_connection_override("fake-openai", override, persist=False, registry=registry)
+
+    with patch("quimera.plugins.get", registry.get):
+        env = registry.get("fake-openai-mcp-cli").env_for_cli()
+
+    assert env["QUIMERA_FAKE_OPENAI_BASE_URL"] == "http://127.0.0.1:43210/v1"
+    assert env["QUIMERA_FAKE_OPENAI_MODEL"] == "local-process-model"
