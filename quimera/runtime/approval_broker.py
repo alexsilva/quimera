@@ -287,17 +287,24 @@ class ApprovalBroker:
 
     @contextmanager
     def execution_guard(self, call: ToolCall) -> Iterator[None]:
-        key = self._serialization_key(call)
-        if key is None:
+        keys = self._serialization_keys(call)
+        if not keys:
             yield
             return
+
+        # Deduplica e ordena antes de adquirir para evitar deadlocks quando
+        # chamadas concorrentes pedem os mesmos paths em ordens diferentes.
+        ordered_keys = sorted(set(keys))
         with self._lock_table_lock:
-            lock = self._locks.setdefault(key, threading.RLock())
-        lock.acquire()
+            locks = [self._locks.setdefault(key, threading.RLock()) for key in ordered_keys]
+
+        for lock in locks:
+            lock.acquire()
         try:
             yield
         finally:
-            lock.release()
+            for lock in reversed(locks):
+                lock.release()
 
     def approve_scope(self, scope: ApprovalScope) -> None:
         self._validate_scope(scope)
@@ -404,23 +411,29 @@ class ApprovalBroker:
             if not s.exhausted and s.expires_at is not None and s.expires_at > now
         ]
 
-    def _serialization_key(self, call: ToolCall) -> str | None:
+    def _serialization_keys(self, call: ToolCall) -> list[str]:
         if call.name in {"run_shell", "run_shell_command", "exec_command"}:
-            return f"workspace:{self.config.workspace_root}"
+            return [f"workspace:{self.config.workspace_root}"]
         if call.name in {"write_stdin", "close_command_session"}:
             session_id = call.arguments.get("session_id")
-            return f"command-session:{session_id}" if session_id is not None else "command-session:unknown"
+            return [f"command-session:{session_id}" if session_id is not None else "command-session:unknown"]
         if call.name in {"write_file", "remove_file"}:
             path = self._extract_path(call)
-            return f"path:{path}" if path else f"workspace:{self.config.workspace_root}"
+            return [f"path:{path}" if path else f"workspace:{self.config.workspace_root}"]
         if call.name == "apply_patch":
             paths = self._extract_patch_paths(str(call.arguments.get("patch", "")))
-            if len(paths) == 1:
-                return f"path:{paths[0]}"
             if paths:
-                return "paths:" + "|".join(sorted(paths))
-            return f"workspace:{self.config.workspace_root}"
-        return None
+                return [f"path:{path}" for path in sorted(set(paths))]
+            return [f"workspace:{self.config.workspace_root}"]
+        return []
+
+    def _serialization_key(self, call: ToolCall) -> str | None:
+        keys = self._serialization_keys(call)
+        if not keys:
+            return None
+        if len(keys) == 1:
+            return keys[0]
+        return "|".join(keys)
 
     def _extract_path(self, call: ToolCall, *, permission_error: PathPermissionError | None = None) -> str | None:
         if permission_error is not None:
