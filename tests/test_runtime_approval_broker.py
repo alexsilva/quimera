@@ -27,6 +27,59 @@ def _trusted(**overrides):
     return {"trusted_context": TrustedToolExecutionContext(**values)}
 
 
+def _patch_for_paths(*paths: str) -> str:
+    sections = []
+    for path in paths:
+        sections.append(f"*** Update File: {path}\n@@\n-old\n+new")
+    return "*** Begin Patch\n" + "\n".join(sections) + "\n*** End Patch"
+
+
+def _register_timed_handlers(executor, *tool_names: str, sleep_seconds: float = 0.05):
+    active = 0
+    active_lock = threading.Lock()
+    intervals = []
+    overlap_seen = threading.Event()
+
+    def handler(call):
+        nonlocal active
+        start = time.monotonic()
+        with active_lock:
+            active += 1
+            if active > 1:
+                overlap_seen.set()
+        time.sleep(sleep_seconds)
+        end = time.monotonic()
+        with active_lock:
+            active -= 1
+            intervals.append((call.name, start, end))
+        return ToolResult(ok=True, tool_name=call.name, content="ok")
+
+    for tool_name in tool_names:
+        executor.registry.register(tool_name, handler)
+    return intervals, overlap_seen
+
+
+def _execute_concurrently(executor, calls: list[ToolCall]) -> list[ToolResult]:
+    barrier = threading.Barrier(len(calls) + 1)
+    results: list[ToolResult] = []
+    results_lock = threading.Lock()
+
+    def run(call: ToolCall) -> None:
+        barrier.wait(timeout=2)
+        result = executor.execute(call)
+        with results_lock:
+            results.append(result)
+
+    threads = [threading.Thread(target=run, args=(call,)) for call in calls]
+    for thread in threads:
+        thread.start()
+    barrier.wait(timeout=2)
+    for thread in threads:
+        thread.join(timeout=2)
+    assert all(not thread.is_alive() for thread in threads)
+    return results
+
+
 def test_call_agent_internal_auto_approved_with_server_side_budget(tmp_path):
     approval = MagicMock()
     approval.approve.return_value = False
@@ -260,32 +313,22 @@ def test_apply_patch_concurrent_same_file_is_serialized_with_real_quimera_patch(
     approval = MagicMock()
     approval.approve.return_value = True
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), approval)
-    intervals = []
-    guard = threading.Lock()
+    intervals, overlap_seen = _register_timed_handlers(executor, "apply_patch")
 
-    def handler(call):
-        start = time.monotonic()
-        time.sleep(0.05)
-        end = time.monotonic()
-        with guard:
-            intervals.append((start, end))
-        return ToolResult(ok=True, tool_name=call.name, content="ok")
+    patch = _patch_for_paths("a.txt")
+    results = _execute_concurrently(
+        executor,
+        [ToolCall(name="apply_patch", arguments={"patch": patch}) for _ in range(2)],
+    )
 
-    executor.registry.register("apply_patch", handler)
-    patch = "*** Begin Patch\n*** Update File: a.txt\n@@\n-old\n+new\n*** End Patch"
-    calls = [ToolCall(name="apply_patch", arguments={"patch": patch}) for _ in range(2)]
-    threads = [threading.Thread(target=executor.execute, args=(call,)) for call in calls]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join()
-
+    assert all(result.ok for result in results)
     assert len(intervals) == 2
-    first, second = sorted(intervals)
+    first, second = sorted((start, end) for _, start, end in intervals)
     assert first[1] <= second[0]
+    assert not overlap_seen.is_set()
 
 
-def test_apply_patch_multi_file_lock_key_is_deterministic(tmp_path):
+def test_apply_patch_multi_file_lock_keys_are_deterministic_per_path(tmp_path):
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
     patch_a = """*** Begin Patch
 *** Update File: b.txt
@@ -308,14 +351,118 @@ def test_apply_patch_multi_file_lock_key_is_deterministic(tmp_path):
 +new
 *** End Patch"""
 
-    key_a = executor.approval_broker._serialization_key(ToolCall(name="apply_patch", arguments={"patch": patch_a}))
-    key_b = executor.approval_broker._serialization_key(ToolCall(name="apply_patch", arguments={"patch": patch_b}))
+    keys_a = executor.approval_broker._serialization_keys(ToolCall(name="apply_patch", arguments={"patch": patch_a}))
+    keys_b = executor.approval_broker._serialization_keys(ToolCall(name="apply_patch", arguments={"patch": patch_b}))
 
-    assert key_a == key_b
-    assert str((tmp_path / "a.txt").resolve()) in key_a
-    assert str((tmp_path / "b.txt").resolve()) in key_a
-    assert str((tmp_path / "c.txt").resolve()) in key_a
-    assert str((tmp_path / "d.txt").resolve()) in key_a
+    expected = [
+        f"path:{(tmp_path / name).resolve()}"
+        for name in ("a.txt", "b.txt", "c.txt", "d.txt")
+    ]
+    assert keys_a == expected
+    assert keys_b == expected
+    assert executor.approval_broker._serialization_key(
+        ToolCall(name="apply_patch", arguments={"patch": patch_a})
+    ) == "|".join(expected)
+
+
+def test_apply_patch_overlapping_multi_file_patch_is_serialized(tmp_path):
+    approval = MagicMock()
+    approval.approve.return_value = True
+    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), approval)
+    intervals, overlap_seen = _register_timed_handlers(executor, "apply_patch")
+
+    results = _execute_concurrently(
+        executor,
+        [
+            ToolCall(name="apply_patch", arguments={"patch": _patch_for_paths("a.txt", "b.txt")}),
+            ToolCall(name="apply_patch", arguments={"patch": _patch_for_paths("b.txt", "c.txt")}),
+        ],
+    )
+
+    assert all(result.ok for result in results)
+    assert len(intervals) == 2
+    first, second = sorted((start, end) for _, start, end in intervals)
+    assert first[1] <= second[0]
+    assert not overlap_seen.is_set()
+
+
+def test_apply_patch_multi_file_is_serialized_with_write_file_on_same_path(tmp_path):
+    approval = MagicMock()
+    approval.approve.return_value = True
+    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), approval)
+    intervals, overlap_seen = _register_timed_handlers(executor, "apply_patch", "write_file")
+
+    results = _execute_concurrently(
+        executor,
+        [
+            ToolCall(name="apply_patch", arguments={"patch": _patch_for_paths("a.txt", "b.txt")}),
+            ToolCall(name="write_file", arguments={"path": "a.txt", "content": "x"}),
+        ],
+    )
+
+    assert all(result.ok for result in results)
+    assert len(intervals) == 2
+    first, second = sorted((start, end) for _, start, end in intervals)
+    assert first[1] <= second[0]
+    assert not overlap_seen.is_set()
+
+
+def test_apply_patch_multi_file_is_serialized_with_remove_file_on_same_path(tmp_path):
+    approval = MagicMock()
+    approval.approve.return_value = True
+    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), approval)
+    intervals, overlap_seen = _register_timed_handlers(executor, "apply_patch", "remove_file")
+
+    results = _execute_concurrently(
+        executor,
+        [
+            ToolCall(name="apply_patch", arguments={"patch": _patch_for_paths("a.txt", "b.txt")}),
+            ToolCall(name="remove_file", arguments={"path": "b.txt", "dry_run": False}),
+        ],
+    )
+
+    assert all(result.ok for result in results)
+    assert len(intervals) == 2
+    first, second = sorted((start, end) for _, start, end in intervals)
+    assert first[1] <= second[0]
+    assert not overlap_seen.is_set()
+
+
+def test_apply_patch_multi_file_can_run_parallel_with_disjoint_write_file(tmp_path):
+    approval = MagicMock()
+    approval.approve.return_value = True
+    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), approval)
+    intervals, overlap_seen = _register_timed_handlers(executor, "apply_patch", "write_file")
+
+    results = _execute_concurrently(
+        executor,
+        [
+            ToolCall(name="apply_patch", arguments={"patch": _patch_for_paths("a.txt", "b.txt")}),
+            ToolCall(name="write_file", arguments={"path": "c.txt", "content": "x"}),
+        ],
+    )
+
+    assert all(result.ok for result in results)
+    assert len(intervals) == 2
+    assert overlap_seen.is_set()
+
+
+def test_multi_path_lock_acquisition_is_deadlock_free_with_reversed_patch_order(tmp_path):
+    approval = MagicMock()
+    approval.approve.return_value = True
+    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), approval)
+    _register_timed_handlers(executor, "apply_patch")
+
+    results = _execute_concurrently(
+        executor,
+        [
+            ToolCall(name="apply_patch", arguments={"patch": _patch_for_paths("a.txt", "b.txt")}),
+            ToolCall(name="apply_patch", arguments={"patch": _patch_for_paths("b.txt", "a.txt")}),
+        ],
+    )
+
+    assert len(results) == 2
+    assert all(result.ok for result in results)
 
 
 def test_run_shell_concurrent_same_workspace_is_serialized(tmp_path):

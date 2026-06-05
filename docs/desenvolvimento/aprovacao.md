@@ -244,7 +244,7 @@ O `ApprovalBroker` também serializa chamadas que podem conflitar.
 *** Move to: novo-caminho
 ```
 
-Se o patch mexe em múltiplos arquivos, o broker gera uma chave determinística com todos os paths ordenados. Assim, dois agentes tentando alterar o mesmo conjunto de arquivos não executam ao mesmo tempo.
+Se o patch mexe em múltiplos arquivos, o broker adquire um lock `path:<arquivo>` para cada arquivo afetado, sempre em ordem determinística, e libera esses locks em ordem reversa. Assim, `apply_patch(a,b)` bloqueia `apply_patch(b,c)`, `write_file(a)` e `remove_file(b)`, mas não bloqueia `write_file(c)` quando não há path em comum.
 
 ### `write_file` e `remove_file`
 
