@@ -78,3 +78,26 @@ Isso garante que:
 - O agente mais qualificado para a tarefa seja priorizado.
 - O trabalho seja distribuído caso o agente principal já tenha muitas tarefas pendentes.
 - Agentes especializados (OpenCode) sejam usados para tarefas simples, liberando os orquestradores (Gemini) para arquitetura complexa.
+
+
+## Teste Interativo Local
+
+Quando trabalhar neste projeto e precisar comprovar fluxos interativos sem provedores externos, use o modo de teste explícito. Os plugins fake só devem entrar na rodada com `--test`; sem esse parâmetro, eles não fazem parte do uso humano normal.
+
+Fluxo recomendado para validar chamadas OpenAI-compatible com ferramentas via MCP:
+
+1. Suba o backend fake em um terminal:
+   ```bash
+   python -m quimera.devtools.fake_agents openai-server --port 8765
+   ```
+2. Em outro terminal, rode o app somente com agentes fake:
+   ```bash
+   python quimera.py --test --agents fake-cli-handoff fake-openai --visibility full
+   ```
+3. Envie um prompt como `Execute pwd via shell usando o agente OpenAI` e confira no output `MCP conectado`, `MCP tool_call: call_agent`, a execução do agente `fake-openai`, a aprovação/execução da ferramenta solicitada por ele e `MCP tool_result: OK`.
+
+Para testar o driver diretamente, também use `--test`:
+
+```bash
+python quimera.py --test --driver-repl fake-openai --prompt "Leia o README usando ferramentas"
+```

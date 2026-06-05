@@ -56,3 +56,92 @@ from quimera.runtime.drivers.tool_schemas import resolve_tool_schemas
 print([s['function']['name'] for s in resolve_tool_schemas()])
 PY
 ```
+
+## Testador interativo local com agentes fake
+
+Para validar o fluxo do Quimera sem depender de credenciais ou provedores externos, o projeto inclui mecanismos fake e determinísticos. Esses plugins ficam fora do uso normal: execute o app com `--test` para ativá-los e restringir a rodada aos fake.
+
+### Agente CLI local
+
+Execute um agente local por stdin ou argumento:
+
+```bash
+python -m quimera.devtools.fake_agents cli --role tester "valide o roteamento de tarefas"
+```
+
+Papéis disponíveis:
+
+- `tester`: emite uma evidência de teste fake.
+- `reviewer`: simula uma revisão determinística.
+- `architect`: simula uma resposta arquitetural.
+- `coder`: responde como executor local simples.
+
+O plugin embutido `fake-cli` usa esse mecanismo e pode participar de uma sessão do app:
+
+```bash
+python quimera.py --test --agents fake-cli --visibility full
+```
+
+### Backend OpenAI-compatible fake com tool calling
+
+Em um terminal, suba o servidor local:
+
+```bash
+python -m quimera.devtools.fake_agents openai-server --port 8765
+```
+
+Em outro terminal, use o plugin embutido `fake-openai` no REPL do driver. Esse caminho usa o driver `openai_compat`, cuja dependência `openai` faz parte da instalação base:
+
+```bash
+python quimera.py --test --driver-repl fake-openai --prompt "Leia o README usando ferramentas"
+```
+
+O servidor expõe:
+
+- `GET /v1/models` para o probe do driver.
+- `POST /v1/chat/completions` em formato OpenAI-compatible.
+- Tool calls nativas para `read_file`, `list_files`, `grep_search`, `run_shell` e `write_file` conforme palavras-chave do prompt.
+
+Gatilhos úteis:
+
+| Prompt contém | Tool selecionada |
+|---|---|
+| `README` | `read_file` |
+| `listar`, `arquivos`, `files` ou `ls` | `list_files` |
+| `grep`, `buscar`, `procure` ou `search` | `grep_search` |
+| `pwd`, `diretório`, `diretorio` ou `shell` | `run_shell` |
+| `escreva`, `write` ou `arquivo probe` | `write_file` |
+
+### CLI que delega para um agente OpenAI via MCP
+
+O plugin `fake-cli-handoff` valida o caminho entre dois agentes de execução diferentes: um agente CLI MCP-capaz recebe o socket/token MCP do Quimera por variáveis de ambiente, chama a tool `call_agent` e delega para o agente OpenAI-compatible `fake-openai`. A partir daí, o agente OpenAI usa o driver `openai_compat`, emite tool calls nativas e passa pelo fluxo normal de aprovação/execução de ferramentas do runtime.
+
+O plugin `fake-openai-mcp-cli` continua disponível para validar o caminho direto CLI -> OpenAI-compatible -> MCP, mas ele não exercita delegação entre agentes; para comprovar CLI -> `call_agent` -> OpenAI, prefira `fake-cli-handoff`.
+
+Em um terminal, suba o backend OpenAI-compatible fake:
+
+```bash
+python -m quimera.devtools.fake_agents openai-server --port 8765
+```
+
+Em outro terminal, rode o app com MCP habilitado (padrão) e o agente CLI MCP:
+
+```bash
+python quimera.py --test --agents fake-cli-handoff fake-openai --visibility full
+```
+
+Prompt de smoke sugerido:
+
+```text
+Execute pwd via shell usando o agente OpenAI
+```
+
+O output esperado deve conter, nessa ordem, `MCP conectado`, `MCP tool_call: call_agent`, execução do `fake-openai`, aprovação/execução da ferramenta pedida pelo OpenAI e `MCP tool_result: OK`. Esse fluxo comprova que um CLI local consegue delegar para um agente OpenAI por `call_agent`, e que o agente OpenAI executa ferramentas pelo runtime com a política normal de aprovação.
+
+Também é possível executar o app inteiro com o agente OpenAI fake:
+
+```bash
+python quimera.py --test --agents fake-openai --visibility full
+```
+
+Esse modo permite que o operador humano atue como testador interativo: envie comandos no chat, observe previews/aprovações de tools e confira a resposta final com a evidência retornada pelo runtime.

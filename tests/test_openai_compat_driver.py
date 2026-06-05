@@ -18,6 +18,7 @@ from quimera.runtime.drivers.openai_compat import (
      DEFAULT_MAX_CONNECTIONS,
      MAX_TOOL_HOPS_BY_RELIABILITY,
      OpenAICompatDriver,
+     _build_openai_messages_from_prompt,
      _build_tool_budget_prompt,
      _build_tool_system_prompt,
      _prune_tool_loop_messages,
@@ -211,6 +212,84 @@ def test_sanitize_assistant_text_preserves_function_like_text():
     text = "<think>x</think></function>\nResposta final\n</tool_call>"
     assert _sanitize_assistant_text(text) == "</function>\nResposta final\n</tool_call>"
 
+
+def test_build_openai_messages_from_prompt_uses_current_turn_as_active_user_message():
+    prompt = (
+        '<rules title="Suas regras">contexto</rules>\n'
+        '<recent_conversation title="Conversa recente">\n'
+        'USER: Leia o README\nASSISTANT: já li\n'
+        '</recent_conversation>\n'
+        '<current_turn title="Pedido atual de >>>">\n'
+        'Execute pwd via shell usando MCP\n'
+        '</current_turn>'
+    )
+
+    messages = _build_openai_messages_from_prompt(prompt)
+
+    assert messages[-1] == {"role": "user", "content": "Execute pwd via shell usando MCP"}
+    assert all(message["role"] == "system" for message in messages[:-1])
+    assert "Leia o README" in messages[-2]["content"]
+    assert "Execute pwd" not in messages[0]["content"]
+
+
+def test_run_sends_quimera_current_turn_as_final_user_message_to_openai_api():
+    driver, mock_client = _make_driver()
+    _setup_stream(mock_client, [_make_chunk(content="ok")])
+    prompt = (
+        '<recent_conversation title="Conversa recente">\n'
+        'USER: Leia o README\n'
+        '</recent_conversation>\n'
+        '<current_turn title="Pedido atual de >>>">\n'
+        'Liste arquivos atuais\n'
+        '</current_turn>'
+    )
+
+    result = driver.run(prompt, tool_executor=None)
+
+    assert result == "ok"
+    messages = mock_client.chat.completions.create.call_args[1]["messages"]
+    assert messages[-1] == {"role": "user", "content": "Liste arquivos atuais"}
+    assert "Leia o README" in messages[-2]["content"]
+
+
+
+def test_build_openai_messages_uses_short_operational_context_title_for_free_text():
+    messages = _build_openai_messages_from_prompt('texto solto\n<header title="H">\nctx\n</header>')
+
+    assert messages[0]["content"] == "Contexto operacional\n\ntexto solto"
+
+
+def test_build_openai_messages_uses_plain_titles_without_instructional_text():
+    prompt = (
+        '<header title="Identificação">\nVocê é OPENAI.\n</header>\n'
+        '<recent_conversation title="Conversa recente">\nUSER: ação antiga\n</recent_conversation>\n'
+        '<current_turn title="Pedido atual de >>>">\nAção atual\n</current_turn>'
+    )
+
+    messages = _build_openai_messages_from_prompt(prompt)
+
+    assert messages[0]["content"] == '<header title="Identificação">\n\nVocê é OPENAI.'
+    assert messages[1]["content"] == "Conversa recente\n\nUSER: ação antiga"
+    assert "Não trate este bloco" not in messages[0]["content"]
+    assert "Use para evitar duplicação" not in messages[1]["content"]
+
+def test_build_openai_messages_maps_task_reviewer_rules_to_system_and_material_to_user():
+    prompt = (
+        '<header title="Task Reviewer">\nVocê é OPENAI.\n</header>\n'
+        '<task_review_rules title="Critério de review">\n'
+        '- Responda com ACEITE ou RETENTATIVA.\n'
+        '</task_review_rules>\n'
+        '<task_review title="Material para validação">\n'
+        'TASK:\nValidar execução\n'
+        '</task_review>'
+    )
+
+    messages = _build_openai_messages_from_prompt(prompt)
+
+    assert messages[-1] == {"role": "user", "content": "TASK:\nValidar execução"}
+    assert all(message["role"] == "system" for message in messages[:-1])
+    assert "Critério de review" in messages[1]["content"]
+    assert "ACEITE ou RETENTATIVA" in messages[1]["content"]
 
 def test_build_tool_system_prompt_includes_workspace_hint():
     prompt = _build_tool_system_prompt(["read_file", "apply_patch"], "/tmp/workspace")
