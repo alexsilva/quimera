@@ -210,6 +210,65 @@ def test_mcp_handoff_cli_calls_call_agent_via_mcp(tmp_path):
         mcp.shutdown()
 
 
+def test_mcp_handoff_cli_delegates_only_current_turn_via_call_agent(tmp_path):
+    socket_path = str(tmp_path / "quimera-mcp-current-turn.sock")
+    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), AutoApprovalHandler(approve_all=True))
+    executor.set_active_agents_provider(lambda: ["fake-openai"])
+
+    def call_agent(agent_name, **kwargs):
+        assert agent_name == "fake-openai"
+        assert kwargs["handoff"]["task"] == "Execute pwd via shell"
+        assert "<header" not in kwargs["handoff"]["task"]
+        assert "métricas" not in kwargs["handoff"]["task"]
+        return "delegado com pedido limpo"
+
+    executor.set_call_agent_fn(call_agent)
+    mcp = MCPServer(executor, auth_token="test-token")
+    mcp.start_background(socket_path)
+    for _ in range(50):
+        if os.path.exists(socket_path):
+            break
+        time.sleep(0.02)
+
+    rendered_prompt = (
+        '<header title="Identificação">contexto CLI</header>\n'
+        '<current_turn>Execute pwd via shell</current_turn>\n'
+        '<agent_metrics>métricas internas</agent_metrics>'
+    )
+    env = {
+        **os.environ,
+        "QUIMERA_FAKE_MCP_SOCKET": socket_path,
+        "QUIMERA_FAKE_MCP_TOKEN": "test-token",
+        "PYTHONPATH": os.getcwd(),
+    }
+    try:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "quimera.devtools.fake_agents",
+                "mcp-handoff-cli",
+                "--target-agent",
+                "fake-openai",
+            ],
+            cwd=tmp_path,
+            env=env,
+            input=rendered_prompt,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=10,
+            check=False,
+        )
+        assert completed.returncode == 0, completed.stderr
+        assert '"task": "Execute pwd via shell"' in completed.stdout
+        assert "<header" not in completed.stdout
+        assert "métricas internas" not in completed.stdout
+        assert "delegado com pedido limpo" in completed.stdout
+    finally:
+        mcp.shutdown()
+
+
 def test_fake_openai_ignores_persisted_connection_overrides_in_test_registry(tmp_path):
     conn_file = tmp_path / "connections.json"
     conn_file.write_text(json.dumps({
