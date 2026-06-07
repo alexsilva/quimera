@@ -1048,9 +1048,9 @@ class TestOAuthMetadata:
             )
             data = json.loads(resp.data)
             assert "resource" in data
-            assert "authorization_servers" in data
-            assert isinstance(data["authorization_servers"], list)
-            assert len(data["authorization_servers"]) > 0
+            # authorization_servers é omitido intencionalmente: o Quimera usa
+            # Bearer tokens pré-configurados, sem fluxo OAuth.
+            assert "authorization_servers" not in data
             assert "bearer_methods_supported" in data
             assert "header" in data["bearer_methods_supported"]
         finally:
@@ -1077,7 +1077,7 @@ class TestOAuthMetadata:
                 "/.well-known/oauth-protected-resource/mcp",
             )
             raw = resp.data.decode("utf-8")
-            assert "token" not in raw.lower() or "token_endpoint" in raw or "bearer_methods" in raw
+            assert "token" not in raw.lower() or "bearer_methods" in raw
             assert "socket" not in raw
             assert "QUIMERA" not in raw
         finally:
@@ -1143,10 +1143,11 @@ class TestOAuthMetadata:
             )
             data = json.loads(resp.data)
             assert "issuer" in data
-            assert "authorization_endpoint" in data
-            assert "token_endpoint" in data
-            assert "grant_types_supported" in data
-            assert "response_types_supported" in data
+            # Endpoints OAuth omitidos: Quimera usa Bearer token pré-configurado.
+            # Anunciá-los causaria 404 em clientes que tentam auto-seguir o fluxo.
+            assert "authorization_endpoint" not in data
+            assert "token_endpoint" not in data
+            assert "grant_types_supported" not in data
         finally:
             httpd.shutdown()
 
@@ -1161,8 +1162,8 @@ class TestOAuthMetadata:
             )
             data = json.loads(resp.data)
             assert data["issuer"] == f"http://{host_header}"
-            assert data["authorization_endpoint"].startswith(f"http://{host_header}")
-            assert data["token_endpoint"].startswith(f"http://{host_header}")
+            assert "authorization_endpoint" not in data
+            assert "token_endpoint" not in data
         finally:
             httpd.shutdown()
 
@@ -1203,11 +1204,10 @@ class TestOAuthMetadata:
             raw = resp.data.decode("utf-8")
             assert "socket" not in raw
             assert "QUIMERA" not in raw
-            # token_endpoint key is fine; the actual token value must not appear
             data = json.loads(raw)
-            for key in ("issuer", "authorization_endpoint", "token_endpoint"):
-                assert "secret" not in data.get(key, "")
-                assert "Bearer" not in data.get(key, "")
+            # Apenas issuer é publicado; endpoints OAuth omitidos.
+            assert "secret" not in data.get("issuer", "")
+            assert "Bearer" not in data.get("issuer", "")
         finally:
             httpd.shutdown()
 
