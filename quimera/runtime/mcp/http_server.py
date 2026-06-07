@@ -137,6 +137,10 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
             return self._handle_sse()
         if parsed.path == "/mcp":
             return self._handle_mcp_stream()
+        if parsed.path == "/.well-known/oauth-protected-resource/mcp":
+            return self._handle_oauth_protected_resource()
+        if parsed.path == "/.well-known/oauth-authorization-server":
+            return self._handle_oauth_authorization_server()
         self.send_response(404)
         self._send_cors()
         self.end_headers()
@@ -181,6 +185,67 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
             "server": MCPServer.SERVER_NAME,
         })
         self.wfile.write(body.encode("utf-8"))
+
+    # ------------------------------------------------------------------
+    # GET /.well-known/oauth-protected-resource/mcp  (RFC 9728)
+    # GET /.well-known/oauth-authorization-server    (RFC 8414)
+    # ------------------------------------------------------------------
+
+    def _base_url_from_request(self) -> str:
+        """Constrói a URL base a partir do cabeçalho Host da requisição."""
+        host = self.headers.get("Host", "").strip()
+        if host:
+            return f"http://{host}"
+        mcp_server: MCP_HTTPServer = self.server.mcp_http_server
+        return f"http://{mcp_server.host}:{mcp_server.port}"
+
+    def _handle_oauth_protected_resource(self) -> None:
+        """RFC 9728 — OAuth 2.0 Protected Resource Metadata.
+
+        Informa ao tunnel-client qual é o servidor de autorização responsável
+        por emitir tokens para este recurso MCP. Não expõe tokens nem dados
+        internos do Quimera.
+        """
+        base = self._base_url_from_request()
+        metadata = {
+            "resource": f"{base}/mcp",
+            "authorization_servers": [base],
+            "bearer_methods_supported": ["header"],
+        }
+        body_bytes = json.dumps(metadata).encode("utf-8")
+        self.send_response(200)
+        self._send_cors()
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body_bytes)))
+        self.end_headers()
+        self.wfile.write(body_bytes)
+
+    def _handle_oauth_authorization_server(self) -> None:
+        """RFC 8414 — OAuth 2.0 Authorization Server Metadata.
+
+        Descreve os endpoints de autorização deste servidor. O Quimera usa
+        tokens Bearer pré-configurados; o endpoint ``/oauth/token`` aceita
+        ``client_credentials`` para emissão de token com o segredo correto.
+        Não expõe tokens nem dados internos do Quimera.
+        """
+        base = self._base_url_from_request()
+        metadata = {
+            "issuer": base,
+            "authorization_endpoint": f"{base}/oauth/authorize",
+            "token_endpoint": f"{base}/oauth/token",
+            "grant_types_supported": ["authorization_code", "client_credentials"],
+            "response_types_supported": ["code"],
+            "code_challenge_methods_supported": ["S256"],
+            "token_endpoint_auth_methods_supported": ["none", "client_secret_basic"],
+            "scopes_supported": [],
+        }
+        body_bytes = json.dumps(metadata).encode("utf-8")
+        self.send_response(200)
+        self._send_cors()
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body_bytes)))
+        self.end_headers()
+        self.wfile.write(body_bytes)
 
     # ------------------------------------------------------------------
     # GET /sse

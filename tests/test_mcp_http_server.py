@@ -1006,3 +1006,218 @@ class TestHTTPTrustedSessions:
             assert b"must not be sent" in resp.data
         finally:
             httpd.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# OAuth metadata endpoints (OpenAI Secure MCP Tunnel compatibility)
+# ---------------------------------------------------------------------------
+
+class TestOAuthMetadata:
+    """Testa os endpoints de discovery OAuth exigidos pelo tunnel-client da OpenAI."""
+
+    def test_oauth_protected_resource_returns_200(self):
+        httpd = _start_http_server()
+        try:
+            resp = _http_request(
+                httpd.host, httpd.port, "GET",
+                "/.well-known/oauth-protected-resource/mcp",
+            )
+            assert resp.status == 200
+        finally:
+            httpd.shutdown()
+
+    def test_oauth_protected_resource_content_type_is_json(self):
+        httpd = _start_http_server()
+        try:
+            resp = _http_request(
+                httpd.host, httpd.port, "GET",
+                "/.well-known/oauth-protected-resource/mcp",
+            )
+            ct = resp.header("content-type") or ""
+            assert "application/json" in ct
+        finally:
+            httpd.shutdown()
+
+    def test_oauth_protected_resource_body_has_required_fields(self):
+        httpd = _start_http_server()
+        try:
+            resp = _http_request(
+                httpd.host, httpd.port, "GET",
+                "/.well-known/oauth-protected-resource/mcp",
+                headers={"Host": f"{httpd.host}:{httpd.port}"},
+            )
+            data = json.loads(resp.data)
+            assert "resource" in data
+            assert "authorization_servers" in data
+            assert isinstance(data["authorization_servers"], list)
+            assert len(data["authorization_servers"]) > 0
+            assert "bearer_methods_supported" in data
+            assert "header" in data["bearer_methods_supported"]
+        finally:
+            httpd.shutdown()
+
+    def test_oauth_protected_resource_resource_url_ends_with_mcp(self):
+        httpd = _start_http_server()
+        try:
+            resp = _http_request(
+                httpd.host, httpd.port, "GET",
+                "/.well-known/oauth-protected-resource/mcp",
+                headers={"Host": f"{httpd.host}:{httpd.port}"},
+            )
+            data = json.loads(resp.data)
+            assert data["resource"].endswith("/mcp")
+        finally:
+            httpd.shutdown()
+
+    def test_oauth_protected_resource_does_not_expose_sensitive_data(self):
+        httpd = _start_http_server()
+        try:
+            resp = _http_request(
+                httpd.host, httpd.port, "GET",
+                "/.well-known/oauth-protected-resource/mcp",
+            )
+            raw = resp.data.decode("utf-8")
+            assert "token" not in raw.lower() or "token_endpoint" in raw or "bearer_methods" in raw
+            assert "socket" not in raw
+            assert "QUIMERA" not in raw
+        finally:
+            httpd.shutdown()
+
+    def test_oauth_protected_resource_has_cors_headers(self):
+        httpd = _start_http_server()
+        try:
+            resp = _http_request(
+                httpd.host, httpd.port, "GET",
+                "/.well-known/oauth-protected-resource/mcp",
+            )
+            assert resp.header("access-control-allow-origin") == "*"
+        finally:
+            httpd.shutdown()
+
+    def test_oauth_protected_resource_requires_no_auth(self):
+        """Discovery endpoints são públicos — não exigem Authorization."""
+        mcp = _make_mcp_server()
+        mcp._auth_token = "supersecret"
+        httpd = MCP_HTTPServer(mcp, host="127.0.0.1", port=0)
+        httpd.start_background()
+        _wait_for_server(httpd.host, httpd.port)
+        try:
+            resp = _http_request(
+                httpd.host, httpd.port, "GET",
+                "/.well-known/oauth-protected-resource/mcp",
+            )
+            assert resp.status == 200
+        finally:
+            httpd.shutdown()
+
+    def test_oauth_authorization_server_returns_200(self):
+        httpd = _start_http_server()
+        try:
+            resp = _http_request(
+                httpd.host, httpd.port, "GET",
+                "/.well-known/oauth-authorization-server",
+            )
+            assert resp.status == 200
+        finally:
+            httpd.shutdown()
+
+    def test_oauth_authorization_server_content_type_is_json(self):
+        httpd = _start_http_server()
+        try:
+            resp = _http_request(
+                httpd.host, httpd.port, "GET",
+                "/.well-known/oauth-authorization-server",
+            )
+            ct = resp.header("content-type") or ""
+            assert "application/json" in ct
+        finally:
+            httpd.shutdown()
+
+    def test_oauth_authorization_server_body_has_required_fields(self):
+        httpd = _start_http_server()
+        try:
+            resp = _http_request(
+                httpd.host, httpd.port, "GET",
+                "/.well-known/oauth-authorization-server",
+                headers={"Host": f"{httpd.host}:{httpd.port}"},
+            )
+            data = json.loads(resp.data)
+            assert "issuer" in data
+            assert "authorization_endpoint" in data
+            assert "token_endpoint" in data
+            assert "grant_types_supported" in data
+            assert "response_types_supported" in data
+        finally:
+            httpd.shutdown()
+
+    def test_oauth_authorization_server_issuer_matches_host(self):
+        httpd = _start_http_server()
+        try:
+            host_header = f"{httpd.host}:{httpd.port}"
+            resp = _http_request(
+                httpd.host, httpd.port, "GET",
+                "/.well-known/oauth-authorization-server",
+                headers={"Host": host_header},
+            )
+            data = json.loads(resp.data)
+            assert data["issuer"] == f"http://{host_header}"
+            assert data["authorization_endpoint"].startswith(f"http://{host_header}")
+            assert data["token_endpoint"].startswith(f"http://{host_header}")
+        finally:
+            httpd.shutdown()
+
+    def test_oauth_authorization_server_has_cors_headers(self):
+        httpd = _start_http_server()
+        try:
+            resp = _http_request(
+                httpd.host, httpd.port, "GET",
+                "/.well-known/oauth-authorization-server",
+            )
+            assert resp.header("access-control-allow-origin") == "*"
+        finally:
+            httpd.shutdown()
+
+    def test_oauth_authorization_server_requires_no_auth(self):
+        """Discovery endpoints são públicos — não exigem Authorization."""
+        mcp = _make_mcp_server()
+        mcp._auth_token = "supersecret"
+        httpd = MCP_HTTPServer(mcp, host="127.0.0.1", port=0)
+        httpd.start_background()
+        _wait_for_server(httpd.host, httpd.port)
+        try:
+            resp = _http_request(
+                httpd.host, httpd.port, "GET",
+                "/.well-known/oauth-authorization-server",
+            )
+            assert resp.status == 200
+        finally:
+            httpd.shutdown()
+
+    def test_oauth_authorization_server_does_not_expose_sensitive_data(self):
+        httpd = _start_http_server()
+        try:
+            resp = _http_request(
+                httpd.host, httpd.port, "GET",
+                "/.well-known/oauth-authorization-server",
+            )
+            raw = resp.data.decode("utf-8")
+            assert "socket" not in raw
+            assert "QUIMERA" not in raw
+            # token_endpoint key is fine; the actual token value must not appear
+            data = json.loads(raw)
+            for key in ("issuer", "authorization_endpoint", "token_endpoint"):
+                assert "secret" not in data.get(key, "")
+                assert "Bearer" not in data.get(key, "")
+        finally:
+            httpd.shutdown()
+
+    def test_unknown_wellknown_returns_404(self):
+        httpd = _start_http_server()
+        try:
+            resp = _http_request(
+                httpd.host, httpd.port, "GET",
+                "/.well-known/oauth-protected-resource/other",
+            )
+            assert resp.status == 404
+        finally:
+            httpd.shutdown()
