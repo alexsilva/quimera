@@ -70,50 +70,49 @@ A ferramenta `call_agent` permite que um agente delegue uma tarefa a outro agent
 
 ## ChatGPT Secure MCP Tunnel via HTTP
 
-O Quimera expõe metadados OAuth padrão para compatibilidade com o `tunnel-client` da OpenAI.
+O Quimera expõe dois endpoints de discovery padrão para compatibilidade com clientes OAuth-aware como o `tunnel-client` da OpenAI.
 
-### Endpoints de descoberta
+### Endpoints de discovery
 
 | Endpoint | RFC | Descrição |
 |---|---|---|
-| `GET /.well-known/oauth-protected-resource/mcp` | RFC 9728 | Identifica o servidor de autorização responsável pelo recurso `/mcp`. |
-| `GET /.well-known/oauth-authorization-server` | RFC 8414 | Descreve endpoints de autorização e token. |
+| `GET /.well-known/oauth-protected-resource/mcp` | RFC 9728 | Declara que `/mcp` é um recurso protegido. |
+| `GET /.well-known/oauth-authorization-server` | RFC 8414 | Metadados mínimos do servidor (apenas `issuer` e `scopes_supported`). |
 
-Esses endpoints são **públicos** (não exigem `Authorization`) e não expõem tokens, segredos ou dados internos do Quimera.
+> **Atenção:** esses endpoints existem apenas para discovery/compatibilidade. O Quimera **não implementa** fluxo OAuth completo — não há `authorization_endpoint`, `token_endpoint` nem code-flow. A autenticação real é sempre via Bearer token pré-configurado.
 
-### Configuração do perfil HTTP para o tunnel
+Esses endpoints são **públicos** (não exigem `Authorization`) e não expõem tokens, segredos ou dados internos.
 
-Gere o perfil `quimera-local.yaml` usando o `tunnel-client init --mcp-server-url http://127.0.0.1:9095/mcp`. O Quimera deve ser iniciado com o perfil `agent` para expor `call_agent`:
+### Configuração do servidor HTTP
+
+Inicie o Quimera com HTTP MCP habilitado e o conjunto de ferramentas `agent`:
 
 ```bash
-quimera --mcp-http --mcp-http-port 9095 --mcp-http-profile agent
+quimera --mcp-http --mcp-port 9095 --mcp-http-allow-tools agent
 ```
 
-O perfil `agent` publica apenas:
+O conjunto `agent` publica apenas:
 - `list_files`, `read_file`, `grep_search`, `list_tasks`, `list_jobs`, `get_job`, `todo_list` (somente leitura local)
 - `web_search`, `web_fetch` (leitura de rede)
 - `call_agent` (delegação para agentes do pool)
 
-Ferramentas de escrita e shell (`run_shell`, `write_file`, `apply_patch`, `remove_file`, `exec_command`) **não são expostas** por esse perfil.
+Ferramentas de escrita e shell (`run_shell`, `write_file`, `apply_patch`, `remove_file`, `exec_command`) **não são expostas** por esse conjunto.
 
 ### Validação
 
 ```bash
-# Checar metadados OAuth
+# Checar endpoints de discovery
 curl -i http://127.0.0.1:9095/.well-known/oauth-protected-resource/mcp
 curl -i http://127.0.0.1:9095/.well-known/oauth-authorization-server
 
 # Verificar saúde do servidor
 curl http://127.0.0.1:9095/health
-
-# Diagnóstico do tunnel-client
-tunnel-client doctor --profile quimera-local --explain
 ```
 
 ### Autenticação
 
-O Quimera usa tokens Bearer pré-configurados, não um fluxo OAuth completo. Para clientes que passam pelo tunnel:
+O Quimera usa tokens Bearer pré-configurados. Configure antes de iniciar o servidor:
 
-- Configure `QUIMERA_MCP_TOKEN` (ou `--mcp-token-env`) com um token forte.
-- Inclua o header `Authorization: Bearer <token>` em todas as requisições MCP.
+- Defina `QUIMERA_MCP_TOKEN` (ou use `--mcp-token-env`) com um token forte.
+- Inclua `Authorization: Bearer <token>` em todas as requisições MCP.
 - O header alternativo `X-Quimera-MCP-Token: <token>` também é aceito.
