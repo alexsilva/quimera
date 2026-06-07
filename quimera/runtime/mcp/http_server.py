@@ -202,14 +202,14 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
     def _handle_oauth_protected_resource(self) -> None:
         """RFC 9728 — OAuth 2.0 Protected Resource Metadata.
 
-        Informa ao tunnel-client qual é o servidor de autorização responsável
-        por emitir tokens para este recurso MCP. Não expõe tokens nem dados
-        internos do Quimera.
+        Informa ao tunnel-client que este recurso MCP aceita Bearer tokens
+        pré-configurados via header. Não há fluxo OAuth/AS — omitimos
+        ``authorization_servers`` para evitar que clientes tentem auto-descoberta
+        de endpoints inexistentes.
         """
         base = self._base_url_from_request()
         metadata = {
             "resource": f"{base}/mcp",
-            "authorization_servers": [base],
             "bearer_methods_supported": ["header"],
         }
         body_bytes = json.dumps(metadata).encode("utf-8")
@@ -221,22 +221,17 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(body_bytes)
 
     def _handle_oauth_authorization_server(self) -> None:
-        """RFC 8414 — OAuth 2.0 Authorization Server Metadata.
+        """RFC 8414 — OAuth 2.0 Authorization Server Metadata (mínimo).
 
-        Descreve os endpoints de autorização deste servidor. O Quimera usa
-        tokens Bearer pré-configurados; o endpoint ``/oauth/token`` aceita
-        ``client_credentials`` para emissão de token com o segredo correto.
-        Não expõe tokens nem dados internos do Quimera.
+        O Quimera usa Bearer tokens pré-configurados — não há fluxo OAuth.
+        Publicamos apenas ``issuer`` para compatibilidade com clientes que
+        consultam este endpoint após RFC 9728, mas omitimos
+        ``authorization_endpoint``, ``token_endpoint`` e ``grant_types_supported``
+        para que clientes não tentem iniciar fluxos OAuth inexistentes.
         """
         base = self._base_url_from_request()
         metadata = {
             "issuer": base,
-            "authorization_endpoint": f"{base}/oauth/authorize",
-            "token_endpoint": f"{base}/oauth/token",
-            "grant_types_supported": ["authorization_code", "client_credentials"],
-            "response_types_supported": ["code"],
-            "code_challenge_methods_supported": ["S256"],
-            "token_endpoint_auth_methods_supported": ["none", "client_secret_basic"],
             "scopes_supported": [],
         }
         body_bytes = json.dumps(metadata).encode("utf-8")
@@ -533,7 +528,7 @@ class MCP_HTTPServer:
         self,
         mcp_server: MCPServer,
         host: str = "",
-        port: int = 0,
+        port: int | None = None,
         allowed_tools: Iterable[str] | None = DEFAULT_HTTP_READ_ONLY_TOOLS,
         cors_origins: str | Iterable[str] | None = None,
     ) -> None:
@@ -544,13 +539,17 @@ class MCP_HTTPServer:
         self._host = host or os.environ.get(
             _QUIMERA_MCP_HTTP_HOST, _DEFAULT_HOST
         )
-        self._port = port or int(
-            os.environ.get(_QUIMERA_MCP_HTTP_PORT, str(_DEFAULT_PORT))
-        )
+        # port=0 → SO escolhe porta livre (bind random); port=None → usa env/padrão.
+        if port is None:
+            env_port = os.environ.get(_QUIMERA_MCP_HTTP_PORT, "")
+            self._port = int(env_port) if env_port else _DEFAULT_PORT
+        else:
+            self._port = port
         self._sse_clients: dict[str, queue.Queue] = {}
         self._http_sessions: dict[str, dict] = {}
         self._sse_lock = threading.Lock()
         self._httpd: ThreadingHTTPServer | None = None
+        self._ready_event = threading.Event()
 
 
     @staticmethod
@@ -612,9 +611,12 @@ class MCP_HTTPServer:
         server = ThreadingHTTPServer(
             (self._host, self._port), _MCPHTTPRequestHandler
         )
+        # Captura a porta real após o bind (relevante quando port=0 foi pedido).
+        self._port = server.server_address[1]
         server.mcp_http_server = self
         self._httpd = server
         self._mcp._start_background_flush()
+        self._ready_event.set()
         _logger.info(
             "MCP HTTP+SSE server listening on http://%s:%d",
             self._host,
@@ -630,9 +632,11 @@ class MCP_HTTPServer:
             _logger.info("MCP HTTP+SSE server stopped")
 
     def start_background(self) -> None:
-        """Inicia o servidor HTTP em uma thread daemon e retorna imediatamente."""
+        """Inicia o servidor HTTP em uma thread daemon e retorna após o bind."""
+        self._ready_event.clear()
         t = threading.Thread(target=self.serve_forever, daemon=True)
         t.start()
+        self._ready_event.wait(timeout=10)
 
     def shutdown(self) -> None:
         """Para o servidor HTTP e sinaliza todas as conexões SSE."""
@@ -649,7 +653,7 @@ class MCP_HTTPServer:
 def create_server(
     mcp_server: MCPServer,
     host: str = "",
-    port: int = 0,
+    port: int | None = None,
     allowed_tools: Iterable[str] | None = DEFAULT_HTTP_READ_ONLY_TOOLS,
     cors_origins: str | Iterable[str] | None = None,
 ) -> MCP_HTTPServer:
