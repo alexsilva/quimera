@@ -7,6 +7,7 @@ __pycache__/
 quimera_conversa_inicial.txt
 .claude/
 .idea/
+.gemini
 quimera_session_context.md
 quimera_context.md
 quimera/plugins/mock.py
