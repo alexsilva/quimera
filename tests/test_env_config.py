@@ -138,6 +138,46 @@ class TestEnvConfig:
         assert os.environ["MODEL"] == "existing"
         assert os.environ["API_KEY"] == "secret"
 
+    def test_load_strips_double_quoted_value(self, temp_dir):
+        """Test _load strips double quotes surrounding a value."""
+        from quimera.env_config import EnvConfig
+
+        env_file = temp_dir / ".env"
+        env_file.write_text('CHATGPT_KEY="sk-abc123"\n', encoding="utf-8")
+
+        env = EnvConfig(env_file)
+        assert env._load() == {"CHATGPT_KEY": "sk-abc123"}
+
+    def test_load_strips_single_quoted_value(self, temp_dir):
+        """Test _load strips single quotes surrounding a value."""
+        from quimera.env_config import EnvConfig
+
+        env_file = temp_dir / ".env"
+        env_file.write_text("CHATGPT_KEY='sk-abc123'\n", encoding="utf-8")
+
+        env = EnvConfig(env_file)
+        assert env._load() == {"CHATGPT_KEY": "sk-abc123"}
+
+    def test_load_preserves_value_with_equals_sign(self, temp_dir):
+        """Test _load keeps everything after the first = as the value."""
+        from quimera.env_config import EnvConfig
+
+        env_file = temp_dir / ".env"
+        env_file.write_text("TOKEN=abc=def=ghi\n", encoding="utf-8")
+
+        env = EnvConfig(env_file)
+        assert env._load() == {"TOKEN": "abc=def=ghi"}
+
+    def test_load_preserves_mismatched_quotes(self, temp_dir):
+        """Test _load does not strip mismatched quotes."""
+        from quimera.env_config import EnvConfig
+
+        env_file = temp_dir / ".env"
+        env_file.write_text("TOKEN=\"value'\n", encoding="utf-8")
+
+        env = EnvConfig(env_file)
+        assert env._load() == {"TOKEN": "\"value'"}
+
     def test_setenv_persists_and_updates_environ(self, temp_dir, monkeypatch):
         """Test setenv persists to file and updates environment immediately."""
         from quimera.env_config import EnvConfig
