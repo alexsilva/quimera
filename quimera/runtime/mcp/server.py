@@ -40,13 +40,20 @@ _logger = logging.getLogger(__name__)
 
 
 def _openai_schema_to_mcp(schema: dict) -> dict:
-    """Converte schema OpenAI (type/function) para formato MCP (tools/list)."""
+    """Converte schema OpenAI (type/function) para formato MCP (tools/list).
+    
+    Inclui outputSchema (spec 2025-06-18) quando presente no schema original.
+    """
     fn = schema.get("function", {})
-    return {
+    tool = {
         "name": fn.get("name", ""),
         "description": fn.get("description", ""),
         "inputSchema": fn.get("parameters", {"type": "object", "properties": {}}),
     }
+    output_schema = fn.get("output_schema")
+    if output_schema is not None:
+        tool["outputSchema"] = output_schema
+    return tool
 
 
 def _proxy_stdio_to_socket(
@@ -635,9 +642,23 @@ class MCPServer:
             error_str = str(result.error) if result.error else "Tool execution failed"
             text = error_str
 
+        structured = {
+            "ok": result.ok,
+            "content": result.content,
+            "error": result.error,
+        }
+        data = getattr(result, "data", None) or {}
+        if data:
+            structured["data"] = data
+        if getattr(result, "truncated", None) is not None:
+            structured["truncated"] = result.truncated
+        if getattr(result, "exit_code", None) is not None:
+            structured["exit_code"] = result.exit_code
+
         return self._ok(msg_id, {
             "content": self._build_content(text),
             "isError": not result.ok,
+            "structuredContent": structured,
         })
 
     def _flush_pending(self, out: IO) -> None:

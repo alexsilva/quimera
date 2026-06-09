@@ -21,6 +21,15 @@ TOOL_SCHEMAS = [
                 },
                 "required": [],
             },
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "ok": {"type": "boolean", "description": "Success status"},
+                    "content": {"type": "string", "description": "File/directory names separated by newlines. Directories have trailing '/'"},
+                    "error": {"type": "string", "description": "Error message if ok=false"},
+                },
+                "required": ["ok", "content"],
+            },
         },
     },
     {
@@ -45,6 +54,16 @@ TOOL_SCHEMAS = [
                     }
                 },
                 "required": ["path"]
+            },
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "ok": {"type": "boolean"},
+                    "content": {"type": "string", "description": "File content (or requested range)"},
+                    "truncated": {"type": "boolean", "description": "Content was truncated if true"},
+                    "error": {"type": "string"},
+                },
+                "required": ["ok", "content"],
             },
         },
     },
@@ -83,6 +102,15 @@ TOOL_SCHEMAS = [
                 },
                 "required": ["path", "content"],
             },
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "ok": {"type": "boolean"},
+                    "content": {"type": "string", "description": "Confirmation message"},
+                    "error": {"type": "string"},
+                },
+                "required": ["ok", "content"],
+            },
         },
     },
     {
@@ -111,6 +139,16 @@ TOOL_SCHEMAS = [
                 },
                 "required": ["patch"],
             },
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "ok": {"type": "boolean"},
+                    "content": {"type": "string", "description": "Success message with changed files"},
+                    "data": {"type": "object", "properties": {"changed_files": {"type": "array", "items": {"type": "string"}}}, "description": "List of changed files"},
+                    "error": {"type": "string"},
+                },
+                "required": ["ok", "content"],
+            },
         },
     },
     {
@@ -131,6 +169,16 @@ TOOL_SCHEMAS = [
                     },
                 },
                 "required": ["pattern"],
+            },
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "ok": {"type": "boolean"},
+                    "content": {"type": "string", "description": "Results in path:line:content format, one per line"},
+                    "truncated": {"type": "boolean"},
+                    "error": {"type": "string"},
+                },
+                "required": ["ok", "content"],
             },
         },
     },
@@ -153,6 +201,15 @@ TOOL_SCHEMAS = [
                 },
                 "required": ["path"],
             },
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "ok": {"type": "boolean"},
+                    "content": {"type": "string", "description": "Dry-run or removal confirmation message"},
+                    "error": {"type": "string"},
+                },
+                "required": ["ok", "content"],
+            },
         },
     },
     {
@@ -172,6 +229,18 @@ TOOL_SCHEMAS = [
                     }
                 },
                 "required": ["command"],
+            },
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "ok": {"type": "boolean", "description": "True if exit_code=0"},
+                    "content": {"type": "string", "description": "stdout (and optionally stderr) output"},
+                    "exit_code": {"type": "integer", "description": "Process exit code"},
+                    "truncated": {"type": "boolean"},
+                    "duration_ms": {"type": "integer"},
+                    "error": {"type": "string"},
+                },
+                "required": ["ok", "content", "exit_code"],
             },
         },
     },
@@ -213,6 +282,19 @@ TOOL_SCHEMAS = [
                 },
                 "required": ["cmd"],
             },
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "ok": {"type": "boolean"},
+                    "content": {"type": "string", "description": "Session status and output"},
+                    "exit_code": {"type": "integer", "description": "None if still running"},
+                    "session_id": {"type": "integer", "description": "Persistent session ID"},
+                    "truncated": {"type": "boolean"},
+                    "duration_ms": {"type": "integer"},
+                    "error": {"type": "string"},
+                },
+                "required": ["ok", "content"],
+            },
         },
     },
     {
@@ -233,6 +315,18 @@ TOOL_SCHEMAS = [
                     },
                 },
                 "required": ["session_id"],
+            },
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "ok": {"type": "boolean"},
+                    "content": {"type": "string", "description": "Closure confirmation with status"},
+                    "exit_code": {"type": "integer"},
+                    "session_id": {"type": "integer"},
+                    "duration_ms": {"type": "integer"},
+                    "error": {"type": "string"},
+                },
+                "required": ["ok", "content"],
             },
         },
     },
@@ -266,6 +360,18 @@ TOOL_SCHEMAS = [
                 },
                 "required": ["session_id"],
             },
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "ok": {"type": "boolean"},
+                    "content": {"type": "string", "description": "Session output after write/poll"},
+                    "exit_code": {"type": "integer"},
+                    "session_id": {"type": "integer"},
+                    "truncated": {"type": "boolean"},
+                    "error": {"type": "string"},
+                },
+                "required": ["ok", "content"],
+            },
         },
     },
     {
@@ -295,6 +401,16 @@ TOOL_SCHEMAS = [
                 },
                 "required": [],
             },
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "ok": {"type": "boolean"},
+                    "content": {"type": "string", "description": "JSON array of TaskRecord objects"},
+                    "truncated": {"type": "boolean"},
+                    "error": {"type": "string"},
+                },
+                "required": ["ok", "content"],
+            },
         },
     },
     {
@@ -316,6 +432,15 @@ TOOL_SCHEMAS = [
                 },
                 "required": [],
             },
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "ok": {"type": "boolean"},
+                    "content": {"type": "string", "description": "JSON array of JobRecord objects"},
+                    "error": {"type": "string"},
+                },
+                "required": ["ok", "content"],
+            },
         },
     },
     {
@@ -332,6 +457,16 @@ TOOL_SCHEMAS = [
                     }
                 },
                 "required": [],
+            },
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "ok": {"type": "boolean"},
+                    "content": {"type": "string", "description": "JSON of the job object, or 'null'"},
+                    "data": {"type": "object", "properties": {"job": {"type": "object"}}, "description": "Job details"},
+                    "error": {"type": "string"},
+                },
+                "required": ["ok", "content"],
             },
         },
     },
@@ -353,6 +488,15 @@ TOOL_SCHEMAS = [
                     },
                 },
                 "required": ["query"],
+            },
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "ok": {"type": "boolean"},
+                    "content": {"type": "string", "description": "Markdown links with snippets"},
+                    "error": {"type": "string"},
+                },
+                "required": ["ok", "content"],
             },
         },
     },
@@ -378,6 +522,15 @@ TOOL_SCHEMAS = [
                     },
                 },
                 "required": ["url"],
+            },
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "ok": {"type": "boolean"},
+                    "content": {"type": "string", "description": "Extracted page text or raw HTML"},
+                    "error": {"type": "string", "description": "Network error details if ok=false"},
+                },
+                "required": ["ok", "content"],
             },
         },
     },
@@ -424,6 +577,15 @@ TOOL_SCHEMAS = [
                 },
                 "required": ["todos"],
             },
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "ok": {"type": "boolean"},
+                    "content": {"type": "string", "description": "JSON array of updated TodoItem objects"},
+                    "error": {"type": "string"},
+                },
+                "required": ["ok", "content"],
+            },
         },
     },
     {
@@ -435,6 +597,15 @@ TOOL_SCHEMAS = [
                 "type": "object",
                 "properties": {},
                 "required": [],
+            },
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "ok": {"type": "boolean"},
+                    "content": {"type": "string", "description": "JSON array of TodoItem objects"},
+                    "error": {"type": "string"},
+                },
+                "required": ["ok", "content"],
             },
         },
     },
@@ -493,6 +664,15 @@ TOOL_SCHEMAS = [
                     },
                 },
                 "required": ["agent_name", "task"],
+            },
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "ok": {"type": "boolean"},
+                    "content": {"type": "string", "description": "Concatenated agent responses. Multi-step prefixed with '[agent_name] response'."},
+                    "error": {"type": "string"},
+                },
+                "required": ["ok", "content"],
             },
         },
     },

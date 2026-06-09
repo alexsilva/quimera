@@ -140,13 +140,17 @@ class MCPJsonRpcClient:
 
 
 def _mcp_tool_to_openai_schema(tool: dict[str, Any]) -> dict[str, Any]:
+    fn = {
+        "name": str(tool.get("name") or ""),
+        "description": str(tool.get("description") or ""),
+        "parameters": tool.get("inputSchema") or {"type": "object", "properties": {}},
+    }
+    output_schema = tool.get("outputSchema")
+    if output_schema is not None:
+        fn["output_schema"] = output_schema
     return {
         "type": "function",
-        "function": {
-            "name": str(tool.get("name") or ""),
-            "description": str(tool.get("description") or ""),
-            "parameters": tool.get("inputSchema") or {"type": "object", "properties": {}},
-        },
+        "function": fn,
     }
 
 
