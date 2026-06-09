@@ -75,6 +75,7 @@ class ToolExecutor:
         self.registry.register("list_jobs", self._task_tools.list_jobs)
         self.registry.register("get_job", self._task_tools.get_job)
         self.registry.register("call_agent", self._handoff_tools.call_agent)
+        self.registry.register("list_agents", self._handoff_tools.list_agents)
         self.registry.register("todo_write", self._todo_tools.todo_write)
         self.registry.register("todo_list", self._todo_tools.todo_list)
 

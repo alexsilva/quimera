@@ -1,6 +1,7 @@
 """Componentes de `quimera.runtime.tools.handoff`."""
 from __future__ import annotations
 
+import json
 import logging
 from typing import Protocol, Callable
 
@@ -79,6 +80,13 @@ class HandoffTools:
             if normalized:
                 active.add(normalized)
         return active
+
+    def list_agents(self, call: ToolCall) -> ToolResult:
+        """Retorna a lista de agentes ativos no pool da sessão atual."""
+        agents = self._resolve_active_agents()
+        agent_list = sorted(agents) if agents else []
+        content = json.dumps(agent_list, ensure_ascii=False)
+        return ToolResult(ok=True, tool_name=call.name, content=content)
 
     def call_agent(self, call: ToolCall) -> ToolResult:
         """Dispatch a task to another Quimera agent via MCP tool."""

@@ -129,6 +129,10 @@ class ToolPolicy:
         if fallback_agents is not None and not isinstance(fallback_agents, list):
             raise ToolPolicyError("call_agent.fallback_agents deve ser uma lista")
 
+    def _validate_list_agents(self, call: ToolCall) -> None:
+        """list_agents não requer argumentos — sempre válida."""
+        pass
+
     def _validate_list_files(self, call: ToolCall) -> None:
         """Executa validate list files."""
         self._resolve_workspace_path(call.arguments.get("path", "."))

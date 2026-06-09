@@ -95,7 +95,7 @@ def test_schema_names_match_registered_tools():
         "list_files", "read_file", "write_file", "apply_patch", "grep_search", "run_shell",
         "exec_command", "write_stdin", "close_command_session", "list_tasks", "list_jobs",
         "get_job", "remove_file", "web_search", "web_fetch", "call_agent",
-        "todo_write", "todo_list",
+        "todo_write", "todo_list", "list_agents",
     }
     actual = {s["function"]["name"] for s in TOOL_SCHEMAS}
     assert actual == expected

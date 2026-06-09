@@ -57,6 +57,7 @@ HTTP_READ_TOOLS = frozenset({
 HTTP_AGENT_TOOLS = frozenset({
     *HTTP_READ_TOOLS,
     "call_agent",
+    "list_agents",
 })
 
 HTTP_TOOL_PROFILES: dict[str, frozenset[str] | None] = {

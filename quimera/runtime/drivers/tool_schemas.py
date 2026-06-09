@@ -61,7 +61,7 @@ TOOL_SCHEMAS = [
                     "ok": {"type": "boolean"},
                     "content": {"type": "string", "description": "File content (or requested range)"},
                     "truncated": {"type": "boolean", "description": "Content was truncated if true"},
-                    "error": {"type": "string"},
+                    "error": {"oneOf": [{"type": "string"}, {"type": "null"}]},
                 },
                 "required": ["ok", "content"],
             },
@@ -107,7 +107,7 @@ TOOL_SCHEMAS = [
                 "properties": {
                     "ok": {"type": "boolean"},
                     "content": {"type": "string", "description": "Confirmation message"},
-                    "error": {"type": "string"},
+                    "error": {"oneOf": [{"type": "string"}, {"type": "null"}]},
                 },
                 "required": ["ok", "content"],
             },
@@ -145,7 +145,7 @@ TOOL_SCHEMAS = [
                     "ok": {"type": "boolean"},
                     "content": {"type": "string", "description": "Success message with changed files"},
                     "data": {"type": "object", "properties": {"changed_files": {"type": "array", "items": {"type": "string"}}}, "description": "List of changed files"},
-                    "error": {"type": "string"},
+                    "error": {"oneOf": [{"type": "string"}, {"type": "null"}]},
                 },
                 "required": ["ok", "content"],
             },
@@ -176,7 +176,7 @@ TOOL_SCHEMAS = [
                     "ok": {"type": "boolean"},
                     "content": {"type": "string", "description": "Results in path:line:content format, one per line"},
                     "truncated": {"type": "boolean"},
-                    "error": {"type": "string"},
+                    "error": {"oneOf": [{"type": "string"}, {"type": "null"}]},
                 },
                 "required": ["ok", "content"],
             },
@@ -206,7 +206,7 @@ TOOL_SCHEMAS = [
                 "properties": {
                     "ok": {"type": "boolean"},
                     "content": {"type": "string", "description": "Dry-run or removal confirmation message"},
-                    "error": {"type": "string"},
+                    "error": {"oneOf": [{"type": "string"}, {"type": "null"}]},
                 },
                 "required": ["ok", "content"],
             },
@@ -238,7 +238,7 @@ TOOL_SCHEMAS = [
                     "exit_code": {"type": "integer", "description": "Process exit code"},
                     "truncated": {"type": "boolean"},
                     "duration_ms": {"type": "integer"},
-                    "error": {"type": "string"},
+                    "error": {"oneOf": [{"type": "string"}, {"type": "null"}]},
                 },
                 "required": ["ok", "content", "exit_code"],
             },
@@ -291,7 +291,7 @@ TOOL_SCHEMAS = [
                     "session_id": {"type": "integer", "description": "Persistent session ID"},
                     "truncated": {"type": "boolean"},
                     "duration_ms": {"type": "integer"},
-                    "error": {"type": "string"},
+                    "error": {"oneOf": [{"type": "string"}, {"type": "null"}]},
                 },
                 "required": ["ok", "content"],
             },
@@ -324,7 +324,7 @@ TOOL_SCHEMAS = [
                     "exit_code": {"type": "integer"},
                     "session_id": {"type": "integer"},
                     "duration_ms": {"type": "integer"},
-                    "error": {"type": "string"},
+                    "error": {"oneOf": [{"type": "string"}, {"type": "null"}]},
                 },
                 "required": ["ok", "content"],
             },
@@ -368,7 +368,7 @@ TOOL_SCHEMAS = [
                     "exit_code": {"type": "integer"},
                     "session_id": {"type": "integer"},
                     "truncated": {"type": "boolean"},
-                    "error": {"type": "string"},
+                    "error": {"oneOf": [{"type": "string"}, {"type": "null"}]},
                 },
                 "required": ["ok", "content"],
             },
@@ -407,7 +407,7 @@ TOOL_SCHEMAS = [
                     "ok": {"type": "boolean"},
                     "content": {"type": "string", "description": "JSON array of TaskRecord objects"},
                     "truncated": {"type": "boolean"},
-                    "error": {"type": "string"},
+                    "error": {"oneOf": [{"type": "string"}, {"type": "null"}]},
                 },
                 "required": ["ok", "content"],
             },
@@ -437,7 +437,7 @@ TOOL_SCHEMAS = [
                 "properties": {
                     "ok": {"type": "boolean"},
                     "content": {"type": "string", "description": "JSON array of JobRecord objects"},
-                    "error": {"type": "string"},
+                    "error": {"oneOf": [{"type": "string"}, {"type": "null"}]},
                 },
                 "required": ["ok", "content"],
             },
@@ -464,7 +464,7 @@ TOOL_SCHEMAS = [
                     "ok": {"type": "boolean"},
                     "content": {"type": "string", "description": "JSON of the job object, or 'null'"},
                     "data": {"type": "object", "properties": {"job": {"type": "object"}}, "description": "Job details"},
-                    "error": {"type": "string"},
+                    "error": {"oneOf": [{"type": "string"}, {"type": "null"}]},
                 },
                 "required": ["ok", "content"],
             },
@@ -494,7 +494,7 @@ TOOL_SCHEMAS = [
                 "properties": {
                     "ok": {"type": "boolean"},
                     "content": {"type": "string", "description": "Markdown links with snippets"},
-                    "error": {"type": "string"},
+                    "error": {"oneOf": [{"type": "string"}, {"type": "null"}]},
                 },
                 "required": ["ok", "content"],
             },
@@ -582,7 +582,7 @@ TOOL_SCHEMAS = [
                 "properties": {
                     "ok": {"type": "boolean"},
                     "content": {"type": "string", "description": "JSON array of updated TodoItem objects"},
-                    "error": {"type": "string"},
+                    "error": {"oneOf": [{"type": "string"}, {"type": "null"}]},
                 },
                 "required": ["ok", "content"],
             },
@@ -603,7 +603,7 @@ TOOL_SCHEMAS = [
                 "properties": {
                     "ok": {"type": "boolean"},
                     "content": {"type": "string", "description": "JSON array of TodoItem objects"},
-                    "error": {"type": "string"},
+                    "error": {"oneOf": [{"type": "string"}, {"type": "null"}]},
                 },
                 "required": ["ok", "content"],
             },
@@ -670,7 +670,28 @@ TOOL_SCHEMAS = [
                 "properties": {
                     "ok": {"type": "boolean"},
                     "content": {"type": "string", "description": "Concatenated agent responses. Multi-step prefixed with '[agent_name] response'."},
-                    "error": {"type": "string"},
+                    "error": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+                },
+                "required": ["ok", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_agents",
+            "description": "Lista os agentes ativos na sessão atual do chat. A lista reflete o pool atual — agentes que falharam ou saíram não aparecem.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "ok": {"type": "boolean"},
+                    "content": {"type": "string", "description": "JSON array of active agent names"},
+                    "error": {"oneOf": [{"type": "string"}, {"type": "null"}]},
                 },
                 "required": ["ok", "content"],
             },
@@ -714,7 +735,7 @@ def resolve_tool_schemas(tool_executor=None) -> list[dict]:
     if callable(is_call_agent_available) and not is_call_agent_available():
         schemas = [
             schema for schema in schemas
-            if schema["function"]["name"] != "call_agent"
+            if schema["function"]["name"] not in ("call_agent", "list_agents")
         ]
 
     return schemas

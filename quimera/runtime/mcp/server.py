@@ -645,8 +645,9 @@ class MCPServer:
         structured = {
             "ok": result.ok,
             "content": result.content,
-            "error": result.error,
         }
+        if result.error is not None:
+            structured["error"] = result.error
         data = getattr(result, "data", None) or {}
         if data:
             structured["data"] = data
