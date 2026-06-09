@@ -50,6 +50,7 @@ class HandoffTools:
         self._call_agent_fn: _CallAgentFnProto | None = None
         self._active_agents_provider = None
         self._progress_callback: Callable[[str], None] | None = None
+        self._cleanup_callback: Callable[[str], None] | None = None
 
     def set_call_agent_fn(self, fn: _CallAgentFnProto) -> None:
         """Injeta callable para despachar tarefas a outro agente."""
@@ -62,6 +63,10 @@ class HandoffTools:
     def set_progress_callback(self, fn: Callable[[str], None] | None) -> None:
         """Injeta callback para reporte de progresso."""
         self._progress_callback = fn
+
+    def set_cleanup_callback(self, fn: Callable[[str], None] | None) -> None:
+        """Injeta callback para limpeza do estado de render após cada step."""
+        self._cleanup_callback = fn
 
     def is_call_agent_available(self) -> bool:
         """Indica se a tool call_agent está operável no contexto atual."""
@@ -144,6 +149,7 @@ class HandoffTools:
                 self._progress_callback,
                 self._resolve_active_agents,
                 self._normalize_agent_identity,
+                cleanup_callback=self._cleanup_callback,
             )
 
         # ── non-SSE (Streamable HTTP): background thread ──
@@ -180,10 +186,12 @@ class HandoffTools:
         _progress_cb = self._progress_callback
         _resolve_active = self._resolve_active_agents
         _normalize = self._normalize_agent_identity
+        _cleanup_cb = self._cleanup_callback
 
         def _run() -> None:
             result = self._execute_steps_inner(
                 steps, _fn, _progress_cb, _resolve_active, _normalize,
+                cleanup_callback=_cleanup_cb,
             )
             try:
                 if result.ok:
@@ -212,6 +220,7 @@ class HandoffTools:
         progress_callback: Callable[[str], None] | None,
         resolve_active_agents_fn: Callable[[], set[str]],
         normalize_agent_fn: Callable[[str | None], str],
+        cleanup_callback: Callable[[str], None] | None = None,
     ) -> ToolResult:
         """Loop de execução dos steps — reusado síncrono e assíncrono."""
         tool_name = "call_agent"
@@ -275,9 +284,25 @@ class HandoffTools:
                         continue
                     selected_agent = target_agent
                     step_result = str(result)
+                    if cleanup_callback and normalized_target_agent:
+                        try:
+                            cleanup_callback(normalized_target_agent)
+                        except Exception:
+                            logger.warning(
+                                "cleanup_callback failed for %s",
+                                normalized_target_agent, exc_info=True,
+                            )
                     break
 
                 if step_result is None:
+                    if cleanup_callback and normalized_target_agent:
+                        try:
+                            cleanup_callback(normalized_target_agent)
+                        except Exception:
+                            logger.warning(
+                                "cleanup_callback failed for %s",
+                                normalized_target_agent, exc_info=True,
+                            )
                     error_detail = (
                         f"{last_error}. Tried: {', '.join(attempt_targets)}"
                         if last_error
@@ -449,4 +474,5 @@ class HandoffTools:
             self._progress_callback,
             self._resolve_active_agents,
             self._normalize_agent_identity,
+            cleanup_callback=self._cleanup_callback,
         )

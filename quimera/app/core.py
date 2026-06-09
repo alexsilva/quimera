@@ -489,6 +489,7 @@ class QuimeraApp:
         self.agent_client.tool_executor = self.tool_executor
         self.tool_executor.set_call_agent_fn(self.dispatch_services.call_agent)
         self.tool_executor.set_active_agents_provider(lambda: list(self.agent_pool.agents))
+        self.tool_executor.set_agent_cleanup_callback(self._cleanup_sub_agent_stream)
         self._display_service = DisplayService(
             renderer=self.renderer,
             input_status_getter=self.input_gate.is_active,
@@ -922,6 +923,19 @@ class QuimeraApp:
     def _stop_task_executors(self):
         """Executa stop task executors."""
         self.task_services.stop_task_executors()
+
+    def _cleanup_sub_agent_stream(self, agent_name: str) -> None:
+        """Limpa o estado de render do agente chamado via call_agent.
+
+        Remove o stream transitório do sub-agente do Live display e da
+        rolling buffer, evitando vazamento de estado em _stream_states
+        e _active_stream_agents.
+        """
+        renderer = self.renderer
+        if not renderer:
+            return
+        renderer.clear_agent_transient(agent_name)
+        renderer.abort_message_stream(agent_name)
 
     def _redisplay_user_prompt_if_needed(self, clear_first: bool = True) -> None:
         """Executa redisplay user prompt if needed."""

@@ -163,6 +163,14 @@ class ToolExecutor:
         """Injeta provider que retorna agentes ativos no momento da delegação."""
         self._handoff_tools.set_active_agents_provider(fn)
 
+    def set_agent_cleanup_callback(self, fn) -> None:
+        """Injeta callback para limpeza do estado de render após call_agent.
+
+        Assinatura esperada: fn(agent_name: str) -> None
+        Chamado após cada step de call_agent para limpar streams transitórios.
+        """
+        self._handoff_tools.set_cleanup_callback(fn)
+
     def is_call_agent_available(self) -> bool:
         """Indica se a tool call_agent está operável no contexto atual."""
         return self._handoff_tools.is_call_agent_available()

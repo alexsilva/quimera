@@ -401,3 +401,191 @@ class TestListAgents:
         result = handoff_tools.list_agents(call)
         assert result.ok is True
         assert result.content == "[]"
+
+
+# ── cleanup_callback ────────────────────────────────────────
+
+class TestCleanupCallback:
+    """Testes para o callback de limpeza (_cleanup_sub_agent_stream).
+
+    O cleanup_callback é invocado após cada execução de step (sucesso ou
+    falha total de fallbacks) para remover o estado transitório de render
+    do agente chamado (_stream_states, _rolling_buffers, transient agents).
+    """
+
+    def test_cleanup_chamado_no_sucesso(self):
+        """Step bem-sucedido → cleanup_callback chamado com o nome do agente."""
+        cleanup = MagicMock()
+        result = HandoffTools._execute_steps_inner(
+            STEPS,
+            MagicMock(return_value="ok"),
+            progress_callback=None,
+            resolve_active_agents_fn=lambda: {"codex"},
+            normalize_agent_fn=lambda s: s.lower().lstrip("/"),
+            cleanup_callback=cleanup,
+        )
+        assert result.ok is True
+        cleanup.assert_called_once_with("codex")
+
+    def test_cleanup_chamado_apos_fallback_bem_sucedido(self):
+        """Agente principal falha, fallback responde → cleanup para o fallback."""
+        cleanup = MagicMock()
+        call_count = [0]
+
+        def dispatch(agent, **_kw):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return None  # codex falha
+            return "resposta do fallback"  # claude responde
+
+        steps = [
+            {"agent_name": "codex", "task": "t1", "context": "", "fallback_agents": ["claude"]},
+        ]
+        result = HandoffTools._execute_steps_inner(
+            steps,
+            dispatch,
+            progress_callback=None,
+            resolve_active_agents_fn=lambda: {"codex", "claude"},
+            normalize_agent_fn=lambda s: s.lower().lstrip("/"),
+            cleanup_callback=cleanup,
+        )
+        assert result.ok is True
+        assert result.content == "resposta do fallback"
+        cleanup.assert_called_once_with("claude")
+
+    def test_cleanup_chamado_quando_todos_fallbacks_retornam_none(self):
+        """Todos os targets retornam None → cleanup_callback chamado para o último."""
+        cleanup = MagicMock()
+
+        def dispatch_all_none(agent, **_kw):
+            return None
+
+        result = HandoffTools._execute_steps_inner(
+            STEPS,
+            dispatch_all_none,
+            progress_callback=None,
+            resolve_active_agents_fn=lambda: {"codex"},
+            normalize_agent_fn=lambda s: s.lower().lstrip("/"),
+            cleanup_callback=cleanup,
+        )
+        assert result.ok is False
+        cleanup.assert_called_once_with("codex")
+
+    def test_cleanup_chamado_quando_todos_fallbacks_lancam_excecao(self):
+        """Todos os targets lançam exceção → cleanup_callback chamado para o último."""
+        cleanup = MagicMock()
+
+        def dispatch_raise(agent, **_kw):
+            raise RuntimeError(f"falha: {agent}")
+
+        result = HandoffTools._execute_steps_inner(
+            STEPS,
+            dispatch_raise,
+            progress_callback=None,
+            resolve_active_agents_fn=lambda: {"codex"},
+            normalize_agent_fn=lambda s: s.lower().lstrip("/"),
+            cleanup_callback=cleanup,
+        )
+        assert result.ok is False
+        cleanup.assert_called_once_with("codex")
+
+    def test_cleanup_chamado_quando_todos_fallbacks_com_fallback_total(self):
+        """Fallback chain inteira falha (None + exceção) → cleanup para o último."""
+        cleanup = MagicMock()
+        call_count = [0]
+
+        def dispatch_mixed(agent, **_kw):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return None  # codex: None
+            raise RuntimeError(f"falha: {agent}")  # claude: exception
+
+        steps = [
+            {"agent_name": "codex", "task": "t1", "context": "", "fallback_agents": ["claude"]},
+        ]
+        result = HandoffTools._execute_steps_inner(
+            steps,
+            dispatch_mixed,
+            progress_callback=None,
+            resolve_active_agents_fn=lambda: {"codex", "claude"},
+            normalize_agent_fn=lambda s: s.lower().lstrip("/"),
+            cleanup_callback=cleanup,
+        )
+        assert result.ok is False
+        cleanup.assert_called_once_with("claude")
+
+    def test_cleanup_nao_chamado_sem_callback(self):
+        """Nenhum cleanup_callback registrado → não levanta exceção."""
+        result = HandoffTools._execute_steps_inner(
+            STEPS,
+            MagicMock(return_value="ok"),
+            progress_callback=None,
+            resolve_active_agents_fn=lambda: {"codex"},
+            normalize_agent_fn=lambda s: s.lower().lstrip("/"),
+            cleanup_callback=None,
+        )
+        assert result.ok is True
+
+    def test_cleanup_falha_nao_quebra_fluxo(self):
+        """cleanup_callback lança exceção → não interrompe o fluxo de sucesso."""
+        def failing_cleanup(agent):
+            raise RuntimeError("limpeza falhou")
+
+        result = HandoffTools._execute_steps_inner(
+            STEPS,
+            MagicMock(return_value="ok"),
+            progress_callback=None,
+            resolve_active_agents_fn=lambda: {"codex"},
+            normalize_agent_fn=lambda s: s.lower().lstrip("/"),
+            cleanup_callback=failing_cleanup,
+        )
+        assert result.ok is True
+        assert result.content == "ok"
+
+    def test_cleanup_chamado_em_cada_step_multi_step(self):
+        """Múltiplos steps → cleanup_callback chamado após cada step bem-sucedido."""
+        cleanup = MagicMock()
+        results = iter(["r1", "r2"])
+
+        def multi_fn(agent, **_kw):
+            return next(results)
+
+        steps = [
+            {"agent_name": "codex", "task": "t1", "context": "", "fallback_agents": []},
+            {"agent_name": "claude", "task": "t2", "context": "", "fallback_agents": []},
+        ]
+        result = HandoffTools._execute_steps_inner(
+            steps,
+            multi_fn,
+            progress_callback=None,
+            resolve_active_agents_fn=lambda: {"codex", "claude"},
+            normalize_agent_fn=lambda s: s.lower().lstrip("/"),
+            cleanup_callback=cleanup,
+        )
+        assert result.ok is True
+        assert cleanup.call_count == 2
+        cleanup.assert_any_call("codex")
+        cleanup.assert_any_call("claude")
+
+    def test_cleanup_chamado_no_step_que_falha_dentro_de_multi_step(self):
+        """Step 1 falha totalmente → cleanup para o último tentado antes de retornar erro."""
+        cleanup = MagicMock()
+
+        def dispatch_all_none(agent, **_kw):
+            return None
+
+        steps = [
+            {"agent_name": "codex", "task": "t1", "context": "", "fallback_agents": ["claude"]},
+            {"agent_name": "gemini", "task": "t2", "context": "", "fallback_agents": []},
+        ]
+        result = HandoffTools._execute_steps_inner(
+            steps,
+            dispatch_all_none,
+            progress_callback=None,
+            resolve_active_agents_fn=lambda: {"codex", "claude", "gemini"},
+            normalize_agent_fn=lambda s: s.lower().lstrip("/"),
+            cleanup_callback=cleanup,
+        )
+        assert result.ok is False
+        # O step 1 tentou codex (None) → claude (None) → cleanup(claude)
+        cleanup.assert_called_once_with("claude")
