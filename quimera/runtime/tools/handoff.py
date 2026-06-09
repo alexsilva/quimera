@@ -3,10 +3,18 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from typing import Protocol, Callable
 
 from ..config import ToolRuntimeConfig
 from ..models import ToolCall, ToolResult
+from ..tasks import (
+    add_job,
+    create_task,
+    complete_task,
+    fail_task,
+)
+from ..approval_broker import TrustedToolExecutionContext
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +95,213 @@ class HandoffTools:
         agent_list = sorted(agents) if agents else []
         content = json.dumps(agent_list, ensure_ascii=False)
         return ToolResult(ok=True, tool_name=call.name, content=content)
+
+    # ── transport detection ──────────────────────────────────────────────
+
+    @staticmethod
+    def _get_transport(call: ToolCall) -> str:
+        """Extrai o transporte do contexto confiável no metadata do ToolCall."""
+        ctx = call.metadata.get("trusted_context", {})
+        if isinstance(ctx, TrustedToolExecutionContext):
+            return ctx.transport
+        if isinstance(ctx, dict):
+            return str(ctx.get("transport", "native_tool_call"))
+        return "native_tool_call"
+
+    def _get_db_path(self) -> str | None:
+        """Retorna db_path como string ou None se não configurado."""
+        raw = getattr(self.config, "db_path", None)
+        if raw is None:
+            return None
+        return str(raw)
+
+    # ── async HTTP path ──────────────────────────────────────────────────
+
+    def _call_agent_http_async(
+        self,
+        call: ToolCall,
+        steps: list[dict],
+    ) -> ToolResult:
+        """Executa call_agent via HTTP MCP.
+
+        Com SSE (canal assíncrono): executa inline na thread pool — o resultado
+        real chega ao cliente via SSE quando a thread pool completar.
+
+        Sem SSE (Streamable HTTP): cria job/task no banco e executa em background
+        thread — retorna job_id/task_id imediatamente para polling.
+        """
+        # Detecta se há canal SSE (assinatura de resposta assíncrona)
+        meta_state = call.metadata.get("_mcp_state", {}) or {}
+        sse_available = meta_state.get("sse_queue") is not None
+
+        if sse_available:
+            # SSE path: executa inline — já estamos na thread pool do
+            # _handle_tools_call. O resultado será enviado ao cliente via SSE
+            # por _flush_pending quando a thread pool completar.
+            return self._execute_steps_inner(
+                steps,
+                self._call_agent_fn,
+                self._progress_callback,
+                self._resolve_active_agents,
+                self._normalize_agent_identity,
+            )
+
+        # ── non-SSE (Streamable HTTP): background thread ──
+        db_path = self._get_db_path()
+        if not db_path:
+            return ToolResult(
+                ok=False,
+                tool_name=call.name,
+                error="db_path not configured — cannot run call_agent async via HTTP MCP",
+            )
+
+        step_one = steps[0]
+        job_desc = f"call_agent → {step_one['agent_name']}: {step_one['task'][:80]}"
+        try:
+            job_id = add_job(job_desc, created_by="mcp_http", db_path=db_path)
+        except Exception as exc:
+            return ToolResult(ok=False, tool_name=call.name, error=f"Failed to create job: {exc}")
+
+        body = json.dumps(steps, ensure_ascii=False)
+        try:
+            task_id = create_task(
+                job_id,
+                step_one["task"][:120],
+                body=body,
+                assigned_to=step_one["agent_name"],
+                origin="mcp_http_call_agent",
+                status="in_progress",
+                db_path=db_path,
+            )
+        except Exception as exc:
+            return ToolResult(ok=False, tool_name=call.name, error=f"Failed to create task: {exc}")
+
+        _fn = self._call_agent_fn
+        _progress_cb = self._progress_callback
+        _resolve_active = self._resolve_active_agents
+        _normalize = self._normalize_agent_identity
+
+        def _run() -> None:
+            result = self._execute_steps_inner(
+                steps, _fn, _progress_cb, _resolve_active, _normalize,
+            )
+            try:
+                if result.ok:
+                    complete_task(task_id, result=result.content, db_path=db_path)
+                else:
+                    fail_task(task_id, reason=result.error, db_path=db_path)
+            except Exception as exc:
+                logger.warning("call_agent async: failed to update task %d: %s", task_id, exc)
+
+        t = threading.Thread(target=_run, daemon=True, name=f"call-agent-{task_id}")
+        t.start()
+
+        return ToolResult(
+            ok=True,
+            tool_name=call.name,
+            content=json.dumps({"job_id": job_id, "task_id": task_id, "status": "in_progress"}),
+            data={"job_id": job_id, "task_id": task_id},
+        )
+
+    # ── synchronous execution core ───────────────────────────────────────
+
+    @staticmethod
+    def _execute_steps_inner(
+        steps: list[dict],
+        call_agent_fn: _CallAgentFnProto,
+        progress_callback: Callable[[str], None] | None,
+        resolve_active_agents_fn: Callable[[], set[str]],
+        normalize_agent_fn: Callable[[str | None], str],
+    ) -> ToolResult:
+        """Loop de execução dos steps — reusado síncrono e assíncrono."""
+        tool_name = "call_agent"
+        try:
+            step_outputs: list[str] = []
+            for step in steps:
+                active_agents = resolve_active_agents_fn()
+                if active_agents:
+                    invalid_targets: list[str] = []
+                    targets = [step["agent_name"], *step["fallback_agents"]]
+                    for target in targets:
+                        normalized_target = normalize_agent_fn(target)
+                        if normalized_target and normalized_target not in active_agents:
+                            invalid_targets.append(target)
+                    if invalid_targets:
+                        invalid_label = ", ".join(dict.fromkeys(invalid_targets))
+                        active_label = ", ".join(sorted(active_agents))
+                        return ToolResult(
+                            ok=False,
+                            tool_name=tool_name,
+                            error=f"Agents not active in current pool: {invalid_label}. Active agents: {active_label}",
+                        )
+
+                attempt_targets = [step["agent_name"], *step["fallback_agents"]]
+                step_result = None
+                last_error = None
+                selected_agent = None
+                for target_agent in attempt_targets:
+                    normalized_target_agent = normalize_agent_fn(target_agent)
+                    handoff = {
+                        "task": step["task"],
+                        "context": step["context"],
+                    }
+                    try:
+                        result = call_agent_fn(
+                            normalized_target_agent,
+                            handoff=handoff,
+                            handoff_only=True,
+                            protocol_mode="handoff",
+                            primary=False,
+                            silent=False,
+                            show_output=False,
+                            persist_history=True,
+                            history_snapshot=[],
+                            max_retries=3,
+                            progress_callback=progress_callback,
+                        )
+                    except Exception as dispatch_error:
+                        last_error = str(dispatch_error)
+                        logger.warning(
+                            "call_agent: dispatch to '%s' failed: %s",
+                            target_agent, last_error,
+                        )
+                        continue
+                    if result is None:
+                        last_error = f"Agent '{target_agent}' returned no response"
+                        logger.warning(
+                            "call_agent: dispatch to '%s' returned no response",
+                            target_agent,
+                        )
+                        continue
+                    selected_agent = target_agent
+                    step_result = str(result)
+                    break
+
+                if step_result is None:
+                    error_detail = (
+                        f"{last_error}. Tried: {', '.join(attempt_targets)}"
+                        if last_error
+                        else f"No response from any target. Tried: {', '.join(attempt_targets)}"
+                    )
+                    return ToolResult(
+                        ok=False,
+                        tool_name=tool_name,
+                        error=error_detail,
+                    )
+
+                if len(steps) == 1:
+                    step_outputs.append(step_result)
+                else:
+                    step_outputs.append(f"[{selected_agent}] {step_result}")
+
+            content = "\n\n".join(step_outputs)
+            return ToolResult(ok=True, tool_name=tool_name, content=content)
+        except Exception as exc:
+            return ToolResult(
+                ok=False,
+                tool_name=tool_name,
+                error=str(exc),
+            )
 
     def call_agent(self, call: ToolCall) -> ToolResult:
         """Dispatch a task to another Quimera agent via MCP tool."""
@@ -221,93 +436,17 @@ class HandoffTools:
                     }
                 )
 
-        try:
-            step_outputs: list[str] = []
-            for step in steps:
-                # Re-validate active agents for each step to handle agents that may have become inactive
-                active_agents = self._resolve_active_agents()
-                if active_agents:
-                    invalid_targets: list[str] = []
-                    targets = [step["agent_name"], *step["fallback_agents"]]
-                    for target in targets:
-                        normalized_target = self._normalize_agent_identity(target)
-                        if normalized_target and normalized_target not in active_agents:
-                            invalid_targets.append(target)
-                    if invalid_targets:
-                        invalid_label = ", ".join(dict.fromkeys(invalid_targets))
-                        active_label = ", ".join(sorted(active_agents))
-                        return ToolResult(
-                            ok=False,
-                            tool_name=call.name,
-                            error=f"Agents not active in current pool: {invalid_label}. Active agents: {active_label}",
-                        )
+        # Decide sync vs async baseado no transporte
+        transport = self._get_transport(call)
 
-                attempt_targets = [step["agent_name"], *step["fallback_agents"]]
-                step_result = None
-                last_error = None
-                selected_agent = None
-                for target_agent in attempt_targets:
-                    normalized_target_agent = self._normalize_agent_identity(target_agent)
-                    handoff = {
-                        "task": step["task"],
-                        "context": step["context"],
-                    }
-                    try:
-                        result = self._call_agent_fn(
-                            normalized_target_agent,
-                            handoff=handoff,
-                            handoff_only=True,
-                            protocol_mode="handoff",
-                            primary=False,
-                            silent=False,
-                            show_output=False,
-                            persist_history=True,
-                            # Evita reenviar todo o histórico da conversa principal
-                            # para o subagente em handoff MCP (reduz latência/timeout).
-                            history_snapshot=[],
-                            max_retries=3,
-                            progress_callback=self._progress_callback,
-                        )
-                    except Exception as dispatch_error:  # noqa: BLE001
-                        last_error = str(dispatch_error)
-                        logger.warning(
-                            "call_agent: dispatch to '%s' failed after %d attempt(s): %s",
-                            target_agent, len(step_outputs) + 1, last_error,
-                        )
-                        continue
-                    if result is None:
-                        last_error = f"Agent '{target_agent}' returned no response"
-                        logger.warning(
-                            "call_agent: dispatch to '%s' returned no response after %d attempt(s)",
-                            target_agent, len(step_outputs) + 1,
-                        )
-                        continue
-                    selected_agent = target_agent
-                    step_result = str(result)
-                    break
+        if transport == "http_mcp":
+            return self._call_agent_http_async(call, steps)
 
-                if step_result is None:
-                    error_detail = (
-                        f"{last_error}. Tried: {', '.join(attempt_targets)}"
-                        if last_error
-                        else f"No response from any target. Tried: {', '.join(attempt_targets)}"
-                    )
-                    return ToolResult(
-                        ok=False,
-                        tool_name=call.name,
-                        error=error_detail,
-                    )
-
-                if len(steps) == 1:
-                    step_outputs.append(step_result)
-                else:
-                    step_outputs.append(f"[{selected_agent}] {step_result}")
-
-            content = "\n\n".join(step_outputs)
-            return ToolResult(ok=True, tool_name=call.name, content=content)
-        except Exception as exc:  # noqa: BLE001
-            return ToolResult(
-                ok=False,
-                tool_name=call.name,
-                error=str(exc),
-            )
+        # ── synchronous path (stdio MCP, native, etc.) ──
+        return self._execute_steps_inner(
+            steps,
+            self._call_agent_fn,
+            self._progress_callback,
+            self._resolve_active_agents,
+            self._normalize_agent_identity,
+        )

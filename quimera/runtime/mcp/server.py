@@ -524,7 +524,7 @@ class MCPServer:
             delegation_budget=state.get("delegation_budget"),
             http_call_agent_auto_approve=bool(state.get("http_call_agent_auto_approve", False)),
         )
-        call_metadata = {"trusted_context": trusted_context}
+        call_metadata = {"trusted_context": trusted_context, "_mcp_state": state}
 
         if not tool_name:
             return self._err(msg_id, -32602, "tools/call: 'name' é obrigatório")

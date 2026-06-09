@@ -150,6 +150,7 @@ def test_resolve_tool_schemas_hides_call_agent_when_not_bound():
 
     actual = {s["function"]["name"] for s in resolve_tool_schemas(mock_executor)}
     assert "call_agent" not in actual
+    assert "list_agents" not in actual
 
 
 def test_required_args_are_lists():
@@ -708,6 +709,7 @@ def test_run_tools_system_prompt_guides_tool_usage():
         "web_search",
         "web_fetch",
         "call_agent",
+        "list_agents",
         "todo_write",
         "todo_list",
     }

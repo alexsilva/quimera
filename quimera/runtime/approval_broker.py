@@ -180,7 +180,7 @@ class ApprovalScope:
 class ApprovalBroker:
     """Governança central de approval, auditoria e serialização de ferramentas."""
 
-    _READ_TOOLS = {"list_files", "read_file", "grep_search", "list_tasks", "list_jobs", "get_job", "todo_list"}
+    _READ_TOOLS = {"list_files", "read_file", "grep_search", "list_tasks", "list_jobs", "get_job", "todo_list", "list_agents"}
     _NETWORK_TOOLS = {"web_search", "web_fetch"}
     _WRITE_TOOLS = {"write_file", "apply_patch", "todo_write", "write_stdin", "close_command_session"}
     _SHELL_TOOLS = {"run_shell", "run_shell_command", "exec_command"}

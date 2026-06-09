@@ -458,6 +458,7 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
             }
         if sse_queue is not None:
             out = _SSEQueueOutput(sse_queue)
+            state["sse_queue"] = sse_queue
         else:
             out = StringIO()
         if session_id:
