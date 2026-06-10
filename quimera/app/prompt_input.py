@@ -20,6 +20,8 @@ from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.history import FileHistory, InMemoryHistory
 from prompt_toolkit.key_binding import KeyBindings
+from rich.console import Console
+from rich.rule import Rule
 
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
@@ -255,9 +257,14 @@ class InputGate:
             except Exception:
                 pass
 
+    def _print_rule(self) -> None:
+        """Imprime linha horizontal no estilo da UI."""
+        console = Console(highlight=False)
+        console.print(Rule(style="dim"))
+
     def __call__(self, prompt: str) -> str:
         """Lê input do usuário.
-  
+
         Flusha o renderer antes de exibir o prompt, eliminando a necessidade
         de patch_stdout(). Usa session.prompt() diretamente com toolbar,
         placeholder e completer — tudo nativo do PromptSession, funcionando.
@@ -268,9 +275,10 @@ class InputGate:
         self._set_active_state(True)
         try:
             self._flush_renderer()
+            self._print_rule()
 
             if self._session is not None:
-                return self._session.prompt(
+                result = self._session.prompt(
                     prompt,
                     bottom_toolbar=self._build_toolbar(),
                     placeholder=self._build_placeholder(),
@@ -279,8 +287,12 @@ class InputGate:
                     complete_while_typing=False,
                     vi_mode=False,
                 )
+                self._print_rule()
+                return result
             # Fallback para input() padrão quando prompt_toolkit não está disponível
-            return input(prompt)
+            result = input(prompt)
+            self._print_rule()
+            return result
         finally:
             self._set_active_state(False)
 
