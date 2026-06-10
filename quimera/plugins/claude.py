@@ -136,9 +136,9 @@ def _format_claude_spy_event(line: str) -> list[SpyEvent]:
     for block in content:
         btype = block.get("type")
         if btype == "text":
-            text = (block.get("text") or "").strip()
+            text = _truncate_text((block.get("text") or "").strip())
             if text:
-                messages.append(SpyEvent(kind="response", text=text, final=True))
+                messages.append(SpyEvent(kind="response", text=text, transient=True))
         elif btype == "tool_use":
             tool_name = block.get("name") or "ferramenta"
             messages.append(SpyEvent(kind="tool", text=f"usando {tool_name}", transient=True))
