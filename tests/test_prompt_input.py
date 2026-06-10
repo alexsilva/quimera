@@ -492,6 +492,13 @@ class TestCoreCommandArgumentResolver:
         result = app._command_argument_resolver("/bugs", "")
         assert result == ["list", "show", "close", "analyze", "stats"]
 
+    def test_returns_subcommands_for_reset(self):
+        """Para /reset, retorna os tipos suportados."""
+        from quimera.app.core import QuimeraApp
+        app = QuimeraApp.__new__(QuimeraApp)
+        result = app._command_argument_resolver("/reset", "")
+        assert result == ["state", "history", "all"]
+
     def test_returns_empty_for_disconnect_without_connections(self):
         """Sem conexões persistidas, /disconnect não sugere argumentos."""
         from quimera.app.core import QuimeraApp

@@ -65,5 +65,5 @@ Use com cuidado: agentes com ferramentas podem editar arquivos e executar comand
 ## Limpar ou sair
 
 - `/clear` limpa a tela.
-- `/reset-state` limpa `shared_state` operacional sem apagar histórico.
+- `/reset [state|history|all]` limpa `shared_state`, histórico ou ambos.
 - `/exit` encerra a sessão.

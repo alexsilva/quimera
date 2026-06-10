@@ -57,7 +57,7 @@ para liberar todas as próximas mutações da sessão. Revise o risco antes de u
 - Use `/context` para ver o contexto atual.
 - Use `/context-edit` para corrigir.
 - Use `/context-branch <nome>` para separar iniciativas.
-- Use `/reset-state` para limpar estado operacional sem apagar histórico.
+- Use `/reset state` para limpar estado operacional; `/reset history` para limpar o histórico; `/reset all` para ambos.
 
 ## Tasks presas
 

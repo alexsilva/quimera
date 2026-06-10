@@ -79,7 +79,7 @@ from ..bugs import (
 from ..constants import (
     CMD_AGENTS, CMD_ALIASES, CMD_BUGS, CMD_CLEAR, CMD_CONNECT, CMD_DISCONNECT, CMD_CONTEXT, CMD_EDIT, CMD_EXIT,
     CMD_APPROVE, CMD_APPROVE_ALL, CMD_FILE_PREFIX, CMD_HELP,
-    CMD_PROMPT, CMD_RELOAD, CMD_RESET_STATE, CMD_TASK,
+    CMD_PROMPT, CMD_RELOAD, CMD_RESET, CMD_TASK,
     MSG_CHAT_STARTED, MSG_SESSION_LOG, MSG_SESSION_STATUS, MSG_MIGRATION,
     MSG_SHUTDOWN,
     Visibility,
@@ -707,7 +707,7 @@ class QuimeraApp:
             CMD_HELP,
             CMD_PROMPT,
             CMD_RELOAD,
-            CMD_RESET_STATE,
+            CMD_RESET,
             CMD_TASK,
             *CMD_ALIASES,
             *MODES.keys(),
@@ -738,6 +738,8 @@ class QuimeraApp:
             return self.system_layer.list_connected_agents()
         if command == CMD_BUGS:
             return ["list", "show", "close", "analyze", "stats"]
+        if command == CMD_RESET:
+            return ["state", "history", "all"]
         return []
 
     def _resolve_plugin_style(self, agent: str):
@@ -1485,22 +1487,44 @@ class QuimeraApp:
                 if expired:
                     logger.info("[shared_state] expired stale keys: %s", expired)
 
-    def reset_shared_state(self) -> None:
-        """Limpa o shared_state em memória e persiste o snapshot atualizado."""
-        state_lock = getattr(self, "_shared_state_lock", None) or getattr(self, "_lock", None)
-        if state_lock is None:
-            self.shared_state.clear()
-            stamps = getattr(self, "_turn_stamps", None)
-            if isinstance(stamps, dict):
-                stamps.clear()
+    def reset_shared_state(self, target: str = "state") -> str:
+        """Reseta o estado da sessão conforme o alvo especificado.
+
+        Args:
+            target: ``"state"`` (shared_state), ``"history"`` (conversa)
+                    ou ``"all"`` (ambos).
+
+        Returns:
+            Descrição do que foi resetado.
+        """
+        valid = ("state", "history", "all")
+        if target not in valid:
+            return f"uso: /reset {{{','.join(valid)}}}"
+
+        if target in ("state", "all"):
+            state_lock = getattr(self, "_shared_state_lock", None) or getattr(self, "_lock", None)
+            if state_lock is None:
+                self.shared_state.clear()
+                stamps = getattr(self, "_turn_stamps", None)
+                if isinstance(stamps, dict):
+                    stamps.clear()
+                self.storage.save_history(self.history, shared_state=self.shared_state)
+            else:
+                with state_lock:
+                    self.shared_state.clear()
+                    stamps = getattr(self, "_turn_stamps", None)
+                    if isinstance(stamps, dict):
+                        stamps.clear()
+                    self.storage.save_history(self.history, shared_state=self.shared_state)
+
+        if target in ("history", "all"):
+            with self._history_lock:
+                self.history.clear()
             self.storage.save_history(self.history, shared_state=self.shared_state)
-            return
-        with state_lock:
-            self.shared_state.clear()
-            stamps = getattr(self, "_turn_stamps", None)
-            if isinstance(stamps, dict):
-                stamps.clear()
-            self.storage.save_history(self.history, shared_state=self.shared_state)
+
+        return {"state": "shared_state limpo.",
+                "history": "histórico limpo.",
+                "all": "shared_state e histórico limpos."}[target]
 
     def _merge_staging_to_workspace(self, staging_root: Path):
         """Mescla arquivos do staging para o workspace em ordem de índice com auditoria."""

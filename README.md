@@ -104,7 +104,7 @@ python quimera.py --help
 - `/file <caminho>`: envia conteúdo de arquivo como mensagem.
 - `/approve`: pré-aprova a próxima tool mutation.
 - `/approve-all`: aprova automaticamente mutações subsequentes.
-- `/reset-state`: limpa `shared_state` sem apagar histórico.
+- `/reset [state|history|all]`: limpa `shared_state`, histórico ou ambos.
 - `/clear`, `/help`, `/exit`.
 
 

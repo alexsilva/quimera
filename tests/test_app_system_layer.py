@@ -15,7 +15,7 @@ from quimera.constants import (
     CMD_CONTEXT_EDIT,
     CMD_PROMPT,
     CMD_RELOAD,
-    CMD_RESET_STATE,
+    CMD_RESET,
 )
 from quimera.plugins import AgentPlugin
 from quimera.plugins.base import CliConnection, OpenAIConnection
@@ -731,8 +731,11 @@ def test_handle_command_reload_and_reset_state_paths():
     assert app.selected_agents == ["a"]
     assert app.renderer.system_messages[-1] == "Plugins recarregados: 2 plugin(s)"
 
-    assert layer.handle_command(CMD_RESET_STATE) is True
-    app.reset_shared_state.assert_called_once()
+    assert layer.handle_command(CMD_RESET) is True
+    app.reset_shared_state.assert_called_once_with("state")
+
+    assert layer.handle_command(f"{CMD_RESET} all") is True
+    assert app.reset_shared_state.call_args_list[-1] == (("all",),)
 
 
 def test_handle_command_reload_passes_injected_registry():

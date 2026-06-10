@@ -19,7 +19,7 @@
 | `/bugs ...` | — | Acessa serviços de bugs. |
 | `/approve` | `/a`, `/y` | Pré-aprova próxima mutação. |
 | `/approve-all` | `/aa` | Autoaprova mutações subsequentes. |
-| `/reset-state` | — | Limpa `shared_state`. |
+| `/reset [state\|history\|all]` | — | Limpa `shared_state`, histórico ou ambos. |
 | `/clear` | — | Limpa tela. |
 | `/exit` | — | Encerra chat. |
 

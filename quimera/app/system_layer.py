@@ -24,7 +24,7 @@ from ..constants import (
     CMD_HELP,
     CMD_PROMPT,
     CMD_RELOAD,
-    CMD_RESET_STATE,
+    CMD_RESET,
     CMD_TASK,
     DEFAULT_FIRST_AGENT,
     build_agents_help,
@@ -619,10 +619,13 @@ class AppSystemLayer:
                 self.task_command_handler(command)
             return True
 
-        if command == CMD_RESET_STATE:
+        if command == CMD_RESET or command.startswith(f"{CMD_RESET} "):
+            target = command[len(CMD_RESET):].strip() or "state"
             if callable(self.reset_shared_state):
-                self.reset_shared_state()
-            self._display.show_system("shared_state limpo.")
+                msg = self.reset_shared_state(target)
+            else:
+                msg = "reset não disponível."
+            self._display.show_system(msg)
             return True
 
         if command == CMD_APPROVE_ALL:
