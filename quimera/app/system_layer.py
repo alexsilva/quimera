@@ -674,7 +674,9 @@ class AppSystemLayer:
             return True
 
         if command.startswith("s/") and len(command) > 2:
-            agent = command[2:].strip().split()[0]
+            parts = command[2:].strip().split(None, 1)
+            agent = parts[0]
+            trailing = parts[1].strip() if len(parts) > 1 else ""
             try:
                 self.agent_pool.freeze(agent)
             except ValueError:
@@ -686,6 +688,8 @@ class AppSystemLayer:
                 f"[rotação] congelada para {agent} — "
                 "todo input não-prefixado irá para este agente."
             )
+            if trailing:
+                return trailing
             return True
 
         if command.startswith("r/") and len(command) > 2:

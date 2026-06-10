@@ -208,8 +208,11 @@ def run_chat_loop(
                     continue
                 user = content
 
-            if app.handle_command(user):
+            _cmd_result = app.handle_command(user)
+            if _cmd_result is True:
                 continue
+            elif isinstance(_cmd_result, str):
+                user = _cmd_result
 
             app._advance_shared_state_turn()
 
