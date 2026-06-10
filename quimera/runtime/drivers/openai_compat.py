@@ -537,7 +537,7 @@ class OpenAICompatDriver:
                     for tc in tool_calls:
                         if on_tool_call is not None:
                             on_tool_call(tc["name"], tc["arguments"])
-                        result = self._execute_tool(tc, tool_executor)
+                        result = self._execute_tool(tc, tool_executor, agent_name=agent_name)
                         _logger.info(
                             "OpenAICompatDriver: tool=%s ok=%s hop=%d",
                             tc["name"], result.ok, hop,
@@ -667,12 +667,16 @@ class OpenAICompatDriver:
                     on_text_chunk(content)
         return text.strip(), []
 
-    def _execute_tool(self, tc: dict, tool_executor) -> ToolResult:
+    def _execute_tool(self, tc: dict, tool_executor, agent_name: str | None = None) -> ToolResult:
         """Executa um tool call via ToolExecutor."""
+        metadata: dict = {}
+        if agent_name:
+            metadata["calling_agent"] = agent_name
         tool_call = ToolCall(
             name=tc["name"],
             arguments=tc["arguments"],
             call_id=tc["id"],
+            metadata=metadata,
         )
         try:
             return tool_executor.execute(tool_call)

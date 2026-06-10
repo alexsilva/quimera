@@ -113,6 +113,23 @@ class HandoffTools:
             return str(ctx.get("transport", "native_tool_call"))
         return "native_tool_call"
 
+    @staticmethod
+    def _get_calling_agent(call: ToolCall) -> str | None:
+        """Extrai o nome do agente que emitiu o tool call, se disponível."""
+        # Caminho openai_compat: metadata["calling_agent"]
+        raw = call.metadata.get("calling_agent")
+        if raw and isinstance(raw, str):
+            return raw.strip().lower().lstrip("/")
+        # Caminho MCP: trusted_context.agent_name
+        ctx = call.metadata.get("trusted_context")
+        if isinstance(ctx, TrustedToolExecutionContext) and ctx.agent_name:
+            return ctx.agent_name.strip().lower().lstrip("/")
+        if isinstance(ctx, dict):
+            name = ctx.get("agent_name")
+            if name and isinstance(name, str):
+                return name.strip().lower().lstrip("/")
+        return None
+
     def _get_db_path(self) -> str | None:
         """Retorna db_path como string ou None se não configurado."""
         raw = getattr(self.config, "db_path", None)
@@ -343,10 +360,20 @@ class HandoffTools:
         fallback_agents_raw = arguments.get("fallback_agents")
         handoffs_raw = arguments.get("handoffs")
 
+        calling_agent = self._get_calling_agent(call)
+
         agent_name = str(agent_name_raw).strip() if isinstance(agent_name_raw, str) else ""
         task = str(task_raw).strip() if isinstance(task_raw, str) else ""
         if len(task) > self._CALL_AGENT_MAX_TASK_CHARS:
             task = task[: self._CALL_AGENT_MAX_TASK_CHARS]
+
+        if calling_agent and self._normalize_agent_identity(agent_name) == calling_agent:
+            return ToolResult(
+                ok=False,
+                tool_name=call.name,
+                error=f"Agent '{agent_name}' cannot delegate to itself via call_agent",
+            )
+
         context = ""
         if context_raw is not None:
             if not isinstance(context_raw, str):
@@ -374,6 +401,8 @@ class HandoffTools:
                         tool_name=call.name,
                         error="'fallback_agents' must contain only non-empty strings",
                     )
+                if calling_agent and self._normalize_agent_identity(item) == calling_agent:
+                    continue
                 fallback_agents.append(item.strip())
 
         if not agent_name or not task:
@@ -416,6 +445,12 @@ class HandoffTools:
                         tool_name=call.name,
                         error=f"handoffs[{idx}].agent_name must be a non-empty string",
                     )
+                if calling_agent and self._normalize_agent_identity(extra_agent) == calling_agent:
+                    return ToolResult(
+                        ok=False,
+                        tool_name=call.name,
+                        error=f"handoffs[{idx}]: agent '{extra_agent}' cannot delegate to itself",
+                    )
                 if not isinstance(extra_task, str) or not extra_task.strip():
                     return ToolResult(
                         ok=False,
@@ -444,6 +479,8 @@ class HandoffTools:
                                 f"handoffs[{idx}].fallback_agents[{fb_idx}] must be a non-empty string"
                             ),
                         )
+                    if calling_agent and self._normalize_agent_identity(fb) == calling_agent:
+                        continue
                     normalized_extra_fallback.append(fb.strip())
 
                 normalized_context = extra_context.strip() if isinstance(extra_context, str) else ""

@@ -21,6 +21,8 @@ class AgentPool:
     @property
     def primary(self) -> str | None:
         with self._lock:
+            if self._frozen_agent is not None and self._frozen_agent in self._agents:
+                return self._frozen_agent
             return self._agents[0] if self._agents else None
 
     def take_primary(self) -> str | None:
@@ -28,7 +30,7 @@ class AgentPool:
         with self._lock:
             if not self._agents:
                 return None
-            if self._frozen_agent is not None:
+            if self._frozen_agent is not None and self._frozen_agent in self._agents:
                 return self._frozen_agent
             primary = self._agents[0]
             if len(self._agents) > 1:

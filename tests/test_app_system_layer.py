@@ -1315,6 +1315,13 @@ def test_freeze_take_primary_retorna_agente_congelado():
     assert pool.take_primary() == "codex"
 
 
+def test_freeze_primary_retorna_agente_congelado():
+    """Verifica que primary também respeita o freeze, não retorna _agents[0]."""
+    layer, pool, _ = _make_layer_with_pool(["claude", "codex"])
+    layer.handle_command("s/codex")
+    assert pool.primary == "codex"
+
+
 def test_unfreeze_retoma_rotacao():
     """Verifica que Test unfreeze retoma rotacao."""
     layer, pool, _ = _make_layer_with_pool(["claude", "codex"])

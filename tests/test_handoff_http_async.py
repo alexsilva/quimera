@@ -589,3 +589,292 @@ class TestCleanupCallback:
         assert result.ok is False
         # O step 1 tentou codex (None) → claude (None) → cleanup(claude)
         cleanup.assert_called_once_with("claude")
+
+
+class TestGetCallingAgent:
+    """Testes para HandoffTools._get_calling_agent().
+
+    Verifica a extração do nome do agente chamador a partir do metadata
+    de uma ToolCall, cobrindo os dois caminhos suportados: via campo
+    direto 'calling_agent' (preenchido pelo openai_compat) e via
+    TrustedToolExecutionContext (MCP).
+    """
+
+    def test_retorna_calling_agent_do_metadata_direto(self):
+        """Campo 'calling_agent' no metadata é retornado normalizado em lowercase."""
+        call = _make_call(metadata={"calling_agent": "Codex"})
+        assert HandoffTools._get_calling_agent(call) == "codex"
+
+    def test_retorna_calling_agent_com_espacos_trimados(self):
+        """Espaços em torno do nome são removidos."""
+        call = _make_call(metadata={"calling_agent": "  deepseek  "})
+        assert HandoffTools._get_calling_agent(call) == "deepseek"
+
+    def test_retorna_none_sem_metadata(self):
+        """Sem metadata retorna None."""
+        call = _make_call(metadata={})
+        assert HandoffTools._get_calling_agent(call) is None
+
+    def test_retorna_calling_agent_via_trusted_context_objeto(self):
+        """Lê agent_name de TrustedToolExecutionContext quando não há campo direto."""
+        ctx = TrustedToolExecutionContext(
+            agent_name="claude",
+            transport="native_tool_call",
+            session_id="s1",
+        )
+        call = _make_call(metadata={"trusted_context": ctx})
+        assert HandoffTools._get_calling_agent(call) == "claude"
+
+    def test_retorna_calling_agent_via_trusted_context_dict(self):
+        """Lê agent_name de dict trusted_context quando não há campo direto."""
+        call = _make_call(metadata={"trusted_context": {"agent_name": "Gemini", "transport": "http_mcp"}})
+        assert HandoffTools._get_calling_agent(call) == "gemini"
+
+    def test_campo_direto_tem_prioridade_sobre_trusted_context(self):
+        """'calling_agent' direto tem precedência sobre trusted_context."""
+        ctx = TrustedToolExecutionContext(
+            agent_name="claude",
+            transport="native_tool_call",
+            session_id="s1",
+        )
+        call = _make_call(metadata={"calling_agent": "codex", "trusted_context": ctx})
+        assert HandoffTools._get_calling_agent(call) == "codex"
+
+    def test_calling_agent_vazio_ignorado_retorna_via_trusted_context(self):
+        """String vazia em 'calling_agent' não é considerada — cai para trusted_context."""
+        call = _make_call(metadata={"calling_agent": "", "trusted_context": {"agent_name": "gemini"}})
+        assert HandoffTools._get_calling_agent(call) == "gemini"
+
+    def test_retorna_none_quando_trusted_context_dict_sem_agent_name(self):
+        """trusted_context como dict sem 'agent_name' retorna None."""
+        call = _make_call(metadata={"trusted_context": {"transport": "http_mcp"}})
+        assert HandoffTools._get_calling_agent(call) is None
+
+
+class TestCallAgentAutoReferencia:
+    """Testes para o bloqueio de auto-referência em call_agent().
+
+    Garante que um agente não pode delegar para si mesmo, seja no step
+    principal, nos fallback_agents ou nos handoffs.
+    """
+
+    def _make_tools(self, tmp_path) -> HandoffTools:
+        config = ToolRuntimeConfig(workspace_root=tmp_path)
+        tools = HandoffTools(config)
+        tools.set_call_agent_fn(MagicMock(return_value="ok"))
+        tools.set_active_agents_provider(lambda: ["codex", "claude", "deepseek"])
+        return tools
+
+    def test_bloqueia_main_step_auto_referencia(self, tmp_path):
+        """Agente não pode delegar o step principal para si mesmo."""
+        tools = self._make_tools(tmp_path)
+        call = _make_call(
+            metadata={"calling_agent": "deepseek"},
+            args={"agent_name": "deepseek", "task": "faz algo"},
+        )
+        result = tools.call_agent(call)
+        assert result.ok is False
+        assert "cannot delegate to itself" in result.error
+
+    def test_bloqueia_main_step_case_insensitive(self, tmp_path):
+        """Comparação de auto-referência é case-insensitive."""
+        tools = self._make_tools(tmp_path)
+        call = _make_call(
+            metadata={"calling_agent": "codex"},
+            args={"agent_name": "CODEX", "task": "faz algo"},
+        )
+        result = tools.call_agent(call)
+        assert result.ok is False
+        assert "cannot delegate to itself" in result.error
+
+    def test_permite_main_step_agente_diferente(self, tmp_path):
+        """Delegação para agente diferente do chamador é permitida."""
+        tools = self._make_tools(tmp_path)
+        call = _make_call(
+            metadata={"calling_agent": "deepseek"},
+            args={"agent_name": "codex", "task": "faz algo"},
+        )
+        result = tools.call_agent(call)
+        assert result.ok is True
+
+    def test_sem_calling_agent_nao_bloqueia(self, tmp_path):
+        """Sem informação de agente chamador, não há bloqueio."""
+        tools = self._make_tools(tmp_path)
+        call = _make_call(
+            metadata={},
+            args={"agent_name": "codex", "task": "faz algo"},
+        )
+        result = tools.call_agent(call)
+        assert result.ok is True
+
+    def test_filtra_self_de_fallback_agents(self, tmp_path):
+        """Entradas auto-referentes em fallback_agents são removidas silenciosamente."""
+        dispatched: list[str] = []
+
+        def dispatch(agent, **kw):
+            dispatched.append(agent)
+            return "ok"
+
+        config = ToolRuntimeConfig(workspace_root=tmp_path)
+        tools = HandoffTools(config)
+        tools.set_call_agent_fn(dispatch)
+        tools.set_active_agents_provider(lambda: ["codex", "claude", "deepseek"])
+
+        call = _make_call(
+            metadata={"calling_agent": "deepseek"},
+            args={
+                "agent_name": "codex",
+                "task": "faz algo",
+                "fallback_agents": ["deepseek", "claude"],
+            },
+        )
+        result = tools.call_agent(call)
+        assert result.ok is True
+        # deepseek filtrado dos fallbacks; dispatch ocorreu para codex
+        assert dispatched == ["codex"]
+
+    def test_bloqueia_handoff_step_auto_referencia(self, tmp_path):
+        """Handoff step com agent_name igual ao chamador é bloqueado com erro."""
+        tools = self._make_tools(tmp_path)
+        call = _make_call(
+            metadata={"calling_agent": "deepseek"},
+            args={
+                "agent_name": "codex",
+                "task": "step 1",
+                "handoffs": [
+                    {"agent_name": "deepseek", "task": "step 2"},
+                ],
+            },
+        )
+        result = tools.call_agent(call)
+        assert result.ok is False
+        assert "cannot delegate to itself" in result.error
+
+    def test_filtra_self_de_handoff_fallback_agents(self, tmp_path):
+        """Self em fallback_agents de um handoff step é removido silenciosamente."""
+        dispatched: list[str] = []
+
+        def dispatch(agent, **kw):
+            dispatched.append(agent)
+            return "ok"
+
+        config = ToolRuntimeConfig(workspace_root=tmp_path)
+        tools = HandoffTools(config)
+        tools.set_call_agent_fn(dispatch)
+        tools.set_active_agents_provider(lambda: ["codex", "claude", "deepseek"])
+
+        call = _make_call(
+            metadata={"calling_agent": "deepseek"},
+            args={
+                "agent_name": "codex",
+                "task": "step 1",
+                "handoffs": [
+                    {
+                        "agent_name": "claude",
+                        "task": "step 2",
+                        "fallback_agents": ["deepseek", "codex"],
+                    }
+                ],
+            },
+        )
+        result = tools.call_agent(call)
+        assert result.ok is True
+        # step 1 → codex, step 2 → claude (deepseek filtrado dos fallbacks)
+        assert dispatched == ["codex", "claude"]
+
+    def test_bloqueia_com_prefixo_slash_no_agent_name(self, tmp_path):
+        """Agent_name com prefixo / equivale ao mesmo agente (calling_agent)."""
+        tools = self._make_tools(tmp_path)
+        call = _make_call(
+            metadata={"calling_agent": "deepseek"},
+            args={"agent_name": "/deepseek", "task": "faz algo"},
+        )
+        result = tools.call_agent(call)
+        assert result.ok is False
+        assert "cannot delegate to itself" in result.error
+
+    def test_bloqueia_via_trusted_context(self, tmp_path):
+        """Self-reference funciona com calling_agent vindo de TrustedToolExecutionContext."""
+        config = ToolRuntimeConfig(workspace_root=tmp_path)
+        tools = HandoffTools(config)
+        tools.set_call_agent_fn(MagicMock(return_value="ok"))
+        tools.set_active_agents_provider(lambda: ["codex", "deepseek"])
+        ctx = TrustedToolExecutionContext(
+            agent_name="deepseek",
+            transport="native_tool_call",
+            session_id="s1",
+        )
+        call = _make_call(
+            metadata={"trusted_context": ctx},
+            args={"agent_name": "deepseek", "task": "faz algo"},
+        )
+        result = tools.call_agent(call)
+        assert result.ok is False
+        assert "cannot delegate to itself" in result.error
+
+    def test_fallback_agents_todos_self_referencia(self, tmp_path):
+        """Todos fallback_agents são auto-referência → removidos sem erro."""
+        dispatched: list[str] = []
+
+        def dispatch(agent, **kw):
+            dispatched.append(agent)
+            return "ok"
+
+        config = ToolRuntimeConfig(workspace_root=tmp_path)
+        tools = HandoffTools(config)
+        tools.set_call_agent_fn(dispatch)
+        tools.set_active_agents_provider(lambda: ["codex", "deepseek"])
+
+        call = _make_call(
+            metadata={"calling_agent": "deepseek"},
+            args={
+                "agent_name": "codex",
+                "task": "faz algo",
+                "fallback_agents": ["deepseek", "/deepseek", "  deepseek  "],
+            },
+        )
+        result = tools.call_agent(call)
+        assert result.ok is True
+        assert dispatched == ["codex"]
+
+    def test_handoff_fallback_agents_todos_self_referencia(self, tmp_path):
+        """Todos handoff fallback_agents são auto-referência → removidos sem erro."""
+        dispatched: list[str] = []
+
+        def dispatch(agent, **kw):
+            dispatched.append(agent)
+            return "ok"
+
+        config = ToolRuntimeConfig(workspace_root=tmp_path)
+        tools = HandoffTools(config)
+        tools.set_call_agent_fn(dispatch)
+        tools.set_active_agents_provider(lambda: ["codex", "claude", "deepseek"])
+
+        call = _make_call(
+            metadata={"calling_agent": "deepseek"},
+            args={
+                "agent_name": "codex",
+                "task": "step 1",
+                "handoffs": [
+                    {
+                        "agent_name": "claude",
+                        "task": "step 2",
+                        "fallback_agents": ["deepseek", "/deepseek"],
+                    }
+                ],
+            },
+        )
+        result = tools.call_agent(call)
+        assert result.ok is True
+        assert dispatched == ["codex", "claude"]
+
+    def test_bloqueia_main_step_com_prefixo_no_calling_agent(self, tmp_path):
+        """calling_agent com prefixo / normaliza e bloqueia corretamente."""
+        tools = self._make_tools(tmp_path)
+        call = _make_call(
+            metadata={"calling_agent": "/CODEX"},
+            args={"agent_name": "codex", "task": "faz algo"},
+        )
+        result = tools.call_agent(call)
+        assert result.ok is False
+        assert "cannot delegate to itself" in result.error
