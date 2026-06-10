@@ -276,3 +276,21 @@ class TestStreamSummarySequence:
             rec.flush()
         rendered = rec._console.export_text()
         assert "write_file" in rendered
+
+    def test_abort_stream_then_error_does_not_leave_blank_line(self, rec):
+        """Fechar stream antes de erro não deve deixar linha vazia extra."""
+        rec.start_message_stream("claude")
+        rec.abort_message_stream("claude")
+        rec.show_plain("You've hit your limit", agent="claude")
+        rec.show_error("[erro] retornou código 1", agent="claude")
+        rec.flush()
+        rendered = rec._console.export_text()
+        assert "You've hit your limit\n\n" not in rendered
+
+    def test_show_message_after_system_neutral_skips_extra_spacing(self, rec):
+        """Mensagem final após status neutro não abre linha em branco redundante."""
+        rec.show_system_neutral("[fallback] claude não respondeu; codex assumiu")
+        rec.show_message("codex", "Commit criado")
+        rec.flush()
+        rendered = rec._console.export_text()
+        assert "assumiu\n\n" not in rendered

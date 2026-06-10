@@ -24,6 +24,7 @@ class AgentCallService:
         record_failure=None,
         record_success=None,
         is_rate_limited=None,
+        before_retry=None,
     ):
         self._max_retries = max_retries
         self._retry_backoff = retry_backoff
@@ -31,6 +32,7 @@ class AgentCallService:
         self._record_failure = record_failure or (lambda agent: None)
         self._record_success = record_success or (lambda agent: None)
         self._is_rate_limited = is_rate_limited or (lambda: False)
+        self._before_retry = before_retry or (lambda agent, attempt, reason: None)
 
     def call(
         self,
@@ -70,6 +72,7 @@ class AgentCallService:
                         return None
                     if attempt < effective_max_retries:
                         backoff = self._compute_backoff(attempt)
+                        self._before_retry(agent, attempt, "no_response")
                         logger.warning(
                             "[AGENT_CALL] retry %d/%d for agent=%s (no response)",
                             attempt, effective_max_retries, agent,
@@ -86,6 +89,7 @@ class AgentCallService:
                         return None
                     if attempt < effective_max_retries:
                         backoff = self._compute_backoff(attempt)
+                        self._before_retry(agent, attempt, "resolve_failed")
                         logger.warning(
                             "[AGENT_CALL] retry %d/%d for agent=%s (resolve failed)",
                             attempt, effective_max_retries, agent,
@@ -103,6 +107,7 @@ class AgentCallService:
                     return None
                 last_error = exc
                 if attempt < effective_max_retries:
+                    self._before_retry(agent, attempt, "exception")
                     logger.warning(
                         "[AGENT_CALL] retry %d/%d for agent=%s after exception: %s",
                         attempt, effective_max_retries, agent, exc,

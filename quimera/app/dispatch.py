@@ -259,9 +259,21 @@ class AppDispatchServices:
 
     def _build_agent_call_service(self) -> AgentCallService:
         agent_client = self._get_agent_client()
+        renderer = self._call(self._renderer)
 
         def _is_rate_limited():
             return bool(agent_client and getattr(agent_client, 'rate_limit_detected', False))
+
+        def _before_retry(agent: str, attempt: int, reason: str) -> None:
+            del agent, attempt, reason
+            if renderer is None:
+                return
+            flush_quick = getattr(renderer, "flush_quick", None)
+            if callable(flush_quick):
+                try:
+                    flush_quick(timeout=0.25)
+                except TypeError:
+                    flush_quick()
 
         return AgentCallService(
             max_retries=self._call(self._max_retries),
@@ -270,6 +282,7 @@ class AppDispatchServices:
             record_failure=self._record_failure,
             record_success=self._record_success,
             is_rate_limited=_is_rate_limited,
+            before_retry=_before_retry,
         )
 
     # -------------------------------------------------------------------------

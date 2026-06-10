@@ -15,16 +15,19 @@ class TestAgentCallServiceConstruction:
     def test_custom_values(self):
         record = MagicMock()
         limited = MagicMock(return_value=False)
+        before_retry = MagicMock()
         service = AgentCallService(
             max_retries=3, retry_backoff=0.5,
             rate_limit_backoff=10.0,
             record_failure=record, is_rate_limited=limited,
+            before_retry=before_retry,
         )
         assert service._max_retries == 3
         assert service._retry_backoff == 0.5
         assert service._rate_limit_backoff == 10.0
         assert service._record_failure is record
         assert service._is_rate_limited is limited
+        assert service._before_retry is before_retry
 
     def test_default_record_failure_is_noop(self):
         service = AgentCallService()
@@ -86,6 +89,14 @@ class TestCall:
         assert call_fn.call_count == 3
         resolve_fn.assert_called_once_with("agent1", "response")
 
+    def test_before_retry_called_on_none_call(self):
+        before_retry = MagicMock()
+        service = AgentCallService(max_retries=2, retry_backoff=0.01, before_retry=before_retry)
+        call_fn = MagicMock(return_value=None)
+        with patch("quimera.app.agent_call_service.time.sleep"):
+            service.call("agent1", call_fn, MagicMock(), lambda: False)
+        before_retry.assert_called_once_with("agent1", 1, "no_response")
+
     def test_retry_on_none_resolve_exhausted(self):
         record = MagicMock()
         service = AgentCallService(max_retries=2, retry_backoff=0.01, record_failure=record)
@@ -109,6 +120,15 @@ class TestCall:
         assert call_fn.call_count == 3
         assert resolve_fn.call_count == 3
 
+    def test_before_retry_called_on_none_resolve(self):
+        before_retry = MagicMock()
+        service = AgentCallService(max_retries=2, retry_backoff=0.01, before_retry=before_retry)
+        call_fn = MagicMock(return_value="response")
+        resolve_fn = MagicMock(return_value=None)
+        with patch("quimera.app.agent_call_service.time.sleep"):
+            service.call("agent1", call_fn, resolve_fn, lambda: False)
+        before_retry.assert_called_once_with("agent1", 1, "resolve_failed")
+
     def test_exception_during_call_retries_and_raises(self):
         record = MagicMock()
         service = AgentCallService(max_retries=2, retry_backoff=0.01, record_failure=record)
@@ -131,6 +151,15 @@ class TestCall:
         with patch("quimera.app.agent_call_service.time.sleep"):
             result = service.call("agent1", _call, resolve_fn, lambda: False)
         assert result == "result"
+
+    def test_before_retry_called_on_exception(self):
+        before_retry = MagicMock()
+        service = AgentCallService(max_retries=2, retry_backoff=0.01, before_retry=before_retry)
+        call_fn = MagicMock(side_effect=ValueError("boom"))
+        with patch("quimera.app.agent_call_service.time.sleep"):
+            with pytest.raises(ValueError):
+                service.call("agent1", call_fn, MagicMock(), lambda: False)
+        before_retry.assert_called_once_with("agent1", 1, "exception")
 
     def test_exception_during_resolve_retries_and_raises(self):
         record = MagicMock()

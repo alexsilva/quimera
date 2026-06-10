@@ -487,6 +487,9 @@ class TerminalRenderer:
         self._active_stream_agents = set()
         # Streams transitórios de progresso
         self._transient_stream_agents = set()
+        # Último evento persistente impresso, para evitar espaçamento redundante.
+        self._last_persistent_kind: str | None = None
+        self._last_persistent_agent: str | None = None
         # Buffer rolling para feed rolável do agente
         self._rolling_buffers: dict[str, list[str]] = {}
         # Lock protege _completed_streams, _active_stream_agents, _statuses e versão
@@ -650,7 +653,7 @@ class TerminalRenderer:
                     _get_renderable(),
                     console=self._console,
                     refresh_per_second=8,
-                    transient=False,
+                    transient=True,
                     auto_refresh=False,
                 )
                 _ul[0].start()
@@ -661,9 +664,8 @@ class TerminalRenderer:
                 _ul[0].update(_get_renderable(), refresh=True)
 
         def _close_live():
-            """Encerra o Live ativo com refresh final vazio."""
+            """Encerra o Live ativo sem refresh vazio residual."""
             if _ul[0] is not None:
-                _ul[0].update(Text(""), refresh=True)
                 _ul[0].stop()
                 _ul[0] = None
                 self._stream_live_active.clear()
@@ -741,8 +743,9 @@ class TerminalRenderer:
                 elif isinstance(event, LiveStartEvent):
                     _audit("stream_start", agent=event.agent, prompt_active=_prompt_active())
                     _stream_states[event.agent] = event.state
-                    _ensure_live()
-                    _refresh()
+                    if str(event.state.get("content") or "").strip():
+                        _ensure_live()
+                        _refresh()
 
                 elif isinstance(event, LiveUpdateChunkEvent):
                     # Coalescing: drena chunks consecutivos de todos os agentes para um único _refresh()
@@ -782,6 +785,12 @@ class TerminalRenderer:
                                 previews_truncated=len(chunks) > 5,
                             )
                     if batches:
+                        has_visible_content = any(
+                            str(state.get("content") or "").strip()
+                            for state in _stream_states.values()
+                        )
+                        if has_visible_content:
+                            _ensure_live()
                         _refresh()
 
                 elif isinstance(event, LiveStopEvent):
@@ -963,6 +972,30 @@ class TerminalRenderer:
         if self._density != "compact":
             self._print("", kind="spacing")
 
+    def _remember_persistent_event(self, kind: str, agent: str | None = None) -> None:
+        """Registra o último evento persistente impresso no histórico."""
+        self._last_persistent_kind = kind
+        self._last_persistent_agent = _coerce_agent_name(agent) if agent else None
+
+    def _should_insert_message_spacing(self, agent: str | None = None) -> bool:
+        """Decide se a próxima mensagem final deve abrir um novo bloco visual."""
+        if self._density == "compact":
+            return False
+        if self._last_persistent_kind in {
+            "plain",
+            "error",
+            "warning",
+            "system",
+            "system_neutral",
+        }:
+            return False
+        if not agent:
+            return True
+        current_agent = _coerce_agent_name(agent)
+        if self._last_persistent_agent != current_agent:
+            return True
+        return True
+
     def _build_turn_header(self, theme_name: str, label: str, style: str):
         """Monta cabeçalho de turno por tema."""
         if theme_name == "chat":
@@ -1112,7 +1145,8 @@ class TerminalRenderer:
             return
         if self._console:
             theme_name = self._theme.name
-            self._spacing()
+            if self._should_insert_message_spacing(agent):
+                self._spacing()
             block = self._render_turn_block(
                 theme_name,
                 label,
@@ -1123,6 +1157,7 @@ class TerminalRenderer:
                 render_mode=render_mode,
             )
             self._print(block, kind="message")
+            self._remember_persistent_event("message", agent)
         else:
             print(f"\n{label}: {clean_content}\n")
 
@@ -1367,6 +1402,7 @@ class TerminalRenderer:
             line.no_wrap = False
             line.overflow = "fold"
             self._print(line, kind="system")
+            self._remember_persistent_event("system")
         else:
             print(clean_message)
 
@@ -1383,6 +1419,7 @@ class TerminalRenderer:
             line.no_wrap = False
             line.overflow = "fold"
             self._print(line, kind="system_neutral")
+            self._remember_persistent_event("system_neutral")
         else:
             print(f"{icon} {clean_message}")
 
@@ -1416,6 +1453,7 @@ class TerminalRenderer:
             line.no_wrap = False
             line.overflow = "fold"
             self._print(line, kind="plain")
+            self._remember_persistent_event("plain", agent)
         else:
             prefix = f"{agent}: " if agent else ""
             print(f"{prefix}{clean_message}")
@@ -1455,6 +1493,7 @@ class TerminalRenderer:
             else:
                 line = Text.assemble((f"{icon} ", style), (clean_message, "red"))
             self._print(line, kind="error")
+            self._remember_persistent_event("error", agent)
         else:
             if agent:
                 _, label = self._agent_style(agent)
@@ -1469,6 +1508,7 @@ class TerminalRenderer:
             style, icon = ROLE_STYLES["warning"]
             line = Text.assemble((f"{icon} ", style), (clean_message, "yellow"))
             self._print(line, kind="warning")
+            self._remember_persistent_event("warning")
         else:
             print(clean_message)
 
