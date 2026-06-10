@@ -444,6 +444,7 @@ def test_main_connect_socket_usa_modo_proxy(monkeypatch):
 
     monkeypatch.setattr("quimera.runtime.mcp.server._proxy_stdio_to_socket", _fake_proxy)
     monkeypatch.setattr(sys, "argv", ["mcp_server", "--connect-socket", "/tmp/quimera.sock"])
+    monkeypatch.delenv("QUIMERA_MCP_TOKEN", raising=False)
 
     from quimera.runtime.mcp import server as mcp_server
 

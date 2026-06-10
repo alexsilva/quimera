@@ -202,7 +202,7 @@ def test_claude_plugin_injects_mcp_server():
     try:
         plugin.set_mcp_socket_path("/tmp/quimera.sock")
         cmd = plugin.effective_cmd()
-        base = ["claude", "--permission-mode=dontAsk", "--output-format=stream-json", "--verbose", "-p"]
+        base = ["claude", "--permission-mode=bypassPermissions", "--output-format=stream-json", "--verbose", "-p"]
         assert cmd[:len(base)] == base
         assert "--mcp-config" in cmd
         idx = cmd.index("--mcp-config")
@@ -1179,8 +1179,7 @@ def test_agent_client_run_spy_shows_claude_stdout_context(renderer):
     assert result == '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read"},{"type":"text","text":"Vou inspecionar o arquivo antes de sugerir a mudança."}]}}\n{"type":"result","result":"ok","is_error":false}'
     renderer.update_agent_transient.assert_any_call("claude", "iniciando execução")
     renderer.update_agent_transient.assert_any_call("claude", "usando Read")
-    renderer.show_plain.assert_any_call("Vou inspecionar o arquivo antes de sugerir a mudança.",
-                                        agent="claude", muted=True)
+    renderer.update_agent_transient.assert_any_call("claude", "Vou inspecionar o arquivo antes de sugerir a mudança.")
     renderer.update_agent_transient.assert_any_call("claude", "execução concluída")
     renderer.clear_agent_transient.assert_any_call("claude")
 
@@ -1656,7 +1655,7 @@ def test_format_claude_spy_event_summarizes_assistant_and_result():
     result = _format_claude_spy_event('{"type":"result","result":"ok","is_error":false}')
     assert assistant == [
         SpyEvent(kind="tool", text="usando Bash", transient=True),
-        SpyEvent(kind="response", text="Vou validar com um teste focado antes de concluir.", final=True),
+        SpyEvent(kind="response", text="Vou validar com um teste focado antes de concluir.", transient=True),
     ]
     assert result == [SpyEvent(kind="context", text="execução concluída", transient=True)]
 

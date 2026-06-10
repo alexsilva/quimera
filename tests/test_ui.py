@@ -638,10 +638,12 @@ class TestTerminalRenderer:
         renderer.close(timeout=1.0)
 
     def test_start_message_stream_disables_auto_refresh(self, mock_renderer):
-        # Live é criado no writer thread (_ensure_live); auto_refresh=False elimina repaints ociosos
+        # Live é criado no writer thread (_ensure_live) apenas quando há conteúdo;
+        # auto_refresh=False elimina repaints ociosos
         with patch("quimera.ui.Live") as mock_live:
             mock_live.return_value = MagicMock()
             mock_renderer.start_message_stream("codex")
+            mock_renderer.update_message_stream("codex", "primeiro conteúdo")
             mock_renderer.flush()
 
         assert mock_live.call_args.kwargs["auto_refresh"] is False
