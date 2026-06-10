@@ -740,6 +740,8 @@ class QuimeraApp:
             return ["list", "show", "close", "analyze", "stats"]
         if command == CMD_RESET:
             return ["state", "history", "all"]
+        if command in ("s", "r"):
+            return sorted(self.agent_pool)
         return []
 
     def _resolve_plugin_style(self, agent: str):

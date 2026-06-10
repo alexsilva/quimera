@@ -11,6 +11,7 @@ class AgentPool:
     def __init__(self, agents: list[str]):
         self._lock = threading.Lock()
         self._agents = list(agents)
+        self._frozen_agent: str | None = None
 
     @property
     def agents(self) -> list[str]:
@@ -27,10 +28,29 @@ class AgentPool:
         with self._lock:
             if not self._agents:
                 return None
+            if self._frozen_agent is not None:
+                return self._frozen_agent
             primary = self._agents[0]
             if len(self._agents) > 1:
                 self._agents = self._agents[1:] + self._agents[:1]
             return primary
+
+    def freeze(self, agent_name: str) -> None:
+        """Congela a rotação: take_primary() sempre retorna este agente."""
+        with self._lock:
+            if agent_name not in self._agents:
+                raise ValueError(f"Agente {agent_name} não está no pool")
+            self._frozen_agent = agent_name
+
+    def unfreeze(self) -> None:
+        """Descongela: take_primary() volta a rotacionar."""
+        with self._lock:
+            self._frozen_agent = None
+
+    @property
+    def frozen_agent(self) -> str | None:
+        with self._lock:
+            return self._frozen_agent
 
     def add(self, name: str) -> None:
         with self._lock:

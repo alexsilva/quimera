@@ -41,6 +41,25 @@ class _SlashCommandCompleter(Completer):
 
     def get_completions(self, document, complete_event):
         text_before_cursor = (document.text_before_cursor or "").lstrip()
+
+        for prefix in ("s/", "r/"):
+            if text_before_cursor.startswith(prefix):
+                partial = text_before_cursor[len(prefix):]
+                if callable(self._argument_resolver):
+                    try:
+                        suggestions = (
+                            self._argument_resolver(prefix.rstrip("/"), partial) or []
+                        )
+                    except Exception:
+                        suggestions = []
+                    for suggestion in suggestions:
+                        full = f"{prefix}{suggestion}"
+                        if full.startswith(text_before_cursor):
+                            yield Completion(
+                                full, start_position=-len(text_before_cursor)
+                            )
+                return
+
         if not text_before_cursor.startswith("/"):
             return
 

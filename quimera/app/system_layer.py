@@ -673,4 +673,26 @@ class AppSystemLayer:
                 )
             return True
 
+        if command.startswith("s/") and len(command) > 2:
+            agent = command[2:].strip().split()[0]
+            try:
+                self.agent_pool.freeze(agent)
+            except ValueError:
+                self._display.show_warning_message(
+                    f"Agente '{agent}' não está no pool ativo."
+                )
+                return True
+            self._display.show_system(
+                f"[rotação] congelada para {agent} — "
+                "todo input não-prefixado irá para este agente."
+            )
+            return True
+
+        if command.startswith("r/") and len(command) > 2:
+            self.agent_pool.unfreeze()
+            self._display.show_system(
+                "[rotação] descongelada — agentes voltam a rotacionar."
+            )
+            return True
+
         return False
