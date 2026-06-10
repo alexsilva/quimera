@@ -1186,7 +1186,6 @@ class TerminalRenderer:
             self._active_stream_agents.add(agent)
             theme_name = self._theme.name
 
-        self._spacing()
         state = {
             "content": "",
             "label": label,
