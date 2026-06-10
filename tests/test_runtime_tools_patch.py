@@ -4,6 +4,7 @@ from quimera.runtime.tools.patch import PatchTool
 
 
 def test_apply_patch_updates_existing_file(tmp_path):
+    """Verifica que apply_patch atualiza linhas existentes corretamente."""
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     target = workspace / "demo.txt"
@@ -27,6 +28,7 @@ def test_apply_patch_updates_existing_file(tmp_path):
 
 
 def test_apply_patch_add_file(tmp_path):
+    """Verifica que apply_patch cria novos arquivos via Add File."""
     workspace = tmp_path / "workspace"
     workspace.mkdir()
 
@@ -45,6 +47,7 @@ def test_apply_patch_add_file(tmp_path):
 
 
 def test_apply_patch_rejects_missing_hunk(tmp_path):
+    """Verifica que apply_patch rejeita hunk que não encontra correspondência."""
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     (workspace / "demo.txt").write_text("linha 1\nlinha 2\n", encoding="utf-8")

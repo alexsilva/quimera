@@ -29,6 +29,7 @@ def populated_registry(sample_plugin):
 
 
 class TestPluginRegistryInjection:
+    """Testes para injeção de PluginRegistry no QuimeraApp."""
 
     def test_default_no_registry_uses_plugins_module(self, tmp_path):
         """Sem registry injetado, usa plugins.get / plugins.all_plugins (fallback)."""
@@ -42,7 +43,7 @@ class TestPluginRegistryInjection:
         assert plugin.name == "codex"
 
     def test_injected_empty_registry_returns_no_plugins(self, tmp_path, empty_registry):
-        """Registry vazio injetado -> get_available_plugins vazio, get_agent_plugin None."""
+        """Verifica que registry vazio injetado retorna lista vazia e None para consultas."""
         app = QuimeraApp(tmp_path, plugin_registry=empty_registry)
         available = app.get_available_plugins()
         assert available == []
@@ -50,7 +51,7 @@ class TestPluginRegistryInjection:
         assert plugin is None
 
     def test_injected_registry_with_plugin_returns_it(self, tmp_path, populated_registry, sample_plugin):
-        """Registry populado injetado -> plugins corretos."""
+        """Verifica que registry populado retorna os plugins corretos."""
         app = QuimeraApp(tmp_path, plugin_registry=populated_registry)
         available = app.get_available_plugins()
         assert available == [sample_plugin]
@@ -58,20 +59,20 @@ class TestPluginRegistryInjection:
         assert plugin is sample_plugin
 
     def test_injected_registry_unknown_agent_returns_none(self, tmp_path, populated_registry):
-        """Registry injetado sem o agente consultado -> None."""
+        """Verifica que agente inexistente no registry retorna None."""
         app = QuimeraApp(tmp_path, plugin_registry=populated_registry)
         plugin = app.get_agent_plugin("unknown-agent")
         assert plugin is None
 
     def test_default_registry_isolation_from_injected(self, tmp_path, populated_registry):
-        """Dois apps com registries diferentes nao compartilham plugins."""
+        """Verifica que dois apps com registries diferentes não compartilham plugins."""
         app1 = QuimeraApp(tmp_path, plugin_registry=populated_registry)
         app2 = QuimeraApp(tmp_path)  # Sem registry -> usa modulo plugins global
         assert app1.get_available_plugins() == [populated_registry.all_plugins()[0]]
         assert len(app2.get_available_plugins()) > 0  # Modulo global tem plugins
 
     def test_get_agent_plugin_normalizes_name_with_registry(self, tmp_path, populated_registry, sample_plugin):
-        """Normalizacao de nome (objeto com .name) funciona com registry injetado."""
+        """Verifica que a normalização de nome funciona com registry injetado."""
         app = QuimeraApp(tmp_path, plugin_registry=populated_registry)
 
         class FakeAgent:
@@ -81,13 +82,13 @@ class TestPluginRegistryInjection:
         assert plugin is sample_plugin
 
     def test_get_agent_plugin_empty_name_returns_none(self, tmp_path, empty_registry):
-        """Nome vazio ou None retorna None mesmo com registry."""
+        """Verifica que nome vazio ou None retorna None mesmo com registry."""
         app = QuimeraApp(tmp_path, plugin_registry=empty_registry)
         assert app.get_agent_plugin("") is None
         assert app.get_agent_plugin(None) is None
 
     def test_available_commands_uses_only_selected_agents_prefixes(self, tmp_path):
-        """Autocomplete não deve incluir prefixo de plugin base fora do agent_pool."""
+        """Verifica que o autocomplete só inclui prefixos dos agentes selecionados."""
         registry = PluginRegistry()
         codex_plugin = AgentPlugin(name="codex", prefix="/codex", style=("blue", "Codex"))
         opencode_plugin = AgentPlugin(name="opencode", prefix="/opencode", style=("blue", "OpenCode"))

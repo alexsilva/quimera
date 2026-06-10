@@ -41,11 +41,13 @@ def _task_row(task_id, db_path):
 
 
 def test_init_requires_db_path():
+    """Verifica que o repositório exige um db_path válido."""
     with pytest.raises(ValueError, match="db_path is required"):
         TaskRepository("")
 
 
 def test_create_task_and_list_tasks(repository):
+    """Verifica a criação de tarefa e a listagem de tarefas."""
     job_id = runtime_tasks.add_job("job repo", db_path=repository.db_path)
     task_id = repository.create_task(
         job_id,
@@ -63,6 +65,7 @@ def test_create_task_and_list_tasks(repository):
 
 
 def test_get_job_returns_existing_and_none(repository):
+    """Verifica que get_job retorna o job existente ou None."""
     job_id = runtime_tasks.add_job("job detail", db_path=repository.db_path)
     job = repository.get_job(job_id)
 
@@ -73,6 +76,7 @@ def test_get_job_returns_existing_and_none(repository):
 
 
 def test_fail_task(repository):
+    """Verifica que fail_task marca a tarefa como falha."""
     job_id = runtime_tasks.add_job("job fail", db_path=repository.db_path)
     task_id = repository.create_task(job_id, "falhar", status=TaskStatus.IN_PROGRESS)
 
@@ -85,6 +89,7 @@ def test_fail_task(repository):
 
 
 def test_requeue_task(repository):
+    """Verifica que requeue_task coloca a tarefa de volta na fila."""
     job_id = runtime_tasks.add_job("job requeue", db_path=repository.db_path)
     task_id = repository.create_task(job_id, "retentar", assigned_to="codex", status=TaskStatus.IN_PROGRESS)
 
@@ -100,6 +105,7 @@ def test_requeue_task(repository):
 
 
 def test_submit_for_review_and_complete_task(repository):
+    """Verifica o fluxo de submissão para revisão e conclusão de tarefa."""
     job_id = runtime_tasks.add_job("job review", db_path=repository.db_path)
     review_task_id = repository.create_task(job_id, "revisar", status=TaskStatus.IN_PROGRESS)
     direct_task_id = repository.create_task(job_id, "fechar", status=TaskStatus.IN_PROGRESS)
@@ -124,6 +130,7 @@ def test_submit_for_review_and_complete_task(repository):
 
 
 def test_requeue_task_after_review_clears_reviewer(repository):
+    """Verifica que requeue após revisão limpa o revisor."""
     job_id = runtime_tasks.add_job("job review requeue", db_path=repository.db_path)
     task_id = repository.create_task(job_id, "ajustar", assigned_to="codex", status=TaskStatus.REVIEWING)
 
@@ -145,6 +152,7 @@ def test_requeue_task_after_review_clears_reviewer(repository):
 
 
 def test_transition_task_preserves_omitted_fields(repository):
+    """Verifica que transition_task preserva campos não informados."""
     job_id = runtime_tasks.add_job("job transition", db_path=repository.db_path)
     task_id = repository.create_task(job_id, "transicionar", status=TaskStatus.IN_PROGRESS)
     runtime_tasks.update_task(
@@ -167,6 +175,7 @@ def test_transition_task_preserves_omitted_fields(repository):
 
 
 def test_can_reassign_task(repository):
+    """Verifica a lógica de can_reassign_task com diferentes cenários."""
     assert repository.can_reassign_task(1, []) is False
     assert repository.can_reassign_task(999, ["codex"]) is False
 
@@ -183,6 +192,7 @@ def test_can_reassign_task(repository):
 
 
 def test_can_reassign_task_returns_true_on_sqlite_error(repository, monkeypatch):
+    """Verifica que can_reassign_task retorna True em caso de erro SQLite."""
     class BrokenCursor:
         def execute(self, *_args, **_kwargs):
             raise sqlite3.Error("boom")
@@ -232,6 +242,7 @@ def test_publish_swallows_sink_exception(tmp_path):
 
 
 def test_create_task_publishes_task_proposed(sink_repository):
+    """Verifica que create_task publica um evento TaskProposed."""
     repo, sink = sink_repository
     received = []
     sink.subscribe(TaskProposed, received.append)
@@ -249,6 +260,7 @@ def test_create_task_publishes_task_proposed(sink_repository):
 
 
 def test_claim_task_publishes_task_started(sink_repository):
+    """Verifica que claim_task publica um evento TaskStarted."""
     repo, sink = sink_repository
     received = []
     sink.subscribe(TaskStarted, received.append)
@@ -267,6 +279,7 @@ def test_claim_task_publishes_task_started(sink_repository):
 
 
 def test_submit_for_review_publishes_event(sink_repository):
+    """Verifica que submit_for_review publica um evento TaskSubmittedForReview."""
     repo, sink = sink_repository
     received = []
     sink.subscribe(TaskSubmittedForReview, received.append)
@@ -283,6 +296,7 @@ def test_submit_for_review_publishes_event(sink_repository):
 
 
 def test_claim_review_task_publishes_event(sink_repository):
+    """Verifica que claim_review_task publica um evento TaskReviewStarted."""
     repo, sink = sink_repository
     received = []
     sink.subscribe(TaskReviewStarted, received.append)
@@ -302,6 +316,7 @@ def test_claim_review_task_publishes_event(sink_repository):
 
 
 def test_complete_task_publishes_event(sink_repository):
+    """Verifica que complete_task publica um evento TaskCompleted."""
     repo, sink = sink_repository
     received = []
     sink.subscribe(TaskCompleted, received.append)
@@ -319,6 +334,7 @@ def test_complete_task_publishes_event(sink_repository):
 
 
 def test_requeue_task_publishes_event(sink_repository):
+    """Verifica que requeue_task publica um evento TaskRequeued."""
     repo, sink = sink_repository
     received = []
     sink.subscribe(TaskRequeued, received.append)
@@ -337,6 +353,7 @@ def test_requeue_task_publishes_event(sink_repository):
 
 
 def test_requeue_task_after_review_publishes_event(sink_repository):
+    """Verifica que requeue após revisão publica um evento TaskRequeued."""
     repo, sink = sink_repository
     received = []
     sink.subscribe(TaskRequeued, received.append)
@@ -352,6 +369,7 @@ def test_requeue_task_after_review_publishes_event(sink_repository):
 
 
 def test_transition_task_publishes_approved(sink_repository):
+    """Verifica que transition_task para APPROVED publica TaskApproved."""
     repo, sink = sink_repository
     received = []
     sink.subscribe(TaskApproved, received.append)
@@ -368,6 +386,7 @@ def test_transition_task_publishes_approved(sink_repository):
 
 
 def test_transition_task_publishes_rejected(sink_repository):
+    """Verifica que transition_task para REJECTED publica TaskRejected."""
     repo, sink = sink_repository
     received = []
     sink.subscribe(TaskRejected, received.append)

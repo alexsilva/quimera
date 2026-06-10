@@ -5,6 +5,7 @@ from quimera.plugins import get
 
 
 def test_mock_plugin_registered():
+    """Verifica que o plugin mock é registrado com os atributos esperados."""
     plugin = get("mock")
     assert plugin is not None
     assert plugin.name == "mock"

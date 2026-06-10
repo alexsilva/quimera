@@ -111,6 +111,7 @@ def _start_http_server(mcp=None) -> MCP_HTTPServer:
 
 class TestSSEQueueOutput:
     def test_write_parses_json_and_puts_on_queue(self):
+        """Verifica que Test write parses json and puts on queue."""
         q = MagicMock()
         out = _SSEQueueOutput(q)
         out.write('{"jsonrpc":"2.0","id":1,"result":{}}\n')
@@ -119,18 +120,21 @@ class TestSSEQueueOutput:
         )
 
     def test_write_ignores_empty_string(self):
+        """Verifica que Test write ignores empty string."""
         q = MagicMock()
         out = _SSEQueueOutput(q)
         out.write("\n")
         q.put_nowait.assert_not_called()
 
     def test_write_ignores_invalid_json(self):
+        """Verifica que Test write ignores invalid json."""
         q = MagicMock()
         out = _SSEQueueOutput(q)
         out.write("not json\n")
         q.put_nowait.assert_not_called()
 
     def test_flush_does_nothing(self):
+        """Verifica que Test flush does nothing."""
         out = _SSEQueueOutput(MagicMock())
         out.flush()
 
@@ -141,6 +145,7 @@ class TestSSEQueueOutput:
 
 class TestHealth:
     def test_health_returns_200_with_status_ok(self):
+        """Verifica que Test health returns 200 with status ok."""
         httpd = _start_http_server()
         try:
             resp = _http_request(
@@ -154,6 +159,7 @@ class TestHealth:
             httpd.shutdown()
 
     def test_health_has_cors_headers(self):
+        """Verifica que Test health has cors headers."""
         httpd = _start_http_server()
         try:
             resp = _http_request(
@@ -164,6 +170,7 @@ class TestHealth:
             httpd.shutdown()
 
     def test_health_returns_json_content_type(self):
+        """Verifica que Test health returns json content type."""
         httpd = _start_http_server()
         try:
             resp = _http_request(
@@ -181,6 +188,7 @@ class TestHealth:
 
 class TestSSE:
     def test_sse_returns_200_with_event_stream_content_type(self):
+        """Verifica que Test sse returns 200 with event stream content type."""
         httpd = _start_http_server()
         try:
             conn = HTTPConnection(httpd.host, httpd.port, timeout=5)
@@ -195,6 +203,7 @@ class TestSSE:
             httpd.shutdown()
 
     def test_sse_has_cors_headers(self):
+        """Verifica que Test sse has cors headers."""
         httpd = _start_http_server()
         try:
             conn = HTTPConnection(httpd.host, httpd.port, timeout=5)
@@ -207,6 +216,7 @@ class TestSSE:
             httpd.shutdown()
 
     def test_sse_sends_endpoint_event(self):
+        """Verifica que Test sse sends endpoint event."""
         httpd = _start_http_server()
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -233,6 +243,7 @@ class TestSSE:
             httpd.shutdown()
 
     def test_sse_sends_keepalive(self):
+        """Verifica que Test sse sends keepalive."""
         httpd = _start_http_server()
         try:
             with patch("queue.Queue.get", side_effect=queue.Empty):
@@ -264,6 +275,7 @@ class TestSSE:
 
 class TestOptions:
     def test_options_returns_204_with_cors(self):
+        """Verifica que Test options returns 204 with cors."""
         httpd = _start_http_server()
         try:
             resp = _http_request(
@@ -280,6 +292,7 @@ class TestOptions:
 
     @patch.dict(os.environ, {"QUIMERA_MCP_HTTP_CORS_ORIGINS": "https://app.example, https://admin.example"})
     def test_cors_uses_configured_origin_allowlist(self):
+        """Verifica que Test cors uses configured origin allowlist."""
         httpd = _start_http_server()
         try:
             resp = _http_request(
@@ -297,6 +310,7 @@ class TestOptions:
 
     @patch.dict(os.environ, {"QUIMERA_MCP_HTTP_CORS_ORIGINS": "https://app.example"})
     def test_cors_omits_unconfigured_origin(self):
+        """Verifica que Test cors omits unconfigured origin."""
         httpd = _start_http_server()
         try:
             resp = _http_request(
@@ -318,6 +332,7 @@ class TestOptions:
 
 class TestMessage:
     def test_ping_returns_pong(self):
+        """Verifica que Test ping returns pong."""
         httpd = _start_http_server()
         try:
             body = json.dumps({
@@ -336,6 +351,7 @@ class TestMessage:
             httpd.shutdown()
 
     def test_initialize_returns_server_info(self):
+        """Verifica que Test initialize returns server info."""
         httpd = _start_http_server()
         try:
             body = json.dumps({
@@ -353,6 +369,7 @@ class TestMessage:
             httpd.shutdown()
 
     def test_message_has_cors_headers(self):
+        """Verifica que Test message has cors headers."""
         httpd = _start_http_server()
         try:
             body = json.dumps({
@@ -368,6 +385,7 @@ class TestMessage:
             httpd.shutdown()
 
     def test_invalid_json_returns_400(self):
+        """Verifica que Test invalid json returns 400."""
         httpd = _start_http_server()
         try:
             resp = _http_request(
@@ -382,6 +400,7 @@ class TestMessage:
             httpd.shutdown()
 
     def test_non_dict_body_returns_400(self):
+        """Verifica que Test non dict body returns 400."""
         httpd = _start_http_server()
         try:
             body = json.dumps(["not", "a", "dict"]).encode("utf-8")
@@ -400,6 +419,7 @@ class TestMessage:
             httpd.shutdown()
 
     def test_initialized_notification_no_response(self):
+        """Verifica que Test initialized notification no response."""
         httpd = _start_http_server()
         try:
             body = json.dumps({
@@ -422,6 +442,7 @@ class TestMessage:
 
 class TestNotFound:
     def test_unknown_get_returns_404(self):
+        """Verifica que Test unknown get returns 404."""
         httpd = _start_http_server()
         try:
             resp = _http_request(
@@ -432,6 +453,7 @@ class TestNotFound:
             httpd.shutdown()
 
     def test_unknown_post_returns_404(self):
+        """Verifica que Test unknown post returns 404."""
         httpd = _start_http_server()
         try:
             resp = _http_request(
@@ -442,6 +464,7 @@ class TestNotFound:
             httpd.shutdown()
 
     def test_404_has_cors_headers(self):
+        """Verifica que Test 404 has cors headers."""
         httpd = _start_http_server()
         try:
             resp = _http_request(
@@ -458,6 +481,7 @@ class TestNotFound:
 
 class TestSSEIntegration:
     def test_message_goes_through_sse_channel(self):
+        """Verifica que Test message goes through sse channel."""
         httpd = _start_http_server()
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -524,6 +548,7 @@ class TestEnvConfig:
     @patch.dict(os.environ, {"QUIMERA_MCP_HTTP_HOST": "0.0.0.0",
                               "QUIMERA_MCP_HTTP_PORT": "9090"})
     def test_env_vars_configure_host_and_port(self):
+        """Verifica que Test env vars configure host and port."""
         mcp = _make_mcp_server()
         httpd = MCP_HTTPServer(mcp)
         assert httpd.host == "0.0.0.0"
@@ -531,12 +556,14 @@ class TestEnvConfig:
 
     @patch.dict(os.environ, {}, clear=True)
     def test_default_host_and_port(self):
+        """Verifica que Test default host and port."""
         mcp = _make_mcp_server()
         httpd = MCP_HTTPServer(mcp)
         assert httpd.host == "127.0.0.1"
         assert httpd.port == 8080
 
     def test_constructor_args_override_env(self):
+        """Verifica que Test constructor args override env."""
         os.environ["QUIMERA_MCP_HTTP_HOST"] = "0.0.0.0"
         os.environ["QUIMERA_MCP_HTTP_PORT"] = "9090"
         try:
@@ -555,6 +582,7 @@ class TestEnvConfig:
 
 class TestCreateServer:
     def test_create_server_returns_configured_instance(self):
+        """Verifica que Test create server returns configured instance."""
         mcp = _make_mcp_server()
         httpd = create_server(mcp, host="127.0.0.1", port=9999)
         assert isinstance(httpd, MCP_HTTPServer)
@@ -563,6 +591,7 @@ class TestCreateServer:
         assert httpd._mcp is mcp
 
     def test_create_server_uses_defaults(self):
+        """Verifica que Test create server uses defaults."""
         mcp = _make_mcp_server()
         httpd = create_server(mcp)
         assert httpd.host == "127.0.0.1"
@@ -599,17 +628,20 @@ class TestToolsCallHTTP:
 
 
     def test_read_local_profile_excludes_network_tools(self):
+        """Verifica que Test read local profile excludes network tools."""
         assert parse_http_allowed_tools("read-local") == HTTP_READ_LOCAL_TOOLS
         assert "web_search" not in HTTP_READ_LOCAL_TOOLS
         assert "web_fetch" not in HTTP_READ_LOCAL_TOOLS
 
     def test_read_profile_keeps_network_read_tools(self):
+        """Verifica que Test read profile keeps network read tools."""
         tools = parse_http_allowed_tools("read")
         assert tools == DEFAULT_HTTP_READ_ONLY_TOOLS
         assert "web_search" in tools
         assert "web_fetch" in tools
 
     def test_agent_profile_adds_call_agent_without_dangerous_write_or_shell_tools(self):
+        """Verifica que Test agent profile adds call agent without dangerous write or shell tools."""
         tools = parse_http_allowed_tools("agent")
         assert tools == HTTP_AGENT_TOOLS
         assert "call_agent" in tools
@@ -617,9 +649,11 @@ class TestToolsCallHTTP:
             assert blocked not in tools
 
     def test_all_profile_disables_allowlist(self):
+        """Verifica que Test all profile disables allowlist."""
         assert parse_http_allowed_tools("all") is None
 
     def test_tools_list_uses_default_read_only_allowlist(self):
+        """Verifica que Test tools list uses default read only allowlist."""
         executor = _make_executor(tool_names=["read_file", "run_shell", "grep_search"])
         httpd = _start_http_server(_make_mcp_server(executor))
         try:
@@ -644,6 +678,7 @@ class TestToolsCallHTTP:
 
 
     def test_profile_allowlists_filter_http_tools_for_external_clients(self):
+        """Verifica que Test profile allowlists filter http tools for external clients."""
         executor = _make_executor(tool_names=[
             "read_file", "grep_search", "web_search", "web_fetch",
             "call_agent", "run_shell", "write_file", "apply_patch",
@@ -684,6 +719,7 @@ class TestToolsCallHTTP:
                 httpd.shutdown()
 
     def test_internal_mcp_server_lists_sensitive_tools_without_http_allowlist(self):
+        """Verifica que Test internal mcp server lists sensitive tools without http allowlist."""
         executor = _make_executor(tool_names=["read_file", "run_shell", "write_file", "apply_patch"])
         server = _make_mcp_server(executor)
         inp = io.StringIO(json.dumps({"jsonrpc": "2.0", "id": 34, "method": "tools/list"}) + "\n")
@@ -696,6 +732,7 @@ class TestToolsCallHTTP:
         assert {"run_shell", "write_file", "apply_patch"} <= tool_names
 
     def test_sensitive_internal_tool_calls_still_go_through_tool_policy_and_approval(self, tmp_path):
+        """Verifica que Test sensitive internal tool calls still go through tool policy and approval."""
         approval = MagicMock()
         approval.approve.return_value = False
         executor = ToolExecutor(
@@ -719,6 +756,7 @@ class TestToolsCallHTTP:
         assert "Execução negada" in response["result"]["content"][0]["text"]
 
     def test_tools_call_blocks_tools_outside_default_allowlist(self):
+        """Verifica que Test tools call blocks tools outside default allowlist."""
         executor = _make_executor(tool_names=["read_file", "run_shell"])
         httpd = _start_http_server(_make_mcp_server(executor))
         try:
@@ -740,6 +778,7 @@ class TestToolsCallHTTP:
             httpd.shutdown()
 
     def test_custom_allowlist_can_expose_run_shell(self):
+        """Verifica que Test custom allowlist can expose run shell."""
         executor = _make_executor(tool_names=["read_file", "run_shell"])
         httpd = MCP_HTTPServer(
             _make_mcp_server(executor),
@@ -860,6 +899,7 @@ class TestToolsCallHTTP:
 
 class TestShutdown:
     def test_shutdown_clears_sse_clients(self):
+        """Verifica que Test shutdown clears sse clients."""
         mcp = _make_mcp_server()
         httpd = MCP_HTTPServer(mcp, host="127.0.0.1", port=0)
         httpd.start_background()
@@ -874,12 +914,14 @@ class TestShutdown:
         assert len(httpd._sse_clients) == 0
 
     def test_shutdown_without_start_does_not_raise(self):
+        """Verifica que Test shutdown without start does not raise."""
         mcp = _make_mcp_server()
         httpd = MCP_HTTPServer(mcp)
         httpd.shutdown()
 
 class TestStreamableHTTP:
     def test_mcp_post_initialize_cria_sessao_e_exige_header_de_versao_depois(self):
+        """Verifica que Test mcp post initialize cria sessao e exige header de versao depois."""
         httpd = _start_http_server(_make_mcp_server())
         try:
             body = json.dumps({
@@ -904,6 +946,7 @@ class TestStreamableHTTP:
             httpd.shutdown()
 
     def test_mcp_http_respeita_bearer_token(self):
+        """Verifica que Test mcp http respeita bearer token."""
         mcp = MCPServer(_make_executor(), auth_token="secret")
         httpd = _start_http_server(mcp)
         try:
@@ -916,6 +959,7 @@ class TestStreamableHTTP:
             httpd.shutdown()
 
     def test_mcp_http_aplica_token_em_sse_e_message_legados(self):
+        """Verifica que Test mcp http aplica token em sse e message legados."""
         mcp = MCPServer(_make_executor(), auth_token="secret")
         httpd = _start_http_server(mcp)
         try:
@@ -941,6 +985,7 @@ class TestStreamableHTTP:
 
 class TestHTTPTrustedSessions:
     def test_message_without_session_does_not_grow_http_sessions(self):
+        """Verifica que Test message without session does not grow http sessions."""
         result = ToolResult(ok=True, tool_name="read_file", content="ok")
         executor = _make_executor(call_result=result)
         httpd = _start_http_server(_make_mcp_server(executor))
@@ -962,6 +1007,7 @@ class TestHTTPTrustedSessions:
             httpd.shutdown()
 
     def test_mcp_rejects_unknown_session_id(self):
+        """Verifica que Test mcp rejects unknown session id."""
         httpd = _start_http_server(_make_mcp_server())
         try:
             body = json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}).encode()
@@ -980,6 +1026,7 @@ class TestHTTPTrustedSessions:
             httpd.shutdown()
 
     def test_message_rejects_unknown_session_id(self):
+        """Verifica que Test message rejects unknown session id."""
         httpd = _start_http_server(_make_mcp_server())
         try:
             body = json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}).encode()
@@ -994,6 +1041,7 @@ class TestHTTPTrustedSessions:
             httpd.shutdown()
 
     def test_initialize_rejects_client_supplied_session_id(self):
+        """Verifica que Test initialize rejects client supplied session id."""
         httpd = _start_http_server(_make_mcp_server())
         try:
             body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}).encode()
@@ -1016,6 +1064,7 @@ class TestOAuthMetadata:
     """Testa os endpoints de discovery OAuth exigidos pelo tunnel-client da OpenAI."""
 
     def test_oauth_protected_resource_returns_200(self):
+        """Verifica que Test oauth protected resource returns 200."""
         httpd = _start_http_server()
         try:
             resp = _http_request(
@@ -1027,6 +1076,7 @@ class TestOAuthMetadata:
             httpd.shutdown()
 
     def test_oauth_protected_resource_content_type_is_json(self):
+        """Verifica que Test oauth protected resource content type is json."""
         httpd = _start_http_server()
         try:
             resp = _http_request(
@@ -1039,6 +1089,7 @@ class TestOAuthMetadata:
             httpd.shutdown()
 
     def test_oauth_protected_resource_body_has_required_fields(self):
+        """Verifica que Test oauth protected resource body has required fields."""
         httpd = _start_http_server()
         try:
             resp = _http_request(
@@ -1057,6 +1108,7 @@ class TestOAuthMetadata:
             httpd.shutdown()
 
     def test_oauth_protected_resource_resource_url_ends_with_mcp(self):
+        """Verifica que Test oauth protected resource resource url ends with mcp."""
         httpd = _start_http_server()
         try:
             resp = _http_request(
@@ -1070,6 +1122,7 @@ class TestOAuthMetadata:
             httpd.shutdown()
 
     def test_oauth_protected_resource_does_not_expose_sensitive_data(self):
+        """Verifica que Test oauth protected resource does not expose sensitive data."""
         httpd = _start_http_server()
         try:
             resp = _http_request(
@@ -1084,6 +1137,7 @@ class TestOAuthMetadata:
             httpd.shutdown()
 
     def test_oauth_protected_resource_has_cors_headers(self):
+        """Verifica que Test oauth protected resource has cors headers."""
         httpd = _start_http_server()
         try:
             resp = _http_request(
@@ -1111,6 +1165,7 @@ class TestOAuthMetadata:
             httpd.shutdown()
 
     def test_oauth_authorization_server_returns_200(self):
+        """Verifica que Test oauth authorization server returns 200."""
         httpd = _start_http_server()
         try:
             resp = _http_request(
@@ -1122,6 +1177,7 @@ class TestOAuthMetadata:
             httpd.shutdown()
 
     def test_oauth_authorization_server_content_type_is_json(self):
+        """Verifica que Test oauth authorization server content type is json."""
         httpd = _start_http_server()
         try:
             resp = _http_request(
@@ -1134,6 +1190,7 @@ class TestOAuthMetadata:
             httpd.shutdown()
 
     def test_oauth_authorization_server_body_has_required_fields(self):
+        """Verifica que Test oauth authorization server body has required fields."""
         httpd = _start_http_server()
         try:
             resp = _http_request(
@@ -1152,6 +1209,7 @@ class TestOAuthMetadata:
             httpd.shutdown()
 
     def test_oauth_authorization_server_issuer_matches_host(self):
+        """Verifica que Test oauth authorization server issuer matches host."""
         httpd = _start_http_server()
         try:
             host_header = f"{httpd.host}:{httpd.port}"
@@ -1168,6 +1226,7 @@ class TestOAuthMetadata:
             httpd.shutdown()
 
     def test_oauth_authorization_server_has_cors_headers(self):
+        """Verifica que Test oauth authorization server has cors headers."""
         httpd = _start_http_server()
         try:
             resp = _http_request(
@@ -1195,6 +1254,7 @@ class TestOAuthMetadata:
             httpd.shutdown()
 
     def test_oauth_authorization_server_does_not_expose_sensitive_data(self):
+        """Verifica que Test oauth authorization server does not expose sensitive data."""
         httpd = _start_http_server()
         try:
             resp = _http_request(
@@ -1212,6 +1272,7 @@ class TestOAuthMetadata:
             httpd.shutdown()
 
     def test_unknown_wellknown_returns_404(self):
+        """Verifica que Test unknown wellknown returns 404."""
         httpd = _start_http_server()
         try:
             resp = _http_request(

@@ -30,6 +30,7 @@ def approval_handler():
 
 def test_executor_denied(config, approval_handler):
     # Line 58-59 coverage
+    """Verifica que Test executor denied."""
     executor = ToolExecutor(config, approval_handler)
     call = ToolCall(name="write_file", arguments={"path": "test.py", "content": "print(1)"})
     approval_handler.approve.return_value = False
@@ -39,6 +40,7 @@ def test_executor_denied(config, approval_handler):
 
 
 def test_executor_apply_patch_requires_approval(config, approval_handler):
+    """Verifica que Test executor apply patch requires approval."""
     executor = ToolExecutor(config, approval_handler)
     call = ToolCall(name="apply_patch", arguments={"patch": "*** Begin Patch\n*** End Patch"})
     approval_handler.approve.return_value = False
@@ -49,6 +51,7 @@ def test_executor_apply_patch_requires_approval(config, approval_handler):
 
 def test_executor_unexpected_exception(config, approval_handler):
     # Line 64-65 coverage
+    """Verifica que Test executor unexpected exception."""
     executor = ToolExecutor(config, approval_handler)
     call = ToolCall(name="list_files", arguments={"path": "/tmp"})
     with patch.object(executor.registry, "get") as mock_get:
@@ -60,6 +63,7 @@ def test_executor_unexpected_exception(config, approval_handler):
 
 
 def test_executor_registers_interactive_command_tools(config, approval_handler):
+    """Verifica que Test executor registers interactive command tools."""
     executor = ToolExecutor(config, approval_handler)
     names = executor.registry.names()
     assert "run_shell_command" not in names
@@ -70,6 +74,7 @@ def test_executor_registers_interactive_command_tools(config, approval_handler):
 
 
 def test_executor_normalizes_run_alias_with_commands_list(tmp_path):
+    """Verifica que Test executor normalizes run alias with commands list."""
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
     executor.approval_handler.approve.return_value = True
     result = executor.execute(ToolCall(name="run", arguments={"commands": ["echo hello"]}))
@@ -78,6 +83,7 @@ def test_executor_normalizes_run_alias_with_commands_list(tmp_path):
 
 
 def test_executor_normalizes_execute_command_alias(tmp_path):
+    """Verifica que Test executor normalizes execute command alias."""
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
     executor.approval_handler.approve.return_value = True
     result = executor.execute(ToolCall(name="execute_command", arguments={"command": "echo hello"}))
@@ -86,6 +92,7 @@ def test_executor_normalizes_execute_command_alias(tmp_path):
 
 
 def test_task_executor_skips_review_claim_when_agent_is_not_operational(tmp_path):
+    """Verifica que Test task executor skips review claim when agent is not operational."""
     repository = MagicMock()
     repository.claim_task.return_value = None
     executor = TaskExecutor("gemini", db_path=tmp_path / "tasks.db", poll_interval=0, repository=repository)

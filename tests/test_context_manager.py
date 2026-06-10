@@ -22,12 +22,14 @@ def renderer():
 
 
 def test_load_base(temp_files, renderer):
+    """Verifica que load_base retorna o conteúdo do arquivo base."""
     base, session = temp_files
     cm = ContextManager(base, session, renderer)
     assert cm.load_base() == "Base Content"
 
 
 def test_load_base_not_exists(tmp_path, renderer):
+    """Verifica que load_base retorna vazio quando o arquivo base não existe."""
     base = tmp_path / "nonexistent.md"
     session = tmp_path / "session.md"
     cm = ContextManager(base, session, renderer)
@@ -35,18 +37,21 @@ def test_load_base_not_exists(tmp_path, renderer):
 
 
 def test_load_session(temp_files, renderer):
+    """Verifica que load_session retorna o conteúdo completo do arquivo de sessão."""
     base, session = temp_files
     cm = ContextManager(base, session, renderer)
     assert cm.load_session() == "## Resumo da última sessão\n\n_Gerado em 2026-01-01 10:00_\n\nActual Summary"
 
 
 def test_load_session_summary(temp_files, renderer):
+    """Verifica que load_session_summary extrai o resumo do arquivo de sessão."""
     base, session = temp_files
     cm = ContextManager(base, session, renderer)
     assert cm.load_session_summary() == "Actual Summary"
 
 
 def test_load_session_summary_invalid(tmp_path, renderer):
+    """Verifica que resumo inválido retorna string vazia."""
     base = tmp_path / "base.md"
     session = tmp_path / "session.md"
     session.write_text("Invalid Summary", encoding="utf-8")
@@ -55,6 +60,7 @@ def test_load_session_summary_invalid(tmp_path, renderer):
 
 
 def test_load_session_summary_empty(tmp_path, renderer):
+    """Verifica que resumo vazio retorna string vazia."""
     base = tmp_path / "base.md"
     session = tmp_path / "session.md"
     session.write_text("## Resumo da última sessão\n\n", encoding="utf-8")
@@ -63,6 +69,7 @@ def test_load_session_summary_empty(tmp_path, renderer):
 
 
 def test_load_combined(temp_files, renderer):
+    """Verifica que load combina base e sessão, omitindo o cabeçalho do resumo."""
     base, session = temp_files
     cm = ContextManager(base, session, renderer)
     combined = cm.load()
@@ -72,6 +79,7 @@ def test_load_combined(temp_files, renderer):
 
 
 def test_load_only_base(tmp_path, renderer):
+    """Verifica que load retorna apenas o base quando não há sessão."""
     base = tmp_path / "base.md"
     base.write_text("Base Only", encoding="utf-8")
     session = tmp_path / "nonexistent.md"
@@ -80,6 +88,7 @@ def test_load_only_base(tmp_path, renderer):
 
 
 def test_load_only_session(tmp_path, renderer):
+    """Verifica que load retorna apenas a sessão quando não há base."""
     base = tmp_path / "nonexistent.md"
     session = tmp_path / "session.md"
     session.write_text("Session Only", encoding="utf-8")
@@ -88,6 +97,7 @@ def test_load_only_session(tmp_path, renderer):
 
 
 def test_load_empty(tmp_path, renderer):
+    """Verifica que load retorna vazio quando não há base nem sessão."""
     base = tmp_path / "nonexistent.md"
     session = tmp_path / "nonexistent.md"
     cm = ContextManager(base, session, renderer)
@@ -95,6 +105,7 @@ def test_load_empty(tmp_path, renderer):
 
 
 def test_show(temp_files, renderer):
+    """Verifica que show exibe o conteúdo base através do renderer."""
     base, session = temp_files
     cm = ContextManager(base, session, renderer)
     cm.show()
@@ -102,6 +113,7 @@ def test_show(temp_files, renderer):
 
 
 def test_show_empty(tmp_path, renderer):
+    """Verifica que show exibe mensagem de contexto vazio quando não há conteúdo."""
     base = tmp_path / "nonexistent.md"
     session = tmp_path / "nonexistent.md"
     cm = ContextManager(base, session, renderer)
@@ -112,6 +124,8 @@ def test_show_empty(tmp_path, renderer):
 @patch('os.environ.get')
 @patch('subprocess.run')
 def test_edit_with_editor_env(mock_run, mock_get, temp_files, renderer):
+    """Verifica que edit usa o editor definido em EDITOR."""
+
     mock_get.return_value = "code --wait"
     renderer.suspend_output.return_value = True
     base, session = temp_files
@@ -125,6 +139,8 @@ def test_edit_with_editor_env(mock_run, mock_get, temp_files, renderer):
 @patch('os.environ.get')
 @patch('subprocess.run')
 def test_edit_resumes_output_even_when_suspend_ack_times_out(mock_run, mock_get, temp_files, renderer):
+    """Verifica que edit retoma a saída mesmo quando o suspend não é confirmado."""
+
     mock_get.return_value = "code --wait"
     renderer.suspend_output.return_value = False
     base, session = temp_files
@@ -139,6 +155,8 @@ def test_edit_resumes_output_even_when_suspend_ack_times_out(mock_run, mock_get,
 @patch('shutil.which')
 @patch('subprocess.run')
 def test_edit_fallback_editor(mock_run, mock_which, mock_get, temp_files, renderer):
+    """Verifica que edit usa nano como fallback quando EDITOR não está definido."""
+
     mock_get.return_value = None
     mock_which.side_effect = lambda x: x == "nano"
     base, session = temp_files
@@ -150,6 +168,8 @@ def test_edit_fallback_editor(mock_run, mock_which, mock_get, temp_files, render
 @patch('os.environ.get')
 @patch('shutil.which')
 def test_edit_no_editor_found(mock_which, mock_get, temp_files, renderer):
+    """Verifica que edit exibe erro quando nenhum editor é encontrado."""
+
     mock_get.return_value = None
     mock_which.return_value = None
     base, session = temp_files
@@ -161,6 +181,8 @@ def test_edit_no_editor_found(mock_which, mock_get, temp_files, renderer):
 @patch('os.environ.get')
 @patch('subprocess.run')
 def test_edit_file_not_found(mock_run, mock_get, temp_files, renderer):
+    """Verifica que edit lida com FileNotFoundError do editor."""
+
     mock_get.return_value = "nonexistent_editor"
     mock_run.side_effect = FileNotFoundError
     base, session = temp_files
@@ -172,6 +194,8 @@ def test_edit_file_not_found(mock_run, mock_get, temp_files, renderer):
 @patch('os.environ.get')
 @patch('subprocess.run')
 def test_edit_error(mock_run, mock_get, temp_files, renderer):
+    """Verifica que edit exibe erro quando o subprocesso falha."""
+
     mock_get.return_value = "vim"
     mock_run.side_effect = subprocess.CalledProcessError(1, "vim")
     base, session = temp_files
@@ -181,6 +205,7 @@ def test_edit_error(mock_run, mock_get, temp_files, renderer):
 
 
 def test_update_with_summary(temp_files, renderer):
+    """Verifica que update_with_summary escreve o resumo no arquivo de sessão."""
     base, session = temp_files
     cm = ContextManager(base, session, renderer)
     cm.update_with_summary("New Summary")
@@ -191,6 +216,7 @@ def test_update_with_summary(temp_files, renderer):
 
 
 def test_load_previous_session_exists(tmp_path, renderer):
+    """Verifica que load_previous_session retorna o conteúdo quando o arquivo existe."""
     base = tmp_path / "base.md"
     session = tmp_path / "session.md"
     previous = tmp_path / "previous_session.md"
@@ -200,12 +226,14 @@ def test_load_previous_session_exists(tmp_path, renderer):
 
 
 def test_load_previous_session_not_exists(temp_files, renderer):
+    """Verifica que load_previous_session retorna vazio quando não há arquivo anterior."""
     base, session = temp_files
     cm = ContextManager(base, session, renderer, previous_session_file=None)
     assert cm.load_previous_session() == ""
 
 
 def test_load_with_previous_session(tmp_path, renderer):
+    """Verifica que load combina base e sessão sem incluir a sessão anterior."""
     base = tmp_path / "base.md"
     base.write_text("Base Context", encoding="utf-8")
     session = tmp_path / "session.md"
@@ -223,6 +251,7 @@ def test_load_with_previous_session(tmp_path, renderer):
 
 
 def test_load_without_previous_session(temp_files, renderer):
+    """Verifica que load funciona normalmente sem arquivo de sessão anterior."""
     base, session = temp_files
     cm = ContextManager(base, session, renderer, previous_session_file=None)
     result = cm.load()
@@ -233,6 +262,7 @@ def test_load_without_previous_session(temp_files, renderer):
 
 
 def test_load_filters_pending_sections_from_session_summary(tmp_path, renderer):
+    """Verifica que load filtra seções de pendências do resumo da sessão."""
     base = tmp_path / "base.md"
     base.write_text("Base Context", encoding="utf-8")
     session = tmp_path / "session.md"
@@ -258,6 +288,7 @@ def test_load_filters_pending_sections_from_session_summary(tmp_path, renderer):
 
 
 def test_save_previous_session(tmp_path, renderer):
+    """Verifica que save_previous_session persiste o resumo no arquivo anterior."""
     base = tmp_path / "base.md"
     session = tmp_path / "session.md"
     previous = tmp_path / "previous_session.md"
@@ -268,6 +299,7 @@ def test_save_previous_session(tmp_path, renderer):
 
 
 def test_save_previous_session_without_file_is_noop(tmp_path, renderer):
+    """Verifica que save_previous_session não faz nada quando não há arquivo configurado."""
     base = tmp_path / "base.md"
     session = tmp_path / "session.md"
     cm = ContextManager(base, session, renderer, previous_session_file=None)
@@ -276,6 +308,7 @@ def test_save_previous_session_without_file_is_noop(tmp_path, renderer):
 
 
 def test_load_truncates_context_to_max_lines(tmp_path, renderer):
+    """Verifica que load trunca o contexto respeitando max_context_lines."""
     base = tmp_path / "base.md"
     session = tmp_path / "session.md"
     base.write_text("linha 1\nlinha 2", encoding="utf-8")
@@ -290,6 +323,8 @@ def test_load_truncates_context_to_max_lines(tmp_path, renderer):
 @patch("os.environ.get")
 @patch("subprocess.run")
 def test_context_branch_switch_updates_edit_and_load_base(mock_run, mock_get, tmp_path, renderer):
+    """Verifica que a troca de branch atualiza o contexto e o editor."""
+
     mock_get.return_value = "code --wait"
     base_dir = tmp_path / "base"
     project_dir = tmp_path / "project"

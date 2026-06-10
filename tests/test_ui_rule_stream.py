@@ -7,6 +7,7 @@ from quimera.ui import TerminalRenderer
 
 
 def test_rule_stream_lifecycle_does_not_crash():
+    """Verifica que Test rule stream lifecycle does not crash."""
     with patch("quimera.ui._RICH_AVAILABLE", True):
         r = TerminalRenderer(theme="rule")
         r._console = Console(width=80, record=True, force_terminal=False)

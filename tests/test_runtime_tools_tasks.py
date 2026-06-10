@@ -20,6 +20,7 @@ def tools(config):
 
 
 def test_resolve_job_id_env(tools):
+    """Verifica que _resolve_job_id lê QUIMERA_CURRENT_JOB_ID do ambiente."""
     # Line 27-28 coverage
     with patch.dict(os.environ, {"QUIMERA_CURRENT_JOB_ID": "123"}):
         assert tools._resolve_job_id(None) == 123
@@ -30,6 +31,7 @@ def test_resolve_job_id_env(tools):
 
 @patch("quimera.runtime.tools.tasks._list_jobs")
 def test_resolve_job_id_fallback(mock_list, tools):
+    """Verifica que _resolve_job_id faz fallback para o job mais recente."""
     # Line 30-37 coverage
     # Clear environment to ensure fallback is tested
     with patch.dict(os.environ, {}, clear=True):
@@ -44,6 +46,7 @@ def test_resolve_job_id_fallback(mock_list, tools):
 
 
 def test_find_duplicate_task(tools):
+    """Verifica que _find_duplicate_task detecta tasks duplicadas por descrição."""
     # Line 53-62 coverage
     with patch("quimera.runtime.tools.tasks._list_tasks") as mock_list:
         mock_list.return_value = [{"description": "  TEST description  "}]
@@ -56,6 +59,7 @@ def test_find_duplicate_task(tools):
 
 @patch("quimera.runtime.tools.tasks._list_tasks")
 def test_list_tasks_error(mock_list, tools):
+    """Verifica que list_tasks trata exceção do banco."""
     # Line 69-70 coverage
     mock_list.side_effect = Exception("Boom")
     call = ToolCall(name="list_tasks", arguments={})
@@ -66,6 +70,7 @@ def test_list_tasks_error(mock_list, tools):
 
 @patch("quimera.runtime.tools.tasks._list_jobs")
 def test_list_jobs_error(mock_list, tools):
+    """Verifica que list_jobs trata exceção do banco."""
     # Line 81-82 coverage
     mock_list.side_effect = Exception("Boom")
     call = ToolCall(name="list_jobs", arguments={})
@@ -76,6 +81,7 @@ def test_list_jobs_error(mock_list, tools):
 
 @patch("quimera.runtime.tools.tasks._get_job")
 def test_get_job_no_id(mock_get, tools):
+    """Verifica que get_job retorna erro quando job_id não é fornecido."""
     # Line 87 coverage
     call = ToolCall(name="get_job", arguments={})
     with patch.dict(os.environ, {}, clear=True):
@@ -87,6 +93,7 @@ def test_get_job_no_id(mock_get, tools):
 
 @patch("quimera.runtime.tools.tasks._get_job")
 def test_get_job_error(mock_get, tools):
+    """Verifica que get_job trata exceção do banco."""
     # Line 91-92 coverage
     mock_get.side_effect = Exception("Boom")
     call = ToolCall(name="get_job", arguments={"job_id": 1})
@@ -96,6 +103,7 @@ def test_get_job_error(mock_get, tools):
 
 
 def test_get_job_null(tools):
+    """Verifica que get_job retorna 'null' quando job não existe."""
     with patch("quimera.runtime.tools.tasks._get_job") as mock_get:
         mock_get.return_value = None
         call = ToolCall(name="get_job", arguments={"job_id": 1})

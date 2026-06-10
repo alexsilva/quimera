@@ -18,6 +18,7 @@ from quimera.runtime.mcp import MCPServer
 
 
 def test_fake_plugins_are_registered_only_when_requested():
+    """Verifica que os plugins fake só são registrados após chamada explícita a register_fake_plugins e que as capacidades de cada um estão corretas."""
     registry = PluginRegistry()
 
     assert registry.all_names() == []
@@ -37,6 +38,7 @@ def test_fake_plugins_are_registered_only_when_requested():
 
 
 def test_fake_openai_prefers_current_turn_from_rendered_prompt():
+    """Verifica que fake openai prefers current turn from rendered prompt."""
     prompt = (
         "texto antigo com README e arquivos\n"
         '<current_turn title="Pedido atual de >>>">\n'
@@ -57,6 +59,7 @@ def test_fake_openai_prefers_current_turn_from_rendered_prompt():
     assert tool_call["function"]["name"] == "run_shell"
 
 def test_fake_openai_completion_requests_tool_call():
+    """Verifica que fake openai completion requests tool call."""
     payload = {
         "model": "quimera-fake-tools",
         "messages": [{"role": "user", "content": "Liste os arquivos do workspace"}],
@@ -77,6 +80,7 @@ def test_fake_openai_completion_requests_tool_call():
 
 
 def test_fake_openai_http_models_and_chat():
+    """Verifica que fake openai http models and chat."""
     server = ThreadingHTTPServer(("127.0.0.1", 0), FakeOpenAIHandler)
     server.model = "quimera-fake-tools"
     server.quiet = True
@@ -110,6 +114,7 @@ def test_fake_openai_http_models_and_chat():
 
 
 def test_openai_mcp_cli_calls_fake_openai_and_executes_tool_via_mcp(tmp_path):
+    """Verifica que openai mcp cli calls fake openai and executes tool via mcp."""
     (tmp_path / "README.md").write_text("# Projeto fake\nConteúdo via MCP.\n", encoding="utf-8")
 
     http = ThreadingHTTPServer(("127.0.0.1", 0), FakeOpenAIHandler)
@@ -159,6 +164,7 @@ def test_openai_mcp_cli_calls_fake_openai_and_executes_tool_via_mcp(tmp_path):
 
 
 def test_mcp_handoff_cli_calls_call_agent_via_mcp(tmp_path):
+    """Verifica que mcp handoff cli calls call agent via mcp."""
     socket_path = str(tmp_path / "quimera-mcp.sock")
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), AutoApprovalHandler(approve_all=True))
     executor.set_active_agents_provider(lambda: ["fake-openai"])
@@ -211,6 +217,7 @@ def test_mcp_handoff_cli_calls_call_agent_via_mcp(tmp_path):
 
 
 def test_mcp_handoff_cli_delegates_only_current_turn_via_call_agent(tmp_path):
+    """Verifica que mcp handoff cli delegates only current turn via call agent."""
     socket_path = str(tmp_path / "quimera-mcp-current-turn.sock")
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), AutoApprovalHandler(approve_all=True))
     executor.set_active_agents_provider(lambda: ["fake-openai"])
@@ -270,6 +277,7 @@ def test_mcp_handoff_cli_delegates_only_current_turn_via_call_agent(tmp_path):
 
 
 def test_fake_openai_ignores_persisted_connection_overrides_in_test_registry(tmp_path):
+    """Verifica que fake openai ignores persisted connection overrides in test registry."""
     conn_file = tmp_path / "connections.json"
     conn_file.write_text(json.dumps({
         "fake-openai": {
@@ -295,6 +303,7 @@ def test_fake_openai_ignores_persisted_connection_overrides_in_test_registry(tmp
 
 
 def test_fake_openai_allows_explicit_non_persistent_process_override(tmp_path):
+    """Verifica que fake openai allows explicit non persistent process override."""
     conn_file = tmp_path / "connections.json"
     registry = PluginRegistry()
     register_fake_plugins(registry)
@@ -317,6 +326,7 @@ def test_fake_openai_allows_explicit_non_persistent_process_override(tmp_path):
 
 
 def test_fake_openai_mcp_cli_env_uses_fake_openai_process_override():
+    """Verifica que fake openai mcp cli env uses fake openai process override."""
     registry = PluginRegistry()
     register_fake_plugins(registry)
     override = OpenAIConnection(

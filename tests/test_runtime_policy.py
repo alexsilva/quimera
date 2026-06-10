@@ -18,24 +18,28 @@ def policy(config):
 
 
 def test_policy_validate_unknown_tool(policy):
+    """Verifica que policy validate unknown tool."""
     call = ToolCall(name="unknown", arguments={})
     with pytest.raises(ToolPolicyError, match="Sem política"):
         policy.validate(call)
 
 
 def test_policy_read_file_no_path(policy):
+    """Verifica que policy read file no path."""
     call = ToolCall(name="read_file", arguments={})
     with pytest.raises(ToolPolicyError, match="requer 'path'"):
         policy.validate(call)
 
 
 def test_policy_write_file_no_content(policy):
+    """Verifica que policy write file no content."""
     call = ToolCall(name="write_file", arguments={"path": "test.txt"})
     with pytest.raises(ToolPolicyError, match="requer 'content'"):
         policy.validate(call)
 
 
 def test_policy_write_file_existing_requires_replace_flag(tmp_path):
+    """Verifica que policy write file existing requires replace flag."""
     config = ToolRuntimeConfig(workspace_root=tmp_path)
     policy = ToolPolicy(config)
     (tmp_path / "test.txt").write_text("old", encoding="utf-8")
@@ -45,6 +49,7 @@ def test_policy_write_file_existing_requires_replace_flag(tmp_path):
 
 
 def test_policy_write_file_existing_allowed_with_replace_flag(tmp_path):
+    """Verifica que policy write file existing allowed with replace flag."""
     config = ToolRuntimeConfig(workspace_root=tmp_path)
     policy = ToolPolicy(config)
     (tmp_path / "test.txt").write_text("old", encoding="utf-8")
@@ -56,12 +61,14 @@ def test_policy_write_file_existing_allowed_with_replace_flag(tmp_path):
 
 
 def test_policy_apply_patch_requires_patch(policy):
+    """Verifica que policy apply patch requires patch."""
     call = ToolCall(name="apply_patch", arguments={})
     with pytest.raises(ToolPolicyError, match="apply_patch requer 'patch'"):
         policy.validate(call)
 
 
 def test_policy_grep_search_no_pattern(policy):
+    """Verifica que policy grep search no pattern."""
     # Line 47 coverage
     call = ToolCall(name="grep_search", arguments={"pattern": ""})
     with pytest.raises(ToolPolicyError, match="requer um padrão não vazio"):
@@ -69,6 +76,7 @@ def test_policy_grep_search_no_pattern(policy):
 
 
 def test_policy_propose_task_disabled(policy):
+    """Verifica que policy propose task disabled."""
     # Line 53 coverage
     call = ToolCall(name="propose_task", arguments={})
     with pytest.raises(ToolPolicyError, match="foi desativada"):
@@ -76,6 +84,7 @@ def test_policy_propose_task_disabled(policy):
 
 
 def test_policy_shell_empty(policy):
+    """Verifica que policy shell empty."""
     # Line 74 coverage
     call = ToolCall(name="run_shell", arguments={"command": "  "})
     with pytest.raises(ToolPolicyError, match="requer um comando não vazio"):
@@ -83,35 +92,41 @@ def test_policy_shell_empty(policy):
 
 
 def test_policy_run_shell_command_alias(policy):
+    """Verifica que policy run shell command alias."""
     call = ToolCall(name="run_shell_command", arguments={"command": "ls"})
     policy.validate(call)
 
 
 def test_policy_exec_command_empty(policy):
+    """Verifica que policy exec command empty."""
     call = ToolCall(name="exec_command", arguments={"cmd": "  "})
     with pytest.raises(ToolPolicyError, match="exec_command requer um comando não vazio"):
         policy.validate(call)
 
 
 def test_policy_write_stdin_requires_session_id(policy):
+    """Verifica que policy write stdin requires session id."""
     call = ToolCall(name="write_stdin", arguments={})
     with pytest.raises(ToolPolicyError, match="session_id"):
         policy.validate(call)
 
 
 def test_policy_write_stdin_requires_integer_session_id(policy):
+    """Verifica que policy write stdin requires integer session id."""
     call = ToolCall(name="write_stdin", arguments={"session_id": "abc"})
     with pytest.raises(ToolPolicyError, match="session_id inteiro"):
         policy.validate(call)
 
 
 def test_policy_close_command_session_requires_session_id(policy):
+    """Verifica que policy close command session requires session id."""
     call = ToolCall(name="close_command_session", arguments={})
     with pytest.raises(ToolPolicyError, match="session_id"):
         policy.validate(call)
 
 
 def test_policy_shell_denylist(policy):
+    """Verifica que policy shell denylist."""
     # Line 81 coverage
     call = ToolCall(name="run_shell", arguments={"command": "rm -rf /"})
     with pytest.raises(ToolPolicyError, match="Comando bloqueado pela denylist"):
@@ -119,12 +134,14 @@ def test_policy_shell_denylist(policy):
 
 
 def test_policy_shell_chain_operator(policy):
+    """Verifica que policy shell chain operator."""
     call = ToolCall(name="run_shell", arguments={"command": "ls && cat"})
     with pytest.raises(ToolPolicyError, match="operador de encadeamento proibido"):
         policy.validate(call)
 
 
 def test_policy_shell_invalid_shlex(policy):
+    """Verifica que policy shell invalid shlex."""
     # Line 91-92 coverage
     call = ToolCall(name="run_shell", arguments={"command": 'echo "unclosed quote'})
     with pytest.raises(ToolPolicyError, match="Comando inválido"):
@@ -132,12 +149,14 @@ def test_policy_shell_invalid_shlex(policy):
 
 
 def test_policy_shell_not_in_allowlist(policy):
+    """Verifica que policy shell not in allowlist."""
     call = ToolCall(name="run_shell", arguments={"command": "nc -l 8080"})
     with pytest.raises(ToolPolicyError, match="fora da allowlist"):
         policy.validate(call)
 
 
 def test_policy_path_outside_workspace(policy):
+    """Verifica que policy path outside workspace."""
     call = ToolCall(name="read_file", arguments={"path": "../../etc/passwd"})
     with pytest.raises(ToolPolicyError, match="Path fora da workspace"):
         policy.validate(call)
@@ -158,6 +177,7 @@ def test_policy_path_prefix_sibling_outside_workspace(tmp_path):
 
 
 def test_policy_requires_approval(policy):
+    """Verifica que policy requires approval."""
     assert policy.requires_approval(ToolCall(name="write_file", arguments={})) is True
     assert policy.requires_approval(ToolCall(name="apply_patch", arguments={})) is True
     assert policy.requires_approval(ToolCall(name="run_shell_command", arguments={})) is True
@@ -165,6 +185,7 @@ def test_policy_requires_approval(policy):
 
 
 def test_policy_other_validations(policy):
+    """Verifica que policy other validations."""
     # Just to hit the pass/return lines
     policy.validate(ToolCall(name="list_tasks", arguments={"job_id": 1}))
     policy.validate(ToolCall(name="list_jobs", arguments={}))
@@ -176,63 +197,74 @@ def test_policy_other_validations(policy):
 
 
 def test_policy_todo_write_empty_todos(policy):
+    """Verifica que policy todo write empty todos."""
     call = ToolCall(name="todo_write", arguments={"todos": []})
     with pytest.raises(ToolPolicyError, match="lista não vazia"):
         policy.validate(call)
 
 
 def test_policy_todo_write_missing_todos(policy):
+    """Verifica que policy todo write missing todos."""
     call = ToolCall(name="todo_write", arguments={})
     with pytest.raises(ToolPolicyError, match="lista não vazia"):
         policy.validate(call)
 
 
 def test_policy_todo_write_invalid_item_type(policy):
+    """Verifica que policy todo write invalid item type."""
     call = ToolCall(name="todo_write", arguments={"todos": ["not a dict"]})
     with pytest.raises(ToolPolicyError, match="deve ser um dicionário"):
         policy.validate(call)
 
 
 def test_policy_todo_write_missing_content(policy):
+    """Verifica que policy todo write missing content."""
     call = ToolCall(name="todo_write", arguments={"todos": [{"priority": "high"}]})
     with pytest.raises(ToolPolicyError, match="requer 'content' não vazio"):
         policy.validate(call)
 
 
 def test_policy_todo_write_invalid_status(policy):
+    """Verifica que policy todo write invalid status."""
     call = ToolCall(name="todo_write", arguments={"todos": [{"content": "x", "status": "invalid"}]})
     with pytest.raises(ToolPolicyError, match="status inválido"):
         policy.validate(call)
 
 
 def test_policy_todo_write_invalid_priority(policy):
+    """Verifica que policy todo write invalid priority."""
     call = ToolCall(name="todo_write", arguments={"todos": [{"content": "x", "priority": "urgent"}]})
     with pytest.raises(ToolPolicyError, match="priority inválida"):
         policy.validate(call)
 
 
 def test_policy_todo_write_valid(policy):
+    """Verifica que policy todo write valid."""
     call = ToolCall(name="todo_write", arguments={"todos": [{"content": "task"}]})
     policy.validate(call)
 
 
 def test_policy_web_fetch_accepts_url(policy):
+    """Verifica que policy web fetch accepts url."""
     call = ToolCall(name="web_fetch", arguments={"url": "https://example.com"})
     policy.validate(call)
 
 
 def test_policy_web_fetch_accepts_url_string(policy):
+    """Verifica que policy web fetch accepts url string."""
     call = ToolCall(name="web_fetch", arguments={"url": "https://example.com"})
     policy.validate(call)
 
 
 def test_policy_web_fetch_rejects_empty_url(policy):
+    """Verifica que policy web fetch rejects empty url."""
     call = ToolCall(name="web_fetch", arguments={"url": " "})
     with pytest.raises(ToolPolicyError, match="url' não vazia"):
         policy.validate(call)
 
 
 def test_policy_disabled_tool_exceptions(policy):
+    """Verifica que policy disabled tool exceptions."""
     for tool in ["approve_task", "complete_task", "fail_task"]:
         with pytest.raises(ToolPolicyError):
             policy.validate(ToolCall(name=tool, arguments={}))
@@ -553,20 +585,24 @@ def test_policy_shell_file_cmd_flag_not_validated(policy):
 # ── is_path_inside ─────────────────────────────────────────
 
 def test_is_path_inside_same_dir(tmp_path):
+    """Verifica que is path inside same dir."""
     assert is_path_inside(tmp_path / "file.txt", tmp_path) is True
 
 
 def test_is_path_inside_subdir(tmp_path):
+    """Verifica que is path inside subdir."""
     sub = tmp_path / "sub"
     sub.mkdir()
     assert is_path_inside(sub / "file.txt", tmp_path) is True
 
 
 def test_is_path_inside_outside(tmp_path):
+    """Verifica que is path inside outside."""
     assert is_path_inside(Path("/etc/passwd"), tmp_path) is False
 
 
 def test_is_path_inside_prefix_sibling(tmp_path):
+    """Verifica que is path inside prefix sibling."""
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     sibling = tmp_path / "workspace2"
@@ -575,10 +611,12 @@ def test_is_path_inside_prefix_sibling(tmp_path):
 
 
 def test_is_path_inside_exact_root(tmp_path):
+    """Verifica que is path inside exact root."""
     assert is_path_inside(tmp_path, tmp_path) is True
 
 
 def test_is_path_inside_symlink(tmp_path):
+    """Verifica que is path inside symlink."""
     sub = tmp_path / "sub"
     sub.mkdir()
     target = sub / "target.txt"
@@ -589,6 +627,7 @@ def test_is_path_inside_symlink(tmp_path):
 
 
 def test_is_path_inside_with_symlinked_root(tmp_path):
+    """Verifica que is path inside with symlinked root."""
     real_root = tmp_path / "workspace"
     real_root.mkdir()
     root_alias = tmp_path / "workspace-link"

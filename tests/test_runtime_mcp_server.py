@@ -60,6 +60,7 @@ def _exchange(server, *msgs):
 
 class TestOpenaiSchemaToMcp:
     def test_converte_campos_basicos(self):
+        """Verifica que Test converte campos basicos."""
         schema = {
             "type": "function",
             "function": {
@@ -74,6 +75,7 @@ class TestOpenaiSchemaToMcp:
         assert result["inputSchema"]["required"] == ["path"]
 
     def test_schema_sem_parameters_usa_padrao(self):
+        """Verifica que Test schema sem parameters usa padrao."""
         schema = {"type": "function", "function": {"name": "ping", "description": ""}}
         result = _openai_schema_to_mcp(schema)
         assert result["inputSchema"] == {"type": "object", "properties": {}}
@@ -85,17 +87,20 @@ class TestOpenaiSchemaToMcp:
 
 class TestInitialize:
     def test_retorna_protocolVersion(self):
+        """Verifica que Test retorna protocolversion."""
         server = _make_server()
         [resp] = _exchange(server, {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
         assert resp["id"] == 1
         assert resp["result"]["protocolVersion"] == MCPServer.PROTOCOL_VERSION
 
     def test_retorna_serverInfo(self):
+        """Verifica que Test retorna serverinfo."""
         server = _make_server()
         [resp] = _exchange(server, {"jsonrpc": "2.0", "id": 2, "method": "initialize", "params": {}})
         assert resp["result"]["serverInfo"]["name"] == MCPServer.SERVER_NAME
 
     def test_retorna_capabilities_com_tools(self):
+        """Verifica que Test retorna capabilities com tools."""
         server = _make_server()
         [resp] = _exchange(server, {"jsonrpc": "2.0", "id": 3, "method": "initialize", "params": {}})
         assert "tools" in resp["result"]["capabilities"]
@@ -107,6 +112,7 @@ class TestInitialize:
 
 class TestInitialized:
     def test_nao_produz_resposta(self):
+        """Verifica que Test nao produz resposta."""
         server = _make_server()
         responses = _exchange(server, {"jsonrpc": "2.0", "method": "notifications/initialized"})
         assert responses == []
@@ -118,6 +124,7 @@ class TestInitialized:
 
 class TestPing:
     def test_retorna_resultado_vazio(self):
+        """Verifica que Test retorna resultado vazio."""
         server = _make_server()
         [resp] = _exchange(server, {"jsonrpc": "2.0", "id": 99, "method": "ping"})
         assert resp["result"] == {}
@@ -130,6 +137,7 @@ class TestPing:
 
 class TestToolsList:
     def test_retorna_lista_de_tools(self):
+        """Verifica que Test retorna lista de tools."""
         server = _make_server()
         with patch("quimera.runtime.mcp.server.resolve_tool_schemas") as mock_resolve:
             mock_resolve.return_value = [
@@ -143,6 +151,7 @@ class TestToolsList:
         assert "inputSchema" in tools[0]
 
     def test_tools_vazio_quando_executor_sem_tools(self):
+        """Verifica que Test tools vazio quando executor sem tools."""
         server = _make_server()
         with patch("quimera.runtime.mcp.server.resolve_tool_schemas", return_value=[]):
             [resp] = _exchange(server, {"jsonrpc": "2.0", "id": 6, "method": "tools/list"})
@@ -155,6 +164,7 @@ class TestToolsList:
 
 class TestToolsCall:
     def test_chama_executor_e_retorna_conteudo(self):
+        """Verifica que Test chama executor e retorna conteudo."""
         result = ToolResult(ok=True, tool_name="read_file", content="linhas do arquivo")
         executor = _make_executor(call_result=result)
         server = _make_server(executor)
@@ -173,6 +183,7 @@ class TestToolsCall:
         assert call_arg.arguments == {"path": "foo.py"}
 
     def test_retorna_is_error_quando_tool_falha(self):
+        """Verifica que Test retorna is error quando tool falha."""
         result = ToolResult(ok=False, tool_name="run_shell", error="Permissão negada")
         executor = _make_executor(call_result=result)
         server = _make_server(executor)
@@ -186,6 +197,7 @@ class TestToolsCall:
         assert "Permissão negada" in resp["result"]["content"][0]["text"]
 
     def test_retorna_erro_quando_name_ausente(self):
+        """Verifica que Test retorna erro quando name ausente."""
         server = _make_server()
         [resp] = _exchange(server, {
             "jsonrpc": "2.0", "id": 12, "method": "tools/call",
@@ -195,6 +207,7 @@ class TestToolsCall:
         assert resp["error"]["code"] == -32602
 
     def test_retorna_erro_interno_quando_execute_levanta_excecao(self):
+        """Verifica que Test retorna erro interno quando execute levanta excecao."""
         executor = _make_executor()
         executor.execute.side_effect = RuntimeError("boom")
         server = _make_server(executor)
@@ -209,6 +222,7 @@ class TestToolsCall:
         assert "boom" in resp["error"]["message"]
 
     def test_emite_logs_de_execucao_da_tool(self, caplog):
+        """Verifica que Test emite logs de execucao da tool."""
         result = ToolResult(ok=True, tool_name="read_file", content="ok")
         executor = _make_executor(call_result=result)
         server = _make_server(executor)
@@ -235,11 +249,13 @@ class TestToolsCall:
 
 class TestUnknownMethod:
     def test_retorna_method_not_found_para_request(self):
+        """Verifica que Test retorna method not found para request."""
         server = _make_server()
         [resp] = _exchange(server, {"jsonrpc": "2.0", "id": 20, "method": "foo/bar"})
         assert resp["error"]["code"] == -32601
 
     def test_silencioso_para_notificacao_desconhecida(self):
+        """Verifica que Test silencioso para notificacao desconhecida."""
         server = _make_server()
         # Notificação: sem id
         responses = _exchange(server, {"jsonrpc": "2.0", "method": "foo/bar"})
@@ -274,6 +290,7 @@ def _unix_socket_exchange(path: str, *msgs) -> list[dict]:
 
 class TestServeSocket:
     def test_serve_socket_processa_ping(self, tmp_path):
+        """Verifica que Test serve socket processa ping."""
         sock_path = str(tmp_path / "mcp_test.sock")
         server = _make_server()
         t = threading.Thread(target=server.serve_socket, args=(sock_path,), daemon=True)
@@ -291,6 +308,7 @@ class TestServeSocket:
         assert responses[0]["id"] == 1
 
     def test_serve_socket_remove_socket_antigo(self, tmp_path):
+        """Verifica que Test serve socket remove socket antigo."""
         sock_path = str(tmp_path / "mcp_old.sock")
         # Cria arquivo fantasma no path do socket
         open(sock_path, "w").close()
@@ -310,6 +328,7 @@ class TestServeSocket:
         # Não lança exceção, servidor está rodando
 
     def test_serve_socket_multiplos_clientes(self, tmp_path):
+        """Verifica que Test serve socket multiplos clientes."""
         sock_path = str(tmp_path / "mcp_multi.sock")
         server = _make_server()
         t = threading.Thread(target=server.serve_socket, args=(sock_path,), daemon=True)
@@ -342,6 +361,7 @@ class TestServeSocket:
         assert sorted(results) == [0, 1, 2]
 
     def test_start_background_retorna_imediatamente(self, tmp_path):
+        """Verifica que Test start background retorna imediatamente."""
         sock_path = str(tmp_path / "mcp_bg.sock")
         server = _make_server()
         server.start_background(sock_path)
@@ -358,6 +378,7 @@ class TestServeSocket:
 
 class TestSocketProxy:
     def test_proxy_stdio_to_socket_encaminha_request_e_resposta(self, tmp_path):
+        """Verifica que Test proxy stdio to socket encaminha request e resposta."""
         sock_path = str(tmp_path / "mcp_proxy.sock")
         server = _make_server()
         server.start_background(sock_path)
@@ -379,6 +400,7 @@ class TestSocketProxy:
 
 class TestInputRobustness:
     def test_linha_json_invalida_retorna_parse_error(self):
+        """Verifica que Test linha json invalida retorna parse error."""
         server = _make_server()
         inp = io.StringIO("isto nao e json\n" + json.dumps({"jsonrpc": "2.0", "id": 1, "method": "ping"}) + "\n")
         out = io.StringIO()
@@ -389,6 +411,7 @@ class TestInputRobustness:
         assert responses[1]["result"] == {}
 
     def test_linha_em_branco_e_ignorada(self):
+        """Verifica que Test linha em branco e ignorada."""
         server = _make_server()
         inp = io.StringIO("\n\n" + json.dumps({"jsonrpc": "2.0", "id": 1, "method": "ping"}) + "\n")
         out = io.StringIO()
@@ -397,6 +420,7 @@ class TestInputRobustness:
         assert len(responses) == 1
 
     def test_sequencia_de_requests(self):
+        """Verifica que Test sequencia de requests."""
         server = _make_server()
         msgs = [
             {"jsonrpc": "2.0", "id": i, "method": "ping"}
@@ -409,6 +433,7 @@ class TestInputRobustness:
 
 
 def test_main_connect_socket_usa_modo_proxy(monkeypatch):
+    """Verifica que Test main connect socket usa modo proxy."""
     captured = {}
 
     def _fake_proxy(path, *, token=None, stdin=None, stdout=None):
@@ -428,6 +453,7 @@ def test_main_connect_socket_usa_modo_proxy(monkeypatch):
 
 
 def test_main_connect_socket_com_token_cli(monkeypatch):
+    """Verifica que Test main connect socket com token cli."""
     captured = {}
 
     def _fake_proxy(path, *, token=None, stdin=None, stdout=None):
@@ -442,6 +468,7 @@ def test_main_connect_socket_com_token_cli(monkeypatch):
 
 
 def test_main_connect_socket_token_via_env(monkeypatch):
+    """Verifica que Test main connect socket token via env."""
     captured = {}
 
     def _fake_proxy(path, *, token=None, stdin=None, stdout=None):
@@ -457,6 +484,7 @@ def test_main_connect_socket_token_via_env(monkeypatch):
 
 
 def test_main_connect_socket_respeita_quimera_mcp_log_level(monkeypatch):
+    """Verifica que Test main connect socket respeita quimera mcp log level."""
     captured = {}
 
     def _fake_proxy(path, *, token=None, stdin=None, stdout=None):
@@ -640,6 +668,7 @@ class TestSocketAuth:
 
 class TestPluginTokenIntegration:
     def test_codex_inclui_token_no_proxy_args(self):
+        """Verifica que Test codex inclui token no proxy args."""
         from quimera.plugins.codex import CodexPlugin
         plugin = CodexPlugin(name="codex", prefix="/codex", style=("blue", "Codex"),
                              cmd=["codex", "exec"])
@@ -653,6 +682,7 @@ class TestPluginTokenIntegration:
         assert "mytoken" in proxy_cmd
 
     def test_codex_sem_token_nao_inclui_token_arg(self):
+        """Verifica que Test codex sem token nao inclui token arg."""
         from quimera.plugins.codex import CodexPlugin
         plugin = CodexPlugin(name="codex", prefix="/codex", style=("blue", "Codex"),
                              cmd=["codex", "exec"])
@@ -665,6 +695,7 @@ class TestPluginTokenIntegration:
         assert "--token" not in proxy_cmd
 
     def test_claude_inclui_token_no_mcp_config(self):
+        """Verifica que Test claude inclui token no mcp config."""
         from quimera.plugins.claude import ClaudePlugin
         plugin = ClaudePlugin(name="claude", prefix="/claude", style=("magenta", "Claude"),
                               cmd=["claude", "-p"])
@@ -678,6 +709,7 @@ class TestPluginTokenIntegration:
         assert "claudetoken" in proxy_args
 
     def test_claude_sem_token_nao_inclui_token_arg(self):
+        """Verifica que Test claude sem token nao inclui token arg."""
         from quimera.plugins.claude import ClaudePlugin
         plugin = ClaudePlugin(name="claude", prefix="/claude", style=("magenta", "Claude"),
                               cmd=["claude", "-p"])
@@ -689,6 +721,7 @@ class TestPluginTokenIntegration:
         assert "--token" not in proxy_args
 
     def test_opencode_inclui_token_na_config(self):
+        """Verifica que Test opencode inclui token na config."""
         from quimera.plugins.opencode import OpenCodePlugin
         plugin = OpenCodePlugin(name="opencode", prefix="/opencode", style=("blue", "OpenCode"),
                                 cmd=["opencode", "run"])
@@ -702,6 +735,7 @@ class TestPluginTokenIntegration:
         assert "opencodetoken" in cmd
 
     def test_opencode_sem_token_nao_inclui_token_arg(self):
+        """Verifica que Test opencode sem token nao inclui token arg."""
         from quimera.plugins.opencode import OpenCodePlugin
         plugin = OpenCodePlugin(name="opencode", prefix="/opencode", style=("blue", "OpenCode"),
                                 cmd=["opencode", "run"])
@@ -714,6 +748,7 @@ class TestPluginTokenIntegration:
         assert "--token" not in cmd
 
     def test_set_mcp_socket_config_configura_path_e_token(self):
+        """Verifica que Test set mcp socket config configura path e token."""
         from quimera.plugins.base import AgentPlugin
         plugin = AgentPlugin(name="test", prefix="/test", style=("white", "Test"))
         plugin.set_mcp_socket_config("/tmp/test.sock", "mytoken")
@@ -721,6 +756,7 @@ class TestPluginTokenIntegration:
         assert plugin._mcp_token == "mytoken"
 
     def test_set_mcp_socket_config_com_token_vazio_define_none(self):
+        """Verifica que Test set mcp socket config com token vazio define none."""
         from quimera.plugins.base import AgentPlugin
         plugin = AgentPlugin(name="test", prefix="/test", style=("white", "Test"))
         plugin.set_mcp_socket_config("/tmp/test.sock", "  ")
@@ -796,6 +832,7 @@ class TestPluginTokenIntegration:
 
 class TestLatestMCPFeatures:
     def test_initialize_anuncia_spec_latest_e_capacidades_completas(self):
+        """Verifica que Test initialize anuncia spec latest e capacidades completas."""
         server = _make_server()
         [resp] = _exchange(server, {
             "jsonrpc": "2.0", "id": 50, "method": "initialize",
@@ -809,6 +846,7 @@ class TestLatestMCPFeatures:
         assert result["capabilities"]["tools"]["listChanged"] is True
 
     def test_resources_list_read_templates_e_subscribe(self, tmp_path):
+        """Verifica que Test resources list read templates e subscribe."""
         (tmp_path / "README.md").write_text("# hello", encoding="utf-8")
         executor = _make_executor()
         executor.config.workspace_root = tmp_path
@@ -832,6 +870,7 @@ class TestLatestMCPFeatures:
         assert sub["result"] == {}
 
     def test_prompts_list_get_e_completion(self):
+        """Verifica que Test prompts list get e completion."""
         server = _make_server()
         [listed] = _exchange(server, {"jsonrpc": "2.0", "id": 55, "method": "prompts/list"})
         names = [p["name"] for p in listed["result"]["prompts"]]
@@ -852,6 +891,7 @@ class TestLatestMCPFeatures:
 
 class TestPluginHTTPIntegration:
     def test_http_config_is_legacy_and_not_injected_without_socket(self):
+        """Verifica que Test http config is legacy and not injected without socket."""
         from quimera.plugins.claude import ClaudePlugin
         from quimera.plugins.codex import CodexPlugin
         from quimera.plugins.opencode import OpenCodePlugin

@@ -47,11 +47,13 @@ def repository():
 
 
 def test_task_executor_init_error():
+    """Verifica que o executor levanta erro quando repository é None."""
     with pytest.raises(ValueError, match="repository is required"):
         TaskExecutor("agent", None)
 
 
 def test_task_executor_start_stop(db_path, repository):
+    """Verifica que o executor inicia e para corretamente."""
     executor = TaskExecutor("agent", db_path, repository=repository)
     executor.start()
     assert executor._running is True
@@ -61,6 +63,7 @@ def test_task_executor_start_stop(db_path, repository):
 
 
 def test_task_executor_poll_loop(db_path, repository):
+    """Verifica que o executor faz polling e processa tasks."""
     executor = TaskExecutor("agent", db_path, poll_interval=0.1, repository=repository)
     mock_handler = MagicMock(return_value=True)
     executor.set_handler(mock_handler)
@@ -77,6 +80,7 @@ def test_task_executor_poll_loop(db_path, repository):
 
 
 def test_task_executor_process_pending(db_path, repository):
+    """Verifica que o executor processa tasks pendentes."""
     executor = TaskExecutor("agent", db_path, repository=repository)
     mock_handler = MagicMock(return_value=True)
     executor.set_handler(mock_handler)
@@ -91,6 +95,7 @@ def test_task_executor_process_pending(db_path, repository):
 
 
 def test_create_executor(db_path, repository):
+    """Verifica que create_executor cria um executor corretamente."""
     handler = lambda x: True
     executor = create_executor("agent", handler, db_path, repository=repository)
     assert executor.agent_name == "agent"
@@ -98,11 +103,13 @@ def test_create_executor(db_path, repository):
 
 
 def test_create_executor_requires_repository(db_path):
+    """Verifica que create_executor exige repository."""
     with pytest.raises(ValueError, match="repository is required"):
         create_executor("agent", lambda _task: True, db_path)
 
 
 def test_task_executor_stop_ignores_keyboard_interrupt(db_path, repository):
+    """Verifica que o executor ignora KeyboardInterrupt ao parar."""
     executor = TaskExecutor("agent", db_path, repository=repository)
     mock_thread = MagicMock()
     mock_thread.join.side_effect = KeyboardInterrupt()
@@ -115,6 +122,7 @@ def test_task_executor_stop_ignores_keyboard_interrupt(db_path, repository):
 
 
 def test_task_executor_stop_interrupts_long_poll_interval(db_path, repository):
+    """Verifica que o executor interrompe polling longo ao parar."""
     executor = TaskExecutor("agent", db_path, poll_interval=60, repository=repository)
 
     executor.start()

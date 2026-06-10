@@ -11,6 +11,7 @@ from quimera.workspace import Workspace, WorkspaceTmp, find_base_writable
 
 class TestWorkspace(unittest.TestCase):
     def test_find_writable_prefers_writable_candidate(self):
+        """Verifica que find_base_writable prefere o primeiro diretório gravável encontrado."""
         # cria dois diretórios; o primeiro será torna-se não gravável
         with tempfile.TemporaryDirectory() as d1, tempfile.TemporaryDirectory() as d2:
             p1 = Path(d1)
@@ -27,6 +28,7 @@ class TestWorkspace(unittest.TestCase):
                 os.chmod(p1, old_mode)
 
     def test_workspace_metadata_and_index_creation(self):
+        """Verifica que o Workspace cria metadados e índice corretamente."""
         with tempfile.TemporaryDirectory() as base_dir, tempfile.TemporaryDirectory() as proj_tmp:
             base = Path(base_dir)
             proj = Path(proj_tmp) / "myproj"
@@ -45,6 +47,7 @@ class TestWorkspace(unittest.TestCase):
                 self.assertIn(ws.cwd_hash, index)
 
     def test_migrate_from_legacy_copies_context_and_logs(self):
+        """Verifica que a migração legado copia contexto e logs."""
         with tempfile.TemporaryDirectory() as base_dir, tempfile.TemporaryDirectory() as project_dir:
             base = Path(base_dir)
             project = Path(project_dir) / "projX"
@@ -69,6 +72,7 @@ class TestWorkspace(unittest.TestCase):
                 self.assertEqual(ws.context_session.read_text(encoding="utf-8"), "Legacy Session")
 
     def test_branch_persists_and_restores_across_instances(self):
+        """Verifica que a branch persiste entre diferentes instâncias do Workspace."""
         with tempfile.TemporaryDirectory() as base_dir, tempfile.TemporaryDirectory() as proj_tmp:
             base = Path(base_dir)
             proj = Path(proj_tmp) / "branchproj"
@@ -83,6 +87,7 @@ class TestWorkspace(unittest.TestCase):
                 self.assertEqual(ws2.context_persistent, ws1.context_persistent)
 
     def test_tmp_render_debug_paths_live_under_workspace_tmp(self):
+        """Verifica que os caminhos de debug de render estão sob workspace tmp."""
         with tempfile.TemporaryDirectory() as base_dir, tempfile.TemporaryDirectory() as proj_tmp:
             base = Path(base_dir)
             proj = Path(proj_tmp) / "renderproj"
@@ -108,6 +113,7 @@ class TestWorkspace(unittest.TestCase):
                 self.assertTrue(ws.tmp.render_logs_dir.exists())
 
     def test_tmp_metrics_paths_live_under_workspace_tmp(self):
+        """Verifica que os caminhos de métricas estão sob workspace tmp."""
         with tempfile.TemporaryDirectory() as base_dir, tempfile.TemporaryDirectory() as proj_tmp:
             base = Path(base_dir)
             proj = Path(proj_tmp) / "renderproj"
@@ -128,6 +134,7 @@ class TestWorkspace(unittest.TestCase):
                 self.assertTrue(ws.tmp.metrics_dir.exists())
 
     def test_debug_render_and_metrics_paths_are_persistent_under_workspace_root(self):
+        """Verifica que os caminhos de render e métricas estão sob workspace root."""
         with tempfile.TemporaryDirectory() as base_dir, tempfile.TemporaryDirectory() as proj_tmp:
             base = Path(base_dir)
             proj = Path(proj_tmp) / "renderproj"
@@ -159,6 +166,7 @@ class TestWorkspace(unittest.TestCase):
                 self.assertTrue(ws.metrics_dir.exists())
 
     def test_tmp_ensure_dirs_logs_only_the_failing_directory(self):
+        """Verifica que apenas o diretório com falha é registrado no log."""
         render_dir = Path("/tmp") / "quimera" / "hash123" / "data" / "logs" / "render"
         metrics_dir = Path("/tmp") / "quimera" / "hash123" / "data" / "logs" / "metrics"
 

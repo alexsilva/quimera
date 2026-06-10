@@ -14,6 +14,7 @@ SAMPLE_SESSION = "sess-001"
 
 class TestThinkExtractor:
     def test_extract_single_think_block(self):
+        """Verifica extração de um único bloco thinking."""
         output = "Some text\n<thinking>Este é o raciocínio do modelo sobre o problema.</thinking>\nMore text."
         ext = ThinkExtractor()
         results = ext.extract(output, SAMPLE_AGENT, SAMPLE_SESSION)
@@ -25,6 +26,7 @@ class TestThinkExtractor:
         assert results[0].session_id == SAMPLE_SESSION
 
     def test_extract_think_tag(self):
+        """Verifica extração de bloco com tag think."""
         output = "<think>Conteúdo com think tag.</think>"
         ext = ThinkExtractor()
         results = ext.extract(output, SAMPLE_AGENT, SAMPLE_SESSION)
@@ -34,6 +36,7 @@ class TestThinkExtractor:
         assert "Conteúdo com think tag" in results[0].summary
 
     def test_extract_multiple_think_blocks(self):
+        """Verifica extração de múltiplos blocos thinking/think."""
         output = "<thinking>Primeiro bloco.</thinking>\ntexto\n<think>Segundo bloco.</think>"
         ext = ThinkExtractor()
         results = ext.extract(output, SAMPLE_AGENT, SAMPLE_SESSION)
@@ -43,6 +46,7 @@ class TestThinkExtractor:
         assert "Segundo bloco" in results[1].summary
 
     def test_truncates_to_500_chars(self):
+        """Verifica que o resumo é truncado em 500 caracteres."""
         long_text = "A" * 1200
         output = f"<thinking>{long_text}</thinking>"
         ext = ThinkExtractor()
@@ -52,6 +56,7 @@ class TestThinkExtractor:
         assert len(results[0].summary) == 500
 
     def test_no_think_block_returns_empty(self):
+        """Verifica que ausência de bloco thinking retorna lista vazia."""
         output = "Apenas texto normal sem blocos de raciocínio."
         ext = ThinkExtractor()
         results = ext.extract(output, SAMPLE_AGENT, SAMPLE_SESSION)
@@ -61,6 +66,7 @@ class TestThinkExtractor:
 
 class TestFileReadExtractor:
     def test_read_file_pattern(self):
+        """Verifica extração de path com padrão 'Read file:'."""
         output = "Read file: /home/project/src/main.py"
         ext = FileReadExtractor()
         results = ext.extract(output, SAMPLE_AGENT, SAMPLE_SESSION)
@@ -70,6 +76,7 @@ class TestFileReadExtractor:
         assert results[0].path == "/home/project/src/main.py"
 
     def test_lendo_pattern(self):
+        """Verifica extração de path com padrão 'Lendo'."""
         output = "Lendo /tmp/config.yaml para análise."
         ext = FileReadExtractor()
         results = ext.extract(output, SAMPLE_AGENT, SAMPLE_SESSION)
@@ -79,6 +86,7 @@ class TestFileReadExtractor:
         assert results[0].path == "/tmp/config.yaml"
 
     def test_read_pattern(self):
+        """Verifica extração de path com padrão 'Read'."""
         output = "Read src/utils.py"
         ext = FileReadExtractor()
         results = ext.extract(output, SAMPLE_AGENT, SAMPLE_SESSION)
@@ -88,6 +96,7 @@ class TestFileReadExtractor:
         assert results[0].path == "src/utils.py"
 
     def test_deduplicates_paths(self):
+        """Verifica deduplicação de paths de leitura."""
         output = "Read file: /a.txt\nRead file: /a.txt\nLendo /b.txt"
         ext = FileReadExtractor()
         results = ext.extract(output, SAMPLE_AGENT, SAMPLE_SESSION)
@@ -97,6 +106,7 @@ class TestFileReadExtractor:
         assert paths == {"/a.txt", "/b.txt"}
 
     def test_no_match_returns_empty(self):
+        """Verifica que ausência de padrão de leitura retorna lista vazia."""
         output = "Nenhum arquivo foi lido nesta execução."
         ext = FileReadExtractor()
         results = ext.extract(output, SAMPLE_AGENT, SAMPLE_SESSION)
@@ -106,6 +116,7 @@ class TestFileReadExtractor:
 
 class TestFileEditExtractor:
     def test_checkmark_edit_pattern(self):
+        """Verifica extração de path com padrão '✓ Edit'."""
         output = "✓ Edit src/models.py"
         ext = FileEditExtractor()
         results = ext.extract(output, SAMPLE_AGENT, SAMPLE_SESSION)
@@ -115,6 +126,7 @@ class TestFileEditExtractor:
         assert results[0].path == "src/models.py"
 
     def test_edit_pattern(self):
+        """Verifica extração de path com padrão 'Edit'."""
         output = "Edit README.md"
         ext = FileEditExtractor()
         results = ext.extract(output, SAMPLE_AGENT, SAMPLE_SESSION)
@@ -124,6 +136,7 @@ class TestFileEditExtractor:
         assert results[0].path == "README.md"
 
     def test_wrote_pattern(self):
+        """Verifica extração de path com padrão 'Wrote'."""
         output = "Wrote tests/test_parser.py"
         ext = FileEditExtractor()
         results = ext.extract(output, SAMPLE_AGENT, SAMPLE_SESSION)
@@ -133,6 +146,7 @@ class TestFileEditExtractor:
         assert results[0].path == "tests/test_parser.py"
 
     def test_deduplicates_paths(self):
+        """Verifica deduplicação de paths de leitura."""
         output = "✓ Edit /a.py\nEdit /a.py\nWrote /b.py"
         ext = FileEditExtractor()
         results = ext.extract(output, SAMPLE_AGENT, SAMPLE_SESSION)
@@ -142,6 +156,7 @@ class TestFileEditExtractor:
         assert paths == {"/a.py", "/b.py"}
 
     def test_no_match_returns_empty(self):
+        """Verifica que ausência de padrão de leitura retorna lista vazia."""
         output = "Nenhuma edição foi realizada."
         ext = FileEditExtractor()
         results = ext.extract(output, SAMPLE_AGENT, SAMPLE_SESSION)
@@ -151,6 +166,7 @@ class TestFileEditExtractor:
 
 class TestPatternRegistry:
     def test_register_and_extract_all(self):
+        """Verifica que todos os extratores registrados são executados."""
         PatternRegistry._extractors = {}
         PatternRegistry.default()
 
@@ -167,11 +183,13 @@ class TestPatternRegistry:
         assert "file_edit" in types
 
     def test_extract_all_empty_registry(self):
+        """Verifica que registry vazio retorna lista vazia."""
         PatternRegistry._extractors = {}
         results = PatternRegistry.extract_all("qualquer texto", SAMPLE_AGENT, SAMPLE_SESSION)
         assert len(results) == 0
 
     def test_extract_all_propagates_agent_and_session(self):
+        """Verifica que extract_all propaga agente e sessão para todos os extratores."""
         PatternRegistry._extractors = {}
         PatternRegistry.default()
 
@@ -187,35 +205,43 @@ class TestSanitizePath:
     """Testes para a função de sanitização de paths."""
 
     def test_valid_path_passes_through(self):
+        """Verifica que paths válidos passam pela sanitização."""
         assert _sanitize_path("src/main.py") == "src/main.py"
         assert _sanitize_path("/home/user/file.txt") == "/home/user/file.txt"
         assert _sanitize_path("./config.yaml") == "./config.yaml"
 
     def test_strips_trailing_checkmark(self):
+        """Verifica remoção de checkmark no final do path."""
         assert _sanitize_path("quimera/prompt.py✓") == "quimera/prompt.py"
         assert _sanitize_path("src/models.py✓") == "src/models.py"
 
     def test_strips_leading_checkmark(self):
+        """Verifica remoção de checkmark no início do path."""
         assert _sanitize_path("✓src/models.py") == "src/models.py"
 
     def test_strips_ansi_codes(self):
+        """Verifica remoção de códigos ANSI do path."""
         ansi_path = "\x1b[32mquimera/prompt.py\x1b[0m"
         assert _sanitize_path(ansi_path) == "quimera/prompt.py"
 
     def test_rejects_plain_word_no_path_structure(self):
+        """Verifica que palavras simples sem estrutura de path são rejeitadas."""
         assert _sanitize_path("Read") is None
         assert _sanitize_path("Edit") is None
         assert _sanitize_path("hello") is None
 
     def test_rejects_empty_and_whitespace(self):
+        """Verifica que strings vazias ou só espaços são rejeitadas."""
         assert _sanitize_path("") is None
         assert _sanitize_path("   ") is None
 
     def test_strips_surrounding_noise_chars(self):
+        """Verifica remoção de caracteres de ruído ao redor do path."""
         assert _sanitize_path("[src/main.py]") == "src/main.py"
         assert _sanitize_path("`config.yaml`") == "config.yaml"
 
     def test_rejects_path_with_invalid_chars(self):
+        """Verifica que paths com caracteres inválidos são rejeitados."""
         assert _sanitize_path("file name.py") is None
         assert _sanitize_path("file\nname.py") is None
 

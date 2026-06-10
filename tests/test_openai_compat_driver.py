@@ -83,6 +83,7 @@ def _setup_stream(mock_client, chunks):
 # ---------------------------------------------------------------------------
 
 def test_all_schemas_have_required_fields():
+    """Verifica que Test all schemas have required fields."""
     required_keys = {"type", "function"}
     function_keys = {"name", "description", "parameters"}
     for schema in TOOL_SCHEMAS:
@@ -91,6 +92,7 @@ def test_all_schemas_have_required_fields():
 
 
 def test_schema_names_match_registered_tools():
+    """Verifica que Test schema names match registered tools."""
     expected = {
         "list_files", "read_file", "write_file", "apply_patch", "grep_search", "run_shell",
         "exec_command", "write_stdin", "close_command_session", "list_tasks", "list_jobs",
@@ -102,6 +104,7 @@ def test_schema_names_match_registered_tools():
 
 
 def test_resolve_tool_schemas_hides_task_tools_without_db():
+    """Verifica que Test resolve tool schemas hides task tools without db."""
     mock_executor = MagicMock()
     mock_executor.config = SimpleNamespace(db_path=None)
     mock_executor.policy = SimpleNamespace(blocked_tools=[])
@@ -127,6 +130,7 @@ def test_resolve_tool_schemas_hides_task_tools_without_db():
 
 
 def test_resolve_tool_schemas_hides_blocked_tools_from_active_mode():
+    """Verifica que Test resolve tool schemas hides blocked tools from active mode."""
     mock_executor = MagicMock()
     mock_executor.config = SimpleNamespace(db_path="/tmp/tasks.db")
     mock_executor.policy = SimpleNamespace(blocked_tools=["run_shell", "exec_command", "apply_patch"])
@@ -142,6 +146,7 @@ def test_resolve_tool_schemas_hides_blocked_tools_from_active_mode():
 
 
 def test_resolve_tool_schemas_hides_call_agent_when_not_bound():
+    """Verifica que Test resolve tool schemas hides call agent when not bound."""
     mock_executor = MagicMock()
     mock_executor.config = SimpleNamespace(db_path="/tmp/tasks.db")
     mock_executor.policy = SimpleNamespace(blocked_tools=[])
@@ -154,6 +159,7 @@ def test_resolve_tool_schemas_hides_call_agent_when_not_bound():
 
 
 def test_required_args_are_lists():
+    """Verifica que Test required args are lists."""
     for schema in TOOL_SCHEMAS:
         params = schema["function"]["parameters"]
         assert isinstance(params.get("required"), list), (
@@ -166,26 +172,31 @@ def test_required_args_are_lists():
 # ---------------------------------------------------------------------------
 
 def test_strip_thinking_removes_block():
+    """Verifica que Test strip thinking removes block."""
     text = "<think>raciocínio interno</think>Resposta final."
     assert _strip_thinking(text) == "Resposta final."
 
 
 def test_strip_thinking_multiline():
+    """Verifica que Test strip thinking multiline."""
     text = "<think>\nlinha 1\nlinha 2\n</think>\nResposta."
     assert _strip_thinking(text) == "Resposta."
 
 
 def test_strip_thinking_no_block():
+    """Verifica que Test strip thinking no block."""
     text = "Resposta sem bloco think."
     assert _strip_thinking(text) == text
 
 
 def test_strip_thinking_multiple_blocks():
+    """Verifica que Test strip thinking multiple blocks."""
     text = "<think>a</think>Texto<think>b</think>Final"
     assert _strip_thinking(text) == "TextoFinal"
 
 
 def test_strip_thinking_persists_evidence_before_removal(tmp_path):
+    """Verifica que Test strip thinking persists evidence before removal."""
     text = "<think>raciocínio interno detalhado</think>Resposta final."
 
     cleaned = _strip_thinking(
@@ -210,11 +221,13 @@ def test_strip_thinking_persists_evidence_before_removal(tmp_path):
 
 
 def test_sanitize_assistant_text_preserves_function_like_text():
+    """Verifica que Test sanitize assistant text preserves function like text."""
     text = "<think>x</think></function>\nResposta final\n</tool_call>"
     assert _sanitize_assistant_text(text) == "</function>\nResposta final\n</tool_call>"
 
 
 def test_build_openai_messages_from_prompt_uses_current_turn_as_active_user_message():
+    """Verifica que Test build openai messages from prompt uses current turn as active user message."""
     prompt = (
         '<rules title="Suas regras">contexto</rules>\n'
         '<recent_conversation title="Conversa recente">\n'
@@ -235,6 +248,7 @@ def test_build_openai_messages_from_prompt_uses_current_turn_as_active_user_mess
 
 
 def test_build_openai_messages_keeps_current_turn_last_with_embedded_xml():
+    """Verifica que Test build openai messages keeps current turn last with embedded xml."""
     prompt = (
         '<recent_conversation title="Conversa recente">\n'
         'Histórico anterior\n'
@@ -258,6 +272,7 @@ def test_build_openai_messages_keeps_current_turn_last_with_embedded_xml():
 
 
 def test_build_openai_messages_keeps_current_turn_last_when_metrics_follow():
+    """Verifica que Test build openai messages keeps current turn last when metrics follow."""
     prompt = (
         '<header title="Identificação">contexto</header>\n'
         '<current_turn>pedido atual</current_turn>\n'
@@ -272,6 +287,7 @@ def test_build_openai_messages_keeps_current_turn_last_when_metrics_follow():
 
 
 def test_run_sends_quimera_current_turn_as_final_user_message_to_openai_api():
+    """Verifica que Test run sends quimera current turn as final user message to openai api."""
     driver, mock_client = _make_driver()
     _setup_stream(mock_client, [_make_chunk(content="ok")])
     prompt = (
@@ -293,12 +309,14 @@ def test_run_sends_quimera_current_turn_as_final_user_message_to_openai_api():
 
 
 def test_build_openai_messages_uses_short_operational_context_title_for_free_text():
+    """Verifica que Test build openai messages uses short operational context title for free text."""
     messages = _build_openai_messages_from_prompt('texto solto\n<header title="H">\nctx\n</header>')
 
     assert messages[0]["content"] == "Contexto operacional\n\ntexto solto"
 
 
 def test_build_openai_messages_uses_plain_titles_without_instructional_text():
+    """Verifica que Test build openai messages uses plain titles without instructional text."""
     prompt = (
         '<header title="Identificação">\nVocê é OPENAI.\n</header>\n'
         '<recent_conversation title="Conversa recente">\nUSER: ação antiga\n</recent_conversation>\n'
@@ -313,6 +331,7 @@ def test_build_openai_messages_uses_plain_titles_without_instructional_text():
     assert "Use para evitar duplicação" not in messages[1]["content"]
 
 def test_build_openai_messages_maps_task_reviewer_rules_to_system_and_material_to_user():
+    """Verifica que Test build openai messages maps task reviewer rules to system and material to user."""
     prompt = (
         '<header title="Task Reviewer">\nVocê é OPENAI.\n</header>\n'
         '<task_review_rules title="Critério de review">\n'
@@ -331,6 +350,7 @@ def test_build_openai_messages_maps_task_reviewer_rules_to_system_and_material_t
     assert "ACEITE ou RETENTATIVA" in messages[1]["content"]
 
 def test_build_tool_system_prompt_includes_workspace_hint():
+    """Verifica que Test build tool system prompt includes workspace hint."""
     prompt = _build_tool_system_prompt(["read_file", "apply_patch"], "/tmp/workspace")
 
     assert "read_file, apply_patch" in prompt
@@ -339,6 +359,7 @@ def test_build_tool_system_prompt_includes_workspace_hint():
 
 
 def test_build_tool_system_prompt_avoids_unavailable_tool_guidance():
+    """Verifica que Test build tool system prompt avoids unavailable tool guidance."""
     prompt = _build_tool_system_prompt(["read_file"], "/tmp/workspace")
 
     assert "read_file usa 'path', não 'file_path'" in prompt
@@ -348,6 +369,7 @@ def test_build_tool_system_prompt_avoids_unavailable_tool_guidance():
 
 
 def test_build_tool_system_prompt_prefers_call_agent_for_delegation():
+    """Verifica que Test build tool system prompt prefers call agent for delegation."""
     prompt = _build_tool_system_prompt(["read_file", "call_agent"], "/tmp/workspace")
 
     assert "Para delegação entre agentes, use a tool `call_agent`" in prompt
@@ -357,12 +379,14 @@ def test_build_tool_system_prompt_prefers_call_agent_for_delegation():
 
 
 def test_build_tool_system_prompt_reports_limitation_without_call_agent():
+    """Verifica que Test build tool system prompt reports limitation without call agent."""
     prompt = _build_tool_system_prompt(["read_file"], "/tmp/workspace")
 
     assert "Se precisar delegar e `call_agent` não estiver disponível" in prompt
 
 
 def test_build_tool_system_prompt_includes_shell_policy_rules():
+    """Verifica que Test build tool system prompt includes shell policy rules."""
     prompt = _build_tool_system_prompt(
         ["run_shell", "exec_command"],
         "/tmp/workspace",
@@ -374,6 +398,7 @@ def test_build_tool_system_prompt_includes_shell_policy_rules():
 
 
 def test_build_tool_budget_prompt_includes_max_and_remaining():
+    """Verifica que Test build tool budget prompt includes max and remaining."""
     prompt = _build_tool_budget_prompt(max_tool_hops=24, remaining_tool_hops=17)
 
     assert "max_tool_hops=24" in prompt
@@ -381,6 +406,7 @@ def test_build_tool_budget_prompt_includes_max_and_remaining():
 
 
 def test_prune_tool_loop_messages_keeps_head_and_recent_tail():
+    """Verifica que Test prune tool loop messages keeps head and recent tail."""
     messages = [
         {"role": "system", "content": "sys"},
         {"role": "user", "content": "user"},
@@ -397,6 +423,7 @@ def test_prune_tool_loop_messages_keeps_head_and_recent_tail():
 
 
 def test_prune_tool_loop_messages_preserves_assistant_for_multi_tool_results():
+    """Verifica que Test prune tool loop messages preserves assistant for multi tool results."""
     messages = [
         {"role": "system", "content": "sys"},
         {"role": "user", "content": "user"},
@@ -427,6 +454,7 @@ def test_prune_tool_loop_messages_preserves_assistant_for_multi_tool_results():
 
 
 def test_prune_tool_loop_messages_caps_oversized_final_tool_segment():
+    """Verifica que Test prune tool loop messages caps oversized final tool segment."""
     total_calls = _MAX_TOOL_LOOP_MESSAGES
     messages = [
         {"role": "system", "content": "sys"},
@@ -460,6 +488,7 @@ def test_prune_tool_loop_messages_caps_oversized_final_tool_segment():
 # ---------------------------------------------------------------------------
 
 def test_driver_init_missing_openai_raises():
+    """Verifica que Test driver init missing openai raises."""
     import quimera.runtime.drivers.openai_compat as mod
     with patch.object(mod, "OpenAI", None):
         with pytest.raises(ImportError, match="openai"):
@@ -467,6 +496,7 @@ def test_driver_init_missing_openai_raises():
 
 
 def test_driver_init_success():
+    """Verifica que Test driver init success."""
     driver, _ = _make_driver()
     assert driver.model == "qwen3-coder:30b"
 
@@ -480,6 +510,7 @@ def test_driver_init_success():
 # ---------------------------------------------------------------------------
 
 def test_chat_simple_response():
+    """Verifica que Test chat simple response."""
     driver, mock_client = _make_driver()
     chunks = [_make_chunk(content="Olá "), _make_chunk(content="mundo!"), _make_chunk(content=None)]
     _setup_stream(mock_client, chunks)
@@ -490,6 +521,7 @@ def test_chat_simple_response():
 
 
 def test_chat_empty_choices_ignored():
+    """Verifica que Test chat empty choices ignored."""
     driver, mock_client = _make_driver()
     empty_chunk = SimpleNamespace(choices=[])
     _setup_stream(mock_client, [empty_chunk, _make_chunk(content="ok")])
@@ -500,6 +532,7 @@ def test_chat_empty_choices_ignored():
 
 
 def test_chat_no_tools_uses_streaming():
+    """Verifica que Test chat no tools uses streaming."""
     driver, mock_client = _make_driver()
     _setup_stream(mock_client, [_make_chunk(content="resposta")])
 
@@ -512,6 +545,7 @@ def test_chat_no_tools_uses_streaming():
 
 
 def test_chat_streaming_supports_structured_diff_chunks():
+    """Verifica que Test chat streaming supports structured diff chunks."""
     driver, mock_client = _make_driver()
     chunks = [
         _make_chunk(diff={"op": "replace", "text": "abc"}),
@@ -557,6 +591,7 @@ def test_chat_with_tools_uses_non_streaming():
 
 
 def test_chat_with_tools_returns_structured_tool_calls():
+    """Verifica que Test chat with tools returns structured tool calls."""
     driver, mock_client = _make_driver()
     tc = _make_tool_call("call_abc", "read_file", '{"path":"app.py"}')
     mock_client.chat.completions.create.return_value = _make_non_streaming_response(
@@ -571,6 +606,7 @@ def test_chat_with_tools_returns_structured_tool_calls():
 
 
 def test_chat_with_tools_invalid_json_returns_empty_dict():
+    """Verifica que Test chat with tools invalid json returns empty dict."""
     driver, mock_client = _make_driver()
     tc = _make_tool_call("x", "run_shell", "NOT_JSON")
     mock_client.chat.completions.create.return_value = _make_non_streaming_response(
@@ -582,6 +618,7 @@ def test_chat_with_tools_invalid_json_returns_empty_dict():
 
 
 def test_chat_with_tools_no_tool_calls_in_response():
+    """Verifica que Test chat with tools no tool calls in response."""
     driver, mock_client = _make_driver()
     mock_client.chat.completions.create.return_value = _make_non_streaming_response(
         content="</function>\nSó texto, sem ferramentas.", tool_calls=None
@@ -593,6 +630,7 @@ def test_chat_with_tools_no_tool_calls_in_response():
 
 
 def test_chat_with_tools_ignores_textual_function_like_tool_call():
+    """Verifica que Test chat with tools ignores textual function like tool call."""
     driver, mock_client = _make_driver()
     textual = '<function=read_file><parameter=path>secret.txt</function>'
     mock_client.chat.completions.create.return_value = _make_non_streaming_response(
@@ -610,6 +648,7 @@ def test_chat_with_tools_ignores_textual_function_like_tool_call():
 # ---------------------------------------------------------------------------
 
 def test_execute_tool_success():
+    """Verifica que Test execute tool success."""
     driver, _ = _make_driver()
     mock_executor = MagicMock()
     mock_executor.execute.return_value = ToolResult(ok=True, tool_name="read_file", content="conteúdo")
@@ -626,6 +665,7 @@ def test_execute_tool_success():
 
 
 def test_execute_tool_exception_returns_error_result():
+    """Verifica que Test execute tool exception returns error result."""
     driver, _ = _make_driver()
     mock_executor = MagicMock()
     mock_executor.execute.side_effect = RuntimeError("boom")
@@ -642,6 +682,7 @@ def test_execute_tool_exception_returns_error_result():
 # ---------------------------------------------------------------------------
 
 def test_run_simple_response_no_tools():
+    """Verifica que Test run simple response no tools."""
     driver, mock_client = _make_driver()
     _setup_stream(mock_client, [_make_chunk(content="Resposta simples")])
 
@@ -650,6 +691,7 @@ def test_run_simple_response_no_tools():
 
 
 def test_run_strips_thinking_block():
+    """Verifica que Test run strips thinking block."""
     driver, mock_client = _make_driver()
     _setup_stream(mock_client, [_make_chunk(content="<think>thinking</think>Resposta")])
 
@@ -658,6 +700,7 @@ def test_run_strips_thinking_block():
 
 
 def test_run_preserves_function_like_text_in_final_response():
+    """Verifica que Test run preserves function like text in final response."""
     driver, mock_client = _make_driver()
     _setup_stream(mock_client, [_make_chunk(content="</function>Resposta final</tool_call>")])
 
@@ -666,6 +709,7 @@ def test_run_preserves_function_like_text_in_final_response():
 
 
 def test_run_tools_system_prompt_guides_tool_usage():
+    """Verifica que Test run tools system prompt guides tool usage."""
     driver, mock_client = _make_driver()
     mock_client.chat.completions.create.return_value = _make_non_streaming_response(
         content="ok", tool_calls=None
@@ -716,6 +760,7 @@ def test_run_tools_system_prompt_guides_tool_usage():
 
 
 def test_run_returns_none_on_empty_response():
+    """Verifica que Test run returns none on empty response."""
     driver, mock_client = _make_driver()
     _setup_stream(mock_client, [_make_chunk(content=None)])
 
@@ -774,6 +819,7 @@ def test_run_tool_loop_sends_tool_result_message():
 
 
 def test_run_tool_loop_updates_remaining_budget_each_hop():
+    """Verifica que Test run tool loop updates remaining budget each hop."""
     driver, mock_client = _make_driver()
 
     tc_id = "call_budget"
@@ -809,6 +855,7 @@ def test_run_tool_loop_updates_remaining_budget_each_hop():
 
 
 def test_run_tool_loop_uses_minimal_prompt_payload_and_valid_json():
+    """Verifica que Test run tool loop uses minimal prompt payload and valid json."""
     driver, mock_client = _make_driver()
     oversized_len = _MAX_TOOL_RESULT_CHARS + 1000
 
@@ -848,6 +895,7 @@ def test_run_tool_loop_uses_minimal_prompt_payload_and_valid_json():
 
 
 def test_run_tool_loop_prunes_messages_between_hops():
+    """Verifica que Test run tool loop prunes messages between hops."""
     driver, mock_client = _make_driver()
 
     def side_effect(*args, **kwargs):
@@ -880,6 +928,7 @@ def test_run_tool_loop_prunes_messages_between_hops():
 
 
 def test_run_api_error_returns_none():
+    """Verifica que Test run api error returns none."""
     driver, mock_client = _make_driver()
     mock_client.chat.completions.create.side_effect = RuntimeError("connection refused")
 
@@ -888,6 +937,7 @@ def test_run_api_error_returns_none():
 
 
 def test_driver_repl_probe_backend_success():
+    """Verifica que Test driver repl probe backend success."""
     fake_plugin = SimpleNamespace(
         name="ollama-qwen",
         driver="openai_compat",
@@ -910,6 +960,7 @@ def test_driver_repl_probe_backend_success():
 
 
 def test_driver_repl_probe_backend_unavailable_raises_clear_error():
+    """Verifica que Test driver repl probe backend unavailable raises clear error."""
     fake_plugin = SimpleNamespace(
         name="ollama-qwen",
         driver="openai_compat",
@@ -933,6 +984,7 @@ def test_driver_repl_probe_backend_unavailable_raises_clear_error():
 
 
 def test_driver_repl_build_input_prompt_formats_user_name():
+    """Verifica que Test driver repl build input prompt formats user name."""
     assert DriverRepl._build_input_prompt("Alex", "execute") == "Alex: "
     assert DriverRepl._build_input_prompt("Alex>", "execute") == "Alex: "
     assert DriverRepl._build_input_prompt(">>>", "execute") == ">>> "
@@ -940,6 +992,7 @@ def test_driver_repl_build_input_prompt_formats_user_name():
 
 
 def test_driver_repl_run_uses_prompt_from_config_name():
+    """Verifica que Test driver repl run uses prompt from config name."""
     fake_plugin = SimpleNamespace(
         name="ollama-qwen",
         driver="openai_compat",
@@ -964,6 +1017,7 @@ def test_driver_repl_run_uses_prompt_from_config_name():
 
 
 def test_driver_repl_with_input_gate_uses_gate_for_prompt_and_approval_handler():
+    """Verifica que Test driver repl with input gate uses gate for prompt and approval handler."""
     fake_plugin = SimpleNamespace(
         name="ollama-qwen",
         driver="openai_compat",
@@ -994,6 +1048,7 @@ def test_driver_repl_with_input_gate_uses_gate_for_prompt_and_approval_handler()
 
 
 def test_driver_repl_with_input_gate_executes_regular_message_flow():
+    """Verifica que Test driver repl with input gate executes regular message flow."""
     fake_plugin = SimpleNamespace(
         name="ollama-qwen",
         driver="openai_compat",
@@ -1028,6 +1083,7 @@ def test_driver_repl_with_input_gate_executes_regular_message_flow():
 
 
 def test_repl_helpers_print_and_truncate_fields():
+    """Verifica que Test repl helpers print and truncate fields."""
     with patch("builtins.print") as mock_print:
         _header("Sessao")
         _on_tool_call("run_shell", {"long": "x" * 305, "short": "ok"})
@@ -1054,6 +1110,7 @@ def test_repl_helpers_print_and_truncate_fields():
 
 
 def test_resolve_plugin_connection_and_driver_with_fallbacks():
+    """Verifica que Test resolve plugin connection and driver with fallbacks."""
     plugin_with_resolver = SimpleNamespace(
         effective_connection=lambda: OpenAIConnection(
             model="qwen3",
@@ -1084,6 +1141,7 @@ def test_resolve_plugin_connection_and_driver_with_fallbacks():
 
 
 def test_driver_repl_init_fails_when_plugin_not_found_with_compat_list():
+    """Verifica que Test driver repl init fails when plugin not found with compat list."""
     compat_plugin = SimpleNamespace(
         name="ollama-qwen",
         driver="openai_compat",
@@ -1100,6 +1158,7 @@ def test_driver_repl_init_fails_when_plugin_not_found_with_compat_list():
 
 
 def test_driver_repl_init_rejects_cli_plugins():
+    """Verifica que Test driver repl init rejects cli plugins."""
     cli_plugin = SimpleNamespace(name="claude", driver="cli", model=None, base_url=None, api_key_env=None)
     with pytest.raises(ValueError, match="driver='cli'"):
         DriverRepl(
@@ -1110,11 +1169,13 @@ def test_driver_repl_init_rejects_cli_plugins():
 
 
 def test_driver_repl_build_input_prompt_handles_empty_name_and_mode_with_chevrons():
+    """Verifica que Test driver repl build input prompt handles empty name and mode with chevrons."""
     assert DriverRepl._build_input_prompt("", "execute") == ">>> "
     assert DriverRepl._build_input_prompt(">>>", "review") == ">>> [review]: "
 
 
 def test_driver_repl_load_user_name_from_config_falls_back_to_default():
+    """Verifica que Test driver repl load user name from config falls back to default."""
     from quimera.config import DEFAULT_USER_NAME
 
     with patch("quimera.runtime.drivers.repl.find_base_writable", side_effect=RuntimeError("boom")):
@@ -1122,6 +1183,7 @@ def test_driver_repl_load_user_name_from_config_falls_back_to_default():
 
 
 def test_driver_repl_connection_signature_tracks_model_url_and_api_key_env():
+    """Verifica que Test driver repl connection signature tracks model url and api key env."""
     plugin = SimpleNamespace(
         name="ollama-qwen",
         driver="openai_compat",
@@ -1143,6 +1205,7 @@ def test_driver_repl_connection_signature_tracks_model_url_and_api_key_env():
 
 
 def test_driver_repl_get_current_connection_rejects_when_plugin_driver_changes():
+    """Verifica que Test driver repl get current connection rejects when plugin driver changes."""
     plugin = SimpleNamespace(
         name="ollama-qwen",
         driver="openai_compat",
@@ -1162,6 +1225,7 @@ def test_driver_repl_get_current_connection_rejects_when_plugin_driver_changes()
 
 
 def test_driver_repl_backend_probe_handles_status_and_http_errors():
+    """Verifica que Test driver repl backend probe handles status and http errors."""
     plugin = SimpleNamespace(
         name="ollama-qwen",
         driver="openai_compat",
@@ -1221,6 +1285,7 @@ def test_driver_repl_backend_probe_handles_status_and_http_errors():
 
 
 def test_driver_repl_probe_uses_executor_toggle():
+    """Verifica que Test driver repl probe uses executor toggle."""
     plugin = SimpleNamespace(
         name="ollama-qwen",
         driver="openai_compat",
@@ -1247,6 +1312,7 @@ def test_driver_repl_probe_uses_executor_toggle():
 
 
 def test_driver_repl_run_one_shot_and_interactive_commands():
+    """Verifica que Test driver repl run one shot and interactive commands."""
     plugin = SimpleNamespace(
         name="ollama-qwen",
         driver="openai_compat",
@@ -1319,6 +1385,7 @@ def test_run_max_hops_returns_last_text():
 
 
 def test_run_low_reliability_uses_lower_max_hops():
+    """Verifica que Test run low reliability uses lower max hops."""
     driver, mock_client = _make_driver()
     driver.tool_use_reliability = "low"
     tc = _make_tool_call("c", "run_shell", '{"command":"x"}')
@@ -1339,6 +1406,7 @@ def test_run_low_reliability_uses_lower_max_hops():
 
 
 def test_run_aborts_on_repeated_policy_error_for_all_reliabilities():
+    """Verifica que Test run aborts on repeated policy error for all reliabilities."""
     from quimera.runtime.tool_hops import get_invalid_tool_loop_threshold
 
     tc = _make_tool_call("c", "bad_tool", '{"path":"x"}')
@@ -1372,6 +1440,7 @@ def test_run_aborts_on_repeated_policy_error_for_all_reliabilities():
 
 
 def test_run_does_not_abort_on_different_policy_error_signatures():
+    """Verifica que Test run does not abort on different policy error signatures."""
     driver, mock_client = _make_driver()
     tc = _make_tool_call("c", "run_shell", '{"command":"x"}')
     mock_client.chat.completions.create.side_effect = [
@@ -1402,6 +1471,7 @@ def test_run_does_not_abort_on_different_policy_error_signatures():
 
 
 def test_run_allows_same_policy_signature_before_threshold():
+    """Verifica que Test run allows same policy signature before threshold."""
     from quimera.runtime.tool_hops import get_invalid_tool_loop_threshold
 
     driver, mock_client = _make_driver()
@@ -1434,6 +1504,7 @@ def test_run_allows_same_policy_signature_before_threshold():
 
 
 def test_run_reports_tool_abort_callback():
+    """Verifica que Test run reports tool abort callback."""
     from quimera.runtime.tool_hops import get_invalid_tool_loop_threshold
 
     driver, mock_client = _make_driver()
@@ -1487,6 +1558,7 @@ def test_agent_client_dispatches_api_driver():
 
 
 def test_agent_client_passes_tool_use_reliability_to_api_driver():
+    """Verifica que Test agent client passes tool use reliability to api driver."""
     from quimera.agents import AgentClient
 
     renderer = MagicMock()
@@ -1623,6 +1695,7 @@ def test_run_cancel_event_not_set_completes_normally():
 # ---------------------------------------------------------------------------
 
 def test_agent_plugin_api_defaults():
+    """Verifica que Test agent plugin api defaults."""
     from quimera.plugins.base import AgentPlugin
 
     plugin = AgentPlugin(
@@ -1639,6 +1712,7 @@ def test_agent_plugin_api_defaults():
 
 
 def test_agent_plugin_cli_defaults():
+    """Verifica que Test agent plugin cli defaults."""
     from quimera.plugins.base import AgentPlugin
 
     plugin = AgentPlugin(
@@ -1657,6 +1731,7 @@ def test_agent_plugin_cli_defaults():
 # ---------------------------------------------------------------------------
 
 def test_existing_plugins_still_register():
+    """Verifica que Test existing plugins still register."""
     import quimera.plugins.claude  # noqa: F401
     import quimera.plugins.mock  # noqa: F401
     import quimera.plugins.ollama  # noqa: F401

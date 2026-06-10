@@ -91,6 +91,7 @@ def _run_cli_in_pty(tmp_path: Path, extra_args: list[str]) -> subprocess.Complet
 
 @pytest.mark.parametrize("extra_args", [[], ["--no-mcp"]])
 def test_cli_app_starts_interactively_and_exits_cleanly(tmp_path, extra_args):
+    """Verifica que a CLI inicia em modo interativo via PTY e encerra corretamente com /exit."""
     result = _run_cli_in_pty(tmp_path, extra_args)
 
     assert result.returncode == 0, result.stdout

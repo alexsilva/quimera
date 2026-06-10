@@ -80,6 +80,7 @@ def _make_app(active_agents=None):
 
 class TestChatRoundContextBridge(unittest.TestCase):
     def test_core_passes_explicit_chat_round_context(self):
+        """Verifica que Test core passes explicit chat round context."""
         app = _make_app(active_agents=["claude", "codex"])
         app._chat_state = {"history": []}
         app._ui_event_queue = queue.Queue()
@@ -102,6 +103,7 @@ class TestChatRoundContextBridge(unittest.TestCase):
         self.assertIs(ctx.ui_queue, app._ui_event_queue)
 
     def test_orchestrator_process_applies_runtime_context(self):
+        """Verifica que Test orchestrator process applies runtime context."""
         orchestrator = ChatRoundOrchestrator(
             dispatch_services=Mock(),
             parse_routing=lambda _user: (None, None, False),
@@ -152,23 +154,27 @@ class TestChatRoundContextBridge(unittest.TestCase):
 class TestTurnManager(unittest.TestCase):
 
     def test_initial_state_is_human_turn(self):
+        """Verifica que Test initial state is human turn."""
         tm = TurnManager()
         self.assertTrue(tm.is_human_turn)
         self.assertFalse(tm.is_ai_turn)
 
     def test_next_turn_alternates_to_ai(self):
+        """Verifica que Test next turn alternates to ai."""
         tm = TurnManager()
         tm.next_turn()
         self.assertFalse(tm.is_human_turn)
         self.assertTrue(tm.is_ai_turn)
 
     def test_next_turn_alternates_back_to_human(self):
+        """Verifica que Test next turn alternates back to human."""
         tm = TurnManager()
         tm.next_turn()
         tm.next_turn()
         self.assertTrue(tm.is_human_turn)
 
     def test_reset_always_returns_to_human(self):
+        """Verifica que Test reset always returns to human."""
         tm = TurnManager()
         tm.next_turn()  # AI
         tm.reset()
@@ -1329,6 +1335,7 @@ class TestParallelToolbarState(unittest.TestCase):
         self.assertEqual(state_after_reset["active"], 2)
 
     def test_increment_requests_toolbar_redisplay(self):
+        """Verifica que Test increment requests toolbar redisplay."""
         app = self._make_minimal_app(threads=2)
 
         app._increment_chat_inflight()
@@ -1336,6 +1343,7 @@ class TestParallelToolbarState(unittest.TestCase):
         app.input_gate.redisplay.assert_called_once_with()
 
     def test_decrement_requests_toolbar_redisplay(self):
+        """Verifica que Test decrement requests toolbar redisplay."""
         app = self._make_minimal_app(threads=2)
         app._increment_chat_inflight()
         app.input_gate.redisplay.reset_mock()
@@ -1348,6 +1356,7 @@ class TestParallelToolbarState(unittest.TestCase):
 class TestTTYControlEcho(unittest.TestCase):
 
     def test_suppress_and_restore_tty_control_echo(self):
+        """Verifica que Test suppress and restore tty control echo."""
         from quimera.app.tty_control import TtyController
         ctrl = TtyController()
 
@@ -1374,6 +1383,7 @@ class TestTTYControlEcho(unittest.TestCase):
             fake_termios.tcsetattr.assert_called_with(9, fake_termios.TCSADRAIN, original_attrs)
 
     def test_suppress_skips_when_not_tty(self):
+        """Verifica que Test suppress skips when not tty."""
         from quimera.app.tty_control import TtyController
         ctrl = TtyController()
 

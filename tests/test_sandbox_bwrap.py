@@ -38,6 +38,7 @@ class TestBuildBwrapCmd(unittest.TestCase):
         return plugin
 
     def test_returns_original_cmd_when_bwrap_unavailable(self):
+        """Verifica que retorna o comando original quando bwrap não está disponível."""
         from unittest.mock import patch
         cmd = ["echo", "hello"]
         with patch("quimera.sandbox.bwrap.is_bwrap_available", return_value=False):
@@ -45,12 +46,14 @@ class TestBuildBwrapCmd(unittest.TestCase):
         self.assertEqual(result, cmd)
 
     def test_starts_with_bwrap(self):
+        """Verifica que o comando gerado inicia com bwrap."""
         from unittest.mock import patch
         with patch("quimera.sandbox.bwrap.is_bwrap_available", return_value=True):
             result = build_bwrap_cmd(EXECUTE, "/tmp", ["echo", "hi"])
         self.assertEqual(result[0], "bwrap")
 
     def test_includes_dev_and_proc(self):
+        """Verifica que --dev /dev e --proc /proc estão presentes."""
         from unittest.mock import patch
         with patch("quimera.sandbox.bwrap.is_bwrap_available", return_value=True):
             result = build_bwrap_cmd(EXECUTE, "/tmp", ["echo"])
@@ -59,6 +62,7 @@ class TestBuildBwrapCmd(unittest.TestCase):
         self.assertIn("--proc /proc", joined)
 
     def test_uses_dynamic_home_bind_instead_of_hardcoded_user(self):
+        """Verifica que o home do usuário é montado como --ro-bind."""
         from unittest.mock import patch
         home = str(Path.home())
         with patch("quimera.sandbox.bwrap.is_bwrap_available", return_value=True):
@@ -70,6 +74,7 @@ class TestBuildBwrapCmd(unittest.TestCase):
         )
 
     def test_opencode_data_dir_keeps_rw_bind_inside_read_only_home(self):
+        """Verifica que diretório opencode-data tem --bind dentro do home read-only."""
         from unittest.mock import patch
         opencode_dir = str(Path.home() / ".local" / "share" / "opencode")
         plugin = self._plugin_with_rw_paths(opencode_dir)
@@ -84,6 +89,7 @@ class TestBuildBwrapCmd(unittest.TestCase):
         )
 
     def test_claude_state_dir_keeps_rw_bind_inside_read_only_home(self):
+        """Verifica que diretório .claude tem --bind dentro do home read-only."""
         from unittest.mock import patch
         claude_dir = str(Path.home() / ".claude")
         plugin = self._plugin_with_rw_paths(claude_dir)
@@ -98,6 +104,7 @@ class TestBuildBwrapCmd(unittest.TestCase):
         )
 
     def test_claude_auth_file_keeps_rw_bind_inside_read_only_home(self):
+        """Verifica que .claude.json tem --bind dentro do home read-only."""
         from unittest.mock import patch
         claude_auth_file = str(Path.home() / ".claude.json")
         plugin = self._plugin_with_rw_paths(claude_auth_file)
@@ -112,6 +119,7 @@ class TestBuildBwrapCmd(unittest.TestCase):
         )
 
     def test_claude_share_dir_keeps_rw_bind_inside_read_only_home(self):
+        """Verifica que diretório share/claude tem --bind dentro do home read-only."""
         from unittest.mock import patch
         claude_share_dir = str(Path.home() / ".local" / "share" / "claude")
         plugin = self._plugin_with_rw_paths(claude_share_dir)
@@ -126,6 +134,7 @@ class TestBuildBwrapCmd(unittest.TestCase):
         )
 
     def test_execute_mode_uses_bind_rw(self):
+        """Verifica que modo execute usa --bind para o diretório de trabalho."""
         from unittest.mock import patch
         wd = "/home/user/project"
         with patch("quimera.sandbox.bwrap.is_bwrap_available", return_value=True):
@@ -142,6 +151,7 @@ class TestBuildBwrapCmd(unittest.TestCase):
                 self.fail("--bind para working_dir não encontrado")
 
     def test_analysis_mode_uses_ro_bind(self):
+        """Verifica que modo analysis usa --ro-bind para o diretório de trabalho."""
         from unittest.mock import patch
         wd = "/home/user/project"
         with patch("quimera.sandbox.bwrap.is_bwrap_available", return_value=True):
@@ -154,7 +164,7 @@ class TestBuildBwrapCmd(unittest.TestCase):
         )
 
     def test_no_duplicate_workspace_bind(self):
-        """working_dir não pode aparecer tanto em --bind quanto --ro-bind."""
+        """Verifica que working_dir não aparece em --bind e --ro-bind simultaneamente."""
         from unittest.mock import patch
         wd = "/home/user/project"
         with patch("quimera.sandbox.bwrap.is_bwrap_available", return_value=True):
@@ -170,18 +180,21 @@ class TestBuildBwrapCmd(unittest.TestCase):
         self.assertFalse(rw_count > 0 and ro_count > 0, "bind duplicado detectado")
 
     def test_planning_mode_does_not_add_unshare_net(self):
+        """Verifica que modo planning não adiciona --unshare-net."""
         from unittest.mock import patch
         with patch("quimera.sandbox.bwrap.is_bwrap_available", return_value=True):
             result = build_bwrap_cmd(PLANNING, "/tmp", ["echo"])
         self.assertNotIn("--unshare-net", result)
 
     def test_analysis_mode_no_unshare_net(self):
+        """Verifica que modo analysis não adiciona --unshare-net."""
         from unittest.mock import patch
         with patch("quimera.sandbox.bwrap.is_bwrap_available", return_value=True):
             result = build_bwrap_cmd(ANALYSIS, "/tmp", ["echo"])
         self.assertNotIn("--unshare-net", result)
 
     def test_cmd_appended_after_separator(self):
+        """Verifica que o comando original é inserido após o separador --."""
         from unittest.mock import patch
         cmd = ["python", "-c", "print('ok')"]
         with patch("quimera.sandbox.bwrap.is_bwrap_available", return_value=True):
@@ -190,6 +203,7 @@ class TestBuildBwrapCmd(unittest.TestCase):
         self.assertEqual(result[sep + 1:], cmd)
 
     def test_chdir_set_to_working_dir(self):
+        """Verifica que --chdir usa o diretório de trabalho."""
         from unittest.mock import patch
         wd = "/my/project"
         with patch("quimera.sandbox.bwrap.is_bwrap_available", return_value=True):
@@ -209,6 +223,7 @@ class TestBwrapIntegration(unittest.TestCase):
         return subprocess.run(full_cmd, capture_output=True, text=True), wd
 
     def test_execute_mode_allows_write(self):
+        """Verifica que modo execute permite escrita no diretório."""
         with tempfile.TemporaryDirectory() as wd:
             result, _ = self._run(
                 EXECUTE,
@@ -219,6 +234,7 @@ class TestBwrapIntegration(unittest.TestCase):
             self.assertIn("ok", result.stdout)
 
     def test_analysis_mode_blocks_write(self):
+        """Verifica que modo analysis bloqueia escrita no diretório."""
         with tempfile.TemporaryDirectory() as wd:
             result, _ = self._run(
                 ANALYSIS,
@@ -228,6 +244,7 @@ class TestBwrapIntegration(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
 
     def test_planning_mode_allows_network_namespace(self):
+        """Verifica que modo planning permite acesso à rede."""
         with tempfile.TemporaryDirectory() as wd:
             result, _ = self._run(
                 PLANNING,
@@ -238,6 +255,7 @@ class TestBwrapIntegration(unittest.TestCase):
             self.assertIn("default via", result.stdout)
 
     def test_echo_works_in_all_modes(self):
+        """Verifica que echo funciona em todos os modos."""
         for mode in [ANALYSIS, PLANNING, EXECUTE]:
             with self.subTest(mode=mode.name):
                 with tempfile.TemporaryDirectory() as wd:

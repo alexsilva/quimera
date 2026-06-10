@@ -7,12 +7,14 @@ from quimera.app.agent_call_service import AgentCallService
 
 class TestAgentCallServiceConstruction:
     def test_default_values(self):
+        """Verifica que AgentCallService usa os valores padrão corretos para retries e backoffs."""
         service = AgentCallService()
         assert service._max_retries == 2
         assert service._retry_backoff == 1.0
         assert service._rate_limit_backoff == 30.0
 
     def test_custom_values(self):
+        """Verifica que AgentCallService aceita e armazena corretamente parâmetros personalizados."""
         record = MagicMock()
         limited = MagicMock(return_value=False)
         before_retry = MagicMock()
@@ -30,16 +32,19 @@ class TestAgentCallServiceConstruction:
         assert service._before_retry is before_retry
 
     def test_default_record_failure_is_noop(self):
+        """Verifica que o _record_failure padrão pode ser chamado sem lançar exceção."""
         service = AgentCallService()
         service._record_failure("agent1")
 
     def test_default_is_rate_limited_returns_false(self):
+        """Verifica que _is_rate_limited padrão sempre retorna False."""
         service = AgentCallService()
         assert service._is_rate_limited() is False
 
 
 class TestComputeBackoff:
     def test_rate_limited_uses_rate_limit_backoff(self):
+        """Verifica que _compute_backoff usa rate_limit_backoff quando rate limit está ativo."""
         service = AgentCallService(
             retry_backoff=1.0, rate_limit_backoff=30.0,
             is_rate_limited=lambda: True,
@@ -47,6 +52,7 @@ class TestComputeBackoff:
         assert service._compute_backoff(1) == 30.0
 
     def test_not_rate_limited_uses_linear_backoff(self):
+        """Verifica que _compute_backoff usa backoff linear (retry_backoff * tentativa) sem rate limit."""
         service = AgentCallService(
             retry_backoff=2.0, rate_limit_backoff=30.0,
             is_rate_limited=lambda: False,
@@ -58,6 +64,7 @@ class TestComputeBackoff:
 
 class TestCall:
     def test_success_first_attempt(self):
+        """Verifica que call() retorna o resultado de resolve_fn quando a primeira tentativa é bem-sucedida."""
         service = AgentCallService(max_retries=2)
         call_fn = MagicMock(return_value="response")
         resolve_fn = MagicMock(return_value="result")
@@ -67,6 +74,7 @@ class TestCall:
         resolve_fn.assert_called_once_with("agent1", "response")
 
     def test_retry_on_none_call_exhausted(self):
+        """Verifica que call() retorna None e registra falha quando call_fn retorna None em todas as tentativas."""
         record = MagicMock()
         service = AgentCallService(max_retries=2, retry_backoff=0.01, record_failure=record)
         call_fn = MagicMock(return_value=None)
@@ -79,6 +87,7 @@ class TestCall:
         record.assert_called_once_with("agent1")
 
     def test_retry_on_none_call_then_succeeds(self):
+        """Verifica que call() realiza retentativas e retorna sucesso quando call_fn finalmente responde."""
         service = AgentCallService(max_retries=3, retry_backoff=0.01)
         call_responses = [None, None, "response"]
         call_fn = MagicMock(side_effect=call_responses)
@@ -90,6 +99,7 @@ class TestCall:
         resolve_fn.assert_called_once_with("agent1", "response")
 
     def test_before_retry_called_on_none_call(self):
+        """Verifica que before_retry é chamado com motivo 'no_response' quando call_fn retorna None."""
         before_retry = MagicMock()
         service = AgentCallService(max_retries=2, retry_backoff=0.01, before_retry=before_retry)
         call_fn = MagicMock(return_value=None)
@@ -98,6 +108,7 @@ class TestCall:
         before_retry.assert_called_once_with("agent1", 1, "no_response")
 
     def test_retry_on_none_resolve_exhausted(self):
+        """Verifica que call() retorna None e registra falha quando resolve_fn retorna None em todas as tentativas."""
         record = MagicMock()
         service = AgentCallService(max_retries=2, retry_backoff=0.01, record_failure=record)
         call_fn = MagicMock(return_value="response")
@@ -110,6 +121,7 @@ class TestCall:
         record.assert_called_once_with("agent1")
 
     def test_retry_on_none_resolve_then_succeeds(self):
+        """Verifica que call() realiza retentativas e retorna sucesso quando resolve_fn finalmente responde."""
         service = AgentCallService(max_retries=3, retry_backoff=0.01)
         call_fn = MagicMock(return_value="response")
         resolve_responses = [None, None, "result"]
@@ -121,6 +133,7 @@ class TestCall:
         assert resolve_fn.call_count == 3
 
     def test_before_retry_called_on_none_resolve(self):
+        """Verifica que before_retry é chamado com motivo 'resolve_failed' quando resolve_fn retorna None."""
         before_retry = MagicMock()
         service = AgentCallService(max_retries=2, retry_backoff=0.01, before_retry=before_retry)
         call_fn = MagicMock(return_value="response")
@@ -130,6 +143,7 @@ class TestCall:
         before_retry.assert_called_once_with("agent1", 1, "resolve_failed")
 
     def test_exception_during_call_retries_and_raises(self):
+        """Verifica que call() realiza retentativas e relança a exceção quando call_fn sempre lança."""
         record = MagicMock()
         service = AgentCallService(max_retries=2, retry_backoff=0.01, record_failure=record)
         call_fn = MagicMock(side_effect=ValueError("boom"))
@@ -140,6 +154,7 @@ class TestCall:
         record.assert_called_once_with("agent1")
 
     def test_exception_during_call_then_succeeds(self):
+        """Verifica que call() retorna sucesso após exceções transitórias em call_fn."""
         service = AgentCallService(max_retries=3, retry_backoff=0.01)
         call_responses = [ValueError("boom"), ValueError("boom"), "response"]
         def _call(a):
@@ -153,6 +168,7 @@ class TestCall:
         assert result == "result"
 
     def test_before_retry_called_on_exception(self):
+        """Verifica que before_retry é chamado com motivo 'exception' quando call_fn lança exceção."""
         before_retry = MagicMock()
         service = AgentCallService(max_retries=2, retry_backoff=0.01, before_retry=before_retry)
         call_fn = MagicMock(side_effect=ValueError("boom"))
@@ -162,6 +178,7 @@ class TestCall:
         before_retry.assert_called_once_with("agent1", 1, "exception")
 
     def test_exception_during_resolve_retries_and_raises(self):
+        """Verifica que call() realiza retentativas e relança quando resolve_fn sempre lança exceção."""
         record = MagicMock()
         service = AgentCallService(max_retries=2, retry_backoff=0.01, record_failure=record)
         call_fn = MagicMock(return_value="response")
@@ -174,6 +191,7 @@ class TestCall:
         record.assert_called_once_with("agent1")
 
     def test_exception_during_resolve_then_succeeds(self):
+        """Verifica que call() retorna sucesso após exceções transitórias em resolve_fn."""
         service = AgentCallService(max_retries=3, retry_backoff=0.01)
         call_fn = MagicMock(return_value="response")
         resolve_responses = [RuntimeError("fail"), RuntimeError("fail"), "result"]
@@ -187,6 +205,7 @@ class TestCall:
         assert result == "result"
 
     def test_user_cancelled_aborts_before_attempt(self):
+        """Verifica que call() retorna None sem chamar call_fn quando cancelado antes da primeira tentativa."""
         service = AgentCallService(max_retries=3)
         call_fn = MagicMock()
         result = service.call("agent1", call_fn, MagicMock(), lambda: True)
@@ -194,6 +213,7 @@ class TestCall:
         call_fn.assert_not_called()
 
     def test_user_cancelled_mid_retry_aborts(self):
+        """Verifica que call() interrompe retentativas e retorna None quando cancelado durante retry."""
         service = AgentCallService(max_retries=3, retry_backoff=0.01)
         cancel_count = 0
         def _cancel():
@@ -208,6 +228,7 @@ class TestCall:
         assert call_fn.call_count == 1
 
     def test_user_cancelled_after_none_call_aborts(self):
+        """Verifica que call() retorna None imediatamente quando cancelado após call_fn retornar None."""
         service = AgentCallService(max_retries=3, retry_backoff=0.01)
         call_fn = MagicMock(return_value=None)
         def _cancel():
@@ -216,6 +237,7 @@ class TestCall:
         assert result is None
 
     def test_user_cancelled_before_resolve_aborts(self):
+        """Verifica que call() retorna None sem chamar resolve_fn quando cancelado após call_fn bem-sucedida."""
         service = AgentCallService(max_retries=2, retry_backoff=0.01)
         call_fn = MagicMock(return_value="response")
         def _cancel():
@@ -224,6 +246,7 @@ class TestCall:
         assert result is None
 
     def test_user_cancelled_after_exception_returns_none(self):
+        """Verifica que call() retorna None sem relançar exceção quando cancelado após call_fn lançar."""
         service = AgentCallService(max_retries=2, retry_backoff=0.01)
         cancel_after = 0
         def _cancel():
@@ -237,6 +260,7 @@ class TestCall:
         assert call_fn.call_count == 1
 
     def test_rate_limit_backoff_used(self):
+        """Verifica que o sleep usa rate_limit_backoff quando rate limit está ativo durante retry."""
         service = AgentCallService(
             max_retries=2, retry_backoff=1.0,
             rate_limit_backoff=0.01,
@@ -248,6 +272,7 @@ class TestCall:
         mock_sleep.assert_called_with(0.01)
 
     def test_linear_backoff_without_rate_limit(self):
+        """Verifica que o sleep incrementa linearmente (0.5s, 1.0s) quando não há rate limit."""
         service = AgentCallService(
             max_retries=3, retry_backoff=0.5,
             rate_limit_backoff=30.0,
@@ -261,6 +286,7 @@ class TestCall:
         mock_sleep.assert_any_call(1.0)
 
     def test_max_retries_one_no_retry(self):
+        """Verifica que com max_retries=1 não há retentativa e a falha é registrada imediatamente."""
         service = AgentCallService(max_retries=1)
         call_fn = MagicMock(return_value=None)
         resolve_fn = MagicMock()
@@ -273,6 +299,7 @@ class TestCall:
         record.assert_called_once_with("agent1")
 
     def test_call_fn_arguments_preserved(self):
+        """Verifica que call() passa o agent_name corretamente tanto para call_fn quanto para resolve_fn."""
         service = AgentCallService(max_retries=1)
         call_fn = MagicMock(return_value="response")
         resolve_fn = MagicMock(return_value="result")
@@ -282,6 +309,7 @@ class TestCall:
         resolve_fn.assert_called_once_with("agent1", "response")
 
     def test_call_fn_none_then_resolve_succeeds(self):
+        """Verifica que call() retorna sucesso na segunda tentativa sem registrar falha quando call_fn eventualmente responde."""
         record = MagicMock()
         service = AgentCallService(max_retries=3, retry_backoff=0.01, record_failure=record)
         call_responses = [None, "response"]

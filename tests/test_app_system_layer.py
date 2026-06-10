@@ -4,6 +4,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
+from quimera.app.agent_pool import AgentPool
 from quimera.app.system_layer import AppSystemLayer
 from quimera.constants import (
     CMD_APPROVE,
@@ -89,6 +90,7 @@ def make_app(renderer=None):
 
 
 def test_flush_deferred_messages_clears_when_renderer_missing():
+    """Verifica que Test flush deferred messages clears when renderer missing."""
     app = make_app()
     app.renderer = None
     app._deferred_system_messages = ["a", "b"]
@@ -99,6 +101,7 @@ def test_flush_deferred_messages_clears_when_renderer_missing():
 
 
 def test_flush_deferred_messages_shows_and_flushes():
+    """Verifica que Test flush deferred messages shows and flushes."""
     app = make_app()
     app._deferred_system_messages = [("system", "a"), ("neutral", "b"), ("warning", "c"), ("error", "d")]
 
@@ -113,6 +116,7 @@ def test_flush_deferred_messages_shows_and_flushes():
 
 
 def test_show_system_message_returns_when_renderer_missing():
+    """Verifica que Test show system message returns when renderer missing."""
     app = make_app()
     app.renderer = None
 
@@ -120,6 +124,7 @@ def test_show_system_message_returns_when_renderer_missing():
 
 
 def test_show_system_message_defer_queue_none_is_noop():
+    """Verifica que Test show system message defer queue none is noop."""
     app = make_app()
     app._nonblocking_input_status = "reading"
     app._deferred_system_messages = None
@@ -128,6 +133,7 @@ def test_show_system_message_defer_queue_none_is_noop():
 
 
 def test_show_system_message_defer_overflow_drops_oldest():
+    """Verifica que Test show system message defer overflow drops oldest."""
     app = make_app()
     app._nonblocking_input_status = "reading"
     app._MAX_DEFERRED_SYSTEM_MESSAGES = 2
@@ -142,6 +148,7 @@ def test_show_system_message_defer_overflow_drops_oldest():
 
 
 def test_show_system_message_standard_path_flushes_and_redraws():
+    """Verifica que Test show system message standard path flushes and redraws."""
     app = make_app()
 
     AppSystemLayer(app).show_system_message("mensagem")
@@ -152,6 +159,7 @@ def test_show_system_message_standard_path_flushes_and_redraws():
 
 
 def test_show_system_message_prefers_quick_flush_on_prompt_owner_thread():
+    """Verifica que Test show system message prefers quick flush on prompt owner thread."""
     class QuickFlushRenderer(DummyRenderer):
         def __init__(self):
             super().__init__()
@@ -175,6 +183,7 @@ def test_show_system_message_prefers_quick_flush_on_prompt_owner_thread():
 
 
 def test_show_muted_message_returns_when_renderer_missing():
+    """Verifica que Test show muted message returns when renderer missing."""
     app = make_app()
     app.renderer = None
 
@@ -182,6 +191,7 @@ def test_show_muted_message_returns_when_renderer_missing():
 
 
 def test_show_muted_message_prefers_neutral_and_flushes():
+    """Verifica que Test show muted message prefers neutral and flushes."""
     app = make_app()
 
     AppSystemLayer(app).show_muted_message("neutro")
@@ -192,6 +202,7 @@ def test_show_muted_message_prefers_neutral_and_flushes():
 
 
 def test_show_muted_message_defers_from_background_thread_while_prompt_active():
+    """Verifica que Test show muted message defers from background thread while prompt active."""
     app = make_app()
     app._nonblocking_input_status = "reading"
     app._prompt_owning_thread_id = object()
@@ -204,6 +215,7 @@ def test_show_muted_message_defers_from_background_thread_while_prompt_active():
 
 
 def test_show_muted_message_defers_task_completion_from_background_thread():
+    """Verifica que Test show muted message defers task completion from background thread."""
     app = make_app()
     app._nonblocking_input_status = "reading"
     app._prompt_owning_thread_id = object()
@@ -216,6 +228,7 @@ def test_show_muted_message_defers_task_completion_from_background_thread():
 
 
 def test_show_system_message_shows_above_prompt_when_input_gate_supports_it():
+    """Verifica que Test show system message shows above prompt when input gate supports it."""
     app = make_app()
     app._nonblocking_input_status = "reading"
     app._prompt_owning_thread_id = object()
@@ -237,6 +250,7 @@ def test_show_system_message_shows_above_prompt_when_input_gate_supports_it():
 
 
 def test_show_muted_message_shows_task_completion_above_prompt_when_input_gate_supports_it():
+    """Verifica que Test show muted message shows task completion above prompt when input gate supports it."""
     app = make_app()
     app._nonblocking_input_status = "reading"
     app._prompt_owning_thread_id = object()
@@ -258,6 +272,7 @@ def test_show_muted_message_shows_task_completion_above_prompt_when_input_gate_s
 
 
 def test_show_warning_message_defers_from_background_thread_while_prompt_active():
+    """Verifica que Test show warning message defers from background thread while prompt active."""
     app = make_app()
     app._nonblocking_input_status = "reading"
     app._prompt_owning_thread_id = object()
@@ -270,6 +285,7 @@ def test_show_warning_message_defers_from_background_thread_while_prompt_active(
 
 
 def test_show_warning_message_shows_above_prompt_when_input_gate_supports_it():
+    """Verifica que Test show warning message shows above prompt when input gate supports it."""
     app = make_app()
     app._nonblocking_input_status = "reading"
     app._prompt_owning_thread_id = object()
@@ -291,6 +307,7 @@ def test_show_warning_message_shows_above_prompt_when_input_gate_supports_it():
 
 
 def test_show_error_message_defers_from_background_thread_while_prompt_active():
+    """Verifica que Test show error message defers from background thread while prompt active."""
     app = make_app()
     app._nonblocking_input_status = "reading"
     app._prompt_owning_thread_id = object()
@@ -303,6 +320,7 @@ def test_show_error_message_defers_from_background_thread_while_prompt_active():
 
 
 def test_show_error_message_shows_above_prompt_when_input_gate_supports_it():
+    """Verifica que Test show error message shows above prompt when input gate supports it."""
     app = make_app()
     app._nonblocking_input_status = "reading"
     app._prompt_owning_thread_id = object()
@@ -324,6 +342,7 @@ def test_show_error_message_shows_above_prompt_when_input_gate_supports_it():
 
 
 def test_show_task_response_uses_strip_and_emits_only_non_empty():
+    """Verifica que Test show task response uses strip and emits only non empty."""
     app = make_app()
     layer = AppSystemLayer(app)
 
@@ -334,6 +353,7 @@ def test_show_task_response_uses_strip_and_emits_only_non_empty():
 
 
 def test_resolve_prompt_target_covers_default_exact_and_alias_paths():
+    """Verifica que Test resolve prompt target covers default exact and alias paths."""
     app = make_app()
     plugin = make_plugin(name="Alpha", prefix="/alpha", aliases=["/a"])  # noqa: N806
     app.active_agents = ["ghost", "Alpha"]
@@ -360,6 +380,7 @@ def test_resolve_prompt_target_covers_default_exact_and_alias_paths():
 
 
 def test_resolve_prompt_target_prompts_when_ambiguous():
+    """Verifica que Test resolve prompt target prompts when ambiguous."""
     app = make_app()
     app.active_agents = ["codex", "claude"]
     layer = AppSystemLayer(app)
@@ -371,6 +392,7 @@ def test_resolve_prompt_target_prompts_when_ambiguous():
 
 
 def test_resolve_connect_target_variants_and_validation_fallback():
+    """Verifica que Test resolve connect target variants and validation fallback."""
     app = make_app()
     plugin = make_plugin(name="chatgpt", prefix="/chatgpt", aliases=["/gpt"])
     app.get_available_plugins = Mock(return_value=[plugin])
@@ -387,6 +409,7 @@ def test_resolve_connect_target_variants_and_validation_fallback():
 
 
 def test_read_command_input_uses_app_reader_when_available():
+    """Verifica que Test read command input uses app reader when available."""
     app = make_app()
     app.read_user_input = Mock(return_value="ok")
 
@@ -397,6 +420,7 @@ def test_read_command_input_uses_app_reader_when_available():
 
 
 def test_read_command_input_falls_back_to_builtin_input():
+    """Verifica que Test read command input falls back to builtin input."""
     app = make_app()
     app.read_user_input = None
 
@@ -408,6 +432,7 @@ def test_read_command_input_falls_back_to_builtin_input():
 
 
 def test_prompt_bool_reprompts_on_invalid_value():
+    """Verifica que Test prompt bool reprompts on invalid value."""
     app = make_app()
     app.read_user_input = Mock(side_effect=["talvez", "s"])
     layer = AppSystemLayer(app)
@@ -417,6 +442,7 @@ def test_prompt_bool_reprompts_on_invalid_value():
 
 
 def test_prompt_bool_supports_default_and_negative_answer():
+    """Verifica que Test prompt bool supports default and negative answer."""
     app = make_app()
     app.read_user_input = Mock(side_effect=["", "n"])
     layer = AppSystemLayer(app)
@@ -426,6 +452,7 @@ def test_prompt_bool_supports_default_and_negative_answer():
 
 
 def test_configure_connection_interactively_raises_for_unknown_base_plugin():
+    """Verifica que Test configure connection interactively raises for unknown base plugin."""
     app = make_app()
     app.read_user_input = Mock(side_effect=["desconhecido"])
     layer = AppSystemLayer(app)
@@ -437,6 +464,7 @@ def test_configure_connection_interactively_raises_for_unknown_base_plugin():
 
 
 def test_configure_connection_interactively_raises_for_empty_model_in_base_plugin_mode():
+    """Verifica que Test configure connection interactively raises for empty model in base plugin mode."""
     app = make_app()
     app.read_user_input = Mock(side_effect=["base", ""])
     layer = AppSystemLayer(app)
@@ -449,6 +477,7 @@ def test_configure_connection_interactively_raises_for_empty_model_in_base_plugi
 
 
 def test_configure_connection_interactively_returns_base_plugin_connection_when_valid():
+    """Verifica que Test configure connection interactively returns base plugin connection when valid."""
     app = make_app()
     app.read_user_input = Mock(side_effect=["base", "gpt-5"])
     layer = AppSystemLayer(app)
@@ -465,6 +494,7 @@ def test_configure_connection_interactively_returns_base_plugin_connection_when_
 
 
 def test_configure_connection_interactively_cli_reprompts_invalid_driver_and_rejects_empty_cmd():
+    """Verifica que Test configure connection interactively cli reprompts invalid driver and rejects empty cmd."""
     app = make_app()
     # plugin_base, driver(invalid), driver(valid), output_format, cmd(empty→ValueError)
     app.read_user_input = Mock(side_effect=["", "invalido", "cli", "", ""])
@@ -479,6 +509,7 @@ def test_configure_connection_interactively_cli_reprompts_invalid_driver_and_rej
 
 
 def test_configure_connection_interactively_cli_returns_connection_when_valid():
+    """Verifica que Test configure connection interactively cli returns connection when valid."""
     app = make_app()
     # plugin_base, driver, output_format, cmd, prompt_as_arg
     app.read_user_input = Mock(side_effect=["", "cli", "", "codex run", "s"])
@@ -495,6 +526,7 @@ def test_configure_connection_interactively_cli_returns_connection_when_valid():
 
 
 def test_configure_connection_interactively_openai_empty_object_clears_extra_body():
+    """Verifica que Test configure connection interactively openai empty object clears extra body."""
     app = make_app()
     # plugin_base, driver, provider, model, base_url, api_key_env, extra_body("{}"=clear), supports_tools, max_connections
     app.read_user_input = Mock(side_effect=["", "openai", "", "", "", "", "{}", "", ""])
@@ -514,6 +546,7 @@ def test_configure_connection_interactively_openai_empty_object_clears_extra_bod
 
 
 def test_configure_connection_interactively_openai_invalid_json_keeps_previous_extra_body():
+    """Verifica que Test configure connection interactively openai invalid json keeps previous extra body."""
     app = make_app()
     # plugin_base, driver, provider, model, base_url, api_key_env, extra_body("{"=invalid), supports_tools, max_connections
     app.read_user_input = Mock(side_effect=["", "openai", "", "", "", "", "{", "", ""])
@@ -533,6 +566,7 @@ def test_configure_connection_interactively_openai_invalid_json_keeps_previous_e
 
 
 def test_configure_connection_interactively_openai_blank_input_preserves_extra_body():
+    """Verifica que Test configure connection interactively openai blank input preserves extra body."""
     app = make_app()
     # plugin_base, driver, provider, model, base_url, api_key_env, extra_body(empty=preserve), supports_tools, max_connections
     app.read_user_input = Mock(side_effect=["", "openai", "", "", "", "", "", "", ""])
@@ -550,6 +584,7 @@ def test_configure_connection_interactively_openai_blank_input_preserves_extra_b
 
 
 def test_build_prompt_preview_message_raises_without_prompt_builder():
+    """Verifica que Test build prompt preview message raises without prompt builder."""
     app = make_app()
     layer = AppSystemLayer(app)
 
@@ -573,6 +608,7 @@ def _make_dummy_metrics():
 
 
 def test_build_prompt_preview_message_omits_raw_history():
+    """Verifica que Test build prompt preview message omits raw history."""
     app = make_app()
     app.history = [
         {"role": "user", "content": "oi"},
@@ -594,6 +630,7 @@ def test_build_prompt_preview_message_omits_raw_history():
 
 
 def test_build_prompt_preview_message_empty_history_omits_placeholder():
+    """Verifica que Test build prompt preview message empty history omits placeholder."""
     app = make_app()
     app.history = []
     mock_builder = Mock()
@@ -610,6 +647,7 @@ def test_build_prompt_preview_message_empty_history_omits_placeholder():
 
 
 def test_build_prompt_preview_message_follower_mode_passes_is_first_speaker_false():
+    """Verifica que Test build prompt preview message follower mode passes is first speaker false."""
     app = make_app()
     app.history = []
     mock_builder = Mock()
@@ -625,6 +663,7 @@ def test_build_prompt_preview_message_follower_mode_passes_is_first_speaker_fals
 
 
 def test_build_prompt_preview_message_first_speaker_mode_label():
+    """Verifica que Test build prompt preview message first speaker mode label."""
     app = make_app()
     app.history = []
     mock_builder = Mock()
@@ -641,6 +680,7 @@ def test_build_prompt_preview_message_first_speaker_mode_label():
 
 
 def test_handle_command_connect_dynamic_plugin_and_configure_error():
+    """Verifica que Test handle command connect dynamic plugin and configure error."""
     app = make_app()
     app.get_agent_plugin = Mock(return_value=None)
     layer = AppSystemLayer(app)
@@ -659,6 +699,7 @@ def test_handle_command_connect_dynamic_plugin_and_configure_error():
 
 
 def test_handle_command_connect_applies_base_plugin_and_updates_active_lists():
+    """Verifica que Test handle command connect applies base plugin and updates active lists."""
     app = make_app()
     layer = AppSystemLayer(app)
     plugin = make_plugin(name="target")
@@ -686,6 +727,7 @@ def test_handle_command_connect_applies_base_plugin_and_updates_active_lists():
 
 
 def test_handle_command_connect_passes_injected_registry_to_set_override():
+    """Verifica que Test handle command connect passes injected registry to set override."""
     app = make_app()
     app._plugin_registry = object()
     layer = AppSystemLayer(app)
@@ -705,6 +747,7 @@ def test_handle_command_connect_passes_injected_registry_to_set_override():
 
 
 def test_handle_command_reload_preserves_session_agents():
+    """Verifica que Test handle command reload preserves session agents."""
     app = make_app()
     app.active_agents = ["existing_agent"]
     app.selected_agents = ["existing_agent", "ghost"]
@@ -719,6 +762,7 @@ def test_handle_command_reload_preserves_session_agents():
 
 
 def test_handle_command_reload_and_reset_state_paths():
+    """Verifica que Test handle command reload and reset state paths."""
     app = make_app()
     app.active_agents = ["a", "stale"]
     app.selected_agents = ["a", "ghost"]
@@ -739,6 +783,7 @@ def test_handle_command_reload_and_reset_state_paths():
 
 
 def test_handle_command_reload_passes_injected_registry():
+    """Verifica que Test handle command reload passes injected registry."""
     app = make_app()
     app._plugin_registry = object()
     layer = AppSystemLayer(app)
@@ -750,6 +795,7 @@ def test_handle_command_reload_passes_injected_registry():
 
 
 def test_handle_command_disconnect_passes_injected_registry():
+    """Verifica que Test handle command disconnect passes injected registry."""
     app = make_app()
     app._plugin_registry = object()
     layer = AppSystemLayer(app)
@@ -761,6 +807,7 @@ def test_handle_command_disconnect_passes_injected_registry():
 
 
 def test_handle_command_approve_all_and_approve_available_and_unavailable():
+    """Verifica que Test handle command approve all and approve available and unavailable."""
     app = make_app()
     layer = AppSystemLayer(app)
 
@@ -783,6 +830,7 @@ def test_handle_command_approve_all_and_approve_available_and_unavailable():
 
 
 def test_handle_command_context_variants():
+    """Verifica que Test handle command context variants."""
     app = make_app()
     layer = AppSystemLayer(app)
 
@@ -820,6 +868,7 @@ def test_handle_command_prompt_preview():
 
 
 def test_handle_command_returns_false_for_unknown_command():
+    """Verifica que Test handle command returns false for unknown command."""
     app = make_app()
     layer = AppSystemLayer(app)
 
@@ -827,6 +876,7 @@ def test_handle_command_returns_false_for_unknown_command():
 
 
 def test_handle_command_bugs_dispatches_to_handler():
+    """Verifica que Test handle command bugs dispatches to handler."""
     app = make_app()
     handler = Mock(return_value=True)
     layer = AppSystemLayer(app, bugs_command_handler=handler)
@@ -837,6 +887,7 @@ def test_handle_command_bugs_dispatches_to_handler():
 
 
 def test_handle_command_bugs_without_handler_warns():
+    """Verifica que Test handle command bugs without handler warns."""
     app = make_app()
     layer = AppSystemLayer(app)
 
@@ -1186,3 +1237,88 @@ def test_flush_deferred_t2_retry_annotation_integration():
         "⚙ [task 1] codex: concluída (após 1 tentativas)",
     ]
     assert app._deferred_system_messages == []
+
+
+# ---------------------------------------------------------------------------
+# s/<agente> (freeze) e r/<agente> (unfreeze)
+# ---------------------------------------------------------------------------
+
+def _make_layer_with_pool(agents=None):
+    """Cria AppSystemLayer com AgentPool real."""
+    agents = agents or ["claude", "codex"]
+    pool = AgentPool(agents)
+    app = make_app()
+    app.agent_pool = pool
+    layer = AppSystemLayer(app)
+    return layer, pool, app
+
+
+def test_freeze_congela_pool():
+    """Verifica que Test freeze congela pool."""
+    layer, pool, _ = _make_layer_with_pool()
+    layer.handle_command("s/claude")
+    assert pool.frozen_agent == "claude"
+
+
+def test_freeze_exibe_mensagem_sistema():
+    """Verifica que Test freeze exibe mensagem sistema."""
+    layer, _, app = _make_layer_with_pool()
+    layer.handle_command("s/claude")
+    assert any("claude" in msg for msg in app.renderer.system_messages)
+
+
+def test_freeze_com_trailing_retorna_mensagem():
+    """Verifica que Test freeze com trailing retorna mensagem."""
+    layer, pool, _ = _make_layer_with_pool()
+    result = layer.handle_command("s/claude explique o que fez")
+    assert pool.frozen_agent == "claude"
+    assert result == "explique o que fez"
+
+
+def test_freeze_trailing_somente_agente_sem_texto():
+    """Verifica que Test freeze trailing somente agente sem texto."""
+    layer, _, _ = _make_layer_with_pool()
+    result = layer.handle_command("s/claude")
+    assert result is True
+
+
+def test_freeze_agente_desconhecido_avisa_e_nao_congela():
+    """Verifica que Test freeze agente desconhecido avisa e nao congela."""
+    layer, pool, app = _make_layer_with_pool()
+    result = layer.handle_command("s/naoexiste")
+    assert pool.frozen_agent is None
+    assert any("naoexiste" in msg for msg in app.renderer.warning_messages)
+    assert result is True
+
+
+def test_unfreeze_descongela_pool():
+    """Verifica que Test unfreeze descongela pool."""
+    layer, pool, _ = _make_layer_with_pool()
+    pool.freeze("claude")
+    layer.handle_command("r/claude")
+    assert pool.frozen_agent is None
+
+
+def test_unfreeze_exibe_mensagem_sistema():
+    """Verifica que Test unfreeze exibe mensagem sistema."""
+    layer, pool, app = _make_layer_with_pool()
+    pool.freeze("claude")
+    layer.handle_command("r/claude")
+    assert any("descongelada" in msg or "rotacionar" in msg for msg in app.renderer.system_messages)
+
+
+def test_freeze_take_primary_retorna_agente_congelado():
+    """Verifica que Test freeze take primary retorna agente congelado."""
+    layer, pool, _ = _make_layer_with_pool(["claude", "codex"])
+    layer.handle_command("s/codex")
+    assert pool.take_primary() == "codex"
+    assert pool.take_primary() == "codex"
+
+
+def test_unfreeze_retoma_rotacao():
+    """Verifica que Test unfreeze retoma rotacao."""
+    layer, pool, _ = _make_layer_with_pool(["claude", "codex"])
+    pool.freeze("claude")
+    pool.unfreeze()
+    primaries = {pool.take_primary() for _ in range(4)}
+    assert primaries == {"claude", "codex"}

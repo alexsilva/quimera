@@ -6,6 +6,7 @@ from quimera.evidence.store import EvidenceStore
 
 
 def test_append_and_query_round_trip(tmp_path):
+    """Verifica que evidências são armazenadas e recuperadas corretamente."""
     store = EvidenceStore(tmp_path, "sessao-1")
     first = Evidence(ts="2026-05-18T20:36:11.000Z", path="/tmp/a.txt", digest="aaa")
     second = Evidence(ts="2026-05-18T20:36:12.000Z", path="/tmp/b.txt", digest="bbb")
@@ -25,6 +26,7 @@ def test_append_and_query_round_trip(tmp_path):
 
 
 def test_is_valid_returns_false_after_file_changes(tmp_path):
+    """Verifica que is_valid retorna False após o arquivo ser modificado."""
     evidence_file = tmp_path / "artifact.txt"
     evidence_file.write_text("original", encoding="utf-8")
     digest = hashlib.sha1(evidence_file.read_bytes()).hexdigest()
@@ -38,6 +40,7 @@ def test_is_valid_returns_false_after_file_changes(tmp_path):
 
 
 def test_is_valid_returns_true_for_matching_digest(tmp_path):
+    """Verifica que is_valid retorna True quando o digest coincide."""
     evidence_file = tmp_path / "artifact.txt"
     evidence_file.write_text("conteudo", encoding="utf-8")
     digest = hashlib.sha1(evidence_file.read_bytes()).hexdigest()

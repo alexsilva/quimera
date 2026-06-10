@@ -209,6 +209,7 @@ class FailoverPolicyStub:
 
 
 def test_handler_completes_task_when_no_review_agent_available():
+    """Verifica que handler completes task when no review agent available."""
     dispatch = DispatchStub(response="resultado final")
     system = SystemLayerSpy()
     repo = RepositorySpy()
@@ -235,6 +236,7 @@ def test_handler_completes_task_when_no_review_agent_available():
 
 
 def test_handler_submits_for_review_when_other_reviewer_exists():
+    """Verifica que handler submits for review when other reviewer exists."""
     dispatch = DispatchStub(response="resultado final")
     system = SystemLayerSpy()
     repo = RepositorySpy()
@@ -257,6 +259,7 @@ def test_handler_submits_for_review_when_other_reviewer_exists():
 
 
 def test_handler_requeues_when_agent_returns_no_response_and_failover_is_possible():
+    """Verifica que handler requeues when agent returns no response and failover is possible."""
     dispatch = DispatchStub(response=None)
     system = SystemLayerSpy()
     repo = RepositorySpy()
@@ -281,6 +284,7 @@ def test_handler_requeues_when_agent_returns_no_response_and_failover_is_possibl
 
 
 def test_handler_fails_when_execution_is_blocked_and_no_failover_exists():
+    """Verifica que handler fails when execution is blocked and no failover exists."""
     dispatch = DispatchStub(response="não consigo executar")
     system = SystemLayerSpy()
     repo = RepositorySpy()
@@ -303,6 +307,7 @@ def test_handler_fails_when_execution_is_blocked_and_no_failover_exists():
 
 
 def test_handler_fails_when_user_cancels_execution():
+    """Verifica que handler fails when user cancels execution."""
     dispatch = DispatchStub(response="resultado parcial")
     system = SystemLayerSpy()
     repo = RepositorySpy()
@@ -361,6 +366,7 @@ def test_app_task_services_execution_isolated_from_chat_cancel_state(monkeypatch
 
 
 def test_background_dispatch_uses_chat_timeout_when_present(tmp_path):
+    """Verifica que background dispatch uses chat timeout when present."""
     class AppStub:
         pass
 
@@ -380,6 +386,7 @@ def test_background_dispatch_uses_chat_timeout_when_present(tmp_path):
 
 
 def test_background_dispatch_uses_fallback_timeout_when_chat_timeout_is_missing(tmp_path):
+    """Verifica que background dispatch uses fallback timeout when chat timeout is missing."""
     class AppStub:
         pass
 
@@ -399,6 +406,7 @@ def test_background_dispatch_uses_fallback_timeout_when_chat_timeout_is_missing(
 
 
 def test_parallel_calls_use_background_dispatch_when_available(tmp_path, monkeypatch):
+    """Verifica que parallel calls use background dispatch when available."""
     class AppStub:
         pass
 
@@ -451,6 +459,7 @@ def test_parallel_calls_use_background_dispatch_when_available(tmp_path, monkeyp
 
 
 def test_parallel_calls_create_dedicated_background_dispatch_and_close_it(tmp_path, monkeypatch):
+    """Verifica que parallel calls create dedicated background dispatch and close it."""
     class AppStub:
         pass
 

@@ -50,16 +50,19 @@ class AgentsCoverageTests(unittest.TestCase):
         self.renderer.running_status.return_value = _DummyStatus()
 
     def test_strip_spinner(self):
+        """Verifica que Test strip spinner."""
         self.assertEqual(_strip_spinner("⠋Executing"), "Executing")
         self.assertEqual(_strip_spinner("Normal text"), "Normal text")
 
     def test_run_handles_os_error(self):
+        """Verifica que Test run handles os error."""
         client = AgentClient(self.renderer)
         with patch("subprocess.Popen", side_effect=OSError("missing")):
             self.assertIsNone(client.run(["missing"], silent=True))
         self.renderer.show_error.assert_called_once()
 
     def test_run_silent_success_and_logging(self):
+        """Verifica que Test run silent success and logging."""
         client = AgentClient(self.renderer)
         proc = MagicMock()
         proc.stdout = ["ok\n"]
@@ -71,6 +74,7 @@ class AgentsCoverageTests(unittest.TestCase):
         logger.warning.assert_called_once()
 
     def test_run_handles_input_failure(self):
+        """Verifica que Test run handles input failure."""
         client = AgentClient(self.renderer)
         proc = MagicMock()
         proc.stdin.write.side_effect = RuntimeError("broken pipe")
@@ -81,6 +85,7 @@ class AgentsCoverageTests(unittest.TestCase):
 
     def test_run_handles_timeout(self):
         # Agents idle (no stdout) for > timeout*5 are killed; producing stdout resets the idle timer.
+        """Verifica que Test run handles timeout."""
         client = AgentClient(self.renderer, timeout=0.1)
         proc = MagicMock()
         proc.stdout = iter(())
@@ -103,6 +108,7 @@ class AgentsCoverageTests(unittest.TestCase):
         self.renderer.show_error.assert_called()
 
     def test_run_handles_reader_exception(self):
+        """Verifica que Test run handles reader exception."""
         client = AgentClient(self.renderer)
         proc = MagicMock()
 
@@ -124,6 +130,7 @@ class AgentsCoverageTests(unittest.TestCase):
         )
 
     def test_run_streaming_shows_output_and_truncates_stderr(self):
+        """Verifica que Test run streaming shows output and truncates stderr."""
         client = AgentClient(self.renderer, visibility=Visibility.SUMMARY)
         proc = MagicMock()
         proc.stdout = iter(["out\n"])
@@ -135,6 +142,7 @@ class AgentsCoverageTests(unittest.TestCase):
         self.renderer.show_plain.assert_any_call("err1", agent="codex")
 
     def test_run_returns_none_for_non_zero_exit(self):
+        """Verifica que Test run returns none for non zero exit."""
         client = AgentClient(self.renderer)
         proc = MagicMock()
         proc.stdout = []
@@ -146,6 +154,7 @@ class AgentsCoverageTests(unittest.TestCase):
         self.assertGreaterEqual(self.renderer.show_plain.call_count, 1)
 
     def test_call_uses_plugin_and_prompt_mode(self):
+        """Verifica que Test call uses plugin and prompt mode."""
         client = AgentClient(self.renderer)
         plugin = MagicMock()
         plugin.cmd = ["mock-agent"]
@@ -165,6 +174,7 @@ class AgentsCoverageTests(unittest.TestCase):
         )
 
     def test_call_uses_prompt_as_arg_and_unknown_agent_errors(self):
+        """Verifica que Test call uses prompt as arg and unknown agent errors."""
         client = AgentClient(self.renderer)
         plugin = MagicMock()
         plugin.cmd = ["mock-agent"]
@@ -186,6 +196,7 @@ class AgentsCoverageTests(unittest.TestCase):
         self.renderer.show_error.assert_called()
 
     def test_log_prompt_metrics_persists_jsonl(self):
+        """Verifica que Test log prompt metrics persists jsonl."""
         with tempfile.TemporaryDirectory() as tmpdir:
             metrics_file = Path(tmpdir) / "metrics.jsonl"
             client = AgentClient(self.renderer, metrics_file=str(metrics_file))
@@ -213,6 +224,7 @@ class ContextCoverageTests(unittest.TestCase):
         self.tmpdir.cleanup()
 
     def test_load_methods(self):
+        """Verifica que Test load methods."""
         manager = ContextManager(self.base, self.session, self.renderer)
         self.assertEqual(manager.load_base(), "Base")
         self.assertIn("Resumo", manager.load_session())
@@ -227,6 +239,7 @@ class ContextCoverageTests(unittest.TestCase):
         self.assertIn("Resumo", only_session.load())
 
     def test_show_empty_and_non_empty(self):
+        """Verifica que Test show empty and non empty."""
         manager = ContextManager(self.base, self.session, self.renderer)
         manager.show()
         self.renderer.show_plain.assert_called_once()
@@ -235,6 +248,7 @@ class ContextCoverageTests(unittest.TestCase):
         self.renderer.show_system.assert_called_with("\n[contexto vazio]\n")
 
     def test_edit_uses_editor_fallback_and_errors(self):
+        """Verifica que Test edit uses editor fallback and errors."""
         manager = ContextManager(self.base, self.session, self.renderer)
         with patch("os.environ.get", return_value="code --wait"), patch("subprocess.run") as run:
             manager.edit()
@@ -257,6 +271,7 @@ class ContextCoverageTests(unittest.TestCase):
         self.assertGreaterEqual(self.renderer.show_error.call_count, 3)
 
     def test_update_with_summary(self):
+        """Verifica que Test update with summary."""
         manager = ContextManager(self.base, self.session, self.renderer)
         manager.update_with_summary("Novo resumo")
         content = self.session.read_text(encoding="utf-8")
@@ -266,6 +281,7 @@ class ContextCoverageTests(unittest.TestCase):
 
 class ApprovalCoverageTests(unittest.TestCase):
     def test_approval_handler_base_raises(self):
+        """Verifica que Test approval handler base raises."""
         class ConcreteApproval(ApprovalHandler):
             def approve(self, *, tool_name: str, summary: str) -> bool:
                 return super().approve(tool_name=tool_name, summary=summary)
@@ -274,6 +290,7 @@ class ApprovalCoverageTests(unittest.TestCase):
             ConcreteApproval().approve(tool_name="shell", summary="ls")
 
     def test_console_approval_handler_variants(self):
+        """Verifica que Test console approval handler variants."""
         handler = ConsoleApprovalHandler()
         with patch("builtins.print"), patch("builtins.input", return_value="y"):
             self.assertTrue(handler.approve(tool_name="shell", summary="ls"))
@@ -285,6 +302,7 @@ class ApprovalCoverageTests(unittest.TestCase):
 
 class RuntimeConfigAndModelsCoverageTests(unittest.TestCase):
     def test_runtime_config_resolves_defaults(self):
+        """Verifica que Test runtime config resolves defaults."""
         root = Path("/tmp").resolve()
         self.assertEqual(ToolRuntimeConfig(workspace_root=root).allowed_read_roots, [root])
         other = Path("/").resolve()
@@ -292,6 +310,7 @@ class RuntimeConfigAndModelsCoverageTests(unittest.TestCase):
         self.assertEqual(config.allowed_read_roots, [other])
 
     def test_models_payload_and_defaults(self):
+        """Verifica que Test models payload and defaults."""
         result = ToolResult(ok=True, tool_name="test", content="done", data={"a": 1})
         self.assertEqual(result.to_model_payload()["data"], {"a": 1})
         call = ToolCall(name="list_files", arguments={"path": "."})
@@ -304,6 +323,7 @@ class RegistryAndExecutorCoverageTests(unittest.TestCase):
         self.approval = MagicMock()
 
     def test_registry_register_get_and_names(self):
+        """Verifica que Test registry register get and names."""
         registry = ToolRegistry()
 
         def handler(call):
@@ -317,6 +337,7 @@ class RegistryAndExecutorCoverageTests(unittest.TestCase):
             registry.get("missing")
 
     def test_executor_denied_and_unexpected_error(self):
+        """Verifica que Test executor denied and unexpected error."""
         executor = ToolExecutor(self.config, self.approval)
         self.approval.approve.return_value = False
         denied = executor.execute(ToolCall(name="write_file", arguments={"path": "a", "content": "b"}))
@@ -340,6 +361,7 @@ class PolicyCoverageTests(unittest.TestCase):
         self.tmpdir.cleanup()
 
     def test_policy_validation_paths_and_disabled_tools(self):
+        """Verifica que Test policy validation paths and disabled tools."""
         self.policy.validate(ToolCall(name="list_tasks", arguments={"job_id": 1}))
         self.policy.validate(ToolCall(name="list_jobs", arguments={}))
         self.policy.validate(ToolCall(name="get_job", arguments={}))
@@ -365,6 +387,7 @@ class PolicyCoverageTests(unittest.TestCase):
         self.assertFalse(self.policy.requires_approval(ToolCall(name="read_file", arguments={})))
 
     def test_policy_shell_validation(self):
+        """Verifica que Test policy shell validation."""
         self.policy.validate(ToolCall(name="run_shell", arguments={"command": "echo hello"}))
         with self.assertRaisesRegex(ToolPolicyError, "comando não vazio"):
             self.policy.validate(ToolCall(name="run_shell", arguments={"command": "  "}))
@@ -400,6 +423,7 @@ class TaskPlanningCoverageTests(unittest.TestCase):
             self.capabilities = capabilities or []
 
     def test_classification_and_scoring(self):
+        """Verifica que Test classification and scoring."""
         self.assertEqual(classify_task_type(""), TASK_TYPE_GENERAL)
         self.assertEqual(classify_task_type("texto aleatório"), TASK_TYPE_GENERAL)
         self.assertEqual(classify_task_type("corrija o bug"), "code_edit")
@@ -410,6 +434,7 @@ class TaskPlanningCoverageTests(unittest.TestCase):
         self.assertEqual(score_plugin_for_task(avoided, TASK_TYPE_TEST_EXECUTION), -5)
 
     def test_choose_best_agent_paths(self):
+        """Verifica que Test choose best agent paths."""
         self.assertIsNone(choose_best_agent("anything", []))
         p1 = self.Plugin("p1", tier=1)
         p2 = self.Plugin("p2", tier=3)
@@ -455,10 +480,12 @@ class TaskExecutorCoverageTests(unittest.TestCase):
             return True
 
     def test_constructor_requires_repository(self):
+        """Verifica que Test constructor requires repository."""
         with self.assertRaisesRegex(ValueError, "repository is required"):
             TaskExecutor("agent", None)
 
     def test_start_stop_and_create_executor(self):
+        """Verifica que Test start stop and create executor."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "tasks.db"
             repository = self.RepositoryStub()
@@ -473,6 +500,7 @@ class TaskExecutorCoverageTests(unittest.TestCase):
             self.assertIsNotNone(created._handler)
 
     def test_process_pending_and_poll_loop_paths(self):
+        """Verifica que Test process pending and poll loop paths."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "tasks.db"
             repository = self.RepositoryStub()
@@ -531,6 +559,7 @@ class FileToolsCoverageTests(unittest.TestCase):
         self.tmpdir.cleanup()
 
     def test_resolve_and_list_files_with_staging_overlay(self):
+        """Verifica que Test resolve and list files with staging overlay."""
         (self.root / "local.txt").write_text("a", encoding="utf-8")
         (self.root / "subdir").mkdir()
         (self.root / "subdir" / "workspace.txt").write_text("workspace", encoding="utf-8")
@@ -548,6 +577,7 @@ class FileToolsCoverageTests(unittest.TestCase):
             self.tools._resolve("../../etc/passwd")
 
     def test_read_write_and_grep(self):
+        """Verifica que Test read write and grep."""
         (self.root / "a.txt").write_text("abcdef", encoding="utf-8")
         read_result = self.tools.read_file(ToolCall(name="read_file", arguments={"path": "a.txt"}))
         self.assertEqual(read_result.content, "abcd")
@@ -586,6 +616,7 @@ class FileToolsCoverageTests(unittest.TestCase):
 
 class ShellToolCoverageTests(unittest.TestCase):
     def test_shell_tool_success_and_warning(self):
+        """Verifica que Test shell tool success and warning."""
         config = ToolRuntimeConfig(workspace_root=Path("/tmp"))
         tool = ShellTool(config)
         proc = MagicMock(stdout="hello\n", stderr="", returncode=0)
@@ -606,6 +637,7 @@ class TaskToolsCoverageTests(unittest.TestCase):
         self.tools = TaskTools(self.config)
 
     def test_resolve_job_id_and_duplicates(self):
+        """Verifica que Test resolve job id and duplicates."""
         with patch.dict(os.environ, {"QUIMERA_CURRENT_JOB_ID": "123"}):
             self.assertEqual(self.tools._resolve_job_id(None), 123)
         with patch.dict(os.environ, {"QUIMERA_CURRENT_JOB_ID": "bad"}):
@@ -631,6 +663,7 @@ class TaskToolsCoverageTests(unittest.TestCase):
             self.assertIsNone(self.tools._find_duplicate_task(1, "unique task"))
 
     def test_list_jobs_tasks_and_get_job_paths(self):
+        """Verifica que Test list jobs tasks and get job paths."""
         with patch("quimera.runtime.tools.tasks._list_tasks", return_value=[{"id": 1}]):
             tasks = self.tools.list_tasks(ToolCall(name="list_tasks", arguments={"status": "approved"}))
         self.assertEqual(json.loads(tasks.content), [{"id": 1}])
@@ -660,6 +693,7 @@ class TaskToolsCoverageTests(unittest.TestCase):
 
 class MockPluginCoverageTests(unittest.TestCase):
     def test_mock_plugin_registered(self):
+        """Verifica que Test mock plugin registered."""
         plugin = get("mock")
         self.assertIsNotNone(plugin)
         self.assertEqual(plugin.name, "mock")

@@ -55,6 +55,8 @@ def _make_configurator(inputs: list, bools: list | None = None, warn=None):
 # ---------------------------------------------------------------------------
 
 class TestOpenAIUnchanged:
+    """Testes para conexão OpenAI sem alterações."""
+
     def _make_existing_conn(self, provider="openai_compat"):
         return OpenAIConnection(
             model="gpt-4o",
@@ -81,6 +83,7 @@ class TestOpenAIUnchanged:
         return conn, result
 
     def test_unchanged_returns_same_object_openai_compat(self):
+        """Verifica que nenhuma alteração retorna o mesmo objeto de conexão."""
         conn, result = self._run_configure_unchanged(provider="openai_compat")
         assert result is conn, "Deve retornar o mesmo objeto quando nada mudou"
 
@@ -90,6 +93,7 @@ class TestOpenAIUnchanged:
         assert result is conn, "provider='openai' deve ser preservado sem normalização"
 
     def test_changed_model_returns_new_conn(self):
+        """Verifica que alterar o modelo retorna um novo objeto de conexão."""
         conn = self._make_existing_conn()
         plugin = _make_plugin()
         object.__setattr__(plugin, "_connection_override", conn)
@@ -103,6 +107,7 @@ class TestOpenAIUnchanged:
         assert result.model == "gpt-4o-mini"
 
     def test_extra_body_preserved_when_unchanged(self):
+        """Verifica que extra_body é preservado quando não alterado."""
         body = {"thinking": {"type": "enabled"}}
         conn = OpenAIConnection(
             model="claude-3-5",
@@ -130,6 +135,8 @@ class TestOpenAIUnchanged:
 # ---------------------------------------------------------------------------
 
 class TestCLIUnchanged:
+    """Testes para conexão CLI sem alterações."""
+
     def _make_existing_conn(self):
         return CliConnection(
             cmd=["ollama", "run", "llama3"],
@@ -138,6 +145,7 @@ class TestCLIUnchanged:
         )
 
     def test_unchanged_returns_same_object(self):
+        """Verifica que nenhuma alteração na CLI retorna o mesmo objeto."""
         conn = self._make_existing_conn()
         plugin = _make_plugin(driver="cli")
         object.__setattr__(plugin, "_connection_override", conn)
@@ -151,6 +159,7 @@ class TestCLIUnchanged:
         assert result is conn
 
     def test_changed_cmd_returns_new_conn(self):
+        """Verifica que alterar o cmd retorna um novo objeto de conexão."""
         conn = self._make_existing_conn()
         plugin = _make_plugin(driver="cli")
         object.__setattr__(plugin, "_connection_override", conn)

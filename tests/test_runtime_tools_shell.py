@@ -15,6 +15,7 @@ def config():
 
 
 def test_shell_tool_run_basic(config):
+    """Verifica que Test shell tool run basic."""
     tool = ShellTool(config)
     call = ToolCall(name="run_shell", arguments={"command": "echo hello"})
     with patch("subprocess.run") as mock_run:
@@ -28,6 +29,7 @@ def test_shell_tool_run_basic(config):
 
 def test_shell_tool_with_staging_warning(config):
     # Line 21 coverage
+    """Verifica que Test shell tool with staging warning."""
     tool = ShellTool(config)
     call = ToolCall(name="run_shell", arguments={"command": "ls"})
     with patch("quimera.runtime.tools.files.get_staging_root") as mock_staging:
@@ -57,6 +59,7 @@ def _poll_until_completed(tool: ShellTool, result, *, yield_time_ms: int = 500):
 
 
 def test_exec_command_completes_and_returns_payload(tmp_path):
+    """Verifica que Test exec command completes and returns payload."""
     tool = ShellTool(ToolRuntimeConfig(workspace_root=tmp_path))
     call = ToolCall(
         name="exec_command",
@@ -73,6 +76,7 @@ def test_exec_command_completes_and_returns_payload(tmp_path):
 
 
 def test_exec_command_supports_polling_running_process(tmp_path):
+    """Verifica que Test exec command supports polling running process."""
     tool = ShellTool(ToolRuntimeConfig(workspace_root=tmp_path))
     started = tool.exec_command(
         ToolCall(
@@ -110,6 +114,7 @@ def test_exec_command_supports_polling_running_process(tmp_path):
 
 
 def test_exec_command_supports_stdin_roundtrip(tmp_path):
+    """Verifica que Test exec command supports stdin roundtrip."""
     tool = ShellTool(ToolRuntimeConfig(workspace_root=tmp_path))
     started = tool.exec_command(
         ToolCall(
@@ -142,6 +147,7 @@ def test_exec_command_supports_stdin_roundtrip(tmp_path):
 
 
 def test_close_command_session_terminates_running_process(tmp_path):
+    """Verifica que Test close command session terminates running process."""
     tool = ShellTool(ToolRuntimeConfig(workspace_root=tmp_path))
     started = tool.exec_command(
         ToolCall(
@@ -166,6 +172,7 @@ def test_close_command_session_terminates_running_process(tmp_path):
 
 
 def test_exec_command_supports_tty_mode(tmp_path):
+    """Verifica que Test exec command supports tty mode."""
     tool = ShellTool(ToolRuntimeConfig(workspace_root=tmp_path))
     result = _poll_until_completed(
         tool,
@@ -186,6 +193,7 @@ def test_exec_command_supports_tty_mode(tmp_path):
 
 
 def test_exec_command_tty_waits_for_short_completion_after_yield(tmp_path):
+    """Verifica que Test exec command tty waits for short completion after yield."""
     tool = ShellTool(ToolRuntimeConfig(workspace_root=tmp_path))
     result = _poll_until_completed(
         tool,
@@ -207,6 +215,7 @@ def test_exec_command_tty_waits_for_short_completion_after_yield(tmp_path):
 
 
 def test_truncate_consumed_chunks_releases_stdout_without_stderr(config):
+    """Verifica que Test truncate consumed chunks releases stdout without stderr."""
     tool = ShellTool(config)
     session = CommandSession(
         session_id=1,
@@ -237,6 +246,7 @@ def test_truncate_consumed_chunks_releases_stdout_without_stderr(config):
 
 
 def test_drain_session_output_returns_only_new_suffix(config):
+    """Verifica que Test drain session output returns only new suffix."""
     tool = ShellTool(config)
     session = CommandSession(
         session_id=1,
@@ -266,6 +276,7 @@ def test_drain_session_output_returns_only_new_suffix(config):
 
 
 def test_exec_command_enforces_session_limit_on_session_creation(tmp_path):
+    """Verifica que Test exec command enforces session limit on session creation."""
     tool = ShellTool(ToolRuntimeConfig(workspace_root=tmp_path))
     fake_process = MagicMock()
     fake_process.poll.return_value = None
@@ -282,6 +293,7 @@ def test_exec_command_enforces_session_limit_on_session_creation(tmp_path):
 
 
 def test_create_session_evicts_oldest_without_holding_sessions_lock(tmp_path):
+    """Verifica que Test create session evicts oldest without holding sessions lock."""
     tool = ShellTool(ToolRuntimeConfig(workspace_root=tmp_path))
     first_process = MagicMock()
     first_process.poll.return_value = None

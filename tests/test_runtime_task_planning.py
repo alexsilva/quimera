@@ -44,6 +44,7 @@ class MockPlugin(AgentPlugin):
 
 
 def test_classify_task_type():
+    """Verifica a classificação do tipo de task."""
     assert classify_task_type("") == TaskType.GENERAL
     assert classify_task_type("something random") == TaskType.GENERAL
     assert classify_task_type("corrija o bug") == TaskType.CODE_EDIT
@@ -51,6 +52,7 @@ def test_classify_task_type():
 
 
 def test_classify_task_type_with_realistic_descriptions():
+    """Verifica a classificação com descrições realistas."""
     assert classify_task_type("Execute os testes de integração e reporte o traceback do task runner") == TaskType.TEST_EXECUTION
     assert classify_task_type("Revise o módulo quimera/app/task.py e aponte regressões") == TaskType.CODE_REVIEW
     assert classify_task_type("Implemente retry para falha transitória no executor de tasks") == TaskType.CODE_EDIT
@@ -59,6 +61,7 @@ def test_classify_task_type_with_realistic_descriptions():
 
 
 def test_classify_task_returns_richer_dimensions():
+    """Verifica que classify_task retorna dimensões enriquecidas."""
     classification = classify_task("Investigue por que o /task falha em produção, rode pytest e traga traceback.")
 
     assert classification == TaskClassification(
@@ -71,6 +74,7 @@ def test_classify_task_returns_richer_dimensions():
 
 
 def test_classify_task_allows_pluggable_classifier():
+    """Verifica que classify_task aceita classificador plugável."""
     class CustomClassifier:
         def classify(self, _description: str) -> TaskClassification:
             return TaskClassification(
@@ -88,6 +92,7 @@ def test_classify_task_allows_pluggable_classifier():
 
 
 def test_classify_task_rejects_invalid_classifier_return_type():
+    """Verifica que classify_task rejeita tipo de retorno inválido do classificador."""
     class InvalidClassifier:
         def classify(self, _description: str):
             return {"task_type": TaskType.CODE_EDIT}
@@ -97,6 +102,7 @@ def test_classify_task_rejects_invalid_classifier_return_type():
 
 
 def test_score_plugin_for_task():
+    """Verifica o score de um plugin para um tipo de task."""
     p = MockPlugin("p1", tier=3, preferred=[TaskType.CODE_EDIT], code=True, long=True, tools=True)
     # Tier 3 -> (3-1)*2 = 4
     # Preferred CODE_EDIT -> +5
@@ -112,6 +118,7 @@ def test_score_plugin_for_task():
 
 
 def test_choose_best_agent():
+    """Verifica a escolha do melhor agente."""
     assert choose_best_agent("any", []) is None
 
     p1 = MockPlugin("p1", tier=1)
@@ -120,6 +127,7 @@ def test_choose_best_agent():
 
 
 def test_choose_best_agent_fallback():
+    """Verifica o fallback na escolha do melhor agente."""
     # p1 avoids the task
     p1 = MockPlugin("p1", avoid=[TaskType.CODE_EDIT])
     # score will be -5
@@ -137,6 +145,7 @@ def test_choose_best_agent_fallback():
 
 
 def test_code_editing_agents_can_review():
+    """Verifica que agentes com code_editing podem fazer review."""
     p = MockPlugin("editor", tier=2, code=True)
     score_review = score_plugin_for_task(p, TaskType.CODE_REVIEW)
     score_edit = score_plugin_for_task(p, TaskType.CODE_EDIT)
@@ -149,6 +158,7 @@ def test_code_editing_agents_can_review():
 
 
 def test_bug_investigation_penalizes_plugins_without_tools():
+    """Verifica que plugins sem ferramentas são penalizados para bug_investigation."""
     with_tools = MockPlugin("with_tools", tier=2, code=True, tools=True, caps=["general_coding"])
     without_tools = MockPlugin("without_tools", tier=2, code=True, tools=False, caps=["general_coding"])
 
@@ -165,6 +175,7 @@ def test_bug_investigation_penalizes_plugins_without_tools():
 
 
 def test_choose_best_agent_penalizes_no_tools_for_bug_investigation():
+    """Verifica que agente sem ferramentas é preterido para bug_investigation."""
     agent_with_tools = MockPlugin("with_tools", tier=2, tools=True)
     agent_without_tools = MockPlugin("without_tools", tier=2, tools=False)
 
@@ -173,18 +184,21 @@ def test_choose_best_agent_penalizes_no_tools_for_bug_investigation():
 
 
 def test_test_execution_prefers_high_tool_reliability():
+    """Verifica que alta confiabilidade de ferramentas é preferida para test_execution."""
     low = MockPlugin("low", tier=2, tools=True, tool_reliability="low")
     high = MockPlugin("high", tier=1, tools=True, tool_reliability="high")
     assert choose_best_agent(TaskType.TEST_EXECUTION, [low, high]) == "high"
 
 
 def test_bug_investigation_prefers_high_tool_reliability():
+    """Verifica que alta confiabilidade de ferramentas é preferida para bug_investigation."""
     low = MockPlugin("low", tier=2, tools=True, code=True, caps=["general_coding"], tool_reliability="low")
     high = MockPlugin("high", tier=1, tools=True, tool_reliability="high")
     assert choose_best_agent(TaskType.BUG_INVESTIGATION, [low, high]) == "high"
 
 
 def test_choose_best_agent_ignores_agents_without_task_execution():
+    """Verifica que agentes sem execução de tasks são ignorados."""
     non_executor = MockPlugin("qwen-like", tier=3, preferred=[TaskType.CODE_REVIEW], task_execution=False)
     executor = MockPlugin("executor", tier=1)
 
@@ -194,6 +208,7 @@ def test_choose_best_agent_ignores_agents_without_task_execution():
 
 
 def test_choose_best_agent_returns_none_when_only_non_executors_are_available():
+    """Verifica que retorna None quando só há não-executores disponíveis."""
     non_executor = MockPlugin("qwen-like", tier=3, preferred=[TaskType.CODE_REVIEW], task_execution=False)
 
     assert choose_best_agent(TaskType.CODE_REVIEW, [non_executor]) is None

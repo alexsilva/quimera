@@ -13,6 +13,7 @@ from quimera.storage import SessionStorage
 
 class SessionStorageTests(unittest.TestCase):
     def test_load_last_session_defers_restore_notice_until_consumed(self):
+        """Verifica que o aviso de restauro é adiado até ser consumido pelo caller."""
         with tempfile.TemporaryDirectory() as tmp:
             logs_dir = Path(tmp)
             now = datetime.now()
@@ -42,6 +43,7 @@ class SessionStorageTests(unittest.TestCase):
             self.assertIsNone(storage.pop_restore_notice())
 
     def test_load_last_session_discards_dict_snapshot_without_saved_at(self):
+        """Verifica que snapshots sem saved_at são descartados."""
         with tempfile.TemporaryDirectory() as tmp:
             logs_dir = Path(tmp)
             now = datetime.now()
@@ -68,6 +70,7 @@ class SessionStorageTests(unittest.TestCase):
             self.assertEqual(restored["shared_state"], {})
 
     def test_load_last_session_discards_shared_state_when_saved_at_is_invalid(self):
+        """Verifica que shared_state é descartado quando saved_at é inválido."""
         with tempfile.TemporaryDirectory() as tmp:
             logs_dir = Path(tmp)
             now = datetime.now()
@@ -95,6 +98,7 @@ class SessionStorageTests(unittest.TestCase):
             self.assertEqual(restored["shared_state"], {})
 
     def test_load_last_session_keeps_recent_shared_state(self):
+        """Verifica que shared_state recente é preservado durante o restauro."""
         with tempfile.TemporaryDirectory() as tmp:
             logs_dir = Path(tmp)
             now = datetime.now()
@@ -121,6 +125,7 @@ class SessionStorageTests(unittest.TestCase):
             self.assertEqual(restored["shared_state"], {"next_step": "continuar"})
 
     def test_load_last_session_discards_old_history_by_ttl(self):
+        """Verifica que histórico antigo além do TTL é descartado."""
         with tempfile.TemporaryDirectory() as tmp:
             logs_dir = Path(tmp)
             now = datetime.now()

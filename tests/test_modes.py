@@ -14,24 +14,29 @@ from quimera.runtime.policy import ToolPolicy, ToolPolicyError
 
 class TestExecutionMode(unittest.TestCase):
     def test_all_modes_defined(self):
+        """Verifica que todos os modos esperados estão registrados em MODES."""
         for key in ["/planning", "/analysis", "/design", "/review", "/execute"]:
             self.assertIn(key, MODES)
 
     def test_get_mode_returns_correct_mode(self):
+        """Verifica que get_mode retorna o modo correto para um comando válido."""
         mode = get_mode("/planning")
         self.assertIsNotNone(mode)
         self.assertEqual(mode.name, "planning")
 
     def test_get_mode_case_insensitive(self):
+        """Verifica que get_mode é insensível a maiúsculas/minúsculas."""
         self.assertIsNotNone(get_mode("/PLANNING"))
         self.assertIsNotNone(get_mode("/Analysis"))
 
     def test_get_mode_unknown_returns_none(self):
+        """Verifica que get_mode retorna None para comandos desconhecidos ou inválidos."""
         self.assertIsNone(get_mode("/unknown"))
         self.assertIsNone(get_mode("planning"))
         self.assertIsNone(get_mode(""))
 
     def test_planning_mode_properties(self):
+        """Verifica as propriedades do modo /planning: somente leitura, rede permitida e ferramentas bloqueadas."""
         mode = get_mode("/planning")
         self.assertTrue(mode.read_only_fs)
         self.assertTrue(mode.allow_network)
@@ -42,6 +47,7 @@ class TestExecutionMode(unittest.TestCase):
         self.assertNotEqual(mode.prompt_addon, "")
 
     def test_analysis_mode_allows_network(self):
+        """Verifica que o modo /analysis é somente leitura e permite acesso à rede."""
         mode = get_mode("/analysis")
         self.assertTrue(mode.read_only_fs)
         self.assertTrue(mode.allow_network)
@@ -49,6 +55,7 @@ class TestExecutionMode(unittest.TestCase):
         self.assertNotIn("run_shell", mode.blocked_tools)
 
     def test_execute_mode_no_restrictions(self):
+        """Verifica que o modo /execute não possui restrições de filesystem nem ferramentas bloqueadas."""
         mode = get_mode("/execute")
         self.assertFalse(mode.read_only_fs)
         self.assertTrue(mode.allow_network)
@@ -57,6 +64,7 @@ class TestExecutionMode(unittest.TestCase):
         self.assertIn("se o humano pedir análise, analise", mode.prompt_addon.lower())
 
     def test_design_review_are_read_only_with_network(self):
+        """Verifica que /design e /review são somente leitura e permitem rede."""
         for cmd in ["/design", "/review"]:
             mode = get_mode(cmd)
             self.assertTrue(mode.read_only_fs, f"{cmd} should be read_only_fs")
@@ -75,10 +83,12 @@ class TestToolPolicyBlockedTools(unittest.TestCase):
         return ToolCall(name=name, arguments=args or {})
 
     def test_no_blocked_tools_by_default(self):
+        """Verifica que a política não tem ferramentas bloqueadas por padrão."""
         policy = self._make_policy()
         self.assertEqual(policy.blocked_tools, [])
 
     def test_blocked_tool_raises(self):
+        """Verifica que validar uma ferramenta bloqueada lança ToolPolicyError com mensagem adequada."""
         policy = self._make_policy(blocked=["write_file"])
         call = self._call("write_file", {"path": "foo.py", "content": "x"})
         with self.assertRaises(ToolPolicyError) as ctx:
@@ -86,6 +96,7 @@ class TestToolPolicyBlockedTools(unittest.TestCase):
         self.assertIn("bloqueada", str(ctx.exception))
 
     def test_non_blocked_tool_passes_policy(self):
+        """Verifica que ferramenta não bloqueada não lança erro de 'bloqueada' na validação."""
         policy = self._make_policy(blocked=["write_file"])
         # read_file is not blocked — should pass policy check (file existence may fail,
         # but the blocked_tools check itself should not raise)
@@ -97,6 +108,7 @@ class TestToolPolicyBlockedTools(unittest.TestCase):
             self.assertNotIn("bloqueada", str(exc))
 
     def test_multiple_blocked_tools(self):
+        """Verifica que múltiplas ferramentas bloqueadas são todas rejeitadas pela política."""
         blocked = ["write_file", "apply_patch", "run_shell"]
         policy = self._make_policy(blocked=blocked)
         for tool in blocked:
@@ -105,6 +117,7 @@ class TestToolPolicyBlockedTools(unittest.TestCase):
                 policy.validate(call)
 
     def test_blocked_tools_cleared(self):
+        """Verifica que limpar blocked_tools remove todas as restrições da política."""
         policy = self._make_policy(blocked=["write_file"])
         policy.blocked_tools = []
         # write_file now must pass the blocked check (may fail for other reasons)
@@ -115,6 +128,7 @@ class TestToolPolicyBlockedTools(unittest.TestCase):
             self.assertNotIn("bloqueada", str(exc))
 
     def test_execution_modes_keep_blocked_tools_enforced(self):
+        """Verifica que ferramentas bloqueadas pelo modo de execução são aplicadas pela política."""
         policy = self._make_policy()
         analysis_mode = get_mode("/analysis")
         policy.blocked_tools = list(analysis_mode.blocked_tools)
@@ -172,6 +186,7 @@ class TestParseRoutingWithModes(unittest.TestCase):
             return app, mock_plugins, None
 
     def test_mode_command_sets_execution_mode(self):
+        """Verifica que um comando de modo define execution_mode na instância do app."""
         app, _, _ = self._make_app()
         with patch("quimera.app.core.plugins") as mp:
             mp.get = lambda n: {"claude": MagicMock(prefix="/claude", name="claude"),

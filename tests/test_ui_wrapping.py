@@ -7,6 +7,7 @@ from quimera.ui import TerminalRenderer
 
 
 def test_show_plain_with_agent_wraps_without_second_column_indent():
+    """Verifica que show_plain com agente não cria indentação extra na quebra de linha."""
     renderer = TerminalRenderer()
     renderer._console = Console(width=40, record=True, force_terminal=False)
 
@@ -23,6 +24,7 @@ def test_show_plain_with_agent_wraps_without_second_column_indent():
 
 
 def test_show_system_folds_long_path_on_narrow_width():
+    """Verifica que show_system quebra caminhos longos em largura estreita."""
     renderer = TerminalRenderer()
     renderer._console = Console(width=40, record=True, force_terminal=False)
 
@@ -42,6 +44,7 @@ def test_show_system_folds_long_path_on_narrow_width():
 
 
 def test_show_turn_summary_renders_compact_line_on_narrow_width():
+    """Verifica que show_turn_summary renderiza linha compacta em largura estreita."""
     renderer = TerminalRenderer(theme="rule")
     renderer._console = Console(width=40, record=True, force_terminal=False)
 
@@ -68,6 +71,7 @@ def test_show_turn_summary_renders_compact_line_on_narrow_width():
 
 
 def test_show_turn_summary_renders_compact_line_on_wide_width():
+    """Verifica que show_turn_summary renderiza linha compacta em largura ampla."""
     renderer = TerminalRenderer(theme="rule")
     renderer._console = Console(width=120, record=True, force_terminal=False)
 
@@ -94,6 +98,7 @@ def test_show_turn_summary_renders_compact_line_on_wide_width():
 
 
 def test_show_turn_summary_with_long_tool_name_does_not_crash():
+    """Verifica que show_turn_summary não quebra com nomes de ferramenta muito longos."""
     renderer = TerminalRenderer(theme="rule")
     renderer._console = Console(width=40, record=True, force_terminal=False)
 
@@ -123,6 +128,7 @@ def test_show_turn_summary_with_long_tool_name_does_not_crash():
 
 
 def test_show_turn_summary_includes_trace_id_field_when_provided():
+    """Verifica que show_turn_summary inclui trace_id quando fornecido."""
     renderer = TerminalRenderer(theme="rule")
     renderer._console = Console(width=120, record=True, force_terminal=False)
 
@@ -150,6 +156,7 @@ def test_show_turn_summary_includes_trace_id_field_when_provided():
 
 
 def test_show_turn_summary_does_not_mutate_detail_payload():
+    """Verifica que show_turn_summary não modifica o payload de detalhes."""
     renderer = TerminalRenderer(theme="rule")
     renderer._console = Console(width=80, record=True, force_terminal=False)
 
@@ -176,6 +183,7 @@ def test_show_turn_summary_does_not_mutate_detail_payload():
 
 
 def test_show_turn_summary_does_not_mutate_detail_payload_between_layouts():
+    """Verifica que show_turn_summary não modifica o payload entre diferentes larguras."""
     detail = {
         "turn_id": "turn_5",
         "tools": [
@@ -201,6 +209,7 @@ def test_show_turn_summary_does_not_mutate_detail_payload_between_layouts():
 
 
 def test_show_turn_summary_skips_non_cli_runtime():
+    """Verifica que show_turn_summary ignora runtimes não-CLI."""
     renderer = TerminalRenderer(theme="rule")
     renderer._console = Console(width=120, record=True, force_terminal=False)
 
@@ -221,6 +230,7 @@ def test_show_turn_summary_skips_non_cli_runtime():
 
 
 def test_show_turn_summary_cli_runtime_keeps_summary_line():
+    """Verifica que show_turn_summary exibe resumo para runtime CLI."""
     renderer = TerminalRenderer(theme="rule")
     renderer._console = Console(width=120, record=True, force_terminal=False)
 

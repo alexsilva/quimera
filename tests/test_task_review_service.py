@@ -65,6 +65,8 @@ class FailoverPolicyStub:
 
 
 def test_review_handler_rejects_self_review_and_returns_to_pending_review():
+    """Verifica que o handler de review rejeita auto-revisão e retorna para pending_review."""
+    """Verifica que o handler de review rejeita auto-review e retorna para pending_review."""
     dispatch = DispatchStub(response=None)
     system = SystemLayerSpy()
     repo = RepositorySpy()
@@ -88,6 +90,8 @@ def test_review_handler_rejects_self_review_and_returns_to_pending_review():
 
 
 def test_review_handler_completes_task_when_verdict_is_aceite():
+    """Verifica que o handler conclui a tarefa quando o veredito é ACEITE."""
+    """Verifica que o handler conclui a task quando o veredito é ACEITE."""
     dispatch = DispatchStub(response="ACEITE\nEvidência ok")
     system = SystemLayerSpy()
     repo = RepositorySpy()
@@ -111,6 +115,8 @@ def test_review_handler_completes_task_when_verdict_is_aceite():
 
 
 def test_review_handler_requeues_task_when_verdict_is_not_accepted():
+    """Verifica que o handler recoloca a tarefa em fila quando o veredito não é ACEITE."""
+    """Verifica que o handler recoloca a task na fila quando o veredito não é aceito."""
     dispatch = DispatchStub(response="RETENTATIVA\nFaltou teste")
     system = SystemLayerSpy()
     repo = RepositorySpy()
@@ -134,6 +140,8 @@ def test_review_handler_requeues_task_when_verdict_is_not_accepted():
 
 
 def test_review_handler_returns_to_pending_review_when_exception_has_fallback():
+    """Verifica que o handler retorna a tarefa para pending_review quando há fallback."""
+    """Verifica que o handler retorna para pending_review quando há fallback na exceção."""
     dispatch = DispatchStub(error=RuntimeError("timeout"))
     system = SystemLayerSpy()
     repo = RepositorySpy()
@@ -157,6 +165,8 @@ def test_review_handler_returns_to_pending_review_when_exception_has_fallback():
 
 
 def test_review_handler_fails_when_exception_has_no_operational_fallback():
+    """Verifica que o handler falha a tarefa quando não há fallback operacional."""
+    """Verifica que o handler falha quando não há fallback operacional na exceção."""
     dispatch = DispatchStub(error=RuntimeError("timeout"))
     system = SystemLayerSpy()
     repo = RepositorySpy()

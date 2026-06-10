@@ -20,6 +20,7 @@ def tools(config):
 
 
 def test_file_tools_resolve_outside(tools):
+    """Verifica que _resolve rejeita path fora da workspace."""
     # Line 36 coverage
     with pytest.raises(ValueError, match="Path fora da workspace"):
         tools._resolve("../../etc/passwd")
@@ -41,6 +42,7 @@ def test_file_tools_read_file_rejects_prefix_sibling_path(tools, config):
 
 
 def test_file_tools_list_files_staging(tools, config):
+    """Verifica que list_files inclui arquivos do staging."""
     # Line 47, 58-61 coverage
     workspace = config.workspace_root
     (workspace / "a.txt").write_text("a")
@@ -69,6 +71,7 @@ def test_file_tools_list_files_staging(tools, config):
 
 
 def test_file_tools_read_file_staging(tools, config):
+    """Verifica que read_file prioriza arquivo do staging sobre workspace."""
     workspace = config.workspace_root
     (workspace / "a.txt").write_text("original")
 
@@ -86,6 +89,7 @@ def test_file_tools_read_file_staging(tools, config):
 
 
 def test_file_tools_write_file_modes(tools, config):
+    """Verifica que write_file suporta modos overwrite, create e append."""
     # Line 97, 99-100 coverage
     workspace = config.workspace_root
     path = workspace / "test.txt"
@@ -106,6 +110,7 @@ def test_file_tools_write_file_modes(tools, config):
 
 
 def test_file_tools_write_file_overwrite_requires_replace_existing(tools, config):
+    """Verifica que sobrescrita de arquivo existente exige replace_existing=true."""
     workspace = config.workspace_root
     path = workspace / "test.txt"
     path.write_text("hello")
@@ -122,6 +127,7 @@ def test_file_tools_write_file_overwrite_requires_replace_existing(tools, config
 
 
 def test_file_tools_grep_search_staging(tools, config):
+    """Verifica que grep_search busca também no staging."""
     # Line 114-116 coverage
     workspace = config.workspace_root
     (workspace / "a.txt").write_text("foo")
@@ -141,6 +147,7 @@ def test_file_tools_grep_search_staging(tools, config):
 
 
 def test_file_tools_grep_search_error(tools, config):
+    """Verifica que grep_search trata erro de leitura silenciosamente."""
     # Line 126 coverage
     workspace = config.workspace_root
     (workspace / "a.txt").write_text("foo")

@@ -3,6 +3,7 @@ from quimera.runtime.models import ToolResult, ToolCall
 
 
 def test_tool_result_to_model_payload():
+    """Verifica que to_model_payload retorna dict com todos os campos."""
     result = ToolResult(
         ok=True,
         tool_name="test",
@@ -21,6 +22,7 @@ def test_tool_result_to_model_payload():
 
 
 def test_tool_call_init():
+    """Verifica que ToolCall é inicializado com name e arguments."""
     call = ToolCall(name="test", arguments={"a": 1})
     assert call.name == "test"
     assert call.arguments == {"a": 1}
@@ -28,6 +30,7 @@ def test_tool_call_init():
 
 
 def test_tool_result_to_model_payload_includes_error_metadata():
+    """Verifica que to_model_payload inclui error_type e error_metadata."""
     result = ToolResult(
         ok=False,
         tool_name="test",
@@ -42,6 +45,7 @@ def test_tool_result_to_model_payload_includes_error_metadata():
 
 
 def test_tool_result_to_prompt_payload_is_minimal_and_truncated():
+    """Verifica que to_prompt_payload retorna subconjunto mínimo de campos com truncamento."""
     result = ToolResult(
         ok=False,
         tool_name="run_shell",
@@ -65,6 +69,7 @@ def test_tool_result_to_prompt_payload_is_minimal_and_truncated():
 
 
 def test_tool_result_to_prompt_payload_includes_policy_type_and_hint():
+    """Verifica que to_prompt_payload inclui error_type policy e hint."""
     result = ToolResult(
         ok=False,
         tool_name="run_shell",

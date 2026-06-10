@@ -8,10 +8,12 @@ from quimera.ui import RenderAuditLogger, TerminalRenderer
 
 
 def _read_jsonl(path):
+    """Lê arquivo JSONL e retorna lista de dicionários."""
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
 def test_renderer_audit_logs_static_print_and_ansi(tmp_path):
+    """Verifica que o audit logger registra eventos de print e ANSI."""
     log_dir = tmp_path / "render"
     events_path = log_dir / "render-test-session.jsonl"
     ansi_path = log_dir / "render-test-session.ansi"
@@ -30,6 +32,7 @@ def test_renderer_audit_logs_static_print_and_ansi(tmp_path):
 
 
 def test_renderer_audit_logs_stream_lifecycle(tmp_path):
+    """Verifica que o audit logger registra o ciclo de vida do stream (start/chunk/stop)."""
     log_dir = tmp_path / "render"
     events_path = log_dir / "render-test-session.jsonl"
     ansi_path = log_dir / "render-test-session.ansi"
@@ -53,7 +56,7 @@ def test_renderer_audit_logs_stream_lifecycle(tmp_path):
 
 
 def test_audit_preview_extracts_text_from_rich_group(tmp_path):
-    """Previews must show human-readable text, not '<rich.console.Group object at 0x...>'."""
+    """Verifica que previews extraem texto legível de objetos Rich Group."""
     from rich.console import Group
     from rich.text import Text
 
@@ -79,7 +82,7 @@ def test_audit_preview_extracts_text_from_rich_group(tmp_path):
 
 
 def test_audit_preview_extracts_text_from_table_and_rule_group(tmp_path):
-    """Prompt-preview-like groups must not leak Rich object reprs into audit logs."""
+    """Verifica que previews de grupos com tabelas não mostram representações Rich."""
     from rich.console import Group
     from rich.rule import Rule
     from rich.table import Table
@@ -111,7 +114,8 @@ def test_audit_preview_extracts_text_from_table_and_rule_group(tmp_path):
 
 
 def test_audit_no_empty_print_events(tmp_path):
-    """Empty prints must not produce audit entries (they add no debug value)."""
+    """Verifica que prints vazios não geram entradas de audit."""
+
     log_dir = tmp_path / "render"
     events_path = log_dir / "render-empty-test.jsonl"
     ansi_path = log_dir / "render-empty-test.ansi"
@@ -128,7 +132,8 @@ def test_audit_no_empty_print_events(tmp_path):
 
 
 def test_audit_no_noop_events(tmp_path):
-    """NoopEvent (used for flush sync) must not produce audit entries."""
+    """Verifica que NoopEvent não gera entradas de audit."""
+
     log_dir = tmp_path / "render"
     events_path = log_dir / "render-noop-test.jsonl"
     ansi_path = log_dir / "render-noop-test.ansi"
@@ -145,6 +150,7 @@ def test_audit_no_noop_events(tmp_path):
 
 
 def test_ansi_burst_duplicates_are_suppressed_and_logged(tmp_path):
+    """Verifica que explosões de ANSI duplicadas são suprimidas e registradas."""
     log_dir = tmp_path / "render"
     events_path = log_dir / "render-dedup-test.jsonl"
     ansi_path = log_dir / "render-dedup-test.ansi"
@@ -167,6 +173,7 @@ def test_ansi_burst_duplicates_are_suppressed_and_logged(tmp_path):
 
 
 def test_ansi_dedup_does_not_suppress_short_payload(tmp_path):
+    """Verifica que a deduplicação ANSI não suprime payloads curtos."""
     log_dir = tmp_path / "render"
     events_path = log_dir / "render-dedup-short-test.jsonl"
     ansi_path = log_dir / "render-dedup-short-test.ansi"
@@ -184,6 +191,7 @@ def test_ansi_dedup_does_not_suppress_short_payload(tmp_path):
 
 
 def test_renderer_audit_logs_transient_updates_and_chunk_previews(tmp_path):
+    """Verifica que o audit logger registra atualizações transientes e previews de chunks."""
     log_dir = tmp_path / "render"
     events_path = log_dir / "render-transient-test.jsonl"
     ansi_path = log_dir / "render-transient-test.ansi"
@@ -210,6 +218,7 @@ def test_renderer_audit_logs_transient_updates_and_chunk_previews(tmp_path):
 
 
 def test_spy_presenter_events_are_logged_in_render_audit(tmp_path):
+    """Verifica que eventos do SpyOutputPresenter são registrados no audit de render."""
     log_dir = tmp_path / "render"
     events_path = log_dir / "render-spy-event-test.jsonl"
     ansi_path = log_dir / "render-spy-event-test.ansi"

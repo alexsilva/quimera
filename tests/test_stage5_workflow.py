@@ -21,6 +21,7 @@ class TestStage5Workflow(unittest.TestCase):
             os.remove(self.tmp)
 
     def test_full_lifecycle(self):
+        """Verifica o ciclo completo de criação, claim e conclusão de tasks."""
         job_id = add_job("Refactor auth module", created_by="alex", db_path=self.tmp)
         self.assertIsInstance(job_id, int)
 
@@ -43,6 +44,7 @@ class TestStage5Workflow(unittest.TestCase):
         self.assertEqual(tasks_completed[0]["result"], "JWT validation implemented")
 
     def test_approve_validates_state(self):
+        """Verifica que approve_task só funciona uma vez no mesmo estado."""
         job_id = add_job("Test job", db_path=self.tmp)
         tid = propose_task(job_id, "Some task", db_path=self.tmp)
 
@@ -50,6 +52,7 @@ class TestStage5Workflow(unittest.TestCase):
         self.assertFalse(approve_task(tid, approved_by="alex", db_path=self.tmp))
 
     def test_reject_validates_state(self):
+        """Verifica que reject_task só funciona uma vez no mesmo estado."""
         job_id = add_job("Test job", db_path=self.tmp)
         tid = propose_task(job_id, "Some task", db_path=self.tmp)
 
@@ -57,17 +60,20 @@ class TestStage5Workflow(unittest.TestCase):
         self.assertFalse(reject_task(tid, rejected_by="alex", db_path=self.tmp))
 
     def test_cannot_approve_rejected(self):
+        """Verifica que task rejeitada não pode ser aprovada."""
         job_id = add_job("Test job", db_path=self.tmp)
         tid = propose_task(job_id, "Some task", db_path=self.tmp)
         reject_task(tid, rejected_by="alex", db_path=self.tmp)
         self.assertFalse(approve_task(tid, approved_by="alex", db_path=self.tmp))
 
     def test_claim_returns_none_when_no_pending_tasks(self):
+        """Verifica que claim retorna None quando não há tasks pendentes."""
         job_id = add_job("Test job", db_path=self.tmp)
         propose_task(job_id, "Task not approved", db_path=self.tmp)
         self.assertIsNone(claim_task("agent-1", db_path=self.tmp))
 
     def test_human_task_persists_metadata(self):
+        """Verifica que metadados de task humana são persistidos."""
         job_id = add_job("Test job", db_path=self.tmp)
         tid = create_task(
             job_id,
@@ -87,6 +93,7 @@ class TestStage5Workflow(unittest.TestCase):
         self.assertEqual(tasks[0]["requested_by"], "alex")
 
     def test_fail_task(self):
+        """Verifica que fail_task marca a task como failed."""
         job_id = add_job("Test job", db_path=self.tmp)
         tid = create_task(job_id, "Some task", assigned_to="agent-1", origin="human_command", db_path=self.tmp)
         claim_task("agent-1", db_path=self.tmp)
@@ -97,6 +104,7 @@ class TestStage5Workflow(unittest.TestCase):
         self.assertEqual(tasks[0]["result"], "Dependency missing")
 
     def test_requeue_task_allows_failover_claim(self):
+        """Verifica que requeue permite que outro agente faça claim."""
         job_id = add_job("Test job", db_path=self.tmp)
         tid = create_task(job_id, "Some task", assigned_to="agent-1", origin="human_command", db_path=self.tmp)
 
@@ -112,6 +120,7 @@ class TestStage5Workflow(unittest.TestCase):
         self.assertEqual(claim_task("agent-2", db_path=self.tmp), tid)
 
     def test_list_jobs_filter(self):
+        """Verifica que list_jobs filtra por created_by."""
         add_job("Job A", created_by="alex", db_path=self.tmp)
         add_job("Job B", created_by="bob", db_path=self.tmp)
 
@@ -123,6 +132,7 @@ class TestStage5Workflow(unittest.TestCase):
         self.assertEqual(alex_jobs[0]["description"], "Job A")
 
     def test_list_tasks_filter_by_job(self):
+        """Verifica que list_tasks filtra por job_id."""
         j1 = add_job("Job 1", db_path=self.tmp)
         j2 = add_job("Job 2", db_path=self.tmp)
         propose_task(j1, "Task for job 1", db_path=self.tmp)
@@ -132,6 +142,7 @@ class TestStage5Workflow(unittest.TestCase):
         self.assertEqual(len(tasks_j1), 1)
 
     def test_update_task(self):
+        """Verifica que update_task altera status, resultado e notas."""
         job_id = add_job("Test job", db_path=self.tmp)
         tid = propose_task(job_id, "Some task", db_path=self.tmp)
         approve_task(tid, approved_by="alex", db_path=self.tmp)

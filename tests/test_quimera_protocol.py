@@ -401,6 +401,7 @@ class ProtocolTests(unittest.TestCase):
         "interactive-test CLI não está disponível nesta versão",
     )
     def test_cli_runs_interactive_test_with_default_prompt(self):
+        """Verifica que cli runs interactive test with default prompt."""
         class FakeRenderer:
             instances = []
 
@@ -444,6 +445,7 @@ class ProtocolTests(unittest.TestCase):
         "interactive-test CLI não está disponível nesta versão",
     )
     def test_cli_runs_interactive_test_with_custom_prompt(self):
+        """Verifica que cli runs interactive test with custom prompt."""
         calls = []
 
         class FakeRenderer:
@@ -483,6 +485,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(FakeRenderer.instances[0].system_messages, ["rode pwd"])
 
     def test_cli_passes_visibility_to_app(self):
+        """Verifica que cli passes visibility to app."""
         captured = {}
 
         class FakeApp:
@@ -504,6 +507,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertTrue(captured["ran"])
 
     def test_cli_rejects_legacy_spy_flag(self):
+        """Verifica que cli rejects legacy spy flag."""
         with patch("sys.argv", ["quimera", "--spy"]):
             with self.assertRaises(SystemExit) as exc:
                 cli_main()
@@ -511,6 +515,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(exc.exception.code, 2)
 
     def test_parse_response_detects_extend_marker_at_end(self):
+        """Verifica que parse response detects extend marker at end."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.protocol = _make_protocol(app)
         app.shared_state = {}
@@ -521,6 +526,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertTrue(extend)
 
     def test_parse_response_keeps_plain_response(self):
+        """Verifica que parse response keeps plain response."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.protocol = _make_protocol(app)
         app.shared_state = {}
@@ -533,6 +539,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertFalse(extend)
 
     def test_parse_response_extracts_state_update_before_debate(self):
+        """Verifica que parse response extracts state update before debate."""
         import threading
         app = QuimeraApp.__new__(QuimeraApp)
         app.protocol = _make_protocol(app)
@@ -555,6 +562,7 @@ class ProtocolTests(unittest.TestCase):
         )
 
     def test_parse_response_extracts_state_update_after_debate_marker(self):
+        """Verifica que parse response extracts state update after debate marker."""
         import threading
         app = QuimeraApp.__new__(QuimeraApp)
         app.protocol = _make_protocol(app)
@@ -574,6 +582,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(app.shared_state, {"next_step": "escrever testes"})
 
     def test_parse_response_merges_multiple_state_updates(self):
+        """Verifica que parse response merges multiple state updates."""
         import threading
         app = QuimeraApp.__new__(QuimeraApp)
         app.protocol = _make_protocol(app)
@@ -602,6 +611,7 @@ class ProtocolTests(unittest.TestCase):
         )
 
     def test_parse_routing_rejects_double_prefix(self):
+        """Verifica que parse routing rejects double prefix."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
@@ -613,6 +623,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertTrue(app.renderer.warnings)
 
     def test_parse_routing_treats_unknown_prefix_as_plain_message(self):
+        """Verifica que parse routing treats unknown prefix as plain message."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
@@ -624,6 +635,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertFalse(explicit)
 
     def test_handle_command_shows_help(self):
+        """Verifica que handle command shows help."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
@@ -636,6 +648,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(app.renderer.system_messages, [expected_help])
 
     def test_handle_command_shows_agents(self):
+        """Verifica que handle command shows agents."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
@@ -648,6 +661,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(app.renderer.system_messages, [expected_agents])
 
     def test_handle_command_clears_terminal(self):
+        """Verifica que handle command clears terminal."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
         app.clear_terminal_screen = Mock()
@@ -659,6 +673,7 @@ class ProtocolTests(unittest.TestCase):
         app.clear_terminal_screen.assert_called_once_with()
 
     def test_handle_command_shows_prompt_preview_for_default_agent(self):
+        """Verifica que handle command shows prompt preview for default agent."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
         app._output_lock = threading.Lock()
@@ -709,6 +724,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn("PROMPT FINAL:\nPROMPT GERADO", content)
 
     def test_handle_command_shows_prompt_preview_for_exact_agent_prefix(self):
+        """Verifica que handle command shows prompt preview for exact agent prefix."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
         app._output_lock = threading.Lock()
@@ -747,6 +763,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn("PROMPT PREVIEW: codex", app.renderer.prompt_previews[0][1])
 
     def test_prompt_preview_omits_tool_prompt_for_cli_agent_without_builtin_tools(self):
+        """Verifica que prompt preview omits tool prompt for cli agent without builtin tools."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.history = []
         app.shared_state = {}
@@ -780,6 +797,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertTrue(app.prompt_builder.build.call_args.kwargs["skip_tool_prompt"])
 
     def test_prompt_preview_skips_tool_prompt_for_cli_agent_with_builtin_tools(self):
+        """Verifica que prompt preview skips tool prompt for cli agent with builtin tools."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.history = []
         app.shared_state = {}
@@ -813,6 +831,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertTrue(app.prompt_builder.build.call_args.kwargs["skip_tool_prompt"])
 
     def test_prompt_preview_omits_tool_prompt_for_openai_compat_even_with_builtin_tools(self):
+        """Verifica que prompt preview omits tool prompt for openai compat even with builtin tools."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.history = []
         app.shared_state = {}
@@ -849,6 +868,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertTrue(app.prompt_builder.build.call_args.kwargs["skip_tool_prompt"])
 
     def test_handle_command_warns_on_unknown_prompt_agent(self):
+        """Verifica que handle command warns on unknown prompt agent."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
@@ -860,15 +880,19 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(app.renderer.warnings, ["Uso: /prompt [agente] [follower]"])
 
     def test_available_internal_commands_include_prompt(self):
+        """Verifica que available internal commands include prompt."""
         self.assertIn(CMD_PROMPT, QuimeraApp._available_internal_commands())
 
     def test_available_internal_commands_include_connect(self):
+        """Verifica que available internal commands include connect."""
         self.assertIn(CMD_CONNECT, QuimeraApp._available_internal_commands())
 
     def test_available_internal_commands_include_disconnect(self):
+        """Verifica que available internal commands include disconnect."""
         self.assertIn(CMD_DISCONNECT, QuimeraApp._available_internal_commands())
 
     def test_list_connected_agents_returns_sorted_names(self):
+        """Verifica que list connected agents returns sorted names."""
         app = QuimeraApp.__new__(QuimeraApp)
         layer = AppSystemLayer(app)
 
@@ -879,6 +903,7 @@ class ProtocolTests(unittest.TestCase):
         get_overrides.assert_called_once_with()
 
     def test_handle_command_warns_when_connect_target_is_missing(self):
+        """Verifica que handle command warns when connect target is missing."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
         app.system_layer = AppSystemLayer(app)
@@ -889,6 +914,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(app.renderer.warnings, ["Uso: /connect <agente>"])
 
     def test_handle_command_connects_agent_interactively(self):
+        """Verifica que handle command connects agent interactively."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
         app._output_lock = threading.Lock()
@@ -926,6 +952,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn("Conexão ativa para chatgpt", app.renderer.system_messages[-1])
 
     def test_handle_command_warns_when_disconnect_target_is_missing(self):
+        """Verifica que handle command warns when disconnect target is missing."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
         app.system_layer = AppSystemLayer(app)
@@ -936,6 +963,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(app.renderer.warnings, ["Uso: /disconnect <agente>"])
 
     def test_handle_command_disconnects_persisted_connection(self):
+        """Verifica que handle command disconnects persisted connection."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
         app.system_layer = AppSystemLayer(app)
@@ -948,6 +976,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn("Conexão removida para chatgpt.", app.renderer.system_messages)
 
     def test_handle_command_disconnect_warns_when_not_found(self):
+        """Verifica que handle command disconnect warns when not found."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
         app.system_layer = AppSystemLayer(app)
@@ -963,6 +992,7 @@ class ProtocolTests(unittest.TestCase):
         )
 
     def test_configure_connection_interactively_openai_returns_dataclass_connection(self):
+        """Verifica que configure connection interactively openai returns dataclass connection."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
         plugin = AgentPlugin(
@@ -989,6 +1019,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(connection.provider, "openai_compat")
 
     def test_clear_terminal_screen_clears_scrollback_and_repositions_cursor(self):
+        """Verifica que clear terminal screen clears scrollback and repositions cursor."""
         app = QuimeraApp.__new__(QuimeraApp)
 
         stdout = Mock()
@@ -1001,6 +1032,7 @@ class ProtocolTests(unittest.TestCase):
         stdout.flush.assert_called_once_with()
 
     def test_handle_task_command_creates_task_and_assigns_best_agent(self):
+        """Verifica que handle task command creates task and assigns best agent."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
         app._output_lock = threading.Lock()
@@ -1038,6 +1070,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn("atribuída para codex", app.renderer.system_messages[-1])
 
     def test_handle_task_command_assigns_ollama_when_it_supports_task_execution(self):
+        """Verifica que handle task command assigns ollama when it supports task execution."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
         app._output_lock = threading.Lock()
@@ -1061,6 +1094,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn("atribuída para ollama-granite4", app.renderer.system_messages[-1])
 
     def test_handle_task_command_uses_injected_task_classifier(self):
+        """Verifica que handle task command uses injected task classifier."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
         app._output_lock = threading.Lock()
@@ -1096,6 +1130,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(tasks[0]["task_type"], TaskType.DOCUMENTATION)
 
     def test_handle_task_command_warns_and_falls_back_for_invalid_task_classifier(self):
+        """Verifica que handle task command warns and falls back for invalid task classifier."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
         app._output_lock = threading.Lock()
@@ -1122,6 +1157,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(tasks[0]["task_type"], TaskType.TEST_EXECUTION)
 
     def test_classify_task_execution_result_rejects_needs_input(self):
+        """Verifica que classify task execution result rejects needs input."""
         ok, reason = QuimeraApp.classify_task_execution_result(
             "Preciso de mais contexto. [NEEDS_INPUT]"
         )
@@ -1130,6 +1166,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(reason, "agente solicitou input humano")
 
     def test_classify_task_execution_result_rejects_inability_text(self):
+        """Verifica que classify task execution result rejects inability text."""
         ok, reason = QuimeraApp.classify_task_execution_result(
             "Não consigo executar isso sem acesso ao ambiente."
         )
@@ -1138,6 +1175,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn("Não consigo", reason)
 
     def test_choose_agent_with_load_balance_penalizes_busy_higher_tier_agent(self):
+        """Verifica que choose agent with load balance penalizes busy higher tier agent."""
         from quimera.runtime.tasks import create_task
 
         app = QuimeraApp.__new__(QuimeraApp)
@@ -1162,6 +1200,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(selected, AGENT_CODEX)
 
     def test_handle_task_command_rejects_empty_description(self):
+        """Verifica que handle task command rejects empty description."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
@@ -1183,6 +1222,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(list_tasks({"job_id": 1}, db_path=str(db_path)), [])
 
     def test_prompt_marks_only_first_speaker(self):
+        """Verifica que prompt marks only first speaker."""
         builder = PromptBuilder(DummyContextManager(), history_window=3)
         history = [{"role": "human", "content": "Pergunta"}]
 
@@ -1194,6 +1234,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertNotIn("inclua [DEBATE] ao final da sua resposta", second_prompt)
 
     def test_prompt_handoff_only_allows_route_for_multi_hop(self):
+        """Verifica que prompt handoff only allows route for multi hop."""
         builder = PromptBuilder(DummyContextManager(), history_window=3)
         history = [{"role": "human", "content": "Pergunta"}]
 
@@ -1217,6 +1258,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertNotIn("Não delegue de volta", prompt)
 
     def test_prompt_includes_handoff_when_present(self):
+        """Verifica que prompt includes handoff when present."""
         builder = PromptBuilder(DummyContextManager(), history_window=3)
         history = [{"role": "human", "content": "Pergunta"}]
 
@@ -1227,6 +1269,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn("Revise este ponto.", prompt)
 
     def test_prompt_includes_current_human_request_block(self):
+        """Verifica que prompt includes current human request block."""
         builder = PromptBuilder(DummyContextManager(), history_window=4)
         history = [
             {"role": "human", "content": "Primeiro pedido"},
@@ -1241,6 +1284,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn("Pedido atual", prompt)
 
     def test_prompt_does_not_repeat_current_human_request_in_conversation(self):
+        """Verifica que prompt does not repeat current human request in conversation."""
         builder = PromptBuilder(DummyContextManager(), history_window=4)
         history = [
             {"role": "human", "content": "Primeiro pedido"},
@@ -1256,6 +1300,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn("</recent_conversation>", conversation)
 
     def test_prompt_keeps_agent_messages_in_recent_conversation(self):
+        """Verifica que prompt keeps agent messages in recent conversation."""
         # Mensagens de outros agentes aparecem em recent_conversation (ordem
         # canônica). O bloco auxiliar não deve renderizar para não duplicar.
         builder = PromptBuilder(DummyContextManager(), history_window=5)
@@ -1274,6 +1319,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertNotIn("<recent_agent_messages", prompt)
 
     def test_prompt_skips_meta_lock_messages_from_recent_conversation(self):
+        """Verifica que prompt skips meta lock messages from recent conversation."""
         builder = PromptBuilder(DummyContextManager(), history_window=5)
         history = [
             {"role": "human", "content": "Mude o foco"},
@@ -1291,6 +1337,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn("[sem itens residuais na conversa recente]", conversation)
 
     def test_prompt_keeps_same_agent_history_in_conversation_not_other_agents_block(self):
+        """Verifica que prompt keeps same agent history in conversation not other agents block."""
         builder = PromptBuilder(DummyContextManager(), history_window=5)
         history = [
             {"role": "claude", "content": "Eu estava investigando o parser"},
@@ -1304,6 +1351,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn("[CLAUDE]: Eu estava investigando o parser", conversation)
 
     def test_prompt_keeps_latest_same_agent_message_even_if_just_outside_window(self):
+        """Verifica que prompt keeps latest same agent message even if just outside window."""
         builder = PromptBuilder(DummyContextManager(), history_window=4)
         history = [
             {"role": "claude", "content": "Eu já tinha isolado a causa no parser."},
@@ -1319,6 +1367,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn("[CLAUDE]: Eu já tinha isolado a causa no parser.", conversation)
 
     def test_prompt_keeps_recent_messages_in_conversation_for_continuity(self):
+        """Verifica que prompt keeps recent messages in conversation for continuity."""
         builder = PromptBuilder(DummyContextManager(), history_window=5)
         history = [
             {"role": "human", "content": "Investigue"},
@@ -1333,6 +1382,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertNotIn("[sem itens residuais na conversa recente]", conversation)
 
     def test_prompt_lists_only_active_agents(self):
+        """Verifica que prompt lists only active agents."""
         builder = PromptBuilder(
             DummyContextManager(),
             history_window=3,
@@ -1347,6 +1397,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertNotIn("QWEN", prompt)
 
     def test_prompt_includes_session_state_when_present(self):
+        """Verifica que prompt includes session state when present."""
         builder = PromptBuilder(
             DummyContextManager(),
             history_window=3,
@@ -1377,6 +1428,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertNotIn("RESUMO CARREGADO", prompt)
 
     def test_prompt_includes_shared_state_as_json(self):
+        """Verifica que prompt includes shared state as json."""
         builder = PromptBuilder(DummyContextManager(), history_window=3)
         history = [{"role": "human", "content": "Pergunta"}]
 
@@ -1411,6 +1463,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertNotIn('"goal":', prompt3)
 
     def test_prompt_truncates_shared_state_to_last_five_decisions(self):
+        """Verifica que prompt truncates shared state to last five decisions."""
         builder = PromptBuilder(DummyContextManager(), history_window=3)
         history = [{"role": "human", "content": "Pergunta"}]
         big_state = {
@@ -1440,6 +1493,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertNotIn('"next_step":', state_block)
 
     def test_prompt_includes_task_overview_in_shared_state(self):
+        """Verifica que prompt includes task overview in shared state."""
         builder = PromptBuilder(DummyContextManager(), history_window=3)
         history = [{"role": "human", "content": "Pergunta"}]
 
@@ -1461,6 +1515,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn('Execute approved antes de criar novas.', prompt)
 
     def test_prompt_includes_state_update_rule_with_shared_state_fallback(self):
+        """Verifica que prompt includes state update rule with shared state fallback."""
         builder = PromptBuilder(DummyContextManager(), history_window=3)
         history = [{"role": "human", "content": "Pergunta"}]
 
@@ -1485,6 +1540,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(prompt2.count("Você pode atualizar o estado compartilhado usando:"), 1)
 
     def test_prompt_keeps_internal_shared_state_keys_out_of_visible_blocks(self):
+        """Verifica que prompt keeps internal shared state keys out of visible blocks."""
         builder = PromptBuilder(DummyContextManager(), history_window=3)
         history = [{"role": "human", "content": "Pergunta"}]
 
@@ -1513,6 +1569,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(completed_block.strip(), "[task 1] ok")
 
     def test_app_builds_explicit_session_state_for_prompt(self):
+        """Verifica que app builds explicit session state for prompt."""
         temp_root = Path(self.enterContext(tempfile.TemporaryDirectory()))
 
         class FakeTmp:
@@ -1592,6 +1649,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(app.shared_state, {})
 
     def test_app_uses_default_history_window_from_config(self):
+        """Verifica que app uses default history window from config."""
         temp_root = Path(self.enterContext(tempfile.TemporaryDirectory()))
 
         class FakeTmp:
@@ -1657,6 +1715,7 @@ class ProtocolTests(unittest.TestCase):
             app._stop_task_executors()
 
     def test_app_allows_history_window_override(self):
+        """Verifica que app allows history window override."""
         temp_root = Path(self.enterContext(tempfile.TemporaryDirectory()))
 
         class FakeTmp:
@@ -1722,6 +1781,7 @@ class ProtocolTests(unittest.TestCase):
             app._stop_task_executors()
 
     def test_app_truncates_restored_history_to_hard_limit(self):
+        """Verifica que app truncates restored history to hard limit."""
         temp_root = Path(self.enterContext(tempfile.TemporaryDirectory()))
 
         class FakeTmp:
@@ -1842,6 +1902,7 @@ class ProtocolTests(unittest.TestCase):
         app.dispatch_services.call_agent.assert_called_once()
 
     def test_run_flushes_startup_system_messages_before_first_prompt(self):
+        """Verifica que run flushes startup system messages before first prompt."""
         class RecordingRenderer(DummyRenderer):
             def __init__(self):
                 super().__init__()
@@ -1878,6 +1939,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(app.renderer.events[4], ("flush", None))
 
     def test_run_shows_render_audit_path_only_in_debug_mode(self):
+        """Verifica que run shows render audit path only in debug mode."""
         class RecordingRenderer(DummyRenderer):
             def __init__(self):
                 super().__init__()
@@ -1928,6 +1990,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertTrue(any("/tmp/quimera/" in msg for msg in app.renderer.events))
 
     def test_run_keyboard_interrupt_renders_shutdown_with_muted_style(self):
+        """Verifica que run keyboard interrupt renders shutdown with muted style."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.history = []
         app.user_name = "Alex"
@@ -1951,6 +2014,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertTrue(app.agent_client._cancel_event.is_set())
 
     def test_run_forwards_full_multiline_editor_content_without_truncation(self):
+        """Verifica que run forwards full multiline editor content without truncation."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.history = []
         app.user_name = "Alex"
@@ -1983,6 +2047,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(captured_messages, [edited_message])
 
     def test_format_session_log_message_compacts_home_path(self):
+        """Verifica que format session log message compacts home path."""
         app = QuimeraApp.__new__(QuimeraApp)
         long_path = Path.home() / "um" / "caminho" / ("muito-longo-" * 12) / "sessao-2026-04-30.txt"
 
@@ -1996,6 +2061,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertLessEqual(len(lines[1].strip()), app._SESSION_LOG_DISPLAY_MAX_CHARS)
 
     def test_resolve_session_log_path_does_not_fallback_to_render_tmp(self):
+        """Verifica que resolve session log path does not fallback to render tmp."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.storage = SimpleNamespace(get_log_file=lambda: "", session_id="sessao-2026-03-27-123456")
         app.workspace = SimpleNamespace(
@@ -2011,6 +2077,7 @@ class ProtocolTests(unittest.TestCase):
         )
 
     def test_resolve_render_debug_log_path_only_when_debug_active(self):
+        """Verifica que resolve render debug log path only when debug active."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.storage = SimpleNamespace(session_id="sessao-2026-03-27-123456")
         app.workspace = SimpleNamespace(
@@ -2029,6 +2096,7 @@ class ProtocolTests(unittest.TestCase):
         )
 
     def test_resolve_render_debug_log_path_prefers_workspace_tmp_path(self):
+        """Verifica que resolve render debug log path prefers workspace tmp path."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.storage = SimpleNamespace(session_id="sessao-2026-03-27-123456")
         app.workspace = SimpleNamespace(
@@ -2047,6 +2115,7 @@ class ProtocolTests(unittest.TestCase):
         )
 
     def test_resolve_render_debug_log_path_returns_empty_when_getters_missing(self):
+        """Verifica que resolve render debug log path returns empty when getters missing."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.storage = SimpleNamespace(session_id="sessao-2026-03-27-123456")
         app.workspace = SimpleNamespace(
@@ -2057,6 +2126,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(resolve_render_debug_log_path(app.storage, app.workspace, app.debug_prompt_metrics), "")
 
     def test_resolve_render_debug_log_path_ignores_dot_path(self):
+        """Verifica que resolve render debug log path ignores dot path."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.storage = SimpleNamespace(session_id="sessao-2026-03-27-123456")
         app.workspace = SimpleNamespace(
@@ -2073,6 +2143,7 @@ class ProtocolTests(unittest.TestCase):
         )
 
     def test_run_uses_four_turns_when_extended(self):
+        """Verifica que run uses four turns when extended."""
         app = QuimeraApp.__new__(QuimeraApp)
         materialize_internal_services(app)
         app.history = []
@@ -2136,6 +2207,7 @@ class ProtocolTests(unittest.TestCase):
         )
 
     def test_run_blocks_agent_task_creation_via_tool_in_normal_flow(self):
+        """Verifica que run blocks agent task creation via tool in normal flow."""
         class AutoApprove(ApprovalHandler):
             def approve(self, tool_name, summary):
                 return True
@@ -2253,6 +2325,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(app.renderer.handoffs, [])
 
     def test_persist_message_saves_shared_state(self):
+        """Verifica que persist message saves shared state."""
         import threading
         app = QuimeraApp.__new__(QuimeraApp)
         app.history = []
@@ -2266,6 +2339,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(app.storage.saved_shared_state, {"goal": "corrigir protocolo"})
 
     def test_persist_message_caps_history_when_auto_summarize_is_disabled(self):
+        """Verifica que persist message caps history when auto summarize is disabled."""
         import threading
         app = QuimeraApp.__new__(QuimeraApp)
         app.history = [{"role": "human", "content": f"m{i}"} for i in range(24)]
@@ -2283,6 +2357,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(app.history[-1]["content"], "m24")
 
     def test_auto_summarize_merges_with_existing_session_summary(self):
+        """Verifica que auto summarize merges with existing session summary."""
         class FakeContextManager:
             def __init__(self):
                 self.saved_summary = None
@@ -2402,6 +2477,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(len(app.history), 64)  # janela preservada
 
     def test_shutdown_merges_existing_session_summary(self):
+        """Verifica que shutdown merges existing session summary."""
         class FakeContextManager:
             def __init__(self):
                 self.saved_summary = None
@@ -2448,6 +2524,7 @@ class ProtocolTests(unittest.TestCase):
         )
 
     def test_shutdown_skips_summary_when_interrupted(self):
+        """Verifica que shutdown skips summary when interrupted."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.history = [{"role": "human", "content": "mensagem final"}]
         app.context_manager = DummyContextManager()
@@ -2463,6 +2540,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(app.renderer.system_messages, [])
 
     def test_shutdown_cancels_agent_summary_when_join_is_interrupted(self):
+        """Verifica que shutdown cancels agent summary when join is interrupted."""
         class FakeThread:
             def __init__(self, target=None, daemon=None):
                 self.target = target
@@ -2496,6 +2574,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(app.renderer.system_messages[-1], "[memória] não foi possível gerar o resumo.")
 
     def test_summarize_session_returns_none_when_all_backends_unavailable(self):
+        """Verifica que summarize session returns none when all backends unavailable."""
         class DummyRendererWithSystem(DummyRenderer):
             def __init__(self):
                 super().__init__()
@@ -2519,6 +2598,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn("[memória] resumidores indisponíveis", renderer.system_messages)
 
     def test_summarize_session_returns_none_when_backend_raises(self):
+        """Verifica que summarize session returns none when backend raises."""
         class DummyRendererWithSystem(DummyRenderer):
             def __init__(self):
                 super().__init__()
@@ -2545,6 +2625,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(renderer.system_messages, ["[memória] resumidores indisponíveis"])
 
     def test_chain_summarizer_stops_fallback_when_user_cancels(self):
+        """Verifica que chain summarizer stops fallback when user cancels."""
         class DummyAgentClient:
             def __init__(self, renderer):
                 self.renderer = renderer
@@ -2568,6 +2649,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(summarizer_call.last_outcome, "cancelled")
 
     def test_summarize_session_suppresses_unavailable_message_on_user_cancel(self):
+        """Verifica que summarize session suppresses unavailable message on user cancel."""
         class DummyAgentClient:
             def __init__(self, renderer):
                 self.renderer = renderer
@@ -2590,6 +2672,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(renderer.system_messages, [])
 
     def test_chain_summarizer_stops_fallback_when_cancel_event_is_already_set(self):
+        """Verifica que chain summarizer stops fallback when cancel event is already set."""
         class DummyAgentClient:
             def __init__(self, renderer):
                 self.renderer = renderer
@@ -2614,6 +2697,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(summarizer_call.last_outcome, "cancelled")
 
     def test_chain_summarizer_does_not_emit_per_agent_unavailable_messages(self):
+        """Verifica que chain summarizer does not emit per agent unavailable messages."""
         class DummyAgentClient:
             def __init__(self, renderer):
                 self.renderer = renderer
@@ -2643,6 +2727,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(renderer.system_messages, ["[memória] resumidores indisponíveis"])
 
     def test_session_summary_prompt_explicitly_restricts_scope_to_provided_messages(self):
+        """Verifica que session summary prompt explicitly restricts scope to provided messages."""
         prompt = SessionSummarizer._build_prompt(
             [{"role": "human", "content": "Mensagem relevante"}],
             existing_summary="## Resumo anterior",
@@ -2652,6 +2737,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn("Não use ferramentas, arquivos, shell, web ou memória externa", prompt)
 
     def test_shutdown_summary_thread_does_not_mark_agents_unavailable_due_to_signal_registration(self):
+        """Verifica que shutdown summary thread does not mark agents unavailable due to signal registration."""
         class DummyStatusContext:
             def __init__(self, status):
                 self._status = status
@@ -2698,6 +2784,7 @@ class ProtocolTests(unittest.TestCase):
         renderer.show_system.assert_not_called()
 
     def test_call_api_marks_user_cancelled_when_cancel_event_finishes_driver_without_result(self):
+        """Verifica que call api marks user cancelled when cancel event finishes driver without result."""
         class DummyStatusContext:
             def __init__(self, status):
                 self._status = status
@@ -2737,6 +2824,7 @@ class ProtocolTests(unittest.TestCase):
         renderer.show_error.assert_not_called()
 
     def test_call_api_disables_tool_executor_when_allow_tools_is_false(self):
+        """Verifica que call api disables tool executor when allow tools is false."""
         class DummyStatusContext:
             def __init__(self, status):
                 self._status = status
@@ -2783,6 +2871,7 @@ class PluginTests(unittest.TestCase):
         importlib.reload(plugins)
 
     def test_agent_plugin_fields(self):
+        """Verifica que agent plugin fields."""
         p = AgentPlugin(name="test", prefix="/test", cmd=["test", "-p"], style=("red", "Test"))
 
         self.assertEqual(p.name, "test")
@@ -2791,6 +2880,7 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(p.style, ("red", "Test"))
 
     def test_register_and_get(self):
+        """Verifica que register and get."""
         p = AgentPlugin(name="dummy", prefix="/dummy", cmd=["dummy"], style=("yellow", "Dummy"))
 
         with patch("quimera.plugins.base._registry", PluginRegistry()):
@@ -2798,36 +2888,43 @@ class PluginTests(unittest.TestCase):
             self.assertIs(plugins.get("dummy"), p)
 
     def test_get_returns_none_for_unknown(self):
+        """Verifica que get returns none for unknown."""
         with patch("quimera.plugins.base._registry", PluginRegistry()):
             self.assertIsNone(plugins.get("naoexiste"))
 
     def test_default_plugins_loaded(self):
+        """Verifica que default plugins loaded."""
         self.assertIn("claude", plugins.all_names())
         self.assertIn("codex", plugins.all_names())
 
     def test_all_plugins_returns_agent_plugin_instances(self):
+        """Verifica que all plugins returns agent plugin instances."""
         for p in plugins.all_plugins():
             self.assertIsInstance(p, AgentPlugin)
 
     def test_all_names_matches_all_plugins(self):
+        """Verifica que all names matches all plugins."""
         names = plugins.all_names()
         self.assertEqual(len(names), len(plugins.all_plugins()))
         for p in plugins.all_plugins():
             self.assertIn(p.name, names)
 
     def test_agent_style_returns_plugin_style(self):
+        """Verifica que agent style returns plugin style."""
         def get_style(agent):
             return ("magenta", "🤖  Stub") if agent == "stub" else None
 
         self.assertEqual(_agent_style("stub", get_plugin_style=get_style), ("magenta", "🤖  Stub"))
 
     def test_agent_style_fallback_for_unknown(self):
+        """Verifica que agent style fallback for unknown."""
         with patch("quimera.plugins.base._registry", PluginRegistry()):
             color, label = _agent_style("unknown")
             self.assertEqual(color, "white")
             self.assertEqual(label, "🤖  Unknown")
 
     def test_agent_client_call_uses_plugin_cmd(self):
+        """Verifica que agent client call uses plugin cmd."""
         stub = AgentPlugin(name="stub", prefix="/stub", cmd=["stub", "-x"], style=("white", "Stub"))
         renderer = Mock()
 
@@ -2845,6 +2942,7 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(result, "ok")
 
     def test_agent_client_call_error_on_unknown_agent(self):
+        """Verifica que agent client call error on unknown agent."""
         renderer = Mock()
         with patch("quimera.plugins.base._registry", PluginRegistry()):
             client = AgentClient(renderer)
@@ -2855,6 +2953,7 @@ class PluginTests(unittest.TestCase):
         self.assertIn("fantasma", renderer.show_error.call_args[0][0])
 
     def test_new_plugin_registration_visible_via_all_names(self):
+        """Verifica que new plugin registration visible via all names."""
         novo = AgentPlugin(name="novo", prefix="/novo", cmd=["novo"], style=("cyan", "Novo"))
 
         with patch("quimera.plugins.base._registry", PluginRegistry()):
@@ -2863,6 +2962,7 @@ class PluginTests(unittest.TestCase):
             self.assertEqual(plugins.all_plugins(), [novo])
 
     def test_parallel_threads_initializes_correctly(self):
+        """Verifica que parallel threads initializes correctly."""
         tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))
         app = QuimeraApp(tmp, debug=False, history_window=10, agents=["agent1", "agent2"], threads=3)
         self.assertEqual(app.threads, 3)
@@ -2872,6 +2972,7 @@ class PluginTests(unittest.TestCase):
         app._stop_task_executors()
 
     def test_parallel_threads_calls_agents_concurrently(self):
+        """Verifica que parallel threads calls agents concurrently."""
         # Testa que o método _call_agent_for_parallel retorna tupla correta
         app = QuimeraApp.__new__(QuimeraApp)
         materialize_internal_services(app)
@@ -2914,6 +3015,7 @@ class PluginTests(unittest.TestCase):
         self.assertFalse(extend)
 
     def test_run_thread_mode_accepts_new_human_input_while_agent_is_running(self):
+        """Verifica que run thread mode accepts new human input while agent is running."""
         app = QuimeraApp.__new__(QuimeraApp)
         materialize_internal_services(app)
         app.history = []
@@ -2974,6 +3076,7 @@ class PluginTests(unittest.TestCase):
         self.assertIn((AGENT_CLAUDE, "claude responde"), printed)
 
     def test_turn_manager_wait_for_human_turn_unblocks_immediately_after_agent_response(self):
+        """Verifica que turn manager wait for human turn unblocks immediately after agent response."""
         turn_manager = TurnManager()
         turn_manager.next_turn()
 
@@ -2996,6 +3099,7 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(released, [True])
 
     def test_read_user_input_zero_timeout_tty_uses_blocking_input_path(self):
+        """Verifica que read user input zero timeout tty uses blocking input path."""
         app = QuimeraApp.__new__(QuimeraApp)
         materialize_internal_services(app)
         app.renderer = DummyRenderer()
@@ -3015,6 +3119,7 @@ class PluginTests(unittest.TestCase):
         mock_input.assert_called_once_with("Você: ")
 
     def test_read_user_input_zero_timeout_tty_marks_prompt_as_reading_during_blocking_input(self):
+        """Verifica que read user input zero timeout tty marks prompt as reading during blocking input."""
         app = QuimeraApp.__new__(QuimeraApp)
         materialize_internal_services(app)
         app.renderer = DummyRenderer()
@@ -3042,6 +3147,7 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(app.runtime_state.nonblocking_prompt_text, "")
 
     def test_read_user_input_with_timeout_polls_stdin_without_spawning_thread(self):
+        """Verifica que read user input with timeout polls stdin without spawning thread."""
         stdin = Mock()
         stdin.isatty.return_value = False
         stdin.readline.return_value = "mensagem\n"
@@ -3056,6 +3162,7 @@ class PluginTests(unittest.TestCase):
         mock_thread.assert_not_called()
 
     def test_read_user_input_with_timeout_returns_none_without_spawning_thread_when_idle(self):
+        """Verifica que read user input with timeout returns none without spawning thread when idle."""
         stdin = Mock()
         stdin.isatty.return_value = False
 
@@ -3069,6 +3176,7 @@ class PluginTests(unittest.TestCase):
         mock_thread.assert_not_called()
 
     def test_read_user_input_zero_timeout_tty_flushes_deferred_messages_before_prompt(self):
+        """Verifica que read user input zero timeout tty flushes deferred messages before prompt."""
         app = QuimeraApp.__new__(QuimeraApp)
         materialize_internal_services(app)
         app.renderer = DummyRenderer()
@@ -3093,6 +3201,7 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(app.renderer.system_messages, ["[task 7] claude:\nresultado final"])
 
     def test_read_user_input_zero_timeout_tty_raises_keyboard_interrupt(self):
+        """Verifica que read user input zero timeout tty raises keyboard interrupt."""
         app = QuimeraApp.__new__(QuimeraApp)
         materialize_internal_services(app)
         app.renderer = DummyRenderer()
@@ -3114,6 +3223,7 @@ class PluginTests(unittest.TestCase):
         mock_print.assert_called_once_with()
 
     def test_read_from_editor_holds_output_lock_during_editor_session(self):
+        """Verifica que read from editor holds output lock during editor session."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
         app._output_lock = threading.Lock()
@@ -3133,6 +3243,7 @@ class PluginTests(unittest.TestCase):
         self.assertFalse(app._output_lock.locked())
 
     def test_read_from_editor_preserves_multiline_content(self):
+        """Verifica que read from editor preserves multiline content."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
         app._output_lock = threading.Lock()
@@ -3156,6 +3267,7 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(content, expected)
 
     def test_read_from_editor_writes_newline_to_stdout_after_editor_exits(self):
+        """Verifica que read from editor writes newline to stdout after editor exits."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
         app._output_lock = threading.Lock()
@@ -3204,6 +3316,7 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(content, expected)
 
     def test_show_system_message_suppresses_transient_task_status_while_tty_reader_is_active(self):
+        """Verifica que show system message suppresses transient task status while tty reader is active."""
         app = QuimeraApp.__new__(QuimeraApp)
         materialize_internal_services(app)
         app.renderer = DummyRenderer()
@@ -3224,6 +3337,7 @@ class PluginTests(unittest.TestCase):
         app.input_gate.redisplay.assert_not_called()
 
     def test_show_system_message_redraws_human_prompt_with_user_name_for_task_error_text(self):
+        """Verifica que show system message redraws human prompt with user name for task error text."""
         app = QuimeraApp.__new__(QuimeraApp)
         materialize_internal_services(app)
         app.renderer = DummyRenderer()
@@ -3244,6 +3358,7 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(app._deferred_system_messages, [("system", msg)])
 
     def test_redisplay_user_prompt_does_not_sleep_while_redrawing_after_agent_output(self):
+        """Verifica que redisplay user prompt does not sleep while redrawing after agent output."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.runtime_state.nonblocking_input_status = "reading"
         app.runtime_state.nonblocking_prompt_text = "Alex: "
@@ -3264,6 +3379,7 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(app.input_gate.redisplay.call_count, 5)
 
     def test_show_system_message_defers_multiline_review_message_while_tty_reader_is_active(self):
+        """Verifica que show system message defers multiline review message while tty reader is active."""
         app = QuimeraApp.__new__(QuimeraApp)
         materialize_internal_services(app)
         app._output_lock = threading.Lock()
@@ -3287,6 +3403,7 @@ class PluginTests(unittest.TestCase):
         renderer.show_system.assert_called_once_with(msg)
 
     def test_staging_logger_does_not_touch_prompt_for_info_logs_while_tty_reader_is_active(self):
+        """Verifica que staging logger does not touch prompt for info logs while tty reader is active."""
         app = QuimeraApp.__new__(QuimeraApp)
         app._output_lock = threading.Lock()
         app._deferred_system_messages = []
@@ -3314,6 +3431,7 @@ class PluginTests(unittest.TestCase):
             prompt_handler.bind_app(previous_app)
 
     def test_staging_logger_still_shows_warning_logs_while_tty_reader_is_active(self):
+        """Verifica que staging logger still shows warning logs while tty reader is active."""
         app = QuimeraApp.__new__(QuimeraApp)
         materialize_internal_services(app)
         app.renderer = DummyRenderer()
@@ -3345,6 +3463,7 @@ class PluginTests(unittest.TestCase):
             prompt_handler.bind_app(previous_app)
 
     def test_show_system_message_uses_prompt_toolkit_redisplay_without_manual_clear(self):
+        """Verifica que show system message uses prompt toolkit redisplay without manual clear."""
         app = QuimeraApp.__new__(QuimeraApp)
         materialize_internal_services(app)
         app.renderer = DummyRenderer()
@@ -3367,6 +3486,7 @@ class PluginTests(unittest.TestCase):
         app.input_gate.redisplay.assert_called_once_with()
 
     def test_print_response_uses_prompt_toolkit_redisplay_without_manual_prompt_rewrite(self):
+        """Verifica que print response uses prompt toolkit redisplay without manual prompt rewrite."""
         app = QuimeraApp.__new__(QuimeraApp)
         materialize_internal_services(app)
         app._output_lock = threading.Lock()
@@ -3391,6 +3511,7 @@ class PluginTests(unittest.TestCase):
         app.input_gate.redisplay.assert_called_once_with()
 
     def test_show_system_message_defers_task_output_while_tty_reader_is_active(self):
+        """Verifica que show system message defers task output while tty reader is active."""
         app = QuimeraApp.__new__(QuimeraApp)
         materialize_internal_services(app)
         app.renderer = DummyRenderer()
@@ -3404,6 +3525,7 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(app._deferred_system_messages, [])
 
     def test_parse_routing_selects_first_initial_agent(self):
+        """Verifica que parse routing selects first initial agent."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
         app.round_index = 0
@@ -3416,6 +3538,7 @@ class PluginTests(unittest.TestCase):
         self.assertFalse(explicit)
 
     def test_parse_routing_fallback_normalizes_plugin_objects_to_agent_names(self):
+        """Verifica que parse routing fallback normalizes plugin objects to agent names."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.active_agents = []
         app.selected_agents = []
@@ -3442,6 +3565,7 @@ class PluginTests(unittest.TestCase):
         self.assertIsInstance(app.active_agents[0], str)
 
     def test_record_failure_accepts_agent_plugin_instance(self):
+        """Verifica que record failure accepts agent plugin instance."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.active_agents = [AGENT_CLAUDE]
         app.agent_failures = defaultdict(int)
@@ -3463,6 +3587,7 @@ class PluginTests(unittest.TestCase):
         app.session_metrics.record_agent_metric.assert_called_once_with(app, AGENT_CLAUDE, "failed", 0)
 
     def test_handoff_format_omits_priority_when_normal(self):
+        """Verifica que handoff format omits priority when normal."""
         builder = PromptBuilder(DummyContextManager(), history_window=3)
         handoff = {
             "task": "Revisar código",
@@ -3474,6 +3599,7 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(fields["handoff_priority"], "")
 
     def test_retry_on_none_response(self):
+        """Verifica que retry on none response."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.active_agents = ["claude"]
         app.agent_failures = {}
@@ -3497,6 +3623,7 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(call_count[0], 2)
 
     def test_call_agent_low_level_always_skips_tool_prompt_for_cli_builtin_tools(self):
+        """Verifica que call agent low level always skips tool prompt for cli builtin tools."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.session_call_index = 0
         app.history = [{"role": "human", "content": "Pedido atual"}]
@@ -3528,6 +3655,7 @@ class PluginTests(unittest.TestCase):
         self.assertTrue(app.prompt_builder.build.call_args.kwargs["skip_tool_prompt"])
 
     def test_call_agent_low_level_always_skips_tool_prompt_for_openai_compat(self):
+        """Verifica que call agent low level always skips tool prompt for openai compat."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.session_call_index = 0
         app.history = [{"role": "human", "content": "Pedido atual"}]
@@ -3561,6 +3689,7 @@ class PluginTests(unittest.TestCase):
         self.assertTrue(app.prompt_builder.build.call_args.kwargs["skip_tool_prompt"])
 
     def test_call_agent_low_level_keeps_history_in_handoff_only_mode(self):
+        """Verifica que call agent low level keeps history in handoff only mode."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.session_call_index = 0
         app.history = [
@@ -3601,6 +3730,7 @@ class PluginTests(unittest.TestCase):
         self.assertTrue(app.prompt_builder.build.call_args.kwargs["handoff_only"])
 
     def test_call_agent_low_level_streaming_respects_show_output_false(self):
+        """Verifica que call agent low level streaming respects show output false."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.session_call_index = 0
         app.history = [{"role": "human", "content": "Pedido atual"}]
@@ -3642,6 +3772,7 @@ class PluginTests(unittest.TestCase):
         app.renderer.finish_message_stream.assert_not_called()
 
     def test_call_agent_low_level_exports_last_spy_turn_detail_to_state(self):
+        """Verifica que call agent low level exports last spy turn detail to state."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.session_call_index = 0
         app.history = [{"role": "human", "content": "Pedido atual"}]
@@ -3695,6 +3826,7 @@ class PluginTests(unittest.TestCase):
         )
 
     def test_sanitize_spy_turn_detail_preserves_full_payload(self):
+        """Verifica que sanitize spy turn detail preserves full payload."""
         long_text = "x" * 500
         detail = {
             "turn_id": "turn_1234",
@@ -3723,6 +3855,7 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(set(sanitized["tools"][0]["error"].keys()), {"type", "message", "stack"})
 
     def test_task_handler_prints_and_persists_agent_response(self):
+        """Verifica que task handler prints and persists agent response."""
         app = QuimeraApp.__new__(QuimeraApp)
         materialize_internal_services(app)
         app.active_agents = [AGENT_CLAUDE]
@@ -3770,6 +3903,7 @@ class PluginTests(unittest.TestCase):
         fail_task.assert_not_called()
 
     def test_task_handler_marks_task_waiting_for_review_from_another_agent(self):
+        """Verifica que task handler marks task waiting for review from another agent."""
         app = QuimeraApp.__new__(QuimeraApp)
         materialize_internal_services(app)
         app.active_agents = [AGENT_CLAUDE, AGENT_GEMINI]
@@ -3817,6 +3951,7 @@ class PluginTests(unittest.TestCase):
         complete_task.assert_not_called()
 
     def test_task_handler_completes_when_no_other_operational_reviewer_exists(self):
+        """Verifica que task handler completes when no other operational reviewer exists."""
         app = QuimeraApp.__new__(QuimeraApp)
         materialize_internal_services(app)
         app.active_agents = [AGENT_CLAUDE, AGENT_GEMINI]
@@ -3871,6 +4006,7 @@ class PluginTests(unittest.TestCase):
         )
 
     def test_review_handler_prints_review_progress_and_completion(self):
+        """Verifica que review handler prints review progress and completion."""
         app = QuimeraApp.__new__(QuimeraApp)
         materialize_internal_services(app)
         app.active_agents = [AGENT_CLAUDE, AGENT_GEMINI]
@@ -3927,6 +4063,7 @@ class PluginTests(unittest.TestCase):
         )
 
     def test_review_handler_reports_rejected_self_review(self):
+        """Verifica que review handler reports rejected self review."""
         app = QuimeraApp.__new__(QuimeraApp)
         materialize_internal_services(app)
         app.active_agents = [AGENT_CLAUDE, AGENT_GEMINI]
@@ -3970,6 +4107,7 @@ class PluginTests(unittest.TestCase):
         complete_task.assert_not_called()
 
     def test_review_handler_returns_task_to_pending_on_retentativa(self):
+        """Verifica que review handler returns task to pending on retentativa."""
         app = QuimeraApp.__new__(QuimeraApp)
         materialize_internal_services(app)
         app.active_agents = [AGENT_CLAUDE, AGENT_GEMINI]
@@ -4023,6 +4161,7 @@ class PluginTests(unittest.TestCase):
         complete_task.assert_not_called()
 
     def test_task_completed_event_shows_consolidated_feedback_to_human(self):
+        """Verifica que task completed event shows consolidated feedback to human."""
         app = QuimeraApp.__new__(QuimeraApp)
         materialize_internal_services(app)
         status_updates = []
@@ -4045,6 +4184,7 @@ class PluginTests(unittest.TestCase):
         )
 
     def test_review_handler_returns_task_to_pending_review_on_failure(self):
+        """Verifica que review handler returns task to pending review on failure."""
         app = QuimeraApp.__new__(QuimeraApp)
         materialize_internal_services(app)
         app.active_agents = [AGENT_CLAUDE, AGENT_GEMINI, AGENT_CODEX]
@@ -4106,6 +4246,7 @@ class PluginTests(unittest.TestCase):
         fail_task.assert_not_called()
 
     def test_review_handler_fails_when_pending_review_transition_fails(self):
+        """Verifica que review handler fails when pending review transition fails."""
         app = QuimeraApp.__new__(QuimeraApp)
         materialize_internal_services(app)
         app.active_agents = [AGENT_CLAUDE, AGENT_GEMINI, AGENT_CODEX]
@@ -4171,6 +4312,7 @@ class PluginTests(unittest.TestCase):
         )
 
     def test_review_handler_fails_when_no_other_operational_reviewer_exists(self):
+        """Verifica que review handler fails when no other operational reviewer exists."""
         app = QuimeraApp.__new__(QuimeraApp)
         materialize_internal_services(app)
         app.active_agents = [AGENT_CLAUDE, AGENT_GEMINI]
@@ -4233,6 +4375,7 @@ class PluginTests(unittest.TestCase):
         )
 
     def test_setup_task_executors_only_registers_review_for_operational_agents(self):
+        """Verifica que setup task executors only registers review for operational agents."""
         app = QuimeraApp.__new__(QuimeraApp)
         materialize_internal_services(app)
         app.active_agents = [AGENT_CLAUDE, AGENT_GEMINI]
@@ -4274,6 +4417,7 @@ class PluginTests(unittest.TestCase):
         self.assertIn(AGENT_GEMINI, review_handlers)
 
     def test_review_eligibility_tracks_operational_agent_state_dynamically(self):
+        """Verifica que review eligibility tracks operational agent state dynamically."""
         app = QuimeraApp.__new__(QuimeraApp)
         materialize_internal_services(app)
         app.active_agents = [AGENT_CLAUDE, AGENT_GEMINI]
@@ -4312,6 +4456,7 @@ class PluginTests(unittest.TestCase):
             self.assertFalse(review_eligibility[AGENT_GEMINI]())
 
     def test_task_handler_executes_with_serialized_chat_context_in_body(self):
+        """Verifica que task handler executes with serialized chat context in body."""
         app = QuimeraApp.__new__(QuimeraApp)
         materialize_internal_services(app)
         app.active_agents = [AGENT_CLAUDE]
@@ -4375,6 +4520,7 @@ class PluginTests(unittest.TestCase):
         )
 
     def test_task_handler_requeues_failed_execution_for_other_agent(self):
+        """Verifica que task handler requeues failed execution for other agent."""
         app = QuimeraApp.__new__(QuimeraApp)
         materialize_internal_services(app)
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
@@ -4416,6 +4562,7 @@ class PluginTests(unittest.TestCase):
         fail_task.assert_not_called()
 
     def test_task_handler_fails_when_all_other_agents_already_failed(self):
+        """Verifica que task handler fails when all other agents already failed."""
         app = QuimeraApp.__new__(QuimeraApp)
         materialize_internal_services(app)
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
@@ -4529,6 +4676,7 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(summary["tool_loop_abort_reasons"]["invalid_tool_loop"], 1)
 
     def test_resolve_agent_response_leaves_textual_tool_like_content_untouched(self):
+        """Verifica que resolve agent response leaves textual tool like content untouched."""
         from quimera.app.dispatch import AppDispatchServices
 
         app = Mock()
@@ -4732,6 +4880,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         self.assertLess(len(prompt), 6250)
 
     def test_get_task_routing_plugins_respects_explicit_active_agents(self):
+        """Verifica que get task routing plugins respects explicit active agents."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
         app.tasks_db_path = str(Path(self.enterContext(tempfile.TemporaryDirectory())) / "tasks.db")
@@ -4741,6 +4890,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         self.assertEqual(selected, [AGENT_CLAUDE, AGENT_CODEX])
 
     def test_get_task_routing_plugins_expands_wildcard_to_all_plugins(self):
+        """Verifica que get task routing plugins expands wildcard to all plugins."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.active_agents = ["*"]
         app.tasks_db_path = str(Path(self.enterContext(tempfile.TemporaryDirectory())) / "tasks.db")
@@ -4846,6 +4996,7 @@ class MetricsFeedbackTests(unittest.TestCase):
 
 
     def test_main_template_does_not_embed_static_tool_instructions_block(self):
+        """Verifica que main template does not embed static tool instructions block."""
         main = prompt_template._load()
         self.assertNotIn('<tools title="Ferramentas disponíveis">', main)
         self.assertNotIn("a ferramenta não executa", main)
@@ -4854,6 +5005,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         self.assertNotIn("exec_command / write_stdin / close_command_session", main)
 
     def test_build_tools_prompt_is_compact_but_preserves_essentials(self):
+        """Verifica que build tools prompt is compact but preserves essentials."""
         from quimera.constants import build_tools_prompt
 
         prompt = build_tools_prompt()
@@ -4872,6 +5024,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         self.assertLess(len(prompt), 3400)
 
     def test_build_task_body_includes_operational_protocol(self):
+        """Verifica que build task body includes operational protocol."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.user_name = "Alex"
         app.history = [{"role": "human", "content": "Corrija o parser atual"}]
@@ -4887,6 +5040,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         self.assertIn("arquivos alterados", body)
 
     def test_build_task_body_uses_shared_state_as_reference_only(self):
+        """Verifica que build task body uses shared state as reference only."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.user_name = "Alex"
         app.history = [{"role": "human", "content": "Corrija o parser atual"}]
@@ -4905,6 +5059,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         self.assertIn("Use o estado compartilhado apenas como referência auxiliar", body)
 
     def test_build_task_body_accepts_deque_history(self):
+        """Verifica que build task body accepts deque history."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.user_name = "Alex"
         app.history = deque([
@@ -4920,6 +5075,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         self.assertIn("CODEX]: Vou inspecionar o arquivo antes de editar.", body)
 
     def test_prompt_builder_accepts_deque_history(self):
+        """Verifica que prompt builder accepts deque history."""
         builder = PromptBuilder(DummyContextManager(), history_window=4, user_name="Alex")
         history = deque([
             {"role": "human", "content": "Primeiro pedido"},
@@ -4933,6 +5089,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         self.assertIn("[CLAUDE]: Resposta anterior", prompt)
 
     def test_refresh_task_shared_state_adds_completed_task_results(self):
+        """Verifica que refresh task shared state adds completed task results."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.shared_state = {}
         app.current_job_id = 1
@@ -4957,6 +5114,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         self.assertLessEqual(len(results.split(": ", 1)[1]), 200)
 
     def test_refresh_task_shared_state_caps_completed_task_results_budget(self):
+        """Verifica que refresh task shared state caps completed task results budget."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.shared_state = {}
         app.current_job_id = 1
@@ -4985,6 +5143,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         self.assertIn("task-10", results)
 
     def test_refresh_task_shared_state_removes_completed_task_results_when_none_exist(self):
+        """Verifica que refresh task shared state removes completed task results when none exist."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.shared_state = {"completed_task_results": "stale"}
         app.current_job_id = 1
@@ -4999,6 +5158,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         self.assertNotIn("completed_task_results", app.shared_state)
 
     def test_refresh_task_shared_state_returns_when_shared_state_is_invalid(self):
+        """Verifica que refresh task shared state returns when shared state is invalid."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.shared_state = None
         app.current_job_id = 1
@@ -5009,6 +5169,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         self.assertIsNone(app.shared_state)
 
     def test_prompt_includes_completed_task_results_without_goal_lock(self):
+        """Verifica que prompt includes completed task results without goal lock."""
         builder = PromptBuilder(DummyContextManager(), history_window=3)
         history = [{"role": "human", "content": "Pergunta"}]
 
@@ -5026,6 +5187,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         self.assertIn("[task 1] testes: ok", prompt)
 
     def test_prompt_debug_metrics_include_prompt_sizes(self):
+        """Verifica que prompt debug metrics include prompt sizes."""
         builder = PromptBuilder(DummyContextManager(), history_window=3)
         history = [
             {"role": "human", "content": "Pergunta"},
@@ -5041,6 +5203,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         self.assertIn("execution_state_chars", metrics)
 
     def test_prompt_wraps_core_sections_with_consistent_boundaries(self):
+        """Verifica que prompt wraps core sections with consistent boundaries."""
         class ContextManagerWithData(DummyContextManager):
             def load(self):
                 return "Contexto persistente ativo"
@@ -5171,11 +5334,13 @@ class AppProtocolDirectTests(unittest.TestCase):
     # --- _get_decisions_logger ---
 
     def test_get_decisions_logger_returns_none_when_no_path(self):
+        """Verifica que get decisions logger returns none when no path."""
         proto = AppProtocol(lock=threading.Lock(), shared_state={}, decisions_log_path=None)
         result = proto._get_decisions_logger()
         self.assertIsNone(result)
 
     def test_get_decisions_logger_caches_instance(self):
+        """Verifica que get decisions logger caches instance."""
         with patch("quimera.workspace.DecisionsLogger") as MockDL:
             import tempfile
             tmp = tempfile.mktemp(suffix=".json")
@@ -5187,6 +5352,7 @@ class AppProtocolDirectTests(unittest.TestCase):
             self.assertIs(first, second)
 
     def test_get_decisions_logger_creates_instance_with_path(self):
+        """Verifica que get decisions logger creates instance with path."""
         with patch("quimera.app.protocol.DecisionsLogger", create=True) as MockDL:
             pass
         # test via apply_state_update which calls the logger (lines 37-39, 80-81)
@@ -5206,28 +5372,33 @@ class AppProtocolDirectTests(unittest.TestCase):
     # --- merge_state_value ---
 
     def test_merge_state_value_incoming_none_returns_current(self):
+        """Verifica que merge state value incoming none returns current."""
         result = AppProtocol.merge_state_value("existing", None)
         self.assertEqual(result, "existing")
 
     def test_merge_state_value_incoming_empty_string_returns_none(self):
+        """Verifica que merge state value incoming empty string returns none."""
         result = AppProtocol.merge_state_value("existing", "")
         self.assertIsNone(result)
 
     # --- apply_state_update ---
 
     def test_apply_state_update_invalid_json_returns_false(self):
+        """Verifica que apply state update invalid json returns false."""
         app = self._make_app()
         proto = _make_protocol(app)
         result = proto.apply_state_update("not json {{")
         self.assertFalse(result)
 
     def test_apply_state_update_non_dict_returns_false(self):
+        """Verifica que apply state update non dict returns false."""
         app = self._make_app()
         proto = _make_protocol(app)
         result = proto.apply_state_update('"just a string"')
         self.assertFalse(result)
 
     def test_apply_state_update_skips_empty_key(self):
+        """Verifica que apply state update skips empty key."""
         app = self._make_app()
         proto = _make_protocol(app)
         result = proto.apply_state_update('{"": "value", "valid": "ok"}')
@@ -5236,6 +5407,7 @@ class AppProtocolDirectTests(unittest.TestCase):
         self.assertEqual(app.shared_state, {})
 
     def test_apply_state_update_pops_key_when_merged_is_none(self):
+        """Verifica que apply state update pops key when merged is none."""
         app = self._make_app(shared_state={"goal": "old"})
         proto = _make_protocol(app)
         # incoming "" causes merge to return None → pop
@@ -5244,6 +5416,7 @@ class AppProtocolDirectTests(unittest.TestCase):
         self.assertNotIn("goal", app.shared_state)
 
     def test_apply_state_update_ignores_keys_outside_agent_allowlist(self):
+        """Verifica que apply state update ignores keys outside agent allowlist."""
         app = self._make_app(shared_state={"goal": "old"})
         proto = _make_protocol(app)
 
@@ -5262,6 +5435,7 @@ class AppProtocolDirectTests(unittest.TestCase):
         self.assertLessEqual(set(app.shared_state), AGENT_STATE_KEYS)
 
     def test_apply_state_update_rejects_invalid_value_types_for_agent_contract(self):
+        """Verifica que apply state update rejects invalid value types for agent contract."""
         app = self._make_app()
         proto = _make_protocol(app)
 
@@ -5279,6 +5453,7 @@ class AppProtocolDirectTests(unittest.TestCase):
         )
 
     def test_apply_state_update_ignores_invalid_type_for_list_field(self):
+        """Verifica que apply state update ignores invalid type for list field."""
         app = self._make_app()
         proto = _make_protocol(app)
         result = proto.apply_state_update('{"allowed_scope": "parser.py"}')
@@ -5286,6 +5461,7 @@ class AppProtocolDirectTests(unittest.TestCase):
         self.assertEqual(app.shared_state, {})
 
     def test_apply_state_update_stamps_only_effective_keys(self):
+        """Verifica que apply state update stamps only effective keys."""
         app = self._make_app(shared_state={"_current_turn": 9})
         proto = _make_protocol(app)
 
@@ -5303,6 +5479,7 @@ class AppProtocolDirectTests(unittest.TestCase):
         self.assertNotIn("allowed_scope", app._turn_stamps)
 
     def test_apply_state_update_clearing_key_removes_stamp(self):
+        """Verifica que apply state update clearing key removes stamp."""
         app = self._make_app(shared_state={"_current_turn": 5, "goal_canonical": "old"})
         app._turn_stamps["goal_canonical"] = 4
         proto = _make_protocol(app)
@@ -5314,6 +5491,7 @@ class AppProtocolDirectTests(unittest.TestCase):
         self.assertNotIn("goal_canonical", app._turn_stamps)
 
     def test_advance_shared_state_turn_increments_once_per_call_and_expires(self):
+        """Verifica que advance shared state turn increments once per call and expires."""
         app = self._make_app(
             shared_state={
                 "_current_turn": 10,
@@ -5333,12 +5511,14 @@ class AppProtocolDirectTests(unittest.TestCase):
     # --- parse_response ---
 
     def test_parse_response_none_returns_all_none(self):
+        """Verifica que parse response none returns all none."""
         app = self._make_app()
         proto = _make_protocol(app)
         result = proto.parse_response(None)
         self.assertEqual(result, (None, None, None, False, False, None))
 
     def test_parse_response_needs_human_input_marker(self):
+        """Verifica que parse response needs human input marker."""
         from quimera.constants import NEEDS_INPUT_MARKER
         app = self._make_app()
         proto = _make_protocol(app)
@@ -5448,6 +5628,7 @@ class AppProtocolDirectTests(unittest.TestCase):
     # --- parse_response com envelope JSON ---
 
     def test_parse_response_json_envelope_handoff(self):
+        """Verifica que parse response json envelope handoff."""
         app = self._make_app()
         proto = _make_protocol(app)
         response, route_target, handoff, extend, needs_input, ack_id = (
@@ -5464,6 +5645,7 @@ class AppProtocolDirectTests(unittest.TestCase):
         self.assertIsNone(ack_id)
 
     def test_parse_response_json_envelope_state_update_is_plain_text(self):
+        """Verifica que parse response json envelope state update is plain text."""
         app = self._make_app()
         proto = _make_protocol(app)
         text = '{"type": "state_update", "content": "", "state_updates": {"goal_canonical": "corrigir parser","mode":"test"}}'
@@ -5477,6 +5659,7 @@ class AppProtocolDirectTests(unittest.TestCase):
         self.assertIsNone(ack_id)
 
     def test_parse_response_json_envelope_ack_is_plain_text(self):
+        """Verifica que parse response json envelope ack is plain text."""
         app = self._make_app()
         proto = _make_protocol(app)
         text = '{"type": "ack", "content": "done", "handoff_id": "abc123"}'

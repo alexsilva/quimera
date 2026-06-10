@@ -48,6 +48,7 @@ def _render_baseline_sample(*, theme: str, density: str, width: int) -> str:
 @pytest.mark.parametrize("density", BASELINE_DENSITIES)
 @pytest.mark.parametrize("width", BASELINE_WIDTHS)
 def test_ui_visual_baseline(theme: str, density: str, width: int):
+    """Verifica que a renderização corresponde ao baseline visual salvo para o tema, densidade e largura dados."""
     baseline_path = BASELINE_DIR / f"{theme}-{density}-{width}.txt"
     assert baseline_path.exists(), f"baseline ausente: {baseline_path}"
 
@@ -62,13 +63,13 @@ def test_ui_visual_baseline(theme: str, density: str, width: int):
 
 
 def test_renderer_baseline_dir_exists():
-    """O diretório de baselines visuais existe e contém baselines."""
+    """Verifica que o diretório de baselines visuais existe."""
     assert BASELINE_DIR.exists()
     assert BASELINE_DIR.is_dir()
 
 
 def test_required_baseline_files_exist():
-    """Todos os arquivos de baseline necessários estão presentes."""
+    """Verifica que todos os arquivos de baseline necessários existem e não estão vazios."""
     for theme in BASELINE_THEMES:
         for density in BASELINE_DENSITIES:
             for width in BASELINE_WIDTHS:

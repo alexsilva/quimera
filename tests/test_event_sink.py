@@ -21,6 +21,7 @@ def _completed(task_id=1, job_id=1):
 
 
 def test_handler_called_on_matching_event():
+    """Verifica que o handler é chamado quando o evento corresponde ao tipo inscrito."""
     sink = EventSink()
     received = []
     sink.subscribe(TaskProposed, received.append)
@@ -32,6 +33,7 @@ def test_handler_called_on_matching_event():
 
 
 def test_handler_not_called_for_different_event_type():
+    """Verifica que o handler não é chamado para evento de tipo diferente."""
     sink = EventSink()
     received = []
     sink.subscribe(TaskCompleted, received.append)
@@ -54,6 +56,7 @@ def test_supertype_handler_receives_subclass_event():
 
 
 def test_multiple_handlers_all_called():
+    """Verifica que múltiplos handlers para o mesmo evento são todos chamados."""
     sink = EventSink()
     calls_a, calls_b = [], []
     sink.subscribe(TaskProposed, calls_a.append)
@@ -70,6 +73,7 @@ def test_multiple_handlers_all_called():
 
 
 def test_unsubscribe_stops_delivery():
+    """Verifica que remover a inscrição interrompe a entrega de eventos."""
     sink = EventSink()
     received = []
     unsubscribe = sink.subscribe(TaskProposed, received.append)
@@ -81,6 +85,7 @@ def test_unsubscribe_stops_delivery():
 
 
 def test_unsubscribe_idempotent():
+    """Verifica que chamar unsubscribe duas vezes não causa erro."""
     sink = EventSink()
     received = []
     unsubscribe = sink.subscribe(TaskProposed, received.append)
@@ -94,6 +99,7 @@ def test_unsubscribe_idempotent():
 
 
 def test_failing_handler_does_not_prevent_others():
+    """Verifica que um handler com falha não impede outros handlers de serem chamados."""
     sink = EventSink()
     received = []
 
@@ -110,6 +116,7 @@ def test_failing_handler_does_not_prevent_others():
 
 
 def test_publish_does_not_raise_on_handler_error():
+    """Verifica que publish não propaga exceções lançadas por handlers."""
     sink = EventSink()
     sink.subscribe(TaskProposed, lambda _: (_ for _ in ()).throw(ValueError("x")))
     sink.publish(_proposed())  # deve ser silencioso
@@ -119,6 +126,7 @@ def test_publish_does_not_raise_on_handler_error():
 
 
 def test_clear_removes_all_handlers():
+    """Verifica que clear remove todos os handlers registrados."""
     sink = EventSink()
     received = []
     sink.subscribe(TaskProposed, received.append)
@@ -133,6 +141,7 @@ def test_clear_removes_all_handlers():
 
 
 def test_concurrent_publish_does_not_raise():
+    """Verifica que publish concorrente não lança exceções."""
     sink = EventSink()
     sink.subscribe(TaskProposed, lambda _: None)
     errors = []
@@ -154,6 +163,7 @@ def test_concurrent_publish_does_not_raise():
 
 
 def test_publish_from_background_thread_defers_until_main_thread_drains():
+    """Verifica que publish de thread background é deferido até o drain da thread principal."""
     sink = EventSink()
     received = []
     handler_threads = []

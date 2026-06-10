@@ -33,6 +33,7 @@ from quimera.runtime.drivers.openai_compat import OpenAICompatDriver
 # ---------------------------------------------------------------------------
 
 def test_connection_to_dict_includes_extra_body():
+    """Verifica que connection_to_dict inclui extra_body no dict."""
     conn = OpenAIConnection(
         model="deepseek-chat",
         base_url="https://api.deepseek.com/v1",
@@ -46,6 +47,7 @@ def test_connection_to_dict_includes_extra_body():
 
 
 def test_connection_to_dict_extra_body_none_omitted():
+    """Verifica que extra_body=None aparece como None no dict."""
     conn = OpenAIConnection(model="gpt-4o")
     data = connection_to_dict(conn)
     assert "extra_body" in data
@@ -53,6 +55,7 @@ def test_connection_to_dict_extra_body_none_omitted():
 
 
 def test_connection_from_dict_loads_extra_body():
+    """Verifica que _connection_from_dict carrega extra_body do dict."""
     data = {
         "type": "openai",
         "model": "deepseek-chat",
@@ -67,6 +70,7 @@ def test_connection_from_dict_loads_extra_body():
 
 
 def test_connection_from_dict_loads_extra_body_none_when_missing():
+    """Verifica que _connection_from_dict define extra_body como None quando ausente."""
     data = {
         "type": "openai",
         "model": "gpt-4o",
@@ -78,6 +82,7 @@ def test_connection_from_dict_loads_extra_body_none_when_missing():
 
 
 def test_roundtrip_extra_body():
+    """Verifica roundtrip completo de serialização com extra_body."""
     conn = OpenAIConnection(
         model="deepseek-chat",
         base_url="https://api.deepseek.com/v1",
@@ -89,6 +94,7 @@ def test_roundtrip_extra_body():
 
 
 def test_roundtrip_extra_body_none():
+    """Verifica roundtrip completo de serialização com extra_body=None."""
     conn = OpenAIConnection(model="gpt-4o", extra_body=None)
     data = connection_to_dict(conn)
     conn2 = _connection_from_dict(data)
@@ -100,6 +106,7 @@ def test_roundtrip_extra_body_none():
 # ---------------------------------------------------------------------------
 
 def test_format_connection_label_includes_extra_body():
+    """Verifica que format_connection_label inclui extra_body no label."""
     conn = OpenAIConnection(
         model="deepseek-chat",
         base_url="https://api.deepseek.com/v1",
@@ -114,6 +121,7 @@ def test_format_connection_label_includes_extra_body():
 
 
 def test_format_connection_label_no_extra_body():
+    """Verifica que format_connection_label omite extra_body quando ausente."""
     conn = OpenAIConnection(model="gpt-4o")
     label = format_connection_label(conn)
     assert "extra_body" not in label
@@ -124,19 +132,23 @@ def test_format_connection_label_no_extra_body():
 # ---------------------------------------------------------------------------
 
 def test_parse_extra_body_arg_valid_json():
+    """Verifica que JSON válido é parseado corretamente."""
     result = _parse_extra_body_arg('{"thinking": {"type": "disabled"}}')
     assert result == {"thinking": {"type": "disabled"}}
 
 
 def test_parse_extra_body_arg_none():
+    """Verifica que None retorna None."""
     assert _parse_extra_body_arg(None) is None
 
 
 def test_parse_extra_body_arg_empty_string():
+    """Verifica que string vazia ou com espaços retorna None."""
     assert _parse_extra_body_arg("  ") is None
 
 
 def test_parse_extra_body_arg_invalid_json_exits():
+    """Verifica que JSON inválido causa SystemExit."""
     with pytest.raises(SystemExit, match="extra-body"):
         _parse_extra_body_arg("not json")
 
@@ -146,6 +158,7 @@ def test_parse_extra_body_arg_invalid_json_exits():
 # ---------------------------------------------------------------------------
 
 def test_driver_init_with_extra_body():
+    """Verifica que OpenAICompatDriver armazena extra_body no init."""
     with patch("quimera.runtime.drivers.openai_compat.OpenAI") as MockOpenAI:
         mock_client = MagicMock()
         MockOpenAI.return_value = mock_client
@@ -159,6 +172,7 @@ def test_driver_init_with_extra_body():
 
 
 def test_driver_init_without_extra_body():
+    """Verifica que driver sem extra_body tem o atributo como None."""
     with patch("quimera.runtime.drivers.openai_compat.OpenAI") as MockOpenAI:
         mock_client = MagicMock()
         MockOpenAI.return_value = mock_client
@@ -170,6 +184,7 @@ def test_driver_init_without_extra_body():
 
 
 def test_driver_init_extra_body_none_explicit():
+    """Verifica que driver com extra_body=None tem atributo como None."""
     with patch("quimera.runtime.drivers.openai_compat.OpenAI") as MockOpenAI:
         mock_client = MagicMock()
         MockOpenAI.return_value = mock_client

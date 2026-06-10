@@ -33,11 +33,13 @@ def renderer():
 
 
 def test_strip_spinner():
+    """Verifica que strip spinner."""
     assert _strip_spinner("⠋Executing") == "Executing"
     assert _strip_spinner("Normal text") == "Normal text"
 
 
 def test_should_ignore_codex_stdin_noise():
+    """Verifica que should ignore codex stdin noise."""
     assert _should_ignore_stderr_line("codex", "Reading additional input from stdin...\n") is True
     assert _should_ignore_stderr_line("codex", "\x1b[2mReading additional input from stdin...\x1b[0m\r\n") is True
     assert _should_ignore_stderr_line("codex", "Reading prompt from stdin...\n") is True
@@ -54,6 +56,7 @@ def test_should_ignore_codex_stdin_noise():
 
 
 def test_should_ignore_interrupt_echo_caret_c():
+    """Verifica que should ignore interrupt echo caret c."""
     assert _should_ignore_stderr_line("codex", "^C\n") is True
     assert _should_ignore_stderr_line(None, "\x1b[2m^C\x1b[0m\r\n") is True
     assert _should_ignore_stderr_line("codex", "\x03\n") is True
@@ -62,6 +65,7 @@ def test_should_ignore_interrupt_echo_caret_c():
 
 
 def test_filter_stderr_lines_removes_codex_stdin_noise():
+    """Verifica que filter stderr lines removes codex stdin noise."""
     assert _filter_stderr_lines(
         "codex",
         ["Reading prompt from stdin...\n", "real error\n"],
@@ -80,10 +84,12 @@ def test_filter_stderr_lines_removes_codex_stdin_noise():
     ],
 )
 def test_is_rate_limit_signal(text, expected):
+    """Verifica que is rate limit signal."""
     assert _is_rate_limit_signal(text) is expected
 
 
 def test_codex_plugin_reads_prompt_from_stdin():
+    """Verifica que codex plugin reads prompt from stdin."""
     plugin = get_plugin("codex")
     assert plugin is not None
     assert plugin.prompt_as_arg is False
@@ -91,6 +97,7 @@ def test_codex_plugin_reads_prompt_from_stdin():
 
 
 def test_codex_plugin_resumes_last_session_in_workspace():
+    """Verifica que codex plugin resumes last session in workspace."""
     plugin = get_plugin("codex")
     assert plugin is not None
     assert plugin.effective_cmd() == [
@@ -106,6 +113,7 @@ def test_codex_plugin_resumes_last_session_in_workspace():
 
 
 def test_codex_plugin_applies_resume_to_cli_override():
+    """Verifica que codex plugin applies resume to cli override."""
     plugin = get_plugin("codex")
     assert plugin is not None
     original_override = plugin._connection_override
@@ -124,6 +132,7 @@ def test_codex_plugin_applies_resume_to_cli_override():
 
 
 def test_codex_plugin_injects_mcp_server_before_stdin_sentinel():
+    """Verifica que codex plugin injects mcp server before stdin sentinel."""
     plugin = get_plugin("codex")
     assert plugin is not None
     original_mcp_socket = plugin._mcp_socket_path
@@ -152,6 +161,7 @@ def test_codex_plugin_injects_mcp_server_before_stdin_sentinel():
 
 
 def test_codex_plugin_does_not_duplicate_existing_mcp_override():
+    """Verifica que codex plugin does not duplicate existing mcp override."""
     plugin = get_plugin("codex")
     assert plugin is not None
     original_override = plugin._connection_override
@@ -184,6 +194,7 @@ def test_codex_plugin_does_not_duplicate_existing_mcp_override():
 
 
 def test_claude_plugin_injects_mcp_server():
+    """Verifica que claude plugin injects mcp server."""
     import json as _json
     plugin = get_plugin("claude")
     assert plugin is not None
@@ -207,6 +218,7 @@ def test_claude_plugin_injects_mcp_server():
 
 
 def test_base_agent_plugin_prefers_socket_when_socket_and_http_are_set():
+    """Verifica que base agent plugin prefers socket when socket and http are set."""
     from quimera.plugins.base import AgentPlugin
 
     class _SocketPlugin(AgentPlugin):
@@ -228,6 +240,7 @@ def test_base_agent_plugin_prefers_socket_when_socket_and_http_are_set():
 
 
 def test_claude_plugin_prefers_socket_when_socket_and_http_are_set():
+    """Verifica que claude plugin prefers socket when socket and http are set."""
     import json as _json
     plugin = get_plugin("claude")
     assert plugin is not None
@@ -256,6 +269,7 @@ def test_claude_plugin_prefers_socket_when_socket_and_http_are_set():
 
 
 def test_codex_plugin_prefers_socket_when_socket_and_http_are_set():
+    """Verifica que codex plugin prefers socket when socket and http are set."""
     plugin = get_plugin("codex")
     assert plugin is not None
     original_mcp_socket = plugin._mcp_socket_path
@@ -280,6 +294,7 @@ def test_codex_plugin_prefers_socket_when_socket_and_http_are_set():
 
 
 def test_opencode_plugin_prefers_local_socket_env_when_socket_and_http_are_set():
+    """Verifica que opencode plugin prefers local socket env when socket and http are set."""
     plugin = get_plugin("opencode")
     assert isinstance(plugin, OpenCodePlugin)
     original_mcp_socket = plugin._mcp_socket_path
@@ -304,6 +319,7 @@ def test_opencode_plugin_prefers_local_socket_env_when_socket_and_http_are_set()
         plugin._mcp_token = original_token
 
 def test_agent_client_run_success(renderer):
+    """Verifica que agent client run success."""
     client = AgentClient(renderer)
     with patch("subprocess.Popen") as mock_popen:
         mock_proc = MagicMock()
@@ -317,6 +333,7 @@ def test_agent_client_run_success(renderer):
 
 
 def test_agent_client_run_silent_does_not_log_codex_stdin_noise(renderer):
+    """Verifica que agent client run silent does not log codex stdin noise."""
     client = AgentClient(renderer)
     with patch("subprocess.Popen") as mock_popen, patch("quimera.agents.client._logger") as mock_logger:
         mock_proc = MagicMock()
@@ -332,6 +349,7 @@ def test_agent_client_run_silent_does_not_log_codex_stdin_noise(renderer):
 
 
 def test_agent_client_run_ignores_codex_orphan_function_call_noise(renderer):
+    """Verifica que agent client run ignores codex orphan function call noise."""
     client = AgentClient(renderer)
     with patch("subprocess.Popen") as mock_popen:
         mock_proc = MagicMock()
@@ -354,6 +372,7 @@ def test_agent_client_run_ignores_codex_orphan_function_call_noise(renderer):
 
 
 def test_agent_client_run_os_error(renderer):
+    """Verifica que agent client run os error."""
     client = AgentClient(renderer)
     with patch("subprocess.Popen") as mock_popen:
         mock_popen.side_effect = OSError("command not found")
@@ -363,6 +382,7 @@ def test_agent_client_run_os_error(renderer):
 
 
 def test_agent_client_run_failure_return_code(renderer):
+    """Verifica que agent client run failure return code."""
     client = AgentClient(renderer)
     with patch("subprocess.Popen") as mock_popen:
         mock_proc = MagicMock()
@@ -383,6 +403,7 @@ def test_agent_client_run_failure_return_code(renderer):
 
 
 def test_agent_client_run_failure_uses_error_reporter_when_provided(renderer):
+    """Verifica que agent client run failure uses error reporter when provided."""
     error_reporter = MagicMock()
     client = AgentClient(renderer, error_reporter=error_reporter)
     with patch("subprocess.Popen") as mock_popen:
@@ -406,6 +427,7 @@ def test_agent_client_run_failure_uses_error_reporter_when_provided(renderer):
 
 
 def test_agent_client_run_failure_uses_plugin_label_when_agent_is_known(renderer):
+    """Verifica que agent client run failure uses plugin label when agent is known."""
     error_reporter = MagicMock()
     client = AgentClient(renderer, error_reporter=error_reporter)
     with patch("subprocess.Popen") as mock_popen:
@@ -429,6 +451,7 @@ def test_agent_client_run_failure_uses_plugin_label_when_agent_is_known(renderer
 
 
 def test_agent_client_run_failure_uses_agent_name_when_plugin_is_unknown(renderer):
+    """Verifica que agent client run failure uses agent name when plugin is unknown."""
     error_reporter = MagicMock()
     client = AgentClient(renderer, error_reporter=error_reporter)
     with patch("subprocess.Popen") as mock_popen:
@@ -452,6 +475,7 @@ def test_agent_client_run_failure_uses_agent_name_when_plugin_is_unknown(rendere
 
 
 def test_agent_client_call(renderer):
+    """Verifica que agent client call."""
     client = AgentClient(renderer)
     with patch("quimera.plugins.get") as mock_get:
         mock_plugin = MagicMock()
@@ -470,6 +494,7 @@ def test_agent_client_call(renderer):
 
 
 def test_agent_client_call_prompt_as_arg(renderer):
+    """Verifica que agent client call prompt as arg."""
     client = AgentClient(renderer)
     with patch("quimera.plugins.get") as mock_get:
         mock_plugin = MagicMock()
@@ -488,6 +513,7 @@ def test_agent_client_call_prompt_as_arg(renderer):
 
 
 def test_agent_client_call_does_not_duplicate_mode_prompt(renderer):
+    """Verifica que agent client call does not duplicate mode prompt."""
     client = AgentClient(renderer)
     mode_addon = "[MODO: ANÁLISE] Apenas leitura e análise. Não edite arquivos."
     client.execution_mode = SimpleNamespace(prompt_addon=mode_addon)
@@ -509,6 +535,7 @@ def test_agent_client_call_does_not_duplicate_mode_prompt(renderer):
                                         silent=False, agent="mock", show_status=True, progress_callback=None)
 
 def test_agent_client_log_metrics(renderer, tmp_path):
+    """Verifica que agent client log metrics."""
     metrics_file = tmp_path / "metrics.jsonl"
     client = AgentClient(renderer, metrics_file=str(metrics_file))
     metrics = {"total_chars": 100, "history_chars": 50}
@@ -521,6 +548,7 @@ def test_agent_client_log_metrics(renderer, tmp_path):
 
 
 def test_agent_client_run_streaming(renderer):
+    """Verifica que agent client run streaming."""
     # Line 100-161 coverage approx
     client = AgentClient(renderer)
     with patch("subprocess.Popen") as mock_popen:
@@ -539,6 +567,7 @@ def test_agent_client_run_streaming(renderer):
 
 
 def test_agent_client_run_timeout(renderer):
+    """Verifica que agent client run timeout."""
     # Line 152-161 coverage approx
     client = AgentClient(renderer, timeout=0.1)
     with patch("subprocess.Popen") as mock_popen:
@@ -572,6 +601,7 @@ def test_agent_client_run_timeout(renderer):
 
 
 def test_agent_client_run_input_failure(renderer):
+    """Verifica que agent client run input failure."""
     client = AgentClient(renderer)
     with patch("subprocess.Popen") as mock_popen:
         mock_proc = MagicMock()
@@ -585,6 +615,7 @@ def test_agent_client_run_input_failure(renderer):
 
 
 def test_agent_client_run_communication_error(renderer):
+    """Verifica que agent client run communication error."""
     client = AgentClient(renderer)
     with patch("subprocess.Popen") as mock_popen:
         mock_proc = MagicMock()
@@ -602,6 +633,7 @@ def test_agent_client_run_communication_error(renderer):
 
 
 def test_agent_client_run_silent_logs(renderer):
+    """Verifica que agent client run silent logs."""
     client = AgentClient(renderer)
     with patch("subprocess.Popen") as mock_popen:
         mock_proc = MagicMock()
@@ -618,6 +650,7 @@ def test_agent_client_run_silent_logs(renderer):
 
 
 def test_agent_client_run_failure_with_tail(renderer):
+    """Verifica que agent client run failure with tail."""
     client = AgentClient(renderer)
     with patch("subprocess.Popen") as mock_popen:
         mock_proc = MagicMock()
@@ -633,6 +666,7 @@ def test_agent_client_run_failure_with_tail(renderer):
 
 
 def test_agent_client_run_caps_stdout_buffer_to_recent_output(renderer):
+    """Verifica que agent client run caps stdout buffer to recent output."""
     client = AgentClient(renderer)
     with patch.object(AgentClient, "_MAX_STDOUT_CHARS", 12), patch("subprocess.Popen") as mock_popen:
         mock_proc = MagicMock()
@@ -647,6 +681,7 @@ def test_agent_client_run_caps_stdout_buffer_to_recent_output(renderer):
 
 
 def test_agent_client_log_queue_drops_oldest_item_when_full(renderer):
+    """Verifica que agent client log queue drops oldest item when full."""
     client = AgentClient(renderer)
     q = queue.Queue(maxsize=2)
 
@@ -659,6 +694,7 @@ def test_agent_client_log_queue_drops_oldest_item_when_full(renderer):
 
 
 def test_agent_client_run_marks_rate_limit_from_stderr(renderer):
+    """Verifica que agent client run marks rate limit from stderr."""
     client = AgentClient(renderer, timeout=1)
 
     class SlowLines:
@@ -687,6 +723,7 @@ def test_agent_client_run_marks_rate_limit_from_stderr(renderer):
 
 
 def test_agent_client_run_does_not_mark_rate_limit_from_stdout(renderer):
+    """Verifica que agent client run does not mark rate limit from stdout."""
     client = AgentClient(renderer, timeout=1)
 
     with patch("subprocess.Popen") as mock_popen, patch("time.sleep"):
@@ -705,6 +742,7 @@ def test_agent_client_run_does_not_mark_rate_limit_from_stdout(renderer):
 
 
 def test_agent_client_run_streaming_with_status_and_stderr(renderer):
+    """Verifica que agent client run streaming with status and stderr."""
     # Line 118, 123-129, 131-140 approx
     client = AgentClient(renderer)
     with patch("subprocess.Popen") as mock_popen:
@@ -722,6 +760,7 @@ def test_agent_client_run_streaming_with_status_and_stderr(renderer):
 
 
 def test_agent_client_run_suppresses_codex_stdin_noise(renderer):
+    """Verifica que agent client run suppresses codex stdin noise."""
     client = AgentClient(renderer)
     with patch("subprocess.Popen") as mock_popen:
         mock_proc = MagicMock()
@@ -742,6 +781,7 @@ def test_agent_client_run_suppresses_codex_stdin_noise(renderer):
 
 
 def test_agent_client_run_spy_shows_stderr_lines(renderer):
+    """Verifica que agent client run spy shows stderr lines."""
     client = AgentClient(renderer, visibility=Visibility.FULL)
     with patch("subprocess.Popen") as mock_popen:
         mock_proc = MagicMock()
@@ -760,6 +800,7 @@ def test_agent_client_run_spy_shows_stderr_lines(renderer):
 
 
 def test_agent_client_run_spy_shows_codex_stdout_context(renderer):
+    """Verifica que agent client run spy shows codex stdout context."""
     client = AgentClient(renderer, visibility=Visibility.FULL)
     with patch("subprocess.Popen") as mock_popen:
         mock_proc = MagicMock()
@@ -787,6 +828,7 @@ def test_agent_client_run_spy_shows_codex_stdout_context(renderer):
 
 
 def test_agent_client_run_summary_shows_formatted_codex_stdout(renderer):
+    """Verifica que agent client run summary shows formatted codex stdout."""
     client = AgentClient(renderer, visibility=Visibility.SUMMARY)
     with patch("subprocess.Popen") as mock_popen:
         mock_proc = MagicMock()
@@ -810,6 +852,7 @@ def test_agent_client_run_summary_shows_formatted_codex_stdout(renderer):
 
 
 def test_agent_client_run_summary_flushes_compacted_responses_before_context(renderer):
+    """Verifica que agent client run summary flushes compacted responses before context."""
     client = AgentClient(renderer, visibility=Visibility.SUMMARY)
     with patch("subprocess.Popen") as mock_popen:
         mock_proc = MagicMock()
@@ -832,6 +875,7 @@ def test_agent_client_run_summary_flushes_compacted_responses_before_context(ren
 
 
 def test_agent_client_run_summary_keeps_completed_tool_line_transient(renderer):
+    """Verifica que agent client run summary keeps completed tool line transient."""
     client = AgentClient(renderer, visibility=Visibility.SUMMARY)
     with patch("subprocess.Popen") as mock_popen:
         mock_proc = MagicMock()
@@ -853,6 +897,7 @@ def test_agent_client_run_summary_keeps_completed_tool_line_transient(renderer):
 
 
 def test_agent_client_run_summary_shows_diff_output_and_keeps_next_operation_clean(renderer):
+    """Verifica que agent client run summary shows diff output and keeps next operation clean."""
     client = AgentClient(renderer, visibility=Visibility.SUMMARY)
     with patch("subprocess.Popen") as mock_popen:
         mock_proc = MagicMock()
@@ -885,6 +930,7 @@ def test_agent_client_run_summary_shows_diff_output_and_keeps_next_operation_cle
 
 
 def test_spy_output_presenter_keeps_next_operation_clean_after_diff_preview(renderer):
+    """Verifica que spy output presenter keeps next operation clean after diff preview."""
     presenter = SpyOutputPresenter(renderer, Visibility.SUMMARY)
 
     presenter.emit("codex", SpyEvent(kind="tool", text="$ git diff -- quimera/agents.py"))
@@ -904,6 +950,7 @@ def test_spy_output_presenter_keeps_next_operation_clean_after_diff_preview(rend
 
 
 def test_spy_output_presenter_compose_status_label_keeps_base_and_tool(renderer):
+    """Verifica que spy output presenter compose status label keeps base and tool."""
     presenter = SpyOutputPresenter(renderer, Visibility.SUMMARY)
 
     presenter.emit("codex", SpyEvent(kind="tool", text="$ git status --short"))
@@ -912,6 +959,7 @@ def test_spy_output_presenter_compose_status_label_keeps_base_and_tool(renderer)
 
 
 def test_spy_output_presenter_collects_structured_turn_detail(renderer):
+    """Verifica que spy output presenter collects structured turn detail."""
     presenter = SpyOutputPresenter(renderer, Visibility.SUMMARY)
     presenter.set_turn_runtime("cli")
 
@@ -938,6 +986,7 @@ def test_spy_output_presenter_collects_structured_turn_detail(renderer):
 
 
 def test_spy_output_presenter_persists_evidence_from_raw_output(renderer, tmp_path):
+    """Verifica que spy output presenter persists evidence from raw output."""
     presenter = SpyOutputPresenter(
         renderer,
         Visibility.SUMMARY,
@@ -962,6 +1011,7 @@ def test_spy_output_presenter_persists_evidence_from_raw_output(renderer, tmp_pa
 
 
 def test_spy_output_presenter_persists_structured_tool_execution_evidence(renderer, tmp_path):
+    """Verifica que spy output presenter persists structured tool execution evidence."""
     presenter = SpyOutputPresenter(
         renderer,
         Visibility.SUMMARY,
@@ -993,6 +1043,7 @@ def test_spy_output_presenter_persists_structured_tool_execution_evidence(render
 
 
 def test_spy_output_presenter_finalize_turn_renders_human_summary(renderer):
+    """Verifica que spy output presenter finalize turn renders human summary."""
     presenter = SpyOutputPresenter(renderer, Visibility.SUMMARY)
 
     for event in _format_codex_spy_event(
@@ -1015,6 +1066,7 @@ def test_spy_output_presenter_finalize_turn_renders_human_summary(renderer):
 
 
 def test_spy_output_presenter_finalize_turn_skips_summary_for_non_cli(renderer):
+    """Verifica que spy output presenter finalize turn skips summary for non cli."""
     presenter = SpyOutputPresenter(renderer, Visibility.SUMMARY)
     with patch("quimera.spy_output_presenter.plugins.get") as mock_get_plugin:
         non_cli = MagicMock()
@@ -1036,6 +1088,7 @@ def test_spy_output_presenter_finalize_turn_skips_summary_for_non_cli(renderer):
 
 
 def test_spy_output_presenter_full_mode_renders_tool_timeline(renderer):
+    """Verifica que spy output presenter full mode renders tool timeline."""
     presenter = SpyOutputPresenter(renderer, Visibility.FULL)
 
     for event in _format_codex_spy_event(
@@ -1053,6 +1106,7 @@ def test_spy_output_presenter_full_mode_renders_tool_timeline(renderer):
 
 
 def test_agent_client_run_summary_does_not_persist_started_tool_without_status(renderer):
+    """Verifica que agent client run summary does not persist started tool without status."""
     client = AgentClient(renderer, visibility=Visibility.SUMMARY)
     with patch("subprocess.Popen") as mock_popen:
         mock_proc = MagicMock()
@@ -1073,6 +1127,7 @@ def test_agent_client_run_summary_does_not_persist_started_tool_without_status(r
 
 
 def test_spy_output_presenter_summary_keeps_tool_progress_transient(renderer):
+    """Verifica que spy output presenter summary keeps tool progress transient."""
     presenter = SpyOutputPresenter(renderer, Visibility.SUMMARY)
 
     presenter.emit("codex", SpyEvent(kind="tool", text="usando apply_patch"))
@@ -1083,6 +1138,7 @@ def test_spy_output_presenter_summary_keeps_tool_progress_transient(renderer):
 
 
 def test_spy_output_presenter_summary_keeps_tool_failure_persistent(renderer):
+    """Verifica que spy output presenter summary keeps tool failure persistent."""
     presenter = SpyOutputPresenter(renderer, Visibility.SUMMARY)
 
     presenter.emit("codex", SpyEvent(kind="tool", text="$ pytest -q"))
@@ -1093,6 +1149,7 @@ def test_spy_output_presenter_summary_keeps_tool_failure_persistent(renderer):
 
 
 def test_spy_output_presenter_summary_skips_transient_terminal_completion(renderer):
+    """Verifica que spy output presenter summary skips transient terminal completion."""
     presenter = SpyOutputPresenter(renderer, Visibility.SUMMARY)
 
     presenter.emit("codex", SpyEvent(kind="context", text="execução concluída", transient=True))
@@ -1103,6 +1160,7 @@ def test_spy_output_presenter_summary_skips_transient_terminal_completion(render
 
 
 def test_agent_client_run_spy_shows_claude_stdout_context(renderer):
+    """Verifica que agent client run spy shows claude stdout context."""
     client = AgentClient(renderer, visibility=Visibility.FULL)
     with patch("subprocess.Popen") as mock_popen:
         mock_proc = MagicMock()
@@ -1128,6 +1186,7 @@ def test_agent_client_run_spy_shows_claude_stdout_context(renderer):
 
 
 def test_agent_client_run_post_drain(renderer):
+    """Verifica que agent client run post drain."""
     # Line 166-180 approx - Drain remaining queue after threads die
     client = AgentClient(renderer)
     with patch("subprocess.Popen") as mock_popen:
@@ -1155,6 +1214,7 @@ def test_agent_client_run_post_drain(renderer):
 
 
 def test_agent_client_run_uses_working_dir(renderer, tmp_path):
+    """Verifica que agent client run uses working dir."""
     workspace = str(tmp_path)
     client = AgentClient(renderer, working_dir=workspace)
     with patch("subprocess.Popen") as mock_popen:
@@ -1170,6 +1230,7 @@ def test_agent_client_run_uses_working_dir(renderer, tmp_path):
 
 
 def test_agent_client_run_legacy_workspace_root_alias(renderer, tmp_path):
+    """Verifica que agent client run legacy workspace root alias."""
     workspace = str(tmp_path)
     client = AgentClient(renderer, workspace_root=workspace)
     with patch("subprocess.Popen") as mock_popen:
@@ -1185,6 +1246,7 @@ def test_agent_client_run_legacy_workspace_root_alias(renderer, tmp_path):
 
 
 def test_agent_client_run_without_working_dir_passes_none(renderer):
+    """Verifica que agent client run without working dir passes none."""
     client = AgentClient(renderer)
     with patch("subprocess.Popen") as mock_popen:
         mock_proc = MagicMock()
@@ -1199,6 +1261,7 @@ def test_agent_client_run_without_working_dir_passes_none(renderer):
 
 
 def test_agent_client_thread_exceptions(renderer):
+    """Verifica que agent client thread exceptions."""
     # Line 62-63, 74-75
     client = AgentClient(renderer)
     with patch("subprocess.Popen") as mock_popen:
@@ -1227,6 +1290,7 @@ def test_agent_client_thread_exceptions(renderer):
 
 
 def test_synthetic_tool_result(renderer):
+    """Verifica que synthetic tool result."""
     from quimera.agents import _SyntheticToolResult
     result_ok = _SyntheticToolResult(ok=True)
     assert result_ok.ok is True
@@ -1236,6 +1300,7 @@ def test_synthetic_tool_result(renderer):
 
 
 def test_agent_client_run_empty_stderr_line(renderer):
+    """Verifica que agent client run empty stderr line."""
     # Line 144: empty line after strip
     client = AgentClient(renderer)
     with patch("subprocess.Popen") as mock_popen:
@@ -1252,6 +1317,7 @@ def test_agent_client_run_empty_stderr_line(renderer):
 
 
 def test_agent_client_run_stderr_truncation(renderer):
+    """Verifica que agent client run stderr truncation."""
     # Line 147-153: stderr truncation at MAX_STDERR_LINES
     client = AgentClient(renderer)
     with patch("subprocess.Popen") as mock_popen:
@@ -1279,6 +1345,7 @@ def test_agent_client_run_stderr_truncation(renderer):
 
 
 def test_agent_client_run_no_output_with_error(renderer):
+    """Verifica que agent client run no output with error."""
     # Line 202-219: no output but has error (returncode 0 case)
     client = AgentClient(renderer)
     with patch("subprocess.Popen") as mock_popen:
@@ -1294,6 +1361,7 @@ def test_agent_client_run_no_output_with_error(renderer):
 
 
 def test_agent_client_call_unknown_agent(renderer):
+    """Verifica que agent client call unknown agent."""
     # Line 276-278: unknown agent
     client = AgentClient(renderer)
     result = client.call("unknown_agent", "prompt")
@@ -1302,6 +1370,7 @@ def test_agent_client_call_unknown_agent(renderer):
 
 
 def test_agent_client_call_api_driver(renderer):
+    """Verifica que agent client call api driver."""
     # Line 280-281, 293-325: API driver path
     client = AgentClient(renderer, timeout=60)
     with patch("quimera.plugins.get") as mock_get:
@@ -1325,6 +1394,7 @@ def test_agent_client_call_api_driver(renderer):
 
 
 def test_parse_stream_json(renderer):
+    """Verifica que parse stream json."""
     # Line 223-247: _parse_stream_json
     client = AgentClient(renderer)
     raw = '''{"type":"result","result":"final output"}
@@ -1334,6 +1404,7 @@ def test_parse_stream_json(renderer):
 
 
 def test_parse_stream_json_error(renderer):
+    """Verifica que parse stream json error."""
     client = AgentClient(renderer)
     raw = '{"type":"result","is_error":true,"result":"error msg"}'
     result = client._parse_stream_json(raw, "test-agent")
@@ -1341,6 +1412,7 @@ def test_parse_stream_json_error(renderer):
 
 
 def test_parse_codex_json(renderer):
+    """Verifica que parse codex json."""
     # Line 249-271: _parse_codex_json
     client = AgentClient(renderer)
     callback_called = []
@@ -1356,6 +1428,7 @@ def test_parse_codex_json(renderer):
 
 
 def test_parse_codex_json_with_text(renderer):
+    """Verifica que parse codex json with text."""
     client = AgentClient(renderer)
     raw = '{"type":"item.completed","item":{"type":"agent_message","text":"final text"}}'
     result = client._parse_codex_json(raw, "codex")
@@ -1363,6 +1436,7 @@ def test_parse_codex_json_with_text(renderer):
 
 
 def test_format_codex_spy_event_command():
+    """Verifica que format codex spy event command."""
     started = _format_codex_spy_event('{"type":"item.started","item":{"type":"command_execution","command":"ls"}}')
     completed = _format_codex_spy_event(
         '{"type":"item.completed","item":{"type":"command_execution","command":"ls","exit_code":0}}')
@@ -1371,6 +1445,7 @@ def test_format_codex_spy_event_command():
 
 
 def test_format_codex_spy_event_reasoning_and_message():
+    """Verifica que format codex spy event reasoning and message."""
     reasoning = _format_codex_spy_event(
         '{"type":"item.started","item":{"type":"reasoning","summary":"Vou localizar o formatter do plugin e ajustar a mensagem"}}'
     )
@@ -1382,6 +1457,7 @@ def test_format_codex_spy_event_reasoning_and_message():
 
 
 def test_format_codex_spy_event_splits_multiline_agent_messages():
+    """Verifica que format codex spy event splits multiline agent messages."""
     message = _format_codex_spy_event(
         '{"type":"item.completed","item":{"type":"agent_message","text":"message 1\\nmessage 2\\nclear\\nmessage 3"}}'
     )
@@ -1394,6 +1470,7 @@ def test_format_codex_spy_event_splits_multiline_agent_messages():
 
 
 def test_format_codex_spy_event_keeps_full_transient_agent_line_without_truncation():
+    """Verifica que format codex spy event keeps full transient agent line without truncation."""
     long_line = "x" * 220
     message = _format_codex_spy_event(
         f'{{"type":"item.completed","item":{{"type":"agent_message","text":"{long_line}"}}}}'
@@ -1402,6 +1479,7 @@ def test_format_codex_spy_event_keeps_full_transient_agent_line_without_truncati
 
 
 def test_format_codex_spy_event_reports_failed_test_command():
+    """Verifica que format codex spy event reports failed test command."""
     completed = _format_codex_spy_event(
         '{"type":"item.completed","item":{"type":"command_execution","command":"pytest -q tests/test_agents.py","exit_code":1}}'
     )
@@ -1409,6 +1487,7 @@ def test_format_codex_spy_event_reports_failed_test_command():
 
 
 def test_format_codex_spy_event_hides_successful_command_completion():
+    """Verifica que format codex spy event hides successful command completion."""
     started = _format_codex_spy_event(
         '{"type":"item.started","item":{"type":"command_execution","command":"git status --short"}}'
     )
@@ -1420,6 +1499,7 @@ def test_format_codex_spy_event_hides_successful_command_completion():
 
 
 def test_format_codex_spy_event_includes_diff_output_from_aggregated_output():
+    """Verifica que format codex spy event includes diff output from aggregated output."""
     completed = _format_codex_spy_event(
         '{"type":"item.completed","item":{"type":"command_execution","command":"git diff -- quimera/agents.py","exit_code":0,"aggregated_output":"diff --git a/quimera/agents.py b/quimera/agents.py\\n+nova linha"}}'
     )
@@ -1431,6 +1511,7 @@ def test_format_codex_spy_event_includes_diff_output_from_aggregated_output():
 
 
 def test_format_codex_spy_event_reports_file_change_start_and_completion():
+    """Verifica que format codex spy event reports file change start and completion."""
     started = _format_codex_spy_event(
         '{"type":"item.started","item":{"type":"file_change","path":"quimera/agents.py"}}'
     )
@@ -1442,6 +1523,7 @@ def test_format_codex_spy_event_reports_file_change_start_and_completion():
 
 
 def test_format_codex_spy_event_reports_tool_calls_as_tool_messages():
+    """Verifica que format codex spy event reports tool calls as tool messages."""
     message = _format_codex_spy_event(
         '{"type":"item.started","item":{"type":"tool_call","name":"apply_patch"}}'
     )
@@ -1449,18 +1531,21 @@ def test_format_codex_spy_event_reports_tool_calls_as_tool_messages():
 
 
 def test_codex_plugin_exposes_spy_stdout_formatter():
+    """Verifica que codex plugin exposes spy stdout formatter."""
     plugin = get_plugin("codex")
     assert plugin is not None
     assert plugin.spy_stdout_formatter is _format_codex_spy_event
 
 
 def test_claude_plugin_exposes_spy_stdout_formatter():
+    """Verifica que claude plugin exposes spy stdout formatter."""
     plugin = get_plugin("claude")
     assert plugin is not None
     assert plugin.spy_stdout_formatter is _format_claude_spy_event
 
 
 def test_opencode_plugin_exposes_spy_stdout_formatter_and_json_output():
+    """Verifica que opencode plugin exposes spy stdout formatter and json output."""
     plugin = get_plugin("opencode")
     assert plugin is not None
     assert plugin.spy_stdout_formatter is _format_opencode_spy_event
@@ -1469,6 +1554,7 @@ def test_opencode_plugin_exposes_spy_stdout_formatter_and_json_output():
 
 
 def test_opencode_plugin_injects_mcp_via_env_var():
+    """Verifica que opencode plugin injects mcp via env var."""
     plugin = get_plugin("opencode")
     assert isinstance(plugin, OpenCodePlugin)
     original_mcp_socket = plugin._mcp_socket_path
@@ -1489,6 +1575,7 @@ def test_opencode_plugin_injects_mcp_via_env_var():
 
 
 def test_opencode_plugin_omits_mcp_env_when_no_socket():
+    """Verifica que opencode plugin omits mcp env when no socket."""
     plugin = get_plugin("opencode")
     original_mcp_socket = plugin._mcp_socket_path
     try:
@@ -1517,6 +1604,7 @@ def test_opencode_plugin_env_for_cli_independent_of_connection_override():
 
 
 def test_dynamic_plugin_with_opencode_base_inherits_env_for_cli():
+    """Verifica que dynamic plugin with opencode base inherits env for cli."""
     plugin = register_dynamic_plugin("opencode-dyn-test", metadata={"base": "opencode"})
     assert isinstance(plugin, OpenCodePlugin)
 
@@ -1526,6 +1614,7 @@ def test_dynamic_plugin_with_opencode_base_inherits_env_for_cli():
 
 
 def test_agent_client_call_dynamic_opencode_base_passes_env_for_cli_to_run(renderer):
+    """Verifica que agent client call dynamic opencode base passes env for cli to run."""
     client = AgentClient(renderer)
     plugin = register_dynamic_plugin("opencode-dyn-call-test", metadata={"base": "opencode"})
     assert isinstance(plugin, OpenCodePlugin)
@@ -1560,6 +1649,7 @@ def test_agent_client_call_dynamic_opencode_base_passes_env_for_cli_to_run(rende
 
 
 def test_format_claude_spy_event_summarizes_assistant_and_result():
+    """Verifica que format claude spy event summarizes assistant and result."""
     assistant = _format_claude_spy_event(
         '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash"},{"type":"text","text":"Vou validar com um teste focado antes de concluir."}]}}'
     )
@@ -1572,6 +1662,7 @@ def test_format_claude_spy_event_summarizes_assistant_and_result():
 
 
 def test_format_opencode_spy_event_ignores_step_boundary_status_and_summarizes_text():
+    """Verifica que format opencode spy event ignores step boundary status and summarizes text."""
     started = _format_opencode_spy_event('{"type":"step_start","part":{"type":"step-start"}}')
     message = _format_opencode_spy_event(
         '{"type":"text","part":{"type":"text","text":"message 1\\nclear\\nmessage 2"}}'
@@ -1589,6 +1680,7 @@ def test_format_opencode_spy_event_ignores_step_boundary_status_and_summarizes_t
 
 
 def test_format_opencode_spy_event_reports_tool_calls_as_tool_messages():
+    """Verifica que format opencode spy event reports tool calls as tool messages."""
     tool = _format_opencode_spy_event(
         '{"type":"tool_call","part":{"type":"tool-call","tool":"run_shell"}}'
     )
@@ -1596,6 +1688,7 @@ def test_format_opencode_spy_event_reports_tool_calls_as_tool_messages():
 
 
 def test_parse_opencode_json_with_text(renderer):
+    """Verifica que parse opencode json with text."""
     client = AgentClient(renderer)
     raw = "\n".join([
         '{"type":"step_start","part":{"type":"step-start"}}',
@@ -1608,6 +1701,7 @@ def test_parse_opencode_json_with_text(renderer):
 
 
 def test_agent_client_call_stream_json_format(renderer):
+    """Verifica que agent client call stream json format."""
     # Line 286-288: stream-json format
     client = AgentClient(renderer)
     with patch("quimera.plugins.get") as mock_get:
@@ -1624,6 +1718,7 @@ def test_agent_client_call_stream_json_format(renderer):
 
 
 def test_agent_client_call_codex_json_format(renderer):
+    """Verifica que agent client call codex json format."""
     # Line 289-290: codex-json format
     client = AgentClient(renderer)
     with patch("quimera.plugins.get") as mock_get:
@@ -1640,6 +1735,7 @@ def test_agent_client_call_codex_json_format(renderer):
 
 
 def test_agent_client_call_opencode_json_format(renderer):
+    """Verifica que agent client call opencode json format."""
     client = AgentClient(renderer)
     with patch("quimera.plugins.get") as mock_get:
         mock_plugin = MagicMock()
@@ -1830,6 +1926,7 @@ def test_call_api_skips_openai_preview_when_tool_requires_approval(renderer):
 
 
 def test_call_api_propagates_task_approval_scope_to_driver_thread(renderer):
+    """Verifica que call api propagates task approval scope to driver thread."""
     from types import SimpleNamespace
 
     client = AgentClient(renderer)
@@ -1911,6 +2008,7 @@ def test_call_api_cancel_event_detection(renderer):
 
 
 def test_show_cancelled_once_deduplicates_repeated_messages(renderer):
+    """Verifica que show cancelled once deduplicates repeated messages."""
     client = AgentClient(renderer)
 
     client._show_cancelled_once()
@@ -1923,6 +2021,7 @@ def test_show_cancelled_once_deduplicates_repeated_messages(renderer):
 
 
 def test_spy_output_presenter_drops_interrupt_echo_from_raw_stdout(renderer):
+    """Verifica que spy output presenter drops interrupt echo from raw stdout."""
     presenter = SpyOutputPresenter(renderer, Visibility.SUMMARY)
 
     consumed = presenter.consume_stdout("unknown-agent", "^C\n")
@@ -1932,6 +2031,7 @@ def test_spy_output_presenter_drops_interrupt_echo_from_raw_stdout(renderer):
 
 
 def test_spy_output_presenter_drops_interrupt_echo_etx_from_raw_stdout(renderer):
+    """Verifica que spy output presenter drops interrupt echo etx from raw stdout."""
     presenter = SpyOutputPresenter(renderer, Visibility.SUMMARY)
 
     consumed = presenter.consume_stdout("unknown-agent", "\x03\n")
@@ -1941,6 +2041,7 @@ def test_spy_output_presenter_drops_interrupt_echo_etx_from_raw_stdout(renderer)
 
 
 def test_spy_output_presenter_never_renders_interrupt_echo_from_event_text(renderer):
+    """Verifica que spy output presenter never renders interrupt echo from event text."""
     presenter = SpyOutputPresenter(renderer, Visibility.FULL)
 
     presenter.emit("codex", SpyEvent(kind="response", text="\x03"))
@@ -2201,6 +2302,7 @@ def test_task_cancellation_after_review(renderer):
 
 
 def test_process_runner_watch_emits_tick_only_on_elapsed_change():
+    """Verifica que process runner watch emits tick only on elapsed change."""
     proc = MagicMock()
     stdout_thread = MagicMock()
     stderr_thread = MagicMock()

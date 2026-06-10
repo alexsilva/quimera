@@ -136,6 +136,7 @@ class TestLongMessages:
     """Garante que mensagens longas são tratadas sem crash nem corrupção."""
 
     def test_show_plain_with_very_long_text_does_not_crash(self, renderer):
+        """Verifica que Test show plain with very long text does not crash."""
         long_text = "palavra " * 200
         with patch("quimera.ui._agent_style", return_value=("cyan", "Codex")):
             renderer.show_plain(long_text, agent="codex")
@@ -144,6 +145,7 @@ class TestLongMessages:
         assert "palavra" in rendered
 
     def test_show_plain_without_agent_with_very_long_text(self, renderer):
+        """Verifica que Test show plain without agent with very long text."""
         long_text = "a" * 500
         renderer.show_plain(long_text)
         renderer.flush()
@@ -151,6 +153,7 @@ class TestLongMessages:
         assert "a" * 10 in rendered
 
     def test_show_system_with_multiline_long_message(self, renderer):
+        """Verifica que Test show system with multiline long message."""
         multiline = "\n".join(f"Linha {i}: " + "conteúdo " * 20 for i in range(10))
         renderer.show_system(multiline)
         renderer.flush()
@@ -159,6 +162,7 @@ class TestLongMessages:
         assert "Linha 9" in rendered
 
     def test_show_message_strips_ansi_from_content(self, renderer):
+        """Verifica que Test show message strips ansi from content."""
         ansi_content = "\x1b[31mTexto vermelho\x1b[0m com mais texto"
         with patch("quimera.ui._agent_style", return_value=("cyan", "Codex")):
             renderer.show_message("codex", ansi_content)
@@ -168,11 +172,13 @@ class TestLongMessages:
         assert "Texto vermelho" in rendered
 
     def test_show_message_with_empty_content_does_not_crash(self, renderer):
+        """Verifica que Test show message with empty content does not crash."""
         with patch("quimera.ui._agent_style", return_value=("cyan", "Codex")):
             renderer.show_message("codex", "")
         renderer.flush()  # não deve lançar
 
     def test_show_turn_summary_with_very_long_tool_input_does_not_crash(self, renderer):
+        """Verifica que Test show turn summary with very long tool input does not crash."""
         long_cmd = "python " + " ".join(f"--arg{i}=valor_{i}" for i in range(60))
         renderer.show_turn_summary(
             "codex",

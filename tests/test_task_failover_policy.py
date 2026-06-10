@@ -22,6 +22,7 @@ class RepositorySpy:
 
 
 def test_is_operational_review_agent_returns_false_for_inactive_agent():
+    """Verifica que is_operational_review_agent retorna False para agente inativo."""
     repository = RepositorySpy()
     policy = TaskFailoverPolicy(
         active_agents=["codex"],
@@ -33,6 +34,7 @@ def test_is_operational_review_agent_returns_false_for_inactive_agent():
 
 
 def test_is_operational_review_agent_returns_false_without_task_execution_support():
+    """Verifica que is_operational_review_agent retorna False se o agente não suporta execução de tarefas."""
     repository = RepositorySpy()
     policy = TaskFailoverPolicy(
         active_agents=["codex"],
@@ -48,6 +50,7 @@ def test_is_operational_review_agent_returns_false_without_task_execution_suppor
 
 
 def test_review_agents_for_excludes_executor_and_explicit_excluded_agents():
+    """Verifica que review_agents_for exclui o executor e agentes explicitamente excluídos."""
     repository = RepositorySpy()
     plugins = {
         "codex": PluginStub(name="codex"),
@@ -69,6 +72,8 @@ def test_review_agents_for_excludes_executor_and_explicit_excluded_agents():
 
 
 def test_can_failover_delegates_to_repository():
+    """Verifica que can_failover delega a decisão para o repositório."""
+
     repository = RepositorySpy(result=True)
     policy = TaskFailoverPolicy(
         active_agents=["codex", "pickle", "deepseek-pro-v4"],
@@ -81,6 +86,7 @@ def test_can_failover_delegates_to_repository():
 
 
 def test_has_review_failover_returns_boolean_based_on_remaining_candidates():
+    """Verifica que has_review_failover retorna booleano baseado em candidatos restantes."""
     repository = RepositorySpy()
     policy_without_fallback = TaskFailoverPolicy(
         active_agents=["codex", "pickle"],
@@ -98,6 +104,7 @@ def test_has_review_failover_returns_boolean_based_on_remaining_candidates():
 
 
 def test_review_agents_for_treats_alias_as_same_agent_identity():
+    """Verifica que review_agents_for trata alias como mesma identidade do agente."""
     repository = RepositorySpy()
     plugins = {
         "codex": PluginStub(name="codex", prefix="/codex", aliases=["/code"]),

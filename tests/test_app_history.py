@@ -8,6 +8,8 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 
 class TestAppHistory(unittest.TestCase):
+    """Testes para o histórico do app Quimera."""
+
     def setUp(self):
         self.tmp_cwd = Path("/tmp/quimera_test_cwd")
         self.history_file = Path("/tmp/quimera_test_workspace/history")
@@ -42,6 +44,7 @@ class TestAppHistory(unittest.TestCase):
         mock_add_job,
         mock_init_db,
     ):
+        """Verifica que o InputGate recebe o history_file e o command_resolver corretamente."""
         mock_add_job.return_value = 1
         self._setup_common_mocks(mock_storage, mock_context)
         mock_gate_instance = MagicMock()
@@ -89,6 +92,7 @@ class TestAppHistory(unittest.TestCase):
         mock_add_job,
         mock_init_db,
     ):
+        """Verifica que read_user_input usa a função input built-in quando não há sessão."""
         mock_add_job.return_value = 1
         self._setup_common_mocks(mock_storage, mock_context)
 
@@ -139,6 +143,7 @@ class TestAppHistory(unittest.TestCase):
         mock_add_job,
         mock_init_db,
     ):
+        """Verifica que o modo debug injeta o RenderAuditLogger no renderer."""
         mock_add_job.return_value = 1
         self._setup_common_mocks(mock_storage, mock_context)
         mock_input_gate.return_value = MagicMock()

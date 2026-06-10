@@ -54,6 +54,7 @@ class TestStagingConcurrency:
         return FileTools(config)
 
     def test_write_different_files(self, workspace, staging_root, config, file_tools):
+        """Verifica que agents diferentes escrevem em arquivos distintos no staging."""
         s0 = staging_root / "0"
         s1 = staging_root / "1"
         s0.mkdir()
@@ -79,6 +80,7 @@ class TestStagingConcurrency:
         assert (workspace / "file2.txt").read_text() == "content from agent 2"
 
     def test_write_same_file(self, workspace, staging_root, config, file_tools):
+        """Verifica que o último agente a escrever no mesmo file prevalece."""
         s0 = staging_root / "0"
         s1 = staging_root / "1"
         s0.mkdir()
@@ -99,6 +101,7 @@ class TestStagingConcurrency:
         assert (workspace / "same.txt").read_text() == "content from agent 2"
 
     def test_read_after_write_staging(self, workspace, config, file_tools):
+        """Verifica que leitura após escrita no staging reflete o conteúdo escrito."""
         staging = tempfile.mkdtemp(dir=workspace)
         set_staging_root(Path(staging))
         file_tools.write_file(ToolCall(name="write_file", arguments={
@@ -113,6 +116,7 @@ class TestStagingConcurrency:
         assert "my content" in result.content
 
     def test_thread_local_isolation(self, workspace, config):
+        """Verifica que staging roots são isolados por thread."""
         results = {}
         errors = []
 
@@ -143,7 +147,7 @@ class TestStagingConcurrency:
         assert results[2] == "content_2"
 
     def test_staging_cleanup_on_worker_failure(self, workspace, staging_root, config, file_tools):
-        """Se worker falha, staging deve ser limpo e não fazer merge parcial."""
+        """Verifica que staging é limpo quando worker falha."""
         s0 = staging_root / "0"
         s1 = staging_root / "1"
         s0.mkdir()
@@ -179,7 +183,7 @@ class TestStagingConcurrency:
         assert not (workspace / "success2.txt").exists()
 
     def test_staging_cleanup_on_merge_success(self, workspace, staging_root, config, file_tools):
-        """Merge bem-sucedido deve remover staging."""
+        """Verifica que staging é removido após merge bem-sucedido."""
         s0 = staging_root / "0"
         s0.mkdir()
 
@@ -197,7 +201,7 @@ class TestStagingConcurrency:
         assert (workspace / "merged.txt").read_text() == "merged content"
 
     def test_staging_cleanup_safety_when_already_removed(self, workspace, staging_root):
-        """Cleanup deve ser seguro se staging já foi removido."""
+        """Verifica que cleanup é seguro quando staging já foi removido."""
         shutil.rmtree(staging_root)
         # Não deve levantar exceção
         if staging_root.exists():

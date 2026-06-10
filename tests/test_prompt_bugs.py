@@ -14,6 +14,8 @@ class _DummyContextManager:
 
 
 def test_prompt_builder_includes_bug_context_when_open_bugs_exist(tmp_path):
+    """Verifica que o PromptBuilder inclui contexto de bugs quando existem bugs abertos."""
+    """Verifica que o PromptBuilder inclui contexto de bugs quando existem relatos abertos."""
     session_id = "sessao-bugs"
     logs_dir = tmp_path / "data" / "logs"
     store = BugStore(logs_dir)
@@ -53,6 +55,8 @@ def test_prompt_builder_includes_bug_context_when_open_bugs_exist(tmp_path):
 
 
 def test_prompt_builder_ignores_bug_store_failures(tmp_path):
+    """Verifica que o PromptBuilder ignora falhas do BugStore sem quebrar."""
+    """Verifica que falhas no BugStore não quebram o PromptBuilder."""
     builder = PromptBuilder(
         context_manager=_DummyContextManager(),
         session_state={"workspace_tmp_root": str(tmp_path)},

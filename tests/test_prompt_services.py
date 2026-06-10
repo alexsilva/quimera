@@ -13,6 +13,7 @@ from quimera.prompt_budget import PromptBudget
 
 class TestMemorySelector:
     def test_select_request_returns_last_human_message(self):
+        """Verifica que select request returns last human message."""
         selector = MemorySelector(history_window=10)
         history = [
             {"role": "human", "content": "primeira"},
@@ -24,12 +25,14 @@ class TestMemorySelector:
         assert content == "segunda"
 
     def test_select_request_returns_none_for_empty_history(self):
+        """Verifica que select request returns none for empty history."""
         selector = MemorySelector(history_window=10)
         idx, content = selector.select_request([])
         assert idx is None
         assert content == ""
 
     def test_select_request_skips_empty_content(self):
+        """Verifica que select request skips empty content."""
         selector = MemorySelector(history_window=10)
         history = [
             {"role": "human", "content": ""},
@@ -40,6 +43,7 @@ class TestMemorySelector:
         assert content == ""
 
     def test_find_request_index_returns_matching_human_message(self):
+        """Verifica que find request index returns matching human message."""
         selector = MemorySelector(history_window=10)
         history = [
             {"role": "human", "content": "primeira"},
@@ -53,22 +57,26 @@ class TestMemorySelector:
 
 
     def test_should_skip_fact_blocks_diff_markers(self):
+        """Verifica que should skip fact blocks diff markers."""
         assert MemorySelector.should_skip_fact("diff --git a/app.py b/app.py")
         assert MemorySelector.should_skip_fact("```diff\n+ novo codigo")
         assert MemorySelector.should_skip_fact("git diff HEAD~1")
         assert not MemorySelector.should_skip_fact("resposta normal")
 
     def test_should_skip_fact_blocks_goal_markers(self):
+        """Verifica que should skip fact blocks goal markers."""
         assert MemorySelector.should_skip_fact("goal_canonical: corrigir bug")
         assert MemorySelector.should_skip_fact("Objetivo fixo é resolver")
 
     def test_should_skip_fact_blocks_protocol_markers(self):
+        """Verifica que should skip fact blocks protocol markers."""
         assert MemorySelector.should_skip_fact("[ACK:abc123] recebido")
         assert MemorySelector.should_skip_fact("Aguardando dados [NEEDS_INPUT]")
         assert MemorySelector.should_skip_fact("Encaminhar para debate [DEBATE]")
         assert MemorySelector.should_skip_fact("[STATE_UPDATE]{\"next_step\":\"x\"}[/STATE_UPDATE]")
 
     def test_build_conversation_block_skips_specified_indexes(self):
+        """Verifica que build conversation block skips specified indexes."""
         selector = MemorySelector(history_window=10, user_name="ALEX")
         history = [
             {"role": "human", "content": "skip me"},
@@ -79,6 +87,7 @@ class TestMemorySelector:
         assert "keep me" in block
 
     def test_build_conversation_block_skips_empty_content(self):
+        """Verifica que build conversation block skips empty content."""
         selector = MemorySelector(history_window=10, user_name="ALEX")
         history = [
             {"role": "human", "content": ""},
@@ -90,11 +99,13 @@ class TestMemorySelector:
         assert block.count("[ALEX]") == 1
 
     def test_build_conversation_block_returns_placeholder_when_empty(self):
+        """Verifica que build conversation block returns placeholder when empty."""
         selector = MemorySelector(history_window=10)
         block = selector.build_conversation_block([], skip_indexes=set())
         assert "[sem itens residuais na conversa recente]" in block
 
     def test_build_conversation_block_looks_back_for_current_agent(self):
+        """Verifica que build conversation block looks back for current agent."""
         selector = MemorySelector(history_window=5, user_name="ALEX")
         history = [
             {"role": "claude", "content": "resposta antiga"},
@@ -111,6 +122,7 @@ class TestMemorySelector:
         assert "[CODEX]: resposta codex" in block
 
     def test_build_conversation_block_excludes_current_agent_before_window(self):
+        """Verifica que build conversation block excludes current agent before window."""
         selector = MemorySelector(history_window=2, user_name="ALEX")
         history = [
             {"role": "codex", "content": "fora da janela"},
@@ -126,6 +138,7 @@ class TestMemorySelector:
         assert "fora da janela" not in block
 
     def test_build_conversation_block_stops_lookback_when_index_is_skipped(self):
+        """Verifica que build conversation block stops lookback when index is skipped."""
         selector = MemorySelector(history_window=2, user_name="ALEX")
         history = [
             {"role": "codex", "content": "mensagem antes da janela"},
@@ -140,6 +153,7 @@ class TestMemorySelector:
         assert "mensagem antes da janela" not in block
 
     def test_build_conversation_block_stops_lookback_when_latest_is_empty(self):
+        """Verifica que build conversation block stops lookback when latest is empty."""
         selector = MemorySelector(history_window=2, user_name="ALEX")
         history = [
             {"role": "codex", "content": "mensagem válida mais antiga"},
@@ -155,6 +169,7 @@ class TestMemorySelector:
         assert "mensagem válida mais antiga" not in block
 
     def test_build_conversation_block_lookback_skips_diff_and_keeps_previous_valid(self):
+        """Verifica que build conversation block lookback skips diff and keeps previous valid."""
         selector = MemorySelector(history_window=2, user_name="ALEX")
         history = [
             {"role": "codex", "content": "mensagem válida mais antiga"},
@@ -171,6 +186,7 @@ class TestMemorySelector:
         assert "[CODEX]: mensagem válida mais antiga" in block
 
     def test_display_role_uses_user_name_for_human(self):
+        """Verifica que display role uses user name for human."""
         selector = MemorySelector(user_name="TESTADOR")
         assert selector._display_role("human") == "TESTADOR"
         assert selector._display_role("claude") == "CLAUDE"
@@ -178,6 +194,7 @@ class TestMemorySelector:
 
 class TestSharedStatePresenter:
     def test_trim_keeps_only_core_keys(self):
+        """Verifica que trim keeps only core keys."""
         state = {
             "goal_canonical": "objetivo",
             "current_step": "passo",
@@ -199,11 +216,13 @@ class TestSharedStatePresenter:
         assert "random_key" not in trimmed
 
     def test_trim_truncates_decisions(self):
+        """Verifica que trim truncates decisions."""
         state = {"decisions": list(range(20))}
         trimmed = SharedStatePresenter.trim(state, decisions_tail=3)
         assert trimmed["decisions"] == [17, 18, 19]
 
     def test_trim_uses_centralized_task_reference_contract(self):
+        """Verifica que trim uses centralized task reference contract."""
         state = {
             "goal": "corrigir parser",
             "goal_canonical": "corrigir parser legado",
@@ -228,11 +247,13 @@ class TestSharedStatePresenter:
         assert "spy_last_turn_detail" not in trimmed
 
     def test_present_returns_empty_json_when_no_state(self):
+        """Verifica que present returns empty json when no state."""
         json_str, results = SharedStatePresenter.present(None)
         assert json_str == ""
         assert results == ""
 
     def test_present_filters_execution_keys(self):
+        """Verifica que present filters execution keys."""
         state = {
             "working_dir": "/tmp",
             "workspace_root": "/tmp/proj",
@@ -249,6 +270,7 @@ class TestSharedStatePresenter:
         assert results == ""
 
     def test_present_includes_completed_task_results(self):
+        """Verifica que present includes completed task results."""
         state = {
             "working_dir": "/tmp",
             "completed_task_results": "Task 1: OK",
@@ -258,6 +280,7 @@ class TestSharedStatePresenter:
         assert json_str
 
     def test_present_exposes_only_prompt_reference_keys_without_internal_leaks(self):
+        """Verifica que present exposes only prompt reference keys without internal leaks."""
         state = {
             "goal_canonical": "não deve vazar no prompt principal",
             "next_step": "também não",
@@ -284,11 +307,13 @@ class TestSharedStatePresenter:
 
 class TestHandoffPresenter:
     def test_present_returns_empty_for_none(self):
+        """Verifica que present returns empty for none."""
         fields = HandoffPresenter.present(None)
         assert fields["handoff_present"] == ""
         assert all(v == "" for v in fields.values())
 
     def test_present_dict_handoff(self):
+        """Verifica que present dict handoff."""
         handoff = {
             "task": "Corrigir bug",
             "context": "Parser quebrado",
@@ -305,21 +330,25 @@ class TestHandoffPresenter:
         assert fields["handoff_priority"] == ""
 
     def test_present_priority_urgent(self):
+        """Verifica que present priority urgent."""
         handoff = {"task": "Urgente", "priority": "urgent"}
         fields = HandoffPresenter.present(handoff)
         assert fields["handoff_priority"] == "URGENT"
 
     def test_present_priority_normal_is_empty(self):
+        """Verifica que present priority normal is empty."""
         handoff = {"task": "Normal", "priority": "normal"}
         fields = HandoffPresenter.present(handoff)
         assert fields["handoff_priority"] == ""
 
     def test_present_string_handoff(self):
+        """Verifica que present string handoff."""
         fields = HandoffPresenter.present("Mensagem direta", from_agent="codex")
         assert fields["handoff_present"] == "1"
         assert fields["handoff_raw"] == "Mensagem direta"
 
     def test_present_dict_with_chain(self):
+        """Verifica que present dict with chain."""
         handoff = {
             "task": "Revisar",
             "chain": ["claude", "codex"],
@@ -332,21 +361,25 @@ class TestHandoffPresenter:
 
 class TestExecutionModePresenter:
     def test_present_returns_empty_for_none(self):
+        """Verifica que present returns empty for none."""
         assert ExecutionModePresenter.present(None) == ""
 
     def test_present_returns_prompt_addon(self):
+        """Verifica que present returns prompt addon."""
         mode = MagicMock()
         mode.prompt_addon = "[MODO: EXECUÇÃO]"
         result = ExecutionModePresenter.present(mode)
         assert result == "[MODO: EXECUÇÃO]"
 
     def test_present_strips_whitespace(self):
+        """Verifica que present strips whitespace."""
         mode = MagicMock()
         mode.prompt_addon = "  [MODO: ANÁLISE]  "
         result = ExecutionModePresenter.present(mode)
         assert result == "[MODO: ANÁLISE]"
 
     def test_present_returns_empty_when_prompt_addon_missing(self):
+        """Verifica que present returns empty when prompt addon missing."""
         mode = MagicMock(spec=[])  # no prompt_addon attr
         result = ExecutionModePresenter.present(mode)
         assert result == ""
@@ -354,16 +387,19 @@ class TestExecutionModePresenter:
 
 class TestPromptBudget:
     def test_measure_returns_all_keys(self):
+        """Verifica que measure returns all keys."""
         metrics = PromptBudget.measure(full_prompt="hello world")
         assert "total_chars" in metrics
         assert "primary" in metrics
         assert "history_messages" in metrics
 
     def test_measure_primary_defaults_to_true(self):
+        """Verifica que measure primary defaults to true."""
         metrics = PromptBudget.measure(full_prompt="test")
         assert metrics["primary"] is True
 
     def test_measure_counts_chars_correctly(self):
+        """Verifica que measure counts chars correctly."""
         metrics = PromptBudget.measure(
             full_prompt="12345",
             route_agents="abc",

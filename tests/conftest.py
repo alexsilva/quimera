@@ -13,6 +13,7 @@ from quimera.runtime.task_executor import TaskExecutor
 
 @pytest.fixture(autouse=True)
 def cleanup_task_executors(monkeypatch):
+    """Verifica que os executores de tarefa são limpos após cada teste."""
     executors = []
     original_init = TaskExecutor.__init__
 
@@ -28,12 +29,14 @@ def cleanup_task_executors(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def cleanup_env_vars(monkeypatch):
+    """Verifica que a variável de ambiente QUIMERA_CURRENT_JOB_ID é removida após cada teste."""
     monkeypatch.delenv("QUIMERA_CURRENT_JOB_ID", raising=False)
     yield
 
 
 @pytest.fixture(autouse=True)
 def reset_stdout_stderr(monkeypatch):
+    """Verifica que sys.stdout e sys.stderr são restaurados após cada teste."""
     import sys
     import io
     real_stdout = sys.stdout
@@ -47,6 +50,7 @@ def reset_stdout_stderr(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def reset_builtins_print(monkeypatch):
+    """Verifica que a função builtins.print é restaurada após cada teste."""
     import builtins
     real_print = builtins.print
     yield

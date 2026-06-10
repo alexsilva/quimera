@@ -27,6 +27,7 @@ class RepositorySpy:
 
 
 def test_choose_agent_with_single_plugin(monkeypatch):
+    """Verifica que choose_agent_with_load_balance retorna o único plugin disponível."""
     plugin = PluginStub("codex")
     repository = RepositorySpy()
     router = TaskRouter(
@@ -42,6 +43,8 @@ def test_choose_agent_with_single_plugin(monkeypatch):
 
 
 def test_choose_agent_with_load_balance_prefers_less_busy_agent(monkeypatch):
+    """Verifica que o roteador prefere o agente menos ocupado."""
+
     claude = PluginStub("claude")
     codex = PluginStub("codex")
     calls = []
@@ -70,6 +73,7 @@ def test_choose_agent_with_load_balance_prefers_less_busy_agent(monkeypatch):
 
 
 def test_choose_agent_uses_fallback_when_effective_score_is_too_low(monkeypatch):
+    """Verifica que o roteador usa fallback quando o score efetivo é muito baixo."""
     plugin = PluginStub("claude")
     router = TaskRouter(
         active_agents=["claude"],
@@ -85,6 +89,8 @@ def test_choose_agent_uses_fallback_when_effective_score_is_too_low(monkeypatch)
 
 
 def test_get_task_routing_plugins_respects_active_agents_and_wildcard():
+    """Verifica que get_task_routing_plugins respeita agentes ativos e curinga."""
+
     claude = PluginStub("claude")
     codex = PluginStub("codex")
     disabled = PluginStub("disabled", supports_task_execution=False)
@@ -107,6 +113,7 @@ def test_get_task_routing_plugins_respects_active_agents_and_wildcard():
 
 
 def test_count_agent_open_tasks_uses_repository_list_tasks():
+    """Verifica que count_agent_open_tasks consulta o repositório corretamente."""
     repository = RepositorySpy({"pending": 2, "in_progress": 1})
     plugin = PluginStub("codex")
     router = TaskRouter(
@@ -126,6 +133,8 @@ def test_count_agent_open_tasks_uses_repository_list_tasks():
 
 
 def test_get_task_routing_plugins_resolves_name_case_and_prefix_without_direct_lookup():
+    """Verifica que get_task_routing_plugins resolve nomes com case diferente e prefixos."""
+
     codex = PluginStub("codex", prefix="/codex", aliases=["/code"])
     opencode = PluginStub("opencode", prefix="/opencode")
     router = TaskRouter(
@@ -141,6 +150,8 @@ def test_get_task_routing_plugins_resolves_name_case_and_prefix_without_direct_l
 
 
 def test_get_task_routing_plugins_deduplicates_same_plugin_when_name_and_alias_are_active():
+    """Verifica que get_task_routing_plugins deduplica quando nome e alias estão ativos."""
+
     codex = PluginStub("codex", prefix="/codex", aliases=["/code"])
     router = TaskRouter(
         active_agents=["codex", "/code"],

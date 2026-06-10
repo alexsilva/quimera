@@ -8,6 +8,7 @@ from quimera.app.handlers import PromptAwareStderrHandler
 
 
 def test_quimera_app_public_api_surface_is_stable():
+    """Verifica que quimera app public api surface is stable."""
     assert app_module.__all__ == ["QuimeraApp", "logger", "PromptAwareStderrHandler"]
     assert tuple(app_module.__all__) == ("QuimeraApp", "logger", "PromptAwareStderrHandler")
     assert app_module.QuimeraApp.__name__ == "QuimeraApp"
@@ -22,6 +23,7 @@ def test_quimera_app_public_api_surface_is_stable():
 
 
 def test_runtime_mcp_logger_uses_app_handler():
+    """Verifica que runtime mcp logger uses app handler."""
     mcp_logger = logging.getLogger("quimera.runtime.mcp.server")
 
     assert app_config.handler in mcp_logger.handlers

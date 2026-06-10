@@ -10,9 +10,11 @@ class TestSanitizeSpyTurnDetail:
     """_sanitize_spy_turn_detail — método de classe"""
 
     def test_non_dict_returns_none(self):
+        """Verifica que non dict returns none."""
         assert AppDispatchServices._sanitize_spy_turn_detail("not dict") is None
 
     def test_truncates_tools_list(self):
+        """Verifica que truncates tools list."""
         tools = [{"tool_call_id": str(i)} for i in range(20)]
         detail = {"turn_id": "t1", "tools": tools}
         result = AppDispatchServices._sanitize_spy_turn_detail(detail)
@@ -21,6 +23,7 @@ class TestSanitizeSpyTurnDetail:
         assert result["truncated_tools"] is False
 
     def test_no_truncation_if_within_limit(self):
+        """Verifica que no truncation if within limit."""
         tools = [{"tool_call_id": str(i)} for i in range(3)]
         detail = {"turn_id": "t1", "tools": tools}
         result = AppDispatchServices._sanitize_spy_turn_detail(detail)
@@ -28,39 +31,48 @@ class TestSanitizeSpyTurnDetail:
         assert result["truncated_tools"] is False
 
     def test_non_list_tools_defaults_empty(self):
+        """Verifica que non list tools defaults empty."""
         detail = {"turn_id": "t1", "tools": None}
         result = AppDispatchServices._sanitize_spy_turn_detail(detail)
         assert result["tools"] == []
 
     def test_non_dict_tool_skipped(self):
+        """Verifica que non dict tool skipped."""
         detail = {"turn_id": "t1", "tools": ["not a dict"]}
         result = AppDispatchServices._sanitize_spy_turn_detail(detail)
         assert result["tools"] == []
 
     def test_truncate_spy_text_short_string(self):
+        """Verifica que truncate spy text short string."""
         assert AppDispatchServices._truncate_spy_text("hello") == "hello"
 
     def test_truncate_spy_text_long_string(self):
+        """Verifica que truncate spy text long string."""
         long_str = "a" * 500
         result = AppDispatchServices._truncate_spy_text(long_str)
         assert result == long_str
 
     def test_truncate_spy_text_non_string(self):
+        """Verifica que truncate spy text non string."""
         assert AppDispatchServices._truncate_spy_text(42) == 42
 
     def test_sanitize_spy_map_non_dict(self):
+        """Verifica que sanitize spy map non dict."""
         assert AppDispatchServices._sanitize_spy_map("not dict") is None
 
     def test_sanitize_spy_map_empty_dict(self):
+        """Verifica que sanitize spy map empty dict."""
         assert AppDispatchServices._sanitize_spy_map({}) is None
 
     def test_sanitize_spy_map_truncates_items(self):
+        """Verifica que sanitize spy map truncates items."""
         payload = {str(i): i for i in range(20)}
         result = AppDispatchServices._sanitize_spy_map(payload)
         assert result is not None
         assert len(result) == len(payload)
 
     def test_sanitize_spy_map_preserves_simple_types(self):
+        """Verifica que sanitize spy map preserves simple types."""
         payload = {"a": 1, "b": 2.5, "c": True, "d": None}
         result = AppDispatchServices._sanitize_spy_map(payload)
         assert result["a"] == 1
@@ -69,11 +81,13 @@ class TestSanitizeSpyTurnDetail:
         assert result["d"] is None
 
     def test_sanitize_spy_map_truncates_long_values(self):
+        """Verifica que sanitize spy map truncates long values."""
         payload = {"key": "x" * 500}
         result = AppDispatchServices._sanitize_spy_map(payload)
         assert result["key"] == payload["key"]
 
     def test_sanitize_spy_map_converts_non_string_value(self):
+        """Verifica que sanitize spy map converts non string value."""
         marker = object()
         payload = {"key": marker}
         result = AppDispatchServices._sanitize_spy_map(payload)
@@ -124,11 +138,13 @@ class TestResolveAgentResponse:
     """Testes para AppDispatchServices.resolve_agent_response"""
 
     def test_empty_response_is_passed_through(self, dispatch_app):
+        """Verifica que empty response is passed through."""
         ds = AppDispatchServices.from_app(dispatch_app)
         assert ds.resolve_agent_response("agent1", None) is None
         assert ds.resolve_agent_response("agent1", "") == ""
 
     def test_response_text_is_not_parsed_as_tool_call(self, dispatch_app):
+        """Verifica que response text is not parsed as tool call."""
         dispatch_app.tool_executor.execute = MagicMock(
             side_effect=AssertionError("textual tool tags must not execute")
         )
@@ -141,6 +157,7 @@ class TestResolveAgentResponse:
         dispatch_app.tool_executor.execute.assert_not_called()
 
     def test_passthrough_does_not_print_or_persist_visible_text(self, dispatch_app):
+        """Verifica que passthrough does not print or persist visible text."""
         ds = AppDispatchServices.from_app(dispatch_app)
         response = "resposta final"
 
@@ -159,6 +176,7 @@ class TestCallAgent:
     """Testes para AppDispatchServices.call_agent"""
 
     def test_successful_single_call(self, dispatch_app):
+        """Verifica que successful single call."""
         dispatch_app.MAX_RETRIES = 1
         ds = AppDispatchServices.from_app(dispatch_app)
         with patch.object(ds, "call_agent_low_level", return_value="response"), \
@@ -191,6 +209,7 @@ class TestCallAgent:
         mock_sleep.assert_not_called()
 
     def test_retry_on_none_low_level_uses_linear_backoff_without_rate_limit(self, dispatch_app):
+        """Verifica que retry on none low level uses linear backoff without rate limit."""
         dispatch_app.MAX_RETRIES = 2
         dispatch_app.RETRY_BACKOFF_SECONDS = 0.5
         dispatch_app.agent_client.rate_limit_detected = False
@@ -202,6 +221,7 @@ class TestCallAgent:
         mock_sleep.assert_called_with(0.5)
 
     def test_none_low_level_with_user_cancelled_after_call_aborts(self, dispatch_app):
+        """Verifica que none low level with user cancelled after call aborts."""
         dispatch_app.MAX_RETRIES = 2
         ds = AppDispatchServices.from_app(dispatch_app)
 
@@ -226,6 +246,7 @@ class TestCallAgent:
         assert mock_resolve.call_count >= 1  # chamado pelo menos uma vez
 
     def test_retry_on_none_resolve_uses_linear_backoff_without_rate_limit(self, dispatch_app):
+        """Verifica que retry on none resolve uses linear backoff without rate limit."""
         dispatch_app.MAX_RETRIES = 2
         dispatch_app.RETRY_BACKOFF_SECONDS = 0.5
         dispatch_app.agent_client.rate_limit_detected = False
@@ -238,6 +259,7 @@ class TestCallAgent:
         mock_sleep.assert_called_with(0.5)
 
     def test_none_resolve_with_user_cancelled_after_resolve_aborts(self, dispatch_app):
+        """Verifica que none resolve with user cancelled after resolve aborts."""
         dispatch_app.MAX_RETRIES = 2
         ds = AppDispatchServices.from_app(dispatch_app)
 
@@ -304,6 +326,7 @@ class TestCallAgent:
         assert result is None
 
     def test_exception_marks_cancelled_and_returns_none(self, dispatch_app):
+        """Verifica que exception marks cancelled and returns none."""
         dispatch_app.MAX_RETRIES = 2
         ds = AppDispatchServices.from_app(dispatch_app)
 
@@ -400,11 +423,13 @@ class TestCallAgentLowLevel:
         return app
 
     def test_basic_call(self, ll_app):
+        """Verifica que basic call."""
         ds = AppDispatchServices.from_app(ll_app)
         result = ds.call_agent_low_level("agent1")
         assert result == "agent response"
 
     def test_silent_does_not_start_stream(self, ll_app):
+        """Verifica que silent does not start stream."""
         ds = AppDispatchServices.from_app(ll_app)
         ds.call_agent_low_level("agent1", silent=True)
         ll_app.renderer.start_message_stream.assert_not_called()
@@ -444,6 +469,7 @@ class TestCallAgentLowLevel:
         ll_app.agent_client.log_prompt_metrics.assert_called_once()
 
     def test_handoff_passed_to_build(self, ll_app):
+        """Verifica que handoff passed to build."""
         ds = AppDispatchServices.from_app(ll_app)
         ds.call_agent_low_level("agent1", handoff={"route_target": "agent2"})
         # build foi chamado com handoff
@@ -452,12 +478,14 @@ class TestCallAgentLowLevel:
         assert args[3] == {"route_target": "agent2"}  # 4º arg posicional
 
     def test_handoff_only(self, ll_app):
+        """Verifica que handoff only."""
         ds = AppDispatchServices.from_app(ll_app)
         ds.call_agent_low_level("agent1", handoff_only=True)
         kwargs = ll_app.prompt_builder.build.call_args.kwargs
         assert kwargs.get("handoff_only") is True
 
     def test_request_override_and_history_snapshot_passed_to_build(self, ll_app):
+        """Verifica que request override and history snapshot passed to build."""
         ds = AppDispatchServices.from_app(ll_app)
         ds.call_agent_low_level(
             "agent1",
@@ -469,6 +497,7 @@ class TestCallAgentLowLevel:
         assert kwargs.get("request_override") == "pedido fixo"
 
     def test_flush_pending_summary_called(self, ll_app):
+        """Verifica que flush pending summary called."""
         ds = AppDispatchServices.from_app(ll_app)
         ds.call_agent_low_level("agent1")
         ll_app.agent_client.flush_pending_summary.assert_called_once()
@@ -494,12 +523,14 @@ class TestCallAgentLowLevel:
         ll_app._redisplay_user_prompt_if_needed.assert_called_once_with(clear_first=False)
 
     def test_primary_false(self, ll_app):
+        """Verifica que primary false."""
         ds = AppDispatchServices.from_app(ll_app)
         ds.call_agent_low_level("agent1", primary=False)
         kwargs = ll_app.prompt_builder.build.call_args.kwargs
         assert kwargs.get("primary") is False
 
     def test_show_output_false_ignores_text_chunks(self, ll_app):
+        """Verifica que show output false ignores text chunks."""
         def _call(agent, prompt, silent=False, on_text_chunk=None, progress_callback=None):
             if on_text_chunk:
                 on_text_chunk("hello")
@@ -512,6 +543,7 @@ class TestCallAgentLowLevel:
         ll_app.renderer.update_message_stream.assert_not_called()
 
     def test_cancelled_before_low_level_call_returns_none(self, ll_app):
+        """Verifica que cancelled before low level call returns none."""
         ll_app.agent_client._user_cancelled = True
         ds = AppDispatchServices.from_app(ll_app)
         result = ds.call_agent_low_level("agent1")
@@ -519,6 +551,7 @@ class TestCallAgentLowLevel:
         ll_app.agent_client.call.assert_not_called()
 
     def test_failed_result_increments_failed_counter(self, ll_app):
+        """Verifica que failed result increments failed counter."""
         ll_app.agent_client.call = MagicMock(return_value=None)
         ll_app.session_state.update(
             {
@@ -534,6 +567,7 @@ class TestCallAgentLowLevel:
         assert ll_app.session_state["handoffs_succeeded"] == 0
 
     def test_success_result_increments_succeeded_counter(self, ll_app):
+        """Verifica que success result increments succeeded counter."""
         ll_app.agent_client.call = MagicMock(return_value="ok")
         ll_app.session_state.update(
             {
@@ -551,6 +585,7 @@ class TestCallAgentLowLevel:
 
 class TestPrintResponse:
     def test_print_response_with_text_shows_message(self, dispatch_app):
+        """Verifica que print response with text shows message."""
         ds = AppDispatchServices.from_app(dispatch_app)
         dispatch_app._redisplay_user_prompt_if_needed = MagicMock()
         ds.print_response("agent1", "hello")
@@ -559,6 +594,7 @@ class TestPrintResponse:
         dispatch_app._redisplay_user_prompt_if_needed.assert_called_once_with(clear_first=False)
 
     def test_print_response_without_text_shows_no_response(self, dispatch_app):
+        """Verifica que print response without text shows no response."""
         ds = AppDispatchServices.from_app(dispatch_app)
         dispatch_app._redisplay_user_prompt_if_needed = MagicMock()
         ds.print_response("agent1", None)
@@ -575,18 +611,21 @@ class TestUpdateSpyTelemetry:
     """_update_spy_telemetry"""
 
     def test_no_agent_client_does_nothing(self, dispatch_app):
+        """Verifica que no agent client does nothing."""
         dispatch_app.agent_client = None
         ds = AppDispatchServices.from_app(dispatch_app)
         # Não deve crashar
         ds._update_spy_telemetry("agent1")
 
     def test_no_last_spy_turn_detail_does_nothing(self, dispatch_app):
+        """Verifica que no last spy turn detail does nothing."""
         dispatch_app.agent_client.last_spy_turn_detail = None
         ds = AppDispatchServices.from_app(dispatch_app)
         ds._update_spy_telemetry("agent1")
         assert "spy_last_turn_detail" not in dispatch_app.shared_state
 
     def test_sets_spy_in_shared_state(self, dispatch_app):
+        """Verifica que sets spy in shared state."""
         dispatch_app.agent_client.last_spy_turn_detail = {
             "turn_id": "t1",
             "tools": [{"tool_call_id": "c1"}],
@@ -597,6 +636,7 @@ class TestUpdateSpyTelemetry:
         assert dispatch_app.shared_state["spy_last_turn_detail"]["agent"] == "agent1"
 
     def test_sets_spy_in_session_state(self, dispatch_app):
+        """Verifica que sets spy in session state."""
         dispatch_app.agent_client.last_spy_turn_detail = {
             "turn_id": "t1",
             "tools": [],
@@ -606,6 +646,7 @@ class TestUpdateSpyTelemetry:
         assert "last_spy_turn_detail" in dispatch_app.session_state
 
     def test_shared_state_not_dict_skips(self, dispatch_app):
+        """Verifica que shared state not dict skips."""
         dispatch_app.shared_state = None
         dispatch_app.agent_client.last_spy_turn_detail = {
             "turn_id": "t1",

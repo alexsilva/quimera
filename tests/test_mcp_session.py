@@ -27,6 +27,7 @@ def _workspace(tmp_path):
 
 
 def test_start_embedded_mcp_socket_default_centraliza_startup(tmp_path, monkeypatch):
+    """Verifica que start embedded mcp socket default centraliza startup."""
     monkeypatch.setenv("QUIMERA_MCP_TOKEN", "external-token-not-used")
     app = _FakeApp()
     workspace = _workspace(tmp_path)
@@ -55,6 +56,7 @@ def test_start_embedded_mcp_socket_default_centraliza_startup(tmp_path, monkeypa
 
 
 def test_start_embedded_mcp_socket_usa_path_explicito(tmp_path):
+    """Verifica que start embedded mcp socket usa path explicito."""
     app = _FakeApp()
 
     with patch("quimera.runtime.mcp.session.secrets.token_urlsafe", return_value="internal-token"), patch("quimera.runtime.mcp.session.MCPServer") as mcp_cls:
@@ -71,6 +73,7 @@ def test_start_embedded_mcp_socket_usa_path_explicito(tmp_path):
 
 
 def test_start_embedded_mcp_http_centraliza_startup_sem_substituir_socket(tmp_path, monkeypatch):
+    """Verifica que start embedded mcp http centraliza startup sem substituir socket."""
     monkeypatch.setenv("QUIMERA_MCP_TOKEN", "http-token")
     app = _FakeApp()
 
@@ -108,6 +111,7 @@ def test_start_embedded_mcp_http_centraliza_startup_sem_substituir_socket(tmp_pa
 
 
 def test_start_embedded_mcp_desabilitado_nao_cria_servidor(tmp_path):
+    """Verifica que start embedded mcp desabilitado nao cria servidor."""
     app = _FakeApp()
 
     with patch("quimera.runtime.mcp.session.MCPServer") as mcp_cls:
@@ -123,6 +127,7 @@ def test_start_embedded_mcp_desabilitado_nao_cria_servidor(tmp_path):
 
 
 def test_start_embedded_mcp_rejeita_transporte_invalido(tmp_path):
+    """Verifica que start embedded mcp rejeita transporte invalido."""
     app = _FakeApp()
 
     with patch("quimera.runtime.mcp.session.MCPServer") as mcp_cls:

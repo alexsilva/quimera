@@ -16,6 +16,7 @@ from quimera.app.prompt_input import (
 
 class TestBuildToolbar:
     def test_toolbar_includes_responder_model_when_context_available(self):
+        """Verifica que Test toolbar includes responder model when context available."""
         gate = InputGate(
             toolbar_context_resolver=lambda: {
                 "responder": "claude",
@@ -30,6 +31,7 @@ class TestBuildToolbar:
         assert "gpt-5" in str(content)
 
     def test_toolbar_includes_theme_when_context_available(self):
+        """Verifica que Test toolbar includes theme when context available."""
         gate = InputGate(
             toolbar_context_resolver=lambda: {
                 "theme": "chat",
@@ -43,6 +45,7 @@ class TestBuildToolbar:
         assert "▕" in str(toolbar())
 
     def test_toolbar_includes_turns_when_context_available(self):
+        """Verifica que Test toolbar includes turns when context available."""
         gate = InputGate(
             toolbar_context_resolver=lambda: {
                 "turns": "5",
@@ -55,6 +58,7 @@ class TestBuildToolbar:
         assert " ↺ 5 " in content
 
     def test_toolbar_includes_open_bugs_when_context_available(self):
+        """Verifica que Test toolbar includes open bugs when context available."""
         gate = InputGate(
             toolbar_context_resolver=lambda: {
                 "open_bugs": "3",
@@ -66,6 +70,7 @@ class TestBuildToolbar:
         assert " ⚠ 3 " in content
 
     def test_toolbar_includes_parallel_status_when_context_available(self):
+        """Verifica que Test toolbar includes parallel status when context available."""
         gate = InputGate(
             toolbar_context_resolver=lambda: {
                 "parallel": "paralelo:1/1 · 📥 2",
@@ -77,6 +82,7 @@ class TestBuildToolbar:
         assert " ⇉ paralelo:1/1 · 📥 2 " in content
 
     def test_toolbar_includes_mode_when_context_available(self):
+        """Verifica que Test toolbar includes mode when context available."""
         gate = InputGate(
             toolbar_context_resolver=lambda: {
                 "mode": "planning",
@@ -88,6 +94,7 @@ class TestBuildToolbar:
         assert " ◆ planning " in content
 
     def test_toolbar_includes_active_agents_when_context_available(self):
+        """Verifica que Test toolbar includes active agents when context available."""
         gate = InputGate(
             toolbar_context_resolver=lambda: {
                 "active_agents": "codex, claude",
@@ -99,6 +106,7 @@ class TestBuildToolbar:
         assert " ⚡ codex, claude " in content
 
     def test_toolbar_clips_long_model_name(self):
+        """Verifica que Test toolbar clips long model name."""
         gate = InputGate(
             toolbar_context_resolver=lambda: {
                 "model": "very-long-model-name-" * 4,
@@ -110,6 +118,7 @@ class TestBuildToolbar:
         assert "..." in content
 
     def test_toolbar_clips_long_active_agents_list(self):
+        """Verifica que Test toolbar clips long active agents list."""
         gate = InputGate(
             toolbar_context_resolver=lambda: {
                 "active_agents": "codex-super-long-name, claude-extended, qwen-very-long, deepseek-extra, minimax-pro, nemotron-ultimate",
@@ -121,6 +130,7 @@ class TestBuildToolbar:
         assert "..." in content
 
     def test_toolbar_includes_all_fields_in_order(self):
+        """Verifica que Test toolbar includes all fields in order."""
         gate = InputGate(
             toolbar_context_resolver=lambda: {
                 "responder": "claude",
@@ -144,6 +154,7 @@ class TestBuildToolbar:
         assert "claude" in content
 
     def test_toolbar_empty_with_only_mode_returns_nonempty(self):
+        """Verifica que Test toolbar empty with only mode returns nonempty."""
         gate = InputGate(
             toolbar_context_resolver=lambda: {
                 "mode": "planning",
@@ -155,6 +166,7 @@ class TestBuildToolbar:
         assert content != ""
 
     def test_toolbar_empty_with_only_session_returns_nonempty(self):
+        """Verifica que Test toolbar empty with only session returns nonempty."""
         gate = InputGate(
             toolbar_context_resolver=lambda: {
                 "session": "abc12345",
@@ -167,6 +179,7 @@ class TestBuildToolbar:
         assert " 🆔 abc12345 " in content
 
     def test_toolbar_includes_branch_when_context_available(self):
+        """Verifica que Test toolbar includes branch when context available."""
         gate = InputGate(
             toolbar_context_resolver=lambda: {
                 "branch": "feature-x",
@@ -178,6 +191,7 @@ class TestBuildToolbar:
         assert " ⎇ feature-x " in content
 
     def test_toolbar_includes_elapsed_when_context_available(self):
+        """Verifica que Test toolbar includes elapsed when context available."""
         gate = InputGate(
             toolbar_context_resolver=lambda: {
                 "elapsed": "12m 34s",
@@ -189,6 +203,7 @@ class TestBuildToolbar:
         assert " ⏱ 12m 34s " in content
 
     def test_toolbar_empty_with_only_elapsed_returns_nonempty(self):
+        """Verifica que Test toolbar empty with only elapsed returns nonempty."""
         gate = InputGate(
             toolbar_context_resolver=lambda: {
                 "elapsed": "5m00s",
@@ -202,10 +217,12 @@ class TestBuildToolbar:
 
 class TestKeyBindings:
     def test_key_bindings_none_without_theme_handler(self):
+        """Verifica que Test key bindings none without theme handler."""
         gate = InputGate()
         assert gate._build_key_bindings() is None
 
     def test_ctrl_t_binding_calls_handler_and_invalidates_prompt(self):
+        """Verifica que Test ctrl t binding calls handler and invalidates prompt."""
         gate = InputGate()
         handler = MagicMock()
         gate.set_theme_cycle_handler(handler)
@@ -236,21 +253,25 @@ class TestKeyBindings:
 
 class TestFlushRenderer:
     def test_flush_called_on_renderer(self):
+        """Verifica que Test flush called on renderer."""
         renderer = MagicMock()
         gate = InputGate(renderer=renderer)
         gate._flush_renderer()
         renderer.flush.assert_called_once()
 
     def test_flush_tolerates_missing_flush(self):
+        """Verifica que Test flush tolerates missing flush."""
         renderer = object()  # sem método flush
         gate = InputGate(renderer=renderer)
         gate._flush_renderer()  # não deve lançar
 
     def test_flush_tolerates_none_renderer(self):
+        """Verifica que Test flush tolerates none renderer."""
         gate = InputGate(renderer=None)
         gate._flush_renderer()  # não deve lançar
 
     def test_flush_tolerates_flush_exception(self):
+        """Verifica que Test flush tolerates flush exception."""
         renderer = MagicMock()
         renderer.flush.side_effect = RuntimeError("erro de flush")
         gate = InputGate(renderer=renderer)
@@ -263,6 +284,7 @@ class TestFlushRenderer:
 
 class TestInputGateCall:
     def test_flush_called_before_prompt(self):
+        """Verifica que Test flush called before prompt."""
         renderer = MagicMock()
         gate = InputGate(renderer=renderer)
         gate._session = MagicMock()
@@ -276,6 +298,7 @@ class TestInputGateCall:
         assert calls == ["flush", "prompt"], "flush deve ocorrer antes do prompt"
 
     def test_uses_session_when_available(self):
+        """Verifica que Test uses session when available."""
         gate = InputGate()
         gate._session = MagicMock()
         gate._session.prompt.return_value = "via session"
@@ -285,6 +308,7 @@ class TestInputGateCall:
         gate._session.prompt.assert_called_once()
 
     def test_session_receives_toolbar_and_placeholder(self):
+        """Verifica que Test session receives toolbar and placeholder."""
         gate = InputGate()
         gate._session = MagicMock()
         gate._session.prompt.return_value = ""

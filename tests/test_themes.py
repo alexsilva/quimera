@@ -12,18 +12,21 @@ class ThemesRenderFunctionsTest(unittest.TestCase):
         return MagicMock()
 
     def test_render_panel(self):
+        """Verifica que _render_panel chama console.print."""
         from quimera.themes import _render_panel
         console = self._console()
         _render_panel(console, "Claude", "cyan", "content")
         self.assertTrue(console.print.called)
 
     def test_render_chat(self):
+        """Verifica que _render_chat chama console.print."""
         from quimera.themes import _render_chat
         console = self._console()
         _render_chat(console, "Claude", "cyan", "content")
         self.assertTrue(console.print.called)
 
     def test_render_rule(self):
+        """Verifica que _render_rule imprime 4 vezes (blank + top rule + content + bottom rule)."""
         from quimera.themes import _render_rule
         console = self._console()
         _render_rule(console, "Claude", "cyan", "content")
@@ -31,6 +34,7 @@ class ThemesRenderFunctionsTest(unittest.TestCase):
         self.assertEqual(console.print.call_count, 4)
 
     def test_render_minimal(self):
+        """Verifica que _render_minimal imprime 3 vezes (blank + label + content)."""
         from quimera.themes import _render_minimal
         console = self._console()
         _render_minimal(console, "Claude", "cyan", "content")
@@ -38,18 +42,21 @@ class ThemesRenderFunctionsTest(unittest.TestCase):
         self.assertEqual(console.print.call_count, 3)
 
     def test_render_card(self):
+        """Verifica que _render_card chama console.print."""
         from quimera.themes import _render_card
         console = self._console()
         _render_card(console, "Claude", "cyan", "content")
         self.assertTrue(console.print.called)
 
     def test_render_line(self):
+        """Verifica que _render_line chama console.print."""
         from quimera.themes import _render_line
         console = self._console()
         _render_line(console, "Claude", "cyan", "content")
         self.assertTrue(console.print.called)
 
     def test_theme_render_delegates_to_fn(self):
+        """Verifica que Theme.render delega para a função de renderização."""
         from quimera.themes import Theme
         fn = MagicMock()
         theme = Theme(name="test", description="desc", render_fn=fn)
@@ -58,16 +65,19 @@ class ThemesRenderFunctionsTest(unittest.TestCase):
         fn.assert_called_once_with(console, "Agent", "blue", "md")
 
     def test_get_returns_correct_theme(self):
+        """Verifica que get retorna o tema pelo nome."""
         import quimera.themes as themes
         theme = themes.get("panel")
         self.assertEqual(theme.name, "panel")
 
     def test_get_falls_back_to_default(self):
+        """Verifica que get retorna o tema padrão para nome inexistente."""
         import quimera.themes as themes
         theme = themes.get("nonexistent_xyz")
         self.assertEqual(theme.name, themes.DEFAULT_THEME)
 
     def test_names_returns_all_themes(self):
+        """Verifica que names retorna lista com todos os temas disponíveis."""
         import quimera.themes as themes
         names = themes.names()
         self.assertIsInstance(names, list)

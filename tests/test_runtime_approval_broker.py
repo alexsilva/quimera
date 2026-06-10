@@ -81,6 +81,7 @@ def _execute_concurrently(executor, calls: list[ToolCall]) -> list[ToolResult]:
 
 
 def test_call_agent_internal_auto_approved_with_server_side_budget(tmp_path):
+    """Verifica que Test call agent internal auto approved with server side budget."""
     approval = MagicMock()
     approval.approve.return_value = False
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), approval)
@@ -102,6 +103,7 @@ def test_call_agent_internal_auto_approved_with_server_side_budget(tmp_path):
 
 
 def test_call_agent_http_external_requires_user_approval(tmp_path):
+    """Verifica que Test call agent http external requires user approval."""
     approval = MagicMock()
     approval.approve.return_value = False
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), approval)
@@ -122,6 +124,7 @@ def test_call_agent_http_external_requires_user_approval(tmp_path):
 
 
 def test_call_agent_http_external_requires_approval_even_with_allowlisted_argument(tmp_path):
+    """Verifica que Test call agent http external requires approval even with allowlisted argument."""
     approval = MagicMock()
     approval.approve.return_value = False
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), approval)
@@ -142,6 +145,7 @@ def test_call_agent_http_external_requires_approval_even_with_allowlisted_argume
 
 
 def test_http_mcp_cannot_spoof_internal_transport_via_meta():
+    """Verifica que Test http mcp cannot spoof internal transport via meta."""
     executor = MagicMock()
     executor.registry.names.return_value = ["call_agent"]
     executor.execute.return_value = ToolResult(ok=True, tool_name="call_agent", content="ok")
@@ -172,6 +176,7 @@ def test_http_mcp_cannot_spoof_internal_transport_via_meta():
 
 
 def test_http_mcp_allowlisted_argument_does_not_bypass_approval(tmp_path):
+    """Verifica que Test http mcp allowlisted argument does not bypass approval."""
     approval = MagicMock()
     approval.approve.return_value = False
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), approval)
@@ -191,6 +196,7 @@ def test_http_mcp_allowlisted_argument_does_not_bypass_approval(tmp_path):
 
 
 def test_caller_cannot_increase_approval_budget(tmp_path):
+    """Verifica que Test caller cannot increase approval budget."""
     approval = MagicMock()
     approval.approve.return_value = False
     config = ToolRuntimeConfig(workspace_root=tmp_path, delegation_budget_per_run=1)
@@ -211,6 +217,7 @@ def test_caller_cannot_increase_approval_budget(tmp_path):
 
 
 def test_caller_cannot_pass_approval_scope_id_argument(tmp_path):
+    """Verifica que Test caller cannot pass approval scope id argument."""
     approval = MagicMock()
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), approval)
     executor.set_call_agent_fn(MagicMock(return_value="ok"))
@@ -228,6 +235,7 @@ def test_caller_cannot_pass_approval_scope_id_argument(tmp_path):
 
 
 def test_delegation_budget_is_consumed_atomically_for_parallel_calls(tmp_path):
+    """Verifica que Test delegation budget is consumed atomically for parallel calls."""
     approval = MagicMock()
     approval.approve.return_value = False
     config = ToolRuntimeConfig(workspace_root=tmp_path, delegation_budget_per_run=1)
@@ -261,6 +269,7 @@ def test_delegation_budget_is_consumed_atomically_for_parallel_calls(tmp_path):
 
 
 def test_approval_scope_remaining_uses_is_consumed_atomically(tmp_path):
+    """Verifica que Test approval scope remaining uses is consumed atomically."""
     approval = MagicMock()
     approval.approve.return_value = False
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), approval)
@@ -310,6 +319,7 @@ def test_approval_scope_remaining_uses_is_consumed_atomically(tmp_path):
 
 
 def test_apply_patch_concurrent_same_file_is_serialized_with_real_quimera_patch(tmp_path):
+    """Verifica que Test apply patch concurrent same file is serialized with real quimera patch."""
     approval = MagicMock()
     approval.approve.return_value = True
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), approval)
@@ -329,6 +339,7 @@ def test_apply_patch_concurrent_same_file_is_serialized_with_real_quimera_patch(
 
 
 def test_apply_patch_multi_file_lock_keys_are_deterministic_per_path(tmp_path):
+    """Verifica que Test apply patch multi file lock keys are deterministic per path."""
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
     patch_a = """*** Begin Patch
 *** Update File: b.txt
@@ -366,6 +377,7 @@ def test_apply_patch_multi_file_lock_keys_are_deterministic_per_path(tmp_path):
 
 
 def test_apply_patch_overlapping_multi_file_patch_is_serialized(tmp_path):
+    """Verifica que Test apply patch overlapping multi file patch is serialized."""
     approval = MagicMock()
     approval.approve.return_value = True
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), approval)
@@ -387,6 +399,7 @@ def test_apply_patch_overlapping_multi_file_patch_is_serialized(tmp_path):
 
 
 def test_apply_patch_multi_file_is_serialized_with_write_file_on_same_path(tmp_path):
+    """Verifica que Test apply patch multi file is serialized with write file on same path."""
     approval = MagicMock()
     approval.approve.return_value = True
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), approval)
@@ -408,6 +421,7 @@ def test_apply_patch_multi_file_is_serialized_with_write_file_on_same_path(tmp_p
 
 
 def test_apply_patch_multi_file_is_serialized_with_remove_file_on_same_path(tmp_path):
+    """Verifica que Test apply patch multi file is serialized with remove file on same path."""
     approval = MagicMock()
     approval.approve.return_value = True
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), approval)
@@ -429,6 +443,7 @@ def test_apply_patch_multi_file_is_serialized_with_remove_file_on_same_path(tmp_
 
 
 def test_apply_patch_multi_file_can_run_parallel_with_disjoint_write_file(tmp_path):
+    """Verifica que Test apply patch multi file can run parallel with disjoint write file."""
     approval = MagicMock()
     approval.approve.return_value = True
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), approval)
@@ -448,6 +463,7 @@ def test_apply_patch_multi_file_can_run_parallel_with_disjoint_write_file(tmp_pa
 
 
 def test_multi_path_lock_acquisition_is_deadlock_free_with_reversed_patch_order(tmp_path):
+    """Verifica que Test multi path lock acquisition is deadlock free with reversed patch order."""
     approval = MagicMock()
     approval.approve.return_value = True
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), approval)
@@ -466,6 +482,7 @@ def test_multi_path_lock_acquisition_is_deadlock_free_with_reversed_patch_order(
 
 
 def test_run_shell_concurrent_same_workspace_is_serialized(tmp_path):
+    """Verifica que Test run shell concurrent same workspace is serialized."""
     approval = MagicMock()
     approval.approve.return_value = True
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), approval)
@@ -494,6 +511,7 @@ def test_run_shell_concurrent_same_workspace_is_serialized(tmp_path):
 
 
 def test_approval_scope_expires(tmp_path):
+    """Verifica que Test approval scope expires."""
     approval = MagicMock()
     approval.approve.return_value = False
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), approval)
@@ -528,6 +546,7 @@ def test_approval_scope_expires(tmp_path):
 
 
 def test_approve_all_scope_does_not_leak_to_another_run(tmp_path):
+    """Verifica que Test approve all scope does not leak to another run."""
     approval = MagicMock()
     approval.approve.return_value = False
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), approval)
@@ -569,6 +588,7 @@ def test_approve_all_scope_does_not_leak_to_another_run(tmp_path):
 
 
 def test_point_approval_does_not_create_broad_scope_for_later_mutations(tmp_path):
+    """Verifica que Test point approval does not create broad scope for later mutations."""
     approval = MagicMock()
     approval.approve.side_effect = [True, False, False, False]
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), approval)
@@ -598,6 +618,7 @@ def test_point_approval_does_not_create_broad_scope_for_later_mutations(tmp_path
 
 
 def test_read_tool_inside_workspace_has_no_prompt(tmp_path):
+    """Verifica que Test read tool inside workspace has no prompt."""
     target = tmp_path / "x.txt"
     target.write_text("ok")
     approval = MagicMock()
@@ -610,6 +631,7 @@ def test_read_tool_inside_workspace_has_no_prompt(tmp_path):
 
 
 def test_dangerous_command_still_blocked(tmp_path):
+    """Verifica que Test dangerous command still blocked."""
     approval = MagicMock()
     approval.approve.return_value = True
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), approval)
@@ -622,6 +644,7 @@ def test_dangerous_command_still_blocked(tmp_path):
 
 
 def test_git_push_requires_strong_confirmation_and_is_blocked_in_mcp_shell(tmp_path):
+    """Verifica que Test git push requires strong confirmation and is blocked in mcp shell."""
     approval = MagicMock()
     approval.approve.return_value = True
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), approval)
@@ -634,6 +657,7 @@ def test_git_push_requires_strong_confirmation_and_is_blocked_in_mcp_shell(tmp_p
 
 
 def test_call_agent_rejects_all_reserved_fields(tmp_path):
+    """Verifica que Test call agent rejects all reserved fields."""
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
     executor.set_call_agent_fn(MagicMock(return_value="ok"))
 
@@ -649,6 +673,7 @@ def test_call_agent_rejects_all_reserved_fields(tmp_path):
 
 
 def test_write_stdin_same_session_is_serialized(tmp_path):
+    """Verifica que Test write stdin same session is serialized."""
     approval = MagicMock()
     approval.approve.return_value = True
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), approval)
@@ -677,6 +702,7 @@ def test_write_stdin_same_session_is_serialized(tmp_path):
 
 
 def test_close_command_session_does_not_run_parallel_with_write_stdin(tmp_path):
+    """Verifica que Test close command session does not run parallel with write stdin."""
     approval = MagicMock()
     approval.approve.return_value = True
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), approval)
@@ -709,6 +735,7 @@ def test_close_command_session_does_not_run_parallel_with_write_stdin(tmp_path):
 
 
 def test_call_agent_scope_limits_caller_and_target_agent(tmp_path):
+    """Verifica que Test call agent scope limits caller and target agent."""
     approval = MagicMock()
     approval.approve.return_value = False
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), approval)

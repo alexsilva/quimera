@@ -48,6 +48,7 @@ class _ContextManager:
 
 
 def test_parse_response_preserves_shared_state_lock():
+    """Verifica que parse response preserves shared state lock."""
     app = QuimeraApp.__new__(QuimeraApp)
     app.shared_state = {}
     app._lock = threading.Lock()
@@ -67,6 +68,7 @@ def test_parse_response_preserves_shared_state_lock():
 
 
 def test_handoff_json_is_plain_content_not_protocol_envelope():
+    """Verifica que handoff json is plain content not protocol envelope."""
     proto = AppProtocol(lock=threading.Lock(), shared_state={})
 
     response, target, handoff, extend, needs_input, ack_id = proto.parse_response(
@@ -88,6 +90,7 @@ def _make_merge_app(workspace_root: Path, state_dir: Path | None = None):
 
 
 def test_merge_staging_to_workspace_normal_path_writes_manifest(tmp_path):
+    """Verifica que merge staging to workspace normal path writes manifest."""
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     staging = tmp_path / "staging"
@@ -106,6 +109,7 @@ def test_merge_staging_to_workspace_normal_path_writes_manifest(tmp_path):
 
 
 def test_merge_staging_to_workspace_blocks_destination_outside_workspace(tmp_path):
+    """Verifica que merge staging to workspace blocks destination outside workspace."""
     workspace = tmp_path / "workspace"
     outside = tmp_path / "outside"
     workspace.mkdir()
@@ -123,6 +127,7 @@ def test_merge_staging_to_workspace_blocks_destination_outside_workspace(tmp_pat
 
 
 def test_merge_staging_to_workspace_blocks_source_symlink(tmp_path):
+    """Verifica que merge staging to workspace blocks source symlink."""
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     staging = tmp_path / "staging"
@@ -138,6 +143,7 @@ def test_merge_staging_to_workspace_blocks_source_symlink(tmp_path):
 
 
 def test_merge_staging_to_workspace_records_overwrite(tmp_path):
+    """Verifica que merge staging to workspace records overwrite."""
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     (workspace / "file.txt").write_text("antigo", encoding="utf-8")
@@ -155,6 +161,7 @@ def test_merge_staging_to_workspace_records_overwrite(tmp_path):
 
 
 def test_session_state_history_transactions_preserve_reference_and_return_snapshots():
+    """Verifica que session state history transactions preserve reference and return snapshots."""
     history = [{"role": "human", "content": f"m{i}"} for i in range(4)]
     original_ref = history
     state = SessionState(history=history, shared_state={})
@@ -198,6 +205,7 @@ def test_session_state_history_transactions_preserve_reference_and_return_snapsh
 
 
 def test_persist_message_returned_snapshot_is_atomic_with_append_and_trim():
+    """Verifica que persist message returned snapshot is atomic with append and trim."""
     history = []
     state = SessionState(history=history, shared_state={"goal": "atomic"})
 
@@ -235,6 +243,7 @@ def test_persist_message_returned_snapshot_is_atomic_with_append_and_trim():
 
 
 def test_session_summarize_preserves_concurrent_persisted_message():
+    """Verifica que session summarize preserves concurrent persisted message."""
     history = [{"role": "human", "content": f"m{i}"} for i in range(12)]
     storage = _Storage()
     renderer = _Renderer()
@@ -275,6 +284,7 @@ def test_session_summarize_preserves_concurrent_persisted_message():
 
 
 def test_session_summarize_does_not_save_summary_when_snapshot_changes():
+    """Verifica que session summarize does not save summary when snapshot changes."""
     history = [{"role": "human", "content": f"m{i}"} for i in range(12)]
     original_length = len(history)
     storage = _Storage()
@@ -315,6 +325,7 @@ def test_session_summarize_does_not_save_summary_when_snapshot_changes():
 
 
 def test_session_shutdown_summarizes_stable_history_snapshot_after_pending_save():
+    """Verifica que session shutdown summarizes stable history snapshot after pending save."""
     history = [{"role": "human", "content": "before shutdown"}]
     shared_state = {"goal": "persist me"}
     storage = _Storage()
@@ -359,6 +370,7 @@ def test_session_shutdown_summarizes_stable_history_snapshot_after_pending_save(
     assert context.saved_summary == "shutdown summary"
 
 def test_restored_session_clears_volatile_agent_goal_state_only():
+    """Verifica que restored session clears volatile agent goal state only."""
     shared_state = {
         "goal": "objetivo antigo",
         "goal_canonical": "objetivo-antigo",
@@ -380,6 +392,7 @@ def test_restored_session_clears_volatile_agent_goal_state_only():
 
 
 def test_current_job_env_restore_removes_session_value(monkeypatch):
+    """Verifica que current job env restore removes session value."""
     monkeypatch.delenv("QUIMERA_CURRENT_JOB_ID", raising=False)
     app = QuimeraApp.__new__(QuimeraApp)
     app._previous_current_job_id_env = None
@@ -391,6 +404,7 @@ def test_current_job_env_restore_removes_session_value(monkeypatch):
 
 
 def test_current_job_env_restore_restores_previous_value(monkeypatch):
+    """Verifica que current job env restore restores previous value."""
     monkeypatch.setenv("QUIMERA_CURRENT_JOB_ID", "old")
     app = QuimeraApp.__new__(QuimeraApp)
     app._previous_current_job_id_env = "old"

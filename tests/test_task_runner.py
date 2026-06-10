@@ -66,6 +66,7 @@ class FailoverPolicyStub:
 
 
 def test_runner_completes_task_when_no_review_agent():
+    """Verifica que o runner conclui a tarefa quando não há agente de revisão."""
     dispatch = DispatchStub(response="resultado final")
     system = SystemLayerSpy()
     repo = RepositorySpy()
@@ -97,6 +98,7 @@ def test_runner_completes_task_when_no_review_agent():
 
 
 def test_runner_submits_for_review_when_reviewer_exists():
+    """Verifica que o runner submete para revisão quando há revisor disponível."""
     dispatch = DispatchStub(response="resultado final")
     system = SystemLayerSpy()
     repo = RepositorySpy()
@@ -119,6 +121,7 @@ def test_runner_submits_for_review_when_reviewer_exists():
 
 
 def test_runner_requeues_when_agent_returns_no_response_and_failover_possible():
+    """Verifica que o runner recoloca em fila quando o agente não responde e há failover."""
     dispatch = DispatchStub(response=None)
     system = SystemLayerSpy()
     repo = RepositorySpy()
@@ -143,6 +146,7 @@ def test_runner_requeues_when_agent_returns_no_response_and_failover_possible():
 
 
 def test_runner_fails_when_execution_blocked_and_no_failover():
+    """Verifica que o runner falha a tarefa quando a execução está bloqueada sem failover."""
     dispatch = DispatchStub(response="não consigo executar")
     system = SystemLayerSpy()
     repo = RepositorySpy()
@@ -165,6 +169,7 @@ def test_runner_fails_when_execution_blocked_and_no_failover():
 
 
 def test_runner_fails_when_user_cancels_execution():
+    """Verifica que o runner falha a tarefa quando o usuário cancela a execução."""
     dispatch = DispatchStub(response="resultado parcial")
     system = SystemLayerSpy()
     repo = RepositorySpy()
@@ -187,6 +192,7 @@ def test_runner_fails_when_user_cancels_execution():
 
 
 def test_runner_fails_on_empty_body():
+    """Verifica que o runner falha a tarefa quando o body está vazio."""
     system = SystemLayerSpy()
     repo = RepositorySpy()
     runner = TaskRunner(
@@ -205,6 +211,7 @@ def test_runner_fails_on_empty_body():
 
 
 def test_runner_requeues_on_exception_when_failover_possible():
+    """Verifica que o runner recoloca em fila quando há exceção e failover disponível."""
     class FailingDispatch:
         def call_agent(self, agent_name, **kwargs):
             raise RuntimeError("api timeout")
@@ -230,6 +237,8 @@ def test_runner_requeues_on_exception_when_failover_possible():
 
 
 def test_runner_wraps_agent_call_with_hooks():
+    """Verifica que o runner executa hooks before/after na chamada do agente."""
+
     dispatch = DispatchStub(response="resultado final")
     system = SystemLayerSpy()
     repo = RepositorySpy()
@@ -253,6 +262,8 @@ def test_runner_wraps_agent_call_with_hooks():
 
 
 def test_runner_uses_structured_handoff_with_real_task_id():
+    """Verifica que o runner usa handoff estruturado com o ID real da tarefa."""
+
     dispatch = DispatchStub(response="resultado final")
     runner = TaskRunner(
         dispatch_services=dispatch,
@@ -277,6 +288,7 @@ def test_runner_uses_structured_handoff_with_real_task_id():
 
 
 def test_runner_calls_after_hook_even_when_dispatch_raises():
+    """Verifica que o hook after é chamado mesmo quando o dispatch lança exceção."""
     class FailingDispatch:
         def call_agent(self, agent_name, **kwargs):
             raise RuntimeError("api timeout")
@@ -303,6 +315,7 @@ def test_runner_calls_after_hook_even_when_dispatch_raises():
 
 
 def test_runner_fails_on_exception_when_no_failover():
+    """Verifica que o runner falha a tarefa quando há exceção e não há failover."""
     class FailingDispatch:
         def call_agent(self, agent_name, **kwargs):
             raise RuntimeError("fatal error")
@@ -327,6 +340,8 @@ def test_runner_fails_on_exception_when_no_failover():
 
 
 def test_runner_submit_for_review_fails():
+    """Verifica que o runner lida com falha ao submeter para revisão."""
+
     dispatch = DispatchStub(response="resultado")
     system = SystemLayerSpy()
     repo = RepositorySpy()
@@ -350,6 +365,8 @@ def test_runner_submit_for_review_fails():
 
 
 def test_runner_complete_task_fails():
+    """Verifica que o runner lida com falha ao concluir a tarefa."""
+
     dispatch = DispatchStub(response="finalizado")
     system = SystemLayerSpy()
     repo = RepositorySpy()
@@ -372,6 +389,8 @@ def test_runner_complete_task_fails():
 
 
 def test_summarize_task_feedback_truncates_lines():
+    """Verifica que summarize_task_feedback trunca linhas que excedem o limite."""
+
     result = "ACEITE\nImplementação concluída com evidência concreta e detalhes extras para exceder o limite configurado."
 
     summary = summarize_task_feedback(result, max_chars=50, max_lines=6)
@@ -381,6 +400,8 @@ def test_summarize_task_feedback_truncates_lines():
     assert len(summary) <= 50
 
 def test_summarize_task_feedback_single_line_without_newlines():
+    """Verifica que summarize_task_feedback mantém linha única sem newlines."""
+
     result = "Implementação concluída com sucesso."
 
     summary = summarize_task_feedback(result, max_chars=100)

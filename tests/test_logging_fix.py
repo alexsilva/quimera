@@ -5,7 +5,10 @@ from quimera.agents import AgentClient
 
 
 class TestLoggingFix(unittest.TestCase):
+    """Testes para logging do AgentClient."""
+
     def test_agent_client_run_logs_when_silent(self):
+        """Verifica que run em modo silent registra stdout e stderr nos logs."""
         renderer = Mock()
         client = AgentClient(renderer)
 

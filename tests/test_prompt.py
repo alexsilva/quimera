@@ -36,6 +36,7 @@ def _build_prompt_template_fixture() -> str:
 
 
 def test_final_prompt_contract_has_sections_once_in_order_and_without_duplication():
+    """Verifica que final prompt contract has sections once in order and without duplication."""
     session_state = {
         "session_id": "test-session",
         "current_job_id": 123,
@@ -109,6 +110,7 @@ def test_final_prompt_contract_has_sections_once_in_order_and_without_duplicatio
 
 
 def test_prompt_includes_render_debug_block_when_active():
+    """Verifica que prompt includes render debug block when active."""
     session_state = {
         "session_id": "test-session",
         "current_job_id": 123,
@@ -136,6 +138,7 @@ def test_prompt_includes_render_debug_block_when_active():
 
 
 def test_prompt_omits_render_debug_block_when_inactive():
+    """Verifica que prompt omits render debug block when inactive."""
     session_state = {
         "session_id": "test-session",
         "current_job_id": 123,
@@ -156,6 +159,7 @@ def test_prompt_omits_render_debug_block_when_inactive():
 
 
 def test_prompt_includes_mcp_runtime_instruction_when_enabled():
+    """Verifica que prompt includes mcp runtime instruction when enabled."""
     session_state = {
         "session_id": "test-session",
         "current_job_id": 123,
@@ -180,6 +184,7 @@ def test_prompt_includes_mcp_runtime_instruction_when_enabled():
 
 
 def test_prompt_omits_mcp_runtime_instruction_when_disabled():
+    """Verifica que prompt omits mcp runtime instruction when disabled."""
     session_state = {
         "session_id": "test-session",
         "current_job_id": 123,
@@ -202,6 +207,7 @@ def test_prompt_omits_mcp_runtime_instruction_when_disabled():
 
 
 def test_prompt_template_loads_file_lazily(tmp_path):
+    """Verifica que prompt template loads file lazily."""
     template_path = tmp_path / "prompt.md"
     template = PromptTemplate(template_path)
 
@@ -212,6 +218,7 @@ def test_prompt_template_loads_file_lazily(tmp_path):
 
 
 def test_prompt_no_tools():
+    """Verifica que prompt no tools."""
     builder = PromptBuilder(context_manager=_make_context_manager(""))
     history = [{"role": "human", "content": "test"}]
 
@@ -226,6 +233,7 @@ def test_prompt_no_tools():
 
 
 def test_prompt_injects_execution_mode_prompt_for_all_modes():
+    """Verifica que prompt injects execution mode prompt for all modes."""
     builder = PromptBuilder(context_manager=_make_context_manager(""))
     history = [{"role": "human", "content": "test"}]
     mode_expectations = {
@@ -245,6 +253,7 @@ def test_prompt_injects_execution_mode_prompt_for_all_modes():
 
 
 def test_prompt_without_execution_mode_does_not_inject_mode_addon():
+    """Verifica que prompt without execution mode does not inject mode addon."""
     builder = PromptBuilder(context_manager=_make_context_manager(""))
     history = [{"role": "human", "content": "test"}]
 
@@ -255,6 +264,7 @@ def test_prompt_without_execution_mode_does_not_inject_mode_addon():
 
 
 def test_prompt_uses_request_override_when_latest_human_differs():
+    """Verifica que prompt uses request override when latest human differs."""
     builder = PromptBuilder(context_manager=_make_context_manager(""))
     history = [
         {"role": "human", "content": "pedido A"},
@@ -270,6 +280,7 @@ def test_prompt_uses_request_override_when_latest_human_differs():
 
 
 def test_prompt_primary_false_omits_only_session_state():
+    """Verifica que prompt primary false omits only session state."""
     session_state = {"session_id": "test"}
     builder = PromptBuilder(context_manager=_make_context_manager("Contexto"), session_state=session_state)
     history = [{"role": "human", "content": "test"}]
@@ -284,6 +295,7 @@ def test_prompt_primary_false_omits_only_session_state():
 
 
 def test_prompt_uses_current_active_agents_in_header_and_route_list():
+    """Verifica que prompt uses current active agents in header and route list."""
     state = {"active_agents": ["claude", "codex", "deepseek"]}
     builder = PromptBuilder(
         context_manager=_make_context_manager(""),
@@ -302,6 +314,7 @@ def test_prompt_uses_current_active_agents_in_header_and_route_list():
 
 
 def test_handoff_prompt_uses_current_active_agents_for_route_candidates():
+    """Verifica que handoff prompt uses current active agents for route candidates."""
     state = {"active_agents": ["claude", "codex", "deepseek"]}
     builder = PromptBuilder(
         context_manager=_make_context_manager(""),
@@ -322,6 +335,7 @@ def test_handoff_prompt_uses_current_active_agents_for_route_candidates():
 
 
 def test_prompt_includes_updated_handoff_contract_in_route_rules():
+    """Verifica que prompt includes updated handoff contract in route rules."""
     builder = PromptBuilder(
         context_manager=_make_context_manager(""),
         active_agents=["claude", "codex", "deepseek"],
@@ -337,6 +351,7 @@ def test_prompt_includes_updated_handoff_contract_in_route_rules():
 
 
 def test_handoff_only_prompt_includes_updated_handoff_contract():
+    """Verifica que handoff only prompt includes updated handoff contract."""
     builder = PromptBuilder(
         context_manager=_make_context_manager(""),
         active_agents=["claude", "codex", "deepseek"],
@@ -356,6 +371,7 @@ def test_handoff_only_prompt_includes_updated_handoff_contract():
 
 
 def test_prompt_shared_state():
+    """Verifica que prompt shared state."""
     builder = PromptBuilder(context_manager=_make_context_manager(""))
     history = [{"role": "human", "content": "test"}]
     shared_state = {
@@ -371,6 +387,7 @@ def test_prompt_shared_state():
 
 
 def test_prompt_renders_evidence_context_when_session_has_entries(tmp_path):
+    """Verifica que prompt renders evidence context when session has entries."""
     store = EvidenceStore(tmp_path, "sessao-1")
     try:
         store.append(
@@ -424,6 +441,7 @@ def test_prompt_renders_evidence_context_when_session_has_entries(tmp_path):
 
 
 def test_prompt_evidence_pipeline_is_identical_across_compact_and_wide_tool_rendering(tmp_path):
+    """Verifica que prompt evidence pipeline is identical across compact and wide tool rendering."""
     from quimera.spy_output_presenter import SpyOutputPresenter
 
     def _collect_evidence_section(session_id: str, width: int) -> tuple[str, str]:
@@ -467,6 +485,7 @@ def test_prompt_evidence_pipeline_is_identical_across_compact_and_wide_tool_rend
 
 
 def test_prompt_keeps_empty_optional_blocks_in_output():
+    """Verifica que prompt keeps empty optional blocks in output."""
     builder = PromptBuilder(context_manager=_make_context_manager(""))
 
     prompt = builder.build(agent="claude", history=[])
@@ -481,6 +500,7 @@ def test_prompt_keeps_empty_optional_blocks_in_output():
 
 
 def test_prompt_template_uses_explicit_bool_for_state_update_block(tmp_path):
+    """Verifica que prompt template uses explicit bool for state update block."""
     template_path = tmp_path / "prompt.md"
     template_path.write_text(
         "<!-- IF:state_update_enabled -->state<!-- ENDIF:state_update_enabled -->",
@@ -493,6 +513,7 @@ def test_prompt_template_uses_explicit_bool_for_state_update_block(tmp_path):
 
 
 def test_prompt_template_treats_boolean_like_strings_explicitly(tmp_path):
+    """Verifica que prompt template treats boolean like strings explicitly."""
     template_path = tmp_path / "prompt.md"
     template_path.write_text(
         "\n".join(
@@ -512,6 +533,7 @@ def test_prompt_template_treats_boolean_like_strings_explicitly(tmp_path):
 
 
 def test_prompt_template_keeps_presence_semantics_for_non_boolean_strings(tmp_path):
+    """Verifica que prompt template keeps presence semantics for non boolean strings."""
     template_path = tmp_path / "prompt.md"
     template_path.write_text(
         "<!-- IF:session_id -->session<!-- ENDIF:session_id -->",
@@ -523,6 +545,7 @@ def test_prompt_template_keeps_presence_semantics_for_non_boolean_strings(tmp_pa
 
 
 def test_prompt_completed_tasks():
+    """Verifica que prompt completed tasks."""
     builder = PromptBuilder(context_manager=_make_context_manager(""))
     history = [{"role": "human", "content": "test"}]
     shared_state = {
@@ -537,6 +560,7 @@ def test_prompt_completed_tasks():
 
 
 def test_prompt_keeps_infra_shared_state_visible_even_with_goal_canonical():
+    """Verifica que prompt keeps infra shared state visible even with goal canonical."""
     builder = PromptBuilder(context_manager=_make_context_manager(""))
     history = [{"role": "human", "content": "test"}]
 
@@ -556,6 +580,7 @@ def test_prompt_keeps_infra_shared_state_visible_even_with_goal_canonical():
 
 
 def test_prompt_parser_extracts_blocks_with_prompt_symbol_in_title():
+    """Verifica que prompt parser extracts blocks with prompt symbol in title."""
     prompt = (
         '<recent_conversation title="Conversa recente">\n'
         'USER: Leia o README\n'
@@ -618,6 +643,7 @@ def test_conversation_block_shows_all_messages():
 
 
 def test_conversation_block_skips_diff_like_tool_output():
+    """Verifica que conversation block skips diff like tool output."""
     builder = PromptBuilder(context_manager=_make_context_manager(""))
     history = [
         {"role": "codex", "content": "diff --git a/app.py b/app.py\n+++ b/app.py\n@@ -1,1 +1,2 @@"},
@@ -633,6 +659,7 @@ def test_conversation_block_skips_diff_like_tool_output():
 
 
 def test_conversation_block_skips_protocol_control_markers():
+    """Verifica que conversation block skips protocol control markers."""
     builder = PromptBuilder(context_manager=_make_context_manager(""))
     history = [
         {"role": "codex", "content": '{"type": "handoff", "route": "claude", "content": "revisar testes"}'},
@@ -666,6 +693,7 @@ def test_build_conversation_block_skips_empty_content():
 
 
 def test_prompt_build_accepts_history_none_and_iterables():
+    """Verifica que prompt build accepts history none and iterables."""
     builder = PromptBuilder(context_manager=_make_context_manager(""))
 
     prompt_none = builder.build(agent="claude", history=None)
@@ -681,6 +709,7 @@ def test_prompt_build_accepts_history_none_and_iterables():
 
 
 def test_prompt_history_window_property_setter_updates_memory_selector():
+    """Verifica que prompt history window property setter updates memory selector."""
     builder = PromptBuilder(context_manager=_make_context_manager(""), history_window=6)
     assert builder.history_window == 6
     builder.history_window = 2
@@ -688,6 +717,7 @@ def test_prompt_history_window_property_setter_updates_memory_selector():
 
 
 def test_prompt_handoff_only_filters_agent_and_from_agent_from_route_list():
+    """Verifica que prompt handoff only filters agent and from agent from route list."""
     builder = PromptBuilder(
         context_manager=_make_context_manager(""),
         active_agents=["codex", "claude", "gemini"],
@@ -707,6 +737,7 @@ def test_prompt_handoff_only_filters_agent_and_from_agent_from_route_list():
 
 
 def test_task_executor_prompt_uses_dedicated_template_without_chat_blocks():
+    """Verifica que task executor prompt uses dedicated template without chat blocks."""
     builder = PromptBuilder(
         context_manager=_make_context_manager("contexto persistente que não deve entrar"),
         session_state={"session_id": "sessao-1", "current_job_id": 123, "workspace_root": "/tmp/test", "current_dir": "."},
@@ -740,6 +771,7 @@ def test_task_executor_prompt_uses_dedicated_template_without_chat_blocks():
 
 
 def test_task_reviewer_prompt_uses_dedicated_template_and_review_material():
+    """Verifica que task reviewer prompt uses dedicated template and review material."""
     builder = PromptBuilder(context_manager=_make_context_manager("contexto persistente"))
 
     prompt = builder.build(
@@ -764,6 +796,7 @@ def test_task_reviewer_prompt_uses_dedicated_template_and_review_material():
 
 
 def test_chat_prompt_still_uses_default_template():
+    """Verifica que chat prompt still uses default template."""
     builder = PromptBuilder(context_manager=_make_context_manager("Contexto"))
 
     prompt = builder.build(
@@ -778,6 +811,7 @@ def test_chat_prompt_still_uses_default_template():
 
 
 def test_prompt_parser_ignores_xml_inside_current_turn():
+    """Verifica que prompt parser ignores xml inside current turn."""
     rendered = (
         '<current_turn title="Pedido atual">\n'
         'Analise este XML:\n'
@@ -795,6 +829,7 @@ def test_prompt_parser_ignores_xml_inside_current_turn():
 
 
 def test_prompt_parser_ignores_html_xml_inside_markdown_code_block():
+    """Verifica que prompt parser ignores html xml inside markdown code block."""
     rendered = (
         '<current_turn title="Pedido atual">\n'
         '```html\n'
@@ -812,6 +847,7 @@ def test_prompt_parser_ignores_html_xml_inside_markdown_code_block():
 
 
 def test_prompt_parser_reads_multiple_sequential_top_level_blocks():
+    """Verifica que prompt parser reads multiple sequential top level blocks."""
     rendered = (
         '<recent_conversation title="Histórico">\n'
         'Mensagem anterior\n'
@@ -831,6 +867,7 @@ def test_prompt_parser_reads_multiple_sequential_top_level_blocks():
 
 
 def test_prompt_parser_returns_empty_list_when_no_template_blocks():
+    """Verifica que prompt parser returns empty list when no template blocks."""
     rendered = "Texto solto\n<section>HTML do usuário</section>\n```xml\n<foo>bar</foo>\n```"
 
     assert PromptParser.iter_blocks(rendered) == []

@@ -22,6 +22,8 @@ def _extract_shared_state_payload(body: str) -> dict:
 
 
 def test_task_context_history_window_uses_prompt_builder_value():
+    """Verifica que task_context_history_window usa o valor do PromptBuilder."""
+
     factory = TaskPromptFactory(
         history=[],
         user_name="Alex",
@@ -33,6 +35,8 @@ def test_task_context_history_window_uses_prompt_builder_value():
 
 
 def test_task_context_history_window_falls_back_to_default():
+    """Verifica que task_context_history_window usa valor padrão quando PromptBuilder retorna 0."""
+
     factory = TaskPromptFactory(
         history=[],
         user_name="Alex",
@@ -44,6 +48,8 @@ def test_task_context_history_window_falls_back_to_default():
 
 
 def test_format_task_chat_context_handles_deque_history():
+    """Verifica que format_task_chat_context lida com histórico em deque."""
+
     history = deque(
         [
             {"role": "human", "content": "Corrija o parser atual"},
@@ -64,6 +70,7 @@ def test_format_task_chat_context_handles_deque_history():
 
 
 def test_format_task_chat_context_empty_history_returns_placeholder():
+    """Verifica que format_task_chat_context retorna placeholder quando histórico está vazio."""
     factory = TaskPromptFactory(
         history=[],
         user_name="Alex",
@@ -75,6 +82,7 @@ def test_format_task_chat_context_empty_history_returns_placeholder():
 
 
 def test_build_task_body_includes_protocol_and_instruction():
+    """Verifica que build_task_body inclui protocolo operacional e instruções."""
     factory = TaskPromptFactory(
         history=[{"role": "human", "content": "Corrija o parser atual"}],
         user_name="Alex",
@@ -96,6 +104,7 @@ def test_build_task_body_includes_protocol_and_instruction():
 
 
 def test_build_task_body_uses_trimmed_shared_state_when_available():
+    """Verifica que build_task_body usa shared_state filtrado, excluindo chaves internas."""
     shared_state = {
         "goal_canonical": "Corrigir parser legado",
         "current_step": "Ajustar tokenizer",
@@ -126,6 +135,7 @@ def test_build_task_body_uses_trimmed_shared_state_when_available():
 
 
 def test_format_task_chat_context_skips_empty_messages():
+    """Verifica que format_task_chat_context ignora mensagens vazias."""
     factory = TaskPromptFactory(
         history=[
             {"role": "human", "content": "  "},
@@ -145,6 +155,7 @@ def test_format_task_chat_context_skips_empty_messages():
 
 
 def test_build_task_body_omits_task_context_block_when_history_is_empty():
+    """Verifica que build_task_body omite bloco de contexto da tarefa quando histórico está vazio."""
     factory = TaskPromptFactory(
         history=[],
         user_name="Alex",
@@ -158,6 +169,7 @@ def test_build_task_body_omits_task_context_block_when_history_is_empty():
 
 
 def test_build_task_body_serializes_shared_state_reference_as_valid_json():
+    """Verifica que build_task_body serializa a referência de shared_state como JSON válido."""
     shared_state = {
         "goal": "corrigir acentuação",
         "evidence": ["stacktrace", "pytest -q"],

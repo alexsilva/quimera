@@ -66,6 +66,7 @@ class FailoverPolicyStub:
 
 
 def test_reviewer_rejects_self_review():
+    """Verifica que o revisor rejeita revisão do mesmo agente que executou a tarefa."""
     dispatch = DispatchStub(response=None)
     system = SystemLayerSpy()
     repo = RepositorySpy()
@@ -90,6 +91,8 @@ def test_reviewer_rejects_self_review():
 
 
 def test_reviewer_completes_task_when_verdict_is_aceite():
+    """Verifica que o revisor conclui a tarefa quando o veredito é ACEITE."""
+
     dispatch = DispatchStub(response="ACEITE\nEvidência ok")
     system = SystemLayerSpy()
     repo = RepositorySpy()
@@ -120,6 +123,7 @@ def test_reviewer_completes_task_when_verdict_is_aceite():
 
 
 def test_reviewer_requeues_when_verdict_not_accepted():
+    """Verifica que o revisor recoloca a tarefa em fila quando o veredito não é ACEITE."""
     dispatch = DispatchStub(response="RETENTATIVA\nFaltou teste")
     system = SystemLayerSpy()
     repo = RepositorySpy()
@@ -144,6 +148,8 @@ def test_reviewer_requeues_when_verdict_not_accepted():
 
 
 def test_reviewer_returns_to_pending_review_when_exception_has_fallback():
+    """Verifica que o revisor retorna a tarefa para pending_review quando há fallback."""
+
     dispatch = DispatchStub(error=RuntimeError("timeout"))
     system = SystemLayerSpy()
     repo = RepositorySpy()
@@ -168,6 +174,7 @@ def test_reviewer_returns_to_pending_review_when_exception_has_fallback():
 
 
 def test_reviewer_fails_when_no_operational_fallback():
+    """Verifica que o revisor falha a tarefa quando não há fallback operacional."""
     dispatch = DispatchStub(error=RuntimeError("timeout"))
     system = SystemLayerSpy()
     repo = RepositorySpy()
@@ -192,6 +199,8 @@ def test_reviewer_fails_when_no_operational_fallback():
 
 
 def test_reviewer_cancelled_by_user():
+    """Verifica que o revisor trata cancelamento pelo usuário."""
+
     dispatch = DispatchStub(response="ACEITE\nok")
     system = SystemLayerSpy()
     repo = RepositorySpy()
@@ -215,6 +224,8 @@ def test_reviewer_cancelled_by_user():
 
 
 def test_reviewer_self_review_transition_fails():
+    """Verifica que o revisor lida com falha na transição de auto-revisão."""
+
     dispatch = DispatchStub(response=None)
     system = SystemLayerSpy()
     repo = RepositorySpy()
@@ -239,6 +250,7 @@ def test_reviewer_self_review_transition_fails():
 
 
 def test_reviewer_requeue_after_review_fails():
+    """Verifica que o revisor lida com falha ao recolocar tarefa em fila após revisão."""
     dispatch = DispatchStub(response="RETENTATIVA\nFaltou teste")
     system = SystemLayerSpy()
     repo = RepositorySpy()
@@ -263,6 +275,8 @@ def test_reviewer_requeue_after_review_fails():
 
 
 def test_reviewer_complete_task_fails():
+    """Verifica que o revisor lida com falha ao concluir tarefa após revisão."""
+
     dispatch = DispatchStub(response="ACEITE\nEvidência ok")
     system = SystemLayerSpy()
     repo = RepositorySpy()
@@ -287,6 +301,8 @@ def test_reviewer_complete_task_fails():
 
 
 def test_reviewer_exception_fallback_transition_fails():
+    """Verifica que o revisor lida com falha na transição de fallback após exceção."""
+
     dispatch = DispatchStub(error=RuntimeError("timeout"))
     system = SystemLayerSpy()
     repo = RepositorySpy()
