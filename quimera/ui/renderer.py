@@ -1067,7 +1067,7 @@ class TerminalRenderer:
         parts = []
         if include_header:
             parts.append(self._build_turn_header(theme_name, label, style))
-        if content is not None:
+        if content:
             parts.append(
                 self._build_turn_body(
                     theme_name,
