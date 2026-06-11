@@ -13,6 +13,7 @@ from ..tasks import (
     create_task,
     complete_task,
     fail_task,
+    update_job_status,
 )
 from ..approval_broker import TrustedToolExecutionContext
 
@@ -213,10 +214,12 @@ class HandoffTools:
             try:
                 if result.ok:
                     complete_task(task_id, result=result.content, db_path=db_path)
+                    update_job_status(job_id, "completed", db_path=db_path)
                 else:
                     fail_task(task_id, reason=result.error, db_path=db_path)
+                    update_job_status(job_id, "failed", db_path=db_path)
             except Exception as exc:
-                logger.warning("call_agent async: failed to update task %d: %s", task_id, exc)
+                logger.warning("call_agent async: failed to update task/job %d: %s", task_id, exc)
 
         t = threading.Thread(target=_run, daemon=True, name=f"call-agent-{task_id}")
         t.start()

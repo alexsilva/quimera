@@ -250,9 +250,10 @@ class TestNonSSEPath:
         assert "faz algo" in desc
 
     def test_non_sse_background_thread_completa_task(self, handoff_tools, tmp_path):
-        """Background thread completa com sucesso e chama complete_task."""
+        """Background thread completa com sucesso: complete_task e update_job_status chamados."""
         db_path = tmp_path / "tasks.db"
         from quimera.runtime import tasks as task_mod
+        import time
         task_mod.init_db(str(db_path))
         job_id = task_mod.add_job("test job", db_path=str(db_path))
         task_id = task_mod.create_task(
@@ -273,19 +274,20 @@ class TestNonSSEPath:
             patch("quimera.runtime.tools.handoff.create_task", return_value=task_id),
             patch("quimera.runtime.tools.handoff.complete_task") as mock_complete,
             patch("quimera.runtime.tools.handoff.fail_task") as mock_fail,
+            patch("quimera.runtime.tools.handoff.update_job_status") as mock_update_job,
         ):
             result = handoff_tools._call_agent_http_async(call, STEPS)
-
-        assert result.ok is True
-        import time
-        time.sleep(0.3)
-        mock_complete.assert_called_once()
-        mock_fail.assert_not_called()
+            assert result.ok is True
+            time.sleep(0.3)
+            mock_complete.assert_called_once()
+            mock_fail.assert_not_called()
+            mock_update_job.assert_called_once_with(job_id, "completed", db_path=str(db_path))
 
     def test_non_sse_background_thread_falha_task(self, handoff_tools, tmp_path):
-        """Dispatch retorna None (falha silenciosa) → fail_task é chamado."""
+        """Dispatch retorna None (falha silenciosa) → fail_task e update_job_status(failed) chamados."""
         db_path = tmp_path / "tasks.db"
         from quimera.runtime import tasks as task_mod
+        import time
         task_mod.init_db(str(db_path))
         job_id = task_mod.add_job("test job", db_path=str(db_path))
         task_id = task_mod.create_task(
@@ -306,17 +308,18 @@ class TestNonSSEPath:
             patch("quimera.runtime.tools.handoff.create_task", return_value=task_id),
             patch("quimera.runtime.tools.handoff.complete_task") as mock_complete,
             patch("quimera.runtime.tools.handoff.fail_task") as mock_fail,
+            patch("quimera.runtime.tools.handoff.update_job_status") as mock_update_job,
         ):
             result = handoff_tools._call_agent_http_async(call, STEPS)
-
-        assert result.ok is True
-        import time
-        time.sleep(0.3)
-        mock_complete.assert_not_called()
-        mock_fail.assert_called_once()
+            assert result.ok is True
+            time.sleep(0.3)
+            mock_complete.assert_not_called()
+            mock_fail.assert_called_once()
+            mock_update_job.assert_called_once_with(job_id, "failed", db_path=str(db_path))
 
     def test_non_sse_background_thread_exception_nao_propaga(self, handoff_tools, tmp_path):
         """Exceção no complete_task (pós-agente) não quebra o retorno inicial."""
+        import time
         db_path = tmp_path / "tasks.db"
         handoff_tools.config.db_path = db_path
         dispatch = MagicMock(return_value="ok")
@@ -330,12 +333,11 @@ class TestNonSSEPath:
             patch("quimera.runtime.tools.handoff.create_task", return_value=1),
             patch("quimera.runtime.tools.handoff.complete_task",
                   side_effect=RuntimeError("db failure after call")),
+            patch("quimera.runtime.tools.handoff.update_job_status"),
         ):
             result = handoff_tools._call_agent_http_async(call, STEPS)
-
-        assert result.ok is True
-        import time
-        time.sleep(0.3)
+            assert result.ok is True
+            time.sleep(0.3)
 
 
 # ── get_db_path ────────────────────────────────────────────

@@ -48,6 +48,11 @@ def get_job(job_id, db_path=None):
     return asdict(job) if job else None
 
 
+def update_job_status(job_id, status, db_path=None):
+    """Atualiza o status de um job."""
+    return _repository(db_path).update_job_status(job_id, status)
+
+
 def create_task(
         job_id,
         description,
@@ -213,7 +218,7 @@ def drop_db(db_path):
 __all__ = [
     "init_db", "add_job", "list_jobs",
     "create_task", "propose_task", "approve_task", "reject_task", "list_tasks",
-    "claim_task", "release_agent_tasks", "update_task", "complete_task", "fail_task", "get_job",
+    "claim_task", "release_agent_tasks", "update_task", "complete_task", "fail_task", "get_job", "update_job_status",
     "submit_for_review", "claim_review_task", "requeue_task_after_review",
     "transition_task",
 ]

@@ -82,6 +82,8 @@ class TaskRepository:
                 priority       TEXT,
                 created_at     DATETIME,
                 updated_at     DATETIME,
+                started_at     DATETIME,
+                completed_at   DATETIME,
                 created_by     TEXT,
                 approved_by    TEXT,
                 source_context TEXT,
@@ -97,6 +99,8 @@ class TaskRepository:
             "reviewed_by": "TEXT",
             "attempt_count": "INTEGER NOT NULL DEFAULT 0",
             "failed_agents": "TEXT",
+            "started_at": "DATETIME",
+            "completed_at": "DATETIME",
         }
         for col, spec in migrations.items():
             if col not in existing:
@@ -190,6 +194,25 @@ class TaskRepository:
             updated_at=row[5],
         )
 
+    def update_job_status(self, job_id: int, status: str) -> bool:
+        """Atualiza o status de um job."""
+        conn = self._conn()
+        cur = conn.cursor()
+        try:
+            cur.execute("BEGIN IMMEDIATE")
+            cur.execute(
+                "UPDATE jobs SET status = ?, updated_at = ? WHERE id = ?",
+                (status, self._now(), job_id),
+            )
+            conn.commit()
+            affected = cur.rowcount
+            conn.close()
+            return affected > 0
+        except Exception:
+            conn.rollback()
+            conn.close()
+            raise
+
     # ── Tasks — leitura ───────────────────────────────────────────────
 
     def list_tasks(self, filt: dict | None = None) -> list[TaskRecord]:
@@ -199,7 +222,8 @@ class TaskRepository:
         cur = conn.cursor()
         sql = (
             "SELECT id, job_id, description, body, status, task_type, origin, assigned_to, "
-            "result, notes, priority, created_at, updated_at, created_by, requested_by "
+            "result, notes, priority, created_at, updated_at, created_by, requested_by, "
+            "started_at, completed_at "
             "FROM tasks"
         )
         clauses: list[str] = []
@@ -219,7 +243,7 @@ class TaskRepository:
                 id=r[0], job_id=r[1], description=r[2], body=r[3], status=r[4],
                 task_type=r[5], origin=r[6], assigned_to=r[7], result=r[8], notes=r[9],
                 priority=r[10], created_at=r[11], updated_at=r[12], created_by=r[13],
-                requested_by=r[14],
+                requested_by=r[14], started_at=r[15], completed_at=r[16],
             )
             for r in rows
         ]
@@ -264,16 +288,17 @@ class TaskRepository:
         conn = self._conn()
         cur = conn.cursor()
         now = self._now()
+        started_at = now if str(status) == TaskStatus.IN_PROGRESS else None
         try:
             cur.execute("BEGIN IMMEDIATE")
             cur.execute(
                 """
                 INSERT INTO tasks(job_id, description, body, status, task_type, origin, assigned_to,
-                                  priority, created_at, updated_at, created_by, requested_by, notes, source_context)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                  priority, created_at, updated_at, started_at, created_by, requested_by, notes, source_context)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (job_id, description, body, status, task_type, origin, assigned_to,
-                 priority, now, now, created_by, requested_by, notes, source_context),
+                 priority, now, now, started_at, created_by, requested_by, notes, source_context),
             )
             task_id = cur.lastrowid
             conn.commit()
@@ -298,14 +323,28 @@ class TaskRepository:
         result: str | None = None,
         notes: str | None = None,
     ) -> bool:
-        """Atualiza status/result/notes sem validação de state machine."""
+        """Atualiza status/result/notes com timestamps refletindo o progresso."""
         conn = self._conn()
         cur = conn.cursor()
         try:
             cur.execute("BEGIN IMMEDIATE")
+            now = self._now()
+            status_str = status.value if isinstance(status, TaskStatus) else status
+            started_at_sql = ""
+            completed_at_sql = ""
+            if status_str == TaskStatus.IN_PROGRESS.value:
+                started_at_sql = ", started_at = COALESCE(started_at, ?)"
+            elif status_str in (TaskStatus.COMPLETED.value, TaskStatus.FAILED.value, TaskStatus.REJECTED.value):
+                completed_at_sql = ", completed_at = ?"
+            params: list = [status, result, notes, now]
+            if started_at_sql:
+                params.append(now)
+            if completed_at_sql:
+                params.append(now)
+            params.append(task_id)
             cur.execute(
-                "UPDATE tasks SET status = ?, result = ?, notes = ?, updated_at = ? WHERE id = ?",
-                (status, result, notes, self._now(), task_id),
+                f"UPDATE tasks SET status = ?, result = ?, notes = ?, updated_at = ?{started_at_sql}{completed_at_sql} WHERE id = ?",
+                params,
             )
             conn.commit()
             affected = cur.rowcount
@@ -345,7 +384,7 @@ class TaskRepository:
             job_id = row[3]
             cur.execute(
                 "UPDATE tasks SET status = ?, assigned_to = NULL, result = ?, notes = ?, "
-                "failed_agents = ?, attempt_count = ?, updated_at = ? WHERE id = ?",
+                "failed_agents = ?, attempt_count = ?, started_at = NULL, completed_at = NULL, updated_at = ? WHERE id = ?",
                 (TaskStatus.PENDING, reason, reason, failed_agents, attempt_count, now, task_id),
             )
             conn.commit()
@@ -376,13 +415,13 @@ class TaskRepository:
             now = self._now()
             if reviewed_by:
                 cur.execute(
-                    "UPDATE tasks SET status = ?, result = ?, reviewed_by = ?, notes = ?, updated_at = ? WHERE id = ?",
-                    (TaskStatus.COMPLETED, result, reviewed_by, None, now, task_id),
+                    "UPDATE tasks SET status = ?, result = ?, reviewed_by = ?, notes = ?, completed_at = ?, updated_at = ? WHERE id = ?",
+                    (TaskStatus.COMPLETED, result, reviewed_by, None, now, now, task_id),
                 )
             else:
                 cur.execute(
-                    "UPDATE tasks SET status = ?, result = ?, notes = ?, updated_at = ? WHERE id = ?",
-                    (TaskStatus.COMPLETED, result, None, now, task_id),
+                    "UPDATE tasks SET status = ?, result = ?, notes = ?, completed_at = ?, updated_at = ? WHERE id = ?",
+                    (TaskStatus.COMPLETED, result, None, now, now, task_id),
                 )
             conn.commit()
             conn.close()
@@ -456,7 +495,8 @@ class TaskRepository:
             job_id = row[3]
             cur.execute(
                 "UPDATE tasks SET status = ?, assigned_to = NULL, result = ?, notes = ?, "
-                "reviewed_by = NULL, failed_agents = ?, attempt_count = ?, updated_at = ? WHERE id = ?",
+                "reviewed_by = NULL, failed_agents = ?, attempt_count = ?, "
+                "started_at = NULL, completed_at = NULL, updated_at = ? WHERE id = ?",
                 (TaskStatus.PENDING, result, notes, failed_agents, attempt_count, now, task_id),
             )
             conn.commit()
@@ -496,7 +536,10 @@ class TaskRepository:
                 conn.close()
                 return False
             job_id = row[1]
-            fields: dict = {"status": to_status, "updated_at": self._now()}
+            now = self._now()
+            fields: dict = {"status": to_status, "updated_at": now}
+            if to_status in (TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.REJECTED):
+                fields["completed_at"] = now
             if result is not _UNSET:
                 fields["result"] = result
             if notes is not _UNSET:
@@ -559,9 +602,10 @@ class TaskRepository:
                 conn.close()
                 return None
             task_id, job_id = row[0], row[1]
+            now = self._now()
             cur.execute(
-                "UPDATE tasks SET assigned_to = ?, status = ?, updated_at = ? WHERE id = ?",
-                (agent_name, TaskStatus.IN_PROGRESS, self._now(), task_id),
+                "UPDATE tasks SET assigned_to = ?, status = ?, started_at = ?, updated_at = ? WHERE id = ?",
+                (agent_name, TaskStatus.IN_PROGRESS, now, now, task_id),
             )
             conn.commit()
             conn.close()
