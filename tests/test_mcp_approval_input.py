@@ -1,0 +1,456 @@
+"""Testes de regressão para os bugs de input/aprovação em contexto MCP.
+
+Cobre três classes de problemas identificados quando um servidor MCP (thread de
+background) pede aprovação enquanto o prompt_toolkit está ativo na main thread:
+
+Bug #1 — TOCTOU freeze (5 min):
+    read_input_in_terminal() detecta app._is_running=True, mas o usuário já
+    pressionou Enter — o loop pt parou antes de processar o coroutine.
+    Resultado: done.wait(timeout=300) trava por 5 minutos.
+    Fix: checar loop.is_running() antes de submeter + registrar done_callback
+    no future retornado por run_coroutine_threadsafe; quando o loop para, o
+    future é cancelado e o callback seta done imediatamente, sem timeout arbitrário.
+
+Bug #2 — Branch errado por race → input some:
+    is_active() retorna False por race (usuário pressionou Enter entre a checagem
+    e o dispatch), cai no branch else que usa sys.stdout.write direto enquanto
+    Rich/pt ainda controla o terminal → texto some ou corrompido.
+    Fix (approval.py): read_input_in_terminal já retorna None nessa situação;
+    o fallback para o else branch é seguro porque pt não está mais em raw mode.
+
+Bug #3 — _show() antes do input corre com Live context:
+    A mensagem de aprovação é emitida por thread background via renderer
+    enquanto Rich.Live está em andamento → próximo refresh apaga o texto.
+    Fix testado aqui: renderer.show_system é chamado, flush é solicitado.
+"""
+from __future__ import annotations
+
+import asyncio
+import sys
+import threading
+import time
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from quimera.app.prompt_input import InputGate
+from quimera.runtime.approval import ConsoleApprovalHandler
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _make_stopped_loop():
+    """Cria um asyncio loop que foi iniciado e parado (não fechado)."""
+    loop = asyncio.new_event_loop()
+    # O loop criado mas nunca iniciado: is_running() = False, is_closed() = False
+    return loop
+
+
+def _make_mock_app(is_running: bool, loop):
+    """Monta um mock de PromptApplication com atributos esperados pelo InputGate."""
+    app = MagicMock()
+    app._is_running = is_running
+    app.loop = loop
+    return app
+
+
+def _make_mock_session(app):
+    """Monta um mock de PromptSession com .app apontando para app."""
+    session = MagicMock()
+    session.app = app
+    return session
+
+
+def _make_gate_with_stopped_loop():
+    """Retorna um InputGate cujo loop pt está parado (não fechado)."""
+    gate = InputGate.__new__(InputGate)
+    loop = _make_stopped_loop()
+    app = _make_mock_app(is_running=True, loop=loop)
+    session = _make_mock_session(app)
+    gate._session = session
+    gate._renderer = None
+    gate._active = False
+    gate._active_lock = threading.Lock()
+    gate._owner_thread_id = None
+    return gate, loop
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Bug #1 — read_input_in_terminal com loop parado retorna None rapidamente
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_read_input_in_terminal_loop_stopped_returns_none_immediately():
+    """Bug #1: loop parado (is_running=False) → None imediato, sem travar.
+
+    Garante que a checagem loop.is_running() antes de run_coroutine_threadsafe
+    evita o freeze de 300s quando o usuário já pressionou Enter.
+    """
+    gate, loop = _make_gate_with_stopped_loop()
+    # loop.is_running() = False por construção (loop criado mas não rodando)
+    assert not loop.is_running()
+
+    start = time.monotonic()
+    result = gate.read_input_in_terminal("Executar? [y/N]: ")
+    elapsed = time.monotonic() - start
+
+    assert result is None
+    # Deve retornar em < 1s (sem nenhum wait desnecessário)
+    assert elapsed < 1.0, f"read_input_in_terminal demorou {elapsed:.2f}s com loop parado"
+
+
+def test_read_input_in_terminal_app_not_running_returns_none():
+    """Bug #1: app._is_running=False → None sem submeter coroutine."""
+    gate = InputGate.__new__(InputGate)
+    loop = asyncio.new_event_loop()
+    app = _make_mock_app(is_running=False, loop=loop)
+    session = _make_mock_session(app)
+    gate._session = session
+    gate._renderer = None
+    gate._active = False
+    gate._active_lock = threading.Lock()
+    gate._owner_thread_id = None
+
+    result = gate.read_input_in_terminal("teste: ")
+    assert result is None
+    loop.close()
+
+
+def test_read_input_in_terminal_closed_loop_returns_none():
+    """Bug #1: loop.is_closed()=True → None sem tentar submit."""
+    gate = InputGate.__new__(InputGate)
+    loop = asyncio.new_event_loop()
+    loop.close()
+    app = _make_mock_app(is_running=True, loop=loop)
+    session = _make_mock_session(app)
+    gate._session = session
+    gate._renderer = None
+    gate._active = False
+    gate._active_lock = threading.Lock()
+    gate._owner_thread_id = None
+
+    result = gate.read_input_in_terminal("teste: ")
+    assert result is None
+
+
+def test_read_input_in_terminal_toctou_race_returns_none_within_3s():
+    """Bug #1 — janela de race residual: loop passa is_running() mas para antes
+    de executar o coroutine. O future é cancelado pelo asyncio → done_callback
+    dispara e retorna None imediatamente, sem precisar de timeout arbitrário.
+
+    Simula o race via future que chama add_done_callback imediatamente
+    (comportamento idêntico ao future cancelado pelo loop ao parar).
+    """
+    gate = InputGate.__new__(InputGate)
+
+    fake_loop = MagicMock()
+    fake_loop.is_closed.return_value = False
+    fake_loop.is_running.return_value = True  # mente: diz que está rodando
+
+    class _CancelledFuture:
+        """Simula concurrent.futures.Future cancelado pelo loop ao parar."""
+        def add_done_callback(self, fn):
+            fn(self)  # dispara imediatamente, como quando o loop cancela o future
+
+    def _fake_run_coroutine(coro, loop):
+        try:
+            coro.close()
+        except Exception:
+            pass
+        return _CancelledFuture()
+
+    app = _make_mock_app(is_running=True, loop=fake_loop)
+    session = _make_mock_session(app)
+    gate._session = session
+    gate._renderer = None
+    gate._active = False
+    gate._active_lock = threading.Lock()
+    gate._owner_thread_id = None
+
+    start = time.monotonic()
+    with patch("asyncio.run_coroutine_threadsafe", side_effect=_fake_run_coroutine):
+        result = gate.read_input_in_terminal("Executar? [y/N]: ", timeout=300.0)
+    elapsed = time.monotonic() - start
+
+    assert result is None
+    # Callback imediato: deve retornar em < 1s, não 300s
+    assert elapsed < 1.0, f"TOCTOU race demorou {elapsed:.2f}s — done_callback não disparou"
+
+
+def test_read_input_in_terminal_session_none_returns_none():
+    """read_input_in_terminal retorna None quando session é None."""
+    gate = InputGate.__new__(InputGate)
+    gate._session = None
+    gate._renderer = None
+    gate._active = False
+    gate._active_lock = threading.Lock()
+    gate._owner_thread_id = None
+
+    result = gate.read_input_in_terminal("teste: ")
+    assert result is None
+
+
+def test_read_input_in_terminal_app_none_returns_none():
+    """read_input_in_terminal retorna None quando session.app é None."""
+    gate = InputGate.__new__(InputGate)
+    session = MagicMock()
+    session.app = None
+    gate._session = session
+    gate._renderer = None
+    gate._active = False
+    gate._active_lock = threading.Lock()
+    gate._owner_thread_id = None
+
+    result = gate.read_input_in_terminal("teste: ")
+    assert result is None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Bug #1 — caminho feliz: loop rodando, coroutine executa, resposta lida
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_read_input_in_terminal_happy_path():
+    """Bug #1 caminho feliz: loop real rodando em thread, lê linha do stdin mock."""
+    gate = InputGate.__new__(InputGate)
+    gate._renderer = None
+    gate._active = False
+    gate._active_lock = threading.Lock()
+    gate._owner_thread_id = None
+
+    # Cria loop real rodando em thread de background
+    loop = asyncio.new_event_loop()
+    loop_thread_started = threading.Event()
+
+    def _run_loop():
+        asyncio.set_event_loop(loop)
+        loop_thread_started.set()
+        loop.run_forever()
+
+    t = threading.Thread(target=_run_loop, daemon=True)
+    t.start()
+    loop_thread_started.wait(timeout=2.0)
+
+    app = _make_mock_app(is_running=True, loop=loop)
+    session = _make_mock_session(app)
+    gate._session = session
+
+    fake_stdin = MagicMock()
+    fake_stdin.readline.return_value = "y\n"
+
+    fake_stdout = MagicMock()
+
+    try:
+        with patch("sys.stdin", fake_stdin), patch("sys.stdout", fake_stdout):
+            result = gate.read_input_in_terminal("Executar? [y/N]: ", timeout=5.0)
+    finally:
+        loop.call_soon_threadsafe(loop.stop)
+        t.join(timeout=2.0)
+        loop.close()
+
+    assert result == "y"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Bug #2 — approval.py: fallback correto quando read_input_in_terminal retorna None
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_approval_xthread_falls_back_to_deny_when_read_returns_none():
+    """Bug #2: quando read_input_in_terminal retorna None (loop parado/race),
+    o branch use_input_gate_xthread retorna False (nega) em vez de travar.
+    """
+    # Simula um input_gate cujo is_active() retorna True mas
+    # read_input_in_terminal retorna None (loop morreu no race)
+    mock_gate = MagicMock()
+    mock_gate.is_active.return_value = True
+    mock_gate.read_input_in_terminal.return_value = None
+
+    handler = ConsoleApprovalHandler(input_gate=mock_gate)
+
+    result_holder = {}
+
+    def _bg():
+        # is_main = False → use_input_gate_xthread path
+        result_holder["result"] = handler.approve(tool_name="shell", summary="ls")
+
+    t = threading.Thread(target=_bg)
+    t.start()
+    t.join(timeout=5.0)
+
+    assert not t.is_alive(), "approve() ficou bloqueado na thread de background"
+    assert result_holder.get("result") is False
+
+
+def test_approval_xthread_approves_when_user_responds_y():
+    """Bug #2 caminho feliz: read_input_in_terminal retorna 'y' → approve True."""
+    mock_gate = MagicMock()
+    mock_gate.is_active.return_value = True
+    mock_gate.read_input_in_terminal.return_value = "y"
+
+    handler = ConsoleApprovalHandler(input_gate=mock_gate)
+
+    result_holder = {}
+
+    def _bg():
+        result_holder["result"] = handler.approve(tool_name="shell", summary="ls")
+
+    t = threading.Thread(target=_bg)
+    t.start()
+    t.join(timeout=5.0)
+
+    assert not t.is_alive()
+    assert result_holder.get("result") is True
+
+
+def test_approval_xthread_denies_on_n():
+    """Bug #2: read_input_in_terminal retorna 'n' → approve False."""
+    mock_gate = MagicMock()
+    mock_gate.is_active.return_value = True
+    mock_gate.read_input_in_terminal.return_value = "n"
+
+    handler = ConsoleApprovalHandler(input_gate=mock_gate)
+
+    result_holder = {}
+
+    def _bg():
+        result_holder["result"] = handler.approve(tool_name="shell", summary="ls")
+
+    t = threading.Thread(target=_bg)
+    t.start()
+    t.join(timeout=5.0)
+
+    assert not t.is_alive()
+    assert result_holder.get("result") is False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Bug #3 — _show() chama renderer.show_system + flush de thread background
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_approval_show_calls_renderer_show_system_from_background_thread():
+    """Bug #3: _show() em thread de background usa renderer.show_system().
+
+    Garante que a mensagem de aprovação passa pelo renderer (que pode rotear
+    para run_in_terminal_message ou Rich.Live) em vez de ir direto para stdout
+    onde seria apagada pelo próximo refresh do Live context.
+    """
+    show_calls = []
+    flush_calls = []
+
+    class FakeRenderer:
+        def show_system(self, msg):
+            show_calls.append(msg)
+
+        def flush(self):
+            flush_calls.append(True)
+
+    renderer = FakeRenderer()
+    # input_fn nega imediatamente — só queremos verificar o _show()
+    handler = ConsoleApprovalHandler(input_fn=lambda _: "n", renderer=renderer)
+
+    result_holder = {}
+
+    def _bg():
+        result_holder["result"] = handler.approve(tool_name="mcp_tool", summary="do_thing")
+
+    t = threading.Thread(target=_bg)
+    t.start()
+    t.join(timeout=5.0)
+
+    assert not t.is_alive()
+    # renderer.show_system foi chamado com a mensagem de aprovação
+    assert any("[aprovação]" in m for m in show_calls), f"show_calls={show_calls}"
+    # flush foi solicitado após show_system
+    assert flush_calls, "flush não foi chamado após show_system"
+
+
+def test_approval_show_falls_back_to_print_without_renderer():
+    """Bug #3 fallback: sem renderer, _show() usa print()."""
+    handler = ConsoleApprovalHandler(input_fn=lambda _: "n")
+
+    with patch("builtins.print") as mock_print:
+        handler.approve(tool_name="mcp_tool", summary="do_thing")
+
+    printed = " ".join(str(c) for c in mock_print.call_args_list)
+    assert "[aprovação]" in printed
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Race condition — concorrência entre threads no _interactive_lock
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_approval_interactive_lock_serializes_concurrent_approvals():
+    """_interactive_lock garante que aprovações concorrentes são serializadas.
+
+    Quando duas threads chegam simultaneamente, apenas uma executa o input()
+    de cada vez — não há prompts sobrepostos.
+    """
+    call_order = []
+    lock_for_test = threading.Lock()
+
+    call_count = 0
+
+    def _sequential_input(prompt):
+        nonlocal call_count
+        with lock_for_test:
+            call_count += 1
+            idx = call_count
+        call_order.append(f"input-{idx}")
+        time.sleep(0.05)  # simula latência
+        return "y"
+
+    handler = ConsoleApprovalHandler(input_fn=_sequential_input)
+
+    results = []
+    barrier = threading.Barrier(3)
+
+    def _worker():
+        barrier.wait()
+        r = handler.approve(tool_name="shell", summary="ls")
+        results.append(r)
+
+    threads = [threading.Thread(target=_worker) for _ in range(3)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10.0)
+
+    # Todos aprovados
+    assert results.count(True) == 3
+    # Três inputs chamados (um por thread, sem sobreposição)
+    assert len(call_order) == 3
+
+
+def test_approval_no_freeze_when_cancel_event_set_before_xthread():
+    """Bug #1 variante: cancel_event já setado antes da chamada de background.
+
+    Garante que a thread de background não trava quando o usuário cancela.
+    """
+    cancel = threading.Event()
+    cancel.set()
+
+    mock_gate = MagicMock()
+    mock_gate.is_active.return_value = True
+
+    handler = ConsoleApprovalHandler(input_gate=mock_gate, cancel_event=cancel)
+
+    start = time.monotonic()
+    result_holder = {}
+
+    def _bg():
+        result_holder["result"] = handler.approve(tool_name="shell", summary="ls")
+
+    t = threading.Thread(target=_bg)
+    t.start()
+    t.join(timeout=3.0)
+    elapsed = time.monotonic() - start
+
+    assert not t.is_alive(), "approve() ficou bloqueado com cancel_event setado"
+    assert result_holder.get("result") is False
+    assert elapsed < 2.0

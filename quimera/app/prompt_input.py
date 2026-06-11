@@ -396,7 +396,7 @@ class InputGate:
         de background (ex: servidor MCP) enquanto a main thread está no prompt.
 
         Returns:
-            String com a resposta do usuário, ou None se timeout/erro.
+            String com a resposta do usuário, ou None se timeout/erro ou loop parado.
         """
         session = self._session
         if session is None:
@@ -406,6 +406,13 @@ class InputGate:
             return None
         loop = getattr(app, "loop", None)
         if loop is None or loop.is_closed():
+            return None
+        # Verifica se o loop realmente está rodando (não apenas não-fechado).
+        # TOCTOU: entre is_active() True e aqui, o usuário pode ter pressionado
+        # Enter — o loop para mas is_closed() ainda é False. Sem essa checagem,
+        # run_coroutine_threadsafe enfileira o coroutine e done.wait() trava por
+        # `timeout` segundos porque o loop nunca vai processar a fila.
+        if not loop.is_running():
             return None
 
         result: list[str | None] = [None]
@@ -427,9 +434,14 @@ class InputGate:
             await run_in_terminal(_read_sync, in_executor=True)
 
         try:
-            asyncio.run_coroutine_threadsafe(_coro(), loop)
+            future = asyncio.run_coroutine_threadsafe(_coro(), loop)
         except Exception:
             return None
+
+        # Guarda TOCTOU residual: se o loop parar após is_running() mas antes de
+        # executar _coro(), o future é cancelado pelo asyncio. O callback garante
+        # que done seja setado sem depender de um timeout arbitrário.
+        future.add_done_callback(lambda _: done.set())
 
         done.wait(timeout=timeout)
         return result[0]
