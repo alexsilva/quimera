@@ -664,6 +664,21 @@ def test_execute_tool_success():
     assert called_with.call_id == "c1"
 
 
+def test_execute_tool_forwards_progress_callback():
+    """Tool calls nativas devem propagar o callback de progresso para o executor."""
+    driver, _ = _make_driver()
+    mock_executor = MagicMock()
+    mock_executor.execute.return_value = ToolResult(ok=True, tool_name="read_file", content="ok")
+    progress_callback = MagicMock()
+
+    tc = {"id": "c-progress", "name": "read_file", "arguments": {"path": "x.py"}}
+    result = driver._execute_tool(tc, mock_executor, progress_callback=progress_callback)
+
+    assert result.ok is True
+    mock_executor.execute.assert_called_once()
+    assert mock_executor.execute.call_args.kwargs["progress_callback"] is progress_callback
+
+
 def test_execute_tool_exception_returns_error_result():
     """Verifica que Test execute tool exception returns error result."""
     driver, _ = _make_driver()

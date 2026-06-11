@@ -181,12 +181,14 @@ class TestNonSSEPath:
     polling via get_job/list_tasks para obter o resultado.
     """
 
+    @patch("quimera.runtime.tools.handoff.get_job", return_value={"status": "active", "started_at": "2026-06-11 20:23:11"})
+    @patch("quimera.runtime.tools.handoff.update_job_status")
     @patch("quimera.runtime.tools.handoff.add_job", return_value=42)
     @patch("quimera.runtime.tools.handoff.create_task", return_value=99)
     def test_non_sse_path_retorna_job_id_task_id(
-        self, mock_create, mock_add, handoff_tools, dispatch_fn, tmp_path,
+        self, mock_create, mock_add, mock_update_job, mock_get_job, handoff_tools, dispatch_fn, tmp_path,
     ):
-        """Retorna {job_id, task_id, status: in_progress} como JSON."""
+        """Retorna status/timestamp inicial sem depender de polling posterior."""
         handoff_tools.config.db_path = tmp_path / "tasks.db"
         handoff_tools.set_call_agent_fn(dispatch_fn)
         call = _make_call(metadata={
@@ -198,8 +200,13 @@ class TestNonSSEPath:
         assert data["job_id"] == 42
         assert data["task_id"] == 99
         assert data["status"] == "in_progress"
+        assert data["job_status"] == "active"
+        assert data["task_status"] == "in_progress"
+        assert data["started_at"] == "2026-06-11 20:23:11"
         mock_add.assert_called_once()
         mock_create.assert_called_once()
+        mock_update_job.assert_any_call(42, "active", db_path=str(tmp_path / "tasks.db"))
+        mock_get_job.assert_called_once_with(42, db_path=str(tmp_path / "tasks.db"))
 
     def test_non_sse_path_sem_db_path_retorna_erro(self, handoff_tools, dispatch_fn):
         """Sem db_path configurado → erro: 'db_path not configured'."""
@@ -281,7 +288,10 @@ class TestNonSSEPath:
             time.sleep(0.3)
             mock_complete.assert_called_once()
             mock_fail.assert_not_called()
-            mock_update_job.assert_called_once_with(job_id, "completed", db_path=str(db_path))
+            assert mock_update_job.call_args_list[0].args == (job_id, "active")
+            assert mock_update_job.call_args_list[0].kwargs == {"db_path": str(db_path)}
+            assert mock_update_job.call_args_list[1].args == (job_id, "completed")
+            assert mock_update_job.call_args_list[1].kwargs == {"db_path": str(db_path)}
 
     def test_non_sse_background_thread_falha_task(self, handoff_tools, tmp_path):
         """Dispatch retorna None (falha silenciosa) → fail_task e update_job_status(failed) chamados."""
@@ -315,7 +325,10 @@ class TestNonSSEPath:
             time.sleep(0.3)
             mock_complete.assert_not_called()
             mock_fail.assert_called_once()
-            mock_update_job.assert_called_once_with(job_id, "failed", db_path=str(db_path))
+            assert mock_update_job.call_args_list[0].args == (job_id, "active")
+            assert mock_update_job.call_args_list[0].kwargs == {"db_path": str(db_path)}
+            assert mock_update_job.call_args_list[1].args == (job_id, "failed")
+            assert mock_update_job.call_args_list[1].kwargs == {"db_path": str(db_path)}
 
     def test_non_sse_background_thread_exception_nao_propaga(self, handoff_tools, tmp_path):
         """Exceção no complete_task (pós-agente) não quebra o retorno inicial."""

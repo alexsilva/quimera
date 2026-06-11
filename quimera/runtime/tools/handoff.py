@@ -13,6 +13,7 @@ from ..tasks import (
     create_task,
     complete_task,
     fail_task,
+    get_job,
     update_job_status,
 )
 from ..approval_broker import TrustedToolExecutionContext
@@ -197,6 +198,8 @@ class HandoffTools:
                 status="in_progress",
                 db_path=db_path,
             )
+            update_job_status(job_id, "active", db_path=db_path)
+            job_snapshot = get_job(job_id, db_path=db_path) or {}
         except Exception as exc:
             return ToolResult(ok=False, tool_name=call.name, error=f"Failed to create task: {exc}")
 
@@ -227,8 +230,21 @@ class HandoffTools:
         return ToolResult(
             ok=True,
             tool_name=call.name,
-            content=json.dumps({"job_id": job_id, "task_id": task_id, "status": "in_progress"}),
-            data={"job_id": job_id, "task_id": task_id},
+            content=json.dumps({
+                "job_id": job_id,
+                "task_id": task_id,
+                "status": "in_progress",
+                "job_status": job_snapshot.get("status", "active"),
+                "task_status": "in_progress",
+                "started_at": job_snapshot.get("started_at"),
+            }),
+            data={
+                "job_id": job_id,
+                "task_id": task_id,
+                "job_status": job_snapshot.get("status", "active"),
+                "task_status": "in_progress",
+                "started_at": job_snapshot.get("started_at"),
+            },
         )
 
     # ── synchronous execution core ───────────────────────────────────────

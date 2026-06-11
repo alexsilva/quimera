@@ -64,9 +64,20 @@ class TaskRepository:
                 status      TEXT NOT NULL,
                 created_by  TEXT,
                 created_at  DATETIME,
-                updated_at  DATETIME
+                updated_at  DATETIME,
+                started_at  DATETIME,
+                completed_at DATETIME
             );
         """)
+        cur.execute("PRAGMA table_info(jobs)")
+        existing_jobs = {row[1] for row in cur.fetchall()}
+        job_migrations = {
+            "started_at": "DATETIME",
+            "completed_at": "DATETIME",
+        }
+        for col, spec in job_migrations.items():
+            if col not in existing_jobs:
+                cur.execute(f"ALTER TABLE jobs ADD COLUMN {col} {spec}")
         cur.execute("""
             CREATE TABLE IF NOT EXISTS tasks (
                 id             INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -146,7 +157,10 @@ class TaskRepository:
         filt = filt or {}
         conn = self._conn()
         cur = conn.cursor()
-        sql = "SELECT id, description, status, created_by, created_at, updated_at FROM jobs"
+        sql = (
+            "SELECT id, description, status, created_by, created_at, updated_at, "
+            "started_at, completed_at FROM jobs"
+        )
         clauses: list[str] = []
         params: list = []
         if "status" in filt:
@@ -169,6 +183,8 @@ class TaskRepository:
                 created_by=r[3],
                 created_at=r[4],
                 updated_at=r[5],
+                started_at=r[6],
+                completed_at=r[7],
             )
             for r in rows
         ]
@@ -178,7 +194,8 @@ class TaskRepository:
         conn = self._conn()
         cur = conn.cursor()
         cur.execute(
-            "SELECT id, description, status, created_by, created_at, updated_at FROM jobs WHERE id = ?",
+            "SELECT id, description, status, created_by, created_at, updated_at, "
+            "started_at, completed_at FROM jobs WHERE id = ?",
             (job_id,),
         )
         row = cur.fetchone()
@@ -192,17 +209,31 @@ class TaskRepository:
             created_by=row[3],
             created_at=row[4],
             updated_at=row[5],
+            started_at=row[6],
+            completed_at=row[7],
         )
 
     def update_job_status(self, job_id: int, status: str) -> bool:
         """Atualiza o status de um job."""
         conn = self._conn()
         cur = conn.cursor()
+        now = self._now()
+        status_text = str(getattr(status, "value", status))
+        started_at_sql = ""
+        completed_at_sql = ""
+        params: list = [status_text, now]
+        if status_text in {"active", "in_progress", "completed", "failed", "rejected"}:
+            started_at_sql = ", started_at = COALESCE(started_at, ?)"
+            params.append(now)
+        if status_text in {"completed", "failed", "rejected"}:
+            completed_at_sql = ", completed_at = COALESCE(completed_at, ?)"
+            params.append(now)
+        params.append(job_id)
         try:
             cur.execute("BEGIN IMMEDIATE")
             cur.execute(
-                "UPDATE jobs SET status = ?, updated_at = ? WHERE id = ?",
-                (status, self._now(), job_id),
+                f"UPDATE jobs SET status = ?, updated_at = ?{started_at_sql}{completed_at_sql} WHERE id = ?",
+                tuple(params),
             )
             conn.commit()
             affected = cur.rowcount
