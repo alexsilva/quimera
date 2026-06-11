@@ -626,13 +626,13 @@ class TerminalRenderer:
                     _agent_toolbar_label(agent, st["label"])
                     for agent, st in _stream_states.items()
                 )
-                toolbar_text = f"[dim]{labels} · Ctrl+C para cancelar · T para tema[/dim]"
+                toolbar_text = f"[dim]{labels} · Ctrl+C para cancelar[/dim]"
             else:
                 only_agent, only_state = next(iter(_stream_states.items()))
                 label_text = _agent_toolbar_label(only_agent, only_state["label"])
                 toolbar_text = (
                     f"[bold {only_state['style']}]{label_text}[/] "
-                    f"[dim]· Ctrl+C para cancelar · T para tema[/dim]"
+                    f"[dim]· Ctrl+C para cancelar[/dim]"
                 )
             infobar = Rule(toolbar_text, characters="·", style="dim")
             return Group(main, infobar)
