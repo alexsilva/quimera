@@ -46,6 +46,15 @@ except ImportError:
 
 _OPENAI_USER_MESSAGE_BLOCKS = frozenset({"current_turn", "task_handoff", "task_review", "handoff"})
 _OPENAI_HISTORY_MESSAGE_BLOCKS = frozenset({"recent_conversation"})
+_OPENAI_SYSTEM_MESSAGE_BLOCKS = frozenset({
+    "header",
+    "session_state",
+    "rules",
+    "execution_mode",
+    "persistent_context",
+    "task_execution_rules",
+    "task_review_rules",
+})
 
 
 def _system_message(title: str, content: str) -> dict:
@@ -68,6 +77,8 @@ def _openai_message_for_prompt_block(block) -> dict:
         return {"role": "user", "content": block.content}
     elif block.name in _OPENAI_HISTORY_MESSAGE_BLOCKS:
         return _history_system_message(block.content)
+    elif block.name in _OPENAI_SYSTEM_MESSAGE_BLOCKS:
+        return _context_system_message(block.content, title=block.title)
 
 
 def _build_openai_messages_from_prompt(prompt: str) -> list[dict]:
@@ -347,6 +358,7 @@ class OpenAICompatDriver:
             on_tool_result=None,
             on_tool_abort=None,
             on_text_chunk=None,
+            progress_callback=None,
             quiet=False,
             cancel_event=None,
     ) -> Optional[str]:
@@ -467,7 +479,12 @@ class OpenAICompatDriver:
                     for tc in tool_calls:
                         if on_tool_call is not None:
                             on_tool_call(tc["name"], tc["arguments"])
-                        result = self._execute_tool(tc, tool_executor, agent_name=agent_name)
+                        result = self._execute_tool(
+                            tc,
+                            tool_executor,
+                            agent_name=agent_name,
+                            progress_callback=progress_callback,
+                        )
                         _logger.info(
                             "OpenAICompatDriver: tool=%s ok=%s hop=%d",
                             tc["name"], result.ok, hop,
@@ -598,7 +615,13 @@ class OpenAICompatDriver:
                     on_text_chunk(content)
         return text.strip(), []
 
-    def _execute_tool(self, tc: dict, tool_executor, agent_name: str | None = None) -> ToolResult:
+    def _execute_tool(
+        self,
+        tc: dict,
+        tool_executor,
+        agent_name: str | None = None,
+        progress_callback=None,
+    ) -> ToolResult:
         """Executa um tool call via ToolExecutor."""
         metadata: dict = {}
         if agent_name:
@@ -610,7 +633,7 @@ class OpenAICompatDriver:
             metadata=metadata,
         )
         try:
-            return tool_executor.execute(tool_call)
+            return tool_executor.execute(tool_call, progress_callback=progress_callback)
         except Exception as exc:
             _logger.error("OpenAICompatDriver: tool execution failed for '%s': %s", tc["name"], exc)
             return ToolResult(ok=False, tool_name=tc["name"], error=str(exc))

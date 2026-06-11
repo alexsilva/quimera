@@ -11,6 +11,7 @@ class PromptBlock:
 
     name: str
     opening: str
+    title: str
     content: str
     start: int
     end: int
@@ -46,6 +47,7 @@ class PromptParser:
         r"<!--\s*(NOT_IF|IF):([A-Za-z_][A-Za-z0-9_]*)\s*-->(.*?)<!--\s*END\1:\2\s*-->",
         re.DOTALL,
     )
+    TITLE_ATTR_PATTERN = re.compile(r"""\btitle\s*=\s*(?:"([^"]*)"|'([^']*)')""")
 
     def __init__(self, path: Path):
         self._source = path
@@ -61,6 +63,14 @@ class PromptParser:
             return newline + 1
         tag_end = text.find(">", start)
         return tag_end + 1 if tag_end >= 0 else -1
+
+    @classmethod
+    def _extract_block_title(cls, opening: str, block_name: str) -> str:
+        """Extrai ``title=...`` da tag de abertura de um bloco de prompt."""
+        match = cls.TITLE_ATTR_PATTERN.search(str(opening or ""))
+        if match:
+            return (match.group(1) or match.group(2) or "").strip()
+        return str(block_name or "").replace("_", " ").strip().title()
 
     @classmethod
     def iter_blocks(cls, text: str, name: str | None = None) -> list[PromptBlock]:
@@ -105,9 +115,11 @@ class PromptParser:
                 continue
             closing_end = closing_start + len(closing)
             if wanted is None or block_name == wanted:
+                opening = rendered[match.start():opening_end].strip()
                 blocks.append(PromptBlock(
                     name=block_name,
-                    opening=rendered[match.start():opening_end].strip(),
+                    opening=opening,
+                    title=cls._extract_block_title(opening, block_name),
                     content=rendered[opening_end:closing_start].strip(),
                     start=match.start(),
                     end=closing_end,

@@ -841,6 +841,7 @@ class AgentClient:
                                 lambda reason: self.tool_event_callback(agent, loop_abort=True, reason=reason))
                             if self.tool_event_callback else None,
                             on_text_chunk=on_text_chunk,
+                            progress_callback=progress_callback,
                         )
                     except Exception as exc:
                         result_holder["error"] = exc

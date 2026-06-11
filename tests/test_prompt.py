@@ -863,7 +863,30 @@ def test_prompt_parser_reads_multiple_sequential_top_level_blocks():
     blocks = PromptParser.iter_blocks(rendered)
 
     assert [block.name for block in blocks] == ["recent_conversation", "current_turn", "agent_metrics"]
+    assert [block.title for block in blocks] == ["Histórico", "Pedido atual", "Métricas"]
     assert [block.content for block in blocks] == ["Mensagem anterior", "Pedido de agora", "ok"]
+
+
+def test_prompt_parser_extracts_title_from_opening_tag():
+    """PromptBlock expõe title parseado, sem obrigar consumidores a parsearem tag."""
+    rendered = '<rules title="Suas regras">\n- Faça o certo.\n</rules>'
+
+    blocks = PromptParser.iter_blocks(rendered)
+
+    assert len(blocks) == 1
+    assert blocks[0].name == "rules"
+    assert blocks[0].opening == '<rules title="Suas regras">'
+    assert blocks[0].title == "Suas regras"
+    assert blocks[0].content == "- Faça o certo."
+
+
+def test_prompt_parser_title_falls_back_to_block_name():
+    """Blocos sem title recebem fallback legível derivado do nome."""
+    rendered = '<task_review_rules>\n- Validar.\n</task_review_rules>'
+
+    blocks = PromptParser.iter_blocks(rendered)
+
+    assert blocks[0].title == "Task Review Rules"
 
 
 def test_prompt_parser_returns_empty_list_when_no_template_blocks():

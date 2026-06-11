@@ -271,8 +271,8 @@ def test_build_openai_messages_keeps_current_turn_last_with_embedded_xml():
     assert messages[-1]["content"].count("não é histórico") == 1
 
 
-def test_build_openai_messages_keeps_current_turn_last_when_metrics_follow():
-    """Verifica que Test build openai messages keeps current turn last when metrics follow."""
+def test_build_openai_messages_keeps_current_turn_last_and_omits_metrics():
+    """current_turn continua último, mas agent_metrics não entra no payload OpenAI."""
     prompt = (
         '<header title="Identificação">contexto</header>\n'
         '<current_turn>pedido atual</current_turn>\n'
@@ -283,7 +283,7 @@ def test_build_openai_messages_keeps_current_turn_last_when_metrics_follow():
 
     assert messages[-1] == {"role": "user", "content": "pedido atual"}
     assert all(message["role"] == "system" for message in messages[:-1])
-    assert "métricas" in messages[-2]["content"]
+    assert all("métricas" not in message["content"] for message in messages)
 
 
 def test_run_sends_quimera_current_turn_as_final_user_message_to_openai_api():
@@ -325,10 +325,20 @@ def test_build_openai_messages_uses_plain_titles_without_instructional_text():
 
     messages = _build_openai_messages_from_prompt(prompt)
 
-    assert messages[0]["content"] == '<header title="Identificação">\n\nVocê é OPENAI.'
+    assert messages[0]["content"] == "Identificação\n\nVocê é OPENAI."
     assert messages[1]["content"] == "Conversa recente\n\nUSER: ação antiga"
     assert "Não trate este bloco" not in messages[0]["content"]
     assert "Use para evitar duplicação" not in messages[1]["content"]
+
+
+def test_build_openai_messages_uses_title_attribute_instead_of_raw_tag():
+    """Blocos system usam title=... como título, não a tag renderizada inteira."""
+    prompt = '<rules title="Suas regras">\n- Faça o certo.\n</rules>'
+
+    messages = _build_openai_messages_from_prompt(prompt)
+
+    assert messages == [{"role": "system", "content": "Suas regras\n\n- Faça o certo."}]
+    assert "<rules" not in messages[0]["content"]
 
 def test_build_openai_messages_maps_task_reviewer_rules_to_system_and_material_to_user():
     """Verifica que Test build openai messages maps task reviewer rules to system and material to user."""
@@ -350,51 +360,56 @@ def test_build_openai_messages_maps_task_reviewer_rules_to_system_and_material_t
     assert "ACEITE ou RETENTATIVA" in messages[1]["content"]
 
 def test_build_tool_system_prompt_includes_workspace_hint():
-    """Verifica que Test build tool system prompt includes workspace hint."""
+    """Prompt de ferramentas permanece curto e sem lista explícita de ferramentas."""
     prompt = _build_tool_system_prompt(["read_file", "apply_patch"], "/tmp/workspace")
 
-    assert "read_file, apply_patch" in prompt
-    assert "Workspace raiz: /tmp/workspace." in prompt
-    assert "não invente envelopes JSON para chamadas de ferramenta" in prompt
+    assert "Use as ferramentas disponíveis" in prompt
+    assert "não repita o mesmo payload inválido" in prompt
+    assert "read_file, apply_patch" not in prompt
+    assert "Workspace raiz: /tmp/workspace." not in prompt
 
 
 def test_build_tool_system_prompt_avoids_unavailable_tool_guidance():
-    """Verifica que Test build tool system prompt avoids unavailable tool guidance."""
+    """Prompt curto não injeta orientação específica de tools individuais."""
     prompt = _build_tool_system_prompt(["read_file"], "/tmp/workspace")
 
-    assert "read_file usa 'path', não 'file_path'" in prompt
+    assert "ferramentas disponíveis" in prompt
+    assert "read_file usa 'path', não 'file_path'" not in prompt
     assert "run_shell" not in prompt
     assert "exec_command" not in prompt
     assert "começar exatamente com '*** Begin Patch'" not in prompt
 
 
 def test_build_tool_system_prompt_prefers_call_agent_for_delegation():
-    """Verifica que Test build tool system prompt prefers call agent for delegation."""
+    """Prompt curto não duplica instruções específicas de call_agent."""
     prompt = _build_tool_system_prompt(["read_file", "call_agent"], "/tmp/workspace")
 
-    assert "Para delegação entre agentes, use a tool `call_agent`" in prompt
-    assert "use `fallback_agents` para failover sequencial" in prompt
-    assert "e `handoffs` para múltiplos passos no mesmo envio" in prompt
+    assert "ferramentas disponíveis" in prompt
+    assert "Para delegação entre agentes, use a tool `call_agent`" not in prompt
+    assert "use `fallback_agents` para failover sequencial" not in prompt
+    assert "e `handoffs` para múltiplos passos no mesmo envio" not in prompt
     assert "Se precisar delegar e `call_agent` não estiver disponível" not in prompt
 
 
 def test_build_tool_system_prompt_reports_limitation_without_call_agent():
-    """Verifica que Test build tool system prompt reports limitation without call agent."""
+    """Prompt curto não injeta limitação específica quando call_agent não está disponível."""
     prompt = _build_tool_system_prompt(["read_file"], "/tmp/workspace")
 
-    assert "Se precisar delegar e `call_agent` não estiver disponível" in prompt
+    assert "ferramentas disponíveis" in prompt
+    assert "Se precisar delegar e `call_agent` não estiver disponível" not in prompt
 
 
 def test_build_tool_system_prompt_includes_shell_policy_rules():
-    """Verifica que Test build tool system prompt includes shell policy rules."""
+    """Prompt curto não duplica política detalhada de shell no system prompt."""
     prompt = _build_tool_system_prompt(
         ["run_shell", "exec_command"],
         "/tmp/workspace",
         shell_allowlist=["ls", "cat", "pytest"],
     )
 
-    assert "sem operadores de encadeamento como &&, ;, ||, ` ou $()" in prompt
-    assert "comandos permitidos na allowlist: cat, ls, pytest;" in prompt
+    assert "ferramentas disponíveis" in prompt
+    assert "sem operadores de encadeamento" not in prompt
+    assert "comandos permitidos" not in prompt
 
 
 def test_build_tool_budget_prompt_includes_max_and_remaining():
@@ -724,7 +739,7 @@ def test_run_preserves_function_like_text_in_final_response():
 
 
 def test_run_tools_system_prompt_guides_tool_usage():
-    """Verifica que Test run tools system prompt guides tool usage."""
+    """Driver injeta prompt curto de uso de ferramentas e orçamento separado."""
     driver, mock_client = _make_driver()
     mock_client.chat.completions.create.return_value = _make_non_streaming_response(
         content="ok", tool_calls=None
@@ -740,17 +755,9 @@ def test_run_tools_system_prompt_guides_tool_usage():
     budget_message = messages[1]
     assert system_message["role"] == "system"
     assert budget_message["role"] == "system"
-    assert "descubra o alvo antes de editar" in system_message["content"]
-    assert "começar exatamente com '*** Begin Patch'" in system_message["content"]
     assert "não repita o mesmo payload inválido" in system_message["content"]
-    assert "não invente envelopes JSON para chamadas de ferramenta" in system_message["content"]
-    assert "Para delegação entre agentes, use a tool `call_agent`" in system_message["content"]
-    assert "use `fallback_agents` para failover sequencial" in system_message["content"]
-    assert "read_file usa 'path', não 'file_path'" in system_message["content"]
-    assert "use exatamente 'run_shell' para uma execução simples ou 'exec_command' para sessão interativa" in \
-           system_message["content"]
-    assert "nunca invente nomes como 'run', 'run_shell_command' ou 'execute_command'" in system_message["content"]
-    assert "Workspace raiz: /tmp/workspace." in system_message["content"]
+    assert "Use as ferramentas disponíveis" in system_message["content"]
+    assert "Workspace raiz: /tmp/workspace." not in system_message["content"]
     assert f"max_tool_hops={MAX_TOOL_HOPS_BY_RELIABILITY['medium']}" in budget_message["content"]
     assert f"remaining_tool_hops={MAX_TOOL_HOPS_BY_RELIABILITY['medium']}" in budget_message["content"]
     tool_names = {tool["function"]["name"] for tool in mock_client.chat.completions.create.call_args[1]["tools"]}
