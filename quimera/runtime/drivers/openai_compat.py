@@ -66,9 +66,8 @@ def _history_system_message(content: str) -> dict:
 def _openai_message_for_prompt_block(block) -> dict:
     if block.name in _OPENAI_USER_MESSAGE_BLOCKS:
         return {"role": "user", "content": block.content}
-    if block.name in _OPENAI_HISTORY_MESSAGE_BLOCKS:
+    elif block.name in _OPENAI_HISTORY_MESSAGE_BLOCKS:
         return _history_system_message(block.content)
-    return _context_system_message(block.content, title=block.opening)
 
 
 def _build_openai_messages_from_prompt(prompt: str) -> list[dict]:
@@ -86,6 +85,9 @@ def _build_openai_messages_from_prompt(prompt: str) -> list[dict]:
         if prefix:
             system_messages.append(_context_system_message(prefix))
         message = _openai_message_for_prompt_block(block)
+        if message is None:
+            cursor = block.end
+            continue
         if message["role"] == "user":
             user_messages.append((block.name, message))
         else:
@@ -195,84 +197,12 @@ def _build_tool_system_prompt(
     shell_allowlist: list[str] | set[str] | tuple[str, ...] | None = None,
 ) -> str:
     """Monta o system prompt usado no modo com ferramentas."""
-    names_csv = ", ".join(tool_names)
-    available = set(tool_names)
-    workspace_hint = f"Workspace raiz: {workspace_root}. " if workspace_root is not None else ""
-
     instructions = [
-        f"Você tem acesso às seguintes ferramentas: {names_csv}. ",
-        workspace_hint,
-        "Use apenas ferramentas listadas e disponíveis nesta requisição. ",
-        "Quando decidir usar uma ferramenta, use o mecanismo nativo de tool calling da API compatível; ",
-        "não invente envelopes JSON para chamadas de ferramenta; ",
-        "Não escreva chamadas de ferramenta como texto visível ao usuário; ",
-        "use exatamente os nomes de argumentos definidos nos schemas das ferramentas; ",
-        "se uma ferramenta retornar erro, ajuste a próxima chamada com base no erro e não repita o mesmo payload inválido; ",
-        "não peça ao usuário para executar comandos manualmente se você pode fazer isso diretamente; ",
-        "na resposta final, resuma arquivos alterados, evidência de validação e próximo passo; ",
+        "Use as ferramentas disponíveis quando precisar inspecionar ou modificar arquivos. ",
+        "Se uma ferramenta retornar erro, ajuste a próxima chamada com base no erro e não repita o mesmo payload inválido; ",
+        "Não peça ao usuário para executar comandos manualmente se você pode fazer isso diretamente; ",
+        "Na resposta final, resuma arquivos alterados, evidência de validação e próximo passo; ",
     ]
-
-    if "call_agent" in available:
-        instructions.append(
-            " Para delegação entre agentes, use a tool `call_agent` com `agent_name`, `task`, `context`; "
-            "use `fallback_agents` para failover sequencial no mesmo passo e `handoffs` para múltiplos passos no mesmo envio; "
-        )
-    else:
-        instructions.append(
-            " Se precisar delegar e `call_agent` não estiver disponível, não invente tool ou envelope; "
-            "responda com limitação explícita. "
-        )
-
-    discovery_tools = [name for name in ("list_files", "grep_search", "read_file") if name in available]
-    if discovery_tools:
-        instructions.append(
-            f" Protocolo de ferramentas: descubra o alvo antes de editar usando {', '.join(discovery_tools)}; "
-        )
-
-    if "apply_patch" in available:
-        instructions.append("prefira apply_patch para mudanças parciais em arquivos existentes; ")
-        instructions.append(
-            "o patch de apply_patch deve usar o formato nativo do Quimera e começar exatamente com "
-            "'*** Begin Patch' e terminar exatamente com '*** End Patch'; "
-        )
-        instructions.append("não use cabeçalhos de diff como '---', '+++' ou 'diff --git' dentro do patch; ")
-
-    if "write_file" in available:
-        instructions.append(
-            "write_file só deve sobrescrever arquivo existente com replace_existing=true e quando a "
-            "reescrita total for realmente necessária; "
-        )
-
-    if "read_file" in available:
-        instructions.append("por exemplo, read_file usa 'path', não 'file_path'; ")
-
-    has_run_shell = "run_shell" in available
-    has_exec_command = "exec_command" in available
-    if has_run_shell and has_exec_command:
-        instructions.append(
-            "para shell, use exatamente 'run_shell' para uma execução simples ou 'exec_command' para sessão "
-            "interativa; "
-        )
-        instructions.append("nunca invente nomes como 'run', 'run_shell_command' ou 'execute_command'; ")
-        instructions.append(
-            "use run_shell para inspeção ou validação objetiva e exec_command apenas quando precisar de stdin, "
-            "polling ou sessão persistente; "
-        )
-    elif has_run_shell:
-        instructions.append("para shell, use exatamente 'run_shell' com argumento 'command'; ")
-    elif has_exec_command:
-        instructions.append(
-            "para shell interativo, use exatamente 'exec_command' com argumento 'cmd' e write_stdin para polling; "
-        )
-    if has_run_shell or has_exec_command:
-        instructions.append(
-            "política de shell: execute um comando por vez, sem operadores de encadeamento como &&, ;, ||, ` ou $(); "
-        )
-        if shell_allowlist:
-            instructions.append(
-                "comandos permitidos na allowlist: " + ", ".join(sorted(shell_allowlist)) + "; "
-            )
-
     return "".join(instructions)
 
 
@@ -608,6 +538,7 @@ class OpenAICompatDriver:
         response = self._client.chat.completions.create(
             model=self.model,
             messages=messages,
+            temperature=0.0,
             tools=tools,
             tool_choice="auto",
             **( {"extra_body": self.extra_body} if self.extra_body else {} ),
