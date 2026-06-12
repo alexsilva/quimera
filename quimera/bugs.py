@@ -937,7 +937,6 @@ def format_bug_context(reports: list[BugReport]) -> str:
     if not reports:
         return ""
     lines = [
-        '<bug_context title="Bugs Operacionais Abertos">',
         "Estes bugs foram detectados automaticamente a partir de sinais de runtime e audit de render.",
         "",
     ]
@@ -950,5 +949,4 @@ def format_bug_context(reports: list[BugReport]) -> str:
             if evidence.line is not None:
                 location = f"{location}:{evidence.line}"
             lines.append(f"  evidence: {evidence.kind} | {location}")
-    lines.append("</bug_context>")
     return "\n".join(lines)

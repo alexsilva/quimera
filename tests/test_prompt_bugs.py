@@ -50,7 +50,6 @@ def test_prompt_builder_includes_bug_context_when_open_bugs_exist(tmp_path):
         },
     )
     section = builder._build_evidence_section({"session_id": session_id}, session_id)
-    assert '<bug_context title="Bugs Operacionais Abertos">' in section
     assert "[prompt_line_collision]" in section
 
 

@@ -191,7 +191,6 @@ def test_format_bug_context_renders_readable_block(tmp_path):
         store.file(_build_report("sessao-1", "render_repeat_block", "Bloco ANSI repetido"))
         reports = store.query(session_id="sessao-1", status="open")
         rendered = format_bug_context(reports)
-        assert '<bug_context title="Bugs Operacionais Abertos">' in rendered
         assert "[render_repeat_block]" in rendered
         assert "evidence:" in rendered
     finally:

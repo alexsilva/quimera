@@ -10,7 +10,7 @@ from .handoff_presenter import HandoffPresenter
 from .memory_selector import MemorySelector
 from .prompt_budget import PromptBudget
 from .prompt_kinds import PromptKind, coerce_prompt_kind
-from .prompt_templates import get_prompt_template
+from .prompt_templates import PromptText, get_prompt_template
 from .shared_state_presenter import SharedStatePresenter
 from .bugs import BugStore, format_bug_context
 
@@ -74,7 +74,7 @@ class PromptBuilder:
             execution_mode=None,
             prompt_kind=PromptKind.CHAT,
             request_override=None,
-    ):
+    ) -> PromptText | tuple[PromptText, dict]:
         """Gera o prompt final para um agente considerando contexto, handoff e histórico."""
         if history is None:
             history = []
@@ -150,9 +150,11 @@ class PromptBuilder:
                 metrics = feedback
         execution_state = self._build_execution_state_block(shared_state)
         execution_mode_prompt = self.execution_mode_presenter.present(execution_mode)
-        evidence_section = self._build_evidence_section(shared_state, session_id)
+        evidence_context_raw = self._build_evidence_context(shared_state, session_id)
+        bug_context_raw = self._build_bugs_context(shared_state, session_id)
         template = get_prompt_template(normalized_prompt_kind)
-        full_prompt = template.render(
+        prompt_text = template.render_prompt(
+            normalized_prompt_kind,
             agent=agent.upper(),
             user_name=self.memory_selector.user_name.upper(),
             agents=agents_list,
@@ -190,12 +192,12 @@ class PromptBuilder:
             recent_conversation=recent_conversation,
             metrics=metrics,
             execution_mode_prompt=execution_mode_prompt,
-            evidence_section=evidence_section,
+            evidence_context_raw=evidence_context_raw,
+            bug_context_raw=bug_context_raw,
         )
-
         if debug:
             metrics = self.prompt_budget.measure(
-                full_prompt=full_prompt,
+                full_prompt=prompt_text,
                 route_agents=route_agents,
                 session_id=session_id,
                 current_job_id=current_job_id,
@@ -212,9 +214,9 @@ class PromptBuilder:
                 history_window=self.memory_selector.history_window,
                 primary=primary,
             )
-            return full_prompt, metrics
+            return prompt_text, metrics
 
-        return full_prompt
+        return prompt_text
 
     def _build_execution_state_block(self, shared_state) -> str:
         if not isinstance(shared_state, dict):
@@ -250,7 +252,10 @@ class PromptBuilder:
         base_dir = self.session_state.get("workspace_tmp_root") if isinstance(self.session_state, dict) else None
         if not evidence_session_id or not base_dir:
             return ""
-        store = EvidenceStore(Path(base_dir), evidence_session_id)
+        try:
+            store = EvidenceStore(Path(base_dir), evidence_session_id)
+        except Exception:
+            return ""
         try:
             evidences = store.query(evidence_session_id)
         finally:

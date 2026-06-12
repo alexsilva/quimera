@@ -151,15 +151,29 @@ Sempre mescle com o estado existente, nunca substitua completamente.
 </execution_mode>
 <!-- ENDIF:execution_mode_prompt -->
 
-<!-- IF:evidence_section -->
-{evidence_section}
-<!-- ENDIF:evidence_section -->
+<!-- IF:evidence_context_raw -->
+<evidence_context title="Contexto Compartilhado de Evidências">
+{evidence_context_raw}
+</evidence_context>
+<!-- ENDIF:evidence_context_raw -->
+
+<!-- IF:bug_context_raw -->
+<bug_context title="Bugs Operacionais Abertos">
+{bug_context_raw}
+</bug_context>
+<!-- ENDIF:bug_context_raw -->
 
 <!-- IF:shared_state_json -->
 <shared_state title="Estado compartilhado">
 {shared_state_json}
 </shared_state>
 <!-- ENDIF:shared_state_json -->
+
+<!-- IF:metrics -->
+<agent_metrics title="Suas métricas (apenas referência)">
+{metrics}
+</agent_metrics>
+<!-- ENDIF:metrics -->
 
 <!-- IF:completed_task_results -->
 <completed_tasks title="Tarefas concluídas">
@@ -227,9 +241,3 @@ CHAIN:
 {request}
 </current_turn>
 <!-- ENDIF:request -->
-
-<!-- IF:metrics -->
-<agent_metrics title="Suas métricas (apenas referência)">
-{metrics}
-</agent_metrics>
-<!-- ENDIF:metrics -->

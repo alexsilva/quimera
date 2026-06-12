@@ -52,14 +52,8 @@ class EvidenceFormatter:
         if tool_lines:
             tool_section = "### Execução recente\n" + "\n".join(tool_lines) + "\n"
 
-        title = "Contexto Compartilhado de Evidências"
         intro = "Estas evidências resumem arquivos já inspecionados, execuções úteis e raciocínios desta sessão."
-        result = (
-            f'<evidence_context title="{title}">\n'
-            f"{intro}\n\n"
-            f"{file_section}{tool_section}{think_section}"
-            "</evidence_context>"
-        )
+        result = f"{intro}\n\n{file_section}{tool_section}{think_section}"
 
         if len(result) > max_chars:
             truncation_marker = "\n... (truncado)"
@@ -69,21 +63,17 @@ class EvidenceFormatter:
                 trimmed = max(0, half_limit - len(truncation_marker))
                 file_part = file_part[:trimmed] + truncation_marker
             think_part = think_section
-            prefix = (
-                f'<evidence_context title="{title}">\n'
-                f"{intro}\n\n"
-            )
-            suffix = "</evidence_context>"
+            prefix = f"{intro}\n\n"
             execution_part = tool_section
-            remaining = max_chars - len(prefix) - len(file_part) - len(execution_part) - len(suffix)
+            remaining = max_chars - len(prefix) - len(file_part) - len(execution_part)
             if remaining < 0:
-                execution_part = execution_part[: max(0, max_chars - len(prefix) - len(file_part) - len(suffix))]
+                execution_part = execution_part[: max(0, max_chars - len(prefix) - len(file_part))]
                 remaining = 0
             if len(think_part) > remaining:
                 if remaining <= len(truncation_marker):
                     think_part = think_part[:remaining]
                 else:
                     think_part = think_part[: remaining - len(truncation_marker)] + truncation_marker
-            result = f"{prefix}{file_part}{execution_part}{think_part}{suffix}"
+            result = f"{prefix}{file_part}{execution_part}{think_part}"
 
         return result

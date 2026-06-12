@@ -17,7 +17,6 @@ def test_only_file_read():
         Evidence(ts="2026-05-18T20:36:11.000Z", path="/tmp/b.txt", digest="bbb", type="file_read"),
     ]
     result = EvidenceFormatter.format(evidences)
-    assert '<evidence_context title="Contexto Compartilhado de Evidências">' in result
     assert "Estas evidências resumem arquivos já inspecionados" in result
     assert "/tmp/a.txt" in result
     assert "/tmp/b.txt" in result
@@ -30,7 +29,6 @@ def test_only_think_summary():
         Evidence(ts="2026-05-18T20:36:11.000Z", path="", digest="", type="think_summary", summary="Preciso verificar testes"),
     ]
     result = EvidenceFormatter.format(evidences)
-    assert '<evidence_context title="Contexto Compartilhado de Evidências">' in result
     assert "Analisando o código" in result
     assert "Preciso verificar testes" in result
 
@@ -60,7 +58,6 @@ def test_mixed_types():
         Evidence(ts="2026-05-18T20:36:12.000Z", path="/tmp/b.txt", digest="bbb", type="file_edit"),
     ]
     result = EvidenceFormatter.format(evidences)
-    assert '<evidence_context title="Contexto Compartilhado de Evidências">' in result
     assert "Arquivos visitados" in result
     assert "Execução recente" in result
     assert "Pensamentos" in result
