@@ -19,6 +19,7 @@ from quimera.spy_output_presenter import SpyOutputPresenter
 from quimera.runtime.drivers.openai_compat import OpenAICompatDriver
 from quimera.runtime.models import ToolCall
 from quimera.runtime.approve_summary import ApproveSummary
+from quimera.prompt_templates import PromptText
 
 from quimera.agents.parsers import parse_stream_json, parse_codex_json, parse_opencode_json
 from quimera.agents.process_runner import ProcessRunner
@@ -328,7 +329,7 @@ class AgentClient:
             "stderr": deque(maxlen=MAX_STDERR_LINES * 2),
             "error": None,
         }
-        log_queue = queue.Queue(maxsize=self._MAX_LOG_QUEUE_ITEMS) if not silent or (show_status and progress_callback) else None
+        log_queue = queue.Queue(maxsize=self._MAX_LOG_QUEUE_ITEMS) if not silent else None
         stderr_lines_shown = 0
         self._spy_output_presenter.reset()
 
@@ -651,7 +652,7 @@ class AgentClient:
     def call(
         self,
         agent,
-        prompt,
+        prompt: PromptText,
         silent=False,
         show_status=True,
         quiet=False,
@@ -728,11 +729,12 @@ class AgentClient:
         if fmt == "opencode-json" and raw is not None:
             return parse_opencode_json(raw, agent, self.tool_event_callback)
         return raw
+
     def _call_api(
         self,
         agent,
         plugin,
-        prompt,
+        prompt: PromptText,
         silent=False,
         show_status=True,
         quiet=False,
