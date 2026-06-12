@@ -310,8 +310,8 @@ def _available_tool_names(tools: list[dict[str, Any]]) -> set[str]:
 
 def _extract_quimera_current_turn(prompt: str) -> str:
     """Extrai o pedido atual usando o parser canônico de prompt."""
-    current_turn, _ = PromptParser.extract_last_block(prompt, "current_turn")
-    return current_turn or prompt
+    blocks = [block for block in PromptParser(prompt).blocks if block.name == "current_turn"]
+    return blocks[-1].content if blocks else prompt
 
 
 def _select_tool(prompt: str, tools: list[dict[str, Any]]) -> tuple[str, dict[str, Any]] | None:
@@ -494,6 +494,7 @@ def run_mcp_handoff_cli_agent(args: argparse.Namespace) -> int:
             return 1
         print("Delegação finalizada via call_agent.")
         return 0
+
 
 def run_openai_server(args: argparse.Namespace) -> int:
     """Inicia o servidor fake OpenAI-compatible."""

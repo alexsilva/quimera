@@ -37,7 +37,7 @@ def test_fake_plugins_are_registered_only_when_requested():
 
 
 
-def test_fake_openai_prefers_current_turn_from_rendered_prompt():
+def test_fake_openai_prefers_current_turn_from_prompt_text():
     """Verifica que fake openai prefers current turn from rendered prompt."""
     prompt = (
         "texto antigo com README e arquivos\n"
@@ -237,10 +237,10 @@ def test_mcp_handoff_cli_delegates_only_current_turn_via_call_agent(tmp_path):
             break
         time.sleep(0.02)
 
-    rendered_prompt = (
+    prompt_text = (
         '<header title="Identificação">contexto CLI</header>\n'
-        '<current_turn>Execute pwd via shell</current_turn>\n'
-        '<agent_metrics>métricas internas</agent_metrics>'
+        '<current_turn title="Pedido atual">Execute pwd via shell</current_turn>\n'
+        '<agent_metrics title="Métricas">métricas internas</agent_metrics>'
     )
     env = {
         **os.environ,
@@ -260,7 +260,7 @@ def test_mcp_handoff_cli_delegates_only_current_turn_via_call_agent(tmp_path):
             ],
             cwd=tmp_path,
             env=env,
-            input=rendered_prompt,
+            input=prompt_text,
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -292,7 +292,6 @@ def test_fake_openai_ignores_persisted_connection_overrides_in_test_registry(tmp
     registry = PluginRegistry()
     names = register_fake_plugins(registry)
 
-    from unittest.mock import patch
     with patch("quimera.plugins.base._get_connections_file", return_value=conn_file):
         apply_connection_overrides(registry=registry, exclude_names=set(names))
 
@@ -314,7 +313,6 @@ def test_fake_openai_allows_explicit_non_persistent_process_override(tmp_path):
         provider="openai_compat",
     )
 
-    from unittest.mock import patch
     with patch("quimera.plugins.base._get_connections_file", return_value=conn_file):
         set_connection_override("fake-openai", override, persist=False, registry=registry)
 
