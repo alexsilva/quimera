@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Optional
 
 from ...evidence import Evidence, EvidenceStore
-from ...prompt_templates import PromptParser
+from ...prompt_templates import PromptText
 from ..streaming import apply_stream_diff, normalize_stream_diff
 from ..tool_hops import (
     DEFAULT_MAX_TOOL_HOPS,
@@ -24,6 +24,11 @@ from ..tool_hops import (
     get_max_tool_hops,
 )
 from .tool_schemas import resolve_tool_schemas
+from .prompt_adapter import (
+    _build_openai_messages_from_prompt,
+    _build_tool_budget_prompt,
+    _build_tool_system_prompt,
+)
 from ..models import ToolCall, ToolResult
 
 MAX_TOOL_HOPS = DEFAULT_MAX_TOOL_HOPS
@@ -42,85 +47,6 @@ except ImportError:
     _OAINotFoundError = Exception  # type: ignore[assignment,misc]
     _OAIBadRequestError = Exception  # type: ignore[assignment,misc]
     _OAIRateLimitError = Exception  # type: ignore[assignment,misc]
-
-
-_OPENAI_USER_MESSAGE_BLOCKS = frozenset({"current_turn", "task_handoff", "task_review", "handoff"})
-_OPENAI_HISTORY_MESSAGE_BLOCKS = frozenset({"recent_conversation"})
-_OPENAI_SYSTEM_MESSAGE_BLOCKS = frozenset({
-    "header",
-    "session_state",
-    "rules",
-    "execution_mode",
-    "persistent_context",
-    "task_execution_rules",
-    "task_review_rules",
-})
-
-
-def _system_message(title: str, content: str) -> dict:
-    normalized_title = str(title or "").strip()
-    normalized_content = str(content or "").strip()
-    body = f"{normalized_title}\n\n{normalized_content}" if normalized_title else normalized_content
-    return {"role": "system", "content": body.strip()}
-
-
-def _context_system_message(content: str, title: str = "Contexto operacional") -> dict:
-    return _system_message(title, content)
-
-
-def _history_system_message(content: str) -> dict:
-    return _system_message("Conversa recente", content)
-
-
-def _openai_message_for_prompt_block(block) -> dict:
-    if block.name in _OPENAI_USER_MESSAGE_BLOCKS:
-        return {"role": "user", "content": block.content}
-    elif block.name in _OPENAI_HISTORY_MESSAGE_BLOCKS:
-        return _history_system_message(block.content)
-    elif block.name in _OPENAI_SYSTEM_MESSAGE_BLOCKS:
-        return _context_system_message(block.content, title=block.title)
-
-
-def _build_openai_messages_from_prompt(prompt: str) -> list[dict]:
-    """Converte o prompt renderizado em mensagens de API chat."""
-    rendered = str(prompt or "")
-    blocks = PromptParser.iter_blocks(rendered)
-    if not blocks:
-        return [{"role": "user", "content": rendered}]
-
-    system_messages: list[dict] = []
-    user_messages: list[tuple[str, dict]] = []
-    cursor = 0
-    for block in blocks:
-        prefix = rendered[cursor:block.start].strip()
-        if prefix:
-            system_messages.append(_context_system_message(prefix))
-        message = _openai_message_for_prompt_block(block)
-        if message is None:
-            cursor = block.end
-            continue
-        if message["role"] == "user":
-            user_messages.append((block.name, message))
-        else:
-            system_messages.append(message)
-        cursor = block.end
-
-    suffix = rendered[cursor:].strip()
-    if suffix:
-        system_messages.append(_context_system_message(suffix))
-
-    if not user_messages:
-        return system_messages
-
-    final_user_index = max(
-        (index for index, (name, _) in enumerate(user_messages) if name == "current_turn"),
-        default=len(user_messages) - 1,
-    )
-    final_user_message = user_messages[final_user_index][1]
-    earlier_user_messages = [
-        message for index, (_, message) in enumerate(user_messages) if index != final_user_index
-    ]
-    return [*system_messages, *earlier_user_messages, final_user_message]
 
 
 def _fatal_api_error_message(exc: Exception) -> str | None:
@@ -200,30 +126,6 @@ def _sanitize_assistant_text(
 ) -> str:
     """Remove apenas blocos de thinking; demais texto do assistente é preservado."""
     return _strip_thinking(text, agent_name=agent_name, session_id=session_id, base_dir=base_dir).strip()
-
-
-def _build_tool_system_prompt(
-    tool_names: list[str],
-    workspace_root: str | None,
-    shell_allowlist: list[str] | set[str] | tuple[str, ...] | None = None,
-) -> str:
-    """Monta o system prompt usado no modo com ferramentas."""
-    instructions = [
-        "Use as ferramentas disponíveis quando precisar inspecionar ou modificar arquivos. ",
-        "Se uma ferramenta retornar erro, ajuste a próxima chamada com base no erro e não repita o mesmo payload inválido; ",
-        "Não peça ao usuário para executar comandos manualmente se você pode fazer isso diretamente; ",
-        "Na resposta final, resuma arquivos alterados, evidência de validação e próximo passo; ",
-    ]
-    return "".join(instructions)
-
-
-def _build_tool_budget_prompt(max_tool_hops: int, remaining_tool_hops: int) -> str:
-    """Monta contexto explícito de orçamento de tools para a iteração atual."""
-    return (
-        "Orçamento de ferramentas desta execução: "
-        f"max_tool_hops={max_tool_hops}, remaining_tool_hops={remaining_tool_hops}. "
-        "Evite chamadas desnecessárias e finalize quando tiver evidência suficiente."
-    )
 
 
 def _invalid_tool_signature(result: ToolResult) -> tuple[str, str, str]:
@@ -349,7 +251,7 @@ class OpenAICompatDriver:
 
     def run(
             self,
-            prompt: str,
+            prompt: PromptText,
             tool_executor=None,
             agent_name: str | None = None,
             session_id: str | None = None,

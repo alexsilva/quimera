@@ -18,9 +18,6 @@ from quimera.runtime.drivers.openai_compat import (
      DEFAULT_MAX_CONNECTIONS,
      MAX_TOOL_HOPS_BY_RELIABILITY,
      OpenAICompatDriver,
-     _build_openai_messages_from_prompt,
-     _build_tool_budget_prompt,
-     _build_tool_system_prompt,
      _prune_tool_loop_messages,
      _sanitize_assistant_text,
      _strip_thinking,
@@ -37,6 +34,7 @@ from quimera.runtime.drivers.tool_schemas import TOOL_SCHEMAS, resolve_tool_sche
 from quimera.runtime.errors import ToolPolicyViolationError
 from quimera.runtime.models import ToolCall, ToolResult
 from quimera.plugins.base import OpenAIConnection
+from quimera.prompt_templates import PromptText
 
 
 # ---------------------------------------------------------------------------
@@ -76,6 +74,15 @@ def _make_driver(model="qwen3-coder:30b", base_url="http://localhost:11434/v1"):
 def _setup_stream(mock_client, chunks):
     """Configura streaming (somente para chamadas sem tools)."""
     mock_client.chat.completions.create.return_value = iter(chunks)
+
+
+def _prompt(text="prompt"):
+    """Prompt mínimo estruturado para testes do driver."""
+    return _rendered(f'<current_turn title="Pedido atual">{text}</current_turn>')
+
+
+def _rendered(text="", kind="chat"):
+    return PromptText(text, kind)
 
 
 # ---------------------------------------------------------------------------
@@ -226,65 +233,6 @@ def test_sanitize_assistant_text_preserves_function_like_text():
     assert _sanitize_assistant_text(text) == "</function>\nResposta final\n</tool_call>"
 
 
-def test_build_openai_messages_from_prompt_uses_current_turn_as_active_user_message():
-    """Verifica que Test build openai messages from prompt uses current turn as active user message."""
-    prompt = (
-        '<rules title="Suas regras">contexto</rules>\n'
-        '<recent_conversation title="Conversa recente">\n'
-        'USER: Leia o README\nASSISTANT: já li\n'
-        '</recent_conversation>\n'
-        '<current_turn title="Pedido atual de >>>">\n'
-        'Execute pwd via shell usando MCP\n'
-        '</current_turn>'
-    )
-
-    messages = _build_openai_messages_from_prompt(prompt)
-
-    assert messages[-1] == {"role": "user", "content": "Execute pwd via shell usando MCP"}
-    assert all(message["role"] == "system" for message in messages[:-1])
-    assert "Leia o README" in messages[-2]["content"]
-    assert "Execute pwd" not in messages[0]["content"]
-
-
-
-def test_build_openai_messages_keeps_current_turn_last_with_embedded_xml():
-    """Verifica que Test build openai messages keeps current turn last with embedded xml."""
-    prompt = (
-        '<recent_conversation title="Conversa recente">\n'
-        'Histórico anterior\n'
-        '</recent_conversation>\n'
-        '<current_turn title="Pedido atual">\n'
-        'Analise este HTML/XML:\n'
-        '```html\n'
-        '<section>\n'
-        '<recent_conversation>não é histórico</recent_conversation>\n'
-        '</section>\n'
-        '```\n'
-        '</current_turn>\n'
-    )
-
-    messages = _build_openai_messages_from_prompt(prompt)
-
-    assert messages[-1]["role"] == "user"
-    assert "Analise este HTML/XML" in messages[-1]["content"]
-    assert "<recent_conversation>não é histórico</recent_conversation>" in messages[-1]["content"]
-    assert messages[-1]["content"].count("não é histórico") == 1
-
-
-def test_build_openai_messages_keeps_current_turn_last_and_omits_metrics():
-    """current_turn continua último, mas agent_metrics não entra no payload OpenAI."""
-    prompt = (
-        '<header title="Identificação">contexto</header>\n'
-        '<current_turn>pedido atual</current_turn>\n'
-        '<agent_metrics>métricas</agent_metrics>'
-    )
-
-    messages = _build_openai_messages_from_prompt(prompt)
-
-    assert messages[-1] == {"role": "user", "content": "pedido atual"}
-    assert all(message["role"] == "system" for message in messages[:-1])
-    assert all("métricas" not in message["content"] for message in messages)
-
 
 def test_run_sends_quimera_current_turn_as_final_user_message_to_openai_api():
     """Verifica que Test run sends quimera current turn as final user message to openai api."""
@@ -299,7 +247,7 @@ def test_run_sends_quimera_current_turn_as_final_user_message_to_openai_api():
         '</current_turn>'
     )
 
-    result = driver.run(prompt, tool_executor=None)
+    result = driver.run(_rendered(prompt), tool_executor=None)
 
     assert result == "ok"
     messages = mock_client.chat.completions.create.call_args[1]["messages"]
@@ -307,117 +255,6 @@ def test_run_sends_quimera_current_turn_as_final_user_message_to_openai_api():
     assert "Leia o README" in messages[-2]["content"]
 
 
-
-def test_build_openai_messages_uses_short_operational_context_title_for_free_text():
-    """Verifica que Test build openai messages uses short operational context title for free text."""
-    messages = _build_openai_messages_from_prompt('texto solto\n<header title="H">\nctx\n</header>')
-
-    assert messages[0]["content"] == "Contexto operacional\n\ntexto solto"
-
-
-def test_build_openai_messages_uses_plain_titles_without_instructional_text():
-    """Verifica que Test build openai messages uses plain titles without instructional text."""
-    prompt = (
-        '<header title="Identificação">\nVocê é OPENAI.\n</header>\n'
-        '<recent_conversation title="Conversa recente">\nUSER: ação antiga\n</recent_conversation>\n'
-        '<current_turn title="Pedido atual de >>>">\nAção atual\n</current_turn>'
-    )
-
-    messages = _build_openai_messages_from_prompt(prompt)
-
-    assert messages[0]["content"] == "Identificação\n\nVocê é OPENAI."
-    assert messages[1]["content"] == "Conversa recente\n\nUSER: ação antiga"
-    assert "Não trate este bloco" not in messages[0]["content"]
-    assert "Use para evitar duplicação" not in messages[1]["content"]
-
-
-def test_build_openai_messages_uses_title_attribute_instead_of_raw_tag():
-    """Blocos system usam title=... como título, não a tag renderizada inteira."""
-    prompt = '<rules title="Suas regras">\n- Faça o certo.\n</rules>'
-
-    messages = _build_openai_messages_from_prompt(prompt)
-
-    assert messages == [{"role": "system", "content": "Suas regras\n\n- Faça o certo."}]
-    assert "<rules" not in messages[0]["content"]
-
-def test_build_openai_messages_maps_task_reviewer_rules_to_system_and_material_to_user():
-    """Verifica que Test build openai messages maps task reviewer rules to system and material to user."""
-    prompt = (
-        '<header title="Task Reviewer">\nVocê é OPENAI.\n</header>\n'
-        '<task_review_rules title="Critério de review">\n'
-        '- Responda com ACEITE ou RETENTATIVA.\n'
-        '</task_review_rules>\n'
-        '<task_review title="Material para validação">\n'
-        'TASK:\nValidar execução\n'
-        '</task_review>'
-    )
-
-    messages = _build_openai_messages_from_prompt(prompt)
-
-    assert messages[-1] == {"role": "user", "content": "TASK:\nValidar execução"}
-    assert all(message["role"] == "system" for message in messages[:-1])
-    assert "Critério de review" in messages[1]["content"]
-    assert "ACEITE ou RETENTATIVA" in messages[1]["content"]
-
-def test_build_tool_system_prompt_includes_workspace_hint():
-    """Prompt de ferramentas permanece curto e sem lista explícita de ferramentas."""
-    prompt = _build_tool_system_prompt(["read_file", "apply_patch"], "/tmp/workspace")
-
-    assert "Use as ferramentas disponíveis" in prompt
-    assert "não repita o mesmo payload inválido" in prompt
-    assert "read_file, apply_patch" not in prompt
-    assert "Workspace raiz: /tmp/workspace." not in prompt
-
-
-def test_build_tool_system_prompt_avoids_unavailable_tool_guidance():
-    """Prompt curto não injeta orientação específica de tools individuais."""
-    prompt = _build_tool_system_prompt(["read_file"], "/tmp/workspace")
-
-    assert "ferramentas disponíveis" in prompt
-    assert "read_file usa 'path', não 'file_path'" not in prompt
-    assert "run_shell" not in prompt
-    assert "exec_command" not in prompt
-    assert "começar exatamente com '*** Begin Patch'" not in prompt
-
-
-def test_build_tool_system_prompt_prefers_call_agent_for_delegation():
-    """Prompt curto não duplica instruções específicas de call_agent."""
-    prompt = _build_tool_system_prompt(["read_file", "call_agent"], "/tmp/workspace")
-
-    assert "ferramentas disponíveis" in prompt
-    assert "Para delegação entre agentes, use a tool `call_agent`" not in prompt
-    assert "use `fallback_agents` para failover sequencial" not in prompt
-    assert "e `handoffs` para múltiplos passos no mesmo envio" not in prompt
-    assert "Se precisar delegar e `call_agent` não estiver disponível" not in prompt
-
-
-def test_build_tool_system_prompt_reports_limitation_without_call_agent():
-    """Prompt curto não injeta limitação específica quando call_agent não está disponível."""
-    prompt = _build_tool_system_prompt(["read_file"], "/tmp/workspace")
-
-    assert "ferramentas disponíveis" in prompt
-    assert "Se precisar delegar e `call_agent` não estiver disponível" not in prompt
-
-
-def test_build_tool_system_prompt_includes_shell_policy_rules():
-    """Prompt curto não duplica política detalhada de shell no system prompt."""
-    prompt = _build_tool_system_prompt(
-        ["run_shell", "exec_command"],
-        "/tmp/workspace",
-        shell_allowlist=["ls", "cat", "pytest"],
-    )
-
-    assert "ferramentas disponíveis" in prompt
-    assert "sem operadores de encadeamento" not in prompt
-    assert "comandos permitidos" not in prompt
-
-
-def test_build_tool_budget_prompt_includes_max_and_remaining():
-    """Verifica que Test build tool budget prompt includes max and remaining."""
-    prompt = _build_tool_budget_prompt(max_tool_hops=24, remaining_tool_hops=17)
-
-    assert "max_tool_hops=24" in prompt
-    assert "remaining_tool_hops=17" in prompt
 
 
 def test_prune_tool_loop_messages_keeps_head_and_recent_tail():
@@ -716,7 +553,7 @@ def test_run_simple_response_no_tools():
     driver, mock_client = _make_driver()
     _setup_stream(mock_client, [_make_chunk(content="Resposta simples")])
 
-    result = driver.run("prompt", tool_executor=None)
+    result = driver.run(_prompt(), tool_executor=None)
     assert result == "Resposta simples"
 
 
@@ -725,7 +562,7 @@ def test_run_strips_thinking_block():
     driver, mock_client = _make_driver()
     _setup_stream(mock_client, [_make_chunk(content="<think>thinking</think>Resposta")])
 
-    result = driver.run("prompt", tool_executor=None)
+    result = driver.run(_prompt(), tool_executor=None)
     assert result == "Resposta"
 
 
@@ -734,7 +571,7 @@ def test_run_preserves_function_like_text_in_final_response():
     driver, mock_client = _make_driver()
     _setup_stream(mock_client, [_make_chunk(content="</function>Resposta final</tool_call>")])
 
-    result = driver.run("prompt", tool_executor=None)
+    result = driver.run(_prompt(), tool_executor=None)
     assert result == "</function>Resposta final</tool_call>"
 
 
@@ -748,7 +585,7 @@ def test_run_tools_system_prompt_guides_tool_usage():
     mock_executor.config = SimpleNamespace(workspace_root="/tmp/workspace", db_path=None)
     mock_executor.registry.names.return_value = [s["function"]["name"] for s in TOOL_SCHEMAS]
 
-    driver.run("prompt", tool_executor=mock_executor)
+    driver.run(_prompt(), tool_executor=mock_executor)
 
     messages = mock_client.chat.completions.create.call_args[1]["messages"]
     system_message = messages[0]
@@ -786,7 +623,7 @@ def test_run_returns_none_on_empty_response():
     driver, mock_client = _make_driver()
     _setup_stream(mock_client, [_make_chunk(content=None)])
 
-    result = driver.run("prompt", tool_executor=None)
+    result = driver.run(_prompt(), tool_executor=None)
     assert result is None
 
 
@@ -809,7 +646,7 @@ def test_run_tool_loop_one_hop():
         ok=True, tool_name="read_file", content="conteúdo do arquivo"
     )
 
-    result = driver.run("leia o arquivo x.py", tool_executor=mock_executor)
+    result = driver.run(_prompt("leia o arquivo x.py"), tool_executor=mock_executor)
     assert result == "Arquivo lido com sucesso."
     assert mock_executor.execute.call_count == 1
     assert mock_client.chat.completions.create.call_count == 2
@@ -830,7 +667,7 @@ def test_run_tool_loop_sends_tool_result_message():
     mock_executor.registry.names.return_value = [s["function"]["name"] for s in TOOL_SCHEMAS]
     mock_executor.execute.return_value = ToolResult(ok=True, tool_name="run_shell", content="file.py")
 
-    driver.run("liste arquivos", tool_executor=mock_executor)
+    driver.run(_prompt("liste arquivos"), tool_executor=mock_executor)
 
     second_call_messages = mock_client.chat.completions.create.call_args_list[1][1]["messages"]
     tool_result_msg = next(m for m in second_call_messages if m.get("role") == "tool")
@@ -866,7 +703,7 @@ def test_run_tool_loop_updates_remaining_budget_each_hop():
     mock_executor.registry.names.return_value = [s["function"]["name"] for s in TOOL_SCHEMAS]
     mock_executor.execute.return_value = ToolResult(ok=True, tool_name="run_shell", content="file.py")
 
-    driver.run("liste arquivos", tool_executor=mock_executor)
+    driver.run(_prompt("liste arquivos"), tool_executor=mock_executor)
 
     max_hops = MAX_TOOL_HOPS_BY_RELIABILITY["medium"]
 
@@ -900,7 +737,7 @@ def test_run_tool_loop_uses_minimal_prompt_payload_and_valid_json():
         data={"cwd": "/tmp/workspace"},
     )
 
-    driver.run("liste arquivos", tool_executor=mock_executor)
+    driver.run(_prompt("liste arquivos"), tool_executor=mock_executor)
 
     second_call_messages = mock_client.chat.completions.create.call_args_list[1][1]["messages"]
     tool_result_msg = next(m for m in second_call_messages if m.get("role") == "tool")
@@ -937,7 +774,7 @@ def test_run_tool_loop_prunes_messages_between_hops():
     mock_executor.registry.names.return_value = [s["function"]["name"] for s in TOOL_SCHEMAS]
     mock_executor.execute.return_value = ToolResult(ok=True, tool_name="run_shell", content="file.py")
 
-    driver.run("liste arquivos", tool_executor=mock_executor)
+    driver.run(_prompt("liste arquivos"), tool_executor=mock_executor)
 
     observed_lengths = [
         call.kwargs["messages"]
@@ -954,7 +791,7 @@ def test_run_api_error_returns_none():
     driver, mock_client = _make_driver()
     mock_client.chat.completions.create.side_effect = RuntimeError("connection refused")
 
-    result = driver.run("prompt", tool_executor=None)
+    result = driver.run(_prompt(), tool_executor=None)
     assert result is None
 
 
@@ -1401,7 +1238,7 @@ def test_run_max_hops_returns_last_text():
     from quimera.runtime.tool_hops import MAX_TOOL_HOPS_BY_RELIABILITY
     expected_hops = MAX_TOOL_HOPS_BY_RELIABILITY["medium"]
     driver.tool_use_reliability = "medium"
-    result = driver.run("prompt", tool_executor=mock_executor)
+    result = driver.run(_prompt(), tool_executor=mock_executor)
     assert result is not None
     assert mock_client.chat.completions.create.call_count == expected_hops + 1
 
@@ -1422,7 +1259,7 @@ def test_run_low_reliability_uses_lower_max_hops():
     mock_executor.registry.names.return_value = [s["function"]["name"] for s in TOOL_SCHEMAS]
     mock_executor.execute.return_value = ToolResult(ok=True, tool_name="run_shell", content="ok")
 
-    result = driver.run("prompt", tool_executor=mock_executor)
+    result = driver.run(_prompt(), tool_executor=mock_executor)
     assert result is not None
     assert mock_client.chat.completions.create.call_count == MAX_TOOL_HOPS_BY_RELIABILITY["low"] + 1
 
@@ -1456,7 +1293,7 @@ def test_run_aborts_on_repeated_policy_error_for_all_reliabilities():
             for _ in range(threshold)
         ]
 
-        result = driver.run("prompt", tool_executor=mock_executor)
+        result = driver.run(_prompt(), tool_executor=mock_executor)
         assert result == "Falha: loop de ferramenta inválida detectado."
         assert mock_client.chat.completions.create.call_count == threshold
 
@@ -1487,7 +1324,7 @@ def test_run_does_not_abort_on_different_policy_error_signatures():
         ),
     ]
 
-    result = driver.run("prompt", tool_executor=mock_executor)
+    result = driver.run(_prompt(), tool_executor=mock_executor)
     assert result == "resposta final"
     assert mock_client.chat.completions.create.call_count == 3
 
@@ -1520,7 +1357,7 @@ def test_run_allows_same_policy_signature_before_threshold():
         for _ in range(threshold - 1)
     ]
 
-    result = driver.run("prompt", tool_executor=mock_executor)
+    result = driver.run(_prompt(), tool_executor=mock_executor)
     assert result == "resposta final"
     assert mock_client.chat.completions.create.call_count == threshold
 
@@ -1551,7 +1388,7 @@ def test_run_reports_tool_abort_callback():
     ]
     aborts = []
 
-    driver.run("prompt", tool_executor=mock_executor, on_tool_abort=aborts.append)
+    driver.run(_prompt(), tool_executor=mock_executor, on_tool_abort=aborts.append)
     assert aborts == ["invalid_tool_loop"]
 
 
@@ -1667,7 +1504,7 @@ def test_run_cancel_event_between_hops():
     mock_executor.registry.names.return_value = [s["function"]["name"] for s in TOOL_SCHEMAS]
     mock_executor.execute.return_value = ToolResult(ok=True, tool_name="run_shell", content="ok")
 
-    result = driver.run("prompt", tool_executor=mock_executor, cancel_event=cancel_event)
+    result = driver.run(_prompt(), tool_executor=mock_executor, cancel_event=cancel_event)
 
     assert result is None
     # Apenas um hop: o cancelamento é checado no início do hop seguinte
@@ -1687,7 +1524,7 @@ def test_run_cancel_event_in_streaming():
 
     _setup_stream(mock_client, make_chunks())
 
-    result = driver.run("prompt", tool_executor=None, cancel_event=cancel_event)
+    result = driver.run(_prompt(), tool_executor=None, cancel_event=cancel_event)
     # "parte2" não deve ser incluído — cancelamento detectado no início da iteração seguinte
     assert result == "parte1"
 
@@ -1697,7 +1534,7 @@ def test_run_no_cancel_event_behaves_normally():
     driver, mock_client = _make_driver()
     _setup_stream(mock_client, [_make_chunk(content="resposta completa")])
 
-    result = driver.run("prompt", tool_executor=None, cancel_event=None)
+    result = driver.run(_prompt(), tool_executor=None, cancel_event=None)
     assert result == "resposta completa"
 
 
@@ -1708,7 +1545,7 @@ def test_run_cancel_event_not_set_completes_normally():
     cancel_event = threading.Event()  # nunca acionado
     _setup_stream(mock_client, [_make_chunk(content="ok")])
 
-    result = driver.run("prompt", tool_executor=None, cancel_event=cancel_event)
+    result = driver.run(_prompt(), tool_executor=None, cancel_event=cancel_event)
     assert result == "ok"
 
 
@@ -1815,7 +1652,7 @@ def test_run_acquires_and_releases_semaphore():
 
     # Semáforo deve ser adquirido durante a execução e liberado após
     assert driver._semaphore._value == 1
-    result = driver.run("prompt", tool_executor=None)
+    result = driver.run(_prompt(), tool_executor=None)
     assert result == "ok"
     # Após run(), o semáforo deve estar liberado de volta
     assert driver._semaphore._value == 1
@@ -1848,7 +1685,7 @@ def test_concurrent_runs_block_at_max_connections():
 
     def run_in_thread(name):
         try:
-            driver.run(f"prompt-{name}", tool_executor=None)
+            driver.run(_prompt(f"prompt-{name}"), tool_executor=None)
             completed["count"] += 1
         except Exception as e:
             errors["list"].append(e)
