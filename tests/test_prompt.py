@@ -1,6 +1,7 @@
 from unittest.mock import MagicMock
 import re
 
+import pytest
 from rich.console import Console
 
 from quimera.context import ContextManager
@@ -10,7 +11,7 @@ from quimera.modes import get_mode
 from quimera.plugins.codex import _format_codex_spy_event
 from quimera.prompt import PromptBuilder
 from quimera.prompt_kinds import PromptKind
-from quimera.prompt_templates import PromptParser, PromptTemplate
+from quimera.prompt_templates import PromptParser, PromptTemplate, PromptText
 from quimera.ui import TerminalRenderer
 
 
@@ -579,8 +580,8 @@ def test_prompt_keeps_infra_shared_state_visible_even_with_goal_canonical():
     assert '<goal_lock title="Objetivo fixo (imutável)">' not in prompt
 
 
-def test_prompt_parser_extracts_blocks_with_prompt_symbol_in_title():
-    """Verifica que prompt parser extracts blocks with prompt symbol in title."""
+def test_prompt_parser_reads_block_with_prompt_symbol_in_title():
+    """Parser lê bloco com símbolo de prompt no title."""
     prompt = (
         '<recent_conversation title="Conversa recente">\n'
         'USER: Leia o README\n'
@@ -590,7 +591,11 @@ def test_prompt_parser_extracts_blocks_with_prompt_symbol_in_title():
         '</current_turn>'
     )
 
-    current_turn, remaining = PromptParser.extract_last_block(prompt, "current_turn")
+    blocks = [block for block in PromptParser(prompt).blocks if block.name == "current_turn"]
+    assert blocks
+    block = blocks[-1]
+    current_turn = block.content
+    remaining = (prompt[:block.start] + prompt[block.end:]).strip()
 
     assert current_turn == "Execute pwd via shell usando MCP"
     assert "Leia o README" in remaining
@@ -821,7 +826,7 @@ def test_prompt_parser_ignores_xml_inside_current_turn():
         '</current_turn>\n'
     )
 
-    blocks = PromptParser.iter_blocks(rendered)
+    blocks = PromptParser(rendered).blocks
 
     assert [block.name for block in blocks] == ["current_turn"]
     assert "<section>" in blocks[0].content
@@ -840,7 +845,7 @@ def test_prompt_parser_ignores_html_xml_inside_markdown_code_block():
         '</current_turn>\n'
     )
 
-    blocks = PromptParser.iter_blocks(rendered)
+    blocks = PromptParser(rendered).blocks
 
     assert [block.name for block in blocks] == ["current_turn"]
     assert "<recent_conversation>não é bloco do template</recent_conversation>" in blocks[0].content
@@ -860,7 +865,7 @@ def test_prompt_parser_reads_multiple_sequential_top_level_blocks():
         '</agent_metrics>\n'
     )
 
-    blocks = PromptParser.iter_blocks(rendered)
+    blocks = PromptParser(rendered).blocks
 
     assert [block.name for block in blocks] == ["recent_conversation", "current_turn", "agent_metrics"]
     assert [block.title for block in blocks] == ["Histórico", "Pedido atual", "Métricas"]
@@ -871,7 +876,7 @@ def test_prompt_parser_extracts_title_from_opening_tag():
     """PromptBlock expõe title parseado, sem obrigar consumidores a parsearem tag."""
     rendered = '<rules title="Suas regras">\n- Faça o certo.\n</rules>'
 
-    blocks = PromptParser.iter_blocks(rendered)
+    blocks = PromptParser(rendered).blocks
 
     assert len(blocks) == 1
     assert blocks[0].name == "rules"
@@ -880,17 +885,32 @@ def test_prompt_parser_extracts_title_from_opening_tag():
     assert blocks[0].content == "- Faça o certo."
 
 
-def test_prompt_parser_title_falls_back_to_block_name():
-    """Blocos sem title recebem fallback legível derivado do nome."""
+def test_prompt_parser_rejects_template_block_without_title():
+    """Blocos estruturados sem title são erro de template, não fallback silencioso."""
     rendered = '<task_review_rules>\n- Validar.\n</task_review_rules>'
 
-    blocks = PromptParser.iter_blocks(rendered)
-
-    assert blocks[0].title == "Task Review Rules"
+    with pytest.raises(ValueError, match="sem atributo title"):
+        PromptParser(rendered)
 
 
 def test_prompt_parser_returns_empty_list_when_no_template_blocks():
     """Verifica que prompt parser returns empty list when no template blocks."""
     rendered = "Texto solto\n<section>HTML do usuário</section>\n```xml\n<foo>bar</foo>\n```"
 
-    assert PromptParser.iter_blocks(rendered) == []
+    assert PromptParser(rendered).blocks == ()
+
+
+def test_prompt_text_behaves_like_str_and_keeps_structure_on_concat():
+    """PromptText é string real, mas preserva kind/blocos em concatenação simples."""
+    rendered = '<current_turn title="Pedido atual">oi</current_turn>'
+    structured = PromptText(rendered, PromptKind.CHAT)
+
+    assert isinstance(structured, str)
+    assert str(structured) == rendered
+    assert structured.kind is PromptKind.CHAT
+    assert structured.blocks[0].name == "current_turn"
+
+    same = structured + ""
+    assert isinstance(same, str)
+    assert same.kind is PromptKind.CHAT
+    assert same.blocks[0].content == "oi"

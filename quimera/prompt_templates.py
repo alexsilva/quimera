@@ -17,28 +17,37 @@ class PromptBlock:
     end: int
 
 
-class PromptParser:
-    """Parseia seções de um arquivo de template de prompt."""
+class PromptText(str):
+    """Prompt renderizado com estrutura preservada.
 
-    BLOCK_NAMES = frozenset({
-        "agent_metrics",
-        "completed_tasks",
-        "current_turn",
-        "debug_state",
-        "execution_mode",
-        "execution_state",
-        "handoff",
-        "header",
-        "persistent_context",
-        "recent_conversation",
-        "rules",
-        "session_state",
-        "shared_state",
-        "task_execution_rules",
-        "task_handoff",
-        "task_review",
-        "task_review_rules",
-    })
+    ``str(prompt)`` devolve o texto final com tags na ordem renderizada.
+    Iterar o objeto devolve os blocos top-level já parseados.
+    """
+
+    def __new__(cls, text: str, kind: PromptKind | str = PromptKind.CHAT, strict: bool = True):
+        rendered = str(text or "")
+        parser = PromptParser(rendered, strict=strict)
+        obj = str.__new__(cls, rendered)
+        obj.kind = coerce_prompt_kind(kind)
+        obj.parser = parser
+        return obj
+
+    def __add__(self, other: object) -> "PromptText":
+        return PromptText(str.__add__(self, str(other)), self.kind, strict=False)
+
+    def __radd__(self, other: object) -> "PromptText":
+        return PromptText(str(other) + str.__str__(self), self.kind, strict=False)
+
+    def __iter__(self):
+        return iter(self.blocks)
+
+    @property
+    def blocks(self) -> tuple[PromptBlock, ...]:
+        return self.parser.blocks
+
+
+class PromptParser:
+    """Parseia blocos estruturados de um prompt renderizado."""
 
     _TRUE_STRINGS = {"1", "true", "yes", "on"}
     _FALSE_STRINGS = {"0", "false", "no", "off", ""}
@@ -48,12 +57,15 @@ class PromptParser:
         re.DOTALL,
     )
     TITLE_ATTR_PATTERN = re.compile(r"""\btitle\s*=\s*(?:"([^"]*)"|'([^']*)')""")
+    TAG_PATTERN = re.compile(r"(?m)^<(?P<name>[A-Za-z_][A-Za-z0-9_-]*)\b")
 
-    def __init__(self, path: Path):
-        self._source = path
-
-    def load(self) -> str:
-        return self._source.read_text(encoding="utf-8").strip()
+    def __init__(self, text: str, strict: bool = False):
+        self.text = str(text or "")
+        self._strict = bool(strict)
+        self._validated_cursor = 0
+        self.blocks = tuple(self._parse())
+        if self._strict:
+            self.validate()
 
     @staticmethod
     def _find_opening_tag_end(text: str, start: int) -> int:
@@ -70,33 +82,18 @@ class PromptParser:
         match = cls.TITLE_ATTR_PATTERN.search(str(opening or ""))
         if match:
             return (match.group(1) or match.group(2) or "").strip()
-        return str(block_name or "").replace("_", " ").strip().title()
+        raise ValueError(f"Bloco de prompt <{block_name}> sem atributo title")
 
-    @classmethod
-    def iter_blocks(cls, text: str, name: str | None = None) -> list[PromptBlock]:
-        """Lista blocos top-level do prompt renderizado.
-
-        Os templates usam blocos textuais conhecidos como ``<current_turn ...>``
-        em linha própria. Ao reconhecer um bloco válido, o parser avança o cursor
-        para depois do fechamento dele, evitando interpretar HTML/XML/código
-        colado pelo usuário dentro do conteúdo como outro bloco do template.
-        """
-        rendered = str(text or "")
-        wanted = str(name).strip() if name else None
-        if wanted is not None and wanted not in cls.BLOCK_NAMES:
-            return []
-        tag_pattern = re.compile(r"(?m)^<(?P<name>[A-Za-z_][A-Za-z0-9_-]*)\b")
+    def _parse(self) -> list[PromptBlock]:
+        rendered = self.text
         blocks: list[PromptBlock] = []
         cursor = 0
         while cursor < len(rendered):
-            match = tag_pattern.search(rendered, cursor)
+            match = self.TAG_PATTERN.search(rendered, cursor)
             if match is None:
                 break
             block_name = match.group("name")
-            if block_name not in cls.BLOCK_NAMES:
-                cursor = match.end()
-                continue
-            opening_end = cls._find_opening_tag_end(rendered, match.start())
+            opening_end = self._find_opening_tag_end(rendered, match.start())
             if opening_end < 0:
                 cursor = match.end()
                 continue
@@ -114,29 +111,41 @@ class PromptParser:
                 cursor = opening_end
                 continue
             closing_end = closing_start + len(closing)
-            if wanted is None or block_name == wanted:
-                opening = rendered[match.start():opening_end].strip()
-                blocks.append(PromptBlock(
-                    name=block_name,
-                    opening=opening,
-                    title=cls._extract_block_title(opening, block_name),
-                    content=rendered[opening_end:closing_start].strip(),
-                    start=match.start(),
-                    end=closing_end,
-                ))
+            opening = rendered[match.start():opening_end].strip()
+            try:
+                title = self._extract_block_title(opening, block_name)
+            except ValueError:
+                if self._strict or "_" in block_name:
+                    raise
+                cursor = opening_end
+                continue
+            block = PromptBlock(
+                name=block_name,
+                opening=opening,
+                title=title,
+                content=rendered[opening_end:closing_start].strip(),
+                start=match.start(),
+                end=closing_end,
+            )
+            if self._strict:
+                self.validate(block)
+            blocks.append(block)
             cursor = closing_end
         return blocks
 
-    @classmethod
-    def extract_last_block(cls, text: str, name: str) -> tuple[str | None, str]:
-        """Extrai o último bloco nomeado e retorna ``(conteúdo, texto_sem_bloco)``."""
-        blocks = cls.iter_blocks(text, name=name)
-        if not blocks:
-            return None, str(text or "")
-        block = blocks[-1]
-        rendered = str(text or "")
-        without = (rendered[:block.start] + rendered[block.end:]).strip()
-        return block.content or None, without
+    def validate(self, block: PromptBlock | None = None) -> None:
+        """Valida um bloco parseado ou finaliza a validação estrutural."""
+        if not self.text.strip():
+            return
+        if block is not None:
+            if self.text[self._validated_cursor:block.start].strip():
+                raise ValueError("Texto fora de blocos no prompt estruturado")
+            self._validated_cursor = block.end
+            return
+        if self.text[self._validated_cursor:].strip():
+            raise ValueError("Texto fora de blocos no prompt estruturado")
+        if not self.blocks:
+            raise ValueError("Texto fora de blocos no prompt estruturado")
 
     @classmethod
     def _resolve_condition_value(cls, value: object) -> bool:
@@ -178,7 +187,7 @@ class PromptTemplate:
 
     def _load(self) -> str:
         if self._text is None:
-            self._text = PromptParser(self._path).load()
+            self._text = self._path.read_text(encoding="utf-8").strip()
         return self._text
 
     @staticmethod
@@ -194,6 +203,10 @@ class PromptTemplate:
         template = PromptParser.resolve_conditionals(self._load(), context)
         rendered = self._safe_format(template, **context)
         return re.sub(r"\n{3,}", "\n\n", rendered).strip()
+
+    def render_prompt(self, kind: PromptKind | str, **context) -> PromptText:
+        """Renderiza o prompt e preserva kind/blocos para adapters estruturados."""
+        return PromptText(self.render(**context), kind)
 
 
 _PROMPT_FILE_BY_KIND = {
