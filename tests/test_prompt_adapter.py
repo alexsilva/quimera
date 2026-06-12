@@ -268,3 +268,74 @@ def test_build_tool_budget_prompt_includes_max_and_remaining():
 
     assert "max_tool_hops=24" in prompt
     assert "remaining_tool_hops=17" in prompt
+
+
+# ---------------------------------------------------------------------------
+# Invariante de contrato: todo PromptKind deve terminar com role "user"
+#
+# Por que esse teste existe?
+#
+# `_build_openai_messages_from_prompt` converte blocos de template em
+# mensagens da API OpenAI-compatible.  A API exige que a última mensagem
+# seja sempre do role "user" — caso contrário o modelo recebe o turno errado
+# e pode se recusar a responder ou produzir saída incoerente.
+#
+# O contrato é declarado em ROLES_BY_KIND: cada PromptKind mapeia nomes de
+# blocos a roles.  A última entrada (em ordem de inserção do dict) define o
+# bloco que fecha o prompt — e deve obrigatoriamente ter role "user".
+#
+# Motivação do teste:
+#   Se alguém adicionar um novo PromptKind sem garantir que o último bloco
+#   seja "user", ou reordenar as entradas de um kind existente de forma que
+#   um bloco "system" fique por último, o erro nunca aparecerá em runtime
+#   (não há exceção) — o modelo simplesmente recebe o turno errado.
+#   Esse teste captura o bug no CI antes de chegar à produção.
+#
+# Dois níveis de verificação:
+#   1. Estrutural  — lê ROLES_BY_KIND diretamente; detecta o problema sem
+#                    montar nenhum prompt (mais rápido, mensagem de erro clara).
+#   2. Integração  — constrói um prompt completo com todos os blocos de cada
+#                    kind e verifica que a mensagem final gerada tem role "user".
+#                    Garante que a lógica de filtragem de blocos em
+#                    `_build_openai_messages_from_prompt` não quebra o contrato.
+# ---------------------------------------------------------------------------
+
+from quimera.runtime.drivers.prompt_adapter import ROLES_BY_KIND  # noqa: E402
+
+
+def test_roles_by_kind_always_ends_with_user_block():
+    """Invariante estrutural: o último bloco de cada PromptKind deve ter role 'user'.
+
+    Detecta imediatamente se alguém adicionar um novo PromptKind sem terminar
+    com um bloco 'user', ou reordenar entradas existentes de forma errada.
+    """
+    for kind, roles in ROLES_BY_KIND.items():
+        last_block_name, last_role = list(roles.items())[-1]
+        assert last_role == "user", (
+            f"PromptKind.{kind.name}: o último bloco mapeado é '{last_block_name}' "
+            f"com role '{last_role}', mas deve ser 'user'. "
+            f"A API OpenAI-compatible exige que a última mensagem seja do role 'user'."
+        )
+
+
+def test_build_openai_messages_ends_with_user_for_every_prompt_kind():
+    """Integração: mensagens geradas terminam com role 'user' para todo PromptKind.
+
+    Para cada PromptKind, monta um prompt com todos os blocos definidos em
+    ROLES_BY_KIND (na ordem do mapa) e verifica que `messages[-1]["role"]`
+    é "user".  Cobre cenários onde a lógica de filtragem de blocos pudesse
+    consumir o último bloco 'user' ou alterá-lo silenciosamente.
+    """
+    for kind, roles in ROLES_BY_KIND.items():
+        blocks_xml = "\n".join(
+            f'<{name} title="{name.upper()}">\nconteúdo de {name}\n</{name}>'
+            for name in roles
+        )
+        prompt = _rendered(blocks_xml, kind)
+        messages = _build_openai_messages_from_prompt(prompt)
+
+        assert messages, f"PromptKind.{kind.name}: nenhuma mensagem gerada"
+        assert messages[-1]["role"] == "user", (
+            f"PromptKind.{kind.name}: última mensagem tem role '{messages[-1]['role']}', "
+            f"esperado 'user'. Verifique a ordem e os roles em ROLES_BY_KIND[PromptKind.{kind.name}]."
+        )
