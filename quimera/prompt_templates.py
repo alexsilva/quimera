@@ -16,6 +16,11 @@ class PromptBlock:
     start: int
     end: int
 
+    @property
+    def size(self) -> int:
+        """Número de caracteres no conteúdo do bloco."""
+        return len(self.content)
+
 
 class PromptText(str):
     """Prompt renderizado com estrutura preservada.

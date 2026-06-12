@@ -394,18 +394,15 @@ class AppSystemLayer:
         ]
         if persistent_notice:
             analysis_lines.append(persistent_notice)
-        analysis_lines += [
-            "ANÁLISE DOS BLOCOS:",
-            f"- regras_chars: {metrics['rules_chars']}",
-            f"- session_state_chars: {metrics['session_state_chars']}",
-            f"- persistent_chars: {persistent_chars}",
-            f"- request_chars: {metrics['request_chars']}",
-            f"- execution_state_chars: {metrics['execution_state_chars']}",
-            f"- shared_state_chars: {metrics['shared_state_chars']}",
-            f"- history_chars: {metrics['history_chars']}",
-            f"- handoff_chars: {metrics['handoff_chars']}",
+        block_lines = ["ANÁLISE DOS BLOCOS:"]
+        for block in prompt.blocks:
+            label = f'"{block.title}"' if block.title else f"<{block.name}>"
+            block_lines.append(f"- {block.name} {label}: {block.size} chars")
+        block_lines += [
             f"- history_messages: {metrics['history_messages']}",
             f"- total_chars: {metrics['total_chars']}",
+        ]
+        analysis_lines += block_lines + [
             "",
             "PROMPT FINAL:",
             prompt,
