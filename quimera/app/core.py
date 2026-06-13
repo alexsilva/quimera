@@ -58,6 +58,7 @@ from .task_utils import summarize_task_feedback
 from .. import plugins
 from ..plugins.base import PluginRegistry, extract_model_from_cli_cmd
 from ..runtime import tasks as runtime_tasks
+from ..runtime.process_supervisor import ProcessSupervisor
 from ..ui import RenderAuditLogger, TerminalRenderer
 from ..context import ContextManager
 from ..storage import SessionStorage
@@ -247,6 +248,7 @@ class QuimeraApp:
         )
         workspace_tmp = getattr(self.workspace, "tmp", None)
         workspace_tmp_root = getattr(workspace_tmp, "root", None)
+        self.process_supervisor = ProcessSupervisor()
         self.agent_client = AgentClient(
             self.renderer,
             metrics_file=metrics_file,
@@ -257,6 +259,7 @@ class QuimeraApp:
             muted_reporter=self.show_muted_message,
             session_id=session_id,
             workspace_tmp_root=workspace_tmp_root,
+            process_supervisor=self.process_supervisor,
         )
         self.task_executor_factory = create_executor
         self.session_summarizer = SessionSummarizer(

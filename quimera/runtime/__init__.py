@@ -11,6 +11,7 @@ from .config import ToolRuntimeConfig
 from .executor import ToolExecutor
 from .models import ToolCall, ToolResult
 from .policy import ToolPolicy
+from .process_supervisor import ManagedProcess, ProcessSupervisor
 from .registry import ToolRegistry
 from .task_executor import TaskExecutor, create_executor
 from .task_runner import TaskRunner
@@ -22,6 +23,8 @@ __all__ = [
     "ConsoleApprovalHandler",
     "NonBlockingConsoleApprovalHandler",
     "PreApprovalHandler",
+    "ManagedProcess",
+    "ProcessSupervisor",
     "ToolRuntimeConfig",
     "ToolExecutor",
     "ToolCall",

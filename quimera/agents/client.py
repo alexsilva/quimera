@@ -25,6 +25,7 @@ from quimera.agents.parsers import parse_stream_json, parse_codex_json, parse_op
 from quimera.agents.process_runner import ProcessRunner
 from quimera.agents.signal_guard import EscMonitor, terminate_process_group
 from quimera.agents.warm_pool import WarmPool
+from quimera.runtime.process_supervisor import ProcessSupervisor
 from quimera.agents.text_filters import (
     _strip_spinner,
     _should_ignore_stderr_line,
@@ -48,7 +49,8 @@ class AgentClient:
 
     def __init__(self, renderer, metrics_file=None, timeout=None, visibility=Visibility.SUMMARY,
                  working_dir=None, workspace_root=None, tool_executor=None, error_reporter=None,
-                 muted_reporter=None, session_id=None, workspace_tmp_root=None):
+                 muted_reporter=None, session_id=None, workspace_tmp_root=None,
+                 process_supervisor=None):
         """Inicializa uma instância de AgentClient."""
         self.renderer = renderer
         self.error_reporter = error_reporter
@@ -86,6 +88,7 @@ class AgentClient:
         self.rate_limit_detected = False
         self.rate_limit_detected_at: float | None = None
         self._warm_pool = WarmPool()
+        self.process_supervisor: ProcessSupervisor | None = process_supervisor
 
     def _show_error(
         self,
@@ -321,6 +324,8 @@ class AgentClient:
                 self._show_error(f"[erro] não foi possível iniciar {cmd[0]}: {exc}")
                 return None
         self._current_proc = proc
+        if self.process_supervisor is not None:
+            self.process_supervisor.register(proc, owner=agent or "cli", label=cmd[0] if cmd else None)
 
         result_holder = {
             "stdout_chunks": deque(),
@@ -533,6 +538,8 @@ class AgentClient:
             output = self._get_capped_stdout(result_holder).strip()
             error = "".join(_filter_stderr_lines(agent, list(result_holder["stderr"]))).strip()
         finally:
+            if self.process_supervisor is not None:
+                self.process_supervisor.unregister(proc)
             should_render_turn_summary = not silent and self.visibility in {Visibility.SUMMARY, Visibility.FULL}
             self.last_spy_turn_detail = self._spy_output_presenter.finalize_turn(
                 agent,
