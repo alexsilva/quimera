@@ -36,6 +36,7 @@ from quimera.cli import main as cli_main
 from quimera.config import DEFAULT_HISTORY_WINDOW
 from quimera.constants import CMD_AGENTS, CMD_CLEAR, CMD_CONNECT, CMD_DISCONNECT, CMD_HELP, CMD_PROMPT, EXTEND_MARKER, MSG_SHUTDOWN, TaskStatus, TaskType, Visibility, build_agents_help, build_help
 from quimera.plugins import AgentPlugin
+from quimera.prompt_templates import PromptText
 from quimera.plugins.base import PluginRegistry
 from quimera.runtime.models import TaskRecord, ToolCall
 from quimera.domain.session_state import SessionState
@@ -685,7 +686,7 @@ class ProtocolTests(unittest.TestCase):
         app.shared_state = {"goal": "corrigir prompt"}
         app.prompt_builder = Mock()
         app.prompt_builder.build.return_value = (
-            "PROMPT GERADO",
+            PromptText("PROMPT GERADO", strict=False),
             {
                 "rules_chars": 10,
                 "session_state_chars": 20,
@@ -736,7 +737,7 @@ class ProtocolTests(unittest.TestCase):
         app.shared_state = {}
         app.prompt_builder = Mock()
         app.prompt_builder.build.return_value = (
-            "PROMPT CODex",
+            PromptText("PROMPT CODex", strict=False),
             {
                 "rules_chars": 1,
                 "session_state_chars": 2,
@@ -768,7 +769,7 @@ class ProtocolTests(unittest.TestCase):
         app.history = []
         app.shared_state = {}
         app.prompt_builder = Mock()
-        app.prompt_builder.build.return_value = ("PROMPT", {
+        app.prompt_builder.build.return_value = (PromptText("PROMPT", strict=False), {
             "rules_chars": 1,
             "session_state_chars": 1,
             "persistent_chars": 1,
@@ -802,7 +803,7 @@ class ProtocolTests(unittest.TestCase):
         app.history = []
         app.shared_state = {}
         app.prompt_builder = Mock()
-        app.prompt_builder.build.return_value = ("PROMPT", {
+        app.prompt_builder.build.return_value = (PromptText("PROMPT", strict=False), {
             "rules_chars": 1,
             "session_state_chars": 1,
             "persistent_chars": 1,
@@ -836,7 +837,7 @@ class ProtocolTests(unittest.TestCase):
         app.history = []
         app.shared_state = {}
         app.prompt_builder = Mock()
-        app.prompt_builder.build.return_value = ("PROMPT", {
+        app.prompt_builder.build.return_value = (PromptText("PROMPT", strict=False), {
             "rules_chars": 1,
             "session_state_chars": 1,
             "persistent_chars": 1,
