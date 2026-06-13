@@ -267,7 +267,7 @@ def main():
         help="Lista de agentes (ex: --agents claude gemini). O primeiro é o agente padrão.",
     )
     parser.add_argument("--threads", type=int, default=1, help="Máximo de agentes processados em paralelo por rodada")
-    parser.add_argument("--timeout", type=int, default=120, help="Timeout em segundos para execução de agentes")
+    parser.add_argument("--timeout", type=int, default=180, help="Timeout em segundos para execução de agentes")
     parser.add_argument("--idle-timeout", dest="idle_timeout", type=int, default=120,
                         help="Idle timeout em segundos.")
     parser.add_argument("--test", action="store_true",

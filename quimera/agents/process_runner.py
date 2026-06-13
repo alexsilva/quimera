@@ -35,7 +35,7 @@ class ProcessRunner:
         result_holder: dict,
         cancel_event: threading.Event,
         timeout,
-        max_wall_clock: float | None = 1200.0,
+        max_wall_clock: float | None = 3600.0,
     ):
         self.proc = proc
         self.stdout_thread = stdout_thread
@@ -77,7 +77,7 @@ class ProcessRunner:
                 return self.RATE_LIMIT
         else:
             silent_duration = now - self._last_stdout_time
-            if silent_duration > self._timeout * 5:
+            if silent_duration > self._timeout:
                 return self.TIMEOUT
         return None
 
