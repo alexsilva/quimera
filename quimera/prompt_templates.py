@@ -38,10 +38,16 @@ class PromptText(str):
         return obj
 
     def __add__(self, other: object) -> "PromptText":
-        return PromptText(str.__add__(self, str(other)), self.kind, strict=False)
+        raise TypeError(
+            "Concatenação com PromptText não é permitida. "
+            "Use o sistema de templates para compor prompts estruturados."
+        )
 
     def __radd__(self, other: object) -> "PromptText":
-        return PromptText(str(other) + str.__str__(self), self.kind, strict=False)
+        raise TypeError(
+            "Concatenação com PromptText não é permitida. "
+            "Use o sistema de templates para compor prompts estruturados."
+        )
 
     def __iter__(self):
         return iter(self.blocks)

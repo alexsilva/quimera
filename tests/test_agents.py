@@ -18,6 +18,7 @@ from quimera.agents import (
 from quimera.agents.process_runner import ProcessRunner
 from quimera.constants import MAX_STDERR_LINES, Visibility
 from quimera.plugins import get as get_plugin
+from quimera.prompt_templates import PromptText
 from quimera.plugins.base import CliConnection, register_dynamic_plugin
 from quimera.plugins.claude import _format_claude_spy_event
 from quimera.plugins.codex import _format_codex_spy_event
@@ -512,12 +513,14 @@ def test_agent_client_call_prompt_as_arg(renderer):
                                         show_status=True, progress_callback=None)
 
 
-def test_agent_client_call_does_not_duplicate_mode_prompt(renderer):
-    """Verifica que agent client call does not duplicate mode prompt."""
+def test_agent_client_call_passes_prompt_text_unchanged(renderer):
+    """Verifica que o PromptText é repassado intacto para run(), sem concatenação."""
     client = AgentClient(renderer)
-    mode_addon = "[MODO: ANÁLISE] Apenas leitura e análise. Não edite arquivos."
-    client.execution_mode = SimpleNamespace(prompt_addon=mode_addon)
-    initial_prompt = f"{mode_addon}\n\npedido"
+    prompt = PromptText(
+        '<current_turn title="Pedido atual">pedido</current_turn>',
+        strict=True,
+    )
+    client.execution_mode = SimpleNamespace(prompt_addon="[MODO: ANÁLISE]")
 
     with patch("quimera.plugins.get") as mock_get:
         mock_plugin = MagicMock()
@@ -529,9 +532,9 @@ def test_agent_client_call_does_not_duplicate_mode_prompt(renderer):
 
         with patch.object(client, "run") as mock_run:
             mock_run.return_value = "output"
-            result = client.call("mock", initial_prompt)
+            result = client.call("mock", prompt)
             assert result == "output"
-            mock_run.assert_called_with(["mock-agent"], input_text=initial_prompt, _primed_proc=None,
+            mock_run.assert_called_with(["mock-agent"], input_text=prompt, _primed_proc=None,
                                         silent=False, agent="mock", show_status=True, progress_callback=None)
 
 def test_agent_client_log_metrics(renderer, tmp_path):

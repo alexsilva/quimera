@@ -669,10 +669,6 @@ class AgentClient:
     ):
         """Resolve o comando do agente e delega a execução."""
         self._user_cancelled = False
-        if self.execution_mode and self.execution_mode.prompt_addon:
-            mode_prompt = str(self.execution_mode.prompt_addon).strip()
-            if mode_prompt and mode_prompt not in prompt:
-                prompt = f"{mode_prompt}\n\n{prompt}"
         plugin = plugins.get(agent)
         if plugin is None:
             self._show_error(f"[erro] agente desconhecido: {agent}")

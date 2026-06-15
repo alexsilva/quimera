@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from typing import Any, Callable, Protocol, runtime_checkable
 
+from quimera.prompt_templates import PromptText
+
 
 @runtime_checkable
 class IRenderer(Protocol):
@@ -25,7 +27,7 @@ class ISessionStorage(Protocol):
 @runtime_checkable
 class IAgentClient(Protocol):
     """Cliente de chamada a agentes externos (envio de prompt + cancelamento)."""
-    def call(self, agent: str, prompt: str, history: list) -> str: ...
+    def call(self, agent: str, prompt: PromptText, history: list) -> str: ...
     def cancel(self) -> None: ...
 
 

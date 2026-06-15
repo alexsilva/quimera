@@ -900,8 +900,8 @@ def test_prompt_parser_returns_empty_list_when_no_template_blocks():
     assert PromptParser(rendered).blocks == ()
 
 
-def test_prompt_text_behaves_like_str_and_keeps_structure_on_concat():
-    """PromptText é string real, mas preserva kind/blocos em concatenação simples."""
+def test_prompt_text_is_str_with_blocks_and_kind():
+    """PromptText é string real e expõe kind/blocos; concatenação é proibida."""
     rendered = '<current_turn title="Pedido atual">oi</current_turn>'
     structured = PromptText(rendered, PromptKind.CHAT)
 
@@ -909,8 +909,10 @@ def test_prompt_text_behaves_like_str_and_keeps_structure_on_concat():
     assert str(structured) == rendered
     assert structured.kind is PromptKind.CHAT
     assert structured.blocks[0].name == "current_turn"
+    assert structured.blocks[0].content == "oi"
 
-    same = structured + ""
-    assert isinstance(same, str)
-    assert same.kind is PromptKind.CHAT
-    assert same.blocks[0].content == "oi"
+    with pytest.raises(TypeError, match="Concatenação com PromptText não é permitida"):
+        _ = structured + ""
+
+    with pytest.raises(TypeError, match="Concatenação com PromptText não é permitida"):
+        _ = "prefixo\n\n" + structured

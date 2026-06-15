@@ -36,6 +36,7 @@ from .runtime.mcp import start_embedded_mcp
 from .config import ConfigManager
 from .runtime.drivers.repl import DriverRepl
 from .workspace import Workspace
+from .prompt_templates import PromptText
 
 try:
     from .ui import TerminalRenderer
@@ -515,8 +516,7 @@ def main():
                          theme=args.theme)
         if args.interactive_test:
             if TerminalRenderer is None or AgentClient is None:
-                raise RuntimeError("Modo interativo não disponível nesta versão")
-
+                raise RuntimeError("Modo interativo não disponível: dependências de UI não instaladas.")
             default_agent = agents[0] if args.agents != ["*"] and agents else "claude"
             default_prompt = "Use uma ferramenta de shell para executar o comando `pwd` e me diga o diretório atual. Se a ferramenta pedir aprovação, mostre o prompt normalmente."
 
@@ -526,9 +526,9 @@ def main():
                 agent_name = default_agent
 
             if args.test_prompt:
-                prompt = " ".join(args.test_prompt)
+                prompt = PromptText(" ".join(args.test_prompt), strict=False)
             else:
-                prompt = default_prompt
+                prompt = PromptText(default_prompt, strict=False)
 
             renderer = TerminalRenderer()
             client = AgentClient(renderer)

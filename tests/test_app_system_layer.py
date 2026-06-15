@@ -6,6 +6,7 @@ import pytest
 
 from quimera.app.agent_pool import AgentPool
 from quimera.app.system_layer import AppSystemLayer
+from quimera.prompt_templates import PromptText
 from quimera.constants import (
     CMD_APPROVE,
     CMD_APPROVE_ALL,
@@ -615,7 +616,7 @@ def test_build_prompt_preview_message_omits_raw_history():
         {"role": "assistant", "content": "olá"},
     ]
     mock_builder = Mock()
-    mock_builder.build.return_value = ("PROMPT", _make_dummy_metrics())
+    mock_builder.build.return_value = (PromptText("PROMPT", strict=False), _make_dummy_metrics())
     mock_builder.history_window = 10
     app.prompt_builder = mock_builder
     layer = AppSystemLayer(app)
@@ -634,7 +635,7 @@ def test_build_prompt_preview_message_empty_history_omits_placeholder():
     app = make_app()
     app.history = []
     mock_builder = Mock()
-    mock_builder.build.return_value = ("PROMPT", _make_dummy_metrics())
+    mock_builder.build.return_value = (PromptText("PROMPT", strict=False), _make_dummy_metrics())
     mock_builder.history_window = 10
     app.prompt_builder = mock_builder
     layer = AppSystemLayer(app)
@@ -651,7 +652,7 @@ def test_build_prompt_preview_message_follower_mode_passes_is_first_speaker_fals
     app = make_app()
     app.history = []
     mock_builder = Mock()
-    mock_builder.build.return_value = ("PROMPT", _make_dummy_metrics())
+    mock_builder.build.return_value = (PromptText("PROMPT", strict=False), _make_dummy_metrics())
     mock_builder.history_window = 10
     app.prompt_builder = mock_builder
     layer = AppSystemLayer(app)
@@ -667,7 +668,7 @@ def test_build_prompt_preview_message_first_speaker_mode_label():
     app = make_app()
     app.history = []
     mock_builder = Mock()
-    mock_builder.build.return_value = ("PROMPT", _make_dummy_metrics())
+    mock_builder.build.return_value = (PromptText("PROMPT", strict=False), _make_dummy_metrics())
     mock_builder.history_window = 10
     app.prompt_builder = mock_builder
     layer = AppSystemLayer(app)
