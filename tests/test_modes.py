@@ -634,6 +634,60 @@ class TestInputContextAndWelcome(unittest.TestCase):
         context = app._build_input_toolbar_context()
         self.assertNotIn("active_agents", context)
 
+    def _make_elapsed_app(self):
+        """Retorna app mínimo para testar o campo elapsed."""
+        from quimera.app.core import QuimeraApp
+
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.workspace = MagicMock(cwd=Path("/tmp/quimera-project"), tasks_db=Path("/tmp/quimera_test_tasks.db"))
+        app.workspace.branch = None
+        app.active_agents = []
+        app.threads = 1
+        app._parallel_toolbar_lock = threading.Lock()
+        app._parallel_toolbar_state = {"active": 0, "queued": 0, "capacity": 0, "active_agents": ()}
+        app._pending_input_for = None
+        app._resolve_active_model_label = QuimeraApp._resolve_active_model_label.__get__(app, QuimeraApp)
+        app._resolve_next_responder_label = QuimeraApp._resolve_next_responder_label.__get__(app, QuimeraApp)
+        app._get_parallel_toolbar_state = QuimeraApp._get_parallel_toolbar_state.__get__(app, QuimeraApp)
+        app._build_input_toolbar_context = QuimeraApp._build_input_toolbar_context.__get__(app, QuimeraApp)
+        return app
+
+    def test_elapsed_formats_seconds(self):
+        """elapsed < 60s → formato 'Xs'."""
+        app = self._make_elapsed_app()
+        app._session_started_at = 1000.0
+        with patch("quimera.app.core.time") as mock_time:
+            mock_time.monotonic.return_value = 1000.0 + 45
+            context = app._build_input_toolbar_context()
+        self.assertEqual(context.get("elapsed"), "45s")
+
+    def test_elapsed_formats_minutes_and_seconds(self):
+        """60s <= elapsed < 3600s → formato 'Xm XXs'."""
+        app = self._make_elapsed_app()
+        app._session_started_at = 1000.0
+        with patch("quimera.app.core.time") as mock_time:
+            mock_time.monotonic.return_value = 1000.0 + 754  # 12m 34s
+            context = app._build_input_toolbar_context()
+        self.assertEqual(context.get("elapsed"), "12m 34s")
+
+    def test_elapsed_formats_hours(self):
+        """elapsed >= 3600s → formato 'Xh XXm'."""
+        app = self._make_elapsed_app()
+        app._session_started_at = 1000.0
+        with patch("quimera.app.core.time") as mock_time:
+            mock_time.monotonic.return_value = 1000.0 + 4530  # 1h 15m
+            context = app._build_input_toolbar_context()
+        self.assertEqual(context.get("elapsed"), "1h 15m")
+
+    def test_elapsed_without_session_started_at_shows_zero(self):
+        """Sem _session_started_at, elapsed cai para ~0s → formato 'Xs'."""
+        app = self._make_elapsed_app()
+        # _session_started_at não definido; monotonic chamado duas vezes com mesmo valor
+        with patch("quimera.app.core.time") as mock_time:
+            mock_time.monotonic.return_value = 5000.0
+            context = app._build_input_toolbar_context()
+        self.assertEqual(context.get("elapsed"), "0s")
+
     def test_build_welcome_message_includes_version_and_project_path(self):
         from quimera.app.core import QuimeraApp
 

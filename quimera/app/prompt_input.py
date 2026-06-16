@@ -112,6 +112,12 @@ class InputGate:
         self._active_lock = threading.Lock()
         self._active = False
         self._owner_thread_id: int | None = None
+        self._clock_condition = threading.Condition()
+        self._clock_active = False
+        self._clock_thread = threading.Thread(
+            target=self._run_toolbar_clock, daemon=True, name="toolbar-clock"
+        )
+        self._clock_thread.start()
 
         history = InMemoryHistory()
         if self._history_file is not None:
@@ -281,6 +287,20 @@ class InputGate:
         console = Console(highlight=False)
         console.print(Rule(style="dim"))
 
+    def _run_toolbar_clock(self, interval: float = 1.0) -> None:
+        """Thread persistente que invalida o prompt a cada segundo enquanto ativo.
+
+        Dorme indefinidamente quando não há prompt ativo e acorda via
+        _clock_condition quando __call__ sinaliza início/fim do prompt.
+        """
+        while True:
+            with self._clock_condition:
+                self._clock_condition.wait_for(lambda: self._clock_active)
+                self._clock_condition.wait(timeout=interval)
+                should_invalidate = self._clock_active
+            if should_invalidate:
+                self.redisplay()
+
     def __call__(self, prompt: str) -> str:
         """Lê input do usuário.
 
@@ -292,6 +312,9 @@ class InputGate:
         o AssertionError e cai no input() padrão.
         """
         self._set_active_state(True)
+        with self._clock_condition:
+            self._clock_active = True
+            self._clock_condition.notify_all()
         try:
             self._flush_renderer()
             self._print_rule()
@@ -313,6 +336,9 @@ class InputGate:
             self._print_rule()
             return result
         finally:
+            with self._clock_condition:
+                self._clock_active = False
+                self._clock_condition.notify_all()
             self._set_active_state(False)
 
     def get_line_buffer(self) -> str:
