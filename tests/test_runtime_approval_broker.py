@@ -123,6 +123,27 @@ def test_delegate_http_external_requires_user_approval(tmp_path):
     assert executor.approval_broker.audit_log[-1]["event"] == "denied"
 
 
+def test_exec_command_approval_summary_does_not_duplicate_command(tmp_path):
+    """Summary de approval não deve repetir o comando já destacado pelo broker."""
+    approval = MagicMock()
+    approval.approve.return_value = False
+    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), approval)
+
+    result = executor.execute(
+        ToolCall(
+            name="exec_command",
+            arguments={"cmd": "pwd", "tty": True},
+            metadata=_trusted(transport="http_mcp", run_id="external-run"),
+        )
+    )
+
+    assert result.ok is False
+    summary = approval.approve.call_args.kwargs["summary"]
+    assert "comando: pwd" in summary
+    assert summary.count("comando: pwd") == 1
+    assert "flags: tty" in summary
+
+
 def test_delegate_http_external_requires_approval_even_with_allowlisted_argument(tmp_path):
     """Verifica que Test call agent http external requires approval even with allowlisted argument."""
     approval = MagicMock()

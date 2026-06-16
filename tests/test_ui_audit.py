@@ -31,6 +31,25 @@ def test_renderer_audit_logs_static_print_and_ansi(tmp_path):
     assert "System message" in ansi_path.read_text(encoding="utf-8")
 
 
+def test_renderer_show_approval_logs_distinct_preview(tmp_path):
+    """Verifica que approval usa evento/texto próprio no renderer."""
+    log_dir = tmp_path / "render"
+    events_path = log_dir / "render-approval-test.jsonl"
+    ansi_path = log_dir / "render-approval-test.ansi"
+    renderer = TerminalRenderer(audit_logger=RenderAuditLogger(events_path, ansi_path), theme="line")
+    try:
+        renderer.show_approval("Aprovar exec_command\ncmd=rm -rf /tmp/demo")
+        renderer.flush()
+    finally:
+        renderer.close(timeout=1.0)
+
+    events = _read_jsonl(events_path)
+    assert any(event.get("preview", "").startswith("⚠ Aprovar exec_command") for event in events if event["event"] == "print")
+    ansi = ansi_path.read_text(encoding="utf-8")
+    assert "Aprovar exec_command" in ansi
+    assert "cmd=rm -rf /tmp/demo" in ansi
+
+
 def test_renderer_audit_logs_stream_lifecycle(tmp_path):
     """Verifica que o audit logger registra o ciclo de vida do stream (start/chunk/stop)."""
     log_dir = tmp_path / "render"

@@ -47,6 +47,27 @@ class TestApprovalPreview(unittest.TestCase):
         self.assertIn("yield=100ms", result)
         self.assertIn("/home/user", result)
 
+    def test_exec_command_can_omit_command_line(self):
+        result = ToolPreview.build(
+            "exec_command",
+            {"cmd": "pwd", "tty": True, "workdir": "/tmp"},
+            context="approval",
+            omit_fields={"command"},
+        )
+        self.assertNotIn("comando: pwd", result)
+        self.assertIn("flags: tty", result)
+        self.assertIn("workdir: /tmp", result)
+
+    def test_run_shell_can_omit_command_line(self):
+        result = ToolPreview.build(
+            "run_shell",
+            {"command": "pwd", "workdir": "/tmp"},
+            context="approval",
+            omit_fields={"command"},
+        )
+        self.assertNotIn("comando: pwd", result)
+        self.assertIn("workdir: /tmp", result)
+
     def test_write_stdin(self):
         result = ToolPreview.build("write_stdin", {"session_id": "abc", "chars": "hello"}, context="approval")
         self.assertIn("abc", result)

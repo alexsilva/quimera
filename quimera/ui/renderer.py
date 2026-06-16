@@ -1405,6 +1405,25 @@ class TerminalRenderer:
         else:
             print(clean_message)
 
+    def show_approval(self, message):
+        """Exibe bloco de aprovação com estilo visual distinto de logs de sistema."""
+        clean_message = strip_ansi(str(message)).strip("\r\n")
+        if self._console:
+            lines = clean_message.splitlines() or [clean_message]
+            first = lines[0] if lines else ""
+            rest = lines[1:]
+            segments = [(f"⚠ ", "yellow"), (first, "bold yellow")]
+            text = Text.assemble(*segments)
+            for line in rest:
+                text.append("\n")
+                text.append(line, "dim")
+            text.no_wrap = False
+            text.overflow = "fold"
+            self._print(text, kind="approval")
+            self._remember_persistent_event("approval")
+        else:
+            print(clean_message)
+
     def show_newline(self):
         """Print a blank newline through the writer thread (thread-safe)."""
         self._print("", kind="generic")

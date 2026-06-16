@@ -8,10 +8,14 @@ import inspect
 from abc import ABC, abstractmethod
 
 
-def _emit_system_message(renderer, message: str) -> None:
-    """Emite mensagem de sistema e força flush quando houver renderer."""
+def _emit_approval_message(renderer, message: str) -> None:
+    """Emite mensagem de approval e força flush quando houver renderer."""
     if renderer is not None:
-        renderer.show_system(message)
+        show_approval = getattr(renderer, "show_approval", None)
+        if callable(show_approval):
+            show_approval(message)
+        else:
+            renderer.show_system(message)
         flush = getattr(renderer, "flush", None)
         if callable(flush):
             try:
@@ -146,7 +150,7 @@ class ConsoleApprovalHandler(ApprovalHandler):
         try:
             if self._cancel_event and self._cancel_event.is_set():
                 return False
-            self._show(f"\n[aprovação] {tool_name} :: {summary}")
+            self._show(f"\nAprovar {tool_name}\n{summary}")
 
             is_main = threading.current_thread() is threading.main_thread()
             # input_gate usa prompt_toolkit: seguro na thread principal.
@@ -176,7 +180,7 @@ class ConsoleApprovalHandler(ApprovalHandler):
                     )
                 except (EOFError, KeyboardInterrupt):
                     self._show(
-                        "  [aprovação] stdin não disponível — negando automaticamente"
+                        "  stdin não disponível — negando automaticamente"
                     )
                     return False
                 finally:
@@ -196,7 +200,7 @@ class ConsoleApprovalHandler(ApprovalHandler):
                 )
                 if raw is None:
                     self._show(
-                        "  [aprovação] sem resposta — negando automaticamente"
+                        "  sem resposta — negando automaticamente"
                     )
                     return False
                 answer = raw.strip().lower()
@@ -229,7 +233,7 @@ class ConsoleApprovalHandler(ApprovalHandler):
                     return False
                 except EOFError:
                     self._show(
-                        "  [aprovação] stdin não disponível — negando automaticamente"
+                        "  stdin não disponível — negando automaticamente"
                     )
                     return False
                 finally:
@@ -253,7 +257,7 @@ class ConsoleApprovalHandler(ApprovalHandler):
             self._interactive_lock.release()
 
     def _show(self, message: str) -> None:
-        _emit_system_message(self._renderer, message)
+        _emit_approval_message(self._renderer, message)
 
     def _is_cancelled(self) -> bool:
         event = self._cancel_event
@@ -326,20 +330,20 @@ class NonBlockingConsoleApprovalHandler(ApprovalHandler):
 
     def approve(self, *, tool_name: str, summary: str) -> bool:
         """Exibe prompt e aguarda resposta não-bloqueante do usuário."""
-        _emit_system_message(self._renderer, f"\n[aprovação] {tool_name}")
-        _emit_system_message(self._renderer, f"  {summary}")
-        _emit_system_message(
+        _emit_approval_message(self._renderer, f"\nAprovar {tool_name}")
+        _emit_approval_message(self._renderer, f"  {summary}")
+        _emit_approval_message(
             self._renderer,
             f"  Digite 'y' em até {self._timeout:.0f}s para aprovar, ou qualquer tecla para negar...",
         )
 
         answer = self._read_with_timeout(self._timeout, show_prompt=self._renderer is None)
         if answer is None:
-            _emit_system_message(self._renderer, "  [aprovação] timeout — negando automaticamente")
+            _emit_approval_message(self._renderer, "  timeout — negando automaticamente")
             return False
         approved = answer.strip().lower() in {"y", "yes", "s", "sim"}
         status = "aprovado" if approved else "negado"
-        _emit_system_message(self._renderer, f"  [aprovação] {status}")
+        _emit_approval_message(self._renderer, f"  {status}")
         return approved
 
     def _read_with_timeout(self, timeout: float, *, show_prompt: bool = True) -> str | None:
@@ -481,20 +485,20 @@ class PreApprovalHandler(ApprovalHandler):
         with self._lock:
             if thread_id in self._thread_approve_all:
                 if thread_id not in self._silent_thread_approve_all:
-                    _emit_system_message(self._renderer, f"  [approve-all] {tool_name} :: {summary}")
+                    _emit_approval_message(self._renderer, f"  [approve-all] {tool_name} :: {summary}")
                 return True
             scope_key = self._thread_scope_keys.get(thread_id)
             if scope_key is not None and scope_key in self._scope_approve_all:
                 if scope_key not in self._silent_scope_approve_all:
-                    _emit_system_message(self._renderer, f"  [approve-all] {tool_name} :: {summary}")
+                    _emit_approval_message(self._renderer, f"  [approve-all] {tool_name} :: {summary}")
                 return True
             if self._approve_all:
                 if not self._approve_all_silent:
-                    _emit_system_message(self._renderer, f"  [approve-all] {tool_name} :: {summary}")
+                    _emit_approval_message(self._renderer, f"  [approve-all] {tool_name} :: {summary}")
                 return True
             if self._pre_approved:
                 self._pre_approved = False
-                _emit_system_message(self._renderer, f"  [pré-aprovado] {tool_name} :: {summary}")
+                _emit_approval_message(self._renderer, f"  [pré-aprovado] {tool_name} :: {summary}")
                 return True
         return self._base.approve(tool_name=tool_name, summary=summary)
 

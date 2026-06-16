@@ -510,7 +510,12 @@ class ApprovalBroker:
         body = (
             f"Permissão necessária para acessar: {permission_error.resolved_path}"
             if permission_error
-            else ToolPreview.build(call.name, call.arguments, context="approval")
+            else ToolPreview.build(
+                call.name,
+                call.arguments,
+                context="approval",
+                omit_fields={"command"} if command else None,
+            )
         )
         details.append(body)
         return "\n".join(details)

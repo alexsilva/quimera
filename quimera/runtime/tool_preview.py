@@ -24,10 +24,12 @@ class ToolPreview:
         arguments: dict[str, Any],
         *,
         context: str = "execution",
+        omit_fields: set[str] | None = None,
     ) -> str:
         context_name = str(context or "execution").strip().lower()
+        omitted = {str(item).strip().lower() for item in (omit_fields or set()) if str(item).strip()}
         if context_name == "approval":
-            return cls._build_approval(tool_name, arguments)
+            return cls._build_approval(tool_name, arguments, omitted)
         return cls._build_execution(tool_name, arguments)
 
     @classmethod
@@ -38,10 +40,15 @@ class ToolPreview:
         return cls._format_execution_unknown(tool_name, arguments)
 
     @classmethod
-    def _build_approval(cls, tool_name: str, arguments: dict[str, Any]) -> str:
+    def _build_approval(
+        cls,
+        tool_name: str,
+        arguments: dict[str, Any],
+        omitted: set[str],
+    ) -> str:
         handler = getattr(cls, f"_format_approval_{tool_name}", None)
         if callable(handler):
-            return handler(arguments)
+            return handler(arguments, omitted)
         return cls._format_approval_unknown(tool_name, arguments)
 
     @classmethod
@@ -129,29 +136,34 @@ class ToolPreview:
         return f"⚒ executando {tool_name}{suffix}"
 
     @classmethod
-    def _format_approval_write_file(cls, args: dict[str, Any]) -> str:
+    def _format_approval_write_file(cls, args: dict[str, Any], _omitted: set[str]) -> str:
         path = args.get("path", "?")
         content = str(args.get("content", ""))
         return cls._render_file_op("write_file", path, content)
 
     @classmethod
-    def _format_approval_apply_patch(cls, args: dict[str, Any]) -> str:
+    def _format_approval_apply_patch(cls, args: dict[str, Any], _omitted: set[str]) -> str:
         return cls._render_file_op("apply_patch", "patch textual", str(args.get("patch", "")))
 
     @classmethod
-    def _format_approval_remove_file(cls, args: dict[str, Any]) -> str:
+    def _format_approval_remove_file(cls, args: dict[str, Any], _omitted: set[str]) -> str:
         path = args.get("path", "?")
         dry_run = args.get("dry_run", True)
         warning = "⚠️  REMOÇÃO" if not dry_run else "🔍 dry-run"
         return f"{warning}  {path}"
 
     @classmethod
-    def _format_approval_run_shell(cls, args: dict[str, Any]) -> str:
+    def _format_approval_run_shell(cls, args: dict[str, Any], omitted: set[str]) -> str:
         cmd = args.get("command", "?")
-        return "\n".join([f"🖥️  run_shell", f"   comando: {cmd}"])
+        lines = [f"🖥️  run_shell"]
+        if "command" not in omitted and "cmd" not in omitted:
+            lines.append(f"   comando: {cmd}")
+        if "workdir" in args:
+            lines.append(f"   workdir: {args['workdir']}")
+        return "\n".join(lines)
 
     @classmethod
-    def _format_approval_exec_command(cls, args: dict[str, Any]) -> str:
+    def _format_approval_exec_command(cls, args: dict[str, Any], omitted: set[str]) -> str:
         cmd = args.get("cmd", "?")
         flags = []
         if args.get("login"):
@@ -160,7 +172,9 @@ class ToolPreview:
             flags.append("tty")
         if args.get("yield_time_ms"):
             flags.append(f"yield={args['yield_time_ms']}ms")
-        lines = [f"🖥️  exec_command", f"   comando: {cmd}"]
+        lines = [f"🖥️  exec_command"]
+        if "command" not in omitted and "cmd" not in omitted:
+            lines.append(f"   comando: {cmd}")
         if flags:
             lines.append(f"   flags: {', '.join(flags)}")
         if "workdir" in args:
@@ -168,7 +182,7 @@ class ToolPreview:
         return "\n".join(lines)
 
     @classmethod
-    def _format_approval_write_stdin(cls, args: dict[str, Any]) -> str:
+    def _format_approval_write_stdin(cls, args: dict[str, Any], _omitted: set[str]) -> str:
         sid = args.get("session_id", "?")
         chars = str(args.get("chars", ""))
         lines = [f"⌨️  write_stdin  session={sid}"]
@@ -179,36 +193,36 @@ class ToolPreview:
         return "\n".join(lines)
 
     @classmethod
-    def _format_approval_close_command_session(cls, args: dict[str, Any]) -> str:
+    def _format_approval_close_command_session(cls, args: dict[str, Any], _omitted: set[str]) -> str:
         sid = args.get("session_id", "?")
         terminate = args.get("terminate", False)
         extra = " [terminate]" if terminate else ""
         return f"❌ close_command_session  session={sid}{extra}"
 
     @classmethod
-    def _format_approval_read_file(cls, args: dict[str, Any]) -> str:
+    def _format_approval_read_file(cls, args: dict[str, Any], _omitted: set[str]) -> str:
         path = args.get("path", "?")
         return f"📖 read_file  {path}"
 
     @classmethod
-    def _format_approval_list_files(cls, args: dict[str, Any]) -> str:
+    def _format_approval_list_files(cls, args: dict[str, Any], _omitted: set[str]) -> str:
         path = args.get("path", "?")
         return f"📂 list_files  {path}"
 
     @classmethod
-    def _format_approval_grep_search(cls, args: dict[str, Any]) -> str:
+    def _format_approval_grep_search(cls, args: dict[str, Any], _omitted: set[str]) -> str:
         pattern = args.get("pattern", "?")
         path = args.get("path", ".")
         return f"🔍 grep_search  pattern={pattern!r}  em {path}"
 
     @classmethod
-    def _format_approval_web_search(cls, args: dict[str, Any]) -> str:
+    def _format_approval_web_search(cls, args: dict[str, Any], _omitted: set[str]) -> str:
         query = args.get("query", "?")
         n = args.get("num_results", 5)
         return f"🌐 web_search  query={query!r}  (max {n} resultados)"
 
     @classmethod
-    def _format_approval_web_fetch(cls, args: dict[str, Any]) -> str:
+    def _format_approval_web_fetch(cls, args: dict[str, Any], _omitted: set[str]) -> str:
         url = args.get("url", "?")
         return f"🌐 web_fetch  {url}"
 

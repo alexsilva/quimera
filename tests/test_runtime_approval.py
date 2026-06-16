@@ -276,12 +276,12 @@ def test_console_approval_handler_input_gate_spinner_callbacks_called():
 
 
 def test_console_approval_handler_with_renderer():
-    """Quando um renderer é injetado, usa show_system em vez de print."""
+    """Quando um renderer é injetado, usa show_approval em vez de print."""
     class FakeRenderer:
         def __init__(self):
             self.calls = []
 
-        def show_system(self, msg):
+        def show_approval(self, msg):
             self.calls.append(msg)
 
     renderer = FakeRenderer()
@@ -289,9 +289,9 @@ def test_console_approval_handler_with_renderer():
     with patch('builtins.print') as mock_print:
         result = handler.approve(tool_name="shell", summary="ls")
     assert result is True
-    # renderer.show_system foi chamado, print não
+    # renderer.show_approval foi chamado, print não
     assert len(renderer.calls) >= 1
-    assert "[aprovação]" in renderer.calls[0]
+    assert "Aprovar shell" in renderer.calls[0]
 
 
 def test_console_approval_handler_renderer_flushes_before_input():
@@ -300,7 +300,7 @@ def test_console_approval_handler_renderer_flushes_before_input():
         def __init__(self):
             self.calls = []
 
-        def show_system(self, msg):
+        def show_approval(self, msg):
             self.calls.append(("show", msg))
 
         def flush(self):
@@ -314,17 +314,17 @@ def test_console_approval_handler_renderer_flushes_before_input():
     )
     result = handler.approve(tool_name="shell", summary="ls")
     assert result is True
-    assert renderer.calls[:2] == [("show", "\n[aprovação] shell :: ls"), ("flush", None)]
+    assert renderer.calls[:2] == [("show", "\nAprovar shell\nls"), ("flush", None)]
     assert order == ["input"]
 
 
 def test_console_approval_handler_renderer_shows_eof_message():
-    """Com renderer, mensagem de EOF também usa show_system."""
+    """Com renderer, mensagem de EOF também usa show_approval."""
     class FakeRenderer:
         def __init__(self):
             self.calls = []
 
-        def show_system(self, msg):
+        def show_approval(self, msg):
             self.calls.append(msg)
 
     renderer = FakeRenderer()
@@ -343,9 +343,9 @@ def test_console_approval_handler_no_renderer_uses_print():
     with patch('builtins.print') as mock_print:
         handler.approve(tool_name="shell", summary="ls")
     mock_print.assert_called()
-    # Pelo menos uma chamada tem "[aprovação]"
+    # Pelo menos uma chamada tem o cabeçalho limpo de aprovação
     found = any(
-        "[aprovação]" in str(call_args)
+        "Aprovar shell" in str(call_args)
         for call_args in mock_print.call_args_list
     )
     assert found
@@ -706,13 +706,13 @@ def test_nonblocking_console_approval_accepts_s(mock_print):
         assert handler.approve(tool_name="shell", summary="ls") is True
 
 
-def test_nonblocking_console_approval_with_renderer_uses_show_system():
-    """Com renderer, NonBlocking usa show_system em vez de print."""
+def test_nonblocking_console_approval_with_renderer_uses_show_approval():
+    """Com renderer, NonBlocking usa show_approval em vez de print."""
     class FakeRenderer:
         def __init__(self):
             self.calls = []
 
-        def show_system(self, msg):
+        def show_approval(self, msg):
             self.calls.append(msg)
 
         def flush(self):
@@ -725,14 +725,14 @@ def test_nonblocking_console_approval_with_renderer_uses_show_system():
             result = handler.approve(tool_name="shell", summary="ls")
     assert result is True
     assert renderer.calls
-    assert any("[aprovação] shell" in msg for msg in renderer.calls)
+    assert any("Aprovar shell" in msg for msg in renderer.calls)
     mock_print.assert_not_called()
 
 
 def test_nonblocking_console_approval_renderer_disables_stdout_prompt():
     """Com renderer, approve() chama _read_with_timeout sem prompt em stdout."""
     class FakeRenderer:
-        def show_system(self, _msg):
+        def show_approval(self, _msg):
             pass
 
         def flush(self):
@@ -896,7 +896,7 @@ def test_console_approval_handler_renderer_with_spinner_callbacks():
         def __init__(self):
             self.calls = []
 
-        def show_system(self, msg):
+        def show_approval(self, msg):
             self.calls.append(msg)
 
     order = []
@@ -914,9 +914,9 @@ def test_console_approval_handler_renderer_with_spinner_callbacks():
         result = handler.approve(tool_name="shell", summary="ls")
 
     assert result is True
-    # renderer.show_system foi usado
+    # renderer.show_approval foi usado
     assert len(renderer.calls) >= 1
-    assert "[aprovação]" in renderer.calls[0]
+    assert "Aprovar shell" in renderer.calls[0]
     # print NÃO foi chamado
     mock_print.assert_not_called()
     # Ordem correta
