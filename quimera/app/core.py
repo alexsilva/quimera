@@ -145,7 +145,6 @@ class QuimeraApp:
                  history_window: int | None = None,
                  agents: list | None = None,
                  threads: int = 1,
-                 timeout: int | None = None,
                  idle_timeout_seconds: int | None = None,
                  visibility: Visibility = Visibility.SUMMARY,
                  theme: str | None = None,
@@ -248,11 +247,12 @@ class QuimeraApp:
         )
         workspace_tmp = getattr(self.workspace, "tmp", None)
         workspace_tmp_root = getattr(workspace_tmp, "root", None)
+        self.idle_timeout_seconds = idle_timeout_seconds if idle_timeout_seconds is not None else self.config.idle_timeout_seconds
         self.process_supervisor = ProcessSupervisor()
         self.agent_client = AgentClient(
             self.renderer,
             metrics_file=metrics_file,
-            timeout=timeout,
+            idle_timeout=self.idle_timeout_seconds,
             visibility=self.visibility,
             working_dir=str(self.workspace.cwd),
             error_reporter=self.show_error_message,
@@ -485,8 +485,6 @@ class QuimeraApp:
             renderer=self.renderer,
             merge_staging_to_workspace=self._merge_staging_to_workspace,
         )
-        self.idle_timeout_seconds = idle_timeout_seconds if idle_timeout_seconds is not None else self.config.idle_timeout_seconds
-
         self.tool_executor = self.task_services.build_tool_executor(require_approval_for_mutations=not self.auto_approve_mutations)
         # Injeta o executor nos drivers de API do agent_client.
         self.agent_client.tool_executor = self.tool_executor

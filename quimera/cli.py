@@ -268,9 +268,16 @@ def main():
         help="Lista de agentes (ex: --agents claude gemini). O primeiro é o agente padrão.",
     )
     parser.add_argument("--threads", type=int, default=1, help="Máximo de agentes processados em paralelo por rodada")
-    parser.add_argument("--timeout", type=int, default=180, help="Timeout em segundos para execução de agentes")
-    parser.add_argument("--idle-timeout", dest="idle_timeout", type=int, default=120,
-                        help="Idle timeout em segundos.")
+    parser.add_argument("--idle-timeout", dest="idle_timeout", type=int, default=None,
+                        help="Idle timeout em segundos (sem stdout do agente). Padrão: valor salvo via --set-idle-timeout ou 180s.")
+    parser.add_argument(
+        "--set-idle-timeout",
+        dest="set_idle_timeout",
+        type=int,
+        metavar="SEGUNDOS",
+        default=None,
+        help="Persiste o idle timeout padrão (em segundos) na config e encerra.",
+    )
     parser.add_argument("--test", action="store_true",
                         help="Ativa modo de teste: somente plugins fake entram na rodada")
     parser.add_argument("--interactive-test", action="store_true",
@@ -498,6 +505,13 @@ def main():
         print(f"History window definida: {args.set_history_window}")
         return
 
+    if args.set_idle_timeout is not None:
+        if args.set_idle_timeout <= 0:
+            parser.error("--set-idle-timeout deve ser maior que zero")
+        config.set_idle_timeout_seconds(args.set_idle_timeout)
+        print(f"Idle timeout padrão definido: {args.set_idle_timeout}s")
+        return
+
     _ensure_required_runtime_dependencies()
 
     visibility = Visibility(args.visibility)
@@ -509,7 +523,6 @@ def main():
                          debug=args.debug,
                          history_window=args.history_window,
                          agents=agents, threads=args.threads,
-                         timeout=args.timeout,
                          idle_timeout_seconds=args.idle_timeout,
                          workspace=workspace,
                          visibility=visibility,

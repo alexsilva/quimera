@@ -10,6 +10,8 @@ from quimera.agents.text_filters import _is_rate_limit_signal, _RATE_LIMIT_YIELD
 
 _logger = logging.getLogger(__name__)
 
+MAX_WALL_CLOCK_SECONDS = 3600
+
 
 class ProcessRunner:
     """Gerencia o loop de watchdog de um subprocess já iniciado.
@@ -34,15 +36,15 @@ class ProcessRunner:
         stderr_thread: threading.Thread,
         result_holder: dict,
         cancel_event: threading.Event,
-        timeout,
-        max_wall_clock: float | None = 3600.0,
+        idle_timeout,
+        max_wall_clock: float | None = MAX_WALL_CLOCK_SECONDS,
     ):
         self.proc = proc
         self.stdout_thread = stdout_thread
         self.stderr_thread = stderr_thread
         self.result_holder = result_holder
         self._cancel_event = cancel_event
-        self._timeout = timeout
+        self._idle_timeout = idle_timeout
         self._max_wall_clock = max_wall_clock
         self.rate_limit_detected = False
         self.rate_limit_detected_at: float | None = None
@@ -70,14 +72,14 @@ class ProcessRunner:
         O timeout é baseado em **silêncio** (sem stdout), não em tempo de parede:
         só dispara se o agente ficar sem produzir stdout por mais de ``timeout * 5``.
         """
-        if self._timeout is None or self._timeout <= 0:
+        if self._idle_timeout is None or self._idle_timeout <= 0:
             return None
         if self.rate_limit_detected and self.rate_limit_detected_at is not None:
             if now - self.rate_limit_detected_at > _RATE_LIMIT_YIELD_SECONDS:
                 return self.RATE_LIMIT
         else:
             silent_duration = now - self._last_stdout_time
-            if silent_duration > self._timeout:
+            if silent_duration > self._idle_timeout:
                 return self.TIMEOUT
         return None
 

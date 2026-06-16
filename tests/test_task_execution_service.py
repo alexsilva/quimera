@@ -372,7 +372,7 @@ def test_background_dispatch_uses_chat_timeout_when_present(tmp_path):
 
     app = AppStub()
     app.renderer = object()
-    app.agent_client = type("ChatClient", (), {"timeout": 45})()
+    app.agent_client = type("ChatClient", (), {"idle_timeout": 45})()
     app.workspace = type("WorkspaceStub", (), {"cwd": tmp_path})()
     app.visibility = "summary"
     app.tasks_db_path = None
@@ -382,7 +382,7 @@ def test_background_dispatch_uses_chat_timeout_when_present(tmp_path):
 
     dispatch = services._get_background_dispatch_services()
 
-    assert dispatch._get_agent_client().timeout == 45
+    assert dispatch._get_agent_client().idle_timeout == 45
 
 
 def test_background_dispatch_uses_fallback_timeout_when_chat_timeout_is_missing(tmp_path):
@@ -392,7 +392,7 @@ def test_background_dispatch_uses_fallback_timeout_when_chat_timeout_is_missing(
 
     app = AppStub()
     app.renderer = object()
-    app.agent_client = type("ChatClient", (), {"timeout": None})()
+    app.agent_client = type("ChatClient", (), {"idle_timeout": None})()
     app.workspace = type("WorkspaceStub", (), {"cwd": tmp_path})()
     app.visibility = "summary"
     app.tasks_db_path = None
@@ -402,7 +402,7 @@ def test_background_dispatch_uses_fallback_timeout_when_chat_timeout_is_missing(
 
     dispatch = services._get_background_dispatch_services()
 
-    assert dispatch._get_agent_client().timeout == _BACKGROUND_AGENT_TIMEOUT_SECONDS
+    assert dispatch._get_agent_client().idle_timeout == _BACKGROUND_AGENT_TIMEOUT_SECONDS
 
 
 def test_parallel_calls_use_background_dispatch_when_available(tmp_path, monkeypatch):
@@ -412,7 +412,7 @@ def test_parallel_calls_use_background_dispatch_when_available(tmp_path, monkeyp
 
     app = AppStub()
     app.renderer = object()
-    app.agent_client = type("ChatClient", (), {"timeout": 45})()
+    app.agent_client = type("ChatClient", (), {"idle_timeout": 45})()
     app.workspace = type("WorkspaceStub", (), {"cwd": tmp_path})()
     app.visibility = "summary"
     app.tasks_db_path = None
@@ -465,7 +465,7 @@ def test_parallel_calls_create_dedicated_background_dispatch_and_close_it(tmp_pa
 
     app = AppStub()
     app.renderer = object()
-    app.agent_client = type("ChatClient", (), {"timeout": 45})()
+    app.agent_client = type("ChatClient", (), {"idle_timeout": 45})()
     app.workspace = type("WorkspaceStub", (), {"cwd": tmp_path})()
     app.visibility = "summary"
     app.tasks_db_path = None

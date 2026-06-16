@@ -22,7 +22,7 @@ from quimera.runtime.approve_summary import ApproveSummary
 from quimera.prompt_templates import PromptText
 
 from quimera.agents.parsers import parse_stream_json, parse_codex_json, parse_opencode_json
-from quimera.agents.process_runner import ProcessRunner
+from quimera.agents.process_runner import ProcessRunner, MAX_WALL_CLOCK_SECONDS
 from quimera.agents.signal_guard import EscMonitor, terminate_process_group
 from quimera.agents.warm_pool import WarmPool
 from quimera.runtime.process_supervisor import ProcessSupervisor
@@ -47,7 +47,7 @@ class AgentClient:
     _MAX_STDOUT_CHARS = 128_000
     _MAX_LOG_QUEUE_ITEMS = 512
 
-    def __init__(self, renderer, metrics_file=None, timeout=None, visibility=Visibility.SUMMARY,
+    def __init__(self, renderer, metrics_file=None, idle_timeout=None, visibility=Visibility.SUMMARY,
                  working_dir=None, workspace_root=None, tool_executor=None, error_reporter=None,
                  muted_reporter=None, session_id=None, workspace_tmp_root=None,
                  process_supervisor=None):
@@ -57,7 +57,7 @@ class AgentClient:
         self.muted_reporter = muted_reporter
         self.metrics_file = metrics_file
         self._metrics_lock = threading.Lock()
-        self.timeout = timeout
+        self.idle_timeout = idle_timeout
         self.visibility = Visibility(visibility)
         # `workspace_root` é mantido como alias compatível.
         self.working_dir = working_dir if working_dir is not None else workspace_root
@@ -378,7 +378,7 @@ class AgentClient:
 
         runner = ProcessRunner(
             proc, stdout_thread, stderr_thread, result_holder,
-            self._cancel_event, self.timeout,
+            self._cancel_event, self.idle_timeout,
         )
 
         try:
@@ -409,7 +409,7 @@ class AgentClient:
                     self._stop_esc_monitor()
                     _logger.warning(
                         "[erro] idle timeout after %ds without stdout for %s",
-                        self.timeout * 5,
+                        self.idle_timeout,
                         cmd[0],
                     )
                     return None
@@ -507,9 +507,8 @@ class AgentClient:
                         self._agent_running = False
                         self._current_proc = None
                         self._stop_esc_monitor()
-                        wall_limit = self.timeout * 5
                         self._show_error(
-                            f"[erro] idle timeout after {wall_limit}s without stdout for {cmd[0]}")
+                            f"[erro] idle timeout after {self.idle_timeout}s without stdout for {cmd[0]}")
                         return None
                     if termination == ProcessRunner.WALL_TIMEOUT:
                         self._agent_running = False
@@ -758,7 +757,7 @@ class AgentClient:
                 model=connection.model,
                 base_url=connection.base_url,
                 api_key=api_key,
-                timeout=self.timeout,
+                timeout=self.idle_timeout,
                 tool_use_reliability=getattr(plugin, "tool_use_reliability", "medium"),
                 extra_body=connection.extra_body,
                 max_connections=getattr(connection, "max_connections", 4),
@@ -875,13 +874,11 @@ class AgentClient:
                     if progress_callback:
                         progress_callback(f"aguardando resposta da API ({connection.model})... {int(_api_elapsed)}s")
 
-                    if self.timeout is not None and self.timeout > 0:
-                        wall_limit = self.timeout * 5
-                        if _api_elapsed > wall_limit:
-                            self._cancel_event.set()
-                            self._show_error(
-                                f"[erro] wall-clock timeout after {int(wall_limit)}s em driver API")
-                            return None
+                    if _api_elapsed > MAX_WALL_CLOCK_SECONDS:
+                        self._cancel_event.set()
+                        self._show_error(
+                            f"[erro] wall-clock timeout after {MAX_WALL_CLOCK_SECONDS}s em driver API")
+                        return None
 
                 if self._cancel_event.is_set() and result_holder["result"] is None:
                     self._user_cancelled = True

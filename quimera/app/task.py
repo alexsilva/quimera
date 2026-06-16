@@ -642,7 +642,7 @@ class AppTaskServices:
             return self._get_dispatch_services()
 
         chat_agent_client = self._get_agent_client()
-        background_timeout = getattr(chat_agent_client, "timeout", None)
+        background_timeout = getattr(chat_agent_client, "idle_timeout", None)
         if background_timeout is None or not isinstance(background_timeout, (int, float)) or background_timeout <= 0:
             background_timeout = _BACKGROUND_AGENT_TIMEOUT_SECONDS
         _muted = self._get_show_muted_message()
@@ -651,7 +651,7 @@ class AppTaskServices:
         workspace_tmp_root = getattr(workspace_tmp, "root", None)
         background_agent_client = AgentClient(
             renderer,
-            timeout=background_timeout,
+            idle_timeout=background_timeout,
             visibility=self._get_visibility(),
             working_dir=str(workspace.cwd),
             error_reporter=_muted,

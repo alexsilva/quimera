@@ -84,9 +84,9 @@ class AgentsCoverageTests(unittest.TestCase):
         self.renderer.show_error.assert_called_once()
 
     def test_run_handles_timeout(self):
-        # Agents idle (no stdout) for > timeout*5 are killed; producing stdout resets the idle timer.
+        # Agents idle (no stdout) for > idle_timeout are killed; producing stdout resets the idle timer.
         """Verifica que Test run handles timeout."""
-        client = AgentClient(self.renderer, timeout=0.1)
+        client = AgentClient(self.renderer, idle_timeout=0.1)
         proc = MagicMock()
         proc.stdout = iter(())
         proc.stderr = iter(())

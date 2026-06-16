@@ -572,7 +572,7 @@ def test_agent_client_run_streaming(renderer):
 def test_agent_client_run_timeout(renderer):
     """Verifica que agent client run timeout."""
     # Line 152-161 coverage approx
-    client = AgentClient(renderer, timeout=0.1)
+    client = AgentClient(renderer, idle_timeout=0.1)
     with patch("subprocess.Popen") as mock_popen:
         mock_proc = MagicMock()
         mock_proc.stdout = iter([])
@@ -585,7 +585,7 @@ def test_agent_client_run_timeout(renderer):
         with patch("threading.Thread") as mock_thread_cls:
             mock_stdout_thread = MagicMock()
             mock_stderr_thread = MagicMock()
-            # Loop stays alive for first iteration; wall-clock fires before second check
+            # Loop stays alive for first iteration; idle timeout fires before second check
             mock_stdout_thread.is_alive.side_effect = [True]
             mock_stderr_thread.is_alive.return_value = False
             mock_thread_cls.side_effect = [mock_stdout_thread, mock_stderr_thread]
@@ -595,7 +595,7 @@ def test_agent_client_run_timeout(renderer):
                 # 2. start_time = time.time() -> 101.0 (ProcessRunner.watch)
                 # 3. elapsed = int(time.time() - start_time) -> 101.0 => elapsed=1
                 # 4. now = time.time() -> 101.0 (_check_timeout)
-                # idle = 101.0 - 100.0 = 1.0; limit = 0.1*5 = 0.5; 1.0 > 0.5 => idle timeout fires
+                # idle = 101.0 - 100.0 = 1.0; idle_timeout = 0.1; 1.0 > 0.1 => idle timeout fires
                 mock_time.side_effect = [100.0, 101.0, 101.0, 101.0]
                 with patch("time.sleep"):
                     result = client.run(["slow"], silent=False)
@@ -698,7 +698,7 @@ def test_agent_client_log_queue_drops_oldest_item_when_full(renderer):
 
 def test_agent_client_run_marks_rate_limit_from_stderr(renderer):
     """Verifica que agent client run marks rate limit from stderr."""
-    client = AgentClient(renderer, timeout=1)
+    client = AgentClient(renderer, idle_timeout=1)
 
     class SlowLines:
         def __init__(self, lines, delay=0.05):
@@ -727,7 +727,7 @@ def test_agent_client_run_marks_rate_limit_from_stderr(renderer):
 
 def test_agent_client_run_does_not_mark_rate_limit_from_stdout(renderer):
     """Verifica que agent client run does not mark rate limit from stdout."""
-    client = AgentClient(renderer, timeout=1)
+    client = AgentClient(renderer, idle_timeout=1)
 
     with patch("subprocess.Popen") as mock_popen, patch("time.sleep"):
         mock_proc = MagicMock()
@@ -1374,7 +1374,7 @@ def test_agent_client_call_unknown_agent(renderer):
 def test_agent_client_call_api_driver(renderer):
     """Verifica que agent client call api driver."""
     # Line 280-281, 293-325: API driver path
-    client = AgentClient(renderer, timeout=60)
+    client = AgentClient(renderer, idle_timeout=60)
     with patch("quimera.plugins.get") as mock_get:
         mock_plugin = MagicMock()
         mock_plugin.driver = "api"
@@ -2316,7 +2316,7 @@ def test_process_runner_watch_emits_tick_only_on_elapsed_change():
         stderr_thread,
         {"stderr": []},
         threading.Event(),
-        timeout=None,
+        idle_timeout=None,
     )
 
     ticks = []
