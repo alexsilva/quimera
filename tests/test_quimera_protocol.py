@@ -2391,6 +2391,7 @@ class ProtocolTests(unittest.TestCase):
 
         app.session_services = _make_session_services(app)
         app.session_services.maybe_auto_summarize()
+        app.session_services.join_summarization(timeout=3)
 
         self.assertEqual(
             app.session_summarizer.calls,
@@ -2471,6 +2472,7 @@ class ProtocolTests(unittest.TestCase):
 
         app.session_services = _make_session_services(app)
         app.session_services.maybe_auto_summarize()
+        app.session_services.join_summarization(timeout=3)
 
         app.session_summarizer.summarize.assert_called_once()
         summarized_history = app.session_summarizer.summarize.call_args[0][0]

@@ -273,6 +273,7 @@ def test_session_summarize_preserves_concurrent_persisted_message():
     summarizer.service = service
 
     service.maybe_auto_summarize()
+    service.join_summarization(timeout=3)
 
     assert history == [
         {"role": "human", "content": "m10"},
@@ -316,12 +317,15 @@ def test_session_summarize_does_not_save_summary_when_snapshot_changes():
     summarizer.service = service
 
     service.maybe_auto_summarize()
+    service.join_summarization(timeout=3)
 
     assert context.saved_summary is None
     assert storage.saved_history is None
     assert len(history) == original_length
     assert history[0] == {"role": "human", "content": "mutado durante resumo"}
-    assert "[memória] histórico mudou durante o resumo — truncamento adiado" in renderer.system_messages
+    assert service._pending_summary_completion == (
+        "[memória] histórico mudou durante o resumo — truncamento adiado"
+    )
 
 
 def test_session_shutdown_summarizes_stable_history_snapshot_after_pending_save():
@@ -413,3 +417,198 @@ def test_current_job_env_restore_restores_previous_value(monkeypatch):
     app._restore_current_job_env()
 
     assert os.environ["QUIMERA_CURRENT_JOB_ID"] == "old"
+
+
+def test_auto_summarize_calls_load_session_summary_inside_background_thread():
+    """load_session_summary deve ser chamado na thread de background, não na thread principal."""
+    history = [{"role": "human", "content": f"m{i}"} for i in range(12)]
+    storage = _Storage()
+    renderer = _Renderer()
+    lock = threading.Lock()
+    call_thread: list = []
+
+    class TrackingContextManager:
+        def load_session_summary(self):
+            call_thread.append(threading.current_thread())
+            return "existente"
+
+        def update_with_summary(self, summary):
+            pass
+
+    class Summarizer:
+        def summarize(self, messages, existing_summary=None, preferred_agent=None):
+            return "resumo"
+
+    service = AppSessionServices(
+        session_state=SessionState(history=history, shared_state={}, shared_state_lock=lock),
+        storage=storage,
+        renderer=renderer,
+        agent_pool=SimpleNamespace(primary="codex"),
+        context_manager=TrackingContextManager(),
+        session_summarizer=Summarizer(),
+        task_services=Mock(stop_task_executors=Mock()),
+        prompt_builder=SimpleNamespace(history_window=2),
+        auto_summarize_threshold=4,
+    )
+
+    service.maybe_auto_summarize()
+    service.join_summarization(timeout=3)
+
+    assert len(call_thread) == 1
+    assert call_thread[0] is not threading.main_thread()
+
+
+def test_shutdown_waits_for_running_summarization_thread_when_not_interrupted():
+    """shutdown() normal deve aguardar a thread de sumarização automática."""
+    class FakeThread:
+        def __init__(self):
+            self.join_calls = []
+
+        def is_alive(self):
+            return True
+
+        def join(self, timeout=None):
+            self.join_calls.append(timeout)
+
+    storage = _Storage()
+    renderer = _Renderer()
+    lock = threading.Lock()
+
+    service = AppSessionServices(
+        session_state=SessionState(history=[], shared_state={}, shared_state_lock=lock),
+        storage=storage,
+        renderer=renderer,
+        agent_pool=SimpleNamespace(primary="codex"),
+        context_manager=_ContextManager(),
+        session_summarizer=Mock(),
+        task_services=Mock(stop_task_executors=Mock()),
+        prompt_builder=SimpleNamespace(history_window=2),
+    )
+    fake_thread = FakeThread()
+    service._summarization_thread = fake_thread
+
+    service.shutdown(interrupted=False)
+
+    assert fake_thread.join_calls == [30]
+
+
+def test_shutdown_interrupted_does_not_wait_for_running_summarization_thread():
+    """shutdown(interrupted=True) não deve bloquear aguardando a sumarização automática."""
+    class FakeThread:
+        def __init__(self):
+            self.join_calls = []
+
+        def is_alive(self):
+            return True
+
+        def join(self, timeout=None):
+            self.join_calls.append(timeout)
+
+    storage = _Storage()
+    renderer = _Renderer()
+    lock = threading.Lock()
+
+    service = AppSessionServices(
+        session_state=SessionState(history=[], shared_state={}, shared_state_lock=lock),
+        storage=storage,
+        renderer=renderer,
+        agent_pool=SimpleNamespace(primary="codex"),
+        context_manager=_ContextManager(),
+        session_summarizer=Mock(),
+        task_services=Mock(stop_task_executors=Mock()),
+        prompt_builder=SimpleNamespace(history_window=2),
+    )
+    fake_thread = FakeThread()
+    service._summarization_thread = fake_thread
+
+    service.shutdown(interrupted=True)
+
+    assert fake_thread.join_calls == []
+
+
+def test_shutdown_flushes_pending_auto_summary_completion():
+    """shutdown() deve exibir a conclusão pendente do resumo automático antes de encerrar."""
+    history = [{"role": "human", "content": f"m{i}"} for i in range(12)]
+    storage = _Storage()
+    renderer = _Renderer()
+    lock = threading.Lock()
+    context = _ContextManager()
+
+    class Summarizer:
+        def summarize(self, messages, existing_summary=None, preferred_agent=None):
+            return "resumo pronto"
+
+    service = AppSessionServices(
+        session_state=SessionState(history=history, shared_state={}, shared_state_lock=lock),
+        storage=storage,
+        renderer=renderer,
+        agent_pool=SimpleNamespace(primary="codex"),
+        context_manager=context,
+        session_summarizer=Summarizer(),
+        task_services=Mock(stop_task_executors=Mock()),
+        prompt_builder=SimpleNamespace(history_window=2),
+        auto_summarize_threshold=4,
+    )
+
+    service.maybe_auto_summarize()
+    service.join_summarization(timeout=3)
+    renderer.system_messages.clear()
+
+    service.shutdown(interrupted=True)
+
+    assert renderer.system_messages == [
+        "[memória] histórico truncado para 2 mensagens recentes",
+    ]
+    assert service._pending_summary_completion is None
+
+
+def test_auto_summarize_records_failure_when_worker_raises():
+    """Exceção no worker de auto-sumarização deve virar falha controlada."""
+    history = [{"role": "human", "content": f"m{i}"} for i in range(12)]
+    storage = _Storage()
+    renderer = _Renderer()
+    lock = threading.Lock()
+
+    class ExplodingSummarizer:
+        def summarize(self, messages, existing_summary=None, preferred_agent=None):
+            raise RuntimeError("boom")
+
+    service = AppSessionServices(
+        session_state=SessionState(history=history, shared_state={}, shared_state_lock=lock),
+        storage=storage,
+        renderer=renderer,
+        agent_pool=SimpleNamespace(primary="codex"),
+        context_manager=_ContextManager(),
+        session_summarizer=ExplodingSummarizer(),
+        task_services=Mock(stop_task_executors=Mock()),
+        prompt_builder=SimpleNamespace(history_window=2),
+        auto_summarize_threshold=4,
+    )
+
+    service.maybe_auto_summarize()
+    service.join_summarization(timeout=3)
+
+    assert service._pending_summary_completion == (
+        "[memória] resumo automático falhou — histórico mantido"
+    )
+
+
+def test_join_summarization_is_noop_when_no_thread_started():
+    """join_summarization não deve lançar exceção quando nenhuma thread foi iniciada."""
+    storage = _Storage()
+    renderer = _Renderer()
+    lock = threading.Lock()
+
+    service = AppSessionServices(
+        session_state=SessionState(history=[], shared_state={}, shared_state_lock=lock),
+        storage=storage,
+        renderer=renderer,
+        agent_pool=SimpleNamespace(primary="codex"),
+        context_manager=_ContextManager(),
+        session_summarizer=Mock(),
+        task_services=Mock(stop_task_executors=Mock()),
+        prompt_builder=SimpleNamespace(history_window=2),
+    )
+
+    # _summarization_thread é None — não deve lançar
+    service.join_summarization(timeout=1)

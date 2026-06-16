@@ -69,6 +69,17 @@ class AppSessionServices:
         self._agent_client = agent_client
         self._last_save_time: float = 0.0
         self._unsaved_messages: int = 0
+        self._summarization_running = threading.Event()
+        self._summarization_thread: threading.Thread | None = None
+        self._pending_summary_completion: str | None = None
+
+    def _flush_pending_summary_completion(self) -> None:
+        """Exibe, uma única vez, a mensagem pendente do último resumo automático."""
+        pending = self._pending_summary_completion
+        if not pending:
+            return
+        self._renderer.show_system(pending)
+        self._pending_summary_completion = None
 
     def _history_hard_limit(self) -> int:
         """Calcula o limite defensivo atual para o histórico em memória."""
@@ -111,6 +122,8 @@ class AppSessionServices:
 
     def maybe_auto_summarize(self, preferred_agent=None):
         """Sumariza e trunca o histórico quando excede o threshold configurado."""
+        self._flush_pending_summary_completion()
+
         threshold = self._auto_summarize_threshold
         if not isinstance(threshold, int) or threshold <= 0:
             return
@@ -132,39 +145,58 @@ class AppSessionServices:
             to_summarize = history_snapshot
             recent = []
 
-        existing_summary = self._context_manager.load_session_summary()
+        if self._summarization_running.is_set():
+            return
 
-        self._renderer.show_system(
-            f"[memória] histórico com {history_len} mensagens — gerando resumo automático..."
-        )
         summary_agent = preferred_agent or self._summary_agent_preference or self._agent_pool.primary
-        summary = self._session_summarizer.summarize(
-            to_summarize,
-            existing_summary=existing_summary,
-            preferred_agent=summary_agent,
-        )
-        if summary:
-            matched, final_history = self._session_state.replace_history_if_prefix_matches(
-                history_snapshot,
-                history_len,
-                recent,
-            )
-            if not matched:
+
+        def _run_summarize():
+            try:
+                existing_summary = self._context_manager.load_session_summary()
                 self._renderer.show_system(
-                    "[memória] histórico mudou durante o resumo — truncamento adiado"
+                    f"[memória] {history_len} mensagens — gerando resumo automático..."
                 )
-                return
-            self._storage.save_history(
-                final_history,
-                shared_state=self._session_state.shared_state_snapshot(),
-            )
-            current_len = len(final_history)
-            self._context_manager.update_with_summary(summary)
-            self._renderer.show_system(
-                f"[memória] histórico truncado para {current_len} mensagens recentes"
-            )
-        else:
-            self._renderer.show_system("[memória] resumo automático falhou — histórico mantido")
+                summary = self._session_summarizer.summarize(
+                    to_summarize,
+                    existing_summary=existing_summary,
+                    preferred_agent=summary_agent,
+                )
+                if summary:
+                    matched, final_history = self._session_state.replace_history_if_prefix_matches(
+                        history_snapshot,
+                        history_len,
+                        recent,
+                    )
+                    if not matched:
+                        self._pending_summary_completion = (
+                            "[memória] histórico mudou durante o resumo — truncamento adiado"
+                        )
+                        return
+                    self._storage.save_history(
+                        final_history,
+                        shared_state=self._session_state.shared_state_snapshot(),
+                    )
+                    current_len = len(final_history)
+                    self._context_manager.update_with_summary(summary)
+                    self._pending_summary_completion = (
+                        f"[memória] histórico truncado para {current_len} mensagens recentes"
+                    )
+                else:
+                    self._pending_summary_completion = (
+                        "[memória] resumo automático falhou — histórico mantido"
+                    )
+            except Exception:
+                self._pending_summary_completion = (
+                    "[memória] resumo automático falhou — histórico mantido"
+                )
+            finally:
+                self._summarization_running.clear()
+
+        # Seta o guard no thread principal para eliminar a janela de corrida
+        # entre a verificação is_set() e o início real da thread.
+        self._summarization_running.set()
+        self._summarization_thread = threading.Thread(target=_run_summarize, daemon=True)
+        self._summarization_thread.start()
 
     def _flush_pending_history(self) -> None:
         """Garante persistência do histórico em memória antes do encerramento."""
@@ -180,10 +212,22 @@ class AppSessionServices:
             self._last_save_time = time.monotonic()
             self._unsaved_messages = 0
 
+    def join_summarization(self, *, timeout: float = 3.0) -> None:
+        """Aguarda a thread de sumarização automática terminar, se existir."""
+        t = self._summarization_thread
+        if t is not None:
+            t.join(timeout=timeout)
+
     def shutdown(self, *, interrupted: bool = False):
         """Finaliza a sessão tentando resumir o histórico no contexto persistente."""
         self._task_services.stop_task_executors()
         self._flush_pending_history()
+
+        t = self._summarization_thread
+        # Em shutdown interrompido, não bloqueia a saída aguardando a sumarização automática.
+        if not interrupted and t is not None and t.is_alive():
+            t.join(timeout=30)
+        self._flush_pending_summary_completion()
 
         history_snapshot = self._session_state.history_snapshot()
 
