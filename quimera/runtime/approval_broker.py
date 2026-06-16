@@ -9,9 +9,9 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Iterator
 
-from .approve_summary import ApproveSummary
 from .models import ToolCall
 from .policy import PathPermissionError, is_path_inside
+from .tool_preview import ToolPreview
 
 
 class RiskLevel(str, Enum):
@@ -510,7 +510,7 @@ class ApprovalBroker:
         body = (
             f"Permissão necessária para acessar: {permission_error.resolved_path}"
             if permission_error
-            else ApproveSummary.build(call.name, call.arguments)
+            else ToolPreview.build(call.name, call.arguments, context="approval")
         )
         details.append(body)
         return "\n".join(details)

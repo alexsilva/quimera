@@ -1845,7 +1845,7 @@ def test_call_api_renders_openai_preview_for_non_approval_tools(renderer):
     assert result == "ok"
     renderer.show_system_neutral.assert_called()
     message = renderer.show_system_neutral.call_args[0][0]
-    assert "[executando]" in message
+    assert "⚒ executando read_file" in message
     assert "read_file" in message
     assert "README.md" in message
 
@@ -1886,7 +1886,7 @@ def test_call_api_routes_openai_preview_through_muted_reporter(renderer):
     assert result == "ok"
     muted_reporter.assert_called_once()
     message = muted_reporter.call_args[0][0]
-    assert "[executando]" in message
+    assert "⚒ executando read_file" in message
     assert "read_file" in message
     assert "README.md" in message
     renderer.show_system_neutral.assert_not_called()
@@ -1925,6 +1925,55 @@ def test_call_api_skips_openai_preview_when_tool_requires_approval(renderer):
         result = client._call_api("test-agent", plugin, "prompt")
 
     assert result == "ok"
+
+
+def test_call_api_masks_sensitive_fields_in_openai_preview(renderer):
+    """Preview operacional deve mascarar campos sensíveis no fallback genérico."""
+    from types import SimpleNamespace
+
+    muted_reporter = MagicMock()
+    client = AgentClient(renderer, muted_reporter=muted_reporter)
+    tool_executor = MagicMock()
+    tool_executor.would_require_approval.return_value = False
+    client.tool_executor = tool_executor
+
+    plugin = SimpleNamespace(
+        driver="openai_compat",
+        model="test-model",
+        base_url="http://localhost",
+        api_key_env=None,
+        tool_use_reliability="medium",
+        supports_tools=True,
+    )
+
+    with patch("quimera.agents.client.OpenAICompatDriver") as mock_driver_cls, \
+            patch.object(client, "_start_esc_monitor"), \
+            patch.object(client, "_stop_esc_monitor"):
+        mock_driver = MagicMock()
+
+        def run_with_tool(**kwargs):
+            kwargs["on_tool_call"](
+                "custom_tool",
+                {
+                    "path": "README.md",
+                    "token": "1234567890",
+                    "headers": {"authorization": "Bearer super-secret-token"},
+                },
+            )
+            return "ok"
+
+        mock_driver.run.side_effect = run_with_tool
+        mock_driver_cls.return_value = mock_driver
+
+        result = client._call_api("test-agent", plugin, "prompt")
+
+    assert result == "ok"
+    message = muted_reporter.call_args[0][0]
+    assert "⚒ executando custom_tool" in message
+    assert "path=README.md" in message
+    assert "1234567890" not in message
+    assert "super-secret-token" not in message
+    assert "12****90" in message
 
 
 def test_call_api_propagates_task_approval_scope_to_driver_thread(renderer):

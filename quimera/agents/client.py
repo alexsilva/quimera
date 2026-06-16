@@ -18,7 +18,7 @@ from quimera.sandbox.bwrap import build_bwrap_cmd
 from quimera.spy_output_presenter import SpyOutputPresenter
 from quimera.runtime.drivers.openai_compat import OpenAICompatDriver
 from quimera.runtime.models import ToolCall
-from quimera.runtime.approve_summary import ApproveSummary
+from quimera.runtime.tool_preview import ToolPreview
 from quimera.prompt_templates import PromptText
 
 from quimera.agents.parsers import parse_stream_json, parse_codex_json, parse_opencode_json
@@ -793,7 +793,7 @@ class AgentClient:
                     set_tool_preview = getattr(effective_tool_executor, "set_tool_preview_callback", None)
                     if callable(set_tool_preview):
                         set_tool_preview(lambda name, args: _logger.info(
-                            "Tool call: %s :: %s", name, ApproveSummary.build(name, args)))
+                            "Tool call: %s :: %s", name, ToolPreview.build(name, args)))
                 # Injeta callbacks de spinner no executor para que o approval handler
                 # possa pausar o Live do Rich antes de input() bloqueante, evitando
                 # race condition entre o refresh do spinner e a leitura do stdin.
@@ -824,8 +824,7 @@ class AgentClient:
                                 try:
                                     call = ToolCall(name=name, arguments=args)
                                     if not effective_tool_executor.would_require_approval(call):
-                                        summary = ApproveSummary.build(name, args)
-                                        self._show_muted(f"[executando] {name} :: {summary}")
+                                        self._show_muted(ToolPreview.build(name, args))
                                 except Exception:
                                     pass  # preview é best-effort
 
