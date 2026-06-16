@@ -88,4 +88,4 @@ Uma evidência deve responder:
 
 ## Logs e métricas
 
-Com `--debug`, o Quimera ativa auditoria de renderização em `data/logs/render/`. Métricas por sessão ficam em `data/logs/metrics/`. Esses arquivos ajudam a diagnosticar problemas de UI, latência, redisplay, turnos, handoff e execução.
+Com `--debug`, o Quimera ativa auditoria de renderização em `data/logs/render/`. Métricas por sessão ficam em `data/logs/metrics/`. Esses arquivos ajudam a diagnosticar problemas de UI, latência, redisplay, turnos, delegation e execução.

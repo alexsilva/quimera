@@ -10,7 +10,7 @@ class DispatchStub:
         self.error = error
         self.calls = []
 
-    def call_agent(self, agent_name, **kwargs):
+    def delegate(self, agent_name, **kwargs):
         self.calls.append((agent_name, kwargs))
         if self.error:
             raise self.error

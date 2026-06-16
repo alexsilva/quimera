@@ -379,15 +379,15 @@ class TestTerminalRenderer:
         text = panel.renderable
         assert "bold magenta" in str(text.spans) or len(text.spans) > 0
 
-    def test_show_handoff(self, mock_renderer):
-        """Test show_handoff display."""
+    def test_show_delegation(self, mock_renderer):
+        """Test show_delegation display."""
         with patch("quimera.ui._agent_style", side_effect=lambda x, *_: ("white", x.capitalize())):
-            mock_renderer.show_handoff("agent1", "agent2", task=123)
+            mock_renderer.show_delegation("agent1", "agent2", task=123)
 
-    def test_show_handoff_without_task(self, mock_renderer):
-        """Test show_handoff without task."""
+    def test_show_delegation_without_task(self, mock_renderer):
+        """Test show_delegation without task."""
         with patch("quimera.ui._agent_style", side_effect=lambda x, *_: ("white", x.capitalize())):
-            mock_renderer.show_handoff("agent1", "agent2")
+            mock_renderer.show_delegation("agent1", "agent2")
 
     def test_update_status_no_live(self, mock_renderer):
         """Test update_status when no live display."""

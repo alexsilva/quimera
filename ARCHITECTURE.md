@@ -42,7 +42,7 @@ quimera/
 │   ├── agent_gateway.py              # Interface de baixo nível para AgentClient
 │   ├── agent_pool.py                 # Gerenciamento de pool de agentes disponíveis
 │   ├── worker.py                     # Worker thread de chat (isola exceções, recupera turno)
-│   ├── protocol.py                   # Parsing/geração do protocolo de handoff entre agentes
+│   ├── protocol.py                   # Parsing/geração do protocolo de delegation entre agentes
 │   ├── event_sink.py                 # Sistema de publish-subscribe de eventos internos
 │   ├── render_event.py               # Definição de eventos de renderização
 │   ├── handlers.py                   # Handlers de eventos de UI
@@ -128,7 +128,7 @@ quimera/
 ├── session_summary.py                # Sumarização de sessão para manter contexto compacto
 ├── bugs.py                           # Detecção, correlação e reporte de bugs de runtime
 ├── agent_events.py                   # Definição de eventos de agentes (AgentEvent, etc.)
-├── handoff_presenter.py              # Formatação de handoffs para exibição
+├── delegate_presenter.py              # Formatação de steps para exibição
 ├── shared_state_presenter.py         # Formatação do shared state para exibição
 ├── execution_mode_presenter.py       # Formatação do modo de execução ativo
 ├── spy_output_presenter.py           # Formatação de saída de spy (debug de agentes)
@@ -165,7 +165,7 @@ quimera/
 - **`inputs.py`**: Integração de alto nível com `InputGate`, exposta ao `core.py`.
 - **`event_sink.py`**: Publish-subscribe interno. Eventos publicados de worker threads são enfileirados na `ui_event_queue`; publicados da main thread são processados diretamente.
 - **`system_layer.py`**: Processa comandos `/cmd` do usuário. Adaptadores legados (`_LegacyPluginResolver`, `_LegacyAgentPoolAdapter`) mantidos para compatibilidade de migração.
-- **`protocol.py`**: Define e parseia o formato de handoff entre agentes (`type`, `route`, `content`, `metadata`).
+- **`protocol.py`**: Define e parseia o formato de delegation entre agentes (`type`, `route`, `content`, `metadata`).
 - **`interfaces.py`**: Protocolos (typing) que tentam estabelecer contratos entre camadas — ainda subutilizados.
 
 ### 3.2 Camada de Runtime (`runtime/`)
@@ -218,7 +218,7 @@ O Quimera implementa o protocolo MCP (`2025-11-25`, com negociação para versõ
 | **MCPServer** | `runtime/mcp/server.py` | Servidor JSON-RPC 2.0 sobre stdio/socket/HTTP. Métodos principais: lifecycle, `ping`, tools, resources, prompts, completion e logging |
 | **ToolExecutor** | `runtime/executor.py` | Executa tools com validação de política, aprovação e resolução de aliases |
 | **ToolRegistry** | `runtime/registry.py` | Registro nome → handler (dict simples) |
-| **HandoffTools** | `runtime/tools/handoff.py` | Implementa `call_agent` — delegação cross-MCP entre agentes |
+| **DelegateTools** | `runtime/tools/delegate.py` | Implementa `delegate` — delegação cross-MCP entre agentes |
 | **Proxy stdio→socket** | `runtime/mcp/server.py:_proxy_stdio_to_socket` | Ponte transparente entre stdio do agente e socket Unix do servidor |
 | **Plugin MCP injection** | `plugins/{claude,codex,opencode}.py` | Cada plugin injeta config MCP no formato nativo do agente |
 | **Tool schemas** | `runtime/drivers/tool_schemas.py` | Fonte única de schemas: `resolve_tool_schemas()` filtra por registro/política |
@@ -255,19 +255,19 @@ Cada conexão socket envia uma linha JSON como primeiro frame:
 ```
 O servidor valida com timeout de 5s. Token inválido → conexão fechada.
 
-#### 3.9.5 Cross-MCP (call_agent)
+#### 3.9.5 Cross-MCP (delegate)
 
-A ferramenta `call_agent` é o mecanismo central de interoperabilidade entre agentes no pool:
+A ferramenta `delegate` é o mecanismo central de interoperabilidade entre agentes no pool:
 
-- **Disponibilidade**: verifica se `_call_agent_fn` foi injetado pelo `ToolExecutor.set_call_agent_fn()`.
-- **Parâmetros**: `agent_name` (obrigatório), `task` (obrigatório), `context`, `fallback_agents`, `handoffs`.
-- **Validação**: agente alvo deve estar no pool ativo. `handoffs` suporta cadeias multi-passo.
-- **Execução**: dispatch via `dispatch_services.call_agent()` com `protocol_mode="handoff"`, `silent=False`.
+- **Disponibilidade**: verifica se `_delegate_fn` foi injetado pelo `ToolExecutor.set_delegate_fn()`.
+- **Parâmetros**: `target_agent` (obrigatório), `request` (obrigatório), `context`, `fallback_agents`, `steps`.
+- **Validação**: agente alvo deve estar no pool ativo. `steps` suporta cadeias multi-passo.
+- **Execução**: dispatch via `dispatch_services.delegate()` com `protocol_mode="delegation"`, `silent=False`.
 - **Truncamento**: task limitada a 1200 caracteres, contexto a 4000.
 
 #### 3.9.6 MCP-First Mode
 
-Em `app/protocol.py:232`, quando MCP está ativo, envelopes textuais legados (`<handoff>...</handoff>`) são ignorados — agentes devem usar exclusivamente `call_agent`. Isso evita dupla delegação.
+Agentes devem usar exclusivamente a tool `delegate` via MCP. Envelopes textuais legados foram removidos.
 
 #### 3.9.7 Ferramentas Expostas via tools/list
 
@@ -275,7 +275,7 @@ Tools definidas em `TOOL_SCHEMAS`, filtradas por:
 1. Registro no executor (intersecção com handlers registrados)
 2. Configuração (tools de task ocultas sem db_path)
 3. Política (tools bloqueadas removidas)
-4. Disponibilidade de `call_agent` (oculta se fn não injetada)
+4. Disponibilidade de `delegate` (oculta se fn não injetada)
 
 ### 3.10 Módulos Raiz de Prompt
 
@@ -284,7 +284,7 @@ Tools definidas em `TOOL_SCHEMAS`, filtradas por:
 | `prompt.py` | Injeta bloco de execução goal-driven no topo do prompt quando `goal_canonical` está ativo |
 | `prompt_budget.py` | Gerencia orçamento de tokens: trunca seções por prioridade quando necessário |
 | `prompt_templates.py` | Templates base: seções obrigatórias/opcionais, marcadores XML |
-| `prompt_kinds.py` | Tipos de prompt por contexto (chat, task, review, handoff) |
+| `prompt_kinds.py` | Tipos de prompt por contexto (chat, task, review, delegation) |
 | `context.py` | Monta o contexto dinâmico: histórico, shared state, instruções |
 
 ### 3.11 Outros Módulos Raiz
@@ -300,7 +300,7 @@ Tools definidas em `TOOL_SCHEMAS`, filtradas por:
 | `constants.py` | Constantes de sistema: prompts goal-driven, regras de revisão, comandos |
 | `paths.py` | Resolve paths de dados (`~/.local/share/quimera/...`), config e workspace |
 | `agent_events.py` | Tipos de eventos emitidos pelos agentes durante execução |
-| `*_presenter.py` | Formatadores de seções específicas do prompt (handoff, shared state, etc.) |
+| `*_presenter.py` | Formatadores de seções específicas do prompt (delegation, shared state, etc.) |
 
 ---
 
@@ -398,46 +398,31 @@ O prompt final é montado com estas seções em ordem de prioridade:
 
 Orçamento de tokens gerenciado por `prompt_budget.py`: trunca seções de menor prioridade primeiro.
 
-### 6.4 Protocolo de Handoff entre Agentes
+### 6.4 Protocolo de Delegation entre Agentes
 
-O Quimera suporta dois mecanismos de handoff:
+O Quimera suporta dois mecanismos de delegation:
 
-#### 6.4.1 Handoff via MCP (call_agent) — Preferencial
+#### 6.4.1 Delegation via MCP (delegate) — Preferencial
 
-Quando o MCP está ativo (padrão), os agentes usam a tool `call_agent` exposta via protocolo MCP. Definido em `runtime/tools/handoff.py`:
+Quando o MCP está ativo (padrão), os agentes usam a tool `delegate` exposta via protocolo MCP. Definido em `runtime/tools/delegate.py`:
 
 ```json
 {
-  "name": "call_agent",
+  "name": "delegate",
   "arguments": {
-    "agent_name": "codex",
-    "task": "Implementar função de leitura",
+    "target_agent": "codex",
+    "request": "Implementar função de leitura",
     "context": "contexto opcional",
     "fallback_agents": ["claude"],
-    "handoffs": [{"agent_name": "claude", "task": "Revise o resultado"}]
+    "steps": [{"target_agent": "claude", "request": "Revise o resultado"}]
   }
 }
 ```
 
-- **Disponibilidade**: depende de `_call_agent_fn` injetado pelo app (`ToolExecutor.set_call_agent_fn()`).
+- **Disponibilidade**: depende de `_delegate_fn` injetado pelo app (`ToolExecutor.set_delegate_fn()`).
 - **Validação**: o alvo é verificado contra `_resolve_active_agents()` no pool.
 - **Failover**: `fallback_agents` tentado em sequência se o primário falhar.
-- **Cadeias**: `handoffs` executa passos adicionais, cada um com seu próprio fallback.
-
-#### 6.4.2 Handoff Textual Legado
-
-Formato definido em `app/protocol.py`:
-
-```json
-{
-  "type": "handoff",
-  "route": "nome-do-agente",
-  "content": "descrição da tarefa",
-  "metadata": {"context": "...", "expected": "..."}
-}
-```
-
-Handoffs em sequência usam `"handoffs": [...]`. O sistema atualiza `shared_state` e histórico automaticamente.
+- **Cadeias**: `steps` executa passos adicionais, cada um com seu próprio fallback.
 
 
 ### 6.5 Arquitetura Orientada a Goals
@@ -470,7 +455,7 @@ Imports diretos de `plugins/` que existiam em módulos da camada de runtime/sand
 | `sandbox/bwrap.py` | importava `AgentPlugin` de `plugins.base` | **Resolvido** (8c) |
 | `runtime/task_planning.py` | importava `AgentPlugin` de `plugins.base` | **Resolvido** (8a) |
 | `runtime/drivers/repl.py` | chamava `_plugin_registry.all_plugins()` diretamente | **Resolvido** (8b) |
-| `app/core.py` | `call_agent_for_parallel` exposto via wrapper desnecessário | **Resolvido** (8e) |
+| `app/core.py` | `delegate_for_parallel` exposto via wrapper desnecessário | **Resolvido** (8e) |
 | `ui/renderer.py` | consultava `quimera.plugins.get(...)` para metadados | **Resolvido** (8d) |
 
 ### 7.4 Lookups de Plugin Distribuídos (Resolvidos)

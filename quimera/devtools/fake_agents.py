@@ -451,15 +451,15 @@ class FakeOpenAIHandler(BaseHTTPRequestHandler):
 
 
 
-def run_mcp_handoff_cli_agent(args: argparse.Namespace) -> int:
-    """Executa um CLI fake que delega para outro agente via call_agent no MCP."""
+def run_mcp_delegate_cli_agent(args: argparse.Namespace) -> int:
+    """Executa um CLI fake que delega para outro agente via delegate no MCP."""
     prompt = _read_prompt(args)
     task = _extract_quimera_current_turn(prompt)
-    target_agent = (args.target_agent or os.environ.get("QUIMERA_FAKE_HANDOFF_TARGET") or "fake-openai").strip()
+    target_agent = (args.target_agent or os.environ.get("QUIMERA_FAKE_DELEGATE_TARGET") or "fake-openai").strip()
     socket_path = args.mcp_socket or os.environ.get("QUIMERA_FAKE_MCP_SOCKET") or ""
     token = args.mcp_token or os.environ.get("QUIMERA_FAKE_MCP_TOKEN") or None
 
-    print(f"[quimera-fake-mcp-handoff-cli] target={target_agent}")
+    print(f"[quimera-fake-mcp-delegate-cli] target={target_agent}")
     if not socket_path:
         print("ERRO: QUIMERA_FAKE_MCP_SOCKET não informado; execute pelo app com MCP habilitado.")
         return 2
@@ -468,11 +468,11 @@ def run_mcp_handoff_cli_agent(args: argparse.Namespace) -> int:
         return 2
 
     arguments = {
-        "agent_name": target_agent,
-        "task": task,
+        "target_agent": target_agent,
+        "request": task,
         "context": (
             "Delegação iniciada por um agente CLI fake via MCP. "
-            "O campo task contém o pedido atual extraído do prompt renderizado recebido pelo agente CLI. "
+            "O campo request contém o pedido atual extraído do prompt renderizado recebido pelo agente CLI. "
             "O agente de destino deve usar suas próprias ferramentas quando necessário."
         ),
     }
@@ -482,17 +482,17 @@ def run_mcp_handoff_cli_agent(args: argparse.Namespace) -> int:
         tools = mcp.tools_list()
         tool_names = {str(tool.get("name") or "") for tool in tools}
         print(f"MCP conectado: {server_info.get('name', 'desconhecido')} | tools={len(tools)}")
-        if "call_agent" not in tool_names:
-            print("ERRO: MCP não expôs call_agent.")
+        if "delegate" not in tool_names:
+            print("ERRO: MCP não expôs delegate.")
             return 2
-        print(f"MCP tool_call: call_agent {json.dumps(arguments, ensure_ascii=False)}")
-        tool_result = mcp.tools_call("call_agent", arguments)
+        print(f"MCP tool_call: delegate {json.dumps(arguments, ensure_ascii=False)}")
+        tool_result = mcp.tools_call("delegate", arguments)
         is_error = bool(tool_result.get("isError"))
         text = _mcp_content_to_text(tool_result.get("content"))
         print(f"MCP tool_result: {'ERRO' if is_error else 'OK'} {text[:2000]}")
         if is_error:
             return 1
-        print("Delegação finalizada via call_agent.")
+        print("Delegação finalizada via delegate.")
         return 0
 
 
@@ -533,13 +533,13 @@ def build_parser() -> argparse.ArgumentParser:
     mcp_cli.add_argument("prompt", nargs="*", help="Prompt opcional; se omitido, lê stdin.")
     mcp_cli.set_defaults(func=run_openai_mcp_cli_agent)
 
-    handoff_cli = sub.add_parser("mcp-handoff-cli", help="CLI fake: delega para outro agente via call_agent no MCP.")
-    handoff_cli.add_argument("prompt", nargs="*", help="Prompt opcional; se omitido, lê stdin.")
-    handoff_cli.add_argument("--target-agent", default="fake-openai", help="Agente alvo da tool call_agent.")
-    handoff_cli.add_argument("--mcp-socket", default="", help="Socket MCP; fallback QUIMERA_FAKE_MCP_SOCKET.")
-    handoff_cli.add_argument("--mcp-token", default="", help="Token MCP; fallback QUIMERA_FAKE_MCP_TOKEN.")
-    handoff_cli.add_argument("--timeout", type=float, default=15.0)
-    handoff_cli.set_defaults(func=run_mcp_handoff_cli_agent)
+    delegate_cli = sub.add_parser("mcp-delegate-cli", help="CLI fake: delega para outro agente via delegate no MCP.")
+    delegate_cli.add_argument("prompt", nargs="*", help="Prompt opcional; se omitido, lê stdin.")
+    delegate_cli.add_argument("--target-agent", default="fake-openai", help="Agente alvo da tool delegate.")
+    delegate_cli.add_argument("--mcp-socket", default="", help="Socket MCP; fallback QUIMERA_FAKE_MCP_SOCKET.")
+    delegate_cli.add_argument("--mcp-token", default="", help="Token MCP; fallback QUIMERA_FAKE_MCP_TOKEN.")
+    delegate_cli.add_argument("--timeout", type=float, default=15.0)
+    delegate_cli.set_defaults(func=run_mcp_delegate_cli_agent)
 
     server = sub.add_parser("openai-server", help="Inicia um backend OpenAI-compatible fake com tool calling.")
     server.add_argument("--host", default=DEFAULT_HOST)

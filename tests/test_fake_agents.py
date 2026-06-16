@@ -25,13 +25,13 @@ def test_fake_plugins_are_registered_only_when_requested():
 
     names = register_fake_plugins(registry)
 
-    assert names == ("fake-cli", "fake-cli-handoff", "fake-openai", "fake-openai-mcp-cli")
+    assert names == ("fake-cli", "fake-cli-delegate", "fake-openai", "fake-openai-mcp-cli")
     assert registry.get("fake-cli") is not None
-    assert registry.get("fake-cli-handoff") is not None
+    assert registry.get("fake-cli-delegate") is not None
     assert registry.get("fake-openai") is not None
     assert registry.get("fake-openai-mcp-cli") is not None
     assert registry.get("fake-cli").supports_tools is False
-    assert registry.get("fake-cli-handoff").supports_tools is True
+    assert registry.get("fake-cli-delegate").supports_tools is True
     assert registry.get("fake-openai").supports_tools is True
     assert registry.get("fake-openai-mcp-cli").supports_tools is True
 
@@ -163,18 +163,18 @@ def test_openai_mcp_cli_calls_fake_openai_and_executes_tool_via_mcp(tmp_path):
         mcp.shutdown()
 
 
-def test_mcp_handoff_cli_calls_call_agent_via_mcp(tmp_path):
-    """Verifica que mcp handoff cli calls call agent via mcp."""
+def test_mcp_delegation_cli_calls_delegate_via_mcp(tmp_path):
+    """Verifica que mcp delegation cli calls call agent via mcp."""
     socket_path = str(tmp_path / "quimera-mcp.sock")
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), AutoApprovalHandler(approve_all=True))
     executor.set_active_agents_provider(lambda: ["fake-openai"])
 
-    def call_agent(agent_name, **kwargs):
+    def delegate(agent_name, **kwargs):
         assert agent_name == "fake-openai"
-        assert kwargs["handoff"]["task"] == "Execute pwd via shell"
+        assert kwargs["delegation"]["task"] == "Execute pwd via shell"
         return "delegado para fake-openai"
 
-    executor.set_call_agent_fn(call_agent)
+    executor.set_delegate_fn(delegate)
     mcp = MCPServer(executor, auth_token="test-token")
     mcp.start_background(socket_path)
     for _ in range(50):
@@ -194,7 +194,7 @@ def test_mcp_handoff_cli_calls_call_agent_via_mcp(tmp_path):
                 sys.executable,
                 "-m",
                 "quimera.devtools.fake_agents",
-                "mcp-handoff-cli",
+                "mcp-delegate-cli",
                 "--target-agent",
                 "fake-openai",
                 "Execute pwd via shell",
@@ -209,27 +209,27 @@ def test_mcp_handoff_cli_calls_call_agent_via_mcp(tmp_path):
         )
         assert completed.returncode == 0, completed.stderr
         assert "MCP conectado" in completed.stdout
-        assert "MCP tool_call: call_agent" in completed.stdout
+        assert "MCP tool_call: delegate" in completed.stdout
         assert "MCP tool_result: OK" in completed.stdout
         assert "delegado para fake-openai" in completed.stdout
     finally:
         mcp.shutdown()
 
 
-def test_mcp_handoff_cli_delegates_only_current_turn_via_call_agent(tmp_path):
-    """Verifica que mcp handoff cli delegates only current turn via call agent."""
+def test_mcp_delegation_cli_delegates_only_current_turn_via_delegate(tmp_path):
+    """Verifica que mcp delegation cli delegates only current turn via call agent."""
     socket_path = str(tmp_path / "quimera-mcp-current-turn.sock")
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), AutoApprovalHandler(approve_all=True))
     executor.set_active_agents_provider(lambda: ["fake-openai"])
 
-    def call_agent(agent_name, **kwargs):
+    def delegate(agent_name, **kwargs):
         assert agent_name == "fake-openai"
-        assert kwargs["handoff"]["task"] == "Execute pwd via shell"
-        assert "<header" not in kwargs["handoff"]["task"]
-        assert "métricas" not in kwargs["handoff"]["task"]
+        assert kwargs["delegation"]["task"] == "Execute pwd via shell"
+        assert "<header" not in kwargs["delegation"]["task"]
+        assert "métricas" not in kwargs["delegation"]["task"]
         return "delegado com pedido limpo"
 
-    executor.set_call_agent_fn(call_agent)
+    executor.set_delegate_fn(delegate)
     mcp = MCPServer(executor, auth_token="test-token")
     mcp.start_background(socket_path)
     for _ in range(50):
@@ -254,7 +254,7 @@ def test_mcp_handoff_cli_delegates_only_current_turn_via_call_agent(tmp_path):
                 sys.executable,
                 "-m",
                 "quimera.devtools.fake_agents",
-                "mcp-handoff-cli",
+                "mcp-delegate-cli",
                 "--target-agent",
                 "fake-openai",
             ],
@@ -268,7 +268,7 @@ def test_mcp_handoff_cli_delegates_only_current_turn_via_call_agent(tmp_path):
             check=False,
         )
         assert completed.returncode == 0, completed.stderr
-        assert '"task": "Execute pwd via shell"' in completed.stdout
+        assert '"request": "Execute pwd via shell"' in completed.stdout
         assert "<header" not in completed.stdout
         assert "métricas internas" not in completed.stdout
         assert "delegado com pedido limpo" in completed.stdout

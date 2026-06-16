@@ -22,7 +22,7 @@
 
 ## [80bf09a] refactor(bug-services): rename AppBugServices to BugServices, flatten ChatProcessor (PR-9)
 - `app_bug_services.py` → `bug_services.py` (`AppBugServices` → `BugServices`).
-- `ChatProcessor` achatado: responsabilidade de handoff/roteamento centralizada.
+- `ChatProcessor` achatado: responsabilidade de delegation/roteamento centralizada.
 - Regressão em `system_layer.py` e `handlers.py` corrigida com fallback explícito para app legado sem `runtime_state`.
 
 ## [fde8c4f] refactor(core): extract bug services and command router

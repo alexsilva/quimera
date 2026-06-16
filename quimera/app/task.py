@@ -210,7 +210,7 @@ class AppTaskServices:
         max_retries: int = 2,
         retry_backoff_seconds: int = 1,
         get_rate_limit_backoff_seconds: Callable[[], int],
-        call_agent: Callable[..., Any],
+        delegate: Callable[..., Any],
         parse_response: Callable[[Any], tuple[Any, Any, Any, Any, Any, Any]],
         classify_task_execution_result: Callable[[str | None], tuple[bool, str]] = classify_task_execution_result,
         classify_task_review_result: Callable[[str | None], tuple[bool, str, str]] = classify_task_review_result,
@@ -261,7 +261,7 @@ class AppTaskServices:
         - ``max_retries``: limite de retries.
         - ``retry_backoff_seconds``: backoff padrão de retry.
         - ``get_rate_limit_backoff_seconds``: retorna o backoff para rate limit.
-        - ``call_agent``: executa chamada de agente para handoffs paralelos.
+            - ``delegate``: executa chamada de agente para delegações paralelas.
         - ``parse_response``: parseia a resposta crua de agente.
         - ``classify_task_execution_result``: classifica sucesso/falha da execução da task.
         - ``classify_task_review_result``: classifica aceite/rejeição/retry do review.
@@ -311,7 +311,7 @@ class AppTaskServices:
         self._max_retries = max_retries
         self._retry_backoff_seconds = retry_backoff_seconds
         self._get_rate_limit_backoff_seconds = get_rate_limit_backoff_seconds
-        self._call_agent = call_agent
+        self._delegate = delegate
         self._parse_response = parse_response
         self._classify_task_execution_result = classify_task_execution_result
         self._classify_task_review_result = classify_task_review_result
@@ -404,10 +404,10 @@ class AppTaskServices:
             approval_handler=approval_handler,
         )
 
-    def call_agent_for_parallel(
+    def delegate_for_parallel(
         self,
         agent,
-        handoff,
+        delegation,
         protocol_mode,
         staging_root: Path,
         index: int,
@@ -422,15 +422,15 @@ class AppTaskServices:
             ),
             cancel_event=cancel_event,
         )
-        call_agent = self._call_agent
+        delegate = self._delegate
         if background_dispatch is not None:
-            call_agent = background_dispatch.call_agent
+            delegate = background_dispatch.delegate
         try:
-            return call_agent_for_parallel_with_client(
-                call_agent,
+            return delegate_for_parallel_with_client(
+                delegate,
                 self._parse_response,
                 agent,
-                handoff,
+                delegation,
                 protocol_mode,
                 staging_root,
                 index,
@@ -773,11 +773,11 @@ class AppTaskServices:
         )
 
 
-def call_agent_for_parallel_with_client(
-    call_agent: Callable[..., Any],
+def delegate_for_parallel_with_client(
+    delegate: Callable[..., Any],
     parse_response: Callable[[Any], tuple[Any, ...]],
     agent,
-    handoff,
+    delegation,
     protocol_mode,
     staging_root: Path,
     index: int,
@@ -787,20 +787,20 @@ def call_agent_for_parallel_with_client(
 
     set_staging_root(staging_root / str(index))
     try:
-        raw = call_agent(agent, handoff=handoff, primary=False, protocol_mode=protocol_mode, silent=True, show_output=False)
+        raw = delegate(agent, delegation=delegation, primary=False, protocol_mode=protocol_mode, silent=True, show_output=False)
         response, _, _, extend, needs_input, _ = parse_response(raw)
         return agent, response, extend, needs_input
     finally:
         set_staging_root(None)
 
 
-def call_agent_for_parallel(app, agent, handoff, protocol_mode, staging_root: Path, index: int):
+def delegate_for_parallel(app, agent, delegation, protocol_mode, staging_root: Path, index: int):
     """Executa chamada paralela do agente isolando staging por thread."""
-    return call_agent_for_parallel_with_client(
-        app.call_agent,
+    return delegate_for_parallel_with_client(
+        app.delegate,
         app.parse_response,
         agent,
-        handoff,
+        delegation,
         protocol_mode,
         staging_root,
         index,

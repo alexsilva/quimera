@@ -1,7 +1,7 @@
 """Componentes de `quimera.plugins.__init__`."""
 from quimera.plugins.base import AgentPlugin, all_names, all_plugins, get, register, remove_connection
 
-TEST_PLUGIN_NAMES = ("fake-cli", "fake-cli-handoff", "fake-openai", "fake-openai-mcp-cli")
+TEST_PLUGIN_NAMES = ("fake-cli", "fake-cli-delegate", "fake-openai", "fake-openai-mcp-cli")
 
 
 def enable_test_plugins() -> tuple[str, ...]:

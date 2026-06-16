@@ -47,7 +47,7 @@ def test_prompt_aware_stderr_handler_suppresses_mcp_info_while_prompt_reading_wi
         level=logging.INFO,
         pathname=__file__,
         lineno=1,
-        msg="MCP tools/call done tool=call_agent ok=True duration_ms=10",
+        msg="MCP tools/call done tool=delegate ok=True duration_ms=10",
         args=(),
         exc_info=None,
     )
@@ -71,7 +71,7 @@ def test_prompt_aware_stderr_handler_shows_mcp_info_while_prompt_reading_in_debu
         level=logging.INFO,
         pathname=__file__,
         lineno=1,
-        msg="MCP tools/call done tool=call_agent ok=True duration_ms=10",
+        msg="MCP tools/call done tool=delegate ok=True duration_ms=10",
         args=(),
         exc_info=None,
     )

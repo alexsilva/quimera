@@ -41,7 +41,7 @@ class TrustedToolExecutionContext:
     http_profile: str | None = None
     approval_scope_id: str | None = None
     delegation_budget: int | None = None
-    http_call_agent_auto_approve: bool = False
+    http_delegate_auto_approve: bool = False
 
     @classmethod
     def native(cls) -> "TrustedToolExecutionContext":
@@ -75,7 +75,7 @@ class TrustedToolExecutionContext:
                 http_profile=_clean(raw.get("http_profile")),
                 approval_scope_id=_clean(raw.get("approval_scope_id")),
                 delegation_budget=_positive_int_or_none(raw.get("delegation_budget")),
-                http_call_agent_auto_approve=bool(raw.get("http_call_agent_auto_approve", False)),
+                http_delegate_auto_approve=bool(raw.get("http_delegate_auto_approve", False)),
             )
         return cls.native()
 
@@ -120,7 +120,7 @@ class ApprovalRequest:
     def route(self) -> str:
         parts = [p for p in (self.context.parent_agent, self.context.agent_name) if p]
         prefix = " → ".join(parts)
-        target = self.arguments.get("agent_name") if self.tool_name == "call_agent" else None
+        target = self.arguments.get("target_agent") if self.tool_name == "delegate" else None
         op = f"{self.tool_name}({target})" if target else self.tool_name
         tail = self.path or self.command or ""
         rendered = f"{op} {tail}".strip()
@@ -205,7 +205,7 @@ class ApprovalBroker:
         return TrustedToolExecutionContext.from_trusted_metadata(call.metadata)
 
     def classify(self, call: ToolCall) -> RiskLevel:
-        if call.name == "call_agent":
+        if call.name == "delegate":
             return RiskLevel.DELEGATION
         if call.name in self._DESTRUCTIVE_TOOLS:
             return RiskLevel.DESTRUCTIVE
@@ -228,7 +228,7 @@ class ApprovalBroker:
         risk = self.classify(call)
         path = self._extract_path(call, permission_error=permission_error)
         command = _extract_command(call)
-        target_agent_name = _clean(call.arguments.get("agent_name")) if call.name == "call_agent" else None
+        target_agent_name = _clean(call.arguments.get("target_agent")) if call.name == "delegate" else None
         effective_reason = reason or ("path_permission" if permission_error is not None else None)
         summary = self._summary(
             call,
@@ -349,7 +349,7 @@ class ApprovalBroker:
         if request.risk == RiskLevel.NETWORK and request.reason is None:
             return True
         if request.risk == RiskLevel.DELEGATION:
-            if request.context.transport == "http_mcp" and not request.context.http_call_agent_auto_approve:
+            if request.context.transport == "http_mcp" and not request.context.http_delegate_auto_approve:
                 return False
             return self._delegation_within_budget(request, consume=consume)
         return not needs_policy_approval and request.reason is None
@@ -397,8 +397,8 @@ class ApprovalBroker:
             raise ValueError("ApprovalScope requer tool_name ou approve_all_in_run explícito")
         if scope.tool_name in {"write_file", "remove_file", "apply_patch"} and not scope.path:
             raise ValueError("ApprovalScope de mutação de arquivo requer path")
-        if scope.tool_name == "call_agent" and (not scope.agent_name or not scope.target_agent_name):
-            raise ValueError("ApprovalScope de call_agent requer agent_name e target_agent_name")
+        if scope.tool_name == "delegate" and (not scope.agent_name or not scope.target_agent_name):
+            raise ValueError("ApprovalScope de delegate requer agent_name e target_agent_name")
 
     def _prune_scopes(self) -> None:
         with self._scope_lock:

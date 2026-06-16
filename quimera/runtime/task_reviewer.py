@@ -12,12 +12,12 @@ from ..app.task_events import TaskReviewReassigned
 
 
 class _DispatchServicesProto(Protocol):
-    def call_agent(
+    def delegate(
         self,
         agent_name: str,
         *,
-        handoff: str | dict[str, object],
-        handoff_only: bool,
+        delegation: str | dict[str, object],
+        delegation_only: bool,
         primary: bool,
         silent: bool,
         persist_history: bool,
@@ -132,8 +132,8 @@ class TaskReviewer:
             task_result = task.result or ""
             description = task.description or ""
             body = task.body or description
-            review_handoff = {
-                "handoff_id": f"task-review-{task_id}",
+            review_delegation = {
+                "delegation_id": f"task-review-{task_id}",
                 "task": description or f"Revisar task {task_id}",
                 "context": (
                     f"Task ID: {task_id}\n"
@@ -149,10 +149,10 @@ class TaskReviewer:
                 "priority": task.priority or "normal",
                 "chain": ["task-reviewer", agent_name],
             }
-            response = self.dispatch_services.call_agent(
+            response = self.dispatch_services.delegate(
                 agent_name,
-                handoff=review_handoff,
-                handoff_only=True,
+                delegation=review_delegation,
+                delegation_only=True,
                 primary=False,
                 silent=True,
                 persist_history=False,

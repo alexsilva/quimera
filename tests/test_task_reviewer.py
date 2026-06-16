@@ -12,7 +12,7 @@ class DispatchStub:
         self.error = error
         self.calls = []
 
-    def call_agent(self, agent_name, **kwargs):
+    def delegate(self, agent_name, **kwargs):
         self.calls.append((agent_name, kwargs))
         if self.error:
             raise self.error
@@ -113,12 +113,12 @@ def test_reviewer_completes_task_when_verdict_is_aceite():
     assert ok is True
     assert repo.complete_calls == [(8, "ok", "pickle")]
     assert repo.requeue_calls == []
-    handoff = dispatch.calls[0][1]["handoff"]
+    delegation = dispatch.calls[0][1]["delegation"]
     assert dispatch.calls[0][1]["prompt_kind"] is PromptKind.TASK_REVIEWER
-    assert handoff["handoff_id"] == "task-review-8"
-    assert "Task original:\najuste" in handoff["context"]
-    assert "Resultado do executor:\nok" in handoff["context"]
-    assert "ACEITE, RETENTATIVA, REPLANEJAR ou REJEITAR" in handoff["expected"]
+    assert delegation["delegation_id"] == "task-review-8"
+    assert "Task original:\najuste" in delegation["context"]
+    assert "Resultado do executor:\nok" in delegation["context"]
+    assert "ACEITE, RETENTATIVA, REPLANEJAR ou REJEITAR" in delegation["expected"]
     assert "review concluído" in system.messages[-1]
 
 

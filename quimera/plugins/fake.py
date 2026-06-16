@@ -24,11 +24,11 @@ class FakeOpenAIMCPCliPlugin(AgentPlugin):
         return env
 
 
-class FakeMCPHandoffCliPlugin(AgentPlugin):
-    """Plugin CLI fake que delega para outro agente via call_agent no MCP."""
+class FakeMCPDelegateCliPlugin(AgentPlugin):
+    """Plugin CLI fake que delega para outro agente via delegate no MCP."""
 
     def env_for_cli(self) -> dict:
-        env = {"QUIMERA_FAKE_HANDOFF_TARGET": "fake-openai"}
+        env = {"QUIMERA_FAKE_DELEGATE_TARGET": "fake-openai"}
         if self._mcp_socket_path:
             env["QUIMERA_FAKE_MCP_SOCKET"] = self._mcp_socket_path
         if self._mcp_token:
@@ -56,12 +56,12 @@ def register_fake_plugins(registry=None) -> tuple[str, ...]:
         base_tier=1,
     ))
 
-    target_register(FakeMCPHandoffCliPlugin(
-        name="fake-cli-handoff",
-        prefix="/fake-cli-handoff",
+    target_register(FakeMCPDelegateCliPlugin(
+        name="fake-cli-delegate",
+        prefix="/fake-cli-delegate",
         icon="🧪",
         style=("yellow", "Fake CLI Handoff"),
-        cmd=[sys.executable, "-m", "quimera.devtools.fake_agents", "mcp-handoff-cli", "--target-agent", "fake-openai"],
+        cmd=[sys.executable, "-m", "quimera.devtools.fake_agents", "mcp-delegate-cli", "--target-agent", "fake-openai"],
         capabilities=["test_execution", "tool_calling", "mcp", "agent_delegation"],
         preferred_task_types=["test_execution", "bug_investigation", "code_review"],
         supports_tools=True,
@@ -112,4 +112,4 @@ def register_fake_plugins(registry=None) -> tuple[str, ...]:
         base_url="http://127.0.0.1:8765/v1",
     ))
 
-    return ("fake-cli", "fake-cli-handoff", "fake-openai", "fake-openai-mcp-cli")
+    return ("fake-cli", "fake-cli-delegate", "fake-openai", "fake-openai-mcp-cli")

@@ -47,7 +47,7 @@ class MemorySelector:
             return False
         lowered = stripped.lower()
         return '"type"' in lowered and any(marker in lowered for marker in (
-            '"type": "handoff"',
+            '"type": "delegation"',
             '"type": "state_update"',
             '"type": "ack"',
         ))

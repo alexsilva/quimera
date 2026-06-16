@@ -2188,8 +2188,8 @@ def test_core_turn_manager_reset_after_first_agent(renderer):
     app.turn_manager.reset.assert_called_once()
 
 
-def test_core_turn_manager_reset_after_handoff(renderer):
-    """ core.py:1037 - turn_manager.reset() após handoff """
+def test_core_turn_manager_reset_after_delegation(renderer):
+    """ core.py:1037 - turn_manager.reset() após delegation """
     from unittest import mock
     from quimera.app.core import QuimeraApp
 

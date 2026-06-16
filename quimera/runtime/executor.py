@@ -12,7 +12,7 @@ from .tools.patch import PatchTool
 from .tools.shell import ShellTool
 from .tools.web import WebTool
 from .tools.tasks import TaskTools
-from .tools.handoff import HandoffTools
+from .tools.delegate import DelegateTools
 from .tools.todo import TodoTools
 from .approval_broker import ApprovalBroker
 
@@ -41,7 +41,7 @@ class ToolExecutor:
         self._tool_progress_callback = None
         self.approval_broker = ApprovalBroker(config, approval_handler)
         self._task_tools = TaskTools(self.config)
-        self._handoff_tools = HandoffTools(self.config)
+        self._delegate_tools = DelegateTools(self.config)
         self._todo_tools = TodoTools(self.config)
         self._register_builtin_tools()
 
@@ -50,7 +50,7 @@ class ToolExecutor:
         Assinatura esperada: fn(message: str) -> None
         """
         self._tool_progress_callback = fn
-        self._handoff_tools.set_progress_callback(fn)
+        self._delegate_tools.set_progress_callback(fn)
 
     def _register_builtin_tools(self) -> None:
         """Executa register builtin tools."""
@@ -74,8 +74,8 @@ class ToolExecutor:
         self.registry.register("web_fetch", web_tool.web_fetch)
         self.registry.register("list_jobs", self._task_tools.list_jobs)
         self.registry.register("get_job", self._task_tools.get_job)
-        self.registry.register("call_agent", self._handoff_tools.call_agent)
-        self.registry.register("list_agents", self._handoff_tools.list_agents)
+        self.registry.register("delegate", self._delegate_tools.delegate)
+        self.registry.register("list_agents", self._delegate_tools.list_agents)
         self.registry.register("todo_write", self._todo_tools.todo_write)
         self.registry.register("todo_list", self._todo_tools.todo_list)
 
@@ -152,28 +152,28 @@ class ToolExecutor:
         """
         self._tool_preview_callback = fn
 
-    def set_call_agent_fn(self, fn) -> None:
+    def set_delegate_fn(self, fn) -> None:
         """Injeta callable para despachar tarefas a outro agente.
 
         Assinatura esperada: fn(agent_name: str, **options) -> str | None
         """
-        self._handoff_tools.set_call_agent_fn(fn)
+        self._delegate_tools.set_delegate_fn(fn)
 
     def set_active_agents_provider(self, fn) -> None:
         """Injeta provider que retorna agentes ativos no momento da delegação."""
-        self._handoff_tools.set_active_agents_provider(fn)
+        self._delegate_tools.set_active_agents_provider(fn)
 
     def set_agent_cleanup_callback(self, fn) -> None:
-        """Injeta callback para limpeza do estado de render após call_agent.
+        """Injeta callback para limpeza do estado de render após delegate.
 
         Assinatura esperada: fn(agent_name: str) -> None
-        Chamado após cada step de call_agent para limpar streams transitórios.
+        Chamado após cada step de delegate para limpar streams transitórios.
         """
-        self._handoff_tools.set_cleanup_callback(fn)
+        self._delegate_tools.set_cleanup_callback(fn)
 
-    def is_call_agent_available(self) -> bool:
-        """Indica se a tool call_agent está operável no contexto atual."""
-        return self._handoff_tools.is_call_agent_available()
+    def is_delegate_available(self) -> bool:
+        """Indica se a tool delegate está operável no contexto atual."""
+        return self._delegate_tools.is_delegate_available()
 
     def execute(self, call: ToolCall, progress_callback: Callable[[str], None] | None = None) -> ToolResult:
         """Executa um ToolCall com política de aprovação.
@@ -188,7 +188,7 @@ class ToolExecutor:
             # Sincroniza callback de progresso se fornecido (prioridade sobre o global)
             effective_progress_callback = progress_callback or self._tool_progress_callback
             if effective_progress_callback:
-                self._handoff_tools.set_progress_callback(effective_progress_callback)
+                self._delegate_tools.set_progress_callback(effective_progress_callback)
             if self.policy.requires_validation(normalized_call):
                 self.policy.validate(normalized_call)
 

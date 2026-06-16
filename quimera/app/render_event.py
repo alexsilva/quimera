@@ -17,7 +17,7 @@ class RenderEvent:
     SPINNER_START = "SPINNER_START"
     SPINNER_STOP = "SPINNER_STOP"
     TURN_SUMMARY = "TURN_SUMMARY"
-    HANDOFF = "HANDOFF"
+    DELEGATION = "DELEGATION"
     EVENT = "EVENT"
     REDISPLAY = "REDISPLAY"
     HEARTBEAT = "HEARTBEAT"
@@ -35,7 +35,7 @@ class RenderEvent:
             "warning": self.WARNING,
             "error": self.ERROR,
             "turn_summary": self.TURN_SUMMARY,
-            "handoff": self.HANDOFF,
+            "delegation": self.DELEGATION,
             "event": self.EVENT,
             "post_agent_flush": self.REDISPLAY,
             "heartbeat": self.HEARTBEAT,

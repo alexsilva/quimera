@@ -1558,8 +1558,8 @@ class TerminalRenderer:
         prefix = f"{agent} " if isinstance(agent, str) and agent.strip() else ""
         self.show_system_neutral(f"{prefix}{summary}")
 
-    def show_handoff(self, from_agent, to_agent, task=None):
-        """Exibe handoff."""
+    def show_delegation(self, from_agent, to_agent, task=None):
+        """Exibe delegation."""
         from_style, from_label = self._agent_style(from_agent)
         to_style, to_label = self._agent_style(to_agent)
         if self._console:
@@ -1571,7 +1571,7 @@ class TerminalRenderer:
             if task:
                 title_parts.append((f"· {task}", "dim"))
             title = Text.assemble(*title_parts)
-            self._print(Rule(title, style="dim", characters="─"), kind="handoff")
+            self._print(Rule(title, style="dim", characters="─"), kind="delegation")
         else:
             arrow = f"{from_label} → {to_label}"
             if task:

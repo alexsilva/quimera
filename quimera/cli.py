@@ -85,7 +85,7 @@ def _available_agent_names(test_mode: bool = False) -> list[str]:
 
 def _test_mode_uses_fake_openai(agents: list[str] | tuple[str, ...] | None) -> bool:
     selected = {str(agent).strip().lower() for agent in (agents or [])}
-    return bool(selected & {"fake-openai", "fake-cli-handoff", "fake-openai-mcp-cli"})
+    return bool(selected & {"fake-openai", "fake-cli-delegate", "fake-openai-mcp-cli"})
 
 
 def _start_test_fake_openai_backend() -> object:

@@ -13,7 +13,7 @@ from .task_repository import TaskRepository
 class _DispatchServicesProto(Protocol):
     """Interface mínima de dispatch usada pelo executor de tasks."""
 
-    def call_agent(self, *args, **kwargs) -> str | None: ...
+    def delegate(self, *args, **kwargs) -> str | None: ...
 
 
 class _SystemLayerProto(Protocol):

@@ -602,7 +602,7 @@ def _make_dummy_metrics():
         "execution_state_chars": 0,
         "shared_state_chars": 0,
         "history_chars": 0,
-        "handoff_chars": 0,
+        "delegation_chars": 0,
         "history_messages": 0,
         "total_chars": 5,
     }

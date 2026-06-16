@@ -11,7 +11,7 @@ As funcionalidades centrais são:
 3. **Modos de execução**: `/planning`, `/analysis`, `/design`, `/review` e `/execute` mudam o conjunto de ferramentas bloqueadas no turno.
 4. **Tasks em background**: `/task <descrição>` classifica, persiste, atribui e acorda executores para trabalhar fora do turno principal.
 5. **Review cruzado e failover**: tasks podem passar por revisão de outro agente e voltar para fila se falharem.
-6. **Runtime de ferramentas**: leitura/escrita de arquivos, patch, shell, web, TODOs, tasks e handoff são expostos para agentes.
+6. **Runtime de ferramentas**: leitura/escrita de arquivos, patch, shell, web, TODOs, tasks e delegation são expostos para agentes.
 7. **MCP embutido**: agentes compatíveis recebem o runtime do Quimera como servidor MCP por socket Unix ou HTTP.
 8. **Estado e memória por workspace**: histórico, contexto persistente, resumo de sessão anterior, logs, métricas, banco SQLite de tasks e evidências ficam isolados por diretório de projeto.
 
@@ -23,7 +23,7 @@ As funcionalidades centrais são:
 | `quimera/app/` | Loop interativo, comandos slash, roteamento, sessão, execução de turnos, tasks e renderização de eventos. |
 | `quimera/plugins/` | Catálogo de agentes, conexões CLI/API, injeção MCP e metadados de capacidade. |
 | `quimera/runtime/` | Drivers, schemas de ferramentas, executor, parser, políticas, MCP e execução de tasks. |
-| `quimera/runtime/tools/` | Implementações de ferramentas: arquivos, shell, patch, handoff, tasks, web e TODO. |
+| `quimera/runtime/tools/` | Implementações de ferramentas: arquivos, shell, patch, delegation, tasks, web e TODO. |
 | `quimera/ui/` | Renderer terminal, temas e auditoria visual. |
 | `quimera/evidence/` | Modelos, parsing, formatação e armazenamento de evidências. |
 | `quimera/workspace.py` | Layout persistente por workspace e diretórios temporários. |
@@ -38,7 +38,7 @@ Usuário inicia `quimera`
   -> usuário envia mensagem ou comando slash
   -> CommandRouter resolve modo/agente
   -> AgentClient ou driver executa o agente
-  -> runtime processa tools, aprovações, handoffs e estado
+  -> runtime processa tools, aprovações, steps e estado
   -> respostas, eventos, métricas e contexto são persistidos
 ```
 

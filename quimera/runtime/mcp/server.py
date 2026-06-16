@@ -297,7 +297,7 @@ class MCPServer:
                 "version": self.SERVER_VERSION,
                 "description": "Quimera runtime tools, resources and prompts",
             },
-            "instructions": "Use Quimera tools for workspace-safe inspection, execution and cross-agent handoff.",
+            "instructions": "Use Quimera tools for workspace-safe inspection, execution and cross-agent delegation.",
             "capabilities": {
                 "tools": {"listChanged": True},
                 "resources": {"subscribe": True, "listChanged": True},
@@ -522,7 +522,7 @@ class MCPServer:
             http_profile=state.get("http_profile"),
             approval_scope_id=state.get("approval_scope_id"),
             delegation_budget=state.get("delegation_budget"),
-            http_call_agent_auto_approve=bool(state.get("http_call_agent_auto_approve", False)),
+            http_delegate_auto_approve=bool(state.get("http_delegate_auto_approve", False)),
         )
         call_metadata = {"trusted_context": trusted_context, "_mcp_state": state}
 

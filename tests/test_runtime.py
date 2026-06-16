@@ -149,7 +149,7 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(classify_task_type("execute os testes"), "test_execution")
         self.assertEqual(classify_task_type("revise o arquivo quimera/app.py"), "code_review")
         self.assertEqual(classify_task_type("corrija o parser"), "code_edit")
-        self.assertEqual(classify_task_type("investigue por que o handoff falha"), "bug_investigation")
+        self.assertEqual(classify_task_type("investigue por que o delegation falha"), "bug_investigation")
 
     def test_choose_best_agent_uses_plugin_preferences(self):
         """Verifica que Test choose best agent uses plugin preferences."""

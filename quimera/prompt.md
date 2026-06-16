@@ -32,7 +32,7 @@ Eventos chave no JSONL e o que diagnosticam:
 | queue_depth | size | backpressure / render atrasado |
 | print | kind, prompt_active, preview | corrupção de layout por tipo de mensagem |
 | print (agent_update) | kind | atualização de progresso/rolling do agente |
-| print (handoff) | kind | transição de handoff entre agentes |
+| print (delegation) | kind | transição de delegação entre agentes |
 | print (prompt_preview) | kind | preview do prompt de depuração |
 | stream_start/stop/abort | agent, render_mode | sequência de streaming |
 | stream_chunk | agent, chunk_count | taxa de chegada de chunks |
@@ -80,17 +80,17 @@ Diagnóstico rápido:
 - Todas as ferramentas passam pela camada segura do runtime (`ToolExecutor`, policy e approval).
 <!-- ENDIF:mcp_enabled -->
 
-<!-- IF:handoff_only -->
+<!-- IF:delegation_only -->
 - Você recebeu uma subtarefa delegada por outro agente. Continue do ponto já avançado e responda diretamente à tarefa.
-- Inicie com [ACK:<HANDOFF_ID>] para confirmar recebimento.
+- Inicie com [ACK:<DELEGATION_ID>] para confirmar recebimento.
 - Se envolver sistema/arquivos: descubra path/comando antes de editar.
-- Se houver ganho real, você pode fazer 1 nova delegação usando a tool estruturada `call_agent` via MCP.
-- Delegação padrão: chame `call_agent` com `agent_name`, `task` e `context` (opcional).
-- Para manter comportamento sequencial: use `fallback_agents` (failover do mesmo passo) e `handoffs` (múltiplos passos no mesmo envio) quando necessário.
-- Para múltiplas delegações independentes, faça chamadas separadas de `call_agent`.
+- Se houver ganho real, você pode fazer 1 nova delegação usando a tool estruturada `delegate` via MCP.
+- Delegação padrão: chame `delegate` com `target_agent`, `request` e `context` (opcional).
+- Para manter comportamento sequencial: use `fallback_agents` (failover do mesmo passo) e `steps` (múltiplos passos no mesmo envio) quando necessário.
+- Para múltiplas delegações independentes, faça chamadas separadas de `delegate`.
 - Não expanda o escopo nem repita análise já feita.
 - Ao final, diga o que mudou, a evidência e o próximo passo.
-<!-- ENDIF:handoff_only -->
+<!-- ENDIF:delegation_only -->
 
 <!-- IF:is_first_speaker -->
 - Se o tópico exigir debate mais aprofundado entre os agentes, inclua {marker} ao final da sua resposta (sem explicação).
@@ -129,9 +129,9 @@ Sempre mescle com o estado existente, nunca substitua completamente.
 
 <!-- IF:route_agents -->
 - Agentes: {route_agents}
-- Delegação padrão: chame a tool estruturada `call_agent` com `agent_name`, `task`, `context`, `fallback_agents` e `handoffs` quando necessário.
-- Sequência: prefira `handoffs` para cadeia sequencial no mesmo envio; use chamadas separadas quando forem tarefas independentes.
-- `task` é obrigatório; inclua contexto e paths/comandos quando existirem.
+- Delegação padrão: chame a tool estruturada `delegate` com `target_agent`, `request`, `context`, `fallback_agents` e `steps` quando necessário.
+- Sequência: prefira `steps` para cadeia sequencial no mesmo envio; use chamadas separadas quando forem tarefas independentes.
+- `request` é obrigatório; inclua contexto e paths/comandos quando existirem.
 - Só delegue com ganho real: paralelizar, destravar etapa ou usar especialidade.
 - Se faltar contexto, não improvise; se faltar dado {user_name}, use [NEEDS_INPUT].
 - Se consegue fazer sozinho sem perder eficiência, faça.
@@ -181,48 +181,48 @@ Sempre mescle com o estado existente, nunca substitua completamente.
 </completed_tasks>
 <!-- ENDIF:completed_task_results -->
 
-<!-- IF:handoff_present -->
-<handoff title="Mensagem direta do outro agente">
-<!-- IF:handoff_id -->
-HANDOFF_ID:
-{handoff_id}
-<!-- ENDIF:handoff_id -->
+<!-- IF:delegation_present -->
+<delegation title="Mensagem direta do outro agente">
+<!-- IF:delegation_id -->
+DELEGATION_ID:
+{delegation_id}
+<!-- ENDIF:delegation_id -->
 
-<!-- IF:handoff_task -->
-TASK:
-{handoff_task}
-<!-- ENDIF:handoff_task -->
+<!-- IF:delegation_request -->
+REQUEST:
+{delegation_request}
+<!-- ENDIF:delegation_request -->
 
-<!-- IF:handoff_from -->
+<!-- IF:delegation_from -->
 FROM:
-{handoff_from}
-<!-- ENDIF:handoff_from -->
+{delegation_from}
+<!-- ENDIF:delegation_from -->
 
-<!-- IF:handoff_context -->
+<!-- IF:delegation_context -->
 CONTEXT:
-{handoff_context}
-<!-- ENDIF:handoff_context -->
+{delegation_context}
+<!-- ENDIF:delegation_context -->
 
-<!-- IF:handoff_expected -->
+<!-- IF:delegation_expected -->
 EXPECTED:
-{handoff_expected}
-<!-- ENDIF:handoff_expected -->
+{delegation_expected}
+<!-- ENDIF:delegation_expected -->
 
-<!-- IF:handoff_priority -->
+<!-- IF:delegation_priority -->
 PRIORITY:
-{handoff_priority}
-<!-- ENDIF:handoff_priority -->
+{delegation_priority}
+<!-- ENDIF:delegation_priority -->
 
-<!-- IF:handoff_chain -->
+<!-- IF:delegation_chain -->
 CHAIN:
-{handoff_chain}
-<!-- ENDIF:handoff_chain -->
+{delegation_chain}
+<!-- ENDIF:delegation_chain -->
 
-<!-- IF:handoff_raw -->
-{handoff_raw}
-<!-- ENDIF:handoff_raw -->
-</handoff>
-<!-- ENDIF:handoff_present -->
+<!-- IF:delegation_raw -->
+{delegation_raw}
+<!-- ENDIF:delegation_raw -->
+</delegation>
+<!-- ENDIF:delegation_present -->
 
 <!-- IF:context -->
 <persistent_context title="Contexto persistente do workspace">

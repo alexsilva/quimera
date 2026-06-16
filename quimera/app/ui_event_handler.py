@@ -203,25 +203,25 @@ class UiEventHandler:
                     self._show_warning_message(event.payload)
                 elif event_type == RenderEvent.ERROR:
                     self._show_error_message(event.payload)
-                elif event_type == RenderEvent.HANDOFF:
+                elif event_type == RenderEvent.DELEGATION:
                     meta = event.metadata or {}
-                    handoff_agent = event.agent
-                    handoff_to = meta.get("to")
-                    handoff_task = meta.get("task")
+                    delegation_agent = event.agent
+                    delegation_to = meta.get("to")
+                    delegation_task = meta.get("task")
 
-                    def _render_handoff_event(
-                        _agent=handoff_agent,
-                        _to=handoff_to,
-                        _task=handoff_task,
+                    def _render_delegation_event(
+                        _agent=delegation_agent,
+                        _to=delegation_to,
+                        _task=delegation_task,
                     ) -> None:
-                        self._renderer.show_handoff(_agent, _to, task=_task)
+                        self._renderer.show_delegation(_agent, _to, task=_task)
 
                     if self._should_render_ui_event_above_prompt():
-                        if not self._run_ui_event_above_prompt(_render_handoff_event):
-                            _render_handoff_event()
+                        if not self._run_ui_event_above_prompt(_render_delegation_event):
+                            _render_delegation_event()
                             self._redisplay_user_prompt(clear_first=False)
                         continue
-                    _render_handoff_event()
+                    _render_delegation_event()
                 elif event_type == RenderEvent.TURN_SUMMARY:
                     summary_agent = event.agent
                     summary_payload = event.payload

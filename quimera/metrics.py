@@ -1,8 +1,8 @@
 """Sistema de métricas de comportamento dos agentes.
 
 Rastreia métricas de eficiência colaborativa:
-- Taxa de handoff inválido (payload malformado)
-- Taxa de handoff circular detectado
+- Taxa de delegação inválida (payload malformado)
+- Taxa de delegação circular detectada
 - Número de turnos sem progresso (respostas vazias/irrelevantes)
 - Frequência de próximos passos claros
 - Tempo médio de resposta por agente
@@ -29,10 +29,10 @@ class AgentBehaviorMetrics:
     # Contadores básicos
     responses_total: int = 0
     responses_empty: int = 0  # Respostas vazias ou sem conteúdo útil
-    handoffs_sent: int = 0
-    handoffs_received: int = 0
-    handoffs_invalid: int = 0  # Payload malformado
-    handoffs_circular_detected: int = 0
+    delegations_sent: int = 0
+    delegations_received: int = 0
+    delegations_invalid: int = 0  # Payload malformado
+    delegations_circular_detected: int = 0
 
     # Qualidade de resposta
     next_steps_claros: int = 0  # Respostas com próximo passo explícito
@@ -61,11 +61,11 @@ class AgentBehaviorMetrics:
         return self.total_latency_seconds / self.response_count
 
     @property
-    def invalid_handoff_rate(self) -> float:
-        """Taxa de handoffs inválidos (0.0 a 1.0)."""
-        if self.handoffs_sent == 0:
+    def invalid_delegation_rate(self) -> float:
+        """Taxa de delegações inválidas (0.0 a 1.0)."""
+        if self.delegations_sent == 0:
             return 0.0
-        return self.handoffs_invalid / self.handoffs_sent
+        return self.delegations_invalid / self.delegations_sent
 
     @property
     def empty_response_rate(self) -> float:
@@ -153,17 +153,17 @@ class AgentBehaviorMetrics:
         )
         return any(indicator in text for indicator in indicators)
 
-    def record_handoff_sent(self, is_invalid: bool = False):
-        """Registra um handoff enviado pelo agente."""
-        self.handoffs_sent += 1
+    def record_delegation_sent(self, is_invalid: bool = False):
+        """Registra uma delegação enviada pelo agente."""
+        self.delegations_sent += 1
         if is_invalid:
-            self.handoffs_invalid += 1
+            self.delegations_invalid += 1
 
-    def record_handoff_received(self, is_circular: bool = False):
-        """Registra um handoff recebido pelo agente."""
-        self.handoffs_received += 1
+    def record_delegation_received(self, is_circular: bool = False):
+        """Registra uma delegação recebida pelo agente."""
+        self.delegations_received += 1
         if is_circular:
-            self.handoffs_circular_detected += 1
+            self.delegations_circular_detected += 1
 
     def record_synthesis(self, needed_correction: bool = False):
         """Registra uma operação de síntese."""
@@ -295,16 +295,16 @@ class BehaviorMetricsTracker:
         )
         self._mark_dirty()
 
-    def record_handoff_sent(self, agent_name: str, is_invalid: bool = False):
-        """Registra um handoff enviado."""
+    def record_delegation_sent(self, agent_name: str, is_invalid: bool = False):
+        """Registra uma delegação enviada."""
         metrics = self.get_agent(agent_name)
-        metrics.record_handoff_sent(is_invalid)
+        metrics.record_delegation_sent(is_invalid)
         self._mark_dirty()
 
-    def record_handoff_received(self, agent_name: str, is_circular: bool = False):
-        """Registra um handoff recebido."""
+    def record_delegation_received(self, agent_name: str, is_circular: bool = False):
+        """Registra uma delegação recebida."""
         metrics = self.get_agent(agent_name)
-        metrics.record_handoff_received(is_circular)
+        metrics.record_delegation_received(is_circular)
         self._mark_dirty()
 
     def record_synthesis(self, agent_name: str, needed_correction: bool = False):
@@ -338,12 +338,12 @@ class BehaviorMetricsTracker:
             "agent": agent_name,
             "responses_total": metrics.responses_total,
             "avg_latency_seconds": round(metrics.avg_latency_seconds, 2),
-            "invalid_handoff_rate": round(metrics.invalid_handoff_rate, 3),
+            "invalid_delegation_rate": round(metrics.invalid_delegation_rate, 3),
             "empty_response_rate": round(metrics.empty_response_rate, 3),
             "next_step_clarity_rate": round(metrics.next_step_clarity_rate, 3),
-            "handoffs_sent": metrics.handoffs_sent,
-            "handoffs_received": metrics.handoffs_received,
-            "circular_detections": metrics.handoffs_circular_detected,
+            "delegations_sent": metrics.delegations_sent,
+            "delegations_received": metrics.delegations_received,
+            "circular_detections": metrics.delegations_circular_detected,
             "redundancias": metrics.redundancias_detectadas,
             "respostas_longas": metrics.respostas_longas,
             "avg_response_chars": round(metrics.avg_response_chars, 1),
@@ -379,19 +379,19 @@ class BehaviorMetricsTracker:
         parts = [
             f"- SEU HISTÓRICO ({metrics.responses_total} respostas em sessões anteriores):",
             f"  Latência média: {metrics.avg_latency_seconds:.1f}s | "
-            f"Handoffs: {metrics.handoffs_sent} enviados, {metrics.handoffs_received} recebidos | "
+            f"Delegações: {metrics.delegations_sent} enviadas, {metrics.delegations_received} recebidas | "
             f"Próximos passos claros: {metrics.next_step_clarity_rate:.0%} | "
             f"Ferramentas: {metrics.tool_calls_total} chamadas, sucesso {metrics.tool_success_rate:.0%} | "
             f"Tamanho médio: {metrics.avg_response_chars:.0f} chars",
         ]
 
         warnings = []
-        if metrics.invalid_handoff_rate > 0.3:
-            warnings.append(f"handoffs inválidos {metrics.invalid_handoff_rate:.0%}")
+        if metrics.invalid_delegation_rate > 0.3:
+            warnings.append(f"delegações inválidas {metrics.invalid_delegation_rate:.0%}")
         if metrics.empty_response_rate > 0.2:
             warnings.append(f"respostas vazias {metrics.empty_response_rate:.0%}")
-        if metrics.handoffs_circular_detected > 0:
-            warnings.append(f"{metrics.handoffs_circular_detected} delegações circulares")
+        if metrics.delegations_circular_detected > 0:
+            warnings.append(f"{metrics.delegations_circular_detected} delegações circulares")
         if metrics.synthesis_requests >= 3 and metrics.synthesis_corrections / metrics.synthesis_requests > 0.5:
             warnings.append(f"sínteses com correção {metrics.synthesis_corrections}/{metrics.synthesis_requests}")
         if metrics.avg_latency_seconds > 30 and metrics.response_count >= 5:
@@ -417,11 +417,11 @@ class BehaviorMetricsTracker:
 
         feedback_parts = []
 
-        # Taxa de handoff inválido alta
-        if metrics.invalid_handoff_rate > 0.3:
+        # Taxa de delegação inválida alta
+        if metrics.invalid_delegation_rate > 0.3:
             feedback_parts.append(
-                f"- ALTA TAXA DE HANDOFF INVÁLIDO ({metrics.invalid_handoff_rate:.0%}):\n"
-                "  Use a tool `call_agent` (MCP) para delegar, com `agent_name`, `task` e `context`.\n"
+                f"- ALTA TAXA DE DELEGAÇÃO INVÁLIDA ({metrics.invalid_delegation_rate:.0%}):\n"
+                "  Use a tool `delegate` (MCP) para delegar, com `target_agent`, `request` e `context`.\n"
                 "  Para múltiplas delegações, faça chamadas independentes (uma tarefa por chamada).\n"
 
                 "  Se faltar contexto suficiente, isso indica falha no roteamento inicial; não improvise, delegue.\n"
@@ -502,18 +502,18 @@ class BehaviorMetricsTracker:
             )
 
         # Detecção circular alta
-        if metrics.handoffs_circular_detected > 1:
+        if metrics.delegations_circular_detected > 1:
             feedback_parts.append(
-                f"- DELEGAÇÕES CIRCULARES ({metrics.handoffs_circular_detected}x):\n"
+                f"- DELEGAÇÕES CIRCULARES ({metrics.delegations_circular_detected}x):\n"
                 "  Verifique a cadeia antes de delegar. Se já participou, resolva diretamente."
             )
 
         # Taxa de sucesso baixa
-        if metrics.handoffs_sent > 3:
-            success_rate = (metrics.handoffs_sent - metrics.handoffs_invalid) / metrics.handoffs_sent
+        if metrics.delegations_sent > 3:
+            success_rate = (metrics.delegations_sent - metrics.delegations_invalid) / metrics.delegations_sent
             if success_rate < 0.7:
                 feedback_parts.append(
-                    f"- BAIXA TAXA DE SUCESSO EM HANDOFFS ({success_rate:.0%}):\n"
+                    f"- BAIXA TAXA DE SUCESSO EM DELEGAÇÕES ({success_rate:.0%}):\n"
                     "  Revise o formato do payload ou resolva sem delegar."
                 )
 

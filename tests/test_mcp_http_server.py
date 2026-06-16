@@ -640,11 +640,11 @@ class TestToolsCallHTTP:
         assert "web_search" in tools
         assert "web_fetch" in tools
 
-    def test_agent_profile_adds_call_agent_without_dangerous_write_or_shell_tools(self):
+    def test_agent_profile_adds_delegate_without_dangerous_write_or_shell_tools(self):
         """Verifica que Test agent profile adds call agent without dangerous write or shell tools."""
         tools = parse_http_allowed_tools("agent")
         assert tools == HTTP_AGENT_TOOLS
-        assert "call_agent" in tools
+        assert "delegate" in tools
         for blocked in {"run_shell", "exec_command", "write_file", "remove_file", "apply_patch"}:
             assert blocked not in tools
 
@@ -681,12 +681,12 @@ class TestToolsCallHTTP:
         """Verifica que Test profile allowlists filter http tools for external clients."""
         executor = _make_executor(tool_names=[
             "read_file", "grep_search", "web_search", "web_fetch",
-            "call_agent", "run_shell", "write_file", "apply_patch",
+            "delegate", "run_shell", "write_file", "apply_patch",
         ])
         cases = {
             "read-local": {"read_file", "grep_search"},
             "read": {"read_file", "grep_search", "web_search", "web_fetch"},
-            "agent": {"read_file", "grep_search", "web_search", "web_fetch", "call_agent"},
+            "agent": {"read_file", "grep_search", "web_search", "web_fetch", "delegate"},
         }
         for profile, expected_subset in cases.items():
             httpd = MCP_HTTPServer(
@@ -711,7 +711,7 @@ class TestToolsCallHTTP:
                     assert "web_search" not in tool_names
                     assert "web_fetch" not in tool_names
                 if profile != "agent":
-                    assert "call_agent" not in tool_names
+                    assert "delegate" not in tool_names
                 assert "run_shell" not in tool_names
                 assert "write_file" not in tool_names
                 assert "apply_patch" not in tool_names

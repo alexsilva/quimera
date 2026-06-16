@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 from quimera.memory_selector import MemorySelector
 from quimera.shared_state_presenter import SharedStatePresenter
 from quimera.shared_state import PROMPT_REFERENCE_KEYS, TASK_REFERENCE_KEYS
-from quimera.handoff_presenter import HandoffPresenter
+from quimera.delegate_presenter import DelegatePresenter
 from quimera.execution_mode_presenter import ExecutionModePresenter
 from quimera.prompt_budget import PromptBudget
 
@@ -305,58 +305,58 @@ class TestSharedStatePresenter:
         assert results == "[task 1] ok"
 
 
-class TestHandoffPresenter:
+class TestDelegatePresenter:
     def test_present_returns_empty_for_none(self):
         """Verifica que present returns empty for none."""
-        fields = HandoffPresenter.present(None)
-        assert fields["handoff_present"] == ""
+        fields = DelegatePresenter.present(None)
+        assert fields["delegation_present"] == ""
         assert all(v == "" for v in fields.values())
 
-    def test_present_dict_handoff(self):
-        """Verifica que present dict handoff."""
-        handoff = {
+    def test_present_dict_delegation(self):
+        """Verifica que present dict delegation."""
+        delegation = {
             "task": "Corrigir bug",
             "context": "Parser quebrado",
             "expected": "Patch",
-            "handoff_id": "abc123",
+            "delegation_id": "abc123",
         }
-        fields = HandoffPresenter.present(handoff, from_agent="claude")
-        assert fields["handoff_present"] == "1"
-        assert fields["handoff_task"] == "Corrigir bug"
-        assert fields["handoff_context"] == "Parser quebrado"
-        assert fields["handoff_expected"] == "Patch"
-        assert fields["handoff_from"] == "claude"
-        assert fields["handoff_id"] == "abc123"
-        assert fields["handoff_priority"] == ""
+        fields = DelegatePresenter.present(delegation, from_agent="claude")
+        assert fields["delegation_present"] == "1"
+        assert fields["delegation_request"] == "Corrigir bug"
+        assert fields["delegation_context"] == "Parser quebrado"
+        assert fields["delegation_expected"] == "Patch"
+        assert fields["delegation_from"] == "claude"
+        assert fields["delegation_id"] == "abc123"
+        assert fields["delegation_priority"] == ""
 
     def test_present_priority_urgent(self):
         """Verifica que present priority urgent."""
-        handoff = {"task": "Urgente", "priority": "urgent"}
-        fields = HandoffPresenter.present(handoff)
-        assert fields["handoff_priority"] == "URGENT"
+        delegation = {"task": "Urgente", "priority": "urgent"}
+        fields = DelegatePresenter.present(delegation)
+        assert fields["delegation_priority"] == "URGENT"
 
     def test_present_priority_normal_is_empty(self):
         """Verifica que present priority normal is empty."""
-        handoff = {"task": "Normal", "priority": "normal"}
-        fields = HandoffPresenter.present(handoff)
-        assert fields["handoff_priority"] == ""
+        delegation = {"task": "Normal", "priority": "normal"}
+        fields = DelegatePresenter.present(delegation)
+        assert fields["delegation_priority"] == ""
 
-    def test_present_string_handoff(self):
-        """Verifica que present string handoff."""
-        fields = HandoffPresenter.present("Mensagem direta", from_agent="codex")
-        assert fields["handoff_present"] == "1"
-        assert fields["handoff_raw"] == "Mensagem direta"
+    def test_present_string_delegation(self):
+        """Verifica que present string delegation."""
+        fields = DelegatePresenter.present("Mensagem direta", from_agent="codex")
+        assert fields["delegation_present"] == "1"
+        assert fields["delegation_raw"] == "Mensagem direta"
 
     def test_present_dict_with_chain(self):
         """Verifica que present dict with chain."""
-        handoff = {
+        delegation = {
             "task": "Revisar",
             "chain": ["claude", "codex"],
-            "handoff_id": "xyz",
+            "delegation_id": "xyz",
         }
-        fields = HandoffPresenter.present(handoff, from_agent="qwen")
-        assert fields["handoff_chain"] == "claude -> codex"
-        assert fields["handoff_from"] == "qwen"
+        fields = DelegatePresenter.present(delegation, from_agent="qwen")
+        assert fields["delegation_chain"] == "claude -> codex"
+        assert fields["delegation_from"] == "qwen"
 
 
 class TestExecutionModePresenter:

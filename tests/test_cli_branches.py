@@ -615,7 +615,7 @@ def test_main_driver_repl_runtime_error_returns_exit_2(monkeypatch):
 
 def test_main_excludes_fake_agents_without_test_mode(monkeypatch):
     """Verifica que main excludes fake agents without test mode."""
-    _patch_main_basics(monkeypatch, agent_names=["claude", "fake-cli", "fake-cli-handoff", "fake-openai", "fake-openai-mcp-cli"])
+    _patch_main_basics(monkeypatch, agent_names=["claude", "fake-cli", "fake-cli-delegate", "fake-openai", "fake-openai-mcp-cli"])
     monkeypatch.setattr(sys, "argv", ["quimera"])
 
     with patch("quimera.runtime.mcp.session.MCPServer"):
@@ -636,7 +636,7 @@ def test_main_test_mode_uses_only_fake_agents(monkeypatch):
             self.stopped = True
 
     backend = FakeBackend()
-    _patch_main_basics(monkeypatch, agent_names=["claude", "fake-cli", "fake-cli-handoff", "fake-openai", "fake-openai-mcp-cli"])
+    _patch_main_basics(monkeypatch, agent_names=["claude", "fake-cli", "fake-cli-delegate", "fake-openai", "fake-openai-mcp-cli"])
     monkeypatch.setattr(cli._plugins, "enable_test_plugins", lambda: cli._plugins.TEST_PLUGIN_NAMES)
     monkeypatch.setattr(cli, "_start_test_fake_openai_backend", lambda: backend)
     monkeypatch.setattr(sys, "argv", ["quimera", "--test"])
@@ -644,7 +644,7 @@ def test_main_test_mode_uses_only_fake_agents(monkeypatch):
     with patch("quimera.runtime.mcp.session.MCPServer"):
         cli.main()
 
-    assert _FakeApp.last_instance.kwargs["agents"] == ["fake-cli", "fake-cli-handoff", "fake-openai", "fake-openai-mcp-cli"]
+    assert _FakeApp.last_instance.kwargs["agents"] == ["fake-cli", "fake-cli-delegate", "fake-openai", "fake-openai-mcp-cli"]
     assert backend.stopped is True
 
 

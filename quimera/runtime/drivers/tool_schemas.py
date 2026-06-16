@@ -612,7 +612,7 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
-            "name": "call_agent",
+            "name": "delegate",
             "description": (
                 "Delega uma tarefa para outro agente do Quimera. "
                 "Use quando precisar de especialidade específica "
@@ -622,11 +622,11 @@ TOOL_SCHEMAS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "agent_name": {
+                    "target_agent": {
                         "type": "string",
                         "description": "Nome do agente alvo (ex: codex, claude, gemini, opencode-big-pickle).",
                     },
-                    "task": {
+                    "request": {
                         "type": "string",
                         "description": "Descrição clara do que o agente deve fazer.",
                     },
@@ -642,28 +642,28 @@ TOOL_SCHEMAS = [
                         ),
                         "items": {"type": "string"},
                     },
-                    "handoffs": {
+                    "steps": {
                         "type": "array",
                         "description": (
-                            "Delegações adicionais opcionais executadas em sequência. "
-                            "Cada item deve conter agent_name, task e context opcional."
+                            "Passos adicionais opcionais executados em sequência. "
+                            "Cada item deve conter target_agent, request e context opcional."
                         ),
                         "items": {
                             "type": "object",
                             "properties": {
-                                "agent_name": {"type": "string"},
-                                "task": {"type": "string"},
+                                "target_agent": {"type": "string"},
+                                "request": {"type": "string"},
                                 "context": {"type": "string"},
                                 "fallback_agents": {
                                     "type": "array",
                                     "items": {"type": "string"},
                                 },
                             },
-                            "required": ["agent_name", "task"],
+                            "required": ["target_agent", "request"],
                         },
                     },
                 },
-                "required": ["agent_name", "task"],
+                "required": ["target_agent", "request"],
             },
             "output_schema": {
                 "type": "object",
@@ -731,11 +731,11 @@ def resolve_tool_schemas(tool_executor=None) -> list[dict]:
             if schema["function"]["name"] not in blocked_names
         ]
 
-    is_call_agent_available = getattr(tool_executor, "is_call_agent_available", None)
-    if callable(is_call_agent_available) and not is_call_agent_available():
+    is_delegate_available = getattr(tool_executor, "is_delegate_available", None)
+    if callable(is_delegate_available) and not is_delegate_available():
         schemas = [
             schema for schema in schemas
-            if schema["function"]["name"] not in ("call_agent", "list_agents")
+            if schema["function"]["name"] not in ("delegate", "list_agents")
         ]
 
     return schemas

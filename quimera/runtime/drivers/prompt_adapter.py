@@ -24,7 +24,7 @@ ROLES_BY_KIND = {
         "execution_mode": "system",
         "persistent_context": "system",
         "recent_conversation": "system",
-        "handoff": "user",
+        "delegation": "user",
         "current_turn": "user",
     },
     PromptKind.TASK_EXECUTOR: {
@@ -32,7 +32,7 @@ ROLES_BY_KIND = {
         "session_state": "system",
         "debug_state": "system",
         "task_execution_rules": "system",
-        "task_handoff": "user",
+        "task_delegation": "user",
     },
     PromptKind.TASK_REVIEWER: {
         "header": "system",

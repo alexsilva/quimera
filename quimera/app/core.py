@@ -292,15 +292,15 @@ class QuimeraApp:
             "history_count": len(self.history),
             "history_restored": history_restored,
             "summary_loaded": summary_loaded,
-            "handoffs_sent": 0,
-            "handoffs_received": 0,
-            "handoffs_succeeded": 0,
-            "handoffs_failed": 0,
+            "delegations_sent": 0,
+            "delegations_received": 0,
+            "delegations_succeeded": 0,
+            "delegations_failed": 0,
             "total_latency": 0.0,
             "agent_metrics": {},
             "rounds_without_progress": 0,
             "consecutive_redundant_responses": 0,
-            "handoff_invalid_count": 0,
+            "delegation_invalid_count": 0,
             "responses_with_clear_next_step": 0,
             "total_responses": 0,
         }
@@ -425,7 +425,7 @@ class QuimeraApp:
             max_retries=self.MAX_RETRIES,
             retry_backoff_seconds=self.RETRY_BACKOFF_SECONDS,
             get_rate_limit_backoff_seconds=lambda: getattr(self, 'RATE_LIMIT_BACKOFF_SECONDS', 30),
-            call_agent=self.call_agent,
+            delegate=self.delegate,
             parse_response=self.parse_response,
             classify_task_execution_result=self.classify_task_execution_result,
             classify_task_review_result=classify_task_review_result,
@@ -490,7 +490,7 @@ class QuimeraApp:
         self.tool_executor = self.task_services.build_tool_executor(require_approval_for_mutations=not self.auto_approve_mutations)
         # Injeta o executor nos drivers de API do agent_client.
         self.agent_client.tool_executor = self.tool_executor
-        self.tool_executor.set_call_agent_fn(self.dispatch_services.call_agent)
+        self.tool_executor.set_delegate_fn(self.dispatch_services.delegate)
         self.tool_executor.set_active_agents_provider(lambda: list(self.agent_pool.agents))
         self.tool_executor.set_agent_cleanup_callback(self._cleanup_sub_agent_stream)
         self._display_service = DisplayService(
@@ -932,7 +932,7 @@ class QuimeraApp:
         self.task_services.stop_task_executors()
 
     def _cleanup_sub_agent_stream(self, agent_name: str) -> None:
-        """Limpa o estado de render do agente chamado via call_agent.
+        """Limpa o estado de render do agente chamado via delegate.
 
         Remove o stream transitório do sub-agente do Live display e da
         rolling buffer, evitando vazamento de estado em _stream_states
@@ -1065,16 +1065,16 @@ class QuimeraApp:
             show_output=show_output,
         )
 
-    def call_agent(self, agent, **options):
+    def delegate(self, agent, **options):
         """Fachada compatível para despacho de agentes."""
-        if hasattr(self, "_call_agent"):
+        if hasattr(self, "_delegate"):
             dispatch_options = dict(options)
             silent = dispatch_options.pop("silent", False)
             persist_history = dispatch_options.pop("persist_history", True)
             show_output = dispatch_options.pop("show_output", True)
             call_options = {"silent": silent, **dispatch_options}
             try:
-                signature = inspect.signature(self._call_agent)
+                signature = inspect.signature(self._delegate)
             except (TypeError, ValueError):
                 filtered_options = call_options
             else:
@@ -1096,7 +1096,7 @@ class QuimeraApp:
                     filtered_options = {
                         key: value for key, value in call_options.items() if key in allowed
                     }
-            response = self._call_agent(agent, **filtered_options)
+            response = self._delegate(agent, **filtered_options)
             return self.resolve_agent_response(
                 agent,
                 response,
@@ -1104,7 +1104,7 @@ class QuimeraApp:
                 persist_history=persist_history,
                 show_output=show_output,
             )
-        return self.dispatch_services.call_agent(agent, **options)
+        return self.dispatch_services.delegate(agent, **options)
 
     def print_response(self, agent, response):
         """Fachada compatível para renderização de respostas."""

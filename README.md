@@ -18,7 +18,7 @@ O Quimera coordena agentes (CLI e OpenAI-compatible), mantém estado compartilha
 - `quimera/runtime/mcp/server.py`: servidor MCP (Model Context Protocol) — expõe tools do runtime via JSON-RPC 2.0 sobre stdio/socket Unix.
 - `quimera/runtime/task_planning.py`: classificação de task e scoring de roteamento.
 - `quimera/runtime/tasks.py`: persistência de jobs/tasks em SQLite.
-- `quimera/runtime/tools/handoff.py`: `call_agent` — delegação entre agentes via MCP (cross-MCP).
+- `quimera/runtime/tools/delegate.py`: `delegate` — delegação entre agentes via MCP (cross-MCP).
 - `quimera/plugins/`: catálogo de agentes e metadados de capacidade. Cada plugin injeta configuração MCP no formato nativo do agente.
 - `quimera/ui/`: renderização terminal (temas, densidade, stream e resumo).
 - `quimera/prompt.md` / `quimera/task_prompt.md`: templates de prompt com blocos condicionais `<!-- IF:mcp_enabled -->`.
@@ -114,13 +114,13 @@ O Quimera inclui agentes fake para validar o app sem provedores externos. Eles n
 
 - `fake-cli`: agente CLI local determinístico (`python -m quimera.devtools.fake_agents cli`).
 - `fake-openai`: plugin OpenAI-compatible apontando para um servidor local fake com tool calling nativo.
-- `fake-cli-handoff`: agente CLI que usa MCP `call_agent` para delegar ao `fake-openai`.
+- `fake-cli-delegation`: agente CLI que usa MCP `delegate` para delegar ao `fake-openai`.
 - `fake-openai-mcp-cli`: agente CLI que chama o backend OpenAI-compatible fake diretamente e executa tool calls via MCP do Quimera.
 
 Exemplo rápido:
 
 ```bash
-python quimera.py --test --agents fake-cli-handoff fake-openai --visibility full
+python quimera.py --test --agents fake-cli-delegation fake-openai --visibility full
 ```
 
 Com `--test`, o app registra os fake plugins, inicia automaticamente o backend OpenAI-compatible fake em uma porta livre e aplica overrides somente no processo. O comando `python -m quimera.devtools.fake_agents openai-server` continua disponível apenas para debug manual.
@@ -159,7 +159,7 @@ MCPServer (quimera/runtime/mcp/server.py)
   │  tools/list → resolve_tool_schemas()
   │  tools/call estruturado → ToolExecutor.execute()
   ▼
-ToolPolicy/approval → ToolRegistry → handlers (read_file, run_shell, call_agent, ...)
+ToolPolicy/approval → ToolRegistry → handlers (read_file, run_shell, delegate, ...)
 ```
 
 
@@ -176,7 +176,7 @@ Por padrão o MCP é ativado automaticamente. Controles via CLI:
 - `--mcp-port <porta>`: porta do servidor HTTP MCP externo (padrão: `9090`).
 - `--mcp-host <host>`: host do servidor HTTP MCP externo (padrão: `127.0.0.1`).
 - `--mcp-token-env <VAR>`: variável de ambiente usada como token MCP fixo para clientes externos (padrão: `QUIMERA_MCP_TOKEN`; se vazia, token externo aleatório por sessão). O socket interno usa seu próprio token de sessão.
-- `--mcp-http-allow-tools <read-local|read|agent|all|CSV>`: perfil/allowlist de tools expostas no MCP HTTP externo. O padrão `read` publica tools de leitura com rede (`list_files`, `read_file`, `grep_search`, `list_tasks`, `list_jobs`, `get_job`, `web_search`, `web_fetch`, `todo_list`); use `read-local` para remover ferramentas com acesso à rede (`web_search`, `web_fetch`), `agent` para acrescentar `call_agent` sem liberar shell/escrita (`run_shell`, `exec_command`, `write_file`, `remove_file`, `apply_patch`), `all` somente em redes confiáveis isoladas, ou nomes separados por vírgula.
+- `--mcp-http-allow-tools <read-local|read|agent|all|CSV>`: perfil/allowlist de tools expostas no MCP HTTP externo. O padrão `read` publica tools de leitura com rede (`list_files`, `read_file`, `grep_search`, `list_tasks`, `list_jobs`, `get_job`, `web_search`, `web_fetch`, `todo_list`); use `read-local` para remover ferramentas com acesso à rede (`web_search`, `web_fetch`), `agent` para acrescentar `delegate` sem liberar shell/escrita (`run_shell`, `exec_command`, `write_file`, `remove_file`, `apply_patch`), `all` somente em redes confiáveis isoladas, ou nomes separados por vírgula.
 
 ### Injeção por plugin
 
@@ -205,22 +205,22 @@ As ferramentas do runtime (`TOOL_SCHEMAS` em `runtime/drivers/tool_schemas.py`) 
 - `grep_search`, `run_shell`, `exec_command`, `write_stdin`, `close_command_session`
 - `list_tasks`, `list_jobs`, `get_job`
 - `web_search`, `web_fetch`
-- `call_agent` — **cross-MCP**: delega tarefas a outro agente no pool
+- `delegate` — **cross-MCP**: delega tarefas a outro agente no pool
 
-### Cross-MCP: call_agent
+### Cross-MCP: delegate
 
-O mecanismo central de interoperabilidade entre agentes é a ferramenta `call_agent`, que permite que qualquer agente MCP-capaz delegue trabalho a outro agente no pool da sessão.
+O mecanismo central de interoperabilidade entre agentes é a ferramenta `delegate`, que permite que qualquer agente MCP-capaz delegue trabalho a outro agente no pool da sessão.
 
 ```json
 {
-  "name": "call_agent",
+  "name": "delegate",
   "arguments": {
-    "agent_name": "codex",
-    "task": "Implementar função de leitura",
+    "target_agent": "codex",
+    "request": "Implementar função de leitura",
     "context": "contexto opcional",
     "fallback_agents": ["claude", "gemini"],
-    "handoffs": [
-      {"agent_name": "claude", "task": "Revisar o resultado"}
+    "steps": [
+      {"target_agent": "claude", "request": "Revisar o resultado"}
     ]
   }
 }
@@ -228,13 +228,13 @@ O mecanismo central de interoperabilidade entre agentes é a ferramenta `call_ag
 
 Características:
 - **Failover automático**: `fallback_agents` é tentado se o primário falhar.
-- **Cadeias de delegação**: `handoffs` permite múltiplos passos em uma chamada.
+- **Cadeias de delegação**: `steps` permite múltiplos passos em uma chamada.
 - **Validação de agentes ativos**: o alvo é verificado contra o pool antes da execução.
 - **Token de autenticação**: o socket interno usa token de sessão gerado pelo Quimera; o HTTP externo usa `QUIMERA_MCP_TOKEN`/`--mcp-token-env` quando configurado ou gera um token externo aleatório por sessão.
 
 ### Delegação entre agentes via MCP
 
-Delegação entre agentes acontece pela tool MCP `call_agent`. Agentes MCP-capazes chamam essa ferramenta para acionar outro agente do pool da sessão, com validação do alvo, contexto estruturado, fallback opcional e cadeias de delegação declaradas nos argumentos da tool.
+Delegação entre agentes acontece pela tool MCP `delegate`. Agentes MCP-capazes chamam essa ferramenta para acionar outro agente do pool da sessão, com validação do alvo, contexto estruturado, fallback opcional e cadeias de delegação declaradas nos argumentos da tool.
 
 ### MCP interno e MCP HTTP externo
 
@@ -248,7 +248,7 @@ Para iniciar o app com MCP interno + Streamable HTTP externo:
 python quimera.py --mcp-http --mcp-host 127.0.0.1 --mcp-port 9090
 ```
 
-Nesse modo, agentes locais continuam recebendo o socket interno, enquanto clientes externos usam `http://127.0.0.1:9090/mcp` com `Authorization: Bearer <token externo>` (ou `X-Quimera-MCP-Token` para clientes simples). Por segurança, o transporte HTTP externo usa o perfil `read` por padrão; prefira `read-local` para exposição externa quando o cliente não precisa de `web_search`/`web_fetch`, ou `agent` quando o cliente externo precisa delegar via `call_agent` sem liberar shell/escrita diretamente. O perfil `all` remove a allowlist e não é recomendado para Internet.
+Nesse modo, agentes locais continuam recebendo o socket interno, enquanto clientes externos usam `http://127.0.0.1:9090/mcp` com `Authorization: Bearer <token externo>` (ou `X-Quimera-MCP-Token` para clientes simples). Por segurança, o transporte HTTP externo usa o perfil `read` por padrão; prefira `read-local` para exposição externa quando o cliente não precisa de `web_search`/`web_fetch`, ou `agent` quando o cliente externo precisa delegar via `delegate` sem liberar shell/escrita diretamente. O perfil `all` remove a allowlist e não é recomendado para Internet.
 
 Perfis embutidos:
 
@@ -256,7 +256,7 @@ Perfis embutidos:
 |---|---|---|
 | `read-local` | `list_files`, `read_file`, `grep_search`, `list_tasks`, `list_jobs`, `get_job`, `todo_list` | Exposição externa mais restrita, sem ferramentas com acesso à rede. |
 | `read` | Tudo de `read-local` + `web_search`, `web_fetch` | Leitura com pesquisa/fetch web quando a rede é necessária. |
-| `agent` | Tudo de `read` + `call_agent` | Delegação entre agentes sem liberar `run_shell`, `exec_command`, `write_file`, `remove_file` ou `apply_patch`. |
+| `agent` | Tudo de `read` + `delegate` | Delegação entre agentes sem liberar `run_shell`, `exec_command`, `write_file`, `remove_file` ou `apply_patch`. |
 | `all` | Sem filtro de allowlist | Apenas desenvolvimento local ou rede privada muito confiável. |
 
 CORS é configurável por `QUIMERA_MCP_HTTP_CORS_ORIGINS` (lista separada por vírgulas). O padrão é `*` para desenvolvimento local; em uso externo, defina origens explícitas. As respostas CORS expõem `MCP-Session-Id` via `Access-Control-Expose-Headers` para clientes web conseguirem reutilizar a sessão Streamable HTTP.
@@ -383,7 +383,7 @@ Ferramentas suportadas pelo runtime (expostas via MCP e, quando disponível, pel
 - shell: `run_shell`, `exec_command`, `write_stdin`, `close_command_session`
 - tasks/jobs: `list_tasks`, `list_jobs`, `get_job`
 - web: `web_search`, `web_fetch`
-- **cross-MCP**: `call_agent` — delega tarefas a outro agente no pool (disponível apenas quando MCP está ativo)
+- **cross-MCP**: `delegate` — delega tarefas a outro agente no pool (disponível apenas quando MCP está ativo)
 
 Política de segurança:
 

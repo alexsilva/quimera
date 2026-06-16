@@ -459,6 +459,136 @@ def test_policy_shell_allowlist_validation(policy):
 
 # ── blocked_tools ───────────────────────────────────────────
 
+# ── delegate policy ─────────────────────────────────────────
+
+def test_policy_delegate_valid(policy):
+    """delegate com campos mínimos válidos passa."""
+    call = ToolCall(name="delegate", arguments={"target_agent": "codex", "request": "faça algo"})
+    policy.validate(call)
+
+
+def test_policy_delegate_missing_target_agent(policy):
+    """delegate sem target_agent é rejeitado."""
+    call = ToolCall(name="delegate", arguments={"request": "faça algo"})
+    with pytest.raises(ToolPolicyError, match="target_agent"):
+        policy.validate(call)
+
+
+def test_policy_delegate_missing_request(policy):
+    """delegate sem request é rejeitado."""
+    call = ToolCall(name="delegate", arguments={"target_agent": "codex"})
+    with pytest.raises(ToolPolicyError, match="request"):
+        policy.validate(call)
+
+
+def test_policy_delegate_reserved_field(policy):
+    """delegate com campo reservado é rejeitado."""
+    call = ToolCall(name="delegate", arguments={
+        "target_agent": "codex", "request": "faça algo", "run_id": "abc"
+    })
+    with pytest.raises(ToolPolicyError, match="campos reservados"):
+        policy.validate(call)
+
+
+def test_policy_delegate_steps_not_a_list(policy):
+    """delegate.steps não-lista é rejeitado."""
+    call = ToolCall(name="delegate", arguments={
+        "target_agent": "codex", "request": "faça algo", "steps": "não é lista"
+    })
+    with pytest.raises(ToolPolicyError, match="steps deve ser uma lista"):
+        policy.validate(call)
+
+
+def test_policy_delegate_steps_item_not_dict(policy):
+    """delegate.steps com item não-dict é rejeitado."""
+    call = ToolCall(name="delegate", arguments={
+        "target_agent": "codex", "request": "faça algo", "steps": ["string"]
+    })
+    with pytest.raises(ToolPolicyError, match=r"steps\[0\] deve ser um objeto"):
+        policy.validate(call)
+
+
+def test_policy_delegate_steps_item_missing_target_agent(policy):
+    """delegate.steps com target_agent ausente é rejeitado."""
+    call = ToolCall(name="delegate", arguments={
+        "target_agent": "codex",
+        "request": "faça algo",
+        "steps": [{"request": "próximo passo"}],
+    })
+    with pytest.raises(ToolPolicyError, match=r"steps\[0\].target_agent"):
+        policy.validate(call)
+
+
+def test_policy_delegate_steps_item_missing_request(policy):
+    """delegate.steps com request ausente é rejeitado."""
+    call = ToolCall(name="delegate", arguments={
+        "target_agent": "codex",
+        "request": "faça algo",
+        "steps": [{"target_agent": "opencode"}],
+    })
+    with pytest.raises(ToolPolicyError, match=r"steps\[0\].request"):
+        policy.validate(call)
+
+
+def test_policy_delegate_steps_valid(policy):
+    """delegate.steps com itens válidos passa."""
+    call = ToolCall(name="delegate", arguments={
+        "target_agent": "codex",
+        "request": "faça algo",
+        "steps": [{"target_agent": "opencode", "request": "próximo passo"}],
+    })
+    policy.validate(call)
+
+
+def test_policy_delegate_blocked_tools(policy):
+    """delegate é bloqueado quando na lista blocked_tools."""
+    policy.blocked_tools = ["delegate"]
+    call = ToolCall(name="delegate", arguments={"target_agent": "codex", "request": "x"})
+    with pytest.raises(ToolPolicyError, match="bloqueada pelo modo de execução ativo"):
+        policy.validate(call)
+
+
+def test_policy_delegate_requires_approval(policy):
+    """delegate requer aprovação."""
+    assert policy.requires_approval(ToolCall(name="delegate", arguments={})) is True
+
+
+def test_policy_delegate_steps_empty_target_agent(policy):
+    """delegate.steps com target_agent em branco é rejeitado."""
+    call = ToolCall(name="delegate", arguments={
+        "target_agent": "codex",
+        "request": "faça algo",
+        "steps": [{"target_agent": "  ", "request": "algo"}],
+    })
+    with pytest.raises(ToolPolicyError, match=r"steps\[0\].target_agent"):
+        policy.validate(call)
+
+
+def test_policy_delegate_steps_empty_request(policy):
+    """delegate.steps com request em branco é rejeitado."""
+    call = ToolCall(name="delegate", arguments={
+        "target_agent": "codex",
+        "request": "faça algo",
+        "steps": [{"target_agent": "opencode", "request": ""}],
+    })
+    with pytest.raises(ToolPolicyError, match=r"steps\[0\].request"):
+        policy.validate(call)
+
+
+def test_policy_delegate_steps_second_item_invalid(policy):
+    """delegate.steps valida todos os itens, não só o primeiro."""
+    call = ToolCall(name="delegate", arguments={
+        "target_agent": "codex",
+        "request": "faça algo",
+        "steps": [
+            {"target_agent": "opencode", "request": "passo 1"},
+            {"target_agent": "opencode"},  # falta request
+        ],
+    })
+    with pytest.raises(ToolPolicyError, match=r"steps\[1\].request"):
+        policy.validate(call)
+
+
 def test_policy_blocked_tools(policy):
     """Ferramentas na lista blocked_tools são rejeitadas."""
     policy.blocked_tools = ["list_files"]

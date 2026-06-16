@@ -47,7 +47,7 @@ Chamadas de tool podem ser executadas em thread pool, com cancelamento e progres
 | `web_fetch` | Busca URL e extrai texto. |
 | `todo_write` | Cria/atualiza TODOs da sessão. |
 | `todo_list` | Lista TODOs da sessão. |
-| `call_agent` | Delega tarefa para outro agente do pool Quimera. |
+| `delegate` | Delega tarefa para outro agente do pool Quimera. |
 
 ## Política de segurança
 
@@ -64,9 +64,9 @@ O runtime usa `ToolRuntimeConfig` para definir:
 
 Ferramentas de mutação podem exigir aprovação. Na app interativa, `/approve` libera a próxima mutação e `/approve-all` muda o comportamento para autoaprovação. Em execução não interativa ou MCP standalone, o handler de aprovação pode ser configurado pelo runtime.
 
-## Cross-MCP e `call_agent`
+## Cross-MCP e `delegate`
 
-A ferramenta `call_agent` permite que um agente delegue uma tarefa a outro agente do pool. Ela é útil para dividir trabalho por especialidade: arquitetura para Gemini/Claude, edição para Codex/OpenCode, revisão para agentes fortes em review. O resultado entra no fluxo da sessão e pode ser usado como evidência ou contexto para a resposta final.
+A ferramenta `delegate` permite que um agente delegue uma tarefa a outro agente do pool. Ela é útil para dividir trabalho por especialidade: arquitetura para Gemini/Claude, edição para Codex/OpenCode, revisão para agentes fortes em review. O resultado entra no fluxo da sessão e pode ser usado como evidência ou contexto para a resposta final.
 
 ## ChatGPT Secure MCP Tunnel via HTTP
 
@@ -94,7 +94,7 @@ quimera --mcp-http --mcp-port 9095 --mcp-http-allow-tools agent
 O conjunto `agent` publica apenas:
 - `list_files`, `read_file`, `grep_search`, `list_tasks`, `list_jobs`, `get_job`, `todo_list` (somente leitura local)
 - `web_search`, `web_fetch` (leitura de rede)
-- `call_agent` (delegação para agentes do pool)
+- `delegate` (delegação para agentes do pool)
 
 Ferramentas de escrita e shell (`run_shell`, `write_file`, `apply_patch`, `remove_file`, `exec_command`) **não são expostas** por esse conjunto.
 

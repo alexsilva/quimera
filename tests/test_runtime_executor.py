@@ -385,18 +385,18 @@ def test_set_spinner_callbacks_no_op_when_handler_is_none_like():
     executor.set_spinner_callbacks(MagicMock(), MagicMock())
 
 
-def test_executor_call_agent_dispatches_with_handoff_mode(tmp_path):
-    """call_agent delega com contrato alinhado ao fluxo de handoff interno."""
+def test_executor_delegate_dispatches_with_delegation_mode(tmp_path):
+    """delegate delega com contrato alinhado ao fluxo de delegation interno."""
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
     dispatch = MagicMock(return_value="delegated ok")
-    executor.set_call_agent_fn(dispatch)
+    executor.set_delegate_fn(dispatch)
 
     result = executor.execute(
         ToolCall(
-            name="call_agent",
+            name="delegate",
             arguments={
-                "agent_name": "codex",
-                "task": "ajuste de bug",
+                "target_agent": "codex",
+                "request": "ajuste de bug",
                 "context": "arquivo quimera/runtime/executor.py",
             },
         )
@@ -406,12 +406,12 @@ def test_executor_call_agent_dispatches_with_handoff_mode(tmp_path):
     assert result.content == "delegated ok"
     dispatch.assert_called_once_with(
         "codex",
-        handoff={
+        delegation={
             "task": "ajuste de bug",
             "context": "arquivo quimera/runtime/executor.py",
         },
-        handoff_only=True,
-        protocol_mode="handoff",
+        delegation_only=True,
+        protocol_mode="delegation",
         primary=False,
         silent=False,
         show_output=False,
@@ -422,50 +422,50 @@ def test_executor_call_agent_dispatches_with_handoff_mode(tmp_path):
     )
 
 
-def test_executor_call_agent_fails_when_dispatch_not_injected(tmp_path):
-    """call_agent retorna erro explícito quando não há callback de dispatch."""
+def test_executor_delegate_fails_when_dispatch_not_injected(tmp_path):
+    """delegate retorna erro explícito quando não há callback de dispatch."""
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
 
     result = executor.execute(
-        ToolCall(name="call_agent", arguments={"agent_name": "codex", "task": "x"})
+        ToolCall(name="delegate", arguments={"target_agent": "codex", "request": "x"})
     )
 
     assert result.ok is False
     assert "not available" in (result.error or "")
 
 
-def test_executor_call_agent_internal_would_not_require_human_approval(tmp_path):
-    """call_agent interno passa por policy/broker, mas é auto-aprovado dentro do budget."""
+def test_executor_delegate_internal_would_not_require_human_approval(tmp_path):
+    """delegate interno passa por policy/broker, mas é auto-aprovado dentro do budget."""
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
-    call = ToolCall(name="call_agent", arguments={"agent_name": "codex", "task": "x"})
+    call = ToolCall(name="delegate", arguments={"target_agent": "codex", "request": "x"})
 
     assert executor.would_require_approval(call) is False
 
 
-def test_policy_phase_methods_for_call_agent(tmp_path):
-    """call_agent agora passa por policy/approval broker como risco de delegação."""
+def test_policy_phase_methods_for_delegate(tmp_path):
+    """delegate agora passa por policy/approval broker como risco de delegação."""
     policy = ToolPolicy(ToolRuntimeConfig(workspace_root=tmp_path))
-    call_agent = ToolCall(name="call_agent", arguments={"agent_name": "codex", "task": "x"})
+    delegate = ToolCall(name="delegate", arguments={"target_agent": "codex", "request": "x"})
     read_file = ToolCall(name="read_file", arguments={"path": "x.txt"})
 
-    assert policy.requires_validation(call_agent) is True
-    assert policy.requires_path_permission(call_agent) is False
-    assert policy.requires_approval(call_agent) is True
+    assert policy.requires_validation(delegate) is True
+    assert policy.requires_path_permission(delegate) is False
+    assert policy.requires_approval(delegate) is True
 
     assert policy.requires_validation(read_file) is True
     assert policy.requires_path_permission(read_file) is True
 
 
-def test_executor_call_agent_goes_through_broker_without_human_prompt_when_internal(tmp_path):
-    """call_agent não bypassa policy, mas delegação interna é auto-aprovada no broker."""
+def test_executor_delegate_goes_through_broker_without_human_prompt_when_internal(tmp_path):
+    """delegate não bypassa policy, mas delegação interna é auto-aprovada no broker."""
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
     dispatch = MagicMock(return_value="ok")
-    executor.set_call_agent_fn(dispatch)
+    executor.set_delegate_fn(dispatch)
 
     result = executor.execute(
         ToolCall(
-            name="call_agent",
-            arguments={"agent_name": "codex", "task": "x", "context": "ctx"},
+            name="delegate",
+            arguments={"target_agent": "codex", "request": "x", "context": "ctx"},
         )
     )
 
@@ -476,16 +476,16 @@ def test_executor_call_agent_goes_through_broker_without_human_prompt_when_inter
     dispatch.assert_called_once()
 
 
-def test_executor_call_agent_rejects_non_string_context(tmp_path):
-    """call_agent valida `context` localmente mesmo com bypass de policy."""
+def test_executor_delegate_rejects_non_string_context(tmp_path):
+    """delegate valida `context` localmente mesmo com bypass de policy."""
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
     dispatch = MagicMock(return_value="ok")
-    executor.set_call_agent_fn(dispatch)
+    executor.set_delegate_fn(dispatch)
 
     result = executor.execute(
         ToolCall(
-            name="call_agent",
-            arguments={"agent_name": "codex", "task": "x", "context": {"invalid": True}},
+            name="delegate",
+            arguments={"target_agent": "codex", "request": "x", "context": {"invalid": True}},
         )
     )
 
@@ -495,8 +495,8 @@ def test_executor_call_agent_rejects_non_string_context(tmp_path):
     dispatch.assert_not_called()
 
 
-def test_executor_call_agent_uses_fallback_agents_sequentially(tmp_path):
-    """call_agent tenta fallback em sequência quando alvo principal falha."""
+def test_executor_delegate_uses_fallback_agents_sequentially(tmp_path):
+    """delegate tenta fallback em sequência quando alvo principal falha."""
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
 
     def dispatch(agent_name, **_kwargs):
@@ -507,14 +507,14 @@ def test_executor_call_agent_uses_fallback_agents_sequentially(tmp_path):
         return None
 
     spy = MagicMock(side_effect=dispatch)
-    executor.set_call_agent_fn(spy)
+    executor.set_delegate_fn(spy)
 
     result = executor.execute(
         ToolCall(
-            name="call_agent",
+            name="delegate",
             arguments={
-                "agent_name": "codex",
-                "task": "x",
+                "target_agent": "codex",
+                "request": "x",
                 "fallback_agents": ["claude", "opencode-qwen3-6-plus-free"],
             },
         )
@@ -525,26 +525,26 @@ def test_executor_call_agent_uses_fallback_agents_sequentially(tmp_path):
     assert [c.args[0] for c in spy.call_args_list] == ["codex", "claude"]
 
 
-def test_executor_call_agent_supports_multiple_sequential_handoffs(tmp_path):
-    """call_agent suporta handoffs múltiplos em sequência no mesmo payload."""
+def test_executor_delegate_supports_multiple_sequential_delegations(tmp_path):
+    """delegate suporta delegations múltiplos em sequência no mesmo payload."""
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
 
     def dispatch(agent_name, **kwargs):
-        handoff = kwargs.get("handoff") or {}
-        return f"{agent_name}:{handoff.get('task')}"
+        delegation = kwargs.get("delegation") or {}
+        return f"{agent_name}:{delegation.get('task')}"
 
     spy = MagicMock(side_effect=dispatch)
-    executor.set_call_agent_fn(spy)
+    executor.set_delegate_fn(spy)
 
     result = executor.execute(
         ToolCall(
-            name="call_agent",
+            name="delegate",
             arguments={
-                "agent_name": "codex",
-                "task": "task-1",
-                "handoffs": [
-                    {"agent_name": "claude", "task": "task-2"},
-                    {"agent_name": "opencode-qwen3-6-plus-free", "task": "task-3"},
+                "target_agent": "codex",
+                "request": "task-1",
+                "steps": [
+                    {"target_agent": "claude", "request": "task-2"},
+                    {"target_agent": "opencode-qwen3-6-plus-free", "request": "task-3"},
                 ],
             },
         )
@@ -561,19 +561,19 @@ def test_executor_call_agent_supports_multiple_sequential_handoffs(tmp_path):
     ]
 
 
-def test_executor_call_agent_rejects_agents_outside_active_pool(tmp_path):
-    """call_agent deve rejeitar alvos que não estão no pool ativo da sessão."""
+def test_executor_delegate_rejects_agents_outside_active_pool(tmp_path):
+    """delegate deve rejeitar alvos que não estão no pool ativo da sessão."""
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
     dispatch = MagicMock(return_value="ok")
-    executor.set_call_agent_fn(dispatch)
+    executor.set_delegate_fn(dispatch)
     executor.set_active_agents_provider(lambda: ["codex", "claude"])
 
     result = executor.execute(
         ToolCall(
-            name="call_agent",
+            name="delegate",
             arguments={
-                "agent_name": "opencode-big-pickle",
-                "task": "x",
+                "target_agent": "opencode-big-pickle",
+                "request": "x",
                 "fallback_agents": ["claude"],
             },
         )
@@ -584,16 +584,16 @@ def test_executor_call_agent_rejects_agents_outside_active_pool(tmp_path):
     dispatch.assert_not_called()
 
 
-def test_executor_call_agent_rejects_inactive_agent_between_handoff_steps(tmp_path):
-    """call_agent rejeita step intermediário quando agente não está mais no pool ativo."""
+def test_executor_delegate_rejects_inactive_agent_between_delegation_steps(tmp_path):
+    """delegate rejeita step intermediário quando agente não está mais no pool ativo."""
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
 
     def dispatch(agent_name, **kwargs):
-        handoff = kwargs.get("handoff") or {}
-        return f"{agent_name}:{handoff.get('task')}"
+        delegation = kwargs.get("delegation") or {}
+        return f"{agent_name}:{delegation.get('task')}"
 
     spy = MagicMock(side_effect=dispatch)
-    executor.set_call_agent_fn(spy)
+    executor.set_delegate_fn(spy)
 
     active = ["codex"]
 
@@ -604,12 +604,12 @@ def test_executor_call_agent_rejects_inactive_agent_between_handoff_steps(tmp_pa
 
     result = executor.execute(
         ToolCall(
-            name="call_agent",
+            name="delegate",
             arguments={
-                "agent_name": "codex",
-                "task": "task-1",
-                "handoffs": [
-                    {"agent_name": "opencode-big-pickle", "task": "task-2"},
+                "target_agent": "codex",
+                "request": "task-1",
+                "steps": [
+                    {"target_agent": "opencode-big-pickle", "request": "task-2"},
                 ],
             },
         )
@@ -623,20 +623,20 @@ def test_executor_call_agent_rejects_inactive_agent_between_handoff_steps(tmp_pa
     assert spy.call_args[0][0] == "codex"
 
 
-def test_executor_call_agent_truncates_long_context_and_task(tmp_path):
-    """call_agent deve limitar tamanho de task/context para reduzir payload."""
+def test_executor_delegate_truncates_long_context_and_task(tmp_path):
+    """delegate deve limitar tamanho de task/context para reduzir payload."""
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
     dispatch = MagicMock(return_value="ok")
-    executor.set_call_agent_fn(dispatch)
+    executor.set_delegate_fn(dispatch)
 
     long_task = "t" * 3000
     long_context = "c" * 8000
     result = executor.execute(
         ToolCall(
-            name="call_agent",
+            name="delegate",
             arguments={
-                "agent_name": "codex",
-                "task": long_task,
+                "target_agent": "codex",
+                "request": long_task,
                 "context": long_context,
             },
         )
@@ -644,6 +644,6 @@ def test_executor_call_agent_truncates_long_context_and_task(tmp_path):
 
     assert result.ok is True
     kwargs = dispatch.call_args.kwargs
-    handoff = kwargs["handoff"]
-    assert len(handoff["task"]) == 1200
-    assert len(handoff["context"]) == 4000
+    delegation = kwargs["delegation"]
+    assert len(delegation["task"]) == 1200
+    assert len(delegation["context"]) == 4000

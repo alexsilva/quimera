@@ -74,10 +74,10 @@ agente chama tools/call
   -> resultado volta como content MCP
 ```
 
-## Handoff entre agentes
+## Delegation entre agentes
 
 ```text
-agente A chama call_agent
+agente A chama delegate
   -> ferramenta resolve agente B no pool
   -> prompt de delegação é montado
   -> AgentGateway executa B

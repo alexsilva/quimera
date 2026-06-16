@@ -61,7 +61,7 @@ def parse_http_allowed_tools(value: str | Iterable[str] | None) -> frozenset[str
 
     ``None`` ou ``"read"`` usa o perfil padrão de leitura com web.
     Perfis disponíveis: ``"read-local"`` (sem rede), ``"read"`` (com web),
-    ``"agent"`` (leitura com web + ``call_agent``) e ``"all"`` (sem filtro).
+    ``"agent"`` (leitura com web + ``delegate``) e ``"all"`` (sem filtro).
     Strings CSV e iteráveis viram allowlist explícita.
     """
     if value is None:

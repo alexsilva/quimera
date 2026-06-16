@@ -22,7 +22,7 @@ from quimera.app.dispatch import AppDispatchServices
 from quimera.app.inputs import AppInputServices, read_from_editor, read_user_input_with_timeout
 from quimera.app.session import AppSessionServices
 from quimera.app.system_layer import AppSystemLayer
-from quimera.app.task import AppTaskServices, call_agent_for_parallel
+from quimera.app.task import AppTaskServices, delegate_for_parallel
 from quimera.app.task_classifiers import classify_task_execution_result, classify_task_review_result
 from quimera.app.protocol import AppProtocol
 from quimera.app.session_metrics import SessionMetricsService
@@ -41,7 +41,7 @@ from quimera.plugins.base import PluginRegistry
 from quimera.runtime.models import TaskRecord, ToolCall
 from quimera.domain.session_state import SessionState
 from quimera.plugins.base import OpenAIConnection
-from quimera.handoff_presenter import HandoffPresenter
+from quimera.delegate_presenter import DelegatePresenter
 from quimera.prompt import PromptBuilder
 from quimera.shared_state import AGENT_STATE_KEYS
 from quimera.prompt_templates import prompt_template
@@ -79,7 +79,7 @@ class DummyRenderer:
         self.warnings = []
         self.system_messages = []
         self.plain_messages = []
-        self.handoffs = []
+        self.delegations = []
         self.prompt_previews = []
         self._output_lock = threading.Lock()
         self.task_services = None
@@ -93,8 +93,8 @@ class DummyRenderer:
     def show_plain(self, message):
         self.plain_messages.append(message)
 
-    def show_handoff(self, from_agent, to_agent, task=None):
-        self.handoffs.append((from_agent, to_agent, task))
+    def show_delegation(self, from_agent, to_agent, task=None):
+        self.delegations.append((from_agent, to_agent, task))
 
     def show_prompt_preview(self, agent, content):
         self.prompt_previews.append((agent, content))
@@ -239,8 +239,8 @@ def build_task_services(app):
         app.RETRY_BACKOFF_SECONDS = 1
     if not hasattr(app, "RATE_LIMIT_BACKOFF_SECONDS"):
         app.RATE_LIMIT_BACKOFF_SECONDS = 30
-    if not hasattr(app, "call_agent"):
-        app.call_agent = lambda *args, **kwargs: None
+    if not hasattr(app, "delegate"):
+        app.delegate = lambda *args, **kwargs: None
     if not hasattr(app, "parse_response"):
         app.parse_response = lambda raw: (raw, None, None, False, False, None)
 
@@ -288,7 +288,7 @@ def build_task_services(app):
         max_retries=app.MAX_RETRIES,
         retry_backoff_seconds=app.RETRY_BACKOFF_SECONDS,
         get_rate_limit_backoff_seconds=lambda: app.RATE_LIMIT_BACKOFF_SECONDS,
-        call_agent=app.call_agent,
+        delegate=app.delegate,
         parse_response=app.parse_response,
         classify_task_execution_result=getattr(app, "classify_task_execution_result", classify_task_execution_result),
         classify_task_review_result=getattr(app, "classify_task_review_result", classify_task_review_result),
@@ -532,11 +532,11 @@ class ProtocolTests(unittest.TestCase):
         app.protocol = _make_protocol(app)
         app.shared_state = {}
 
-        response, target, handoff, extend, _, _ = app.parse_response("Resposta objetiva")
+        response, target, delegation, extend, _, _ = app.parse_response("Resposta objetiva")
 
         self.assertEqual(response, "Resposta objetiva")
         self.assertIsNone(target)
-        self.assertIsNone(handoff)
+        self.assertIsNone(delegation)
         self.assertFalse(extend)
 
     def test_parse_response_extracts_state_update_before_debate(self):
@@ -695,7 +695,7 @@ class ProtocolTests(unittest.TestCase):
                 "execution_state_chars": 50,
                 "shared_state_chars": 60,
                 "history_chars": 70,
-                "handoff_chars": 0,
+                "delegation_chars": 0,
                 "history_messages": 1,
                 "total_chars": 280,
                 "primary": True,
@@ -746,7 +746,7 @@ class ProtocolTests(unittest.TestCase):
                 "execution_state_chars": 5,
                 "shared_state_chars": 6,
                 "history_chars": 7,
-                "handoff_chars": 0,
+                "delegation_chars": 0,
                 "history_messages": 0,
                 "total_chars": 28,
                 "primary": True,
@@ -777,7 +777,7 @@ class ProtocolTests(unittest.TestCase):
             "execution_state_chars": 1,
             "shared_state_chars": 1,
             "history_chars": 1,
-            "handoff_chars": 0,
+            "delegation_chars": 0,
             "history_messages": 0,
             "total_chars": 7,
             "primary": True,
@@ -811,7 +811,7 @@ class ProtocolTests(unittest.TestCase):
             "execution_state_chars": 1,
             "shared_state_chars": 1,
             "history_chars": 1,
-            "handoff_chars": 0,
+            "delegation_chars": 0,
             "history_messages": 0,
             "total_chars": 7,
             "primary": True,
@@ -845,7 +845,7 @@ class ProtocolTests(unittest.TestCase):
             "execution_state_chars": 1,
             "shared_state_chars": 1,
             "history_chars": 1,
-            "handoff_chars": 0,
+            "delegation_chars": 0,
             "history_messages": 0,
             "total_chars": 7,
             "primary": True,
@@ -1234,39 +1234,39 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn("validador", second_prompt)
         self.assertNotIn("inclua [DEBATE] ao final da sua resposta", second_prompt)
 
-    def test_prompt_handoff_only_allows_route_for_multi_hop(self):
-        """Verifica que prompt handoff only allows route for multi hop."""
+    def test_prompt_delegation_only_allows_route_for_multi_hop(self):
+        """Verifica que prompt delegation only allows route for multi hop."""
         builder = PromptBuilder(DummyContextManager(), history_window=3)
         history = [{"role": "human", "content": "Pergunta"}]
 
         prompt = builder.build(
             AGENT_CODEX,
             history,
-            handoff={
+            delegation={
                 "task": "Revisar parser",
                 "context": "Há dúvida sobre validação",
                 "expected": "1 parágrafo curto",
             },
-            handoff_only=True,
+            delegation_only=True,
         )
 
         self.assertIn("Você recebeu uma subtarefa delegada", prompt)
-        self.assertIn("TASK:\nRevisar parser", prompt)
+        self.assertIn("REQUEST:\nRevisar parser", prompt)
         self.assertIn("EXPECTED:\n1 parágrafo curto", prompt)
         self.assertNotIn("segundo agente nesta rodada", prompt)
-        self.assertIn("tool estruturada `call_agent`", prompt)
-        self.assertIn("agent_name", prompt)
+        self.assertIn("tool estruturada `delegate`", prompt)
+        self.assertIn("target_agent", prompt)
         self.assertNotIn("Não delegue de volta", prompt)
 
-    def test_prompt_includes_handoff_when_present(self):
-        """Verifica que prompt includes handoff when present."""
+    def test_prompt_includes_delegation_when_present(self):
+        """Verifica que prompt includes delegation when present."""
         builder = PromptBuilder(DummyContextManager(), history_window=3)
         history = [{"role": "human", "content": "Pergunta"}]
 
-        prompt = builder.build(AGENT_CODEX, history, handoff="Revise este ponto.")
+        prompt = builder.build(AGENT_CODEX, history, delegation="Revise este ponto.")
 
-        self.assertIn('<handoff title="Mensagem direta do outro agente">', prompt)
-        self.assertIn("</handoff>", prompt)
+        self.assertIn('<delegation title="Mensagem direta do outro agente">', prompt)
+        self.assertIn("</delegation>", prompt)
         self.assertIn("Revise este ponto.", prompt)
 
     def test_prompt_includes_current_human_request_block(self):
@@ -1885,7 +1885,7 @@ class ProtocolTests(unittest.TestCase):
         app.system_layer.handle_command = Mock(return_value=False)
         app.protocol = _make_protocol(app)
         app.dispatch_services = Mock(spec=AppDispatchServices)
-        app.dispatch_services.call_agent = Mock(return_value="claude responde")
+        app.dispatch_services.delegate = Mock(return_value="claude responde")
         app.dispatch_services.print_response = lambda agent, response: printed.append((agent, response))
         app.input_services = Mock()
         app.input_services.read_user_input = Mock(side_effect=["mensagem", "/exit"])
@@ -1900,7 +1900,7 @@ class ProtocolTests(unittest.TestCase):
             persisted,
             [("human", "oi"), (AGENT_CLAUDE, "claude responde")],
         )
-        app.dispatch_services.call_agent.assert_called_once()
+        app.dispatch_services.delegate.assert_called_once()
 
     def test_run_flushes_startup_system_messages_before_first_prompt(self):
         """Verifica que run flushes startup system messages before first prompt."""
@@ -2183,7 +2183,7 @@ class ProtocolTests(unittest.TestCase):
                 "codex fecha",
             ]
         )
-        app.dispatch_services.call_agent = lambda agent, is_first_speaker=False, handoff=None, primary=True, protocol_mode="standard": next(responses)
+        app.dispatch_services.delegate = lambda agent, is_first_speaker=False, delegation=None, primary=True, protocol_mode="standard": next(responses)
 
         app.run()
 
@@ -2231,10 +2231,10 @@ class ProtocolTests(unittest.TestCase):
             "session_id": "sessao-2026-04-02-183323",
             "history_count": 0,
             "summary_loaded": True,
-            "handoffs_sent": 0,
-            "handoffs_received": 0,
-            "handoffs_succeeded": 0,
-            "handoffs_failed": 0,
+            "delegations_sent": 0,
+            "delegations_received": 0,
+            "delegations_succeeded": 0,
+            "delegations_failed": 0,
             "total_latency": 0.0,
             "agent_metrics": {},
         }
@@ -2264,11 +2264,11 @@ class ProtocolTests(unittest.TestCase):
         app.parse_routing = lambda user: (AGENT_CLAUDE, "faça o teste pelo chat", True)
         app.parse_response = QuimeraApp.parse_response.__get__(app, QuimeraApp)
         app.resolve_agent_response = QuimeraApp.resolve_agent_response.__get__(app, QuimeraApp)
-        app.call_agent = QuimeraApp.call_agent.__get__(app, QuimeraApp)
+        app.delegate = QuimeraApp.delegate.__get__(app, QuimeraApp)
         app.task_services = Mock()
         app.task_services.refresh_task_shared_state = Mock()
         app.task_services.truncate_payload = lambda payload: payload
-        app.dispatch_services.call_agent = app.call_agent
+        app.dispatch_services.delegate = app.delegate
         app.dispatch_services.print_response = lambda agent, response: printed.append((agent, response))
         app.session_services = Mock()
         app.session_services.persist_message = lambda role, content: persisted.append((role, content))
@@ -2282,21 +2282,21 @@ class ProtocolTests(unittest.TestCase):
             ]
         )
 
-        def fake_call_agent(
+        def fake_delegate(
                 agent,
                 is_first_speaker=False,
-                handoff=None,
+                delegation=None,
                 primary=True,
                 protocol_mode="standard",
-                handoff_only=False,
+                delegation_only=False,
                 silent=False,
                 from_agent=None,
                 prompt_kind=None,
         ):
-            calls.append((agent, protocol_mode, handoff_only, from_agent, handoff))
+            calls.append((agent, protocol_mode, delegation_only, from_agent, delegation))
             return next(responses)
 
-        app._call_agent = fake_call_agent
+        app._delegate = fake_delegate
 
         app.run()
 
@@ -2323,7 +2323,7 @@ class ProtocolTests(unittest.TestCase):
                 ),
             ],
         )
-        self.assertEqual(app.renderer.handoffs, [])
+        self.assertEqual(app.renderer.delegations, [])
 
     def test_persist_message_saves_shared_state(self):
         """Verifica que persist message saves shared state."""
@@ -2969,12 +2969,12 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(app.threads, 3)
         self.assertIn("agent1", app.active_agents)
         self.assertIn("agent2", app.active_agents)
-        self.assertTrue(hasattr(app.task_services, "call_agent_for_parallel"))
+        self.assertTrue(hasattr(app.task_services, "delegate_for_parallel"))
         app._stop_task_executors()
 
     def test_parallel_threads_calls_agents_concurrently(self):
         """Verifica que parallel threads calls agents concurrently."""
-        # Testa que o método _call_agent_for_parallel retorna tupla correta
+        # Testa que o método _delegate_for_parallel retorna tupla correta
         app = QuimeraApp.__new__(QuimeraApp)
         materialize_internal_services(app)
         app.threads = 2
@@ -3008,7 +3008,7 @@ class PluginTests(unittest.TestCase):
         import tempfile
         staging_root = Path(self.enterContext(tempfile.TemporaryDirectory()))
 
-        agent, response, extend, needs_input = call_agent_for_parallel(
+        agent, response, extend, needs_input = delegate_for_parallel(
             app, "agent1", None, "standard", staging_root, 0
         )
         self.assertEqual(agent, "agent1")
@@ -3056,13 +3056,13 @@ class PluginTests(unittest.TestCase):
             second_prompt_seen.set()
             return "/exit"
 
-        def fake_call_agent(agent, **kwargs):
+        def fake_delegate(agent, **kwargs):
             call_started.set()
             allow_finish.wait(timeout=2)
             return "claude responde"
 
         app.read_user_input = Mock(side_effect=fake_read_user_input)
-        app.dispatch_services.call_agent = fake_call_agent
+        app.dispatch_services.delegate = fake_delegate
 
         run_thread = threading.Thread(target=app.run)
         run_thread.start()
@@ -3587,17 +3587,17 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(list(app.agent_failures.keys()), [AGENT_CLAUDE])
         app.session_metrics.record_agent_metric.assert_called_once_with(app, AGENT_CLAUDE, "failed", 0)
 
-    def test_handoff_format_omits_priority_when_normal(self):
-        """Verifica que handoff format omits priority when normal."""
+    def test_delegation_format_omits_priority_when_normal(self):
+        """Verifica que delegation format omits priority when normal."""
         builder = PromptBuilder(DummyContextManager(), history_window=3)
-        handoff = {
+        delegation = {
             "task": "Revisar código",
             "priority": "normal",
-            "handoff_id": "xyz789",
+            "delegation_id": "xyz789",
         }
-        fields = HandoffPresenter.present(handoff, from_agent="codex")
-        self.assertEqual(fields["handoff_id"], "xyz789")
-        self.assertEqual(fields["handoff_priority"], "")
+        fields = DelegatePresenter.present(delegation, from_agent="codex")
+        self.assertEqual(fields["delegation_id"], "xyz789")
+        self.assertEqual(fields["delegation_priority"], "")
 
     def test_retry_on_none_response(self):
         """Verifica que retry on none response."""
@@ -3609,21 +3609,21 @@ class PluginTests(unittest.TestCase):
         app.session_state = {}
         call_count = [0]
 
-        def fake_call_agent(*args, **kwargs):
+        def fake_delegate(*args, **kwargs):
             call_count[0] += 1
             if call_count[0] < 2:
                 return None
             return "sucesso no retry"
 
         dispatch = AppDispatchServices.from_app(app)
-        dispatch.call_agent_low_level = fake_call_agent
+        dispatch.delegate_low_level = fake_delegate
         dispatch.resolve_agent_response = lambda agent, response, silent=False, persist_history=True, show_output=True: response
 
-        result = dispatch.call_agent("claude")
+        result = dispatch.delegate("claude")
         self.assertEqual(result, "sucesso no retry")
         self.assertEqual(call_count[0], 2)
 
-    def test_call_agent_low_level_always_skips_tool_prompt_for_cli_builtin_tools(self):
+    def test_delegate_low_level_always_skips_tool_prompt_for_cli_builtin_tools(self):
         """Verifica que call agent low level always skips tool prompt for cli builtin tools."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.session_call_index = 0
@@ -3650,12 +3650,12 @@ class PluginTests(unittest.TestCase):
         ))
 
         dispatch = AppDispatchServices.from_app(app)
-        result = dispatch.call_agent_low_level("codex-cli")
+        result = dispatch.delegate_low_level("codex-cli")
 
         self.assertEqual(result, "resposta")
         self.assertTrue(app.prompt_builder.build.call_args.kwargs["skip_tool_prompt"])
 
-    def test_call_agent_low_level_always_skips_tool_prompt_for_openai_compat(self):
+    def test_delegate_low_level_always_skips_tool_prompt_for_openai_compat(self):
         """Verifica que call agent low level always skips tool prompt for openai compat."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.session_call_index = 0
@@ -3684,13 +3684,13 @@ class PluginTests(unittest.TestCase):
         ))
 
         dispatch = AppDispatchServices.from_app(app)
-        result = dispatch.call_agent_low_level("chatgpt-api")
+        result = dispatch.delegate_low_level("chatgpt-api")
 
         self.assertEqual(result, "resposta")
         self.assertTrue(app.prompt_builder.build.call_args.kwargs["skip_tool_prompt"])
 
-    def test_call_agent_low_level_keeps_history_in_handoff_only_mode(self):
-        """Verifica que call agent low level keeps history in handoff only mode."""
+    def test_delegate_low_level_keeps_history_in_delegation_only_mode(self):
+        """Verifica que call agent low level keeps history in delegation only mode."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.session_call_index = 0
         app.history = [
@@ -3719,18 +3719,18 @@ class PluginTests(unittest.TestCase):
         ))
 
         dispatch = AppDispatchServices.from_app(app)
-        result = dispatch.call_agent_low_level(
+        result = dispatch.delegate_low_level(
             "codex",
-            handoff={"task": "Continue a investigação"},
-            handoff_only=True,
+            delegation={"task": "Continue a investigação"},
+            delegation_only=True,
             primary=False,
         )
 
         self.assertEqual(result, "resposta")
         self.assertEqual(app.prompt_builder.build.call_args.args[1], app.history)
-        self.assertTrue(app.prompt_builder.build.call_args.kwargs["handoff_only"])
+        self.assertTrue(app.prompt_builder.build.call_args.kwargs["delegation_only"])
 
-    def test_call_agent_low_level_streaming_respects_show_output_false(self):
+    def test_delegate_low_level_streaming_respects_show_output_false(self):
         """Verifica que call agent low level streaming respects show output false."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.session_call_index = 0
@@ -3765,14 +3765,14 @@ class PluginTests(unittest.TestCase):
         app.agent_client.call.side_effect = fake_call
 
         dispatch = AppDispatchServices.from_app(app)
-        result = dispatch.call_agent_low_level("chatgpt-api", show_output=False)
+        result = dispatch.delegate_low_level("chatgpt-api", show_output=False)
 
         self.assertEqual(result, "resposta final")
         app.renderer.start_message_stream.assert_not_called()
         app.renderer.update_message_stream.assert_not_called()
         app.renderer.finish_message_stream.assert_not_called()
 
-    def test_call_agent_low_level_exports_last_spy_turn_detail_to_state(self):
+    def test_delegate_low_level_exports_last_spy_turn_detail_to_state(self):
         """Verifica que call agent low level exports last spy turn detail to state."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.session_call_index = 0
@@ -3814,7 +3814,7 @@ class PluginTests(unittest.TestCase):
         }
 
         dispatch = AppDispatchServices.from_app(app)
-        result = dispatch.call_agent_low_level("codex-cli")
+        result = dispatch.delegate_low_level("codex-cli")
 
         self.assertEqual(result, "resposta final")
         self.assertIn("spy_last_turn_detail", app.shared_state)
@@ -3878,7 +3878,7 @@ class PluginTests(unittest.TestCase):
             handlers[agent] = handler
             return FakeExecutor(handler)
 
-        app.dispatch_services.call_agent = lambda *args, **kwargs: "resposta visivel da task"
+        app.dispatch_services.delegate = lambda *args, **kwargs: "resposta visivel da task"
         app.system_layer.show_system_message = lambda message: status_updates.append(message)
         app.system_layer.show_muted_message = lambda message: status_updates.append(message)
         app.classify_task_execution_result = lambda response: (True, response)
@@ -3926,7 +3926,7 @@ class PluginTests(unittest.TestCase):
             handlers[agent] = handler
             return FakeExecutor(handler)
 
-        app.dispatch_services.call_agent = lambda *args, **kwargs: "resposta visivel da task"
+        app.dispatch_services.delegate = lambda *args, **kwargs: "resposta visivel da task"
         app.system_layer.show_system_message = lambda message: status_updates.append(message)
         app.system_layer.show_muted_message = lambda message: status_updates.append(message)
         app.classify_task_execution_result = lambda response: (True, response)
@@ -3978,7 +3978,7 @@ class PluginTests(unittest.TestCase):
             def __init__(self, supports_task_execution):
                 self.supports_task_execution = supports_task_execution
 
-        app.dispatch_services.call_agent = lambda *args, **kwargs: "resposta visivel da task"
+        app.dispatch_services.delegate = lambda *args, **kwargs: "resposta visivel da task"
         app.system_layer.show_system_message = lambda message: status_updates.append(message)
         app.system_layer.show_muted_message = lambda message: status_updates.append(message)
         app.classify_task_execution_result = lambda response: (True, response)
@@ -4031,11 +4031,11 @@ class PluginTests(unittest.TestCase):
             executor.agent = agent
             return executor
 
-        def fake_call_agent(agent, **kwargs):
-            review_prompts.append(kwargs.get("handoff", ""))
+        def fake_delegate(agent, **kwargs):
+            review_prompts.append(kwargs.get("delegation", ""))
             return "ACEITE\nResultado validado com evidência concreta."
 
-        app.dispatch_services.call_agent = fake_call_agent
+        app.dispatch_services.delegate = fake_delegate
         app.system_layer.show_system_message = lambda message: status_updates.append(message)
         app.system_layer.show_muted_message = lambda message: status_updates.append(message)
 
@@ -4057,7 +4057,7 @@ class PluginTests(unittest.TestCase):
             ],
         )
         self.assertTrue(review_prompts)
-        self.assertEqual(review_prompts[0]["handoff_id"], "task-review-7")
+        self.assertEqual(review_prompts[0]["delegation_id"], "task-review-7")
         self.assertIn("Resultado do executor:\nok", review_prompts[0]["context"])
         complete_task.assert_called_once_with(
             7, result="ok", reviewed_by=AGENT_GEMINI
@@ -4087,7 +4087,7 @@ class PluginTests(unittest.TestCase):
             executor.agent = agent
             return executor
 
-        app.dispatch_services.call_agent = lambda *args, **kwargs: None
+        app.dispatch_services.delegate = lambda *args, **kwargs: None
         app.system_layer.show_system_message = lambda message: status_updates.append(message)
         app.system_layer.show_muted_message = lambda message: status_updates.append(message)
 
@@ -4131,7 +4131,7 @@ class PluginTests(unittest.TestCase):
             executor.agent = agent
             return executor
 
-        app.dispatch_services.call_agent = lambda *args, **kwargs: "RETENTATIVA\nFaltou evidência de alteração no código."
+        app.dispatch_services.delegate = lambda *args, **kwargs: "RETENTATIVA\nFaltou evidência de alteração no código."
         app.system_layer.show_system_message = lambda message: status_updates.append(message)
         app.system_layer.show_muted_message = lambda message: status_updates.append(message)
 
@@ -4208,14 +4208,14 @@ class PluginTests(unittest.TestCase):
             executor.agent = agent
             return executor
 
-        def fake_call_agent(*_args, **_kwargs):
+        def fake_delegate(*_args, **_kwargs):
             raise RuntimeError("timeout")
 
         class FakePlugin:
             def __init__(self, supports_task_execution):
                 self.supports_task_execution = supports_task_execution
 
-        app.dispatch_services.call_agent = fake_call_agent
+        app.dispatch_services.delegate = fake_delegate
         app.system_layer.show_system_message = lambda message: status_updates.append(message)
         app.system_layer.show_muted_message = lambda message: status_updates.append(message)
 
@@ -4270,14 +4270,14 @@ class PluginTests(unittest.TestCase):
             executor.agent = agent
             return executor
 
-        def fake_call_agent(*_args, **_kwargs):
+        def fake_delegate(*_args, **_kwargs):
             raise RuntimeError("timeout")
 
         class FakePlugin:
             def __init__(self, supports_task_execution):
                 self.supports_task_execution = supports_task_execution
 
-        app.dispatch_services.call_agent = fake_call_agent
+        app.dispatch_services.delegate = fake_delegate
         app.system_layer.show_system_message = lambda message: status_updates.append(message)
         app.system_layer.show_muted_message = lambda message: status_updates.append(message)
 
@@ -4343,10 +4343,10 @@ class PluginTests(unittest.TestCase):
             def __init__(self, supports_task_execution):
                 self.supports_task_execution = supports_task_execution
 
-        def fake_call_agent(*_args, **_kwargs):
+        def fake_delegate(*_args, **_kwargs):
             raise RuntimeError("timeout")
 
-        app.dispatch_services.call_agent = fake_call_agent
+        app.dispatch_services.delegate = fake_delegate
         app.system_layer.show_system_message = lambda message: status_updates.append(message)
         app.system_layer.show_muted_message = lambda message: status_updates.append(message)
 
@@ -4479,12 +4479,12 @@ class PluginTests(unittest.TestCase):
             handlers[agent] = handler
             return FakeExecutor(handler)
 
-        def fake_call_agent(agent, **kwargs):
+        def fake_delegate(agent, **kwargs):
             captured["agent"] = agent
             captured["kwargs"] = kwargs
             return "resposta visivel da task"
 
-        app.dispatch_services.call_agent = fake_call_agent
+        app.dispatch_services.delegate = fake_delegate
         app.system_layer.show_system_message = lambda message: None
         app.system_layer.show_muted_message = lambda message: None
         app.classify_task_execution_result = lambda response: (True, response)
@@ -4508,14 +4508,14 @@ class PluginTests(unittest.TestCase):
 
         self.assertTrue(ok)
         self.assertEqual(captured["agent"], AGENT_CLAUDE)
-        self.assertTrue(captured["kwargs"]["handoff_only"])
+        self.assertTrue(captured["kwargs"]["delegation_only"])
         self.assertFalse(captured["kwargs"]["primary"])
         self.assertEqual(captured["kwargs"]["prompt_kind"], "task_executor")
-        self.assertEqual(captured["kwargs"]["handoff"]["handoff_id"], "task-1")
-        self.assertEqual(captured["kwargs"]["handoff"]["task"], "validar regressão")
-        self.assertIn("TAREFA:\nvalidar regressão", captured["kwargs"]["handoff"]["context"])
-        self.assertIn("[ALEX]: a execução da tarefa precisa receber o contexto da task", captured["kwargs"]["handoff"]["context"])
-        self.assertIn("[CLAUDE]: alguém passou contexto errado", captured["kwargs"]["handoff"]["context"])
+        self.assertEqual(captured["kwargs"]["delegation"]["delegation_id"], "task-1")
+        self.assertEqual(captured["kwargs"]["delegation"]["task"], "validar regressão")
+        self.assertIn("TAREFA:\nvalidar regressão", captured["kwargs"]["delegation"]["context"])
+        self.assertIn("[ALEX]: a execução da tarefa precisa receber o contexto da task", captured["kwargs"]["delegation"]["context"])
+        self.assertIn("[CLAUDE]: alguém passou contexto errado", captured["kwargs"]["delegation"]["context"])
         complete_task.assert_called_once_with(
             1, result="resposta visivel da task"
         )
@@ -4542,7 +4542,7 @@ class PluginTests(unittest.TestCase):
             handlers[agent] = handler
             return FakeExecutor(handler)
 
-        app.dispatch_services.call_agent = lambda *args, **kwargs: None
+        app.dispatch_services.delegate = lambda *args, **kwargs: None
         app.system_layer.show_system_message = lambda message: None
         app.system_layer.show_muted_message = lambda message: None
         app.classify_task_execution_result = lambda response: (True, response)
@@ -4584,7 +4584,7 @@ class PluginTests(unittest.TestCase):
             handlers[agent] = handler
             return FakeExecutor(handler)
 
-        app.dispatch_services.call_agent = lambda *args, **kwargs: None
+        app.dispatch_services.delegate = lambda *args, **kwargs: None
         app.system_layer.show_system_message = lambda message: None
         app.system_layer.show_muted_message = lambda message: None
         app.classify_task_execution_result = lambda response: (True, response)
@@ -4612,10 +4612,10 @@ class PluginTests(unittest.TestCase):
             "session_id": "test",
             "history_count": 0,
             "summary_loaded": False,
-            "handoffs_sent": 0,
-            "handoffs_received": 0,
-            "handoffs_succeeded": 0,
-            "handoffs_failed": 0,
+            "delegations_sent": 0,
+            "delegations_received": 0,
+            "delegations_succeeded": 0,
+            "delegations_failed": 0,
             "total_latency": 0.0,
             "agent_metrics": {},
         }
@@ -4645,10 +4645,10 @@ class PluginTests(unittest.TestCase):
             "session_id": "test",
             "history_count": 0,
             "summary_loaded": False,
-            "handoffs_sent": 0,
-            "handoffs_received": 0,
-            "handoffs_succeeded": 0,
-            "handoffs_failed": 0,
+            "delegations_sent": 0,
+            "delegations_received": 0,
+            "delegations_succeeded": 0,
+            "delegations_failed": 0,
             "total_latency": 0.0,
             "agent_metrics": {},
         }
@@ -4704,9 +4704,9 @@ class PluginTests(unittest.TestCase):
         """Route rule deve estar inline no template principal."""
         main = prompt_template._load()
 
-        self.assertIn("call_agent", main)
-        self.assertIn("agent_name", main)
-        self.assertIn("task", main)
+        self.assertIn("delegate", main)
+        self.assertIn("target_agent", main)
+        self.assertIn("request", main)
         self.assertIn("obrigatório", main)
         self.assertIn("não improvise", main)
         self.assertIn("NEEDS_INPUT", main)
@@ -4757,17 +4757,17 @@ class FallbackChainTests(unittest.TestCase):
         def fake_call(
                 agent,
                 is_first_speaker=False,
-                handoff=None,
+                delegation=None,
                 primary=True,
                 protocol_mode="standard",
-                handoff_only=False,
+                delegation_only=False,
                 from_agent=None,
                 prompt_kind=None,
         ):
-            calls.append((agent, is_first_speaker, handoff, handoff_only, from_agent))
+            calls.append((agent, is_first_speaker, delegation, delegation_only, from_agent))
             return next(responses)
 
-        app.dispatch_services.call_agent = fake_call
+        app.dispatch_services.delegate = fake_call
 
         QuimeraApp._do_process_chat_message(app, "oi")
 
@@ -4827,38 +4827,38 @@ class MetricsFeedbackTests(unittest.TestCase):
         app.session_state["total_responses"] = 5
         app.session_state["responses_with_clear_next_step"] = 3
         app.session_state["consecutive_redundant_responses"] = 2
-        app.session_state["handoff_invalid_count"] = 1
+        app.session_state["delegation_invalid_count"] = 1
         app.session_state["rounds_without_progress"] = 0
 
         self.assertEqual(app.session_state["total_responses"], 5)
         self.assertEqual(app.session_state["responses_with_clear_next_step"], 3)
         self.assertEqual(app.session_state["consecutive_redundant_responses"], 2)
-        self.assertEqual(app.session_state["handoff_invalid_count"], 1)
+        self.assertEqual(app.session_state["delegation_invalid_count"], 1)
 
-    def test_handoff_format_includes_chain(self):
-        """Handoff format deve incluir cadeia de delegação quando presente."""
+    def test_delegation_format_includes_chain(self):
+        """Delegation format deve incluir cadeia de delegação quando presente."""
         builder = PromptBuilder(DummyContextManager(), history_window=3)
-        handoff = {
+        delegation = {
             "task": "Revisar parser",
             "context": "Parser quebrado",
             "chain": ["claude", "codex"],
-            "handoff_id": "abc123",
+            "delegation_id": "abc123",
         }
-        fields = HandoffPresenter.present(handoff, from_agent="qwen")
-        self.assertEqual(fields["handoff_chain"], "claude -> codex")
-        self.assertEqual(fields["handoff_id"], "abc123")
-        self.assertEqual(fields["handoff_from"], "qwen")
+        fields = DelegatePresenter.present(delegation, from_agent="qwen")
+        self.assertEqual(fields["delegation_chain"], "claude -> codex")
+        self.assertEqual(fields["delegation_id"], "abc123")
+        self.assertEqual(fields["delegation_from"], "qwen")
 
-    def test_handoff_format_omits_chain_when_empty(self):
-        """Handoff format não deve incluir CHAIN quando vazio."""
+    def test_delegation_format_omits_chain_when_empty(self):
+        """Delegation format não deve incluir CHAIN quando vazio."""
         builder = PromptBuilder(DummyContextManager(), history_window=3)
-        handoff = {
+        delegation = {
             "task": "Tarefa simples",
             "chain": [],
-            "handoff_id": "xyz",
+            "delegation_id": "xyz",
         }
-        fields = HandoffPresenter.present(handoff, from_agent="claude")
-        self.assertEqual(fields["handoff_chain"], "")
+        fields = DelegatePresenter.present(delegation, from_agent="claude")
+        self.assertEqual(fields["delegation_chain"], "")
 
     def test_prompt_includes_collaboration_rules(self):
         """Prompt deve incluir regras de colaboração."""
@@ -4903,11 +4903,11 @@ class MetricsFeedbackTests(unittest.TestCase):
             [plugin.name for plugin in plugins.all_plugins() if getattr(plugin, "supports_task_execution", True)],
         )
 
-    def test_handoff_rule_mentions_ack(self):
-        """HANDOFF_RULE deve estar inline no template e mencionar ACK."""
+    def test_delegation_rule_mentions_ack(self):
+        """DELEGATION_RULE deve estar inline no template e mencionar ACK."""
         main = prompt_template._load()
         self.assertIn("ACK", main)
-        self.assertIn("call_agent", main)
+        self.assertIn("delegate", main)
         self.assertIn("arquivos", main)
 
     def test_behavior_metrics_tracker_integrated_with_app(self):
@@ -4919,10 +4919,10 @@ class MetricsFeedbackTests(unittest.TestCase):
             "session_id": "test",
             "history_count": 0,
             "summary_loaded": False,
-            "handoffs_sent": 0,
-            "handoffs_received": 0,
-            "handoffs_succeeded": 0,
-            "handoffs_failed": 0,
+            "delegations_sent": 0,
+            "delegations_received": 0,
+            "delegations_succeeded": 0,
+            "delegations_failed": 0,
             "total_latency": 0.0,
             "agent_metrics": {},
         }
@@ -4941,8 +4941,8 @@ class MetricsFeedbackTests(unittest.TestCase):
         claude_metrics = app.behavior_metrics.get_agent_summary("claude")
         self.assertEqual(claude_metrics["responses_total"], 4)
 
-    def test_behavior_metrics_tracks_invalid_handoff(self):
-        """Handoff inválido (sem route/handoffs) não deve crashar nem gerar target."""
+    def test_behavior_metrics_tracks_invalid_delegation(self):
+        """Delegation inválido (sem route/delegations) não deve crashar nem gerar target."""
         from quimera.metrics import BehaviorMetricsTracker
 
         app = QuimeraApp.__new__(QuimeraApp)
@@ -4950,14 +4950,14 @@ class MetricsFeedbackTests(unittest.TestCase):
         app.shared_state = {}
         app.behavior_metrics = BehaviorMetricsTracker()
 
-        # Texto sem envelope JSON não é mais detectado como handoff
-        response, target, handoff, extend, needs_input, ack_id = app.parse_response(
-            "Resposta visivel\nsem formato de handoff válido"
+        # Texto sem envelope JSON não é mais detectado como delegation
+        response, target, delegation, extend, needs_input, ack_id = app.parse_response(
+            "Resposta visivel\nsem formato de delegation válido"
         )
 
         self.assertIsNone(target)
-        self.assertIsNone(handoff)
-        self.assertEqual(response, "Resposta visivel\nsem formato de handoff válido")
+        self.assertIsNone(delegation)
+        self.assertEqual(response, "Resposta visivel\nsem formato de delegation válido")
 
     def test_route_rule_is_concise(self):
         """Route rule deve estar inline no template e ser conciso."""
@@ -4982,8 +4982,8 @@ class MetricsFeedbackTests(unittest.TestCase):
         self.assertIn("veredicto", main.lower())
         self.assertIn("ACEITE", main)
 
-    def test_handoff_rule_is_concise(self):
-        """HANDOFF_RULE deve estar inline no template e ser conciso."""
+    def test_delegation_rule_is_concise(self):
+        """DELEGATION_RULE deve estar inline no template e ser conciso."""
         main = prompt_template._load()
         self.assertIn("continue do ponto já avançado", main.lower())
 
@@ -5127,7 +5127,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         for index in range(1, 11):
             task_id = create_task(
                 1,
-                f"task-{index:02d} com descricao longa para ocupar espaco",
+                f"task-delegation-{index:02d} com descricao longa para ocupar espaco",
                 db_path=str(db_path),
                 status="in_progress",
             )
@@ -5139,9 +5139,11 @@ class MetricsFeedbackTests(unittest.TestCase):
         results = app.shared_state.get("completed_task_results", "")
         self.assertLessEqual(len(results), 2000)
         self.assertIn("omitida", results)
-        self.assertNotIn("task-01", results)
-        self.assertIn("task-09", results)
-        self.assertIn("task-10", results)
+        self.assertNotIn("task-delegation-01", results)
+        self.assertNotIn("task-delegation-02", results)
+        self.assertNotIn("task-delegation-03", results)
+        self.assertIn("[task 9]", results)
+        self.assertIn("[task 10]", results)
 
     def test_refresh_task_shared_state_removes_completed_task_results_when_none_exist(self):
         """Verifica que refresh task shared state removes completed task results when none exist."""
@@ -5224,7 +5226,7 @@ class MetricsFeedbackTests(unittest.TestCase):
             {"role": "claude", "content": "Contexto de agente"},
         ]
 
-        prompt = builder.build(AGENT_CODEX, history, handoff="Revise este ponto.")
+        prompt = builder.build(AGENT_CODEX, history, delegation="Revise este ponto.")
 
         self.assertIn('<header title="Identificação">', prompt)
         self.assertIn("</header>", prompt)
@@ -5234,7 +5236,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         self.assertIn('<persistent_context title="Contexto persistente do workspace">', prompt)
         self.assertIn("</persistent_context>", prompt)
         self.assertIn('<current_turn title="Pedido atual de >>>">', prompt)
-        self.assertIn('<handoff title="Mensagem direta do outro agente">', prompt)
+        self.assertIn('<delegation title="Mensagem direta do outro agente">', prompt)
         self.assertIn('<recent_conversation title="Conversa recente">', prompt)
         self.assertNotIn('<response_prefix title="PREFIXO DE RESPOSTA">', prompt)
         self.assertNotIn("</response_prefix>", prompt)
@@ -5263,18 +5265,18 @@ class MetricsFeedbackTests(unittest.TestCase):
         feedback = tracker.generate_feedback("claude")
         self.assertIn("SÍNTESES IMPRECISAS", feedback)
 
-    def test_behavior_metrics_generate_feedback_for_invalid_handoff_context_gap(self):
-        """Feedback de handoff inválido deve tratar falta de contexto como erro de roteamento."""
+    def test_behavior_metrics_generate_feedback_for_invalid_delegation_context_gap(self):
+        """Feedback de delegation inválido deve tratar falta de contexto como erro de roteamento."""
         from quimera.metrics import BehaviorMetricsTracker
 
         tracker = BehaviorMetricsTracker()
         for _ in range(5):
             tracker.record_response("claude", 1.0)
         for _ in range(2):
-            tracker.record_handoff_sent("claude", is_invalid=True)
+            tracker.record_delegation_sent("claude", is_invalid=True)
 
         feedback = tracker.generate_feedback("claude")
-        self.assertIn("ALTA TAXA DE HANDOFF INVÁLIDO", feedback)
+        self.assertIn("ALTA TAXA DE DELEGAÇÃO INVÁLIDA", feedback)
         self.assertIn("faltar contexto suficiente", feedback)
         self.assertIn("falha no roteamento inicial", feedback)
         self.assertIn("delegue", feedback)
@@ -5528,67 +5530,67 @@ class AppProtocolDirectTests(unittest.TestCase):
         self.assertNotIn(NEEDS_INPUT_MARKER, response)
 
     def test_parse_response_json_envelope_no_response_content(self):
-        """Envelope JSON puro de handoff é tratado como texto (MCP-first)."""
+        """Envelope JSON puro de delegation é tratado como texto (MCP-first)."""
         app = self._make_app()
         proto = _make_protocol(app)
-        response, route_target, handoff, extend, needs_input, ack_id = proto.parse_response(
-            '{"type": "handoff", "route": "codex", "content": "task: fazer algo"}'
+        response, route_target, delegation, extend, needs_input, ack_id = proto.parse_response(
+            '{"type": "delegation", "route": "codex", "content": "task: fazer algo"}'
         )
         self.assertEqual(
             response,
-            '{"type": "handoff", "route": "codex", "content": "task: fazer algo"}',
+            '{"type": "delegation", "route": "codex", "content": "task: fazer algo"}',
         )
         self.assertIsNone(route_target)
-        self.assertIsNone(handoff)
+        self.assertIsNone(delegation)
         self.assertFalse(extend)
         self.assertFalse(needs_input)
         self.assertIsNone(ack_id)
 
-    def test_parse_response_json_envelope_handoffs_array_no_surrounding_text(self):
-        """Envelope JSON com handoffs[] também fica como texto no modo MCP-first."""
+    def test_parse_response_json_envelope_delegations_array_no_surrounding_text(self):
+        """Envelope JSON com delegations[] também fica como texto no modo MCP-first."""
         app = self._make_app()
         proto = _make_protocol(app)
-        response, route_target, handoff, _, _, _ = proto.parse_response(
-            '{"type": "handoff", "handoffs": ['
+        response, route_target, delegation, _, _, _ = proto.parse_response(
+            '{"type": "delegation", "steps": ['
             '{"route": "codex", "content": "task: fazer algo"}, '
             '{"route": "claude", "content": "task: validar"}'
             ']}'
         )
-        self.assertIn('"type": "handoff"', response)
+        self.assertIn('"type": "delegation"', response)
         self.assertIsNone(route_target)
-        self.assertIsNone(handoff)
+        self.assertIsNone(delegation)
 
-    def test_parse_response_json_handoff_is_plain_content(self):
-        """JSON type=handoff não rota nem dispara delegação."""
+    def test_parse_response_json_delegation_is_plain_content(self):
+        """JSON type=delegation não rota nem dispara delegação."""
         app = self._make_app()
         proto = _make_protocol(app)
 
-        response, route_target, handoff, extend, needs_input, ack_id = proto.parse_response(
-            '{"type": "handoff", "route": "codex", "content": "task: fazer algo"}'
+        response, route_target, delegation, extend, needs_input, ack_id = proto.parse_response(
+            '{"type": "delegation", "route": "codex", "content": "task: fazer algo"}'
         )
 
         self.assertEqual(
             response,
-            '{"type": "handoff", "route": "codex", "content": "task: fazer algo"}',
+            '{"type": "delegation", "route": "codex", "content": "task: fazer algo"}',
         )
         self.assertIsNone(route_target)
-        self.assertIsNone(handoff)
+        self.assertIsNone(delegation)
         self.assertFalse(extend)
         self.assertFalse(needs_input)
         self.assertIsNone(ack_id)
 
-    def test_parse_response_json_handoff_is_always_ignored_for_routing(self):
-        """Não existe mais modo textual: handoff JSON nunca vira route_target."""
+    def test_parse_response_json_delegation_is_always_ignored_for_routing(self):
+        """Não existe mais modo textual: delegation JSON nunca vira route_target."""
         app = self._make_app()
         proto = _make_protocol(app)
 
-        response, route_target, handoff, extend, needs_input, ack_id = proto.parse_response(
-            '{"type": "handoff", "route": "codex", "content": "task: fazer algo"}'
+        response, route_target, delegation, extend, needs_input, ack_id = proto.parse_response(
+            '{"type": "delegation", "route": "codex", "content": "task: fazer algo"}'
         )
 
         self.assertIsNotNone(response)
         self.assertIsNone(route_target)
-        self.assertIsNone(handoff)
+        self.assertIsNone(delegation)
         self.assertFalse(extend)
         self.assertFalse(needs_input)
         self.assertIsNone(ack_id)
@@ -5599,12 +5601,12 @@ class AppProtocolDirectTests(unittest.TestCase):
         proto = _make_protocol(app)
         text = '{"type": "state_update", "content": "", "state_updates": {"goal_canonical": "corrigir parser"}}'
 
-        response, route_target, handoff, extend, needs_input, ack_id = proto.parse_response(text)
+        response, route_target, delegation, extend, needs_input, ack_id = proto.parse_response(text)
 
         self.assertEqual(response, text)
         self.assertEqual(app.shared_state, {})
         self.assertIsNone(route_target)
-        self.assertIsNone(handoff)
+        self.assertIsNone(delegation)
         self.assertFalse(extend)
         self.assertFalse(needs_input)
         self.assertIsNone(ack_id)
@@ -5614,33 +5616,33 @@ class AppProtocolDirectTests(unittest.TestCase):
         app = self._make_app()
         proto = _make_protocol(app)
 
-        response, route_target, handoff, extend, needs_input, ack_id = proto.parse_response(
+        response, route_target, delegation, extend, needs_input, ack_id = proto.parse_response(
             '[ACK:abc123] done'
         )
 
         self.assertEqual(ack_id, "abc123")
         self.assertEqual(response, "done")
         self.assertIsNone(route_target)
-        self.assertIsNone(handoff)
+        self.assertIsNone(delegation)
         self.assertFalse(extend)
         self.assertFalse(needs_input)
 
 
     # --- parse_response com envelope JSON ---
 
-    def test_parse_response_json_envelope_handoff(self):
-        """Verifica que parse response json envelope handoff."""
+    def test_parse_response_json_envelope_delegation(self):
+        """Verifica que parse response json envelope delegation."""
         app = self._make_app()
         proto = _make_protocol(app)
-        response, route_target, handoff, extend, needs_input, ack_id = (
-            proto.parse_response('{"type": "handoff", "content": "task: refactor", "route": "codex"}')
+        response, route_target, delegation, extend, needs_input, ack_id = (
+            proto.parse_response('{"type": "delegation", "content": "task: refactor", "route": "codex"}')
         )
         self.assertEqual(
             response,
-            '{"type": "handoff", "content": "task: refactor", "route": "codex"}',
+            '{"type": "delegation", "content": "task: refactor", "route": "codex"}',
         )
         self.assertIsNone(route_target)
-        self.assertIsNone(handoff)
+        self.assertIsNone(delegation)
         self.assertFalse(extend)
         self.assertFalse(needs_input)
         self.assertIsNone(ack_id)
@@ -5650,11 +5652,11 @@ class AppProtocolDirectTests(unittest.TestCase):
         app = self._make_app()
         proto = _make_protocol(app)
         text = '{"type": "state_update", "content": "", "state_updates": {"goal_canonical": "corrigir parser","mode":"test"}}'
-        response, route_target, handoff, extend, needs_input, ack_id = proto.parse_response(text)
+        response, route_target, delegation, extend, needs_input, ack_id = proto.parse_response(text)
         self.assertEqual(response, text)
         self.assertEqual(app.shared_state, {})
         self.assertIsNone(route_target)
-        self.assertIsNone(handoff)
+        self.assertIsNone(delegation)
         self.assertFalse(extend)
         self.assertFalse(needs_input)
         self.assertIsNone(ack_id)
@@ -5663,104 +5665,104 @@ class AppProtocolDirectTests(unittest.TestCase):
         """Verifica que parse response json envelope ack is plain text."""
         app = self._make_app()
         proto = _make_protocol(app)
-        text = '{"type": "ack", "content": "done", "handoff_id": "abc123"}'
-        response, route_target, handoff, extend, needs_input, ack_id = proto.parse_response(text)
+        text = '{"type": "ack", "content": "done", "delegation_id": "abc123"}'
+        response, route_target, delegation, extend, needs_input, ack_id = proto.parse_response(text)
         self.assertEqual(response, text)
         self.assertIsNone(ack_id)
         self.assertIsNone(route_target)
-        self.assertIsNone(handoff)
+        self.assertIsNone(delegation)
 
-    def test_parse_response_embedded_handoff_json_with_text_before(self):
-        """JSON type=handoff é conteúdo comum e não roteia."""
+    def test_parse_response_embedded_delegation_json_with_text_before(self):
+        """JSON type=delegation é conteúdo comum e não roteia."""
         text = (
             'Aqui está minha análise\n'
-            '{"type": "handoff", "content": "task: refactor", "route": "codex"}'
+            '{"type": "delegation", "content": "task: refactor", "route": "codex"}'
         )
         app = self._make_app()
         proto = _make_protocol(app)
-        response, route_target, handoff, extend, needs_input, ack_id = (
+        response, route_target, delegation, extend, needs_input, ack_id = (
             proto.parse_response(text)
         )
         self.assertIsNone(route_target)
-        self.assertIsNone(handoff)
+        self.assertIsNone(delegation)
         self.assertEqual(response, text)
         self.assertIsNone(ack_id)
         self.assertFalse(extend)
         self.assertFalse(needs_input)
 
-    def test_parse_response_embedded_handoff_array_json_is_plain_text(self):
-        """JSON type=handoff com handoffs[] é conteúdo comum."""
+    def test_parse_response_embedded_delegation_array_json_is_plain_text(self):
+        """JSON type=delegation com delegations[] é conteúdo comum."""
         text = (
             'Análise\n'
-            '{"type": "handoff", "handoffs": ['
+            '{"type": "delegation", "steps": ['
             '{"route": "gemini", "content": "task: analyze this"}, '
             '{"route": "codex", "content": "task: validate this"}'
             ']}'
         )
         app = self._make_app()
         proto = _make_protocol(app)
-        response, route_target, handoff, extend, needs_input, ack_id = (
+        response, route_target, delegation, extend, needs_input, ack_id = (
             proto.parse_response(text)
         )
         self.assertIsNone(route_target)
-        self.assertIsNone(handoff)
+        self.assertIsNone(delegation)
         self.assertEqual(response, text)
 
     # --- Embedded envelope tests ---
 
-    def test_parse_response_embedded_handoff_json_text_before_and_after(self):
-        """JSON type=handoff embutido permanece no conteúdo e não roteia."""
+    def test_parse_response_embedded_delegation_json_text_before_and_after(self):
+        """JSON type=delegation embutido permanece no conteúdo e não roteia."""
         text = (
             'Análise inicial\n'
-            '{"type": "handoff", "content": "task: revise", "route": "gemini"}\n'
+            '{"type": "delegation", "content": "task: revise", "route": "gemini"}\n'
             'Observação final'
         )
         app = self._make_app()
         proto = _make_protocol(app)
-        response, route_target, handoff, _, _, _ = proto.parse_response(text)
+        response, route_target, delegation, _, _, _ = proto.parse_response(text)
         self.assertIsNone(route_target)
-        self.assertIsNone(handoff)
+        self.assertIsNone(delegation)
         self.assertIn("Análise inicial", response)
         self.assertIn("Observação final", response)
         self.assertIn("task: revise", response)
 
-    def test_parse_response_embedded_handoff_json_text_after_only(self):
-        """JSON type=handoff com texto depois permanece no conteúdo."""
+    def test_parse_response_embedded_delegation_json_text_after_only(self):
+        """JSON type=delegation com texto depois permanece no conteúdo."""
         text = (
-            '{"type": "handoff", "content": "task: check", "route": "codex"}\n'
+            '{"type": "delegation", "content": "task: check", "route": "codex"}\n'
             'Resultado da análise'
         )
         app = self._make_app()
         proto = _make_protocol(app)
-        response, route_target, handoff, _, _, _ = proto.parse_response(text)
+        response, route_target, delegation, _, _, _ = proto.parse_response(text)
         self.assertIsNone(route_target)
-        self.assertIsNone(handoff)
+        self.assertIsNone(delegation)
         self.assertEqual(response, text)
 
-    def test_parse_response_embedded_handoff_json_empty_content_plain_text(self):
-        """JSON type=handoff com content vazio permanece conteúdo comum."""
+    def test_parse_response_embedded_delegation_json_empty_content_plain_text(self):
+        """JSON type=delegation com content vazio permanece conteúdo comum."""
         text = (
             'texto antes\n'
-            '{"type": "handoff", "content": "", "route": "codex"}'
+            '{"type": "delegation", "content": "", "route": "codex"}'
         )
         app = self._make_app()
         proto = _make_protocol(app)
-        response, route_target, handoff, _, _, _ = proto.parse_response(text)
+        response, route_target, delegation, _, _, _ = proto.parse_response(text)
         self.assertIsNone(route_target)
-        self.assertIsNone(handoff)
+        self.assertIsNone(delegation)
         self.assertEqual(response, text)
 
-    def test_parse_response_embedded_handoff_json_whitespace_content_plain_text(self):
-        """JSON type=handoff com content whitespace permanece conteúdo comum."""
+    def test_parse_response_embedded_delegation_json_whitespace_content_plain_text(self):
+        """JSON type=delegation com content whitespace permanece conteúdo comum."""
         text = (
             'texto antes\n'
-            '{"type": "handoff", "content": "   ", "route": "codex"}'
+            '{"type": "delegation", "content": "   ", "route": "codex"}'
         )
         app = self._make_app()
         proto = _make_protocol(app)
-        response, route_target, handoff, _, _, _ = proto.parse_response(text)
+        response, route_target, delegation, _, _, _ = proto.parse_response(text)
         self.assertIsNone(route_target)
-        self.assertIsNone(handoff)
+        self.assertIsNone(delegation)
         self.assertEqual(response, text)
 
     def test_parse_response_embedded_json_state_update_is_plain_text(self):
@@ -5780,7 +5782,7 @@ class AppProtocolDirectTests(unittest.TestCase):
         """JSON ack embutido não extrai ack_id; use [ACK:id]."""
         text = (
             'processando\n'
-            '{"type": "ack", "content": "done", "handoff_id": "xyz789"}'
+            '{"type": "ack", "content": "done", "delegation_id": "xyz789"}'
         )
         app = self._make_app()
         proto = _make_protocol(app)
@@ -5790,74 +5792,74 @@ class AppProtocolDirectTests(unittest.TestCase):
 
     # --- Gap 2: envelope com content vazio ---
 
-    def test_parse_response_json_envelope_empty_content_handoff(self):
-        """Handoff envelope com content vazio segue como texto no modo MCP-first."""
+    def test_parse_response_json_envelope_empty_content_delegation(self):
+        """Delegation envelope com content vazio segue como texto no modo MCP-first."""
         app = self._make_app()
         proto = _make_protocol(app)
-        response, route_target, handoff, extend, needs_input, ack_id = (
-            proto.parse_response('{"type": "handoff", "content": "", "route": "codex"}')
+        response, route_target, delegation, extend, needs_input, ack_id = (
+            proto.parse_response('{"type": "delegation", "content": "", "route": "codex"}')
         )
         self.assertIsNone(route_target)
-        self.assertIsNone(handoff)
-        self.assertEqual(response, '{"type": "handoff", "content": "", "route": "codex"}')
+        self.assertIsNone(delegation)
+        self.assertEqual(response, '{"type": "delegation", "content": "", "route": "codex"}')
 
-    def test_parse_response_json_envelope_whitespace_content_handoff(self):
-        """Handoff envelope com whitespace segue como texto no modo MCP-first."""
+    def test_parse_response_json_envelope_whitespace_content_delegation(self):
+        """Delegation envelope com whitespace segue como texto no modo MCP-first."""
         app = self._make_app()
         proto = _make_protocol(app)
-        response, route_target, handoff, extend, needs_input, ack_id = (
-            proto.parse_response('{"type": "handoff", "content": "   ", "route": "codex"}')
+        response, route_target, delegation, extend, needs_input, ack_id = (
+            proto.parse_response('{"type": "delegation", "content": "   ", "route": "codex"}')
         )
         self.assertIsNone(route_target)
-        self.assertIsNone(handoff)
-        self.assertEqual(response, '{"type": "handoff", "content": "   ", "route": "codex"}')
+        self.assertIsNone(delegation)
+        self.assertEqual(response, '{"type": "delegation", "content": "   ", "route": "codex"}')
 
-    def test_parse_response_handoffs_array_single_item_has_no_pending(self):
-        """handoffs com 1 item não roteia no modo MCP-first."""
+    def test_parse_response_delegations_array_single_item_has_no_pending(self):
+        """delegations com 1 item não roteia no modo MCP-first."""
         app = self._make_app()
         proto = _make_protocol(app)
-        response, target, handoff, _, _, _ = proto.parse_response(
-            '{"type": "handoff", "handoffs": [{"route": "codex", "content": "task: single target"}]}'
+        response, target, delegation, _, _, _ = proto.parse_response(
+            '{"type": "delegation", "steps": [{"route": "codex", "content": "task: single target"}]}'
         )
-        self.assertIn('"type": "handoff"', response)
+        self.assertIn('"type": "delegation"', response)
         self.assertIsNone(target)
-        self.assertIsNone(handoff)
+        self.assertIsNone(delegation)
 
-    def test_parse_response_handoffs_rejected_empty_content(self):
-        """handoffs + content vazio continua sem rotear (texto puro)."""
+    def test_parse_response_delegations_rejected_empty_content(self):
+        """delegations + content vazio continua sem rotear (texto puro)."""
         app = self._make_app()
         proto = _make_protocol(app)
-        response, target, handoff, _, _, _ = proto.parse_response(
-            '{"type": "handoff", "handoffs": [{"route": "codex", "content": ""}]}'
+        response, target, delegation, _, _, _ = proto.parse_response(
+            '{"type": "delegation", "steps": [{"route": "codex", "content": ""}]}'
         )
-        self.assertIn('"type": "handoff"', response)
+        self.assertIn('"type": "delegation"', response)
         self.assertIsNone(target)
-        self.assertIsNone(handoff)
+        self.assertIsNone(delegation)
 
-    def test_parse_response_handoff_routes_field_is_plain_content(self):
-        """type=handoff com routes não roteia e segue como texto."""
+    def test_parse_response_delegation_routes_field_is_plain_content(self):
+        """type=delegation com routes não roteia e segue como texto."""
         app = self._make_app()
         proto = _make_protocol(app)
-        response, target, handoff, _, _, _ = proto.parse_response(
-            '{"type": "handoff", "routes": ["codex"], "content": "task: something"}'
+        response, target, delegation, _, _, _ = proto.parse_response(
+            '{"type": "delegation", "routes": ["codex"], "content": "task: something"}'
         )
         self.assertIsNone(target)
-        self.assertIsNone(handoff)
+        self.assertIsNone(delegation)
         self.assertEqual(
             response,
-            '{"type": "handoff", "routes": ["codex"], "content": "task: something"}',
+            '{"type": "delegation", "routes": ["codex"], "content": "task: something"}',
         )
 
-    def test_parse_response_rejected_missing_route_and_handoffs_value(self):
-        """type=handoff sem route/handoffs não roteia e segue como texto."""
+    def test_parse_response_rejected_missing_route_and_delegations_value(self):
+        """type=delegation sem route/delegations não roteia e segue como texto."""
         app = self._make_app()
         proto = _make_protocol(app)
-        response, target, handoff, _, _, _ = proto.parse_response(
-            '{"type": "handoff", "content": "task: something"}'
+        response, target, delegation, _, _, _ = proto.parse_response(
+            '{"type": "delegation", "content": "task: something"}'
         )
-        self.assertEqual(response, '{"type": "handoff", "content": "task: something"}')
+        self.assertEqual(response, '{"type": "delegation", "content": "task: something"}')
         self.assertIsNone(target)
-        self.assertIsNone(handoff)
+        self.assertIsNone(delegation)
 
 
 # =========================================================================

@@ -91,8 +91,8 @@ def build_task_services(app):
         app.RETRY_BACKOFF_SECONDS = 1
     if not hasattr(app, "RATE_LIMIT_BACKOFF_SECONDS"):
         app.RATE_LIMIT_BACKOFF_SECONDS = 30
-    if not hasattr(app, "call_agent"):
-        app.call_agent = lambda *args, **kwargs: None
+    if not hasattr(app, "delegate"):
+        app.delegate = lambda *args, **kwargs: None
     if not hasattr(app, "parse_response"):
         app.parse_response = lambda raw: (raw, None, None, False, False, None)
 
@@ -140,7 +140,7 @@ def build_task_services(app):
         max_retries=app.MAX_RETRIES,
         retry_backoff_seconds=app.RETRY_BACKOFF_SECONDS,
         get_rate_limit_backoff_seconds=lambda: app.RATE_LIMIT_BACKOFF_SECONDS,
-        call_agent=app.call_agent,
+        delegate=app.delegate,
         parse_response=app.parse_response,
         classify_task_execution_result=getattr(app, "classify_task_execution_result", classify_task_execution_result),
         classify_task_review_result=getattr(app, "classify_task_review_result", classify_task_review_result),
@@ -152,7 +152,7 @@ class DispatchStub:
         self.response = response
         self.calls = []
 
-    def call_agent(self, agent_name, **kwargs):
+    def delegate(self, agent_name, **kwargs):
         self.calls.append((agent_name, kwargs))
         return self.response
 
@@ -417,13 +417,13 @@ def test_parallel_calls_use_background_dispatch_when_available(tmp_path, monkeyp
     app.visibility = "summary"
     app.tasks_db_path = None
     app.auto_approve_mutations = False
-    app.call_agent_calls = []
+    app.delegate_calls = []
 
-    def _chat_call_agent(*args, **kwargs):
-        app.call_agent_calls.append((args, kwargs))
+    def _chat_delegate(*args, **kwargs):
+        app.delegate_calls.append((args, kwargs))
         return "chat-response"
 
-    app.call_agent = _chat_call_agent
+    app.delegate = _chat_delegate
     app.parse_response = lambda raw: (raw, None, None, False, False, None)
 
     services = build_task_services(app)
@@ -434,7 +434,7 @@ def test_parallel_calls_use_background_dispatch_when_available(tmp_path, monkeyp
         lambda **kwargs: dispatch,
     )
 
-    result = services.call_agent_for_parallel(
+    result = services.delegate_for_parallel(
         "codex",
         None,
         "standard",
@@ -447,7 +447,7 @@ def test_parallel_calls_use_background_dispatch_when_available(tmp_path, monkeyp
         (
             "codex",
             {
-                "handoff": None,
+                "delegation": None,
                 "primary": False,
                 "protocol_mode": "standard",
                 "silent": True,
@@ -455,7 +455,7 @@ def test_parallel_calls_use_background_dispatch_when_available(tmp_path, monkeyp
             },
         )
     ]
-    assert app.call_agent_calls == []
+    assert app.delegate_calls == []
 
 
 def test_parallel_calls_create_dedicated_background_dispatch_and_close_it(tmp_path, monkeypatch):
@@ -470,7 +470,7 @@ def test_parallel_calls_create_dedicated_background_dispatch_and_close_it(tmp_pa
     app.visibility = "summary"
     app.tasks_db_path = None
     app.auto_approve_mutations = False
-    app.call_agent = lambda *args, **kwargs: "chat-response"
+    app.delegate = lambda *args, **kwargs: "chat-response"
     app.parse_response = lambda raw: (raw, None, None, False, False, None)
 
     services = build_task_services(app)
@@ -498,7 +498,7 @@ def test_parallel_calls_create_dedicated_background_dispatch_and_close_it(tmp_pa
 
     first_cancel = threading.Event()
     second_cancel = threading.Event()
-    first = services.call_agent_for_parallel(
+    first = services.delegate_for_parallel(
         "codex",
         None,
         "standard",
@@ -506,7 +506,7 @@ def test_parallel_calls_create_dedicated_background_dispatch_and_close_it(tmp_pa
         0,
         cancel_event=first_cancel,
     )
-    second = services.call_agent_for_parallel(
+    second = services.delegate_for_parallel(
         "codex",
         None,
         "standard",

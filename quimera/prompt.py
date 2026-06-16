@@ -6,7 +6,7 @@ from .config import DEFAULT_HISTORY_WINDOW, DEFAULT_USER_NAME
 from .constants import EXTEND_MARKER
 from .evidence import EvidenceFormatter, EvidenceStore
 from .execution_mode_presenter import ExecutionModePresenter
-from .handoff_presenter import HandoffPresenter
+from .delegate_presenter import DelegatePresenter
 from .memory_selector import MemorySelector
 from .prompt_budget import PromptBudget
 from .prompt_kinds import PromptKind, coerce_prompt_kind
@@ -35,7 +35,7 @@ class PromptBuilder:
         self.metrics_tracker = metrics_tracker
         self.memory_selector = MemorySelector(history_window, user_name)
         self.shared_state_presenter = SharedStatePresenter()
-        self.handoff_presenter = HandoffPresenter()
+        self.delegate_presenter = DelegatePresenter()
         self.execution_mode_presenter = ExecutionModePresenter()
         self.prompt_budget = PromptBudget()
 
@@ -64,18 +64,18 @@ class PromptBuilder:
             agent,
             history,
             is_first_speaker=False,
-            handoff=None,
+            delegation=None,
             debug=False,
             primary=True,
             shared_state=None,
-            handoff_only=False,
+            delegation_only=False,
             from_agent=None,
             skip_tool_prompt=False,
             execution_mode=None,
             prompt_kind=PromptKind.CHAT,
             request_override=None,
     ) -> PromptText | tuple[PromptText, dict]:
-        """Gera o prompt final para um agente considerando contexto, handoff e histórico."""
+        """Gera o prompt final para um agente considerando contexto, delegação e histórico."""
         if history is None:
             history = []
         elif not isinstance(history, list):
@@ -85,7 +85,7 @@ class PromptBuilder:
         context = self.context_manager.load() if is_chat_prompt else ""
         active_agents = self._get_active_agents()
 
-        if handoff_only:
+        if delegation_only:
             route_candidates = [n for n in active_agents if n.lower() != agent.lower()]
             if from_agent:
                 route_candidates = [n for n in route_candidates if n.lower() != from_agent.lower()]
@@ -124,7 +124,7 @@ class PromptBuilder:
             mcp_enabled = bool(self.session_state.get("mcp_enabled", False))
             mcp_socket_path = self.session_state.get("mcp_socket_path", "")
 
-        handoff_fields = self.handoff_presenter.present(handoff, from_agent)
+        delegation_fields = self.delegate_presenter.present(delegation, from_agent)
         if is_chat_prompt:
             override_request = (request_override or "").strip()
             if override_request:
@@ -159,7 +159,7 @@ class PromptBuilder:
             user_name=self.memory_selector.user_name.upper(),
             agents=agents_list,
             route_agents=route_agents,
-            handoff_only=handoff_only,
+            delegation_only=delegation_only,
             is_first_speaker=is_first_speaker_flag,
             is_reviewer=is_reviewer,
             marker=EXTEND_MARKER,
@@ -178,15 +178,15 @@ class PromptBuilder:
             request=request,
             shared_state_json=shared_state_json,
             completed_task_results=completed_task_results,
-            handoff_present=handoff_fields["handoff_present"],
-            handoff_id=handoff_fields["handoff_id"],
-            handoff_task=handoff_fields["handoff_task"],
-            handoff_from=handoff_fields["handoff_from"],
-            handoff_context=handoff_fields["handoff_context"],
-            handoff_expected=handoff_fields["handoff_expected"],
-            handoff_priority=handoff_fields["handoff_priority"],
-            handoff_chain=handoff_fields["handoff_chain"],
-            handoff_raw=handoff_fields["handoff_raw"],
+            delegation_present=delegation_fields["delegation_present"],
+            delegation_id=delegation_fields["delegation_id"],
+            delegation_request=delegation_fields["delegation_request"],
+            delegation_from=delegation_fields["delegation_from"],
+            delegation_context=delegation_fields["delegation_context"],
+            delegation_expected=delegation_fields["delegation_expected"],
+            delegation_priority=delegation_fields["delegation_priority"],
+            delegation_chain=delegation_fields["delegation_chain"],
+            delegation_raw=delegation_fields["delegation_raw"],
             state_update_enabled=True,
             execution_state=execution_state,
             recent_conversation=recent_conversation,
@@ -209,7 +209,7 @@ class PromptBuilder:
                 shared_state_json=shared_state_json,
                 completed_task_results=completed_task_results,
                 recent_conversation=recent_conversation,
-                handoff_fields=handoff_fields,
+                delegation_fields=delegation_fields,
                 history=history,
                 history_window=self.memory_selector.history_window,
                 primary=primary,

@@ -85,7 +85,7 @@ def test_build_openai_messages_preserves_template_order_and_omits_metrics():
     """Adapter preserva ordem do template; agent_metrics é omitido."""
     prompt = (
         '<header title="Identificação">\nHEADER\n</header>\n'
-        '<handoff title="Mensagem direta do outro agente">\nHANDOFF\n</handoff>\n'
+        '<delegation title="Mensagem direta do outro agente">\nDELEGATION\n</delegation>\n'
         '<debug_state title="Debug de render ativo">\nDEBUG\n</debug_state>\n'
         '<agent_metrics title="Métricas">\nMETRICS\n</agent_metrics>\n'
         '<recent_conversation title="Conversa recente">\nHISTORY\n</recent_conversation>\n'
@@ -96,7 +96,7 @@ def test_build_openai_messages_preserves_template_order_and_omits_metrics():
 
     assert [message["content"] for message in messages] == [
         "Identificação\n\nHEADER",
-        "HANDOFF",
+        "DELEGATION",
         "Debug de render ativo\n\nDEBUG",
         "Conversa recente\n\nHISTORY",
         "CURRENT",
@@ -161,7 +161,7 @@ def test_build_openai_messages_uses_prompt_kind_policy_for_task_executor():
         '<debug_state title="Debug de render ativo">\nDEBUG\n</debug_state>\n'
         '<rules title="Suas regras">\nRegra de chat que não deve entrar.\n</rules>\n'
         '<task_execution_rules title="Protocolo operacional">\n- Leia o alvo.\n</task_execution_rules>\n'
-        '<task_handoff title="Task atribuída">\nTASK:\nEditar.\n</task_handoff>'
+        '<task_delegation title="Task atribuída">\nTASK:\nEditar.\n</task_delegation>'
     )
 
     messages = _build_openai_messages_from_prompt(_rendered(prompt, PromptKind.TASK_EXECUTOR))
@@ -230,23 +230,23 @@ def test_build_tool_system_prompt_avoids_unavailable_tool_guidance():
     assert "começar exatamente com '*** Begin Patch'" not in prompt
 
 
-def test_build_tool_system_prompt_prefers_call_agent_for_delegation():
-    """Prompt curto não duplica instruções específicas de call_agent."""
-    prompt = _build_tool_system_prompt(["read_file", "call_agent"], "/tmp/workspace")
+def test_build_tool_system_prompt_prefers_delegate_for_delegation():
+    """Prompt curto não duplica instruções específicas de delegate."""
+    prompt = _build_tool_system_prompt(["read_file", "delegate"], "/tmp/workspace")
 
     assert "ferramentas disponíveis" in prompt
-    assert "Para delegação entre agentes, use a tool `call_agent`" not in prompt
+    assert "Para delegação entre agentes, use a tool `delegate`" not in prompt
     assert "use `fallback_agents` para failover sequencial" not in prompt
-    assert "e `handoffs` para múltiplos passos no mesmo envio" not in prompt
-    assert "Se precisar delegar e `call_agent` não estiver disponível" not in prompt
+    assert "e `delegations` para múltiplos passos no mesmo envio" not in prompt
+    assert "Se precisar delegar e `delegate` não estiver disponível" not in prompt
 
 
-def test_build_tool_system_prompt_reports_limitation_without_call_agent():
-    """Prompt curto não injeta limitação específica quando call_agent não está disponível."""
+def test_build_tool_system_prompt_reports_limitation_without_delegate():
+    """Prompt curto não injeta limitação específica quando delegate não está disponível."""
     prompt = _build_tool_system_prompt(["read_file"], "/tmp/workspace")
 
     assert "ferramentas disponíveis" in prompt
-    assert "Se precisar delegar e `call_agent` não estiver disponível" not in prompt
+    assert "Se precisar delegar e `delegate` não estiver disponível" not in prompt
 
 
 def test_build_tool_system_prompt_includes_shell_policy_rules():

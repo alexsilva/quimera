@@ -2,7 +2,7 @@
 
 O Quimera organiza os agentes por **Tiers** e **Especialidades**. Todos os agentes compartilham o mesmo servidor MCP da sessão, que expõe as ferramentas do runtime via protocolo MCP (`2024-11-05`).
 
-O sistema **Cross-MCP** permite que agentes deleguem tarefas entre si através da tool `call_agent` — qualquer agente MCP-capaz pode chamar qualquer outro agente do pool, com suporte a fallback e cadeias de delegação (`handoffs`).
+O sistema **Cross-MCP** permite que agentes deleguem tarefas entre si através da tool `delegate` — qualquer agente MCP-capaz pode chamar qualquer outro agente do pool, com suporte a fallback e cadeias de delegação (`steps`).
 
 ## Tier 3: Orquestradores de Alto Nível
 
@@ -88,9 +88,9 @@ Fluxo recomendado para validar chamadas OpenAI-compatible com ferramentas via MC
 
 1. Rode o app em modo de teste. O próprio `--test` registra os fake plugins, sobe o backend OpenAI-compatible fake em uma porta livre e aplica override não persistente para o processo:
    ```bash
-   python quimera.py --test --agents fake-cli-handoff fake-openai --visibility full
+   python quimera.py --test --agents fake-cli-delegation fake-openai --visibility full
    ```
-2. Envie um prompt como `Execute pwd via shell usando o agente OpenAI` e confira no output `MCP conectado`, `MCP tool_call: call_agent`, a execução do agente `fake-openai`, a aprovação/execução da ferramenta solicitada por ele e `MCP tool_result: OK`.
+2. Envie um prompt como `Execute pwd via shell usando o agente OpenAI` e confira no output `MCP conectado`, `MCP tool_call: delegate`, a execução do agente `fake-openai`, a aprovação/execução da ferramenta solicitada por ele e `MCP tool_result: OK`.
 3. Use `python -m quimera.devtools.fake_agents openai-server` apenas como ferramenta manual de debug; ela não é pré-requisito para `python quimera.py --test`.
 
 Para testar o driver diretamente, também use `--test`:

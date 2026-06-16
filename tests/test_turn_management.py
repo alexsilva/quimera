@@ -35,7 +35,7 @@ class DummyRenderer:
 
     def show_no_response(self, *a, **kw): pass
 
-    def show_handoff(self, *a, **kw): pass
+    def show_delegation(self, *a, **kw): pass
 
 
 def _make_app(active_agents=None):
@@ -50,12 +50,12 @@ def _make_app(active_agents=None):
     app.renderer = DummyRenderer()
     app.turn_manager = TurnManager()
 
-    # Comportamento padrão: primeira chamada retorna resposta simples (sem handoff, sem extend)
+    # Comportamento padrão: primeira chamada retorna resposta simples (sem delegation, sem extend)
     app.parse_routing = Mock(return_value=("claude", "olá", False))
     app.parse_response = Mock(return_value=("resposta", None, None, False, False, None))
     app.session_services = Mock()
     app.dispatch_services = Mock()
-    app.dispatch_services.call_agent = Mock(return_value="resposta")
+    app.dispatch_services.delegate = Mock(return_value="resposta")
     app.dispatch_services.print_response = Mock()
     app.chat_round_orchestrator = ChatRoundOrchestrator(
         dispatch_services=app.dispatch_services,
@@ -73,7 +73,7 @@ def _make_app(active_agents=None):
         get_pending_input_for=lambda: app._pending_input_for_val,
         set_pending_input_for=lambda v: setattr(app, '_pending_input_for_val', v),
     )
-    app._generate_handoff_id = lambda task, target: f"gen-{target}"
+    app._generate_delegation_id = lambda task, target: f"gen-{target}"
 
     return app
 
@@ -529,15 +529,15 @@ class TestTurnCycle(unittest.TestCase):
         self.assertEqual(rendered_messages, [("codex", "primeira")])
         self.assertEqual(no_response_calls, ["claude"])
 
-    def test_drain_ui_events_keeps_handoff_callback_payload_isolated_when_scheduled(self):
-        """Callbacks HANDOFF agendados devem manter metadata da iteração correta."""
+    def test_drain_ui_events_keeps_delegation_callback_payload_isolated_when_scheduled(self):
+        """Callbacks DELEGATION agendados devem manter metadata da iteração correta."""
         app = QuimeraApp.__new__(QuimeraApp)
-        handoff_calls = []
+        delegation_calls = []
         scheduled_callbacks = []
 
         class Renderer:
-            def show_handoff(self, from_agent, to_agent, task=None):
-                handoff_calls.append((from_agent, to_agent, task))
+            def show_delegation(self, from_agent, to_agent, task=None):
+                delegation_calls.append((from_agent, to_agent, task))
 
             def flush(self):
                 return None
@@ -557,7 +557,7 @@ class TestTurnCycle(unittest.TestCase):
         ui_queue = queue.Queue()
         ui_queue.put(
             RenderEvent(
-                RenderEvent.HANDOFF,
+                RenderEvent.DELEGATION,
                 "",
                 agent="codex",
                 metadata={"to": "claude", "task": "T1"},
@@ -565,7 +565,7 @@ class TestTurnCycle(unittest.TestCase):
         )
         ui_queue.put(
             RenderEvent(
-                RenderEvent.HANDOFF,
+                RenderEvent.DELEGATION,
                 "",
                 agent="claude",
                 metadata={"to": "gemini", "task": "T2"},
@@ -577,13 +577,13 @@ class TestTurnCycle(unittest.TestCase):
             QuimeraApp._drain_ui_events(app, ui_queue)
 
         self.assertEqual(len(scheduled_callbacks), 2)
-        self.assertEqual(handoff_calls, [])
+        self.assertEqual(delegation_calls, [])
 
         scheduled_callbacks[0]()
         scheduled_callbacks[1]()
 
         self.assertEqual(
-            handoff_calls,
+            delegation_calls,
             [
                 ("codex", "claude", "T1"),
                 ("claude", "gemini", "T2"),
@@ -897,15 +897,15 @@ class TestSingleAgentPerTurn(unittest.TestCase):
         app = _make_app(active_agents=["claude", "codex"])
         # Roteamento padrão: sem prefixo explícito
         app.parse_routing = Mock(return_value=("claude", "olá", False))
-        # parse_response: sem extend, sem handoff, sem needs_human_input
+        # parse_response: sem extend, sem delegation, sem needs_human_input
         app.parse_response = Mock(return_value=("resposta", None, None, False, False, None))
 
         QuimeraApp._do_process_chat_message(app, "olá")
 
-        # call_agent chamado exatamente uma vez (apenas para claude)
-        self.assertEqual(app.dispatch_services.call_agent.call_count, 1)
-        first_call_agent = app.dispatch_services.call_agent.call_args_list[0][0][0]
-        self.assertEqual(first_call_agent, "claude")
+        # delegate chamado exatamente uma vez (apenas para claude)
+        self.assertEqual(app.dispatch_services.delegate.call_count, 1)
+        first_delegate = app.dispatch_services.delegate.call_args_list[0][0][0]
+        self.assertEqual(first_delegate, "claude")
 
     def test_explicit_prefix_only_that_agent_responds(self):
         """/claude ou /codex explícito → apenas aquele agente responde."""
@@ -915,20 +915,20 @@ class TestSingleAgentPerTurn(unittest.TestCase):
 
         QuimeraApp._do_process_chat_message(app, "/codex revisa isso")
 
-        self.assertEqual(app.dispatch_services.call_agent.call_count, 1)
-        self.assertEqual(app.dispatch_services.call_agent.call_args_list[0][0][0], "codex")
+        self.assertEqual(app.dispatch_services.delegate.call_count, 1)
+        self.assertEqual(app.dispatch_services.delegate.call_args_list[0][0][0], "codex")
 
     def test_extend_mode_stays_on_first_agent(self):
         """EXTEND_MARKER no chat interativo não deve mais disparar outros agentes no mesmo prompt."""
         app = _make_app(active_agents=["claude", "codex"])
         app.parse_routing = Mock(return_value=("claude", "debate isso", False))
         app.parse_response = Mock(return_value=("resposta1", None, None, True, False, None))
-        app.dispatch_services.call_agent = Mock(return_value="r1")
+        app.dispatch_services.delegate = Mock(return_value="r1")
 
         QuimeraApp._do_process_chat_message(app, "debate isso")
 
-        self.assertEqual(app.dispatch_services.call_agent.call_count, 1)
-        self.assertEqual(app.dispatch_services.call_agent.call_args_list[0][0][0], "claude")
+        self.assertEqual(app.dispatch_services.delegate.call_count, 1)
+        self.assertEqual(app.dispatch_services.delegate.call_args_list[0][0][0], "claude")
 
     def test_extend_with_explicit_prefix_still_single_agent(self):
         """Prefixo explícito anula extend: mesmo com EXTEND_MARKER, só um agente responde."""
@@ -939,30 +939,30 @@ class TestSingleAgentPerTurn(unittest.TestCase):
 
         QuimeraApp._do_process_chat_message(app, "/claude faz algo")
 
-        self.assertEqual(app.dispatch_services.call_agent.call_count, 1)
+        self.assertEqual(app.dispatch_services.delegate.call_count, 1)
 
-    def test_handoff_triggers_secondary_agent(self):
-        """Envelope textual de handoff não aciona delegação no fluxo MCP-first."""
+    def test_delegation_triggers_secondary_agent(self):
+        """Envelope textual de delegation não aciona delegação no fluxo MCP-first."""
         app = _make_app(active_agents=["claude", "codex"])
         app.parse_routing = Mock(return_value=("claude", "analisa", False))
 
-        handoff_payload = {
+        delegation_payload = {
             "task": "Revisa o código",
             "context": "contexto",
             "expected": "resultado",
-            "handoff_id": "abc123",
+            "delegation_id": "abc123",
             "chain": [],
         }
         responses = [
-            # Primeira resposta: handoff para codex
-            ("resposta claude", "codex", handoff_payload, False, False, None),
-            # Resposta do codex (handoff_only)
+            # Primeira resposta: delegation para codex
+            ("resposta claude", "codex", delegation_payload, False, False, None),
+            # Resposta do codex (delegation_only)
             ("resposta codex", None, None, False, False, "abc123"),
             # Síntese do claude
             ("síntese", None, None, False, False, None),
         ]
         app.parse_response = Mock(side_effect=responses)
-        app.dispatch_services.call_agent = Mock(side_effect=["r1", "r2", "r3"])
+        app.dispatch_services.delegate = Mock(side_effect=["r1", "r2", "r3"])
 
         # behavior_metrics opcional
         app.behavior_metrics = None
@@ -970,86 +970,86 @@ class TestSingleAgentPerTurn(unittest.TestCase):
         QuimeraApp._do_process_chat_message(app, "analisa")
 
         # Retornos delegativos do parser são ignorados: permanece apenas no agente primário.
-        self.assertEqual(app.dispatch_services.call_agent.call_count, 1)
-        agents_called = [c[0][0] for c in app.dispatch_services.call_agent.call_args_list]
+        self.assertEqual(app.dispatch_services.delegate.call_count, 1)
+        agents_called = [c[0][0] for c in app.dispatch_services.delegate.call_args_list]
         self.assertEqual(agents_called, ["claude"])
 
-    def test_self_handoff_is_ignored(self):
-        """Handoff de um agente para si mesmo deve ser ignorado — não gera nova chamada."""
+    def test_self_delegation_is_ignored(self):
+        """Delegation de um agente para si mesmo deve ser ignorado — não gera nova chamada."""
         app = _make_app(active_agents=["claude", "codex"])
         app.parse_routing = Mock(return_value=("claude", "analisa", False))
 
-        handoff_payload = {
+        delegation_payload = {
             "task": "Revisa o código",
             "context": "contexto",
             "expected": "resultado",
-            "handoff_id": "abc123",
+            "delegation_id": "abc123",
             "chain": [],
         }
-        # parse_response retorna route_target == first_agent ("claude") — self-handoff
-        app.parse_response = Mock(return_value=("resposta claude", "claude", handoff_payload, False, False, None))
-        app.dispatch_services.call_agent = Mock(return_value="resposta claude")
+        # parse_response retorna route_target == first_agent ("claude") — self-delegation
+        app.parse_response = Mock(return_value=("resposta claude", "claude", delegation_payload, False, False, None))
+        app.dispatch_services.delegate = Mock(return_value="resposta claude")
 
         QuimeraApp._do_process_chat_message(app, "analisa")
 
-        # Apenas 1 chamada (claude como primary) — sem chamada extra para self-handoff
-        self.assertEqual(app.dispatch_services.call_agent.call_count, 1)
+        # Apenas 1 chamada (claude como primary) — sem chamada extra para self-delegation
+        self.assertEqual(app.dispatch_services.delegate.call_count, 1)
 
-    def test_handoff_secondary_can_delegate_to_third_before_synthesis(self):
-        """Retornos route_target/handoff do parser são ignorados; delegação real vem de call_agent."""
+    def test_delegation_secondary_can_delegate_to_third_before_synthesis(self):
+        """Retornos route_target/delegation do parser são ignorados; delegação real vem de delegate."""
         app = _make_app(active_agents=["claude", "codex", "opencode-qwen"])
         app.parse_routing = Mock(return_value=("claude", "analisa", False))
 
-        first_handoff = {
+        first_delegation = {
             "task": "Revisa parser",
             "context": "Validar regras",
             "expected": "2 bullets",
-            "handoff_id": "h1",
+            "delegation_id": "h1",
             "chain": [],
         }
-        second_handoff = {
+        second_delegation = {
             "task": "Valida edge cases",
             "context": "Cobrir entradas inválidas",
             "expected": "1 resumo curto",
-            "handoff_id": "h2",
+            "delegation_id": "h2",
             "chain": ["claude"],
         }
         app.parse_response = Mock(side_effect=[
-            ("resposta claude", "codex", first_handoff, False, False, None),
-            ("resposta codex", "opencode-qwen", second_handoff, False, False, "h1"),
+            ("resposta claude", "codex", first_delegation, False, False, None),
+            ("resposta codex", "opencode-qwen", second_delegation, False, False, "h1"),
             ("resposta qwen", None, None, False, False, "h2"),
             ("síntese final", None, None, False, False, None),
         ])
-        app.dispatch_services.call_agent = Mock(side_effect=["r1", "r2", "r3", "r4"])
+        app.dispatch_services.delegate = Mock(side_effect=["r1", "r2", "r3", "r4"])
 
         QuimeraApp._do_process_chat_message(app, "analisa")
 
-        self.assertEqual(app.dispatch_services.call_agent.call_count, 1)
-        calls = app.dispatch_services.call_agent.call_args_list
+        self.assertEqual(app.dispatch_services.delegate.call_count, 1)
+        calls = app.dispatch_services.delegate.call_args_list
         self.assertEqual([c[0][0] for c in calls], ["claude"])
 
-    def test_handoff_circular_chain_does_not_loop(self):
-        """Tentativa de ciclo em handoff não deve entrar em loop infinito."""
+    def test_delegation_circular_chain_does_not_loop(self):
+        """Tentativa de ciclo em delegation não deve entrar em loop infinito."""
         app = _make_app(active_agents=["claude", "codex", "opencode-qwen"])
         app.parse_routing = Mock(return_value=("claude", "analisa", False))
 
-        first_handoff = {
+        first_delegation = {
             "task": "Revisa parser",
             "context": "Validar regras",
             "expected": "2 bullets",
-            "handoff_id": "h1",
+            "delegation_id": "h1",
             "chain": [],
         }
-        circular_handoff = {
+        circular_delegation = {
             "task": "Volta para claude",
             "context": "Confere etapa anterior",
             "expected": "1 linha",
-            "handoff_id": "h2",
+            "delegation_id": "h2",
             "chain": ["claude", "codex"],
         }
         parsed = iter([
-            ("resposta claude", "codex", first_handoff, False, False, None),
-            ("resposta codex", "claude", circular_handoff, False, False, "h1"),
+            ("resposta claude", "codex", first_delegation, False, False, None),
+            ("resposta codex", "claude", circular_delegation, False, False, "h1"),
             ("síntese", None, None, False, False, None),
         ])
 
@@ -1061,20 +1061,20 @@ class TestSingleAgentPerTurn(unittest.TestCase):
 
         calls = []
 
-        def fake_call_agent(agent, *args, **kwargs):
+        def fake_delegate(agent, *args, **kwargs):
             calls.append((agent, kwargs))
             if len(calls) > 6:
-                raise AssertionError("Loop detectado: call_agent excedeu limite esperado")
+                raise AssertionError("Loop detectado: delegate excedeu limite esperado")
             return f"r{len(calls)}"
 
         app.parse_response = Mock(side_effect=fake_parse_response)
-        app.dispatch_services.call_agent = Mock(side_effect=fake_call_agent)
+        app.dispatch_services.delegate = Mock(side_effect=fake_delegate)
 
         QuimeraApp._do_process_chat_message(app, "analisa")
 
-        self.assertLessEqual(app.dispatch_services.call_agent.call_count, 4)
-        handoff_only_calls = [call for call in calls if call[1].get("handoff_only")]
-        self.assertLessEqual(len(handoff_only_calls), 2)
+        self.assertLessEqual(app.dispatch_services.delegate.call_count, 4)
+        delegation_only_calls = [call for call in calls if call[1].get("delegation_only")]
+        self.assertLessEqual(len(delegation_only_calls), 2)
 
     def test_single_active_agent_works(self):
         """Com apenas um agente ativo, não há tentativa de chamar agente secundário."""
@@ -1084,7 +1084,7 @@ class TestSingleAgentPerTurn(unittest.TestCase):
 
         QuimeraApp._do_process_chat_message(app, "oi")
 
-        self.assertEqual(app.dispatch_services.call_agent.call_count, 1)
+        self.assertEqual(app.dispatch_services.delegate.call_count, 1)
 
     def test_needs_human_input_suspends_turn(self):
         """Quando agente sinaliza NEEDS_INPUT, o turno é suspenso e _pending_input_for é definido."""
@@ -1095,7 +1095,7 @@ class TestSingleAgentPerTurn(unittest.TestCase):
         QuimeraApp._do_process_chat_message(app, "pergunta")
 
         # Apenas o primeiro agente respondeu
-        self.assertEqual(app.dispatch_services.call_agent.call_count, 1)
+        self.assertEqual(app.dispatch_services.delegate.call_count, 1)
         # Turno suspenso: próxima fala do humano vai para claude
         self.assertEqual(app._pending_input_for_val, "claude")
 
@@ -1110,75 +1110,75 @@ class TestSingleAgentPerTurn(unittest.TestCase):
 
         app.show_system_message.assert_called_once_with("Responda para CLAUDE:")
 
-    def test_handoff_without_body_continues_chain(self):
-        """O fluxo não encadeia delegação por route_target/handoff retornado pelo parser."""
+    def test_delegation_without_body_continues_chain(self):
+        """O fluxo não encadeia delegação por route_target/delegation retornado pelo parser."""
         app = _make_app(active_agents=["claude", "codex", "opencode-qwen"])
         app.parse_routing = Mock(return_value=("claude", "analisa", False))
 
-        first_handoff = {
+        first_delegation = {
             "task": "Revisa código",
             "context": "branch main",
             "expected": "lista de issues",
-            "handoff_id": "h1",
+            "delegation_id": "h1",
             "chain": [],
         }
-        second_handoff = {
+        second_delegation = {
             "task": "Executa correções",
             "context": "issues listados",
             "expected": "patch aplicado",
-            "handoff_id": "h2",
+            "delegation_id": "h2",
             "chain": ["claude"],
         }
-        # codex responde com apenas handoff (body=None) — sem texto, só delegação
+        # codex responde com apenas delegation (body=None) — sem texto, só delegação
         app.parse_response = Mock(side_effect=[
-            ("resposta claude", "codex", first_handoff, False, False, None),
-            (None, "opencode-qwen", second_handoff, False, False, "h1"),  # sem body
+            ("resposta claude", "codex", first_delegation, False, False, None),
+            (None, "opencode-qwen", second_delegation, False, False, "h1"),  # sem body
             ("resposta qwen", None, None, False, False, "h2"),
             ("síntese final", None, None, False, False, None),
         ])
-        app.dispatch_services.call_agent = Mock(side_effect=["r1", "r2", "r3", "r4"])
+        app.dispatch_services.delegate = Mock(side_effect=["r1", "r2", "r3", "r4"])
 
         QuimeraApp._do_process_chat_message(app, "analisa")
 
-        calls = app.dispatch_services.call_agent.call_args_list
+        calls = app.dispatch_services.delegate.call_args_list
         agents_called = [c[0][0] for c in calls]
         self.assertEqual(agents_called, ["claude"])
-        self.assertEqual(app.dispatch_services.call_agent.call_count, 1)
+        self.assertEqual(app.dispatch_services.delegate.call_count, 1)
 
-    def test_handoff_to_unknown_agent_is_ignored(self):
-        """Handoff para agente não conectado deve ser ignorado silenciosamente."""
+    def test_delegation_to_unknown_agent_is_ignored(self):
+        """Delegation para agente não conectado deve ser ignorado silenciosamente."""
         app = _make_app(active_agents=["claude", "codex"])
         app.parse_routing = Mock(return_value=("claude", "mensagem", False))
 
-        handoff = {
+        delegation = {
             "task": "alguma tarefa",
             "context": "",
             "expected": "",
-            "handoff_id": "hx",
+            "delegation_id": "hx",
             "chain": [],
         }
-        # claude responde com handoff para agente fora de active_agents
-        app.parse_response = Mock(return_value=("resposta claude", "agente", handoff, False, False, None))
+        # claude responde com delegation para agente fora de active_agents
+        app.parse_response = Mock(return_value=("resposta claude", "agente", delegation, False, False, None))
 
         QuimeraApp._do_process_chat_message(app, "mensagem")
 
-        # Apenas claude deve ter sido chamado; handoff para 'agente' ignorado
-        self.assertEqual(app.dispatch_services.call_agent.call_count, 1)
-        agents_called = [c[0][0] for c in app.dispatch_services.call_agent.call_args_list]
+        # Apenas claude deve ter sido chamado; delegation para 'agente' ignorado
+        self.assertEqual(app.dispatch_services.delegate.call_count, 1)
+        agents_called = [c[0][0] for c in app.dispatch_services.delegate.call_args_list]
         self.assertEqual(agents_called, ["claude"])
 
-    def test_sequential_handoffs_accumulate_all_delegate_responses_for_synthesis(self):
+    def test_sequential_delegations_accumulate_all_delegate_responses_for_synthesis(self):
         """Resposta vazia no primário cai em failover padrão sem delegação por parser."""
         app = _make_app(active_agents=["claude", "codex", "opencode-qwen"])
         app.parse_routing = Mock(return_value=("claude", "analisa", False))
 
-        first_handoff = {
+        first_delegation = {
             "task": "Revisar implementação",
             "context": "contexto",
             "expected": "resumo",
-            "handoff_id": "h1",
+            "delegation_id": "h1",
             "chain": [],
-            "_pending_handoffs": [
+            "_pending_delegations": [
                 {
                     "route": "opencode-qwen",
                     "content": "Validar edge cases",
@@ -1186,21 +1186,21 @@ class TestSingleAgentPerTurn(unittest.TestCase):
                         "context": "contexto 2",
                         "expected": "resumo 2",
                     },
-                    "handoff_id": "h2",
+                    "delegation_id": "h2",
                 }
             ],
         }
         app.parse_response = Mock(side_effect=[
-            (None, "codex", first_handoff, False, False, None),
+            (None, "codex", first_delegation, False, False, None),
             ("resposta codex", None, None, False, False, "h1"),
             ("resposta qwen", None, None, False, False, "h2"),
             ("síntese final", None, None, False, False, None),
         ])
-        app.dispatch_services.call_agent = Mock(side_effect=["r1", "r2", "r3", "r4"])
+        app.dispatch_services.delegate = Mock(side_effect=["r1", "r2", "r3", "r4"])
 
         QuimeraApp._do_process_chat_message(app, "analisa")
 
-        calls = app.dispatch_services.call_agent.call_args_list
+        calls = app.dispatch_services.delegate.call_args_list
         self.assertEqual([c[0][0] for c in calls], ["claude", "codex"])
 
     def test_consecutive_turns_route_to_different_agents(self):
@@ -1217,8 +1217,8 @@ class TestSingleAgentPerTurn(unittest.TestCase):
         QuimeraApp._do_process_chat_message(app, "primeira fala")
         QuimeraApp._do_process_chat_message(app, "segunda fala")
 
-        self.assertEqual(app.dispatch_services.call_agent.call_count, 2)
-        agents_called = [c[0][0] for c in app.dispatch_services.call_agent.call_args_list]
+        self.assertEqual(app.dispatch_services.delegate.call_count, 2)
+        agents_called = [c[0][0] for c in app.dispatch_services.delegate.call_args_list]
         self.assertEqual(agents_called, ["claude", "codex"])
 
 

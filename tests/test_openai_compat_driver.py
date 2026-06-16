@@ -103,7 +103,7 @@ def test_schema_names_match_registered_tools():
     expected = {
         "list_files", "read_file", "write_file", "apply_patch", "grep_search", "run_shell",
         "exec_command", "write_stdin", "close_command_session", "list_tasks", "list_jobs",
-        "get_job", "remove_file", "web_search", "web_fetch", "call_agent",
+        "get_job", "remove_file", "web_search", "web_fetch", "delegate",
         "todo_write", "todo_list", "list_agents",
     }
     actual = {s["function"]["name"] for s in TOOL_SCHEMAS}
@@ -141,7 +141,7 @@ def test_resolve_tool_schemas_hides_blocked_tools_from_active_mode():
     mock_executor = MagicMock()
     mock_executor.config = SimpleNamespace(db_path="/tmp/tasks.db")
     mock_executor.policy = SimpleNamespace(blocked_tools=["run_shell", "exec_command", "apply_patch"])
-    mock_executor.is_call_agent_available.return_value = True
+    mock_executor.is_delegate_available.return_value = True
     mock_executor.registry.names.return_value = [s["function"]["name"] for s in TOOL_SCHEMAS]
 
     actual = {s["function"]["name"] for s in resolve_tool_schemas(mock_executor)}
@@ -152,16 +152,16 @@ def test_resolve_tool_schemas_hides_blocked_tools_from_active_mode():
     assert "list_files" in actual
 
 
-def test_resolve_tool_schemas_hides_call_agent_when_not_bound():
+def test_resolve_tool_schemas_hides_delegate_when_not_bound():
     """Verifica que Test resolve tool schemas hides call agent when not bound."""
     mock_executor = MagicMock()
     mock_executor.config = SimpleNamespace(db_path="/tmp/tasks.db")
     mock_executor.policy = SimpleNamespace(blocked_tools=[])
-    mock_executor.is_call_agent_available.return_value = False
+    mock_executor.is_delegate_available.return_value = False
     mock_executor.registry.names.return_value = [s["function"]["name"] for s in TOOL_SCHEMAS]
 
     actual = {s["function"]["name"] for s in resolve_tool_schemas(mock_executor)}
-    assert "call_agent" not in actual
+    assert "delegate" not in actual
     assert "list_agents" not in actual
 
 
@@ -611,7 +611,7 @@ def test_run_tools_system_prompt_guides_tool_usage():
         "remove_file",
         "web_search",
         "web_fetch",
-        "call_agent",
+        "delegate",
         "list_agents",
         "todo_write",
         "todo_list",

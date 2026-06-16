@@ -10,12 +10,12 @@ from ..runtime.models import TaskRecord
 
 
 class _DispatchServicesProto(Protocol):
-    def call_agent(
+    def delegate(
         self,
-        agent_name: str,
+        target_agent: str,
         *,
-        handoff: str | dict[str, object],
-        handoff_only: bool,
+        delegation: str | dict[str, object],
+        delegation_only: bool,
         primary: bool,
         silent: bool,
         persist_history: bool,
@@ -91,8 +91,8 @@ class TaskRunner:
                 self.repository.fail_task(task_id, reason="empty body")
                 return False
 
-            handoff = {
-                "handoff_id": f"task-{task_id}",
+            delegation = {
+                "delegation_id": f"task-{task_id}",
                 "task": description or f"Executar task {task_id}",
                 "context": body,
                 "expected": (
@@ -110,10 +110,10 @@ class TaskRunner:
 
             self.before_agent_call(agent_name)
             try:
-                response = self.dispatch_services.call_agent(
+                response = self.dispatch_services.delegate(
                     agent_name,
-                    handoff=handoff,
-                    handoff_only=True,
+                    delegation=delegation,
+                    delegation_only=True,
                     primary=False,
                     persist_history=False,
                     show_output=False,

@@ -197,9 +197,7 @@ class PromptTemplate:
         self._text: str | None = None
 
     def _load(self) -> str:
-        if self._text is None:
-            self._text = self._path.read_text(encoding="utf-8").strip()
-        return self._text
+        return self._path.read_text(encoding="utf-8").strip()
 
     @staticmethod
     def _safe_format(template: str, **context) -> str:

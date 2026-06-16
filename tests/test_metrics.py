@@ -15,7 +15,7 @@ class TestAgentBehaviorMetrics(unittest.TestCase):
         self.assertEqual(metrics.agent_name, "test")
         self.assertEqual(metrics.responses_total, 0)
         self.assertEqual(metrics.avg_latency_seconds, 0.0)
-        self.assertEqual(metrics.invalid_handoff_rate, 0.0)
+        self.assertEqual(metrics.invalid_delegation_rate, 0.0)
         self.assertEqual(metrics.next_step_clarity_rate, 0.0)
         self.assertEqual(metrics.empty_response_rate, 0.0)
 
@@ -43,21 +43,21 @@ class TestAgentBehaviorMetrics(unittest.TestCase):
         self.assertAlmostEqual(metrics.next_step_clarity_rate, 2 / 3, places=2)
         self.assertAlmostEqual(metrics.empty_response_rate, 1 / 3, places=2)
 
-    def test_record_handoff(self):
-        """Verifica registro de handoffs."""
+    def test_record_delegation(self):
+        """Verifica registro de delegations."""
         metrics = AgentBehaviorMetrics(agent_name="test")
 
-        metrics.record_handoff_sent(is_invalid=False)
-        metrics.record_handoff_sent(is_invalid=True)
-        metrics.record_handoff_sent(is_invalid=False)
-        metrics.record_handoff_received(is_circular=False)
-        metrics.record_handoff_received(is_circular=True)
+        metrics.record_delegation_sent(is_invalid=False)
+        metrics.record_delegation_sent(is_invalid=True)
+        metrics.record_delegation_sent(is_invalid=False)
+        metrics.record_delegation_received(is_circular=False)
+        metrics.record_delegation_received(is_circular=True)
 
-        self.assertEqual(metrics.handoffs_sent, 3)
-        self.assertEqual(metrics.handoffs_invalid, 1)
-        self.assertEqual(metrics.invalid_handoff_rate, 1 / 3)
-        self.assertEqual(metrics.handoffs_received, 2)
-        self.assertEqual(metrics.handoffs_circular_detected, 1)
+        self.assertEqual(metrics.delegations_sent, 3)
+        self.assertEqual(metrics.delegations_invalid, 1)
+        self.assertEqual(metrics.invalid_delegation_rate, 1 / 3)
+        self.assertEqual(metrics.delegations_received, 2)
+        self.assertEqual(metrics.delegations_circular_detected, 1)
 
     def test_record_synthesis(self):
         """Verifica registro de sínteses."""
@@ -116,13 +116,13 @@ class TestBehaviorMetricsTracker(unittest.TestCase):
 
         tracker.record_response("claude", 2.0, has_next_step=True)
         tracker.record_response("claude", 3.0, is_empty=True)
-        tracker.record_handoff_sent("claude", is_invalid=True)
+        tracker.record_delegation_sent("claude", is_invalid=True)
 
         summary = tracker.get_agent_summary("claude")
 
         self.assertEqual(summary["agent"], "claude")
         self.assertEqual(summary["responses_total"], 2)
-        self.assertEqual(summary["invalid_handoff_rate"], 1.0)
+        self.assertEqual(summary["invalid_delegation_rate"], 1.0)
 
     def test_get_agent_summary_includes_tool_metrics(self):
         """Resumo deve incluir métricas explícitas de ferramenta."""
@@ -165,17 +165,17 @@ class TestBehaviorMetricsTracker(unittest.TestCase):
         self.assertEqual(feedback, "")
 
     def test_generate_feedback_high_invalid_rate(self):
-        """Verifica feedback para taxa alta de handoffs inválidos."""
+        """Verifica feedback para taxa alta de delegations inválidos."""
         tracker = BehaviorMetricsTracker()
 
-        # 5 respostas com 3 handoffs inválidos de 5 (60%)
+        # 5 respostas com 3 delegations inválidos de 5 (60%)
         for i in range(5):
             tracker.record_response("codex", 1.0, has_next_step=True)
-            tracker.record_handoff_sent("codex", is_invalid=(i < 3))
+            tracker.record_delegation_sent("codex", is_invalid=(i < 3))
 
         feedback = tracker.generate_feedback("codex")
 
-        self.assertIn("HANDOFF INVÁLIDO", feedback)
+        self.assertIn("DELEGAÇÃO INVÁLIDA", feedback)
         self.assertIn("60%", feedback)
 
     def test_generate_feedback_low_next_step_rate(self):
@@ -195,10 +195,10 @@ class TestBehaviorMetricsTracker(unittest.TestCase):
         """Verifica feedback para delegações circulares."""
         tracker = BehaviorMetricsTracker()
 
-        # Simular respostas e handoffs circulares
+        # Simular respostas e delegações circulares
         for _ in range(4):
             tracker.record_response("codex", 1.0, has_next_step=True)
-            tracker.record_handoff_received("codex", is_circular=True)
+            tracker.record_delegation_received("codex", is_circular=True)
 
         feedback = tracker.generate_feedback("codex")
 
@@ -217,7 +217,7 @@ class TestBehaviorMetricsTracker(unittest.TestCase):
             # 1. Cria tracker, grava dados e salva
             tracker1 = BehaviorMetricsTracker(storage_path=tmp_path)
             tracker1.record_response("claude", 2.0, has_next_step=True)
-            tracker1.record_handoff_sent("claude", is_invalid=False)
+            tracker1.record_delegation_sent("claude", is_invalid=False)
             tracker1.record_synthesis("claude", needed_correction=True)
 
             # 2. Cria novo tracker com o mesmo path e verifica se carregou
@@ -225,7 +225,7 @@ class TestBehaviorMetricsTracker(unittest.TestCase):
             summary = tracker2.get_agent_summary("claude")
 
             self.assertEqual(summary["responses_total"], 1)
-            self.assertEqual(summary["handoffs_sent"], 1)
+            self.assertEqual(summary["delegations_sent"], 1)
             self.assertEqual(summary["synthesis_corrections"], 1)
             self.assertEqual(summary["agent"], "claude")
 
@@ -286,9 +286,9 @@ class TestBehaviorMetricsTracker(unittest.TestCase):
         # Com dados e alertas
         for _ in range(10):
             metrics.record_response(40.0, is_empty=True)  # latency > 30, empty > 0.2
-        metrics.record_handoff_sent(is_invalid=True)
-        metrics.record_handoff_sent(is_invalid=True)  # rate > 0.3
-        metrics.record_handoff_received(is_circular=True)
+        metrics.record_delegation_sent(is_invalid=True)
+        metrics.record_delegation_sent(is_invalid=True)  # rate > 0.3
+        metrics.record_delegation_received(is_circular=True)
         for _ in range(4):
             metrics.record_synthesis(needed_correction=True)  # count >= 3, corrections > 0.5
 
@@ -296,7 +296,7 @@ class TestBehaviorMetricsTracker(unittest.TestCase):
         self.assertIn("HISTÓRICO", summary)
         self.assertIn("Atenção:", summary)
         self.assertIn("latência alta", summary)
-        self.assertIn("handoffs inválidos", summary)
+        self.assertIn("delegações inválidas", summary)
         self.assertIn("respostas vazias", summary)  # line 227
         self.assertIn("delegações circulares", summary)
         self.assertIn("sínteses com correção", summary)  # line 231
@@ -334,10 +334,10 @@ class TestBehaviorMetricsTracker(unittest.TestCase):
         for _ in range(4):
             metrics.record_synthesis(needed_correction=True)
 
-        # 4. Baixa taxa de sucesso em handoffs (line 321)
-        # handoffs_sent > 3
+        # 4. Baixa taxa de sucesso em delegations (line 321)
+        # delegations_sent > 3
         for _ in range(5):
-            metrics.record_handoff_sent(is_invalid=True)
+            metrics.record_delegation_sent(is_invalid=True)
         # success = 0/5 = 0.0 < 0.7
 
         feedback = tracker.generate_feedback("test")

@@ -1,4 +1,4 @@
-"""Componentes de `quimera.runtime.tools.handoff`."""
+"""Componentes de `quimera.runtime.tools.delegate`."""
 from __future__ import annotations
 
 import json
@@ -21,16 +21,16 @@ from ..approval_broker import TrustedToolExecutionContext
 logger = logging.getLogger(__name__)
 
 
-class _CallAgentFnProto(Protocol):
+class _DelegateFnProto(Protocol):
     """Protocolo para a função de despacho de tarefas entre agentes."""
 
     def __call__(
         self,
         agent: str,
         *,
-        handoff: dict[str, object] | None = None,
-        handoff_only: bool = True,
-        protocol_mode: str = "handoff",
+        delegation: dict[str, object] | None = None,
+        delegation_only: bool = True,
+        protocol_mode: str = "delegation",
         primary: bool = False,
         silent: bool = True,
         show_output: bool = False,
@@ -41,22 +41,22 @@ class _CallAgentFnProto(Protocol):
     ) -> str | None: ...
 
 
-class HandoffTools:
-    """Implementa `HandoffTools` — delegação entre agentes via MCP."""
-    _CALL_AGENT_MAX_TASK_CHARS = 1_200
-    _CALL_AGENT_MAX_CONTEXT_CHARS = 4_000
+class DelegateTools:
+    """Implementa `DelegateTools` — delegação entre agentes via MCP."""
+    _DELEGATE_MAX_REQUEST_CHARS = 1_200
+    _DELEGATE_MAX_CONTEXT_CHARS = 4_000
 
     def __init__(self, config: ToolRuntimeConfig) -> None:
-        """Inicializa uma instância de HandoffTools."""
+        """Inicializa uma instância de DelegateTools."""
         self.config = config
-        self._call_agent_fn: _CallAgentFnProto | None = None
+        self._delegate_fn: _DelegateFnProto | None = None
         self._active_agents_provider = None
         self._progress_callback: Callable[[str], None] | None = None
         self._cleanup_callback: Callable[[str], None] | None = None
 
-    def set_call_agent_fn(self, fn: _CallAgentFnProto) -> None:
+    def set_delegate_fn(self, fn: _DelegateFnProto) -> None:
         """Injeta callable para despachar tarefas a outro agente."""
-        self._call_agent_fn = fn
+        self._delegate_fn = fn
 
     def set_active_agents_provider(self, fn) -> None:
         """Injeta provider que retorna agentes ativos no momento da delegação."""
@@ -70,9 +70,9 @@ class HandoffTools:
         """Injeta callback para limpeza do estado de render após cada step."""
         self._cleanup_callback = fn
 
-    def is_call_agent_available(self) -> bool:
-        """Indica se a tool call_agent está operável no contexto atual."""
-        return callable(self._call_agent_fn)
+    def is_delegate_available(self) -> bool:
+        """Indica se a tool delegate está operável no contexto atual."""
+        return callable(self._delegate_fn)
 
     @staticmethod
     def _normalize_agent_identity(agent_name: str | None) -> str:
@@ -141,12 +141,12 @@ class HandoffTools:
 
     # ── async HTTP path ──────────────────────────────────────────────────
 
-    def _call_agent_http_async(
+    def _delegate_http_async(
         self,
         call: ToolCall,
         steps: list[dict],
     ) -> ToolResult:
-        """Executa call_agent via HTTP MCP.
+        """Executa delegate via HTTP MCP.
 
         Com SSE (canal assíncrono): executa inline na thread pool — o resultado
         real chega ao cliente via SSE quando a thread pool completar.
@@ -164,7 +164,7 @@ class HandoffTools:
             # por _flush_pending quando a thread pool completar.
             return self._execute_steps_inner(
                 steps,
-                self._call_agent_fn,
+                self._delegate_fn,
                 self._progress_callback,
                 self._resolve_active_agents,
                 self._normalize_agent_identity,
@@ -177,11 +177,11 @@ class HandoffTools:
             return ToolResult(
                 ok=False,
                 tool_name=call.name,
-                error="db_path not configured — cannot run call_agent async via HTTP MCP",
+                error="db_path not configured — cannot run delegate async via HTTP MCP",
             )
 
         step_one = steps[0]
-        job_desc = f"call_agent → {step_one['agent_name']}: {step_one['task'][:80]}"
+        job_desc = f"delegate → {step_one['target_agent']}: {step_one['request'][:80]}"
         try:
             job_id = add_job(job_desc, created_by="mcp_http", db_path=db_path)
         except Exception as exc:
@@ -191,10 +191,10 @@ class HandoffTools:
         try:
             task_id = create_task(
                 job_id,
-                step_one["task"][:120],
+                step_one["request"][:120],
                 body=body,
-                assigned_to=step_one["agent_name"],
-                origin="mcp_http_call_agent",
+                assigned_to=step_one["target_agent"],
+                origin="mcp_http_delegate",
                 status="in_progress",
                 db_path=db_path,
             )
@@ -203,7 +203,7 @@ class HandoffTools:
         except Exception as exc:
             return ToolResult(ok=False, tool_name=call.name, error=f"Failed to create task: {exc}")
 
-        _fn = self._call_agent_fn
+        _fn = self._delegate_fn
         _progress_cb = self._progress_callback
         _resolve_active = self._resolve_active_agents
         _normalize = self._normalize_agent_identity
@@ -222,9 +222,9 @@ class HandoffTools:
                     fail_task(task_id, reason=result.error, db_path=db_path)
                     update_job_status(job_id, "failed", db_path=db_path)
             except Exception as exc:
-                logger.warning("call_agent async: failed to update task/job %d: %s", task_id, exc)
+                logger.warning("delegate async: failed to update task/job %d: %s", task_id, exc)
 
-        t = threading.Thread(target=_run, daemon=True, name=f"call-agent-{task_id}")
+        t = threading.Thread(target=_run, daemon=True, name=f"delegate-{task_id}")
         t.start()
 
         return ToolResult(
@@ -252,21 +252,21 @@ class HandoffTools:
     @staticmethod
     def _execute_steps_inner(
         steps: list[dict],
-        call_agent_fn: _CallAgentFnProto,
+        delegate_fn: _DelegateFnProto,
         progress_callback: Callable[[str], None] | None,
         resolve_active_agents_fn: Callable[[], set[str]],
         normalize_agent_fn: Callable[[str | None], str],
         cleanup_callback: Callable[[str], None] | None = None,
     ) -> ToolResult:
         """Loop de execução dos steps — reusado síncrono e assíncrono."""
-        tool_name = "call_agent"
+        tool_name = "delegate"
         try:
             step_outputs: list[str] = []
             for step in steps:
                 active_agents = resolve_active_agents_fn()
                 if active_agents:
                     invalid_targets: list[str] = []
-                    targets = [step["agent_name"], *step["fallback_agents"]]
+                    targets = [step["target_agent"], *step["fallback_agents"]]
                     for target in targets:
                         normalized_target = normalize_agent_fn(target)
                         if normalized_target and normalized_target not in active_agents:
@@ -280,22 +280,23 @@ class HandoffTools:
                             error=f"Agents not active in current pool: {invalid_label}. Active agents: {active_label}",
                         )
 
-                attempt_targets = [step["agent_name"], *step["fallback_agents"]]
+                attempt_targets = [step["target_agent"], *step["fallback_agents"]]
                 step_result = None
                 last_error = None
                 selected_agent = None
+                normalized_target_agent = ""
                 for target_agent in attempt_targets:
                     normalized_target_agent = normalize_agent_fn(target_agent)
-                    handoff = {
-                        "task": step["task"],
+                    delegation = {
+                        "task": step["request"],
                         "context": step["context"],
                     }
                     try:
-                        result = call_agent_fn(
+                        result = delegate_fn(
                             normalized_target_agent,
-                            handoff=handoff,
-                            handoff_only=True,
-                            protocol_mode="handoff",
+                            delegation=delegation,
+                            delegation_only=True,
+                            protocol_mode="delegation",
                             primary=False,
                             silent=False,
                             show_output=False,
@@ -307,14 +308,14 @@ class HandoffTools:
                     except Exception as dispatch_error:
                         last_error = str(dispatch_error)
                         logger.warning(
-                            "call_agent: dispatch to '%s' failed: %s",
+                            "delegate: dispatch to '%s' failed: %s",
                             target_agent, last_error,
                         )
                         continue
                     if result is None:
                         last_error = f"Agent '{target_agent}' returned no response"
                         logger.warning(
-                            "call_agent: dispatch to '%s' returned no response",
+                            "delegate: dispatch to '%s' returned no response",
                             target_agent,
                         )
                         continue
@@ -364,33 +365,33 @@ class HandoffTools:
                 error=str(exc),
             )
 
-    def call_agent(self, call: ToolCall) -> ToolResult:
+    def delegate(self, call: ToolCall) -> ToolResult:
         """Dispatch a task to another Quimera agent via MCP tool."""
-        if not self.is_call_agent_available():
+        if not self.is_delegate_available():
             return ToolResult(
                 ok=False,
                 tool_name=call.name,
                 error="Agent dispatch not available in this context",
             )
         arguments = call.arguments if isinstance(call.arguments, dict) else {}
-        agent_name_raw = arguments.get("agent_name")
-        task_raw = arguments.get("task")
+        target_agent_raw = arguments.get("target_agent")
+        request_raw = arguments.get("request")
         context_raw = arguments.get("context")
         fallback_agents_raw = arguments.get("fallback_agents")
-        handoffs_raw = arguments.get("handoffs")
+        steps_raw = arguments.get("steps")
 
         calling_agent = self._get_calling_agent(call)
 
-        agent_name = str(agent_name_raw).strip() if isinstance(agent_name_raw, str) else ""
-        task = str(task_raw).strip() if isinstance(task_raw, str) else ""
-        if len(task) > self._CALL_AGENT_MAX_TASK_CHARS:
-            task = task[: self._CALL_AGENT_MAX_TASK_CHARS]
+        target_agent = str(target_agent_raw).strip() if isinstance(target_agent_raw, str) else ""
+        request = str(request_raw).strip() if isinstance(request_raw, str) else ""
+        if len(request) > self._DELEGATE_MAX_REQUEST_CHARS:
+            request = request[: self._DELEGATE_MAX_REQUEST_CHARS]
 
-        if calling_agent and self._normalize_agent_identity(agent_name) == calling_agent:
+        if calling_agent and self._normalize_agent_identity(target_agent) == calling_agent:
             return ToolResult(
                 ok=False,
                 tool_name=call.name,
-                error=f"Agent '{agent_name}' cannot delegate to itself via call_agent",
+                error=f"Agent '{target_agent}' cannot delegate to itself",
             )
 
         context = ""
@@ -402,8 +403,8 @@ class HandoffTools:
                     error="'context' must be a string when provided",
                 )
             context = context_raw.strip()
-            if len(context) > self._CALL_AGENT_MAX_CONTEXT_CHARS:
-                context = context[: self._CALL_AGENT_MAX_CONTEXT_CHARS]
+            if len(context) > self._DELEGATE_MAX_CONTEXT_CHARS:
+                context = context[: self._DELEGATE_MAX_CONTEXT_CHARS]
 
         fallback_agents: list[str] = []
         if fallback_agents_raw is not None:
@@ -424,37 +425,37 @@ class HandoffTools:
                     continue
                 fallback_agents.append(item.strip())
 
-        if not agent_name or not task:
+        if not target_agent or not request:
             return ToolResult(
                 ok=False,
                 tool_name=call.name,
-                error="Both 'agent_name' and 'task' are required",
+                error="Both 'target_agent' and 'request' are required",
             )
         steps: list[dict] = [
             {
-                "agent_name": agent_name,
-                "task": task,
+                "target_agent": target_agent,
+                "request": request,
                 "context": context,
                 "fallback_agents": fallback_agents,
             }
         ]
 
-        if handoffs_raw is not None:
-            if not isinstance(handoffs_raw, list):
+        if steps_raw is not None:
+            if not isinstance(steps_raw, list):
                 return ToolResult(
                     ok=False,
                     tool_name=call.name,
-                    error="'handoffs' must be a list of objects when provided",
+                    error="'steps' must be a list of objects when provided",
                 )
-            for idx, item in enumerate(handoffs_raw):
+            for idx, item in enumerate(steps_raw):
                 if not isinstance(item, dict):
                     return ToolResult(
                         ok=False,
                         tool_name=call.name,
-                        error=f"handoffs[{idx}] must be an object",
+                        error=f"steps[{idx}] must be an object",
                     )
-                extra_agent = item.get("agent_name")
-                extra_task = item.get("task")
+                extra_agent = item.get("target_agent")
+                extra_task = item.get("request")
                 extra_context = item.get("context")
                 extra_fallback = item.get("fallback_agents", [])
 
@@ -462,31 +463,31 @@ class HandoffTools:
                     return ToolResult(
                         ok=False,
                         tool_name=call.name,
-                        error=f"handoffs[{idx}].agent_name must be a non-empty string",
+                        error=f"steps[{idx}].target_agent must be a non-empty string",
                     )
                 if calling_agent and self._normalize_agent_identity(extra_agent) == calling_agent:
                     return ToolResult(
                         ok=False,
                         tool_name=call.name,
-                        error=f"handoffs[{idx}]: agent '{extra_agent}' cannot delegate to itself",
+                        error=f"steps[{idx}]: agent '{extra_agent}' cannot delegate to itself",
                     )
                 if not isinstance(extra_task, str) or not extra_task.strip():
                     return ToolResult(
                         ok=False,
                         tool_name=call.name,
-                        error=f"handoffs[{idx}].task must be a non-empty string",
+                        error=f"steps[{idx}].request must be a non-empty string",
                     )
                 if extra_context is not None and not isinstance(extra_context, str):
                     return ToolResult(
                         ok=False,
                         tool_name=call.name,
-                        error=f"handoffs[{idx}].context must be a string when provided",
+                        error=f"steps[{idx}].context must be a string when provided",
                     )
                 if not isinstance(extra_fallback, list):
                     return ToolResult(
                         ok=False,
                         tool_name=call.name,
-                        error=f"handoffs[{idx}].fallback_agents must be a list",
+                        error=f"steps[{idx}].fallback_agents must be a list",
                     )
                 normalized_extra_fallback: list[str] = []
                 for fb_idx, fb in enumerate(extra_fallback):
@@ -495,7 +496,7 @@ class HandoffTools:
                             ok=False,
                             tool_name=call.name,
                             error=(
-                                f"handoffs[{idx}].fallback_agents[{fb_idx}] must be a non-empty string"
+                                f"steps[{idx}].fallback_agents[{fb_idx}] must be a non-empty string"
                             ),
                         )
                     if calling_agent and self._normalize_agent_identity(fb) == calling_agent:
@@ -503,15 +504,15 @@ class HandoffTools:
                     normalized_extra_fallback.append(fb.strip())
 
                 normalized_context = extra_context.strip() if isinstance(extra_context, str) else ""
-                if len(normalized_context) > self._CALL_AGENT_MAX_CONTEXT_CHARS:
-                    normalized_context = normalized_context[: self._CALL_AGENT_MAX_CONTEXT_CHARS]
+                if len(normalized_context) > self._DELEGATE_MAX_CONTEXT_CHARS:
+                    normalized_context = normalized_context[: self._DELEGATE_MAX_CONTEXT_CHARS]
                 normalized_task = extra_task.strip()
-                if len(normalized_task) > self._CALL_AGENT_MAX_TASK_CHARS:
-                    normalized_task = normalized_task[: self._CALL_AGENT_MAX_TASK_CHARS]
+                if len(normalized_task) > self._DELEGATE_MAX_REQUEST_CHARS:
+                    normalized_task = normalized_task[: self._DELEGATE_MAX_REQUEST_CHARS]
                 steps.append(
                     {
-                        "agent_name": extra_agent.strip(),
-                        "task": normalized_task,
+                        "target_agent": extra_agent.strip(),
+                        "request": normalized_task,
                         "context": normalized_context,
                         "fallback_agents": normalized_extra_fallback,
                     }
@@ -521,12 +522,12 @@ class HandoffTools:
         transport = self._get_transport(call)
 
         if transport == "http_mcp":
-            return self._call_agent_http_async(call, steps)
+            return self._delegate_http_async(call, steps)
 
         # ── synchronous path (stdio MCP, native, etc.) ──
         return self._execute_steps_inner(
             steps,
-            self._call_agent_fn,
+            self._delegate_fn,
             self._progress_callback,
             self._resolve_active_agents,
             self._normalize_agent_identity,

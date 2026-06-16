@@ -48,7 +48,7 @@ class AppDispatchServices:
         record_success=None,
         get_agent_client=None,
         get_tool_executor=None,
-        get_call_agent_fn_override=None,
+        get_delegate_fn_override=None,
         # compat: aceita lambdas individuais quando session_state não é fornecido
         get_history=None,
         get_shared_state=None,
@@ -92,7 +92,7 @@ class AppDispatchServices:
         self._record_success = record_success
         self._get_agent_client_fn = get_agent_client
         self._get_tool_executor_fn = get_tool_executor
-        self._get_call_agent_fn_override = get_call_agent_fn_override
+        self._get_delegate_fn_override = get_delegate_fn_override
         self._gateway = None
         self._agent_call_service = None
 
@@ -142,7 +142,7 @@ class AppDispatchServices:
             get_shared_state_lock=lambda: getattr(app, '_shared_state_lock', None),
             get_agent_client=lambda: getattr(app, 'agent_client', None),
             get_tool_executor=lambda: getattr(app, 'tool_executor', None),
-            get_call_agent_fn_override=lambda: getattr(app, '_call_agent', None),
+            get_delegate_fn_override=lambda: getattr(app, '_delegate', None),
             **kwargs,
         )
 
@@ -216,12 +216,12 @@ class AppDispatchServices:
             if not ss:
                 return
             try:
-                ss["handoffs_sent"] += 1
+                ss["delegations_sent"] += 1
                 ss["total_latency"] += elapsed
                 if success:
-                    ss["handoffs_succeeded"] += 1
+                    ss["delegations_succeeded"] += 1
                 else:
-                    ss["handoffs_failed"] += 1
+                    ss["delegations_failed"] += 1
             except KeyError:
                 pass
             if self._record_session_metric:
@@ -357,7 +357,7 @@ class AppDispatchServices:
         """
         return response
 
-    def call_agent(self, agent, **options):
+    def delegate(self, agent, **options):
         """Executa despacho com retry e finalização padrão da resposta."""
         dispatch_options = dict(options)
         max_retries_override = dispatch_options.pop("max_retries", None)
@@ -366,11 +366,11 @@ class AppDispatchServices:
         show_output = dispatch_options.pop("show_output", True)
         dispatch_options.pop("quiet", False)
         progress_callback = dispatch_options.pop("progress_callback", None)
-        handoff = dispatch_options.get("handoff")
-        handoff_id = handoff.get("handoff_id") if isinstance(handoff, dict) else None
+        delegation = dispatch_options.get("delegation")
+        delegation_id = delegation.get("delegation_id") if isinstance(delegation, dict) else None
         logger.debug(
-            "[DISPATCH] sending to agent=%s, handoff_only=%s, handoff_id=%s",
-            agent, dispatch_options.get("handoff_only", False), handoff_id,
+            "[DISPATCH] sending to agent=%s, delegation_only=%s, delegation_id=%s",
+            agent, dispatch_options.get("delegation_only", False), delegation_id,
         )
         agent_client = self._get_agent_client()
         if agent_client is not None and hasattr(agent_client, "execution_mode"):
@@ -378,7 +378,7 @@ class AppDispatchServices:
         service = self._get_agent_call_service()
 
         def _call_fn(a):
-            return self.call_agent_low_level(
+            return self.delegate_low_level(
                 a,
                 silent=silent,
                 show_output=show_output,
@@ -403,14 +403,14 @@ class AppDispatchServices:
             max_retries=max_retries_override,
         )
 
-    def call_agent_low_level(
+    def delegate_low_level(
             self,
             agent,
             is_first_speaker=False,
-            handoff=None,
+            delegation=None,
             primary=True,
             protocol_mode="standard",
-            handoff_only=False,
+            delegation_only=False,
             silent=False,
             show_output=True,
             from_agent=None,
@@ -423,10 +423,10 @@ class AppDispatchServices:
         result = self._get_gateway().call(
             agent,
             is_first_speaker=is_first_speaker,
-            handoff=handoff,
+            delegation=delegation,
             primary=primary,
             protocol_mode=protocol_mode,
-            handoff_only=handoff_only,
+            delegation_only=delegation_only,
             silent=silent,
             show_output=show_output,
             from_agent=from_agent,

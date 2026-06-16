@@ -31,33 +31,33 @@ Esta é uma revisão isolada de task, não uma conversa normal.
 </task_review_rules>
 
 <task_review title="Material para validação">
-<!-- IF:handoff_id -->
-HANDOFF_ID:
-{handoff_id}
-<!-- ENDIF:handoff_id -->
+<!-- IF:delegation_id -->
+DELEGATION_ID:
+{delegation_id}
+<!-- ENDIF:delegation_id -->
 
-<!-- IF:handoff_task -->
+<!-- IF:delegation_request -->
 TASK:
-{handoff_task}
-<!-- ENDIF:handoff_task -->
+{delegation_request}
+<!-- ENDIF:delegation_request -->
 
-<!-- IF:handoff_context -->
+<!-- IF:delegation_context -->
 CONTEXTO DE REVIEW:
-{handoff_context}
-<!-- ENDIF:handoff_context -->
+{delegation_context}
+<!-- ENDIF:delegation_context -->
 
-<!-- IF:handoff_expected -->
+<!-- IF:delegation_expected -->
 VEREDITO ESPERADO:
-{handoff_expected}
-<!-- ENDIF:handoff_expected -->
+{delegation_expected}
+<!-- ENDIF:delegation_expected -->
 
-<!-- IF:handoff_priority -->
+<!-- IF:delegation_priority -->
 PRIORIDADE:
-{handoff_priority}
-<!-- ENDIF:handoff_priority -->
+{delegation_priority}
+<!-- ENDIF:delegation_priority -->
 
-<!-- IF:handoff_chain -->
+<!-- IF:delegation_chain -->
 CHAIN:
-{handoff_chain}
-<!-- ENDIF:handoff_chain -->
+{delegation_chain}
+<!-- ENDIF:delegation_chain -->
 </task_review>

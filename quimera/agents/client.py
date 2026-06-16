@@ -943,7 +943,7 @@ class AgentClient:
                 ("session_state", metrics.get("session_state_chars", 0)),
                 ("persistent", metrics.get("persistent_chars", 0)),
                 ("history", metrics.get("history_chars", 0)),
-                ("handoff", metrics.get("handoff_chars", 0)),
+                ("delegation", metrics.get("delegation_chars", 0)),
             ),
             key=lambda item: item[1],
         )

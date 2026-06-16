@@ -56,7 +56,7 @@ HTTP_READ_TOOLS = frozenset({
 
 HTTP_AGENT_TOOLS = frozenset({
     *HTTP_READ_TOOLS,
-    "call_agent",
+    "delegate",
     "list_agents",
 })
 
@@ -264,7 +264,7 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
             "session_id": session_id,
             "trusted_run_id": f"http:{uuid.uuid4()}",
             "http_profile": mcp_server._http_profile,
-            "http_call_agent_auto_approve": mcp_server._http_profile in ("agent", "all"),
+            "http_delegate_auto_approve": mcp_server._http_profile in ("agent", "all"),
         }
 
         try:
@@ -364,7 +364,7 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
                 "session_id": session_id,
                 "trusted_run_id": f"http:{uuid.uuid4()}",
                 "http_profile": mcp_server._http_profile,
-                "http_call_agent_auto_approve": mcp_server._http_profile in ("agent", "all"),
+                "http_delegate_auto_approve": mcp_server._http_profile in ("agent", "all"),
             }
             mcp_server._http_sessions[session_id] = state
         elif session_id:
@@ -374,7 +374,7 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
                 return
             state["session_id"] = session_id
             state["http_profile"] = mcp_server._http_profile
-            state["http_call_agent_auto_approve"] = mcp_server._http_profile in ("agent", "all")
+            state["http_delegate_auto_approve"] = mcp_server._http_profile in ("agent", "all")
         else:
             state = {
                 "initialize_seen": False,
@@ -382,7 +382,7 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
                 "strict_lifecycle": True,
                 "trusted_run_id": f"http:{uuid.uuid4()}",
                 "http_profile": mcp_server._http_profile,
-                "http_call_agent_auto_approve": mcp_server._http_profile in ("agent", "all"),
+                "http_delegate_auto_approve": mcp_server._http_profile in ("agent", "all"),
             }
         out = StringIO()
         setattr(out, "_mcp_state", state)
@@ -454,7 +454,7 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
                 "strict_lifecycle": False,
                 "trusted_run_id": f"http:{uuid.uuid4()}",
                 "http_profile": mcp_server._http_profile,
-                "http_call_agent_auto_approve": mcp_server._http_profile in ("agent", "all"),
+                "http_delegate_auto_approve": mcp_server._http_profile in ("agent", "all"),
             }
         if sse_queue is not None:
             out = _SSEQueueOutput(sse_queue)
@@ -464,7 +464,7 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
         if session_id:
             state["session_id"] = session_id
         state["http_profile"] = mcp_server._http_profile
-        state["http_call_agent_auto_approve"] = mcp_server._http_profile in ("agent", "all")
+        state["http_delegate_auto_approve"] = mcp_server._http_profile in ("agent", "all")
         setattr(out, "_mcp_state", state)
 
         try:

@@ -62,7 +62,7 @@ def test_final_prompt_contract_has_sections_once_in_order_and_without_duplicatio
     prompt = builder.build(
         agent="codex",
         history=history,
-        handoff="Revise apenas os testes do prompt.",
+        delegation="Revise apenas os testes do prompt.",
         shared_state={
             "goal_canonical": "Melhorar qualidade do prompt",
             "current_step": "Remover blocos duplicados",
@@ -78,7 +78,7 @@ def test_final_prompt_contract_has_sections_once_in_order_and_without_duplicatio
         '<rules title="Suas regras">',
         '<execution_state title="Estado de execução atual">',
         '<shared_state title="Estado compartilhado">',
-        '<handoff title="Mensagem direta do outro agente">',
+        '<delegation title="Mensagem direta do outro agente">',
         '<persistent_context title="Contexto persistente do workspace">',
         '<recent_conversation title="Conversa recente">',
         '<current_turn title="Pedido atual de ALEX">',
@@ -99,8 +99,8 @@ def test_final_prompt_contract_has_sections_once_in_order_and_without_duplicatio
     assert '"workspace_root": "/tmp/test"' in shared_state_block
     assert "ignored_internal_note" not in shared_state_block
 
-    handoff_block = _extract_block(prompt, "handoff")
-    assert "Revise apenas os testes do prompt." in handoff_block
+    delegation_block = _extract_block(prompt, "delegation")
+    assert "Revise apenas os testes do prompt." in delegation_block
 
     conversation_block = _extract_block(prompt, "recent_conversation")
     assert "[ALEX]: Contexto inicial" in conversation_block
@@ -303,7 +303,7 @@ def test_prompt_uses_current_active_agents_in_header_and_route_list():
         active_agents=["claude", "codex", "deepseek"],
         active_agents_provider=lambda: state["active_agents"],
     )
-    history = [{"role": "human", "content": "valide o handoff"}]
+    history = [{"role": "human", "content": "valide o delegation"}]
 
     state["active_agents"] = ["codex", "deepseek"]
     prompt = builder.build(agent="codex", history=history)
@@ -314,8 +314,8 @@ def test_prompt_uses_current_active_agents_in_header_and_route_list():
     assert "claude" not in prompt
 
 
-def test_handoff_prompt_uses_current_active_agents_for_route_candidates():
-    """Verifica que handoff prompt uses current active agents for route candidates."""
+def test_delegation_prompt_uses_current_active_agents_for_route_candidates():
+    """Verifica que delegation prompt uses current active agents for route candidates."""
     state = {"active_agents": ["claude", "codex", "deepseek"]}
     builder = PromptBuilder(
         context_manager=_make_context_manager(""),
@@ -327,7 +327,7 @@ def test_handoff_prompt_uses_current_active_agents_for_route_candidates():
     prompt = builder.build(
         agent="deepseek",
         history=[],
-        handoff_only=True,
+        delegation_only=True,
         from_agent="codex",
     )
 
@@ -335,8 +335,8 @@ def test_handoff_prompt_uses_current_active_agents_for_route_candidates():
     assert "claude" not in prompt
 
 
-def test_prompt_includes_updated_handoff_contract_in_route_rules():
-    """Verifica que prompt includes updated handoff contract in route rules."""
+def test_prompt_includes_updated_delegation_contract_in_route_rules():
+    """Verifica que prompt includes updated delegation contract in route rules."""
     builder = PromptBuilder(
         context_manager=_make_context_manager(""),
         active_agents=["claude", "codex", "deepseek"],
@@ -344,15 +344,15 @@ def test_prompt_includes_updated_handoff_contract_in_route_rules():
 
     prompt = builder.build(agent="codex", history=[{"role": "human", "content": "delegue"}])
 
-    assert "tool estruturada `call_agent`" in prompt
-    assert "agent_name" in prompt
-    assert "task" in prompt
+    assert "tool estruturada `delegate`" in prompt
+    assert "target_agent" in prompt
+    assert "request" in prompt
     assert "fallback_agents" in prompt
-    assert "handoffs" in prompt
+    assert "steps" in prompt
 
 
-def test_handoff_only_prompt_includes_updated_handoff_contract():
-    """Verifica que handoff only prompt includes updated handoff contract."""
+def test_delegation_only_prompt_includes_updated_delegation_contract():
+    """Verifica que delegation only prompt includes updated delegation contract."""
     builder = PromptBuilder(
         context_manager=_make_context_manager(""),
         active_agents=["claude", "codex", "deepseek"],
@@ -361,14 +361,14 @@ def test_handoff_only_prompt_includes_updated_handoff_contract():
     prompt = builder.build(
         agent="deepseek",
         history=[],
-        handoff_only=True,
+        delegation_only=True,
         from_agent="codex",
     )
 
-    assert "tool estruturada `call_agent` via MCP" in prompt
+    assert "tool estruturada `delegate` via MCP" in prompt
     assert "Delegação padrão:" in prompt
     assert "fallback_agents" in prompt
-    assert "handoffs" in prompt
+    assert "steps" in prompt
 
 
 def test_prompt_shared_state():
@@ -496,7 +496,7 @@ def test_prompt_keeps_empty_optional_blocks_in_output():
     assert '<recent_agent_messages title=' not in prompt
     assert '<shared_state title="Estado compartilhado">' not in prompt
     assert '<completed_tasks title="Tarefas concluídas">' not in prompt
-    assert '<handoff title="Mensagem direta do outro agente">' not in prompt
+    assert '<delegation title="Mensagem direta do outro agente">' not in prompt
     assert '<agent_metrics title="Suas métricas (apenas referência)">' not in prompt
 
 
@@ -667,7 +667,7 @@ def test_conversation_block_skips_protocol_control_markers():
     """Verifica que conversation block skips protocol control markers."""
     builder = PromptBuilder(context_manager=_make_context_manager(""))
     history = [
-        {"role": "codex", "content": '{"type": "handoff", "route": "claude", "content": "revisar testes"}'},
+        {"role": "codex", "content": '{"type": "delegation", "route": "claude", "content": "revisar testes"}'},
         {"role": "claude", "content": "[ACK:abc123] recebido"},
         {"role": "human", "content": "qual o próximo passo?"},
     ]
@@ -721,8 +721,8 @@ def test_prompt_history_window_property_setter_updates_memory_selector():
     assert builder.history_window == 2
 
 
-def test_prompt_handoff_only_filters_agent_and_from_agent_from_route_list():
-    """Verifica que prompt handoff only filters agent and from agent from route list."""
+def test_prompt_delegation_only_filters_agent_and_from_agent_from_route_list():
+    """Verifica que prompt delegation only filters agent and from agent from route list."""
     builder = PromptBuilder(
         context_manager=_make_context_manager(""),
         active_agents=["codex", "claude", "gemini"],
@@ -731,7 +731,7 @@ def test_prompt_handoff_only_filters_agent_and_from_agent_from_route_list():
     prompt = builder.build(
         agent="codex",
         history=[{"role": "human", "content": "faça a revisão"}],
-        handoff_only=True,
+        delegation_only=True,
         from_agent="claude",
     )
 
@@ -755,19 +755,19 @@ def test_task_executor_prompt_uses_dedicated_template_without_chat_blocks():
             {"role": "human", "content": "pedido geral"},
             {"role": "claude", "content": "contexto paralelo"},
         ],
-        handoff={
-            "handoff_id": "task-123",
+        delegation={
+            "delegation_id": "task-123",
             "task": "corrigir parser",
             "context": "TAREFA:\ncorrigir parser",
             "expected": "validar com pytest",
         },
-        handoff_only=True,
+        delegation_only=True,
         from_agent="claude",
         prompt_kind=PromptKind.TASK_EXECUTOR,
     )
 
     assert '<header title="Task Executor">' in prompt
-    assert "HANDOFF_ID:\ntask-123" in prompt
+    assert "DELEGATION_ID:\ntask-123" in prompt
     assert '<recent_conversation title="Conversa recente">' not in prompt
     assert '<current_turn title=' not in prompt
     assert '<recent_agent_messages title=' not in prompt
@@ -782,13 +782,13 @@ def test_task_reviewer_prompt_uses_dedicated_template_and_review_material():
     prompt = builder.build(
         agent="pickle",
         history=[{"role": "human", "content": "pedido geral"}],
-        handoff={
-            "handoff_id": "task-review-123",
+        delegation={
+            "delegation_id": "task-review-123",
             "task": "revisar parser",
             "context": "Task original:\nparser\n\nResultado do executor:\nok",
             "expected": "ACEITE, RETENTATIVA, REPLANEJAR ou REJEITAR",
         },
-        handoff_only=True,
+        delegation_only=True,
         prompt_kind=PromptKind.TASK_REVIEWER,
     )
 

@@ -80,18 +80,18 @@ def _execute_concurrently(executor, calls: list[ToolCall]) -> list[ToolResult]:
     return results
 
 
-def test_call_agent_internal_auto_approved_with_server_side_budget(tmp_path):
+def test_delegate_internal_auto_approved_with_server_side_budget(tmp_path):
     """Verifica que Test call agent internal auto approved with server side budget."""
     approval = MagicMock()
     approval.approve.return_value = False
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), approval)
     dispatch = MagicMock(return_value="ok")
-    executor.set_call_agent_fn(dispatch)
+    executor.set_delegate_fn(dispatch)
 
     result = executor.execute(
         ToolCall(
-            name="call_agent",
-            arguments={"agent_name": "codex", "task": "x"},
+            name="delegate",
+            arguments={"target_agent": "codex", "request": "x"},
             metadata=_trusted(delegation_budget=1),
         )
     )
@@ -102,17 +102,17 @@ def test_call_agent_internal_auto_approved_with_server_side_budget(tmp_path):
     assert executor.approval_broker.audit_log[-1]["run_id"] == "run-1"
 
 
-def test_call_agent_http_external_requires_user_approval(tmp_path):
+def test_delegate_http_external_requires_user_approval(tmp_path):
     """Verifica que Test call agent http external requires user approval."""
     approval = MagicMock()
     approval.approve.return_value = False
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), approval)
-    executor.set_call_agent_fn(MagicMock(return_value="ok"))
+    executor.set_delegate_fn(MagicMock(return_value="ok"))
 
     result = executor.execute(
         ToolCall(
-            name="call_agent",
-            arguments={"agent_name": "codex", "task": "x"},
+            name="delegate",
+            arguments={"target_agent": "codex", "request": "x"},
             metadata=_trusted(transport="http_mcp", run_id="external-run"),
         )
     )
@@ -123,17 +123,17 @@ def test_call_agent_http_external_requires_user_approval(tmp_path):
     assert executor.approval_broker.audit_log[-1]["event"] == "denied"
 
 
-def test_call_agent_http_external_requires_approval_even_with_allowlisted_argument(tmp_path):
+def test_delegate_http_external_requires_approval_even_with_allowlisted_argument(tmp_path):
     """Verifica que Test call agent http external requires approval even with allowlisted argument."""
     approval = MagicMock()
     approval.approve.return_value = False
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), approval)
-    executor.set_call_agent_fn(MagicMock(return_value="ok"))
+    executor.set_delegate_fn(MagicMock(return_value="ok"))
 
     result = executor.execute(
         ToolCall(
-            name="call_agent",
-            arguments={"agent_name": "codex", "task": "x", "allowlisted": True},
+            name="delegate",
+            arguments={"target_agent": "codex", "request": "x", "allowlisted": True},
             metadata=_trusted(transport="http_mcp", run_id="external-run"),
         )
     )
@@ -147,8 +147,8 @@ def test_call_agent_http_external_requires_approval_even_with_allowlisted_argume
 def test_http_mcp_cannot_spoof_internal_transport_via_meta():
     """Verifica que Test http mcp cannot spoof internal transport via meta."""
     executor = MagicMock()
-    executor.registry.names.return_value = ["call_agent"]
-    executor.execute.return_value = ToolResult(ok=True, tool_name="call_agent", content="ok")
+    executor.registry.names.return_value = ["delegate"]
+    executor.execute.return_value = ToolResult(ok=True, tool_name="delegate", content="ok")
     server = MCPServer(executor)
     out = io.StringIO()
 
@@ -158,8 +158,8 @@ def test_http_mcp_cannot_spoof_internal_transport_via_meta():
             "id": 1,
             "method": "tools/call",
             "params": {
-                "name": "call_agent",
-                "arguments": {"agent_name": "codex", "task": "x"},
+                "name": "delegate",
+                "arguments": {"target_agent": "codex", "request": "x"},
                 "_meta": {"transport": "internal_mcp", "run_id": "evil", "approval_scope_id": "evil"},
             },
         },
@@ -180,12 +180,12 @@ def test_http_mcp_allowlisted_argument_does_not_bypass_approval(tmp_path):
     approval = MagicMock()
     approval.approve.return_value = False
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), approval)
-    executor.set_call_agent_fn(MagicMock(return_value="ok"))
+    executor.set_delegate_fn(MagicMock(return_value="ok"))
 
     result = executor.execute(
         ToolCall(
-            name="call_agent",
-            arguments={"agent_name": "codex", "task": "x", "allowlisted": True},
+            name="delegate",
+            arguments={"target_agent": "codex", "request": "x", "allowlisted": True},
             metadata=_trusted(transport="http_mcp", run_id="external-run"),
         )
     )
@@ -201,12 +201,12 @@ def test_caller_cannot_increase_approval_budget(tmp_path):
     approval.approve.return_value = False
     config = ToolRuntimeConfig(workspace_root=tmp_path, delegation_budget_per_run=1)
     executor = ToolExecutor(config, approval)
-    executor.set_call_agent_fn(MagicMock(return_value="ok"))
+    executor.set_delegate_fn(MagicMock(return_value="ok"))
 
     result = executor.execute(
         ToolCall(
-            name="call_agent",
-            arguments={"agent_name": "codex", "task": "x", "approval_budget": 1000},
+            name="delegate",
+            arguments={"target_agent": "codex", "request": "x", "approval_budget": 1000},
             metadata=_trusted(delegation_budget=1),
         )
     )
@@ -220,12 +220,12 @@ def test_caller_cannot_pass_approval_scope_id_argument(tmp_path):
     """Verifica que Test caller cannot pass approval scope id argument."""
     approval = MagicMock()
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), approval)
-    executor.set_call_agent_fn(MagicMock(return_value="ok"))
+    executor.set_delegate_fn(MagicMock(return_value="ok"))
 
     result = executor.execute(
         ToolCall(
-            name="call_agent",
-            arguments={"agent_name": "codex", "task": "x", "approval_scope_id": "evil"},
+            name="delegate",
+            arguments={"target_agent": "codex", "request": "x", "approval_scope_id": "evil"},
         )
     )
 
@@ -240,7 +240,7 @@ def test_delegation_budget_is_consumed_atomically_for_parallel_calls(tmp_path):
     approval.approve.return_value = False
     config = ToolRuntimeConfig(workspace_root=tmp_path, delegation_budget_per_run=1)
     executor = ToolExecutor(config, approval)
-    executor.set_call_agent_fn(MagicMock(return_value="ok"))
+    executor.set_delegate_fn(MagicMock(return_value="ok"))
     barrier = threading.Barrier(6)
     results = []
     guard = threading.Lock()
@@ -249,8 +249,8 @@ def test_delegation_budget_is_consumed_atomically_for_parallel_calls(tmp_path):
         barrier.wait()
         result = executor.execute(
             ToolCall(
-                name="call_agent",
-                arguments={"agent_name": "codex", "task": "x"},
+                name="delegate",
+                arguments={"target_agent": "codex", "request": "x"},
                 metadata=_trusted(delegation_budget=1),
             )
         )
@@ -656,16 +656,16 @@ def test_git_push_requires_strong_confirmation_and_is_blocked_in_mcp_shell(tmp_p
     approval.approve.assert_not_called()
 
 
-def test_call_agent_rejects_all_reserved_fields(tmp_path):
+def test_delegate_rejects_all_reserved_fields(tmp_path):
     """Verifica que Test call agent rejects all reserved fields."""
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
-    executor.set_call_agent_fn(MagicMock(return_value="ok"))
+    executor.set_delegate_fn(MagicMock(return_value="ok"))
 
     for field in ("allowlisted", "approval_budget", "approval_scope_id", "transport", "run_id", "parent_run_id"):
         result = executor.execute(
             ToolCall(
-                name="call_agent",
-                arguments={"agent_name": "codex", "task": "x", field: "evil"},
+                name="delegate",
+                arguments={"target_agent": "codex", "request": "x", field: "evil"},
             )
         )
         assert result.ok is False
@@ -734,19 +734,19 @@ def test_close_command_session_does_not_run_parallel_with_write_stdin(tmp_path):
     assert first[1] <= second[0]
 
 
-def test_call_agent_scope_limits_caller_and_target_agent(tmp_path):
+def test_delegate_scope_limits_caller_and_target_agent(tmp_path):
     """Verifica que Test call agent scope limits caller and target agent."""
     approval = MagicMock()
     approval.approve.return_value = False
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), approval)
-    executor.set_call_agent_fn(MagicMock(return_value="ok"))
+    executor.set_delegate_fn(MagicMock(return_value="ok"))
     executor.approval_broker.approve_scope(
         ApprovalScope(
             id="claude-to-codex",
             run_id="run-1",
             transport="internal_mcp",
             server_origin="tool_executor",
-            tool_name="call_agent",
+            tool_name="delegate",
             agent_name="claude",
             target_agent_name="codex",
             risk=RiskLevel.DELEGATION,
@@ -757,15 +757,15 @@ def test_call_agent_scope_limits_caller_and_target_agent(tmp_path):
 
     codex = executor.execute(
         ToolCall(
-            name="call_agent",
-            arguments={"agent_name": "codex", "task": "x"},
+            name="delegate",
+            arguments={"target_agent": "codex", "request": "x"},
             metadata=_trusted(run_id="run-1", agent_name="claude", delegation_budget=0),
         )
     )
     gemini = executor.execute(
         ToolCall(
-            name="call_agent",
-            arguments={"agent_name": "gemini", "task": "x"},
+            name="delegate",
+            arguments={"target_agent": "gemini", "request": "x"},
             metadata=_trusted(run_id="run-1", agent_name="claude", delegation_budget=0),
         )
     )

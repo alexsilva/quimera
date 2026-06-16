@@ -228,14 +228,14 @@ class ChatRoundOrchestrator:
         }
         return {key: value for key, value in kwargs.items() if key in allowed}
 
-    def _call_agent(self, agent: str, **kwargs):
+    def _delegate(self, agent: str, **kwargs):
         if self._threads > 1 and "max_retries" not in kwargs:
             # Em modo threaded cada prompt deve executar uma vez por agente;
             # retries automáticos causam efeito de loop/cascata no chat.
             kwargs["max_retries"] = 1
-        call_agent = self._dispatch_services.call_agent
-        filtered_kwargs = self._filter_supported_kwargs(call_agent, kwargs)
-        return call_agent(agent, **filtered_kwargs)
+        delegate_fn = self._dispatch_services.delegate
+        filtered_kwargs = self._filter_supported_kwargs(delegate_fn, kwargs)
+        return delegate_fn(agent, **filtered_kwargs)
 
     def _set_parallel_toolbar_state(
         self,
@@ -313,18 +313,18 @@ class ChatRoundOrchestrator:
         if callable(show_message):
             show_message(agent, message)
 
-    def _show_handoff(self, from_agent: str, to_agent: str, task: str | None) -> None:
+    def _show_delegation(self, from_agent: str, to_agent: str, task: str | None) -> None:
         if self._emit_event(
-            RenderEvent.HANDOFF,
+            RenderEvent.DELEGATION,
             "",
             agent=from_agent,
             metadata={"to": to_agent, "task": task},
         ):
             return
         if self._renderer is not None:
-            show_handoff = getattr(self._renderer, "show_handoff", None)
-            if callable(show_handoff):
-                show_handoff(from_agent, to_agent, task=task)
+            show_delegation = getattr(self._renderer, "show_delegation", None)
+            if callable(show_delegation):
+                show_delegation(from_agent, to_agent, task=task)
 
     def _is_cancelled(self) -> bool:
         return bool(self._agent_client and getattr(self._agent_client, '_user_cancelled', False))
@@ -396,7 +396,7 @@ class ChatRoundOrchestrator:
         if history_snapshot:
             prompt_binding["history_snapshot"] = history_snapshot
 
-        response = self._call_agent(
+        response = self._delegate(
             first_agent,
             is_first_speaker=True,
             protocol_mode="standard",
@@ -430,7 +430,7 @@ class ChatRoundOrchestrator:
                 self._show_system(
                     f"[fallback] {failed_agent} não respondeu; {fallback_agent} assumiu"
                 )
-                fallback_response = self._call_agent(
+                fallback_response = self._delegate(
                     fallback_agent,
                     is_first_speaker=True,
                     primary=False,
@@ -521,7 +521,7 @@ class ChatRoundOrchestrator:
                     capacity=parallel_slots,
                     active_agents=(),
                 )
-                response = self._call_agent(
+                response = self._delegate(
                     agent,
                     primary=False,
                     protocol_mode=protocol_mode,

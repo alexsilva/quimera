@@ -79,7 +79,7 @@ class ToolPolicy:
             "close_command_session",
             "remove_file",
             "write_stdin",
-            "call_agent",
+            "delegate",
         }:
             return self.config.require_approval_for_mutations
         return False
@@ -100,7 +100,7 @@ class ToolPolicy:
         return PathPermissionError(raw, path)
 
 
-    def _validate_call_agent(self, call: ToolCall) -> None:
+    def _validate_delegate(self, call: ToolCall) -> None:
         """Valida delegação cross-agent antes do ApprovalBroker."""
         reserved = {
             "allowlisted",
@@ -113,21 +113,34 @@ class ToolPolicy:
         present_reserved = sorted(reserved.intersection(call.arguments))
         if present_reserved:
             raise ToolPolicyError(
-                "call_agent recebeu campos reservados não confiáveis: "
+                "delegate recebeu campos reservados não confiáveis: "
                 + ", ".join(present_reserved)
             )
-        agent_name = call.arguments.get("agent_name")
-        task = call.arguments.get("task")
-        if not isinstance(agent_name, str) or not agent_name.strip():
-            raise ToolPolicyError("call_agent requer 'agent_name' não vazio")
-        if not isinstance(task, str) or not task.strip():
-            raise ToolPolicyError("call_agent requer 'task' não vazia")
+        target_agent = call.arguments.get("target_agent")
+        request = call.arguments.get("request")
+        if not isinstance(target_agent, str) or not target_agent.strip():
+            raise ToolPolicyError("delegate requer 'target_agent' não vazio")
+        if not isinstance(request, str) or not request.strip():
+            raise ToolPolicyError("delegate requer 'request' não vazia")
         context = call.arguments.get("context")
         if context is not None and not isinstance(context, str):
-            raise ToolPolicyError("call_agent.context deve ser string quando fornecido")
+            raise ToolPolicyError("delegate.context deve ser string quando fornecido")
         fallback_agents = call.arguments.get("fallback_agents", [])
         if fallback_agents is not None and not isinstance(fallback_agents, list):
-            raise ToolPolicyError("call_agent.fallback_agents deve ser uma lista")
+            raise ToolPolicyError("delegate.fallback_agents deve ser uma lista")
+        steps = call.arguments.get("steps")
+        if steps is not None:
+            if not isinstance(steps, list):
+                raise ToolPolicyError("delegate.steps deve ser uma lista")
+            for i, step in enumerate(steps):
+                if not isinstance(step, dict):
+                    raise ToolPolicyError(f"delegate.steps[{i}] deve ser um objeto")
+                step_target = step.get("target_agent")
+                step_request = step.get("request")
+                if not isinstance(step_target, str) or not step_target.strip():
+                    raise ToolPolicyError(f"delegate.steps[{i}].target_agent não pode ser vazio")
+                if not isinstance(step_request, str) or not step_request.strip():
+                    raise ToolPolicyError(f"delegate.steps[{i}].request não pode ser vazio")
 
     def _validate_list_agents(self, call: ToolCall) -> None:
         """list_agents não requer argumentos — sempre válida."""

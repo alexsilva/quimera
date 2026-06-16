@@ -11,7 +11,7 @@ class DispatchStub:
         self.response = response
         self.calls = []
 
-    def call_agent(self, agent_name, **kwargs):
+    def delegate(self, agent_name, **kwargs):
         self.calls.append((agent_name, kwargs))
         return self.response
 
@@ -85,11 +85,11 @@ def test_runner_completes_task_when_no_review_agent():
     assert ok is True
     assert repo.complete_calls == [(1, "resultado final", None)]
     assert repo.submit_calls == []
-    handoff = dispatch.calls[0][1]["handoff"]
+    delegation = dispatch.calls[0][1]["delegation"]
     assert dispatch.calls[0][1]["prompt_kind"] is PromptKind.TASK_EXECUTOR
-    assert handoff["handoff_id"] == "task-1"
-    assert handoff["task"] == "corrigir bug"
-    assert handoff["context"] == "corrigir bug"
+    assert delegation["delegation_id"] == "task-1"
+    assert delegation["task"] == "corrigir bug"
+    assert delegation["context"] == "corrigir bug"
     assert system.messages == [
         "[task 1] codex: iniciando — corrigir bug",
         "[task 1] codex:\nresultado final",
@@ -213,7 +213,7 @@ def test_runner_fails_on_empty_body():
 def test_runner_requeues_on_exception_when_failover_possible():
     """Verifica que o runner recoloca em fila quando há exceção e failover disponível."""
     class FailingDispatch:
-        def call_agent(self, agent_name, **kwargs):
+        def delegate(self, agent_name, **kwargs):
             raise RuntimeError("api timeout")
 
     system = SystemLayerSpy()
@@ -261,8 +261,8 @@ def test_runner_wraps_agent_call_with_hooks():
     assert events == [("before", "chatgpt-api"), ("after", "chatgpt-api")]
 
 
-def test_runner_uses_structured_handoff_with_real_task_id():
-    """Verifica que o runner usa handoff estruturado com o ID real da tarefa."""
+def test_runner_uses_structured_delegation_with_real_task_id():
+    """Verifica que o runner usa delegation estruturado com o ID real da tarefa."""
 
     dispatch = DispatchStub(response="resultado final")
     runner = TaskRunner(
@@ -280,17 +280,17 @@ def test_runner_uses_structured_handoff_with_real_task_id():
     )
 
     assert ok is True
-    handoff = dispatch.calls[0][1]["handoff"]
-    assert handoff["handoff_id"] == "task-123"
-    assert handoff["task"] == "validar regressão"
-    assert handoff["context"] == "body da task"
+    delegation = dispatch.calls[0][1]["delegation"]
+    assert delegation["delegation_id"] == "task-123"
+    assert delegation["task"] == "validar regressão"
+    assert delegation["context"] == "body da task"
     assert dispatch.calls[0][1]["prompt_kind"] is PromptKind.TASK_EXECUTOR
 
 
 def test_runner_calls_after_hook_even_when_dispatch_raises():
     """Verifica que o hook after é chamado mesmo quando o dispatch lança exceção."""
     class FailingDispatch:
-        def call_agent(self, agent_name, **kwargs):
+        def delegate(self, agent_name, **kwargs):
             raise RuntimeError("api timeout")
 
     system = SystemLayerSpy()
@@ -317,7 +317,7 @@ def test_runner_calls_after_hook_even_when_dispatch_raises():
 def test_runner_fails_on_exception_when_no_failover():
     """Verifica que o runner falha a tarefa quando há exceção e não há failover."""
     class FailingDispatch:
-        def call_agent(self, agent_name, **kwargs):
+        def delegate(self, agent_name, **kwargs):
             raise RuntimeError("fatal error")
 
     system = SystemLayerSpy()

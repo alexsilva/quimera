@@ -67,17 +67,17 @@ def test_parse_response_preserves_shared_state_lock():
     assert app.shared_state["goal"] == "corrigir lock"
 
 
-def test_handoff_json_is_plain_content_not_protocol_envelope():
-    """Verifica que handoff json is plain content not protocol envelope."""
+def test_delegation_json_is_plain_content_not_protocol_envelope():
+    """Verifica que delegation json is plain content not protocol envelope."""
     proto = AppProtocol(lock=threading.Lock(), shared_state={})
 
-    response, target, handoff, extend, needs_input, ack_id = proto.parse_response(
-        '{"type":"handoff","route":"codex","content":"delegar textual"}'
+    response, target, delegation, extend, needs_input, ack_id = proto.parse_response(
+        '{"type":"delegation","route":"codex","content":"delegar textual"}'
     )
 
-    assert response == '{"type":"handoff","route":"codex","content":"delegar textual"}'
+    assert response == '{"type":"delegation","route":"codex","content":"delegar textual"}'
     assert target is None
-    assert handoff is None
+    assert delegation is None
     assert extend is False
     assert needs_input is False
     assert ack_id is None
