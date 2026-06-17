@@ -45,6 +45,7 @@ HTTP_READ_LOCAL_TOOLS = frozenset({
     "list_tasks",
     "list_jobs",
     "get_job",
+    "memory_retrieve",
     "todo_list",
 })
 
@@ -56,6 +57,7 @@ HTTP_READ_TOOLS = frozenset({
 
 HTTP_AGENT_TOOLS = frozenset({
     *HTTP_READ_TOOLS,
+    "memory_save",
     "delegate",
     "list_agents",
 })

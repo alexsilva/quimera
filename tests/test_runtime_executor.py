@@ -71,6 +71,8 @@ def test_executor_registers_interactive_command_tools(config, approval_handler):
     assert "exec_command" in names
     assert "write_stdin" in names
     assert "close_command_session" in names
+    assert "memory_save" in names
+    assert "memory_retrieve" in names
 
 
 def test_executor_normalizes_run_alias_with_commands_list(tmp_path):
@@ -89,6 +91,87 @@ def test_executor_normalizes_execute_command_alias(tmp_path):
     result = executor.execute(ToolCall(name="execute_command", arguments={"command": "echo hello"}))
     assert result.ok is True
     assert result.data["status"] in {"running", "completed"}
+
+
+def test_executor_memory_save_and_retrieve_roundtrip(tmp_path):
+    executor = ToolExecutor(
+        ToolRuntimeConfig(
+            workspace_root=tmp_path,
+            memory_file=tmp_path / "state" / "memory.json",
+        ),
+        MagicMock(),
+    )
+
+    save = executor.execute(
+        ToolCall(
+            name="memory_save",
+            arguments={
+                "namespace": "workspace",
+                "key": "summary",
+                "value": {"text": "hello", "tags": ["context", "active"]},
+            },
+            metadata={"trusted_context": {"agent_name": "codex"}},
+        )
+    )
+    retrieve = executor.execute(
+        ToolCall(
+            name="memory_retrieve",
+            arguments={"namespace": "workspace", "key": "summary"},
+        )
+    )
+
+    assert save.ok is True
+    assert save.data["revision"] == 1
+    assert retrieve.ok is True
+    assert retrieve.data["revision"] == 1
+    assert len(retrieve.data["entries"]) == 1
+    entry = retrieve.data["entries"][0]
+    assert entry["namespace"] == "workspace"
+    assert entry["key"] == "summary"
+    assert entry["value"]["text"] == "hello"
+    assert entry["tags"] == ["context", "active"]
+    assert entry["updated_by"] == "codex"
+
+
+def test_executor_memory_retrieve_filters_by_prefix_and_tags(tmp_path):
+    executor = ToolExecutor(
+        ToolRuntimeConfig(
+            workspace_root=tmp_path,
+            memory_file=tmp_path / "state" / "memory.json",
+        ),
+        MagicMock(),
+    )
+
+    executor.execute(
+        ToolCall(
+            name="memory_save",
+            arguments={
+                "namespace": "workspace",
+                "key": "decision.api",
+                "value": {"text": "v1", "tags": ["decision", "api"]},
+            },
+        )
+    )
+    executor.execute(
+        ToolCall(
+            name="memory_save",
+            arguments={
+                "namespace": "workspace",
+                "key": "decision.ui",
+                "value": {"text": "v2", "tags": ["decision", "ui"]},
+            },
+        )
+    )
+
+    retrieve = executor.execute(
+        ToolCall(
+            name="memory_retrieve",
+            arguments={"namespace": "workspace", "prefix": "decision.", "tags": ["api"]},
+        )
+    )
+
+    assert retrieve.ok is True
+    assert [entry["key"] for entry in retrieve.data["entries"]] == ["decision.api"]
 
 
 def test_task_executor_skips_review_claim_when_agent_is_not_operational(tmp_path):

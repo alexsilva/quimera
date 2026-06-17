@@ -10,6 +10,7 @@ class ToolRuntimeConfig:
     """Implementa `ToolRuntimeConfig`."""
     workspace_root: Path
     db_path: Path | None = None
+    memory_file: Path | None = None
     command_timeout_seconds: int = 20
     interactive_command_default_yield_ms: int = 1000
     max_output_chars: int = 1_000_000
@@ -55,6 +56,10 @@ class ToolRuntimeConfig:
         if not isinstance(self.workspace_root, Path):
             raise TypeError(f"workspace_root deve ser Path, não {type(self.workspace_root).__name__}")
         self.workspace_root = self.workspace_root.resolve()
+        if self.db_path is not None:
+            self.db_path = self.db_path.resolve()
+        if self.memory_file is not None:
+            self.memory_file = self.memory_file.resolve()
         if not self.allowed_read_roots:
             self.allowed_read_roots = [self.workspace_root]
         else:

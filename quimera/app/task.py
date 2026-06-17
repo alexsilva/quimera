@@ -395,6 +395,7 @@ class AppTaskServices:
             config=ToolRuntimeConfig(
                 workspace_root=workspace.cwd,
                 db_path=workspace.tasks_db,
+                memory_file=getattr(workspace, "memory_file", None),
                 require_approval_for_mutations=require_approval_for_mutations,
             ),
             approval_handler=approval_handler,

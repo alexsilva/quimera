@@ -612,6 +612,107 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "memory_save",
+            "description": "Salva ou atualiza uma entrada determinística de memória estruturada do workspace, sem expor o arquivo interno.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "namespace": {
+                        "type": "string",
+                        "description": "Namespace lógico da memória, ex: workspace, decisions, handoff.",
+                    },
+                    "key": {
+                        "type": "string",
+                        "description": "Chave determinística dentro do namespace.",
+                    },
+                    "value": {
+                        "description": "Valor JSON-serializable a persistir.",
+                    },
+                    "ttl_seconds": {
+                        "type": ["integer", "null"],
+                        "description": "TTL opcional em segundos. Se omitido ou null, a entrada não expira.",
+                    },
+                },
+                "required": ["namespace", "key", "value"],
+            },
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "ok": {"type": "boolean"},
+                    "revision": {"type": "integer"},
+                    "namespace": {"type": "string"},
+                    "key": {"type": "string"},
+                    "updated_at": {"type": "string"},
+                    "error": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+                },
+                "required": ["ok", "revision", "namespace", "key", "updated_at"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "memory_retrieve",
+            "description": "Recupera memória estruturada do workspace por namespace, key, prefixo ou tags, sem busca semântica.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "namespace": {
+                        "type": "string",
+                        "description": "Filtra por namespace exato.",
+                    },
+                    "key": {
+                        "type": "string",
+                        "description": "Busca exata por key.",
+                    },
+                    "prefix": {
+                        "type": "string",
+                        "description": "Filtra keys que começam com este prefixo.",
+                    },
+                    "tags": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Filtra entradas que contenham todas as tags fornecidas.",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Máximo de entradas retornadas.",
+                    },
+                },
+                "required": [],
+            },
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "ok": {"type": "boolean"},
+                    "revision": {"type": "integer"},
+                    "entries": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "namespace": {"type": "string"},
+                                "key": {"type": "string"},
+                                "value": {},
+                                "tags": {"type": "array", "items": {"type": "string"}},
+                                "created_at": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+                                "created_by": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+                                "updated_at": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+                                "updated_by": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+                                "ttl_seconds_remaining": {"oneOf": [{"type": "integer"}, {"type": "null"}]},
+                            },
+                            "required": ["namespace", "key", "value", "tags", "updated_at", "updated_by", "ttl_seconds_remaining"],
+                        },
+                    },
+                    "error": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+                },
+                "required": ["ok", "revision", "entries"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "delegate",
             "description": (
                 "Delega uma tarefa para outro agente do Quimera. "

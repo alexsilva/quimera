@@ -1,6 +1,7 @@
 """Componentes de `quimera.runtime.policy`."""
 from __future__ import annotations
 
+import json
 import shlex
 from pathlib import Path
 
@@ -264,6 +265,65 @@ class ToolPolicy:
         """Executa validate todo list."""
         pass
 
+    def _validate_memory_save(self, call: ToolCall) -> None:
+        namespace = call.arguments.get("namespace")
+        key = call.arguments.get("key")
+        if not isinstance(namespace, str) or not namespace.strip():
+            raise ToolPolicyError("memory_save requer 'namespace' não vazio")
+        if not isinstance(key, str) or not key.strip():
+            raise ToolPolicyError("memory_save requer 'key' não vazio")
+        self._validate_memory_token(namespace, field_name="namespace")
+        self._validate_memory_token(key, field_name="key")
+        if "value" not in call.arguments:
+            raise ToolPolicyError("memory_save requer 'value'")
+        try:
+            serialized = json.dumps(call.arguments.get("value"), ensure_ascii=False)
+        except (TypeError, ValueError) as exc:
+            raise ToolPolicyError("memory_save requer 'value' JSON-serializable") from exc
+        if len(serialized.encode("utf-8")) > 32_000:
+            raise ToolPolicyError("memory_save rejeitou value grande demais; limite de 32000 bytes serializados")
+        ttl = call.arguments.get("ttl_seconds")
+        if ttl is not None:
+            try:
+                ttl_int = int(ttl)
+            except (TypeError, ValueError) as exc:
+                raise ToolPolicyError("memory_save.ttl_seconds deve ser inteiro positivo") from exc
+            if ttl_int <= 0:
+                raise ToolPolicyError("memory_save.ttl_seconds deve ser inteiro positivo")
+
+    def _validate_memory_retrieve(self, call: ToolCall) -> None:
+        namespace = call.arguments.get("namespace")
+        key = call.arguments.get("key")
+        prefix = call.arguments.get("prefix")
+        if namespace is not None:
+            if not isinstance(namespace, str) or not namespace.strip():
+                raise ToolPolicyError("memory_retrieve.namespace deve ser string não vazia")
+            self._validate_memory_token(namespace, field_name="namespace")
+        if key is not None:
+            if not isinstance(key, str) or not key.strip():
+                raise ToolPolicyError("memory_retrieve.key deve ser string não vazia")
+            self._validate_memory_token(key, field_name="key")
+        if prefix is not None:
+            if not isinstance(prefix, str) or not prefix.strip():
+                raise ToolPolicyError("memory_retrieve.prefix deve ser string não vazia")
+            self._validate_memory_token(prefix, field_name="prefix")
+        tags = call.arguments.get("tags")
+        if tags is not None:
+            if not isinstance(tags, list):
+                raise ToolPolicyError("memory_retrieve.tags deve ser lista de strings")
+            for tag in tags:
+                if not isinstance(tag, str) or not tag.strip():
+                    raise ToolPolicyError("memory_retrieve.tags deve conter apenas strings não vazias")
+                self._validate_memory_token(tag, field_name="tag")
+        limit = call.arguments.get("limit")
+        if limit is not None:
+            try:
+                limit_int = int(limit)
+            except (TypeError, ValueError) as exc:
+                raise ToolPolicyError("memory_retrieve.limit deve ser inteiro positivo") from exc
+            if limit_int <= 0:
+                raise ToolPolicyError("memory_retrieve.limit deve ser inteiro positivo")
+
     def _validate_approve_task(self, call: ToolCall) -> None:
         """Executa validate approve task."""
         raise ToolPolicyError("approve_task foi desativada no chat; tasks humanas já nascem roteadas")
@@ -356,3 +416,13 @@ class ToolPolicy:
         if not is_path_inside(path, self.config.workspace_root):
             raise ToolPolicyError(f"Path fora da workspace: {raw_path}")
         return path
+
+    @staticmethod
+    def _validate_memory_token(value: str, *, field_name: str) -> None:
+        if value.startswith("/") or "/" in value or "\\" in value:
+            raise ToolPolicyError(f"{field_name} não pode conter path")
+        allowed = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:-")
+        if any(ch not in allowed for ch in value):
+            raise ToolPolicyError(
+                f"{field_name} contém caracteres inválidos; use apenas letras, números, '.', '_', ':' ou '-'"
+            )

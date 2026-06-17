@@ -103,7 +103,7 @@ def test_schema_names_match_registered_tools():
     expected = {
         "list_files", "read_file", "write_file", "apply_patch", "grep_search", "run_shell",
         "exec_command", "write_stdin", "close_command_session", "list_tasks", "list_jobs",
-        "get_job", "remove_file", "web_search", "web_fetch", "delegate",
+        "get_job", "memory_save", "memory_retrieve", "remove_file", "web_search", "web_fetch", "delegate",
         "todo_write", "todo_list", "list_agents",
     }
     actual = {s["function"]["name"] for s in TOOL_SCHEMAS}
@@ -608,6 +608,8 @@ def test_run_tools_system_prompt_guides_tool_usage():
         "exec_command",
         "write_stdin",
         "close_command_session",
+        "memory_save",
+        "memory_retrieve",
         "remove_file",
         "web_search",
         "web_fetch",

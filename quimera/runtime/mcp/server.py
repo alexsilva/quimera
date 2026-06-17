@@ -35,6 +35,7 @@ from quimera.runtime.executor import ToolExecutor
 from quimera.runtime.models import ToolCall
 from quimera.runtime.approval_broker import TrustedToolExecutionContext
 from quimera.runtime.drivers.tool_schemas import resolve_tool_schemas
+from quimera.workspace import Workspace
 
 _logger = logging.getLogger(__name__)
 
@@ -1028,8 +1029,13 @@ class MCPServer:
 
 def _build_standalone_executor():
     """Constrói um ToolExecutor mínimo para uso standalone."""
-    workspace = Path(os.environ.get("QUIMERA_WORKSPACE", os.getcwd()))
-    config = ToolRuntimeConfig(workspace_root=workspace)
+    workspace_root = Path(os.environ.get("QUIMERA_WORKSPACE", os.getcwd()))
+    workspace = Workspace(workspace_root)
+    config = ToolRuntimeConfig(
+        workspace_root=workspace.cwd,
+        db_path=workspace.tasks_db,
+        memory_file=workspace.memory_file,
+    )
     approval = AutoApprovalHandler()
     return ToolExecutor(config, approval)
 

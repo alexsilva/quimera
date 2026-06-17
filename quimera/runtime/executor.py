@@ -14,6 +14,7 @@ from .tools.web import WebTool
 from .tools.tasks import TaskTools
 from .tools.delegate import DelegateTools
 from .tools.todo import TodoTools
+from .tools.memory import MemoryTools
 from .approval_broker import ApprovalBroker
 
 
@@ -43,6 +44,7 @@ class ToolExecutor:
         self._task_tools = TaskTools(self.config)
         self._delegate_tools = DelegateTools(self.config)
         self._todo_tools = TodoTools(self.config)
+        self._memory_tools = MemoryTools(self.config)
         self._register_builtin_tools()
 
     def set_tool_progress_callback(self, fn) -> None:
@@ -74,6 +76,8 @@ class ToolExecutor:
         self.registry.register("web_fetch", web_tool.web_fetch)
         self.registry.register("list_jobs", self._task_tools.list_jobs)
         self.registry.register("get_job", self._task_tools.get_job)
+        self.registry.register("memory_save", self._memory_tools.memory_save)
+        self.registry.register("memory_retrieve", self._memory_tools.memory_retrieve)
         self.registry.register("delegate", self._delegate_tools.delegate)
         self.registry.register("list_agents", self._delegate_tools.list_agents)
         self.registry.register("todo_write", self._todo_tools.todo_write)

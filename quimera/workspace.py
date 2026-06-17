@@ -235,6 +235,11 @@ class Workspace:
         return self._root / "data" / "decisions.jsonl"
 
     @property
+    def memory_file(self) -> Path:
+        """Arquivo JSON de memória estruturada do workspace."""
+        return self._root / "state" / "memory.json"
+
+    @property
     def config_file(self) -> Path:
         """Caminho do arquivo de configuração global do usuário."""
         return self.base_dir / "config.json"

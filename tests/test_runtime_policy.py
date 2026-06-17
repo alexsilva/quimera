@@ -190,6 +190,7 @@ def test_policy_other_validations(policy):
     policy.validate(ToolCall(name="list_tasks", arguments={"job_id": 1}))
     policy.validate(ToolCall(name="list_jobs", arguments={}))
     policy.validate(ToolCall(name="get_job", arguments={}))
+    policy.validate(ToolCall(name="memory_retrieve", arguments={}))
     policy.validate(ToolCall(name="todo_list", arguments={}))
     policy.validate(
         ToolCall(name="todo_write", arguments={"todos": [{"content": "task"}]})
@@ -363,7 +364,7 @@ def test_policy_requires_approval_for_all_mutational_tools(policy):
 
 def test_policy_does_not_require_approval_for_read_tools(policy):
     """Ferramentas de leitura não requerem aprovação."""
-    readonly = ["read_file", "list_files", "grep_search", "list_tasks", "list_jobs", "get_job", "todo_list"]
+    readonly = ["read_file", "list_files", "grep_search", "list_tasks", "list_jobs", "get_job", "memory_save", "memory_retrieve", "todo_list"]
     for tool_name in readonly:
         assert policy.requires_approval(ToolCall(name=tool_name, arguments={})) is False, \
             f"{tool_name} NÃO deveria requerer aprovação"
@@ -387,6 +388,35 @@ def test_policy_write_stdin_requires_yield_time_ms_integer(policy):
     })
     with pytest.raises(ToolPolicyError, match="yield_time_ms inteiro"):
         policy.validate(call)
+
+
+def test_policy_memory_save_valid(policy):
+    policy.validate(
+        ToolCall(
+            name="memory_save",
+            arguments={"namespace": "workspace", "key": "summary", "value": {"text": "ok"}, "ttl_seconds": 60},
+        )
+    )
+
+
+def test_policy_memory_save_rejects_path_like_key(policy):
+    with pytest.raises(ToolPolicyError, match="key não pode conter path"):
+        policy.validate(
+            ToolCall(
+                name="memory_save",
+                arguments={"namespace": "workspace", "key": "../secret", "value": {"text": "ok"}},
+            )
+        )
+
+
+def test_policy_memory_retrieve_rejects_invalid_tags(policy):
+    with pytest.raises(ToolPolicyError, match="tags deve conter apenas strings não vazias"):
+        policy.validate(
+            ToolCall(
+                name="memory_retrieve",
+                arguments={"tags": ["ok", ""]},
+            )
+        )
 
 
 def test_policy_write_stdin_valid(policy):

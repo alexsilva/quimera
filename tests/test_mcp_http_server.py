@@ -645,6 +645,7 @@ class TestToolsCallHTTP:
         tools = parse_http_allowed_tools("agent")
         assert tools == HTTP_AGENT_TOOLS
         assert "delegate" in tools
+        assert "memory_save" in tools
         for blocked in {"run_shell", "exec_command", "write_file", "remove_file", "apply_patch"}:
             assert blocked not in tools
 
@@ -681,12 +682,12 @@ class TestToolsCallHTTP:
         """Verifica que Test profile allowlists filter http tools for external clients."""
         executor = _make_executor(tool_names=[
             "read_file", "grep_search", "web_search", "web_fetch",
-            "delegate", "run_shell", "write_file", "apply_patch",
+            "memory_retrieve", "memory_save", "delegate", "run_shell", "write_file", "apply_patch",
         ])
         cases = {
-            "read-local": {"read_file", "grep_search"},
-            "read": {"read_file", "grep_search", "web_search", "web_fetch"},
-            "agent": {"read_file", "grep_search", "web_search", "web_fetch", "delegate"},
+            "read-local": {"read_file", "grep_search", "memory_retrieve"},
+            "read": {"read_file", "grep_search", "web_search", "web_fetch", "memory_retrieve"},
+            "agent": {"read_file", "grep_search", "web_search", "web_fetch", "memory_retrieve", "memory_save", "delegate"},
         }
         for profile, expected_subset in cases.items():
             httpd = MCP_HTTPServer(
