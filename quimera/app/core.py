@@ -490,6 +490,7 @@ class QuimeraApp:
         self.agent_client.tool_executor = self.tool_executor
         self.tool_executor.set_delegate_fn(self.dispatch_services.delegate)
         self.tool_executor.set_active_agents_provider(lambda: list(self.agent_pool.agents))
+        self.tool_executor.set_cancel_checker(lambda: bool(getattr(self.agent_client, "_cancel_event", None) and self.agent_client._cancel_event.is_set()))
         self.tool_executor.set_agent_cleanup_callback(self._cleanup_sub_agent_stream)
         self._display_service = DisplayService(
             renderer=self.renderer,
@@ -1645,6 +1646,17 @@ class QuimeraApp:
 
     def _handle_local_processing_interrupt(self) -> None:
         """Cancela só o processamento atual e devolve o chat ao input."""
+        agent_client = getattr(self, "agent_client", None)
+        cancel_active_work = getattr(agent_client, "cancel_active_work", None)
+        if callable(cancel_active_work):
+            cancel_active_work()
+        elif agent_client is not None:
+            agent_client._user_cancelled = True
+            cancel_event = getattr(agent_client, "_cancel_event", None)
+            if cancel_event is not None and hasattr(cancel_event, "set"):
+                cancel_event.set()
+        if hasattr(self, "renderer") and self.renderer is not None:
+            self.renderer.reset_visual_state()
         if hasattr(self, "turn_manager") and self.turn_manager is not None:
             self.turn_manager.reset()
         self.show_muted_message("[cancelado] pelo usuário")

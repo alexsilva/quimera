@@ -2017,7 +2017,8 @@ def test_call_api_cancel_event_detection(renderer):
     from types import SimpleNamespace
     import threading as _threading
 
-    client = AgentClient(renderer)
+    process_supervisor = MagicMock()
+    client = AgentClient(renderer, process_supervisor=process_supervisor)
     plugin = SimpleNamespace(
         driver="openai_compat",
         model="test-model",
@@ -2055,6 +2056,7 @@ def test_call_api_cancel_event_detection(renderer):
 
     assert result is None
     renderer.show_error.assert_called_with("[cancelado] pelo usuário")
+    process_supervisor.terminate_all.assert_called_once_with()
 
 
 def test_show_cancelled_once_deduplicates_repeated_messages(renderer):

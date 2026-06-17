@@ -53,6 +53,7 @@ class DelegateTools:
         self._active_agents_provider = None
         self._progress_callback: Callable[[str], None] | None = None
         self._cleanup_callback: Callable[[str], None] | None = None
+        self._cancel_checker: Callable[[], bool] | None = None
 
     def set_delegate_fn(self, fn: _DelegateFnProto) -> None:
         """Injeta callable para despachar tarefas a outro agente."""
@@ -69,6 +70,10 @@ class DelegateTools:
     def set_cleanup_callback(self, fn: Callable[[str], None] | None) -> None:
         """Injeta callback para limpeza do estado de render após cada step."""
         self._cleanup_callback = fn
+
+    def set_cancel_checker(self, fn: Callable[[], bool] | None) -> None:
+        """Injeta checker de cancelamento do usuário."""
+        self._cancel_checker = fn
 
     def is_delegate_available(self) -> bool:
         """Indica se a tool delegate está operável no contexto atual."""
@@ -169,6 +174,7 @@ class DelegateTools:
                 self._resolve_active_agents,
                 self._normalize_agent_identity,
                 cleanup_callback=self._cleanup_callback,
+                cancel_checker=self._cancel_checker,
             )
 
         # ── non-SSE (Streamable HTTP): background thread ──
@@ -211,8 +217,13 @@ class DelegateTools:
 
         def _run() -> None:
             result = self._execute_steps_inner(
-                steps, _fn, _progress_cb, _resolve_active, _normalize,
+                steps,
+                _fn,
+                _progress_cb,
+                _resolve_active,
+                _normalize,
                 cleanup_callback=_cleanup_cb,
+                cancel_checker=self._cancel_checker,
             )
             try:
                 if result.ok:
@@ -257,12 +268,19 @@ class DelegateTools:
         resolve_active_agents_fn: Callable[[], set[str]],
         normalize_agent_fn: Callable[[str | None], str],
         cleanup_callback: Callable[[str], None] | None = None,
+        cancel_checker: Callable[[], bool] | None = None,
     ) -> ToolResult:
         """Loop de execução dos steps — reusado síncrono e assíncrono."""
         tool_name = "delegate"
         try:
             step_outputs: list[str] = []
             for step in steps:
+                if callable(cancel_checker) and cancel_checker():
+                    return ToolResult(
+                        ok=False,
+                        tool_name=tool_name,
+                        error="Execução cancelada pelo usuário",
+                    )
                 active_agents = resolve_active_agents_fn()
                 if active_agents:
                     invalid_targets: list[str] = []
@@ -286,6 +304,12 @@ class DelegateTools:
                 selected_agent = None
                 normalized_target_agent = ""
                 for target_agent in attempt_targets:
+                    if callable(cancel_checker) and cancel_checker():
+                        return ToolResult(
+                            ok=False,
+                            tool_name=tool_name,
+                            error="Execução cancelada pelo usuário",
+                        )
                     normalized_target_agent = normalize_agent_fn(target_agent)
                     delegation = {
                         "task": step["request"],
@@ -306,6 +330,12 @@ class DelegateTools:
                             progress_callback=progress_callback,
                         )
                     except Exception as dispatch_error:
+                        if callable(cancel_checker) and cancel_checker():
+                            return ToolResult(
+                                ok=False,
+                                tool_name=tool_name,
+                                error="Execução cancelada pelo usuário",
+                            )
                         last_error = str(dispatch_error)
                         logger.warning(
                             "delegate: dispatch to '%s' failed: %s",
@@ -313,6 +343,12 @@ class DelegateTools:
                         )
                         continue
                     if result is None:
+                        if callable(cancel_checker) and cancel_checker():
+                            return ToolResult(
+                                ok=False,
+                                tool_name=tool_name,
+                                error="Execução cancelada pelo usuário",
+                            )
                         last_error = f"Agent '{target_agent}' returned no response"
                         logger.warning(
                             "delegate: dispatch to '%s' returned no response",
@@ -532,4 +568,5 @@ class DelegateTools:
             self._resolve_active_agents,
             self._normalize_agent_identity,
             cleanup_callback=self._cleanup_callback,
+            cancel_checker=self._cancel_checker,
         )

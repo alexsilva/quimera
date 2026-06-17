@@ -170,6 +170,10 @@ class ToolExecutor:
         """Injeta provider que retorna agentes ativos no momento da delegação."""
         self._delegate_tools.set_active_agents_provider(fn)
 
+    def set_cancel_checker(self, fn) -> None:
+        """Injeta checker de cancelamento para tools longas como delegate."""
+        self._delegate_tools.set_cancel_checker(fn)
+
     def set_agent_cleanup_callback(self, fn) -> None:
         """Injeta callback para limpeza do estado de render após delegate.
 

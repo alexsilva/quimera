@@ -207,6 +207,22 @@ class AgentClient:
     def _terminate_process_group(self, proc) -> None:
         terminate_process_group(proc)
 
+    def cancel_active_work(self) -> None:
+        """Cancela o trabalho atual e encerra subprocessos ainda vivos."""
+        self._user_cancelled = True
+        self._cancel_event.set()
+        current_proc = self._current_proc
+        if current_proc is not None:
+            try:
+                self._terminate_process_group(current_proc)
+            except Exception:
+                _logger.debug("cancel_active_work: falha ao terminar current_proc", exc_info=True)
+        if self.process_supervisor is not None:
+            try:
+                self.process_supervisor.terminate_all()
+            except Exception:
+                _logger.debug("cancel_active_work: falha ao terminar processos supervisionados", exc_info=True)
+
     # ------------------------------------------------------------------
     # Formatação de stdout ao vivo
     # ------------------------------------------------------------------
@@ -394,7 +410,7 @@ class AgentClient:
                 self.rate_limit_detected_at = runner.rate_limit_detected_at
 
                 if termination == ProcessRunner.CANCELLED:
-                    self._user_cancelled = True
+                    self.cancel_active_work()
                     self._agent_running = False
                     self._current_proc = None
                     self._stop_esc_monitor()
@@ -492,7 +508,7 @@ class AgentClient:
                     self.rate_limit_detected_at = runner.rate_limit_detected_at
 
                     if termination == ProcessRunner.CANCELLED:
-                        self._user_cancelled = True
+                        self.cancel_active_work()
                         self._agent_running = False
                         self._current_proc = None
                         self._stop_esc_monitor()
@@ -866,7 +882,7 @@ class AgentClient:
                 _api_start = time.time()
                 while t.is_alive():
                     if self._cancel_event.is_set():
-                        self._user_cancelled = True
+                        self.cancel_active_work()
                         t.join(timeout=0.5)
                         self._show_cancelled_once()
                         return None
@@ -882,7 +898,7 @@ class AgentClient:
                         return None
 
                 if self._cancel_event.is_set() and result_holder["result"] is None:
-                    self._user_cancelled = True
+                    self.cancel_active_work()
                     return None
 
                 if result_holder["error"]:

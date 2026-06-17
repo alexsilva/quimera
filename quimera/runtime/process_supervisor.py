@@ -139,50 +139,17 @@ class ProcessSupervisor:
         if not snapshot:
             return
 
-        _logger.info("process_supervisor: encerrando %d processo(s)", len(snapshot))
-
-        # --- 1ª rodada: SIGTERM para cada process group ---
-        for mp in snapshot:
-            if not self._is_process_alive(mp.pid):
-                continue
-            try:
-                os.killpg(mp.pgid, signal.SIGTERM)
-                _logger.info("process_supervisor: SIGTERM enviado para pgid=%d (pid=%d)", mp.pgid, mp.pid)
-            except OSError as exc:
-                _logger.debug("process_supervisor: SIGTERM falhou para pid=%d: %s", mp.pid, exc)
-
-        # Aguarda um pouco para os processos terminarem voluntariamente
-        deadline = time.monotonic() + _SIGTERM_WAIT_SECONDS
-        for mp in snapshot:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                break
-            try:
-                mp.proc.wait(timeout=remaining)
-            except Exception:
-                pass
-
-        # --- 2ª rodada: SIGKILL para sobreviventes ---
-        for mp in snapshot:
-            if not self._is_process_alive(mp.pid):
-                continue
-            try:
-                os.killpg(mp.pgid, signal.SIGKILL)
-                _logger.warning("process_supervisor: SIGKILL enviado para pgid=%d (pid=%d)", mp.pgid, mp.pid)
-            except OSError as exc:
-                _logger.debug("process_supervisor: SIGKILL falhou para pid=%d: %s", mp.pid, exc)
-
-        # Aguarda coleta final
-        for mp in snapshot:
-            try:
-                mp.proc.wait(timeout=_SIGKILL_WAIT_SECONDS)
-            except Exception:
-                pass
-
-        with self._lock:
-            self._processes.clear()
-
+        self._terminate_snapshot(snapshot, clear_registry=True)
         _logger.info("process_supervisor: shutdown concluído")
+
+    def terminate_all(self) -> None:
+        """Encerra todos os processos registrados sem bloquear novos registros futuros."""
+        with self._lock:
+            snapshot = list(self._processes.values())
+        if not snapshot:
+            return
+        _logger.info("process_supervisor: terminate_all em %d processo(s)", len(snapshot))
+        self._terminate_snapshot(snapshot, clear_registry=True)
 
     # ------------------------------------------------------------------
     # Internos
@@ -196,6 +163,47 @@ class ProcessSupervisor:
             self._shutting_down = True
             snapshot = list(self._processes.values())
         return snapshot
+
+    def _terminate_snapshot(self, snapshot: list[ManagedProcess], *, clear_registry: bool) -> None:
+        """Termina um snapshot de processos com escalada SIGTERM → SIGKILL."""
+        for mp in snapshot:
+            if not self._is_process_alive(mp.pid):
+                continue
+            try:
+                os.killpg(mp.pgid, signal.SIGTERM)
+                _logger.info("process_supervisor: SIGTERM enviado para pgid=%d (pid=%d)", mp.pgid, mp.pid)
+            except OSError as exc:
+                _logger.debug("process_supervisor: SIGTERM falhou para pid=%d: %s", mp.pid, exc)
+
+        deadline = time.monotonic() + _SIGTERM_WAIT_SECONDS
+        for mp in snapshot:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            try:
+                mp.proc.wait(timeout=remaining)
+            except Exception:
+                pass
+
+        for mp in snapshot:
+            if not self._is_process_alive(mp.pid):
+                continue
+            try:
+                os.killpg(mp.pgid, signal.SIGKILL)
+                _logger.warning("process_supervisor: SIGKILL enviado para pgid=%d (pid=%d)", mp.pgid, mp.pid)
+            except OSError as exc:
+                _logger.debug("process_supervisor: SIGKILL falhou para pid=%d: %s", mp.pid, exc)
+
+        for mp in snapshot:
+            try:
+                mp.proc.wait(timeout=_SIGKILL_WAIT_SECONDS)
+            except Exception:
+                pass
+
+        if clear_registry:
+            with self._lock:
+                for mp in snapshot:
+                    self._processes.pop(mp.pid, None)
 
     @staticmethod
     def _is_process_alive(pid: int) -> bool:

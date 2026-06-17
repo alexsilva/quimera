@@ -99,6 +99,8 @@ class DummyRenderer:
     def show_prompt_preview(self, agent, content):
         self.prompt_previews.append((agent, content))
 
+    def reset_visual_state(self, *a, **kw): pass
+
 
 class DummyContextManager:
     SUMMARY_MARKER = "<SUMMARY>"

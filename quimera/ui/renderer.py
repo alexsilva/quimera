@@ -1355,6 +1355,35 @@ class TerminalRenderer:
         with self._lock:
             return self._agent_elapsed.get(agent)
 
+    def reset_visual_state(self, agent: str | None = None) -> None:
+        """Reseta estado visual após cancelamento (Ctrl+C).
+
+        Se agent for None, limpa todos os agentes.
+        Caso contrário, limpa apenas o agente específico.
+        """
+        with self._lock:
+            if agent:
+                stream_agents = [agent] if agent in self._active_stream_agents else []
+                transient_agents = [agent] if agent in self._transient_stream_agents else []
+            else:
+                stream_agents = list(self._active_stream_agents)
+                transient_agents = list(self._transient_stream_agents)
+                self._completed_streams.clear()
+                self._statuses.clear()
+                self._last_persistent_kind = None
+                self._last_persistent_agent = None
+
+        for agt in stream_agents:
+            self.abort_message_stream(agt)
+        for agt in transient_agents:
+            self.clear_agent_transient(agt)
+
+        with self._lock:
+            if agent:
+                self._agent_elapsed.pop(agent, None)
+            else:
+                self._agent_elapsed.clear()
+
     def request_toolbar_refresh(self) -> None:
         """Enfileira evento para refresh periódico da toolbar."""
         self._queue.put(ToolbarTickEvent())

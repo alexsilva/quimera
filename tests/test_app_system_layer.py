@@ -46,6 +46,8 @@ class DummyRenderer:
     def flush(self):
         self.flush_calls += 1
 
+    def reset_visual_state(self, *a, **kw): pass
+
 
 def make_plugin(name="codex", prefix="/codex", aliases=None):
     return AgentPlugin(

@@ -37,6 +37,8 @@ class DummyRenderer:
 
     def show_delegation(self, *a, **kw): pass
 
+    def reset_visual_state(self, *a, **kw): pass
+
 
 def _make_app(active_agents=None):
     """Cria um stub mínimo de QuimeraApp para testes de _do_process_chat_message."""
@@ -436,6 +438,20 @@ class TestTurnCycle(unittest.TestCase):
         self.assertTrue(app.turn_manager.is_human_turn)
         app.session_services.shutdown.assert_called_once_with(interrupted=False)
         app.agent_client.close.assert_called_once()
+
+    def test_handle_local_processing_interrupt_cancels_active_work(self):
+        """Ctrl+C local deve sinalizar cancelamento real do AgentClient."""
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.turn_manager = TurnManager()
+        app.show_muted_message = MagicMock()
+        app._refresh_parallel_toolbar = MagicMock()
+        app.agent_client = MagicMock()
+
+        QuimeraApp._handle_local_processing_interrupt(app)
+
+        app.agent_client.cancel_active_work.assert_called_once_with()
+        self.assertTrue(app.turn_manager.is_human_turn)
+        app.show_muted_message.assert_called_once_with("[cancelado] pelo usuário")
 
     def test_drain_ui_events_routes_agent_text_above_active_prompt(self):
         """Eventos TEXT devem usar run_in_terminal quando o prompt humano está ativo."""

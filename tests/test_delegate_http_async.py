@@ -691,6 +691,38 @@ class TestCallAgentAutoReferencia:
         assert result.ok is False
         assert "cannot delegate to itself" in result.error
 
+
+def test_delegate_stops_on_user_cancel_without_trying_fallbacks(tmp_path):
+    """Cancelamento do usuário não deve virar fallback silencioso."""
+    config = ToolRuntimeConfig(workspace_root=tmp_path)
+    tools = DelegateTools(config)
+    dispatched = []
+    cancel_state = {"cancelled": False}
+
+    def dispatch(agent, **kwargs):
+        dispatched.append(agent)
+        cancel_state["cancelled"] = True
+        return None
+
+    tools.set_delegate_fn(dispatch)
+    tools.set_active_agents_provider(lambda: ["codex", "claude"])
+    tools.set_cancel_checker(lambda: cancel_state["cancelled"])
+
+    call = _make_call(
+        metadata={"calling_agent": "deepseek"},
+        args={
+            "target_agent": "codex",
+            "request": "faz algo",
+            "fallback_agents": ["claude"],
+        },
+    )
+
+    result = tools.delegate(call)
+
+    assert result.ok is False
+    assert result.error == "Execução cancelada pelo usuário"
+    assert dispatched == ["codex"]
+
     def test_bloqueia_main_step_case_insensitive(self, tmp_path):
         """Comparação de auto-referência é case-insensitive."""
         tools = self._make_tools(tmp_path)
