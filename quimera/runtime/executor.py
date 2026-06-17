@@ -166,6 +166,14 @@ class ToolExecutor:
         """
         self._delegate_tools.set_delegate_fn(fn)
 
+    def set_background_delegate_fn(self, fn) -> None:
+        """Injeta callable isolado para delegação assíncrona via HTTP MCP.
+
+        Deve usar dispatch services com AgentClient próprio para isolar
+        cancelamentos do fluxo do chat das execuções assíncronas.
+        """
+        self._delegate_tools.set_background_delegate_fn(fn)
+
     def set_active_agents_provider(self, fn) -> None:
         """Injeta provider que retorna agentes ativos no momento da delegação."""
         self._delegate_tools.set_active_agents_provider(fn)

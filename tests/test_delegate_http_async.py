@@ -149,6 +149,41 @@ class TestSSEPath:
         result = delegation_tools._delegate_http_async(call, STEPS)
         assert result.ok is True
 
+    def test_sse_path_usa_background_delegate_fn_quando_disponivel(self, delegation_tools):
+        """Com background_delegate_fn setado, SSE path usa-o em vez de delegate_fn.
+
+        Garante isolamento: Ctrl+C no fluxo principal não cancela o delegate
+        assíncrono porque este usa um AgentClient próprio (background_delegate_fn),
+        não o mesmo callable vinculado ao cancel_event do chat.
+        """
+        main_fn = MagicMock(return_value="resposta do main")
+        bg_fn = MagicMock(return_value="resposta do background")
+
+        delegation_tools.set_delegate_fn(main_fn)
+        delegation_tools.set_background_delegate_fn(bg_fn)
+
+        call = _make_call(metadata={"_mcp_state": {"sse_queue": MagicMock()}})
+        result = delegation_tools._delegate_http_async(call, STEPS)
+
+        assert result.ok is True
+        assert result.content == "resposta do background"
+        bg_fn.assert_called_once()
+        main_fn.assert_not_called()
+
+    def test_sse_path_cai_para_delegate_fn_sem_background_fn(self, delegation_tools):
+        """Sem background_delegate_fn, SSE path usa delegate_fn como fallback."""
+        main_fn = MagicMock(return_value="resposta do main")
+
+        delegation_tools.set_delegate_fn(main_fn)
+        delegation_tools.set_background_delegate_fn(None)
+
+        call = _make_call(metadata={"_mcp_state": {"sse_queue": MagicMock()}})
+        result = delegation_tools._delegate_http_async(call, STEPS)
+
+        assert result.ok is True
+        assert result.content == "resposta do main"
+        main_fn.assert_called_once()
+
     def test_sse_path_com_steps_multiplos(self, delegation_tools):
         """Múltiplos steps são executados em sequência e os resultados agregados."""
         results = iter(["r1", "r2"])
@@ -329,6 +364,90 @@ class TestNonSSEPath:
             assert mock_update_job.call_args_list[0].kwargs == {"db_path": str(db_path)}
             assert mock_update_job.call_args_list[1].args == (job_id, "failed")
             assert mock_update_job.call_args_list[1].kwargs == {"db_path": str(db_path)}
+
+    @patch("quimera.runtime.tools.delegate.add_job", return_value=42)
+    @patch("quimera.runtime.tools.delegate.create_task", return_value=99)
+    @patch("quimera.runtime.tools.delegate.complete_task")
+    @patch("quimera.runtime.tools.delegate.fail_task")
+    @patch("quimera.runtime.tools.delegate.update_job_status")
+    def test_non_sse_usa_background_delegate_fn_quando_disponivel(
+        self, mock_update, mock_fail, mock_complete, mock_create, mock_add,
+        delegation_tools, tmp_path,
+    ):
+        """Non-SSE background thread usa background_delegate_fn em vez de delegate_fn.
+
+        Garante que o delegate assíncrono usa um AgentClient isolado
+        (background_delegate_fn), de modo que o cancel_checker do fluxo
+        principal não interrompe a thread de background.
+        """
+        import time
+
+        delegation_tools.config.db_path = tmp_path / "tasks.db"
+
+        main_fn = MagicMock(return_value="resposta do main")
+        bg_fn = MagicMock(return_value="resposta do background")
+
+        delegation_tools.set_delegate_fn(main_fn)
+        delegation_tools.set_background_delegate_fn(bg_fn)
+
+        # cancel_checker retorna True imediatamente (simula Ctrl+C no chat principal)
+        delegation_tools.set_cancel_checker(lambda: True)
+
+        call = _make_call(metadata={"_mcp_state": {"sse_queue": None}})
+        result = delegation_tools._delegate_http_async(call, STEPS)
+
+        # Retorno imediato com job/task ids — cancel do chat não impede o disparo
+        assert result.ok is True
+
+        # Aguarda a thread de background concluir
+        time.sleep(0.4)
+
+        # background_delegate_fn foi chamada (não main_fn)
+        bg_fn.assert_called_once()
+        main_fn.assert_not_called()
+
+        # complete_task chamado: a thread de background completou sem ser cancelada
+        mock_complete.assert_called_once()
+        mock_fail.assert_not_called()
+
+    @patch("quimera.runtime.tools.delegate.add_job", return_value=42)
+    @patch("quimera.runtime.tools.delegate.create_task", return_value=99)
+    @patch("quimera.runtime.tools.delegate.complete_task")
+    @patch("quimera.runtime.tools.delegate.fail_task")
+    @patch("quimera.runtime.tools.delegate.update_job_status")
+    def test_non_sse_cancel_checker_nao_interrompe_background_thread(
+        self, mock_update, mock_fail, mock_complete, mock_create, mock_add,
+        delegation_tools, tmp_path,
+    ):
+        """Cancel do chat principal (cancel_checker=True) não para thread de background.
+
+        O delegate via MCP HTTP roda até concluir independentemente de Ctrl+C
+        no fluxo principal, pois cancel_checker não é passado para _execute_steps_inner
+        no path assíncrono.
+        """
+        import time
+
+        delegation_tools.config.db_path = tmp_path / "tasks.db"
+
+        # cancel_checker já retorna True desde o início — simula Ctrl+C
+        cancelled_immediately = lambda: True
+        delegation_tools.set_cancel_checker(cancelled_immediately)
+        delegation_tools.set_delegate_fn(MagicMock(return_value="resultado"))
+
+        call = _make_call(metadata={"_mcp_state": {"sse_queue": None}})
+        result = delegation_tools._delegate_http_async(call, STEPS)
+
+        # retorno imediato correto
+        assert result.ok is True
+        data = __import__("json").loads(result.content)
+        assert data["job_id"] == 42
+
+        # aguarda background completar
+        time.sleep(0.4)
+
+        # background completou apesar do cancel_checker ativo no fluxo principal
+        mock_complete.assert_called_once()
+        mock_fail.assert_not_called()
 
     def test_non_sse_background_thread_exception_nao_propaga(self, delegation_tools, tmp_path):
         """Exceção no complete_task (pós-agente) não quebra o retorno inicial."""

@@ -50,6 +50,7 @@ class DelegateTools:
         """Inicializa uma instância de DelegateTools."""
         self.config = config
         self._delegate_fn: _DelegateFnProto | None = None
+        self._background_delegate_fn: _DelegateFnProto | None = None
         self._active_agents_provider = None
         self._progress_callback: Callable[[str], None] | None = None
         self._cleanup_callback: Callable[[str], None] | None = None
@@ -58,6 +59,15 @@ class DelegateTools:
     def set_delegate_fn(self, fn: _DelegateFnProto) -> None:
         """Injeta callable para despachar tarefas a outro agente."""
         self._delegate_fn = fn
+
+    def set_background_delegate_fn(self, fn: _DelegateFnProto | None) -> None:
+        """Injeta callable independente para delegação assíncrona via HTTP MCP.
+
+        Deve usar dispatch services com AgentClient próprio (cancel_event isolado),
+        garantindo que cancelamentos do fluxo do chat não interfiram no delegate
+        assíncrono e vice-versa.
+        """
+        self._background_delegate_fn = fn
 
     def set_active_agents_provider(self, fn) -> None:
         """Injeta provider que retorna agentes ativos no momento da delegação."""
@@ -167,14 +177,16 @@ class DelegateTools:
             # SSE path: executa inline — já estamos na thread pool do
             # _handle_tools_call. O resultado será enviado ao cliente via SSE
             # por _flush_pending quando a thread pool completar.
+            # Usa background_delegate_fn (AgentClient isolado) para que
+            # cancelamentos do fluxo do chat não interfiram nesta execução.
+            _bg_fn = self._background_delegate_fn or self._delegate_fn
             return self._execute_steps_inner(
                 steps,
-                self._delegate_fn,
+                _bg_fn,
                 self._progress_callback,
                 self._resolve_active_agents,
                 self._normalize_agent_identity,
                 cleanup_callback=self._cleanup_callback,
-                cancel_checker=self._cancel_checker,
             )
 
         # ── non-SSE (Streamable HTTP): background thread ──
@@ -209,7 +221,11 @@ class DelegateTools:
         except Exception as exc:
             return ToolResult(ok=False, tool_name=call.name, error=f"Failed to create task: {exc}")
 
-        _fn = self._delegate_fn
+        # Usa background_delegate_fn (AgentClient isolado) para que
+        # cancelamentos do fluxo do chat não interfiram na thread de background
+        # e vice-versa. cancel_checker=None: o delegate assíncrono roda até
+        # concluir independentemente de Ctrl+C no fluxo principal.
+        _fn = self._background_delegate_fn or self._delegate_fn
         _progress_cb = self._progress_callback
         _resolve_active = self._resolve_active_agents
         _normalize = self._normalize_agent_identity
@@ -223,7 +239,6 @@ class DelegateTools:
                 _resolve_active,
                 _normalize,
                 cleanup_callback=_cleanup_cb,
-                cancel_checker=self._cancel_checker,
             )
             try:
                 if result.ok:

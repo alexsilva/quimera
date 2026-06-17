@@ -489,6 +489,14 @@ class QuimeraApp:
         # Injeta o executor nos drivers de API do agent_client.
         self.agent_client.tool_executor = self.tool_executor
         self.tool_executor.set_delegate_fn(self.dispatch_services.delegate)
+        # background_delegate_fn usa AgentClient isolado (cancel_event próprio),
+        # impedindo que Ctrl+C no fluxo do chat cancele delegates assíncronos
+        # e que o delegate assíncrono afete o fluxo principal.
+        self.tool_executor.set_background_delegate_fn(
+            lambda agent, **opts: (
+                self.task_services._get_background_dispatch_services() or self.dispatch_services
+            ).delegate(agent, **opts)
+        )
         self.tool_executor.set_active_agents_provider(lambda: list(self.agent_pool.agents))
         self.tool_executor.set_cancel_checker(lambda: bool(getattr(self.agent_client, "_cancel_event", None) and self.agent_client._cancel_event.is_set()))
         self.tool_executor.set_agent_cleanup_callback(self._cleanup_sub_agent_stream)
