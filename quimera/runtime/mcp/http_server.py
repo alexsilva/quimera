@@ -417,16 +417,19 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
         else:
             raw = out.getvalue()
         body_bytes = raw.encode("utf-8") if raw else b""
-        self.send_response(200 if raw else 202)
-        self._send_cors()
-        self.send_header("Content-Type", "application/json")
-        if session_id:
-            self.send_header("MCP-Session-Id", session_id)
-        self.send_header("MCP-Protocol-Version", MCPServer.PROTOCOL_VERSION)
-        self.send_header("Content-Length", str(len(body_bytes)))
-        self.end_headers()
-        if body_bytes:
-            self.wfile.write(body_bytes)
+        try:
+            self.send_response(200 if raw else 202)
+            self._send_cors()
+            self.send_header("Content-Type", "application/json")
+            if session_id:
+                self.send_header("MCP-Session-Id", session_id)
+            self.send_header("MCP-Protocol-Version", MCPServer.PROTOCOL_VERSION)
+            self.send_header("Content-Length", str(len(body_bytes)))
+            self.end_headers()
+            if body_bytes:
+                self.wfile.write(body_bytes)
+        except (BrokenPipeError, ConnectionResetError):
+            _logger.debug("MCP HTTP: client disconnected during /mcp response")
 
     def _handle_message(self) -> None:
         if not self._is_authorized():
@@ -501,29 +504,38 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
                 -32603, f"Internal error: {exc}",
             )
             body_bytes = json.dumps(error_resp).encode("utf-8")
-            self.send_response(500)
-            self._send_cors()
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body_bytes)))
-            self.end_headers()
-            self.wfile.write(body_bytes)
+            try:
+                self.send_response(500)
+                self._send_cors()
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body_bytes)))
+                self.end_headers()
+                self.wfile.write(body_bytes)
+            except (BrokenPipeError, ConnectionResetError):
+                _logger.debug("MCP HTTP: client disconnected during error response")
             return
 
         if isinstance(out, StringIO):
             raw = out.getvalue()
             if raw:
                 body_bytes = raw.encode("utf-8")
-                self.send_response(200)
-                self._send_cors()
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(body_bytes)))
-                self.end_headers()
-                self.wfile.write(body_bytes)
+                try:
+                    self.send_response(200)
+                    self._send_cors()
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body_bytes)))
+                    self.end_headers()
+                    self.wfile.write(body_bytes)
+                except (BrokenPipeError, ConnectionResetError):
+                    _logger.debug("MCP HTTP: client disconnected during message response")
                 return
 
-        self.send_response(202)
-        self._send_cors()
-        self.end_headers()
+        try:
+            self.send_response(202)
+            self._send_cors()
+            self.end_headers()
+        except (BrokenPipeError, ConnectionResetError):
+            _logger.debug("MCP HTTP: client disconnected during 202 response")
 
     def _send_error_response(
         self, status: int, code: int, message: str
@@ -534,12 +546,15 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
             "error": {"code": code, "message": message},
         }
         body_bytes = json.dumps(error_resp).encode("utf-8")
-        self.send_response(status)
-        self._send_cors()
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body_bytes)))
-        self.end_headers()
-        self.wfile.write(body_bytes)
+        try:
+            self.send_response(status)
+            self._send_cors()
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body_bytes)))
+            self.end_headers()
+            self.wfile.write(body_bytes)
+        except (BrokenPipeError, ConnectionResetError):
+            _logger.debug("MCP HTTP: client disconnected during error response")
 
 
 class MCP_HTTPServer:

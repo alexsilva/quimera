@@ -131,6 +131,14 @@ class ConsoleApprovalHandler(ApprovalHandler):
         """
         return self._approve_interactive(tool_name, summary)
 
+    @staticmethod
+    def _is_stdin_interactive() -> bool:
+        """Verifica se stdin é um terminal interativo no contexto atual."""
+        try:
+            return sys.stdin is not None and sys.stdin.isatty()
+        except Exception:
+            return False
+
     def _approve_interactive(self, tool_name: str, summary: str) -> bool:
         """Aprovação interativa via input_gate ou input_fn (usado em testes/REPL).
 
@@ -156,11 +164,13 @@ class ConsoleApprovalHandler(ApprovalHandler):
             # input_gate usa prompt_toolkit: seguro na thread principal.
             use_input_gate = self._input_gate is not None and is_main
             # Threads de background com pt ativo: delegar ao pt via run_in_terminal.
-            use_input_gate_xthread = (
-                not is_main
-                and self._input_gate is not None
-                and self._input_gate.is_active()
+            gate_is_active = getattr(self._input_gate, "is_active", None)
+            input_gate_active = (
+                self._input_gate is not None
+                and callable(gate_is_active)
+                and gate_is_active()
             )
+            use_input_gate_xthread = not is_main and input_gate_active
 
             if use_input_gate:
                 if self._cancel_event and self._cancel_event.is_set():
@@ -205,6 +215,22 @@ class ConsoleApprovalHandler(ApprovalHandler):
                     return False
                 answer = raw.strip().lower()
             else:
+                # Background thread com InputGate existente mas inativo: o terminal
+                # pode estar em raw mode residual do prompt_toolkit, e input()/readline()
+                # trava porque Enter envia \r em vez de \n. Auto-deny preventivo.
+                # Só entra aqui se input_gate tiver is_active() (ou seja, é um InputGate
+                # real, não um mock de teste).
+                has_inactive_gate = (
+                    not is_main
+                    and self._input_gate is not None
+                    and callable(gate_is_active)
+                    and not input_gate_active
+                )
+                if has_inactive_gate:
+                    self._show(
+                        "  terminal raw mode — negando automaticamente"
+                    )
+                    return False
                 renderer = self._renderer
                 _suspend_output = getattr(renderer, "suspend_output", None)
                 _resume_output = getattr(renderer, "resume_output", None)
