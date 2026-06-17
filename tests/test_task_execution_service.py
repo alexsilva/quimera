@@ -23,8 +23,6 @@ def build_task_services(app):
         app.input_services = None
     if not hasattr(app, "input_gate"):
         app.input_gate = None
-    if not hasattr(app, "tasks_db_path"):
-        app.tasks_db_path = None
     if not hasattr(app, "event_sink"):
         app.event_sink = None
     if not hasattr(app, "agent_client"):
@@ -105,7 +103,6 @@ def build_task_services(app):
         get_renderer=lambda: app.renderer,
         get_input_services=lambda: app.input_services,
         get_input_gate=lambda: app.input_gate,
-        get_tasks_db_path=lambda: app.tasks_db_path,
         get_event_sink=lambda: app.event_sink,
         get_agent_client=lambda: app.agent_client,
         get_workspace=lambda: app.workspace,
@@ -343,8 +340,11 @@ def test_app_task_services_execution_isolated_from_chat_cancel_state(monkeypatch
     app.agent_client = type("ChatClient", (), {"_user_cancelled": True})()
     app.system_layer = system
     app.record_failure = lambda _agent_name: None
-    app.workspace = type("WorkspaceStub", (), {"cwd": tmp_path})()
-    app.tasks_db_path = str(tmp_path / "tasks.db")
+    app.workspace = type(
+        "WorkspaceStub",
+        (),
+        {"cwd": tmp_path, "tasks_db": tmp_path / "tasks.db"},
+    )()
     app.auto_approve_mutations = False
     app.get_agent_plugin = lambda _agent_name: None
 
@@ -373,9 +373,12 @@ def test_background_dispatch_uses_chat_timeout_when_present(tmp_path):
     app = AppStub()
     app.renderer = object()
     app.agent_client = type("ChatClient", (), {"idle_timeout": 45})()
-    app.workspace = type("WorkspaceStub", (), {"cwd": tmp_path})()
+    app.workspace = type(
+        "WorkspaceStub",
+        (),
+        {"cwd": tmp_path, "tasks_db": tmp_path / "tasks.db"},
+    )()
     app.visibility = "summary"
-    app.tasks_db_path = None
     app.auto_approve_mutations = False
 
     services = build_task_services(app)
@@ -393,9 +396,12 @@ def test_background_dispatch_uses_fallback_timeout_when_chat_timeout_is_missing(
     app = AppStub()
     app.renderer = object()
     app.agent_client = type("ChatClient", (), {"idle_timeout": None})()
-    app.workspace = type("WorkspaceStub", (), {"cwd": tmp_path})()
+    app.workspace = type(
+        "WorkspaceStub",
+        (),
+        {"cwd": tmp_path, "tasks_db": tmp_path / "tasks.db"},
+    )()
     app.visibility = "summary"
-    app.tasks_db_path = None
     app.auto_approve_mutations = False
 
     services = build_task_services(app)
@@ -413,9 +419,12 @@ def test_parallel_calls_use_background_dispatch_when_available(tmp_path, monkeyp
     app = AppStub()
     app.renderer = object()
     app.agent_client = type("ChatClient", (), {"idle_timeout": 45})()
-    app.workspace = type("WorkspaceStub", (), {"cwd": tmp_path})()
+    app.workspace = type(
+        "WorkspaceStub",
+        (),
+        {"cwd": tmp_path, "tasks_db": tmp_path / "tasks.db"},
+    )()
     app.visibility = "summary"
-    app.tasks_db_path = None
     app.auto_approve_mutations = False
     app.delegate_calls = []
 
@@ -466,9 +475,12 @@ def test_parallel_calls_create_dedicated_background_dispatch_and_close_it(tmp_pa
     app = AppStub()
     app.renderer = object()
     app.agent_client = type("ChatClient", (), {"idle_timeout": 45})()
-    app.workspace = type("WorkspaceStub", (), {"cwd": tmp_path})()
+    app.workspace = type(
+        "WorkspaceStub",
+        (),
+        {"cwd": tmp_path, "tasks_db": tmp_path / "tasks.db"},
+    )()
     app.visibility = "summary"
-    app.tasks_db_path = None
     app.auto_approve_mutations = False
     app.delegate = lambda *args, **kwargs: "chat-response"
     app.parse_response = lambda raw: (raw, None, None, False, False, None)
@@ -522,3 +534,50 @@ def test_parallel_calls_create_dedicated_background_dispatch_and_close_it(tmp_pa
     assert created[0] is not created[1]
     assert created[0].kwargs["cancel_event"] is first_cancel
     assert created[1].kwargs["cancel_event"] is second_cancel
+
+
+def test_background_dispatch_does_not_reuse_primary_delegate_override(tmp_path, monkeypatch):
+    """Background dispatch deve usar seu próprio pipeline, não o delegate do dispatch principal."""
+
+    class AppStub:
+        pass
+
+    app = AppStub()
+    app.renderer = object()
+    app.agent_client = type("ChatClient", (), {"idle_timeout": 45})()
+    app.workspace = type(
+        "WorkspaceStub",
+        (),
+        {"cwd": tmp_path, "tasks_db": tmp_path / "tasks.db", "tmp": None},
+    )()
+    app.visibility = "summary"
+    app.auto_approve_mutations = False
+    app.execution_mode = None
+    app.show_muted_message = None
+    app._record_tool_event = None
+    app.session_state = {"session_id": "sess", "history_count": 0}
+    app.dispatch_services = type("PrimaryDispatch", (), {})()
+    app.dispatch_services.delegate = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        AssertionError("background dispatch desviou para o delegate principal")
+    )
+    app.parse_response = lambda raw: (raw, None, None, False, False, None)
+
+    services = build_task_services(app)
+    background_dispatch = services._create_background_dispatch_services()
+
+    class FakeCallService:
+        def __init__(self):
+            self.calls = []
+
+        def call(self, **kwargs):
+            self.calls.append(kwargs)
+            return "through-service"
+
+    fake_service = FakeCallService()
+    monkeypatch.setattr(background_dispatch, "_get_agent_call_service", lambda: fake_service)
+
+    result = background_dispatch.delegate("codex", silent=True, show_output=False)
+
+    assert result == "through-service"
+    assert len(fake_service.calls) == 1
+    assert fake_service.calls[0]["agent"] == "codex"

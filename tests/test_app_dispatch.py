@@ -131,6 +131,7 @@ def dispatch_app():
     app.session_services = MagicMock()
     app.print_response = MagicMock()
     app.record_failure = MagicMock()
+    app._delegate = None
     return app
 
 

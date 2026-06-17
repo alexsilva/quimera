@@ -359,6 +359,9 @@ class AppDispatchServices:
 
     def delegate(self, agent, **options):
         """Executa despacho com retry e finalização padrão da resposta."""
+        delegate_fn_override = self._call(self._get_delegate_fn_override)
+        if delegate_fn_override is not None:
+            return delegate_fn_override(agent, **options)
         dispatch_options = dict(options)
         max_retries_override = dispatch_options.pop("max_retries", None)
         silent = dispatch_options.pop("silent", False)

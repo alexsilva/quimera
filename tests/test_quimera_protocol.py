@@ -178,7 +178,17 @@ def build_task_services(app):
     if not hasattr(app, "agent_client"):
         app.agent_client = None
     if not hasattr(app, "workspace"):
-        app.workspace = None
+        class _DynamicWorkspace:
+            def __init__(self, app_ref):
+                self._app_ref = app_ref
+                self.cwd = Path("/tmp")
+                self.tmp = None
+
+            @property
+            def tasks_db(self):
+                path = getattr(self._app_ref, "tasks_db_path", None)
+                return Path(path) if path else None
+        app.workspace = _DynamicWorkspace(app)
     if not hasattr(app, "dispatch_services"):
         app.dispatch_services = None
     if not hasattr(app, "tool_executor"):
@@ -253,7 +263,6 @@ def build_task_services(app):
         get_renderer=lambda: app.renderer,
         get_input_services=lambda: app.input_services,
         get_input_gate=lambda: app.input_gate,
-        get_tasks_db_path=lambda: app.tasks_db_path,
         get_event_sink=lambda: app.event_sink,
         get_agent_client=lambda: app.agent_client,
         get_workspace=lambda: app.workspace,

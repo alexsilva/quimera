@@ -8,6 +8,12 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+# Impede qualquer teste (inclusive unittest.TestCase) de escrever em ~/.local.
+# CANDIDATE_DIRS é uma lista mutável compartilhada por referência em todos os módulos
+# que fazem `from quimera.paths import CANDIDATE_DIRS`, então a mutação in-place é suficiente.
+import quimera.paths as _quimera_paths
+_quimera_paths.CANDIDATE_DIRS[:] = [_quimera_paths.TMP_BASE_DIR]
+
 from quimera.runtime.task_executor import TaskExecutor
 
 
@@ -66,4 +72,32 @@ def bypass_cli_runtime_dependency_check(monkeypatch):
         yield
         return
     monkeypatch.setattr(cli, "_ensure_required_runtime_dependencies", lambda: None)
+    yield
+
+
+@pytest.fixture(autouse=True)
+def redirect_workspace_base_to_tmp(monkeypatch, tmp_path):
+    """Redireciona find_base_writable para tmp_path em todos os testes.
+
+    Evita que criações de Workspace escrevam em ~/.local/share/quimera durante testes.
+    Os arquivos ficam em /tmp/pytest-* e são removidos automaticamente pelo pytest.
+    """
+    tmp_base = tmp_path / "quimera_base"
+    tmp_base.mkdir(exist_ok=True)
+
+    import quimera.workspace as _ws
+    monkeypatch.setattr(_ws, "find_base_writable", lambda _candidates: tmp_base)
+
+    try:
+        import quimera.plugins.base as _pb
+        monkeypatch.setattr(_pb, "find_base_writable", lambda _candidates: tmp_base)
+    except Exception:
+        pass
+
+    try:
+        import quimera.runtime.drivers.repl as _repl
+        monkeypatch.setattr(_repl, "find_base_writable", lambda _candidates: tmp_base)
+    except Exception:
+        pass
+
     yield

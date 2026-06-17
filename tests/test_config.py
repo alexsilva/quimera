@@ -21,7 +21,7 @@ class TestConfigManagerBasics:
         assert DEFAULT_USER_NAME == ">>>"
         assert DEFAULT_HISTORY_WINDOW == 12
         assert DEFAULT_AUTO_SUMMARIZE_THRESHOLD == 30
-        assert DEFAULT_IDLE_TIMEOUT_SECONDS == 60
+        assert DEFAULT_IDLE_TIMEOUT_SECONDS == 180
 
 
 class TestConfigManagerWithTempDir:

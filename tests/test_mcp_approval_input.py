@@ -364,7 +364,7 @@ def test_approval_show_calls_renderer_show_system_from_background_thread():
 
     assert not t.is_alive()
     # renderer.show_system foi chamado com a mensagem de aprovação
-    assert any("[aprovação]" in m for m in show_calls), f"show_calls={show_calls}"
+    assert any("Aprovar mcp_tool" in m for m in show_calls), f"show_calls={show_calls}"
     # flush foi solicitado após show_system
     assert flush_calls, "flush não foi chamado após show_system"
 
@@ -377,7 +377,7 @@ def test_approval_show_falls_back_to_print_without_renderer():
         handler.approve(tool_name="mcp_tool", summary="do_thing")
 
     printed = " ".join(str(c) for c in mock_print.call_args_list)
-    assert "[aprovação]" in printed
+    assert "Aprovar mcp_tool" in printed
 
 
 # ─────────────────────────────────────────────────────────────────────────────

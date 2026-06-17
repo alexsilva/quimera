@@ -174,7 +174,6 @@ class AppTaskServices:
         get_renderer: Callable[[], Any],
         get_input_services: Callable[[], Any],
         get_input_gate: Callable[[], Any],
-        get_tasks_db_path: Callable[[], str | None],
         get_event_sink: Callable[[], Any],
         get_agent_client: Callable[[], Any],
         get_workspace: Callable[[], Any],
@@ -226,7 +225,6 @@ class AppTaskServices:
         - ``get_renderer``: retorna o renderer atual.
         - ``get_input_services``: retorna os serviços de input atuais.
         - ``get_input_gate``: retorna o gate de input atual.
-        - ``get_tasks_db_path``: retorna o caminho atual do banco de tasks.
         - ``get_event_sink``: retorna o event sink atual.
         - ``get_agent_client``: retorna o agent client atual.
         - ``get_workspace``: retorna o workspace atual.
@@ -274,7 +272,6 @@ class AppTaskServices:
         self._get_renderer = get_renderer
         self._get_input_services = get_input_services
         self._get_input_gate = get_input_gate
-        self._get_tasks_db_path = get_tasks_db_path
         self._get_event_sink = get_event_sink
         self._get_agent_client = get_agent_client
         self._get_workspace = get_workspace
@@ -394,11 +391,10 @@ class AppTaskServices:
         if register_as_primary:
             self._set_approval_handler(approval_handler)
         workspace = self._get_workspace()
-        tasks_db_path = self._get_tasks_db_path()
         return ToolExecutor(
             config=ToolRuntimeConfig(
                 workspace_root=workspace.cwd,
-                db_path=Path(tasks_db_path) if tasks_db_path else None,
+                db_path=workspace.tasks_db,
                 require_approval_for_mutations=require_approval_for_mutations,
             ),
             approval_handler=approval_handler,
@@ -508,7 +504,8 @@ class AppTaskServices:
         """Sincroniza estado compartilhado de tasks no app (delega ao repositório)."""
         shared_state = self._get_shared_state()
         current_job_id = self._get_current_job_id()
-        if not isinstance(shared_state, dict) or current_job_id is None or not self._get_tasks_db_path():
+        workspace = self._get_workspace()
+        if not isinstance(shared_state, dict) or current_job_id is None or workspace is None:
             return
         shared_state["task_overview"] = self.build_task_overview()
         try:
@@ -608,10 +605,10 @@ class AppTaskServices:
     # ── Builders privados ──────────────────────────────────────────────
 
     def _build_task_repository(self) -> TaskRepository:
-        db_path = self._get_tasks_db_path()
-        if not db_path:
-            raise ValueError("tasks_db_path is required to access task repository")
-        return TaskRepository(db_path, event_sink=self._get_event_sink())
+        workspace = self._get_workspace()
+        if workspace is None:
+            raise ValueError("Workspace is required to access task repository")
+        return TaskRepository(workspace.tasks_db, event_sink=self._get_event_sink())
 
     def _was_user_cancelled(self) -> bool:
         agent_client = self._get_agent_client()
@@ -642,6 +639,8 @@ class AppTaskServices:
             return self._get_dispatch_services()
 
         chat_agent_client = self._get_agent_client()
+        if chat_agent_client is None:
+            return self._get_dispatch_services()
         background_timeout = getattr(chat_agent_client, "idle_timeout", None)
         if background_timeout is None or not isinstance(background_timeout, (int, float)) or background_timeout <= 0:
             background_timeout = _BACKGROUND_AGENT_TIMEOUT_SECONDS

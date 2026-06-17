@@ -394,7 +394,6 @@ class QuimeraApp:
             get_renderer=lambda: self.renderer,
             get_input_services=lambda: self.input_services,
             get_input_gate=lambda: self.input_gate,
-            get_tasks_db_path=lambda: self.tasks_db_path,
             get_event_sink=lambda: self.event_sink,
             get_agent_client=lambda: self.agent_client,
             get_workspace=lambda: self.workspace,
