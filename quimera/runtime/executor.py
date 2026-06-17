@@ -8,6 +8,7 @@ from .models import ToolCall, ToolResult
 from .policy import ToolPolicy, ToolPolicyError
 from .registry import ToolRegistry
 from .tools.files import FileTools
+from .tools import git
 from .tools.patch import PatchTool
 from .tools.shell import ShellTool
 from .tools.web import WebTool
@@ -82,6 +83,8 @@ class ToolExecutor:
         self.registry.register("list_agents", self._delegate_tools.list_agents)
         self.registry.register("todo_write", self._todo_tools.todo_write)
         self.registry.register("todo_list", self._todo_tools.todo_list)
+        # Git tools
+        git.register(self.registry, self.policy, self.config)
 
     @property
     def approval_handler(self):

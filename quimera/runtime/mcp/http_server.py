@@ -47,6 +47,12 @@ HTTP_READ_LOCAL_TOOLS = frozenset({
     "get_job",
     "memory_retrieve",
     "todo_list",
+    # Git read-only tools
+    "git_status",
+    "git_log",
+    "git_diff",
+    "git_branch",
+    "git_fetch",
 })
 
 HTTP_READ_TOOLS = frozenset({
@@ -60,6 +66,11 @@ HTTP_AGENT_TOOLS = frozenset({
     "memory_save",
     "delegate",
     "list_agents",
+    # Git mutation tools (require approval)
+    "git_add",
+    "git_commit",
+    "git_checkout",
+    "git_push",
 })
 
 HTTP_TOOL_PROFILES: dict[str, frozenset[str] | None] = {

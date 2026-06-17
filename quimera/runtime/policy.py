@@ -48,6 +48,12 @@ class ToolPolicy:
         """Inicializa uma instância de ToolPolicy."""
         self.config = config
         self.blocked_tools: list[str] = []
+        self._tool_validators: dict[str, object] = {}
+
+    def register_tool_validator(self, tool_names: list[str], tool) -> None:
+        """Registra um ValidatableTool como responsável pela validação das tools listadas."""
+        for name in tool_names:
+            self._tool_validators[name] = tool
 
     def validate(self, call: ToolCall) -> None:
         """Executa validate."""
@@ -55,6 +61,10 @@ class ToolPolicy:
             raise ToolPolicyError(
                 f"Ferramenta '{call.name}' bloqueada pelo modo de execução ativo."
             )
+        tool = self._tool_validators.get(call.name)
+        if tool is not None:
+            tool.validate(call)
+            return
         validator_name = f"_validate_{call.name}"
         validator = getattr(self, validator_name, None)
         if validator is None:
@@ -81,6 +91,10 @@ class ToolPolicy:
             "remove_file",
             "write_stdin",
             "delegate",
+            "git_add",
+            "git_commit",
+            "git_checkout",
+            "git_push",
         }:
             return self.config.require_approval_for_mutations
         return False

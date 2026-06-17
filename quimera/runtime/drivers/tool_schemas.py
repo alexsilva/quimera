@@ -777,6 +777,392 @@ TOOL_SCHEMAS = [
             },
         },
     },
+    # ------------------------------------------------------------------
+    # Git tools
+    # ------------------------------------------------------------------
+    {
+        "type": "function",
+        "function": {
+            "name": "git_status",
+            "description": (
+                "Retorna o status do repositório git de forma estruturada: branch atual, "
+                "arquivos staged/unstaged/untracked, e distância ao upstream (ahead/behind)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "ok": {"type": "boolean"},
+                    "content": {"type": "string"},
+                    "data": {
+                        "type": "object",
+                        "properties": {
+                            "branch": {"type": "string"},
+                            "staged": {"type": "array", "items": {"type": "object"}},
+                            "unstaged": {"type": "array", "items": {"type": "object"}},
+                            "untracked": {"type": "array", "items": {"type": "string"}},
+                            "ahead": {"type": "integer"},
+                            "behind": {"type": "integer"},
+                            "clean": {"type": "boolean"},
+                        },
+                    },
+                    "error": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+                },
+                "required": ["ok", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "git_log",
+            "description": "Lista commits recentes de forma estruturada (hash, autor, data, mensagem).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "max_count": {
+                        "type": "integer",
+                        "description": "Número máximo de commits a retornar (padrão: 10, máx: 200).",
+                    },
+                    "branch": {
+                        "type": "string",
+                        "description": "Branch ou ref a partir da qual listar commits. Padrão: HEAD.",
+                    },
+                },
+                "required": [],
+            },
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "ok": {"type": "boolean"},
+                    "content": {"type": "string"},
+                    "data": {
+                        "type": "object",
+                        "properties": {
+                            "commits": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "hash": {"type": "string"},
+                                        "short_hash": {"type": "string"},
+                                        "author": {"type": "string"},
+                                        "author_email": {"type": "string"},
+                                        "date": {"type": "string"},
+                                        "message": {"type": "string"},
+                                    },
+                                },
+                            },
+                        },
+                    },
+                    "error": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+                },
+                "required": ["ok", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "git_diff",
+            "description": (
+                "Retorna o diff do repositório. Pode mostrar alterações não staged (padrão), "
+                "staged (staged=true) ou entre dois refs (ref1, ref2). "
+                "Filtro opcional por arquivo (path)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "staged": {
+                        "type": "boolean",
+                        "description": "Se true, mostra diff staged (git diff --staged). Padrão: false.",
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "Caminho relativo ao workspace para filtrar o diff.",
+                    },
+                    "ref1": {
+                        "type": "string",
+                        "description": "Ref/commit base para comparação (ex: HEAD~1, main).",
+                    },
+                    "ref2": {
+                        "type": "string",
+                        "description": "Ref/commit alvo para comparação. Requer ref1.",
+                    },
+                },
+                "required": [],
+            },
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "ok": {"type": "boolean"},
+                    "content": {"type": "string", "description": "stat + diff completo"},
+                    "truncated": {"type": "boolean"},
+                    "data": {
+                        "type": "object",
+                        "properties": {
+                            "diff": {"type": "string"},
+                            "stat": {"type": "string"},
+                            "staged": {"type": "boolean"},
+                        },
+                    },
+                    "error": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+                },
+                "required": ["ok", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "git_branch",
+            "description": "Lista branches locais (e opcionalmente remotas) do repositório.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "all": {
+                        "type": "boolean",
+                        "description": "Lista branches locais e remotas (git branch --all). Padrão: false.",
+                    },
+                    "remote": {
+                        "type": "boolean",
+                        "description": "Lista apenas branches remotas (git branch --remote). Padrão: false.",
+                    },
+                },
+                "required": [],
+            },
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "ok": {"type": "boolean"},
+                    "content": {"type": "string"},
+                    "data": {
+                        "type": "object",
+                        "properties": {
+                            "branches": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "name": {"type": "string"},
+                                        "upstream": {"type": "string"},
+                                        "current": {"type": "boolean"},
+                                    },
+                                },
+                            },
+                            "current": {"type": "string"},
+                        },
+                    },
+                    "error": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+                },
+                "required": ["ok", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "git_fetch",
+            "description": (
+                "Faz fetch de um remote, atualizando refs remotas locais sem alterar "
+                "branches locais nem o working tree."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "remote": {
+                        "type": "string",
+                        "description": "Nome do remote (padrão: origin).",
+                    },
+                    "prune": {
+                        "type": "boolean",
+                        "description": "Remove refs remotas que não existem mais no remote (--prune). Padrão: false.",
+                    },
+                },
+                "required": [],
+            },
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "ok": {"type": "boolean"},
+                    "content": {"type": "string"},
+                    "data": {
+                        "type": "object",
+                        "properties": {
+                            "remote": {"type": "string"},
+                            "output": {"type": "string"},
+                        },
+                    },
+                    "error": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+                },
+                "required": ["ok", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "git_add",
+            "description": "Adiciona arquivos ao índice (staging area). Equivale a `git add <paths>`.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "paths": {
+                        "oneOf": [
+                            {"type": "string"},
+                            {"type": "array", "items": {"type": "string"}},
+                        ],
+                        "description": "Arquivo(s) a adicionar. Use '.' para adicionar tudo. Padrão: '.'.",
+                    },
+                },
+                "required": [],
+            },
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "ok": {"type": "boolean"},
+                    "content": {"type": "string"},
+                    "data": {
+                        "type": "object",
+                        "properties": {
+                            "paths": {"type": "array", "items": {"type": "string"}},
+                            "staged": {"type": "array", "items": {"type": "string"}},
+                        },
+                    },
+                    "error": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+                },
+                "required": ["ok", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "git_commit",
+            "description": "Cria um commit com os arquivos staged e a mensagem fornecida.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "message": {
+                        "type": "string",
+                        "description": "Mensagem do commit (obrigatória).",
+                    },
+                    "amend": {
+                        "type": "boolean",
+                        "description": "Emendar o commit anterior (--amend). Padrão: false.",
+                    },
+                },
+                "required": ["message"],
+            },
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "ok": {"type": "boolean"},
+                    "content": {"type": "string"},
+                    "data": {
+                        "type": "object",
+                        "properties": {
+                            "commit": {"type": "string", "description": "Full commit hash"},
+                            "short_hash": {"type": "string"},
+                            "message": {"type": "string"},
+                        },
+                    },
+                    "error": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+                },
+                "required": ["ok", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "git_checkout",
+            "description": (
+                "Muda para uma branch existente ou cria uma nova (create=true). "
+                "Force-push e mudanças destrutivas devem ser feitas via run_shell com aprovação explícita."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "branch": {
+                        "type": "string",
+                        "description": "Nome da branch de destino (obrigatório).",
+                    },
+                    "create": {
+                        "type": "boolean",
+                        "description": "Cria a branch antes de mudar (git checkout -b). Padrão: false.",
+                    },
+                },
+                "required": ["branch"],
+            },
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "ok": {"type": "boolean"},
+                    "content": {"type": "string"},
+                    "data": {
+                        "type": "object",
+                        "properties": {
+                            "branch": {"type": "string"},
+                            "created": {"type": "boolean"},
+                            "output": {"type": "string"},
+                        },
+                    },
+                    "error": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+                },
+                "required": ["ok", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "git_push",
+            "description": (
+                "Faz push para um remote. "
+                "Force-push (--force / -f) é bloqueado; use run_shell com aprovação explícita se necessário."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "remote": {
+                        "type": "string",
+                        "description": "Nome do remote (padrão: origin).",
+                    },
+                    "branch": {
+                        "type": "string",
+                        "description": "Branch local a enviar. Se omitido, usa a branch atual.",
+                    },
+                    "set_upstream": {
+                        "type": "boolean",
+                        "description": "Define o upstream da branch local (-u). Padrão: false.",
+                    },
+                },
+                "required": [],
+            },
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "ok": {"type": "boolean"},
+                    "content": {"type": "string"},
+                    "data": {
+                        "type": "object",
+                        "properties": {
+                            "remote": {"type": "string"},
+                            "branch": {"type": "string"},
+                            "output": {"type": "string"},
+                        },
+                    },
+                    "error": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+                },
+                "required": ["ok", "content"],
+            },
+        },
+    },
     {
         "type": "function",
         "function": {
