@@ -260,6 +260,7 @@ class QuimeraApp:
             session_id=session_id,
             workspace_tmp_root=workspace_tmp_root,
             process_supervisor=self.process_supervisor,
+            pause_idle_if=self._has_mcp_pending,
         )
         self.task_executor_factory = create_executor
         self.session_summarizer = SessionSummarizer(
@@ -769,6 +770,17 @@ class QuimeraApp:
         if reg is not None:
             return list(reg.all_plugins())
         return list(plugins.all_plugins())
+
+    def _has_mcp_pending(self) -> bool:
+        """Retorna True enquanto o MCP server interno tem tool calls em execução.
+
+        Usado pelo ProcessRunner para suspender o idle timer do agente enquanto
+        ele aguarda silenciosamente a resposta de uma tool call longa (ex: delegate).
+        O atributo ``internal_mcp_server`` é setado por ``start_embedded_mcp`` após
+        a criação do AgentClient, por isso o lookup é feito via getattr.
+        """
+        server = getattr(self, "internal_mcp_server", None)
+        return bool(server and server.has_pending_calls)
 
     def configure_mcp_socket(self, socket_path: str | None, token: str | None = None) -> None:
         """Propaga o socket MCP e token para os plugins dos agentes ativos na sessão."""

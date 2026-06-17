@@ -43,7 +43,10 @@ class GitTool(ToolBase, tool_prefix="git"):
 
     def git_log(self, call: ToolCall) -> ToolResult:
         """Retorna commits recentes de forma estruturada."""
-        max_count = max(1, min(200, int(call.arguments.get("max_count", 10))))
+        try:
+            max_count = max(1, min(200, int(call.arguments.get("max_count", 10))))
+        except (TypeError, ValueError):
+            max_count = 10
         branch = str(call.arguments.get("branch") or "").strip()
 
         fmt = "%H%x00%h%x00%an%x00%ae%x00%ad%x00%s"

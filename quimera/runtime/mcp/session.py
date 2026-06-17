@@ -134,6 +134,7 @@ def start_embedded_mcp(
     app.configure_mcp_socket(resolved_socket_path, internal_mcp_token)
     setattr(app, "mcp_socket_path", resolved_socket_path)
     setattr(app, "internal_mcp_socket_path", resolved_socket_path)
+    setattr(app, "internal_mcp_server", internal_mcp_server)
 
     external_mcp_server = None
     external_mcp_http_server = None

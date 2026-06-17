@@ -327,6 +327,16 @@ class TestServeSocket:
             time.sleep(0.02)
         # Não lança exceção, servidor está rodando
 
+
+class TestPendingCallsProperty:
+    def test_has_pending_calls_reflects_internal_queue(self):
+        """has_pending_calls expõe estado público thread-safe para o app."""
+        server = _make_server()
+        assert server.has_pending_calls is False
+        with server._pending_lock:
+            server._pending_calls.append({"msg_id": 1})
+        assert server.has_pending_calls is True
+
     def test_serve_socket_multiplos_clientes(self, tmp_path):
         """Verifica que Test serve socket multiplos clientes."""
         sock_path = str(tmp_path / "mcp_multi.sock")

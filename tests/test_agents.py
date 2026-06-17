@@ -586,21 +586,20 @@ def test_agent_client_run_timeout(renderer):
             mock_stdout_thread = MagicMock()
             mock_stderr_thread = MagicMock()
             # Loop stays alive for first iteration; idle timeout fires before second check
-            mock_stdout_thread.is_alive.side_effect = [True]
+            mock_stdout_thread.is_alive.side_effect = [True, False]
             mock_stderr_thread.is_alive.return_value = False
             mock_thread_cls.side_effect = [mock_stdout_thread, mock_stderr_thread]
 
-            with patch("time.time") as mock_time:
-                # 1. _last_stdout_time = time.time() -> 100.0 (ProcessRunner.__init__)
-                # 2. start_time = time.time() -> 101.0 (ProcessRunner.watch)
-                # 3. elapsed = int(time.time() - start_time) -> 101.0 => elapsed=1
-                # 4. now = time.time() -> 101.0 (_check_timeout)
-                # idle = 101.0 - 100.0 = 1.0; idle_timeout = 0.1; 1.0 > 0.1 => idle timeout fires
-                mock_time.side_effect = [100.0, 101.0, 101.0, 101.0]
-                with patch("time.sleep"):
-                    result = client.run(["slow"], silent=False)
-                    assert result is None
-                    renderer.show_error.assert_called()
+            with patch("time.time", return_value=500.0):
+                with patch("time.monotonic") as mock_monotonic:
+                    # 1. _last_stdout_time = 100.0 (ProcessRunner.__init__)
+                    # 2. start_time = 100.0 (watch)
+                    # 3. now = 101.0 => elapsed=1 e idle=1.0 > 0.1
+                    mock_monotonic.side_effect = [100.0, 100.0, 101.0]
+                    with patch("time.sleep"):
+                        result = client.run(["slow"], silent=False)
+                        assert result is None
+                        renderer.show_error.assert_called()
 
 
 def test_agent_client_run_input_failure(renderer):
@@ -2370,14 +2369,43 @@ def test_process_runner_watch_emits_tick_only_on_elapsed_change():
 
     ticks = []
     with patch("time.sleep"):
-        with patch("time.time") as mock_time:
-            mock_time.side_effect = [
+        with patch("time.monotonic") as mock_monotonic:
+            mock_monotonic.side_effect = [
                 100.0,  # start_time
-                100.2, 100.2,
-                100.4, 100.4,
-                101.1, 101.1,
+                100.2,
+                100.4,
+                101.1,
             ]
             result = runner.watch(on_tick=ticks.append)
 
     assert result == ProcessRunner.COMPLETED
     assert ticks == [0, 1]
+
+
+def test_process_runner_pause_idle_if_suppresses_idle_timeout():
+    """Enquanto pause_idle_if retornar True, o watchdog não deve encerrar por idle."""
+    proc = MagicMock()
+    stdout_thread = MagicMock()
+    stderr_thread = MagicMock()
+    stdout_thread.is_alive.side_effect = [True, True, False]
+    stderr_thread.is_alive.return_value = False
+    runner = ProcessRunner(
+        proc,
+        stdout_thread,
+        stderr_thread,
+        {"stderr": [], "stdout_total": 0},
+        threading.Event(),
+        idle_timeout=0.1,
+        pause_idle_if=lambda: True,
+    )
+
+    with patch("time.sleep"):
+        with patch("time.monotonic") as mock_monotonic:
+            mock_monotonic.side_effect = [
+                100.0,  # start_time
+                101.0,  # 1a iteração
+                102.0,  # 2a iteração
+            ]
+            result = runner.watch()
+
+    assert result == ProcessRunner.COMPLETED

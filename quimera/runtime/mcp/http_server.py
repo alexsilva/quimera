@@ -84,6 +84,14 @@ DEFAULT_HTTP_READ_ONLY_TOOLS = HTTP_READ_TOOLS
 DEFAULT_HTTP_TOOL_PROFILE = "read"
 
 
+def _set_mcp_state(out: Any, state: dict) -> None:
+    """Anexa o estado de sessão MCP ao stream de saída quando suportado."""
+    try:
+        setattr(out, "_mcp_state", state)
+    except Exception:
+        pass
+
+
 class _SSEQueueOutput:
     """Writable stream-like object that puts JSON-RPC objects into an SSE queue."""
 
@@ -398,7 +406,7 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
                 "http_delegate_auto_approve": mcp_server._http_profile in ("agent", "all"),
             }
         out = StringIO()
-        setattr(out, "_mcp_state", state)
+        _set_mcp_state(out, state)
         try:
             mcp_server._mcp._process_message(msg, out=out, transport="http_mcp")
             mcp_server._mcp._drain_all_pending(out)
@@ -478,7 +486,7 @@ class _MCPHTTPRequestHandler(BaseHTTPRequestHandler):
             state["session_id"] = session_id
         state["http_profile"] = mcp_server._http_profile
         state["http_delegate_auto_approve"] = mcp_server._http_profile in ("agent", "all")
-        setattr(out, "_mcp_state", state)
+        _set_mcp_state(out, state)
 
         try:
             mcp_server._mcp._process_message(msg, out=out, transport="http_mcp")

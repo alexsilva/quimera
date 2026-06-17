@@ -38,6 +38,7 @@ class ProcessRunner:
         cancel_event: threading.Event,
         idle_timeout,
         max_wall_clock: float | None = MAX_WALL_CLOCK_SECONDS,
+        pause_idle_if=None,
     ):
         self.proc = proc
         self.stdout_thread = stdout_thread
@@ -46,10 +47,12 @@ class ProcessRunner:
         self._cancel_event = cancel_event
         self._idle_timeout = idle_timeout
         self._max_wall_clock = max_wall_clock
+        self._pause_idle_if = pause_idle_if
         self.rate_limit_detected = False
         self.rate_limit_detected_at: float | None = None
+        self._rate_limit_detected_monotonic_at: float | None = None
         self._rate_checked = 0
-        self._last_stdout_time = time.time()
+        self._last_stdout_time = time.monotonic()
         self._last_stdout_total = 0
 
     def notify_rate_limit(self) -> None:
@@ -57,6 +60,8 @@ class ProcessRunner:
         self.rate_limit_detected = True
         if self.rate_limit_detected_at is None:
             self.rate_limit_detected_at = time.time()
+        if self._rate_limit_detected_monotonic_at is None:
+            self._rate_limit_detected_monotonic_at = time.monotonic()
 
     def _check_rate_limit_silent(self) -> None:
         """Verifica novos itens de stderr por sinais de rate limit (modo silencioso)."""
@@ -74,8 +79,17 @@ class ProcessRunner:
         """
         if self._idle_timeout is None or self._idle_timeout <= 0:
             return None
-        if self.rate_limit_detected and self.rate_limit_detected_at is not None:
-            if now - self.rate_limit_detected_at > _RATE_LIMIT_YIELD_SECONDS:
+        if callable(self._pause_idle_if):
+            try:
+                if self._pause_idle_if():
+                    # Enquanto houver trabalho externo pendente, o agente pode ficar
+                    # silencioso legitimamente; reseta o relógio de idle.
+                    self._last_stdout_time = now
+                    return None
+            except Exception:
+                _logger.exception("pause_idle_if callback failed")
+        if self.rate_limit_detected and self._rate_limit_detected_monotonic_at is not None:
+            if now - self._rate_limit_detected_monotonic_at > _RATE_LIMIT_YIELD_SECONDS:
                 return self.RATE_LIMIT
         else:
             silent_duration = now - self._last_stdout_time
@@ -100,7 +114,7 @@ class ProcessRunner:
         -------
         Uma das constantes: ``COMPLETED``, ``CANCELLED``, ``TIMEOUT``, ``RATE_LIMIT``.
         """
-        start_time = time.time()
+        start_time = time.monotonic()
         elapsed = 0
         last_tick_elapsed = None
         self._rate_checked = 0
@@ -131,7 +145,7 @@ class ProcessRunner:
             # Detecta nova atividade de stdout para resetar o timer de idle
             current_total = self.result_holder.get("stdout_total", 0)
             if current_total != self._last_stdout_total:
-                self._last_stdout_time = time.time()
+                self._last_stdout_time = time.monotonic()
                 self._last_stdout_total = current_total
 
             # Em modo silencioso, detecta rate limit no stderr acumulado
@@ -139,7 +153,8 @@ class ProcessRunner:
                 self._check_rate_limit_silent()
 
             time.sleep(0.2)
-            elapsed = int(time.time() - start_time)
+            now = time.monotonic()
+            elapsed = int(now - start_time)
 
             if on_tick is not None and elapsed != last_tick_elapsed:
                 on_tick(elapsed)
@@ -154,7 +169,7 @@ class ProcessRunner:
                 self.stderr_thread.join(2)
                 return self.WALL_TIMEOUT
 
-            reason = self._check_timeout(elapsed, time.time())
+            reason = self._check_timeout(elapsed, now)
             if reason is not None:
                 terminate_process_group(self.proc)
                 self.stdout_thread.join(2)

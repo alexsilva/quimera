@@ -244,6 +244,28 @@ class TestProcessMainFlow(unittest.TestCase):
             "Nenhum agente disponível respondeu."
         )
 
+    def test_failover_recomputes_other_agents_before_extend_follow_up(self):
+        """Após failover, o debate sequencial deve excluir o agente que assumiu."""
+        app = _make_app(active_agents=["codex", "claude", "opencode"], threads=2)
+        app.parse_routing = Mock(return_value=("codex", "status", False))
+        responses = iter([None, "claude respondeu", "codex debate", "claude síntese", "codex réplica"])
+        app.dispatch_services.delegate = Mock(side_effect=lambda *a, **kw: next(responses))
+
+        def fake_parse(resp):
+            if resp is None:
+                return (None, None, None, False, False, None)
+            if resp == "claude respondeu":
+                return (resp, None, None, True, False, None)
+            return (resp, None, None, False, False, None)
+
+        app.parse_response = Mock(side_effect=fake_parse)
+
+        app.chat_round_orchestrator.process("status")
+
+        delegated_agents = [call.args[0] for call in app.dispatch_services.delegate.call_args_list]
+        self.assertEqual(delegated_agents[:2], ["codex", "claude"])
+        self.assertEqual(delegated_agents[2:], ["opencode", "claude", "opencode"])
+
     def test_main_flow_fallback_cancelled_resets_turn_without_warning(self):
         """Cancelamento após fallback no fluxo principal deve resetar turno e retornar."""
         app = _make_app(active_agents=["codex", "claude", "opencode"], threads=2)

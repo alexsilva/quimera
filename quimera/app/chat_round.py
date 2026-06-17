@@ -387,8 +387,6 @@ class ChatRoundOrchestrator:
                 first_agent = reserved_agent
         self._set_pending_input_for(None)
 
-        other_agents = [n for n in self._agent_pool.agents if n != first_agent]
-
         self._set_round_index(self._get_round_index() + 1)
         self._set_summary_agent_preference(first_agent)
         history_snapshot = self._persist_user_message(message)
@@ -463,6 +461,7 @@ class ChatRoundOrchestrator:
                 self._show_agent_message(first_agent, response)
             self._handle_needs_human_input(first_agent)
             return
+        other_agents = [agent for agent in self._agent_pool.agents if agent != first_agent]
         self._dispatch_services.print_response(first_agent, response)
         if response is not None:
             self._session_services.persist_message(first_agent, response)

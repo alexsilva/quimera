@@ -174,6 +174,12 @@ class MCPServer:
         """Ferramentas permitidas via MCP; ``None`` significa sem filtro."""
         return self._allowed_tools
 
+    @property
+    def has_pending_calls(self) -> bool:
+        """Indica se há tools/call ainda em execução neste servidor MCP."""
+        with self._pending_lock:
+            return bool(self._pending_calls)
+
     def set_allowed_tools(self, allowed_tools: Iterable[str] | None) -> None:
         """Atualiza a allowlist de ferramentas expostas por este servidor MCP."""
         self._allowed_tools = self._normalize_allowed_tools(allowed_tools)
@@ -185,6 +191,8 @@ class MCPServer:
         """Encerra o pool de threads, aguardando tarefas em execução."""
         self._thread_pool.shutdown(wait=True)
 
+        self._pending_calls.clear()
+        self._cancel_events.clear()
     # ------------------------------------------------------------------
     # I/O
     # ------------------------------------------------------------------
@@ -600,6 +608,13 @@ class MCPServer:
             except concurrent.futures.TimeoutError:
                 with self._cancel_lock:
                     self._cancel_events.pop(msg_id, None)
+                with self._pending_lock:
+                    owned = [c for c in self._pending_calls if c["msg_id"] == msg_id]
+                    for c in owned:
+                        try:
+                            self._pending_calls.remove(c)
+                        except ValueError:
+                            pass
                 return self._err(msg_id, -32603, "Tool execution timed out")
 
         if cancel_event.is_set():

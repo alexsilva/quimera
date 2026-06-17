@@ -155,7 +155,7 @@ class DelegateTools:
         thread — retorna job_id/task_id imediatamente para polling.
         """
         # Detecta se há canal SSE (assinatura de resposta assíncrona)
-        meta_state = call.metadata.get("_mcp_state", {}) or {}
+        meta_state = call.metadata.get("_mcp_state") or {}
         sse_available = meta_state.get("sse_queue") is not None
 
         if sse_available:

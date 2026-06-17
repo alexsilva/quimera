@@ -50,7 +50,7 @@ class AgentClient:
     def __init__(self, renderer, metrics_file=None, idle_timeout=None, visibility=Visibility.SUMMARY,
                  working_dir=None, workspace_root=None, tool_executor=None, error_reporter=None,
                  muted_reporter=None, session_id=None, workspace_tmp_root=None,
-                 process_supervisor=None):
+                 process_supervisor=None, pause_idle_if=None):
         """Inicializa uma instância de AgentClient."""
         self.renderer = renderer
         self.error_reporter = error_reporter
@@ -58,6 +58,7 @@ class AgentClient:
         self.metrics_file = metrics_file
         self._metrics_lock = threading.Lock()
         self.idle_timeout = idle_timeout
+        self._pause_idle_if = pause_idle_if
         self.visibility = Visibility(visibility)
         # `workspace_root` é mantido como alias compatível.
         self.working_dir = working_dir if working_dir is not None else workspace_root
@@ -379,6 +380,7 @@ class AgentClient:
         runner = ProcessRunner(
             proc, stdout_thread, stderr_thread, result_holder,
             self._cancel_event, self.idle_timeout,
+            pause_idle_if=self._pause_idle_if,
         )
 
         try:
