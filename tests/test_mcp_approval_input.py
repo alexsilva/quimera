@@ -327,6 +327,32 @@ def test_approval_xthread_denies_on_n():
     assert result_holder.get("result") is False
 
 
+def test_approval_inactive_gate_xthread_falls_back_to_regular_input():
+    """InputGate inativo em thread de background não deve auto-negar.
+
+    Regressão do guard introduzido em approval.py: InputGate existir mas estar
+    inativo não prova raw mode residual. O handler deve cair no caminho normal
+    de input com suspend/resume em vez de negar automaticamente.
+    """
+    mock_gate = MagicMock()
+    mock_gate.is_active.return_value = False
+
+    handler = ConsoleApprovalHandler(input_gate=mock_gate, input_fn=lambda _: "y")
+
+    result_holder = {}
+
+    def _bg():
+        result_holder["result"] = handler.approve(tool_name="run_shell", summary="pwd")
+
+    t = threading.Thread(target=_bg)
+    t.start()
+    t.join(timeout=5.0)
+
+    assert not t.is_alive(), "approve() ficou bloqueado na thread de background"
+    assert result_holder.get("result") is True
+    mock_gate.read_input_in_terminal.assert_not_called()
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Bug #3 — _show() chama renderer.show_system + flush de thread background
 # ─────────────────────────────────────────────────────────────────────────────

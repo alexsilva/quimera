@@ -215,22 +215,10 @@ class ConsoleApprovalHandler(ApprovalHandler):
                     return False
                 answer = raw.strip().lower()
             else:
-                # Background thread com InputGate existente mas inativo: o terminal
-                # pode estar em raw mode residual do prompt_toolkit, e input()/readline()
-                # trava porque Enter envia \r em vez de \n. Auto-deny preventivo.
-                # Só entra aqui se input_gate tiver is_active() (ou seja, é um InputGate
-                # real, não um mock de teste).
-                has_inactive_gate = (
-                    not is_main
-                    and self._input_gate is not None
-                    and callable(gate_is_active)
-                    and not input_gate_active
-                )
-                if has_inactive_gate:
-                    self._show(
-                        "  terminal raw mode — negando automaticamente"
-                    )
-                    return False
+                # Background thread sem prompt_toolkit ativo: usa o caminho
+                # padrão com suspend/resume. InputGate inativo não é prova de
+                # raw mode residual; no fluxo normal do app isso pode ocorrer
+                # durante tool approval fora do prompt.
                 renderer = self._renderer
                 _suspend_output = getattr(renderer, "suspend_output", None)
                 _resume_output = getattr(renderer, "resume_output", None)
