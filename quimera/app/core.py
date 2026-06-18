@@ -12,7 +12,7 @@ import time
 from collections import defaultdict
 from datetime import datetime, timezone
 from contextlib import nullcontext
-from importlib import metadata
+
 from pathlib import Path
 
 from .agent_pool import AgentPool, AgentPoolView
@@ -1040,36 +1040,6 @@ class QuimeraApp:
         """Retorna o prompt visível ao humano com nome e modo atual."""
         active_mode = getattr(getattr(self, "execution_mode", None), "name", None)
         return PromptFormatter.format_user_prompt(self.user_name, active_mode)
-
-    @staticmethod
-    def _resolve_app_version() -> str:
-        """Resolve a versão instalada do pacote, com fallback seguro."""
-        try:
-            ver = metadata.version("quimera")
-            if ver is not None:
-                return ver
-        except Exception:
-            pass
-        return "dev"
-
-    @staticmethod
-    def _build_welcome_logo() -> str:
-        """Retorna logo ASCII simples para o banner inicial."""
-        return (
-            " / __ \\__  __(_)___ ___  ___  _________ _\n"
-            "/ / / / / / / / __ `__ \\/ _ \\/ ___/ __ `/\n"
-            "/ /_/ / /_/ / / / / / / /  __/ /  / /_/ / \n"
-            "\\___\\_\\__,_/_/_/ /_/ /_/\\___/_/   \\__,_/  "
-        )
-
-    def _build_welcome_message(self) -> str:
-        """Monta texto de boas-vindas com versão e path do projeto."""
-        version = self._resolve_app_version()
-        workspace = getattr(self, "workspace", None)
-        project_path = str(getattr(workspace, "cwd", Path.cwd()))
-        logo_lines = self._build_welcome_logo().split("\n")
-        logo_lines[-1] = logo_lines[-1].rstrip() + f"  v{version}"
-        return f"{chr(10).join(logo_lines)}\n"
 
     def _resolve_active_model_label(self) -> str:
         """Resolve o modelo ativo a partir do primeiro plugin/agente ativo."""

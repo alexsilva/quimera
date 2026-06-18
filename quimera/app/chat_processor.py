@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from .config import logger
+from .welcome_presenter import WelcomePresenter
 from ..runtime.tools.todo import TodoRegistry
 from .tty_control import TtyController
 from .session_bootstrap import (
@@ -64,7 +65,7 @@ def run_chat_loop(
         agent_client._user_cancelled = False
     _tty.suppress_control_echo()
     show_banner = getattr(app.renderer, "show_banner", app.renderer.show_system)
-    show_banner(app._build_welcome_message())
+    show_banner(WelcomePresenter.build_welcome_message())
     workspace = getattr(app, "workspace", None)
     project_path = str(getattr(workspace, "cwd", Path.cwd()))
     _show_neutral = getattr(app.renderer, "show_system_neutral", app.renderer.show_system)

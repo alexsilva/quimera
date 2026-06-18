@@ -788,17 +788,12 @@ class TestInputContextAndWelcome(unittest.TestCase):
         self.assertEqual(context.get("elapsed"), "0s")
 
     def test_build_welcome_message_includes_version_and_project_path(self):
-        from quimera.app.core import QuimeraApp
+        from quimera.app.welcome_presenter import WelcomePresenter
 
-        app = QuimeraApp.__new__(QuimeraApp)
-        app.workspace = MagicMock(cwd=Path("/tmp/projeto"), tasks_db=Path("/tmp/quimera_test_tasks.db"))
-        app._build_welcome_message = QuimeraApp._build_welcome_message.__get__(app, QuimeraApp)
-
-        with patch.object(QuimeraApp, "_resolve_app_version", return_value="0.1.0"):
-            message = app._build_welcome_message()
+        with patch.object(WelcomePresenter, "resolve_app_version", return_value="0.1.0"):
+            message = WelcomePresenter.build_welcome_message()
 
         self.assertIn("v0.1.0", message)
-        self.assertNotIn("projeto:", message)
 
     def test_resolver_next_responder_prefers_pending_input_target(self):
         from quimera.app.core import QuimeraApp
