@@ -179,7 +179,7 @@ def run_chat_loop(
             app._turn_blocked_warning_shown = False
 
             try:
-                user = app.read_user_input(app._build_input_prompt(), timeout=0)
+                user = app.read_user_input(app._format_user_prompt(), timeout=0)
                 if user is not None:
                     swallow_threaded_input_interrupt = False
             except KeyboardInterrupt:

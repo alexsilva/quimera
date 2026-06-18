@@ -20,6 +20,7 @@ from urllib import request as urllib_request
 from ...config import ConfigManager as GlobalConfigManager, DEFAULT_USER_NAME
 from ...paths import CANDIDATE_DIRS, find_base_writable
 from ...plugins.base import OpenAIConnection
+from ...app.prompt_input import PromptFormatter
 from .openai_compat import OpenAICompatDriver
 from ..approval import AutoApprovalHandler, ConsoleApprovalHandler
 from ..config import ToolRuntimeConfig
@@ -130,24 +131,9 @@ class DriverRepl:
         self._auto_tool_executor = ToolExecutor(rt_config, AutoApprovalHandler(approve_all=True))
 
     @staticmethod
-    def _build_input_prompt(user_name: str | None, mode_name: str | None = None) -> str:
-        """Formata prompt do REPL, exibindo `[mode]` apenas fora do modo default."""
-        normalized_name = str(user_name or "").strip()
-        if not normalized_name:
-            normalized_name = DEFAULT_USER_NAME
-        if normalized_name not in {">", ">>>"}:
-            normalized_name = normalized_name.rstrip(":").rstrip(">").strip() or DEFAULT_USER_NAME
-
-        normalized_mode = str(mode_name or "").strip().lower() or "default"
-        if normalized_mode in {"default", "execute"}:
-            # O símbolo >>> não usa dois-pontos como separador
-            if normalized_name == ">>>":
-                return f"{normalized_name} "
-            return f"{normalized_name}: "
-        # Modos não-default: o símbolo >>> mantém dois-pontos antes do [mode]
-        if normalized_name == ">>>":
-            return f"{normalized_name} [{normalized_mode}]: "
-        return f"{normalized_name} [{normalized_mode}]: "
+    def _format_user_prompt(user_name: str | None, mode_name: str | None = None) -> str:
+        """Formata prompt do REPL usando a regra compartilhada da aplicação."""
+        return PromptFormatter.format_user_prompt(user_name, mode_name)
 
     @staticmethod
     def _load_user_name_from_config() -> str:
@@ -160,7 +146,7 @@ class DriverRepl:
 
     def _resolve_input_prompt(self) -> str:
         """Resolve o prompt do input usando a configuração global."""
-        return self._build_input_prompt(
+        return self._format_user_prompt(
             self._load_user_name_from_config(),
             self._PROMPT_MODE_LABEL,
         )

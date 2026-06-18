@@ -204,13 +204,9 @@ class AppSystemLayer:
             if renderer is not None and not looks_like_renderer:
                 app = renderer
                 renderer = lambda: getattr(app, "renderer", None)
-                ensure_agent_pool = getattr(app, "_ensure_agent_pool", None)
-                if callable(ensure_agent_pool):
-                    agent_pool = ensure_agent_pool()
-                else:
-                    agent_pool = getattr(app, "agent_pool", None)
-                    if agent_pool is None or not hasattr(agent_pool, "agents"):
-                        agent_pool = _LegacyAgentPoolAdapter(app)
+                agent_pool = getattr(app, "agent_pool", None)
+                if agent_pool is None or not hasattr(agent_pool, "agents"):
+                    agent_pool = _LegacyAgentPoolAdapter(app)
                 plugin_resolver = plugin_resolver or _LegacyPluginResolver(app)
                 prompt_builder = prompt_builder or getattr(app, "prompt_builder", None)
                 history_getter = history_getter or (lambda: list(getattr(app, "history", []) or []))

@@ -198,9 +198,23 @@ def test_format_bug_context_renders_readable_block(tmp_path):
 
 
 def test_file_bug_persists_without_event_sink(tmp_path):
+    from quimera.app.bug_services import BugServices
     app = QuimeraApp.__new__(QuimeraApp)
     app.bug_store = BugStore(tmp_path)
     app.storage = SimpleNamespace(session_id="sessao-1")
+    app.bug_services = BugServices(
+        bug_store=app.bug_store,
+        bug_detector=None,
+        agent_bug_detector=None,
+        bug_correlator=None,
+        workspace=None,
+        storage=app.storage,
+        renderer=None,
+        event_sink=None,
+        show_system_message=lambda msg: None,
+        show_warning_message=lambda msg: None,
+        show_muted_message=lambda msg: None,
+    )
     try:
         filed = app._file_bug(
             session_id="sessao-1",
@@ -318,12 +332,26 @@ def test_bug_correlator_respects_window_boundary():
 
 
 def test_handle_bugs_command_handles_store_errors_without_crashing():
+    from quimera.app.bug_services import BugServices
     app = QuimeraApp.__new__(QuimeraApp)
     app.storage = SimpleNamespace(session_id="sessao-1")
     app.show_warning_message = Mock()
     app.show_system_message = Mock()
     app.show_muted_message = Mock()
     app.bug_store = SimpleNamespace(query=Mock(side_effect=RuntimeError("boom")))
+    app.bug_services = BugServices(
+        bug_store=app.bug_store,
+        bug_detector=None,
+        agent_bug_detector=None,
+        bug_correlator=None,
+        workspace=None,
+        storage=app.storage,
+        renderer=None,
+        event_sink=None,
+        show_system_message=app.show_system_message,
+        show_warning_message=app.show_warning_message,
+        show_muted_message=app.show_muted_message,
+    )
 
     result = app._handle_bugs_command("/bugs list")
 
@@ -332,12 +360,26 @@ def test_handle_bugs_command_handles_store_errors_without_crashing():
 
 
 def test_handle_bugs_command_stats_renders_aggregates(tmp_path):
+    from quimera.app.bug_services import BugServices
     app = QuimeraApp.__new__(QuimeraApp)
     app.storage = SimpleNamespace(session_id="sessao-1")
     app.show_warning_message = Mock()
     app.show_system_message = Mock()
     app.show_muted_message = Mock()
     app.bug_store = BugStore(tmp_path)
+    app.bug_services = BugServices(
+        bug_store=app.bug_store,
+        bug_detector=None,
+        agent_bug_detector=None,
+        bug_correlator=None,
+        workspace=None,
+        storage=app.storage,
+        renderer=None,
+        event_sink=None,
+        show_system_message=app.show_system_message,
+        show_warning_message=app.show_warning_message,
+        show_muted_message=app.show_muted_message,
+    )
     try:
         app.bug_store.file(_build_report("sessao-1", "render_repeat_block", "Bloco ANSI repetido"))
         app.bug_store.file(_build_report("sessao-1", "prompt_line_collision", "Prompt colado"))

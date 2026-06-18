@@ -31,12 +31,17 @@ from .session_bootstrap import (
     resolve_workspace_render_ansi_path,
     resolve_workspace_metrics_path,
 )
-from .toolbar import ToolbarManager
+from .toolbar import (
+    ActiveModelRequest,
+    ParallelToolbarSnapshotRequest,
+    ToolbarContextRequest,
+    ToolbarManager,
+)
 from .session_metrics import SessionMetricsService
 from .dispatch import AppDispatchServices
 from .inputs import AppInputServices
 from .interfaces import PluginResolverAdapter
-from .prompt_input import InputGate
+from .prompt_input import InputGate, PromptFormatter
 from .runtime_state import AppRuntimeState
 from ..tasks.classifiers import (
     classify_task_execution_result,
@@ -61,7 +66,7 @@ from .event_sink import EventSink
 from .ui_event_handler import UiEventHandler
 from .worker import ChatWorker
 from .. import plugins
-from ..plugins.base import PluginRegistry, extract_model_from_cli_cmd
+from ..plugins.base import PluginRegistry
 from ..tasks import api as runtime_tasks
 from ..runtime.process_supervisor import ProcessSupervisor
 from ..ui import RenderAuditLogger, TerminalRenderer
@@ -107,42 +112,6 @@ def normalize_agent_name(agent):
 class QuimeraApp:
     """Orquestra comandos locais, roteamento entre agentes e ciclo da sessão."""
     _SESSION_LOG_DISPLAY_MAX_CHARS = 96
-
-    def _ensure_runtime_state(self):
-        try:
-            return object.__getattribute__(self, "runtime_state")
-        except AttributeError:
-            rs = AppRuntimeState()
-            object.__setattr__(self, "runtime_state", rs)
-            return rs
-
-    def _ensure_toolbar(self):
-        try:
-            return object.__getattribute__(self, "toolbar")
-        except AttributeError:
-            threads = getattr(self, "threads", 1)
-            tb = ToolbarManager(threads=threads)
-            legacy_state = getattr(self, "_parallel_toolbar_state", None)
-            if legacy_state is not None:
-                tb._parallel_toolbar_state.update(legacy_state)
-            object.__setattr__(self, "toolbar", tb)
-            return tb
-
-    def __getattr__(self, name: str):
-        if name == "runtime_state":
-            return self._ensure_runtime_state()
-        if name == "bug_services":
-            return self._ensure_bug_services()
-        if name == "command_router":
-            return self._ensure_command_router()
-        if name == "toolbar":
-            return self._ensure_toolbar()
-        raise AttributeError(
-            f"'{type(self).__name__}' object has no attribute '{name}'"
-        )
-
-    def __setattr__(self, name: str, value):
-        object.__setattr__(self, name, value)
 
     def __init__(self,
                  cwd: Path,
@@ -574,79 +543,14 @@ class QuimeraApp:
         )
         self._ui_subscriptions = self._ui_event_handler.wire_event_ui()
 
-    def _ensure_bug_services(self) -> BugServices:
-        try:
-            return object.__getattribute__(self, "bug_services")
-        except AttributeError:
-            bs = BugServices(
-                bug_store=getattr(self, "bug_store", None),
-                bug_detector=getattr(self, "bug_detector", None),
-                agent_bug_detector=getattr(self, "agent_bug_detector", None),
-                bug_correlator=getattr(self, "bug_correlator", None),
-                workspace=getattr(self, "workspace", None),
-                storage=getattr(self, "storage", None),
-                renderer=getattr(self, "renderer", None),
-                event_sink=getattr(self, "event_sink", None),
-                show_system_message=self.show_system_message,
-                show_warning_message=self.show_warning_message,
-                show_muted_message=self.show_muted_message,
-            )
-            object.__setattr__(self, "bug_services", bs)
-            return bs
-
-    def _ensure_command_router(self) -> CommandRouter:
-        try:
-            return object.__getattribute__(self, "command_router")
-        except AttributeError:
-            cr = CommandRouter(
-                agent_pool=self._ensure_agent_pool(),
-                renderer=getattr(self, "renderer", None),
-                get_active_agent_plugins=self.get_active_agent_plugins,
-                set_execution_mode=self._set_execution_mode,
-                normalize_agent_name=self._normalize_agent_name,
-                selected_agents=getattr(self, "selected_agents", []),
-                get_available_plugins=self.get_available_plugins,
-            )
-            object.__setattr__(self, "command_router", cr)
-            return cr
-
-    def _ensure_ui_event_handler(self):
-        """Retorna _ui_event_handler, criando lazy se necessário (ex.: __new__ em testes)."""
-        handler = getattr(self, '_ui_event_handler', None)
-        if handler is not None:
-            return handler
-        handler = UiEventHandler(
-            renderer=getattr(self, 'renderer', None),
-            input_gate=getattr(self, 'input_gate', None),
-            runtime_state=self._ensure_runtime_state(),
-            system_layer=getattr(self, 'system_layer', None),
-            event_sink=getattr(self, 'event_sink', None),
-            show_muted_message=self.show_muted_message,
-            show_system_message=self.show_system_message,
-            show_warning_message=self.show_warning_message,
-            show_error_message=self.show_error_message,
-            redisplay_user_prompt=self._redisplay_user_prompt_if_needed,
-            output_lock=getattr(self, '_output_lock', nullcontext()),
-        )
-        object.__setattr__(self, '_ui_event_handler', handler)
-        return handler
-
-    def _ensure_agent_pool(self) -> AgentPool:
-        """Materializa o pool ao acessar instâncias criadas via ``__new__``."""
-        pool = getattr(self, "agent_pool", None)
-        if pool is None:
-            pool = AgentPool([])
-            self.agent_pool = pool
-        return pool
-
     @property
     def active_agents(self):
         """Retorna uma visão em lista dos agentes ativos do pool da sessão."""
-        return AgentPoolView(self._ensure_agent_pool())
+        return AgentPoolView(self.agent_pool)
 
     @active_agents.setter
     def active_agents(self, agents) -> None:
-        self._ensure_agent_pool().set(list(agents or []))
+        self.agent_pool.set(list(agents or []))
 
     # ------------------------------------------------------------------
     # Propriedades que delegam para _chat_state (compatibilidade)
@@ -943,8 +847,7 @@ class QuimeraApp:
 
     def _wire_event_ui(self) -> None:
         """Conecta eventos de domínio à renderização UI."""
-        handler = self._ensure_ui_event_handler()
-        self._ui_subscriptions = handler.wire_event_ui()
+        self._ui_subscriptions = self._ui_event_handler.wire_event_ui()
 
     def _setup_task_executors(self):
         """Set up task executors for explicit human-created task execution."""
@@ -1133,28 +1036,10 @@ class QuimeraApp:
         """Fachada compatível para renderização de respostas."""
         return self.dispatch_services.print_response(agent, response)
 
-    @staticmethod
-    def _format_user_prompt(user_name: str | None, mode_name: str | None = None) -> str:
-        """Formata prompt humano, exibindo `[mode]` apenas fora do modo default."""
-        normalized_name = str(user_name or "").strip()
-        if not normalized_name:
-            normalized_name = DEFAULT_USER_NAME
-        if normalized_name not in {">", ">>>"}:
-            normalized_name = normalized_name.rstrip(":").rstrip(">").strip() or DEFAULT_USER_NAME
-
-        normalized_mode = str(mode_name or "").strip().lower() or "default"
-        if normalized_mode in {"default", "execute"}:
-            if normalized_name in {">", ">>>"}:
-                return f"{normalized_name} "
-            return f"{normalized_name}: "
-        if normalized_name in {">", ">>>"}:
-            return f"{normalized_name} [{normalized_mode}]: "
-        return f"{normalized_name} [{normalized_mode}]: "
-
-    def _build_input_prompt(self) -> str:
+    def _format_user_prompt(self) -> str:
         """Retorna o prompt visível ao humano com nome e modo atual."""
         active_mode = getattr(getattr(self, "execution_mode", None), "name", None)
-        return self._format_user_prompt(self.user_name, active_mode)
+        return PromptFormatter.format_user_prompt(self.user_name, active_mode)
 
     @staticmethod
     def _resolve_app_version() -> str:
@@ -1188,150 +1073,59 @@ class QuimeraApp:
 
     def _resolve_active_model_label(self) -> str:
         """Resolve o modelo ativo a partir do primeiro plugin/agente ativo."""
-        agent_name = self.agent_pool.primary
-        if not agent_name:
-            return "unknown"
-        plugin = self.get_agent_plugin(agent_name)
-        if plugin is None:
-            return str(agent_name)
-        connection = plugin.effective_connection() if hasattr(plugin, "effective_connection") else None
-        model = getattr(connection, "model", None) if connection is not None else None
-        if model:
-            return str(model)
-
-        cmd = getattr(connection, "cmd", None) if connection is not None else None
-        if not cmd and hasattr(plugin, "effective_cmd"):
-            try:
-                cmd = plugin.effective_cmd()
-            except Exception:
-                cmd = None
-        if not cmd:
-            cmd = getattr(plugin, "cmd", None)
-
         workspace = getattr(self, "workspace", None)
-        cwd = str(getattr(workspace, "cwd", Path.cwd()))
-        cli_model: str | None = None
-        resolver = getattr(plugin, "resolve_runtime_model", None)
-        if callable(resolver):
-            try:
-                resolved = resolver(cwd=cwd)
-            except TypeError:
-                resolved = resolver()
-            if isinstance(resolved, str):
-                normalized = resolved.strip()
-                if normalized:
-                    cli_model = normalized
-        if cli_model is None:
-            cli_model = extract_model_from_cli_cmd(cmd)
-        if isinstance(cli_model, str) and cli_model.strip():
-            return cli_model.strip()
-
-        plugin_model = getattr(plugin, "model", None)
-        return str(plugin_model) if plugin_model else str(plugin.name)
+        request = ActiveModelRequest(
+            primary_agent=self.agent_pool.primary,
+            get_agent_plugin=self.get_agent_plugin,
+            workspace_cwd=str(getattr(workspace, "cwd", ".")),
+        )
+        return self.toolbar.resolve_active_model_label(request)
 
     def _resolve_next_responder_label(self) -> str:
         """Resolve o agente que deve responder na próxima rodada."""
-        pending_input_for = str(getattr(self, "_pending_input_for", "") or "").strip()
-        if pending_input_for:
-            return pending_input_for
-        if self.agent_pool.primary:
-            return str(self.agent_pool.primary)
-        return "unknown"
+        return self.toolbar.resolve_next_responder_label(
+            getattr(self, "_pending_input_for", ""),
+            self.agent_pool.primary,
+        )
 
     def _cycle_renderer_theme(self) -> None:
         """Avança para o próximo tema no TerminalRenderer e persiste na config."""
-        renderer = getattr(self, "renderer", None)
-        if renderer is None:
-            return
-        cycle = getattr(renderer, "cycle_theme", None)
-        if callable(cycle):
-            new_name = cycle()
-            if new_name and hasattr(self, "config"):
-                self.config.set_theme(new_name)
+        self.toolbar.cycle_renderer_theme(
+            getattr(self, "renderer", None),
+            getattr(self, "config", None),
+        )
 
     def _build_input_toolbar_context(self) -> dict[str, str]:
         """Retorna dados de contexto exibidos na toolbar do input."""
         workspace = getattr(self, "workspace", None)
-        ctx = {
-            "responder": self._resolve_next_responder_label(),
-            "model": self._resolve_active_model_label(),
-        }
-        branch = getattr(workspace, "branch", None)
-        if branch and isinstance(branch, str):
-            ctx["branch"] = branch
-        elapsed = time.monotonic() - getattr(self, "_session_started_at", time.monotonic())
-        if elapsed >= 3600:
-            mins = int(elapsed // 60)
-            ctx["elapsed"] = f"{mins // 60}h {mins % 60:02d}m"
-        elif elapsed >= 60:
-            mins = int(elapsed // 60)
-            secs = int(elapsed % 60)
-            ctx["elapsed"] = f"{mins}m {secs:02d}s"
-        else:
-            ctx["elapsed"] = f"{int(elapsed)}s"
-        renderer = getattr(self, "renderer", None)
-        theme_name = getattr(renderer, "theme_name", "") if renderer else ""
-        ctx["theme"] = theme_name
-        active_mode = getattr(self, "execution_mode", None)
-        if active_mode is not None:
-            ctx["mode"] = getattr(active_mode, "name", None) or ""
-        parallel_state = self._get_parallel_toolbar_state()
-        capacity = int(parallel_state.get("capacity", max(0, self.threads)) or 0)
-        active = int(parallel_state.get("active", 0) or 0)
-        queued = int(parallel_state.get("queued", 0) or 0)
-        if active > 0 or queued > 0 or capacity > 1:
-            slots_label = f"{active}/{capacity}"
-            if queued:
-                slots_label = f"{slots_label} · 📥 {queued}"
-            ctx["parallel"] = slots_label
-        active_agents = parallel_state.get("active_agents", ())
-        if active_agents:
-            normalized_agents = [str(a).strip() for a in active_agents if str(a).strip()]
-            if normalized_agents:
-                visible_agents = normalized_agents[:3]
-                extra_agents = len(normalized_agents) - len(visible_agents)
-                label = ", ".join(visible_agents)
-                if extra_agents > 0:
-                    label = f"{label} +{extra_agents}"
-                ctx["active_agents"] = label
         history = getattr(self, "history", None)
-        if history is not None:
-            ctx["turns"] = str(len(history))
-        # Add session ID to toolbar context
         session_id = getattr(getattr(self, "storage", None), "session_id", "")
-        if session_id:
-            ctx["session"] = session_id
-        bug_store = getattr(self, "bug_store", None)
-        if bug_store is not None:
-            open_bug_count = None
-            cache = getattr(self._ensure_toolbar(), "toolbar_bug_count_cache", None)
-            cache_ttl = float(getattr(self._ensure_toolbar(), "toolbar_bug_count_ttl_sec", 1.0) or 1.0)
-            now_monotonic = time.monotonic()
-            if isinstance(cache, dict):
-                cached_session = str(cache.get("session_id", ""))
-                cached_ts = float(cache.get("ts", 0.0) or 0.0)
-                if cached_session == str(session_id or "") and (now_monotonic - cached_ts) < cache_ttl:
-                    cached_count = cache.get("count", 0)
-                    try:
-                        open_bug_count = int(cached_count)
-                    except Exception:
-                        open_bug_count = 0
-            if open_bug_count is None:
-                try:
-                    open_bugs = bug_store.query(
-                        session_id=session_id, status="open", limit=100
-                    ) if session_id else bug_store.query(status="open", limit=100)
-                    open_bug_count = len(open_bugs or [])
-                    self._ensure_toolbar().toolbar_bug_count_cache = {
-                        "session_id": str(session_id or ""),
-                        "count": open_bug_count,
-                        "ts": now_monotonic,
-                    }
-                except Exception:
-                    open_bug_count = 0
-            if open_bug_count > 0:
-                ctx["open_bugs"] = str(open_bug_count)
-        return ctx
+
+        def _query_open_bugs(current_session_id: str) -> int:
+            bug_store = getattr(self, "bug_store", None)
+            if bug_store is None:
+                return 0
+            open_bugs = bug_store.query(
+                session_id=current_session_id, status="open", limit=100
+            ) if current_session_id else bug_store.query(status="open", limit=100)
+            return len(open_bugs or [])
+
+        request = ToolbarContextRequest(
+            responder=self._resolve_next_responder_label(),
+            model=self._resolve_active_model_label(),
+            branch=str(getattr(workspace, "branch", "") or ""),
+            elapsed_seconds=time.monotonic() - getattr(self, "_session_started_at", time.monotonic()),
+            theme=str(getattr(getattr(self, "renderer", None), "theme_name", "") or ""),
+            mode=str(getattr(getattr(self, "execution_mode", None), "name", "") or ""),
+            threads=int(getattr(self, "threads", 1) or 1),
+            history_turns=len(history) if history is not None else None,
+            session_id=str(session_id or ""),
+            query_open_bugs=_query_open_bugs,
+        )
+        return self.toolbar.build_input_toolbar_context(
+            request,
+            self._get_parallel_toolbar_state(),
+        )
 
     def _set_parallel_toolbar_state(
         self,
@@ -1342,24 +1136,12 @@ class QuimeraApp:
         active_agents: list[str] | tuple[str, ...] | None = None,
     ) -> None:
         """Atualiza o snapshot de paralelismo exibido na toolbar do prompt."""
-        try:
-            toolbar = object.__getattribute__(self, "toolbar")
-        except AttributeError:
-            toolbar = None
-        setter = getattr(toolbar, "_set_parallel_toolbar_state", None) if toolbar is not None else None
-        if callable(setter):
-            setter(active=active, queued=queued, capacity=capacity, active_agents=active_agents)
-            return
-
-        with self._parallel_toolbar_lock:
-            if active is not None:
-                self._parallel_toolbar_state["active"] = max(0, int(active))
-            if queued is not None:
-                self._parallel_toolbar_state["queued"] = max(0, int(queued))
-            if capacity is not None:
-                self._parallel_toolbar_state["capacity"] = max(0, int(capacity))
-            if active_agents is not None:
-                self._parallel_toolbar_state["active_agents"] = tuple(active_agents)
+        self.toolbar.set_parallel_toolbar_state(
+            active=active,
+            queued=queued,
+            capacity=capacity,
+            active_agents=active_agents,
+        )
 
     def _get_parallel_toolbar_state(self) -> dict[str, object]:
         """Retorna uma cópia do estado de paralelismo da toolbar.
@@ -1368,36 +1150,24 @@ class QuimeraApp:
         e deriva ``queued`` do tamanho da fila do chat quando disponível,
         garantindo que a toolbar reflita a ocupação real em runtime.
         """
-        try:
-            toolbar = object.__getattribute__(self, "toolbar")
-        except AttributeError:
-            toolbar = None
-        getter = getattr(toolbar, "_get_parallel_toolbar_state", None) if toolbar is not None else None
-        if callable(getter):
-            snapshot = dict(getter() or {})
-        else:
-            with self._parallel_toolbar_lock:
-                snapshot = dict(self._parallel_toolbar_state)
         active = self._get_chat_inflight_count()
-        snapshot["active"] = active
         chat_queue = getattr(self.runtime_state, "chat_queue", None)
+        queued_from_queue: int | None = None
         if chat_queue is not None:
             try:
                 queued_from_queue = max(0, int(chat_queue.qsize()))
-                if queued_from_queue > 0:
-                    snapshot["queued"] = queued_from_queue
             except Exception:
-                pass
-        return snapshot
+                queued_from_queue = None
+        request = ParallelToolbarSnapshotRequest(
+            inflight_count=active,
+            queued_count=queued_from_queue,
+        )
+        return self.toolbar.build_parallel_toolbar_state(request)
 
     def _refresh_parallel_toolbar(self) -> None:
         """Solicita redraw do prompt quando o estado de paralelismo muda."""
-        input_gate = getattr(self, "input_gate", None)
-        redisplay = getattr(input_gate, "redisplay", None)
-        if not callable(redisplay):
-            return
         try:
-            redisplay()
+            ToolbarManager.refresh_parallel_toolbar(getattr(self, "input_gate", None))
         except Exception:
             logger.debug("falha ao redesenhar toolbar de paralelismo", exc_info=True)
 
@@ -1651,11 +1421,11 @@ class QuimeraApp:
 
     def _should_render_ui_event_above_prompt(self) -> bool:
         """Retorna True quando há prompt ativo controlado por outra thread."""
-        return self._ensure_ui_event_handler()._should_render_ui_event_above_prompt()
+        return self._ui_event_handler._should_render_ui_event_above_prompt()
 
     def _run_ui_event_above_prompt(self, callback) -> bool:
         """Tenta renderizar callback acima do prompt ativo via InputGate."""
-        return self._ensure_ui_event_handler()._run_ui_event_above_prompt(callback)
+        return self._ui_event_handler._run_ui_event_above_prompt(callback)
 
     def _handle_local_processing_interrupt(self) -> None:
         """Cancela só o processamento atual e devolve o chat ao input."""
@@ -1687,7 +1457,7 @@ class QuimeraApp:
 
     def _submit_async_chat_message(self, user):
         """Submete um prompt já reservado para a pool de execução do chat."""
-        runtime_state = self._ensure_runtime_state()
+        runtime_state = self.runtime_state
         chat_executor = getattr(runtime_state, "chat_executor", None)
         if chat_executor is None:
             raise RuntimeError("chat executor não inicializado")
@@ -1702,7 +1472,7 @@ class QuimeraApp:
 
     def _process_sync_chat_message_with_slot(self, user):
         """Executa um prompt no thread principal ocupando um slot de concorrência."""
-        runtime_state = self._ensure_runtime_state()
+        runtime_state = self.runtime_state
         slot_semaphore = getattr(runtime_state, "chat_slot_semaphore", None)
         if slot_semaphore is not None:
             slot_semaphore.acquire()
@@ -1726,7 +1496,7 @@ class QuimeraApp:
 
     def _drain_ui_events(self, ui_queue: "queue.Queue") -> None:
         """Consome todos os RenderEvents pendentes na fila e chama renderer na main thread."""
-        self._ensure_ui_event_handler().drain_ui_events(ui_queue)
+        self._ui_event_handler.drain_ui_events(ui_queue)
 
     def run(self):
         """Executa o loop interativo do chat multiagente."""

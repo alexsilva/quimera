@@ -23,6 +23,8 @@ from prompt_toolkit.key_binding import KeyBindings
 from rich.console import Console
 from rich.rule import Rule
 
+from ..config import DEFAULT_USER_NAME
+
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 
@@ -31,6 +33,27 @@ def _visible_len(html_str: str) -> int:
     """Comprimento visível de uma string HTML (sem tags)."""
     return len(_HTML_TAG_RE.sub("", html_str))
 
+
+class PromptFormatter:
+    """Formata o prompt visível ao humano."""
+
+    @staticmethod
+    def format_user_prompt(user_name: str | None, mode_name: str | None = None) -> str:
+        """Formata prompt humano, exibindo `[mode]` apenas fora do modo default."""
+        normalized_name = str(user_name or "").strip()
+        if not normalized_name:
+            normalized_name = DEFAULT_USER_NAME
+        if normalized_name not in {">", ">>>"}:
+            normalized_name = normalized_name.rstrip(":").rstrip(">").strip() or DEFAULT_USER_NAME
+
+        normalized_mode = str(mode_name or "").strip().lower() or "default"
+        if normalized_mode in {"default", "execute"}:
+            if normalized_name in {">", ">>>"}:
+                return f"{normalized_name} "
+            return f"{normalized_name}: "
+        if normalized_name in {">", ">>>"}:
+            return f"{normalized_name} [{normalized_mode}]: "
+        return f"{normalized_name} [{normalized_mode}]: "
 
 class _SlashCommandCompleter(Completer):
     """Completa comandos slash usando o resolver da aplicação."""

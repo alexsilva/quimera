@@ -36,7 +36,9 @@ class TestPromptRedraw:
 
     def _make_app(self, status="reading", prompt="Você: "):
         from quimera.app.core import QuimeraApp
+        from quimera.app.runtime_state import AppRuntimeState
         app = QuimeraApp.__new__(QuimeraApp)
+        app.runtime_state = AppRuntimeState()
         app.runtime_state.nonblocking_input_status = status
         app.runtime_state.nonblocking_prompt_text = prompt
         app.input_gate = MagicMock()

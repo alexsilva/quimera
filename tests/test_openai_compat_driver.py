@@ -857,12 +857,12 @@ def test_driver_repl_probe_backend_unavailable_raises_clear_error():
             repl.ensure_backend_available()
 
 
-def test_driver_repl_build_input_prompt_formats_user_name():
-    """Verifica que Test driver repl build input prompt formats user name."""
-    assert DriverRepl._build_input_prompt("Alex", "execute") == "Alex: "
-    assert DriverRepl._build_input_prompt("Alex>", "execute") == "Alex: "
-    assert DriverRepl._build_input_prompt(">>>", "execute") == ">>> "
-    assert DriverRepl._build_input_prompt("Alex", "review") == "Alex [review]: "
+def test_driver_repl_format_user_prompt_formats_user_name():
+    """Verifica que Test driver repl format user prompt formats user name."""
+    assert DriverRepl._format_user_prompt("Alex", "execute") == "Alex: "
+    assert DriverRepl._format_user_prompt("Alex>", "execute") == "Alex: "
+    assert DriverRepl._format_user_prompt(">>>", "execute") == ">>> "
+    assert DriverRepl._format_user_prompt("Alex", "review") == "Alex [review]: "
 
 
 def test_driver_repl_run_uses_prompt_from_config_name():
@@ -1042,10 +1042,10 @@ def test_driver_repl_init_rejects_cli_plugins():
         )
 
 
-def test_driver_repl_build_input_prompt_handles_empty_name_and_mode_with_chevrons():
-    """Verifica que Test driver repl build input prompt handles empty name and mode with chevrons."""
-    assert DriverRepl._build_input_prompt("", "execute") == ">>> "
-    assert DriverRepl._build_input_prompt(">>>", "review") == ">>> [review]: "
+def test_driver_repl_format_user_prompt_handles_empty_name_and_mode_with_chevrons():
+    """Verifica que Test driver repl format user prompt handles empty name and mode with chevrons."""
+    assert DriverRepl._format_user_prompt("", "execute") == ">>> "
+    assert DriverRepl._format_user_prompt(">>>", "review") == ">>> [review]: "
 
 
 def test_driver_repl_load_user_name_from_config_falls_back_to_default():

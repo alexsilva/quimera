@@ -345,6 +345,18 @@ def _make_session_services(app):
 
 
 def materialize_internal_services(app):
+    import threading
+    from contextlib import nullcontext
+    if getattr(app, "_output_lock", None) is None:
+        app._output_lock = threading.Lock()
+    if getattr(app, "runtime_state", None) is None:
+        from quimera.app.runtime_state import AppRuntimeState
+        app.runtime_state = AppRuntimeState()
+    if getattr(app, "agent_pool", None) is None:
+        from quimera.app.agent_pool import AgentPool
+        app.agent_pool = AgentPool([])
+    if getattr(app, "storage", None) is None:
+        app.storage = DummyStorage()
     if getattr(app, "renderer", None) is None:
         app.renderer = DummyRenderer()
     if getattr(app, "protocol", None) is None:
@@ -401,6 +413,38 @@ def materialize_internal_services(app):
         )
     if not hasattr(app, "execution_mode"):
         app.execution_mode = None
+    if getattr(app, "command_router", None) is None:
+        from quimera.app.command_router import CommandRouter
+        from quimera.app.agent_pool import AgentPool
+        _existing = getattr(app, "agent_pool", None)
+        _agent_pool = _existing if _existing is not None else AgentPool([])
+        app.command_router = CommandRouter(
+            agent_pool=_agent_pool,
+            renderer=getattr(app, "renderer", None),
+            get_active_agent_plugins=getattr(app, "get_active_agent_plugins", lambda: []),
+            set_execution_mode=getattr(app, "_set_execution_mode", lambda mode: None),
+            normalize_agent_name=getattr(app, "_normalize_agent_name", lambda n: n),
+            selected_agents=getattr(app, "selected_agents", []),
+            get_available_plugins=getattr(app, "get_available_plugins", lambda: []),
+        )
+    if getattr(app, "bug_services", None) is None:
+        from unittest.mock import Mock
+        app.bug_services = Mock()
+    if getattr(app, "_ui_event_handler", None) is None:
+        from quimera.app.ui_event_handler import UiEventHandler
+        app._ui_event_handler = UiEventHandler(
+            renderer=getattr(app, "renderer", None),
+            input_gate=getattr(app, "input_gate", None),
+            runtime_state=getattr(app, "runtime_state", None),
+            system_layer=getattr(app, "system_layer", None),
+            event_sink=getattr(app, "event_sink", None),
+            show_muted_message=getattr(app, "show_muted_message", lambda msg: None),
+            show_system_message=getattr(app, "show_system_message", lambda msg: None),
+            show_warning_message=getattr(app, "show_warning_message", lambda msg: None),
+            show_error_message=getattr(app, "show_error_message", lambda msg: None),
+            redisplay_user_prompt=getattr(app, "_redisplay_user_prompt_if_needed", lambda: None),
+            output_lock=getattr(app, "_output_lock", nullcontext()),
+        )
     return app
 
 
@@ -626,8 +670,11 @@ class ProtocolTests(unittest.TestCase):
         """Verifica que parse routing rejects double prefix."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
+        from quimera.app.agent_pool import AgentPool
+        app.agent_pool = AgentPool([AGENT_CLAUDE, AGENT_CODEX])
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
 
+        materialize_internal_services(app)
         agent, message, explicit = app.parse_routing("/claude /codex revisar isso")
 
         self.assertIsNone(agent)
@@ -638,8 +685,11 @@ class ProtocolTests(unittest.TestCase):
         """Verifica que parse routing treats unknown prefix as plain message."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
+        from quimera.app.agent_pool import AgentPool
+        app.agent_pool = AgentPool([AGENT_CLAUDE, AGENT_CODEX])
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
 
+        materialize_internal_services(app)
         agent, message, explicit = app.parse_routing("/code revise isso")
 
         self.assertEqual(agent, AGENT_CLAUDE)
@@ -650,9 +700,12 @@ class ProtocolTests(unittest.TestCase):
         """Verifica que handle command shows help."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
+        from quimera.app.agent_pool import AgentPool
+        app.agent_pool = AgentPool([AGENT_CLAUDE, AGENT_CODEX])
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
         app.system_layer = AppSystemLayer(app)
 
+        materialize_internal_services(app)
         handled = app.system_layer.handle_command(CMD_HELP)
 
         self.assertTrue(handled)
@@ -663,9 +716,12 @@ class ProtocolTests(unittest.TestCase):
         """Verifica que handle command shows agents."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
+        from quimera.app.agent_pool import AgentPool
+        app.agent_pool = AgentPool([AGENT_CLAUDE, AGENT_CODEX])
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
         app.system_layer = AppSystemLayer(app)
 
+        materialize_internal_services(app)
         handled = app.system_layer.handle_command(CMD_AGENTS)
 
         self.assertTrue(handled)
@@ -679,6 +735,7 @@ class ProtocolTests(unittest.TestCase):
         app.clear_terminal_screen = Mock()
         app.system_layer = AppSystemLayer(app)
 
+        materialize_internal_services(app)
         handled = app.system_layer.handle_command(CMD_CLEAR)
 
         self.assertTrue(handled)
@@ -690,8 +747,12 @@ class ProtocolTests(unittest.TestCase):
         app.renderer = DummyRenderer()
         app._output_lock = threading.Lock()
         app._redisplay_user_prompt_if_needed = Mock()
+        from quimera.app.runtime_state import AppRuntimeState
+        app.runtime_state = AppRuntimeState()
         app.runtime_state.nonblocking_input_status = "idle"
         app._deferred_system_messages = []
+        from quimera.app.agent_pool import AgentPool
+        app.agent_pool = AgentPool([AGENT_CLAUDE, AGENT_CODEX])
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
         app.history = [{"role": "human", "content": "Pedido atual"}]
         app.shared_state = {"goal": "corrigir prompt"}
@@ -741,8 +802,12 @@ class ProtocolTests(unittest.TestCase):
         app.renderer = DummyRenderer()
         app._output_lock = threading.Lock()
         app._redisplay_user_prompt_if_needed = Mock()
+        from quimera.app.runtime_state import AppRuntimeState
+        app.runtime_state = AppRuntimeState()
         app.runtime_state.nonblocking_input_status = "idle"
         app._deferred_system_messages = []
+        from quimera.app.agent_pool import AgentPool
+        app.agent_pool = AgentPool([AGENT_CLAUDE, AGENT_CODEX])
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
         app.history = []
         app.shared_state = {}
@@ -765,6 +830,7 @@ class ProtocolTests(unittest.TestCase):
         )
 
         app.system_layer = AppSystemLayer(app)
+        materialize_internal_services(app)
         handled = app.system_layer.handle_command("/prompt /codex")
 
         self.assertTrue(handled)
@@ -883,9 +949,12 @@ class ProtocolTests(unittest.TestCase):
         """Verifica que handle command warns on unknown prompt agent."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
+        from quimera.app.agent_pool import AgentPool
+        app.agent_pool = AgentPool([AGENT_CLAUDE, AGENT_CODEX])
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
         app.system_layer = AppSystemLayer(app)
 
+        materialize_internal_services(app)
         handled = app.system_layer.handle_command("/prompt inexistente")
 
         self.assertTrue(handled)
@@ -920,6 +989,7 @@ class ProtocolTests(unittest.TestCase):
         app.renderer = DummyRenderer()
         app.system_layer = AppSystemLayer(app)
 
+        materialize_internal_services(app)
         handled = app.system_layer.handle_command(CMD_CONNECT)
 
         self.assertTrue(handled)
@@ -931,8 +1001,13 @@ class ProtocolTests(unittest.TestCase):
         app.renderer = DummyRenderer()
         app._output_lock = threading.Lock()
         app._redisplay_user_prompt_if_needed = Mock()
+        from quimera.app.runtime_state import AppRuntimeState
+        app.runtime_state = AppRuntimeState()
         app.runtime_state.nonblocking_input_status = "idle"
         app._deferred_system_messages = []
+        from quimera.app.agent_pool import AgentPool
+        app.agent_pool = AgentPool([])
+        app.active_agents = []
         plugin = AgentPlugin(
             name="chatgpt",
             prefix="/chatgpt",
@@ -950,6 +1025,7 @@ class ProtocolTests(unittest.TestCase):
         app.system_layer = AppSystemLayer(app)
 
         with patch("quimera.app.system_layer.set_connection_override") as set_override:
+            materialize_internal_services(app)
             handled = app.system_layer.handle_command("/connect chatgpt")
 
         self.assertTrue(handled)
@@ -969,6 +1045,7 @@ class ProtocolTests(unittest.TestCase):
         app.renderer = DummyRenderer()
         app.system_layer = AppSystemLayer(app)
 
+        materialize_internal_services(app)
         handled = app.system_layer.handle_command(CMD_DISCONNECT)
 
         self.assertTrue(handled)
@@ -981,6 +1058,7 @@ class ProtocolTests(unittest.TestCase):
         app.system_layer = AppSystemLayer(app)
 
         with patch("quimera.app.system_layer.remove_connection", return_value=True) as remove_conn:
+            materialize_internal_services(app)
             handled = app.system_layer.handle_command("/disconnect chatgpt")
 
         self.assertTrue(handled)
@@ -994,6 +1072,7 @@ class ProtocolTests(unittest.TestCase):
         app.system_layer = AppSystemLayer(app)
 
         with patch("quimera.app.system_layer.remove_connection", return_value=False) as remove_conn:
+            materialize_internal_services(app)
             handled = app.system_layer.handle_command("/disconnect chatgpt")
 
         self.assertTrue(handled)
@@ -1048,6 +1127,8 @@ class ProtocolTests(unittest.TestCase):
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
         app._output_lock = threading.Lock()
+        from quimera.app.agent_pool import AgentPool
+        app.agent_pool = AgentPool([AGENT_CLAUDE, AGENT_CODEX])
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
         app.user_name = "Alex"
         app.shared_state = {"goal": "corrigir task runner"}
@@ -1064,6 +1145,7 @@ class ProtocolTests(unittest.TestCase):
         app.tasks_db_path = str(db_path)
         app.task_services = build_task_services(app)
         app.system_layer = AppSystemLayer(app)
+        materialize_internal_services(app)
         handled = app.system_layer.handle_command('/task "execute os testes"')
 
         self.assertTrue(handled)
@@ -1086,6 +1168,8 @@ class ProtocolTests(unittest.TestCase):
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
         app._output_lock = threading.Lock()
+        from quimera.app.agent_pool import AgentPool
+        app.agent_pool = AgentPool(["ollama-granite4"])
         app.active_agents = ["ollama-granite4"]
         app.user_name = "Alex"
         app.shared_state = {}
@@ -1097,6 +1181,7 @@ class ProtocolTests(unittest.TestCase):
         app.tasks_db_path = str(db_path)
         app.task_services = build_task_services(app)
         app.system_layer = AppSystemLayer(app)
+        materialize_internal_services(app)
         handled = app.system_layer.handle_command('/task "revise o arquivo quimera/app.py"')
 
         self.assertTrue(handled)
@@ -1110,6 +1195,8 @@ class ProtocolTests(unittest.TestCase):
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
         app._output_lock = threading.Lock()
+        from quimera.app.agent_pool import AgentPool
+        app.agent_pool = AgentPool([AGENT_CLAUDE, AGENT_CODEX])
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
         app.user_name = "Alex"
         app.shared_state = {}
@@ -1146,6 +1233,8 @@ class ProtocolTests(unittest.TestCase):
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
         app._output_lock = threading.Lock()
+        from quimera.app.agent_pool import AgentPool
+        app.agent_pool = AgentPool([AGENT_CLAUDE, AGENT_CODEX])
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
         app.user_name = "Alex"
         app.shared_state = {}
@@ -1160,6 +1249,7 @@ class ProtocolTests(unittest.TestCase):
         app.system_layer = AppSystemLayer(app)
 
         with patch("quimera.tasks.services.logger.warning") as warning:
+            materialize_internal_services(app)
             handled = app.system_layer.handle_command('/task "execute os testes"')
 
         self.assertTrue(handled)
@@ -1191,6 +1281,8 @@ class ProtocolTests(unittest.TestCase):
         from quimera.tasks.api import create_task
 
         app = QuimeraApp.__new__(QuimeraApp)
+        from quimera.app.agent_pool import AgentPool
+        app.agent_pool = AgentPool([AGENT_CLAUDE, AGENT_CODEX])
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
         tmp_dir = Path(self.enterContext(tempfile.TemporaryDirectory()))
         db_path = tmp_dir / "tasks.db"
@@ -1215,6 +1307,8 @@ class ProtocolTests(unittest.TestCase):
         """Verifica que handle task command rejects empty description."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
+        from quimera.app.agent_pool import AgentPool
+        app.agent_pool = AgentPool([AGENT_CLAUDE, AGENT_CODEX])
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
         app.user_name = "Alex"
         app.shared_state = {}
@@ -1227,6 +1321,7 @@ class ProtocolTests(unittest.TestCase):
         app.task_services = build_task_services(app)
         app.system_layer = AppSystemLayer(app)
 
+        materialize_internal_services(app)
         handled = app.system_layer.handle_command('/task ""')
 
         self.assertTrue(handled)
@@ -1885,7 +1980,13 @@ class ProtocolTests(unittest.TestCase):
         persisted = []
         printed = []
 
+        from quimera.app.agent_pool import AgentPool
+        app.agent_pool = AgentPool(list(plugins.all_names()))
         app.active_agents = list(plugins.all_names())
+        from quimera.app.runtime_state import AppRuntimeState
+        app.runtime_state = AppRuntimeState()
+        app.bug_services = Mock()
+        app._ui_event_handler = Mock()
         app.threads = 1
         app.parse_routing = lambda user: (AGENT_CLAUDE, "oi", False)
         app.shared_state = {}
@@ -1942,6 +2043,7 @@ class ProtocolTests(unittest.TestCase):
         app.read_user_input = Mock(side_effect=["/exit"])
         app.session_services = Mock()
 
+        materialize_internal_services(app)
         app.run()
 
         self.assertEqual(app.renderer.events[0][0], "show_system")
@@ -1986,6 +2088,7 @@ class ProtocolTests(unittest.TestCase):
         app.session_services = Mock()
         app.debug_prompt_metrics = False
 
+        materialize_internal_services(app)
         app.run()
 
         self.assertFalse(any("Log da sessão:" in msg for msg in app.renderer.events))
@@ -2019,6 +2122,7 @@ class ProtocolTests(unittest.TestCase):
         app.read_user_input = Mock(side_effect=KeyboardInterrupt)
         app.session_services = Mock()
 
+        materialize_internal_services(app)
         app.run()
 
         self.assertEqual(app.renderer.system_messages[-1], MSG_SHUTDOWN)
@@ -2054,6 +2158,7 @@ class ProtocolTests(unittest.TestCase):
         captured_messages = []
         app._process_chat_message = lambda message: captured_messages.append(message)
 
+        materialize_internal_services(app)
         app.run()
 
         self.assertEqual(captured_messages, [edited_message])
@@ -2157,7 +2262,6 @@ class ProtocolTests(unittest.TestCase):
     def test_run_uses_four_turns_when_extended(self):
         """Verifica que run uses four turns when extended."""
         app = QuimeraApp.__new__(QuimeraApp)
-        materialize_internal_services(app)
         app.history = []
         app.user_name = "Você"
         app.round_index = 0
@@ -2176,16 +2280,21 @@ class ProtocolTests(unittest.TestCase):
         persisted = []
         printed = []
 
+        from quimera.app.agent_pool import AgentPool
+        app.agent_pool = AgentPool([AGENT_CLAUDE, AGENT_CODEX])
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
         app.threads = 1
         app.handle_command = lambda user: False
         app.parse_routing = lambda user: (AGENT_CLAUDE, "oi", False)
         app.parse_response = QuimeraApp.parse_response.__get__(app, QuimeraApp)
         app.shared_state = {}
-        app.dispatch_services.print_response = lambda agent, response: printed.append((agent, response))
         app.session_services = Mock()
         app.session_services.persist_message = lambda role, content: persisted.append((role, content))
+
+        materialize_internal_services(app)
+
         app.read_user_input = Mock(side_effect=["mensagem", "/exit"])
+        app.dispatch_services.print_response = lambda agent, response: printed.append((agent, response))
         responses = iter(
             [
                 "claude abre [DEBATE]",
@@ -2269,6 +2378,8 @@ class ProtocolTests(unittest.TestCase):
         printed = []
         calls = []
 
+        from quimera.app.agent_pool import AgentPool
+        app.agent_pool = AgentPool([AGENT_CLAUDE, "opencode-qwen"])
         app.active_agents = [AGENT_CLAUDE, "opencode-qwen"]
         app.threads = 1
         app.handle_command = lambda user: False
@@ -2391,6 +2502,8 @@ class ProtocolTests(unittest.TestCase):
         # 12 mensagens com janela=2: surplus=10 >= _MIN_SUMMARIZE_SURPLUS, então resume as 10 primeiras.
         app = QuimeraApp.__new__(QuimeraApp)
         app.history = [{"role": "human", "content": f"m{i}"} for i in range(1, 13)]
+        from quimera.app.agent_pool import AgentPool
+        app.agent_pool = AgentPool([AGENT_CLAUDE, AGENT_CODEX])
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
         app.auto_summarize_threshold = 4
         app.prompt_builder = type("PromptBuilderStub", (), {"history_window": 2})()
@@ -2472,6 +2585,8 @@ class ProtocolTests(unittest.TestCase):
         app.history = [{"role": "human", "content": f"m{i}"} for i in range(74)]
         app.auto_summarize_threshold = 30
         app.prompt_builder = type("PromptBuilderStub", (), {"history_window": 64})()
+        from quimera.app.agent_pool import AgentPool
+        app.agent_pool = AgentPool([AGENT_CLAUDE, AGENT_CODEX])
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
         app.context_manager = Mock()
         app.context_manager.load_session_summary.return_value = None
@@ -2991,6 +3106,8 @@ class PluginTests(unittest.TestCase):
         app = QuimeraApp.__new__(QuimeraApp)
         materialize_internal_services(app)
         app.threads = 2
+        from quimera.app.agent_pool import AgentPool
+        app.agent_pool = AgentPool(["agent1", "agent2"])
         app.active_agents = ["agent1", "agent2"]
         app.debug_prompt_metrics = False
         app.session_call_index = 0
@@ -3048,6 +3165,8 @@ class PluginTests(unittest.TestCase):
             "summary_loaded": False,
         }
         app.shared_state = {}
+        from quimera.app.agent_pool import AgentPool
+        app.agent_pool = AgentPool([AGENT_CLAUDE, AGENT_CODEX])
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
         app.threads = 2
         app.handle_command = lambda user: False
@@ -3118,6 +3237,8 @@ class PluginTests(unittest.TestCase):
         materialize_internal_services(app)
         app.renderer = DummyRenderer()
         app._deferred_system_messages = []
+        from quimera.app.runtime_state import AppRuntimeState
+        app.runtime_state = AppRuntimeState()
         app.runtime_state.nonblocking_prompt_visible = False
         app.runtime_state.nonblocking_input_queue = None
         app.runtime_state.nonblocking_input_thread = None
@@ -3138,6 +3259,8 @@ class PluginTests(unittest.TestCase):
         materialize_internal_services(app)
         app.renderer = DummyRenderer()
         app._deferred_system_messages = []
+        from quimera.app.runtime_state import AppRuntimeState
+        app.runtime_state = AppRuntimeState()
         app.runtime_state.nonblocking_prompt_visible = False
         app.runtime_state.nonblocking_input_queue = None
         app.runtime_state.nonblocking_input_thread = None
@@ -3195,6 +3318,8 @@ class PluginTests(unittest.TestCase):
         materialize_internal_services(app)
         app.renderer = DummyRenderer()
         app._deferred_system_messages = ["[task 7] claude:\nresultado final"]
+        from quimera.app.runtime_state import AppRuntimeState
+        app.runtime_state = AppRuntimeState()
         app.runtime_state.nonblocking_prompt_visible = False
         app.runtime_state.nonblocking_input_queue = None
         app.runtime_state.nonblocking_input_thread = None
@@ -3220,6 +3345,8 @@ class PluginTests(unittest.TestCase):
         materialize_internal_services(app)
         app.renderer = DummyRenderer()
         app._deferred_system_messages = []
+        from quimera.app.runtime_state import AppRuntimeState
+        app.runtime_state = AppRuntimeState()
         app.runtime_state.nonblocking_prompt_visible = False
         app.runtime_state.nonblocking_input_queue = None
         app.runtime_state.nonblocking_input_thread = None
@@ -3336,6 +3463,8 @@ class PluginTests(unittest.TestCase):
         app.renderer = DummyRenderer()
         app._output_lock = threading.Lock()
         app._deferred_system_messages = []
+        from quimera.app.runtime_state import AppRuntimeState
+        app.runtime_state = AppRuntimeState()
         app.runtime_state.nonblocking_input_status = "reading"
         app.runtime_state.nonblocking_prompt_text = "Alex: "
         app.input_gate = Mock()
@@ -3357,6 +3486,8 @@ class PluginTests(unittest.TestCase):
         app.renderer = DummyRenderer()
         app._output_lock = threading.Lock()
         app._deferred_system_messages = []
+        from quimera.app.runtime_state import AppRuntimeState
+        app.runtime_state = AppRuntimeState()
         app.runtime_state.nonblocking_input_status = "reading"
         app.runtime_state.nonblocking_prompt_text = "Alex: "
         app.input_gate = Mock()
@@ -3374,6 +3505,8 @@ class PluginTests(unittest.TestCase):
     def test_redisplay_user_prompt_does_not_sleep_while_redrawing_after_agent_output(self):
         """Verifica que redisplay user prompt does not sleep while redrawing after agent output."""
         app = QuimeraApp.__new__(QuimeraApp)
+        from quimera.app.runtime_state import AppRuntimeState
+        app.runtime_state = AppRuntimeState()
         app.runtime_state.nonblocking_input_status = "reading"
         app.runtime_state.nonblocking_prompt_text = "Alex: "
         app.input_gate = Mock()
@@ -3398,6 +3531,8 @@ class PluginTests(unittest.TestCase):
         materialize_internal_services(app)
         app._output_lock = threading.Lock()
         app._deferred_system_messages = []
+        from quimera.app.runtime_state import AppRuntimeState
+        app.runtime_state = AppRuntimeState()
         app.runtime_state.nonblocking_input_status = "reading"
         app.runtime_state.nonblocking_prompt_text = "Alex: "
 
@@ -3421,6 +3556,8 @@ class PluginTests(unittest.TestCase):
         app = QuimeraApp.__new__(QuimeraApp)
         app._output_lock = threading.Lock()
         app._deferred_system_messages = []
+        from quimera.app.runtime_state import AppRuntimeState
+        app.runtime_state = AppRuntimeState()
         app.runtime_state.nonblocking_input_status = "reading"
         app.runtime_state.nonblocking_prompt_text = "Alex: "
         app.input_gate = Mock()
@@ -3451,6 +3588,8 @@ class PluginTests(unittest.TestCase):
         app.renderer = DummyRenderer()
         app._output_lock = threading.Lock()
         app._deferred_system_messages = []
+        from quimera.app.runtime_state import AppRuntimeState
+        app.runtime_state = AppRuntimeState()
         app.runtime_state.nonblocking_input_status = "reading"
         app.runtime_state.nonblocking_prompt_text = "Alex: "
         app.input_gate = Mock()
@@ -3483,6 +3622,8 @@ class PluginTests(unittest.TestCase):
         app.renderer = DummyRenderer()
         app._output_lock = threading.Lock()
         app._deferred_system_messages = []
+        from quimera.app.runtime_state import AppRuntimeState
+        app.runtime_state = AppRuntimeState()
         app.runtime_state.nonblocking_input_status = "reading"
         app.runtime_state.nonblocking_prompt_text = "Alex: "
         app.input_gate = Mock()
@@ -3505,6 +3646,8 @@ class PluginTests(unittest.TestCase):
         materialize_internal_services(app)
         app._output_lock = threading.Lock()
         app._deferred_system_messages = []
+        from quimera.app.runtime_state import AppRuntimeState
+        app.runtime_state = AppRuntimeState()
         app.runtime_state.nonblocking_input_status = "reading"
         app.runtime_state.nonblocking_prompt_text = "Alex: "
         app.renderer = Mock()
@@ -3531,6 +3674,8 @@ class PluginTests(unittest.TestCase):
         app.renderer = DummyRenderer()
         app._output_lock = threading.Lock()
         app._deferred_system_messages = []
+        from quimera.app.runtime_state import AppRuntimeState
+        app.runtime_state = AppRuntimeState()
         app.runtime_state.nonblocking_input_status = "reading"
 
         app.show_system_message("[task 7] claude:\nresultado final")
@@ -3541,10 +3686,13 @@ class PluginTests(unittest.TestCase):
     def test_parse_routing_selects_first_initial_agent(self):
         """Verifica que parse routing selects first initial agent."""
         app = QuimeraApp.__new__(QuimeraApp)
+        from quimera.app.agent_pool import AgentPool
+        app.agent_pool = AgentPool([AGENT_CLAUDE, AGENT_CODEX])
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
         app.round_index = 0
         app.renderer = DummyRenderer()
 
+        materialize_internal_services(app)
         agent, message, explicit = app.parse_routing("oi")
 
         self.assertEqual(agent, AGENT_CLAUDE)
@@ -3554,6 +3702,8 @@ class PluginTests(unittest.TestCase):
     def test_parse_routing_fallback_normalizes_plugin_objects_to_agent_names(self):
         """Verifica que parse routing fallback normalizes plugin objects to agent names."""
         app = QuimeraApp.__new__(QuimeraApp)
+        from quimera.app.agent_pool import AgentPool
+        app.agent_pool = AgentPool([])
         app.active_agents = []
         app.selected_agents = []
         app.round_index = 0
@@ -3570,6 +3720,7 @@ class PluginTests(unittest.TestCase):
         app.get_available_plugins = Mock(return_value=[plugin])
 
         with patch("quimera.app.core.random.choice", return_value=AGENT_CLAUDE):
+            materialize_internal_services(app)
             agent, message, explicit = app.parse_routing("oi")
 
         self.assertEqual(agent, AGENT_CLAUDE)
@@ -3581,6 +3732,8 @@ class PluginTests(unittest.TestCase):
     def test_record_failure_accepts_agent_plugin_instance(self):
         """Verifica que record failure accepts agent plugin instance."""
         app = QuimeraApp.__new__(QuimeraApp)
+        from quimera.app.agent_pool import AgentPool
+        app.agent_pool = AgentPool([AGENT_CLAUDE])
         app.active_agents = [AGENT_CLAUDE]
         app.agent_failures = defaultdict(int)
         app._agent_failures_lock = threading.Lock()
@@ -3615,6 +3768,8 @@ class PluginTests(unittest.TestCase):
     def test_retry_on_none_response(self):
         """Verifica que retry on none response."""
         app = QuimeraApp.__new__(QuimeraApp)
+        from quimera.app.agent_pool import AgentPool
+        app.agent_pool = AgentPool(["claude"])
         app.active_agents = ["claude"]
         app.agent_failures = {}
         app._agent_failures_lock = threading.Lock()
@@ -3872,6 +4027,8 @@ class PluginTests(unittest.TestCase):
         """Verifica que task handler prints and persists agent response."""
         app = QuimeraApp.__new__(QuimeraApp)
         materialize_internal_services(app)
+        from quimera.app.agent_pool import AgentPool
+        app.agent_pool = AgentPool([AGENT_CLAUDE])
         app.active_agents = [AGENT_CLAUDE]
         app.tasks_db_path = "/tmp/quimera-tasks-test.db"
         status_updates = []
@@ -3920,6 +4077,8 @@ class PluginTests(unittest.TestCase):
         """Verifica que task handler marks task waiting for review from another agent."""
         app = QuimeraApp.__new__(QuimeraApp)
         materialize_internal_services(app)
+        from quimera.app.agent_pool import AgentPool
+        app.agent_pool = AgentPool([AGENT_CLAUDE, AGENT_GEMINI])
         app.active_agents = [AGENT_CLAUDE, AGENT_GEMINI]
         app.tasks_db_path = "/tmp/quimera-tasks-test.db"
         status_updates = []
@@ -3968,6 +4127,8 @@ class PluginTests(unittest.TestCase):
         """Verifica que task handler completes when no other operational reviewer exists."""
         app = QuimeraApp.__new__(QuimeraApp)
         materialize_internal_services(app)
+        from quimera.app.agent_pool import AgentPool
+        app.agent_pool = AgentPool([AGENT_CLAUDE, AGENT_GEMINI])
         app.active_agents = [AGENT_CLAUDE, AGENT_GEMINI]
         app.tasks_db_path = "/tmp/quimera-tasks-test.db"
         status_updates = []
@@ -4023,6 +4184,8 @@ class PluginTests(unittest.TestCase):
         """Verifica que review handler prints review progress and completion."""
         app = QuimeraApp.__new__(QuimeraApp)
         materialize_internal_services(app)
+        from quimera.app.agent_pool import AgentPool
+        app.agent_pool = AgentPool([AGENT_CLAUDE, AGENT_GEMINI])
         app.active_agents = [AGENT_CLAUDE, AGENT_GEMINI]
         app.tasks_db_path = "/tmp/quimera-tasks-test.db"
         status_updates = []
@@ -4080,6 +4243,8 @@ class PluginTests(unittest.TestCase):
         """Verifica que review handler reports rejected self review."""
         app = QuimeraApp.__new__(QuimeraApp)
         materialize_internal_services(app)
+        from quimera.app.agent_pool import AgentPool
+        app.agent_pool = AgentPool([AGENT_CLAUDE, AGENT_GEMINI])
         app.active_agents = [AGENT_CLAUDE, AGENT_GEMINI]
         app.tasks_db_path = "/tmp/quimera-tasks-test.db"
         status_updates = []
@@ -4124,6 +4289,8 @@ class PluginTests(unittest.TestCase):
         """Verifica que review handler returns task to pending on retentativa."""
         app = QuimeraApp.__new__(QuimeraApp)
         materialize_internal_services(app)
+        from quimera.app.agent_pool import AgentPool
+        app.agent_pool = AgentPool([AGENT_CLAUDE, AGENT_GEMINI])
         app.active_agents = [AGENT_CLAUDE, AGENT_GEMINI]
         app.tasks_db_path = "/tmp/quimera-tasks-test.db"
         status_updates = []
@@ -4181,6 +4348,20 @@ class PluginTests(unittest.TestCase):
         status_updates = []
         app.event_sink = EventSink()
         app.show_muted_message = lambda message: status_updates.append(message)
+        from quimera.app.ui_event_handler import UiEventHandler
+        app._ui_event_handler = UiEventHandler(
+            renderer=app.renderer,
+            input_gate=getattr(app, "input_gate", None),
+            runtime_state=getattr(app, "runtime_state", None),
+            system_layer=app.system_layer,
+            event_sink=app.event_sink,
+            show_muted_message=app.show_muted_message,
+            show_system_message=getattr(app, "show_system_message", lambda msg: None),
+            show_warning_message=getattr(app, "show_warning_message", lambda msg: None),
+            show_error_message=getattr(app, "show_error_message", lambda msg: None),
+            redisplay_user_prompt=getattr(app, "_redisplay_user_prompt_if_needed", lambda: None),
+            output_lock=app._output_lock,
+        )
 
         app._wire_event_ui()
         app.event_sink.publish(TaskCompleted(
@@ -4201,6 +4382,8 @@ class PluginTests(unittest.TestCase):
         """Verifica que review handler returns task to pending review on failure."""
         app = QuimeraApp.__new__(QuimeraApp)
         materialize_internal_services(app)
+        from quimera.app.agent_pool import AgentPool
+        app.agent_pool = AgentPool([AGENT_CLAUDE, AGENT_GEMINI, AGENT_CODEX])
         app.active_agents = [AGENT_CLAUDE, AGENT_GEMINI, AGENT_CODEX]
         app.tasks_db_path = "/tmp/quimera-tasks-test.db"
         status_updates = []
@@ -4263,6 +4446,8 @@ class PluginTests(unittest.TestCase):
         """Verifica que review handler fails when pending review transition fails."""
         app = QuimeraApp.__new__(QuimeraApp)
         materialize_internal_services(app)
+        from quimera.app.agent_pool import AgentPool
+        app.agent_pool = AgentPool([AGENT_CLAUDE, AGENT_GEMINI, AGENT_CODEX])
         app.active_agents = [AGENT_CLAUDE, AGENT_GEMINI, AGENT_CODEX]
         app.tasks_db_path = "/tmp/quimera-tasks-test.db"
         status_updates = []
@@ -4329,6 +4514,8 @@ class PluginTests(unittest.TestCase):
         """Verifica que review handler fails when no other operational reviewer exists."""
         app = QuimeraApp.__new__(QuimeraApp)
         materialize_internal_services(app)
+        from quimera.app.agent_pool import AgentPool
+        app.agent_pool = AgentPool([AGENT_CLAUDE, AGENT_GEMINI])
         app.active_agents = [AGENT_CLAUDE, AGENT_GEMINI]
         app.tasks_db_path = "/tmp/quimera-tasks-test.db"
         status_updates = []
@@ -4392,6 +4579,8 @@ class PluginTests(unittest.TestCase):
         """Verifica que setup task executors only registers review for operational agents."""
         app = QuimeraApp.__new__(QuimeraApp)
         materialize_internal_services(app)
+        from quimera.app.agent_pool import AgentPool
+        app.agent_pool = AgentPool([AGENT_CLAUDE, AGENT_GEMINI])
         app.active_agents = [AGENT_CLAUDE, AGENT_GEMINI]
         app.tasks_db_path = "/tmp/quimera-tasks-test.db"
         review_handlers = {}
@@ -4434,6 +4623,8 @@ class PluginTests(unittest.TestCase):
         """Verifica que review eligibility tracks operational agent state dynamically."""
         app = QuimeraApp.__new__(QuimeraApp)
         materialize_internal_services(app)
+        from quimera.app.agent_pool import AgentPool
+        app.agent_pool = AgentPool([AGENT_CLAUDE, AGENT_GEMINI])
         app.active_agents = [AGENT_CLAUDE, AGENT_GEMINI]
         app.tasks_db_path = "/tmp/quimera-tasks-test.db"
         review_eligibility = {}
@@ -4473,6 +4664,8 @@ class PluginTests(unittest.TestCase):
         """Verifica que task handler executes with serialized chat context in body."""
         app = QuimeraApp.__new__(QuimeraApp)
         materialize_internal_services(app)
+        from quimera.app.agent_pool import AgentPool
+        app.agent_pool = AgentPool([AGENT_CLAUDE])
         app.active_agents = [AGENT_CLAUDE]
         app.tasks_db_path = "/tmp/quimera-tasks-test.db"
         handlers = {}
@@ -4537,6 +4730,8 @@ class PluginTests(unittest.TestCase):
         """Verifica que task handler requeues failed execution for other agent."""
         app = QuimeraApp.__new__(QuimeraApp)
         materialize_internal_services(app)
+        from quimera.app.agent_pool import AgentPool
+        app.agent_pool = AgentPool([AGENT_CLAUDE, AGENT_CODEX])
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
         app.tasks_db_path = "/tmp/quimera-tasks-test.db"
         handlers = {}
@@ -4579,6 +4774,8 @@ class PluginTests(unittest.TestCase):
         """Verifica que task handler fails when all other agents already failed."""
         app = QuimeraApp.__new__(QuimeraApp)
         materialize_internal_services(app)
+        from quimera.app.agent_pool import AgentPool
+        app.agent_pool = AgentPool([AGENT_CLAUDE, AGENT_CODEX])
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
         app.tasks_db_path = "/tmp/quimera-tasks-test.db"
         handlers = {}
@@ -4731,7 +4928,6 @@ class FallbackChainTests(unittest.TestCase):
     def test_first_agent_failover_to_another_agent(self):
         """Quando o primeiro agente não responde, outro agente deve assumir a rodada."""
         app = QuimeraApp.__new__(QuimeraApp)
-        materialize_internal_services(app)
         app.history = []
         app.user_name = "Você"
         app.round_index = 0
@@ -4752,15 +4948,20 @@ class FallbackChainTests(unittest.TestCase):
         persisted = []
         calls = []
 
+        from quimera.app.agent_pool import AgentPool
+        app.agent_pool = AgentPool([AGENT_CLAUDE, AGENT_CODEX])
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
         app.threads = 1
         app.shared_state = {}
         app.handle_command = lambda user: False
         app.parse_routing = lambda user: (AGENT_CLAUDE, "oi", False)
         app.parse_response = QuimeraApp.parse_response.__get__(app, QuimeraApp)
-        app.dispatch_services.print_response = lambda agent, response: printed.append((agent, response))
         app.session_services = Mock()
         app.session_services.persist_message = lambda role, content: persisted.append((role, content))
+
+        materialize_internal_services(app)
+
+        app.dispatch_services.print_response = lambda agent, response: printed.append((agent, response))
 
         responses = iter([
             None,
@@ -4794,6 +4995,8 @@ class FallbackChainTests(unittest.TestCase):
     def test_no_fallback_when_no_candidates(self):
         """Se não há candidatos de fallback, o sistema não deve tentar."""
         app = QuimeraApp.__new__(QuimeraApp)
+        from quimera.app.agent_pool import AgentPool
+        app.agent_pool = AgentPool(["claude", "codex"])
         app.active_agents = ["claude", "codex"]
         chain = ["claude"]
         route_target = "codex"
@@ -4896,6 +5099,8 @@ class MetricsFeedbackTests(unittest.TestCase):
     def test_get_task_routing_plugins_respects_explicit_active_agents(self):
         """Verifica que get task routing plugins respects explicit active agents."""
         app = QuimeraApp.__new__(QuimeraApp)
+        from quimera.app.agent_pool import AgentPool
+        app.agent_pool = AgentPool([AGENT_CLAUDE, AGENT_CODEX])
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
         app.tasks_db_path = str(Path(self.enterContext(tempfile.TemporaryDirectory())) / "tasks.db")
 
@@ -4906,6 +5111,8 @@ class MetricsFeedbackTests(unittest.TestCase):
     def test_get_task_routing_plugins_expands_wildcard_to_all_plugins(self):
         """Verifica que get task routing plugins expands wildcard to all plugins."""
         app = QuimeraApp.__new__(QuimeraApp)
+        from quimera.app.agent_pool import AgentPool
+        app.agent_pool = AgentPool(["*"])
         app.active_agents = ["*"]
         app.tasks_db_path = str(Path(self.enterContext(tempfile.TemporaryDirectory())) / "tasks.db")
 
@@ -5886,8 +6093,9 @@ class TestRunSmoke(unittest.TestCase):
     def test_run_requires_renderer(self):
         """run() levanta RuntimeError se renderer não foi inicializado."""
         app = QuimeraApp.__new__(QuimeraApp)
-        app.renderer = None
         app.session_services = Mock()
+        materialize_internal_services(app)
+        app.renderer = None
         with self.assertRaises(RuntimeError) as ctx:
             app.run()
         self.assertIn("renderer", str(ctx.exception))
@@ -5898,6 +6106,7 @@ class TestRunSmoke(unittest.TestCase):
         app.renderer = DummyRenderer()
         app.session_services = None
         with self.assertRaises(RuntimeError) as ctx:
+            materialize_internal_services(app)
             app.run()
         self.assertIn("session_services", str(ctx.exception))
 
@@ -5920,6 +6129,7 @@ class TestRunSmoke(unittest.TestCase):
         app.read_user_input = Mock(side_effect=["/exit"])
         app.session_services = Mock()
         app.session_services.shutdown = Mock()
+        materialize_internal_services(app)
         app.run()
         app.session_services.shutdown.assert_called_once()
 

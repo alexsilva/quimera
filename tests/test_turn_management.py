@@ -40,6 +40,25 @@ class DummyRenderer:
     def reset_visual_state(self, *a, **kw): pass
 
 
+def _materialize_ui_event_handler(app):
+    """Cria UiEventHandler a partir dos atributos já setados no app (test helper)."""
+    from quimera.app.ui_event_handler import UiEventHandler
+    from contextlib import nullcontext
+    app._ui_event_handler = UiEventHandler(
+        renderer=getattr(app, "renderer", None),
+        input_gate=getattr(app, "input_gate", None),
+        runtime_state=getattr(app, "runtime_state", None),
+        system_layer=getattr(app, "system_layer", None),
+        event_sink=getattr(app, "event_sink", None),
+        show_muted_message=getattr(app, "show_muted_message", lambda msg: None),
+        show_system_message=getattr(app, "show_system_message", lambda msg: None),
+        show_warning_message=getattr(app, "show_warning_message", lambda msg: None),
+        show_error_message=getattr(app, "show_error_message", lambda msg: None),
+        redisplay_user_prompt=getattr(app, "_redisplay_user_prompt_if_needed", lambda: None),
+        output_lock=getattr(app, "_output_lock", nullcontext()),
+    )
+
+
 def _make_app(active_agents=None):
     """Cria um stub mínimo de QuimeraApp para testes de _do_process_chat_message."""
     agents = list(active_agents or ["claude", "codex"])
@@ -76,6 +95,7 @@ def _make_app(active_agents=None):
         set_pending_input_for=lambda v: setattr(app, '_pending_input_for_val', v),
     )
     app._generate_delegation_id = lambda task, target: f"gen-{target}"
+    _materialize_ui_event_handler(app)
 
     return app
 
@@ -214,6 +234,8 @@ class TestTurnCycle(unittest.TestCase):
     def test_process_chat_message_restores_human_turn_on_success(self):
         """_process_chat_message deve devolver o turno ao humano via finally."""
         app = QuimeraApp.__new__(QuimeraApp)
+        from quimera.app.runtime_state import AppRuntimeState
+        app.runtime_state = AppRuntimeState()
         app.turn_manager = TurnManager()
         app.turn_manager.next_turn()  # simula: loop já cedeu turno para AI
 
@@ -226,6 +248,8 @@ class TestTurnCycle(unittest.TestCase):
     def test_process_chat_message_restores_human_turn_on_exception(self):
         """_process_chat_message deve devolver o turno ao humano mesmo com exceção."""
         app = QuimeraApp.__new__(QuimeraApp)
+        from quimera.app.runtime_state import AppRuntimeState
+        app.runtime_state = AppRuntimeState()
         app.turn_manager = TurnManager()
         app.turn_manager.next_turn()
 
@@ -239,6 +263,8 @@ class TestTurnCycle(unittest.TestCase):
     def test_run_blocks_while_ai_is_responding(self):
         """run() não deve chamar read_user_input enquanto é turno da IA."""
         app = QuimeraApp.__new__(QuimeraApp)
+        from quimera.app.runtime_state import AppRuntimeState
+        app.runtime_state = AppRuntimeState()
         app.turn_manager = TurnManager()
         app.renderer = DummyRenderer()
         app.threads = 1
@@ -268,6 +294,7 @@ class TestTurnCycle(unittest.TestCase):
         app._process_chat_message = Mock()
         app.session_services = Mock()
         app.agent_client = Mock()
+        app.bug_services = Mock()
 
         # Libera o turno para o humano depois de 0,25 s
         def release_turn():
@@ -277,6 +304,7 @@ class TestTurnCycle(unittest.TestCase):
         releaser = threading.Thread(target=release_turn, daemon=True)
         releaser.start()
 
+        _materialize_ui_event_handler(app)
         run_thread = threading.Thread(target=QuimeraApp.run, args=(app,), daemon=True)
         run_thread.start()
         run_thread.join(timeout=2)
@@ -288,6 +316,8 @@ class TestTurnCycle(unittest.TestCase):
     def test_run_does_not_block_on_keyboard_interrupt_while_chat_worker_is_busy(self):
         """run() deve encerrar mesmo se o worker do chat estiver preso processando."""
         app = QuimeraApp.__new__(QuimeraApp)
+        from quimera.app.runtime_state import AppRuntimeState
+        app.runtime_state = AppRuntimeState()
         app.renderer = DummyRenderer()
         app.threads = 2
         app.user_name = "User"
@@ -304,7 +334,7 @@ class TestTurnCycle(unittest.TestCase):
         app.session_services = Mock()
         app.agent_client = Mock()
         app.turn_manager = TurnManager()
-        app._build_input_prompt = lambda: "User: "
+        app._format_user_prompt = lambda: "User: "
         reads = iter(["mensagem"])
 
         def interrupting_read_user_input(prompt, timeout):
@@ -319,6 +349,8 @@ class TestTurnCycle(unittest.TestCase):
             time.sleep(10)
 
         app._process_chat_message = slow_process
+        app.bug_services = Mock()
+        _materialize_ui_event_handler(app)
 
         run_thread = threading.Thread(target=QuimeraApp.run, args=(app,), daemon=True)
         run_thread.start()
@@ -330,6 +362,8 @@ class TestTurnCycle(unittest.TestCase):
     def test_run_keeps_chat_alive_on_keyboard_interrupt_during_sync_processing(self):
         """Ctrl+C durante processamento síncrono deve cancelar só a execução atual."""
         app = QuimeraApp.__new__(QuimeraApp)
+        from quimera.app.runtime_state import AppRuntimeState
+        app.runtime_state = AppRuntimeState()
         app.renderer = DummyRenderer()
         app.threads = 1
         app.user_name = "User"
@@ -346,7 +380,7 @@ class TestTurnCycle(unittest.TestCase):
         app.session_services = Mock()
         app.agent_client = Mock()
         app.turn_manager = TurnManager()
-        app._build_input_prompt = lambda: "User: "
+        app._format_user_prompt = lambda: "User: "
 
         reads = iter(["mensagem", CMD_EXIT])
         read_calls = []
@@ -365,7 +399,9 @@ class TestTurnCycle(unittest.TestCase):
         app.read_user_input = mock_read_user_input
         app._process_chat_message = interrupting_process
         app.show_muted_message = lambda message: status_updates.append(message)
+        app.bug_services = Mock()
 
+        _materialize_ui_event_handler(app)
         QuimeraApp.run(app)
 
         self.assertEqual(process_calls, ["mensagem"])
@@ -378,6 +414,8 @@ class TestTurnCycle(unittest.TestCase):
     def test_run_keeps_chat_alive_on_threaded_input_interrupt_after_sync_cancel(self):
         """Em modo threaded, o interrupt residual do input não deve encerrar o chat."""
         app = QuimeraApp.__new__(QuimeraApp)
+        from quimera.app.runtime_state import AppRuntimeState
+        app.runtime_state = AppRuntimeState()
         app.renderer = DummyRenderer()
         app.threads = 2
         app.user_name = "User"
@@ -394,14 +432,11 @@ class TestTurnCycle(unittest.TestCase):
         app.session_services = Mock()
         app.agent_client = Mock()
         app.turn_manager = TurnManager()
-        app._build_input_prompt = lambda: "User: "
+        app._format_user_prompt = lambda: "User: "
         app.show_muted_message = MagicMock()
         app._refresh_parallel_toolbar = Mock()
         app.runtime_state.chat_inflight_count = 0
         app.runtime_state.chat_inflight_lock = threading.Lock()
-        app.runtime_state.chat_queue = None
-        app.runtime_state.chat_slot_semaphore = None
-        app.runtime_state.chat_executor = None
 
         reads = iter(["mensagem", KeyboardInterrupt(), CMD_EXIT])
         read_calls = []
@@ -429,7 +464,10 @@ class TestTurnCycle(unittest.TestCase):
         app.read_user_input = mock_read_user_input
         app._process_sync_chat_message_with_slot = interrupting_sync_process
 
+        app.bug_services = Mock()
+
         with patch("quimera.app.core.threading.Semaphore", return_value=NoAsyncSlotSemaphore()):
+            _materialize_ui_event_handler(app)
             QuimeraApp.run(app)
 
         self.assertEqual(process_calls, ["mensagem"])
@@ -456,6 +494,8 @@ class TestTurnCycle(unittest.TestCase):
     def test_drain_ui_events_routes_agent_text_above_active_prompt(self):
         """Eventos TEXT devem usar run_in_terminal quando o prompt humano está ativo."""
         app = QuimeraApp.__new__(QuimeraApp)
+        from quimera.app.runtime_state import AppRuntimeState
+        app.runtime_state = AppRuntimeState()
         rendered_messages = []
         scheduled_callbacks = []
 
@@ -481,6 +521,8 @@ class TestTurnCycle(unittest.TestCase):
         ui_queue = queue.Queue()
         ui_queue.put(RenderEvent(RenderEvent.TEXT, "mensagem do agente", agent="codex"))
 
+        _materialize_ui_event_handler(app)
+
         with patch("quimera.app.core.sys.stdin") as mock_stdin:
             mock_stdin.isatty.return_value = True
             QuimeraApp._drain_ui_events(app, ui_queue)
@@ -494,6 +536,8 @@ class TestTurnCycle(unittest.TestCase):
     def test_drain_ui_events_keeps_text_callback_payload_isolated_when_scheduled(self):
         """Callbacks TEXT agendados devem preservar payload/agent da iteração de origem."""
         app = QuimeraApp.__new__(QuimeraApp)
+        from quimera.app.runtime_state import AppRuntimeState
+        app.runtime_state = AppRuntimeState()
         rendered_messages = []
         no_response_calls = []
         scheduled_callbacks = []
@@ -531,6 +575,8 @@ class TestTurnCycle(unittest.TestCase):
             )
         )
 
+        _materialize_ui_event_handler(app)
+
         with patch("quimera.app.core.sys.stdin") as mock_stdin:
             mock_stdin.isatty.return_value = True
             QuimeraApp._drain_ui_events(app, ui_queue)
@@ -548,6 +594,8 @@ class TestTurnCycle(unittest.TestCase):
     def test_drain_ui_events_keeps_delegation_callback_payload_isolated_when_scheduled(self):
         """Callbacks DELEGATION agendados devem manter metadata da iteração correta."""
         app = QuimeraApp.__new__(QuimeraApp)
+        from quimera.app.runtime_state import AppRuntimeState
+        app.runtime_state = AppRuntimeState()
         delegation_calls = []
         scheduled_callbacks = []
 
@@ -588,6 +636,8 @@ class TestTurnCycle(unittest.TestCase):
             )
         )
 
+        _materialize_ui_event_handler(app)
+
         with patch("quimera.app.core.sys.stdin") as mock_stdin:
             mock_stdin.isatty.return_value = True
             QuimeraApp._drain_ui_events(app, ui_queue)
@@ -609,6 +659,8 @@ class TestTurnCycle(unittest.TestCase):
     def test_drain_ui_events_text_without_agent_is_rendered_as_system_message(self):
         """Evento TEXT sem agente não deve renderizar card 'Unknown'."""
         app = QuimeraApp.__new__(QuimeraApp)
+        from quimera.app.runtime_state import AppRuntimeState
+        app.runtime_state = AppRuntimeState()
         app.renderer = Mock()
         app.show_muted_message = Mock()
         app._output_lock = threading.Lock()
@@ -618,6 +670,8 @@ class TestTurnCycle(unittest.TestCase):
 
         ui_queue = queue.Queue()
         ui_queue.put(RenderEvent(RenderEvent.TEXT, "Responda para CODEX:", agent=None))
+
+        _materialize_ui_event_handler(app)
 
         with patch("quimera.app.core.sys.stdin") as mock_stdin:
             mock_stdin.isatty.return_value = True
@@ -630,6 +684,8 @@ class TestTurnCycle(unittest.TestCase):
     def test_run_threaded_keyboard_interrupt_without_local_cancel_still_shuts_down(self):
         """Ctrl+C no input ocioso em modo threaded deve continuar encerrando o chat."""
         app = QuimeraApp.__new__(QuimeraApp)
+        from quimera.app.runtime_state import AppRuntimeState
+        app.runtime_state = AppRuntimeState()
         app.renderer = DummyRenderer()
         app.threads = 2
         app.user_name = "User"
@@ -644,12 +700,14 @@ class TestTurnCycle(unittest.TestCase):
         app.storage = storage
         app.handle_command = Mock(return_value=False)
         app.session_services = Mock()
-        app.agent_client = Mock(_user_cancelled=False, _cancel_event=None)
+        app.agent_client = Mock()
         app.turn_manager = TurnManager()
-        app._build_input_prompt = lambda: "User: "
+        app._format_user_prompt = lambda: "User: "
         app.read_user_input = Mock(side_effect=KeyboardInterrupt())
         app.show_muted_message = MagicMock()
+        app.bug_services = Mock()
 
+        _materialize_ui_event_handler(app)
         QuimeraApp.run(app)
 
         self.assertEqual(app.show_muted_message.call_args_list, [unittest.mock.call(MSG_SHUTDOWN)])
@@ -659,6 +717,8 @@ class TestTurnCycle(unittest.TestCase):
     def test_process_chat_message_keeps_ai_turn_while_async_queue_has_pending_work(self):
         """Um prompt concluído não deve devolver o turno se ainda houver trabalho assíncrono pendente."""
         app = QuimeraApp.__new__(QuimeraApp)
+        from quimera.app.runtime_state import AppRuntimeState
+        app.runtime_state = AppRuntimeState()
         app.turn_manager = TurnManager()
         app.turn_manager.next_turn()
         app.runtime_state.chat_inflight_count = 2
@@ -673,6 +733,8 @@ class TestTurnCycle(unittest.TestCase):
     def test_run_falls_back_to_sync_when_chat_worker_dies(self):
         """run() deve alertar e voltar ao modo síncrono quando o worker morre."""
         app = QuimeraApp.__new__(QuimeraApp)
+        from quimera.app.runtime_state import AppRuntimeState
+        app.runtime_state = AppRuntimeState()
         app.renderer = DummyRenderer()
         app.threads = 2
         app.user_name = "User"
@@ -689,7 +751,7 @@ class TestTurnCycle(unittest.TestCase):
         app.session_services = Mock()
         app.agent_client = Mock()
         app.show_error_message = QuimeraApp.show_error_message.__get__(app, QuimeraApp)
-        app._build_input_prompt = lambda: "User: "
+        app._format_user_prompt = lambda: "User: "
         processed = []
         read_values = iter(["mensagem", CMD_EXIT])
 
@@ -714,7 +776,10 @@ class TestTurnCycle(unittest.TestCase):
             def join(self, timeout=None):
                 return None
 
+        app.bug_services = Mock()
+
         with patch("quimera.app.core.ChatWorker", return_value=DeadWorker()):
+            _materialize_ui_event_handler(app)
             QuimeraApp.run(app)
 
         self.assertEqual(processed, ["mensagem"])
@@ -724,6 +789,8 @@ class TestTurnCycle(unittest.TestCase):
     def test_run_blocks_until_slot_frees_then_processes_prompt_sync(self):
         """Com todos os slots ocupados, o próximo prompt espera e roda no thread principal."""
         app = QuimeraApp.__new__(QuimeraApp)
+        from quimera.app.runtime_state import AppRuntimeState
+        app.runtime_state = AppRuntimeState()
         app.renderer = DummyRenderer()
         app.threads = 2
         app.user_name = "User"
@@ -742,7 +809,7 @@ class TestTurnCycle(unittest.TestCase):
         app.turn_manager = TurnManager()
         app.runtime_state.chat_inflight_count = 0
         app.runtime_state.chat_inflight_lock = threading.Lock()
-        app._build_input_prompt = lambda: "User: "
+        app._format_user_prompt = lambda: "User: "
         reads = iter(["m1", "m2", "m3", CMD_EXIT])
         app.read_user_input = lambda prompt, timeout: next(reads)
         calls = []
@@ -754,8 +821,10 @@ class TestTurnCycle(unittest.TestCase):
                 time.sleep(0.25)
 
         app._process_chat_message = observed_process
+        app.bug_services = Mock()
 
         started = time.monotonic()
+        _materialize_ui_event_handler(app)
         QuimeraApp.run(app)
         elapsed = time.monotonic() - started
 
@@ -767,6 +836,8 @@ class TestTurnCycle(unittest.TestCase):
     def test_threads_one_is_serial(self):
         """Com threads=1, todos os prompts rodam serialmente no thread principal."""
         app = QuimeraApp.__new__(QuimeraApp)
+        from quimera.app.runtime_state import AppRuntimeState
+        app.runtime_state = AppRuntimeState()
         app.renderer = DummyRenderer()
         app.threads = 1
         app.user_name = "User"
@@ -783,7 +854,7 @@ class TestTurnCycle(unittest.TestCase):
         app.session_services = Mock()
         app.agent_client = Mock()
         app.turn_manager = TurnManager()
-        app._build_input_prompt = lambda: "User: "
+        app._format_user_prompt = lambda: "User: "
         reads = iter(["m1", "m2", CMD_EXIT])
         app.read_user_input = lambda prompt, timeout: next(reads)
         calls = []
@@ -792,7 +863,9 @@ class TestTurnCycle(unittest.TestCase):
             calls.append((user, threading.current_thread() is threading.main_thread()))
 
         app._process_chat_message = observed_process
+        app.bug_services = Mock()
 
+        _materialize_ui_event_handler(app)
         QuimeraApp.run(app)
 
         self.assertEqual(calls, [("m1", True), ("m2", True)])
@@ -800,6 +873,8 @@ class TestTurnCycle(unittest.TestCase):
     def test_run_enqueues_before_switching_turn_with_worker(self):
         """No modo com worker, run() deve enfileirar a mensagem antes de ceder o turno."""
         app = QuimeraApp.__new__(QuimeraApp)
+        from quimera.app.runtime_state import AppRuntimeState
+        app.runtime_state = AppRuntimeState()
         app.renderer = DummyRenderer()
         app.threads = 2
         app.user_name = "User"
@@ -815,7 +890,7 @@ class TestTurnCycle(unittest.TestCase):
         app.handle_command = Mock(return_value=False)
         app.session_services = Mock()
         app.agent_client = Mock()
-        app._build_input_prompt = lambda: "User: "
+        app._format_user_prompt = lambda: "User: "
         order = []
         real_turn_manager = TurnManager()
 
@@ -873,9 +948,12 @@ class TestTurnCycle(unittest.TestCase):
             def join(self, timeout=None):
                 return None
 
+        app.bug_services = Mock()
+
         with patch("quimera.app.chat_processor.queue.Queue", side_effect=queue_factory), patch(
             "quimera.app.core.ChatWorker", return_value=IdleWorker()
         ):
+            _materialize_ui_event_handler(app)
             QuimeraApp.run(app)
 
         self.assertEqual(order[:2], ["put:mensagem", "next_turn"])
@@ -1246,10 +1324,12 @@ class TestParallelToolbarState(unittest.TestCase):
 
     def _make_minimal_app(self, threads=2):
         """Cria um stub de QuimeraApp com os atributos necessários para toolbar."""
+        from quimera.app.runtime_state import AppRuntimeState
         from quimera.app.toolbar import ToolbarManager
         app = QuimeraApp.__new__(QuimeraApp)
         app.threads = threads
         app.toolbar = ToolbarManager(threads=threads)
+        app.runtime_state = AppRuntimeState()
         app.runtime_state.chat_inflight_count = 0
         app.runtime_state.chat_inflight_lock = threading.Lock()
         app.runtime_state.chat_queue = None
@@ -1311,12 +1391,16 @@ class TestParallelToolbarState(unittest.TestCase):
 
     def test_toolbar_context_parallel_label_with_active_and_queued(self):
         """_build_input_toolbar_context deve gerar label correta com slots e fila."""
+        from quimera.app.runtime_state import AppRuntimeState
         from quimera.app.toolbar import ToolbarManager
         app = QuimeraApp.__new__(QuimeraApp)
         app.workspace = MagicMock(cwd=Path("/tmp/proj"), tasks_db=Path("/tmp/quimera_test_tasks.db"))
+        from quimera.app.agent_pool import AgentPool
+        app.agent_pool = AgentPool([])
         app.active_agents = []
         app.threads = 2
         app.toolbar = ToolbarManager(threads=2)
+        app.runtime_state = AppRuntimeState()
         app.runtime_state.chat_inflight_count = 1
         app.runtime_state.chat_inflight_lock = threading.Lock()
         app.runtime_state.chat_queue = queue.Queue()
