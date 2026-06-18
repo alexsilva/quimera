@@ -92,9 +92,6 @@ class ChatRoundOrchestrator:
                 set_pending_input_for = set_pending_input_for or (
                     lambda value: setattr(app, "_pending_input_for", value)
                 )
-            merge_staging_to_workspace = merge_staging_to_workspace or getattr(
-                app, "_merge_staging_to_workspace", None
-            )
 
         self._dispatch_services = dispatch_services
         self._parse_routing = parse_routing

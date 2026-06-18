@@ -5,12 +5,11 @@ import os
 import platform
 import queue
 import random
-import shutil
+
 import sys
 import threading
 import time
 from collections import defaultdict
-from datetime import datetime, timezone
 from contextlib import nullcontext
 
 from pathlib import Path
@@ -24,6 +23,7 @@ from .chat_processor import run_chat_loop
 from .protocol import AppProtocol
 from .render_event import RenderEvent
 from .session import AppSessionServices, compute_history_hard_limit, trim_history_messages
+from .staging import merge_staging_to_workspace
 from .session_bootstrap import (
     resolve_session_log_path,
     resolve_render_debug_log_path,
@@ -488,7 +488,7 @@ class QuimeraApp:
             session_state=self._chat_state,
             show_system_message=self.system_layer.show_system_message,
             renderer=self.renderer,
-            merge_staging_to_workspace=self._merge_staging_to_workspace,
+            merge_staging_to_workspace=merge_staging_to_workspace,
         )
         self.tool_executor = self.task_services.build_tool_executor(require_approval_for_mutations=not self.auto_approve_mutations)
         # Injeta o executor nos drivers de API do agent_client.
@@ -1235,60 +1235,6 @@ class QuimeraApp:
         return {"state": "shared_state limpo.",
                 "history": "histórico limpo.",
                 "all": "shared_state e histórico limpos."}[target]
-
-    def _merge_staging_to_workspace(self, staging_root: Path):
-        """Mescla arquivos do staging para o workspace em ordem de índice com auditoria."""
-
-        if not staging_root.exists():
-            logger.debug("merge: staging_root does not exist, skipping")
-            return []
-
-        workspace_root = self.workspace.cwd.resolve()
-        manifest = []
-        index_dirs = sorted(staging_root.iterdir(), key=lambda p: int(p.name) if p.name.isdigit() else 999)
-
-        for index_dir in index_dirs:
-            if not index_dir.is_dir() or index_dir.is_symlink():
-                continue
-            for src in index_dir.rglob("*"):
-                if src.is_symlink():
-                    raise ValueError(f"merge blocked symlink source: {src}")
-                if not src.is_file():
-                    continue
-                rel_path = src.relative_to(index_dir)
-                dest = self.workspace.cwd / rel_path
-                dest_resolved = dest.resolve(strict=False)
-                if not dest_resolved.is_relative_to(workspace_root):
-                    raise ValueError(f"merge blocked destination outside workspace: {rel_path}")
-                if dest.exists() and dest.is_symlink():
-                    raise ValueError(f"merge blocked symlink destination: {dest}")
-                overwritten = dest.exists()
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(src, dest)
-                entry = {
-                    "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                    "source": str(src),
-                    "destination": str(dest_resolved),
-                    "relative_path": rel_path.as_posix(),
-                    "overwritten": overwritten,
-                }
-                manifest.append(entry)
-                logger.info(
-                    "merge %s: %s -> %s",
-                    "overwrote" if overwritten else "created",
-                    src,
-                    dest_resolved,
-                )
-
-        manifest_path = getattr(self.workspace, "state_dir", None)
-        if manifest and manifest_path is not None:
-            manifest_file = manifest_path / "staging_merge_manifest.jsonl"
-            manifest_file.parent.mkdir(parents=True, exist_ok=True)
-            with manifest_file.open("a", encoding="utf-8") as fh:
-                for entry in manifest:
-                    fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
-        logger.info("merge completed: %d files to %s", len(manifest), workspace_root)
-        return manifest
 
     def _restore_current_job_env(self) -> None:
         """Restaura QUIMERA_CURRENT_JOB_ID para evitar vazamento entre sessões."""

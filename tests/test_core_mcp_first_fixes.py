@@ -8,6 +8,7 @@ from unittest.mock import Mock
 import pytest
 
 from quimera.app import QuimeraApp
+from quimera.app.staging import merge_staging_to_workspace
 from quimera.app.protocol import AppProtocol
 from quimera.app.session import AppSessionServices
 from quimera.domain.session_state import SessionState
@@ -99,7 +100,7 @@ def test_merge_staging_to_workspace_normal_path_writes_manifest(tmp_path):
     src.write_text("novo", encoding="utf-8")
     app = _make_merge_app(workspace)
 
-    manifest = app._merge_staging_to_workspace(staging)
+    manifest = merge_staging_to_workspace(staging, app.workspace)
 
     assert (workspace / "dir" / "file.txt").read_text(encoding="utf-8") == "novo"
     assert manifest[0]["relative_path"] == "dir/file.txt"
@@ -122,7 +123,7 @@ def test_merge_staging_to_workspace_blocks_destination_outside_workspace(tmp_pat
     app = _make_merge_app(workspace)
 
     with pytest.raises(ValueError, match="outside workspace"):
-        app._merge_staging_to_workspace(staging)
+        merge_staging_to_workspace(staging, app.workspace)
     assert not (outside / "escape.txt").exists()
 
 
@@ -139,7 +140,7 @@ def test_merge_staging_to_workspace_blocks_source_symlink(tmp_path):
     app = _make_merge_app(workspace)
 
     with pytest.raises(ValueError, match="symlink source"):
-        app._merge_staging_to_workspace(staging)
+        merge_staging_to_workspace(staging, app.workspace)
 
 
 def test_merge_staging_to_workspace_records_overwrite(tmp_path):
@@ -153,7 +154,7 @@ def test_merge_staging_to_workspace_records_overwrite(tmp_path):
     src.write_text("novo", encoding="utf-8")
     app = _make_merge_app(workspace)
 
-    manifest = app._merge_staging_to_workspace(staging)
+    manifest = merge_staging_to_workspace(staging, app.workspace)
 
     assert (workspace / "file.txt").read_text(encoding="utf-8") == "novo"
     assert manifest[0]["overwritten"] is True

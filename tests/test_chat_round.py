@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, Mock, patch
 
 from quimera.app.agent_pool import AgentPool
 from quimera.app.chat_round import ChatRoundOrchestrator
+from quimera.app.staging import merge_staging_to_workspace
 
 
 # ---------------------------------------------------------------------------
@@ -92,7 +93,7 @@ def _make_orchestrator(app):
         set_parallel_toolbar_state=getattr(app, '_set_parallel_toolbar_state', None),
         get_pending_input_for=lambda: app._pending_input_for,
         set_pending_input_for=lambda v: setattr(app, '_pending_input_for', v),
-        merge_staging_to_workspace=getattr(app, '_merge_staging_to_workspace', None),
+        merge_staging_to_workspace=merge_staging_to_workspace,
     )
 
 

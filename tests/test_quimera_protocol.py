@@ -18,6 +18,7 @@ from quimera.app import QuimeraApp
 from quimera.app.chat_round import ChatRoundOrchestrator
 from quimera.app.agent_pool import AgentPool
 from quimera.app.core import TurnManager
+from quimera.app.staging import merge_staging_to_workspace
 from quimera.app.dispatch import AppDispatchServices
 from quimera.app.inputs import AppInputServices, read_from_editor, read_user_input_with_timeout
 from quimera.app.session import AppSessionServices
@@ -409,7 +410,7 @@ def materialize_internal_services(app):
             set_summary_agent_preference=lambda v: setattr(app, "summary_agent_preference", v),
             get_pending_input_for=lambda: getattr(app, "_pending_input_for", None),
             set_pending_input_for=lambda v: setattr(app, "_pending_input_for", v),
-            merge_staging_to_workspace=getattr(app, "_merge_staging_to_workspace", None),
+            merge_staging_to_workspace=merge_staging_to_workspace,
         )
     if not hasattr(app, "execution_mode"):
         app.execution_mode = None
