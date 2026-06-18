@@ -18,7 +18,6 @@ from .agent_pool import AgentPool, AgentPoolView
 from .handlers import PromptAwareStderrHandler
 from ..domain.session_state import SessionState
 from .chat_round import ChatRoundContext, ChatRoundOrchestrator
-from .bootstrapper import AppBootstrapper
 from .chat_processor import run_chat_loop
 from .protocol import AppProtocol
 from .render_event import RenderEvent
@@ -139,39 +138,30 @@ class QuimeraApp:
         self._agent_failures_lock = threading.Lock()
         self.auto_approve_mutations = auto_approve_mutations
         self._plugin_registry = plugin_registry
-        infrastructure = AppBootstrapper(
-            cwd,
-            debug=debug,
-            theme=theme,
-            workspace=workspace,
-            workspace_cls=Workspace,
-            env_config_cls=EnvConfig,
-            config_manager_cls=ConfigManager,
-            session_storage_cls=SessionStorage,
-            bug_store_cls=BugStore,
-            render_bug_detector_cls=RenderBugDetector,
-            agent_runtime_bug_detector_cls=AgentRuntimeBugDetector,
-            bug_correlator_cls=BugCorrelator,
-            render_audit_logger_cls=RenderAuditLogger,
-            terminal_renderer_cls=TerminalRenderer,
-            event_sink_cls=EventSink,
-        ).build_infrastructure(
-            get_plugin_style=self._resolve_plugin_style,
-        )
-        self.workspace = infrastructure.workspace
-        self.config = infrastructure.config
-        self.storage = infrastructure.storage
+        self.workspace = workspace if workspace is not None else Workspace(cwd)
+        EnvConfig(self.workspace.env_file).apply_to_environ()
+        self.config = ConfigManager(self.workspace.config_file)
+        active_theme = theme if theme is not None else self.config.theme
+        self.storage = SessionStorage(self.workspace.logs_dir)
         self._session_started_at = time.monotonic()
-        self.bug_store = infrastructure.bug_store
-        self.bug_detector = infrastructure.bug_detector
-        self.agent_bug_detector = infrastructure.agent_bug_detector
-        self.bug_correlator = infrastructure.bug_correlator
+        self.bug_store = BugStore(self.workspace.tmp.root / "data" / "logs")
+        self.bug_detector = RenderBugDetector(repeat_threshold=2)
+        self.agent_bug_detector = AgentRuntimeBugDetector()
+        self.bug_correlator = BugCorrelator(window_seconds=60.0)
         session_id = self.storage.session_id
-        render_log_path = infrastructure.render_log_path
-        render_ansi_path = infrastructure.render_ansi_path
-        metrics_file = infrastructure.metrics_file
-        self.renderer = infrastructure.renderer
-        self.event_sink = infrastructure.event_sink
+        render_log_path = resolve_workspace_render_log_path(self.workspace, session_id)
+        render_ansi_path = resolve_workspace_render_ansi_path(self.workspace, session_id)
+        metrics_file = resolve_workspace_metrics_path(self.workspace, session_id) if debug else None
+        render_audit_logger = (
+            RenderAuditLogger(render_log_path, render_ansi_path) if debug else None
+        )
+        self.renderer = TerminalRenderer(
+            theme=active_theme,
+            get_plugin_style=self._resolve_plugin_style,
+            density=self.config.density,
+            audit_logger=render_audit_logger,
+        )
+        self.event_sink = EventSink()
         self.user_name = self.config.user_name
         self.visibility = Visibility(visibility)
         self.session_metrics = SessionMetricsService()
