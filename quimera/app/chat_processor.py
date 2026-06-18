@@ -63,9 +63,9 @@ def run_chat_loop(
         raise RuntimeError("QuimeraApp.renderer não foi inicializado")
     if not hasattr(app, "session_services") or app.session_services is None:
         raise RuntimeError("QuimeraApp.session_services não foi inicializado")
-    agent_client = getattr(app, "agent_client", None)
-    if agent_client:
-        agent_client._user_cancelled = False
+    chat_lifecycle = getattr(app, "chat_lifecycle", None)
+    if chat_lifecycle is None:
+        raise RuntimeError("QuimeraApp.chat_lifecycle não foi inicializado")
     _tty.suppress_control_echo()
     show_banner = getattr(app.renderer, "show_banner", app.renderer.show_system)
     show_banner(WelcomePresenter.build_welcome_message())
@@ -106,13 +106,13 @@ def run_chat_loop(
     _ui_wakeup = threading.Event()
     _ui_event_queue: queue.Queue = _WakeupQueue(_ui_wakeup)
     app._ui_event_queue = _ui_event_queue
+    chat_lifecycle.bind_ui_event_queue(_ui_event_queue)
     if hasattr(app, "dispatch_services") and app.dispatch_services is not None:
         app.dispatch_services._ui_queue = _ui_event_queue
     if hasattr(app, "event_sink") and app.event_sink is not None:
         app.event_sink._ui_queue = _ui_event_queue
     if not hasattr(app, "turn_manager") or app.turn_manager is None:
         app.turn_manager = turn_manager_cls()
-
     threaded_chat = app.threads > 1
     if hasattr(app, "input_services") and app.input_services is not None:
         app.input_services.set_nonblocking_tty(threaded_chat)
@@ -138,8 +138,8 @@ def run_chat_loop(
         chat_worker = chat_worker_cls(
             chat_queue=chat_queue,
             ui_event_queue=_ui_event_queue,
-            agent_executor=app._submit_async_chat_message,
-            turn_manager=app.turn_manager,
+            agent_executor=chat_lifecycle.submit_async_message,
+            turn_manager=getattr(app, 'turn_manager', None),
         )
         chat_worker.start()
         app.runtime_state.chat_queue = chat_queue
@@ -147,7 +147,7 @@ def run_chat_loop(
     _pending_async_slot = False
     try:
         while True:
-            app._drain_ui_events(_ui_event_queue)
+            chat_lifecycle.drain_ui_events(_ui_event_queue)
             if hasattr(app, "event_sink") and app.event_sink is not None:
                 app.event_sink.drain_pending()
             if threaded_chat and chat_worker is not None and not chat_worker.is_alive():
@@ -238,10 +238,10 @@ def run_chat_loop(
                     if hasattr(app, "turn_manager") and app.turn_manager.is_human_turn:
                         app.turn_manager.next_turn()
                     try:
-                        app._process_sync_chat_message_with_slot(user)
+                        chat_lifecycle.process_sync_message_with_slot(user)
                     except KeyboardInterrupt:
                         swallow_threaded_input_interrupt = True
-                        app._handle_local_processing_interrupt()
+                        chat_lifecycle.handle_local_interrupt()
                         continue
                     if hasattr(app, "turn_manager") and app.turn_manager.is_ai_turn:
                         app.turn_manager.next_turn()
@@ -249,9 +249,9 @@ def run_chat_loop(
                 if hasattr(app, "turn_manager"):
                     app.turn_manager.next_turn()
                 try:
-                    app._process_chat_message(user)
+                    chat_lifecycle.process_message(user)
                 except KeyboardInterrupt:
-                    app._handle_local_processing_interrupt()
+                    chat_lifecycle.handle_local_interrupt()
                     continue
                 if hasattr(app, "turn_manager") and app.turn_manager.is_ai_turn:
                     app.turn_manager.next_turn()

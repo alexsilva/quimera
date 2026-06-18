@@ -18,6 +18,7 @@ from .agent_pool import AgentPool, AgentPoolView
 from .handlers import PromptAwareStderrHandler
 from ..domain.session_state import SessionState
 from .chat_round import ChatRoundContext, ChatRoundOrchestrator
+from .chat_lifecycle import ChatLifecycle
 from .chat_processor import run_chat_loop
 from .protocol import AppProtocol
 from .render_event import RenderEvent
@@ -515,6 +516,22 @@ class QuimeraApp:
             show_error_message=self.system_layer.show_error_message,
             redisplay_user_prompt=self._redisplay_user_prompt_if_needed,
             output_lock=self._output_lock,
+        )
+        self.chat_lifecycle = ChatLifecycle(
+            chat_round_orchestrator=self.chat_round_orchestrator,
+            system_layer=self.system_layer,
+            renderer=self.renderer,
+            runtime_state=self.runtime_state,
+            turn_manager=self.turn_manager,
+            agent_client=self.agent_client,
+            ui_event_handler=self._ui_event_handler,
+            session_services=self.session_services,
+            task_services=self.task_services,
+            session_state=self._chat_state,
+            dispatch_services=self.dispatch_services,
+            parse_routing=self.parse_routing,
+            parse_response=self.parse_response,
+            refresh_parallel_toolbar=self._refresh_parallel_toolbar,
         )
         self.bug_services = BugServices(
             bug_store=self.bug_store,
@@ -1146,7 +1163,7 @@ class QuimeraApp:
         return self.system_layer.handle_command(user_input)
 
     def _do_process_chat_message(self, user):
-        """Fachada compatível para a implementação da rodada de chat."""
+        """Executa uma rodada de chat com o contexto completo."""
         orchestrator = self.chat_round_orchestrator
         ctx = ChatRoundContext(
             session_services=getattr(self, "session_services", None),
@@ -1179,13 +1196,7 @@ class QuimeraApp:
         """Executa process chat message com controle de turno."""
         agent_client = getattr(self, "agent_client", None)
         if agent_client is not None:
-            agent_client._user_cancelled = False
-            cancel_event = getattr(agent_client, "_cancel_event", None)
-            if cancel_event is not None:
-                cancel_event.clear()
-            reset_cancel_notices = getattr(agent_client, "reset_cancel_notices", None)
-            if callable(reset_cancel_notices):
-                reset_cancel_notices()
+            agent_client.reset_cancel_state()
         try:
             self._do_process_chat_message(user)
         finally:
@@ -1207,14 +1218,8 @@ class QuimeraApp:
     def _handle_local_processing_interrupt(self) -> None:
         """Cancela só o processamento atual e devolve o chat ao input."""
         agent_client = getattr(self, "agent_client", None)
-        cancel_active_work = getattr(agent_client, "cancel_active_work", None)
-        if callable(cancel_active_work):
-            cancel_active_work()
-        elif agent_client is not None:
-            agent_client._user_cancelled = True
-            cancel_event = getattr(agent_client, "_cancel_event", None)
-            if cancel_event is not None and hasattr(cancel_event, "set"):
-                cancel_event.set()
+        if agent_client is not None:
+            agent_client.cancel_active_work()
         if hasattr(self, "renderer") and self.renderer is not None:
             self.renderer.reset_visual_state()
         if hasattr(self, "turn_manager") and self.turn_manager is not None:

@@ -59,6 +59,7 @@ class TestAppHistory(unittest.TestCase):
             mock_ws_instance.tasks_db = Path("/tmp/quimera_test_tasks.db")
             mock_ws_instance.tmp = MagicMock()
             mock_ws_instance.tmp.root = tmp_root
+            mock_ws_instance.tmp.logs_dir = tmp_root / "data" / "logs"
             mock_ws.return_value = mock_ws_instance
 
             with patch("quimera.app.core.create_executor"):
@@ -106,6 +107,7 @@ class TestAppHistory(unittest.TestCase):
             mock_ws_instance.render_logs_dir = Path("/tmp/quimera_test_workspace/data/logs/render")
             mock_ws_instance.tmp = MagicMock()
             mock_ws_instance.tmp.root = tmp_root
+            mock_ws_instance.tmp.logs_dir = tmp_root / "data" / "logs"
             mock_ws.return_value = mock_ws_instance
 
             with patch("quimera.app.core.create_executor"):
@@ -160,6 +162,7 @@ class TestAppHistory(unittest.TestCase):
             mock_ws_instance.tasks_db = Path("/tmp/quimera_test_tasks.db")
             mock_tmp = MagicMock()
             mock_tmp.root = Path("/tmp/quimera_test_workspace_tmp")
+            mock_tmp.logs_dir = mock_tmp.root / "data" / "logs"
             mock_tmp.render_log_path_for.side_effect = (
                 lambda session_id: tmp_render_logs_dir / f"render-{session_id}.jsonl"
             )

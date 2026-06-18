@@ -183,6 +183,12 @@ class AgentClient:
         with self._cancel_notice_lock:
             self._cancel_notice_shown = False
 
+    def reset_cancel_state(self) -> None:
+        """Limpa estado de cancelamento antes de uma nova rodada."""
+        self._user_cancelled = False
+        self._cancel_event.clear()
+        self.reset_cancel_notices()
+
     def _show_cancelled_once(self) -> None:
         """Evita repetição de '[cancelado] pelo usuário' em cancelamentos concorrentes."""
         should_show = False

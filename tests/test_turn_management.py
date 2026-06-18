@@ -40,6 +40,79 @@ class DummyRenderer:
     def reset_visual_state(self, *a, **kw): pass
 
 
+def _materialize_chat_lifecycle(app):
+    """Cria ChatLifecycle com bridge para métodos mock já setados no app."""
+    from quimera.app.chat_lifecycle import ChatLifecycle
+    from unittest.mock import Mock
+
+    # Usa o orquestrador real se existir e _process_chat_message não foi sobrescrito como mock
+    real_orchestrator = getattr(app, 'chat_round_orchestrator', None)
+    mock_overridden = '_process_chat_message' in app.__dict__
+
+    if real_orchestrator is not None and not mock_overridden:
+        stub_orchestrator = real_orchestrator
+    else:
+        class _StubOrchestrator:
+            def process(self, user, ctx):
+                fn = getattr(app, '_process_chat_message', None)
+                if callable(fn) and '_process_chat_message' in app.__dict__:
+                    fn(user)
+        stub_orchestrator = _StubOrchestrator()
+
+    class _AppBridgeLifecycle(ChatLifecycle):
+        def _do_process_message(self, user):
+            for attr in ('session_services', 'task_services', 'dispatch_services', 'agent_client', 'parse_routing', 'parse_response'):
+                val = getattr(app, attr, None)
+                if val is not None:
+                    setattr(self, f'_{attr}', val)
+            super()._do_process_message(user)
+
+        def process_sync_message_with_slot(self, user):
+            fn = getattr(app, '_process_sync_chat_message_with_slot', None)
+            if callable(fn):
+                fn(user)
+            else:
+                super().process_sync_message_with_slot(user)
+
+        def handle_local_interrupt(self):
+            fn = getattr(app, '_handle_local_processing_interrupt', None)
+            if callable(fn):
+                fn()
+            else:
+                super().handle_local_interrupt()
+
+        def submit_async_message(self, user):
+            fn = getattr(app, '_submit_async_chat_message', None)
+            if callable(fn):
+                fn(user)
+            else:
+                super().submit_async_message(user)
+
+        def drain_ui_events(self, ui_queue):
+            fn = getattr(app, '_drain_ui_events', None)
+            if callable(fn):
+                fn(ui_queue)
+            else:
+                super().drain_ui_events(ui_queue)
+
+    app.chat_lifecycle = _AppBridgeLifecycle(
+        chat_round_orchestrator=stub_orchestrator,
+        system_layer=getattr(app, 'system_layer', Mock()),
+        renderer=getattr(app, 'renderer', None),
+        runtime_state=getattr(app, 'runtime_state', None),
+        turn_manager=getattr(app, 'turn_manager', None),
+        agent_client=getattr(app, 'agent_client', None),
+        ui_event_handler=getattr(app, '_ui_event_handler', None),
+        session_services=getattr(app, 'session_services', None),
+        task_services=getattr(app, 'task_services', None),
+        session_state=getattr(app, '_chat_state', None),
+        dispatch_services=getattr(app, 'dispatch_services', None),
+        parse_routing=getattr(app, 'parse_routing', None),
+        parse_response=getattr(app, 'parse_response', None),
+        refresh_parallel_toolbar=getattr(app, '_refresh_parallel_toolbar', lambda: None),
+    )
+
+
 def _materialize_ui_event_handler(app):
     """Cria UiEventHandler a partir dos atributos já setados no app (test helper)."""
     from quimera.app.ui_event_handler import UiEventHandler
@@ -71,6 +144,8 @@ def _materialize_ui_event_handler(app):
         redisplay_user_prompt=getattr(app, "_redisplay_user_prompt_if_needed", lambda: None),
         output_lock=getattr(app, "_output_lock", nullcontext()),
     )
+    if getattr(app, "chat_lifecycle", None) is None:
+        _materialize_chat_lifecycle(app)
 
 
 def _make_app(active_agents=None):
