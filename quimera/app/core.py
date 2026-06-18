@@ -144,7 +144,7 @@ class QuimeraApp:
         active_theme = theme if theme is not None else self.config.theme
         self.storage = SessionStorage(self.workspace.logs_dir)
         self._session_started_at = time.monotonic()
-        self.bug_store = BugStore(self.workspace.tmp.root / "data" / "logs")
+        self.bug_store = BugStore(self.workspace.tmp.logs_dir)
         self.bug_detector = RenderBugDetector(repeat_threshold=2)
         self.agent_bug_detector = AgentRuntimeBugDetector()
         self.bug_correlator = BugCorrelator(window_seconds=60.0)

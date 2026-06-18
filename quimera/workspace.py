@@ -55,6 +55,7 @@ class WorkspaceTmp:
 
     def _ensure_dirs(self):
         """Cria os subdiretórios temporários necessários, registrando warnings em caso de falha."""
+        self._ensure_dir(self.logs_dir, "logs dir")
         self._ensure_dir(self.render_logs_dir, "render logs dir")
         self._ensure_dir(self.metrics_dir, "metrics dir")
 
@@ -71,14 +72,19 @@ class WorkspaceTmp:
         return self._root
 
     @property
+    def logs_dir(self) -> Path:
+        """Diretório temporário base de logs da sessão atual."""
+        return self._root / "data" / "logs"
+
+    @property
     def render_logs_dir(self) -> Path:
         """Diretório de logs de auditoria de render (JSONL + ANSI bruto)."""
-        return self._root / "data" / "logs" / "render"
+        return self.logs_dir / "render"
 
     @property
     def metrics_dir(self) -> Path:
         """Diretório de métricas de sessão (latência, tokens, etc.)."""
-        return self._root / "data" / "logs" / "metrics"
+        return self.logs_dir / "metrics"
 
     def render_log_path_for(self, session_id: str) -> Path:
         """Caminho do arquivo JSONL de auditoria de render para *session_id*."""
