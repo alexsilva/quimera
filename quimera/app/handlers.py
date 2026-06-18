@@ -45,10 +45,10 @@ class PromptAwareStderrHandler(logging.StreamHandler):
         self.bind_callbacks(
             output_lock=getattr(app, "_output_lock", None),
             redisplay_prompt=getattr(app, "_redisplay_user_prompt_if_needed", _noop),
-            show_error=getattr(app, "show_error_message", _noop),
-            show_warning=getattr(app, "show_warning_message", _noop),
-            show_system=getattr(app, "show_system_message", _noop),
-            show_muted=getattr(app, "show_muted_message", _noop),
+            show_error=getattr(app.system_layer, "show_error_message", _noop),
+            show_warning=getattr(app.system_layer, "show_warning_message", _noop),
+            show_system=getattr(app.system_layer, "show_system_message", _noop),
+            show_muted=getattr(app.system_layer, "show_muted_message", _noop),
             is_reading=lambda: _is_prompt_active_from_app(app),
             debug_enabled=lambda: bool(getattr(app, "debug_prompt_metrics", False)),
         )

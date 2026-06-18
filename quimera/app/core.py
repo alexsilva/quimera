@@ -180,7 +180,6 @@ class QuimeraApp:
         self.task_executors = []
         self._approval_handler = None
         self.session_services = None
-        self.system_layer = None
         self.execution_mode = None
         self.task_classifier = None
         self.tool_executor = None
@@ -192,6 +191,42 @@ class QuimeraApp:
             command_resolver=self._available_commands,
             argument_resolver=self._command_argument_resolver,
         )
+        self.context_manager = ContextManager(
+            self.workspace.context_persistent,
+            self.workspace.context_session,
+            self.renderer,
+            workspace=self.workspace,
+        )
+        self._display_service = DisplayService(
+            renderer=self.renderer,
+            input_status_getter=self.input_gate.is_active,
+            redisplay_prompt=self._redisplay_user_prompt_if_needed,
+            output_lock=self._output_lock,
+            prompt_owner_thread_id_getter=self.input_gate.get_owner_thread_id,
+            run_above_active_prompt=self.input_gate.run_in_terminal_message,
+        )
+        self.system_layer = AppSystemLayer(
+            display_service=self._display_service,
+            plugin_resolver=PluginResolverAdapter(
+                registry=self._plugin_registry,
+                normalize=self._normalize_agent_name,
+            ),
+            prompt_builder=None,
+            history_getter=lambda: list(getattr(self, "history", []) or []),
+            shared_state_getter=lambda: getattr(self, "shared_state", None),
+            execution_mode_getter=lambda: getattr(self, "execution_mode", None),
+            agent_pool=self.agent_pool,
+            get_selected_agents=lambda: list(getattr(self, "selected_agents", []) or []),
+            set_selected_agents=lambda agents: setattr(self, "selected_agents", list(agents)),
+            clear_screen=self.clear_terminal_screen,
+            read_user_input=self.read_user_input,
+            task_command_handler=None,
+            bugs_command_handler=self._handle_bugs_command,
+            reset_shared_state=self.reset_shared_state,
+            approval_handler_getter=lambda: getattr(self, "_approval_handler", None),
+            context_manager=self.context_manager,
+            plugin_registry=self._plugin_registry,
+        )
         self.input_services = AppInputServices(
             self.renderer,
             input_resolver=lambda: self.input_gate,
@@ -200,7 +235,7 @@ class QuimeraApp:
             set_prompt_text=lambda v: setattr(self.runtime_state, 'nonblocking_prompt_text', v),
             set_prompt_owner=lambda v: setattr(self.runtime_state, 'prompt_owning_thread_id', v),
             set_prompt_visible=lambda v: setattr(self.runtime_state, 'nonblocking_prompt_visible', v),
-            flush_deferred_messages=lambda: self.system_layer.flush_deferred_messages(),
+            flush_deferred_messages=self.system_layer.flush_deferred_messages,
             output_lock=self._output_lock,
         )
         self.input_gate.set_toolbar_context_resolver(self._build_input_toolbar_context)
@@ -213,12 +248,6 @@ class QuimeraApp:
         for item in migrated:
             self.renderer.show_system(MSG_MIGRATION.format(item))
 
-        self.context_manager = ContextManager(
-            self.workspace.context_persistent,
-            self.workspace.context_session,
-            self.renderer,
-            workspace=self.workspace,
-        )
         workspace_tmp = getattr(self.workspace, "tmp", None)
         workspace_tmp_root = getattr(workspace_tmp, "root", None)
         self.idle_timeout_seconds = idle_timeout_seconds if idle_timeout_seconds is not None else self.config.idle_timeout_seconds
@@ -229,8 +258,8 @@ class QuimeraApp:
             idle_timeout=self.idle_timeout_seconds,
             visibility=self.visibility,
             working_dir=str(self.workspace.cwd),
-            error_reporter=self.show_error_message,
-            muted_reporter=self.show_muted_message,
+            error_reporter=self.system_layer.show_error_message,
+            muted_reporter=self.system_layer.show_muted_message,
             session_id=session_id,
             workspace_tmp_root=workspace_tmp_root,
             process_supervisor=self.process_supervisor,
@@ -315,10 +344,10 @@ class QuimeraApp:
                 handler.bind_callbacks(
                     output_lock=self._output_lock,
                     redisplay_prompt=self._redisplay_user_prompt_if_needed,
-                    show_error=self.show_error_message,
-                    show_warning=self.show_warning_message,
-                    show_system=self.show_system_message,
-                    show_muted=self.show_muted_message,
+                    show_error=self.system_layer.show_error_message,
+                    show_warning=self.system_layer.show_warning_message,
+                    show_system=self.system_layer.show_system_message,
+                    show_muted=self.system_layer.show_muted_message,
                     is_reading=self.input_gate.is_active,
                     debug_enabled=lambda: bool(self.debug_prompt_metrics),
                 )
@@ -359,6 +388,7 @@ class QuimeraApp:
             active_agents_provider=lambda: self.agent_pool.agents,
             metrics_tracker=self.behavior_metrics,
         )
+        self.system_layer._prompt_builder = self.prompt_builder
         self.auto_summarize_threshold = configured_auto_summarize_threshold
         self.task_services = AppTaskServices(
             task_executor_factory=self.task_executor_factory,
@@ -385,8 +415,8 @@ class QuimeraApp:
             get_user_name=lambda: self.user_name,
             get_prompt_builder=lambda: self.prompt_builder,
             get_visibility=lambda: self.visibility,
-            get_show_error_message=lambda: self.show_error_message,
-            get_show_muted_message=lambda: self.show_muted_message,
+            get_show_error_message=lambda: self.system_layer.show_error_message,
+            get_show_muted_message=lambda: self.system_layer.show_muted_message,
             get_execution_mode=lambda: self.execution_mode,
             get_record_tool_event=lambda: self._record_tool_event,
             get_record_failure=lambda: self.record_failure,
@@ -404,6 +434,7 @@ class QuimeraApp:
             classify_task_execution_result=self.classify_task_execution_result,
             classify_task_review_result=classify_task_review_result,
         )
+        self.system_layer.task_command_handler = self.task_services.handle_task_command
         self.session_services = AppSessionServices(
             session_state=self._chat_state,
             storage=self.storage,
@@ -455,7 +486,7 @@ class QuimeraApp:
             behavior_metrics=self.behavior_metrics,
             threads=self.threads,
             session_state=self._chat_state,
-            show_system_message=self.show_system_message,
+            show_system_message=self.system_layer.show_system_message,
             renderer=self.renderer,
             merge_staging_to_workspace=self._merge_staging_to_workspace,
         )
@@ -474,36 +505,6 @@ class QuimeraApp:
         self.tool_executor.set_active_agents_provider(lambda: list(self.agent_pool.agents))
         self.tool_executor.set_cancel_checker(lambda: bool(getattr(self.agent_client, "_cancel_event", None) and self.agent_client._cancel_event.is_set()))
         self.tool_executor.set_agent_cleanup_callback(self._cleanup_sub_agent_stream)
-        self._display_service = DisplayService(
-            renderer=self.renderer,
-            input_status_getter=self.input_gate.is_active,
-            redisplay_prompt=self._redisplay_user_prompt_if_needed,
-            output_lock=self._output_lock,
-            prompt_owner_thread_id_getter=self.input_gate.get_owner_thread_id,
-            run_above_active_prompt=self.input_gate.run_in_terminal_message,
-        )
-        self.system_layer = AppSystemLayer(
-            display_service=self._display_service,
-            plugin_resolver=PluginResolverAdapter(
-                registry=self._plugin_registry,
-                normalize=self._normalize_agent_name,
-            ),
-            prompt_builder=self.prompt_builder,
-            history_getter=lambda: list(getattr(self, "history", []) or []),
-            shared_state_getter=lambda: getattr(self, "shared_state", None),
-            execution_mode_getter=lambda: getattr(self, "execution_mode", None),
-            agent_pool=self.agent_pool,
-            get_selected_agents=lambda: list(getattr(self, "selected_agents", []) or []),
-            set_selected_agents=lambda agents: setattr(self, "selected_agents", list(agents)),
-            clear_screen=self.clear_terminal_screen,
-            read_user_input=self.read_user_input,
-            task_command_handler=self.task_services.handle_task_command,
-            bugs_command_handler=self._handle_bugs_command,
-            reset_shared_state=self.reset_shared_state,
-            approval_handler_getter=lambda: getattr(self, "_approval_handler", None),
-            context_manager=self.context_manager,
-            plugin_registry=self._plugin_registry,
-        )
         # Set up task executors for autonomous task execution
         self._setup_task_executors()
         self._ui_event_handler = UiEventHandler(
@@ -512,10 +513,10 @@ class QuimeraApp:
             runtime_state=self.runtime_state,
             system_layer=self.system_layer,
             event_sink=self.event_sink,
-            show_muted_message=self.show_muted_message,
-            show_system_message=self.show_system_message,
-            show_warning_message=self.show_warning_message,
-            show_error_message=self.show_error_message,
+            show_muted_message=self.system_layer.show_muted_message,
+            show_system_message=self.system_layer.show_system_message,
+            show_warning_message=self.system_layer.show_warning_message,
+            show_error_message=self.system_layer.show_error_message,
             redisplay_user_prompt=self._redisplay_user_prompt_if_needed,
             output_lock=self._output_lock,
         )
@@ -528,9 +529,9 @@ class QuimeraApp:
             storage=self.storage,
             renderer=self.renderer,
             event_sink=self.event_sink,
-            show_system_message=self.show_system_message,
-            show_warning_message=self.show_warning_message,
-            show_muted_message=self.show_muted_message,
+            show_system_message=self.system_layer.show_system_message,
+            show_warning_message=self.system_layer.show_warning_message,
+            show_muted_message=self.system_layer.show_muted_message,
         )
         self.command_router = CommandRouter(
             agent_pool=self.agent_pool,
@@ -1157,65 +1158,6 @@ class QuimeraApp:
         """Fachada compatível para comandos slash."""
         return self.system_layer.handle_command(user_input)
 
-    def show_system_message(self, message: str) -> None:
-        """Fachada compatível para mensagens de sistema."""
-        system_layer = getattr(self, "system_layer", None)
-        if system_layer is not None:
-            system_layer.show_system_message(message)
-
-    def show_muted_message(self, message: str) -> None:
-        """Fachada compatível para mensagens neutras (dim)."""
-        system_layer = getattr(self, "system_layer", None)
-        if system_layer is not None and hasattr(system_layer, "show_muted_message"):
-            system_layer.show_muted_message(message)
-            return
-        renderer = getattr(self, "renderer", None)
-        if renderer is None:
-            return
-        show_system_neutral = getattr(renderer, "show_system_neutral", None)
-        if callable(show_system_neutral):
-            show_system_neutral(message)
-            return
-        show_system = getattr(renderer, "show_system", None)
-        if callable(show_system):
-            show_system(message)
-            return
-        show_plain = getattr(renderer, "show_plain", None)
-        if callable(show_plain):
-            show_plain(message)
-            return
-
-    def show_error_message(self, message: str) -> None:
-        """Fachada compatível para mensagens de erro."""
-        system_layer = getattr(self, "system_layer", None)
-        if system_layer is not None and hasattr(system_layer, "show_error_message"):
-            system_layer.show_error_message(message)
-            return
-        renderer = getattr(self, "renderer", None)
-        if renderer is None:
-            return
-        show_error = getattr(renderer, "show_error", None)
-        if callable(show_error):
-            show_error(message)
-
-    def show_warning_message(self, message: str) -> None:
-        """Fachada compatível para mensagens de aviso."""
-        system_layer = getattr(self, "system_layer", None)
-        if system_layer is not None and hasattr(system_layer, "show_warning_message"):
-            system_layer.show_warning_message(message)
-            return
-        renderer = getattr(self, "renderer", None)
-        if renderer is None:
-            return
-        show_warning = getattr(renderer, "show_warning", None)
-        if callable(show_warning):
-            show_warning(message)
-            return
-        show_system = getattr(renderer, "show_system", None)
-        if callable(show_system):
-            show_system(message)
-            return
-
     def _do_process_chat_message(self, user):
         """Fachada compatível para a implementação da rodada de chat."""
         orchestrator = self.chat_round_orchestrator
@@ -1227,7 +1169,7 @@ class QuimeraApp:
             parse_routing=self.parse_routing,
             parse_response=self.parse_response,
             dispatch_services=getattr(self, "dispatch_services", None),
-            show_system_message=getattr(self, "show_system_message", None),
+            show_system_message=self.system_layer.show_system_message,
             ui_queue=getattr(self, "_ui_event_queue", None),
         )
         orchestrator.process(user, ctx=ctx)
@@ -1400,7 +1342,7 @@ class QuimeraApp:
             self.renderer.reset_visual_state()
         if hasattr(self, "turn_manager") and self.turn_manager is not None:
             self.turn_manager.reset()
-        self.show_muted_message("[cancelado] pelo usuário")
+        self.system_layer.show_muted_message("[cancelado] pelo usuário")
         self._refresh_parallel_toolbar()
 
     def _process_async_chat_message(self, user):

@@ -150,9 +150,7 @@ def run_chat_loop(
             if threaded_chat and chat_worker is not None and not chat_worker.is_alive():
                 if not chat_worker_failure_reported:
                     logger.error("chat worker morreu; alternando para processamento síncrono")
-                    app.show_error_message(
-                        "[erro] worker do chat interrompido; alternando para processamento síncrono."
-                    )
+                    app.system_layer.show_error_message("[erro] worker do chat interrompido; alternando para processamento síncrono.")
                     chat_worker_failure_reported = True
                 chat_worker = None
                 chat_queue = None
@@ -262,7 +260,7 @@ def run_chat_loop(
             cancel_event = getattr(agent_client, "_cancel_event", None)
             if cancel_event is not None and hasattr(cancel_event, "set"):
                 cancel_event.set()
-        app.show_muted_message(MSG_SHUTDOWN)
+        app.system_layer.show_muted_message(MSG_SHUTDOWN)
     finally:
         if _pending_async_slot:
             app.runtime_state.decrement_chat_inflight(app._refresh_parallel_toolbar)

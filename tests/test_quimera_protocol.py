@@ -403,7 +403,7 @@ def materialize_internal_services(app):
             threads=getattr(app, "threads", 1),
             session_state=getattr(app, "session_state", {}),
             renderer=getattr(app, "renderer", None),
-            show_system_message=getattr(app, "show_system_message", None),
+            show_system_message=getattr(getattr(app, "system_layer", None), "show_system_message", None),
             get_round_index=lambda: getattr(app, "round_index", 0),
             set_round_index=lambda v: setattr(app, "round_index", v),
             set_summary_agent_preference=lambda v: setattr(app, "summary_agent_preference", v),
@@ -438,10 +438,22 @@ def materialize_internal_services(app):
             runtime_state=getattr(app, "runtime_state", None),
             system_layer=getattr(app, "system_layer", None),
             event_sink=getattr(app, "event_sink", None),
-            show_muted_message=getattr(app, "show_muted_message", lambda msg: None),
-            show_system_message=getattr(app, "show_system_message", lambda msg: None),
-            show_warning_message=getattr(app, "show_warning_message", lambda msg: None),
-            show_error_message=getattr(app, "show_error_message", lambda msg: None),
+            show_muted_message=(
+                getattr(app, "show_muted_message", None)
+                or getattr(getattr(app, "system_layer", None), "show_muted_message", lambda msg: None)
+            ),
+            show_system_message=(
+                getattr(app, "show_system_message", None)
+                or getattr(getattr(app, "system_layer", None), "show_system_message", lambda msg: None)
+            ),
+            show_warning_message=(
+                getattr(app, "show_warning_message", None)
+                or getattr(getattr(app, "system_layer", None), "show_warning_message", lambda msg: None)
+            ),
+            show_error_message=(
+                getattr(app, "show_error_message", None)
+                or getattr(getattr(app, "system_layer", None), "show_error_message", lambda msg: None)
+            ),
             redisplay_user_prompt=getattr(app, "_redisplay_user_prompt_if_needed", lambda: None),
             output_lock=getattr(app, "_output_lock", nullcontext()),
         )
@@ -3474,7 +3486,7 @@ class PluginTests(unittest.TestCase):
         stdin.isatty = lambda: True
 
         with patch("sys.stdin", stdin):
-            app.show_system_message("[task 7] claude: iniciando")
+            app.system_layer.show_system_message("[task 7] claude: iniciando")
 
         self.assertEqual(app.renderer.system_messages, [])
         app.input_gate.redisplay.assert_not_called()
@@ -3498,7 +3510,7 @@ class PluginTests(unittest.TestCase):
 
         msg = "[task 7] claude: erro: falha de rede"
         with patch("sys.stdin", stdin), patch("sys.stdout.write"), patch("sys.stdout.flush"):
-            app.show_system_message(msg)
+            app.system_layer.show_system_message(msg)
 
         self.assertEqual(app._deferred_system_messages, [("system", msg)])
 
@@ -3546,7 +3558,7 @@ class PluginTests(unittest.TestCase):
 
         msg = "[task 7] gemini:\nACEITE\nResultado validado com evidência concreta."
         with patch("sys.stdin", stdin), patch("sys.stdout.write"), patch("sys.stdout.flush"):
-            app.show_system_message(msg)
+            app.system_layer.show_system_message(msg)
 
         self.assertEqual(app._deferred_system_messages, [])
         renderer.show_system.assert_called_once_with(msg)
@@ -3562,6 +3574,7 @@ class PluginTests(unittest.TestCase):
         app.runtime_state.nonblocking_prompt_text = "Alex: "
         app.input_gate = Mock()
         app.input_gate.get_line_buffer.return_value = ""
+        app.system_layer = Mock()
 
         stdin = io.StringIO("")
         stdin.isatty = lambda: True
@@ -3634,7 +3647,7 @@ class PluginTests(unittest.TestCase):
         stdin.isatty = lambda: True
 
         with patch("sys.stdin", stdin), patch("sys.stdout.write") as mock_write, patch("sys.stdout.flush"):
-            app.show_system_message("erro: timeout")
+            app.system_layer.show_system_message("erro: timeout")
 
         clear_calls = [call_args for call_args in mock_write.call_args_list if call_args == call("\r\x1b[2K")]
         self.assertEqual(len(clear_calls), 0)
@@ -3678,7 +3691,7 @@ class PluginTests(unittest.TestCase):
         app.runtime_state = AppRuntimeState()
         app.runtime_state.nonblocking_input_status = "reading"
 
-        app.show_system_message("[task 7] claude:\nresultado final")
+        app.system_layer.show_system_message("[task 7] claude:\nresultado final")
 
         self.assertEqual(app.renderer.system_messages, ["[task 7] claude:\nresultado final"])
         self.assertEqual(app._deferred_system_messages, [])
@@ -4356,9 +4369,9 @@ class PluginTests(unittest.TestCase):
             system_layer=app.system_layer,
             event_sink=app.event_sink,
             show_muted_message=app.show_muted_message,
-            show_system_message=getattr(app, "show_system_message", lambda msg: None),
-            show_warning_message=getattr(app, "show_warning_message", lambda msg: None),
-            show_error_message=getattr(app, "show_error_message", lambda msg: None),
+            show_system_message=app.system_layer.show_system_message,
+            show_warning_message=app.system_layer.show_warning_message,
+            show_error_message=app.system_layer.show_error_message,
             redisplay_user_prompt=getattr(app, "_redisplay_user_prompt_if_needed", lambda: None),
             output_lock=app._output_lock,
         )

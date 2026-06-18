@@ -74,7 +74,7 @@ class ChatRoundOrchestrator:
             behavior_metrics = getattr(app, "behavior_metrics", behavior_metrics)
             threads = getattr(app, "threads", threads)
             session_state = getattr(app, "_chat_state", getattr(app, "session_state", session_state))
-            show_system_message = getattr(app, "show_system_message", show_system_message)
+            show_system_message = getattr(getattr(app, "system_layer", None), "show_system_message", show_system_message)
             renderer = getattr(app, "renderer", renderer)
             ui_queue = getattr(app, "_ui_event_queue", ui_queue)
             if not isinstance(session_state, SessionState):

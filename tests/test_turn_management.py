@@ -50,10 +50,22 @@ def _materialize_ui_event_handler(app):
         runtime_state=getattr(app, "runtime_state", None),
         system_layer=getattr(app, "system_layer", None),
         event_sink=getattr(app, "event_sink", None),
-        show_muted_message=getattr(app, "show_muted_message", lambda msg: None),
-        show_system_message=getattr(app, "show_system_message", lambda msg: None),
-        show_warning_message=getattr(app, "show_warning_message", lambda msg: None),
-        show_error_message=getattr(app, "show_error_message", lambda msg: None),
+        show_muted_message=(
+            getattr(app, "show_muted_message", None)
+            or getattr(getattr(app, "system_layer", None), "show_muted_message", lambda msg: None)
+        ),
+        show_system_message=(
+            getattr(app, "show_system_message", None)
+            or getattr(getattr(app, "system_layer", None), "show_system_message", lambda msg: None)
+        ),
+        show_warning_message=(
+            getattr(app, "show_warning_message", None)
+            or getattr(getattr(app, "system_layer", None), "show_warning_message", lambda msg: None)
+        ),
+        show_error_message=(
+            getattr(app, "show_error_message", None)
+            or getattr(getattr(app, "system_layer", None), "show_error_message", lambda msg: None)
+        ),
         redisplay_user_prompt=getattr(app, "_redisplay_user_prompt_if_needed", lambda: None),
         output_lock=getattr(app, "_output_lock", nullcontext()),
     )
@@ -95,6 +107,7 @@ def _make_app(active_agents=None):
         set_pending_input_for=lambda v: setattr(app, '_pending_input_for_val', v),
     )
     app._generate_delegation_id = lambda task, target: f"gen-{target}"
+    app.system_layer = Mock()
     _materialize_ui_event_handler(app)
 
     return app
@@ -106,7 +119,7 @@ class TestChatRoundContextBridge(unittest.TestCase):
         app = _make_app(active_agents=["claude", "codex"])
         app._chat_state = {"history": []}
         app._ui_event_queue = queue.Queue()
-        app.show_system_message = Mock()
+        app.system_layer = Mock(show_system_message=Mock())
         app.task_services = Mock()
         app.chat_round_orchestrator.process = Mock()
 
@@ -121,7 +134,7 @@ class TestChatRoundContextBridge(unittest.TestCase):
         self.assertIs(ctx.renderer, app.renderer)
         self.assertIs(ctx.session_state, app._chat_state)
         self.assertIs(ctx.dispatch_services, app.dispatch_services)
-        self.assertIs(ctx.show_system_message, app.show_system_message)
+        self.assertIs(ctx.show_system_message, app.system_layer.show_system_message)
         self.assertIs(ctx.ui_queue, app._ui_event_queue)
 
     def test_orchestrator_process_applies_runtime_context(self):
@@ -294,6 +307,7 @@ class TestTurnCycle(unittest.TestCase):
         app._process_chat_message = Mock()
         app.session_services = Mock()
         app.agent_client = Mock()
+        app.system_layer = Mock()
         app.bug_services = Mock()
 
         # Libera o turno para o humano depois de 0,25 s
@@ -349,6 +363,7 @@ class TestTurnCycle(unittest.TestCase):
             time.sleep(10)
 
         app._process_chat_message = slow_process
+        app.system_layer = Mock()
         app.bug_services = Mock()
         _materialize_ui_event_handler(app)
 
@@ -398,7 +413,7 @@ class TestTurnCycle(unittest.TestCase):
         status_updates = []
         app.read_user_input = mock_read_user_input
         app._process_chat_message = interrupting_process
-        app.show_muted_message = lambda message: status_updates.append(message)
+        app.system_layer = Mock(show_muted_message=lambda message: status_updates.append(message))
         app.bug_services = Mock()
 
         _materialize_ui_event_handler(app)
@@ -433,7 +448,7 @@ class TestTurnCycle(unittest.TestCase):
         app.agent_client = Mock()
         app.turn_manager = TurnManager()
         app._format_user_prompt = lambda: "User: "
-        app.show_muted_message = MagicMock()
+        app.system_layer = Mock(show_muted_message=MagicMock())
         app._refresh_parallel_toolbar = Mock()
         app.runtime_state.chat_inflight_count = 0
         app.runtime_state.chat_inflight_lock = threading.Lock()
@@ -472,7 +487,7 @@ class TestTurnCycle(unittest.TestCase):
 
         self.assertEqual(process_calls, ["mensagem"])
         self.assertEqual(len(read_calls), 3, "run() deveria consumir o interrupt residual e voltar ao input")
-        self.assertEqual(app.show_muted_message.call_args_list, [unittest.mock.call("[cancelado] pelo usuário")])
+        self.assertEqual(app.system_layer.show_muted_message.call_args_list, [unittest.mock.call("[cancelado] pelo usuário")])
         self.assertTrue(app.turn_manager.is_human_turn)
         app.session_services.shutdown.assert_called_once_with(interrupted=False)
         app.agent_client.close.assert_called_once()
@@ -481,7 +496,7 @@ class TestTurnCycle(unittest.TestCase):
         """Ctrl+C local deve sinalizar cancelamento real do AgentClient."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.turn_manager = TurnManager()
-        app.show_muted_message = MagicMock()
+        app.system_layer = Mock(show_muted_message=MagicMock())
         app._refresh_parallel_toolbar = MagicMock()
         app.agent_client = MagicMock()
 
@@ -489,7 +504,7 @@ class TestTurnCycle(unittest.TestCase):
 
         app.agent_client.cancel_active_work.assert_called_once_with()
         self.assertTrue(app.turn_manager.is_human_turn)
-        app.show_muted_message.assert_called_once_with("[cancelado] pelo usuário")
+        app.system_layer.show_muted_message.assert_called_once_with("[cancelado] pelo usuário")
 
     def test_drain_ui_events_routes_agent_text_above_active_prompt(self):
         """Eventos TEXT devem usar run_in_terminal quando o prompt humano está ativo."""
@@ -704,13 +719,13 @@ class TestTurnCycle(unittest.TestCase):
         app.turn_manager = TurnManager()
         app._format_user_prompt = lambda: "User: "
         app.read_user_input = Mock(side_effect=KeyboardInterrupt())
-        app.show_muted_message = MagicMock()
+        app.system_layer = Mock(show_muted_message=MagicMock())
         app.bug_services = Mock()
 
         _materialize_ui_event_handler(app)
         QuimeraApp.run(app)
 
-        self.assertEqual(app.show_muted_message.call_args_list, [unittest.mock.call(MSG_SHUTDOWN)])
+        self.assertEqual(app.system_layer.show_muted_message.call_args_list, [unittest.mock.call(MSG_SHUTDOWN)])
         app.session_services.shutdown.assert_called_once_with(interrupted=True)
         app.agent_client.close.assert_called_once()
 
@@ -750,7 +765,7 @@ class TestTurnCycle(unittest.TestCase):
         app.handle_command = Mock(return_value=False)
         app.session_services = Mock()
         app.agent_client = Mock()
-        app.show_error_message = QuimeraApp.show_error_message.__get__(app, QuimeraApp)
+        app.show_error_message = app.renderer.show_error
         app._format_user_prompt = lambda: "User: "
         processed = []
         read_values = iter(["mensagem", CMD_EXIT])
@@ -776,6 +791,7 @@ class TestTurnCycle(unittest.TestCase):
             def join(self, timeout=None):
                 return None
 
+        app.system_layer = Mock(show_error_message=app.renderer.show_error)
         app.bug_services = Mock()
 
         with patch("quimera.app.core.ChatWorker", return_value=DeadWorker()):
@@ -948,6 +964,7 @@ class TestTurnCycle(unittest.TestCase):
             def join(self, timeout=None):
                 return None
 
+        app.system_layer = Mock()
         app.bug_services = Mock()
 
         with patch("quimera.app.chat_processor.queue.Queue", side_effect=queue_factory), patch(
@@ -1198,11 +1215,11 @@ class TestSingleAgentPerTurn(unittest.TestCase):
         app = _make_app(active_agents=["claude", "codex"])
         app.parse_routing = Mock(return_value=("claude", "pergunta", False))
         app.parse_response = Mock(return_value=("Você quer continuar?", None, None, False, True, None))
-        app.show_system_message = Mock()
+        app.system_layer = Mock(show_system_message=Mock())
 
         QuimeraApp._do_process_chat_message(app, "pergunta")
 
-        app.show_system_message.assert_called_once_with("Responda para CLAUDE:")
+        app.system_layer.show_system_message.assert_called_once_with("Responda para CLAUDE:")
 
     def test_delegation_without_body_continues_chain(self):
         """O fluxo não encadeia delegação por route_target/delegation retornado pelo parser."""

@@ -82,7 +82,10 @@ def _make_orchestrator(app):
         threads=getattr(app, 'threads', 1),
         session_state=getattr(app, 'session_state', {"session_id": "test-cr"}),
         renderer=getattr(app, 'renderer', None),
-        show_system_message=getattr(app, 'show_system_message', None),
+        show_system_message=(
+            getattr(app, 'show_system_message', None)
+            or getattr(getattr(app, 'system_layer', None), 'show_system_message', None)
+        ),
         get_round_index=lambda: app.round_index,
         set_round_index=lambda v: setattr(app, 'round_index', v),
         set_summary_agent_preference=lambda v: setattr(app, 'summary_agent_preference', v),
