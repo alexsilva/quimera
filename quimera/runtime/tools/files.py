@@ -7,9 +7,18 @@ from pathlib import Path
 
 from ..config import ToolRuntimeConfig
 from ..models import ToolCall, ToolResult
+from ..policy import ToolPolicyError, is_path_inside
+from .base import ToolBase, ValidatableTool
 
 _logger = logging.getLogger("quimera.staging")
 _thread_local = threading.local()
+_FILE_TOOL_NAMES = [
+    "list_files",
+    "read_file",
+    "write_file",
+    "remove_file",
+    "grep_search",
+]
 
 
 def get_staging_root() -> Path | None:
@@ -26,12 +35,12 @@ def set_staging_root(path: Path | None) -> None:
         _logger.debug("staging cleared (thread=%s)", threading.current_thread().name)
 
 
-class FileTools:
+class FileTools(ToolBase):
     """Implementa `FileTools`."""
 
     def __init__(self, config: ToolRuntimeConfig) -> None:
         """Inicializa uma instância de FileTools."""
-        self.config = config
+        super().__init__(config)
 
     def _is_allowed_path(self, path: Path) -> bool:
         """Retorna True quando o path está em staging ou em algum root permitido."""
@@ -247,3 +256,77 @@ class FileTools:
                                 truncated=True,
                             )
         return ToolResult(ok=True, tool_name=call.name, content="\n".join(results))
+
+
+class FileToolsValidator(ValidatableTool):
+    """Validação de policy para as ferramentas de arquivo."""
+
+    def _resolve_workspace_or_staging_path(self, raw_path: str) -> Path:
+        """Resolve path no workspace e aceita também o staging root quando ativo."""
+        path = self._resolve_workspace_path(raw_path)
+        staging = get_staging_root()
+        if staging is None:
+            return path
+        normalized = raw_path.lstrip("/") or "."
+        staging_path = (staging / normalized).resolve()
+        if is_path_inside(staging_path, staging):
+            return staging_path
+        return path
+
+    def _validate_list_files(self, call: ToolCall) -> None:
+        """Valida list_files."""
+        self._resolve_workspace_or_staging_path(str(call.arguments.get("path", ".")))
+
+    def _validate_read_file(self, call: ToolCall) -> None:
+        """Valida read_file."""
+        raw_path = call.arguments.get("path")
+        if not raw_path:
+            raise ToolPolicyError("read_file requer 'path'")
+        workspace_path = self._resolve_workspace_path(str(raw_path))
+        staging_path = self._resolve_workspace_or_staging_path(str(raw_path))
+        if not workspace_path.is_file() and not staging_path.is_file():
+            raise ToolPolicyError(f"Arquivo inválido para leitura: {workspace_path}")
+
+    def _validate_write_file(self, call: ToolCall) -> None:
+        """Valida write_file."""
+        raw_path = call.arguments.get("path")
+        if not raw_path:
+            raise ToolPolicyError("write_file requer 'path'")
+        path = self._resolve_workspace_or_staging_path(str(raw_path))
+        if "content" not in call.arguments:
+            raise ToolPolicyError("write_file requer 'content'")
+        mode = str(call.arguments.get("mode", "overwrite"))
+        replace_existing = bool(call.arguments.get("replace_existing", False))
+        if mode == "overwrite" and path.exists() and not replace_existing:
+            raise ToolPolicyError(
+                "write_file não pode sobrescrever arquivo existente sem replace_existing=true; "
+                "para edições parciais use apply_patch"
+            )
+
+    def _validate_grep_search(self, call: ToolCall) -> None:
+        """Valida grep_search."""
+        self._resolve_workspace_or_staging_path(str(call.arguments.get("path", ".")))
+        pattern = str(call.arguments.get("pattern", "")).strip()
+        if not pattern:
+            raise ToolPolicyError("grep_search requer um padrão não vazio")
+
+    def _validate_remove_file(self, call: ToolCall) -> None:
+        """Valida remove_file."""
+        raw_path = call.arguments.get("path")
+        if not raw_path:
+            raise ToolPolicyError("remove_file requer 'path'")
+        self._resolve_workspace_or_staging_path(str(raw_path))
+        dry_run = call.arguments.get("dry_run", True)
+        if dry_run is not False:
+            raise ToolPolicyError(
+                "remove_file requer dry_run=False explícito para confirmar a remoção"
+            )
+
+
+def register(registry, policy, config) -> None:
+    """Registra todas as ferramentas de arquivo e sua validação na policy."""
+    file_tools = FileTools(config)
+    file_validator = FileToolsValidator(config)
+    for name in _FILE_TOOL_NAMES:
+        registry.register(name, getattr(file_tools, name))
+    policy.register_tool_validator(_FILE_TOOL_NAMES, file_validator)

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import pty
+import shlex
 import threading
 import time
 import warnings
@@ -14,6 +15,8 @@ from quimera import process_factory as subprocess
 from . import files as file_tools
 from ..config import ToolRuntimeConfig
 from ..models import ToolCall, ToolResult
+from ..policy import ToolPolicyError
+from .base import ToolBase, ValidatableTool
 
 
 _MAX_CHUNK_CHARS = 250_000  # limite de caracteres por stream (stdout/stderr)
@@ -43,12 +46,12 @@ class CommandSession:
     reader_threads: list[threading.Thread] = field(default_factory=list)
 
 
-class ShellTool:
+class ShellTool(ToolBase):
     """Implementa `ShellTool`."""
 
     def __init__(self, config: ToolRuntimeConfig) -> None:
         """Inicializa uma instância de ShellTool."""
-        self.config = config
+        super().__init__(config)
         self._sessions: dict[int, CommandSession] = {}
         self._next_session_id = 1
         self._sessions_lock = threading.Lock()
@@ -612,3 +615,90 @@ class ShellTool:
         if stderr:
             parts.append(f"stderr:\n{stderr}")
         return "\n\n".join(parts)
+
+
+class ShellToolValidator(ValidatableTool):
+    """Validação de policy para as ferramentas shell."""
+
+    _SHELL_CHAIN_OPERATORS = (";", "&&", "||", "|", "`", "$(")
+    _FILE_PATH_CMDS = frozenset({"cat", "head", "tail", "less", "grep", "sed", "find", "ls"})
+
+    def _validate_run_shell(self, call: ToolCall) -> None:
+        """Executa validate run shell."""
+        command = str(call.arguments.get("command", "")).strip()
+        self._validate_shell_command(command, tool_name="run_shell")
+
+    def _validate_exec_command(self, call: ToolCall) -> None:
+        """Valida uma chamada interativa de execução de comando."""
+        command = str(call.arguments.get("cmd", "")).strip()
+        self._validate_shell_command(command, tool_name="exec_command")
+        raw_workdir = call.arguments.get("workdir")
+        if raw_workdir is not None:
+            self._resolve_workspace_path(str(raw_workdir))
+
+    def _validate_write_stdin(self, call: ToolCall) -> None:
+        """Valida uma operação de escrita ou polling em sessão ativa."""
+        if "session_id" not in call.arguments:
+            raise ToolPolicyError("write_stdin requer 'session_id'")
+        try:
+            int(call.arguments["session_id"])
+        except (ValueError, TypeError) as exc:
+            raise ToolPolicyError("write_stdin requer um session_id inteiro") from exc
+        if "yield_time_ms" in call.arguments:
+            try:
+                int(call.arguments["yield_time_ms"])
+            except (ValueError, TypeError) as exc:
+                raise ToolPolicyError("write_stdin requer yield_time_ms inteiro") from exc
+
+    def _validate_close_command_session(self, call: ToolCall) -> None:
+        """Valida o fechamento explícito de uma sessão de comando."""
+        if "session_id" not in call.arguments:
+            raise ToolPolicyError("close_command_session requer 'session_id'")
+        try:
+            int(call.arguments["session_id"])
+        except (ValueError, TypeError) as exc:
+            raise ToolPolicyError("close_command_session requer um session_id inteiro") from exc
+
+    def _validate_shell_command(self, command: str, *, tool_name: str) -> None:
+        """Aplica a política comum de shell para ferramentas de comando."""
+        if not command:
+            raise ToolPolicyError(f"{tool_name} requer um comando não vazio")
+        for op in self._SHELL_CHAIN_OPERATORS:
+            if op in command:
+                raise ToolPolicyError(f"Comando bloqueado: operador de encadeamento proibido: '{op}'")
+        lowered = f" {command.lower()} "
+        for pattern in self.config.shell_denylist_patterns:
+            if pattern.lower() in lowered:
+                raise ToolPolicyError(f"Comando bloqueado pela denylist: {pattern}")
+        try:
+            tokens = shlex.split(command)
+            first_token = tokens[0]
+        except Exception as exc:  # noqa: BLE001
+            raise ToolPolicyError(f"Comando inválido: {command}") from exc
+        if first_token not in self.config.shell_allowlist:
+            raise ToolPolicyError(f"Comando fora da allowlist: {first_token}")
+        if first_token == "git" and len(tokens) > 1 and tokens[1] in {"push"}:
+            raise ToolPolicyError("Comando bloqueado: git push exige confirmação forte fora do shell MCP")
+        if first_token in self._FILE_PATH_CMDS:
+            self._validate_shell_file_paths(tokens[1:])
+
+    def _validate_shell_file_paths(self, args: list[str]) -> None:
+        """Valida que paths absolutos em argumentos de comandos de leitura ficam dentro do workspace."""
+        for arg in args:
+            expanded = Path(arg).expanduser()
+            if not expanded.is_absolute():
+                continue
+            resolved = expanded.resolve()
+            from ..policy import is_path_inside
+            if not is_path_inside(resolved, self.config.workspace_root):
+                raise ToolPolicyError(f"Caminho fora do workspace: {arg}")
+
+
+def register(registry, policy, config) -> None:
+    """Registra todas as tools shell no registry e a validação na policy."""
+    shell_tool = ShellTool(config)
+    shell_validator = ShellToolValidator(config)
+    _SHELL_TOOL_NAMES = ['run_shell', 'exec_command', 'write_stdin', 'close_command_session']
+    for name in _SHELL_TOOL_NAMES:
+        registry.register(name, getattr(shell_tool, name))
+    policy.register_tool_validator(_SHELL_TOOL_NAMES, shell_validator)

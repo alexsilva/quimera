@@ -8,7 +8,9 @@ from dataclasses import dataclass, asdict
 
 from ..config import ToolRuntimeConfig
 from ..models import ToolCall, ToolResult
+from ..policy import ToolPolicyError
 from ._helpers import resolve_current_job_id
+from .base import ToolBase, ValidatableTool
 
 
 @dataclass
@@ -47,6 +49,7 @@ class TodoRegistry:
 
     @classmethod
     def write(cls, job_id: int, agent: str, items_data: list[dict]) -> list[TodoItem]:
+        """Cria ou atualiza itens do job."""
         with cls._lock:
             if job_id not in cls._todos:
                 cls._todos[job_id] = []
@@ -89,18 +92,24 @@ class TodoRegistry:
 
     @classmethod
     def list(cls, job_id: int) -> list[TodoItem]:
+        """Lista todos os itens do job."""
         with cls._lock:
             return list(cls._todos.get(job_id, []))
 
 
-class TodoTools:
+class TodoTools(ToolBase, tool_prefix="todo"):
+    """Ferramentas de gerenciamento de todo list por job."""
+
     def __init__(self, config: ToolRuntimeConfig) -> None:
-        self.config = config
+        """Inicializa uma instância de TodoTools."""
+        super().__init__(config)
 
     def _resolve_job_id(self) -> int | None:
+        """Resolve o job_id corrente via variável de ambiente."""
         return resolve_current_job_id()
 
     def todo_write(self, call: ToolCall) -> ToolResult:
+        """Cria ou atualiza itens na todo list do job corrente."""
         job_id = self._resolve_job_id()
         if job_id is None:
             return ToolResult(
@@ -133,6 +142,7 @@ class TodoTools:
             return ToolResult(ok=False, tool_name=call.name, error=str(exc))
 
     def todo_list(self, call: ToolCall) -> ToolResult:
+        """Lista todos os itens do job corrente."""
         job_id = self._resolve_job_id()
         if job_id is None:
             return ToolResult(
@@ -149,3 +159,40 @@ class TodoTools:
             )
         except Exception as exc:  # noqa: BLE001
             return ToolResult(ok=False, tool_name=call.name, error=str(exc))
+
+
+class TodoToolsValidator(ValidatableTool):
+    """Validação de policy para as ferramentas de todo."""
+
+    _VALID_STATUSES = frozenset({"pending", "in_progress", "done", "cancelled"})
+    _VALID_PRIORITIES = frozenset({"high", "medium", "low"})
+
+    def _validate_todo_write(self, call: ToolCall) -> None:
+        """Valida todo_write: lista não vazia com content e campos opcionais válidos."""
+        items = call.arguments.get("todos")
+        if not isinstance(items, list) or not items:
+            raise ToolPolicyError("todo_write requer 'todos' como lista não vazia")
+        for i, item in enumerate(items):
+            if not isinstance(item, dict):
+                raise ToolPolicyError(f"todo_write: item {i} deve ser um dicionário")
+            if not item.get("content"):
+                raise ToolPolicyError(f"todo_write: item {i} requer 'content' não vazio")
+            status = item.get("status")
+            if status and status not in self._VALID_STATUSES:
+                raise ToolPolicyError(f"todo_write: status inválido '{status}' em item {i}")
+            priority = item.get("priority")
+            if priority and priority not in self._VALID_PRIORITIES:
+                raise ToolPolicyError(f"todo_write: priority inválida '{priority}' em item {i}")
+
+    def _validate_todo_list(self, call: ToolCall) -> None:
+        """todo_list não exige argumentos."""
+
+
+def register(registry, policy, config) -> None:
+    """Registra todas as tools de todo no registry e a validação na policy."""
+    todo_tools = TodoTools(config)
+    todo_validator = TodoToolsValidator(config)
+    tool_names = [name for name in dir(TodoTools) if name.startswith("todo_")]
+    for name in tool_names:
+        registry.register(name, getattr(todo_tools, name))
+    policy.register_tool_validator(tool_names, todo_validator)

@@ -57,9 +57,9 @@ class ToolRuntimeConfig:
             raise TypeError(f"workspace_root deve ser Path, não {type(self.workspace_root).__name__}")
         self.workspace_root = self.workspace_root.resolve()
         if self.db_path is not None:
-            self.db_path = self.db_path.resolve()
+            self.db_path = Path(self.db_path).resolve()
         if self.memory_file is not None:
-            self.memory_file = self.memory_file.resolve()
+            self.memory_file = Path(self.memory_file).resolve()
         if not self.allowed_read_roots:
             self.allowed_read_roots = [self.workspace_root]
         else:

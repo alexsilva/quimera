@@ -4,46 +4,49 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from .files import get_staging_root
 from ..config import ToolRuntimeConfig
 from ..models import ToolCall, ToolResult
+from ..policy import ToolPolicyError
+from .base import ToolBase, ValidatableTool
+from .files import get_staging_root
+
+_PATCH_TOOL_NAMES = ["apply_patch"]
 
 
 class PatchApplyError(Exception):
-    """Implementa `PatchApplyError`."""
-    pass
+    """Erro durante a aplicação de um patch estruturado."""
 
 
 @dataclass(slots=True)
 class AddFileOp:
-    """Implementa `AddFileOp`."""
+    """Operação de adição de arquivo no patch."""
     path: str
     content: str
 
 
 @dataclass(slots=True)
 class DeleteFileOp:
-    """Implementa `DeleteFileOp`."""
+    """Operação de remoção de arquivo no patch."""
     path: str
 
 
 @dataclass(slots=True)
 class UpdateFileOp:
-    """Implementa `UpdateFileOp`."""
+    """Operação de atualização de arquivo no patch."""
     path: str
     hunks: list[list[str]]
     move_to: str | None = None
 
 
 def _join_patch_lines(lines: list[str]) -> str:
-    """Executa join patch lines."""
+    """Junta linhas de patch com newline final."""
     if not lines:
         return ""
     return "\n".join(lines) + "\n"
 
 
 def _parse_patch(patch: str) -> list[AddFileOp | DeleteFileOp | UpdateFileOp]:
-    """Interpreta patch."""
+    """Interpreta um patch estruturado e retorna a lista de operações."""
     lines = patch.splitlines()
     if not lines or lines[0] != "*** Begin Patch":
         raise PatchApplyError("Patch deve começar com '*** Begin Patch'")
@@ -107,17 +110,17 @@ def _parse_patch(patch: str) -> list[AddFileOp | DeleteFileOp | UpdateFileOp]:
     return ops
 
 
-class PatchTool:
-    """Implementa `PatchTool`."""
+class PatchTool(ToolBase):
+    """Aplica patches estruturados ao workspace."""
 
     def __init__(self, config: ToolRuntimeConfig) -> None:
         """Inicializa uma instância de PatchTool."""
         if not isinstance(config, ToolRuntimeConfig):
             raise TypeError(f"config deve ser ToolRuntimeConfig, não {type(config).__name__}")
-        self.config = config
+        super().__init__(config)
 
     def _resolve(self, raw_path: str) -> Path:
-        """Resolve resolve."""
+        """Resolve um path relativo dentro do workspace ou staging."""
         normalized = raw_path.lstrip("/") or "."
         staging = get_staging_root()
         base = staging if staging else self.config.workspace_root
@@ -127,14 +130,14 @@ class PatchTool:
         return path
 
     def _display_path(self, path: Path) -> str:
-        """Executa display path."""
+        """Retorna o path relativo à base ativa (staging ou workspace)."""
         staging = get_staging_root()
         base = staging if staging else self.config.workspace_root
         return str(path.relative_to(base))
 
     @staticmethod
     def _find_subsequence(haystack: list[str], needle: list[str], start: int) -> int:
-        """Executa find subsequence."""
+        """Encontra a primeira ocorrência de needle em haystack a partir de start."""
         if not needle:
             return start
         max_start = len(haystack) - len(needle)
@@ -144,7 +147,7 @@ class PatchTool:
         return -1
 
     def _apply_update(self, path: Path, op: UpdateFileOp) -> Path:
-        """Executa apply update."""
+        """Aplica os hunks de uma UpdateFileOp a um arquivo existente."""
         if not path.exists():
             raise PatchApplyError(f"Arquivo não existe para update: {op.path}")
 
@@ -168,7 +171,7 @@ class PatchTool:
         return target
 
     def apply_patch(self, call: ToolCall) -> ToolResult:
-        """Executa apply patch."""
+        """Aplica um patch estruturado ao workspace."""
         raw_patch = str(call.arguments.get("patch", ""))
         if not raw_patch.strip():
             return ToolResult(ok=False, tool_name=call.name, error="apply_patch requer 'patch'")
@@ -203,3 +206,22 @@ class PatchTool:
             content="Patch aplicado com sucesso.",
             data={"changed_files": changed},
         )
+
+
+class PatchToolValidator(ValidatableTool):
+    """Validação de policy para apply_patch."""
+
+    def _validate_apply_patch(self, call: ToolCall) -> None:
+        """Valida apply_patch: patch não pode ser vazio."""
+        patch = str(call.arguments.get("patch", "")).strip()
+        if not patch:
+            raise ToolPolicyError("apply_patch requer 'patch'")
+
+
+def register(registry, policy, config) -> None:
+    """Registra apply_patch no registry e a validação na policy."""
+    patch_tool = PatchTool(config)
+    patch_validator = PatchToolValidator(config)
+    for name in _PATCH_TOOL_NAMES:
+        registry.register(name, getattr(patch_tool, name))
+    policy.register_tool_validator(_PATCH_TOOL_NAMES, patch_validator)

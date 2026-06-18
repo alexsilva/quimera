@@ -6,20 +6,24 @@ import re
 
 from ..config import ToolRuntimeConfig
 from ..models import ToolCall, ToolResult
-from ._helpers import resolve_current_job_id
+from ..policy import ToolPolicyError
 from ..tasks import (
     list_tasks as _list_tasks,
     list_jobs as _list_jobs,
     get_job as _get_job,
 )
+from ._helpers import resolve_current_job_id
+from .base import ToolBase, ValidatableTool
+
+_TASK_TOOL_NAMES = ["list_tasks", "list_jobs", "get_job"]
 
 
-class TaskTools:
-    """Implementa `TaskTools`."""
+class TaskTools(ToolBase):
+    """Ferramentas de consulta a tasks e jobs."""
 
     def __init__(self, config: ToolRuntimeConfig) -> None:
         """Inicializa uma instância de TaskTools."""
-        self.config = config
+        super().__init__(config)
 
     def _resolve_job_id(self, raw_job_id, *, allow_recent_fallback: bool = False) -> int | None:
         """Resolve job id."""
@@ -98,11 +102,50 @@ class TaskTools:
         """Retorna job."""
         job_id = self._resolve_job_id(call.arguments.get("job_id"), allow_recent_fallback=True)
         if job_id is None:
-            return ToolResult(ok=False, tool_name=call.name,
-                              error="job_id is required (set QUIMERA_CURRENT_JOB_ID or create a job first)")
+            return ToolResult(
+                ok=False,
+                tool_name=call.name,
+                error="job_id is required (set QUIMERA_CURRENT_JOB_ID or create a job first)",
+            )
         try:
             job = _get_job(job_id, db_path=self.config.db_path)
-            return ToolResult(ok=True, tool_name=call.name, content=json.dumps(job) if job is not None else "null",
-                              data={"job": job})
+            return ToolResult(
+                ok=True,
+                tool_name=call.name,
+                content=json.dumps(job) if job is not None else "null",
+                data={"job": job},
+            )
         except Exception as exc:  # noqa: BLE001
             return ToolResult(ok=False, tool_name=call.name, error=str(exc))
+
+
+class TaskToolsValidator(ValidatableTool):
+    """Validação de policy para as ferramentas de tasks."""
+
+    def _validate_list_tasks(self, call: ToolCall) -> None:
+        """Exige ao menos um filtro para evitar DoS por listagem sem limites."""
+        filt = call.arguments.get("filters") or {}
+        has_top_level_filter = any(
+            call.arguments.get(k) is not None
+            for k in ("job_id", "status", "assigned_to", "id")
+        )
+        has_dict_filter = isinstance(filt, dict) and bool(filt)
+        if not has_top_level_filter and not has_dict_filter:
+            raise ToolPolicyError(
+                "list_tasks exige ao menos um filtro (job_id, status, assigned_to, id ou filters)"
+            )
+
+    def _validate_list_jobs(self, call: ToolCall) -> None:
+        """list_jobs não exige filtros obrigatórios."""
+
+    def _validate_get_job(self, call: ToolCall) -> None:
+        """get_job não exige job_id obrigatório (usa fallback)."""
+
+
+def register(registry, policy, config) -> None:
+    """Registra todas as tools de tasks no registry e a validação na policy."""
+    task_tools = TaskTools(config)
+    task_validator = TaskToolsValidator(config)
+    for name in _TASK_TOOL_NAMES:
+        registry.register(name, getattr(task_tools, name))
+    policy.register_tool_validator(_TASK_TOOL_NAMES, task_validator)

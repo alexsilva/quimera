@@ -8,6 +8,7 @@ from typing import Protocol, Callable
 
 from ..config import ToolRuntimeConfig
 from ..models import ToolCall, ToolResult
+from ..policy import ToolPolicyError
 from ..tasks import (
     add_job,
     create_task,
@@ -17,8 +18,11 @@ from ..tasks import (
     update_job_status,
 )
 from ..approval_broker import TrustedToolExecutionContext
+from .base import ToolBase, ValidatableTool
 
 logger = logging.getLogger(__name__)
+
+_DELEGATE_TOOL_NAMES = ["delegate", "list_agents"]
 
 
 class _DelegateFnProto(Protocol):
@@ -41,14 +45,15 @@ class _DelegateFnProto(Protocol):
     ) -> str | None: ...
 
 
-class DelegateTools:
-    """Implementa `DelegateTools` — delegação entre agentes via MCP."""
+class DelegateTools(ToolBase):
+    """Ferramentas de delegação entre agentes via MCP."""
+
     _DELEGATE_MAX_REQUEST_CHARS = 1_200
     _DELEGATE_MAX_CONTEXT_CHARS = 4_000
 
     def __init__(self, config: ToolRuntimeConfig) -> None:
         """Inicializa uma instância de DelegateTools."""
-        self.config = config
+        super().__init__(config)
         self._delegate_fn: _DelegateFnProto | None = None
         self._background_delegate_fn: _DelegateFnProto | None = None
         self._active_agents_provider = None
@@ -91,11 +96,13 @@ class DelegateTools:
 
     @staticmethod
     def _normalize_agent_identity(agent_name: str | None) -> str:
+        """Normaliza o nome de um agente para comparação."""
         if agent_name is None:
             return ""
         return str(agent_name).strip().lower().lstrip("/")
 
     def _resolve_active_agents(self) -> set[str]:
+        """Retorna o conjunto de agentes ativos via o provider injetado."""
         provider = self._active_agents_provider
         if not callable(provider):
             return set()
@@ -133,11 +140,9 @@ class DelegateTools:
     @staticmethod
     def _get_calling_agent(call: ToolCall) -> str | None:
         """Extrai o nome do agente que emitiu o tool call, se disponível."""
-        # Caminho openai_compat: metadata["calling_agent"]
         raw = call.metadata.get("calling_agent")
         if raw and isinstance(raw, str):
             return raw.strip().lower().lstrip("/")
-        # Caminho MCP: trusted_context.agent_name
         ctx = call.metadata.get("trusted_context")
         if isinstance(ctx, TrustedToolExecutionContext) and ctx.agent_name:
             return ctx.agent_name.strip().lower().lstrip("/")
@@ -163,22 +168,14 @@ class DelegateTools:
     ) -> ToolResult:
         """Executa delegate via HTTP MCP.
 
-        Com SSE (canal assíncrono): executa inline na thread pool — o resultado
-        real chega ao cliente via SSE quando a thread pool completar.
-
-        Sem SSE (Streamable HTTP): cria job/task no banco e executa em background
-        thread — retorna job_id/task_id imediatamente para polling.
+        Com SSE: executa inline na thread pool — o resultado chega ao cliente
+        via SSE quando a thread pool completar.
+        Sem SSE: cria job/task no banco e executa em background thread.
         """
-        # Detecta se há canal SSE (assinatura de resposta assíncrona)
         meta_state = call.metadata.get("_mcp_state") or {}
         sse_available = meta_state.get("sse_queue") is not None
 
         if sse_available:
-            # SSE path: executa inline — já estamos na thread pool do
-            # _handle_tools_call. O resultado será enviado ao cliente via SSE
-            # por _flush_pending quando a thread pool completar.
-            # Usa background_delegate_fn (AgentClient isolado) para que
-            # cancelamentos do fluxo do chat não interfiram nesta execução.
             _bg_fn = self._background_delegate_fn or self._delegate_fn
             return self._execute_steps_inner(
                 steps,
@@ -189,7 +186,6 @@ class DelegateTools:
                 cleanup_callback=self._cleanup_callback,
             )
 
-        # ── non-SSE (Streamable HTTP): background thread ──
         db_path = self._get_db_path()
         if not db_path:
             return ToolResult(
@@ -221,10 +217,6 @@ class DelegateTools:
         except Exception as exc:
             return ToolResult(ok=False, tool_name=call.name, error=f"Failed to create task: {exc}")
 
-        # Usa background_delegate_fn (AgentClient isolado) para que
-        # cancelamentos do fluxo do chat não interfiram na thread de background
-        # e vice-versa. cancel_checker=None: o delegate assíncrono roda até
-        # concluir independentemente de Ctrl+C no fluxo principal.
         _fn = self._background_delegate_fn or self._delegate_fn
         _progress_cb = self._progress_callback
         _resolve_active = self._resolve_active_agents
@@ -248,7 +240,9 @@ class DelegateTools:
                     fail_task(task_id, reason=result.error, db_path=db_path)
                     update_job_status(job_id, "failed", db_path=db_path)
             except Exception as exc:
-                logger.warning("delegate async: failed to update task/job %d: %s", task_id, exc)
+                logger.warning(
+                    "delegate async: failed to update task/job %d: %s", task_id, exc
+                )
 
         t = threading.Thread(target=_run, daemon=True, name=f"delegate-{task_id}")
         t.start()
@@ -310,7 +304,10 @@ class DelegateTools:
                         return ToolResult(
                             ok=False,
                             tool_name=tool_name,
-                            error=f"Agents not active in current pool: {invalid_label}. Active agents: {active_label}",
+                            error=(
+                                f"Agents not active in current pool: {invalid_label}. "
+                                f"Active agents: {active_label}"
+                            ),
                         )
 
                 attempt_targets = [step["target_agent"], *step["fallback_agents"]]
@@ -417,7 +414,7 @@ class DelegateTools:
             )
 
     def delegate(self, call: ToolCall) -> ToolResult:
-        """Dispatch a task to another Quimera agent via MCP tool."""
+        """Despacha uma tarefa para outro agente Quimera via MCP tool."""
         if not self.is_delegate_available():
             return ToolResult(
                 ok=False,
@@ -547,7 +544,8 @@ class DelegateTools:
                             ok=False,
                             tool_name=call.name,
                             error=(
-                                f"steps[{idx}].fallback_agents[{fb_idx}] must be a non-empty string"
+                                f"steps[{idx}].fallback_agents[{fb_idx}] "
+                                "must be a non-empty string"
                             ),
                         )
                     if calling_agent and self._normalize_agent_identity(fb) == calling_agent:
@@ -569,13 +567,11 @@ class DelegateTools:
                     }
                 )
 
-        # Decide sync vs async baseado no transporte
         transport = self._get_transport(call)
 
         if transport == "http_mcp":
             return self._delegate_http_async(call, steps)
 
-        # ── synchronous path (stdio MCP, native, etc.) ──
         return self._execute_steps_inner(
             steps,
             self._delegate_fn,
@@ -585,3 +581,66 @@ class DelegateTools:
             cleanup_callback=self._cleanup_callback,
             cancel_checker=self._cancel_checker,
         )
+
+
+class DelegateToolsValidator(ValidatableTool):
+    """Validação de policy para as ferramentas de delegação."""
+
+    def _validate_delegate(self, call: ToolCall) -> None:
+        """Valida delegate: bloqueia campos reservados e exige target_agent/request."""
+        reserved = {
+            "allowlisted",
+            "approval_budget",
+            "approval_scope_id",
+            "transport",
+            "run_id",
+            "parent_run_id",
+        }
+        present_reserved = sorted(reserved.intersection(call.arguments))
+        if present_reserved:
+            raise ToolPolicyError(
+                "delegate recebeu campos reservados não confiáveis: "
+                + ", ".join(present_reserved)
+            )
+        target_agent = call.arguments.get("target_agent")
+        request = call.arguments.get("request")
+        if not isinstance(target_agent, str) or not target_agent.strip():
+            raise ToolPolicyError("delegate requer 'target_agent' não vazio")
+        if not isinstance(request, str) or not request.strip():
+            raise ToolPolicyError("delegate requer 'request' não vazia")
+        context = call.arguments.get("context")
+        if context is not None and not isinstance(context, str):
+            raise ToolPolicyError("delegate.context deve ser string quando fornecido")
+        fallback_agents = call.arguments.get("fallback_agents", [])
+        if fallback_agents is not None and not isinstance(fallback_agents, list):
+            raise ToolPolicyError("delegate.fallback_agents deve ser uma lista")
+        steps = call.arguments.get("steps")
+        if steps is not None:
+            if not isinstance(steps, list):
+                raise ToolPolicyError("delegate.steps deve ser uma lista")
+            for i, step in enumerate(steps):
+                if not isinstance(step, dict):
+                    raise ToolPolicyError(f"delegate.steps[{i}] deve ser um objeto")
+                step_target = step.get("target_agent")
+                step_request = step.get("request")
+                if not isinstance(step_target, str) or not step_target.strip():
+                    raise ToolPolicyError(f"delegate.steps[{i}].target_agent não pode ser vazio")
+                if not isinstance(step_request, str) or not step_request.strip():
+                    raise ToolPolicyError(f"delegate.steps[{i}].request não pode ser vazio")
+
+    def _validate_list_agents(self, call: ToolCall) -> None:
+        """list_agents não requer argumentos — sempre válida."""
+
+
+def register(registry, policy, config) -> DelegateTools:
+    """Registra as tools de delegação no registry e a validação na policy.
+
+    Retorna a instância de DelegateTools para que o executor possa injetar
+    callbacks (set_delegate_fn, set_active_agents_provider, etc.).
+    """
+    delegate_tools = DelegateTools(config)
+    delegate_validator = DelegateToolsValidator(config)
+    for name in _DELEGATE_TOOL_NAMES:
+        registry.register(name, getattr(delegate_tools, name))
+    policy.register_tool_validator(_DELEGATE_TOOL_NAMES, delegate_validator)
+    return delegate_tools

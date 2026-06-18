@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import tempfile
 import time
 from html import unescape
@@ -13,11 +14,13 @@ from quimera import process_factory as subprocess
 
 from ..config import ToolRuntimeConfig
 from ..models import ToolCall, ToolResult
+from ..policy import ToolPolicyError
+from .base import ToolBase, ValidatableTool
 
 _logger = logging.getLogger(__name__)
 
 
-class WebTool:
+class WebTool(ToolBase, tool_prefix="web"):
     """Implementa `WebTool` — busca na web usando curl."""
     _MAX_URLS = 5
     _HTTP_SCHEME = "http://"
@@ -30,11 +33,9 @@ class WebTool:
     _DUCKDUCKGO_API_URL = "https://api.duckduckgo.com/"
 
     def __init__(self, config: ToolRuntimeConfig) -> None:
-        """Inicializa uma instância de WebTool."""
-        self.config = config
+        super().__init__(config)
 
     def _resolve_url(self, raw: str) -> str:
-        """Normaliza a URL."""
         raw = raw.strip()
         if not raw:
             raise ValueError("URL vazia")
@@ -69,7 +70,6 @@ class WebTool:
         payload = urllib.parse.urlencode({"q": query})
 
         try:
-            # DuckDuckGo Lite responde melhor via POST para evitar challenges anti-bot em algumas queries.
             result = self._write_and_curl(
                 self._DUCKDUCKGO_LITE_URL,
                 payload,
@@ -80,7 +80,6 @@ class WebTool:
             links = self._parse_duckduckgo_links(result, count)
 
             if not links:
-                # fallback: tenta o formato json
                 url_json = f"{self._DUCKDUCKGO_API_URL}?{urllib.parse.urlencode({'q': query, 'format': 'json'})}"
                 result_json = self._curl(url_json, timeout=10)
                 if result_json and result_json.strip():
@@ -164,7 +163,6 @@ class WebTool:
                 data={"results": [{"url": url, "error": str(exc)}], "total": 1},
             )
 
-
     def _curl(self, url: str, timeout: int = 30) -> str:
         """Executa curl e retorna o corpo da resposta."""
         args = [
@@ -189,10 +187,7 @@ class WebTool:
             raise TimeoutError(f"curl excedeu o tempo limite de {timeout}s.")
 
     def _write_and_curl(self, url: str, payload: str, content_type: str = "application/json", timeout: int = 30) -> str:
-        """Escreve payload em um arquivo temporário e faz POST via curl.
-
-        Usa o padrão de arquivo temporário para evitar expor dados no cmdline.
-        """
+        """Escreve payload em um arquivo temporário e faz POST via curl."""
         tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".payload", delete=False)
         try:
             tmp.write(payload)
@@ -225,8 +220,6 @@ class WebTool:
     @staticmethod
     def _parse_duckduckgo_links(html: str, count: int) -> list[dict]:
         """Extrai links e snippets do HTML do DuckDuckGo Lite."""
-        import re
-
         links: list[dict] = []
 
         href_pattern = re.compile(
@@ -286,10 +279,35 @@ class WebTool:
     @staticmethod
     def _strip_html(html: str) -> str:
         """Remove tags HTML e normaliza espaços."""
-        import re
-
         text = re.sub(r"<script[^>]*>.*?</script>", "", html, flags=re.DOTALL)
         text = re.sub(r"<style[^>]*>.*?</style>", "", text, flags=re.DOTALL)
         text = re.sub(r"<[^>]+>", " ", text)
         text = re.sub(r"\s+", " ", text).strip()
         return text
+
+
+class WebToolValidator(ValidatableTool):
+    """Validação de policy para as ferramentas web."""
+
+    def _validate_web_search(self, call: ToolCall) -> None:
+        """Valida uma chamada de busca na web."""
+        query = call.arguments.get("query", "")
+        if not query or not str(query).strip():
+            raise ToolPolicyError("web_search requer 'query' não vazia")
+
+    def _validate_web_fetch(self, call: ToolCall) -> None:
+        """Valida uma chamada de fetch de URL."""
+        url = call.arguments.get("url")
+        if isinstance(url, str) and url.strip():
+            return
+        raise ToolPolicyError("web_fetch requer 'url' não vazia")
+
+
+def register(registry, policy, config) -> None:
+    """Registra todas as tools web no registry e a validação na policy."""
+    web_tool = WebTool(config)
+    web_validator = WebToolValidator(config)
+    tool_names = [name for name in dir(WebTool) if name.startswith("web_")]
+    for name in tool_names:
+        registry.register(name, getattr(web_tool, name))
+    policy.register_tool_validator(tool_names, web_validator)

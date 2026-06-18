@@ -18,6 +18,12 @@ from quimera.runtime.executor import ToolExecutor
 from quimera.runtime.models import TaskRecord, ToolCall, ToolResult
 from quimera.runtime.policy import ToolPolicy, ToolPolicyError
 from quimera.runtime.registry import ToolRegistry
+from quimera.runtime.tools import delegate as delegate_module
+from quimera.runtime.tools import files as files_tools
+from quimera.runtime.tools import memory as memory_tools
+from quimera.runtime.tools import patch as patch_tools
+from quimera.runtime.tools import tasks as tasks_tools
+from quimera.runtime.tools import todo as todo_tools
 from quimera.runtime.task_executor import TaskExecutor, create_executor
 from quimera.constants import TaskType
 from quimera.runtime.task_planning import (
@@ -31,6 +37,19 @@ TASK_TYPE_TEST_EXECUTION = TaskType.TEST_EXECUTION
 from quimera.runtime.tools.files import FileTools, set_staging_root
 from quimera.runtime.tools.shell import ShellTool
 from quimera.runtime.tools.tasks import TaskTools
+
+
+def _make_policy(config):
+    """Cria ToolPolicy com todos os validators registrados."""
+    p = ToolPolicy(config)
+    _reg = ToolRegistry()
+    files_tools.register(_reg, p, config)
+    patch_tools.register(_reg, p, config)
+    tasks_tools.register(_reg, p, config)
+    todo_tools.register(_reg, p, config)
+    memory_tools.register(_reg, p, config)
+    delegate_module.register(_reg, p, config)
+    return p
 
 
 class _DummyStatus:
@@ -99,7 +118,7 @@ class AgentsCoverageTests(unittest.TestCase):
         with patch("subprocess.Popen", return_value=proc), patch(
                 "threading.Thread", side_effect=[stdout_thread, stderr_thread]
         ), patch("time.sleep"), patch(
-            "time.time", side_effect=[100.0, 101.0, 101.0, 101.0]
+            "time.monotonic", side_effect=[100.0, 100.0, 101.0, 101.0]
         ), patch(
             "quimera.agents.process_runner.terminate_process_group"
         ) as mock_terminate_pg:
@@ -355,7 +374,7 @@ class PolicyCoverageTests(unittest.TestCase):
         self.tmpdir = tempfile.TemporaryDirectory()
         self.root = Path(self.tmpdir.name)
         (self.root / "file.txt").write_text("x", encoding="utf-8")
-        self.policy = ToolPolicy(ToolRuntimeConfig(workspace_root=self.root))
+        self.policy = _make_policy(ToolRuntimeConfig(workspace_root=self.root))
 
     def tearDown(self):
         self.tmpdir.cleanup()
@@ -388,17 +407,19 @@ class PolicyCoverageTests(unittest.TestCase):
 
     def test_policy_shell_validation(self):
         """Verifica que Test policy shell validation."""
-        self.policy.validate(ToolCall(name="run_shell", arguments={"command": "echo hello"}))
+        from quimera.runtime.tools.shell import ShellToolValidator
+        validator = ShellToolValidator(self.policy.config)
+        validator.validate(ToolCall(name="run_shell", arguments={"command": "echo hello"}))
         with self.assertRaisesRegex(ToolPolicyError, "comando não vazio"):
-            self.policy.validate(ToolCall(name="run_shell", arguments={"command": "  "}))
+            validator.validate(ToolCall(name="run_shell", arguments={"command": "  "}))
         with self.assertRaisesRegex(ToolPolicyError, "operador de encadeamento proibido"):
-            self.policy.validate(ToolCall(name="run_shell", arguments={"command": "ls && pwd"}))
+            validator.validate(ToolCall(name="run_shell", arguments={"command": "ls && pwd"}))
         with self.assertRaisesRegex(ToolPolicyError, "denylist"):
-            self.policy.validate(ToolCall(name="run_shell", arguments={"command": "rm -rf /"}))
+            validator.validate(ToolCall(name="run_shell", arguments={"command": "rm -rf /"}))
         with self.assertRaisesRegex(ToolPolicyError, "Comando inválido"):
-            self.policy.validate(ToolCall(name="run_shell", arguments={"command": 'echo "bad'}))
+            validator.validate(ToolCall(name="run_shell", arguments={"command": 'echo "bad'}))
         with self.assertRaisesRegex(ToolPolicyError, "fora da allowlist"):
-            self.policy.validate(ToolCall(name="run_shell", arguments={"command": "nc -l 80"}))
+            validator.validate(ToolCall(name="run_shell", arguments={"command": "nc -l 80"}))
 
 
 class TaskPlanningCoverageTests(unittest.TestCase):

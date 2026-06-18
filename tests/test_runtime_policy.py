@@ -5,6 +5,28 @@ import pytest
 from quimera.runtime.config import ToolRuntimeConfig
 from quimera.runtime.models import ToolCall
 from quimera.runtime.policy import ToolPolicy, ToolPolicyError, is_path_inside
+from quimera.runtime.registry import ToolRegistry
+from quimera.runtime.tools import delegate as delegate_module
+from quimera.runtime.tools import files as files_tools
+from quimera.runtime.tools import memory as memory_tools
+from quimera.runtime.tools import patch as patch_tools
+from quimera.runtime.tools import tasks as tasks_tools
+from quimera.runtime.tools import todo as todo_tools
+from quimera.runtime.tools.shell import ShellToolValidator
+from quimera.runtime.tools.web import WebToolValidator
+
+
+def _make_policy(config):
+    """Cria ToolPolicy com todos os validators registrados."""
+    p = ToolPolicy(config)
+    _reg = ToolRegistry()
+    files_tools.register(_reg, p, config)
+    patch_tools.register(_reg, p, config)
+    tasks_tools.register(_reg, p, config)
+    todo_tools.register(_reg, p, config)
+    memory_tools.register(_reg, p, config)
+    delegate_module.register(_reg, p, config)
+    return p
 
 
 @pytest.fixture
@@ -14,7 +36,12 @@ def config():
 
 @pytest.fixture
 def policy(config):
-    return ToolPolicy(config)
+    return _make_policy(config)
+
+
+@pytest.fixture
+def shell_validator(config):
+    return ShellToolValidator(config)
 
 
 def test_policy_validate_unknown_tool(policy):
@@ -41,7 +68,7 @@ def test_policy_write_file_no_content(policy):
 def test_policy_write_file_existing_requires_replace_flag(tmp_path):
     """Verifica que policy write file existing requires replace flag."""
     config = ToolRuntimeConfig(workspace_root=tmp_path)
-    policy = ToolPolicy(config)
+    policy = _make_policy(config)
     (tmp_path / "test.txt").write_text("old", encoding="utf-8")
     call = ToolCall(name="write_file", arguments={"path": "test.txt", "content": "new"})
     with pytest.raises(ToolPolicyError, match="replace_existing=true"):
@@ -51,7 +78,7 @@ def test_policy_write_file_existing_requires_replace_flag(tmp_path):
 def test_policy_write_file_existing_allowed_with_replace_flag(tmp_path):
     """Verifica que policy write file existing allowed with replace flag."""
     config = ToolRuntimeConfig(workspace_root=tmp_path)
-    policy = ToolPolicy(config)
+    policy = _make_policy(config)
     (tmp_path / "test.txt").write_text("old", encoding="utf-8")
     call = ToolCall(
         name="write_file",
@@ -83,12 +110,11 @@ def test_policy_propose_task_disabled(policy):
         policy.validate(call)
 
 
-def test_policy_shell_empty(policy):
+def test_policy_shell_empty(shell_validator):
     """Verifica que policy shell empty."""
-    # Line 74 coverage
     call = ToolCall(name="run_shell", arguments={"command": "  "})
     with pytest.raises(ToolPolicyError, match="requer um comando não vazio"):
-        policy.validate(call)
+        shell_validator.validate(call)
 
 
 def test_policy_run_shell_command_alias(policy):
@@ -97,62 +123,60 @@ def test_policy_run_shell_command_alias(policy):
     policy.validate(call)
 
 
-def test_policy_exec_command_empty(policy):
+def test_policy_exec_command_empty(shell_validator):
     """Verifica que policy exec command empty."""
     call = ToolCall(name="exec_command", arguments={"cmd": "  "})
     with pytest.raises(ToolPolicyError, match="exec_command requer um comando não vazio"):
-        policy.validate(call)
+        shell_validator.validate(call)
 
 
-def test_policy_write_stdin_requires_session_id(policy):
+def test_policy_write_stdin_requires_session_id(shell_validator):
     """Verifica que policy write stdin requires session id."""
     call = ToolCall(name="write_stdin", arguments={})
     with pytest.raises(ToolPolicyError, match="session_id"):
-        policy.validate(call)
+        shell_validator.validate(call)
 
 
-def test_policy_write_stdin_requires_integer_session_id(policy):
+def test_policy_write_stdin_requires_integer_session_id(shell_validator):
     """Verifica que policy write stdin requires integer session id."""
     call = ToolCall(name="write_stdin", arguments={"session_id": "abc"})
     with pytest.raises(ToolPolicyError, match="session_id inteiro"):
-        policy.validate(call)
+        shell_validator.validate(call)
 
 
-def test_policy_close_command_session_requires_session_id(policy):
+def test_policy_close_command_session_requires_session_id(shell_validator):
     """Verifica que policy close command session requires session id."""
     call = ToolCall(name="close_command_session", arguments={})
     with pytest.raises(ToolPolicyError, match="session_id"):
-        policy.validate(call)
+        shell_validator.validate(call)
 
 
-def test_policy_shell_denylist(policy):
+def test_policy_shell_denylist(shell_validator):
     """Verifica que policy shell denylist."""
-    # Line 81 coverage
     call = ToolCall(name="run_shell", arguments={"command": "rm -rf /"})
     with pytest.raises(ToolPolicyError, match="Comando bloqueado pela denylist"):
-        policy.validate(call)
+        shell_validator.validate(call)
 
 
-def test_policy_shell_chain_operator(policy):
+def test_policy_shell_chain_operator(shell_validator):
     """Verifica que policy shell chain operator."""
     call = ToolCall(name="run_shell", arguments={"command": "ls && cat"})
     with pytest.raises(ToolPolicyError, match="operador de encadeamento proibido"):
-        policy.validate(call)
+        shell_validator.validate(call)
 
 
-def test_policy_shell_invalid_shlex(policy):
+def test_policy_shell_invalid_shlex(shell_validator):
     """Verifica que policy shell invalid shlex."""
-    # Line 91-92 coverage
     call = ToolCall(name="run_shell", arguments={"command": 'echo "unclosed quote'})
     with pytest.raises(ToolPolicyError, match="Comando inválido"):
-        policy.validate(call)
+        shell_validator.validate(call)
 
 
-def test_policy_shell_not_in_allowlist(policy):
+def test_policy_shell_not_in_allowlist(shell_validator):
     """Verifica que policy shell not in allowlist."""
     call = ToolCall(name="run_shell", arguments={"command": "nc -l 8080"})
     with pytest.raises(ToolPolicyError, match="fora da allowlist"):
-        policy.validate(call)
+        shell_validator.validate(call)
 
 
 def test_policy_path_outside_workspace(policy):
@@ -170,7 +194,7 @@ def test_policy_path_prefix_sibling_outside_workspace(tmp_path):
     sibling.mkdir()
     (sibling / "secret.txt").write_text("TOPSECRET", encoding="utf-8")
 
-    policy = ToolPolicy(ToolRuntimeConfig(workspace_root=workspace))
+    policy = _make_policy(ToolRuntimeConfig(workspace_root=workspace))
     call = ToolCall(name="read_file", arguments={"path": "../workspace2/secret.txt"})
     with pytest.raises(ToolPolicyError, match="Path fora da workspace"):
         policy.validate(call)
@@ -245,20 +269,23 @@ def test_policy_todo_write_valid(policy):
     policy.validate(call)
 
 
-def test_policy_web_fetch_accepts_url(policy):
+def test_policy_web_fetch_accepts_url(policy, config):
     """Verifica que policy web fetch accepts url."""
+    policy.register_tool_validator(["web_fetch"], WebToolValidator(config))
     call = ToolCall(name="web_fetch", arguments={"url": "https://example.com"})
     policy.validate(call)
 
 
-def test_policy_web_fetch_accepts_url_string(policy):
+def test_policy_web_fetch_accepts_url_string(policy, config):
     """Verifica que policy web fetch accepts url string."""
+    policy.register_tool_validator(["web_fetch"], WebToolValidator(config))
     call = ToolCall(name="web_fetch", arguments={"url": "https://example.com"})
     policy.validate(call)
 
 
-def test_policy_web_fetch_rejects_empty_url(policy):
+def test_policy_web_fetch_rejects_empty_url(policy, config):
     """Verifica que policy web fetch rejects empty url."""
+    policy.register_tool_validator(["web_fetch"], WebToolValidator(config))
     call = ToolCall(name="web_fetch", arguments={"url": " "})
     with pytest.raises(ToolPolicyError, match="url' não vazia"):
         policy.validate(call)
@@ -283,7 +310,7 @@ def test_policy_remove_file_requires_path(policy):
 def test_policy_remove_file_requires_explicit_dry_run_false(tmp_path):
     """dry_run deve ser explicitamente False; True (padrão) é rejeitado."""
     config = ToolRuntimeConfig(workspace_root=tmp_path)
-    policy = ToolPolicy(config)
+    policy = _make_policy(config)
     (tmp_path / "x.txt").write_text("x")
 
     call = ToolCall(name="remove_file", arguments={"path": "x.txt"})
@@ -294,7 +321,7 @@ def test_policy_remove_file_requires_explicit_dry_run_false(tmp_path):
 def test_policy_remove_file_allows_explicit_false(tmp_path):
     """dry_run=False explícito passa na validação."""
     config = ToolRuntimeConfig(workspace_root=tmp_path)
-    policy = ToolPolicy(config)
+    policy = _make_policy(config)
     (tmp_path / "x.txt").write_text("x")
 
     call = ToolCall(name="remove_file", arguments={"path": "x.txt", "dry_run": False})
@@ -304,7 +331,7 @@ def test_policy_remove_file_allows_explicit_false(tmp_path):
 def test_policy_remove_file_rejects_dry_run_true(tmp_path):
     """dry_run=True também é rejeitado (só False passa)."""
     config = ToolRuntimeConfig(workspace_root=tmp_path)
-    policy = ToolPolicy(config)
+    policy = _make_policy(config)
     (tmp_path / "x.txt").write_text("x")
 
     call = ToolCall(name="remove_file", arguments={"path": "x.txt", "dry_run": True})
@@ -315,7 +342,7 @@ def test_policy_remove_file_rejects_dry_run_true(tmp_path):
 def test_policy_remove_file_outside_workspace(tmp_path):
     """remove_file com path fora do workspace é rejeitado."""
     config = ToolRuntimeConfig(workspace_root=tmp_path)
-    policy = ToolPolicy(config)
+    policy = _make_policy(config)
 
     call = ToolCall(name="remove_file", arguments={"path": "../../etc/passwd", "dry_run": False})
     with pytest.raises(ToolPolicyError, match="Path fora da workspace"):
@@ -380,14 +407,14 @@ def test_policy_check_path_permission_none_for_non_path_tools(policy):
 
 # ── write_stdin policy ──────────────────────────────────────
 
-def test_policy_write_stdin_requires_yield_time_ms_integer(policy):
+def test_policy_write_stdin_requires_yield_time_ms_integer(shell_validator):
     """write_stdin com yield_time_ms não inteiro é rejeitado."""
     call = ToolCall(name="write_stdin", arguments={
         "session_id": 1,
         "yield_time_ms": "abc",
     })
     with pytest.raises(ToolPolicyError, match="yield_time_ms inteiro"):
-        policy.validate(call)
+        shell_validator.validate(call)
 
 
 def test_policy_memory_save_valid(policy):
@@ -419,72 +446,71 @@ def test_policy_memory_retrieve_rejects_invalid_tags(policy):
         )
 
 
-def test_policy_write_stdin_valid(policy):
+def test_policy_write_stdin_valid(shell_validator):
     """write_stdin com session_id inteiro válido passa."""
     call = ToolCall(name="write_stdin", arguments={"session_id": 1})
-    policy.validate(call)  # não deve lançar
+    shell_validator.validate(call)  # não deve lançar
 
 
-def test_policy_write_stdin_valid_with_yield_time_ms(policy):
+def test_policy_write_stdin_valid_with_yield_time_ms(shell_validator):
     """write_stdin com yield_time_ms inteiro passa."""
     call = ToolCall(name="write_stdin", arguments={
         "session_id": 1,
         "yield_time_ms": 100,
     })
-    policy.validate(call)
+    shell_validator.validate(call)
 
 
 # ── close_command_session policy ────────────────────────────
 
-def test_policy_close_command_session_requires_integer_session_id(policy):
+def test_policy_close_command_session_requires_integer_session_id(shell_validator):
     """close_command_session com session_id não inteiro é rejeitado."""
     call = ToolCall(name="close_command_session", arguments={"session_id": "abc"})
     with pytest.raises(ToolPolicyError, match="session_id inteiro"):
-        policy.validate(call)
+        shell_validator.validate(call)
 
 
-def test_policy_close_command_session_valid(policy):
+def test_policy_close_command_session_valid(shell_validator):
     """close_command_session com session_id inteiro passa."""
     call = ToolCall(name="close_command_session", arguments={"session_id": 1})
-    policy.validate(call)
+    shell_validator.validate(call)
 
 
 # ── exec_command policy ─────────────────────────────────────
 
-def test_policy_exec_command_with_workdir(policy):
+def test_policy_exec_command_with_workdir(shell_validator):
     """exec_command com workdir dentro do workspace passa."""
     call = ToolCall(name="exec_command", arguments={
         "cmd": "echo hello",
         "workdir": ".",
     })
-    policy.validate(call)
+    shell_validator.validate(call)
 
 
-def test_policy_exec_command_with_workdir_outside_workspace(policy):
+def test_policy_exec_command_with_workdir_outside_workspace(shell_validator):
     """exec_command com workdir fora do workspace é rejeitado."""
     call = ToolCall(name="exec_command", arguments={
         "cmd": "echo hello",
         "workdir": "../../etc",
     })
     with pytest.raises(ToolPolicyError, match="Path fora da workspace"):
-        policy.validate(call)
+        shell_validator.validate(call)
 
 
 # ── shell policy ────────────────────────────────────────────
 
-def test_policy_shell_chain_operators_all(policy):
+def test_policy_shell_chain_operators_all(shell_validator):
     """Todos os operadores de encadeamento são bloqueados."""
     for op in [";", "&&", "||", "|", "`", "$("]:
         call = ToolCall(name="run_shell", arguments={"command": f"ls {op} cat"})
         with pytest.raises(ToolPolicyError, match="operador de encadeamento proibido"):
-            policy.validate(call)
+            shell_validator.validate(call)
 
 
-def test_policy_shell_allowlist_validation(policy):
+def test_policy_shell_allowlist_validation(shell_validator):
     """Comandos na allowlist passam na validação."""
-    # 'ls', 'echo', 'cat', etc. estão na allowlist padrão
     call = ToolCall(name="run_shell", arguments={"command": "ls -la"})
-    policy.validate(call)  # não deve lançar
+    shell_validator.validate(call)  # não deve lançar
 
 
 # ── blocked_tools ───────────────────────────────────────────
@@ -632,7 +658,7 @@ def test_policy_blocked_tools(policy):
 def test_policy_resolve_workspace_path_empty_becomes_current(tmp_path):
     """Path vazio resolve para '.' (diretório corrente)."""
     config = ToolRuntimeConfig(workspace_root=tmp_path)
-    policy = ToolPolicy(config)
+    policy = _make_policy(config)
     # _resolve_workspace_path é chamada via validate
     call = ToolCall(name="list_files", arguments={"path": ""})
     policy.validate(call)  # path vazio → "." → resolve para workspace_root
@@ -691,7 +717,7 @@ def test_policy_check_path_permission_rejects_prefix_sibling(tmp_path):
     sibling = tmp_path / "workspace2"
     sibling.mkdir()
 
-    policy = ToolPolicy(ToolRuntimeConfig(workspace_root=workspace))
+    policy = _make_policy(ToolRuntimeConfig(workspace_root=workspace))
     call = ToolCall(name="list_files", arguments={"path": "../workspace2"})
     result = policy.check_path_permission(call)
     assert result is not None
@@ -699,47 +725,46 @@ def test_policy_check_path_permission_rejects_prefix_sibling(tmp_path):
 
 # ── shell file-path validation ──────────────────────────────
 
-def test_policy_shell_file_cmd_absolute_outside_workspace(policy):
+def test_policy_shell_file_cmd_absolute_outside_workspace(shell_validator):
     """cat com path absoluto fora do workspace é bloqueado."""
     call = ToolCall(name="run_shell", arguments={"command": "cat /etc/passwd"})
     with pytest.raises(ToolPolicyError, match="fora do workspace"):
-        policy.validate(call)
+        shell_validator.validate(call)
 
 
-def test_policy_shell_file_cmd_tilde_outside_workspace(policy):
+def test_policy_shell_file_cmd_tilde_outside_workspace(shell_validator):
     """cat com ~ expandindo para fora do workspace é bloqueado."""
     call = ToolCall(name="run_shell", arguments={"command": "cat ~/.ssh/id_rsa"})
     with pytest.raises(ToolPolicyError, match="fora do workspace"):
-        policy.validate(call)
+        shell_validator.validate(call)
 
 
 def test_policy_shell_file_cmd_absolute_inside_workspace(tmp_path):
     """cat com path absoluto dentro do workspace é permitido."""
     config = ToolRuntimeConfig(workspace_root=tmp_path)
-    pol = ToolPolicy(config)
+    validator = ShellToolValidator(config)
     target = tmp_path / "file.txt"
     target.write_text("data")
     call = ToolCall(name="run_shell", arguments={"command": f"cat {target}"})
-    pol.validate(call)
+    validator.validate(call)
 
 
-def test_policy_shell_file_cmd_relative_path_allowed(policy):
+def test_policy_shell_file_cmd_relative_path_allowed(shell_validator):
     """cat com path relativo passa (resolve dentro do workdir do processo)."""
     call = ToolCall(name="run_shell", arguments={"command": "cat requirements.txt"})
-    policy.validate(call)
+    shell_validator.validate(call)
 
 
-def test_policy_shell_non_file_cmd_absolute_path_ignored(policy):
+def test_policy_shell_non_file_cmd_absolute_path_ignored(shell_validator):
     """Comandos fora de _FILE_PATH_CMDS não têm validação de path."""
-    # 'echo' está na allowlist mas não em _FILE_PATH_CMDS
     call = ToolCall(name="run_shell", arguments={"command": "echo /etc/passwd"})
-    policy.validate(call)
+    shell_validator.validate(call)
 
 
-def test_policy_shell_file_cmd_flag_not_validated(policy):
+def test_policy_shell_file_cmd_flag_not_validated(shell_validator):
     """Flags (tokens iniciados com -) não são tratadas como paths."""
     call = ToolCall(name="run_shell", arguments={"command": "ls -la"})
-    policy.validate(call)
+    shell_validator.validate(call)
 
 
 # ── is_path_inside ─────────────────────────────────────────

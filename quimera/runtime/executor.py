@@ -7,15 +7,15 @@ from .config import ToolRuntimeConfig
 from .models import ToolCall, ToolResult
 from .policy import ToolPolicy, ToolPolicyError
 from .registry import ToolRegistry
-from .tools.files import FileTools
+from .tools import delegate as delegate_module
+from .tools import files as files_tools
 from .tools import git
-from .tools.patch import PatchTool
-from .tools.shell import ShellTool
-from .tools.web import WebTool
-from .tools.tasks import TaskTools
-from .tools.delegate import DelegateTools
-from .tools.todo import TodoTools
-from .tools.memory import MemoryTools
+from .tools import memory as memory_tools
+from .tools import patch as patch_tools
+from .tools import shell as shell_tools
+from .tools import tasks as tasks_tools
+from .tools import todo as todo_tools
+from .tools import web as web_tools
 from .approval_broker import ApprovalBroker
 
 
@@ -42,10 +42,7 @@ class ToolExecutor:
         self._tool_preview_callback = None
         self._tool_progress_callback = None
         self.approval_broker = ApprovalBroker(config, approval_handler)
-        self._task_tools = TaskTools(self.config)
-        self._delegate_tools = DelegateTools(self.config)
-        self._todo_tools = TodoTools(self.config)
-        self._memory_tools = MemoryTools(self.config)
+        self._delegate_tools = None
         self._register_builtin_tools()
 
     def set_tool_progress_callback(self, fn) -> None:
@@ -56,34 +53,15 @@ class ToolExecutor:
         self._delegate_tools.set_progress_callback(fn)
 
     def _register_builtin_tools(self) -> None:
-        """Executa register builtin tools."""
-        file_tools = FileTools(self.config)
-        patch_tool = PatchTool(self.config)
-        shell_tool = ShellTool(self.config)
-        web_tool = WebTool(self.config)
-        self.registry.register("list_files", file_tools.list_files)
-        self.registry.register("read_file", file_tools.read_file)
-        self.registry.register("write_file", file_tools.write_file)
-        self.registry.register("remove_file", file_tools.remove_file)
-        self.registry.register("apply_patch", patch_tool.apply_patch)
-        self.registry.register("grep_search", file_tools.grep_search)
-        self.registry.register("run_shell", shell_tool.run_shell)
-        self.registry.register("exec_command", shell_tool.exec_command)
-        self.registry.register("write_stdin", shell_tool.write_stdin)
-        self.registry.register("close_command_session", shell_tool.close_command_session)
-        # Task-related read-only tools
-        self.registry.register("list_tasks", self._task_tools.list_tasks)
-        self.registry.register("web_search", web_tool.web_search)
-        self.registry.register("web_fetch", web_tool.web_fetch)
-        self.registry.register("list_jobs", self._task_tools.list_jobs)
-        self.registry.register("get_job", self._task_tools.get_job)
-        self.registry.register("memory_save", self._memory_tools.memory_save)
-        self.registry.register("memory_retrieve", self._memory_tools.memory_retrieve)
-        self.registry.register("delegate", self._delegate_tools.delegate)
-        self.registry.register("list_agents", self._delegate_tools.list_agents)
-        self.registry.register("todo_write", self._todo_tools.todo_write)
-        self.registry.register("todo_list", self._todo_tools.todo_list)
-        # Git tools
+        """Registra todas as ferramentas builtin usando os módulos register()."""
+        files_tools.register(self.registry, self.policy, self.config)
+        patch_tools.register(self.registry, self.policy, self.config)
+        shell_tools.register(self.registry, self.policy, self.config)
+        web_tools.register(self.registry, self.policy, self.config)
+        tasks_tools.register(self.registry, self.policy, self.config)
+        todo_tools.register(self.registry, self.policy, self.config)
+        memory_tools.register(self.registry, self.policy, self.config)
+        self._delegate_tools = delegate_module.register(self.registry, self.policy, self.config)
         git.register(self.registry, self.policy, self.config)
 
     @property
