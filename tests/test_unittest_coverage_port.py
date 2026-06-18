@@ -24,9 +24,9 @@ from quimera.runtime.tools import memory as memory_tools
 from quimera.runtime.tools import patch as patch_tools
 from quimera.runtime.tools import tasks as tasks_tools
 from quimera.runtime.tools import todo as todo_tools
-from quimera.runtime.task_executor import TaskExecutor, create_executor
+from quimera.tasks.executor import TaskExecutor, create_executor
 from quimera.constants import TaskType
-from quimera.runtime.task_planning import (
+from quimera.tasks.planning import (
     choose_best_agent,
     classify_task_type,
     score_plugin_for_task,

@@ -5,7 +5,7 @@ import queue as _queue_module
 import threading
 from collections.abc import Callable
 
-from .task_events import TaskEvent
+from ..tasks.events import TaskEvent
 
 
 Handler = Callable[[TaskEvent], None]

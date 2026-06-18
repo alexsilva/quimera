@@ -1,11 +1,11 @@
-"""Componentes de `quimera.runtime.tasks`."""
+"""API procedural do domínio de tasks."""
 import argparse
 import os
 import sqlite3
 from dataclasses import asdict
 
 from ..constants import TaskStatus, TaskType, can_transition
-from ..app.task_repository import TaskRepository
+from .repository import TaskRepository
 
 _UNSET = object()
 

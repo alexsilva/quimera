@@ -6,8 +6,8 @@ from collections.abc import Callable, Iterable, Sequence
 from typing import Protocol
 
 from ..runtime.models import TaskRecord
-from ..runtime.task_planning import can_execute_task, choose_best_agent, score_plugin_for_task
-from .task_repository import TaskRepository
+from .planning import can_execute_task, choose_best_agent, score_plugin_for_task
+from .repository import TaskRepository
 
 
 class _TaskPluginProto(Protocol):

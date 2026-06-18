@@ -9,7 +9,7 @@ from unittest.mock import patch
 import pytest
 
 from quimera.constants import TaskStatus, can_transition
-from quimera.runtime import tasks
+from quimera.tasks import api as tasks
 
 
 @pytest.fixture
@@ -393,13 +393,13 @@ def _run_main(db_path, *args):
     """Execute the __main__ block of tasks.py in-process and return (stdout, exit_code)."""
     import sys
     buf = io.StringIO()
-    argv = ["quimera.runtime.tasks", "--db", str(db_path), *args]
+    argv = ["quimera.tasks.api", "--db", str(db_path), *args]
     exit_code = 0
     sys.stdout.flush()
     sys.stderr.flush()
     with patch("sys.argv", argv), redirect_stdout(buf):
         try:
-            runpy.run_module("quimera.runtime.tasks", run_name="__main__", alter_sys=False)
+            runpy.run_module("quimera.tasks.api", run_name="__main__", alter_sys=False)
         except SystemExit as exc:
             exit_code = exc.code if exc.code is not None else 0
     return buf.getvalue().strip(), exit_code
@@ -554,10 +554,10 @@ def test_cli_no_cmd_prints_help(cli_db):
     """Verifica que a CLI sem comando imprime ajuda."""
     # No subcommand → parser.print_help() + exit(1)
     buf = io.StringIO()
-    argv = ["quimera.runtime.tasks", "--db", str(cli_db)]
+    argv = ["quimera.tasks.api", "--db", str(cli_db)]
     with patch("sys.argv", argv), redirect_stdout(buf):
         try:
-            runpy.run_module("quimera.runtime.tasks", run_name="__main__", alter_sys=False)
+            runpy.run_module("quimera.tasks.api", run_name="__main__", alter_sys=False)
         except SystemExit as exc:
             assert exc.code == 1
     assert "usage" in buf.getvalue().lower()

@@ -12,7 +12,7 @@ from quimera.runtime.executor import ToolExecutor
 from quimera.runtime.models import ToolCall
 from quimera.runtime.policy import ToolPolicy, ToolPolicyError
 from quimera.runtime.registry import ToolRegistry
-from quimera.runtime.task_executor import TaskExecutor
+from quimera.tasks.executor import TaskExecutor
 from quimera.runtime.tools import delegate as delegate_module
 from quimera.runtime.tools import files as files_tools
 from quimera.runtime.tools import memory as memory_tools
@@ -20,8 +20,8 @@ from quimera.runtime.tools import patch as patch_tools
 from quimera.runtime.tools import tasks as tasks_tools
 from quimera.runtime.tools import todo as todo_tools
 from quimera.runtime.tools.shell import ShellToolValidator
-from quimera.runtime.task_planning import choose_best_agent, classify_task_type
-from quimera.runtime.tasks import add_job, get_conn, init_db, list_tasks, propose_task
+from quimera.tasks.planning import choose_best_agent, classify_task_type
+from quimera.tasks.api import add_job, get_conn, init_db, list_tasks, propose_task
 
 
 # ---------------------------------------------------------------------------

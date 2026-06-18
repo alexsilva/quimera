@@ -1,4 +1,4 @@
-"""Componentes de `quimera.runtime.task_planning`."""
+"""Componentes de `quimera.tasks.planning`."""
 from __future__ import annotations
 
 from dataclasses import dataclass

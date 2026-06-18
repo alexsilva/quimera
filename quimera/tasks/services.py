@@ -1,4 +1,4 @@
-"""Componentes de ``quimera.app.task``.
+"""Componentes do domínio `quimera.tasks`.
 
 ``AppTaskServices`` é o adaptador fino entre o ``/task`` (e demais operações
 de task do ``QuimeraApp``) e o domínio de tasks composto pelos serviços:
@@ -22,21 +22,23 @@ from typing import Any, Callable
 
 from ..agents import AgentClient
 from ..constants import TaskStatus
-from ..runtime import ConsoleApprovalHandler, PreApprovalHandler, ToolRuntimeConfig, create_executor
+from ..runtime.approval import ConsoleApprovalHandler, PreApprovalHandler
+from ..runtime.config import ToolRuntimeConfig
 from ..runtime.executor import ToolExecutor
-from ..runtime.task_planning import classify_task
-from .config import logger
-from .dispatch import AppDispatchServices
+from .executor import create_executor
+from ..tasks.planning import classify_task
+from ..app.config import logger
+from ..app.dispatch import AppDispatchServices
 from ..domain.session_state import SessionState
 from ..runtime.tools.todo import TodoRegistry
-from .task_classifiers import classify_task_execution_result, classify_task_review_result, parse_task_command
-from .task_execution_service import TaskExecutionService
-from .task_failover_policy import TaskFailoverPolicy
-from .task_prompt_factory import TaskPromptFactory
-from .task_repository import TaskRepository
-from .task_review_service import TaskReviewService
-from .task_router import TaskRouter
-from .task_utils import build_completed_task_results
+from .classifiers import classify_task_execution_result, classify_task_review_result, parse_task_command
+from .execution import TaskExecutionService
+from .failover import TaskFailoverPolicy
+from .prompt import TaskPromptFactory
+from .repository import TaskRepository
+from .review import TaskReviewService
+from .router import TaskRouter
+from .utils import build_completed_task_results
 
 
 _BACKGROUND_AGENT_TIMEOUT_SECONDS = 120

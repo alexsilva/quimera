@@ -3,14 +3,14 @@ import sqlite3
 import pytest
 
 from quimera.app.event_sink import EventSink
-from quimera.app.task_events import (
+from quimera.tasks.events import (
     TaskProposed, TaskStarted, TaskSubmittedForReview,
     TaskReviewStarted, TaskCompleted, TaskRequeued,
     TaskApproved, TaskRejected, TaskFailed,
 )
-from quimera.app.task_repository import TaskRepository
+from quimera.tasks.repository import TaskRepository
 from quimera.constants import TaskStatus
-from quimera.runtime import tasks as runtime_tasks
+from quimera.tasks import api as runtime_tasks
 from quimera.runtime.models import JobRecord, TaskRecord
 
 

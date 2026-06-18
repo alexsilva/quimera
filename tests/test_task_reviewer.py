@@ -2,7 +2,7 @@
 
 from quimera.constants import TaskStatus
 from quimera.prompt_kinds import PromptKind
-from quimera.runtime.task_reviewer import TaskReviewer
+from quimera.tasks.reviewer import TaskReviewer
 from quimera.runtime.models import TaskRecord
 
 

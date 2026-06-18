@@ -5,8 +5,8 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Sequence
 from typing import Protocol
 
-from ..runtime.task_planning import can_execute_task
-from .task_repository import TaskRepository
+from .planning import can_execute_task
+from .repository import TaskRepository
 
 
 class _TaskPluginProto(Protocol):

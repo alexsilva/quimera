@@ -8,7 +8,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Optional
 
-from .models import TaskRecord
+from ..runtime.models import TaskRecord
 
 _logger = logging.getLogger("quimera.task_executor")
 

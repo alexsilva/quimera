@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 
-from quimera.app.task_router import TaskRouter
+from quimera.tasks.router import TaskRouter
 
 
 @dataclass
@@ -37,7 +37,7 @@ def test_choose_agent_with_single_plugin(monkeypatch):
         repository=repository,
     )
 
-    monkeypatch.setattr("quimera.app.task_router.score_plugin_for_task", lambda _plugin, _task_type: 3)
+    monkeypatch.setattr("quimera.tasks.router.score_plugin_for_task", lambda _plugin, _task_type: 3)
 
     assert router.choose_agent_with_load_balance("code_edit") == "codex"
 
@@ -65,7 +65,7 @@ def test_choose_agent_with_load_balance_prefers_less_busy_agent(monkeypatch):
         get_available_plugins=lambda: [claude, codex],
         repository=RepositoryByAgent(),
     )
-    monkeypatch.setattr("quimera.app.task_router.score_plugin_for_task", lambda _plugin, _task_type: 5)
+    monkeypatch.setattr("quimera.tasks.router.score_plugin_for_task", lambda _plugin, _task_type: 5)
 
     assert router.choose_agent_with_load_balance("general") == "codex"
     assert any(call.get("assigned_to") == "claude" for call in calls)
@@ -82,8 +82,8 @@ def test_choose_agent_uses_fallback_when_effective_score_is_too_low(monkeypatch)
         repository=RepositorySpy(),
     )
 
-    monkeypatch.setattr("quimera.app.task_router.score_plugin_for_task", lambda _plugin, _task_type: -5)
-    monkeypatch.setattr("quimera.app.task_router.choose_best_agent", lambda _task_type, _plugins: "fallback-agent")
+    monkeypatch.setattr("quimera.tasks.router.score_plugin_for_task", lambda _plugin, _task_type: -5)
+    monkeypatch.setattr("quimera.tasks.router.choose_best_agent", lambda _task_type, _plugins: "fallback-agent")
 
     assert router.choose_agent_with_load_balance("architecture") == "fallback-agent"
 

@@ -15,7 +15,7 @@ from quimera.runtime.approval import (
     AutoApprovalHandler,
 )
 from quimera.runtime.policy import ToolPolicy
-from quimera.runtime.task_executor import TaskExecutor
+from quimera.tasks.executor import TaskExecutor
 
 
 @pytest.fixture

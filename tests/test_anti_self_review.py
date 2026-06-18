@@ -1,6 +1,6 @@
 import pytest
 
-from quimera.runtime.tasks import (
+from quimera.tasks.api import (
     init_db, create_task, claim_task, submit_for_review,
     claim_review_task, complete_task, get_conn, add_job, requeue_task_after_review
 )
@@ -83,7 +83,7 @@ def test_failed_reviewer_cannot_reclaim_same_review(db_path):
     review_id = claim_review_task("gemini", job_id=job_id, db_path=str(db_path))
     assert review_id == task_id
 
-    from quimera.runtime.tasks import update_task
+    from quimera.tasks.api import update_task
 
     update_task(task_id, "pending_review", result="done", notes="falha transitória", db_path=str(db_path))
 

@@ -1,6 +1,6 @@
 from quimera.constants import TaskStatus
 
-from quimera.app.task_review_service import TaskReviewService
+from quimera.tasks.review import TaskReviewService
 from quimera.runtime.models import TaskRecord
 
 

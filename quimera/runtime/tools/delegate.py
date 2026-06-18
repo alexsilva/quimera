@@ -9,10 +9,10 @@ from typing import Protocol, Callable
 from ..config import ToolRuntimeConfig
 from ..models import ToolCall, ToolResult
 from ..policy import ToolPolicyError
-from ..tasks import (
+from ...tasks.api import (
     add_job,
-    create_task,
     complete_task,
+    create_task,
     fail_task,
     get_job,
     update_job_status,

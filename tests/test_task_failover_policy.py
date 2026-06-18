@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from quimera.app.task_failover_policy import TaskFailoverPolicy
+from quimera.tasks.failover import TaskFailoverPolicy
 
 
 @dataclass

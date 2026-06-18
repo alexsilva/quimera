@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from quimera.runtime.models import TaskRecord
-from quimera.runtime.task_executor import TaskExecutor, create_executor
+from quimera.tasks.executor import TaskExecutor, create_executor
 
 
 class RepositoryStub:

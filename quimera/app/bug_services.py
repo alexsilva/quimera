@@ -9,7 +9,7 @@ from ..bugs import (
     BugReport,
     make_bug_fingerprint,
 )
-from .task_events import BugFiled
+from ..tasks.events import BugFiled
 from .session_bootstrap import (
     resolve_workspace_render_ansi_path,
     resolve_workspace_render_log_path,

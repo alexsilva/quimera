@@ -1,8 +1,8 @@
 import threading
 
-from quimera.app.task_execution_service import TaskExecutionService
-from quimera.app.task import AppTaskServices, _BACKGROUND_AGENT_TIMEOUT_SECONDS
-from quimera.app.task_classifiers import classify_task_execution_result, classify_task_review_result
+from quimera.tasks.execution import TaskExecutionService
+from quimera.tasks.services import AppTaskServices, _BACKGROUND_AGENT_TIMEOUT_SECONDS
+from quimera.tasks.classifiers import classify_task_execution_result, classify_task_review_result
 from quimera.runtime.models import TaskRecord
 
 

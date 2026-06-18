@@ -21,8 +21,8 @@ class TestAppHistory(unittest.TestCase):
         mock_context.SUMMARY_MARKER = "SUMMARY"
         mock_context.load_session.return_value = ""
 
-    @patch("quimera.runtime.tasks.init_db")
-    @patch("quimera.runtime.tasks.add_job")
+    @patch("quimera.tasks.api.init_db")
+    @patch("quimera.tasks.api.add_job")
     @patch("quimera.app.core.TerminalRenderer")
     @patch("quimera.app.core.RenderAuditLogger")
     @patch("quimera.app.core.ConfigManager")
@@ -71,8 +71,8 @@ class TestAppHistory(unittest.TestCase):
         self.assertTrue(callable(kwargs["command_resolver"]))
         mock_gate_instance.set_toolbar_context_resolver.assert_called_once_with(app._build_input_toolbar_context)
 
-    @patch("quimera.runtime.tasks.init_db")
-    @patch("quimera.runtime.tasks.add_job")
+    @patch("quimera.tasks.api.init_db")
+    @patch("quimera.tasks.api.add_job")
     @patch("quimera.app.core.TerminalRenderer")
     @patch("quimera.app.core.ConfigManager")
     @patch("quimera.app.core.ContextManager")
@@ -120,8 +120,8 @@ class TestAppHistory(unittest.TestCase):
             self.assertEqual(result, "test input")
             mock_input.assert_called_with("user: ")
 
-    @patch("quimera.runtime.tasks.init_db")
-    @patch("quimera.runtime.tasks.add_job")
+    @patch("quimera.tasks.api.init_db")
+    @patch("quimera.tasks.api.add_job")
     @patch("quimera.app.core.TerminalRenderer")
     @patch("quimera.app.core.RenderAuditLogger")
     @patch("quimera.app.core.ConfigManager")

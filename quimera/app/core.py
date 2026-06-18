@@ -38,15 +38,12 @@ from .inputs import AppInputServices
 from .interfaces import PluginResolverAdapter
 from .prompt_input import InputGate
 from .runtime_state import AppRuntimeState
-from .task import AppTaskServices, create_executor
-from .task_classifiers import classify_task_execution_result, classify_task_review_result, parse_task_command
-from .display_service import DisplayService
-from .system_layer import AppSystemLayer
-from .turn import TurnManager
-from .event_sink import EventSink
-from .ui_event_handler import UiEventHandler
-from .worker import ChatWorker
-from .task_events import (
+from ..tasks.classifiers import (
+    classify_task_execution_result,
+    classify_task_review_result,
+    parse_task_command,
+)
+from ..tasks.events import (
     TaskStarted,
     TaskCompleted,
     TaskFailed,
@@ -54,10 +51,18 @@ from .task_events import (
     TaskSubmittedForReview,
     TaskRequeued,
 )
-from .task_utils import summarize_task_feedback
+from ..tasks.services import AppTaskServices
+from ..tasks.utils import summarize_task_feedback
+from ..tasks.executor import create_executor
+from .display_service import DisplayService
+from .system_layer import AppSystemLayer
+from .turn import TurnManager
+from .event_sink import EventSink
+from .ui_event_handler import UiEventHandler
+from .worker import ChatWorker
 from .. import plugins
 from ..plugins.base import PluginRegistry, extract_model_from_cli_cmd
-from ..runtime import tasks as runtime_tasks
+from ..tasks import api as runtime_tasks
 from ..runtime.process_supervisor import ProcessSupervisor
 from ..ui import RenderAuditLogger, TerminalRenderer
 from ..context import ContextManager

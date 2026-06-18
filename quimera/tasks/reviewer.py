@@ -8,7 +8,7 @@ from typing import Protocol
 from ..prompt_kinds import PromptKind
 from ..constants import TaskStatus
 from ..runtime.models import TaskRecord
-from ..app.task_events import TaskReviewReassigned
+from .events import TaskReviewReassigned
 
 
 class _DispatchServicesProto(Protocol):

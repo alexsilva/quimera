@@ -8,8 +8,8 @@ from datetime import datetime, timezone
 
 from ..constants import TaskStatus, TaskType, can_transition
 from ..runtime.models import JobRecord, TaskRecord
-from .event_sink import EventSink
-from .task_events import (
+from ..app.event_sink import EventSink
+from .events import (
     TaskProposed, TaskApproved, TaskRejected, TaskStarted,
     TaskSubmittedForReview, TaskReviewStarted, TaskCompleted,
     TaskFailed, TaskRequeued,

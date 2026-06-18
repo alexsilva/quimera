@@ -6,7 +6,7 @@ import threading
 import pytest
 
 from quimera.app.event_sink import EventSink
-from quimera.app.task_events import TaskEvent, TaskProposed, TaskCompleted
+from quimera.tasks.events import TaskEvent, TaskProposed, TaskCompleted
 
 
 def _proposed(task_id=1, job_id=1, description="desc"):

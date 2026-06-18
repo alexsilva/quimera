@@ -14,7 +14,7 @@ if str(ROOT) not in sys.path:
 import quimera.paths as _quimera_paths
 _quimera_paths.CANDIDATE_DIRS[:] = [_quimera_paths.TMP_BASE_DIR]
 
-from quimera.runtime.task_executor import TaskExecutor
+from quimera.tasks.executor import TaskExecutor
 
 
 @pytest.fixture(autouse=True)

@@ -7,7 +7,7 @@ import re
 from ..config import ToolRuntimeConfig
 from ..models import ToolCall, ToolResult
 from ..policy import ToolPolicyError
-from ..tasks import (
+from ...tasks.api import (
     list_tasks as _list_tasks,
     list_jobs as _list_jobs,
     get_job as _get_job,

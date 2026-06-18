@@ -2,7 +2,7 @@ import pytest
 
 from quimera.plugins.base import AgentPlugin
 from quimera.constants import TaskType
-from quimera.runtime.task_planning import (
+from quimera.tasks.planning import (
     TaskClassification,
     classify_task,
     classify_task_type,

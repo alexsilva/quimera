@@ -10,7 +10,7 @@ from typing import Tuple
 
 from ..constants import CMD_TASK
 from ..constants import NEEDS_INPUT_MARKER
-from ..runtime.task_planning import normalize_task_description
+from .planning import normalize_task_description
 
 
 def classify_task_execution_result(response: str | None) -> Tuple[bool, str]:

@@ -294,7 +294,7 @@ class TestNonSSEPath:
     def test_non_sse_background_thread_completa_task(self, delegation_tools, tmp_path):
         """Background thread completa com sucesso: complete_task e update_job_status chamados."""
         db_path = tmp_path / "tasks.db"
-        from quimera.runtime import tasks as task_mod
+        from quimera.tasks import api as task_mod
         import time
         task_mod.init_db(str(db_path))
         job_id = task_mod.add_job("test job", db_path=str(db_path))
@@ -331,7 +331,7 @@ class TestNonSSEPath:
     def test_non_sse_background_thread_falha_task(self, delegation_tools, tmp_path):
         """Dispatch retorna None (falha silenciosa) → fail_task e update_job_status(failed) chamados."""
         db_path = tmp_path / "tasks.db"
-        from quimera.runtime import tasks as task_mod
+        from quimera.tasks import api as task_mod
         import time
         task_mod.init_db(str(db_path))
         job_id = task_mod.add_job("test job", db_path=str(db_path))

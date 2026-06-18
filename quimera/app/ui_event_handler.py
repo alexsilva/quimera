@@ -6,7 +6,7 @@ import threading
 from contextlib import nullcontext
 
 from .render_event import RenderEvent
-from .task_events import (
+from ..tasks.events import (
     BugFiled,
     TaskCompleted,
     TaskFailed,
@@ -14,7 +14,7 @@ from .task_events import (
     TaskRequeued,
     TaskSubmittedForReview,
 )
-from .task_utils import summarize_task_feedback
+from ..tasks.utils import summarize_task_feedback
 from .config import logger
 
 

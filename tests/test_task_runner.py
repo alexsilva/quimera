@@ -1,9 +1,9 @@
 """Testes para TaskRunner — execução isolada de tasks sem subir o app."""
 
 from quimera.prompt_kinds import PromptKind
-from quimera.runtime.task_runner import TaskRunner
+from quimera.tasks.runner import TaskRunner
 from quimera.runtime.models import TaskRecord
-from quimera.app.task_utils import summarize_task_feedback
+from quimera.tasks.utils import summarize_task_feedback
 
 
 class DispatchStub:

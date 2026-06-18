@@ -3,7 +3,7 @@ import tempfile
 import threading
 import unittest
 
-from quimera.runtime.tasks import (
+from quimera.tasks.api import (
     init_db, add_job, create_task, propose_task, approve_task, reject_task,
     list_tasks, list_jobs, claim_task, update_task, complete_task,
     fail_task, requeue_task, )

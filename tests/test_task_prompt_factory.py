@@ -2,7 +2,7 @@ import json
 import re
 from collections import deque
 
-from quimera.app.task_prompt_factory import TaskPromptFactory
+from quimera.tasks.prompt import TaskPromptFactory
 from quimera.shared_state_presenter import SharedStatePresenter
 
 

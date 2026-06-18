@@ -5,9 +5,9 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Protocol
 
-from ..runtime.task_reviewer import TaskReviewer
+from .reviewer import TaskReviewer
 from ..runtime.models import TaskRecord
-from .task_repository import TaskRepository
+from .repository import TaskRepository
 
 
 class _DispatchServicesProto(Protocol):
