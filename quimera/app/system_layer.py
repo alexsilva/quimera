@@ -186,7 +186,7 @@ class AppSystemLayer:
         read_user_input=None,
         task_command_handler=None,
         bugs_command_handler=None,
-        reset_shared_state=None,
+        session_state_manager=None,
         approval_handler_getter=None,
         context_manager=None,
         plugin_registry=None,
@@ -237,7 +237,7 @@ class AppSystemLayer:
                     task_services = getattr(app, "task_services", None)
                     task_command_handler = getattr(task_services, "handle_task_command", None)
                 bugs_command_handler = bugs_command_handler or getattr(app, "_handle_bugs_command", None)
-                reset_shared_state = reset_shared_state or getattr(app, "reset_shared_state", None)
+                session_state_manager = session_state_manager or getattr(app, "session_state_mgr", None)
                 approval_handler_getter = approval_handler_getter or (
                     lambda: getattr(app, "_approval_handler", None)
                 )
@@ -277,7 +277,7 @@ class AppSystemLayer:
         self.read_user_input = read_user_input
         self.task_command_handler = task_command_handler
         self.bugs_command_handler = bugs_command_handler
-        self.reset_shared_state = reset_shared_state
+        self.session_state_manager = session_state_manager
         self.approval_handler_getter = approval_handler_getter or (lambda: None)
         self.context_manager = context_manager
         self.plugin_registry = plugin_registry
@@ -614,8 +614,9 @@ class AppSystemLayer:
 
         if command == CMD_RESET or command.startswith(f"{CMD_RESET} "):
             target = command[len(CMD_RESET):].strip() or "state"
-            if callable(self.reset_shared_state):
-                msg = self.reset_shared_state(target)
+            session_state_manager = self.session_state_manager
+            if session_state_manager is not None and hasattr(session_state_manager, "reset"):
+                msg = session_state_manager.reset(target)
             else:
                 msg = "reset não disponível."
             self._display.show_system(msg)

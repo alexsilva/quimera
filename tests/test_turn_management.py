@@ -44,6 +44,8 @@ def _materialize_ui_event_handler(app):
     """Cria UiEventHandler a partir dos atributos já setados no app (test helper)."""
     from quimera.app.ui_event_handler import UiEventHandler
     from contextlib import nullcontext
+    if getattr(app, "session_state_mgr", None) is None:
+        app.session_state_mgr = Mock()
     app._ui_event_handler = UiEventHandler(
         renderer=getattr(app, "renderer", None),
         input_gate=getattr(app, "input_gate", None),

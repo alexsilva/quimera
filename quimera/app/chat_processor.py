@@ -56,6 +56,9 @@ def run_chat_loop(
     executor_cls=ThreadPoolExecutor,
 ) -> None:
     """Executa o ciclo de input/processamento/shutdown do chat."""
+    session_state_manager = getattr(app, "session_state_mgr", None)
+    if session_state_manager is None:
+        raise RuntimeError("QuimeraApp.session_state_mgr não foi inicializado")
     if not hasattr(app, "renderer") or app.renderer is None:
         raise RuntimeError("QuimeraApp.renderer não foi inicializado")
     if not hasattr(app, "session_services") or app.session_services is None:
@@ -213,7 +216,7 @@ def run_chat_loop(
             elif isinstance(_cmd_result, str):
                 user = _cmd_result
 
-            app._advance_shared_state_turn()
+            session_state_manager.advance_turn()
 
             if chat_queue is not None:
                 acquired_async_slot = False

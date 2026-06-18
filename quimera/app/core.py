@@ -96,7 +96,8 @@ from ..constants import (
     Visibility,
 )
 from ..modes import MODES
-from ..shared_state import bootstrap_state_key_stamps, clear_agent_state_for_session_start, expire_stale_keys
+from ..shared_state import bootstrap_state_key_stamps, clear_agent_state_for_session_start
+from .session_state import SessionStateManager
 from .bug_services import BugServices
 from .command_router import CommandRouter
 from .config import logger
@@ -128,10 +129,8 @@ class QuimeraApp:
                  ):
         """Inicializa uma instância de QuimeraApp."""
         self._lock = threading.Lock()
-        self._history_lock = threading.Lock()
         self._output_lock = threading.Lock()
         self._counter_lock = threading.Lock()
-        self._shared_state_lock = threading.Lock()
         self.selected_agents = list(agents) if agents else []
         self.agent_pool = AgentPool(self.selected_agents)
         self.threads = int(threads) if threads is not None else 1
@@ -197,6 +196,37 @@ class QuimeraApp:
             self.renderer,
             workspace=self.workspace,
         )
+        configured_history_window = history_window or self.config.history_window
+        configured_auto_summarize_threshold = self.config.auto_summarize_threshold
+        history_hard_limit = compute_history_hard_limit(
+            configured_history_window,
+            configured_auto_summarize_threshold,
+        )
+        last_session = self.storage.load_last_session()
+        self.history, restored_drop_count = trim_history_messages(
+            last_session["messages"],
+            history_hard_limit,
+        )
+        if restored_drop_count:
+            self.renderer.show_system(
+                f"[memória] histórico restaurado truncado para {len(self.history)} mensagens recentes\n"
+            )
+        self.session_state_mgr = SessionStateManager(
+            storage=self.storage,
+            shared_state=last_session["shared_state"],
+            history=self.history,
+        )
+        self.shared_state = self.session_state_mgr.shared_state
+        self._turn_stamps = self.session_state_mgr.turn_stamps
+        self._shared_state_lock = self.session_state_mgr.shared_state_lock
+        self._history_lock = self.session_state_mgr.history_lock
+        history_restored = bool(self.history)
+        clear_agent_state_for_session_start(self.shared_state, history_restored=history_restored)
+        bootstrap_state_key_stamps(
+            self.shared_state,
+            self._turn_stamps,
+            current_turn=int(self.shared_state.get("_current_turn", 0) or 0),
+        )
         self._display_service = DisplayService(
             renderer=self.renderer,
             input_status_getter=self.input_gate.is_active,
@@ -212,8 +242,8 @@ class QuimeraApp:
                 normalize=self._normalize_agent_name,
             ),
             prompt_builder=None,
-            history_getter=lambda: list(getattr(self, "history", []) or []),
-            shared_state_getter=lambda: getattr(self, "shared_state", None),
+            history_getter=self.session_state_mgr.history_snapshot,
+            shared_state_getter=self.session_state_mgr.shared_state_snapshot,
             execution_mode_getter=lambda: getattr(self, "execution_mode", None),
             agent_pool=self.agent_pool,
             get_selected_agents=lambda: list(getattr(self, "selected_agents", []) or []),
@@ -222,7 +252,7 @@ class QuimeraApp:
             read_user_input=self.read_user_input,
             task_command_handler=None,
             bugs_command_handler=self._handle_bugs_command,
-            reset_shared_state=self.reset_shared_state,
+            session_state_manager=self.session_state_mgr,
             approval_handler_getter=lambda: getattr(self, "_approval_handler", None),
             context_manager=self.context_manager,
             plugin_registry=self._plugin_registry,
@@ -273,23 +303,7 @@ class QuimeraApp:
                 lambda: list(dict.fromkeys(self.agent_pool.agents)),
             ),
         )
-        configured_history_window = history_window or self.config.history_window
-        configured_auto_summarize_threshold = self.config.auto_summarize_threshold
-        history_hard_limit = compute_history_hard_limit(
-            configured_history_window,
-            configured_auto_summarize_threshold,
-        )
-        last_session = self.storage.load_last_session()
-        self.history, restored_drop_count = trim_history_messages(
-            last_session["messages"],
-            history_hard_limit,
-        )
-        if restored_drop_count:
-            self.renderer.show_system(
-                f"[memória] histórico restaurado truncado para {len(self.history)} mensagens recentes\n"
-            )
         session_context = self.context_manager.load_session()
-        history_restored = bool(self.history)
         summary_loaded = self.context_manager.SUMMARY_MARKER in session_context
         self.session_state = {
             "session_id": session_id,
@@ -313,14 +327,6 @@ class QuimeraApp:
         self.behavior_metrics = BehaviorMetricsTracker(storage_path=metrics_state_path)
         self.agent_client.tool_event_callback = self._record_tool_event
         self.debug_prompt_metrics = debug
-        self.shared_state = last_session["shared_state"]
-        self._turn_stamps: dict = {}
-        clear_agent_state_for_session_start(self.shared_state, history_restored=history_restored)
-        bootstrap_state_key_stamps(
-            self.shared_state,
-            self._turn_stamps,
-            current_turn=int(self.shared_state.get("_current_turn", 0) or 0),
-        )
         self._chat_state = SessionState(
             history=self.history,
             shared_state=self.shared_state,
@@ -930,15 +936,6 @@ class QuimeraApp:
     def parse_routing(self, user_input: str) -> tuple[str | None, str | None, bool]:
         return self.command_router.parse_routing(user_input)
 
-    @staticmethod
-    def _merge_state_value(current, incoming):
-        """Mescla state value."""
-        return AppProtocol.merge_state_value(current, incoming)
-
-    def _apply_state_update(self, block_content):
-        """Executa apply state update."""
-        return self.protocol.apply_state_update(block_content)
-
     MAX_RETRIES = 2
     RETRY_BACKOFF_SECONDS = 1
 
@@ -1179,62 +1176,6 @@ class QuimeraApp:
         if getattr(self.protocol, "_shared_state", None) is not self.shared_state:
             self.protocol._shared_state = self.shared_state
         return self.protocol.parse_response(response)
-
-    def _advance_shared_state_turn(self) -> None:
-        """Avança turno lógico de conversa e expira agent keys antigas."""
-        shared = getattr(self, "shared_state", None)
-        if not isinstance(shared, dict):
-            return
-        state_lock = getattr(self, "_shared_state_lock", None) or getattr(self, "_lock", None)
-        if state_lock is None:
-            return
-        with state_lock:
-            turn = int(shared.get("_current_turn", 0) or 0) + 1
-            shared["_current_turn"] = turn
-            stamps = getattr(self, "_turn_stamps", None)
-            if isinstance(stamps, dict):
-                expired = expire_stale_keys(shared, stamps, turn)
-                if expired:
-                    logger.info("[shared_state] expired stale keys: %s", expired)
-
-    def reset_shared_state(self, target: str = "state") -> str:
-        """Reseta o estado da sessão conforme o alvo especificado.
-
-        Args:
-            target: ``"state"`` (shared_state), ``"history"`` (conversa)
-                    ou ``"all"`` (ambos).
-
-        Returns:
-            Descrição do que foi resetado.
-        """
-        valid = ("state", "history", "all")
-        if target not in valid:
-            return f"uso: /reset {{{','.join(valid)}}}"
-
-        if target in ("state", "all"):
-            state_lock = getattr(self, "_shared_state_lock", None) or getattr(self, "_lock", None)
-            if state_lock is None:
-                self.shared_state.clear()
-                stamps = getattr(self, "_turn_stamps", None)
-                if isinstance(stamps, dict):
-                    stamps.clear()
-                self.storage.save_history(self.history, shared_state=self.shared_state)
-            else:
-                with state_lock:
-                    self.shared_state.clear()
-                    stamps = getattr(self, "_turn_stamps", None)
-                    if isinstance(stamps, dict):
-                        stamps.clear()
-                    self.storage.save_history(self.history, shared_state=self.shared_state)
-
-        if target in ("history", "all"):
-            with self._history_lock:
-                self.history.clear()
-            self.storage.save_history(self.history, shared_state=self.shared_state)
-
-        return {"state": "shared_state limpo.",
-                "history": "histórico limpo.",
-                "all": "shared_state e histórico limpos."}[target]
 
     def _restore_current_job_env(self) -> None:
         """Restaura QUIMERA_CURRENT_JOB_ID para evitar vazamento entre sessões."""

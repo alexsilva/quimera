@@ -82,7 +82,7 @@ def make_app(renderer=None):
     app.get_available_plugins = Mock(return_value=[])
     app.read_user_input = Mock(return_value="")
     app.clear_terminal_screen = Mock()
-    app.reset_shared_state = Mock()
+    app.session_state_mgr = SimpleNamespace(reset=Mock())
     app.task_services = SimpleNamespace(handle_task_command=Mock())
     app.context_manager = SimpleNamespace(
         show=Mock(),
@@ -779,10 +779,10 @@ def test_handle_command_reload_and_reset_state_paths():
     assert app.renderer.system_messages[-1] == "Plugins recarregados: 2 plugin(s)"
 
     assert layer.handle_command(CMD_RESET) is True
-    app.reset_shared_state.assert_called_once_with("state")
+    app.session_state_mgr.reset.assert_called_once_with("state")
 
     assert layer.handle_command(f"{CMD_RESET} all") is True
-    assert app.reset_shared_state.call_args_list[-1] == (("all",),)
+    assert app.session_state_mgr.reset.call_args_list[-1] == (("all",),)
 
 
 def test_handle_command_reload_passes_injected_registry():

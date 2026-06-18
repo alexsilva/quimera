@@ -348,8 +348,11 @@ def _make_session_services(app):
 def materialize_internal_services(app):
     import threading
     from contextlib import nullcontext
+    from unittest.mock import Mock
     if getattr(app, "_output_lock", None) is None:
         app._output_lock = threading.Lock()
+    if getattr(app, "session_state_mgr", None) is None:
+        app.session_state_mgr = Mock()
     if getattr(app, "runtime_state", None) is None:
         from quimera.app.runtime_state import AppRuntimeState
         app.runtime_state = AppRuntimeState()
@@ -1990,6 +1993,7 @@ class ProtocolTests(unittest.TestCase):
             "history_count": 0,
             "summary_loaded": False,
         }
+        app.session_state_mgr = Mock()
         persisted = []
         printed = []
 
@@ -2155,6 +2159,7 @@ class ProtocolTests(unittest.TestCase):
             "history_count": 0,
             "summary_loaded": False,
         }
+        app.session_state_mgr = Mock()
         app.agent_client = DummyAgentClient()
         app.threads = 1
         app.read_user_input = Mock(side_effect=["/edit", "/exit"])
@@ -2360,6 +2365,7 @@ class ProtocolTests(unittest.TestCase):
         app.prompt_builder = None
         app.shared_state = {}
         app._lock = threading.Lock()
+        app.session_state_mgr = Mock()
         app.session_state = {
             "session_id": "sessao-2026-04-02-183323",
             "history_count": 0,
@@ -5561,11 +5567,21 @@ class AppProtocolDirectTests(unittest.TestCase):
     def _make_app(self, shared_state=None, session_state=None):
         app = QuimeraApp.__new__(QuimeraApp)
         import threading
+        from unittest.mock import Mock
+        from quimera.app.session_state import SessionStateManager
         app._lock = threading.Lock()
-        app._shared_state_lock = threading.Lock()
-        app._turn_stamps = {}
-        app.shared_state = shared_state if shared_state is not None else {}
-        app.session_state = session_state
+        if session_state is None:
+            ss = shared_state if shared_state is not None else {}
+            mgr = SessionStateManager(storage=Mock(), shared_state=ss)
+            app._shared_state_lock = mgr._lock
+            app._turn_stamps = mgr._turn_stamps
+            app.shared_state = mgr.shared_state
+            app.session_state_mgr = mgr
+        else:
+            app._shared_state_lock = threading.Lock()
+            app._turn_stamps = {}
+            app.shared_state = shared_state if shared_state is not None else {}
+            app.session_state_mgr = session_state
         return app
 
     # --- _get_decisions_logger ---
@@ -5739,7 +5755,7 @@ class AppProtocolDirectTests(unittest.TestCase):
         app._turn_stamps["goal_canonical"] = 0
         app._turn_stamps["current_step"] = 10
 
-        app._advance_shared_state_turn()
+        app.session_state_mgr.advance_turn()
 
         self.assertEqual(app.shared_state["_current_turn"], 11)
         self.assertNotIn("goal_canonical", app.shared_state)
