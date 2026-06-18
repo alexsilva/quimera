@@ -1,15 +1,10 @@
 """Componentes de `quimera.app.core`."""
-import inspect
 import json
 import os
 import platform
-import queue
-import random
-
 import sys
 import threading
 import time
-from collections import defaultdict
 from contextlib import nullcontext
 
 from pathlib import Path
@@ -17,11 +12,11 @@ from pathlib import Path
 from .agent_pool import AgentPool, AgentPoolView
 from .handlers import PromptAwareStderrHandler
 from ..domain.session_state import SessionState
-from .chat_round import ChatRoundContext, ChatRoundOrchestrator
+from .chat_round import ChatRoundOrchestrator
 from .chat_lifecycle import ChatLifecycle
 from .chat_processor import run_chat_loop
 from .protocol import AppProtocol
-from .render_event import RenderEvent
+
 from .session import AppSessionServices, compute_history_hard_limit, trim_history_messages
 from .staging import merge_staging_to_workspace
 from .session_bootstrap import (
@@ -31,12 +26,8 @@ from .session_bootstrap import (
     resolve_workspace_render_ansi_path,
     resolve_workspace_metrics_path,
 )
-from .toolbar import (
-    ActiveModelRequest,
-    ParallelToolbarSnapshotRequest,
-    ToolbarContextRequest,
-    ToolbarManager,
-)
+from .toolbar import ToolbarManager
+from .toolbar_coordinator import ToolbarCoordinator
 from .session_metrics import SessionMetricsService
 from .dispatch import AppDispatchServices
 from .inputs import AppInputServices
@@ -98,6 +89,7 @@ from ..constants import (
 from ..modes import MODES
 from ..shared_state import bootstrap_state_key_stamps, clear_agent_state_for_session_start
 from .session_state import SessionStateManager
+from .agent_failure_tracker import AgentFailureTracker
 from .bug_services import BugServices
 from .command_router import CommandRouter
 from .config import logger
@@ -135,8 +127,6 @@ class QuimeraApp:
         self.agent_pool = AgentPool(self.selected_agents)
         self.threads = int(threads) if threads is not None else 1
         self.toolbar = ToolbarManager(threads=self.threads)
-        self.agent_failures = defaultdict(int)
-        self._agent_failures_lock = threading.Lock()
         self.auto_approve_mutations = auto_approve_mutations
         self._plugin_registry = plugin_registry
         self.workspace = workspace if workspace is not None else Workspace(cwd)
@@ -226,12 +216,13 @@ class QuimeraApp:
             prompt_owner_thread_id_getter=self.input_gate.get_owner_thread_id,
             run_above_active_prompt=self.input_gate.run_in_terminal_message,
         )
+        self._plugin_resolver = PluginResolverAdapter(
+            registry=self._plugin_registry,
+            normalize=normalize_agent_name,
+        )
         self.system_layer = AppSystemLayer(
             display_service=self._display_service,
-            plugin_resolver=PluginResolverAdapter(
-                registry=self._plugin_registry,
-                normalize=self._normalize_agent_name,
-            ),
+            plugin_resolver=self._plugin_resolver,
             prompt_builder=None,
             history_getter=self.session_state_mgr.history_snapshot,
             shared_state_getter=self.session_state_mgr.shared_state_snapshot,
@@ -259,8 +250,6 @@ class QuimeraApp:
             flush_deferred_messages=self.system_layer.flush_deferred_messages,
             output_lock=self._output_lock,
         )
-        self.input_gate.set_toolbar_context_resolver(self._build_input_toolbar_context)
-        self.input_gate.set_theme_cycle_handler(self._cycle_renderer_theme)
         self.renderer.set_prompt_integration(
             is_active_fn=self.input_gate.is_active,
             run_above_fn=self.input_gate.run_in_terminal_message,
@@ -404,8 +393,8 @@ class QuimeraApp:
             get_auto_approve_mutations=lambda: self.auto_approve_mutations,
             get_approval_handler=lambda: self._approval_handler,
             set_approval_handler=lambda handler: setattr(self, "_approval_handler", handler),
-            get_agent_plugin=self.get_agent_plugin,
-            get_available_plugins=self.get_available_plugins,
+            get_agent_plugin=self._plugin_resolver.get,
+            get_available_plugins=lambda: self._plugin_resolver.plugins,
             session_state=self._chat_state,
             get_system_layer=lambda: self.system_layer,
             get_task_classifier=lambda: self.task_classifier,
@@ -426,7 +415,7 @@ class QuimeraApp:
             max_retries=self.MAX_RETRIES,
             retry_backoff_seconds=self.RETRY_BACKOFF_SECONDS,
             get_rate_limit_backoff_seconds=lambda: getattr(self, 'RATE_LIMIT_BACKOFF_SECONDS', 30),
-            delegate=self.delegate,
+            delegate=lambda *args, **kwargs: self.dispatch_services.delegate(*args, **kwargs),
             parse_response=self.parse_response,
             classify_task_execution_result=self.classify_task_execution_result,
             classify_task_review_result=classify_task_review_result,
@@ -448,7 +437,7 @@ class QuimeraApp:
         self.dispatch_services = AppDispatchServices(
             prompt_builder=self.prompt_builder,
             renderer=self.renderer,
-            get_agent_plugin=self.get_agent_plugin,
+            get_agent_plugin=self._plugin_resolver.get,
             session_state=self._chat_state,
             get_execution_mode=lambda: self.execution_mode,
             refresh_task_state=self.task_services.refresh_task_shared_state,
@@ -479,7 +468,7 @@ class QuimeraApp:
             agent_client=self.agent_client,
             turn_manager=self.turn_manager,
             task_services=self.task_services,
-            get_agent_plugin=self.get_agent_plugin,
+            get_agent_plugin=self._plugin_resolver.get,
             behavior_metrics=self.behavior_metrics,
             threads=self.threads,
             session_state=self._chat_state,
@@ -517,6 +506,25 @@ class QuimeraApp:
             redisplay_user_prompt=self._redisplay_user_prompt_if_needed,
             output_lock=self._output_lock,
         )
+        self.toolbar_coordinator = ToolbarCoordinator(
+            toolbar_manager=self.toolbar,
+            agent_pool=self.agent_pool,
+            get_agent_plugin=self._plugin_resolver.get,
+            workspace=self.workspace,
+            get_history=lambda: self.history,
+            storage=self.storage,
+            bug_store=self.bug_store,
+            get_session_started_at=lambda: self._session_started_at,
+            renderer=self.renderer,
+            config=self.config,
+            runtime_state=self.runtime_state,
+            input_gate=self.input_gate,
+            get_pending_input_for=lambda: self._chat_state.pending_input_for,
+            get_execution_mode=lambda: self.execution_mode,
+            threads=self.threads,
+        )
+        self.input_gate.set_toolbar_context_resolver(self.toolbar_coordinator.build_input_toolbar_context)
+        self.input_gate.set_theme_cycle_handler(self.toolbar_coordinator.cycle_renderer_theme)
         self.chat_lifecycle = ChatLifecycle(
             chat_round_orchestrator=self.chat_round_orchestrator,
             system_layer=self.system_layer,
@@ -531,7 +539,7 @@ class QuimeraApp:
             dispatch_services=self.dispatch_services,
             parse_routing=self.parse_routing,
             parse_response=self.parse_response,
-            refresh_parallel_toolbar=self._refresh_parallel_toolbar,
+            refresh_parallel_toolbar=self.toolbar_coordinator.refresh,
         )
         self.bug_services = BugServices(
             bug_store=self.bug_store,
@@ -546,14 +554,26 @@ class QuimeraApp:
             show_warning_message=self.system_layer.show_warning_message,
             show_muted_message=self.system_layer.show_muted_message,
         )
+        self.failure_tracker = AgentFailureTracker(
+            normalize_agent_name=normalize_agent_name,
+            agent_pool=self.agent_pool,
+            release_agent_tasks=lambda name: runtime_tasks.release_agent_tasks(
+                name, db_path=self.tasks_db_path
+            ),
+            record_metric=lambda name: self.session_metrics.record_agent_metric(
+                self, name, "failed", 0
+            ),
+            file_bug=self._file_bug,
+            get_session_id=lambda: getattr(self.storage, "session_id", ""),
+        )
         self.command_router = CommandRouter(
             agent_pool=self.agent_pool,
             renderer=self.renderer,
-            get_active_agent_plugins=self.get_active_agent_plugins,
+            get_active_agent_plugins=lambda: self._plugin_resolver.active_plugins(self.agent_pool),
             set_execution_mode=self._set_execution_mode,
-            normalize_agent_name=self._normalize_agent_name,
+            normalize_agent_name=normalize_agent_name,
             selected_agents=self.selected_agents,
-            get_available_plugins=self.get_available_plugins,
+            get_available_plugins=lambda: self._plugin_resolver.plugins,
         )
         self._ui_subscriptions = self._ui_event_handler.wire_event_ui()
 
@@ -566,61 +586,21 @@ class QuimeraApp:
     def active_agents(self, agents) -> None:
         self.agent_pool.set(list(agents or []))
 
-    # ------------------------------------------------------------------
-    # Propriedades que delegam para _chat_state (compatibilidade)
-    # ------------------------------------------------------------------
-
     @property
-    def round_index(self) -> int:
-        cs = getattr(self, '_chat_state', None)
-        return cs.round_index if cs is not None else getattr(self, '_round_index_raw', 0)
-
-    @round_index.setter
-    def round_index(self, value: int) -> None:
-        cs = getattr(self, '_chat_state', None)
-        if cs is not None:
-            cs.round_index = value
-        else:
-            object.__setattr__(self, '_round_index_raw', value)
-
-    @property
-    def session_call_index(self) -> int:
-        cs = getattr(self, '_chat_state', None)
-        return cs.call_index if cs is not None else getattr(self, '_call_index_raw', 0)
-
-    @session_call_index.setter
-    def session_call_index(self, value: int) -> None:
-        cs = getattr(self, '_chat_state', None)
-        if cs is not None:
-            cs._call_index = value
-        else:
-            object.__setattr__(self, '_call_index_raw', value)
-
-    @property
-    def summary_agent_preference(self) -> str | None:
-        cs = getattr(self, '_chat_state', None)
-        return cs.summary_agent_preference if cs is not None else getattr(self, '_summary_agent_pref_raw', None)
+    def summary_agent_preference(self):
+        """Retorna o agente preferido para sumarização."""
+        chat_state = getattr(self, "_chat_state", None)
+        if chat_state is not None:
+            return chat_state.summary_agent_preference
+        return self.__dict__.get("_summary_agent_preference_fallback")
 
     @summary_agent_preference.setter
-    def summary_agent_preference(self, value: str | None) -> None:
-        cs = getattr(self, '_chat_state', None)
-        if cs is not None:
-            cs.summary_agent_preference = value
+    def summary_agent_preference(self, value):
+        chat_state = getattr(self, "_chat_state", None)
+        if chat_state is not None:
+            chat_state.summary_agent_preference = value
         else:
-            object.__setattr__(self, '_summary_agent_pref_raw', value)
-
-    @property
-    def _pending_input_for(self) -> str | None:
-        cs = getattr(self, '_chat_state', None)
-        return cs.pending_input_for if cs is not None else getattr(self, '_pending_input_for_raw', None)
-
-    @_pending_input_for.setter
-    def _pending_input_for(self, value: str | None) -> None:
-        cs = getattr(self, '_chat_state', None)
-        if cs is not None:
-            cs.pending_input_for = value
-        else:
-            object.__setattr__(self, '_pending_input_for_raw', value)
+            self.__dict__["_summary_agent_preference_fallback"] = value
 
     @staticmethod
     def _available_internal_commands() -> list[str]:
@@ -656,7 +636,7 @@ class QuimeraApp:
         """Retorna todos os comandos disponíveis para autocomplete."""
         commands = set(self._available_internal_commands())
         for agent_name in self.agent_pool:
-            plugin = self.get_agent_plugin(agent_name)
+            plugin = self._plugin_resolver.get(agent_name)
             if plugin and plugin.prefix:
                 commands.add(plugin.prefix)
         return sorted(commands)
@@ -679,29 +659,109 @@ class QuimeraApp:
 
     def _resolve_plugin_style(self, agent: str):
         """Resolve (color, label) para o agente; retorna None se não encontrado."""
-        plugin = self.get_agent_plugin(agent)
+        plugin = self._plugin_resolver.get(agent)
         return plugin.render_style if plugin else None
 
-    @staticmethod
-    def _normalize_agent_name(agent):
-        return normalize_agent_name(agent)
+    def configure_mcp_socket(self, socket_path: str | None, token: str | None = None) -> None:
+        """Propaga socket MCP e token para os plugins dos agentes ativos."""
+        for plugin in self.get_active_agent_plugins():
+            config_setter = getattr(plugin, "set_mcp_socket_config", None)
+            if callable(config_setter):
+                config_setter(socket_path, token)
+            else:
+                path_setter = getattr(plugin, "set_mcp_socket_path", None)
+                if callable(path_setter):
+                    path_setter(socket_path)
 
-    def get_agent_plugin(self, agent_name: str):
-        """Resolve um plugin pelo nome canônico do agente."""
-        normalized_name = self._normalize_agent_name(agent_name)
-        if not normalized_name:
-            return None
-        reg = getattr(self, '_plugin_registry', None)
-        if reg is not None:
-            return reg.get(normalized_name)
-        return plugins.get(normalized_name)
+    def configure_mcp_http(self, url: str | None, token: str | None = None) -> None:
+        """Propaga endpoint MCP HTTP e token para os plugins dos agentes ativos."""
+        for plugin in self.get_active_agent_plugins():
+            config_setter = getattr(plugin, "set_mcp_http_config", None)
+            if callable(config_setter):
+                config_setter(url, token)
+
+    def get_agent_plugin(self, agent):
+        """Retorna o plugin associado ao agente, ou None."""
+        resolver = getattr(self, "_plugin_resolver", None)
+        if resolver is not None:
+            return resolver.get(agent)
+        return plugins.get(agent)
 
     def get_available_plugins(self) -> list:
-        """Retorna a lista atual de plugins conhecidos pela aplicação."""
-        reg = getattr(self, '_plugin_registry', None)
-        if reg is not None:
-            return list(reg.all_plugins())
-        return list(plugins.all_plugins())
+        """Retorna todos os plugins disponíveis."""
+        resolver = getattr(self, "_plugin_resolver", None)
+        if resolver is not None:
+            return resolver.plugins
+        return plugins.all_plugins()
+
+    def get_active_agent_plugins(self) -> list:
+        """Retorna plugins dos agentes ativos no pool."""
+        resolver = getattr(self, "_plugin_resolver", None)
+        if resolver is not None:
+            return resolver.active_plugins(self.agent_pool)
+        agent_pool = getattr(self, "agent_pool", None)
+        if agent_pool is None:
+            return []
+        return [p for name in (agent_pool.agents or []) if (p := plugins.get(name)) is not None]
+
+    def delegate(self, agent, **options):
+        """Delega uma mensagem para o agente especificado."""
+        return self.dispatch_services.delegate(agent, **options)
+
+    def _refresh_parallel_toolbar(self) -> None:
+        """Solicita redraw do prompt de paralelismo."""
+        coordinator = getattr(self, "toolbar_coordinator", None)
+        if coordinator is not None:
+            coordinator.refresh()
+
+    def _get_parallel_toolbar_state(self) -> dict:
+        """Retorna cópia do estado de paralelismo da toolbar."""
+        coordinator = getattr(self, "toolbar_coordinator", None)
+        if coordinator is not None:
+            return coordinator.get_parallel_toolbar_state()
+        toolbar = getattr(self, "toolbar", None)
+        if toolbar is not None:
+            return toolbar._get_parallel_toolbar_state()
+        return {}
+
+    def _set_parallel_toolbar_state(
+        self,
+        *,
+        active: int | None = None,
+        queued: int | None = None,
+        capacity: int | None = None,
+        active_agents=None,
+    ) -> None:
+        """Atualiza o estado de paralelismo na toolbar."""
+        coordinator = getattr(self, "toolbar_coordinator", None)
+        if coordinator is not None:
+            coordinator.set_parallel_toolbar_state(
+                active=active,
+                queued=queued,
+                capacity=capacity,
+                active_agents=active_agents,
+            )
+
+    def _resolve_active_model_label(self) -> str:
+        """Resolve o modelo ativo para exibição na toolbar."""
+        coordinator = getattr(self, "toolbar_coordinator", None)
+        if coordinator is not None:
+            return coordinator.resolve_active_model_label()
+        return "unknown"
+
+    def _resolve_next_responder_label(self) -> str:
+        """Resolve o agente que responde na próxima rodada."""
+        coordinator = getattr(self, "toolbar_coordinator", None)
+        if coordinator is not None:
+            return coordinator.resolve_next_responder_label()
+        return "unknown"
+
+    def _build_input_toolbar_context(self) -> dict:
+        """Retorna contexto da toolbar do input."""
+        coordinator = getattr(self, "toolbar_coordinator", None)
+        if coordinator is not None:
+            return coordinator.build_input_toolbar_context()
+        return {}
 
     def _has_mcp_pending(self) -> bool:
         """Retorna True enquanto o MCP server interno tem tool calls em execução.
@@ -714,35 +774,6 @@ class QuimeraApp:
         server = getattr(self, "internal_mcp_server", None)
         return bool(server and server.has_pending_calls)
 
-    def configure_mcp_socket(self, socket_path: str | None, token: str | None = None) -> None:
-        """Propaga o socket MCP e token para os plugins dos agentes ativos na sessão."""
-        for plugin in self.get_active_agent_plugins():
-            config_setter = getattr(plugin, "set_mcp_socket_config", None)
-            if callable(config_setter):
-                config_setter(socket_path, token)
-            else:
-                path_setter = getattr(plugin, "set_mcp_socket_path", None)
-                if callable(path_setter):
-                    path_setter(socket_path)
-
-    def configure_mcp_http(self, url: str | None, token: str | None = None) -> None:
-        """Propaga endpoint e token MCP HTTP para plugins de agentes ativos."""
-        # O MCP HTTP externo é apenas para clientes remotos; plugins CLI locais
-        # devem receber o MCP socket interno via ``configure_mcp_socket``.
-        for plugin in self.get_active_agent_plugins():
-            config_setter = getattr(plugin, "set_mcp_http_config", None)
-            if callable(config_setter):
-                config_setter(url, token)
-
-    def get_active_agent_plugins(self) -> list:
-        """Retorna os plugins válidos dos agentes ativos na sessão."""
-        active_plugins = []
-        for agent_name in self.agent_pool:
-            plugin = self.get_agent_plugin(agent_name)
-            if plugin is not None:
-                active_plugins.append(plugin)
-        return active_plugins
-
     def __del__(self):
         """Libera recursos associados à instância."""
         try:
@@ -752,45 +783,15 @@ class QuimeraApp:
 
     def record_success(self, agent):
         """Reseta o contador de falhas de um agente após resposta bem-sucedida."""
-        agent_name = self._normalize_agent_name(agent)
-        if not agent_name:
-            return
-        with self._agent_failures_lock:
-            if self.agent_failures.get(agent_name, 0) > 0:
-                self.agent_failures[agent_name] = 0
-                logger.debug("agent %s failure counter reset after success", agent_name)
+        tracker = getattr(self, "failure_tracker", None)
+        if tracker is not None:
+            tracker.record_success(agent)
 
     def record_failure(self, agent):
-        """Registra failure."""
-        agent_name = self._normalize_agent_name(agent)
-        if not agent_name:
-            return
-        with self._agent_failures_lock:
-            self.agent_failures[agent_name] += 1
-            failures = self.agent_failures[agent_name]
-        if failures >= 2:
-            if agent_name in self.agent_pool:
-                self.agent_pool.remove(agent_name)
-                logger.warning("agent %s removed after %d failures", agent_name, failures)
-                try:
-                    runtime_tasks.release_agent_tasks(agent_name, db_path=self.tasks_db_path)
-                except Exception:
-                    pass
-        session_metrics = getattr(self, "session_metrics", None)
-        if session_metrics is not None:
-            session_metrics.record_agent_metric(self, agent_name, "failed", 0)
-        # Emite bug apenas na transição para o estado de burst (2 falhas consecutivas),
-        # evitando duplicação de log/evento para a mesma sequência contínua de falhas.
-        if failures == 2:
-            self._file_bug(
-                session_id=getattr(self.storage, "session_id", ""),
-                category="agent_failure_burst",
-                summary=f"Agente {agent_name} acumulou falhas consecutivas",
-                severity="medium",
-                confidence=0.85,
-                description=f"Falhas consecutivas atuais: {failures}",
-                agent=agent_name,
-            )
+        """Registra failure e aplica política de remoção via AgentFailureTracker."""
+        tracker = getattr(self, "failure_tracker", None)
+        if tracker is not None:
+            tracker.record_failure(agent)
 
     def _file_bug(
         self,
@@ -858,6 +859,10 @@ class QuimeraApp:
             path_text = f"~{path_text[len(home_dir):]}"
         path_text = self._shorten_middle(path_text, self._SESSION_LOG_DISPLAY_MAX_CHARS)
         return MSG_SESSION_LOG.format(path_text)
+
+    def _do_process_chat_message(self, user: str) -> None:
+        """Executa processamento de uma mensagem de chat via ChatLifecycle."""
+        self.chat_lifecycle._do_process_message(user)
 
     def _wire_event_ui(self) -> None:
         """Conecta eventos de domínio à renderização UI."""
@@ -996,47 +1001,6 @@ class QuimeraApp:
             show_output=show_output,
         )
 
-    def delegate(self, agent, **options):
-        """Fachada compatível para despacho de agentes."""
-        if hasattr(self, "_delegate"):
-            dispatch_options = dict(options)
-            silent = dispatch_options.pop("silent", False)
-            persist_history = dispatch_options.pop("persist_history", True)
-            show_output = dispatch_options.pop("show_output", True)
-            call_options = {"silent": silent, **dispatch_options}
-            try:
-                signature = inspect.signature(self._delegate)
-            except (TypeError, ValueError):
-                filtered_options = call_options
-            else:
-                accepts_var_kwargs = any(
-                    parameter.kind == inspect.Parameter.VAR_KEYWORD
-                    for parameter in signature.parameters.values()
-                )
-                if accepts_var_kwargs:
-                    filtered_options = call_options
-                else:
-                    allowed = {
-                        name
-                        for name, parameter in signature.parameters.items()
-                        if parameter.kind in (
-                            inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                            inspect.Parameter.KEYWORD_ONLY,
-                        )
-                    }
-                    filtered_options = {
-                        key: value for key, value in call_options.items() if key in allowed
-                    }
-            response = self._delegate(agent, **filtered_options)
-            return self.resolve_agent_response(
-                agent,
-                response,
-                silent=silent,
-                persist_history=persist_history,
-                show_output=show_output,
-            )
-        return self.dispatch_services.delegate(agent, **options)
-
     def print_response(self, agent, response):
         """Fachada compatível para renderização de respostas."""
         return self.dispatch_services.print_response(agent, response)
@@ -1045,106 +1009,6 @@ class QuimeraApp:
         """Retorna o prompt visível ao humano com nome e modo atual."""
         active_mode = getattr(getattr(self, "execution_mode", None), "name", None)
         return PromptFormatter.format_user_prompt(self.user_name, active_mode)
-
-    def _resolve_active_model_label(self) -> str:
-        """Resolve o modelo ativo a partir do primeiro plugin/agente ativo."""
-        workspace = getattr(self, "workspace", None)
-        request = ActiveModelRequest(
-            primary_agent=self.agent_pool.primary,
-            get_agent_plugin=self.get_agent_plugin,
-            workspace_cwd=str(getattr(workspace, "cwd", ".")),
-        )
-        return self.toolbar.resolve_active_model_label(request)
-
-    def _resolve_next_responder_label(self) -> str:
-        """Resolve o agente que deve responder na próxima rodada."""
-        return self.toolbar.resolve_next_responder_label(
-            getattr(self, "_pending_input_for", ""),
-            self.agent_pool.primary,
-        )
-
-    def _cycle_renderer_theme(self) -> None:
-        """Avança para o próximo tema no TerminalRenderer e persiste na config."""
-        self.toolbar.cycle_renderer_theme(
-            getattr(self, "renderer", None),
-            getattr(self, "config", None),
-        )
-
-    def _build_input_toolbar_context(self) -> dict[str, str]:
-        """Retorna dados de contexto exibidos na toolbar do input."""
-        workspace = getattr(self, "workspace", None)
-        history = getattr(self, "history", None)
-        session_id = getattr(getattr(self, "storage", None), "session_id", "")
-
-        def _query_open_bugs(current_session_id: str) -> int:
-            bug_store = getattr(self, "bug_store", None)
-            if bug_store is None:
-                return 0
-            open_bugs = bug_store.query(
-                session_id=current_session_id, status="open", limit=100
-            ) if current_session_id else bug_store.query(status="open", limit=100)
-            return len(open_bugs or [])
-
-        request = ToolbarContextRequest(
-            responder=self._resolve_next_responder_label(),
-            model=self._resolve_active_model_label(),
-            branch=str(getattr(workspace, "branch", "") or ""),
-            elapsed_seconds=time.monotonic() - getattr(self, "_session_started_at", time.monotonic()),
-            theme=str(getattr(getattr(self, "renderer", None), "theme_name", "") or ""),
-            mode=str(getattr(getattr(self, "execution_mode", None), "name", "") or ""),
-            threads=int(getattr(self, "threads", 1) or 1),
-            history_turns=len(history) if history is not None else None,
-            session_id=str(session_id or ""),
-            query_open_bugs=_query_open_bugs,
-        )
-        return self.toolbar.build_input_toolbar_context(
-            request,
-            self._get_parallel_toolbar_state(),
-        )
-
-    def _set_parallel_toolbar_state(
-        self,
-        *,
-        active: int | None = None,
-        queued: int | None = None,
-        capacity: int | None = None,
-        active_agents: list[str] | tuple[str, ...] | None = None,
-    ) -> None:
-        """Atualiza o snapshot de paralelismo exibido na toolbar do prompt."""
-        self.toolbar.set_parallel_toolbar_state(
-            active=active,
-            queued=queued,
-            capacity=capacity,
-            active_agents=active_agents,
-        )
-
-    def _get_parallel_toolbar_state(self) -> dict[str, object]:
-        """Retorna uma cópia do estado de paralelismo da toolbar.
-
-        Usa ``_chat_inflight_count`` como fonte de verdade para slots ativos
-        e deriva ``queued`` do tamanho da fila do chat quando disponível,
-        garantindo que a toolbar reflita a ocupação real em runtime.
-        """
-        active = self.runtime_state.get_chat_inflight_count()
-        chat_queue = getattr(self.runtime_state, "chat_queue", None)
-        queued_from_queue: int | None = None
-        if chat_queue is not None:
-            try:
-                queued_from_queue = max(0, int(chat_queue.qsize()))
-            except Exception:
-                queued_from_queue = None
-        request = ParallelToolbarSnapshotRequest(
-            inflight_count=active,
-            queued_count=queued_from_queue,
-        )
-        return self.toolbar.build_parallel_toolbar_state(request)
-
-    def _refresh_parallel_toolbar(self) -> None:
-        """Solicita redraw do prompt quando o estado de paralelismo muda."""
-        try:
-            ToolbarManager.refresh_parallel_toolbar(getattr(self, "input_gate", None))
-        except Exception:
-            logger.debug("falha ao redesenhar toolbar de paralelismo", exc_info=True)
 
     def read_user_input(self, prompt, timeout: int):
         """Fachada compatível para leitura de input."""
@@ -1162,22 +1026,6 @@ class QuimeraApp:
         """Fachada compatível para comandos slash."""
         return self.system_layer.handle_command(user_input)
 
-    def _do_process_chat_message(self, user):
-        """Executa uma rodada de chat com o contexto completo."""
-        orchestrator = self.chat_round_orchestrator
-        ctx = ChatRoundContext(
-            session_services=getattr(self, "session_services", None),
-            task_services=getattr(self, "task_services", None),
-            renderer=getattr(self, "renderer", None),
-            session_state=getattr(self, "_chat_state", None),
-            parse_routing=self.parse_routing,
-            parse_response=self.parse_response,
-            dispatch_services=getattr(self, "dispatch_services", None),
-            show_system_message=self.system_layer.show_system_message,
-            ui_queue=getattr(self, "_ui_event_queue", None),
-        )
-        orchestrator.process(user, ctx=ctx)
-
     def parse_response(self, response, **_kwargs):
         """Interpreta response."""
         if getattr(self.protocol, "_shared_state", None) is not self.shared_state:
@@ -1192,21 +1040,6 @@ class QuimeraApp:
         else:
             os.environ["QUIMERA_CURRENT_JOB_ID"] = previous
 
-    def _process_chat_message(self, user):
-        """Executa process chat message com controle de turno."""
-        agent_client = getattr(self, "agent_client", None)
-        if agent_client is not None:
-            agent_client.reset_cancel_state()
-        try:
-            self._do_process_chat_message(user)
-        finally:
-            if (
-                hasattr(self, "turn_manager")
-                and self.turn_manager.is_ai_turn
-                and self.runtime_state.get_chat_inflight_count() <= 1
-            ):
-                self.turn_manager.next_turn()
-
     def _should_render_ui_event_above_prompt(self) -> bool:
         """Retorna True quando há prompt ativo controlado por outra thread."""
         return self._ui_event_handler._should_render_ui_event_above_prompt()
@@ -1214,71 +1047,6 @@ class QuimeraApp:
     def _run_ui_event_above_prompt(self, callback) -> bool:
         """Tenta renderizar callback acima do prompt ativo via InputGate."""
         return self._ui_event_handler._run_ui_event_above_prompt(callback)
-
-    def _handle_local_processing_interrupt(self) -> None:
-        """Cancela só o processamento atual e devolve o chat ao input."""
-        agent_client = getattr(self, "agent_client", None)
-        if agent_client is not None:
-            agent_client.cancel_active_work()
-        if hasattr(self, "renderer") and self.renderer is not None:
-            self.renderer.reset_visual_state()
-        if hasattr(self, "turn_manager") and self.turn_manager is not None:
-            self.turn_manager.reset()
-        self.system_layer.show_muted_message("[cancelado] pelo usuário")
-        self._refresh_parallel_toolbar()
-
-    def _process_async_chat_message(self, user):
-        """Processa um prompt vindo da fila assíncrona e libera o slot ao final."""
-        try:
-            self._process_chat_message(user)
-        finally:
-            remaining = self.runtime_state.decrement_chat_inflight(self._refresh_parallel_toolbar)
-            self.runtime_state.release_chat_slot()
-            if remaining == 0 and hasattr(self, "turn_manager") and self.turn_manager.is_ai_turn:
-                self.turn_manager.next_turn()
-
-    def _submit_async_chat_message(self, user):
-        """Submete um prompt já reservado para a pool de execução do chat."""
-        runtime_state = self.runtime_state
-        chat_executor = getattr(runtime_state, "chat_executor", None)
-        if chat_executor is None:
-            raise RuntimeError("chat executor não inicializado")
-        try:
-            chat_executor.submit(self._process_async_chat_message, user)
-            self._refresh_parallel_toolbar()
-        except Exception:
-            runtime_state.decrement_chat_inflight(self._refresh_parallel_toolbar)
-            runtime_state.release_chat_slot()
-            self._refresh_parallel_toolbar()
-            raise
-
-    def _process_sync_chat_message_with_slot(self, user):
-        """Executa um prompt no thread principal ocupando um slot de concorrência."""
-        runtime_state = self.runtime_state
-        slot_semaphore = getattr(runtime_state, "chat_slot_semaphore", None)
-        if slot_semaphore is not None:
-            slot_semaphore.acquire()
-        runtime_state.increment_chat_inflight(self._refresh_parallel_toolbar)
-        try:
-            self._process_chat_message(user)
-        finally:
-            runtime_state.decrement_chat_inflight(self._refresh_parallel_toolbar)
-            runtime_state.release_chat_slot()
-
-    def _process_chat_queue(self, chat_queue: queue.Queue):
-        """Executa process chat queue."""
-        while True:
-            user = chat_queue.get()
-            try:
-                if user is None:
-                    return
-                self._process_chat_message(user)
-            finally:
-                chat_queue.task_done()
-
-    def _drain_ui_events(self, ui_queue: "queue.Queue") -> None:
-        """Consome todos os RenderEvents pendentes na fila e chama renderer na main thread."""
-        self._ui_event_handler.drain_ui_events(ui_queue)
 
     def run(self):
         """Executa o loop interativo do chat multiagente."""

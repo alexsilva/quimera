@@ -17,7 +17,7 @@ from quimera.agents import AgentClient
 from quimera.app import QuimeraApp
 from quimera.app.chat_round import ChatRoundOrchestrator
 from quimera.app.agent_pool import AgentPool
-from quimera.app.core import TurnManager
+from quimera.app.core import TurnManager, normalize_agent_name
 from quimera.app.staging import merge_staging_to_workspace
 from quimera.app.dispatch import AppDispatchServices
 from quimera.app.inputs import AppInputServices, read_from_editor, read_user_input_with_timeout
@@ -370,35 +370,42 @@ def _materialize_chat_lifecycle(app):
 
     class _AppBridgeLifecycle(ChatLifecycle):
         def _do_process_message(self, user):
+            do_fn = app.__dict__.get('_do_process_chat_message')
+            if callable(do_fn):
+                do_fn(user)
+                return
             for attr in ('session_services', 'task_services', 'dispatch_services', 'agent_client', 'parse_routing', 'parse_response'):
                 val = getattr(app, attr, None)
                 if val is not None:
                     setattr(self, f'_{attr}', val)
+            chat_state = getattr(app, '_chat_state', None)
+            if chat_state is not None:
+                self._session_state = chat_state
             super()._do_process_message(user)
 
         def process_sync_message_with_slot(self, user):
-            fn = getattr(app, '_process_sync_chat_message_with_slot', None)
+            fn = app.__dict__.get('_process_sync_chat_message_with_slot')
             if callable(fn):
                 fn(user)
             else:
                 super().process_sync_message_with_slot(user)
 
         def handle_local_interrupt(self):
-            fn = getattr(app, '_handle_local_processing_interrupt', None)
+            fn = app.__dict__.get('_handle_local_processing_interrupt')
             if callable(fn):
                 fn()
             else:
                 super().handle_local_interrupt()
 
         def submit_async_message(self, user):
-            fn = getattr(app, '_submit_async_chat_message', None)
+            fn = app.__dict__.get('_submit_async_chat_message')
             if callable(fn):
                 fn(user)
             else:
                 super().submit_async_message(user)
 
         def drain_ui_events(self, ui_queue):
-            fn = getattr(app, '_drain_ui_events', None)
+            fn = app.__dict__.get('_drain_ui_events')
             if callable(fn):
                 fn(ui_queue)
             else:
@@ -2489,11 +2496,9 @@ class ProtocolTests(unittest.TestCase):
         app.parse_routing = lambda user: (AGENT_CLAUDE, "faça o teste pelo chat", True)
         app.parse_response = QuimeraApp.parse_response.__get__(app, QuimeraApp)
         app.resolve_agent_response = QuimeraApp.resolve_agent_response.__get__(app, QuimeraApp)
-        app.delegate = QuimeraApp.delegate.__get__(app, QuimeraApp)
         app.task_services = Mock()
         app.task_services.refresh_task_shared_state = Mock()
         app.task_services.truncate_payload = lambda payload: payload
-        app.dispatch_services.delegate = app.delegate
         app.dispatch_services.print_response = lambda agent, response: printed.append((agent, response))
         app.session_services = Mock()
         app.session_services.persist_message = lambda role, content: persisted.append((role, content))
@@ -2517,6 +2522,7 @@ class ProtocolTests(unittest.TestCase):
                 silent=False,
                 from_agent=None,
                 prompt_kind=None,
+                **_kwargs,
         ):
             calls.append((agent, protocol_mode, delegation_only, from_agent, delegation))
             return next(responses)
@@ -3217,8 +3223,6 @@ class PluginTests(unittest.TestCase):
         app._lock = threading.Lock()
         app._output_lock = threading.Lock()
         app._counter_lock = threading.Lock()
-        app.agent_failures = defaultdict(int)
-        app._agent_failures_lock = threading.Lock()
         app.prompt_builder = Mock()
         app.prompt_builder.build.return_value = "dummy prompt"
         app.agent_client = Mock()
@@ -3823,9 +3827,8 @@ class PluginTests(unittest.TestCase):
         )
         app.get_available_plugins = Mock(return_value=[plugin])
 
-        with patch("quimera.app.core.random.choice", return_value=AGENT_CLAUDE):
-            materialize_internal_services(app)
-            agent, message, explicit = app.parse_routing("oi")
+        materialize_internal_services(app)
+        agent, message, explicit = app.parse_routing("oi")
 
         self.assertEqual(agent, AGENT_CLAUDE)
         self.assertEqual(message, "oi")
@@ -3835,13 +3838,19 @@ class PluginTests(unittest.TestCase):
 
     def test_record_failure_accepts_agent_plugin_instance(self):
         """Verifica que record failure accepts agent plugin instance."""
-        app = QuimeraApp.__new__(QuimeraApp)
+        from quimera.app.agent_failure_tracker import AgentFailureTracker
         from quimera.app.agent_pool import AgentPool
-        app.agent_pool = AgentPool([AGENT_CLAUDE])
-        app.active_agents = [AGENT_CLAUDE]
-        app.agent_failures = defaultdict(int)
-        app._agent_failures_lock = threading.Lock()
-        app.session_metrics = Mock()
+
+        agent_pool = AgentPool([AGENT_CLAUDE])
+        record_metric = Mock()
+        tracker = AgentFailureTracker(
+            normalize_agent_name=normalize_agent_name,
+            agent_pool=agent_pool,
+            release_agent_tasks=lambda _name: None,
+            record_metric=record_metric,
+            file_bug=None,
+            get_session_id=lambda: "test",
+        )
         plugin = AgentPlugin(
             name=AGENT_CLAUDE,
             prefix="/claude",
@@ -3851,11 +3860,11 @@ class PluginTests(unittest.TestCase):
             supports_tools=True,
         )
 
-        app.record_failure(plugin)
+        tracker.record_failure(plugin)
 
-        self.assertEqual(app.agent_failures[AGENT_CLAUDE], 1)
-        self.assertEqual(list(app.agent_failures.keys()), [AGENT_CLAUDE])
-        app.session_metrics.record_agent_metric.assert_called_once_with(app, AGENT_CLAUDE, "failed", 0)
+        self.assertEqual(tracker.failures[AGENT_CLAUDE], 1)
+        self.assertEqual(list(tracker.failures.keys()), [AGENT_CLAUDE])
+        record_metric.assert_called_once_with(AGENT_CLAUDE)
 
     def test_delegation_format_omits_priority_when_normal(self):
         """Verifica que delegation format omits priority when normal."""
@@ -3875,8 +3884,6 @@ class PluginTests(unittest.TestCase):
         from quimera.app.agent_pool import AgentPool
         app.agent_pool = AgentPool(["claude"])
         app.active_agents = ["claude"]
-        app.agent_failures = {}
-        app._agent_failures_lock = threading.Lock()
         app.session_metrics = SessionMetricsService()
         app.session_state = {}
         call_count = [0]
@@ -4933,8 +4940,6 @@ class PluginTests(unittest.TestCase):
             "total_latency": 0.0,
             "agent_metrics": {},
         }
-        app.agent_failures = {}
-        app._agent_failures_lock = threading.Lock()
         app.session_metrics = SessionMetricsService()
 
         # Simulate successful call to claude
@@ -5250,8 +5255,6 @@ class MetricsFeedbackTests(unittest.TestCase):
             "total_latency": 0.0,
             "agent_metrics": {},
         }
-        app.agent_failures = {}
-        app._agent_failures_lock = threading.Lock()
         app.behavior_metrics = BehaviorMetricsTracker()
         app.session_metrics = SessionMetricsService()
 

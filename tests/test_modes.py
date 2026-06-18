@@ -358,6 +358,38 @@ class TestFormatUserPrompt(unittest.TestCase):
         self.assertEqual(app._format_user_prompt(), ">>> ")
 
 
+def _attach_toolbar_coordinator(app):
+    """Cria e anexa um ToolbarCoordinator mínimo ao stub de app.
+
+    Usa os atributos já presentes no stub (toolbar, agent_pool, runtime_state, etc.)
+    e delega get_agent_plugin ao método do app para que mocks de instância funcionem.
+    """
+    from quimera.app.toolbar_coordinator import ToolbarCoordinator
+    from quimera.app.agent_pool import AgentPool
+    from quimera.app.runtime_state import AppRuntimeState
+    if not hasattr(app, "runtime_state"):
+        app.runtime_state = AppRuntimeState()
+    coordinator = ToolbarCoordinator(
+        toolbar_manager=app.toolbar,
+        agent_pool=getattr(app, "agent_pool", AgentPool([])),
+        get_agent_plugin=lambda name: app.get_agent_plugin(name),
+        workspace=getattr(app, "workspace", MagicMock()),
+        get_history=lambda: getattr(app, "history", None),
+        storage=getattr(app, "storage", MagicMock(session_id="")),
+        bug_store=getattr(app, "bug_store", None),
+        get_session_started_at=lambda: getattr(app, "_session_started_at", 0.0),
+        renderer=getattr(app, "renderer", MagicMock()),
+        config=getattr(app, "config", MagicMock()),
+        runtime_state=app.runtime_state,
+        input_gate=getattr(app, "input_gate", MagicMock()),
+        get_pending_input_for=lambda: getattr(app, "_pending_input_for", None),
+        get_execution_mode=lambda: getattr(app, "execution_mode", None),
+        threads=getattr(app, "threads", 1),
+    )
+    app.toolbar_coordinator = coordinator
+    return coordinator
+
+
 class TestInputContextAndWelcome(unittest.TestCase):
     def test_build_input_toolbar_context_exposes_responder_and_model(self):
         from quimera.app.core import QuimeraApp
@@ -375,10 +407,7 @@ class TestInputContextAndWelcome(unittest.TestCase):
             {"active": 0, "queued": 0, "capacity": 0, "active_agents": ()}
         )
         app._pending_input_for = None
-        app._resolve_active_model_label = QuimeraApp._resolve_active_model_label.__get__(app, QuimeraApp)
-        app._resolve_next_responder_label = QuimeraApp._resolve_next_responder_label.__get__(app, QuimeraApp)
-        app._get_parallel_toolbar_state = QuimeraApp._get_parallel_toolbar_state.__get__(app, QuimeraApp)
-        app._build_input_toolbar_context = QuimeraApp._build_input_toolbar_context.__get__(app, QuimeraApp)
+        _attach_toolbar_coordinator(app)
 
         context = app._build_input_toolbar_context()
         self.assertEqual(context["responder"], "unknown")
@@ -403,10 +432,7 @@ class TestInputContextAndWelcome(unittest.TestCase):
         app.runtime_state.chat_inflight_count = 1
         app.runtime_state.chat_inflight_lock = threading.Lock()
         app._pending_input_for = None
-        app._resolve_active_model_label = QuimeraApp._resolve_active_model_label.__get__(app, QuimeraApp)
-        app._resolve_next_responder_label = QuimeraApp._resolve_next_responder_label.__get__(app, QuimeraApp)
-        app._get_parallel_toolbar_state = QuimeraApp._get_parallel_toolbar_state.__get__(app, QuimeraApp)
-        app._build_input_toolbar_context = QuimeraApp._build_input_toolbar_context.__get__(app, QuimeraApp)
+        _attach_toolbar_coordinator(app)
 
         context = app._build_input_toolbar_context()
         self.assertNotIn("threads", context)
@@ -429,10 +455,7 @@ class TestInputContextAndWelcome(unittest.TestCase):
         )
         app.runtime_state.chat_inflight_count = 0
         app._pending_input_for = None
-        app._resolve_active_model_label = QuimeraApp._resolve_active_model_label.__get__(app, QuimeraApp)
-        app._resolve_next_responder_label = QuimeraApp._resolve_next_responder_label.__get__(app, QuimeraApp)
-        app._get_parallel_toolbar_state = QuimeraApp._get_parallel_toolbar_state.__get__(app, QuimeraApp)
-        app._build_input_toolbar_context = QuimeraApp._build_input_toolbar_context.__get__(app, QuimeraApp)
+        _attach_toolbar_coordinator(app)
 
         context = app._build_input_toolbar_context()
         self.assertEqual(context["parallel"], "0/2")
@@ -454,10 +477,7 @@ class TestInputContextAndWelcome(unittest.TestCase):
             {"active": 0, "queued": 0, "capacity": 0, "active_agents": ()}
         )
         app._pending_input_for = None
-        app._resolve_active_model_label = QuimeraApp._resolve_active_model_label.__get__(app, QuimeraApp)
-        app._resolve_next_responder_label = QuimeraApp._resolve_next_responder_label.__get__(app, QuimeraApp)
-        app._get_parallel_toolbar_state = QuimeraApp._get_parallel_toolbar_state.__get__(app, QuimeraApp)
-        app._build_input_toolbar_context = QuimeraApp._build_input_toolbar_context.__get__(app, QuimeraApp)
+        _attach_toolbar_coordinator(app)
 
         context = app._build_input_toolbar_context()
         self.assertEqual(context.get("turns"), "3")
@@ -478,10 +498,7 @@ class TestInputContextAndWelcome(unittest.TestCase):
             {"active": 0, "queued": 0, "capacity": 0, "active_agents": ()}
         )
         app._pending_input_for = None
-        app._resolve_active_model_label = QuimeraApp._resolve_active_model_label.__get__(app, QuimeraApp)
-        app._resolve_next_responder_label = QuimeraApp._resolve_next_responder_label.__get__(app, QuimeraApp)
-        app._get_parallel_toolbar_state = QuimeraApp._get_parallel_toolbar_state.__get__(app, QuimeraApp)
-        app._build_input_toolbar_context = QuimeraApp._build_input_toolbar_context.__get__(app, QuimeraApp)
+        _attach_toolbar_coordinator(app)
 
         context = app._build_input_toolbar_context()
         self.assertNotIn("turns", context)
@@ -503,14 +520,10 @@ class TestInputContextAndWelcome(unittest.TestCase):
             {"active": 0, "queued": 0, "capacity": 0, "active_agents": ()}
         )
         app._pending_input_for = None
-        app._resolve_active_model_label = QuimeraApp._resolve_active_model_label.__get__(app, QuimeraApp)
-        app._resolve_next_responder_label = QuimeraApp._resolve_next_responder_label.__get__(app, QuimeraApp)
-        app._get_parallel_toolbar_state = QuimeraApp._get_parallel_toolbar_state.__get__(app, QuimeraApp)
-        app._build_input_toolbar_context = QuimeraApp._build_input_toolbar_context.__get__(app, QuimeraApp)
-
         # bug_store que lança exceção no query()
         app.bug_store = MagicMock()
         app.bug_store.query.side_effect = RuntimeError("query falhou")
+        _attach_toolbar_coordinator(app)
 
         context = app._build_input_toolbar_context()
         self.assertEqual(context.get("turns"), "1")
@@ -535,12 +548,9 @@ class TestInputContextAndWelcome(unittest.TestCase):
         app.storage = MagicMock(session_id="sessao-12345678")
         app.bug_store = MagicMock()
         app.bug_store.query.return_value = [MagicMock(), MagicMock()]
-        app._toolbar_bug_count_cache = {"session_id": "", "count": 0, "ts": 0.0}
-        app._toolbar_bug_count_ttl_sec = 30.0
-        app._resolve_active_model_label = QuimeraApp._resolve_active_model_label.__get__(app, QuimeraApp)
-        app._resolve_next_responder_label = QuimeraApp._resolve_next_responder_label.__get__(app, QuimeraApp)
-        app._get_parallel_toolbar_state = QuimeraApp._get_parallel_toolbar_state.__get__(app, QuimeraApp)
-        app._build_input_toolbar_context = QuimeraApp._build_input_toolbar_context.__get__(app, QuimeraApp)
+        _attach_toolbar_coordinator(app)
+        app.toolbar._toolbar_bug_count_cache = {"session_id": "", "count": 0, "ts": 0.0}
+        app.toolbar._toolbar_bug_count_ttl_sec = 30.0
 
         first = app._build_input_toolbar_context()
         second = app._build_input_toolbar_context()
@@ -569,10 +579,7 @@ class TestInputContextAndWelcome(unittest.TestCase):
         )
         app._pending_input_for = None
         app.execution_mode = ExecutionMode(name="planning")
-        app._resolve_active_model_label = QuimeraApp._resolve_active_model_label.__get__(app, QuimeraApp)
-        app._resolve_next_responder_label = QuimeraApp._resolve_next_responder_label.__get__(app, QuimeraApp)
-        app._get_parallel_toolbar_state = QuimeraApp._get_parallel_toolbar_state.__get__(app, QuimeraApp)
-        app._build_input_toolbar_context = QuimeraApp._build_input_toolbar_context.__get__(app, QuimeraApp)
+        _attach_toolbar_coordinator(app)
 
         context = app._build_input_toolbar_context()
         self.assertEqual(context.get("mode"), "planning")
@@ -594,10 +601,7 @@ class TestInputContextAndWelcome(unittest.TestCase):
         )
         app._pending_input_for = None
         app.execution_mode = None
-        app._resolve_active_model_label = QuimeraApp._resolve_active_model_label.__get__(app, QuimeraApp)
-        app._resolve_next_responder_label = QuimeraApp._resolve_next_responder_label.__get__(app, QuimeraApp)
-        app._get_parallel_toolbar_state = QuimeraApp._get_parallel_toolbar_state.__get__(app, QuimeraApp)
-        app._build_input_toolbar_context = QuimeraApp._build_input_toolbar_context.__get__(app, QuimeraApp)
+        _attach_toolbar_coordinator(app)
 
         context = app._build_input_toolbar_context()
         self.assertNotIn("mode", context)
@@ -618,10 +622,7 @@ class TestInputContextAndWelcome(unittest.TestCase):
             {"active": 1, "queued": 0, "capacity": 2, "active_agents": ("codex", "claude")}
         )
         app._pending_input_for = None
-        app._resolve_active_model_label = QuimeraApp._resolve_active_model_label.__get__(app, QuimeraApp)
-        app._resolve_next_responder_label = QuimeraApp._resolve_next_responder_label.__get__(app, QuimeraApp)
-        app._get_parallel_toolbar_state = QuimeraApp._get_parallel_toolbar_state.__get__(app, QuimeraApp)
-        app._build_input_toolbar_context = QuimeraApp._build_input_toolbar_context.__get__(app, QuimeraApp)
+        _attach_toolbar_coordinator(app)
 
         context = app._build_input_toolbar_context()
         self.assertEqual(context.get("active_agents"), "codex, claude")
@@ -642,10 +643,7 @@ class TestInputContextAndWelcome(unittest.TestCase):
             {"active": 3, "queued": 0, "capacity": 4, "active_agents": ("codex", "claude", "qwen", "nemotron")}
         )
         app._pending_input_for = None
-        app._resolve_active_model_label = QuimeraApp._resolve_active_model_label.__get__(app, QuimeraApp)
-        app._resolve_next_responder_label = QuimeraApp._resolve_next_responder_label.__get__(app, QuimeraApp)
-        app._get_parallel_toolbar_state = QuimeraApp._get_parallel_toolbar_state.__get__(app, QuimeraApp)
-        app._build_input_toolbar_context = QuimeraApp._build_input_toolbar_context.__get__(app, QuimeraApp)
+        _attach_toolbar_coordinator(app)
 
         context = app._build_input_toolbar_context()
         self.assertEqual(context.get("active_agents"), "codex, claude, qwen +1")
@@ -667,10 +665,7 @@ class TestInputContextAndWelcome(unittest.TestCase):
             {"active": 0, "queued": 0, "capacity": 0, "active_agents": ()}
         )
         app._pending_input_for = None
-        app._resolve_active_model_label = QuimeraApp._resolve_active_model_label.__get__(app, QuimeraApp)
-        app._resolve_next_responder_label = QuimeraApp._resolve_next_responder_label.__get__(app, QuimeraApp)
-        app._get_parallel_toolbar_state = QuimeraApp._get_parallel_toolbar_state.__get__(app, QuimeraApp)
-        app._build_input_toolbar_context = QuimeraApp._build_input_toolbar_context.__get__(app, QuimeraApp)
+        _attach_toolbar_coordinator(app)
 
         context = app._build_input_toolbar_context()
         self.assertEqual(context.get("branch"), "feature-x")
@@ -693,11 +688,8 @@ class TestInputContextAndWelcome(unittest.TestCase):
             {"active": 0, "queued": 0, "capacity": 0, "active_agents": ()}
         )
         app._pending_input_for = None
-        app._resolve_active_model_label = QuimeraApp._resolve_active_model_label.__get__(app, QuimeraApp)
-        app._resolve_next_responder_label = QuimeraApp._resolve_next_responder_label.__get__(app, QuimeraApp)
-        app._get_parallel_toolbar_state = QuimeraApp._get_parallel_toolbar_state.__get__(app, QuimeraApp)
-        app._build_input_toolbar_context = QuimeraApp._build_input_toolbar_context.__get__(app, QuimeraApp)
- 
+        _attach_toolbar_coordinator(app)
+
         context = app._build_input_toolbar_context()
         self.assertNotIn("branch", context)
 
@@ -717,10 +709,7 @@ class TestInputContextAndWelcome(unittest.TestCase):
             {"active": 0, "queued": 0, "capacity": 1, "active_agents": ()}
         )
         app._pending_input_for = None
-        app._resolve_active_model_label = QuimeraApp._resolve_active_model_label.__get__(app, QuimeraApp)
-        app._resolve_next_responder_label = QuimeraApp._resolve_next_responder_label.__get__(app, QuimeraApp)
-        app._get_parallel_toolbar_state = QuimeraApp._get_parallel_toolbar_state.__get__(app, QuimeraApp)
-        app._build_input_toolbar_context = QuimeraApp._build_input_toolbar_context.__get__(app, QuimeraApp)
+        _attach_toolbar_coordinator(app)
 
         context = app._build_input_toolbar_context()
         self.assertNotIn("active_agents", context)
@@ -743,17 +732,14 @@ class TestInputContextAndWelcome(unittest.TestCase):
             {"active": 0, "queued": 0, "capacity": 0, "active_agents": ()}
         )
         app._pending_input_for = None
-        app._resolve_active_model_label = QuimeraApp._resolve_active_model_label.__get__(app, QuimeraApp)
-        app._resolve_next_responder_label = QuimeraApp._resolve_next_responder_label.__get__(app, QuimeraApp)
-        app._get_parallel_toolbar_state = QuimeraApp._get_parallel_toolbar_state.__get__(app, QuimeraApp)
-        app._build_input_toolbar_context = QuimeraApp._build_input_toolbar_context.__get__(app, QuimeraApp)
+        _attach_toolbar_coordinator(app)
         return app
 
     def test_elapsed_formats_seconds(self):
         """elapsed < 60s → formato 'Xs'."""
         app = self._make_elapsed_app()
         app._session_started_at = 1000.0
-        with patch("quimera.app.core.time") as mock_time:
+        with patch("quimera.app.toolbar_coordinator.time") as mock_time:
             mock_time.monotonic.return_value = 1000.0 + 45
             context = app._build_input_toolbar_context()
         self.assertEqual(context.get("elapsed"), "45s")
@@ -762,7 +748,7 @@ class TestInputContextAndWelcome(unittest.TestCase):
         """60s <= elapsed < 3600s → formato 'Xm XXs'."""
         app = self._make_elapsed_app()
         app._session_started_at = 1000.0
-        with patch("quimera.app.core.time") as mock_time:
+        with patch("quimera.app.toolbar_coordinator.time") as mock_time:
             mock_time.monotonic.return_value = 1000.0 + 754  # 12m 34s
             context = app._build_input_toolbar_context()
         self.assertEqual(context.get("elapsed"), "12m 34s")
@@ -771,7 +757,7 @@ class TestInputContextAndWelcome(unittest.TestCase):
         """elapsed >= 3600s → formato 'Xh XXm'."""
         app = self._make_elapsed_app()
         app._session_started_at = 1000.0
-        with patch("quimera.app.core.time") as mock_time:
+        with patch("quimera.app.toolbar_coordinator.time") as mock_time:
             mock_time.monotonic.return_value = 1000.0 + 4530  # 1h 15m
             context = app._build_input_toolbar_context()
         self.assertEqual(context.get("elapsed"), "1h 15m")
@@ -780,7 +766,7 @@ class TestInputContextAndWelcome(unittest.TestCase):
         """Sem _session_started_at, elapsed cai para ~0s → formato 'Xs'."""
         app = self._make_elapsed_app()
         # _session_started_at não definido; monotonic chamado duas vezes com mesmo valor
-        with patch("quimera.app.core.time") as mock_time:
+        with patch("quimera.app.toolbar_coordinator.time") as mock_time:
             mock_time.monotonic.return_value = 5000.0
             context = app._build_input_toolbar_context()
         self.assertEqual(context.get("elapsed"), "0s")
@@ -802,7 +788,7 @@ class TestInputContextAndWelcome(unittest.TestCase):
         app.active_agents = ["codex", "claude"]
         app.toolbar = ToolbarManager(threads=1)
         app._pending_input_for = "claude"
-        app._resolve_next_responder_label = QuimeraApp._resolve_next_responder_label.__get__(app, QuimeraApp)
+        _attach_toolbar_coordinator(app)
 
         self.assertEqual(app._resolve_next_responder_label(), "claude")
 
@@ -822,8 +808,8 @@ class TestInputContextAndWelcome(unittest.TestCase):
         plugin.cmd = ["codex", "exec", "--model=codex-5", "--json"]
         plugin.effective_connection.return_value = CliConnection(cmd=list(plugin.cmd))
         app.get_agent_plugin = MagicMock(return_value=plugin)
+        _attach_toolbar_coordinator(app)
 
-        app._resolve_active_model_label = QuimeraApp._resolve_active_model_label.__get__(app, QuimeraApp)
         self.assertEqual(app._resolve_active_model_label(), "codex-5")
 
     def test_resolve_active_model_label_extracts_model_from_cli_next_arg(self):
@@ -842,8 +828,8 @@ class TestInputContextAndWelcome(unittest.TestCase):
         plugin.cmd = ["opencode", "--model", "gpt-5-mini", "run"]
         plugin.effective_connection.return_value = CliConnection(cmd=list(plugin.cmd))
         app.get_agent_plugin = MagicMock(return_value=plugin)
+        _attach_toolbar_coordinator(app)
 
-        app._resolve_active_model_label = QuimeraApp._resolve_active_model_label.__get__(app, QuimeraApp)
         self.assertEqual(app._resolve_active_model_label(), "gpt-5-mini")
 
     def test_resolve_active_model_label_falls_back_to_plugin_name_when_cli_has_no_model(self):
@@ -862,8 +848,8 @@ class TestInputContextAndWelcome(unittest.TestCase):
         plugin.cmd = ["claude", "--output-format=stream-json", "-p"]
         plugin.effective_connection.return_value = CliConnection(cmd=list(plugin.cmd))
         app.get_agent_plugin = MagicMock(return_value=plugin)
+        _attach_toolbar_coordinator(app)
 
-        app._resolve_active_model_label = QuimeraApp._resolve_active_model_label.__get__(app, QuimeraApp)
         plugin.resolve_runtime_model.return_value = None
         self.assertEqual(app._resolve_active_model_label(), "claude")
 

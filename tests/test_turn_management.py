@@ -45,55 +45,43 @@ def _materialize_chat_lifecycle(app):
     from quimera.app.chat_lifecycle import ChatLifecycle
     from unittest.mock import Mock
 
-    # Usa o orquestrador real se existir e _process_chat_message não foi sobrescrito como mock
-    real_orchestrator = getattr(app, 'chat_round_orchestrator', None)
-    mock_overridden = '_process_chat_message' in app.__dict__
-
-    if real_orchestrator is not None and not mock_overridden:
-        stub_orchestrator = real_orchestrator
-    else:
+    # Usa o orquestrador real se existir
+    stub_orchestrator = getattr(app, 'chat_round_orchestrator', None)
+    if stub_orchestrator is None:
         class _StubOrchestrator:
             def process(self, user, ctx):
-                fn = getattr(app, '_process_chat_message', None)
-                if callable(fn) and '_process_chat_message' in app.__dict__:
+                fn = app.__dict__.get('_do_process_chat_message')
+                if callable(fn):
                     fn(user)
         stub_orchestrator = _StubOrchestrator()
 
     class _AppBridgeLifecycle(ChatLifecycle):
         def _do_process_message(self, user):
+            do_fn = app.__dict__.get('_do_process_chat_message')
+            if callable(do_fn):
+                do_fn(user)
+                return
             for attr in ('session_services', 'task_services', 'dispatch_services', 'agent_client', 'parse_routing', 'parse_response'):
                 val = getattr(app, attr, None)
                 if val is not None:
                     setattr(self, f'_{attr}', val)
+            chat_state = getattr(app, '_chat_state', None)
+            if chat_state is not None:
+                self._session_state = chat_state
+            system_layer = getattr(app, 'system_layer', None)
+            if system_layer is not None:
+                self._system_layer = system_layer
+            ui_queue = getattr(app, '_ui_event_queue', None)
+            if ui_queue is not None:
+                self._ui_event_queue = ui_queue
             super()._do_process_message(user)
 
         def process_sync_message_with_slot(self, user):
-            fn = getattr(app, '_process_sync_chat_message_with_slot', None)
+            fn = app.__dict__.get('_process_sync_chat_message_with_slot')
             if callable(fn):
                 fn(user)
             else:
                 super().process_sync_message_with_slot(user)
-
-        def handle_local_interrupt(self):
-            fn = getattr(app, '_handle_local_processing_interrupt', None)
-            if callable(fn):
-                fn()
-            else:
-                super().handle_local_interrupt()
-
-        def submit_async_message(self, user):
-            fn = getattr(app, '_submit_async_chat_message', None)
-            if callable(fn):
-                fn(user)
-            else:
-                super().submit_async_message(user)
-
-        def drain_ui_events(self, ui_queue):
-            fn = getattr(app, '_drain_ui_events', None)
-            if callable(fn):
-                fn(ui_queue)
-            else:
-                super().drain_ui_events(ui_queue)
 
     app.chat_lifecycle = _AppBridgeLifecycle(
         chat_round_orchestrator=stub_orchestrator,
@@ -153,12 +141,11 @@ def _make_app(active_agents=None):
     agents = list(active_agents or ["claude", "codex"])
     app = QuimeraApp.__new__(QuimeraApp)
     app.agent_pool = AgentPool(agents)
-    app._round_index_val = 0
-    app._summary_agent_preference_val = ""
     app.threads = 1
-    app._pending_input_for_val = None
     app.renderer = DummyRenderer()
     app.turn_manager = TurnManager()
+    from quimera.domain.session_state import SessionState
+    app._chat_state = SessionState(history=[], shared_state={}, session_meta={}, shared_state_lock=None)
 
     # Comportamento padrão: primeira chamada retorna resposta simples (sem delegation, sem extend)
     app.parse_routing = Mock(return_value=("claude", "olá", False))
@@ -177,15 +164,12 @@ def _make_app(active_agents=None):
         turn_manager=app.turn_manager,
         threads=app.threads,
         renderer=app.renderer,
-        get_round_index=lambda: app._round_index_val,
-        set_round_index=lambda v: setattr(app, '_round_index_val', v),
-        set_summary_agent_preference=lambda v: setattr(app, '_summary_agent_preference_val', v),
-        get_pending_input_for=lambda: app._pending_input_for_val,
-        set_pending_input_for=lambda v: setattr(app, '_pending_input_for_val', v),
+        session_state=app._chat_state,
     )
     app._generate_delegation_id = lambda task, target: f"gen-{target}"
     app.system_layer = Mock()
     _materialize_ui_event_handler(app)
+    _materialize_chat_lifecycle(app)
 
     return app
 
@@ -199,8 +183,9 @@ class TestChatRoundContextBridge(unittest.TestCase):
         app.system_layer = Mock(show_system_message=Mock())
         app.task_services = Mock()
         app.chat_round_orchestrator.process = Mock()
+        _materialize_chat_lifecycle(app)
 
-        QuimeraApp._do_process_chat_message(app, "mensagem")
+        app.chat_lifecycle._do_process_message("mensagem")
 
         app.chat_round_orchestrator.process.assert_called_once()
         _, kwargs = app.chat_round_orchestrator.process.call_args
@@ -322,31 +307,33 @@ class TestTurnManager(unittest.TestCase):
 class TestTurnCycle(unittest.TestCase):
 
     def test_process_chat_message_restores_human_turn_on_success(self):
-        """_process_chat_message deve devolver o turno ao humano via finally."""
+        """chat_lifecycle.process_message deve devolver o turno ao humano via finally."""
         app = QuimeraApp.__new__(QuimeraApp)
         from quimera.app.runtime_state import AppRuntimeState
         app.runtime_state = AppRuntimeState()
         app.turn_manager = TurnManager()
         app.turn_manager.next_turn()  # simula: loop já cedeu turno para AI
+        _materialize_chat_lifecycle(app)
 
         app._do_process_chat_message = Mock()
 
-        QuimeraApp._process_chat_message(app, "teste")
+        app.chat_lifecycle.process_message("teste")
 
         self.assertTrue(app.turn_manager.is_human_turn)
 
     def test_process_chat_message_restores_human_turn_on_exception(self):
-        """_process_chat_message deve devolver o turno ao humano mesmo com exceção."""
+        """chat_lifecycle.process_message deve devolver o turno ao humano mesmo com exceção."""
         app = QuimeraApp.__new__(QuimeraApp)
         from quimera.app.runtime_state import AppRuntimeState
         app.runtime_state = AppRuntimeState()
         app.turn_manager = TurnManager()
         app.turn_manager.next_turn()
+        _materialize_chat_lifecycle(app)
 
         app._do_process_chat_message = Mock(side_effect=RuntimeError("falha"))
 
         with self.assertRaises(RuntimeError):
-            QuimeraApp._process_chat_message(app, "teste")
+            app.chat_lifecycle.process_message("teste")
 
         self.assertTrue(app.turn_manager.is_human_turn)
 
@@ -381,7 +368,7 @@ class TestTurnCycle(unittest.TestCase):
 
         app.read_user_input = mock_read_user_input
         app.handle_command = Mock(return_value=False)
-        app._process_chat_message = Mock()
+        app._do_process_chat_message =Mock()
         app.session_services = Mock()
         app.agent_client = Mock()
         app.system_layer = Mock()
@@ -439,7 +426,7 @@ class TestTurnCycle(unittest.TestCase):
         def slow_process(_user):
             time.sleep(10)
 
-        app._process_chat_message = slow_process
+        app._do_process_chat_message =slow_process
         app.system_layer = Mock()
         app.bug_services = Mock()
         _materialize_ui_event_handler(app)
@@ -489,7 +476,7 @@ class TestTurnCycle(unittest.TestCase):
 
         status_updates = []
         app.read_user_input = mock_read_user_input
-        app._process_chat_message = interrupting_process
+        app._do_process_chat_message =interrupting_process
         app.system_layer = Mock(show_muted_message=lambda message: status_updates.append(message))
         app.bug_services = Mock()
 
@@ -576,8 +563,9 @@ class TestTurnCycle(unittest.TestCase):
         app.system_layer = Mock(show_muted_message=MagicMock())
         app._refresh_parallel_toolbar = MagicMock()
         app.agent_client = MagicMock()
+        _materialize_chat_lifecycle(app)
 
-        QuimeraApp._handle_local_processing_interrupt(app)
+        app.chat_lifecycle.handle_local_interrupt()
 
         app.agent_client.cancel_active_work.assert_called_once_with()
         self.assertTrue(app.turn_manager.is_human_turn)
@@ -614,10 +602,11 @@ class TestTurnCycle(unittest.TestCase):
         ui_queue.put(RenderEvent(RenderEvent.TEXT, "mensagem do agente", agent="codex"))
 
         _materialize_ui_event_handler(app)
+        _materialize_chat_lifecycle(app)
 
         with patch("quimera.app.core.sys.stdin") as mock_stdin:
             mock_stdin.isatty.return_value = True
-            QuimeraApp._drain_ui_events(app, ui_queue)
+            app.chat_lifecycle.drain_ui_events(ui_queue)
 
         self.assertEqual(rendered_messages, [])
         self.assertEqual(len(scheduled_callbacks), 1)
@@ -668,10 +657,11 @@ class TestTurnCycle(unittest.TestCase):
         )
 
         _materialize_ui_event_handler(app)
+        _materialize_chat_lifecycle(app)
 
         with patch("quimera.app.core.sys.stdin") as mock_stdin:
             mock_stdin.isatty.return_value = True
-            QuimeraApp._drain_ui_events(app, ui_queue)
+            app.chat_lifecycle.drain_ui_events(ui_queue)
 
         self.assertEqual(len(scheduled_callbacks), 2)
         self.assertEqual(rendered_messages, [])
@@ -729,10 +719,11 @@ class TestTurnCycle(unittest.TestCase):
         )
 
         _materialize_ui_event_handler(app)
+        _materialize_chat_lifecycle(app)
 
         with patch("quimera.app.core.sys.stdin") as mock_stdin:
             mock_stdin.isatty.return_value = True
-            QuimeraApp._drain_ui_events(app, ui_queue)
+            app.chat_lifecycle.drain_ui_events(ui_queue)
 
         self.assertEqual(len(scheduled_callbacks), 2)
         self.assertEqual(delegation_calls, [])
@@ -764,10 +755,11 @@ class TestTurnCycle(unittest.TestCase):
         ui_queue.put(RenderEvent(RenderEvent.TEXT, "Responda para CODEX:", agent=None))
 
         _materialize_ui_event_handler(app)
+        _materialize_chat_lifecycle(app)
 
         with patch("quimera.app.core.sys.stdin") as mock_stdin:
             mock_stdin.isatty.return_value = True
-            QuimeraApp._drain_ui_events(app, ui_queue)
+            app.chat_lifecycle.drain_ui_events(ui_queue)
 
         app.show_muted_message.assert_called_once_with("Responda para CODEX:")
         app.renderer.show_message.assert_not_called()
@@ -816,9 +808,10 @@ class TestTurnCycle(unittest.TestCase):
         app.runtime_state.chat_inflight_count = 2
         app.runtime_state.chat_inflight_lock = threading.Lock()
         app.agent_client = Mock(_user_cancelled=False, _cancel_event=None)
+        _materialize_chat_lifecycle(app)
         app._do_process_chat_message = Mock()
 
-        QuimeraApp._process_chat_message(app, "mensagem")
+        app.chat_lifecycle.process_message("mensagem")
 
         self.assertTrue(app.turn_manager.is_ai_turn)
 
@@ -856,7 +849,7 @@ class TestTurnCycle(unittest.TestCase):
             processed.append(user)
             app.turn_manager.reset()
 
-        app._process_chat_message = record_message
+        app._do_process_chat_message =record_message
 
         class DeadWorker:
             def start(self):
@@ -913,7 +906,7 @@ class TestTurnCycle(unittest.TestCase):
             if user in {"m1", "m2"}:
                 time.sleep(0.25)
 
-        app._process_chat_message = observed_process
+        app._do_process_chat_message =observed_process
         app.bug_services = Mock()
 
         started = time.monotonic()
@@ -955,7 +948,7 @@ class TestTurnCycle(unittest.TestCase):
         def observed_process(user):
             calls.append((user, threading.current_thread() is threading.main_thread()))
 
-        app._process_chat_message = observed_process
+        app._do_process_chat_message =observed_process
         app.bug_services = Mock()
 
         _materialize_ui_event_handler(app)
@@ -1009,7 +1002,7 @@ class TestTurnCycle(unittest.TestCase):
             return next(read_values)
 
         app.read_user_input = mock_read_user_input
-        app._process_chat_message = Mock()
+        app._do_process_chat_message =Mock()
 
         class ObservedQueue(queue.Queue):
             def put(self, item, block=True, timeout=None):
@@ -1285,7 +1278,7 @@ class TestSingleAgentPerTurn(unittest.TestCase):
         # Apenas o primeiro agente respondeu
         self.assertEqual(app.dispatch_services.delegate.call_count, 1)
         # Turno suspenso: próxima fala do humano vai para claude
-        self.assertEqual(app._pending_input_for_val, "claude")
+        self.assertEqual(app._chat_state.pending_input_for, "claude")
 
     def test_needs_human_input_uses_prompt_aware_system_message_when_available(self):
         """Quando disponível, usa show_system_message para evitar saída inline com o prompt."""
@@ -1420,6 +1413,8 @@ class TestParallelToolbarState(unittest.TestCase):
         """Cria um stub de QuimeraApp com os atributos necessários para toolbar."""
         from quimera.app.runtime_state import AppRuntimeState
         from quimera.app.toolbar import ToolbarManager
+        from quimera.app.toolbar_coordinator import ToolbarCoordinator
+        from quimera.app.agent_pool import AgentPool
         app = QuimeraApp.__new__(QuimeraApp)
         app.threads = threads
         app.toolbar = ToolbarManager(threads=threads)
@@ -1428,6 +1423,23 @@ class TestParallelToolbarState(unittest.TestCase):
         app.runtime_state.chat_inflight_lock = threading.Lock()
         app.runtime_state.chat_queue = None
         app.input_gate = MagicMock()
+        app.toolbar_coordinator = ToolbarCoordinator(
+            toolbar_manager=app.toolbar,
+            agent_pool=AgentPool([]),
+            get_agent_plugin=lambda name: None,
+            workspace=Mock(),
+            get_history=lambda: [],
+            storage=Mock(),
+            bug_store=None,
+            get_session_started_at=lambda: 0.0,
+            renderer=Mock(),
+            config=Mock(),
+            runtime_state=app.runtime_state,
+            input_gate=app.input_gate,
+            get_pending_input_for=lambda: None,
+            get_execution_mode=lambda: None,
+            threads=threads,
+        )
         app._get_parallel_toolbar_state = QuimeraApp._get_parallel_toolbar_state.__get__(app, QuimeraApp)
         app._refresh_parallel_toolbar = QuimeraApp._refresh_parallel_toolbar.__get__(app, QuimeraApp)
         return app
@@ -1497,6 +1509,24 @@ class TestParallelToolbarState(unittest.TestCase):
         app.runtime_state.chat_queue = queue.Queue()
         app.runtime_state.chat_queue.put("pending_msg")
         app._pending_input_for = None
+        from quimera.app.toolbar_coordinator import ToolbarCoordinator
+        app.toolbar_coordinator = ToolbarCoordinator(
+            toolbar_manager=app.toolbar,
+            agent_pool=app.agent_pool,
+            get_agent_plugin=lambda name: None,
+            workspace=app.workspace,
+            get_history=lambda: [],
+            storage=MagicMock(),
+            bug_store=None,
+            get_session_started_at=lambda: 0.0,
+            renderer=MagicMock(),
+            config=MagicMock(),
+            runtime_state=app.runtime_state,
+            input_gate=MagicMock(),
+            get_pending_input_for=lambda: None,
+            get_execution_mode=lambda: None,
+            threads=2,
+        )
         app._resolve_active_model_label = QuimeraApp._resolve_active_model_label.__get__(app, QuimeraApp)
         app._resolve_next_responder_label = QuimeraApp._resolve_next_responder_label.__get__(app, QuimeraApp)
         app._get_parallel_toolbar_state = QuimeraApp._get_parallel_toolbar_state.__get__(app, QuimeraApp)

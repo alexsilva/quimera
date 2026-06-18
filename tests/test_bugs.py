@@ -234,21 +234,22 @@ def test_file_bug_persists_without_event_sink(tmp_path):
 
 
 def test_record_failure_files_agent_failure_burst_only_once_per_streak():
-    app = QuimeraApp.__new__(QuimeraApp)
-    app.agent_failures = defaultdict(int)
-    app._agent_failures_lock = threading.Lock()
-    app.agent_pool = []
-    app.tasks_db_path = ""
-    app.session_metrics = None
-    app.storage = SimpleNamespace(session_id="sessao-1")
-    app._normalize_agent_name = lambda agent: str(agent)
-    app._file_bug = Mock()
+    from quimera.app.agent_failure_tracker import AgentFailureTracker
+    file_bug = Mock()
+    tracker = AgentFailureTracker(
+        normalize_agent_name=lambda agent: str(agent),
+        agent_pool=[],
+        release_agent_tasks=lambda _name: None,
+        record_metric=None,
+        file_bug=file_bug,
+        get_session_id=lambda: "sessao-1",
+    )
 
-    app.record_failure("opencode-ring-2-6-1t-free")  # 1
-    app.record_failure("opencode-ring-2-6-1t-free")  # 2 -> deve emitir bug
-    app.record_failure("opencode-ring-2-6-1t-free")  # 3 -> não deve emitir de novo
+    tracker.record_failure("opencode-ring-2-6-1t-free")  # 1
+    tracker.record_failure("opencode-ring-2-6-1t-free")  # 2 -> deve emitir bug
+    tracker.record_failure("opencode-ring-2-6-1t-free")  # 3 -> não deve emitir de novo
 
-    assert app._file_bug.call_count == 1
+    assert file_bug.call_count == 1
 
 
 def test_bug_correlator_produces_combined_bug_when_render_and_agent_failure_overlap():

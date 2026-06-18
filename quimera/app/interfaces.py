@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any, Callable, Protocol, runtime_checkable
 
 from quimera.prompt_templates import PromptText
+from quimera import plugins as _global_plugins
 
 
 @runtime_checkable
@@ -76,13 +77,40 @@ class PluginResolverAdapter:
             return None
         if self._registry is not None:
             return self._registry.get(normalized_name)
-        return None
+        return _global_plugins.get(normalized_name)
 
     @property
     def plugins(self) -> list:
-        if self._registry is None:
-            return []
-        return list(self._registry.all_plugins())
+        if self._registry is not None:
+            return list(self._registry.all_plugins())
+        return list(_global_plugins.all_plugins())
+
+    def active_plugins(self, agent_pool) -> list:
+        """Retorna os plugins válidos dos agentes ativos no pool."""
+        result = []
+        for agent_name in agent_pool:
+            plugin = self.get(agent_name)
+            if plugin is not None:
+                result.append(plugin)
+        return result
+
+    def configure_mcp_socket(self, agent_pool, socket_path: str | None, token: str | None = None) -> None:
+        """Propaga o socket MCP e token para os plugins dos agentes ativos na sessão."""
+        for plugin in self.active_plugins(agent_pool):
+            config_setter = getattr(plugin, "set_mcp_socket_config", None)
+            if callable(config_setter):
+                config_setter(socket_path, token)
+            else:
+                path_setter = getattr(plugin, "set_mcp_socket_path", None)
+                if callable(path_setter):
+                    path_setter(socket_path)
+
+    def configure_mcp_http(self, agent_pool, url: str | None, token: str | None = None) -> None:
+        """Propaga endpoint e token MCP HTTP para plugins de agentes ativos."""
+        for plugin in self.active_plugins(agent_pool):
+            config_setter = getattr(plugin, "set_mcp_http_config", None)
+            if callable(config_setter):
+                config_setter(url, token)
 
 
 @runtime_checkable

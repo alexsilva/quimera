@@ -70,7 +70,7 @@ class TestAppHistory(unittest.TestCase):
         _, kwargs = mock_input_gate.call_args
         self.assertEqual(kwargs["history_file"], self.history_file)
         self.assertTrue(callable(kwargs["command_resolver"]))
-        mock_gate_instance.set_toolbar_context_resolver.assert_called_once_with(app._build_input_toolbar_context)
+        mock_gate_instance.set_toolbar_context_resolver.assert_called_once_with(app.toolbar_coordinator.build_input_toolbar_context)
 
     @patch("quimera.tasks.api.init_db")
     @patch("quimera.tasks.api.add_job")
