@@ -5,6 +5,32 @@ from difflib import SequenceMatcher
 class SessionMetricsService:
     """Centraliza heurísticas de qualidade de resposta e métricas por agente."""
 
+    _POLICY_ERROR_MARKERS = (
+        "sem política para a ferramenta",
+        "bloqueada pelo modo de execução",
+        "comando bloqueado",
+        "comando inválido",
+        "comando fora da allowlist",
+        "path fora da workspace",
+    )
+
+    @classmethod
+    def classify_tool_event_result(cls, result) -> tuple[bool, bool, str]:
+        """Normaliza o resultado de tool call para métricas de sessão."""
+        ok = bool(getattr(result, "ok", False))
+        error_type = getattr(result, "error_type", None) if result is not None else None
+        if isinstance(error_type, str) and error_type:
+            normalized_error_type = error_type
+        else:
+            lowered_error = str(getattr(result, "error", "") or "").lower()
+            if any(marker in lowered_error for marker in cls._POLICY_ERROR_MARKERS):
+                normalized_error_type = "policy"
+            elif lowered_error:
+                normalized_error_type = "generic"
+            else:
+                normalized_error_type = "none"
+        return ok, normalized_error_type == "policy", normalized_error_type
+
     @staticmethod
     def record_agent_metric(app, agent, metric_name, latency):
         """Registra agent metric."""

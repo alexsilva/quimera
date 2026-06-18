@@ -35,6 +35,10 @@ class AppProtocol:
         self._decisions_logger = None
         self._turn_stamps = turn_stamps if turn_stamps is not None else {}
 
+    def set_shared_state(self, shared_state) -> None:
+        """Atualiza a referência de shared state usada pelo protocolo."""
+        self._shared_state = shared_state
+
     def _get_decisions_logger(self):
         """Executa lazy load do DecisionsLogger."""
         if self._decisions_logger is not None:

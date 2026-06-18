@@ -378,44 +378,41 @@ class QuimeraApp:
         self.auto_summarize_threshold = configured_auto_summarize_threshold
         self.task_services = AppTaskServices(
             task_executor_factory=self.task_executor_factory,
-            get_current_job_id=lambda: self.current_job_id,
-            get_agent_pool_agents=lambda: list(self.agent_pool.agents),
-            get_task_executors=lambda: list(self.task_executors),
-            set_task_executors=lambda executors: setattr(self, "task_executors", list(executors)),
-            get_renderer=lambda: self.renderer,
-            get_input_services=lambda: self.input_services,
-            get_input_gate=lambda: self.input_gate,
-            get_event_sink=lambda: self.event_sink,
-            get_agent_client=lambda: self.agent_client,
-            get_workspace=lambda: self.workspace,
+            current_job_id=self.current_job_id,
+            agent_pool=self.agent_pool,
+            task_executors=self.task_executors,
+            renderer=self.renderer,
+            input_services=self.input_services,
+            input_gate=self.input_gate,
+            event_sink=self.event_sink,
+            agent_client=self.agent_client,
+            workspace=self.workspace,
             get_dispatch_tool_executor=lambda: self.tool_executor,
             get_dispatch_services=lambda: self.dispatch_services,
-            get_auto_approve_mutations=lambda: self.auto_approve_mutations,
-            get_approval_handler=lambda: self._approval_handler,
-            set_approval_handler=lambda handler: setattr(self, "_approval_handler", handler),
+            auto_approve_mutations=self.auto_approve_mutations,
+            approval_handler=self._approval_handler,
             get_agent_plugin=self._plugin_resolver.get,
-            get_available_plugins=lambda: self._plugin_resolver.plugins,
+            available_plugins=self._plugin_resolver.plugins,
             session_state=self._chat_state,
-            get_system_layer=lambda: self.system_layer,
-            get_task_classifier=lambda: self.task_classifier,
-            get_user_name=lambda: self.user_name,
-            get_prompt_builder=lambda: self.prompt_builder,
-            get_visibility=lambda: self.visibility,
-            get_show_error_message=lambda: self.system_layer.show_error_message,
-            get_show_muted_message=lambda: self.system_layer.show_muted_message,
+            system_layer=self.system_layer,
+            task_classifier=self.task_classifier,
+            user_name=self.user_name,
+            prompt_builder=self.prompt_builder,
+            visibility=self.visibility,
+            show_error_message=self.system_layer.show_error_message,
+            show_muted_message=self.system_layer.show_muted_message,
             get_execution_mode=lambda: self.execution_mode,
-            get_record_tool_event=lambda: self._record_tool_event,
-            get_record_failure=lambda: self.record_failure,
-            get_session_metrics=lambda: self.session_metrics,
+            record_tool_event=self._record_tool_event,
+            record_failure=self.record_failure,
+            session_metrics=self.session_metrics,
             get_debug_prompt_metrics=lambda: self.debug_prompt_metrics,
-            get_redisplay_prompt=lambda: self._redisplay_user_prompt_if_needed,
-            get_output_lock=lambda: self._output_lock,
-            get_counter_lock=lambda: self._counter_lock,
+            redisplay_prompt=self._redisplay_user_prompt_if_needed,
+            output_lock=self._output_lock,
+            counter_lock=self._counter_lock,
             get_session_services=lambda: self.session_services,
             max_retries=self.MAX_RETRIES,
             retry_backoff_seconds=self.RETRY_BACKOFF_SECONDS,
-            get_rate_limit_backoff_seconds=lambda: getattr(self, 'RATE_LIMIT_BACKOFF_SECONDS', 30),
-            delegate=lambda *args, **kwargs: self.dispatch_services.delegate(*args, **kwargs),
+            rate_limit_backoff_seconds=getattr(self, 'RATE_LIMIT_BACKOFF_SECONDS', 30),
             parse_response=self.parse_response,
             classify_task_execution_result=self.classify_task_execution_result,
             classify_task_review_result=classify_task_review_result,
@@ -459,6 +456,8 @@ class QuimeraApp:
             get_agent_client=lambda: self.agent_client,
             get_tool_executor=lambda: self.tool_executor,
         )
+        self.task_services.bind_session_services(self.session_services)
+        self.task_services.bind_dispatch_services(self.dispatch_services)
         self.chat_round_orchestrator = ChatRoundOrchestrator(
             dispatch_services=self.dispatch_services,
             parse_routing=self.parse_routing,
@@ -477,6 +476,8 @@ class QuimeraApp:
             merge_staging_to_workspace=merge_staging_to_workspace,
         )
         self.tool_executor = self.task_services.build_tool_executor(require_approval_for_mutations=not self.auto_approve_mutations)
+        self.task_services.bind_dispatch_tool_executor(self.tool_executor)
+        self.task_services.bind_primary_approval_handler(self._approval_handler)
         # Injeta o executor nos drivers de API do agent_client.
         self.agent_client.tool_executor = self.tool_executor
         self.tool_executor.set_delegate_fn(self.dispatch_services.delegate)
@@ -664,6 +665,11 @@ class QuimeraApp:
 
     def configure_mcp_socket(self, socket_path: str | None, token: str | None = None) -> None:
         """Propaga socket MCP e token para os plugins dos agentes ativos."""
+        resolver = getattr(self, "_plugin_resolver", None)
+        agent_pool = getattr(self, "agent_pool", None)
+        if resolver is not None and agent_pool is not None:
+            resolver.configure_mcp_socket(agent_pool, socket_path, token)
+            return
         for plugin in self.get_active_agent_plugins():
             config_setter = getattr(plugin, "set_mcp_socket_config", None)
             if callable(config_setter):
@@ -675,6 +681,11 @@ class QuimeraApp:
 
     def configure_mcp_http(self, url: str | None, token: str | None = None) -> None:
         """Propaga endpoint MCP HTTP e token para os plugins dos agentes ativos."""
+        resolver = getattr(self, "_plugin_resolver", None)
+        agent_pool = getattr(self, "agent_pool", None)
+        if resolver is not None and agent_pool is not None:
+            resolver.configure_mcp_http(agent_pool, url, token)
+            return
         for plugin in self.get_active_agent_plugins():
             config_setter = getattr(plugin, "set_mcp_http_config", None)
             if callable(config_setter):
@@ -896,26 +907,19 @@ class QuimeraApp:
         if stdin is None or not stdin.isatty():
             return
         input_gate = getattr(self, "input_gate", None)
-        is_active_fn = getattr(input_gate, "is_active", None)
-        prompt_active = False
-        if callable(is_active_fn):
-            try:
-                active_state = is_active_fn()
-                if isinstance(active_state, bool):
-                    prompt_active = active_state
-            except Exception:
-                prompt_active = False
-        if not prompt_active:
+        if input_gate is None:
             return
         try:
-            redisplay = getattr(input_gate, "redisplay", None)
-            if callable(redisplay):
-                try:
-                    redisplay()
-                except Exception:
-                    pass
+            if not bool(input_gate.is_active()):
+                return
         except Exception:
-            pass
+            return
+        redisplay = getattr(input_gate, "redisplay", None)
+        if callable(redisplay):
+            try:
+                redisplay()
+            except Exception:
+                pass
 
     def clear_terminal_screen(self) -> None:
         """Limpa a viewport e o scrollback do terminal, reposicionando o cursor."""
@@ -953,27 +957,7 @@ class QuimeraApp:
 
     def _record_tool_event(self, agent, result=None, loop_abort=False, reason=None):
         """Registra métricas de uso de ferramentas atribuídas ao agente."""
-        error_type = getattr(result, "error_type", None) if result is not None else None
-        if not isinstance(error_type, str) or not error_type:
-            lowered_error = str(getattr(result, "error", "") or "").lower()
-            if any(
-                marker in lowered_error
-                for marker in (
-                    "sem política para a ferramenta",
-                    "bloqueada pelo modo de execução",
-                    "comando bloqueado",
-                    "comando inválido",
-                    "comando fora da allowlist",
-                    "path fora da workspace",
-                )
-            ):
-                error_type = "policy"
-            elif lowered_error:
-                error_type = "generic"
-            else:
-                error_type = "none"
-        is_invalid = error_type == "policy"
-        ok = bool(getattr(result, "ok", False))
+        ok, is_invalid, error_type = self.session_metrics.classify_tool_event_result(result)
         self.session_metrics.record_tool_event(
             self,
             agent,
@@ -1028,8 +1012,11 @@ class QuimeraApp:
 
     def parse_response(self, response, **_kwargs):
         """Interpreta response."""
-        if getattr(self.protocol, "_shared_state", None) is not self.shared_state:
-            self.protocol._shared_state = self.shared_state
+        protocol = self.protocol
+        if getattr(protocol, "_shared_state", None) is not self.shared_state:
+            sync_shared_state = getattr(protocol, "set_shared_state", None)
+            if callable(sync_shared_state):
+                sync_shared_state(self.shared_state)
         return self.protocol.parse_response(response)
 
     def _restore_current_job_env(self) -> None:
