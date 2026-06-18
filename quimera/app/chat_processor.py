@@ -222,7 +222,7 @@ def run_chat_loop(
                 if chat_slot_semaphore is not None:
                     acquired_async_slot = chat_slot_semaphore.acquire(blocking=False)
                 if acquired_async_slot:
-                    app._increment_chat_inflight()
+                    app.runtime_state.increment_chat_inflight(app._refresh_parallel_toolbar)
                     _pending_async_slot = True
                     chat_queue.put(user)
                     _pending_async_slot = False
@@ -265,10 +265,10 @@ def run_chat_loop(
         app.show_muted_message(MSG_SHUTDOWN)
     finally:
         if _pending_async_slot:
-            app._decrement_chat_inflight()
-            app._release_chat_slot()
+            app.runtime_state.decrement_chat_inflight(app._refresh_parallel_toolbar)
+            app.runtime_state.release_chat_slot()
             _pending_async_slot = False
-        leaked_slots = app._get_chat_inflight_count()
+        leaked_slots = app.runtime_state.get_chat_inflight_count()
         if leaked_slots > 0:
             app._file_bug(
                 session_id=getattr(app.storage, "session_id", ""),

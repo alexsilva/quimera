@@ -1334,11 +1334,8 @@ class TestParallelToolbarState(unittest.TestCase):
         app.runtime_state.chat_inflight_lock = threading.Lock()
         app.runtime_state.chat_queue = None
         app.input_gate = MagicMock()
-        app._get_chat_inflight_count = QuimeraApp._get_chat_inflight_count.__get__(app, QuimeraApp)
         app._get_parallel_toolbar_state = QuimeraApp._get_parallel_toolbar_state.__get__(app, QuimeraApp)
         app._refresh_parallel_toolbar = QuimeraApp._refresh_parallel_toolbar.__get__(app, QuimeraApp)
-        app._increment_chat_inflight = QuimeraApp._increment_chat_inflight.__get__(app, QuimeraApp)
-        app._decrement_chat_inflight = QuimeraApp._decrement_chat_inflight.__get__(app, QuimeraApp)
         return app
 
     def test_slot_async_acquired_shows_active_1_of_2(self):
@@ -1346,7 +1343,7 @@ class TestParallelToolbarState(unittest.TestCase):
         app = self._make_minimal_app(threads=2)
         app.runtime_state.chat_queue = queue.Queue()
 
-        app._increment_chat_inflight()
+        app.runtime_state.increment_chat_inflight(app._refresh_parallel_toolbar)
 
         state = app._get_parallel_toolbar_state()
         self.assertEqual(state["active"], 1)
@@ -1358,8 +1355,8 @@ class TestParallelToolbarState(unittest.TestCase):
         app = self._make_minimal_app(threads=2)
         app.runtime_state.chat_queue = queue.Queue()
 
-        app._increment_chat_inflight()
-        app._increment_chat_inflight()
+        app.runtime_state.increment_chat_inflight(app._refresh_parallel_toolbar)
+        app.runtime_state.increment_chat_inflight(app._refresh_parallel_toolbar)
 
         state = app._get_parallel_toolbar_state()
         self.assertEqual(state["active"], 2)
@@ -1370,10 +1367,10 @@ class TestParallelToolbarState(unittest.TestCase):
         app = self._make_minimal_app(threads=2)
         app.runtime_state.chat_queue = queue.Queue()
 
-        app._increment_chat_inflight()
-        app._increment_chat_inflight()
-        app._decrement_chat_inflight()
-        app._decrement_chat_inflight()
+        app.runtime_state.increment_chat_inflight(app._refresh_parallel_toolbar)
+        app.runtime_state.increment_chat_inflight(app._refresh_parallel_toolbar)
+        app.runtime_state.decrement_chat_inflight(app._refresh_parallel_toolbar)
+        app.runtime_state.decrement_chat_inflight(app._refresh_parallel_toolbar)
 
         state = app._get_parallel_toolbar_state()
         self.assertEqual(state["active"], 0)
@@ -1408,7 +1405,6 @@ class TestParallelToolbarState(unittest.TestCase):
         app._pending_input_for = None
         app._resolve_active_model_label = QuimeraApp._resolve_active_model_label.__get__(app, QuimeraApp)
         app._resolve_next_responder_label = QuimeraApp._resolve_next_responder_label.__get__(app, QuimeraApp)
-        app._get_chat_inflight_count = QuimeraApp._get_chat_inflight_count.__get__(app, QuimeraApp)
         app._get_parallel_toolbar_state = QuimeraApp._get_parallel_toolbar_state.__get__(app, QuimeraApp)
         app._build_input_toolbar_context = QuimeraApp._build_input_toolbar_context.__get__(app, QuimeraApp)
 
@@ -1421,8 +1417,8 @@ class TestParallelToolbarState(unittest.TestCase):
         app = self._make_minimal_app(threads=2)
         app.runtime_state.chat_queue = queue.Queue()
 
-        app._increment_chat_inflight()
-        app._increment_chat_inflight()
+        app.runtime_state.increment_chat_inflight(app._refresh_parallel_toolbar)
+        app.runtime_state.increment_chat_inflight(app._refresh_parallel_toolbar)
 
         state = app._get_parallel_toolbar_state()
         self.assertEqual(state["active"], 2)
@@ -1438,17 +1434,17 @@ class TestParallelToolbarState(unittest.TestCase):
         """Verifica que Test increment requests toolbar redisplay."""
         app = self._make_minimal_app(threads=2)
 
-        app._increment_chat_inflight()
+        app.runtime_state.increment_chat_inflight(app._refresh_parallel_toolbar)
 
         app.input_gate.redisplay.assert_called_once_with()
 
     def test_decrement_requests_toolbar_redisplay(self):
         """Verifica que Test decrement requests toolbar redisplay."""
         app = self._make_minimal_app(threads=2)
-        app._increment_chat_inflight()
+        app.runtime_state.increment_chat_inflight(app._refresh_parallel_toolbar)
         app.input_gate.redisplay.reset_mock()
 
-        app._decrement_chat_inflight()
+        app.runtime_state.decrement_chat_inflight(app._refresh_parallel_toolbar)
 
         app.input_gate.redisplay.assert_called_once_with()
 

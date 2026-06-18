@@ -1120,7 +1120,7 @@ class QuimeraApp:
         e deriva ``queued`` do tamanho da fila do chat quando disponível,
         garantindo que a toolbar reflita a ocupação real em runtime.
         """
-        active = self._get_chat_inflight_count()
+        active = self.runtime_state.get_chat_inflight_count()
         chat_queue = getattr(self.runtime_state, "chat_queue", None)
         queued_from_queue: int | None = None
         if chat_queue is not None:
@@ -1373,21 +1373,9 @@ class QuimeraApp:
             if (
                 hasattr(self, "turn_manager")
                 and self.turn_manager.is_ai_turn
-                and self._get_chat_inflight_count() <= 1
+                and self.runtime_state.get_chat_inflight_count() <= 1
             ):
                 self.turn_manager.next_turn()
-
-    def _get_chat_inflight_count(self) -> int:
-        return self.runtime_state.get_chat_inflight_count()
-
-    def _increment_chat_inflight(self) -> int:
-        return self.runtime_state.increment_chat_inflight(self._refresh_parallel_toolbar)
-
-    def _decrement_chat_inflight(self) -> int:
-        return self.runtime_state.decrement_chat_inflight(self._refresh_parallel_toolbar)
-
-    def _release_chat_slot(self) -> None:
-        self.runtime_state.release_chat_slot()
 
     def _should_render_ui_event_above_prompt(self) -> bool:
         """Retorna True quando há prompt ativo controlado por outra thread."""
@@ -1420,8 +1408,8 @@ class QuimeraApp:
         try:
             self._process_chat_message(user)
         finally:
-            remaining = self._decrement_chat_inflight()
-            self._release_chat_slot()
+            remaining = self.runtime_state.decrement_chat_inflight(self._refresh_parallel_toolbar)
+            self.runtime_state.release_chat_slot()
             if remaining == 0 and hasattr(self, "turn_manager") and self.turn_manager.is_ai_turn:
                 self.turn_manager.next_turn()
 
@@ -1435,8 +1423,8 @@ class QuimeraApp:
             chat_executor.submit(self._process_async_chat_message, user)
             self._refresh_parallel_toolbar()
         except Exception:
-            self._decrement_chat_inflight()
-            self._release_chat_slot()
+            runtime_state.decrement_chat_inflight(self._refresh_parallel_toolbar)
+            runtime_state.release_chat_slot()
             self._refresh_parallel_toolbar()
             raise
 
@@ -1446,12 +1434,12 @@ class QuimeraApp:
         slot_semaphore = getattr(runtime_state, "chat_slot_semaphore", None)
         if slot_semaphore is not None:
             slot_semaphore.acquire()
-        self._increment_chat_inflight()
+        runtime_state.increment_chat_inflight(self._refresh_parallel_toolbar)
         try:
             self._process_chat_message(user)
         finally:
-            self._decrement_chat_inflight()
-            self._release_chat_slot()
+            runtime_state.decrement_chat_inflight(self._refresh_parallel_toolbar)
+            runtime_state.release_chat_slot()
 
     def _process_chat_queue(self, chat_queue: queue.Queue):
         """Executa process chat queue."""
