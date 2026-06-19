@@ -5,7 +5,7 @@ from typing import Optional
 
 from quimera.agent_events import SpyEvent
 from quimera.plugins.base import AgentPlugin, CliConnection, Connection, register
-from quimera.plugins.spy_utils import format_agent_message_lines
+from quimera.plugins.spy_utils import describe_tool_input, format_agent_message_lines
 
 
 def _format_opencode_spy_event(line: str) -> list[SpyEvent]:
@@ -40,7 +40,10 @@ def _format_opencode_spy_event(line: str) -> list[SpyEvent]:
     )
     marker = " ".join(filter(None, [str(etype or ""), str(ptype or "")])).lower()
     if tool_name and any(token in marker for token in {"tool", "call"}):
-        return [SpyEvent(kind="tool", text=f"usando {tool_name}")]
+        inp = part.get("input") or part.get("args") or event.get("input") or event.get("args") or {}
+        detail = describe_tool_input(tool_name, inp)
+        text = detail if detail else f"usando {tool_name}"
+        return [SpyEvent(kind="tool", text=text, transient=True)]
 
     return []
 

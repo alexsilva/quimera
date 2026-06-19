@@ -503,7 +503,8 @@ class SpyOutputPresenter:
                 if self._is_terminal_completion_context(event):
                     self.current_status_label = ""
                     return
-                self._show(agent, event)
+                if self.visibility != Visibility.QUIET:
+                    self._show(agent, event)
                 return
 
             if text:

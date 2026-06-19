@@ -158,7 +158,7 @@ class AgentsCoverageTests(unittest.TestCase):
         proc.returncode = 0
         with patch("subprocess.Popen", return_value=proc), patch("time.sleep"):
             self.assertEqual(client.run(["cmd"], silent=False, agent="codex"), "out")
-        self.renderer.show_plain.assert_any_call("err1", agent="codex")
+        self.renderer.update_agent_transient.assert_any_call("codex", "err1")
 
     def test_run_returns_none_for_non_zero_exit(self):
         """Verifica que Test run returns none for non zero exit."""

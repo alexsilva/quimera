@@ -2155,12 +2155,12 @@ def test_agent_client_uses_transient_for_live_stderr_when_renderer_supports_it()
 
 
 def test_spy_output_presenter_summary_keeps_lifecycle_context_only_in_status(renderer):
-    """Verifica que lifecycle de início não entra no buffer transient em summary."""
+    """Verifica que lifecycle de início aparece no overlay em summary e atualiza current_status_label."""
     presenter = SpyOutputPresenter(renderer, Visibility.SUMMARY)
 
     presenter.emit("codex", SpyEvent(kind="context", text="iniciando execução", transient=True))
 
-    renderer.update_agent_transient.assert_not_called()
+    renderer.update_agent_transient.assert_called_once_with("codex", "iniciando execução")
     renderer.show_plain.assert_not_called()
     assert presenter.current_status_label == "iniciando execução"
 

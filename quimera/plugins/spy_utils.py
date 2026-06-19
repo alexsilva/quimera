@@ -32,6 +32,59 @@ def format_agent_message_lines(text: str) -> list[SpyEvent]:
     return messages
 
 
+def describe_tool_input(tool_name: str, inp: dict) -> str:
+    """Retorna descrição concisa do input de uma ferramenta para exibição no spy."""
+    name = (tool_name or "").strip().lower()
+    inp = inp or {}
+
+    # Ferramentas de shell/exec
+    if name in {"bash", "run", "execute", "exec", "shell", "computer"}:
+        cmd = inp.get("command") or inp.get("cmd") or inp.get("input") or ""
+        if cmd:
+            return f"$ {truncate_spy_text(str(cmd))}"
+
+    # Ferramentas de leitura de arquivo
+    if name in {"read", "read_file", "view", "cat", "readfile"}:
+        path = inp.get("file_path") or inp.get("path") or inp.get("filename") or ""
+        if path:
+            return truncate_spy_text(str(path))
+
+    # Ferramentas de escrita/edição
+    if name in {"write", "write_file", "edit", "edit_file", "str_replace_editor",
+                "str_replace_based_edit_tool",
+                "create", "create_file", "overwrite", "writefile", "editfile"}:
+        path = inp.get("file_path") or inp.get("path") or inp.get("filename") or ""
+        if path:
+            return f"editar {truncate_spy_text(str(path))}"
+
+    # Ferramentas de busca em arquivos
+    if name in {"grep", "search", "search_files", "find_in_files", "rg"}:
+        pattern = inp.get("pattern") or inp.get("query") or inp.get("regex") or ""
+        path = inp.get("path") or inp.get("directory") or ""
+        if pattern:
+            loc = f" em {truncate_spy_text(str(path), limit=60)}" if path else ""
+            return f'buscar "{truncate_spy_text(str(pattern), limit=80)}"{loc}'
+
+    # Ferramentas de listagem de arquivos
+    if name in {"glob", "find_files", "list_files", "ls"}:
+        pattern = inp.get("pattern") or inp.get("glob") or inp.get("path") or ""
+        if pattern:
+            return f"listar {truncate_spy_text(str(pattern))}"
+
+    # Ferramentas web
+    if name in {"websearch", "web_search", "search_web", "brave_search", "google"}:
+        query = inp.get("query") or inp.get("q") or ""
+        if query:
+            return f'pesquisar "{truncate_spy_text(str(query))}"'
+
+    if name in {"webfetch", "web_fetch", "fetch", "http_get", "curl"}:
+        url = inp.get("url") or inp.get("uri") or ""
+        if url:
+            return f"fetch {truncate_spy_text(str(url))}"
+
+    return ""
+
+
 def is_diff_command(command: str) -> bool:
     """Identifica comandos cujo output é útil como preview de diff."""
     command = (command or "").strip().lower()
