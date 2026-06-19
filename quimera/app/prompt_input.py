@@ -19,6 +19,9 @@ from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.history import FileHistory, InMemoryHistory
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.styles import Style
+from rich.console import Console
+from rich.rule import Rule
+
 from ..config import DEFAULT_USER_NAME
 
 
@@ -297,6 +300,11 @@ class InputGate:
             except Exception:
                 pass
 
+    def _print_rule(self) -> None:
+        """Imprime linha horizontal no estilo da UI."""
+        console = Console(highlight=False)
+        console.print(Rule(style="dim"))
+
     def _run_toolbar_clock(self, interval: float = 1.0) -> None:
         """Thread persistente que invalida o prompt a cada segundo enquanto ativo.
 
@@ -327,6 +335,7 @@ class InputGate:
             self._clock_condition.notify_all()
         try:
             self._flush_renderer()
+            self._print_rule()
 
             if self._session is not None:
                 toolbar_style = Style.from_dict({
@@ -348,9 +357,11 @@ class InputGate:
                     complete_while_typing=False,
                     vi_mode=False,
                 )
+                self._print_rule()
                 return result
             # Fallback para input() padrão quando prompt_toolkit não está disponível
             result = input(prompt)
+            self._print_rule()
             return result
         finally:
             with self._clock_condition:
