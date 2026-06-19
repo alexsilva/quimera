@@ -32,6 +32,32 @@ A suíte inclui testes para:
 - configuração, plugins, conexões e workspace;
 - evidências, storage, métricas e bugs.
 
+## Testes de UI relacionados a estilos (debug para bug de dim/muted)
+
+Recentemente, mudanças no `renderer.py` (401, 1611-1613) afetaram como saída de tools é estilizada. Para validar a renderização, execute:
+
+```bash
+# Mostrar saída de teste de UI com nível de log INFO para detalhes
+python quimera.py --test --agents fake-openai --visibility full 2>&1 | rg -i "TOOLS:"
+```
+
+Observar: saída de ferramentas com estilo `dim`/`muted` aparece com `dim` no terminal se o terminal suportar SGR 2. Se o estilo `dim` estiver ausente, pode ser:
+
+1. um problema no pipeline de estilo entre `show_plain` e o writer
+2. o terminal ignorando SGR 2 (`\033[2m`)
+3. o estilo sendo sobreposto por `Live`/`TransientOverlay`
+
+## Testar o pipeline de estilo
+
+Para inspecionar onde o estilo `dim` está sendo perdido, modifique o pipeline de estilo no `TerminalRenderer` (renderer.py) para adicionar debug:
+
+```python
+# Adicionar logging debug em render.py para trace de estilo
+def debug_show_plain(self, message, style=None, **kwargs):
+    logger.debug(f"show_plain chamado: message={message[:50]}..., style={style}")
+    super().show_plain(message, style, **kwargs)
+```
+
 ## Fixtures visuais
 
 `tests/fixtures/ui_baseline/` contém snapshots textuais por tema/densidade/largura. Ao alterar renderização, rode testes de UI e revise diffs com cuidado.

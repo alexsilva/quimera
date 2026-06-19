@@ -106,6 +106,10 @@ Ele contém metadados que influenciam segurança, como:
 
 Importante: esse contexto **não deve ser montado pelo modelo ou cliente MCP**. Ele é criado pelo runtime/servidor. O cliente pode mandar `_meta`, `params` ou `arguments`, mas esses dados são tratados como não confiáveis.
 
+### Observação sobre saída processada por tools
+
+As respostas das ferramentas são processadas pelo `ToolExecutor`, que aplica estilo e formatação através do `TerminalRenderer`. Recentemente, mudanças na renderização (renderer.py:401, 1611-1613) afetaram como o texto de tools é processado, incluindo a aplicação de estilos `dim`/`muted`. Problemas no pipeline de estilo podem afetar a visibilidade de output de ferramentas críticas, especialmente o resumo final de turn.
+
 ## O que é `run_id`
 
 `run_id` identifica uma execução lógica: por exemplo, uma rodada interna de agente, uma task humana, uma sessão HTTP inicializada ou uma chamada nativa.

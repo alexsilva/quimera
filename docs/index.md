@@ -38,3 +38,13 @@ Para validação não interativa:
 ```bash
 mkdocs build --strict
 ```
+
+## Atualização recente da documentação
+
+Recentemente, esta documentação foi atualizada para refletir mudanças no pipeline de renderização do Quimera:
+
+1. **Arquitetura interna**: Adicionado detalhes sobre o pipeline de estilo do `TerminalRenderer` (renderer.py:401, 1611-1613) após mudanças que afetaram a aplicação de estilos `dim`/`muted` em output de ferramentas.
+
+2. **Testes**: Adicionado seções sobre como testar e depurar estilos de UI, especialmente o bug recente onde saída de ferramentas não aparece com opacidade reduzida.
+
+Para detalhes completos, leia [Arquitetura interna](desenvolvimento/arquitetura.md) e [Testes](desenvolvimento/testes.md).

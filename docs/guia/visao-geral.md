@@ -14,6 +14,7 @@ As funcionalidades centrais são:
 6. **Runtime de ferramentas**: leitura/escrita de arquivos, patch, shell, web, TODOs, tasks e delegation são expostos para agentes.
 7. **MCP embutido**: agentes compatíveis recebem o runtime do Quimera como servidor MCP por socket Unix ou HTTP.
 8. **Estado e memória por workspace**: histórico, contexto persistente, resumo de sessão anterior, logs, métricas, banco SQLite de tasks e evidências ficam isolados por diretório de projeto.
+9. **Renderização de terminal**: O `TerminalRenderer` processa saída de agentes, aplica estilos visuais (cores, dim, bold) e atualiza a interface terminal de forma fluida. Recentemente, mudanças em `renderer.py` (401, 1611-1613) afetaram a aplicação de estilos `dim`/`muted` em output de ferramentas.
 
 ## Componentes principais
 
