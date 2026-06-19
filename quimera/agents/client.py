@@ -237,6 +237,16 @@ class AgentClient:
         """Exibe mensagens resumidas de stdout quando o plugin oferece formatter."""
         return self._spy_output_presenter.consume_stdout(agent, line)
 
+    def _show_live_feed_line(self, message: str, *, agent: str | None, muted: bool = False) -> None:
+        """Renderiza linha ao vivo do agente priorizando a janela transient rolante."""
+        if agent and hasattr(self.renderer, "update_agent_transient"):
+            self.renderer.update_agent_transient(agent, message)
+            return
+        if muted:
+            self.renderer.show_plain(message, agent=agent, muted=True)
+        else:
+            self.renderer.show_plain(message, agent=agent)
+
     @classmethod
     def _append_capped_stdout(cls, result_holder: dict, chunk: str) -> None:
         """Mantém apenas a cauda recente de stdout para evitar retenção ilimitada."""
@@ -480,22 +490,16 @@ class AgentClient:
                         if show_status:
                             _lbl = self._spy_output_presenter.compose_status_label(cmd[0])
                             self.renderer.update_agent_transient(agent or cmd[0], _lbl)
-                        if stream_type == "stderr" and self.visibility != Visibility.FULL:
-                            if stderr_lines_shown < MAX_STDERR_LINES:
-                                if self._is_tool_call_text(cleaned):
-                                    self.renderer.show_plain(cleaned, agent=agent, muted=True)
-                                else:
-                                    self.renderer.show_plain(cleaned, agent=agent)
-                                stderr_lines_shown += 1
-                            elif stderr_lines_shown == MAX_STDERR_LINES:
-                                self.renderer.show_plain(
-                                    f"... (stderr truncado, máximo {MAX_STDERR_LINES} linhas)", agent=agent)
-                                stderr_lines_shown += 1
-                        else:
+                        _stderr_limit = MAX_STDERR_LINES * 5
+                        if stderr_lines_shown < _stderr_limit:
                             if self._is_tool_call_text(cleaned):
-                                self.renderer.show_plain(cleaned, agent=agent, muted=True)
+                                self._show_live_feed_line(cleaned, agent=agent, muted=True)
                             else:
-                                self.renderer.show_plain(cleaned, agent=agent)
+                                self._show_live_feed_line(cleaned, agent=agent)
+                        elif stderr_lines_shown == _stderr_limit:
+                            self._show_live_feed_line(
+                                f"... (stderr truncado, máximo {_stderr_limit} linhas)", agent=agent)
+                        stderr_lines_shown += 1
 
                     _elapsed = [0]  # mutable cell for on_item closure
 
@@ -581,7 +585,7 @@ class AgentClient:
                 error_kind="agent_exit",
                 return_code=proc.returncode,
             )
-            if error and stderr_lines_shown <= MAX_STDERR_LINES:
+            if error and (silent or agent):
                 tail = "\n".join(error.splitlines()[-5:])
                 if self._is_tool_call_text(tail):
                     self.renderer.show_plain(tail, agent=agent, muted=True)
@@ -597,7 +601,7 @@ class AgentClient:
                     command_name=cmd[0],
                     error_kind="agent_invalid_output",
                 )
-                if stderr_lines_shown <= MAX_STDERR_LINES:
+                if silent or agent:
                     tail = "\n".join(error.splitlines()[-5:])
                     if self._is_tool_call_text(tail):
                         self.renderer.show_plain(tail, agent=agent, muted=True)

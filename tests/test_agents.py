@@ -796,9 +796,9 @@ def test_agent_client_run_spy_shows_stderr_lines(renderer):
         with patch("time.sleep"):
             result = client.run(["codex", "exec"], silent=False, agent="codex", show_status=False)
 
-    assert "agent_message" in result
-    renderer.show_plain.assert_any_call("tool: exec_command", agent="codex", muted=True)
-    renderer.show_plain.assert_any_call("tool: apply_patch", agent="codex", muted=True)
+    assert '"text":"ok"' in result
+    renderer.update_agent_transient.assert_any_call("codex", "tool: exec_command")
+    renderer.update_agent_transient.assert_any_call("codex", "tool: apply_patch")
 
 
 def test_agent_client_run_spy_shows_codex_stdout_context(renderer):
@@ -820,10 +820,12 @@ def test_agent_client_run_spy_shows_codex_stdout_context(renderer):
         with patch("time.sleep"):
             result = client.run(["codex", "exec"], silent=False, agent="codex", show_status=False)
 
+    assert "reasoning" in result
     assert "agent_message" in result
     renderer.update_agent_transient.assert_any_call("codex", "Vou checar o estado do repositório antes de editar")
-    renderer.show_plain.assert_any_call("$ git status", agent="codex", muted=True)
-    # exit_code=0 é silencioso — nenhum [ok] emitido
+    transient_lines = [call.args[1] for call in renderer.update_agent_transient.call_args_list]
+    assert any("TOOL_START" in line and "cmd=git status" in line for line in transient_lines)
+    assert any("TOOL_END" in line and "status=ok" in line for line in transient_lines)
     renderer.update_agent_transient.assert_any_call(
         "codex", "Encontrei alterações locais e vou seguir sem revertê-las."
     )
@@ -872,12 +874,11 @@ def test_agent_client_run_summary_flushes_compacted_responses_before_context(ren
 
     renderer.update_agent_transient.assert_any_call("codex", "linha 1")
     renderer.update_agent_transient.assert_any_call("codex", "linha 2")
-    assert any("$ git status" in str(c) for c in renderer.update_agent_transient.call_args_list)
-    assert ("$ git status",) not in [call.args for call in renderer.show_plain.call_args_list]
+    renderer.update_agent_transient.assert_any_call("codex", "$ git status")
 
 
 def test_agent_client_run_summary_keeps_completed_tool_line_transient(renderer):
-    """Verifica que agent client run summary keeps completed tool line transient."""
+    """Verifica que agent client run summary mantém tool completion no buffer transient."""
     client = AgentClient(renderer, visibility=Visibility.SUMMARY)
     with patch("subprocess.Popen") as mock_popen:
         mock_proc = MagicMock()
@@ -893,9 +894,8 @@ def test_agent_client_run_summary_keeps_completed_tool_line_transient(renderer):
         with patch("time.sleep"):
             client.run(["codex", "exec"], silent=False, agent="codex", show_status=True)
 
-    assert any("$ git diff -- quimera/agents.py" in str(c) for c in renderer.update_agent_transient.call_args_list) or any("✓ git diff -- quimera/agents.py" in str(c) for c in renderer.update_agent_transient.call_args_list)
-    assert ("✓ git diff -- quimera/agents.py",) not in [call.args for call in renderer.show_plain.call_args_list]
-    assert ("$ git diff -- quimera/agents.py",) not in [call.args for call in renderer.show_plain.call_args_list]
+    renderer.update_agent_transient.assert_any_call("codex", "$ git diff -- quimera/agents.py")
+    renderer.update_agent_transient.assert_any_call("codex", "✓ git diff -- quimera/agents.py")
 
 
 def test_agent_client_run_summary_shows_diff_output_and_keeps_next_operation_clean(renderer):
@@ -918,9 +918,8 @@ def test_agent_client_run_summary_shows_diff_output_and_keeps_next_operation_cle
 
     client.flush_pending_summary()
 
-    assert any("$ git status --short" in str(c) for c in renderer.update_agent_transient.call_args_list)
-    assert ("$ git status --short",) not in [call.args for call in renderer.show_plain.call_args_list]
-    assert ("✓ git diff -- quimera/agents.py",) not in [call.args for call in renderer.show_plain.call_args_list]
+    renderer.update_agent_transient.assert_any_call("codex", "$ git status --short")
+    renderer.update_agent_transient.assert_any_call("codex", "✓ git diff -- quimera/agents.py")
     renderer.show_plain.assert_any_call("diff --git a/quimera/agents.py b/quimera/agents.py", agent="codex", muted=True)
     renderer.show_plain.assert_any_call("+nova linha", agent="codex", muted=True)
     assert client.last_spy_turn_detail is not None
@@ -932,7 +931,7 @@ def test_agent_client_run_summary_shows_diff_output_and_keeps_next_operation_cle
 
 
 def test_spy_output_presenter_keeps_next_operation_clean_after_diff_preview(renderer):
-    """Verifica que spy output presenter keeps next operation clean after diff preview."""
+    """Verifica que spy output presenter keeps next operation visible after diff preview."""
     presenter = SpyOutputPresenter(renderer, Visibility.SUMMARY)
 
     presenter.emit("codex", SpyEvent(kind="tool", text="$ git diff -- quimera/agents.py"))
@@ -944,10 +943,10 @@ def test_spy_output_presenter_keeps_next_operation_clean_after_diff_preview(rend
         presenter.emit("codex", event)
     presenter.emit("codex", SpyEvent(kind="tool", text="$ git status --short"))
 
+    renderer.update_agent_transient.assert_any_call("codex", "$ git diff -- quimera/agents.py")
+    renderer.update_agent_transient.assert_any_call("codex", "✓ git diff -- quimera/agents.py")
     renderer.show_plain.assert_any_call("diff --git a/quimera/agents.py b/quimera/agents.py", agent="codex", muted=True)
     renderer.show_plain.assert_any_call("+nova linha", agent="codex", muted=True)
-    assert ("✓ git diff -- quimera/agents.py",) not in [call.args for call in renderer.show_plain.call_args_list]
-    assert ("$ git status --short",) not in [call.args for call in renderer.show_plain.call_args_list]
     assert presenter.current_status_label == "$ git status --short"
 
 
@@ -1108,7 +1107,7 @@ def test_spy_output_presenter_full_mode_renders_tool_timeline(renderer):
 
 
 def test_agent_client_run_summary_does_not_persist_started_tool_without_status(renderer):
-    """Verifica que agent client run summary does not persist started tool without status."""
+    """Verifica que agent client run summary mantém tool start/completion no transient."""
     client = AgentClient(renderer, visibility=Visibility.SUMMARY)
     with patch("subprocess.Popen") as mock_popen:
         mock_proc = MagicMock()
@@ -1124,29 +1123,35 @@ def test_agent_client_run_summary_does_not_persist_started_tool_without_status(r
         with patch("time.sleep"):
             client.run(["codex", "exec"], silent=False, agent="codex", show_status=False)
 
-    assert ("✓ git diff -- quimera/agents.py",) not in [call.args for call in renderer.show_plain.call_args_list]
-    assert ("$ git diff -- quimera/agents.py",) not in [call.args for call in renderer.show_plain.call_args_list]
+    renderer.update_agent_transient.assert_any_call("codex", "$ git diff -- quimera/agents.py")
+    renderer.update_agent_transient.assert_any_call("codex", "✓ git diff -- quimera/agents.py")
 
 
 def test_spy_output_presenter_summary_keeps_tool_progress_transient(renderer):
-    """Verifica que spy output presenter summary keeps tool progress transient."""
+    """Verifica que spy output presenter summary mantém tool progress transient."""
     presenter = SpyOutputPresenter(renderer, Visibility.SUMMARY)
 
     presenter.emit("codex", SpyEvent(kind="tool", text="usando apply_patch"))
     presenter.emit("codex", SpyEvent(kind="tool", text="✓ editar quimera/agents.py"))
 
     assert presenter.current_status_label == ""
-    assert renderer.show_plain.call_count == 0
+    renderer.update_agent_transient.assert_has_calls([
+        call("codex", "usando apply_patch"),
+        call("codex", "✓ editar quimera/agents.py"),
+    ])
 
 
 def test_spy_output_presenter_summary_keeps_tool_failure_persistent(renderer):
-    """Verifica que spy output presenter summary keeps tool failure persistent."""
+    """Verifica que spy output presenter summary mantém tool failure transient."""
     presenter = SpyOutputPresenter(renderer, Visibility.SUMMARY)
 
     presenter.emit("codex", SpyEvent(kind="tool", text="$ pytest -q"))
     presenter.emit("codex", SpyEvent(kind="tool", text="✗ pytest -q (exit 1)"))
 
-    renderer.show_plain.assert_called_once_with("✗ pytest -q (exit 1)", agent="codex", muted=True)
+    renderer.update_agent_transient.assert_has_calls([
+        call("codex", "$ pytest -q"),
+        call("codex", "✗ pytest -q (exit 1)"),
+    ])
     assert presenter.current_status_label == ""
 
 
@@ -1318,8 +1323,7 @@ def test_agent_client_run_empty_stderr_line(renderer):
 
 
 def test_agent_client_run_stderr_truncation(renderer):
-    """Verifica que agent client run stderr truncation."""
-    # Line 147-153: stderr truncation at MAX_STDERR_LINES
+    """Verifica que agent client run no longer truncates stderr in summary mode."""
     client = AgentClient(renderer)
     with patch("subprocess.Popen") as mock_popen:
         mock_proc = MagicMock()
@@ -1333,16 +1337,9 @@ def test_agent_client_run_stderr_truncation(renderer):
         with patch("time.sleep"):
             result = client.run(["cmd"], silent=False)
             assert "output" in result
-            # Stderr truncado: exatamente MAX_STDERR_LINES linhas + 1 mensagem de truncamento
-            # (summary mode adiciona 2 calls extra de →/←, excluídos da contagem)
-            non_summary_calls = [
-                c for c in renderer.show_plain.call_args_list
-                if not any(
-                    str(c).startswith(f"call('{arrow}")
-                    for arrow in ("→", "←")
-                )
-            ]
-            assert len(non_summary_calls) == MAX_STDERR_LINES + 1
+            for idx in range(15):
+                renderer.show_plain.assert_any_call(f"error line {idx}", agent=None)
+            assert not any("stderr truncado" in str(c) for c in renderer.show_plain.call_args_list)
 
 
 def test_agent_client_run_no_output_with_error(renderer):
@@ -2090,6 +2087,130 @@ def test_spy_output_presenter_drops_interrupt_echo_etx_from_raw_stdout(renderer)
 
     assert consumed is False
     renderer.show_plain.assert_not_called()
+
+
+def test_spy_output_presenter_summary_persists_fallback_raw_stdout(renderer):
+    """Verifica que spy output presenter summary envia fallback raw stdout ao transient."""
+    presenter = SpyOutputPresenter(renderer, Visibility.SUMMARY)
+
+    consumed = presenter.consume_stdout("unknown-agent", "linha crua do agente\n")
+
+    assert consumed is True
+    renderer.update_agent_transient.assert_called_once_with("unknown-agent", "linha crua do agente")
+
+
+def test_spy_output_presenter_uses_muted_feed_for_summary_response_when_supported():
+    """Verifica que summary response vai para o transient do agente (desaparece ao final)."""
+    class FeedRenderer:
+        supports_agent_feed = True
+
+        def __init__(self):
+            self.show_feed = MagicMock()
+            self.show_plain = MagicMock()
+            self.update_agent_transient = MagicMock()
+
+    renderer = FeedRenderer()
+    presenter = SpyOutputPresenter(renderer, Visibility.SUMMARY)
+
+    presenter.emit("codex", SpyEvent(kind="response", text="mensagem transitória", transient=True))
+
+    renderer.update_agent_transient.assert_called_once_with("codex", "mensagem transitória")
+    renderer.show_feed.assert_not_called()
+    renderer.show_plain.assert_not_called()
+
+
+def test_agent_client_uses_transient_for_live_stderr_when_renderer_supports_it():
+    """Verifica que stderr ao vivo volta para a janela transient mesmo com feed disponível."""
+    class FeedRenderer:
+        supports_agent_feed = True
+
+        def __init__(self):
+            self.show_feed = MagicMock()
+            self.show_plain = MagicMock()
+            self.update_agent_transient = MagicMock()
+            self.clear_agent_transient = MagicMock()
+            self.update_agent_elapsed = MagicMock()
+            self.clear_agent_elapsed = MagicMock()
+            self.request_toolbar_refresh = MagicMock()
+            self.show_error = MagicMock()
+            self.show_turn_summary = MagicMock()
+
+    renderer = FeedRenderer()
+    client = AgentClient(renderer, visibility=Visibility.SUMMARY)
+    with patch("subprocess.Popen") as mock_popen:
+        mock_proc = MagicMock()
+        mock_proc.stdout = iter(["output\n"])
+        mock_proc.stderr = iter(["stderr line\n"])
+        mock_proc.returncode = 0
+        mock_proc.stdin = MagicMock()
+        mock_popen.return_value = mock_proc
+
+        with patch("time.sleep"):
+            result = client.run(["cmd"], silent=False, agent="codex", show_status=False)
+
+    assert "output" in result
+    renderer.update_agent_transient.assert_any_call("codex", "stderr line")
+    renderer.show_feed.assert_not_called()
+    renderer.show_plain.assert_any_call("execução concluída", agent="codex", muted=True)
+
+
+def test_spy_output_presenter_summary_keeps_lifecycle_context_only_in_status(renderer):
+    """Verifica que lifecycle de início não entra no buffer transient em summary."""
+    presenter = SpyOutputPresenter(renderer, Visibility.SUMMARY)
+
+    presenter.emit("codex", SpyEvent(kind="context", text="iniciando execução", transient=True))
+
+    renderer.update_agent_transient.assert_not_called()
+    renderer.show_plain.assert_not_called()
+    assert presenter.current_status_label == "iniciando execução"
+
+
+def test_spy_output_presenter_summary_persists_detailed_context(renderer):
+    """Verifica que spy output presenter summary persists detailed context."""
+    presenter = SpyOutputPresenter(renderer, Visibility.SUMMARY)
+
+    presenter.emit("codex", SpyEvent(kind="tool", text="$ git status --short"))
+    presenter.emit("codex", SpyEvent(kind="context", text="Vou inspecionar os handlers de tool antes de editar.", transient=True))
+
+    renderer.update_agent_transient.assert_has_calls([
+        call("codex", "$ git status --short"),
+        call("codex", "Vou inspecionar os handlers de tool antes de editar."),
+    ])
+    assert presenter.current_status_label == ""
+
+
+def test_spy_output_presenter_summary_clears_tool_status_after_response(renderer):
+    """Verifica que response transitória após tool limpa o status label."""
+    presenter = SpyOutputPresenter(renderer, Visibility.SUMMARY)
+
+    presenter.emit("codex", SpyEvent(kind="tool", text="$ git status --short"))
+    presenter.emit("codex", SpyEvent(kind="response", text="Analisei o repositório e vou seguir.", transient=True))
+
+    renderer.update_agent_transient.assert_any_call("codex", "$ git status --short")
+    renderer.update_agent_transient.assert_any_call("codex", "Analisei o repositório e vou seguir.")
+    renderer.show_plain.assert_not_called()
+    assert presenter.current_status_label == ""
+
+
+def test_agent_client_run_summary_shows_all_stderr_lines(renderer):
+    """Verifica que agent client run summary shows all stderr lines."""
+    client = AgentClient(renderer)
+    with patch("subprocess.Popen") as mock_popen:
+        mock_proc = MagicMock()
+        lines = [f"error line {i}\n" for i in range(15)]
+        mock_proc.stdout = iter(["output\n"])
+        mock_proc.stderr = iter(lines)
+        mock_proc.returncode = 0
+        mock_proc.stdin = MagicMock()
+        mock_popen.return_value = mock_proc
+
+        with patch("time.sleep"):
+            result = client.run(["cmd"], silent=False)
+
+    assert "output" in result
+    for idx in range(15):
+        renderer.show_plain.assert_any_call(f"error line {idx}", agent=None)
+    assert not any("stderr truncado" in str(call_args) for call_args in renderer.show_plain.call_args_list)
 
 
 def test_spy_output_presenter_never_renders_interrupt_echo_from_event_text(renderer):

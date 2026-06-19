@@ -5,7 +5,7 @@ from pathlib import Path
 
 from quimera.agent_events import SpyEvent
 from quimera.plugins.base import AgentPlugin, register
-from quimera.plugins.spy_utils import truncate_spy_text
+from quimera.plugins.spy_utils import format_agent_message_lines, truncate_spy_text
 
 
 def _claude_runtime_rw_paths() -> list[str]:
@@ -136,9 +136,9 @@ def _format_claude_spy_event(line: str) -> list[SpyEvent]:
     for block in content:
         btype = block.get("type")
         if btype == "text":
-            text = _truncate_text((block.get("text") or "").strip())
+            text = (block.get("text") or "").strip()
             if text:
-                messages.append(SpyEvent(kind="response", text=text, transient=True))
+                messages.extend(format_agent_message_lines(text))
         elif btype == "tool_use":
             tool_name = block.get("name") or "ferramenta"
             messages.append(SpyEvent(kind="tool", text=f"usando {tool_name}", transient=True))

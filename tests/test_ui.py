@@ -286,6 +286,21 @@ class TestTerminalRenderer:
         assert "🔷  Codex execução concluída" in rendered
         renderer.close(timeout=1.0)
 
+    def test_show_feed_with_agent_does_not_clear_transient(self):
+        """Test show_feed preserves live/transient state while appending to feed."""
+        renderer = TerminalRenderer()
+        renderer._console = Console(width=60, record=True, force_terminal=False)
+        renderer.clear_agent_transient = MagicMock()
+
+        with patch("quimera.ui._agent_style", return_value=("blue", "🔷  Codex")):
+            renderer.show_feed("execução concluída", agent="codex")
+
+        renderer.flush()
+        rendered = renderer._console.export_text()
+        assert "🔷  Codex execução concluída" in rendered
+        renderer.clear_agent_transient.assert_not_called()
+        renderer.close(timeout=1.0)
+
     def test_show_plain_without_agent(self, renderer_no_rich, capsys):
         """Test show_plain without agent."""
         renderer_no_rich.show_plain("Plain message")

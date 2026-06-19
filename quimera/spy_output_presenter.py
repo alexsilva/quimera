@@ -430,9 +430,7 @@ class SpyOutputPresenter:
             return []
         if not text:
             return []
-        if len(text) > 200:
-            text = text[:197] + "..."
-        return [SpyEvent(kind="response", text=text, transient=True)]
+        return [SpyEvent(kind="response", text=text, transient=True, data={"source": "raw_stdout"})]
 
     def notify_agent_started(self, agent: str | None) -> None:
         """Emite evento transitório de início de execução para todos os CLIs."""
@@ -485,25 +483,32 @@ class SpyOutputPresenter:
             payload = event.text.strip()
             if payload.startswith("✗ "):
                 self.flush(agent)
-                self._show(agent, event)
+                self._show(agent, SpyEvent(kind="tool", text=payload, transient=True, data=event.data))
                 self.current_status_label = ""
                 return
-
             if payload.startswith("✓ "):
+                self.flush(agent)
+                self._show(agent, SpyEvent(kind="tool", text=payload, transient=True, data=event.data))
                 self.current_status_label = ""
                 return
-
+            self.flush(agent)
+            self._show(agent, SpyEvent(kind="tool", text=payload, transient=True, data=event.data))
             self.current_status_label = payload
-            self._show(agent, SpyEvent(kind="tool", text=event.text, transient=True, data=event.data))
             return
 
         if event.kind == "context":
-            self.current_status_label = event.text
-            if event.transient:
+            text = event.text.strip()
+            if self._is_lifecycle_context(text):
+                self.current_status_label = event.text
                 if self._is_terminal_completion_context(event):
                     self.current_status_label = ""
                     return
-                self._show(agent, event)
+                return
+
+            if text:
+                self.flush(agent)
+                self._show(agent, SpyEvent(kind="context", text=text, transient=True, data=event.data))
+                self.current_status_label = ""
             return
 
         if event.kind == "diff":
@@ -511,9 +516,6 @@ class SpyOutputPresenter:
             self._show(agent, event)
             return
 
-        # Eventos "raw" são stdout bruto sem formatter estruturado (ex: Claude CLI).
-        # Em SUMMARY, o conteúdo já será exibido pelo card final via show_message().
-        # Exibir inline aqui causaria double rendering (inline + card).
         if event.kind == "raw":
             return
 
@@ -526,7 +528,7 @@ class SpyOutputPresenter:
             return
 
         self.flush(agent)
-        self._show(agent, event)
+        self._show(agent, SpyEvent(kind="response", text=event.text, transient=True, data=event.data))
         self.current_status_label = ""
 
     def flush(self, agent: str | None) -> None:
@@ -563,10 +565,22 @@ class SpyOutputPresenter:
             self.last_message = dedupe_key
             return
         if event.kind == "tool":
-            self.renderer.show_plain(rendered, agent=agent, muted=True)
+            self._show_persistent_line(rendered, agent=agent, muted=True)
         else:
             if agent:
-                self.renderer.show_plain(rendered, agent=agent, muted=True)
+                self._show_persistent_line(rendered, agent=agent, muted=True)
             else:
-                self.renderer.show_plain(rendered, agent=agent)
+                self._show_persistent_line(rendered, agent=agent)
         self.last_message = dedupe_key
+
+    def _show_persistent_line(self, message: str, *, agent: str | None, muted: bool = False) -> None:
+        """Escreve no feed persistente sem derrubar o overlay quando suportado."""
+        if getattr(self.renderer, "supports_agent_feed", False) is True:
+            self.renderer.show_feed(message, agent=agent, muted=muted)
+            return
+        self.renderer.show_plain(message, agent=agent, muted=muted)
+
+    @staticmethod
+    def _is_lifecycle_context(text: str) -> bool:
+        normalized = text.strip().lower()
+        return normalized in {"iniciando execução", "execução concluída"}

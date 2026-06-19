@@ -451,6 +451,8 @@ class _TransientOverlay:
 class TerminalRenderer:
     """Camada exclusiva de apresentação no terminal. Nunca toca em persistência."""
 
+    supports_agent_feed = True
+
     def __init__(
         self,
         theme: str | None = None,
@@ -1474,15 +1476,18 @@ class TerminalRenderer:
         """Exibe plain."""
         if agent:
             self.clear_agent_transient(agent)
+        self.show_feed(message, agent=agent, muted=muted)
+
+    def show_feed(self, message, agent=None, muted=False):
+        """Exibe linha persistente no feed sem limpar o transient/live do agente."""
         clean_message = strip_ansi(str(message)).strip("\r\n")
         if self._console:
             if agent:
                 style, label = self._agent_style(agent)
-                segments = [(label, f"bold {style}"), (" ")]
                 if muted:
-                    segments.append((clean_message, "dim"))
+                    segments = [(label, f"dim {style}"), (" "), (clean_message, "dim")]
                 else:
-                    segments.append((clean_message,))
+                    segments = [(label, f"bold {style}"), (" "), (clean_message,)]
                 line = Text.assemble(*segments)
             else:
                 if muted:

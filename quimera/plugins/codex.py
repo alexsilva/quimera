@@ -9,6 +9,7 @@ from quimera.plugins.base import AgentPlugin, CliConnection, register
 from quimera.plugins.spy_utils import (
     format_agent_message_lines,
     format_command_output_preview,
+    normalize_spy_text,
     truncate_spy_text,
 )
 
@@ -151,7 +152,7 @@ def _format_codex_spy_event(line: str) -> list[SpyEvent]:
         text = (item.get("text") or item.get("summary") or "").strip()
         if not text:
             return [SpyEvent(kind="context", text=f"raciocínio {phase}", transient=True)]
-        return [SpyEvent(kind="context", text=_truncate_text(text.splitlines()[0]), transient=True)]
+        return [SpyEvent(kind="context", text=normalize_spy_text(text), transient=True)]
 
     if itype == "agent_message":
         text = (item.get("text") or "").strip()
