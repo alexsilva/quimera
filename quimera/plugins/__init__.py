@@ -12,6 +12,7 @@ def enable_test_plugins() -> tuple[str, ...]:
     return TEST_PLUGIN_NAMES
 
 
+from . import antigravity as _antigravity  # noqa: F401
 from . import claude as _claude  # noqa: F401
 from . import codex as _codex  # noqa: F401
 from . import gemini as _gemini  # noqa: F401

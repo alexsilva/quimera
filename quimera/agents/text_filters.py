@@ -60,7 +60,7 @@ def _should_ignore_stderr_line(agent: str | None, line: str) -> bool:
     if plugin.stderr_noise and cleaned in plugin.stderr_noise:
         return True
     if plugin.stderr_noise_patterns:
-        compiled = _compile_noise_patterns(plugin.stderr_noise_patterns)
+        compiled = _compile_noise_patterns(tuple(plugin.stderr_noise_patterns))
         return any(p.search(cleaned) for p in compiled)
     return False
 
