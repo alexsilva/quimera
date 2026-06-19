@@ -175,22 +175,22 @@ class TestBuildToolbar:
                 assert "paralelo:1/1" in result
                 assert "fila:2" in result
 
-    def test_toolbar_empty_context_returns_empty_string(self):
+    def test_toolbar_empty_context_returns_empty_fragments(self):
         with patch("quimera.app.prompt_input.PromptSession"):
             with patch("quimera.app.prompt_input.InMemoryHistory"):
                 gate = _make_gate(toolbar_context_resolver=lambda: {})
                 toolbar_fn = gate._build_toolbar()
                 result = toolbar_fn()
-                assert result == ""
+                assert result == []
 
-    def test_toolbar_resolver_exception_returns_empty_string(self):
+    def test_toolbar_resolver_exception_returns_empty_fragments(self):
         with patch("quimera.app.prompt_input.PromptSession"):
             with patch("quimera.app.prompt_input.InMemoryHistory"):
                 def bad(): raise RuntimeError("boom")
                 gate = _make_gate(toolbar_context_resolver=bad)
                 toolbar_fn = gate._build_toolbar()
                 result = toolbar_fn()
-                assert result == ""
+                assert result == []
 
 
 # ---------------------------------------------------------------------------

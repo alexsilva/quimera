@@ -7,8 +7,6 @@ from __future__ import annotations
 
 import asyncio
 import atexit
-import html
-import re
 import shutil
 import sys
 import threading
@@ -20,18 +18,8 @@ from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.history import FileHistory, InMemoryHistory
 from prompt_toolkit.key_binding import KeyBindings
-from rich.console import Console
-from rich.rule import Rule
-
+from prompt_toolkit.styles import Style
 from ..config import DEFAULT_USER_NAME
-
-
-_HTML_TAG_RE = re.compile(r"<[^>]+>")
-
-
-def _visible_len(html_str: str) -> int:
-    """Comprimento visível de uma string HTML (sem tags)."""
-    return len(_HTML_TAG_RE.sub("", html_str))
 
 
 class PromptFormatter:
@@ -174,11 +162,13 @@ class InputGate:
         self._theme_cycle_handler = handler
 
     def _build_toolbar(self):
-        """Monta o conteúdo da toolbar contextual.
+        """Toolbar com fragmentos estilo VS Code, usando FormattedText + Style.
 
-        Retorna uma callable para que o prompt_toolkit reavalie a toolbar a
-        cada redesenho — necessário para que Ctrl+T atualize o nome do tema
-        em tempo real via event.app.invalidate().
+        Cada item vira um fragmento ``(style, text)`` com classe ``toolbar.btn.*``,
+        renderizado como chip retangular com fundo ``#3e3e3e`` sobre o fundo
+        ``#252526`` da toolbar. A ``Style.from_dict`` define as cores por classe
+        usando notaçao ponto (``toolbar.btn.accent``), que prompt_toolkit expande
+        automaticamente para ``toolbar`` → ``toolbar.btn`` → ``toolbar.btn.accent``.
         """
         resolver = self._toolbar_context_resolver
         if not callable(resolver):
@@ -188,7 +178,7 @@ class InputGate:
             def _clip(value: str, max_len: int) -> str:
                 if len(value) <= max_len:
                     return value
-                return value[: max_len - 3].rstrip() + "..."
+                return value[:max_len - 1].rstrip() + "…"
 
             try:
                 context = resolver() or {}
@@ -197,66 +187,68 @@ class InputGate:
 
             responder = str(context.get("responder", "")).strip()
             model = str(context.get("model", "")).strip()
-            theme = str(context.get("theme", "")).strip()
-            parallel = str(context.get("parallel", "")).strip()
-            turns = str(context.get("turns", "")).strip()
-            open_bugs = str(context.get("open_bugs", "")).strip()
-            active_agents = str(context.get("active_agents", "")).strip()
-            mode = str(context.get("mode", "")).strip()
             branch = str(context.get("branch", "")).strip()
             elapsed = str(context.get("elapsed", "")).strip()
+            active_agents = str(context.get("active_agents", "")).strip()
+            parallel = str(context.get("parallel", "")).strip()
+            open_bugs = str(context.get("open_bugs", "")).strip()
+            mode = str(context.get("mode", "")).strip()
+            turns = str(context.get("turns", "")).strip()
             session_id = str(context.get("session", "")).strip()
-            if not any([responder, model, theme, parallel, turns,
-                        open_bugs, active_agents, mode, branch, elapsed, session_id]):
-                return ""
+            theme = str(context.get("theme", "")).strip()
 
-            parts = []
-            # Primary: who responds + model
+            visible_values = [
+                responder, model, branch, elapsed, active_agents, parallel,
+                open_bugs, mode, turns, session_id, theme,
+            ]
+            if not any(visible_values):
+                return []
+
+            def _btn(text: str, style_cls: str) -> tuple:
+                return (f"class:toolbar.{style_cls}", f" {text} ")
+
+            left = []
             if responder:
-                parts.append(
-                    f"<b><style fg='#8fd3ff'> {html.escape(responder)} </style></b>"
-                )
+                left.append(_btn(_clip(responder, 24), "btn.accent"))
             if model:
-                parts.append(f"<style fg='#b7bcc5'> {html.escape(_clip(model, 48))} </style>")
-            # Activity: agents running + parallel slots
-            if active_agents:
-                parts.append(f"<style fg='#79d279'> ⚡ {html.escape(_clip(active_agents, 48))} </style>")
-            if parallel:
-                parts.append(
-                    f"<b><style fg='#ffd787'> ⇉ {html.escape(parallel)} </style></b>"
-                )
-            # Issues
-            if open_bugs:
-                parts.append(
-                    f"<b><style fg='#ff9f9f'> ⚠ {html.escape(open_bugs)} </style></b>"
-                )
-            # Context: mode, branch, time, counters
-            if mode:
-                parts.append(f"<i><style fg='#c3a6ff'> ◆ {html.escape(_clip(mode, 18))} </style></i>")
+                left.append(_btn(_clip(model, 24), "btn.model"))
             if branch:
-                parts.append(f"<style fg='#b0b0b0'> ⎇ {html.escape(_clip(branch, 24))} </style>")
+                left.append(_btn(f"\u2387 {_clip(branch, 20)}", "btn.info"))
             if elapsed:
-                parts.append(f"<style fg='#b0b0b0'> ⏱ {html.escape(elapsed)} </style>")
+                left.append(_btn(f"\u29d6 {elapsed}", "btn.info"))
+            if active_agents:
+                left.append(_btn(f"\u2699 {_clip(active_agents, 30)}", "btn.info"))
+            if parallel:
+                left.append(_btn(f"\u26a1 {parallel}", "btn.info"))
+
+            right = []
+            if open_bugs:
+                right.append(_btn(f"\u2717 {open_bugs}", "btn.err"))
             if turns:
-                parts.append(f"<style fg='#b0b0b0'> ↺ {html.escape(turns)} </style>")
+                right.append(_btn(f"\u21ba {turns}", "btn.dim"))
+            if mode:
+                right.append(_btn(f"\u25c8 {mode}", "btn.dim"))
             if theme:
-                parts.append(f"<style fg='#b0b0b0'> ◈ {html.escape(_clip(theme, 18))} </style>")
+                right.append(_btn(f"\u2728 {_clip(theme, 12)}", "btn.dim"))
             if session_id:
-                parts.append(f"<style fg='#909090'> 🆔 {html.escape(_clip(session_id, 12))} </style>")
-            separator = "<style fg='#666666'>·</style>"
-            # Clipa partes da direita (menor prioridade) até o conteúdo caber no terminal.
-            # Reserva 4 colunas para bordas + padding da toolbar.
-            term_cols = shutil.get_terminal_size(fallback=(80, 24)).columns
-            budget = max(20, term_cols - 4)
-            while len(parts) > 1:
-                candidate = separator.join(parts)
-                if _visible_len(candidate) + 4 <= budget:
-                    break
-                parts.pop()
-            content = separator.join(parts)
-            left_edge = "<style fg='#666666' bg='#1d1d1d'>▎</style>"
-            right_edge = "<style fg='#666666' bg='#1d1d1d'>▕</style>"
-            return HTML(f"<style bg='#1d1d1d'> {left_edge} {content} {right_edge} </style>")
+                right.append(_btn(f"\U0001f517 {_clip(session_id, 22)}", "btn.dim"))
+
+            term_w = shutil.get_terminal_size(fallback=(80, 24)).columns
+
+            left_visible = sum(len(t) for _, t in left) if left else 0
+            right_visible = sum(len(t) for _, t in right) if right else 0
+            if right:
+                padding = max(1, term_w - left_visible - right_visible)
+            else:
+                padding = 0
+
+            fragments = [("", " ")]
+            fragments.extend(left)
+            if right:
+                fragments.append(("", " " * (padding - 1)))
+            fragments.extend(right)
+
+            return fragments
 
         return _toolbar
 
@@ -305,11 +297,6 @@ class InputGate:
             except Exception:
                 pass
 
-    def _print_rule(self) -> None:
-        """Imprime linha horizontal no estilo da UI."""
-        console = Console(highlight=False)
-        console.print(Rule(style="dim"))
-
     def _run_toolbar_clock(self, interval: float = 1.0) -> None:
         """Thread persistente que invalida o prompt a cada segundo enquanto ativo.
 
@@ -340,23 +327,30 @@ class InputGate:
             self._clock_condition.notify_all()
         try:
             self._flush_renderer()
-            self._print_rule()
 
             if self._session is not None:
+                toolbar_style = Style.from_dict({
+                    "bottom-toolbar": "bg:#252526",
+                    "toolbar.btn": "bg:#3e3e3e",
+                    "toolbar.btn.accent": "fg:#5fc3ff bold",
+                    "toolbar.btn.model": "fg:#9cdcfe",
+                    "toolbar.btn.info": "fg:#d4d4d4",
+                    "toolbar.btn.dim": "fg:#9e9e9e",
+                    "toolbar.btn.err": "fg:#fc7b5f bold",
+                })
                 result = self._session.prompt(
                     prompt,
                     bottom_toolbar=self._build_toolbar(),
                     placeholder=self._build_placeholder(),
                     completer=self._build_completer(),
                     key_bindings=self._build_key_bindings(),
+                    style=toolbar_style,
                     complete_while_typing=False,
                     vi_mode=False,
                 )
-                self._print_rule()
                 return result
             # Fallback para input() padrão quando prompt_toolkit não está disponível
             result = input(prompt)
-            self._print_rule()
             return result
         finally:
             with self._clock_condition:

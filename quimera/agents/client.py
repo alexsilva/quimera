@@ -237,7 +237,7 @@ class AgentClient:
         """Exibe mensagens resumidas de stdout quando o plugin oferece formatter."""
         return self._spy_output_presenter.consume_stdout(agent, line)
 
-    def _show_live_feed_line(self, message: str, *, agent: str | None, muted: bool = False) -> None:
+    def _render_agent_transient(self, message: str, *, agent: str | None, muted: bool = False) -> None:
         """Renderiza linha ao vivo do agente priorizando a janela transient rolante."""
         if agent and hasattr(self.renderer, "update_agent_transient"):
             self.renderer.update_agent_transient(agent, message)
@@ -493,11 +493,11 @@ class AgentClient:
                         _stderr_limit = MAX_STDERR_LINES * 5
                         if stderr_lines_shown < _stderr_limit:
                             if self._is_tool_call_text(cleaned):
-                                self._show_live_feed_line(cleaned, agent=agent, muted=True)
+                                self._render_agent_transient(cleaned, agent=agent, muted=True)
                             else:
-                                self._show_live_feed_line(cleaned, agent=agent)
+                                self._render_agent_transient(cleaned, agent=agent)
                         elif stderr_lines_shown == _stderr_limit:
-                            self._show_live_feed_line(
+                            self._render_agent_transient(
                                 f"... (stderr truncado, máximo {_stderr_limit} linhas)", agent=agent)
                         stderr_lines_shown += 1
 

@@ -39,10 +39,8 @@ class TestBuildToolbar:
         )
         toolbar = gate._build_toolbar()
         assert callable(toolbar)
-        assert "<style fg='#b0b0b0'> ◈ chat </style>" in str(toolbar())
-        assert "bg='#1d1d1d'" in str(toolbar())
-        assert "▎" in str(toolbar())
-        assert "▕" in str(toolbar())
+        content = str(toolbar())
+        assert "chat" in content
 
     def test_toolbar_includes_turns_when_context_available(self):
         """Verifica que Test toolbar includes turns when context available."""
@@ -55,7 +53,7 @@ class TestBuildToolbar:
         assert callable(toolbar)
         content = str(toolbar())
         assert "5" in content
-        assert " ↺ 5 " in content
+        assert "↺ 5" in content
 
     def test_toolbar_includes_open_bugs_when_context_available(self):
         """Verifica que Test toolbar includes open bugs when context available."""
@@ -67,19 +65,19 @@ class TestBuildToolbar:
         toolbar = gate._build_toolbar()
         assert callable(toolbar)
         content = str(toolbar())
-        assert " ⚠ 3 " in content
+        assert "✗ 3" in content
 
     def test_toolbar_includes_parallel_status_when_context_available(self):
         """Verifica que Test toolbar includes parallel status when context available."""
         gate = InputGate(
             toolbar_context_resolver=lambda: {
-                "parallel": "paralelo:1/1 · 📥 2",
+                "parallel": "1/2",
             }
         )
         toolbar = gate._build_toolbar()
         assert callable(toolbar)
         content = str(toolbar())
-        assert " ⇉ paralelo:1/1 · 📥 2 " in content
+        assert "1/2" in content
 
     def test_toolbar_includes_mode_when_context_available(self):
         """Verifica que Test toolbar includes mode when context available."""
@@ -91,7 +89,7 @@ class TestBuildToolbar:
         toolbar = gate._build_toolbar()
         assert callable(toolbar)
         content = str(toolbar())
-        assert " ◆ planning " in content
+        assert "planning" in content
 
     def test_toolbar_includes_active_agents_when_context_available(self):
         """Verifica que Test toolbar includes active agents when context available."""
@@ -103,19 +101,20 @@ class TestBuildToolbar:
         toolbar = gate._build_toolbar()
         assert callable(toolbar)
         content = str(toolbar())
-        assert " ⚡ codex, claude " in content
+        assert "codex, claude" in content
 
     def test_toolbar_clips_long_model_name(self):
         """Verifica que Test toolbar clips long model name."""
         gate = InputGate(
             toolbar_context_resolver=lambda: {
+                "responder": "claude",
                 "model": "very-long-model-name-" * 4,
             }
         )
         toolbar = gate._build_toolbar()
         assert callable(toolbar)
         content = str(toolbar())
-        assert "..." in content
+        assert "…" in content
 
     def test_toolbar_clips_long_active_agents_list(self):
         """Verifica que Test toolbar clips long active agents list."""
@@ -127,7 +126,7 @@ class TestBuildToolbar:
         toolbar = gate._build_toolbar()
         assert callable(toolbar)
         content = str(toolbar())
-        assert "..." in content
+        assert "…" in content
 
     def test_toolbar_includes_all_fields_in_order(self):
         """Verifica que Test toolbar includes all fields in order."""
@@ -146,10 +145,10 @@ class TestBuildToolbar:
         toolbar = gate._build_toolbar()
         assert callable(toolbar)
         content = str(toolbar())
-        # responder deve vir antes de turns (nova ordem)
-        assert content.index("claude") < content.index(" ↺ 5 ")
+        # responder deve vir antes de turns
+        assert content.index("claude") < content.index("↺ 5")
         # parallel deve vir antes de bugs
-        assert content.index("1/2") < content.index("⚠")
+        assert content.index("1/2") < content.index("✗ 2")
         # responder presente
         assert "claude" in content
 
@@ -176,7 +175,7 @@ class TestBuildToolbar:
         assert callable(toolbar)
         content = str(toolbar())
         assert content != ""
-        assert " 🆔 abc12345 " in content
+        assert "\U0001f517 abc12345" in content
 
     def test_toolbar_includes_branch_when_context_available(self):
         """Verifica que Test toolbar includes branch when context available."""
@@ -188,7 +187,7 @@ class TestBuildToolbar:
         toolbar = gate._build_toolbar()
         assert callable(toolbar)
         content = str(toolbar())
-        assert " ⎇ feature-x " in content
+        assert "⎇ feature-x" in content
 
     def test_toolbar_includes_elapsed_when_context_available(self):
         """Verifica que Test toolbar includes elapsed when context available."""
@@ -200,7 +199,7 @@ class TestBuildToolbar:
         toolbar = gate._build_toolbar()
         assert callable(toolbar)
         content = str(toolbar())
-        assert " ⏱ 12m 34s " in content
+        assert "12m 34s" in content
 
     def test_toolbar_empty_with_only_elapsed_returns_nonempty(self):
         """Verifica que Test toolbar empty with only elapsed returns nonempty."""
