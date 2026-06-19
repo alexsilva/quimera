@@ -188,6 +188,12 @@ def run_chat_loop(
                 if threaded_chat and swallow_threaded_input_interrupt:
                     swallow_threaded_input_interrupt = False
                     continue
+                if threaded_chat:
+                    inflight = app.runtime_state.get_chat_inflight_count()
+                    if inflight > 0:
+                        chat_lifecycle.handle_local_interrupt()
+                        swallow_threaded_input_interrupt = True
+                        continue
                 raise
             if user is None:
                 if not sys.stdin.isatty():

@@ -197,7 +197,8 @@ class AgentClient:
                 self._cancel_notice_shown = True
                 should_show = True
         if should_show:
-            self._show_error("[cancelado] pelo usuário")
+            ts = datetime.now().strftime("%H:%M:%S")
+            self._show_error(f"[cancelado] pelo usuário às {ts}")
 
     # ------------------------------------------------------------------
     # Helpers de sinal (delegam para EscMonitor para retrocompatibilidade)
@@ -430,6 +431,7 @@ class AgentClient:
                     self._agent_running = False
                     self._current_proc = None
                     self._stop_esc_monitor()
+                    self._show_cancelled_once()
                     return None
                 if termination == ProcessRunner.RATE_LIMIT:
                     self._agent_running = False
@@ -548,7 +550,7 @@ class AgentClient:
 
             self._spy_output_presenter.flush(agent)
             proc.wait()
-            if not silent and self.visibility == Visibility.SUMMARY and proc.returncode == 0:
+            if not silent and self.visibility == Visibility.SUMMARY and proc.returncode == 0 and not self._cancel_event.is_set():
                 if agent:
                     self.renderer.show_plain("execução concluída", agent=agent, muted=True)
                 else:

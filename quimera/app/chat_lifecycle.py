@@ -81,11 +81,11 @@ class ChatLifecycle:
         agent_client = self._agent_client
         if agent_client is not None:
             agent_client.cancel_active_work()
+            agent_client._show_cancelled_once()
         if self._renderer is not None:
             self._renderer.reset_visual_state()
         if self._turn_manager is not None:
             self._turn_manager.reset()
-        self._system_layer.show_muted_message("[cancelado] pelo usuário")
         self._refresh_parallel_toolbar()
 
     def process_async_message(self, user):

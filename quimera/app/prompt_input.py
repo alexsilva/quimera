@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import contextvars
 import shutil
 import sys
 import threading
@@ -126,6 +127,7 @@ class InputGate:
         self._active_lock = threading.Lock()
         self._active = False
         self._owner_thread_id: int | None = None
+        self._running_context: contextvars.Context | None = None
         self._clock_condition = threading.Condition()
         self._clock_active = False
         self._clock_thread = threading.Thread(
@@ -301,7 +303,7 @@ class InputGate:
                 pass
 
     def _print_rule(self) -> None:
-        """Imprime linha horizontal no estilo da UI."""
+        """Imprime divisor horizontal que delimita o bloco de input."""
         console = Console(highlight=False)
         console.print(Rule(style="dim"))
 
@@ -347,6 +349,14 @@ class InputGate:
                     "toolbar.btn.dim": "fg:#9e9e9e",
                     "toolbar.btn.err": "fg:#fc7b5f bold",
                 })
+
+                def _capture_context() -> None:
+                    # Chamado de dentro do run_async do prompt_toolkit, onde
+                    # _current_app_session já está definido no contextvars.
+                    # Salva o contexto para que run_in_terminal_message possa
+                    # agendar callbacks com a identidade correta do app.
+                    self._running_context = contextvars.copy_context()
+
                 result = self._session.prompt(
                     prompt,
                     bottom_toolbar=self._build_toolbar(),
@@ -356,6 +366,7 @@ class InputGate:
                     style=toolbar_style,
                     complete_while_typing=False,
                     vi_mode=False,
+                    pre_run=_capture_context,
                 )
                 return result
             # Fallback para input() padrão quando prompt_toolkit não está disponível
@@ -365,6 +376,7 @@ class InputGate:
             with self._clock_condition:
                 self._clock_active = False
                 self._clock_condition.notify_all()
+            self._running_context = None
             self._set_active_state(False)
 
     def get_line_buffer(self) -> str:
@@ -434,8 +446,9 @@ class InputGate:
             except Exception:
                 pass
 
+        ctx = self._running_context
         try:
-            loop.call_soon_threadsafe(_schedule)
+            loop.call_soon_threadsafe(_schedule, context=ctx)
         except Exception:
             return False
         return True

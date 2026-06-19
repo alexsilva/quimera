@@ -282,6 +282,26 @@ class TestFlushRenderer:
 # ---------------------------------------------------------------------------
 
 class TestInputGateCall:
+    def test_prompt_rule_uses_block_delimiter(self):
+        """O divisor do input deve ser um delimitador visual de bloco."""
+        gate = InputGate()
+        with patch("quimera.app.prompt_input.Console") as console_cls:
+            gate._print_rule()
+
+        renderable = console_cls.return_value.print.call_args.args[0]
+        assert renderable.style == "dim"
+
+    def test_prompt_rule_precedes_prompt_call(self):
+        """O input deve ter um divisor superior sem duplicar no fechamento."""
+        gate = InputGate()
+        gate._session = MagicMock()
+        gate._session.prompt.return_value = "ok"
+        with patch.object(gate, "_print_rule") as print_rule:
+            result = gate("Alex: ")
+
+        assert result == "ok"
+        assert print_rule.call_count == 1
+
     def test_flush_called_before_prompt(self):
         """Verifica que Test flush called before prompt."""
         renderer = MagicMock()
