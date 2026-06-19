@@ -357,11 +357,9 @@ class InputGate:
                     complete_while_typing=False,
                     vi_mode=False,
                 )
-                self._print_rule()
                 return result
             # Fallback para input() padrão quando prompt_toolkit não está disponível
             result = input(prompt)
-            self._print_rule()
             return result
         finally:
             with self._clock_condition:
