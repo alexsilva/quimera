@@ -603,6 +603,33 @@ class TestTerminalRenderer:
         assert "🟢  Gemini gemini msg 2" in rendered
         renderer.close(timeout=1.0)
 
+    def test_update_agent_transient_above_prompt_writes_muted_output(self):
+        """Output transitório acima do prompt deve ser escrito como muted/dim."""
+        import sys
+
+        renderer = TerminalRenderer()
+        renderer._console = Console(width=100, record=True, force_terminal=False)
+        writes = []
+
+        def run_above_fn(fn):
+            fn()
+            return True
+
+        def capture(value):
+            writes.append(value)
+            return len(value)
+
+        renderer.set_prompt_integration(lambda: True, run_above_fn)
+
+        with patch("quimera.ui._agent_style", return_value=("cyan", "🔷  Codex")):
+            with patch.object(sys.stdout, "write", side_effect=capture):
+                renderer.update_agent_transient("codex", "pensando alto")
+                renderer.flush()
+
+        joined = "".join(writes)
+        assert "\033[2m🔷  Codex pensando alto\033[0m" in joined
+        renderer.close(timeout=1.0)
+
     def test_cprint_with_run_above_resets_prev_lines_so_next_transient_is_correct(self):
         """_clear_and_print deve resetar _prev_lines[0]=0 ao executar via run_above.
         Sem o fix, o próximo TransientWindowEvent usaria p=N stale e emitiria
@@ -777,6 +804,20 @@ class TestRenderOrdering:
         output = r._console.export_text()
         assert "TOOLS: 1 chamadas" in output
         assert "None TOOLS:" not in output
+
+    def test_show_turn_summary_with_agent_uses_agent_style(self, recording_renderer):
+        """Resumo de tools com agent deve seguir o estilo visual do agente."""
+        r = recording_renderer
+        r.show_turn_summary("codex", {
+            "tools": [{"tool": "bash", "status": "ok", "duration_ms": 42}],
+            "trace_id": "trace-1",
+        })
+
+        r.flush()
+        output = r._console.export_text()
+        assert "TOOLS: 1 chamadas" in output
+        assert "Codex TOOLS:" in output
+        assert "⚙ codex TOOLS:" not in output
 
     def test_concurrent_prints_no_exception(self, recording_renderer):
         """Múltiplas threads enfileirando prints não geram erros."""

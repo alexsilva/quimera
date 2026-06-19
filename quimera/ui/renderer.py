@@ -398,7 +398,7 @@ class _TransientOverlay:
             actual_text = '\n'.join(visible_lines)
             actual_count = len(visible_lines)
 
-            sys.stdout.write(actual_text)
+            sys.stdout.write(f"\033[2m{actual_text}\033[0m")
             sys.stdout.write('\n')
             sys.stdout.flush()
             lines[0] = actual_count
@@ -1608,8 +1608,10 @@ class TerminalRenderer:
             f"TOOLS: {total} chamadas · {ok_count} ok · {err_count} erro · {duration} "
             f"· último: {last_tool_name}({last_tool_status}) · trace_id={trace_id}"
         )
-        prefix = f"{agent} " if isinstance(agent, str) and agent.strip() else ""
-        self.show_system_neutral(f"{prefix}{summary}")
+        if isinstance(agent, str) and agent.strip():
+            self.show_feed(summary, agent=agent, muted=True)
+        else:
+            self.show_system_neutral(summary)
 
     def show_delegation(self, from_agent, to_agent, task=None):
         """Exibe delegation."""
