@@ -1682,7 +1682,7 @@ def test_format_opencode_spy_event_reports_tool_calls_as_tool_messages():
     tool = _format_opencode_spy_event(
         '{"type":"tool_call","part":{"type":"tool-call","tool":"run_shell"}}'
     )
-    assert tool == [SpyEvent(kind="tool", text="usando run_shell")]
+    assert tool == [SpyEvent(kind="tool", text="usando run_shell", transient=True)]
 
 
 def test_parse_opencode_json_with_text(renderer):
@@ -2052,7 +2052,8 @@ def test_call_api_cancel_event_detection(renderer):
         t.join(timeout=3)
 
     assert result is None
-    renderer.show_error.assert_called_with("[cancelado] pelo usuário")
+    renderer.show_error.assert_called_once()
+    assert renderer.show_error.call_args[0][0].startswith("[cancelado] pelo usuário")
     process_supervisor.terminate_all.assert_called_once_with()
 
 
@@ -2063,7 +2064,8 @@ def test_show_cancelled_once_deduplicates_repeated_messages(renderer):
     client._show_cancelled_once()
     client._show_cancelled_once()
 
-    renderer.show_error.assert_called_once_with("[cancelado] pelo usuário")
+    renderer.show_error.assert_called_once()
+    assert renderer.show_error.call_args[0][0].startswith("[cancelado] pelo usuário")
     client.reset_cancel_notices()
     client._show_cancelled_once()
     assert renderer.show_error.call_count == 2

@@ -105,6 +105,106 @@ class _SlashCommandCompleter(Completer):
                 yield Completion(command, start_position=-len(prefix))
 
 
+def _raw_select(
+    question: str,
+    options: list[str],
+    *,
+    deadline: float | None = None,
+) -> tuple[int, str] | None:
+    """Seleção com setas+número em modo raw — funciona fora do prompt_toolkit.
+
+    Retorna (index, value) ou None se stdin não for tty, termios indisponível,
+    deadline expirado, ou o usuário pressionar Ctrl+C/Ctrl+D.
+
+    deadline: valor de time.monotonic() após o qual a seleção expira e None
+              é retornado para que o chamador aplique o default.
+    """
+    try:
+        import termios
+        import tty
+    except ImportError:
+        return None
+    if not sys.stdin.isatty():
+        return None
+
+    import select as _select
+    import time as _time
+
+    def _wait_key() -> bool:
+        """Aguarda tecla disponível respeitando deadline. False = timeout."""
+        if deadline is None:
+            return True
+        remaining = deadline - _time.monotonic()
+        if remaining <= 0:
+            return False
+        ready, _, _ = _select.select([sys.stdin], [], [], remaining)
+        return bool(ready)
+
+    def _render(selected: int, error: str | None = None) -> int:
+        lines = [question]
+        for i, opt in enumerate(options):
+            if i == selected:
+                lines.append(f"  {i + 1}. \033[7m{opt}\033[0m")
+            else:
+                lines.append(f"  {i + 1}. {opt}")
+        if deadline is not None:
+            remaining_s = max(0, int(deadline - _time.monotonic()))
+            hint = (
+                f"  (↑↓ navegar · Enter confirmar · 1-{len(options)} direto"
+                f" · auto em {remaining_s}s)"
+            )
+        else:
+            hint = f"  (↑↓ navegar \xb7 Enter confirmar \xb7 1-{len(options)} direto)"
+        lines.append(hint)
+        if error:
+            lines.append(f"  \033[31m! {error}\033[0m")
+        sys.stdout.write("\n".join(lines) + "\n")
+        sys.stdout.flush()
+        return len(lines)
+
+    sys.stdout.write("\n")
+    sys.stdout.flush()
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    selected = 0
+    error_msg: str | None = None
+    line_count = _render(selected)
+    try:
+        tty.setraw(fd)
+        while True:
+            if not _wait_key():
+                return None  # deadline expirado
+            ch = sys.stdin.read(1)
+            if ch in ("\x03", "\x04"):
+                return None
+            if ch in ("\r", "\n"):
+                return selected, options[selected]
+            if ch == "\x1b":
+                ch2 = sys.stdin.read(1)
+                if ch2 == "[":
+                    ch3 = sys.stdin.read(1)
+                    if ch3 == "A":
+                        sys.stdout.write(f"\033[{line_count}A\033[J")
+                        selected = (selected - 1) % len(options)
+                        error_msg = None
+                        line_count = _render(selected)
+                    elif ch3 == "B":
+                        sys.stdout.write(f"\033[{line_count}A\033[J")
+                        selected = (selected + 1) % len(options)
+                        error_msg = None
+                        line_count = _render(selected)
+                continue
+            if ch.isdigit() and ch != "0":
+                num = int(ch) - 1
+                if 0 <= num < len(options):
+                    return num, options[num]
+                sys.stdout.write(f"\033[{line_count}A\033[J")
+                error_msg = f"'{ch}' fora do intervalo (1-{len(options)})"
+                line_count = _render(selected, error_msg)
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
 class InputGate:
     """Gate único de input com PromptSession singleton, toolbar e coordenação com terminal.
 
@@ -307,7 +407,7 @@ class InputGate:
         console = Console(highlight=False)
         console.print(Rule(style="dim"))
 
-    def _run_toolbar_clock(self, interval: float = 1.0) -> None:
+    def _run_toolbar_clock(self, interval: float = 30.0) -> None:
         """Thread persistente que invalida o prompt a cada segundo enquanto ativo.
 
         Dorme indefinidamente quando não há prompt ativo e acorda via
@@ -378,6 +478,48 @@ class InputGate:
                 self._clock_condition.notify_all()
             self._running_context = None
             self._set_active_state(False)
+
+    def read_selection_in_terminal(
+        self, question: str, options: list[str], timeout: float = 300.0
+    ) -> tuple[int, str] | None:
+        """Seleção interativa com setas e números via run_in_terminal.
+
+        Retorna (index, value) ou None se Ctrl+C / timeout / stdin não-tty.
+        Seguro de chamar de threads de background enquanto prompt_toolkit está ativo.
+        """
+        import time as _time
+        session = self._session
+        if session is None:
+            return None
+        app = getattr(session, "app", None)
+        if app is None or not getattr(app, "_is_running", False):
+            return None
+        loop = getattr(app, "loop", None)
+        if loop is None or loop.is_closed() or not loop.is_running():
+            return None
+
+        deadline = _time.monotonic() + timeout
+        result: list[tuple[int, str] | None] = [None]
+        done = threading.Event()
+
+        def _select_sync() -> None:
+            self._flush_renderer()
+            result[0] = _raw_select(question, options, deadline=deadline)
+            done.set()
+
+        async def _coro() -> None:
+            await run_in_terminal(_select_sync, in_executor=True)
+
+        try:
+            future = asyncio.run_coroutine_threadsafe(_coro(), loop)
+        except Exception:
+            return None
+
+        future.add_done_callback(lambda _: done.set())
+        # Aguarda um pouco além do deadline: _raw_select já controla o timeout
+        # internamente e vai retornar None. O +1 dá margem para o evento set().
+        done.wait(timeout=timeout + 1.0)
+        return result[0]
 
     def get_line_buffer(self) -> str:
         """Retorna o buffer atual de edição quando disponível."""
@@ -484,13 +626,21 @@ class InputGate:
         done = threading.Event()
 
         def _read_sync() -> None:
+            import select as _sel
             self._flush_renderer()
             sys.stdout.write(prompt)
             sys.stdout.flush()
             try:
+                try:
+                    ready, _, _ = _sel.select([sys.stdin], [], [], timeout)
+                    if not ready:
+                        # timeout expirado — retorna None sem deixar readline bloqueado
+                        return
+                except (TypeError, ValueError, OSError):
+                    pass  # stdin não-selectable (mock/pipe) — vai direto ao readline
                 line = sys.stdin.readline()
                 result[0] = line.rstrip("\n\r")
-            except EOFError:
+            except (EOFError, OSError):
                 result[0] = ""
             finally:
                 done.set()

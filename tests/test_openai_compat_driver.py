@@ -104,7 +104,7 @@ def test_schema_names_match_registered_tools():
         "list_files", "read_file", "write_file", "apply_patch", "grep_search", "run_shell",
         "exec_command", "write_stdin", "close_command_session", "list_tasks", "list_jobs",
         "get_job", "memory_save", "memory_retrieve", "remove_file", "web_search", "web_fetch", "delegate",
-        "todo_write", "todo_list", "list_agents",
+        "todo_write", "todo_list", "list_agents", "ask_user",
         # Git tools
         "git_status", "git_log", "git_diff", "git_branch", "git_fetch",
         "git_add", "git_commit", "git_checkout", "git_push",
@@ -620,6 +620,7 @@ def test_run_tools_system_prompt_guides_tool_usage():
         "list_agents",
         "todo_write",
         "todo_list",
+        "ask_user",
         # Git tools
         "git_status",
         "git_log",
