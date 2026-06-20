@@ -1184,6 +1184,51 @@ TOOL_SCHEMAS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "ask_user",
+            "description": (
+                "Apresenta uma pergunta com opções numeradas ao usuário humano e aguarda a seleção. "
+                "Use para decisões que requerem julgamento humano durante a execução: "
+                "escolha de abordagem, confirmação de risco, seleção de preferência. "
+                "Bloqueia até o usuário responder. O usuário pode digitar o número (1, 2, …) "
+                "ou o texto exato da opção."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "question": {
+                        "type": "string",
+                        "description": "Pergunta clara a exibir ao usuário.",
+                    },
+                    "options": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": 2,
+                        "description": "Lista de opções (mínimo 2) para o usuário escolher.",
+                    },
+                },
+                "required": ["question", "options"],
+            },
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "ok": {"type": "boolean"},
+                    "content": {"type": "string", "description": "Texto da opção selecionada"},
+                    "data": {
+                        "type": "object",
+                        "properties": {
+                            "index": {"type": "integer", "description": "Índice 0-based da opção selecionada"},
+                            "value": {"type": "string", "description": "Texto da opção selecionada"},
+                        },
+                    },
+                    "error": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+                },
+                "required": ["ok", "content"],
+            },
+        },
+    },
 ]
 
 _TASK_TOOL_NAMES = {"list_tasks", "list_jobs", "get_job"}
@@ -1223,6 +1268,13 @@ def resolve_tool_schemas(tool_executor=None) -> list[dict]:
         schemas = [
             schema for schema in schemas
             if schema["function"]["name"] not in ("delegate", "list_agents")
+        ]
+
+    is_ask_user_available = getattr(tool_executor, "is_ask_user_available", None)
+    if callable(is_ask_user_available) and not is_ask_user_available():
+        schemas = [
+            schema for schema in schemas
+            if schema["function"]["name"] != "ask_user"
         ]
 
     return schemas

@@ -127,6 +127,12 @@ class ToolPolicy:
         """fail_task não é exposta no chat."""
         raise ToolPolicyError("fail_task não é exposta no chat; o executor interno encerra a task")
 
+    def _validate_ask_user(self, call: ToolCall) -> None:
+        """ask_user é seguro: apenas exibe pergunta e aguarda resposta do usuário."""
+        options = call.arguments.get("options", [])
+        if len(options) < 2:
+            raise ToolPolicyError("ask_user requer pelo menos 2 opções")
+
     def _validate_run_shell_command(self, call: ToolCall) -> None:
         """Valida o alias legado `run_shell_command` com política mínima de shell."""
         command = str(call.arguments.get("command", "")).strip()

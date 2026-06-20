@@ -90,6 +90,7 @@ class ConsoleApprovalHandler(ApprovalHandler):
         self._cancel_event = cancel_event
         self._cancel_poll_interval = max(float(cancel_poll_interval), 0.01)
         self._input_gate = input_gate
+        self._input_broker = None
         self._interactive_lock = threading.Lock()
 
     def set_spinner_callbacks(self, suspend_spinner_fn, resume_spinner_fn):
@@ -121,14 +122,24 @@ class ConsoleApprovalHandler(ApprovalHandler):
         """Define um cancel_event opcional para interromper input bloqueante."""
         self._cancel_event = cancel_event
 
-    def approve(self, *, tool_name: str, summary: str) -> bool:
-        """Tenta aprovação rápida; retorna False se precisar de interação.
+    def set_input_broker(self, broker) -> None:
+        """Conecta ao InputBroker centralizado para serializar aprovações."""
+        self._input_broker = broker
 
-        Sempre tenta aprovação interativa via input_fn.
-        Se input_fn for o builtin input(), usa input() bloqueante padrão.
-        Em contextos controlados (testes), input_fn injetada responde
-        diretamente sem bloqueio.
+    def approve(self, *, tool_name: str, summary: str) -> bool:
+        """Tenta aprovação interativa, roteando pelo InputBroker quando disponível.
+
+        Com broker: serializa na fila centralizada com timeout e auto-resposta
+        segura — garante que approval e ask_user nunca conflitem em raw mode.
+        Sem broker: comportamento original via _approve_interactive.
         """
+        if self._input_broker is not None:
+            return self._input_broker.request_approval(
+                tool_name,
+                summary,
+                source="aprovação",
+                on_approve_all=self._approve_all_callback,
+            )
         return self._approve_interactive(tool_name, summary)
 
     @staticmethod

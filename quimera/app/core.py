@@ -33,6 +33,7 @@ from .dispatch import AppDispatchServices
 from .inputs import AppInputServices
 from .interfaces import PluginResolverAdapter
 from .prompt_input import InputGate, PromptFormatter
+from ..runtime.input_broker import InputBroker
 from .runtime_state import AppRuntimeState
 from ..tasks.classifiers import (
     classify_task_execution_result,
@@ -170,6 +171,10 @@ class QuimeraApp:
             history_file=self.history_file,
             command_resolver=self._available_commands,
             argument_resolver=self._command_argument_resolver,
+        )
+        self.input_broker = InputBroker(
+            renderer=self.renderer,
+            input_gate=self.input_gate,
         )
         self.context_manager = ContextManager(
             self.workspace.context_persistent,
@@ -478,6 +483,13 @@ class QuimeraApp:
         self.tool_executor = self.task_services.build_tool_executor(require_approval_for_mutations=not self.auto_approve_mutations)
         self.task_services.bind_dispatch_tool_executor(self.tool_executor)
         self.task_services.bind_primary_approval_handler(self._approval_handler)
+        # Conecta o InputBroker ao ConsoleApprovalHandler para serializar
+        # approval e ask_user na mesma fila com timeout e auto-resposta segura.
+        _pre_handler = getattr(self.tool_executor, "_approval_handler", None)
+        _base_handler = getattr(_pre_handler, "_base", _pre_handler)
+        _set_broker = getattr(_base_handler, "set_input_broker", None)
+        if callable(_set_broker):
+            _set_broker(self.input_broker)
         # Injeta o executor nos drivers de API do agent_client.
         self.agent_client.tool_executor = self.tool_executor
         self.tool_executor.set_delegate_fn(self.dispatch_services.delegate)
@@ -492,6 +504,10 @@ class QuimeraApp:
         self.tool_executor.set_active_agents_provider(lambda: list(self.agent_pool.agents))
         self.tool_executor.set_cancel_checker(lambda: bool(getattr(self.agent_client, "_cancel_event", None) and self.agent_client._cancel_event.is_set()))
         self.tool_executor.set_agent_cleanup_callback(self._cleanup_sub_agent_stream)
+        _broker = self.input_broker
+        self.tool_executor.set_ask_user_fn(
+            lambda q, opts: _broker.request_ask_user(q, opts)
+        )
         # Set up task executors for autonomous task execution
         self._setup_task_executors()
         self._ui_event_handler = UiEventHandler(
@@ -886,6 +902,69 @@ class QuimeraApp:
     def _stop_task_executors(self):
         """Executa stop task executors."""
         self.task_services.stop_task_executors()
+
+    def _make_ask_user_fn(self):
+        """Cria callable que exibe seleção interativa e lê a resposta do usuário.
+
+        Quando prompt_toolkit está ativo usa read_selection_in_terminal (setas +
+        número). Caso contrário usa raw mode direto, com fallback readline para
+        stdin não-tty.
+        """
+        import sys as _sys
+        from .prompt_input import _raw_select
+
+        input_gate = self.input_gate
+        renderer = self.renderer
+
+        def _ask_user(question: str, options: list) -> tuple:
+            opts = [str(o) for o in options]
+            gate_is_active = (
+                input_gate is not None
+                and callable(getattr(input_gate, "is_active", None))
+                and input_gate.is_active()
+            )
+            if gate_is_active:
+                result = input_gate.read_selection_in_terminal(question, opts)
+                if result is not None:
+                    return result
+                raise EOFError("sem resposta do terminal")
+            # Gate não ativo: raw mode com suspend/resume
+            _suspend = getattr(renderer, "suspend_output", None)
+            _resume = getattr(renderer, "resume_output", None)
+            if callable(_suspend):
+                _suspend()
+            try:
+                result = _raw_select(question, opts)
+                if result is not None:
+                    return result
+                # stdin não é tty — fallback readline com loop de validação
+                error_msg: str | None = None
+                while True:
+                    parts: list[str] = []
+                    if error_msg:
+                        parts.append(f"  ! {error_msg}")
+                    parts.append(f"\n{question}")
+                    for i, opt in enumerate(opts, 1):
+                        parts.append(f"  {i}. {opt}")
+                    parts.append(f"  (número 1-{len(opts)} ou texto exato)")
+                    _sys.stdout.write("\n".join(parts) + "\n> ")
+                    _sys.stdout.flush()
+                    raw = _sys.stdin.readline().rstrip("\n\r").strip()
+                    try:
+                        idx = int(raw) - 1
+                        if 0 <= idx < len(opts):
+                            return idx, opts[idx]
+                    except ValueError:
+                        pass
+                    for i, opt in enumerate(opts):
+                        if opt.lower() == raw.lower():
+                            return i, opt
+                    error_msg = f"'{raw}' não é uma opção válida."
+            finally:
+                if callable(_resume):
+                    _resume()
+
+        return _ask_user
 
     def _cleanup_sub_agent_stream(self, agent_name: str) -> None:
         """Limpa o estado de render do agente chamado via delegate.

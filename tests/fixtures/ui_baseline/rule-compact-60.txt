@@ -6,5 +6,5 @@ ao-2026-04-30-222821.jsonl
 Implementação concluída. Ajustes de wrapping e alinhamento  
 preservados.                                                
 ────────────────────────────────────────────────────────────
-⚙ codex TOOLS: 1 chamadas · 1 ok · 0 erro · 87ms · último: 
+🤖  Codex TOOLS: 1 chamadas · 1 ok · 0 erro · 87ms · último:
 exec_command(ok) · trace_id=turn_1650

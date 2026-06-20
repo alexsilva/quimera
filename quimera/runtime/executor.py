@@ -10,6 +10,7 @@ from .registry import ToolRegistry
 from .tools import delegate as delegate_module
 from .tools import files as files_tools
 from .tools import git
+from .tools import interaction as interaction_tools
 from .tools import memory as memory_tools
 from .tools import patch as patch_tools
 from .tools import shell as shell_tools
@@ -43,6 +44,7 @@ class ToolExecutor:
         self._tool_progress_callback = None
         self.approval_broker = ApprovalBroker(config, approval_handler)
         self._delegate_tools = None
+        self._interaction_tools = None
         self._register_builtin_tools()
 
     def set_tool_progress_callback(self, fn) -> None:
@@ -62,6 +64,7 @@ class ToolExecutor:
         todo_tools.register(self.registry, self.policy, self.config)
         memory_tools.register(self.registry, self.policy, self.config)
         self._delegate_tools = delegate_module.register(self.registry, self.policy, self.config)
+        self._interaction_tools = interaction_tools.register(self.registry, self.policy, self.config)
         git.register(self.registry, self.policy, self.config)
 
     @property
@@ -171,6 +174,17 @@ class ToolExecutor:
     def is_delegate_available(self) -> bool:
         """Indica se a tool delegate está operável no contexto atual."""
         return self._delegate_tools.is_delegate_available()
+
+    def set_ask_user_fn(self, fn) -> None:
+        """Injeta callable que exibe pergunta com opções e lê a resposta do terminal.
+
+        Assinatura esperada: fn(question: str, options: list[str]) -> (index: int, value: str)
+        """
+        self._interaction_tools.set_ask_user_fn(fn)
+
+    def is_ask_user_available(self) -> bool:
+        """Indica se ask_user está operável no contexto atual."""
+        return self._interaction_tools.is_ask_user_available()
 
     def execute(self, call: ToolCall, progress_callback: Callable[[str], None] | None = None) -> ToolResult:
         """Executa um ToolCall com política de aprovação.

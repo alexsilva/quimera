@@ -440,7 +440,7 @@ class TestRunInTerminalMessage:
             "quimera.app.prompt_input.run_in_terminal",
             side_effect=lambda fn, **kwargs: fn(),
         ) as mock_run:
-            loop.call_soon_threadsafe.side_effect = lambda fn: fn()
+            loop.call_soon_threadsafe.side_effect = lambda fn, **_kwargs: fn()
             assert gate.run_in_terminal_message(callback) is True
 
         assert called == [True]
