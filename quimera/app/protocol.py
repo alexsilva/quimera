@@ -88,10 +88,10 @@ class AppProtocol:
                 if not normalized_key:
                     continue
                 if not is_agent_state_key(normalized_key):
-                    logger.warning("[STATE_UPDATE] Ignored unsupported shared_state key: %s", normalized_key)
+                    logger.debug("[STATE_UPDATE] Ignored unsupported shared_state key: %s", normalized_key)
                     continue
                 if not validate_agent_state_value(normalized_key, value):
-                    logger.warning(
+                    logger.debug(
                         "[STATE_UPDATE] Ignored invalid value for shared_state key %s: %r",
                         normalized_key,
                         type(value).__name__,

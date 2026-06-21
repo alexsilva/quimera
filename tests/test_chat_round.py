@@ -329,10 +329,10 @@ class TestProcessMainFlow(unittest.TestCase):
         fallback_messages = [
             call.args[0]
             for call in app.renderer.show_system.call_args_list
-            if call.args and str(call.args[0]).startswith("[fallback]")
+            if call.args and "não respondeu" in str(call.args[0])
         ]
-        self.assertIn("[fallback] codex não respondeu; claude assumiu", fallback_messages)
-        self.assertIn("[fallback] claude não respondeu; opencode assumiu", fallback_messages)
+        self.assertIn("codex não respondeu, tentando com claude", fallback_messages)
+        self.assertIn("claude não respondeu, tentando com opencode", fallback_messages)
 
     def test_main_flow_cancelled_before_fallback_message_skips_fallback_notice(self):
         """Se cancelar no limiar do fallback, não deve imprimir aviso de fallback."""

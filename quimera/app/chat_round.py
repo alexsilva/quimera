@@ -414,16 +414,15 @@ class ChatRoundOrchestrator:
                 if self._is_cancelled():
                     self._handle_cancelled()
                     return
-                logger.info(
-                    "[CHAT_FAILOVER] trying %s after %s returned no response",
-                    fallback_agent,
-                    failed_agent,
+                logger.debug(
+                    "no response from %s; failover to %s",
+                    failed_agent, fallback_agent,
                 )
                 if self._is_cancelled():
                     self._handle_cancelled()
                     return
                 self._show_system(
-                    f"[fallback] {failed_agent} não respondeu; {fallback_agent} assumiu"
+                    f"{failed_agent} não respondeu, tentando com {fallback_agent}"
                 )
                 fallback_response = self._delegate(
                     fallback_agent,

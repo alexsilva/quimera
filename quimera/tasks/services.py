@@ -758,7 +758,7 @@ class AppTaskServices:
         try:
             shared_state["agent_todos"] = TodoRegistry.get_active_as_dicts(current_job_id)
         except Exception as exc:
-            logger.warning("agent_todos falhou: %s", exc)
+            logger.debug("agent_todos falhou: %s", exc)
             shared_state["agent_todos"] = []
         repo = self._build_task_repository()
         completed_tasks = repo.list_tasks(
@@ -814,7 +814,7 @@ class AppTaskServices:
 
         task_classifier = self._get_task_classifier()
         if task_classifier is not None and not hasattr(task_classifier, "classify"):
-            logger.warning(
+            logger.debug(
                 "task_classifier inválido (%s): fallback para classificador padrão",
                 type(task_classifier).__name__,
             )

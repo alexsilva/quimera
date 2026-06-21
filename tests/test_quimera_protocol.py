@@ -1350,12 +1350,12 @@ class ProtocolTests(unittest.TestCase):
         app.task_services = build_task_services(app)
         app.system_layer = AppSystemLayer(app)
 
-        with patch("quimera.tasks.services.logger.warning") as warning:
+        with patch("quimera.tasks.services.logger.debug") as debug:
             materialize_internal_services(app)
             handled = app.system_layer.handle_command('/task "execute os testes"')
 
         self.assertTrue(handled)
-        warning.assert_called_once()
+        debug.assert_called_once()
         tasks = list_tasks({"job_id": 1}, db_path=str(db_path))
         self.assertEqual(len(tasks), 1)
         self.assertEqual(tasks[0]["task_type"], TaskType.TEST_EXECUTION)

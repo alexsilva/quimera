@@ -25,6 +25,8 @@ class AgentCallService:
         record_success=None,
         is_rate_limited=None,
         before_retry=None,
+        notify_warning=None,
+        notify_error=None,
     ):
         self._max_retries = max_retries
         self._retry_backoff = retry_backoff
@@ -33,6 +35,8 @@ class AgentCallService:
         self._record_success = record_success or (lambda agent: None)
         self._is_rate_limited = is_rate_limited or (lambda: False)
         self._before_retry = before_retry or (lambda agent, attempt, reason: None)
+        self._notify_warning = notify_warning or (lambda msg: None)
+        self._notify_error = notify_error or (lambda msg: None)
 
     def call(
         self,
@@ -73,8 +77,11 @@ class AgentCallService:
                     if attempt < effective_max_retries:
                         backoff = self._compute_backoff(attempt)
                         self._before_retry(agent, attempt, "no_response")
-                        logger.warning(
-                            '"%s" no response, retrying (%d/%d)',
+                        self._notify_warning(
+                            f"{agent}: no response, retrying ({attempt}/{effective_max_retries})"
+                        )
+                        logger.debug(
+                            "agent=%s no response, retrying %d/%d",
                             agent, attempt, effective_max_retries,
                         )
                         time.sleep(backoff)
@@ -90,8 +97,11 @@ class AgentCallService:
                     if attempt < effective_max_retries:
                         backoff = self._compute_backoff(attempt)
                         self._before_retry(agent, attempt, "resolve_failed")
-                        logger.warning(
-                            '"%s" response parsing failed, retrying (%d/%d)',
+                        self._notify_warning(
+                            f"{agent}: response parsing failed, retrying ({attempt}/{effective_max_retries})"
+                        )
+                        logger.debug(
+                            "agent=%s response parsing failed, retrying %d/%d",
                             agent, attempt, effective_max_retries,
                         )
                         time.sleep(backoff)
@@ -108,8 +118,11 @@ class AgentCallService:
                 last_error = exc
                 if attempt < effective_max_retries:
                     self._before_retry(agent, attempt, "exception")
-                    logger.warning(
-                        '"%s" error communicating, retrying (%d/%d): %s',
+                    self._notify_warning(
+                        f"{agent}: error communicating, retrying ({attempt}/{effective_max_retries}): {exc}"
+                    )
+                    logger.debug(
+                        "agent=%s error communicating, retrying %d/%d: %s",
                         agent, attempt, effective_max_retries, exc,
                     )
                     time.sleep(self._retry_backoff * attempt)
@@ -118,7 +131,12 @@ class AgentCallService:
                 raise
 
         if last_error:
-            logger.error('"%s" could not reach after all retries: %s', agent, str(last_error))
+            self._notify_error(
+                f"{agent}: could not reach after all retries: {str(last_error)}"
+            )
+            logger.debug(
+                "agent=%s could not reach after all retries: %s", agent, str(last_error)
+            )
         return None
 
     def _compute_backoff(self, attempt: int) -> float:

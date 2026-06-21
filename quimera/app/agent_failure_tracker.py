@@ -26,6 +26,7 @@ class AgentFailureTracker:
         record_metric: Callable[[str], None] | None = None,
         file_bug: Callable[..., None] | None = None,
         get_session_id: Callable[[], str] | None = None,
+        notify_warning: Callable[[str], None] | None = None,
     ) -> None:
         self._failures: defaultdict = defaultdict(int)
         self._lock = threading.Lock()
@@ -35,6 +36,7 @@ class AgentFailureTracker:
         self._record_metric = record_metric
         self._file_bug = file_bug
         self._get_session_id = get_session_id
+        self._notify_warning = notify_warning
 
     @property
     def failures(self) -> defaultdict:
@@ -67,7 +69,9 @@ class AgentFailureTracker:
         if failures >= self.FAILURE_THRESHOLD:
             if name in self._agent_pool:
                 self._agent_pool.remove(name)
-                logger.warning("agent %s removed after %d failures", name, failures)
+                logger.debug("agent %s removed after %d failures", name, failures)
+                if self._notify_warning is not None:
+                    self._notify_warning(f"{name} foi removido após falhas repetidas")
                 try:
                     self._release_agent_tasks(name)
                 except Exception:

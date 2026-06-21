@@ -459,6 +459,8 @@ class QuimeraApp:
                 self, agent, metric, elapsed
             ),
             record_tool_event_fn=lambda agent, **kw: self.session_metrics.record_tool_event(self, agent, **kw),
+            notify_warning=self.system_layer.show_warning_message,
+            notify_error=self.system_layer.show_error_message,
             max_retries=self.MAX_RETRIES,
             retry_backoff=self.RETRY_BACKOFF_SECONDS,
             rate_limit_backoff=getattr(self, 'RATE_LIMIT_BACKOFF_SECONDS', 30),
@@ -588,6 +590,7 @@ class QuimeraApp:
             ),
             file_bug=self._file_bug,
             get_session_id=lambda: getattr(self.storage, "session_id", ""),
+            notify_warning=self.system_layer.show_warning_message,
         )
         self.command_router = CommandRouter(
             agent_pool=self.agent_pool,
