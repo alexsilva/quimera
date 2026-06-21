@@ -121,6 +121,7 @@ def _raw_select_tty(question: str, options: list[str]) -> tuple[int, str] | None
     try:
         import termios
         import tty
+        import select as _sel
     except ImportError:
         return None
     if not sys.stdin.isatty():
@@ -161,8 +162,12 @@ def _raw_select_tty(question: str, options: list[str]) -> tuple[int, str] | None
                 sys.stdout.flush()
                 return selected, options[selected]
             if ch == "\x1b":
+                if not _sel.select([sys.stdin], [], [], 0.05)[0]:
+                    continue
                 ch2 = sys.stdin.read(1)
                 if ch2 == "[":
+                    if not _sel.select([sys.stdin], [], [], 0.05)[0]:
+                        continue
                     ch3 = sys.stdin.read(1)
                     if ch3 == "A":
                         sys.stdout.write(f"\033[{_lines[0]}A\033[J")
