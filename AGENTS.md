@@ -80,6 +80,26 @@ Isso garante que:
 - Agentes especializados (OpenCode) sejam usados para tarefas simples, liberando os orquestradores (Gemini) para arquitetura complexa.
 
 
+## Regra de Input Interativo (termios BANIDO)
+
+- **Proibido** usar `termios`, `tty`, `tty.setraw`, `tty.setcbreak` ou
+  `termios.tcsetattr`/`tcgetattr` diretamente em qualquer código do projeto.
+  O raw-mode manual a partir de threads de background (ex.: aprovação de
+  ferramenta em modo `--threads`) conflita com o terminal gerenciado pelo
+  `prompt_toolkit` e **trava o input, o shell e o sistema**.
+- Todo input interativo (aprovação de ferramenta, `ask_user`, seleção de
+  opções) deve usar **o mesmo input usado para escrever no chat**: leitura por
+  linha (cooked mode) via `InputGate`/`prompt_toolkit`. O usuário digita a
+  resposta (`y`/`n`/`a`, número da opção ou texto) e confirma com **Enter**.
+- A partir de threads de background, leia sempre através dos helpers do
+  `InputGate` baseados em `run_in_terminal` (`read_input_in_terminal`,
+  `read_selection_in_terminal`, `read_approval_in_terminal`) — eles suspendem o
+  prompt e restauram o terminal sem manipular flags de TTY manualmente.
+- Não há mais navegação por setas em seleções; isso é intencional. Seleção é
+  numerada e confirmada por Enter.
+- `TtyController` é no-op por compatibilidade; não reintroduza supressão de eco
+  via termios.
+
 ## Teste Interativo Local
 
 Quando trabalhar neste projeto e precisar comprovar fluxos interativos sem provedores externos, use o modo de teste explícito. Os plugins fake só devem entrar na rodada com `--test`; sem esse parâmetro, eles não fazem parte do uso humano normal.

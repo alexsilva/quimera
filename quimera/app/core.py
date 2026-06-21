@@ -915,12 +915,11 @@ class QuimeraApp:
     def _make_ask_user_fn(self):
         """Cria callable que exibe seleção interativa e lê a resposta do usuário.
 
-        Quando prompt_toolkit está ativo usa read_selection_in_terminal (setas +
-        número). Caso contrário usa raw mode direto, com fallback readline para
-        stdin não-tty.
+        Quando prompt_toolkit está ativo usa read_selection_in_terminal (seleção
+        numerada por linha — mesmo input usado para escrever no chat). Caso
+        contrário, lê por readline com loop de validação. Sem termios/raw-mode.
         """
         import sys as _sys
-        from .prompt_input import _raw_select
 
         input_gate = self.input_gate
         renderer = self.renderer
@@ -937,16 +936,12 @@ class QuimeraApp:
                 if result is not None:
                     return result
                 raise EOFError("sem resposta do terminal")
-            # Gate não ativo: raw mode com suspend/resume
+            # Gate não ativo: leitura por linha (cooked mode) com suspend/resume
             _suspend = getattr(renderer, "suspend_output", None)
             _resume = getattr(renderer, "resume_output", None)
             if callable(_suspend):
                 _suspend()
             try:
-                result = _raw_select(question, opts)
-                if result is not None:
-                    return result
-                # stdin não é tty — fallback readline com loop de validação
                 error_msg: str | None = None
                 while True:
                     parts: list[str] = []
