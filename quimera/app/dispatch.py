@@ -57,6 +57,8 @@ class AppDispatchServices:
         get_session_call_index=None,
         set_session_call_index=None,
         get_shared_state_lock=None,
+        notify_warning=None,
+        notify_error=None,
     ):
         self._agent_client_override = agent_client_override
         self._tool_executor_override = tool_executor_override
@@ -93,12 +95,15 @@ class AppDispatchServices:
         self._get_agent_client_fn = get_agent_client
         self._get_tool_executor_fn = get_tool_executor
         self._get_delegate_fn_override = get_delegate_fn_override
+        self._notify_warning = notify_warning
+        self._notify_error = notify_error
         self._gateway = None
         self._agent_call_service = None
 
     @classmethod
     def from_app(cls, app, **kwargs):
         """Constrói AppDispatchServices a partir de um objeto app-like (compatibilidade)."""
+        _system_layer = getattr(app, 'system_layer', None)
         return cls(
             prompt_builder=lambda: getattr(app, 'prompt_builder', None),
             renderer=lambda: getattr(app, 'renderer', None),
@@ -134,6 +139,8 @@ class AppDispatchServices:
                     app, agent, **kw
                 )
             ),
+            notify_warning=getattr(_system_layer, 'show_warning_message', lambda m: None),
+            notify_error=getattr(_system_layer, 'show_error_message', lambda m: None),
             max_retries=lambda: getattr(app, 'MAX_RETRIES', 2),
             retry_backoff=lambda: getattr(app, 'RETRY_BACKOFF_SECONDS', 1),
             rate_limit_backoff=lambda: getattr(app, 'RATE_LIMIT_BACKOFF_SECONDS', 1),
@@ -283,6 +290,8 @@ class AppDispatchServices:
             record_success=self._record_success,
             is_rate_limited=_is_rate_limited,
             before_retry=_before_retry,
+            notify_warning=self._notify_warning,
+            notify_error=self._notify_error,
         )
 
     # -------------------------------------------------------------------------

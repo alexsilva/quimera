@@ -637,7 +637,7 @@ class MCPServer:
             with self._cancel_lock:
                 self._cancel_events.pop(msg_id, None)
             duration_ms = int((time.perf_counter() - started_at) * 1000)
-            _logger.exception("MCP tools/call error tool=%s duration_ms=%d", tool_name, duration_ms)
+            _logger.debug("MCP tools/call error tool=%s duration_ms=%d", tool_name, duration_ms, exc_info=True)
             return self._err(msg_id, -32603, f"Internal error: {exc}")
 
         with self._cancel_lock:
@@ -809,15 +809,15 @@ class MCPServer:
         try:
             first_line = inp.readline()
             if not first_line:
-                _logger.warning("MCP auth: conexão encerrada antes da autenticação")
+                _logger.debug("MCP auth: conexão encerrada antes da autenticação")
                 return False
             payload = json.loads(first_line.strip())
             if payload.get("quimera_auth_token") == self._auth_token:
                 return True
-            _logger.warning("MCP auth: token inválido — conexão recusada")
+            _logger.debug("MCP auth: token inválido — conexão recusada")
             return False
         except Exception:
-            _logger.warning("MCP auth: prelude inválido — conexão recusada")
+            _logger.debug("MCP auth: prelude inválido — conexão recusada")
             return False
         finally:
             if underlying is not None:
@@ -864,7 +864,7 @@ class MCPServer:
             try:
                 os.chmod(tmp_path, 0o600)
             except OSError as exc:
-                _logger.warning("MCP socket: não foi possível definir permissão 0600 em %s: %s", tmp_path, exc)
+                _logger.debug("MCP socket: não foi possível definir permissão 0600 em %s: %s", tmp_path, exc)
             srv.listen(5)
             os.replace(tmp_path, path)
             while True:
@@ -923,7 +923,7 @@ class MCPServer:
         try:
             response = self._handle(msg, out=out, used_ids=used_ids, state=state)
         except Exception as exc:
-            _logger.exception("Erro inesperado no handler MCP")
+            _logger.debug("Erro inesperado no handler MCP", exc_info=True)
             msg_id = msg.get("id")
             response = self._err(msg_id, -32603, f"Internal error: {exc}") if msg_id is not None else None
 
@@ -960,7 +960,7 @@ class MCPServer:
                     resp = self._handle(item, out=out, used_ids=used_ids, state=state)
                     responses[idx] = resp
             except Exception as exc:
-                _logger.exception("Erro inesperado no handler MCP batch")
+                _logger.debug("Erro inesperado no handler MCP batch", exc_info=True)
                 item_id = item.get("id")
                 responses[idx] = self._err(item_id, -32603, f"Internal error: {exc}") if item_id is not None else None
 
