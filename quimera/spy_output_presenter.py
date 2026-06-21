@@ -393,9 +393,23 @@ class SpyOutputPresenter:
         for line in lines:
             self._show(agent, SpyEvent(kind="response", text=line, final=True))
 
+    def _close_open_tool_calls(self) -> None:
+        """Fecha tools que tiveram apenas evento de start (sem end) — típico de agentes CLI."""
+        if not self._active_tool_calls:
+            return
+        now = time.time()
+        for record in list(self._active_tool_calls.values()):
+            record["status"] = "ok"
+            record["ended_at"] = now
+            started_at = record.get("started_at")
+            if isinstance(started_at, (int, float)):
+                record["duration_ms"] = int(max((now - started_at) * 1000, 0))
+        self._active_tool_calls.clear()
+
     def finalize_turn(self, agent: str | None = None, render_summary: bool = False) -> dict:
         """Finaliza o turno atual e retorna o detalhe estruturado coletado."""
         self.flush(agent)
+        self._close_open_tool_calls()
         if agent and hasattr(self.renderer, "clear_agent_transient"):
             self.renderer.clear_agent_transient(agent)
         detail = self.build_turn_detail()

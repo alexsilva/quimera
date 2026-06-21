@@ -54,75 +54,56 @@ class ToolPreview:
     @classmethod
     def _format_execution_read_file(cls, args: dict[str, Any]) -> str:
         path = args.get("path", "?")
-        return f"⚒ executando read_file path={cls._truncate(str(path), cls._MAX_VALUE_LEN)}"
+        return f"⚒ read_file {cls._truncate(str(path), cls._MAX_VALUE_LEN)}"
 
     @classmethod
     def _format_execution_list_files(cls, args: dict[str, Any]) -> str:
         path = args.get("path") or args.get("directory") or "?"
-        return f"⚒ executando list_files path={cls._truncate(str(path), cls._MAX_VALUE_LEN)}"
+        return f"⚒ list_files {cls._truncate(str(path), cls._MAX_VALUE_LEN)}"
 
     @classmethod
     def _format_execution_grep_search(cls, args: dict[str, Any]) -> str:
         pattern = args.get("pattern", "?")
         path = args.get("path") or args.get("root") or "."
-        return (
-            "⚒ executando grep_search "
-            f"pattern={pattern!r} path={cls._truncate(str(path), cls._MAX_VALUE_LEN)}"
-        )
+        return f"⚒ grep {pattern!r} {cls._truncate(str(path), cls._MAX_VALUE_LEN)}"
 
     @classmethod
     def _format_execution_web_search(cls, args: dict[str, Any]) -> str:
         query = args.get("query") or args.get("q") or "?"
-        n = args.get("num_results", 5)
-        return f"⚒ executando web_search query={query!r} max={n}"
+        return f"⚒ web_search {query!r}"
 
     @classmethod
     def _format_execution_web_fetch(cls, args: dict[str, Any]) -> str:
         url = args.get("url", "?")
-        return f"⚒ executando web_fetch url={cls._truncate(str(url), cls._MAX_VALUE_LEN)}"
+        return f"⚒ web_fetch {cls._truncate(str(url), cls._MAX_VALUE_LEN)}"
 
     @classmethod
     def _format_execution_run_shell(cls, args: dict[str, Any]) -> str:
         cmd = args.get("command") or args.get("cmd") or "?"
-        return f"⚒ executando run_shell cmd={cls._truncate(str(cmd), 120)}"
+        return f"⚒ $ {cls._truncate(str(cmd), 120)}"
 
     @classmethod
     def _format_execution_exec_command(cls, args: dict[str, Any]) -> str:
         cmd = args.get("cmd", "?")
-        parts = [f"⚒ executando exec_command cmd={cls._truncate(str(cmd), 120)}"]
-        flags = []
-        if args.get("login"):
-            flags.append("login")
-        if args.get("tty"):
-            flags.append("tty")
-        if args.get("yield_time_ms"):
-            flags.append(f"yield={args['yield_time_ms']}ms")
-        if flags or "workdir" in args:
-            extras = []
-            if flags:
-                extras.append(f"flags={','.join(flags)}")
-            if "workdir" in args:
-                extras.append(f"workdir={cls._truncate(str(args['workdir']), cls._MAX_VALUE_LEN)}")
-            parts.append(" ".join(extras))
-        return " ".join(parts)
+        return f"⚒ $ {cls._truncate(str(cmd), 120)}"
 
     @classmethod
     def _format_execution_write_stdin(cls, args: dict[str, Any]) -> str:
         sid = args.get("session_id", "?")
         chars = str(args.get("chars", ""))
-        line = f"⚒ executando write_stdin session={sid}"
+        line = f"⚒ write_stdin session={sid}"
         if chars:
-            line += f" chars={cls._truncate(chars, 80)}"
+            line += f" {cls._truncate(chars, 80)!r}"
         if args.get("close_stdin"):
-            line += " close_stdin=true"
+            line += " [close]"
         return line
 
     @classmethod
     def _format_execution_close_command_session(cls, args: dict[str, Any]) -> str:
         sid = args.get("session_id", "?")
         terminate = args.get("terminate", False)
-        extra = " terminate=true" if terminate else ""
-        return f"⚒ executando close_command_session session={sid}{extra}"
+        extra = " [terminate]" if terminate else ""
+        return f"⚒ close_session {sid}{extra}"
 
     @classmethod
     def _format_execution_unknown(cls, tool_name: str, args: dict[str, Any]) -> str:
@@ -131,9 +112,9 @@ class ToolPreview:
             if index >= cls._MAX_ITEMS:
                 parts.append("...")
                 break
-            parts.append(f"{key}={cls._sanitize_value(key, value)}")
+            parts.append(f"{cls._sanitize_value(key, value)}")
         suffix = f" {' '.join(parts)}" if parts else ""
-        return f"⚒ executando {tool_name}{suffix}"
+        return f"⚒ {tool_name}{suffix}"
 
     @classmethod
     def _format_approval_write_file(cls, args: dict[str, Any], _omitted: set[str]) -> str:

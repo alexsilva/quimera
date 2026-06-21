@@ -74,8 +74,8 @@ class AgentCallService:
                         backoff = self._compute_backoff(attempt)
                         self._before_retry(agent, attempt, "no_response")
                         logger.warning(
-                            "[AGENT_CALL] retry %d/%d for agent=%s (no response)",
-                            attempt, effective_max_retries, agent,
+                            '"%s" no response, retrying (%d/%d)',
+                            agent, attempt, effective_max_retries,
                         )
                         time.sleep(backoff)
                         continue
@@ -91,8 +91,8 @@ class AgentCallService:
                         backoff = self._compute_backoff(attempt)
                         self._before_retry(agent, attempt, "resolve_failed")
                         logger.warning(
-                            "[AGENT_CALL] retry %d/%d for agent=%s (resolve failed)",
-                            attempt, effective_max_retries, agent,
+                            '"%s" response parsing failed, retrying (%d/%d)',
+                            agent, attempt, effective_max_retries,
                         )
                         time.sleep(backoff)
                         continue
@@ -109,8 +109,8 @@ class AgentCallService:
                 if attempt < effective_max_retries:
                     self._before_retry(agent, attempt, "exception")
                     logger.warning(
-                        "[AGENT_CALL] retry %d/%d for agent=%s after exception: %s",
-                        attempt, effective_max_retries, agent, exc,
+                        '"%s" error communicating, retrying (%d/%d): %s',
+                        agent, attempt, effective_max_retries, exc,
                     )
                     time.sleep(self._retry_backoff * attempt)
                     continue
@@ -118,7 +118,7 @@ class AgentCallService:
                 raise
 
         if last_error:
-            logger.error("[AGENT_CALL] all retries exhausted for agent=%s: %s", agent, str(last_error))
+            logger.error('"%s" could not reach after all retries: %s', agent, str(last_error))
         return None
 
     def _compute_backoff(self, attempt: int) -> float:
