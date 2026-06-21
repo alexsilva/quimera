@@ -333,6 +333,13 @@ def _select_tool(prompt: str, tools: list[dict[str, Any]]) -> tuple[str, dict[st
             "mode": "overwrite",
             "replace_existing": True,
         }
+    if "ask_user" in available and any(token in lowered for token in ("enquete", "ask_user", "pergunta", "enquire")):
+        return "ask_user", {
+            "question": "Qual linguagem você prefere?",
+            "options": ["Python", "Rust", "TypeScript", "Go"],
+        }
+    if "git_push" in available and any(token in lowered for token in ("git push", "git_push", "empurra", "push branch")):
+        return "git_push", {"remote": "origin", "branch": "main"}
     return None
 
 

@@ -8,10 +8,13 @@ from __future__ import annotations
 import asyncio
 import atexit
 import contextvars
+import re
 import shutil
 import sys
 import threading
 from pathlib import Path
+
+_ANSI_RE = re.compile(r'\033\[[0-9;]*[A-Za-z]')
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.application import run_in_terminal
@@ -140,7 +143,9 @@ def _raw_select(
         ready, _, _ = _select.select([sys.stdin], [], [], remaining)
         return bool(ready)
 
-    def _render(selected: int, error: str | None = None) -> int:
+    _lines: list[int] = [0]
+
+    def _render(selected: int, error: str | None = None) -> None:
         lines = [question]
         for i, opt in enumerate(options):
             if i == selected:
@@ -158,17 +163,18 @@ def _raw_select(
         lines.append(hint)
         if error:
             lines.append(f"  \033[31m! {error}\033[0m")
-        sys.stdout.write("\n".join(lines) + "\n")
+        cols = shutil.get_terminal_size((80, 24)).columns
+        _lines[0] = sum(
+            max(1, (len(_ANSI_RE.sub('', ln)) + cols - 1) // cols) for ln in lines
+        )
+        sys.stdout.write("\r\n".join(lines) + "\r\n")
         sys.stdout.flush()
-        return len(lines)
 
-    sys.stdout.write("\n")
-    sys.stdout.flush()
     fd = sys.stdin.fileno()
     old = termios.tcgetattr(fd)
     selected = 0
     error_msg: str | None = None
-    line_count = _render(selected)
+    _render(selected)
     try:
         tty.setraw(fd)
         while True:
@@ -178,29 +184,33 @@ def _raw_select(
             if ch in ("\x03", "\x04"):
                 return None
             if ch in ("\r", "\n"):
+                sys.stdout.write(f"\033[{_lines[0]}A\033[J")
+                sys.stdout.flush()
                 return selected, options[selected]
             if ch == "\x1b":
                 ch2 = sys.stdin.read(1)
                 if ch2 == "[":
                     ch3 = sys.stdin.read(1)
                     if ch3 == "A":
-                        sys.stdout.write(f"\033[{line_count}A\033[J")
+                        sys.stdout.write(f"\033[{_lines[0]}A\033[J")
                         selected = (selected - 1) % len(options)
                         error_msg = None
-                        line_count = _render(selected)
+                        _render(selected)
                     elif ch3 == "B":
-                        sys.stdout.write(f"\033[{line_count}A\033[J")
+                        sys.stdout.write(f"\033[{_lines[0]}A\033[J")
                         selected = (selected + 1) % len(options)
                         error_msg = None
-                        line_count = _render(selected)
+                        _render(selected)
                 continue
             if ch.isdigit() and ch != "0":
                 num = int(ch) - 1
                 if 0 <= num < len(options):
+                    sys.stdout.write(f"\033[{_lines[0]}A\033[J")
+                    sys.stdout.flush()
                     return num, options[num]
-                sys.stdout.write(f"\033[{line_count}A\033[J")
+                sys.stdout.write(f"\033[{_lines[0]}A\033[J")
                 error_msg = f"'{ch}' fora do intervalo (1-{len(options)})"
-                line_count = _render(selected, error_msg)
+                _render(selected, error_msg)
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
@@ -503,9 +513,24 @@ class InputGate:
         done = threading.Event()
 
         def _select_sync() -> None:
-            self._flush_renderer()
-            result[0] = _raw_select(question, options, deadline=deadline)
-            done.set()
+            renderer = self._renderer
+            suspended = False
+            if renderer is not None:
+                try:
+                    renderer.suspend_output(timeout=1.0)
+                    suspended = True
+                except Exception:
+                    pass
+            try:
+                self._flush_renderer()
+                result[0] = _raw_select(question, options, deadline=deadline)
+            finally:
+                if suspended and renderer is not None:
+                    try:
+                        renderer.resume_output(timeout=1.0)
+                    except Exception:
+                        pass
+                done.set()
 
         async def _coro() -> None:
             await run_in_terminal(_select_sync, in_executor=True)
@@ -659,4 +684,117 @@ class InputGate:
         future.add_done_callback(lambda _: done.set())
 
         done.wait(timeout=timeout)
+        return result[0]
+
+    def read_approval_in_terminal(
+        self, question: str, prompt: str, timeout: float = 300.0
+    ) -> str | None:
+        """Exibe question+prompt e lê y/N/a dentro de um único run_in_terminal.
+
+        Garante que a pergunta e o prompt de aprovação aparecem e permanecem
+        visíveis até o usuário responder — sem que o pt reexiba o CLI entre
+        a exibição da pergunta e a leitura da resposta.
+
+        Usa raw mode (single keypress) como _raw_read_approval, em vez de
+        cooked mode com readline — consistente com read_selection_in_terminal.
+
+        Retorna a tecla (y/n/a/s) ou None se timeout/erro/Ctrl+C.
+        """
+        import time as _time
+        session = self._session
+        if session is None:
+            return None
+        app = getattr(session, "app", None)
+        if app is None or not getattr(app, "_is_running", False):
+            return None
+        loop = getattr(app, "loop", None)
+        if loop is None or loop.is_closed() or not loop.is_running():
+            return None
+
+        deadline = _time.monotonic() + timeout
+        result: list[str | None] = [None]
+        done = threading.Event()
+
+        def _approval_sync() -> None:
+            renderer = self._renderer
+            suspended = False
+            if renderer is not None:
+                try:
+                    renderer.suspend_output(timeout=1.0)
+                    suspended = True
+                except Exception:
+                    pass
+            try:
+                self._flush_renderer()
+                sys.stdout.write(question + "\r\n")
+                remaining_s = max(0, int(deadline - _time.monotonic()))
+                sys.stdout.write(prompt.rstrip() + f"  [auto em {remaining_s}s]\r\n")
+                sys.stdout.flush()
+
+                cols = shutil.get_terminal_size((80, 24)).columns
+                all_lines = [question] + [prompt.rstrip() + f"  [auto em {remaining_s}s]"]
+                total_lines = sum(
+                    max(1, (len(_ANSI_RE.sub('', ln)) + cols - 1) // cols)
+                    for ln in all_lines
+                )
+
+                try:
+                    import termios
+                    import tty
+                    import select as _sel
+                except ImportError:
+                    return
+                if not sys.stdin.isatty():
+                    return
+
+                fd = sys.stdin.fileno()
+                old = termios.tcgetattr(fd)
+                try:
+                    tty.setraw(fd)
+                    while True:
+                        remaining = deadline - _time.monotonic()
+                        if remaining <= 0:
+                            return
+                        try:
+                            ready, _, _ = _sel.select(
+                                [sys.stdin], [], [], min(remaining, 0.5)
+                            )
+                        except Exception:
+                            return
+                        if not ready:
+                            continue
+                        ch = sys.stdin.read(1)
+                        if ch in ("\x03", "\x04"):
+                            return
+                        if ch in ("\r", "\n"):
+                            sys.stdout.write(f"\033[{total_lines}A\033[J")
+                            sys.stdout.flush()
+                            result[0] = ""
+                            return
+                        key = ch.lower()
+                        if key in {"y", "n", "a", "s"}:
+                            sys.stdout.write(f"\033[{total_lines}A\033[J{ch}\r\n")
+                            sys.stdout.flush()
+                            result[0] = key
+                            return
+                finally:
+                    termios.tcsetattr(fd, termios.TCSADRAIN, old)
+            finally:
+                if suspended and renderer is not None:
+                    try:
+                        renderer.resume_output(timeout=1.0)
+                    except Exception:
+                        pass
+                done.set()
+
+        async def _coro() -> None:
+            await run_in_terminal(_approval_sync, in_executor=True)
+
+        try:
+            future = asyncio.run_coroutine_threadsafe(_coro(), loop)
+        except Exception:
+            return None
+
+        future.add_done_callback(lambda _: done.set())
+        done.wait(timeout=timeout + 1.0)
         return result[0]
