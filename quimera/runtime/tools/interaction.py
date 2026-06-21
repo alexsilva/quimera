@@ -1,8 +1,12 @@
 """Ferramentas de interação com o usuário humano via terminal."""
 from __future__ import annotations
 
+import re
+import shutil
 import sys
 from typing import Callable
+
+_ANSI_RE = re.compile(r'\033\[[0-9;]*[A-Za-z]')
 
 from ..config import ToolRuntimeConfig
 from ..models import ToolCall, ToolResult
@@ -122,7 +126,9 @@ def _raw_select_tty(question: str, options: list[str]) -> tuple[int, str] | None
     if not sys.stdin.isatty():
         return None
 
-    def _render(selected: int, error: str | None = None) -> int:
+    _lines: list[int] = [0]
+
+    def _render(selected: int, error: str | None = None) -> None:
         lines = [question]
         for i, opt in enumerate(options):
             if i == selected:
@@ -132,17 +138,18 @@ def _raw_select_tty(question: str, options: list[str]) -> tuple[int, str] | None
         lines.append(f"  (↑↓ navegar · Enter confirmar · 1-{len(options)} direto)")
         if error:
             lines.append(f"  \033[31m! {error}\033[0m")
-        sys.stdout.write("\n".join(lines) + "\n")
+        cols = shutil.get_terminal_size((80, 24)).columns
+        _lines[0] = sum(
+            max(1, (len(_ANSI_RE.sub('', ln)) + cols - 1) // cols) for ln in lines
+        )
+        sys.stdout.write("\r\n".join(lines) + "\r\n")
         sys.stdout.flush()
-        return len(lines)
 
-    sys.stdout.write("\n")
-    sys.stdout.flush()
     fd = sys.stdin.fileno()
     old = termios.tcgetattr(fd)
     selected = 0
     error_msg: str | None = None
-    line_count = _render(selected)
+    _render(selected)
     try:
         tty.setraw(fd)
         while True:
@@ -150,29 +157,33 @@ def _raw_select_tty(question: str, options: list[str]) -> tuple[int, str] | None
             if ch in ("\x03", "\x04"):
                 return None
             if ch in ("\r", "\n"):
+                sys.stdout.write(f"\033[{_lines[0]}A\033[J")
+                sys.stdout.flush()
                 return selected, options[selected]
             if ch == "\x1b":
                 ch2 = sys.stdin.read(1)
                 if ch2 == "[":
                     ch3 = sys.stdin.read(1)
                     if ch3 == "A":
-                        sys.stdout.write(f"\033[{line_count}A\033[J")
+                        sys.stdout.write(f"\033[{_lines[0]}A\033[J")
                         selected = (selected - 1) % len(options)
                         error_msg = None
-                        line_count = _render(selected)
+                        _render(selected)
                     elif ch3 == "B":
-                        sys.stdout.write(f"\033[{line_count}A\033[J")
+                        sys.stdout.write(f"\033[{_lines[0]}A\033[J")
                         selected = (selected + 1) % len(options)
                         error_msg = None
-                        line_count = _render(selected)
+                        _render(selected)
                 continue
             if ch.isdigit() and ch != "0":
                 num = int(ch) - 1
                 if 0 <= num < len(options):
+                    sys.stdout.write(f"\033[{_lines[0]}A\033[J")
+                    sys.stdout.flush()
                     return num, options[num]
-                sys.stdout.write(f"\033[{line_count}A\033[J")
+                sys.stdout.write(f"\033[{_lines[0]}A\033[J")
                 error_msg = f"'{ch}' fora do intervalo (1-{len(options)})"
-                line_count = _render(selected, error_msg)
+                _render(selected, error_msg)
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
 

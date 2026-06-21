@@ -182,7 +182,8 @@ class ApprovalBroker:
 
     _READ_TOOLS = {"list_files", "read_file", "grep_search", "list_tasks", "list_jobs", "get_job", "todo_list", "list_agents"}
     _NETWORK_TOOLS = {"web_search", "web_fetch"}
-    _WRITE_TOOLS = {"write_file", "apply_patch", "todo_write", "write_stdin", "close_command_session"}
+    _WRITE_TOOLS = {"write_file", "apply_patch", "todo_write", "write_stdin", "close_command_session",
+                    "git_add", "git_commit", "git_checkout", "git_push"}
     _SHELL_TOOLS = {"run_shell", "run_shell_command", "exec_command"}
     _DESTRUCTIVE_TOOLS = {"remove_file"}
     _PATH_TOOLS = {"read_file", "list_files", "grep_search", "write_file", "remove_file"}

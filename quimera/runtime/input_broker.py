@@ -15,6 +15,8 @@ Cenários tratados:
 from __future__ import annotations
 
 import queue
+import re
+import shutil
 import sys
 import threading
 import time
@@ -22,6 +24,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Literal
 
 _UNSET = object()
+_ANSI_RE = re.compile(r'\033\[[0-9;]*[A-Za-z]')
 
 _DEFAULT_APPROVAL_TIMEOUT = 180.0   # 3 min
 _DEFAULT_ASK_TIMEOUT = 180.0        # 3 min
@@ -129,9 +132,6 @@ class InputBroker:
         while True:
             req = self._queue.get()
             pending = self._queue.qsize()
-            # Fecha Rich Live antes de qualquer I/O: sys.stdout.write do prompt
-            # conflita com o Live do streaming e corrompe o display.
-            self._close_live_if_active()
             if pending > 0:
                 self._emit(f"\n  [{pending} pergunta(s) aguardando na fila]")
             try:
@@ -145,27 +145,56 @@ class InputBroker:
                 self._emit(f"  [broker de input: erro inesperado: {exc}]")
 
     def _handle_approval(self, req: _InputRequest) -> bool:
-        self._emit(req.question)
         start = time.monotonic()
         deadline = start + req.timeout
-        prompt = f"  [auto-nega em {req.timeout:.0f}s] Executar? [y/N/a=todas]: "
-        answer = self._read_line(prompt, deadline=deadline)
-        if answer is None:
+        prompt = "  Executar? [y/N/a=todas]: "
+
+        # Quando pt está ativo: questão + input num único run_in_terminal para
+        # evitar que o pt reexiba o CLI entre a exibição da pergunta e a leitura
+        # (que apagaria a pergunta antes do usuário responder).
+        gate = self._input_gate
+        if gate is not None:
+            is_active = getattr(gate, "is_active", None)
+            if callable(is_active) and is_active():
+                read_fn = getattr(gate, "read_approval_in_terminal", None)
+                if callable(read_fn):
+                    remaining = max(0.5, deadline - time.monotonic())
+                    answer = read_fn(req.question, prompt, timeout=remaining)
+                    if answer is None:
+                        elapsed = time.monotonic() - start
+                        self._emit(
+                            f"  [sem resposta em {elapsed:.0f}s — negado automaticamente]"
+                            f" ({req.source})"
+                        )
+                        return False
+                    ans = answer.strip().lower()
+                    if ans in {"a", "all", "todas"}:
+                        if req.on_approve_all is not None:
+                            try:
+                                req.on_approve_all()
+                            except Exception:
+                                pass
+                        return True
+                    return ans in {"y", "yes", "s", "sim"}
+
+        # Sem pt ativo: raw mode para leitura de tecla única (y/n/a).
+        # Evita select+readline que falha quando stdin está em estado inválido.
+        key = self._raw_read_approval(req.question, prompt, deadline=deadline)
+        if key is None:
             elapsed = time.monotonic() - start
             self._emit(
                 f"  [sem resposta em {elapsed:.0f}s — negado automaticamente]"
                 f" ({req.source})"
             )
             return False
-        ans = answer.strip().lower()
-        if ans in {"a", "all", "todas"}:
+        if key in {"a", "all", "todas"}:
             if req.on_approve_all is not None:
                 try:
                     req.on_approve_all()
                 except Exception:
                     pass
             return True
-        return ans in {"y", "yes", "s", "sim"}
+        return key in {"y", "yes", "s", "sim"}
 
     def _handle_ask_user(self, req: _InputRequest) -> tuple[int, str]:
         start = time.monotonic()
@@ -241,11 +270,9 @@ class InputBroker:
     ) -> tuple[int, str] | None:
         """Seleção com setas+número em raw mode com deadline.
 
-        Renderiza display inicial via _emit() (Rich rastreia cursor), depois
-        entra em raw mode. Navegação usa cursor-up + rerender via sys.stdout.write
-        (movimento líquido zero — Rich mantém tracking correto). Display de
-        altura fixa (sempre inclui linha de erro, em branco quando vazia) para
-        que line_count seja constante entre rerenders.
+        Renderiza display inicial via sys.stdout.write direto, depois entra em
+        raw mode. Navegação usa cursor-up + rerender. O renderer Rich é suspenso
+        antes de qualquer I/O para evitar corrupção do tracking de cursor.
 
         Falls back para _line_select() se termios indisponível ou stdin não-tty.
         """
@@ -258,75 +285,115 @@ class InputBroker:
         if not sys.stdin.isatty():
             return self._line_select(question, options, deadline=deadline)
 
-        remaining_s = max(0, int(deadline - time.monotonic()))
-        n = len(options)
+        # Suspende o renderer ANTES de qualquer I/O direto para evitar que
+        # Rich rastreie cursor que será movido por ANSI bruto.
+        renderer = self._renderer
+        suspended = False
+        if renderer is not None:
+            try:
+                renderer.suspend_output(timeout=1.0)
+                suspended = True
+            except Exception:
+                pass
 
-        def _build(sel: int, err: str = "") -> tuple[str, int]:
-            lines = [question]
-            for i, opt in enumerate(options):
-                if i == sel:
-                    lines.append(f"  {i + 1}. \033[7m{opt}\033[0m")
-                else:
-                    lines.append(f"  {i + 1}. {opt}")
-            lines.append(f"  (↑↓ navegar \xb7 Enter confirmar \xb7 1-{n} \xb7 auto em {remaining_s}s)")
-            # linha de erro de altura fixa — garante line_count constante
-            lines.append(f"  ! {err}" if err else "  ")
-            return "\n".join(lines), len(lines)
-
-        text, line_count = _build(0)
-        self._emit(text)  # Rich rastreia cursor após esta linha
-
-        fd = sys.stdin.fileno()
-        old = termios.tcgetattr(fd)
-        selected = 0
-        error_msg = ""
         try:
-            tty.setraw(fd)
-            while True:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    return None
-                try:
-                    ready, _, _ = _sel.select([sys.stdin], [], [], min(remaining, 0.5))
-                except Exception:
-                    return None
-                if not ready:
-                    continue
-                ch = sys.stdin.read(1)
-                if ch in ("\x03", "\x04"):
-                    return None
-                if ch in ("\r", "\n"):
-                    return selected, options[selected]
-                if ch == "\x1b":
+            n = len(options)
+
+            _last_line_count: list[int] = [0]
+
+            def _build(sel: int, err: str = "") -> tuple[str, int]:
+                remaining_now = max(0, int(deadline - time.monotonic()))
+                lines = [question]
+                for i, opt in enumerate(options):
+                    if i == sel:
+                        lines.append(f"  {i + 1}. \033[7m{opt}\033[0m")
+                    else:
+                        lines.append(f"  {i + 1}. {opt}")
+                lines.append(
+                    f"  (↑↓ navegar \xb7 Enter confirmar \xb7 1-{n} \xb7 auto em {remaining_now}s)"
+                )
+                # linha de erro de altura fixa — garante line_count constante
+                lines.append(f"  ! {err}" if err else "  ")
+                cols = shutil.get_terminal_size((80, 24)).columns
+                _last_line_count[0] = sum(
+                    max(1, (len(_ANSI_RE.sub('', ln)) + cols - 1) // cols)
+                    for ln in lines
+                )
+                return "\r\n".join(lines), _last_line_count[0]
+
+            # Render inicial via stdout bruto (renderer suspenso = sem tracking)
+            text, _ = _build(0)
+            sys.stdout.write(text + "\r\n")
+            sys.stdout.flush()
+
+            fd = sys.stdin.fileno()
+            old = termios.tcgetattr(fd)
+            selected = 0
+            error_msg = ""
+            try:
+                tty.setraw(fd)
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        return None
                     try:
-                        ch2 = sys.stdin.read(1)
-                        if ch2 == "[":
-                            ch3 = sys.stdin.read(1)
-                            if ch3 == "A":
-                                selected = (selected - 1) % n
-                                error_msg = ""
-                            elif ch3 == "B":
-                                selected = (selected + 1) % n
-                                error_msg = ""
-                            else:
-                                continue
-                            text, _ = _build(selected, error_msg)
-                            # cursor-up line_count + clear + rerender mantém cursor na mesma posição
-                            sys.stdout.write(f"\033[{line_count}A\033[J{text}\n")
-                            sys.stdout.flush()
+                        ready, _, _ = _sel.select(
+                            [sys.stdin], [], [], min(remaining, 0.5)
+                        )
                     except Exception:
-                        pass
-                    continue
-                if ch.isdigit() and ch != "0":
-                    num = int(ch) - 1
-                    if 0 <= num < n:
-                        return num, options[num]
-                    error_msg = f"'{ch}' fora do intervalo (1-{n})"
-                    text, _ = _build(selected, error_msg)
-                    sys.stdout.write(f"\033[{line_count}A\033[J{text}\n")
-                    sys.stdout.flush()
+                        return None
+                    if not ready:
+                        continue
+                    ch = sys.stdin.read(1)
+                    if ch in ("\x03", "\x04"):
+                        return None
+                    if ch in ("\r", "\n"):
+                        sys.stdout.write(f"\033[{_last_line_count[0]}A\033[J")
+                        sys.stdout.flush()
+                        return selected, options[selected]
+                    if ch == "\x1b":
+                        try:
+                            ch2 = sys.stdin.read(1)
+                            if ch2 == "[":
+                                ch3 = sys.stdin.read(1)
+                                if ch3 == "A":
+                                    selected = (selected - 1) % n
+                                    error_msg = ""
+                                elif ch3 == "B":
+                                    selected = (selected + 1) % n
+                                    error_msg = ""
+                                else:
+                                    continue
+                                text, _ = _build(selected, error_msg)
+                                sys.stdout.write(
+                                    f"\033[{_last_line_count[0]}A\033[J"
+                                    + text + "\r\n"
+                                )
+                                sys.stdout.flush()
+                        except Exception:
+                            pass
+                        continue
+                    if ch.isdigit() and ch != "0":
+                        num = int(ch) - 1
+                        if 0 <= num < n:
+                            sys.stdout.write(f"\033[{_last_line_count[0]}A\033[J")
+                            sys.stdout.flush()
+                            return num, options[num]
+                        error_msg = f"'{ch}' fora do intervalo (1-{n})"
+                        text, _ = _build(selected, error_msg)
+                        sys.stdout.write(
+                            f"\033[{_last_line_count[0]}A\033[J"
+                            + text + "\r\n"
+                        )
+                        sys.stdout.flush()
+            finally:
+                termios.tcsetattr(fd, termios.TCSADRAIN, old)
         finally:
-            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+            if suspended and renderer is not None:
+                try:
+                    renderer.resume_output(timeout=1.0)
+                except Exception:
+                    pass
 
     def _line_select(
         self,
@@ -357,6 +424,93 @@ class InputBroker:
                 if 0 <= num < len(options):
                     return num, options[num]
             self._emit(f"  [{stripped!r} inválido — esperado 1-{len(options)}]")
+
+    def _raw_read_approval(
+        self,
+        question: str,
+        prompt: str,
+        *,
+        deadline: float,
+    ) -> str | None:
+        """Lê y/n/a em raw mode com deadline. Mesmo padrão do _raw_select_deadline.
+
+        Suspende renderer, exibe question+prompt, entra em raw mode e aguarda
+        tecla única. Retorna a tecla pressionada (lowercase) ou None se timeout,
+        stdin não-tty ou termios indisponível.
+
+        Após a resposta, limpa o prompt da tela com \033[{N}A\033[J para evitar
+        que texto residual fique visível quando o renderer retomar (match com
+        o comportamento de _raw_select_deadline).
+        """
+        try:
+            import termios
+            import tty
+            import select as _sel
+        except ImportError:
+            return None
+        if not sys.stdin.isatty():
+            return None
+
+        renderer = self._renderer
+        suspended = False
+        if renderer is not None:
+            try:
+                renderer.suspend_output(timeout=1.0)
+                suspended = True
+            except Exception:
+                pass
+        try:
+            remaining_s = max(0, int(deadline - time.monotonic()))
+
+            # Calcula quantas linhas o prompt inteiro ocupa (com wrap)
+            cols = shutil.get_terminal_size((80, 24)).columns
+            prompt_text = prompt.rstrip() + f"  [auto em {remaining_s}s]"
+            all_lines = [question] + [prompt_text]
+            total_lines = sum(
+                max(1, (len(_ANSI_RE.sub('', ln)) + cols - 1) // cols)
+                for ln in all_lines
+            )
+
+            sys.stdout.write(question + "\r\n")
+            sys.stdout.write(prompt_text + "\r\n")
+            sys.stdout.flush()
+
+            fd = sys.stdin.fileno()
+            old = termios.tcgetattr(fd)
+            try:
+                tty.setraw(fd)
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        return None
+                    try:
+                        ready, _, _ = _sel.select(
+                            [sys.stdin], [], [], min(remaining, 0.5)
+                        )
+                    except Exception:
+                        return None
+                    if not ready:
+                        continue
+                    ch = sys.stdin.read(1)
+                    if ch in ("\x03", "\x04"):
+                        return None
+                    if ch in ("\r", "\n"):
+                        sys.stdout.write(f"\033[{total_lines}A\033[J")
+                        sys.stdout.flush()
+                        return "n"
+                    key = ch.lower()
+                    if key in {"y", "n", "a", "s"}:
+                        sys.stdout.write(f"\033[{total_lines}A\033[J{ch}\r\n")
+                        sys.stdout.flush()
+                        return key
+            finally:
+                termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        finally:
+            if suspended and renderer is not None:
+                try:
+                    renderer.resume_output(timeout=1.0)
+                except Exception:
+                    pass
 
     # ------------------------------------------------------------------
     # Utilitário de saída
