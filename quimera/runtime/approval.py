@@ -340,6 +340,12 @@ class AutoApprovalHandler(ApprovalHandler):
         return self._approve_all
 
 
+# Limite de segurança para o laço de drenagem do stdin (_drain_stdin).
+# Impede busy-loop infinito caso o select reporte readable continuamente sem
+# nunca sinalizar EOF (stdin mockado em teste ou pipe patológico em runtime).
+_DRAIN_MAX_ITERATIONS = 1000
+
+
 class NonBlockingConsoleApprovalHandler(ApprovalHandler):
     """Aprovação não-bloqueante com timeout via select — ideal para uso em loop principal.
 
@@ -393,26 +399,26 @@ class NonBlockingConsoleApprovalHandler(ApprovalHandler):
 
     @staticmethod
     def _drain_stdin() -> None:
-        """Descarta dados pendentes no stdin para evitar leitura de lixo."""
+        """Descarta linhas pendentes no stdin sem alterar o modo do terminal.
+
+        Best-effort, sem termios/raw-mode: em modo cooked o select só reporta
+        readable após Enter, então só linhas completas são drenadas. Mantém o
+        terminal intocado para não conflitar com o input do prompt_toolkit.
+
+        Limitado a um número máximo de iterações para nunca virar busy-loop:
+        se o stdin ficar continuamente "pronto" sem nunca sinalizar EOF (ex.:
+        stdin mockado em teste, ou um pipe patológico), o laço encerra mesmo
+        assim em vez de prender a CPU a 100% e travar o processo.
+        """
         try:
-            import termios
-            import tty
-            fd = sys.stdin.fileno()
-            old_settings = termios.tcgetattr(fd)
-        except Exception:
-            return
-        try:
-            tty.setcbreak(fd)
-            while True:
+            for _ in range(_DRAIN_MAX_ITERATIONS):
                 ready, _, _ = select.select([sys.stdin], [], [], 0.0)
                 if not ready:
                     break
-                sys.stdin.read(1)
-        finally:
-            try:
-                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-            except Exception:
-                pass
+                if sys.stdin.readline() == "":
+                    break
+        except Exception:
+            return
 
 
 class PreApprovalHandler(ApprovalHandler):

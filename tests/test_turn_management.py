@@ -1574,50 +1574,28 @@ class TestParallelToolbarState(unittest.TestCase):
 
 
 class TestTTYControlEcho(unittest.TestCase):
+    """termios foi banido: TtyController é no-op e não toca no terminal."""
 
-    def test_suppress_and_restore_tty_control_echo(self):
-        """Verifica que Test suppress and restore tty control echo."""
+    def test_suppress_and_restore_are_noop_and_never_touch_termios(self):
+        """suppress/restore não chamam termios — nenhuma flag de terminal alterada."""
         from quimera.app.tty_control import TtyController
         ctrl = TtyController()
 
-        stdin_mock = Mock()
-        stdin_mock.isatty.return_value = True
-        stdin_mock.fileno.return_value = 9
         fake_termios = Mock()
-        fake_termios.ECHOCTL = 0x200
-        fake_termios.TCSANOW = 0
-        fake_termios.TCSADRAIN = 1
-        original_attrs = [0, 0, 0, 0x200, 0, 0, [b"\x03"]]
-        fake_termios.tcgetattr.return_value = list(original_attrs)
-
-        with patch("quimera.app.tty_control.sys.stdin", stdin_mock), patch.dict(sys.modules, {"termios": fake_termios}):
+        with patch.dict(sys.modules, {"termios": fake_termios}):
             ctrl.suppress_control_echo()
-            self.assertEqual(ctrl._echoctl_fd, 9)
-            self.assertEqual(ctrl._echoctl_attrs, original_attrs)
-            fake_termios.tcsetattr.assert_called_with(9, fake_termios.TCSANOW, [0, 0, 0, 0, 0, 0, [b"\x03"]])
-
             ctrl.restore_control_echo()
-            self.assertIsNone(ctrl._echoctl_fd)
-            self.assertIsNone(ctrl._echoctl_attrs)
-            self.assertEqual(fake_termios.tcsetattr.call_count, 2)
-            fake_termios.tcsetattr.assert_called_with(9, fake_termios.TCSADRAIN, original_attrs)
-
-    def test_suppress_skips_when_not_tty(self):
-        """Verifica que Test suppress skips when not tty."""
-        from quimera.app.tty_control import TtyController
-        ctrl = TtyController()
-
-        stdin_mock = Mock()
-        stdin_mock.isatty.return_value = False
-        fake_termios = Mock()
-
-        with patch("quimera.app.tty_control.sys.stdin", stdin_mock), patch.dict(sys.modules, {"termios": fake_termios}):
-            ctrl.suppress_control_echo()
 
         fake_termios.tcgetattr.assert_not_called()
         fake_termios.tcsetattr.assert_not_called()
         self.assertIsNone(ctrl._echoctl_fd)
         self.assertIsNone(ctrl._echoctl_attrs)
+
+    def test_module_does_not_import_termios(self):
+        """O módulo tty_control não deve importar termios/tty em nível algum."""
+        import quimera.app.tty_control as mod
+        self.assertFalse(hasattr(mod, "termios"))
+        self.assertFalse(hasattr(mod, "tty"))
 
 
 # =========================================================================

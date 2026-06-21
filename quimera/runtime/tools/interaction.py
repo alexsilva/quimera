@@ -1,12 +1,8 @@
 """Ferramentas de interação com o usuário humano via terminal."""
 from __future__ import annotations
 
-import re
-import shutil
 import sys
 from typing import Callable
-
-_ANSI_RE = re.compile(r'\033\[[0-9;]*[A-Za-z]')
 
 from ..config import ToolRuntimeConfig
 from ..models import ToolCall, ToolResult
@@ -61,14 +57,7 @@ class InteractionTools(ToolBase):
             except Exception as exc:
                 return ToolResult(ok=False, tool_name=call.name, error=f"Erro inesperado: {exc}")
 
-        # Fallback sem injeção: tenta raw mode, cai em readline se necessário
-        raw_result = _raw_select_tty(question, options)
-        if raw_result is not None:
-            idx, val = raw_result
-            return ToolResult(
-                ok=True, tool_name=call.name,
-                content=val, data={"index": idx, "value": val},
-            )
+        # Fallback sem injeção: leitura numerada por linha (cooked mode, sem termios)
         error_msg: str | None = None
         while True:
             parts = []
@@ -114,83 +103,6 @@ def _parse_selection(tool_name: str, raw: str, options: list[str]) -> ToolResult
         ok=False, tool_name=tool_name,
         error=f"Resposta inválida: '{raw}'. Use o número (1-{len(options)}) ou o texto exato da opção.",
     )
-
-
-def _raw_select_tty(question: str, options: list[str]) -> tuple[int, str] | None:
-    """Seleção com setas+número em modo raw — retorna None se stdin não for tty."""
-    try:
-        import termios
-        import tty
-        import select as _sel
-    except ImportError:
-        return None
-    if not sys.stdin.isatty():
-        return None
-
-    _lines: list[int] = [0]
-
-    def _render(selected: int, error: str | None = None) -> None:
-        lines = [question]
-        for i, opt in enumerate(options):
-            if i == selected:
-                lines.append(f"  {i + 1}. \033[7m{opt}\033[0m")
-            else:
-                lines.append(f"  {i + 1}. {opt}")
-        lines.append(f"  (↑↓ navegar · Enter confirmar · 1-{len(options)} direto)")
-        if error:
-            lines.append(f"  \033[31m! {error}\033[0m")
-        cols = shutil.get_terminal_size((80, 24)).columns
-        _lines[0] = sum(
-            max(1, (len(_ANSI_RE.sub('', ln)) + cols - 1) // cols) for ln in lines
-        )
-        sys.stdout.write("\r\n".join(lines) + "\r\n")
-        sys.stdout.flush()
-
-    fd = sys.stdin.fileno()
-    old = termios.tcgetattr(fd)
-    selected = 0
-    error_msg: str | None = None
-    _render(selected)
-    try:
-        tty.setraw(fd)
-        while True:
-            ch = sys.stdin.read(1)
-            if ch in ("\x03", "\x04"):
-                return None
-            if ch in ("\r", "\n"):
-                sys.stdout.write(f"\033[{_lines[0]}A\033[J")
-                sys.stdout.flush()
-                return selected, options[selected]
-            if ch == "\x1b":
-                if not _sel.select([sys.stdin], [], [], 0.05)[0]:
-                    continue
-                ch2 = sys.stdin.read(1)
-                if ch2 == "[":
-                    if not _sel.select([sys.stdin], [], [], 0.05)[0]:
-                        continue
-                    ch3 = sys.stdin.read(1)
-                    if ch3 == "A":
-                        sys.stdout.write(f"\033[{_lines[0]}A\033[J")
-                        selected = (selected - 1) % len(options)
-                        error_msg = None
-                        _render(selected)
-                    elif ch3 == "B":
-                        sys.stdout.write(f"\033[{_lines[0]}A\033[J")
-                        selected = (selected + 1) % len(options)
-                        error_msg = None
-                        _render(selected)
-                continue
-            if ch.isdigit() and ch != "0":
-                num = int(ch) - 1
-                if 0 <= num < len(options):
-                    sys.stdout.write(f"\033[{_lines[0]}A\033[J")
-                    sys.stdout.flush()
-                    return num, options[num]
-                sys.stdout.write(f"\033[{_lines[0]}A\033[J")
-                error_msg = f"'{ch}' fora do intervalo (1-{len(options)})"
-                _render(selected, error_msg)
-    finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
 
 def register(registry, policy, config: ToolRuntimeConfig) -> InteractionTools:
