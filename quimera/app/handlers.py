@@ -80,57 +80,43 @@ class PromptAwareStderrHandler(logging.StreamHandler):
     def emit(self, record):
         """Executa emit."""
         callbacks = self._callbacks
+
+        if record.levelno < logging.WARNING:
+            # INFO/DEBUG → arquivo apenas; excepção: MCP server em debug mode (muted)
+            if callbacks is not None:
+                debug_enabled = False
+                if callable(getattr(callbacks, "debug_enabled", None)):
+                    try:
+                        debug_enabled = bool(callbacks.debug_enabled())
+                    except Exception:
+                        pass
+                if debug_enabled and record.name == "quimera.runtime.mcp.server":
+                    if callable(callbacks.show_muted):
+                        callbacks.show_muted(_friendly_message(record))
+            return
+
+        # WARNING/ERROR → chat com formato amigável
         if callbacks is None:
             super().emit(record)
             return
 
-        prompt_reading = _is_prompt_reading(callbacks.is_reading())
-        debug_enabled = False
-        if callable(callbacks.debug_enabled):
-            try:
-                debug_enabled = bool(callbacks.debug_enabled())
-            except Exception:
-                debug_enabled = False
-        if prompt_reading and record.levelno < logging.WARNING:
-            # Em debug, logs do servidor MCP devem aparecer mesmo com prompt ativo.
-            if not (debug_enabled and record.name == "quimera.runtime.mcp.server"):
-                return
-
-        formatter = self.formatter or logging.Formatter("%(message)s")
-        message = formatter.format(record)
-
-        _raw = str(record.msg) if record.msg else ""
-        _is_operational_noise = _raw.startswith("[DISPATCH]") or _raw.startswith("[GATEWAY]")
+        message = _friendly_message(record)
 
         if record.levelno >= logging.ERROR:
             if callable(callbacks.show_error):
                 callbacks.show_error(message)
                 return
-        if record.levelno >= logging.WARNING:
-            if callable(callbacks.show_warning):
-                callbacks.show_warning(message)
-                return
-        if _is_operational_noise:
-            super().emit(record)
-            return
+        if callable(callbacks.show_warning):
+            callbacks.show_warning(message)
 
-        if record.name == "quimera.runtime.mcp.server":
-            if callable(callbacks.show_muted):
-                callbacks.show_muted(message)
-                return
 
-        if callable(callbacks.show_system):
-            callbacks.show_system(message)
-            return
-
-        stdin_is_tty = sys.stdin is not None and sys.stdin.isatty()
-        if stdin_is_tty and self.stream is sys.stderr:
-            self.stream = sys.stdout
-
-        with callbacks.output_lock:
-            super().emit(record)
-            self.flush()
-            callbacks.redisplay_prompt(clear_first=False)
+def _friendly_message(record: logging.LogRecord) -> str:
+    icon = "✗" if record.levelno >= logging.ERROR else "⚠"
+    component = record.module or record.name.split(".")[-1]
+    msg = record.getMessage()
+    if len(msg) > 100:
+        msg = msg[:97] + "..."
+    return f"{icon} {component}: {msg}"
 
 
 def _is_prompt_reading(value: bool | str | None) -> bool:
