@@ -14,6 +14,7 @@ from .session_paths import (
     resolve_workspace_render_log_path as _resolve_workspace_render_log_path,
     resolve_workspace_render_ansi_path as _resolve_workspace_render_ansi_path,
     resolve_workspace_metrics_path as _resolve_workspace_metrics_path,
+    resolve_app_log_path as _resolve_app_log_path,
 )
 
 
@@ -37,3 +38,7 @@ def resolve_workspace_render_ansi_path(workspace: Any, session_id: str) -> Path 
 
 def resolve_workspace_metrics_path(workspace: Any, session_id: str) -> Path | None:
     return _resolve_workspace_metrics_path(workspace, session_id)
+
+
+def resolve_app_log_path(workspace: Any, session_id: str) -> Path | None:
+    return _resolve_app_log_path(workspace, session_id)

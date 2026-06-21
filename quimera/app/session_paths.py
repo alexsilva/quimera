@@ -64,6 +64,17 @@ def resolve_session_log_path(storage: Any, workspace: Any) -> str | Path:
     return ""
 
 
+def resolve_app_log_path(workspace: Any, session_id: str) -> Path | None:
+    """Resolve o path do arquivo de log da aplicação para agents consultarem."""
+    if workspace is None:
+        return None
+    workspace_tmp = getattr(workspace, "tmp", None)
+    path = _call_path_getter(workspace_tmp, "app_log_path_for", session_id)
+    if path:
+        return path
+    return _call_path_getter(workspace, "app_log_path_for", session_id)
+
+
 def resolve_render_debug_log_path(storage: Any, workspace: Any, debug_prompt_metrics: bool) -> str | Path:
     if not debug_prompt_metrics:
         return ""

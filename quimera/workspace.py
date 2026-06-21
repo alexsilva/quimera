@@ -98,6 +98,10 @@ class WorkspaceTmp:
         """Caminho do arquivo JSONL de métricas para *session_id*."""
         return self.metrics_dir / f"{session_id}.jsonl"
 
+    def app_log_path_for(self, session_id: str) -> Path:
+        """Caminho do arquivo de log da aplicação para *session_id*."""
+        return self.logs_dir / f"app-{session_id}.log"
+
 
 class Workspace:
     """Resolve e gerencia o diretório de dados de um projeto no armazenamento global do quimera."""

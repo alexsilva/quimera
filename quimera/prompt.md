@@ -11,6 +11,9 @@ Agentes de IA nesta conversa: {agents}
 - WORKSPACE RAIZ: {workspace_root}
 - DIRETÓRIO ATUAL: {current_dir}
 - SISTEMA OPERACIONAL: {os_info}
+<!-- IF:app_log_path -->
+- LOG DA APLICAÇÃO: {app_log_path}
+<!-- ENDIF:app_log_path -->
 </session_state>
 <!-- ENDIF:session_id -->
 

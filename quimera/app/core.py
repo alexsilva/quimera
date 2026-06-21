@@ -25,7 +25,9 @@ from .session_bootstrap import (
     resolve_workspace_render_log_path,
     resolve_workspace_render_ansi_path,
     resolve_workspace_metrics_path,
+    resolve_app_log_path,
 )
+from .config import set_app_log_file
 from .toolbar import ToolbarManager
 from .toolbar_coordinator import ToolbarCoordinator
 from .session_metrics import SessionMetricsService
@@ -144,6 +146,9 @@ class QuimeraApp:
         render_log_path = resolve_workspace_render_log_path(self.workspace, session_id)
         render_ansi_path = resolve_workspace_render_ansi_path(self.workspace, session_id)
         metrics_file = resolve_workspace_metrics_path(self.workspace, session_id) if debug else None
+        app_log_path = resolve_app_log_path(self.workspace, session_id)
+        if app_log_path:
+            set_app_log_file(app_log_path)
         render_audit_logger = (
             RenderAuditLogger(render_log_path, render_ansi_path) if debug else None
         )
@@ -367,6 +372,7 @@ class QuimeraApp:
             "render_log_path": str(render_log_path) if debug else "",
             "render_ansi_path": str(render_ansi_path) if debug else "",
             "metrics_path": str(metrics_file) if metrics_file else "",
+            "app_log_path": str(app_log_path) if app_log_path else "",
             "mcp_enabled": False,
             "mcp_socket_path": "",
         }
