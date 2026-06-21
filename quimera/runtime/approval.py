@@ -397,17 +397,22 @@ class NonBlockingConsoleApprovalHandler(ApprovalHandler):
         try:
             import termios
             import tty
-            old_settings = termios.tcgetattr(sys.stdin.fileno())
-            tty.setcbreak(sys.stdin.fileno())
-            # Simplesmente tenta ler e descartar qualquer coisa pendente
+            fd = sys.stdin.fileno()
+            old_settings = termios.tcgetattr(fd)
+        except Exception:
+            return
+        try:
+            tty.setcbreak(fd)
             while True:
                 ready, _, _ = select.select([sys.stdin], [], [], 0.0)
                 if not ready:
                     break
                 sys.stdin.read(1)
-            termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, old_settings)
-        except Exception:
-            pass
+        finally:
+            try:
+                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+            except Exception:
+                pass
 
 
 class PreApprovalHandler(ApprovalHandler):
