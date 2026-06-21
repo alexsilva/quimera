@@ -107,13 +107,11 @@ class TestApprovalPreview(unittest.TestCase):
 class TestExecutionPreview(unittest.TestCase):
     def test_execution_read_file(self):
         result = ToolPreview.build("read_file", {"path": "README.md"})
-        self.assertIn("⚒ executando read_file", result)
-        self.assertIn("README.md", result)
+        self.assertEqual("⚒ read_file README.md", result)
 
     def test_execution_exec_command(self):
         result = ToolPreview.build("exec_command", {"cmd": "ls", "tty": True})
-        self.assertIn("⚒ executando exec_command", result)
-        self.assertIn("flags=tty", result)
+        self.assertEqual("⚒ $ ls", result)
 
     def test_execution_masks_sensitive_fields(self):
         result = ToolPreview.build(
