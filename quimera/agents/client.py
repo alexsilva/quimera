@@ -823,7 +823,7 @@ class AgentClient:
                     set_tool_preview = getattr(effective_tool_executor, "set_tool_preview_callback", None)
                     if callable(set_tool_preview):
                         set_tool_preview(lambda name, args: _logger.info(
-                            "Tool call: %s :: %s", name, ToolPreview.build(name, args)))
+                            "[tool] %s", ToolPreview.build(name, args).removeprefix("⚒ ")))
                 # Injeta callbacks de spinner no executor para que o approval handler
                 # possa pausar o Live do Rich antes de input() bloqueante, evitando
                 # race condition entre o refresh do spinner e a leitura do stdin.

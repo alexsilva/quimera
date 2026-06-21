@@ -1841,7 +1841,7 @@ def test_call_api_renders_openai_preview_for_non_approval_tools(renderer):
     assert result == "ok"
     renderer.show_system_neutral.assert_called()
     message = renderer.show_system_neutral.call_args[0][0]
-    assert "⚒ executando read_file" in message
+    assert "⚒ read_file" in message
     assert "read_file" in message
     assert "README.md" in message
 
@@ -1882,7 +1882,7 @@ def test_call_api_routes_openai_preview_through_muted_reporter(renderer):
     assert result == "ok"
     muted_reporter.assert_called_once()
     message = muted_reporter.call_args[0][0]
-    assert "⚒ executando read_file" in message
+    assert "⚒ read_file" in message
     assert "read_file" in message
     assert "README.md" in message
     renderer.show_system_neutral.assert_not_called()
@@ -1965,8 +1965,8 @@ def test_call_api_masks_sensitive_fields_in_openai_preview(renderer):
 
     assert result == "ok"
     message = muted_reporter.call_args[0][0]
-    assert "⚒ executando custom_tool" in message
-    assert "path=README.md" in message
+    assert "⚒ custom_tool" in message
+    assert "README.md" in message
     assert "1234567890" not in message
     assert "super-secret-token" not in message
     assert "12****90" in message

@@ -1,5 +1,6 @@
 """Componentes de `quimera.app.handlers`."""
 import logging
+import re
 import sys
 from dataclasses import dataclass
 from typing import Callable
@@ -110,13 +111,37 @@ class PromptAwareStderrHandler(logging.StreamHandler):
             callbacks.show_warning(message)
 
 
+_AGENT_QUOTED = re.compile(r'"([^"]+)"')
+
+_FRIENDLY_LABELS: dict[str, str] = {
+    "agent_call_service": "",  # tratado separadamente — extrai nome do agente da mensagem
+}
+
+
 def _friendly_message(record: logging.LogRecord) -> str:
-    icon = "✗" if record.levelno >= logging.ERROR else "⚠"
     component = record.module or record.name.split(".")[-1]
+    label = _FRIENDLY_LABELS.get(component, component)
     msg = record.getMessage()
     if len(msg) > 100:
         msg = msg[:97] + "..."
-    return f"{icon} {component}: {msg}"
+
+    # agent_call_service: extrai o nome do agente entre aspas e usa como prefixo
+    if component == "agent_call_service":
+        m = _AGENT_QUOTED.search(msg)
+        if m:
+            agent_name = m.group(1)
+            clean = _AGENT_QUOTED.sub("", msg).strip()
+            clean = re.sub(r'\s+', ' ', clean)
+            clean = re.sub(r'\s+(?:from|for|with)\s+', ' ', clean, count=1)
+            clean = re.sub(r'\s+', ' ', clean)
+            clean = clean.strip(' ,')
+            clean = re.sub(r'\s*,\s*', ', ', clean)
+            clean = clean.strip()
+            return f"{agent_name}: {clean}"
+
+    if label:
+        return f"{label}: {msg}"
+    return msg
 
 
 def _is_prompt_reading(value: bool | str | None) -> bool:
