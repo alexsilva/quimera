@@ -128,10 +128,17 @@ class ToolPolicy:
         raise ToolPolicyError("fail_task não é exposta no chat; o executor interno encerra a task")
 
     def _validate_ask_user(self, call: ToolCall) -> None:
-        """ask_user é seguro: apenas exibe pergunta e aguarda resposta do usuário."""
-        options = call.arguments.get("options", [])
-        if len(options) < 2:
-            raise ToolPolicyError("ask_user requer pelo menos 2 opções")
+        """ask_user é seguro: apenas exibe pergunta e aguarda resposta do usuário.
+
+        Sem 'options' a pergunta é de texto livre; com 'options' é enquete e
+        exige pelo menos 2 itens.
+        """
+        question = str(call.arguments.get("question") or "").strip()
+        if not question:
+            raise ToolPolicyError("ask_user requer 'question'")
+        options = call.arguments.get("options") or []
+        if options and len(options) < 2:
+            raise ToolPolicyError("ask_user com 'options' requer pelo menos 2 opções (ou omita para texto livre)")
 
     def _validate_run_shell_command(self, call: ToolCall) -> None:
         """Valida o alias legado `run_shell_command` com política mínima de shell."""

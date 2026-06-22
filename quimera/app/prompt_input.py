@@ -413,7 +413,7 @@ class InputGate:
             suspended = False
             if renderer is not None:
                 try:
-                    renderer.suspend_output(timeout=1.0)
+                    renderer.request_floor(timeout=1.0)
                     suspended = True
                 except Exception:
                     pass
@@ -457,11 +457,9 @@ class InputGate:
                         return
                     if not raw_line:
                         return
-                    cleaned = raw_line.rstrip("\n\r")
-                    if cleaned:
-                        sys.stdout.write(cleaned + "\n")
-                        sys.stdout.flush()
-                    raw = cleaned
+                    # Cooked mode (ECHO ativo via in_terminal): a linha digitada
+                    # já aparece no terminal; não re-ecoar para não duplicar.
+                    raw = raw_line.rstrip("\n\r")
                     if raw.isdigit():
                         num = int(raw) - 1
                         if 0 <= num < len(options):
@@ -475,7 +473,7 @@ class InputGate:
             finally:
                 if suspended and renderer is not None:
                     try:
-                        renderer.resume_output(timeout=1.0)
+                        renderer.release_floor(timeout=1.0)
                     except Exception:
                         pass
                 done.set()
@@ -598,10 +596,18 @@ class InputGate:
 
         def _read_sync() -> None:
             import select as _sel
-            self._flush_renderer()
-            sys.stdout.write(prompt)
-            sys.stdout.flush()
+            renderer = self._renderer
+            suspended = False
+            if renderer is not None:
+                try:
+                    renderer.request_floor(timeout=1.0)
+                    suspended = True
+                except Exception:
+                    pass
             try:
+                self._flush_renderer()
+                sys.stdout.write(prompt)
+                sys.stdout.flush()
                 try:
                     ready, _, _ = _sel.select([sys.stdin], [], [], timeout)
                     if not ready:
@@ -612,17 +618,21 @@ class InputGate:
                     raw_line = sys.stdin.readline()
                 except (EOFError, OSError):
                     return
+                # Não re-ecoamos a linha: o terminal está em cooked mode
+                # (ECHO ativo via in_terminal), então o que o usuário digita
+                # já aparece. Escrever de novo duplicaria a linha.
                 if raw_line:
-                    cleaned = raw_line.rstrip("\n\r")
-                    if cleaned:
-                        sys.stdout.write(cleaned + "\n")
-                        sys.stdout.flush()
-                    result[0] = cleaned
+                    result[0] = raw_line.rstrip("\n\r")
                 else:
                     result[0] = ""
             except (EOFError, OSError):
                 result[0] = ""
             finally:
+                if suspended and renderer is not None:
+                    try:
+                        renderer.release_floor(timeout=1.0)
+                    except Exception:
+                        pass
                 done.set()
 
         async def _coro() -> None:
@@ -676,7 +686,7 @@ class InputGate:
             suspended = False
             if renderer is not None:
                 try:
-                    renderer.suspend_output(timeout=1.0)
+                    renderer.request_floor(timeout=1.0)
                     suspended = True
                 except Exception:
                     pass
@@ -703,15 +713,13 @@ class InputGate:
                     return
                 if not raw_line:
                     return
-                cleaned = raw_line.rstrip("\n\r")
-                if cleaned:
-                    sys.stdout.write(cleaned + "\n")
-                    sys.stdout.flush()
-                result[0] = cleaned.strip().lower()
+                # Cooked mode (ECHO ativo via in_terminal): a resposta digitada
+                # já aparece no terminal; não re-ecoar para não duplicar.
+                result[0] = raw_line.rstrip("\n\r").strip().lower()
             finally:
                 if suspended and renderer is not None:
                     try:
-                        renderer.resume_output(timeout=1.0)
+                        renderer.release_floor(timeout=1.0)
                     except Exception:
                         pass
                 done.set()

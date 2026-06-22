@@ -244,7 +244,8 @@ def test_read_input_in_terminal_happy_path():
     fake_stdout = MagicMock()
 
     try:
-        with patch("sys.stdin", fake_stdin), patch("sys.stdout", fake_stdout):
+        with patch("sys.stdin", fake_stdin), patch("sys.stdout", fake_stdout), \
+                patch("select.select", return_value=([fake_stdin], [], [])):
             result = gate.read_input_in_terminal("Executar? [y/N]: ", timeout=5.0)
     finally:
         loop.call_soon_threadsafe(loop.stop)

@@ -21,6 +21,8 @@ class InteractionTools(ToolBase):
         """Injeta callable que exibe a pergunta e lê a resposta do terminal.
 
         Assinatura esperada: fn(question: str, options: list[str]) -> (index, value)
+        Quando ``options`` está vazio, o callable lê texto livre e retorna
+        (-1, texto_digitado). Com opções, retorna (índice_0based, texto_da_opção).
         Deve bloquear até o usuário responder.
         """
         self._ask_user_fn = fn
@@ -30,16 +32,23 @@ class InteractionTools(ToolBase):
         return self._ask_user_fn is not None
 
     def ask_user(self, call: ToolCall) -> ToolResult:
-        """Apresenta uma pergunta com opções numeradas e aguarda a seleção do usuário."""
+        """Pergunta ao usuário humano e aguarda a resposta.
+
+        Modo padrão (texto livre): só ``question`` — o usuário digita uma
+        resposta em texto. Modo enquete (opcional): forneça ``options`` (>=2)
+        e o usuário escolhe uma; ainda assim pode digitar texto fora da lista.
+        """
         question = str(call.arguments.get("question") or "").strip()
         raw_options = call.arguments.get("options") or []
 
         if not question:
             return ToolResult(ok=False, tool_name=call.name, error="'question' é obrigatório")
-        if not isinstance(raw_options, list) or len(raw_options) < 2:
-            return ToolResult(ok=False, tool_name=call.name, error="'options' deve ter ao menos 2 itens")
+        if raw_options and not isinstance(raw_options, list):
+            return ToolResult(ok=False, tool_name=call.name, error="'options' deve ser uma lista")
+        if isinstance(raw_options, list) and 0 < len(raw_options) < 2:
+            return ToolResult(ok=False, tool_name=call.name, error="'options' deve ter ao menos 2 itens (ou ser omitido para texto livre)")
 
-        options = [str(o) for o in raw_options]
+        options = [str(o) for o in raw_options] if isinstance(raw_options, list) else []
 
         if self._ask_user_fn is not None:
             try:
@@ -57,7 +66,20 @@ class InteractionTools(ToolBase):
             except Exception as exc:
                 return ToolResult(ok=False, tool_name=call.name, error=f"Erro inesperado: {exc}")
 
-        # Fallback sem injeção: leitura numerada por linha (cooked mode, sem termios)
+        # Fallback sem injeção: leitura por linha (cooked mode, sem termios).
+        # Sem opções -> texto livre; com opções -> seleção numerada validada.
+        if not options:
+            sys.stdout.write(f"\n{question}\n> ")
+            sys.stdout.flush()
+            try:
+                raw = sys.stdin.readline().rstrip("\n\r")
+            except (EOFError, KeyboardInterrupt):
+                return ToolResult(ok=False, tool_name=call.name, error="Interrompido pelo usuário")
+            return ToolResult(
+                ok=True, tool_name=call.name, content=raw,
+                data={"index": -1, "value": raw},
+            )
+
         error_msg: str | None = None
         while True:
             parts = []

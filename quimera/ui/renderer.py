@@ -251,6 +251,127 @@ class TerminalResizeEvent:
 
 
 # ---------------------------------------------------------------------------
+# Container por agente (janela vertical)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class AgentContainer:
+    """Container (janela vertical) de um agente — dono do próprio output e perguntas.
+
+    Modelo Windows-OS: cada agente ativo é uma janela empilhada na vertical.
+    O container gerencia ativamente:
+
+      output    -> stream ao vivo (iniciar/atualizar/finalizar/abortar) +
+                   buffer rolling de progresso transitório.
+      perguntas -> input/aprovação/seleção emoldurados sob o banner do agente
+                   (commit do transient + request_floor + render + read + release).
+
+    O stream ao vivo mantém cache no writer thread (`_stream_states`); o
+    container espelha `stream_content` para leitura externa (ex.: ao compor
+    uma pergunta durante o streaming).
+    """
+
+    agent: str
+    label: str
+    style: str
+    streaming: bool = False
+    stream_content: str = ""
+    stream_theme_name: str = ""
+    transient_active: bool = False
+    elapsed: float | None = None
+    transient: list[str] = field(default_factory=list)
+
+    def compose_question(self, question: str, options: list[str] | None = None) -> str:
+        """Monta o corpo textual da pergunta exibida sob o banner do agente."""
+        lines = [strip_ansi(str(question or "")).strip()]
+        for i, opt in enumerate(options or []):
+            lines.append(f"  {i + 1}. {strip_ansi(str(opt))}")
+        return "\n".join(line for line in lines if line)
+
+    # -- Output management ------------------------------------------------
+
+    def start_stream(self, renderer, theme_name: str) -> None:
+        """Inicia streaming de output para este agente."""
+        if self.streaming:
+            return
+        self.streaming = True
+        self.stream_content = ""
+        self.stream_theme_name = theme_name
+        renderer._queue.put(LiveStartEvent(self.agent, {
+            "content": "",
+            "label": self.label,
+            "style": self.style,
+            "theme_name": theme_name,
+        }))
+
+    def update_stream(self, renderer, chunk: Any) -> None:
+        """Enfileira chunk de streaming."""
+        renderer._queue.put(LiveUpdateChunkEvent(self.agent, chunk))
+
+    def finish_stream(self, renderer, final_content: str, render_mode: str = "auto") -> None:
+        """Finaliza streaming e persiste conteúdo completo."""
+        self.streaming = False
+        clean = strip_ansi(str(final_content or ""))
+        mode = _normalize_render_mode(render_mode)
+        with renderer._lock:
+            renderer._completed_streams[self.agent] = clean
+        renderer._queue.put(LiveStopEvent(self.agent, clean, mode))
+
+    def abort_stream(self, renderer) -> None:
+        """Aborta streaming sem marcar como completo."""
+        self.streaming = False
+        renderer._queue.put(LiveAbortEvent(self.agent))
+
+    # -- Transient management --------------------------------------------
+
+    def push_transient(self, message: str) -> bool:
+        """Adiciona mensagem ao buffer rolling do container. Retorna True se mudou."""
+        clean = strip_ansi(str(message or "")).strip("\r\n")
+        if not clean:
+            return False
+        if self.transient and self.transient[-1] == clean:
+            return False
+        self.transient.append(clean)
+        self.transient = self.transient[-_SCROLLING_WINDOW_SIZE:]
+        return True
+
+    def clear_transient_buffer(self) -> None:
+        """Esvazia o buffer transitório e desativa flag."""
+        self.transient.clear()
+        self.transient_active = False
+
+    # -- Question management ----------------------------------------------
+
+    def ask_input(self, renderer, input_gate, prompt: str, timeout: float = 300.0) -> str | None:
+        """Input livre de texto dentro deste container.
+
+        Commit do transient, request_floor, render pergunta com banner,
+        leitura da resposta, release_floor.
+        """
+        renderer.clear_agent_transient(self.agent)
+        renderer.flush_quick()
+        return input_gate.read_input_in_terminal(self.compose_question(prompt) + "\n", timeout)
+
+    def ask_approval(self, renderer, input_gate, question: str,
+                     prompt: str = "", timeout: float = 300.0) -> str | None:
+        """Aprovação y/n/a dentro deste container."""
+        renderer.clear_agent_transient(self.agent)
+        renderer.flush_quick()
+        return input_gate.read_approval_in_terminal(self.compose_question(question), prompt, timeout)
+
+    def ask_selection(self, renderer, input_gate, question: str,
+                      options: list[str], timeout: float = 300.0) -> tuple[int, str] | None:
+        """Seleção numerada dentro deste container.
+
+        O reader (`read_selection_in_terminal`) já renderiza as opções numeradas;
+        compomos apenas o texto da pergunta (sem opções) para não duplicá-las.
+        """
+        renderer.clear_agent_transient(self.agent)
+        renderer.flush_quick()
+        return input_gate.read_selection_in_terminal(self.compose_question(question), options, timeout)
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -341,9 +462,11 @@ class _TransientOverlay:
         o overlay antigo permanece visível e o novo é impresso logo abaixo.
     """
 
-    def __init__(self):
-        # Lista mutável compartilhada entre closures — estado real da tela
-        self._lines = [0]
+    def __init__(self, shared_lines: list | None = None):
+        # Lista mutável compartilhada entre closures — estado real da tela.
+        # Quando o Compositor fornece a lista, o contador fica visível a outras
+        # threads (ex.: o detentor do "chão" que precisa limpar o overlay).
+        self._lines = shared_lines if shared_lines is not None else [0]
 
     @property
     def lines_on_screen(self) -> int:
@@ -483,19 +606,22 @@ class TerminalRenderer:
         # Tempo decorrido por agente (atualizado via _on_tick, lido na toolbar)
         self._agent_elapsed: dict[str, float] = {}
 
-        # Streams completados: agent -> final_content
+        # Streams completados: agent -> final_content (cache de dedup do render final)
         self._completed_streams = {}
-        # Agents com stream ativo
-        self._active_stream_agents = set()
-        # Streams transitórios de progresso
-        self._transient_stream_agents = set()
+        # Registro de containers por agente — dono do estado de output e perguntas.
+        # Consolida o que antes eram dicionários/sets paralelos: stream ativo,
+        # progresso transitório, buffer rolling e tempo decorrido.
+        self._containers: dict[Any, AgentContainer] = {}
         # Último evento persistente impresso, para evitar espaçamento redundante.
         self._last_persistent_kind: str | None = None
         self._last_persistent_agent: str | None = None
-        # Buffer rolling para feed rolável do agente
-        self._rolling_buffers: dict[str, list[str]] = {}
-        # Lock protege _completed_streams, _active_stream_agents, _statuses e versão
+        # Lock protege _completed_streams, _containers, _statuses e versão
         self._lock = threading.RLock()
+
+        # Contador de linhas do overlay transitório na tela, compartilhado com
+        # o _TransientOverlay do writer thread. Legível por quem detém o "chão"
+        # (request_floor) para limpar o overlay de forma síncrona.
+        self._overlay_lines = [0]
 
         # Versão monotônica do overlay — usada para invalidar closures stale
         self._transient_buf_version = 0
@@ -588,8 +714,10 @@ class TerminalRenderer:
         _local_pending: collections.deque = collections.deque()
         _deferred_post_prompt: collections.deque = collections.deque()
 
-        # Overlay transitório — único ponto de verdade para o estado da tela
-        _overlay = _TransientOverlay()
+        # Overlay transitório — único ponto de verdade para o estado da tela.
+        # Compartilha o contador de linhas com a instância (self._overlay_lines)
+        # para que request_floor possa limpá-lo sincronamente de outra thread.
+        _overlay = _TransientOverlay(self._overlay_lines)
 
         def _prompt_active() -> bool:
             try:
@@ -857,6 +985,11 @@ class TerminalRenderer:
                     _overlay.reset()
 
                 elif isinstance(event, TransientWindowEvent):
+                    # Floor cedido (request_floor): um prompt/leitor é dono do
+                    # terminal. NÃO desenhar overlay por cima — era exatamente
+                    # isso que atropelava o prompt de pergunta/aprovação.
+                    if self._output_suspended.is_set():
+                        continue
                     # Coalescing: drena eventos consecutivos — o mais recente substitui os anteriores
                     _coalesced = 0
                     while True:
@@ -896,6 +1029,10 @@ class TerminalRenderer:
                         self._console.print(event.text)
 
                 elif isinstance(event, TransientClearEvent):
+                    # Floor cedido: nada a (re)desenhar; o detentor do chão já
+                    # limpou o overlay em request_floor.
+                    if self._output_suspended.is_set():
+                        continue
                     with self._lock:
                         current_ver = self._transient_buf_version
                     if event.buf_version < current_ver:
@@ -941,6 +1078,56 @@ class TerminalRenderer:
         return resumed
 
     # ------------------------------------------------------------------
+    # Floor (chão do terminal) — transição atômica de posse do stdout
+    # ------------------------------------------------------------------
+    #
+    # O writer thread é o Compositor: único dono do stdout. Quando um leitor
+    # interativo (pergunta/aprovação/seleção) precisa do terminal, ele "pede o
+    # chão": o Compositor congela o feed (fecha o Live, para de pintar o overlay
+    # transitório) e o leitor limpa os artefatos remanescentes antes de desenhar
+    # sua própria janela. Ao terminar, devolve o chão e o feed volta a fluir.
+    #
+    # Isto formaliza a transição que antes estava implícita e quebrada
+    # (suspend_output + overlay continuando a pintar por cima do prompt).
+
+    def request_floor(self, timeout: float = 2.0) -> bool:
+        """Cede o chão do terminal ao chamador (que vira o dono temporário do stdout).
+
+        DEVE ser chamado de dentro de run_in_terminal — o chamador é, naquele
+        instante, dono do terminal. Suspende o feed (Live + overlay transitório)
+        e limpa as linhas de overlay que ainda estejam na tela, deixando o chão
+        limpo para o prompt do leitor.
+        """
+        ok = self.suspend_output(timeout=timeout)
+        # Após a suspensão, o writer não desenha mais overlay (handlers checam
+        # _output_suspended). Limpamos sincronamente o que restou na tela.
+        self._clear_overlay_sync()
+        return ok
+
+    def release_floor(self, timeout: float = 2.0) -> bool:
+        """Devolve o chão ao Compositor: retoma o feed e drena prints deferidos."""
+        return self.resume_output(timeout=timeout)
+
+    def _clear_overlay_sync(self) -> None:
+        """Apaga as linhas do overlay transitório direto no stdout.
+
+        Seguro porque é chamado pelo detentor do chão (dentro de run_in_terminal,
+        com o feed já suspenso). Invalida closures de replace pendentes via bump
+        de versão para que não repintem o overlay ao retomar.
+        """
+        n = self._overlay_lines[0]
+        if n > 0:
+            try:
+                sys.stdout.write(f"\033[{n}A\033[J")
+                sys.stdout.flush()
+            except Exception:
+                pass
+            self._overlay_lines[0] = 0
+        with self._lock:
+            self._transient_buf_version += 1
+        self.log_debug_event("floor_request", prev_lines=n)
+
+    # ------------------------------------------------------------------
     # Helpers internos
     # ------------------------------------------------------------------
 
@@ -964,6 +1151,34 @@ class TerminalRenderer:
     def _agent_style(self, agent: str):
         """Retorna (color, label) para o agente."""
         return _public_ui_module()._agent_style(agent, self._get_plugin_style)
+
+    def _container(self, agent) -> AgentContainer:
+        """Get-or-create do container do agente (protegido por _lock reentrante)."""
+        with self._lock:
+            container = self._containers.get(agent)
+            if container is None:
+                style, label = self._agent_style(agent)
+                container = AgentContainer(
+                    agent=_coerce_agent_name(agent), label=label, style=style
+                )
+                self._containers[agent] = container
+            return container
+
+    def _combined_transient(self, term_lines: int) -> tuple[str, int]:
+        """Empilha verticalmente o progresso transitório de todos os containers.
+
+        Cada agente contribui suas linhas rolling sob o próprio label, em ordem
+        estável de agente (o deck multi-agente). DEVE ser chamado com _lock retido.
+        Retorna (texto_combinado, num_linhas) já limitado a 1/3 do terminal.
+        """
+        combined: list[str] = []
+        for agt in sorted(self._containers, key=str):
+            container = self._containers[agt]
+            for msg in container.transient:
+                combined.append(f"{container.label} {msg}")
+        win_limit = max(1, term_lines // 3)
+        combined = combined[-win_limit:]
+        return "\n".join(combined), len(combined)
 
     def _print(self, renderable, kind: str = "generic", **kwargs):
         """Enfileira um evento de print para o writer thread."""
@@ -1181,20 +1396,9 @@ class TerminalRenderer:
         """Inicia a área de renderização incremental para uma resposta."""
         if not self._console:
             return
-        style, label = self._agent_style(agent)
         with self._lock:
-            if agent in self._active_stream_agents:
-                return
-            self._active_stream_agents.add(agent)
-            theme_name = self._theme.name
-
-        state = {
-            "content": "",
-            "label": label,
-            "style": style,
-            "theme_name": theme_name,
-        }
-        self._queue.put(LiveStartEvent(agent, state))
+            container = self._container(agent)
+            container.start_stream(self, self._theme.name)
 
     def update_message_stream(self, agent, chunk):
         """Atualiza a resposta incremental com mais um chunk."""
@@ -1206,20 +1410,15 @@ class TerminalRenderer:
         """Fecha o streaming preservando o conteúdo já mostrado."""
         if not self._console:
             return
-        clean_content = strip_ansi(str(final_content or ""))
-        normalized_mode = _normalize_render_mode(render_mode)
         with self._lock:
-            self._completed_streams[agent] = clean_content
-            self._active_stream_agents.discard(agent)
-        self._queue.put(LiveStopEvent(agent, clean_content, normalized_mode))
+            self._container(agent).finish_stream(self, final_content, render_mode)
 
     def abort_message_stream(self, agent):
         """Fecha o stream sem marcar a resposta como completa."""
         if not self._console:
             return
         with self._lock:
-            self._active_stream_agents.discard(agent)
-        self._queue.put(LiveAbortEvent(agent))
+            self._container(agent).abort_stream(self)
 
     def update_agent_transient(self, agent, message: str) -> None:
         """Atualiza progresso transitório do agente sem acumular linhas."""
@@ -1239,8 +1438,10 @@ class TerminalRenderer:
 
         if prompt_active:
             enqueue_event = None
+            fallback: tuple[str, str] | None = None
             with self._lock:
-                buf = self._rolling_buffers.setdefault(agent, [])
+                container = self._container(agent)
+                buf = container.transient
                 if buf and buf[-1] == clean_message:
                     return
                 buf.append(clean_message)
@@ -1250,24 +1451,17 @@ class TerminalRenderer:
                 buf_version = self._transient_buf_version
 
                 if self._run_above_prompt_fn:
-                    all_bufs = dict(self._rolling_buffers)
-                    combined = []
-                    for agt, msgs in sorted(all_bufs.items()):
-                        _, label = self._agent_style(agt)
-                        for msg in msgs:
-                            combined.append(f"{label} {msg}")
-                    _win_limit = max(1, _term_lines // 3)
-                    combined = combined[-_win_limit:]
-                    combined_text = '\n'.join(combined)
-                    if combined and combined_text != self._last_combined_text:
+                    combined_text, count = self._combined_transient(_term_lines)
+                    if combined_text and combined_text != self._last_combined_text:
                         self._last_combined_text = combined_text
-                        enqueue_event = TransientWindowEvent(combined_text, len(combined), buf_version)
+                        enqueue_event = TransientWindowEvent(combined_text, count, buf_version)
                 else:
-                    style, label = self._agent_style(agent)
+                    fallback = (container.label, container.style)
 
             if enqueue_event is not None:
                 self._queue.put(enqueue_event)
-            elif not self._run_above_prompt_fn:
+            elif fallback is not None:
+                label, style = fallback
                 line = Text.assemble(
                     (label, f"bold {style}"),
                     (" "),
@@ -1279,20 +1473,18 @@ class TerminalRenderer:
             return
 
         with self._lock:
-            is_owned = agent in self._transient_stream_agents
-            is_active = agent in self._active_stream_agents
+            container = self._container(agent)
+            is_owned = container.transient_active
+            is_active = container.streaming
             if not is_owned and is_active:
                 return
             should_start = not is_owned
             if should_start:
-                self._transient_stream_agents.add(agent)
+                container.transient_active = True
 
-            buf = self._rolling_buffers.setdefault(agent, [])
-            if buf and buf[-1] == clean_message:
+            if not container.push_transient(clean_message):
                 return
-            buf.append(clean_message)
-            buf[:] = buf[-_SCROLLING_WINDOW_SIZE:]
-            display_content = "\n".join(buf)
+            display_content = "\n".join(container.transient)
 
         if should_start:
             self.start_message_stream(agent)
@@ -1305,34 +1497,23 @@ class TerminalRenderer:
         prompt_active = bool(self._is_prompt_active_fn and self._is_prompt_active_fn())
 
         with self._lock:
-            removed = self._rolling_buffers.pop(agent, None)
-            is_transient_agent = agent in self._transient_stream_agents
-            if is_transient_agent:
-                self._transient_stream_agents.discard(agent)
-            if removed is not None:
-                self._transient_buf_version += 1
+            container = self._containers.get(agent)
+            is_transient_agent = bool(container and container.transient_active)
+            if container is not None:
+                if container.transient:
+                    self._transient_buf_version += 1
+                container.clear_transient_buffer()
             buf_version = self._transient_buf_version
 
             event = None
             if prompt_active and self._run_above_prompt_fn:
-                all_bufs = dict(self._rolling_buffers)
-                if not all_bufs:
+                _term_lines = shutil.get_terminal_size(fallback=(80, 24)).lines
+                combined_text, count = self._combined_transient(_term_lines)
+                if not combined_text:
                     event = TransientClearEvent(buf_version)
                 else:
-                    combined = []
-                    for agt, msgs in sorted(all_bufs.items()):
-                        _, label = self._agent_style(agt)
-                        for msg in msgs:
-                            combined.append(f"{label} {msg}")
-                    _term_lines = shutil.get_terminal_size(fallback=(80, 24)).lines
-                    _win_limit = max(1, _term_lines // 3)
-                    combined = combined[-_win_limit:]
-                    if not combined:
-                        event = TransientClearEvent(buf_version)
-                    else:
-                        combined_text = '\n'.join(combined)
-                        self._last_combined_text = combined_text
-                        event = TransientWindowEvent(combined_text, len(combined), buf_version)
+                    self._last_combined_text = combined_text
+                    event = TransientWindowEvent(combined_text, count, buf_version)
 
         if event is not None:
             self._queue.put(event)
@@ -1345,17 +1526,20 @@ class TerminalRenderer:
     def update_agent_elapsed(self, agent: str, elapsed: float) -> None:
         """Armazena o tempo decorrido do agente para exibição na toolbar."""
         with self._lock:
-            self._agent_elapsed[agent] = elapsed
+            self._container(agent).elapsed = elapsed
 
     def clear_agent_elapsed(self, agent: str) -> None:
         """Remove o tempo decorrido do agente."""
         with self._lock:
-            self._agent_elapsed.pop(agent, None)
+            container = self._containers.get(agent)
+            if container is not None:
+                container.elapsed = None
 
     def _get_agent_elapsed(self, agent: str) -> float | None:
         """Retorna o tempo decorrido do agente ou None."""
         with self._lock:
-            return self._agent_elapsed.get(agent)
+            container = self._containers.get(agent)
+            return container.elapsed if container is not None else None
 
     def reset_visual_state(self, agent: str | None = None) -> None:
         """Reseta estado visual após cancelamento (Ctrl+C).
@@ -1365,11 +1549,12 @@ class TerminalRenderer:
         """
         with self._lock:
             if agent:
-                stream_agents = [agent] if agent in self._active_stream_agents else []
-                transient_agents = [agent] if agent in self._transient_stream_agents else []
+                container = self._containers.get(agent)
+                stream_agents = [agent] if (container and container.streaming) else []
+                transient_agents = [agent] if (container and container.transient_active) else []
             else:
-                stream_agents = list(self._active_stream_agents)
-                transient_agents = list(self._transient_stream_agents)
+                stream_agents = [a for a, c in self._containers.items() if c.streaming]
+                transient_agents = [a for a, c in self._containers.items() if c.transient_active]
                 self._completed_streams.clear()
                 self._statuses.clear()
                 self._last_persistent_kind = None
@@ -1382,9 +1567,12 @@ class TerminalRenderer:
 
         with self._lock:
             if agent:
-                self._agent_elapsed.pop(agent, None)
+                container = self._containers.get(agent)
+                if container is not None:
+                    container.elapsed = None
             else:
-                self._agent_elapsed.clear()
+                for container in self._containers.values():
+                    container.elapsed = None
 
     def request_toolbar_refresh(self) -> None:
         """Enfileira evento para refresh periódico da toolbar."""

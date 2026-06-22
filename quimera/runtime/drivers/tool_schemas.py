@@ -1189,11 +1189,12 @@ TOOL_SCHEMAS = [
         "function": {
             "name": "ask_user",
             "description": (
-                "Apresenta uma pergunta com opções numeradas ao usuário humano e aguarda a seleção. "
-                "Use para decisões que requerem julgamento humano durante a execução: "
-                "escolha de abordagem, confirmação de risco, seleção de preferência. "
-                "Bloqueia até o usuário responder. O usuário pode digitar o número (1, 2, …) "
-                "ou o texto exato da opção."
+                "Faz uma pergunta ao usuário humano e aguarda a resposta. "
+                "Modo padrão: pergunta aberta de texto livre (só 'question') — use para "
+                "pedir informação, esclarecimento ou instrução que só o humano tem. "
+                "Modo enquete (opcional): forneça 'options' (>=2) para oferecer escolhas; "
+                "o usuário escolhe pelo número ou pelo texto da opção. "
+                "Bloqueia até o usuário responder."
             ),
             "parameters": {
                 "type": "object",
@@ -1206,21 +1207,24 @@ TOOL_SCHEMAS = [
                         "type": "array",
                         "items": {"type": "string"},
                         "minItems": 2,
-                        "description": "Lista de opções (mínimo 2) para o usuário escolher.",
+                        "description": (
+                            "Opcional. Lista de opções (mínimo 2) para uma enquete. "
+                            "Omita para uma pergunta aberta de texto livre."
+                        ),
                     },
                 },
-                "required": ["question", "options"],
+                "required": ["question"],
             },
             "output_schema": {
                 "type": "object",
                 "properties": {
                     "ok": {"type": "boolean"},
-                    "content": {"type": "string", "description": "Texto da opção selecionada"},
+                    "content": {"type": "string", "description": "Resposta do usuário (texto livre ou opção escolhida)"},
                     "data": {
                         "type": "object",
                         "properties": {
-                            "index": {"type": "integer", "description": "Índice 0-based da opção selecionada"},
-                            "value": {"type": "string", "description": "Texto da opção selecionada"},
+                            "index": {"type": "integer", "description": "Índice 0-based da opção escolhida, ou -1 para texto livre"},
+                            "value": {"type": "string", "description": "Texto da resposta do usuário"},
                         },
                     },
                     "error": {"oneOf": [{"type": "string"}, {"type": "null"}]},
