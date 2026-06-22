@@ -22,7 +22,7 @@ from ...paths import CANDIDATE_DIRS, find_base_writable
 from ...plugins.base import OpenAIConnection
 from ...app.prompt_input import PromptFormatter
 from .openai_compat import OpenAICompatDriver
-from ..approval import AutoApprovalHandler, ConsoleApprovalHandler
+from ..approval import ApprovalManager
 from ..config import ToolRuntimeConfig
 from ..executor import ToolExecutor
 from ..models import ToolResult
@@ -124,11 +124,8 @@ class DriverRepl:
 
         rt_config = ToolRuntimeConfig(workspace_root=self.working_dir)
         self._rt_config = rt_config
-        self.tool_executor = ToolExecutor(
-            rt_config,
-            ConsoleApprovalHandler(input_gate=self._input_gate),
-        )
-        self._auto_tool_executor = ToolExecutor(rt_config, AutoApprovalHandler(approve_all=True))
+        self._approval = ApprovalManager(rt_config, input_gate=self._input_gate)
+        self.tool_executor = ToolExecutor(rt_config, self._approval)
 
     @staticmethod
     def _format_user_prompt(user_name: str | None, mode_name: str | None = None) -> str:

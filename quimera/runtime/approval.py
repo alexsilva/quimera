@@ -1,11 +1,13 @@
 """Componentes de `quimera.runtime.approval`."""
 from __future__ import annotations
 
+import inspect
 import select
 import threading
 import sys
-import inspect
 from abc import ABC, abstractmethod
+
+from .approval_broker import ApprovalBroker
 
 
 def _emit_approval_message(renderer, message: str) -> None:
@@ -347,49 +349,46 @@ _DRAIN_MAX_ITERATIONS = 1000
 
 
 class NonBlockingConsoleApprovalHandler(ApprovalHandler):
-    """Aprovação não-bloqueante com timeout via select — ideal para uso em loop principal.
-
-    Exibe a pergunta e aguarda até `timeout_seconds` por input no stdin.
-    Se o usuário digitar 'y'/'yes'/'s'/'sim' a tempo, aprova.
-    Qualquer outra entrada ou timeout resulta em negação automática.
-    """
+    """Aprovação não-bloqueante com timeout via select —
+    ideal para uso em loop principal."""
 
     def __init__(self, timeout_seconds: float = 5.0, renderer=None) -> None:
-        """Inicializa com timeout configurável (padrão: 5 segundos)."""
         self._timeout = timeout_seconds
         self._renderer = renderer
 
     def approve(self, *, tool_name: str, summary: str) -> bool:
-        """Exibe prompt e aguarda resposta não-bloqueante do usuário."""
         _emit_approval_message(self._renderer, f"\nAprovar {tool_name}")
         _emit_approval_message(self._renderer, f"  {summary}")
         _emit_approval_message(
             self._renderer,
-            f"  Digite 'y' em até {self._timeout:.0f}s para aprovar, ou qualquer tecla para negar...",
+            f"  Digite 'y' em até {self._timeout:.0f}s "
+            f"para aprovar, ou qualquer tecla para negar...",
         )
 
-        answer = self._read_with_timeout(self._timeout, show_prompt=self._renderer is None)
+        answer = self._read_with_timeout(
+            self._timeout, show_prompt=self._renderer is None
+        )
         if answer is None:
-            _emit_approval_message(self._renderer, "  timeout — negando automaticamente")
+            _emit_approval_message(
+                self._renderer, "  timeout — negando automaticamente"
+            )
             return False
         approved = answer.strip().lower() in {"y", "yes", "s", "sim"}
         status = "aprovado" if approved else "negado"
         _emit_approval_message(self._renderer, f"  {status}")
         return approved
 
-    def _read_with_timeout(self, timeout: float, *, show_prompt: bool = True) -> str | None:
-        """Lê uma linha do stdin com timeout via select. Retorna None no timeout."""
+    def _read_with_timeout(
+        self, timeout: float, *, show_prompt: bool = True
+    ) -> str | None:
         try:
             stdin = sys.stdin
             if stdin is None:
                 return None
-            # Drena qualquer input pendente antes de esperar
             self._drain_stdin()
-            # Exibe o prompt
             if show_prompt:
                 sys.stdout.write("  > ")
                 sys.stdout.flush()
-            # Aguarda input com timeout
             ready, _, _ = select.select([stdin], [], [], timeout)
             if not ready:
                 return None
@@ -424,13 +423,13 @@ class NonBlockingConsoleApprovalHandler(ApprovalHandler):
 class PreApprovalHandler(ApprovalHandler):
     """Handler que permite pré-aprovar a próxima ferramenta antes dela ser chamada.
 
-    Funciona como um semáforo: quando `pre_approve()` é chamado (ex: via comando /approve),
-    a próxima chamada de `approve()` retorna True automaticamente. Após consumida,
-    a pré-aprovação é resetada e chamadas subsequentes delegam ao handler base.
+    Funciona como um semáforo: quando ``pre_approve()`` é chamado (ex: via
+    comando /approve), a próxima chamada de ``approve()`` retorna True
+    automaticamente. Após consumida, a pré-aprovação é resetada e chamadas
+    subsequentes delegam ao handler base.
     """
 
     def __init__(self, base_handler: ApprovalHandler) -> None:
-        """Inicializa com um handler base para fallback."""
         self._base = base_handler
         self._renderer = _extract_renderer(base_handler)
         self._pre_approved = False
@@ -476,11 +475,14 @@ class PreApprovalHandler(ApprovalHandler):
         scope_key: str | None = None,
         silent: bool = False,
     ) -> None:
-        """Ativa approve-all para a thread atual e seu escopo propagável."""
         thread_id = threading.get_ident()
         with self._lock:
             if enabled:
-                resolved_scope = scope_key or self._thread_scope_keys.get(thread_id) or f"thread:{thread_id}"
+                resolved_scope = (
+                    scope_key
+                    or self._thread_scope_keys.get(thread_id)
+                    or f"thread:{thread_id}"
+                )
                 self._thread_scope_keys[thread_id] = resolved_scope
                 self._thread_approve_all.add(thread_id)
                 self._scope_approve_all.add(resolved_scope)
@@ -493,19 +495,21 @@ class PreApprovalHandler(ApprovalHandler):
             else:
                 self._thread_approve_all.discard(thread_id)
                 self._silent_thread_approve_all.discard(thread_id)
-                resolved_scope = scope_key or self._thread_scope_keys.pop(thread_id, None)
+                resolved_scope = scope_key or self._thread_scope_keys.pop(
+                    thread_id, None
+                )
                 if resolved_scope is not None:
                     self._scope_approve_all.discard(resolved_scope)
                     self._silent_scope_approve_all.discard(resolved_scope)
 
     def get_thread_approval_scope(self) -> str | None:
-        """Retorna o escopo propagável associado à thread atual."""
         thread_id = threading.get_ident()
         with self._lock:
             return self._thread_scope_keys.get(thread_id)
 
-    def bind_thread_approval_scope(self, scope_key: str | None) -> str | None:
-        """Associa temporariamente um escopo de aprovação à thread atual."""
+    def bind_thread_approval_scope(
+        self, scope_key: str | None
+    ) -> str | None:
         thread_id = threading.get_ident()
         with self._lock:
             previous = self._thread_scope_keys.get(thread_id)
@@ -516,30 +520,40 @@ class PreApprovalHandler(ApprovalHandler):
             return previous
 
     def approve(self, *, tool_name: str, summary: str) -> bool:
-        """Aprova automaticamente se pré-aprovado ou em modo approve-all, senão delega ao handler base."""
         thread_id = threading.get_ident()
         with self._lock:
             if thread_id in self._thread_approve_all:
                 if thread_id not in self._silent_thread_approve_all:
-                    _emit_approval_message(self._renderer, f"  [approve-all] {tool_name} :: {summary}")
+                    _emit_approval_message(
+                        self._renderer,
+                        f"  [approve-all] {tool_name} :: {summary}",
+                    )
                 return True
             scope_key = self._thread_scope_keys.get(thread_id)
             if scope_key is not None and scope_key in self._scope_approve_all:
                 if scope_key not in self._silent_scope_approve_all:
-                    _emit_approval_message(self._renderer, f"  [approve-all] {tool_name} :: {summary}")
+                    _emit_approval_message(
+                        self._renderer,
+                        f"  [approve-all] {tool_name} :: {summary}",
+                    )
                 return True
             if self._approve_all:
                 if not self._approve_all_silent:
-                    _emit_approval_message(self._renderer, f"  [approve-all] {tool_name} :: {summary}")
+                    _emit_approval_message(
+                        self._renderer,
+                        f"  [approve-all] {tool_name} :: {summary}",
+                    )
                 return True
             if self._pre_approved:
                 self._pre_approved = False
-                _emit_approval_message(self._renderer, f"  [pré-aprovado] {tool_name} :: {summary}")
+                _emit_approval_message(
+                    self._renderer,
+                    f"  [pré-aprovado] {tool_name} :: {summary}",
+                )
                 return True
         return self._base.approve(tool_name=tool_name, summary=summary)
 
     def reset_approve_all_after_cycle(self) -> None:
-        """Reseta approve-all ao final do ciclo de tool hops, a menos que seja permanente."""
         thread_id = threading.get_ident()
         with self._lock:
             self._thread_approve_all.discard(thread_id)
@@ -551,3 +565,170 @@ class PreApprovalHandler(ApprovalHandler):
             if self._approve_all and not self._approve_all_permanent:
                 self._approve_all = False
                 self._approve_all_silent = False
+
+
+class ApprovalManager(ApprovalHandler):
+    """Ponto único de entrada para aprovação de ferramentas.
+
+    Compõe ``ApprovalBroker`` (governança), ``PreApprovalHandler``
+    (pré-aprovação / approve-all) e ``ConsoleApprovalHandler``
+    (prompt interativo) — e delega a cada um conforme a responsabilidade.
+    """
+
+    def __init__(
+        self,
+        config,
+        *,
+        renderer=None,
+        input_gate=None,
+        input_broker=None,
+        input_fn=None,
+        suspend_fn=None,
+        resume_fn=None,
+        cancel_event=None,
+        cancel_poll_interval: float = 0.1,
+    ) -> None:
+        self.config = config
+        self._renderer = renderer
+
+        self._console_handler = ConsoleApprovalHandler(
+            input_fn=input_fn,
+            renderer=renderer,
+            suspend_fn=suspend_fn,
+            resume_fn=resume_fn,
+            cancel_event=cancel_event,
+            cancel_poll_interval=cancel_poll_interval,
+            input_gate=input_gate,
+        )
+        self._console_handler.set_input_broker(input_broker)
+
+        self._pre_handler = PreApprovalHandler(self._console_handler)
+
+        self._console_handler.set_approve_all_callback(
+            lambda: self._pre_handler.set_approve_all(True)
+        )
+
+        self._broker = ApprovalBroker(config, self._pre_handler)
+
+    # ── Handler mode (interface ApprovalHandler) ────────────────────
+
+    def approve(self, *, tool_name: str, summary: str) -> bool:
+        return self._pre_handler.approve(tool_name=tool_name, summary=summary)
+
+    # ── Broker governance ───────────────────────────────────────────
+
+    @property
+    def audit_log(self) -> list[dict]:
+        return self._broker.audit_log
+
+    def build_context(self, call):
+        return self._broker.build_context(call)
+
+    def classify(self, call):
+        return self._broker.classify(call)
+
+    def create_request(self, call, *, permission_error=None, reason=None):
+        return self._broker.create_request(
+            call, permission_error=permission_error, reason=reason
+        )
+
+    def approve_call(
+        self,
+        call,
+        *,
+        needs_policy_approval,
+        permission_error=None,
+    ) -> bool:
+        return self._broker.approve(
+            call,
+            needs_policy_approval=needs_policy_approval,
+            permission_error=permission_error,
+        )
+
+    def should_request_approval(
+        self,
+        call,
+        *,
+        needs_policy_approval,
+        permission_error=None,
+    ) -> bool:
+        return self._broker.should_request_approval(
+            call,
+            needs_policy_approval=needs_policy_approval,
+            permission_error=permission_error,
+        )
+
+    def execution_guard(self, call):
+        return self._broker.execution_guard(call)
+
+    def approve_scope(self, scope):
+        self._broker.approve_scope(scope)
+
+    def approve_equivalent(self, request, *, ttl_seconds=None, uses=1):
+        return self._broker.approve_equivalent(
+            request, ttl_seconds=ttl_seconds, uses=uses
+        )
+
+    def create_route(
+        self,
+        call,
+        context,
+        *,
+        path=None,
+        command=None,
+    ):
+        return self._broker.create_route(
+            call, context, path=path, command=command
+        )
+
+    # ── PreHandler (approve-all / pre-approve) ──────────────────────
+
+    def pre_approve(self) -> None:
+        self._pre_handler.pre_approve()
+
+    def reset(self) -> None:
+        self._pre_handler.reset()
+
+    def set_approve_all(
+        self,
+        enabled: bool = True,
+        permanent: bool = False,
+        silent: bool = False,
+    ) -> None:
+        self._pre_handler.set_approve_all(
+            enabled, permanent=permanent, silent=silent
+        )
+
+    def set_thread_approve_all(
+        self,
+        enabled: bool = True,
+        scope_key: str | None = None,
+        silent: bool = False,
+    ) -> None:
+        self._pre_handler.set_thread_approve_all(
+            enabled, scope_key=scope_key, silent=silent
+        )
+
+    def get_thread_approval_scope(self) -> str | None:
+        return self._pre_handler.get_thread_approval_scope()
+
+    def bind_thread_approval_scope(
+        self, scope_key: str | None
+    ) -> str | None:
+        return self._pre_handler.bind_thread_approval_scope(scope_key)
+
+    def reset_approve_all_after_cycle(self) -> None:
+        self._pre_handler.reset_approve_all_after_cycle()
+
+    # ── ConsoleHandler (spinner / cancel / input broker) ────────────
+
+    def set_spinner_callbacks(self, suspend_spinner_fn, resume_spinner_fn):
+        self._console_handler.set_spinner_callbacks(
+            suspend_spinner_fn, resume_spinner_fn
+        )
+
+    def set_cancel_event(self, cancel_event) -> None:
+        self._console_handler.set_cancel_event(cancel_event)
+
+    def set_input_broker(self, broker) -> None:
+        self._console_handler.set_input_broker(broker)

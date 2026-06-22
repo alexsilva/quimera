@@ -12,7 +12,7 @@ from quimera.constants import Visibility
 from quimera.context import ContextManager
 from quimera.plugins import get
 from quimera.plugins.base import AgentPlugin
-from quimera.runtime.approval import ApprovalHandler, ConsoleApprovalHandler
+from quimera.runtime.approval import ApprovalHandler, ApprovalManager
 from quimera.runtime.config import ToolRuntimeConfig
 from quimera.runtime.executor import ToolExecutor
 from quimera.runtime.models import TaskRecord, ToolCall, ToolResult
@@ -310,7 +310,8 @@ class ApprovalCoverageTests(unittest.TestCase):
 
     def test_console_approval_handler_variants(self):
         """Verifica que Test console approval handler variants."""
-        handler = ConsoleApprovalHandler()
+        cfg = ToolRuntimeConfig(workspace_root=Path("/tmp"))
+        handler = ApprovalManager(cfg, input_fn=None)
         with patch("builtins.print"), patch("builtins.input", return_value="y"):
             self.assertTrue(handler.approve(tool_name="shell", summary="ls"))
         with patch("builtins.print"), patch("builtins.input", return_value="sim"):
@@ -359,7 +360,7 @@ class RegistryAndExecutorCoverageTests(unittest.TestCase):
         """Verifica que Test executor denied and unexpected error."""
         executor = ToolExecutor(self.config, self.approval)
         self.approval.approve.return_value = False
-        denied = executor.execute(ToolCall(name="write_file", arguments={"path": "a", "content": "b"}))
+        denied = executor.execute(ToolCall(name="write_file", arguments={"path": "a", "content": "b", "replace_existing": True}))
         self.assertFalse(denied.ok)
         self.assertIn("Execução negada", denied.error)
         with patch.object(executor.registry, "get", return_value=MagicMock(side_effect=RuntimeError("boom"))):

@@ -51,7 +51,7 @@ class _InputRequest:
 class InputBroker:
     """Broker que serializa todos os prompts interativos em uma fila única.
 
-    Crie uma instância por app e passe para ConsoleApprovalHandler e para
+    Crie uma instância por app e passe para ApprovalManager e para
     ToolExecutor.set_ask_user_fn.
     """
 

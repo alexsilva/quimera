@@ -18,6 +18,7 @@ from .tools import tasks as tasks_tools
 from .tools import todo as todo_tools
 from .tools import web as web_tools
 from .approval_broker import ApprovalBroker
+from .approval import ApprovalManager
 
 
 class ToolExecutor:
@@ -42,7 +43,10 @@ class ToolExecutor:
         self.policy = policy or ToolPolicy(config)
         self._tool_preview_callback = None
         self._tool_progress_callback = None
-        self.approval_broker = ApprovalBroker(config, approval_handler)
+        if isinstance(approval_handler, ApprovalManager):
+            self.approval_broker = approval_handler
+        else:
+            self.approval_broker = ApprovalBroker(config, approval_handler)
         self._delegate_tools = None
         self._interaction_tools = None
         self._register_builtin_tools()
@@ -73,25 +77,12 @@ class ToolExecutor:
         return self._approval_handler
 
     def set_spinner_callbacks(self, suspend_spinner_fn, resume_spinner_fn):
-        """Injeta callbacks de spinner no approval handler.
-
-        Encadeia até o handler base (ConsoleApprovalHandler) atravessando
-        possíveis wrappers como PreApprovalHandler.
-        """
-        handler = self._approval_handler
-        # Atravessa wrappers (ex: PreApprovalHandler) até chegar no base
-        while hasattr(handler, '_base'):
-            handler = handler._base
-        setter = getattr(handler, 'set_spinner_callbacks', None)
+        setter = getattr(self._approval_handler, 'set_spinner_callbacks', None)
         if callable(setter):
             setter(suspend_spinner_fn, resume_spinner_fn)
 
     def set_approval_cancel_event(self, cancel_event) -> None:
-        """Injeta cancel_event no approval handler base quando suportado."""
-        handler = self._approval_handler
-        while hasattr(handler, '_base'):
-            handler = handler._base
-        setter = getattr(handler, "set_cancel_event", None)
+        setter = getattr(self._approval_handler, "set_cancel_event", None)
         if callable(setter):
             setter(cancel_event)
 
@@ -190,9 +181,7 @@ class ToolExecutor:
         """Executa um ToolCall com política de aprovação.
 
         Se aprovação for necessária, bloqueia no approval_handler
-        até obter decisão do humano. O handler pode ser interativo
-        (ConsoleApprovalHandler com input()) ou automático
-        (AutoApprovalHandler para testes).
+        até obter decisão do humano (ApprovalManager).
         """
         normalized_call = self._normalize_call(call)
         try:
@@ -210,7 +199,7 @@ class ToolExecutor:
             needs_approval = self.policy.requires_approval(normalized_call)
             has_permission_issue = permission_error is not None
 
-            approved = self.approval_broker.approve(
+            approved = self.approval_broker.approve_call(
                 normalized_call,
                 needs_policy_approval=bool(needs_approval),
                 permission_error=permission_error,

@@ -5,7 +5,7 @@ import subprocess
 
 import pytest
 
-from quimera.runtime.approval import AutoApprovalHandler
+from quimera.runtime.approval import ApprovalManager
 from quimera.runtime.config import ToolRuntimeConfig
 from quimera.runtime.executor import ToolExecutor
 from quimera.runtime.models import ToolCall
@@ -68,7 +68,9 @@ def policy(config):
 
 @pytest.fixture
 def executor(config):
-    return ToolExecutor(config, AutoApprovalHandler())
+    am = ApprovalManager(config)
+    am.set_approve_all(True)
+    return ToolExecutor(config, am)
 
 
 def _call(name, **kwargs):

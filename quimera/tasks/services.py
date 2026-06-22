@@ -22,7 +22,7 @@ from typing import Any, Callable
 
 from ..agents import AgentClient
 from ..constants import TaskStatus
-from ..runtime.approval import ConsoleApprovalHandler, PreApprovalHandler
+from ..runtime.approval import ApprovalManager
 from ..runtime.config import ToolRuntimeConfig
 from ..runtime.executor import ToolExecutor
 from .executor import create_executor
@@ -624,26 +624,26 @@ class AppTaskServices:
         renderer = self._get_renderer()
         input_services = self._get_input_services()
         input_gate = self._get_input_gate()
-        base_handler = ConsoleApprovalHandler(
+        workspace = self._get_workspace()
+        rt_config = ToolRuntimeConfig(
+            workspace_root=workspace.cwd,
+            db_path=workspace.tasks_db,
+            memory_file=getattr(workspace, "memory_file", None),
+            require_approval_for_mutations=require_approval_for_mutations,
+        )
+        approval_handler = ApprovalManager(
+            rt_config,
             renderer=renderer,
             suspend_fn=input_services.suspend_nonblocking if input_services else None,
             resume_fn=input_services.resume_nonblocking if input_services else None,
             input_gate=input_gate,
         )
-        approval_handler = PreApprovalHandler(base_handler)
-        base_handler.set_approve_all_callback(approval_handler.set_approve_all)
         if register_as_primary:
             self._approval_handler = approval_handler
             if self._set_approval_handler is not None:
                 self._set_approval_handler(approval_handler)
-        workspace = self._get_workspace()
         return ToolExecutor(
-            config=ToolRuntimeConfig(
-                workspace_root=workspace.cwd,
-                db_path=workspace.tasks_db,
-                memory_file=getattr(workspace, "memory_file", None),
-                require_approval_for_mutations=require_approval_for_mutations,
-            ),
+            config=rt_config,
             approval_handler=approval_handler,
         )
 

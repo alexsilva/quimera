@@ -29,12 +29,17 @@ import asyncio
 import sys
 import threading
 import time
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from quimera.app.prompt_input import InputGate
-from quimera.runtime.approval import ConsoleApprovalHandler
+from quimera.runtime.approval import ApprovalManager
+from quimera.runtime.config import ToolRuntimeConfig
+
+
+_cfg = ToolRuntimeConfig(workspace_root=Path("/tmp"))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -270,7 +275,7 @@ def test_approval_xthread_falls_back_to_deny_when_read_returns_none():
     mock_gate.is_active.return_value = True
     mock_gate.read_input_in_terminal.return_value = None
 
-    handler = ConsoleApprovalHandler(input_gate=mock_gate)
+    handler = ApprovalManager(_cfg, input_gate=mock_gate)
 
     result_holder = {}
 
@@ -292,7 +297,7 @@ def test_approval_xthread_approves_when_user_responds_y():
     mock_gate.is_active.return_value = True
     mock_gate.read_input_in_terminal.return_value = "y"
 
-    handler = ConsoleApprovalHandler(input_gate=mock_gate)
+    handler = ApprovalManager(_cfg, input_gate=mock_gate)
 
     result_holder = {}
 
@@ -313,7 +318,7 @@ def test_approval_xthread_denies_on_n():
     mock_gate.is_active.return_value = True
     mock_gate.read_input_in_terminal.return_value = "n"
 
-    handler = ConsoleApprovalHandler(input_gate=mock_gate)
+    handler = ApprovalManager(_cfg, input_gate=mock_gate)
 
     result_holder = {}
 
@@ -338,7 +343,7 @@ def test_approval_inactive_gate_xthread_falls_back_to_regular_input():
     mock_gate = MagicMock()
     mock_gate.is_active.return_value = False
 
-    handler = ConsoleApprovalHandler(input_gate=mock_gate, input_fn=lambda _: "y")
+    handler = ApprovalManager(_cfg, input_gate=mock_gate, input_fn=lambda _: "y")
 
     result_holder = {}
 
@@ -378,7 +383,7 @@ def test_approval_show_calls_renderer_show_system_from_background_thread():
 
     renderer = FakeRenderer()
     # input_fn nega imediatamente — só queremos verificar o _show()
-    handler = ConsoleApprovalHandler(input_fn=lambda _: "n", renderer=renderer)
+    handler = ApprovalManager(_cfg, input_fn=lambda _: "n", renderer=renderer)
 
     result_holder = {}
 
@@ -398,7 +403,7 @@ def test_approval_show_calls_renderer_show_system_from_background_thread():
 
 def test_approval_show_falls_back_to_print_without_renderer():
     """Bug #3 fallback: sem renderer, _show() usa print()."""
-    handler = ConsoleApprovalHandler(input_fn=lambda _: "n")
+    handler = ApprovalManager(_cfg, input_fn=lambda _: "n")
 
     with patch("builtins.print") as mock_print:
         handler.approve(tool_name="mcp_tool", summary="do_thing")
@@ -432,7 +437,7 @@ def test_approval_interactive_lock_serializes_concurrent_approvals():
         time.sleep(0.05)  # simula latência
         return "y"
 
-    handler = ConsoleApprovalHandler(input_fn=_sequential_input)
+    handler = ApprovalManager(_cfg, input_fn=_sequential_input)
 
     results = []
     barrier = threading.Barrier(3)
@@ -465,7 +470,7 @@ def test_approval_no_freeze_when_cancel_event_set_before_xthread():
     mock_gate = MagicMock()
     mock_gate.is_active.return_value = True
 
-    handler = ConsoleApprovalHandler(input_gate=mock_gate, cancel_event=cancel)
+    handler = ApprovalManager(_cfg, input_gate=mock_gate, cancel_event=cancel)
 
     start = time.monotonic()
     result_holder = {}
