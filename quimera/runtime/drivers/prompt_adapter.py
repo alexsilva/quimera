@@ -23,7 +23,7 @@ ROLES_BY_KIND = {
         "execution_state": "system",
         "execution_mode": "system",
         "persistent_context": "system",
-        "recent_conversation": "system",
+        "recent_conversation": "user",
         "delegation": "user",
         "current_turn": "user",
     },
