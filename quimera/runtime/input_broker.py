@@ -70,6 +70,22 @@ class InputBroker:
     def set_input_gate(self, gate) -> None:
         self._input_gate = gate
 
+    def _container_for(self, agent: str):
+        """Container (janela) do agente, quando o renderer o expõe.
+
+        Retorna (container, renderer) ou (None, renderer). O container é o dono
+        do output/perguntas do agente: emoldura a pergunta sob o banner, limpa o
+        transient daquele agente e faz flush antes de ceder o chão ao prompt.
+        """
+        renderer = self._renderer
+        get = getattr(renderer, "_container", None)
+        if callable(get):
+            try:
+                return get(agent), renderer
+            except Exception:
+                pass
+        return None, renderer
+
     # ------------------------------------------------------------------
     # Public API chamada pelos produtores (approval, ask_user)
     # ------------------------------------------------------------------
@@ -106,10 +122,15 @@ class InputBroker:
         source: str = "agente",
         timeout: float | None = None,
     ) -> tuple[int, str]:
-        """Enfileira pergunta de seleção e bloqueia até resposta ou timeout."""
+        """Enfileira pergunta e bloqueia até resposta ou timeout.
+
+        Sem ``options`` -> texto livre (retorna (-1, texto)). Com opções ->
+        seleção/enquete (retorna (índice_0based, texto_da_opção)).
+        """
         if timeout is None:
             timeout = _DEFAULT_ASK_TIMEOUT
-        default_val: tuple[int, str] = (0, options[0]) if options else (0, "")
+        # Sem opções não há resposta segura para auto-preencher: devolve vazio.
+        default_val: tuple[int, str] = (0, options[0]) if options else (-1, "")
         req = _InputRequest(
             kind="ask_user",
             source=source,
@@ -156,7 +177,13 @@ class InputBroker:
                 read_fn = getattr(gate, "read_approval_in_terminal", None)
                 if callable(read_fn):
                     remaining = max(0.5, deadline - time.monotonic())
-                    answer = read_fn(req.question, prompt, timeout=remaining)
+                    container, renderer = self._container_for(req.source)
+                    if container is not None:
+                        answer = container.ask_approval(
+                            renderer, gate, req.question, prompt, timeout=remaining
+                        )
+                    else:
+                        answer = read_fn(req.question, prompt, timeout=remaining)
                     if answer is None:
                         elapsed = time.monotonic() - start
                         self._emit(
@@ -198,16 +225,60 @@ class InputBroker:
     def _handle_ask_user(self, req: _InputRequest) -> tuple[int, str]:
         start = time.monotonic()
         deadline = start + req.timeout
-        result = self._read_selection(req.question, req.options, deadline=deadline)
+        if req.options:
+            result = self._read_selection(
+                req.question, req.options, deadline=deadline, agent=req.source
+            )
+        else:
+            result = self._read_free_text(
+                req.question, deadline=deadline, agent=req.source
+            )
         if result is None:
             idx, val = req.default
             elapsed = time.monotonic() - start
-            self._emit(
-                f"\n  [sem resposta em {elapsed:.0f}s —"
-                f" selecionado automaticamente: '{val}'] ({req.source})"
-            )
+            if req.options:
+                self._emit(
+                    f"\n  [sem resposta em {elapsed:.0f}s —"
+                    f" selecionado automaticamente: '{val}'] ({req.source})"
+                )
+            else:
+                self._emit(
+                    f"\n  [sem resposta em {elapsed:.0f}s —"
+                    f" seguindo sem resposta] ({req.source})"
+                )
             return idx, val
         return result
+
+    def _read_free_text(
+        self,
+        question: str,
+        *,
+        deadline: float,
+        agent: str = "agente",
+    ) -> tuple[int, str] | None:
+        """Lê uma resposta em texto livre com deadline. Retorna (-1, texto)."""
+        remaining_s = max(0, int(deadline - time.monotonic()))
+        # Via container: a pergunta vai embutida no prompt e só aparece depois
+        # do request_floor, sem ser emitida no feed antes (evita atropelamento).
+        gate = self._input_gate
+        is_active = getattr(gate, "is_active", None)
+        if gate is not None and callable(is_active) and is_active():
+            container, renderer = self._container_for(agent)
+            if container is not None:
+                remaining = max(0.5, deadline - time.monotonic())
+                prompt = f"{question}\n  Resposta (auto em {remaining_s}s): "
+                answer = container.ask_input(renderer, gate, prompt, timeout=remaining)
+                if answer is None:
+                    return None
+                return -1, answer.rstrip("\n\r")
+        # Fallback (sem pt ativo): emite a pergunta e lê por linha.
+        self._emit(f"\n{question}")
+        answer = self._read_line(
+            f"  Resposta (auto em {remaining_s}s): ", deadline=deadline
+        )
+        if answer is None:
+            return None
+        return -1, answer.rstrip("\n\r")
 
     # ------------------------------------------------------------------
     # Primitivos de leitura com deadline
@@ -247,6 +318,7 @@ class InputBroker:
         options: list[str],
         *,
         deadline: float,
+        agent: str = "agente",
     ) -> tuple[int, str] | None:
         """Seleção interativa com deadline. Usa input_gate se pt ativo."""
         gate = self._input_gate
@@ -256,6 +328,11 @@ class InputBroker:
                 remaining = max(0.5, deadline - time.monotonic())
                 read_fn = getattr(gate, "read_selection_in_terminal", None)
                 if callable(read_fn):
+                    container, renderer = self._container_for(agent)
+                    if container is not None:
+                        return container.ask_selection(
+                            renderer, gate, question, options, timeout=remaining
+                        )
                     return read_fn(question, options, timeout=remaining)
         # pt não ativo: seleção numerada por linha (cooked mode, sem termios)
         return self._line_select(question, options, deadline=deadline)

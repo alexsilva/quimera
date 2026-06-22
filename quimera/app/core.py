@@ -932,7 +932,12 @@ class QuimeraApp:
                 and input_gate.is_active()
             )
             if gate_is_active:
-                result = input_gate.read_selection_in_terminal(question, opts)
+                get_container = getattr(renderer, "_container", None)
+                if callable(get_container):
+                    container = get_container("agente")
+                    result = container.ask_selection(renderer, input_gate, question, opts)
+                else:
+                    result = input_gate.read_selection_in_terminal(question, opts)
                 if result is not None:
                     return result
                 raise EOFError("sem resposta do terminal")
