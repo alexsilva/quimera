@@ -193,7 +193,6 @@ class PrintEvent:
 @dataclass
 class LiveStartEvent:
     agent: str
-    state: dict
 
 
 @dataclass
@@ -250,6 +249,20 @@ class TerminalResizeEvent:
     """Terminal foi redimensionado — reseta contador de linhas do overlay."""
 
 
+@dataclass
+class PendingInputEvent:
+    """Sinaliza que um container aguarda input do usuário (aprovação ou pergunta).
+
+    Atualiza os campos ``pending_kind`` / ``pending_question`` do AgentContainer e
+    dispara um refresh do Live para exibir o badge inline enquanto o agente está em
+    streaming. Quando ``kind`` for vazio, limpa o estado pendente.
+    """
+
+    agent: str
+    kind: str     # "approval" | "ask" | ""
+    question: str = ""
+
+
 # ---------------------------------------------------------------------------
 # Container por agente (janela vertical)
 # ---------------------------------------------------------------------------
@@ -266,8 +279,8 @@ class AgentContainer:
       perguntas -> input/aprovação/seleção emoldurados sob o banner do agente
                    (commit do transient + request_floor + render + read + release).
 
-    O stream ao vivo mantém cache no writer thread (`_stream_states`); o
-    container espelha `stream_content` para leitura externa (ex.: ao compor
+    O stream ao vivo atualiza `stream_content` diretamente no container via
+    writer thread; é a fonte de verdade para leitura externa (ex.: ao compor
     uma pergunta durante o streaming).
     """
 
@@ -280,6 +293,8 @@ class AgentContainer:
     transient_active: bool = False
     elapsed: float | None = None
     transient: list[str] = field(default_factory=list)
+    pending_kind: str = ""      # "" | "approval" | "ask"
+    pending_question: str = ""  # resumo da pergunta/tool para exibição inline no Live
 
     def compose_question(self, question: str, options: list[str] | None = None) -> str:
         """Monta o corpo textual da pergunta exibida sob o banner do agente."""
@@ -297,12 +312,7 @@ class AgentContainer:
         self.streaming = True
         self.stream_content = ""
         self.stream_theme_name = theme_name
-        renderer._queue.put(LiveStartEvent(self.agent, {
-            "content": "",
-            "label": self.label,
-            "style": self.style,
-            "theme_name": theme_name,
-        }))
+        renderer._queue.put(LiveStartEvent(self.agent))
 
     def update_stream(self, renderer, chunk: Any) -> None:
         """Enfileira chunk de streaming."""
@@ -349,15 +359,46 @@ class AgentContainer:
         leitura da resposta, release_floor.
         """
         renderer.clear_agent_transient(self.agent)
+        composed = self.compose_question(prompt)
+        if self.streaming:
+            renderer.set_agent_pending_input(self.agent, "ask", composed)
         renderer.flush_quick()
-        return input_gate.read_input_in_terminal(self.compose_question(prompt) + "\n", timeout)
+
+        try:
+            return input_gate.read_input_in_terminal(
+                composed + "\n", timeout
+            )
+        finally:
+            if self.streaming:
+                renderer.clear_agent_pending_input(self.agent)
 
     def ask_approval(self, renderer, input_gate, question: str,
                      prompt: str = "", timeout: float = 300.0) -> str | None:
-        """Aprovação y/n/a dentro deste container."""
+        """Aprovação y/n/a dentro deste container.
+
+        Fluxo:
+        1. Se streaming ativo: exibe badge inline no Live via ``set_agent_pending_input``.
+        2. Antes de ``request_floor``: imprime o card de aprovação permanentemente no
+           scrollback usando ``console.print()`` diretamente (enquanto o renderer está
+           suspenso e o chão foi cedido ao chamador). O card permanece visível mesmo
+           após o Live fechar.
+        3. ``request_floor`` → Live fecha → apenas o prompt ``[y/N/a]`` é exibido em
+           modo raw.
+        4. Limpa o badge pendente ao finalizar.
+        """
         renderer.clear_agent_transient(self.agent)
+        composed = self.compose_question(question)
+        if self.streaming:
+            renderer.set_agent_pending_input(self.agent, "approval", composed)
         renderer.flush_quick()
-        return input_gate.read_approval_in_terminal(self.compose_question(question), prompt, timeout)
+
+        try:
+            return input_gate.read_approval_in_terminal(
+                composed, prompt, timeout
+            )
+        finally:
+            if self.streaming:
+                renderer.clear_agent_pending_input(self.agent)
 
     def ask_selection(self, renderer, input_gate, question: str,
                       options: list[str], timeout: float = 300.0) -> tuple[int, str] | None:
@@ -709,7 +750,7 @@ class TerminalRenderer:
           [histórico] → [overlay N linhas] → [input] → [toolbar]
           overlay gerenciado por _TransientOverlay com closures run_in_terminal
         """
-        _stream_states: dict[str, dict] = {}
+        _stream_containers: dict[str, AgentContainer] = {}
         _ul: list = [None]  # Live unificado ativo (ou None)
         _local_pending: collections.deque = collections.deque()
         _deferred_post_prompt: collections.deque = collections.deque()
@@ -740,28 +781,32 @@ class TerminalRenderer:
         # -- Live helpers --------------------------------------------------
 
         def _get_renderable():
-            if not _stream_states:
+            if not _stream_containers:
                 return Text("")
-            parts = [
-                self._build_stream_renderable(
-                    st["theme_name"], st["label"], st["style"], st["content"]
+            parts = []
+            for c in _stream_containers.values():
+                stream_block = self._build_stream_renderable(
+                    c.stream_theme_name, c.label, c.style, c.stream_content
                 )
-                for st in _stream_states.values()
-            ]
+                if c.pending_kind:
+                    pending_card = self._build_pending_card_renderable(c)
+                    parts.append(Group(stream_block, pending_card))
+                else:
+                    parts.append(stream_block)
             main = Group(*parts) if len(parts) > 1 else parts[0]
             if self._density == "compact":
                 return main
             if len(parts) > 1:
                 labels = " · ".join(
-                    _agent_toolbar_label(agent, st["label"])
-                    for agent, st in _stream_states.items()
+                    _agent_toolbar_label(agent, c.label)
+                    for agent, c in _stream_containers.items()
                 )
                 toolbar_text = f"[dim]{labels} · Ctrl+C para cancelar[/dim]"
             else:
-                only_agent, only_state = next(iter(_stream_states.items()))
-                label_text = _agent_toolbar_label(only_agent, only_state["label"])
+                only_agent, only_c = next(iter(_stream_containers.items()))
+                label_text = _agent_toolbar_label(only_agent, only_c.label)
                 toolbar_text = (
-                    f"[bold {only_state['style']}]{label_text}[/] "
+                    f"[bold {only_c.style}]{label_text}[/] "
                     f"[dim]· Ctrl+C para cancelar[/dim]"
                 )
             infobar = Rule(toolbar_text, characters="·", style="dim")
@@ -801,7 +846,7 @@ class TerminalRenderer:
                 self._stream_live_active.clear()
 
         def _stop_if_empty():
-            if not _stream_states:
+            if not _stream_containers:
                 _close_live()
 
         # -- Print helpers -------------------------------------------------
@@ -872,10 +917,13 @@ class TerminalRenderer:
 
                 elif isinstance(event, LiveStartEvent):
                     _audit("stream_start", agent=event.agent, prompt_active=_prompt_active())
-                    _stream_states[event.agent] = event.state
-                    if str(event.state.get("content") or "").strip():
-                        _ensure_live()
-                        _refresh()
+                    with self._lock:
+                        container = self._containers.get(event.agent)
+                    if container:
+                        _stream_containers[event.agent] = container
+                        if container.stream_content.strip():
+                            _ensure_live()
+                            _refresh()
 
                 elif isinstance(event, LiveUpdateChunkEvent):
                     # Coalescing: drena chunks consecutivos de todos os agentes para um único _refresh()
@@ -893,19 +941,19 @@ class TerminalRenderer:
                             break
 
                     for _a, chunks in batches.items():
-                        state = _stream_states.get(_a)
-                        if state:
+                        container = _stream_containers.get(_a)
+                        if container:
                             for chunk in chunks:
                                 if isinstance(chunk, dict):
-                                    state["content"] = _apply_stream_diff(
-                                        state["content"],
+                                    container.stream_content = _apply_stream_diff(
+                                        container.stream_content,
                                         _normalize_stream_diff(chunk.get("diff"))
                                     )
                                     text = chunk.get("text")
                                     if text and not chunk.get("diff"):
-                                        state["content"] += strip_ansi(str(text))
+                                        container.stream_content += strip_ansi(str(text))
                                 else:
-                                    state["content"] += strip_ansi(str(chunk))
+                                    container.stream_content += strip_ansi(str(chunk))
                             _audit(
                                 "stream_chunk",
                                 agent=_a,
@@ -916,8 +964,8 @@ class TerminalRenderer:
                             )
                     if batches:
                         has_visible_content = any(
-                            str(state.get("content") or "").strip()
-                            for state in _stream_states.values()
+                            container.stream_content.strip()
+                            for container in _stream_containers.values()
                         )
                         if has_visible_content:
                             _ensure_live()
@@ -930,13 +978,13 @@ class TerminalRenderer:
                         render_mode=event.render_mode,
                         preview=_preview_text(event.final_content),
                     )
-                    state = _stream_states.pop(event.agent, None)
-                    if state:
-                        if _stream_states:
+                    container = _stream_containers.pop(event.agent, None)
+                    if container:
+                        if _stream_containers:
                             _refresh()
                         _stop_if_empty()
                         final_block = self._render_turn_block(
-                            state["theme_name"], state["label"], state["style"],
+                            container.stream_theme_name, container.label, container.style,
                             content=event.final_content,
                             include_header=True,
                             include_footer_rule=True,
@@ -946,8 +994,8 @@ class TerminalRenderer:
 
                 elif isinstance(event, LiveAbortEvent):
                     _audit("stream_abort", agent=event.agent)
-                    _stream_states.pop(event.agent, None)
-                    if _stream_states:
+                    _stream_containers.pop(event.agent, None)
+                    if _stream_containers:
                         _refresh()
                     _stop_if_empty()
 
@@ -976,6 +1024,17 @@ class TerminalRenderer:
                     else:
                         self._output_suspended.clear()
                         _flush_deferred(force=True)
+                        # Restaura o Live se o agente ainda está em streaming.
+                        # stream_content acumulado durante a suspensão (ex.: ask_user)
+                        # já está no container; reativar aqui evita tela em branco até
+                        # o próximo chunk. Só inicia se há conteúdo visível para não
+                        # abrir Live vazio desnecessariamente.
+                        if _stream_containers and any(
+                            container.stream_content.strip()
+                            for container in _stream_containers.values()
+                        ):
+                            _ensure_live()
+                            _refresh()
                     if event.done is not None:
                         event.done.set()
 
@@ -983,6 +1042,17 @@ class TerminalRenderer:
                     # Resize invalida a contagem de linhas do overlay —
                     # o cursor-up usaria um valor obsoleto e corromperia o display.
                     _overlay.reset()
+
+                elif isinstance(event, PendingInputEvent):
+                    # Atualiza o estado pendente do container e dispara refresh do Live
+                    # para exibir (ou limpar) o badge de aprovação inline.
+                    with self._lock:
+                        container = self._containers.get(event.agent)
+                        if container is not None:
+                            container.pending_kind = event.kind
+                            container.pending_question = event.question
+                    if event.agent in _stream_containers:
+                        _refresh()
 
                 elif isinstance(event, TransientWindowEvent):
                     # Floor cedido (request_floor): um prompt/leitor é dono do
@@ -1348,6 +1418,66 @@ class TerminalRenderer:
             include_header=True,
             streaming=True,
         )
+
+    def _build_pending_card_renderable(self, container: "AgentContainer"):
+        """Monta badge inline de aprovação/input pendente para exibição no Live.
+
+        Aparece abaixo do stream_content do agente enquanto o Live está ativo,
+        dando contexto visual de que o agente aguarda uma resposta do usuário.
+        """
+        icon = "⚠" if container.pending_kind == "approval" else "❓"
+        question = container.pending_question.strip()
+        first_line = question.splitlines()[0] if question else "aguardando aprovação"
+        content = Text.assemble(
+            (f"\n{icon} ", "bold yellow"),
+            (first_line, "bold yellow"),
+            ("\n  Executar? [y/N/a=todas]\n", "dim yellow"),
+        )
+        return Padding(content, pad=(0, 0, 0, 2))
+
+    def _build_approval_card_renderable(
+        self, label: str, style: str, question: str, kind: str = "approval"
+    ):
+        """Monta card de aprovação/input para impressão permanente no scrollback.
+
+        Chamado de dentro de ``run_in_terminal`` (com o renderer suspenso e o
+        chão cedido ao chamador): imprime via ``console.print()`` diretamente,
+        garantindo que o card permaneça visível mesmo após o Live fechar.
+        """
+        public_ui = _public_ui_module()
+        if not public_ui._RICH_AVAILABLE:
+            return None
+        icon = "⚠" if kind == "approval" else "❓"
+        lines = question.strip().splitlines()
+        content = Text()
+        for i, line in enumerate(lines):
+            if i > 0:
+                content.append("\n")
+            content.append(line, "bold yellow" if i == 0 else "dim")
+        return public_ui.Panel(
+            content,
+            title=f"[bold {style}]{markup_escape(label)}[/] [dim]· aprovação pendente[/]",
+            border_style="yellow",
+            padding=(0, 1),
+        )
+
+    def set_agent_pending_input(self, agent: str, kind: str, question: str = "") -> None:
+        """Sinaliza que o agente aguarda input — exibe badge inline no Live (se ativo).
+
+        Atualiza o campo ``pending_kind`` / ``pending_question`` do container
+        do agente e dispara um refresh do Live para que o badge apareça
+        imediatamente enquanto o agente estiver em streaming.
+        """
+        with self._lock:
+            container = self._containers.get(agent)
+            if container is not None:
+                container.pending_kind = kind
+                container.pending_question = question
+        self._queue.put(PendingInputEvent(agent, kind, question))
+
+    def clear_agent_pending_input(self, agent: str) -> None:
+        """Remove o badge de input pendente do agente."""
+        self.set_agent_pending_input(agent, "", "")
 
     # ------------------------------------------------------------------
     # API pública de exibição de mensagens
@@ -1765,9 +1895,6 @@ class TerminalRenderer:
         ok_count = 0
         err_count = 0
         total_ms = 0
-        last_tool_name = "ferramenta"
-        last_tool_status = "unknown"
-
         for tool in tools:
             if not isinstance(tool, dict):
                 continue
@@ -1780,8 +1907,6 @@ class TerminalRenderer:
             duration_ms = tool.get("duration_ms")
             if isinstance(duration_ms, int) and duration_ms >= 0:
                 total_ms += duration_ms
-            last_tool_name = str(tool.get("tool") or "ferramenta")
-            last_tool_status = str(tool.get("status") or "unknown")
 
         if total <= 0:
             return
@@ -1791,11 +1916,7 @@ class TerminalRenderer:
         else:
             duration = f"{total_ms / 1000:.1f}s"
 
-        trace_id = str(detail.get("trace_id") or detail.get("turn_id") or "n/a")
-        summary = (
-            f"TOOLS: {total} chamadas · {ok_count} ok · {err_count} erro · {duration} "
-            f"· último: {last_tool_name}({last_tool_status}) · trace_id={trace_id}"
-        )
+        summary = f"TOOLS: {total} chamadas · {ok_count} ok · {err_count} erro · {duration}"
         if isinstance(agent, str) and agent.strip():
             self.show_feed(summary, agent=agent, muted=True)
         else:

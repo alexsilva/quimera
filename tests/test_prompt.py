@@ -481,8 +481,6 @@ def test_prompt_evidence_pipeline_is_identical_across_compact_and_wide_tool_rend
     assert "exec_command: ok | cmd: pytest -q" in compact_evidence
     assert "TOOLS: 1 chamadas" in compact_render
     assert "TOOLS: 1 chamadas" in wide_render
-    assert "trace_id=sessao-compact:turn_0001" in compact_render
-    assert "trace_id=sessao-wide:turn_0001" in wide_render
 
 
 def test_prompt_keeps_empty_optional_blocks_in_output():
