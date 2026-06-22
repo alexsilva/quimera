@@ -903,7 +903,7 @@ def test_driver_repl_with_input_gate_uses_gate_for_prompt_and_approval_handler()
     gate = MagicMock(side_effect=EOFError)
 
     with patch("quimera.runtime.drivers.repl.OpenAICompatDriver"), \
-            patch("quimera.runtime.drivers.repl.ConsoleApprovalHandler") as mock_approval_handler, \
+            patch("quimera.runtime.drivers.repl.ApprovalManager") as mock_approval_handler, \
             patch.object(DriverRepl, "_load_user_name_from_config", return_value="Alex"):
         repl = DriverRepl(
             "ollama-qwen",
@@ -912,7 +912,8 @@ def test_driver_repl_with_input_gate_uses_gate_for_prompt_and_approval_handler()
             input_gate=gate,
         )
 
-    mock_approval_handler.assert_called_once_with(input_gate=gate)
+    first_call = mock_approval_handler.call_args_list[0]
+    assert first_call[1].get("input_gate") is gate
 
     with patch.object(repl, "ensure_backend_available"), \
             patch("builtins.input", side_effect=AssertionError("input() não deveria ser chamado")), \

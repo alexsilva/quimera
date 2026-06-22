@@ -6,10 +6,10 @@ import threading
 import time
 from unittest.mock import MagicMock, patch
 
-from quimera.runtime.approval import ConsoleApprovalHandler
+from quimera.runtime.approval import ApprovalManager
 
 
-class TestConsoleApprovalHandlerSerialLock:
+class TestApprovalManagerSerialLock:
     """Testes do lock de serialização em _approve_interactive."""
 
     def test_serial_lock_denies_concurrent_approval(self):
@@ -24,7 +24,7 @@ class TestConsoleApprovalHandlerSerialLock:
             return "n"
 
         # Background threads use input_fn path (not input_gate/prompt_toolkit).
-        handler = ConsoleApprovalHandler(input_fn=slow_gate)
+        handler = ApprovalManager(None, input_fn=slow_gate)
 
         results = []
         errors = []
@@ -71,8 +71,8 @@ class TestConsoleApprovalHandlerSerialLock:
 
     def test_serial_lock_allows_sequential_approvals(self):
         """Chamadas sequenciais (não concorrentes) funcionam normalmente."""
-        handler = ConsoleApprovalHandler(
-            input_fn=lambda p: "y",
+        handler = ApprovalManager(
+            None, input_fn=lambda p: "y",
         )
         with patch("builtins.print"):
             r1 = handler.approve(tool_name="tool1", summary="test1")
@@ -85,7 +85,7 @@ class TestConsoleApprovalHandlerSerialLock:
         def failing_gate(prompt):
             raise EOFError
 
-        handler = ConsoleApprovalHandler(input_gate=failing_gate)
+        handler = ApprovalManager(None, input_gate=failing_gate)
 
         with patch("builtins.print"):
             r1 = handler.approve(tool_name="tool1", summary="test")
@@ -93,15 +93,15 @@ class TestConsoleApprovalHandlerSerialLock:
         assert r1 is False
 
         # Agora o lock deve estar livre
-        handler2 = ConsoleApprovalHandler(
-            input_fn=lambda p: "y",
+        handler2 = ApprovalManager(
+            None, input_fn=lambda p: "y",
         )
         with patch("builtins.print"):
             r2 = handler2.approve(tool_name="tool2", summary="test2")
         assert r2 is True
 
 
-class TestConsoleApprovalHandlerInputGateCancelDuringPrompt:
+class TestApprovalManagerInputGateCancelDuringPrompt:
     """Testes de cancelamento durante prompt ativo com input_gate."""
 
     def test_input_gate_cancel_during_readline(self):
@@ -117,8 +117,8 @@ class TestConsoleApprovalHandlerInputGateCancelDuringPrompt:
             return "n"
 
         # Background threads use input_fn path (not input_gate/prompt_toolkit).
-        handler = ConsoleApprovalHandler(
-            input_fn=gate_with_block,
+        handler = ApprovalManager(
+            None, input_fn=gate_with_block,
             cancel_event=cancel_event,
         )
 
@@ -145,8 +145,8 @@ class TestConsoleApprovalHandlerInputGateCancelDuringPrompt:
         cancel_event = threading.Event()
         cancel_event.set()
 
-        handler = ConsoleApprovalHandler(
-            input_gate=mock_gate,
+        handler = ApprovalManager(
+            None, input_gate=mock_gate,
             cancel_event=cancel_event,
         )
 
@@ -157,7 +157,7 @@ class TestConsoleApprovalHandlerInputGateCancelDuringPrompt:
         mock_gate.assert_not_called()
 
 
-class TestConsoleApprovalHandlerParallelApproval:
+class TestApprovalManagerParallelApproval:
     """Simula múltiplas threads chamando approve() concorrentemente."""
 
     def test_parallel_approvals_only_one_wins_lock(self):
@@ -179,7 +179,7 @@ class TestConsoleApprovalHandlerParallelApproval:
             return "n"
 
         # Background threads use input_fn path (not input_gate/prompt_toolkit).
-        handler = ConsoleApprovalHandler(input_fn=blocking_gate)
+        handler = ApprovalManager(None, input_fn=blocking_gate)
         results = []
         threads = []
 

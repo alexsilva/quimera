@@ -402,6 +402,7 @@ class QuimeraApp:
             get_dispatch_services=lambda: self.dispatch_services,
             auto_approve_mutations=self.auto_approve_mutations,
             approval_handler=self._approval_handler,
+            set_approval_handler=lambda h: setattr(self, "_approval_handler", h),
             get_agent_plugin=self._plugin_resolver.get,
             available_plugins=self._plugin_resolver.plugins,
             session_state=self._chat_state,
@@ -491,13 +492,12 @@ class QuimeraApp:
         self.tool_executor = self.task_services.build_tool_executor(require_approval_for_mutations=not self.auto_approve_mutations)
         self.task_services.bind_dispatch_tool_executor(self.tool_executor)
         self.task_services.bind_primary_approval_handler(self._approval_handler)
-        # Conecta o InputBroker ao ConsoleApprovalHandler para serializar
+        # Conecta o InputBroker ao ApprovalManager para serializar
         # approval e ask_user na mesma fila com timeout e auto-resposta segura.
-        _pre_handler = getattr(self.tool_executor, "_approval_handler", None)
-        _base_handler = getattr(_pre_handler, "_base", _pre_handler)
-        _set_broker = getattr(_base_handler, "set_input_broker", None)
-        if callable(_set_broker):
-            _set_broker(self.input_broker)
+        handler = self._approval_handler
+        set_broker = getattr(handler, "set_input_broker", None)
+        if callable(set_broker):
+            set_broker(self.input_broker)
         # Injeta o executor nos drivers de API do agent_client.
         self.agent_client.tool_executor = self.tool_executor
         self.tool_executor.set_delegate_fn(self.dispatch_services.delegate)

@@ -65,12 +65,12 @@ def _build_openai_messages_from_prompt(
     """Converte um PromptText em mensagens de API chat."""
     if not prompt.strip():
         return []
-    elif not hasattr(prompt, "blocks") or not hasattr(prompt, "kind"):
-        raise ValueError("Prompt estruturado precisa expor kind e blocks")
+    if not hasattr(prompt, "blocks") or not hasattr(prompt, "kind"):
+        return [{"role": "user", "content": str(prompt)}]
 
     blocks = tuple(prompt.blocks)
     if not blocks:
-        return []
+        return [{"role": "user", "content": str(prompt)}]
 
     kind = coerce_prompt_kind(prompt_kind if prompt_kind is not None else prompt.kind)
     roles = ROLES_BY_KIND.get(kind)

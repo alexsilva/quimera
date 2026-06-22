@@ -45,7 +45,11 @@ class TrustedToolExecutionContext:
 
     @classmethod
     def native(cls) -> "TrustedToolExecutionContext":
-        return cls(run_id=f"native:{uuid.uuid4()}", transport="native_tool_call", server_origin="tool_executor")
+        return cls(
+            run_id=f"native:{uuid.uuid4()}",
+            transport="native_tool_call",
+            server_origin="tool_executor",
+        )
 
     @classmethod
     def from_trusted_metadata(
@@ -74,8 +78,12 @@ class TrustedToolExecutionContext:
                 server_origin=_clean(raw.get("server_origin")) or "tool_executor",
                 http_profile=_clean(raw.get("http_profile")),
                 approval_scope_id=_clean(raw.get("approval_scope_id")),
-                delegation_budget=_positive_int_or_none(raw.get("delegation_budget")),
-                http_delegate_auto_approve=bool(raw.get("http_delegate_auto_approve", False)),
+                delegation_budget=_positive_int_or_none(
+                    raw.get("delegation_budget")
+                ),
+                http_delegate_auto_approve=bool(
+                    raw.get("http_delegate_auto_approve", False)
+                ),
             )
         return cls.native()
 
@@ -118,9 +126,15 @@ class ApprovalRequest:
 
     @property
     def route(self) -> str:
-        parts = [p for p in (self.context.parent_agent, self.context.agent_name) if p]
+        parts = [
+            p for p in (self.context.parent_agent, self.context.agent_name) if p
+        ]
         prefix = " → ".join(parts)
-        target = self.arguments.get("target_agent") if self.tool_name == "delegate" else None
+        target = (
+            self.arguments.get("target_agent")
+            if self.tool_name == "delegate"
+            else None
+        )
         op = f"{self.tool_name}({target})" if target else self.tool_name
         tail = self.path or self.command or ""
         rendered = f"{op} {tail}".strip()
@@ -152,15 +166,30 @@ class ApprovalScope:
             return False
         if self.run_id != request.context.run_id:
             return False
-        if self.transport is not None and self.transport != request.context.transport:
+        if (
+            self.transport is not None
+            and self.transport != request.context.transport
+        ):
             return False
-        if self.server_origin is not None and self.server_origin != request.context.server_origin:
+        if (
+            self.server_origin is not None
+            and self.server_origin != request.context.server_origin
+        ):
             return False
-        if self.tool_name is not None and self.tool_name != request.tool_name:
+        if (
+            self.tool_name is not None
+            and self.tool_name != request.tool_name
+        ):
             return False
-        if self.agent_name is not None and self.agent_name != request.context.agent_name:
+        if (
+            self.agent_name is not None
+            and self.agent_name != request.context.agent_name
+        ):
             return False
-        if self.target_agent_name is not None and self.target_agent_name != request.target_agent_name:
+        if (
+            self.target_agent_name is not None
+            and self.target_agent_name != request.target_agent_name
+        ):
             return False
         if self.path is not None and self.path != request.path:
             return False
@@ -180,13 +209,24 @@ class ApprovalScope:
 class ApprovalBroker:
     """Governança central de approval, auditoria e serialização de ferramentas."""
 
-    _READ_TOOLS = {"list_files", "read_file", "grep_search", "list_tasks", "list_jobs", "get_job", "todo_list", "list_agents"}
-    _NETWORK_TOOLS = {"web_search", "web_fetch"}
-    _WRITE_TOOLS = {"write_file", "apply_patch", "todo_write", "write_stdin", "close_command_session",
-                    "git_add", "git_commit", "git_checkout", "git_push"}
-    _SHELL_TOOLS = {"run_shell", "run_shell_command", "exec_command"}
-    _DESTRUCTIVE_TOOLS = {"remove_file"}
-    _PATH_TOOLS = {"read_file", "list_files", "grep_search", "write_file", "remove_file"}
+    _READ_TOOLS = frozenset({
+        "list_files", "read_file", "grep_search", "list_tasks",
+        "list_jobs", "get_job", "todo_list", "list_agents",
+    })
+    _NETWORK_TOOLS = frozenset({"web_search", "web_fetch"})
+    _WRITE_TOOLS = frozenset({
+        "write_file", "apply_patch", "todo_write", "write_stdin",
+        "close_command_session", "git_add", "git_commit",
+        "git_checkout", "git_push",
+    })
+    _SHELL_TOOLS = frozenset({
+        "run_shell", "run_shell_command", "exec_command",
+    })
+    _DESTRUCTIVE_TOOLS = frozenset({"remove_file"})
+    _PATH_TOOLS = frozenset({
+        "read_file", "list_files", "grep_search",
+        "write_file", "remove_file",
+    })
     _DEFAULT_SCOPE_TTL_SECONDS = 300
 
     def __init__(self, config, approval_handler) -> None:
@@ -229,8 +269,14 @@ class ApprovalBroker:
         risk = self.classify(call)
         path = self._extract_path(call, permission_error=permission_error)
         command = _extract_command(call)
-        target_agent_name = _clean(call.arguments.get("target_agent")) if call.name == "delegate" else None
-        effective_reason = reason or ("path_permission" if permission_error is not None else None)
+        target_agent_name = (
+            _clean(call.arguments.get("target_agent"))
+            if call.name == "delegate"
+            else None
+        )
+        effective_reason = reason or (
+            "path_permission" if permission_error is not None else None
+        )
         summary = self._summary(
             call,
             risk,
@@ -274,17 +320,42 @@ class ApprovalBroker:
         needs_policy_approval: bool,
         permission_error: PathPermissionError | None = None,
     ) -> bool:
+        """Fluxo completo de aprovação: governance + delega ao approval_handler."""
         request = self.create_request(call, permission_error=permission_error)
         self._record("request", request, decision=None)
 
-        if self._can_auto_approve(request, needs_policy_approval=needs_policy_approval, consume=True):
+        if self._can_auto_approve(
+            request, needs_policy_approval=needs_policy_approval, consume=True
+        ):
             self._record("auto_approved", request, decision=True)
             return True
 
         with self._prompt_lock:
-            approved = bool(self._approval_handler.approve(tool_name=call.name, summary=request.summary))
-        self._record("approved" if approved else "denied", request, decision=approved)
+            approved = bool(
+                self._approval_handler.approve(
+                    tool_name=call.name, summary=request.summary
+                )
+            )
+        self._record(
+            "approved" if approved else "denied",
+            request,
+            decision=approved,
+        )
         return approved
+
+    def approve_call(
+        self,
+        call: ToolCall,
+        *,
+        needs_policy_approval: bool,
+        permission_error: PathPermissionError | None = None,
+    ) -> bool:
+        """Alias para ``approve`` — compatibilidade com fluxo do ToolExecutor."""
+        return self.approve(
+            call,
+            needs_policy_approval=needs_policy_approval,
+            permission_error=permission_error,
+        )
 
     @contextmanager
     def execution_guard(self, call: ToolCall) -> Iterator[None]:
@@ -293,11 +364,12 @@ class ApprovalBroker:
             yield
             return
 
-        # Deduplica e ordena antes de adquirir para evitar deadlocks quando
-        # chamadas concorrentes pedem os mesmos paths em ordens diferentes.
         ordered_keys = sorted(set(keys))
         with self._lock_table_lock:
-            locks = [self._locks.setdefault(key, threading.RLock()) for key in ordered_keys]
+            locks = [
+                self._locks.setdefault(key, threading.RLock())
+                for key in ordered_keys
+            ]
 
         for lock in locks:
             lock.acquire()
@@ -316,9 +388,11 @@ class ApprovalBroker:
         self,
         request: ApprovalRequest,
         *,
-        ttl_seconds: float = _DEFAULT_SCOPE_TTL_SECONDS,
+        ttl_seconds: float | None = None,
         uses: int = 1,
     ) -> ApprovalScope:
+        if ttl_seconds is None:
+            ttl_seconds = self._DEFAULT_SCOPE_TTL_SECONDS
         scope = ApprovalScope(
             id=f"equiv:{request.id}",
             run_id=request.context.run_id or f"native:{uuid.uuid4()}",
@@ -350,15 +424,22 @@ class ApprovalBroker:
         if request.risk == RiskLevel.NETWORK and request.reason is None:
             return True
         if request.risk == RiskLevel.DELEGATION:
-            if request.context.transport == "http_mcp" and not request.context.http_delegate_auto_approve:
+            if (
+                request.context.transport == "http_mcp"
+                and not request.context.http_delegate_auto_approve
+            ):
                 return False
             return self._delegation_within_budget(request, consume=consume)
         return not needs_policy_approval and request.reason is None
 
-    def _delegation_within_budget(self, request: ApprovalRequest, *, consume: bool) -> bool:
+    def _delegation_within_budget(
+        self, request: ApprovalRequest, *, consume: bool
+    ) -> bool:
         budget = request.context.delegation_budget
         if budget is None:
-            budget = int(getattr(self.config, "delegation_budget_per_run", 8))
+            budget = int(
+                getattr(self.config, "delegation_budget_per_run", 8)
+            )
         if budget <= 0:
             return False
         key = request.context.scope_key
@@ -370,7 +451,9 @@ class ApprovalBroker:
                 self._delegation_budget[key] = used + 1
             return True
 
-    def _consume_matching_scope(self, request: ApprovalRequest, *, consume: bool) -> bool:
+    def _consume_matching_scope(
+        self, request: ApprovalRequest, *, consume: bool
+    ) -> bool:
         with self._scope_lock:
             self._prune_scopes_locked()
             for scope in list(self._scopes):
@@ -395,11 +478,22 @@ class ApprovalBroker:
         if scope.risk is None:
             raise ValueError("ApprovalScope requer risk explícito")
         if not scope.approve_all_in_run and not scope.tool_name:
-            raise ValueError("ApprovalScope requer tool_name ou approve_all_in_run explícito")
-        if scope.tool_name in {"write_file", "remove_file", "apply_patch"} and not scope.path:
-            raise ValueError("ApprovalScope de mutação de arquivo requer path")
-        if scope.tool_name == "delegate" and (not scope.agent_name or not scope.target_agent_name):
-            raise ValueError("ApprovalScope de delegate requer agent_name e target_agent_name")
+            raise ValueError(
+                "ApprovalScope requer tool_name ou approve_all_in_run explícito"
+            )
+        if scope.tool_name in {
+            "write_file", "remove_file", "apply_patch",
+        } and not scope.path:
+            raise ValueError(
+                "ApprovalScope de mutação de arquivo requer path"
+            )
+        if scope.tool_name == "delegate" and (
+            not scope.agent_name or not scope.target_agent_name
+        ):
+            raise ValueError(
+                "ApprovalScope de delegate requer agent_name "
+                "e target_agent_name"
+            )
 
     def _prune_scopes(self) -> None:
         with self._scope_lock:
@@ -408,8 +502,11 @@ class ApprovalBroker:
     def _prune_scopes_locked(self) -> None:
         now = time.time()
         self._scopes = [
-            s for s in self._scopes
-            if not s.exhausted and s.expires_at is not None and s.expires_at > now
+            s
+            for s in self._scopes
+            if not s.exhausted
+            and s.expires_at is not None
+            and s.expires_at > now
         ]
 
     def _serialization_keys(self, call: ToolCall) -> list[str]:
@@ -417,12 +514,22 @@ class ApprovalBroker:
             return [f"workspace:{self.config.workspace_root}"]
         if call.name in {"write_stdin", "close_command_session"}:
             session_id = call.arguments.get("session_id")
-            return [f"command-session:{session_id}" if session_id is not None else "command-session:unknown"]
+            return [
+                f"command-session:{session_id}"
+                if session_id is not None
+                else "command-session:unknown"
+            ]
         if call.name in {"write_file", "remove_file"}:
             path = self._extract_path(call)
-            return [f"path:{path}" if path else f"workspace:{self.config.workspace_root}"]
+            return [
+                f"path:{path}"
+                if path
+                else f"workspace:{self.config.workspace_root}"
+            ]
         if call.name == "apply_patch":
-            paths = self._extract_patch_paths(str(call.arguments.get("patch", "")))
+            paths = self._extract_patch_paths(
+                str(call.arguments.get("patch", ""))
+            )
             if paths:
                 return [f"path:{path}" for path in sorted(set(paths))]
             return [f"workspace:{self.config.workspace_root}"]
@@ -436,12 +543,23 @@ class ApprovalBroker:
             return keys[0]
         return "|".join(keys)
 
-    def _extract_path(self, call: ToolCall, *, permission_error: PathPermissionError | None = None) -> str | None:
+    def _extract_path(
+        self,
+        call: ToolCall,
+        *,
+        permission_error: PathPermissionError | None = None,
+    ) -> str | None:
         if permission_error is not None:
             return str(permission_error.resolved_path)
         if call.name == "apply_patch":
-            paths = self._extract_patch_paths(str(call.arguments.get("patch", "")))
-            return paths[0] if len(paths) == 1 else (", ".join(paths) if paths else None)
+            paths = self._extract_patch_paths(
+                str(call.arguments.get("patch", ""))
+            )
+            return (
+                paths[0]
+                if len(paths) == 1
+                else (", ".join(paths) if paths else None)
+            )
         if call.name not in self._PATH_TOOLS:
             return None
         raw = call.arguments.get("path", ".")
@@ -472,16 +590,16 @@ class ApprovalBroker:
 
         for line in patch.splitlines():
             if line.startswith("*** Add File: "):
-                add(line[len("*** Add File: "):])
+                add(line[len("*** Add File: ") :])
                 continue
             if line.startswith("*** Delete File: "):
-                add(line[len("*** Delete File: "):])
+                add(line[len("*** Delete File: ") :])
                 continue
             if line.startswith("*** Update File: "):
-                add(line[len("*** Update File: "):])
+                add(line[len("*** Update File: ") :])
                 continue
             if line.startswith("*** Move to: "):
-                add(line[len("*** Move to: "):])
+                add(line[len("*** Move to: ") :])
                 continue
             if line.startswith("+++ ") or line.startswith("--- "):
                 add(line[4:].strip().split("\t", 1)[0])
@@ -509,7 +627,8 @@ class ApprovalBroker:
         if reason:
             details.append(f"justificativa: {reason}")
         body = (
-            f"Permissão necessária para acessar: {permission_error.resolved_path}"
+            f"Permissão necessária para acessar: "
+            f"{permission_error.resolved_path}"
             if permission_error
             else ToolPreview.build(
                 call.name,
@@ -541,7 +660,12 @@ class ApprovalBroker:
         )
         return req.route
 
-    def _record(self, event: str, request: ApprovalRequest, decision: bool | None) -> None:
+    def _record(
+        self,
+        event: str,
+        request: ApprovalRequest,
+        decision: bool | None,
+    ) -> None:
         with self._audit_lock:
             self.audit_log.append({
                 "event": event,
@@ -584,5 +708,7 @@ def _extract_command(call: ToolCall) -> str | None:
     if call.name in {"run_shell", "run_shell_command"}:
         return str(call.arguments.get("command", "")).strip() or None
     if call.name == "exec_command":
-        return str(call.arguments.get("cmd") or call.arguments.get("command") or "").strip() or None
+        return (
+            str(call.arguments.get("cmd") or call.arguments.get("command") or "")
+        ).strip() or None
     return None

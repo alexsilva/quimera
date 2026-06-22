@@ -1,8 +1,7 @@
-"""Testes unitários para o módulo quimera.runtime.approval.
+"""Testes unitários para ApprovalManager (quimera.runtime.approval).
 
-Cobre todas as classes e fluxos: ConsoleApprovalHandler, AutoApprovalHandler,
-PreApprovalHandler, NonBlockingConsoleApprovalHandler, e suas interações
-com suspend/resume/spinner callbacks.
+Cobre todos os fluxos: aprovação interativa, pré-aprovação, approve-all,
+escopo por thread, cancelamento e governança.
 """
 import io
 import threading
@@ -12,10 +11,9 @@ import pytest
 
 from quimera.runtime.approval import (
     ApprovalHandler,
-    ConsoleApprovalHandler,
-    AutoApprovalHandler,
-    PreApprovalHandler,
-    NonBlockingConsoleApprovalHandler,
+    ApprovalManager,
+    _ApprovalCancelled,
+    _emit_approval_message,
 )
 
 
@@ -32,14 +30,14 @@ def test_approval_handler_abstract():
         handler.approve(tool_name="test", summary="test")
 
 
-# ── ConsoleApprovalHandler ──────────────────────────────────
+# ── ApprovalManager (interactive) ──────────────────────────
 
 
 @patch('builtins.input')
 @patch('builtins.print')
 def test_console_approval_handler_yes(mock_print, mock_input):
     """Resposta 'y' aprova."""
-    handler = ConsoleApprovalHandler()
+    handler = ApprovalManager(None)
     mock_input.return_value = "y"
     assert handler.approve(tool_name="shell", summary="ls") is True
     mock_print.assert_called()
@@ -48,7 +46,7 @@ def test_console_approval_handler_yes(mock_print, mock_input):
 @patch('builtins.input')
 def test_console_approval_handler_no(mock_input):
     """Resposta 'n' nega."""
-    handler = ConsoleApprovalHandler()
+    handler = ApprovalManager(None)
     mock_input.return_value = "n"
     assert handler.approve(tool_name="shell", summary="rm -rf /") is False
 
@@ -56,7 +54,7 @@ def test_console_approval_handler_no(mock_input):
 @patch('builtins.input')
 def test_console_approval_handler_empty(mock_input):
     """Resposta vazia nega."""
-    handler = ConsoleApprovalHandler()
+    handler = ApprovalManager(None)
     mock_input.return_value = ""
     assert handler.approve(tool_name="shell", summary="echo") is False
 
@@ -69,7 +67,7 @@ def test_console_approval_handler_with_custom_input_fn():
         calls.append(prompt)
         return "yes"
 
-    handler = ConsoleApprovalHandler(input_fn=fake_input)
+    handler = ApprovalManager(None, input_fn=fake_input)
     result = handler.approve(tool_name="shell", summary="ls")
 
     assert result is True
@@ -80,42 +78,42 @@ def test_console_approval_handler_with_custom_input_fn():
 
 def test_console_approval_handler_accepts_sim():
     """Aceita 'sim' (português) como resposta afirmativa."""
-    handler = ConsoleApprovalHandler(input_fn=lambda _: "sim")
+    handler = ApprovalManager(None, input_fn=lambda _: "sim")
     assert handler.approve(tool_name="shell", summary="ls") is True
 
 
 def test_console_approval_handler_accepts_s():
     """Aceita 's' como resposta afirmativa."""
-    handler = ConsoleApprovalHandler(input_fn=lambda _: "s")
+    handler = ApprovalManager(None, input_fn=lambda _: "s")
     assert handler.approve(tool_name="shell", summary="ls") is True
 
 
 def test_console_approval_handler_accepts_yes():
     """Aceita 'yes' como resposta afirmativa."""
-    handler = ConsoleApprovalHandler(input_fn=lambda _: "yes")
+    handler = ApprovalManager(None, input_fn=lambda _: "yes")
     assert handler.approve(tool_name="shell", summary="ls") is True
 
 
 def test_console_approval_handler_rejects_uppercase_n():
     """'N' (maiúsculo) nega."""
-    handler = ConsoleApprovalHandler(input_fn=lambda _: "N")
+    handler = ApprovalManager(None, input_fn=lambda _: "N")
     assert handler.approve(tool_name="shell", summary="ls") is False
 
 
 def test_console_approval_handler_eof_error_returns_false():
     """EOFError (stdin fechado) retorna False."""
-    handler = ConsoleApprovalHandler(input_fn=lambda _: (_ for _ in ()).throw(EOFError()))
+    handler = ApprovalManager(None, input_fn=lambda _: (_ for _ in ()).throw(EOFError()))
     with patch('builtins.print'):
         assert handler.approve(tool_name="shell", summary="ls") is False
 
 
-# ── ConsoleApprovalHandler + suspend/resume ─────────────────
+# ── ApprovalManager + suspend/resume ────────────────────────
 
 
 def test_console_approval_handler_suspend_resume_called():
     """suspend_fn e resume_fn são chamadas durante a aprovação."""
     calls = []
-    handler = ConsoleApprovalHandler(
+    handler = ApprovalManager(None,
         input_fn=lambda _: "y",
         suspend_fn=lambda: calls.append("suspend"),
         resume_fn=lambda: calls.append("resume"),
@@ -128,7 +126,7 @@ def test_console_approval_handler_suspend_resume_called():
 def test_console_approval_handler_suspend_resume_on_eof():
     """Mesmo com EOFError, resume_fn é chamada no finally."""
     calls = []
-    handler = ConsoleApprovalHandler(
+    handler = ApprovalManager(None,
         input_fn=lambda _: (_ for _ in ()).throw(EOFError()),
         suspend_fn=lambda: calls.append("suspend"),
         resume_fn=lambda: calls.append("resume"),
@@ -142,7 +140,7 @@ def test_console_approval_handler_suspend_resume_on_eof():
 def test_console_approval_handler_suspend_resume_on_deny():
     """Mesmo com negação, resume_fn é chamada no finally."""
     calls = []
-    handler = ConsoleApprovalHandler(
+    handler = ApprovalManager(None,
         input_fn=lambda _: "n",
         suspend_fn=lambda: calls.append("suspend"),
         resume_fn=lambda: calls.append("resume"),
@@ -166,7 +164,7 @@ def test_console_approval_handler_suspend_before_input():
     def resume_fn():
         call_order.append("resume")
 
-    handler = ConsoleApprovalHandler(
+    handler = ApprovalManager(None,
         input_fn=input_fn,
         suspend_fn=suspend_fn,
         resume_fn=resume_fn,
@@ -175,13 +173,13 @@ def test_console_approval_handler_suspend_before_input():
     assert call_order == ["suspend", "input", "resume"]
 
 
-# ── ConsoleApprovalHandler + spinner callbacks ──────────────
+# ── ApprovalManager + spinner callbacks ─────────────────────
 
 
 def test_console_approval_handler_spinner_callbacks_called():
     """Spinner callbacks são chamados na ordem: suspend_spinner → input → resume_spinner → resume."""
     calls = []
-    handler = ConsoleApprovalHandler(input_fn=lambda _: "y")
+    handler = ApprovalManager(None, input_fn=lambda _: "y")
     handler.set_spinner_callbacks(
         suspend_spinner_fn=lambda: calls.append("suspend_spinner"),
         resume_spinner_fn=lambda: calls.append("resume_spinner"),
@@ -197,7 +195,7 @@ def test_console_approval_handler_spinner_callbacks_called():
 def test_console_approval_handler_spinner_resume_on_eof():
     """Spinner resume é chamado mesmo com EOFError."""
     calls = []
-    handler = ConsoleApprovalHandler(
+    handler = ApprovalManager(None,
         input_fn=lambda _: (_ for _ in ()).throw(EOFError()),
     )
     handler.set_spinner_callbacks(
@@ -213,7 +211,7 @@ def test_console_approval_handler_spinner_resume_on_eof():
 def test_console_approval_handler_spinner_suspend_before_resume():
     """Spinner resume é chamado mesmo quando não há suspend configurado."""
     calls = []
-    handler = ConsoleApprovalHandler(input_fn=lambda _: "n")
+    handler = ApprovalManager(None, input_fn=lambda _: "n")
     handler.set_spinner_callbacks(
         suspend_spinner_fn=lambda: calls.append("suspend_spinner"),
         resume_spinner_fn=lambda: calls.append("resume_spinner"),
@@ -224,7 +222,7 @@ def test_console_approval_handler_spinner_suspend_before_resume():
 
 def test_console_approval_handler_spinner_callbacks_not_set():
     """Sem spinner callbacks, nada quebra."""
-    handler = ConsoleApprovalHandler(input_fn=lambda _: "y")
+    handler = ApprovalManager(None, input_fn=lambda _: "y")
     result = handler.approve(tool_name="shell", summary="ls")
     assert result is True
     # Não deve lançar AttributeError
@@ -233,7 +231,7 @@ def test_console_approval_handler_spinner_callbacks_not_set():
 def test_console_approval_handler_spinner_and_suspend_order():
     """Ordem completa: suspend_fn → suspend_spinner → input → resume_spinner → resume_fn."""
     order = []
-    handler = ConsoleApprovalHandler(
+    handler = ApprovalManager(None,
         input_fn=lambda _: order.append("input") or "y",
         suspend_fn=lambda: order.append("suspend_fn"),
         resume_fn=lambda: order.append("resume_fn"),
@@ -260,7 +258,7 @@ def test_console_approval_handler_input_gate_spinner_callbacks_called():
         order.append("input_gate")
         return "y"
 
-    handler = ConsoleApprovalHandler(input_gate=gate)
+    handler = ApprovalManager(None, input_gate=gate)
     handler.set_spinner_callbacks(
         suspend_spinner_fn=lambda: order.append("suspend_spinner"),
         resume_spinner_fn=lambda: order.append("resume_spinner"),
@@ -272,7 +270,7 @@ def test_console_approval_handler_input_gate_spinner_callbacks_called():
     assert order == ["suspend_spinner", "input_gate", "resume_spinner"]
 
 
-# ── ConsoleApprovalHandler + renderer ───────────────────────
+# ── ApprovalManager + renderer ──────────────────────────────
 
 
 def test_console_approval_handler_with_renderer():
@@ -285,11 +283,10 @@ def test_console_approval_handler_with_renderer():
             self.calls.append(msg)
 
     renderer = FakeRenderer()
-    handler = ConsoleApprovalHandler(input_fn=lambda _: "y", renderer=renderer)
+    handler = ApprovalManager(None, input_fn=lambda _: "y", renderer=renderer)
     with patch('builtins.print') as mock_print:
         result = handler.approve(tool_name="shell", summary="ls")
     assert result is True
-    # renderer.show_approval foi chamado, print não
     assert len(renderer.calls) >= 1
     assert "Aprovar shell" in renderer.calls[0]
 
@@ -308,7 +305,7 @@ def test_console_approval_handler_renderer_flushes_before_input():
 
     renderer = FakeRenderer()
     order = []
-    handler = ConsoleApprovalHandler(
+    handler = ApprovalManager(None,
         input_fn=lambda _: order.append("input") or "y",
         renderer=renderer,
     )
@@ -328,7 +325,7 @@ def test_console_approval_handler_renderer_shows_eof_message():
             self.calls.append(msg)
 
     renderer = FakeRenderer()
-    handler = ConsoleApprovalHandler(
+    handler = ApprovalManager(None,
         input_fn=lambda _: (_ for _ in ()).throw(EOFError()),
         renderer=renderer,
     )
@@ -339,11 +336,10 @@ def test_console_approval_handler_renderer_shows_eof_message():
 
 def test_console_approval_handler_no_renderer_uses_print():
     """Sem renderer, usa print() builtin."""
-    handler = ConsoleApprovalHandler(input_fn=lambda _: "y")
+    handler = ApprovalManager(None, input_fn=lambda _: "y")
     with patch('builtins.print') as mock_print:
         handler.approve(tool_name="shell", summary="ls")
     mock_print.assert_called()
-    # Pelo menos uma chamada tem o cabeçalho limpo de aprovação
     found = any(
         "Aprovar shell" in str(call_args)
         for call_args in mock_print.call_args_list
@@ -351,14 +347,14 @@ def test_console_approval_handler_no_renderer_uses_print():
     assert found
 
 
-# ── ConsoleApprovalHandler + None input_fn usa builtins.input ──
+# ── ApprovalManager + None input_fn usa builtins.input ──────
 
 
 @patch('builtins.input')
 @patch('builtins.print')
 def test_console_approval_handler_none_input_fn_uses_builtin(mock_print, mock_input):
     """Quando input_fn=None no construtor, usa input() builtin dinamicamente."""
-    handler = ConsoleApprovalHandler(input_fn=None)
+    handler = ApprovalManager(None, input_fn=None)
     mock_input.return_value = "y"
     result = handler.approve(tool_name="shell", summary="ls")
     assert result is True
@@ -371,7 +367,7 @@ def test_console_approval_handler_cancel_event_pre_set_skips_builtin_input(mock_
     """Com cancel_event já setado, approve interrompe sem bloquear no input()."""
     cancel_event = threading.Event()
     cancel_event.set()
-    handler = ConsoleApprovalHandler(input_fn=None, cancel_event=cancel_event)
+    handler = ApprovalManager(None, input_fn=None, cancel_event=cancel_event)
 
     result = handler.approve(tool_name="shell", summary="ls")
 
@@ -383,7 +379,7 @@ def test_console_approval_handler_cancel_event_pre_set_skips_builtin_input(mock_
 def test_console_approval_handler_cancel_event_during_polling_returns_false(_mock_print):
     """Quando cancel_event é acionado durante polling, approve retorna False rapidamente."""
     cancel_event = threading.Event()
-    handler = ConsoleApprovalHandler(input_fn=None, cancel_event=cancel_event, cancel_poll_interval=0.01)
+    handler = ApprovalManager(None, input_fn=None, cancel_event=cancel_event, cancel_poll_interval=0.01)
 
     class FakeStdin:
         @staticmethod
@@ -414,99 +410,91 @@ def test_console_approval_handler_cancel_event_during_polling_returns_false(_moc
     assert calls["count"] >= 1
 
 
-# ── AutoApprovalHandler ─────────────────────────────────────
+# ── ApprovalManager approve_all ─────────────────────────────
 
 
 def test_auto_approval_handler_true():
-    """AutoApprovalHandler com approve_all=True sempre aprova."""
-    handler = AutoApprovalHandler(approve_all=True)
+    """approve_all=True sempre aprova."""
+    handler = ApprovalManager(None)
+    handler.set_approve_all(True)
     assert handler.approve(tool_name="shell", summary="ls") is True
     assert handler.approve(tool_name="write_file", summary="danger") is True
 
 
 def test_auto_approval_handler_false():
-    """AutoApprovalHandler com approve_all=False sempre nega."""
-    handler = AutoApprovalHandler(approve_all=False)
+    """Sem approve_all, ApprovalManager delega à aprovação interativa."""
+    handler = ApprovalManager(None, input_fn=lambda _: "n")
     assert handler.approve(tool_name="shell", summary="ls") is False
     assert handler.approve(tool_name="write_file", summary="danger") is False
 
 
 @patch('builtins.print')
 def test_auto_approval_handler_prints_status(mock_print):
-    """AutoApprovalHandler imprime status de auto-aprovação."""
-    handler = AutoApprovalHandler(approve_all=True)
+    """ApprovalManager imprime status de approve-all."""
+    handler = ApprovalManager(None)
+    handler.set_approve_all(True)
     handler.approve(tool_name="shell", summary="ls")
     found = any(
-        "auto-aprovado" in str(call_args)
+        "[approve-all]" in str(call_args)
         for call_args in mock_print.call_args_list
     )
     assert found
 
 
-# ── PreApprovalHandler ──────────────────────────────────────
+# ── ApprovalManager pre-approve ─────────────────────────────
 
 
 def test_pre_approval_handler_delegates_when_not_pre_approved():
-    """Sem pré-aprovação, delega ao handler base."""
-    base_approval_handler = ConsoleApprovalHandler(input_fn=lambda _: "y")
-    pre = PreApprovalHandler(base_approval_handler)
+    """Sem pré-aprovação, delega à aprovação interativa."""
+    handler = ApprovalManager(None, input_fn=lambda _: "y")
     with patch('builtins.print'):
-        result = pre.approve(tool_name="shell", summary="ls")
-    assert result is True  # base retorna True porque input_fn retorna "y"
+        result = handler.approve(tool_name="shell", summary="ls")
+    assert result is True
 
 
 def test_pre_approval_handler_consumes_pre_approval():
     """Pré-aprovação é consumida uma única vez e depois resetada."""
-    base = ConsoleApprovalHandler(input_fn=lambda _: "n")  # base nega
-    pre = PreApprovalHandler(base)
-    pre.pre_approve()
+    handler = ApprovalManager(None, input_fn=lambda _: "n")
+    handler.pre_approve()
     with patch('builtins.print'):
-        # Primeira chamada: pré-aprovada → True
-        assert pre.approve(tool_name="shell", summary="ls") is True
-        # Segunda chamada: pré-aprovação já foi consumida → delega ao base → False
-        assert pre.approve(tool_name="shell", summary="ls") is False
+        assert handler.approve(tool_name="shell", summary="ls") is True
+        assert handler.approve(tool_name="shell", summary="ls") is False
 
 
 def test_pre_approval_handler_reset():
     """Reset descarta a pré-aprovação sem consumir."""
-    base = ConsoleApprovalHandler(input_fn=lambda _: "n")
-    pre = PreApprovalHandler(base)
-    pre.pre_approve()
-    pre.reset()
+    handler = ApprovalManager(None, input_fn=lambda _: "n")
+    handler.pre_approve()
+    handler.reset()
     with patch('builtins.print'):
-        assert pre.approve(tool_name="shell", summary="ls") is False
+        assert handler.approve(tool_name="shell", summary="ls") is False
 
 
 def test_pre_approval_handler_multiple_pre_approvals():
     """Cada pre_approve() é consumida individualmente."""
-    base = ConsoleApprovalHandler(input_fn=lambda _: "n")
-    pre = PreApprovalHandler(base)
+    handler = ApprovalManager(None, input_fn=lambda _: "n")
     with patch('builtins.print'):
-        pre.pre_approve()
-        assert pre.approve(tool_name="a", summary="1") is True   # consome
-        assert pre.approve(tool_name="b", summary="2") is False  # sem pré-aprovação
-        pre.pre_approve()
-        pre.pre_approve()  # duas pré-aprovações? A segunda sobrescreve a primeira
-        assert pre.approve(tool_name="c", summary="3") is True   # consome
-        assert pre.approve(tool_name="d", summary="4") is False  # acabou
+        handler.pre_approve()
+        assert handler.approve(tool_name="a", summary="1") is True
+        assert handler.approve(tool_name="b", summary="2") is False
+        handler.pre_approve()
+        handler.pre_approve()
+        assert handler.approve(tool_name="c", summary="3") is True
+        assert handler.approve(tool_name="d", summary="4") is False
 
 
 def test_pre_approval_handler_is_thread_safe():
-    """PreApprovalHandler usa Lock para thread safety."""
-    import threading
-    base = MagicMock()
-    base.approve.return_value = False
-    pre = PreApprovalHandler(base)
+    """ApprovalManager usa Lock para thread safety."""
+    handler = ApprovalManager(None, input_fn=lambda _: "n")
 
-    pre.pre_approve()
+    handler.pre_approve()
 
-    # Simula acesso concorrente em threads
     results = []
     barrier = threading.Barrier(2)
 
     def consume():
         barrier.wait()
-        results.append(pre.approve(tool_name="x", summary="test"))
+        results.append(handler.approve(tool_name="x", summary="test"))
 
     t1 = threading.Thread(target=consume)
     t2 = threading.Thread(target=consume)
@@ -515,24 +503,18 @@ def test_pre_approval_handler_is_thread_safe():
     t1.join()
     t2.join()
 
-    # Apenas uma thread deve consumir a pré-aprovação
     assert results.count(True) == 1
     assert results.count(False) == 1
 
 
 @patch('builtins.print')
 def test_pre_approval_handler_prints_pre_approved_status(mock_print):
-    """PreApprovalHandler imprime status quando pré-aprovado."""
-    base = MagicMock()
-    base.approve.return_value = False
-    pre = PreApprovalHandler(base)
-    pre.pre_approve()
+    """ApprovalManager imprime status quando pré-aprovado."""
+    handler = ApprovalManager(None)
+    handler.pre_approve()
 
-    result = pre.approve(tool_name="shell", summary="ls")
+    result = handler.approve(tool_name="shell", summary="ls")
     assert result is True
-    # Não deve delegar ao base
-    base.approve.assert_not_called()
-    # Deve imprimir status
     found = any(
         "pré-aprovado" in str(call_args)
         for call_args in mock_print.call_args_list
@@ -542,87 +524,68 @@ def test_pre_approval_handler_prints_pre_approved_status(mock_print):
 
 @patch('builtins.print')
 def test_pre_approval_handler_delegates_to_base_on_deny(mock_print):
-    """Quando não pré-aprovado, delega ao base."""
-    base = MagicMock()
-    base.approve.return_value = False
-    pre = PreApprovalHandler(base)
+    """Quando não pré-aprovado, delega ao handler interativo."""
+    handler = ApprovalManager(None, input_fn=lambda _: "n")
 
-    result = pre.approve(tool_name="shell", summary="ls")
+    result = handler.approve(tool_name="shell", summary="ls")
     assert result is False
-    base.approve.assert_called_once_with(tool_name="shell", summary="ls")
 
 
-@patch('builtins.print')
-def test_pre_approval_handler_thread_approve_all_short_circuits_base_without_logging(mock_print):
-    base = MagicMock()
-    base.approve.return_value = False
-    pre = PreApprovalHandler(base)
+def test_pre_approval_handler_thread_approve_all_short_circuits_base_without_logging():
+    handler = ApprovalManager(None)
 
-    pre.set_thread_approve_all(True, silent=True)
+    handler.set_thread_approve_all(True, silent=True)
     try:
-        result = pre.approve(tool_name="apply_patch", summary="patch")
+        result = handler.approve(tool_name="apply_patch", summary="patch")
     finally:
-        pre.set_thread_approve_all(False)
+        handler.set_thread_approve_all(False)
 
     assert result is True
-    base.approve.assert_not_called()
-    mock_print.assert_not_called()
 
 
 def test_pre_approval_handler_thread_approve_all_is_cleared_after_cycle():
-    base = MagicMock()
-    base.approve.return_value = False
-    pre = PreApprovalHandler(base)
+    handler = ApprovalManager(None, input_fn=lambda _: "n")
 
-    pre.set_thread_approve_all(True)
-    pre.reset_approve_all_after_cycle()
+    handler.set_thread_approve_all(True)
+    handler.reset_approve_all_after_cycle()
 
-    result = pre.approve(tool_name="apply_patch", summary="patch")
+    result = handler.approve(tool_name="apply_patch", summary="patch")
     assert result is False
-    base.approve.assert_called_once_with(tool_name="apply_patch", summary="patch")
 
 
-@patch('builtins.print')
-def test_pre_approval_handler_scope_approve_all_propagates_across_threads_without_logging(mock_print):
-    base = MagicMock()
-    base.approve.return_value = False
-    pre = PreApprovalHandler(base)
+def test_pre_approval_handler_scope_approve_all_propagates_across_threads_without_logging():
+    handler = ApprovalManager(None)
 
-    pre.set_thread_approve_all(True, scope_key="task:qwen", silent=True)
+    handler.set_thread_approve_all(True, scope_key="task:qwen", silent=True)
     result_holder = {}
 
     def worker():
-        previous = pre.bind_thread_approval_scope("task:qwen")
+        previous = handler.bind_thread_approval_scope("task:qwen")
         try:
-            result_holder["result"] = pre.approve(tool_name="run_shell", summary="cmd")
+            result_holder["result"] = handler.approve(tool_name="run_shell", summary="cmd")
         finally:
-            pre.bind_thread_approval_scope(previous)
+            handler.bind_thread_approval_scope(previous)
 
     thread = threading.Thread(target=worker)
     thread.start()
     thread.join()
 
-    pre.set_thread_approve_all(False, scope_key="task:qwen")
+    handler.set_thread_approve_all(False, scope_key="task:qwen")
 
     assert result_holder["result"] is True
-    base.approve.assert_not_called()
-    mock_print.assert_not_called()
 
 
 @patch('builtins.print')
 def test_pre_approval_handler_thread_approve_all_logs_by_default(mock_print):
-    base = MagicMock()
-    base.approve.return_value = False
-    pre = PreApprovalHandler(base)
+    handler = ApprovalManager(None)
 
-    pre.set_thread_approve_all(True)
+    handler.set_thread_approve_all(True)
     try:
-        result = pre.approve(tool_name="apply_patch", summary="patch")
+        result = handler.approve(tool_name="apply_patch", summary="patch")
     finally:
-        pre.set_thread_approve_all(False)
+        handler.set_thread_approve_all(False)
 
     assert result is True
-    base.approve.assert_not_called()
     found = any(
         "[approve-all]" in str(call_args)
         for call_args in mock_print.call_args_list
@@ -630,263 +593,87 @@ def test_pre_approval_handler_thread_approve_all_logs_by_default(mock_print):
     assert found
 
 
-def test_pre_approval_handler_uses_renderer_property():
-    """PreApprovalHandler detecta _renderer definido como property."""
-    class FakeRenderer:
-        def __init__(self):
-            self.calls = []
-
-        def show_system(self, message):
-            self.calls.append(message)
-
-    class BaseWithRendererProperty(ApprovalHandler):
-        def __init__(self, renderer):
-            self._renderer_ref = renderer
-
-        @property
-        def _renderer(self):
-            return self._renderer_ref
-
-        def approve(self, *, tool_name: str, summary: str) -> bool:
-            return False
-
-    renderer = FakeRenderer()
-    pre = PreApprovalHandler(BaseWithRendererProperty(renderer))
-    pre.pre_approve()
-
-    with patch("builtins.print") as mock_print:
-        result = pre.approve(tool_name="shell", summary="ls")
-
-    assert result is True
-    assert renderer.calls
-    assert any("pré-aprovado" in msg for msg in renderer.calls)
-    mock_print.assert_not_called()
-
-
-# ── NonBlockingConsoleApprovalHandler ───────────────────────
-
-
-@patch('builtins.print')
-def test_nonblocking_console_approval_accepts_sim(mock_print):
-    """NonBlockingConsoleApprovalHandler aceita 'sim'."""
-    handler = NonBlockingConsoleApprovalHandler(timeout_seconds=5.0)
-    with patch.object(handler, '_read_with_timeout', return_value="sim"):
-        assert handler.approve(tool_name="shell", summary="ls") is True
-
-
-@patch('builtins.print')
-def test_nonblocking_console_approval_timeout(mock_print):
-    """Timeout retorna False."""
-    handler = NonBlockingConsoleApprovalHandler(timeout_seconds=5.0)
-    with patch.object(handler, '_read_with_timeout', return_value=None):
-        assert handler.approve(tool_name="shell", summary="ls") is False
-
-
-@patch('builtins.print')
-def test_nonblocking_console_approval_no(mock_print):
-    """Resposta 'n' retorna False."""
-    handler = NonBlockingConsoleApprovalHandler(timeout_seconds=5.0)
-    with patch.object(handler, '_read_with_timeout', return_value="n"):
-        assert handler.approve(tool_name="shell", summary="ls") is False
-
-
-@patch('builtins.print')
-def test_nonblocking_console_approval_yes(mock_print):
-    """Resposta 'yes' retorna True."""
-    handler = NonBlockingConsoleApprovalHandler(timeout_seconds=5.0)
-    with patch.object(handler, '_read_with_timeout', return_value="yes"):
-        assert handler.approve(tool_name="shell", summary="ls") is True
-
-
-@patch('builtins.print')
-def test_nonblocking_console_approval_accepts_s(mock_print):
-    """NonBlockingConsoleApprovalHandler aceita 's'."""
-    handler = NonBlockingConsoleApprovalHandler(timeout_seconds=5.0)
-    with patch.object(handler, '_read_with_timeout', return_value="s"):
-        assert handler.approve(tool_name="shell", summary="ls") is True
-
-
-def test_nonblocking_console_approval_with_renderer_uses_show_approval():
-    """Com renderer, NonBlocking usa show_approval em vez de print."""
-    class FakeRenderer:
-        def __init__(self):
-            self.calls = []
-
-        def show_approval(self, msg):
-            self.calls.append(msg)
-
-        def flush(self):
-            pass
-
-    renderer = FakeRenderer()
-    handler = NonBlockingConsoleApprovalHandler(timeout_seconds=5.0, renderer=renderer)
-    with patch.object(handler, '_read_with_timeout', return_value="y"):
-        with patch('builtins.print') as mock_print:
-            result = handler.approve(tool_name="shell", summary="ls")
-    assert result is True
-    assert renderer.calls
-    assert any("Aprovar shell" in msg for msg in renderer.calls)
-    mock_print.assert_not_called()
-
-
-def test_nonblocking_console_approval_renderer_disables_stdout_prompt():
-    """Com renderer, approve() chama _read_with_timeout sem prompt em stdout."""
-    class FakeRenderer:
-        def show_approval(self, _msg):
-            pass
-
-        def flush(self):
-            pass
-
-    handler = NonBlockingConsoleApprovalHandler(timeout_seconds=5.0, renderer=FakeRenderer())
-    with patch.object(handler, "_read_with_timeout", return_value="y") as mock_read:
-        handler.approve(tool_name="shell", summary="ls")
-    mock_read.assert_called_once_with(5.0, show_prompt=False)
-
-
-@patch('builtins.print')
-def test_nonblocking_console_approval_custom_timeout(mock_print):
-    """NonBlockingConsoleApprovalHandler respeita timeout customizado."""
-    handler = NonBlockingConsoleApprovalHandler(timeout_seconds=1.5)
-    assert handler._timeout == 1.5
-
-
-# ── NonBlockingConsoleApprovalHandler._read_with_timeout ────
-
-
-@patch('builtins.print')
-@patch('sys.stdin')
-@patch('select.select')
-def test_nonblocking_read_with_timeout_stdin_none(mock_select, mock_stdin, mock_print):
-    """_read_with_timeout retorna None quando sys.stdin é None."""
-    handler = NonBlockingConsoleApprovalHandler(timeout_seconds=5.0)
-    mock_stdin.__bool__.return_value = False  # faz "if stdin is None" ser True
-    # Na verdade o código usa "stdin = sys.stdin; if stdin is None"
-    # Precisamos que sys.stdin seja avaliado como None
-    import sys
-    with patch.object(sys, 'stdin', None):
-        result = handler._read_with_timeout(5.0)
-    assert result is None
-
-
-@patch('builtins.print')
-@patch('select.select')
-def test_nonblocking_read_with_timeout_no_data(mock_select, mock_print):
-    """_read_with_timeout retorna None quando select retorna lista vazia."""
-    handler = NonBlockingConsoleApprovalHandler(timeout_seconds=5.0)
-    mock_select.return_value = ([], [], [])
-    result = handler._read_with_timeout(0.1)
-    assert result is None
-
-
-@patch('builtins.print')
-@patch('sys.stdin')
-@patch('select.select')
-def test_nonblocking_read_with_timeout_has_data(mock_select, mock_stdin, mock_print):
-    """_read_with_timeout retorna dados quando select tem ready fd."""
-    handler = NonBlockingConsoleApprovalHandler(timeout_seconds=5.0)
-    mock_select.return_value = ([mock_stdin], [], [])
-    mock_stdin.readline.return_value = "y\n"
-    result = handler._read_with_timeout(5.0)
-    assert result == "y\n"
-
-
-@patch('builtins.print')
-@patch('select.select', side_effect=OSError("termios fail"))
-def test_nonblocking_read_with_timeout_exception_returns_none(mock_select, mock_print):
-    """_read_with_timeout retorna None em caso de exceção."""
-    handler = NonBlockingConsoleApprovalHandler(timeout_seconds=5.0)
-    result = handler._read_with_timeout(0.1)
-    assert result is None
-
-
-# ── PreApprovalHandler + spinner callbacks ──────────────────
+# ── ApprovalManager + spinner callbacks (pre-approval) ──────
 
 
 def test_pre_approval_handler_spinner_callbacks_when_pre_approved():
     """Quando pré-aprovado, spinner callbacks NÃO são chamados
     (a pré-aprovação consome sem interação)."""
-    base = ConsoleApprovalHandler(input_fn=lambda _: "n")
-    pre = PreApprovalHandler(base)
+    handler = ApprovalManager(None, input_fn=lambda _: "n")
 
     suspend_spy = MagicMock()
     resume_spy = MagicMock()
-    base.set_spinner_callbacks(suspend_spy, resume_spy)
+    handler.set_spinner_callbacks(suspend_spy, resume_spy)
 
-    pre.pre_approve()
+    handler.pre_approve()
     with patch('builtins.print'):
-        result = pre.approve(tool_name="shell", summary="ls")
+        result = handler.approve(tool_name="shell", summary="ls")
     assert result is True
-    # Spinner callbacks não devem ser chamados porque não houve interação
     suspend_spy.assert_not_called()
     resume_spy.assert_not_called()
 
 
 def test_pre_approval_handler_spinner_callbacks_when_delegating_to_base():
-    """Quando delega ao base (ConsoleApprovalHandler), spinner callbacks
-    são chamados pelo base durante _approve_interactive."""
+    """Quando delega ao approval interativo, spinner callbacks são chamados."""
     calls = []
-    base = ConsoleApprovalHandler(
+    handler = ApprovalManager(None,
         input_fn=lambda _: "y",
         suspend_fn=lambda: calls.append("suspend_fn"),
         resume_fn=lambda: calls.append("resume_fn"),
     )
-    base.set_spinner_callbacks(
+    handler.set_spinner_callbacks(
         suspend_spinner_fn=lambda: calls.append("suspend_spinner"),
         resume_spinner_fn=lambda: calls.append("resume_spinner"),
     )
-    pre = PreApprovalHandler(base)
 
     with patch('builtins.print'):
-        result = pre.approve(tool_name="shell", summary="ls")
+        result = handler.approve(tool_name="shell", summary="ls")
     assert result is True
     assert "suspend_spinner" in calls
     assert "resume_spinner" in calls
 
 
 def test_pre_approval_handler_spinner_callbacks_on_base_deny():
-    """Quando delega e o base nega, spinner callbacks são chamados no finally."""
+    """Quando o approval interativo nega, spinner callbacks são chamados no finally."""
     calls = []
-    base = ConsoleApprovalHandler(
+    handler = ApprovalManager(None,
         input_fn=lambda _: "n",
         suspend_fn=lambda: calls.append("suspend_fn"),
         resume_fn=lambda: calls.append("resume_fn"),
     )
-    base.set_spinner_callbacks(
+    handler.set_spinner_callbacks(
         suspend_spinner_fn=lambda: calls.append("suspend_spinner"),
         resume_spinner_fn=lambda: calls.append("resume_spinner"),
     )
-    pre = PreApprovalHandler(base)
 
     with patch('builtins.print'):
-        result = pre.approve(tool_name="shell", summary="ls")
+        result = handler.approve(tool_name="shell", summary="ls")
     assert result is False
     assert "suspend_spinner" in calls
     assert "resume_spinner" in calls
 
 
 def test_pre_approval_handler_spinner_callbacks_on_base_eof():
-    """Quando delega e o base recebe EOF, spinner callbacks são chamados no finally."""
+    """Quando o approval interativo recebe EOF, spinner callbacks são chamados no finally."""
     calls = []
-    base = ConsoleApprovalHandler(
+    handler = ApprovalManager(None,
         input_fn=lambda _: (_ for _ in ()).throw(EOFError()),
         suspend_fn=lambda: calls.append("suspend_fn"),
         resume_fn=lambda: calls.append("resume_fn"),
     )
-    base.set_spinner_callbacks(
+    handler.set_spinner_callbacks(
         suspend_spinner_fn=lambda: calls.append("suspend_spinner"),
         resume_spinner_fn=lambda: calls.append("resume_spinner"),
     )
-    pre = PreApprovalHandler(base)
 
     with patch('builtins.print'):
-        result = pre.approve(tool_name="shell", summary="ls")
+        result = handler.approve(tool_name="shell", summary="ls")
     assert result is False
     assert "suspend_spinner" in calls
     assert "resume_spinner" in calls
 
 
-# ── ConsoleApprovalHandler + renderer + spinner ─────────────
+# ── ApprovalManager + renderer + spinner ────────────────────
 
 
 def test_console_approval_handler_renderer_with_spinner_callbacks():
@@ -901,7 +688,7 @@ def test_console_approval_handler_renderer_with_spinner_callbacks():
 
     order = []
     renderer = FakeRenderer()
-    handler = ConsoleApprovalHandler(
+    handler = ApprovalManager(None,
         input_fn=lambda _: order.append("input") or "y",
         renderer=renderer,
     )
@@ -914,15 +701,13 @@ def test_console_approval_handler_renderer_with_spinner_callbacks():
         result = handler.approve(tool_name="shell", summary="ls")
 
     assert result is True
-    # renderer.show_approval foi usado
     assert len(renderer.calls) >= 1
     assert "Aprovar shell" in renderer.calls[0]
-    # print NÃO foi chamado
     mock_print.assert_not_called()
-    # Ordem correta
     assert order == ["suspend_spinner", "input", "resume_spinner"]
 
-# ── ConsoleApprovalHandler + input_gate + cancel_event ──────
+
+# ── ApprovalManager + input_gate + cancel_event ─────────────
 
 
 def test_console_approval_handler_input_gate_with_cancel_pre_set():
@@ -930,7 +715,7 @@ def test_console_approval_handler_input_gate_with_cancel_pre_set():
     cancel_event = threading.Event()
     cancel_event.set()
     mock_gate = MagicMock()
-    handler = ConsoleApprovalHandler(input_gate=mock_gate, cancel_event=cancel_event)
+    handler = ApprovalManager(None, input_gate=mock_gate, cancel_event=cancel_event)
     with patch('builtins.print'):
         result = handler.approve(tool_name="shell", summary="ls")
     assert result is False

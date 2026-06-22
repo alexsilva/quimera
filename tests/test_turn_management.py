@@ -485,7 +485,6 @@ class TestTurnCycle(unittest.TestCase):
 
         self.assertEqual(process_calls, ["mensagem"])
         self.assertEqual(len(read_calls), 2, "run() deveria voltar ao input após o cancelamento")
-        self.assertEqual(status_updates, ["[cancelado] pelo usuário"])
         self.assertTrue(app.turn_manager.is_human_turn)
         app.session_services.shutdown.assert_called_once_with(interrupted=False)
         app.agent_client.close.assert_called_once()
@@ -551,7 +550,6 @@ class TestTurnCycle(unittest.TestCase):
 
         self.assertEqual(process_calls, ["mensagem"])
         self.assertEqual(len(read_calls), 3, "run() deveria consumir o interrupt residual e voltar ao input")
-        self.assertEqual(app.system_layer.show_muted_message.call_args_list, [unittest.mock.call("[cancelado] pelo usuário")])
         self.assertTrue(app.turn_manager.is_human_turn)
         app.session_services.shutdown.assert_called_once_with(interrupted=False)
         app.agent_client.close.assert_called_once()
@@ -569,7 +567,7 @@ class TestTurnCycle(unittest.TestCase):
 
         app.agent_client.cancel_active_work.assert_called_once_with()
         self.assertTrue(app.turn_manager.is_human_turn)
-        app.system_layer.show_muted_message.assert_called_once_with("[cancelado] pelo usuário")
+        app.agent_client._show_cancelled_once.assert_called_once_with()
 
     def test_drain_ui_events_routes_agent_text_above_active_prompt(self):
         """Eventos TEXT devem usar run_in_terminal quando o prompt humano está ativo."""

@@ -9,11 +9,7 @@ from quimera.runtime.config import ToolRuntimeConfig
 from quimera.runtime.executor import ToolExecutor
 from quimera.runtime.models import ToolCall
 from quimera.runtime.policy import PathPermissionError
-from quimera.runtime.approval import (
-    ConsoleApprovalHandler,
-    PreApprovalHandler,
-    AutoApprovalHandler,
-)
+from quimera.runtime.approval import ApprovalManager
 from quimera.runtime.policy import ToolPolicy
 from quimera.tasks.executor import TaskExecutor
 
@@ -32,7 +28,7 @@ def test_executor_denied(config, approval_handler):
     # Line 58-59 coverage
     """Verifica que Test executor denied."""
     executor = ToolExecutor(config, approval_handler)
-    call = ToolCall(name="write_file", arguments={"path": "test.py", "content": "print(1)"})
+    call = ToolCall(name="write_file", arguments={"path": "test.py", "content": "print(1)", "replace_existing": True})
     approval_handler.approve.return_value = False
     result = executor.execute(call)
     assert result.ok is False
@@ -251,39 +247,23 @@ def test_executor_remove_file_policy_blocks_missing_dry_run(tmp_path):
 
 # ── set_spinner_callbacks ───────────────────────────────────
 
-def test_set_spinner_callbacks_injects_into_console_handler():
-    """set_spinner_callbacks injeta no ConsoleApprovalHandler diretamente."""
-    handler = ConsoleApprovalHandler()
+def test_set_spinner_callbacks_injects_into_approval_manager():
+    """set_spinner_callbacks injeta no ApprovalManager diretamente."""
+    handler = ApprovalManager(ToolRuntimeConfig(workspace_root=Path("/tmp")), input_fn=lambda _: "y")
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=Path("/tmp")), handler)
 
     suspend = MagicMock()
     resume = MagicMock()
     executor.set_spinner_callbacks(suspend, resume)
 
-    assert handler._suspend_spinner_fn[threading.get_ident()] is suspend
-    assert handler._resume_spinner_fn[threading.get_ident()] is resume
-
-
-def test_set_spinner_callbacks_traverses_pre_approval_wrapper():
-    """set_spinner_callbacks atravessa PreApprovalHandler e injeta no base."""
-    base = ConsoleApprovalHandler()
-    pre = PreApprovalHandler(base)
-    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=Path("/tmp")), pre)
-
-    suspend = MagicMock()
-    resume = MagicMock()
-    executor.set_spinner_callbacks(suspend, resume)
-
-    # O base (ConsoleApprovalHandler) recebeu os callbacks
-    assert base._suspend_spinner_fn[threading.get_ident()] is suspend
-    assert base._resume_spinner_fn[threading.get_ident()] is resume
-    # O PreApprovalHandler não tem os callbacks diretamente
-    assert not hasattr(pre, '_suspend_spinner_fn')
+    assert handler._console_handler._suspend_spinner_fn[threading.get_ident()] is suspend
+    assert handler._console_handler._resume_spinner_fn[threading.get_ident()] is resume
 
 
 def test_set_spinner_callbacks_ignores_non_console_handler():
     """set_spinner_callbacks não quebra com handler que não tem set_spinner_callbacks."""
-    handler = AutoApprovalHandler(approve_all=True)
+    handler = ApprovalManager(ToolRuntimeConfig(workspace_root=Path("/tmp")), input_fn=lambda _: "y")
+    handler.set_approve_all(True)
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=Path("/tmp")), handler)
 
     suspend = MagicMock()
@@ -292,27 +272,15 @@ def test_set_spinner_callbacks_ignores_non_console_handler():
     executor.set_spinner_callbacks(suspend, resume)
 
 
-def test_set_approval_cancel_event_injects_into_console_handler():
-    """set_approval_cancel_event injeta cancel_event no ConsoleApprovalHandler."""
-    handler = ConsoleApprovalHandler()
+def test_set_approval_cancel_event_injects_into_approval_manager():
+    """set_approval_cancel_event injeta cancel_event no ApprovalManager."""
+    handler = ApprovalManager(ToolRuntimeConfig(workspace_root=Path("/tmp")), input_fn=lambda _: "y")
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=Path("/tmp")), handler)
     cancel_event = threading.Event()
 
     executor.set_approval_cancel_event(cancel_event)
 
-    assert handler._cancel_event is cancel_event
-
-
-def test_set_approval_cancel_event_traverses_pre_approval_wrapper():
-    """set_approval_cancel_event atravessa PreApprovalHandler e injeta no base."""
-    base = ConsoleApprovalHandler()
-    pre = PreApprovalHandler(base)
-    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=Path("/tmp")), pre)
-    cancel_event = threading.Event()
-
-    executor.set_approval_cancel_event(cancel_event)
-
-    assert base._cancel_event is cancel_event
+    assert handler._console_handler._cancel_event is cancel_event
 
 
 # ── Fluxo unificado de aprovação ────────────────────────────
@@ -416,53 +384,15 @@ def test_executor_write_stdin_no_approval_when_mutations_disabled():
 
 def test_executor_approval_handler_property():
     """A property approval_handler retorna o handler configurado."""
-    handler = ConsoleApprovalHandler()
+    handler = ApprovalManager(ToolRuntimeConfig(workspace_root=Path("/tmp")), input_fn=lambda _: "y")
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=Path("/tmp")), handler)
     assert executor.approval_handler is handler
 
 
-
-def test_set_spinner_callbacks_on_pre_approval_with_mock_base():
-    """set_spinner_callbacks atravessa PreApprovalHandler com base que
-    tem set_spinner_callbacks mas não é ConsoleApprovalHandler."""
-    class BaseWithSetter:
-        def __init__(self):
-            self.set_spinner_callbacks = MagicMock()
-
-    base = BaseWithSetter()
-    pre = PreApprovalHandler(base)
-    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=Path("/tmp")), pre)
-
-    suspend = MagicMock()
-    resume = MagicMock()
-    executor.set_spinner_callbacks(suspend, resume)
-
-    # O loop while deve parar no base (que tem set_spinner_callbacks)
-    base.set_spinner_callbacks.assert_called_once_with(suspend, resume)
-
-
-def test_set_spinner_callbacks_double_wrapped_pre_approval():
-    """set_spinner_callbacks atravessa dois PreApprovalHandlers."""
-    inner_base = ConsoleApprovalHandler()
-    middle = PreApprovalHandler(inner_base)
-    outer = PreApprovalHandler(middle)
-    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=Path("/tmp")), outer)
-
-    suspend = MagicMock()
-    resume = MagicMock()
-    executor.set_spinner_callbacks(suspend, resume)
-
-    # inner_base (ConsoleApprovalHandler) deve receber os callbacks
-    assert inner_base._suspend_spinner_fn[threading.get_ident()] is suspend
-    assert inner_base._resume_spinner_fn[threading.get_ident()] is resume
-    # Camadas intermediárias não recebem
-    assert not hasattr(middle, "_suspend_spinner_fn")
-    assert not hasattr(outer, "_suspend_spinner_fn")
-
-
 def test_set_spinner_callbacks_no_op_when_handler_is_none_like():
     """set_spinner_callbacks não quebra com handler sem atributo _base."""
-    handler = AutoApprovalHandler(approve_all=True)
+    handler = ApprovalManager(ToolRuntimeConfig(workspace_root=Path("/tmp")), input_fn=lambda _: "y")
+    handler.set_approve_all(True)
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=Path("/tmp")), handler)
     # Já testado, mas reforçando: não deve lançar exceção
     executor.set_spinner_callbacks(MagicMock(), MagicMock())

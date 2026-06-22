@@ -29,7 +29,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import IO, Any
 
-from quimera.runtime.approval import AutoApprovalHandler
+from quimera.runtime.approval import ApprovalManager
 from quimera.runtime.config import ToolRuntimeConfig
 from quimera.runtime.executor import ToolExecutor
 from quimera.runtime.models import ToolCall
@@ -1051,7 +1051,7 @@ def _build_standalone_executor():
         db_path=workspace.tasks_db,
         memory_file=workspace.memory_file,
     )
-    approval = AutoApprovalHandler()
+    approval = ApprovalManager(config)
     return ToolExecutor(config, approval)
 
 
