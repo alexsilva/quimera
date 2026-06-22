@@ -203,8 +203,12 @@ class InputBroker:
 
         # Sem pt ativo: leitura por linha (cooked mode, sem termios). Mesmo
         # input usado para escrever no chat — o usuário digita y/n/a + Enter.
-        self._emit(req.question)
-        answer = self._read_line(prompt, deadline=deadline)
+        self._suspend_live()
+        try:
+            self._emit(req.question)
+            answer = self._read_line(prompt, deadline=deadline)
+        finally:
+            self._resume_live()
         if answer is None:
             elapsed = time.monotonic() - start
             self._emit(
@@ -272,10 +276,14 @@ class InputBroker:
                     return None
                 return -1, answer.rstrip("\n\r")
         # Fallback (sem pt ativo): emite a pergunta e lê por linha.
-        self._emit(f"\n{question}")
-        answer = self._read_line(
-            f"  Resposta (auto em {remaining_s}s): ", deadline=deadline
-        )
+        self._suspend_live()
+        try:
+            self._emit(f"\n{question}")
+            answer = self._read_line(
+                f"  Resposta (auto em {remaining_s}s): ", deadline=deadline
+            )
+        finally:
+            self._resume_live()
         if answer is None:
             return None
         return -1, answer.rstrip("\n\r")
@@ -296,6 +304,7 @@ class InputBroker:
                     return read_fn(prompt, timeout=remaining)
         # pt não ativo: select + readline direto
         import select as _sel
+        sys.stdout.write("\033[?25h")
         sys.stdout.write(prompt)
         sys.stdout.flush()
         remaining = deadline - time.monotonic()
@@ -352,44 +361,63 @@ class InputBroker:
         for i, opt in enumerate(options):
             lines.append(f"  {i + 1}. {opt}")
         lines.append(f"  (1-{len(options)} · auto em {remaining_s}s)")
-        self._emit("\n".join(lines))
-        while True:
-            if deadline - time.monotonic() <= 0:
-                return None
-            prompt = f"  Selecione (1-{len(options)}): "
-            answer = self._read_line(prompt, deadline=deadline)
-            if answer is None:
-                return None
-            stripped = answer.strip()
-            if stripped.isdigit():
-                num = int(stripped) - 1
-                if 0 <= num < len(options):
-                    return num, options[num]
-            self._emit(f"  [{stripped!r} inválido — esperado 1-{len(options)}]")
+        self._suspend_live()
+        try:
+            self._emit("\n".join(lines))
+            while True:
+                if deadline - time.monotonic() <= 0:
+                    return None
+                prompt = f"  Selecione (1-{len(options)}): "
+                answer = self._read_line(prompt, deadline=deadline)
+                if answer is None:
+                    return None
+                stripped = answer.strip()
+                if stripped.isdigit():
+                    num = int(stripped) - 1
+                    if 0 <= num < len(options):
+                        return num, options[num]
+                self._emit(f"  [{stripped!r} inválido — esperado 1-{len(options)}]")
+        finally:
+            self._resume_live()
 
     # ------------------------------------------------------------------
     # Utilitário de saída
     # ------------------------------------------------------------------
 
-    def _close_live_if_active(self) -> None:
-        """Fecha o Rich Live display (streaming) para evitar conflito com I/O direto.
+    def _suspend_live(self) -> None:
+        """Suspende Rich Live antes de I/O interativo direto.
 
-        Chama suspend_output + resume_output no renderer: fecha o Live, drena
-        eventos pendentes da fila (conteúdo gerado antes da tool call) e deixa
-        o terminal limpo para I/O interativo sem interferência.
-        Deve ser chamado uma vez por request, antes de qualquer I/O interativo.
+        Para o Live display e mostra o cursor, evitando que o refresh
+        do Live sobrescreva o texto da pergunta ou que o cursor oculto
+        impeça o usuário de ver onde digitar.
         """
         renderer = self._renderer
         if renderer is None:
             return
-        try:
-            renderer.suspend_output(timeout=1.0)
-        except Exception:
-            pass
-        try:
-            renderer.resume_output(timeout=1.0)
-        except Exception:
-            pass
+        suspend = getattr(renderer, "suspend_output", None)
+        if callable(suspend):
+            try:
+                suspend(timeout=1.0)
+            except Exception:
+                pass
+        sys.stdout.write("\033[?25h")
+        sys.stdout.flush()
+
+    def _resume_live(self) -> None:
+        """Retoma Rich Live após I/O interativo direto.
+
+        O Live.start() esconde o cursor automaticamente; não fazer
+        hide explícito aqui para não corromper o prompt_toolkit.
+        """
+        renderer = self._renderer
+        if renderer is None:
+            return
+        resume = getattr(renderer, "resume_output", None)
+        if callable(resume):
+            try:
+                resume(timeout=1.0)
+            except Exception:
+                pass
 
     def _emit(self, message: str) -> None:
         """Emite mensagem ao usuário mantendo cursor tracking do Rich correto.
