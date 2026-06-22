@@ -353,14 +353,7 @@ class SpyOutputPresenter:
             if isinstance(duration_ms, int) and duration_ms >= 0:
                 total_ms += duration_ms
         total_duration = self._format_duration(total_ms)
-        last = next((tool for tool in reversed(tools) if isinstance(tool, dict)), {})
-        last_tool = str(last.get("tool") or "ferramenta")
-        last_status = str(last.get("status") or "unknown")
-        trace_id = str(detail.get("trace_id") or detail.get("turn_id") or "n/a")
-        summary = (
-            f"TOOLS: {total} chamadas · {ok_count} ok · {err_count} erro · {total_duration} "
-            f"· último: {last_tool}({last_status}) · trace_id={trace_id}"
-        )
+        summary = f"TOOLS: {total} chamadas · {ok_count} ok · {err_count} erro · {total_duration}"
         return [summary]
 
     @staticmethod
