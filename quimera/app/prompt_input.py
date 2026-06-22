@@ -636,7 +636,7 @@ class InputGate:
                 done.set()
 
         async def _coro() -> None:
-            await run_in_terminal(_read_sync, in_executor=False)
+            await run_in_terminal(_read_sync, in_executor=True)
 
         try:
             future = asyncio.run_coroutine_threadsafe(_coro(), loop)
@@ -725,7 +725,7 @@ class InputGate:
                 done.set()
 
         async def _coro() -> None:
-            await run_in_terminal(_approval_sync, in_executor=False)
+            await run_in_terminal(_approval_sync, in_executor=True)
 
         try:
             future = asyncio.run_coroutine_threadsafe(_coro(), loop)
