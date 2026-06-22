@@ -192,8 +192,8 @@ class PolicyTests(unittest.TestCase):
 
     def test_choose_best_agent_penalizes_low_reliability_tool_users_for_bug_investigation(self):
         """Verifica que Test choose best agent penalizes low reliability tool users for bug investigation."""
-        selected = choose_best_agent("bug_investigation", [plugins.get("ollama-granite4"), plugins.get("gemini")])
-        self.assertEqual(selected, "gemini")
+        selected = choose_best_agent("bug_investigation", [plugins.get("ollama-granite4"), plugins.get("codex")])
+        self.assertEqual(selected, "codex")
 
     def test_choose_best_agent_does_not_route_tasks_to_qwen_without_explicit_execution_support(self):
         """Verifica que Test choose best agent does not route tasks to qwen without explicit execution support."""

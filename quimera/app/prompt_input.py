@@ -407,6 +407,7 @@ class InputGate:
         done = threading.Event()
 
         def _select_sync() -> None:
+            import os as _os
             import select as _sel
             renderer = self._renderer
             suspended = False
@@ -435,19 +436,32 @@ class InputGate:
                     )
                     sys.stdout.write("\n".join(lines))
                     sys.stdout.flush()
+
+                    raw_line: str | None = None
+                    fd: int | None = None
                     try:
-                        ready, _, _ = _sel.select([sys.stdin], [], [], remaining)
+                        fd = sys.stdin.fileno()
+                        ready, _, _ = _sel.select([fd], [], [], remaining)
                         if not ready:
                             return
                     except (TypeError, ValueError, OSError):
-                        pass  # stdin não-selectable (mock/pipe) — vai ao readline
+                        fd = None
                     try:
-                        raw = sys.stdin.readline()
+                        if fd is not None:
+                            raw = _os.read(fd, 4096)
+                            if raw:
+                                raw_line = raw.decode("utf-8", errors="replace")
+                        else:
+                            raw_line = sys.stdin.readline()
                     except (EOFError, OSError):
                         return
-                    if raw == "":
+                    if not raw_line:
                         return
-                    raw = raw.strip()
+                    cleaned = raw_line.rstrip("\n\r")
+                    if cleaned:
+                        sys.stdout.write(cleaned + "\n")
+                        sys.stdout.flush()
+                    raw = cleaned
                     if raw.isdigit():
                         num = int(raw) - 1
                         if 0 <= num < len(options):
@@ -591,19 +605,28 @@ class InputGate:
                 try:
                     ready, _, _ = _sel.select([sys.stdin], [], [], timeout)
                     if not ready:
-                        # timeout expirado — retorna None sem deixar readline bloqueado
                         return
-                except (TypeError, ValueError, OSError):
-                    pass  # stdin não-selectable (mock/pipe) — vai direto ao readline
-                line = sys.stdin.readline()
-                result[0] = line.rstrip("\n\r")
+                except Exception:
+                    return
+                try:
+                    raw_line = sys.stdin.readline()
+                except (EOFError, OSError):
+                    return
+                if raw_line:
+                    cleaned = raw_line.rstrip("\n\r")
+                    if cleaned:
+                        sys.stdout.write(cleaned + "\n")
+                        sys.stdout.flush()
+                    result[0] = cleaned
+                else:
+                    result[0] = ""
             except (EOFError, OSError):
                 result[0] = ""
             finally:
                 done.set()
 
         async def _coro() -> None:
-            await run_in_terminal(_read_sync, in_executor=True)
+            await run_in_terminal(_read_sync, in_executor=False)
 
         try:
             future = asyncio.run_coroutine_threadsafe(_coro(), loop)
@@ -667,19 +690,24 @@ class InputGate:
                 remaining = deadline - _time.monotonic()
                 if remaining <= 0:
                     return
+
                 try:
                     ready, _, _ = _sel.select([sys.stdin], [], [], remaining)
                     if not ready:
                         return
-                except (TypeError, ValueError, OSError):
-                    pass  # stdin não-selectable (mock/pipe) — vai ao readline
+                except Exception:
+                    return
                 try:
-                    line = sys.stdin.readline()
+                    raw_line = sys.stdin.readline()
                 except (EOFError, OSError):
                     return
-                if line == "":
+                if not raw_line:
                     return
-                result[0] = line.strip().lower()
+                cleaned = raw_line.rstrip("\n\r")
+                if cleaned:
+                    sys.stdout.write(cleaned + "\n")
+                    sys.stdout.flush()
+                result[0] = cleaned.strip().lower()
             finally:
                 if suspended and renderer is not None:
                     try:
@@ -689,7 +717,7 @@ class InputGate:
                 done.set()
 
         async def _coro() -> None:
-            await run_in_terminal(_approval_sync, in_executor=True)
+            await run_in_terminal(_approval_sync, in_executor=False)
 
         try:
             future = asyncio.run_coroutine_threadsafe(_coro(), loop)

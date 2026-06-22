@@ -1,3 +1,4 @@
+import sys
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -63,7 +64,7 @@ def test_exec_command_completes_and_returns_payload(tmp_path):
     tool = ShellTool(ToolRuntimeConfig(workspace_root=tmp_path))
     call = ToolCall(
         name="exec_command",
-        arguments={"cmd": 'python -u -c "print(\'hello\')"', "yield_time_ms": 200},
+        arguments={"cmd": f'{sys.executable} -u -c "print(\'hello\')"', "yield_time_ms": 200},
     )
     result = _poll_until_completed(tool, tool.exec_command(call))
     assert result.ok is True
@@ -82,7 +83,7 @@ def test_exec_command_supports_polling_running_process(tmp_path):
         ToolCall(
             name="exec_command",
             arguments={
-                "cmd": 'python -u -c "import time; print(\'start\'); time.sleep(0.2); print(\'done\')"',
+                "cmd": f'{sys.executable} -u -c "import time; print(\'start\'); time.sleep(0.2); print(\'done\')"',
                 "yield_time_ms": 10,
             },
         )
@@ -120,7 +121,7 @@ def test_exec_command_supports_stdin_roundtrip(tmp_path):
         ToolCall(
             name="exec_command",
             arguments={
-                "cmd": 'python -u -c "import sys; print(sys.stdin.readline().strip())"',
+                "cmd": f'{sys.executable} -u -c "import sys; print(sys.stdin.readline().strip())"',
                 "yield_time_ms": 10,
             },
         )
@@ -153,7 +154,7 @@ def test_close_command_session_terminates_running_process(tmp_path):
         ToolCall(
             name="exec_command",
             arguments={
-                "cmd": 'python -u -c "import time; print(\'start\'); time.sleep(5)"',
+                "cmd": f'{sys.executable} -u -c "import time; print(\'start\'); time.sleep(5)"',
                 "yield_time_ms": 10,
             },
         )
@@ -180,7 +181,7 @@ def test_exec_command_supports_tty_mode(tmp_path):
             ToolCall(
                 name="exec_command",
                 arguments={
-                    "cmd": 'python -u -c "print(\'tty-ok\')"',
+                    "cmd": f'{sys.executable} -u -c "print(\'tty-ok\')"',
                     "yield_time_ms": 200,
                     "tty": True,
                 },
@@ -201,7 +202,7 @@ def test_exec_command_tty_waits_for_short_completion_after_yield(tmp_path):
             ToolCall(
                 name="exec_command",
                 arguments={
-                    "cmd": 'python -u -c "import time; time.sleep(0.25); print(\'tty-grace\')"',
+                    "cmd": f'{sys.executable} -u -c "import time; time.sleep(0.25); print(\'tty-grace\')"',
                     "yield_time_ms": 100,
                     "tty": True,
                 },

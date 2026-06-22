@@ -56,7 +56,7 @@ from quimera.ui import _agent_style
 
 AGENT_CLAUDE = "claude"
 AGENT_CODEX = "codex"
-AGENT_GEMINI = "gemini"
+AGENT_GEMINI = "antigravity"
 
 
 def _extract_block(prompt: str, tag: str) -> str:
@@ -2088,8 +2088,8 @@ class ProtocolTests(unittest.TestCase):
         printed = []
 
         from quimera.app.agent_pool import AgentPool
-        app.agent_pool = AgentPool(list(plugins.all_names()))
-        app.active_agents = list(plugins.all_names())
+        app.agent_pool = AgentPool([AGENT_CLAUDE])
+        app.active_agents = [AGENT_CLAUDE]
         from quimera.app.runtime_state import AppRuntimeState
         app.runtime_state = AppRuntimeState()
         app.bug_services = Mock()
@@ -4338,9 +4338,9 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(
             status_updates,
             [
-                "[task 7] gemini: revisando execução de claude",
-                "[task 7] gemini:\nACEITE\nResultado validado com evidência concreta.",
-                "[task 7] gemini: review concluído",
+                "[task 7] antigravity: revisando execução de claude",
+                "[task 7] antigravity:\nACEITE\nResultado validado com evidência concreta.",
+                "[task 7] antigravity: review concluído",
             ],
         )
         self.assertTrue(review_prompts)
@@ -4439,9 +4439,9 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(
             status_updates,
             [
-                "[task 9] gemini: revisando execução de claude",
-                "[task 9] gemini:\nRETENTATIVA\nFaltou evidência de alteração no código.",
-                "[task 9] gemini: review pediu retentativa, task voltou para pending",
+                "[task 9] antigravity: revisando execução de claude",
+                "[task 9] antigravity:\nRETENTATIVA\nFaltou evidência de alteração no código.",
+                "[task 9] antigravity: review pediu retentativa, task voltou para pending",
             ],
         )
         requeue_task_after_review.assert_called_once_with(
@@ -4485,7 +4485,7 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(
             status_updates,
             [
-                "[task 252] concluída | aprovada por gemini: ACEITE\nCommit criado com hash abc123 e worktree limpo.",
+                "[task 252] concluída | aprovada por antigravity: ACEITE\nCommit criado com hash abc123 e worktree limpo.",
             ],
         )
 
@@ -4541,8 +4541,8 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(
             status_updates,
             [
-                "[task 10] gemini: revisando execução de claude",
-                "[task 10] gemini: review falhou: timeout",
+                "[task 10] antigravity: revisando execução de claude",
+                "[task 10] antigravity: review falhou: timeout",
             ],
         )
         transition_task.assert_called_once_with(
@@ -4606,8 +4606,8 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(
             status_updates,
             [
-                "[task 12] gemini: revisando execução de claude",
-                "[task 12] gemini: review falhou: timeout",
+                "[task 12] antigravity: revisando execução de claude",
+                "[task 12] antigravity: review falhou: timeout",
             ],
         )
         transition_task.assert_called_once_with(
@@ -4676,8 +4676,8 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(
             status_updates,
             [
-                "[task 11] gemini: revisando execução de claude",
-                "[task 11] gemini: review falhou: timeout",
+                "[task 11] antigravity: revisando execução de claude",
+                "[task 11] antigravity: review falhou: timeout",
             ],
         )
         update_task.assert_not_called()
