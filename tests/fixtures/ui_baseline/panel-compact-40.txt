@@ -9,5 +9,4 @@ logs/2026-04-30/sessao-2026-04-30-222821
 │ wrapping e alinhamento preservados.  │
 ╰──────────────────────────────────────╯
 🤖  Codex TOOLS: 1 chamadas · 1 ok · 0 
-erro · 87ms · último: exec_command(ok) ·
-trace_id=turn_1650
+erro · 87ms

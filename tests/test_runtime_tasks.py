@@ -398,10 +398,14 @@ def _run_main(db_path, *args):
     sys.stdout.flush()
     sys.stderr.flush()
     with patch("sys.argv", argv), redirect_stdout(buf):
+        previous_module = sys.modules.pop("quimera.tasks.api", None)
         try:
             runpy.run_module("quimera.tasks.api", run_name="__main__", alter_sys=False)
         except SystemExit as exc:
             exit_code = exc.code if exc.code is not None else 0
+        finally:
+            if previous_module is not None:
+                sys.modules["quimera.tasks.api"] = previous_module
     return buf.getvalue().strip(), exit_code
 
 
@@ -556,10 +560,14 @@ def test_cli_no_cmd_prints_help(cli_db):
     buf = io.StringIO()
     argv = ["quimera.tasks.api", "--db", str(cli_db)]
     with patch("sys.argv", argv), redirect_stdout(buf):
+        previous_module = sys.modules.pop("quimera.tasks.api", None)
         try:
             runpy.run_module("quimera.tasks.api", run_name="__main__", alter_sys=False)
         except SystemExit as exc:
             assert exc.code == 1
+        finally:
+            if previous_module is not None:
+                sys.modules["quimera.tasks.api"] = previous_module
     assert "usage" in buf.getvalue().lower()
 
 

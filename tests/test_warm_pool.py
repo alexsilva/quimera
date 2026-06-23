@@ -84,6 +84,11 @@ class TestWarmPool:
         pool = WarmPool()
         assert pool.take(["codex"], "/tmp") is None
 
+    def test_take_empty_command_returns_none(self):
+        """Comando vazio não deve usar o pool."""
+        pool = WarmPool()
+        assert pool.take([], "/tmp") is None
+
     def test_take_returns_alive_slot(self):
         """Verifica que take retorna o slot quando há um processo vivo compatível."""
         pool = WarmPool()
@@ -235,6 +240,14 @@ class TestWarmPool:
         with patch("threading.Thread") as mock_thread_cls:
             pool.schedule_warm(["codex"], {}, "/tmp")
             mock_thread_cls.assert_not_called()
+
+    def test_schedule_warm_noop_for_empty_command(self):
+        """Comando vazio não agenda thread que falharia em background."""
+        pool = WarmPool()
+        with patch("threading.Thread") as mock_thread_cls:
+            pool.schedule_warm([], {}, "/tmp")
+            mock_thread_cls.assert_not_called()
+        assert pool._pending == set()
 
     # shutdown()
 
