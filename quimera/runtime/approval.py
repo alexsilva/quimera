@@ -682,9 +682,7 @@ class ApprovalManager(ApprovalHandler):
         if callable(setter):
             setter(lambda: self._pre_handler.set_approve_all(True))
 
-        self.governance = ApprovalBroker(config, self._pre_handler)
-        # Alias interno mantido para compatibilidade com testes e código legado.
-        self._broker = self.governance
+        self._broker = ApprovalBroker(config, self._pre_handler)
 
     # ── Handler mode (interface ApprovalHandler) ────────────────────
 
@@ -699,23 +697,28 @@ class ApprovalManager(ApprovalHandler):
 
     @property
     def audit_log(self) -> list[dict]:
-        return self.governance.audit_log
+        return self._broker.audit_log
+
+    @property
+    def governance(self):
+        """Alias público compatível para o ApprovalBroker canônico."""
+        return self._broker
 
     @property
     def approval_broker(self):
         """Engine canônica de governança exposta explicitamente."""
-        return self.governance
+        return self._broker
 
     def build_context(self, call):
-        return self.governance.build_context(call)
+        return self._broker.build_context(call)
 
     def classify(self, call):
-        return self.governance.classify(call)
+        return self._broker.classify(call)
 
     def create_authorization_request(
         self, call, *, permission_error=None, reason=None
     ):
-        return self.governance.create_request(
+        return self._broker.create_request(
             call, permission_error=permission_error, reason=reason
         )
 
@@ -732,7 +735,7 @@ class ApprovalManager(ApprovalHandler):
         needs_policy_approval,
         permission_error=None,
     ) -> bool:
-        return self.governance.approve(
+        return self._broker.approve(
             call,
             needs_policy_approval=needs_policy_approval,
             permission_error=permission_error,
@@ -759,7 +762,7 @@ class ApprovalManager(ApprovalHandler):
         needs_policy_approval,
         permission_error=None,
     ) -> bool:
-        return self.governance.should_request_approval(
+        return self._broker.should_request_approval(
             call,
             needs_policy_approval=needs_policy_approval,
             permission_error=permission_error,
@@ -780,7 +783,7 @@ class ApprovalManager(ApprovalHandler):
         )
 
     def guard_execution(self, call):
-        return self.governance.execution_guard(call)
+        return self._broker.execution_guard(call)
 
     def execution_guard(self, call):
         """Alias legado para guard_execution()."""
@@ -790,16 +793,16 @@ class ApprovalManager(ApprovalHandler):
         """Delega acessos legados de governança para o broker incorporado."""
         if name.startswith("__"):
             raise AttributeError(name)
-        return getattr(self.governance, name)
+        return getattr(self._broker, name)
 
     def approve_scope(self, scope):
-        self.governance.approve_scope(scope)
+        self._broker.approve_scope(scope)
 
     def approve_equivalent(self, request, *, ttl_seconds=None, uses=1):
         kwargs = {"uses": uses}
         if ttl_seconds is not None:
             kwargs["ttl_seconds"] = ttl_seconds
-        return self.governance.approve_equivalent(request, **kwargs)
+        return self._broker.approve_equivalent(request, **kwargs)
 
     def create_route(
         self,
@@ -809,7 +812,7 @@ class ApprovalManager(ApprovalHandler):
         path=None,
         command=None,
     ):
-        return self.governance.create_route(
+        return self._broker.create_route(
             call, context, path=path, command=command
         )
 
