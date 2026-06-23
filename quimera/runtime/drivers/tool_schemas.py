@@ -116,6 +116,48 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "replace_text",
+            "description": (
+                "Substitui texto literal em um arquivo dentro do workspace. "
+                "Falha se a quantidade de ocorrências encontradas não bater exatamente com count."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Caminho relativo do arquivo a editar.",
+                    },
+                    "old": {
+                        "type": "string",
+                        "description": "Texto literal existente a substituir. Deve ser não vazio.",
+                    },
+                    "new": {
+                        "type": "string",
+                        "description": "Novo texto literal.",
+                    },
+                    "count": {
+                        "type": "integer",
+                        "description": "Quantidade exata de ocorrências esperada. Padrão: 1.",
+                    },
+                },
+                "required": ["path", "old", "new"],
+            },
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "ok": {"type": "boolean"},
+                    "content": {"type": "string", "description": "Confirmation message"},
+                    "data": {"type": "object"},
+                    "error": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+                },
+                "required": ["ok", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "apply_patch",
             "description": (
                 "Aplica um patch textual estruturado no workspace. "
@@ -135,7 +177,11 @@ TOOL_SCHEMAS = [
                             " *** Begin Patch ... *** End Patch. "
                             "Suporta Add File, Delete File e Update File."
                         ),
-                    }
+                    },
+                    "dry_run": {
+                        "type": "boolean",
+                        "description": "Quando true, valida paths e hunks sem modificar arquivos.",
+                    },
                 },
                 "required": ["patch"],
             },
@@ -183,6 +229,10 @@ TOOL_SCHEMAS = [
                         "type": "integer",
                         "description": "Limite opcional de resultados, limitado pelo máximo global da runtime.",
                     },
+                    "context_lines": {
+                        "type": "integer",
+                        "description": "Número opcional de linhas vizinhas por match. Valores acima de 10 são limitados para evitar respostas enormes.",
+                    },
                 },
                 "required": ["pattern"],
             },
@@ -192,6 +242,33 @@ TOOL_SCHEMAS = [
                     "ok": {"type": "boolean"},
                     "content": {"type": "string", "description": "Results in path:line:content format, one per line"},
                     "truncated": {"type": "boolean"},
+                    "error": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+                },
+                "required": ["ok", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "inspect_symbols",
+            "description": "Lista classes, funções e métodos de um arquivo Python usando AST, sem executar código.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Caminho relativo de um arquivo .py dentro do workspace.",
+                    },
+                },
+                "required": ["path"],
+            },
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "ok": {"type": "boolean"},
+                    "content": {"type": "string", "description": "Símbolos em formato legível com linhas."},
+                    "data": {"type": "object"},
                     "error": {"oneOf": [{"type": "string"}, {"type": "null"}]},
                 },
                 "required": ["ok", "content"],

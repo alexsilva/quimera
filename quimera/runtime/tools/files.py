@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import ast
 import fnmatch
 import os
 import threading
@@ -18,8 +19,10 @@ _FILE_TOOL_NAMES = [
     "list_files",
     "read_file",
     "write_file",
+    "replace_text",
     "remove_file",
     "grep_search",
+    "inspect_symbols",
 ]
 _DEFAULT_GREP_EXCLUDED_DIRS = frozenset({
     ".git",
@@ -148,10 +151,14 @@ class FileTools(ToolBase):
             path = self._resolve(raw_path)
 
         text = path.read_text(encoding="utf-8")
+        all_lines = text.splitlines(keepends=True)
+        total_lines = len(all_lines)
+        selected_start_line = 1 if total_lines else 0
+        selected_end_line = total_lines
 
         if start_line is not None or end_line is not None:
-            lines = text.splitlines(keepends=True)
-            total = len(lines)
+            lines = all_lines
+            total = total_lines
             start = (int(start_line) - 1) if start_line is not None else 0
             end = int(end_line) if end_line is not None else total
             if start < 0:
@@ -166,6 +173,8 @@ class FileTools(ToolBase):
                           f"Arquivo tem {total} linhas.",
                 )
             text = "".join(lines[start:end])
+            selected_start_line = start + 1
+            selected_end_line = end
 
         truncated = len(text) > self.config.max_file_read_chars
         text = text[: self.config.max_file_read_chars]
@@ -174,7 +183,13 @@ class FileTools(ToolBase):
             tool_name=call.name,
             content=text,
             truncated=truncated,
-            data={"path": str(path)},
+            data={
+                "path": str(path),
+                "start_line": selected_start_line,
+                "end_line": selected_end_line,
+                "total_lines": total_lines,
+                "truncated": truncated,
+            },
         )
 
     def write_file(self, call: ToolCall) -> ToolResult:
@@ -201,6 +216,41 @@ class FileTools(ToolBase):
         else:
             path.write_text(content, encoding="utf-8")
         return ToolResult(ok=True, tool_name=call.name, content=f"Arquivo salvo: {path}")
+
+    def replace_text(self, call: ToolCall) -> ToolResult:
+        """Substitui texto literal em um arquivo com contagem exata de ocorrências."""
+        raw_path = call.arguments["path"]
+        path = self._resolve_mutable_path(raw_path)
+        if not path.is_file():
+            return ToolResult(ok=False, tool_name=call.name, error=f"Arquivo inválido: {raw_path}")
+
+        old = str(call.arguments.get("old", ""))
+        new = str(call.arguments.get("new", ""))
+        expected_count = self._resolve_replace_count(call.arguments.get("count"))
+        if not old:
+            return ToolResult(ok=False, tool_name=call.name, error="replace_text requer 'old' não vazio")
+
+        text = path.read_text(encoding="utf-8")
+        actual_count = text.count(old)
+        if actual_count != expected_count:
+            return ToolResult(
+                ok=False,
+                tool_name=call.name,
+                error=(
+                    f"replace_text encontrou {actual_count} ocorrências, "
+                    f"mas esperava {expected_count}. Nenhuma alteração aplicada."
+                ),
+                data={"path": str(path), "occurrences": actual_count, "expected_count": expected_count},
+            )
+
+        updated = text.replace(old, new, expected_count)
+        path.write_text(updated, encoding="utf-8")
+        return ToolResult(
+            ok=True,
+            tool_name=call.name,
+            content=f"Texto substituído em: {path}",
+            data={"path": str(path), "occurrences": actual_count},
+        )
 
     def remove_file(self, call: ToolCall) -> ToolResult:
         """Remove um arquivo dentro do workspace.
@@ -245,8 +295,10 @@ class FileTools(ToolBase):
         pattern = str(call.arguments["pattern"])
         include_glob = call.arguments.get("include_glob") or call.arguments.get("glob")
         max_results = self._resolve_search_limit(call.arguments.get("max_results"))
+        context_lines = self._resolve_context_lines(call.arguments.get("context_lines"))
         excluded_dirs = self._resolve_excluded_search_dirs(call.arguments.get("exclude_dirs"))
         results: list[str] = []
+        match_count = 0
 
         # We always want to search the resolved path (which might be in staging)
         search_paths = [base]
@@ -279,15 +331,23 @@ class FileTools(ToolBase):
                 except Exception:  # noqa: BLE001
                     continue
 
-                for line_no, line in enumerate(text.splitlines(), start=1):
+                lines = text.splitlines()
+                for line_no, line in enumerate(lines, start=1):
                     if pattern in line:
-                        res_key = (str(display_path), line_no, line)
-                        if res_key in seen_results:
+                        match_key = (str(display_path), line_no, line)
+                        if match_key in seen_results:
                             continue
-                        seen_results.add(res_key)
-
-                        results.append(f"{display_path}:{line_no}:{line}")
-                        if len(results) >= max_results:
+                        match_count += 1
+                        start = max(1, line_no - context_lines)
+                        end = min(len(lines), line_no + context_lines)
+                        for context_no in range(start, end + 1):
+                            context_line = lines[context_no - 1]
+                            res_key = (str(display_path), context_no, context_line)
+                            if res_key in seen_results:
+                                continue
+                            seen_results.add(res_key)
+                            results.append(f"{display_path}:{context_no}:{context_line}")
+                        if match_count >= max_results:
                             return ToolResult(
                                 ok=True,
                                 tool_name=call.name,
@@ -295,6 +355,47 @@ class FileTools(ToolBase):
                                 truncated=True,
                             )
         return ToolResult(ok=True, tool_name=call.name, content="\n".join(results))
+
+    def inspect_symbols(self, call: ToolCall) -> ToolResult:
+        """Lista símbolos Python de alto nível usando AST, sem executar o arquivo."""
+        raw_path = call.arguments["path"]
+        path = self._resolve(raw_path)
+        if path.suffix != ".py" or not path.is_file():
+            return ToolResult(ok=False, tool_name=call.name, error=f"Arquivo Python inválido: {raw_path}")
+
+        try:
+            source = path.read_text(encoding="utf-8")
+            tree = ast.parse(source, filename=str(path))
+        except SyntaxError as exc:
+            return ToolResult(ok=False, tool_name=call.name, error=f"SyntaxError: {exc}")
+        except OSError as exc:
+            return ToolResult(ok=False, tool_name=call.name, error=str(exc))
+
+        symbols: list[dict] = []
+        rendered: list[str] = []
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                kind = "async def" if isinstance(node, ast.AsyncFunctionDef) else "def"
+                symbol = {"kind": kind, "name": node.name, "line": node.lineno}
+                symbols.append(symbol)
+                rendered.append(f"{kind} {node.name}:{node.lineno}")
+            elif isinstance(node, ast.ClassDef):
+                symbol = {"kind": "class", "name": node.name, "line": node.lineno, "methods": []}
+                rendered.append(f"class {node.name}:{node.lineno}")
+                for child in node.body:
+                    if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        method_kind = "async def" if isinstance(child, ast.AsyncFunctionDef) else "def"
+                        method = {"kind": method_kind, "name": child.name, "line": child.lineno}
+                        symbol["methods"].append(method)
+                        rendered.append(f"  {method_kind} {child.name}:{child.lineno}")
+                symbols.append(symbol)
+
+        return ToolResult(
+            ok=True,
+            tool_name=call.name,
+            content="\n".join(rendered),
+            data={"path": str(path), "symbols": symbols},
+        )
 
     def _iter_search_files(self, search_path: Path, *, excluded_dirs: set[str]):
         """Itera arquivos pesquisáveis podando diretórios ruidosos cedo."""
@@ -334,6 +435,30 @@ class FileTools(ToolBase):
         if requested <= 0:
             return self.config.max_search_results
         return min(requested, self.config.max_search_results)
+
+    @staticmethod
+    def _resolve_replace_count(raw_count) -> int:
+        """Normaliza contagem esperada para replace_text."""
+        if raw_count is None:
+            return 1
+        try:
+            count = int(raw_count)
+        except (TypeError, ValueError):
+            return 1
+        return max(1, count)
+
+    @staticmethod
+    def _resolve_context_lines(raw_context_lines) -> int:
+        """Normaliza contexto de grep com limite conservador de segurança."""
+        if raw_context_lines is None:
+            return 0
+        try:
+            requested = int(raw_context_lines)
+        except (TypeError, ValueError):
+            return 0
+        if requested <= 0:
+            return 0
+        return min(requested, 10)
 
     @staticmethod
     def _resolve_excluded_search_dirs(raw_exclude_dirs) -> set[str]:
@@ -397,12 +522,30 @@ class FileToolsValidator(ValidatableTool):
                 "para edições parciais use apply_patch"
             )
 
+    def _validate_replace_text(self, call: ToolCall) -> None:
+        """Valida replace_text."""
+        raw_path = call.arguments.get("path")
+        if not raw_path:
+            raise ToolPolicyError("replace_text requer 'path'")
+        self._resolve_workspace_or_staging_path(str(raw_path))
+        if not str(call.arguments.get("old", "")):
+            raise ToolPolicyError("replace_text requer 'old' não vazio")
+        if "new" not in call.arguments:
+            raise ToolPolicyError("replace_text requer 'new'")
+
     def _validate_grep_search(self, call: ToolCall) -> None:
         """Valida grep_search."""
         self._resolve_workspace_or_staging_path(str(call.arguments.get("path", ".")))
         pattern = str(call.arguments.get("pattern", "")).strip()
         if not pattern:
             raise ToolPolicyError("grep_search requer um padrão não vazio")
+
+    def _validate_inspect_symbols(self, call: ToolCall) -> None:
+        """Valida inspect_symbols."""
+        raw_path = call.arguments.get("path")
+        if not raw_path:
+            raise ToolPolicyError("inspect_symbols requer 'path'")
+        self._resolve_workspace_or_staging_path(str(raw_path))
 
     def _validate_remove_file(self, call: ToolCall) -> None:
         """Valida remove_file."""
