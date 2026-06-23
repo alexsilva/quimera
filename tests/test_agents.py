@@ -1807,12 +1807,11 @@ def test_call_api_passes_cancel_event_to_driver(renderer):
 
 
 def test_call_api_renders_openai_preview_for_non_approval_tools(renderer):
-    """No driver OpenAI, tools sem approval devem exibir preview operacional."""
+    """No driver OpenAI, o set_tool_preview_callback deve chamar _show_muted com o ToolPreview."""
     from types import SimpleNamespace
 
     client = AgentClient(renderer)
     tool_executor = MagicMock()
-    tool_executor.would_require_approval.return_value = False
     client.tool_executor = tool_executor
 
     plugin = SimpleNamespace(
@@ -1830,7 +1829,9 @@ def test_call_api_renders_openai_preview_for_non_approval_tools(renderer):
         mock_driver = MagicMock()
 
         def run_with_tool(**kwargs):
-            kwargs["on_tool_call"]("read_file", {"path": "README.md"})
+            # O executor invoca o preview callback para tools sem approval
+            cb = tool_executor.set_tool_preview_callback.call_args[0][0]
+            cb("read_file", {"path": "README.md"})
             return "ok"
 
         mock_driver.run.side_effect = run_with_tool
@@ -1847,13 +1848,12 @@ def test_call_api_renders_openai_preview_for_non_approval_tools(renderer):
 
 
 def test_call_api_routes_openai_preview_through_muted_reporter(renderer):
-    """Preview operacional deve usar callback neutro quando fornecido pelo app."""
+    """Preview operacional deve usar muted_reporter quando fornecido pelo app."""
     from types import SimpleNamespace
 
     muted_reporter = MagicMock()
     client = AgentClient(renderer, muted_reporter=muted_reporter)
     tool_executor = MagicMock()
-    tool_executor.would_require_approval.return_value = False
     client.tool_executor = tool_executor
 
     plugin = SimpleNamespace(
@@ -1871,7 +1871,8 @@ def test_call_api_routes_openai_preview_through_muted_reporter(renderer):
         mock_driver = MagicMock()
 
         def run_with_tool(**kwargs):
-            kwargs["on_tool_call"]("read_file", {"path": "README.md"})
+            cb = tool_executor.set_tool_preview_callback.call_args[0][0]
+            cb("read_file", {"path": "README.md"})
             return "ok"
 
         mock_driver.run.side_effect = run_with_tool
@@ -1889,12 +1890,11 @@ def test_call_api_routes_openai_preview_through_muted_reporter(renderer):
 
 
 def test_call_api_skips_openai_preview_when_tool_requires_approval(renderer):
-    """Preview não deve ser exibido para tools que já passam pelo fluxo de aprovação."""
+    """Para tools de aprovação, o executor não invoca _tool_preview_callback — nada deve ser exibido."""
     from types import SimpleNamespace
 
     client = AgentClient(renderer)
     tool_executor = MagicMock()
-    tool_executor.would_require_approval.return_value = True
     client.tool_executor = tool_executor
 
     plugin = SimpleNamespace(
@@ -1912,7 +1912,7 @@ def test_call_api_skips_openai_preview_when_tool_requires_approval(renderer):
         mock_driver = MagicMock()
 
         def run_with_tool(**kwargs):
-            kwargs["on_tool_call"]("exec_command", {"cmd": "ls"})
+            # Executor não invoca o preview callback para tools de aprovação
             return "ok"
 
         mock_driver.run.side_effect = run_with_tool
@@ -1921,6 +1921,7 @@ def test_call_api_skips_openai_preview_when_tool_requires_approval(renderer):
         result = client._call_api("test-agent", plugin, "prompt")
 
     assert result == "ok"
+    renderer.show_system_neutral.assert_not_called()
 
 
 def test_call_api_masks_sensitive_fields_in_openai_preview(renderer):
@@ -1930,7 +1931,6 @@ def test_call_api_masks_sensitive_fields_in_openai_preview(renderer):
     muted_reporter = MagicMock()
     client = AgentClient(renderer, muted_reporter=muted_reporter)
     tool_executor = MagicMock()
-    tool_executor.would_require_approval.return_value = False
     client.tool_executor = tool_executor
 
     plugin = SimpleNamespace(
@@ -1948,7 +1948,8 @@ def test_call_api_masks_sensitive_fields_in_openai_preview(renderer):
         mock_driver = MagicMock()
 
         def run_with_tool(**kwargs):
-            kwargs["on_tool_call"](
+            cb = tool_executor.set_tool_preview_callback.call_args[0][0]
+            cb(
                 "custom_tool",
                 {
                     "path": "README.md",

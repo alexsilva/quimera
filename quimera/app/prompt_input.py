@@ -379,6 +379,25 @@ class InputGate:
             self._running_context = None
             self._set_active_state(False)
 
+    def read_plain_input(self, prompt: str) -> str:
+        """Le uma resposta curta sem regua, toolbar, placeholder ou completer."""
+        self._set_active_state(True)
+        with self._clock_condition:
+            self._clock_active = False
+            self._clock_condition.notify_all()
+        try:
+            self._flush_renderer()
+            if self._session is not None:
+                return self._session.prompt(
+                    prompt,
+                    complete_while_typing=False,
+                    vi_mode=False,
+                )
+            return input(prompt)
+        finally:
+            self._running_context = None
+            self._set_active_state(False)
+
     def read_selection_in_terminal(
         self, question: str, options: list[str], timeout: float = 300.0
     ) -> tuple[int, str] | None:
@@ -410,13 +429,10 @@ class InputGate:
             import os as _os
             import select as _sel
             renderer = self._renderer
-            suspended = False
-            if renderer is not None:
-                try:
-                    renderer.request_floor(timeout=1.0)
-                    suspended = True
-                except Exception:
-                    pass
+            _request_floor = getattr(renderer, "request_floor", None) if renderer is not None else None
+            _release_floor = getattr(renderer, "release_floor", None) if renderer is not None else None
+            if callable(_request_floor):
+                _request_floor()
             try:
                 self._flush_renderer()
                 error: str | None = None
@@ -437,22 +453,14 @@ class InputGate:
                     sys.stdout.write("\n".join(lines))
                     sys.stdout.flush()
 
-                    raw_line: str | None = None
-                    fd: int | None = None
                     try:
-                        fd = sys.stdin.fileno()
-                        ready, _, _ = _sel.select([fd], [], [], remaining)
+                        ready, _, _ = _sel.select([sys.stdin], [], [], remaining)
                         if not ready:
                             return
-                    except (TypeError, ValueError, OSError):
-                        fd = None
+                    except Exception:
+                        return
                     try:
-                        if fd is not None:
-                            raw = _os.read(fd, 4096)
-                            if raw:
-                                raw_line = raw.decode("utf-8", errors="replace")
-                        else:
-                            raw_line = sys.stdin.readline()
+                        raw_line = sys.stdin.readline()
                     except (EOFError, OSError):
                         return
                     if not raw_line:
@@ -471,11 +479,8 @@ class InputGate:
                             return
                     error = f"'{raw}' inválido — use 1-{len(options)} ou o texto exato"
             finally:
-                if suspended and renderer is not None:
-                    try:
-                        renderer.release_floor(timeout=1.0)
-                    except Exception:
-                        pass
+                if callable(_release_floor):
+                    _release_floor()
                 done.set()
 
         async def _coro() -> None:
@@ -564,12 +569,18 @@ class InputGate:
             return False
         return True
 
-    def read_input_in_terminal(self, prompt: str, timeout: float = 300.0) -> str | None:
+    def read_input_in_terminal(
+        self, prompt: str, timeout: float = 300.0, render_card_fn=None
+    ) -> str | None:
         """Lê uma linha via run_in_terminal — seguro de chamar de qualquer thread.
 
         Suspende o prompt_toolkit ativo, restaura o terminal para cooked mode,
         exibe o prompt e lê a resposta do usuário. Seguro de chamar de threads
         de background (ex: servidor MCP) enquanto a main thread está no prompt.
+
+        Se ``render_card_fn`` for fornecida, é chamada com o Console do renderer
+        imediatamente após ``request_floor`` para exibir o contexto da pergunta
+        como Rich renderable permanente antes do prompt de input cru.
 
         Returns:
             String com a resposta do usuário, ou None se timeout/erro ou loop parado.
@@ -597,16 +608,23 @@ class InputGate:
         def _read_sync() -> None:
             import select as _sel
             renderer = self._renderer
-            suspended = False
-            if renderer is not None:
-                try:
-                    renderer.request_floor(timeout=1.0)
-                    suspended = True
-                except Exception:
-                    pass
+            _request_floor = getattr(renderer, "request_floor", None) if renderer is not None else None
+            _release_floor = getattr(renderer, "release_floor", None) if renderer is not None else None
+            if callable(_request_floor):
+                _request_floor()
             try:
                 self._flush_renderer()
-                sys.stdout.write(prompt)
+                # Exibe card Rich (com contexto) ou cai no prompt cru.
+                console = getattr(renderer, "_console", None) if renderer is not None else None
+                if render_card_fn is not None and console is not None:
+                    try:
+                        render_card_fn(console)
+                        # Após o card, exibe apenas o marcador de input.
+                        sys.stdout.write("> ")
+                    except Exception:
+                        sys.stdout.write(prompt)
+                else:
+                    sys.stdout.write(prompt)
                 sys.stdout.flush()
                 try:
                     ready, _, _ = _sel.select([sys.stdin], [], [], timeout)
@@ -628,11 +646,8 @@ class InputGate:
             except (EOFError, OSError):
                 result[0] = ""
             finally:
-                if suspended and renderer is not None:
-                    try:
-                        renderer.release_floor(timeout=1.0)
-                    except Exception:
-                        pass
+                if callable(_release_floor):
+                    _release_floor()
                 done.set()
 
         async def _coro() -> None:
@@ -652,7 +667,11 @@ class InputGate:
         return result[0]
 
     def read_approval_in_terminal(
-        self, question: str, prompt: str, timeout: float = 300.0
+        self,
+        question: str,
+        prompt: str,
+        timeout: float = 300.0,
+        render_card_fn=None,
     ) -> str | None:
         """Exibe question+prompt e lê a resposta por linha (cooked mode, sem termios).
 
@@ -662,6 +681,11 @@ class InputGate:
 
         Lê uma linha com o mesmo input usado para escrever no chat: o usuário
         digita y/n/a (ou yes/sim/todas) e confirma com Enter.
+
+        Se ``render_card_fn`` for fornecida, é chamada com o Console do renderer
+        depois de ``request_floor`` e imprime o card de aprovação como Rich
+        renderable permanente (com contexto e estilo visual). Caso contrário,
+        imprime ``question`` como texto cru.
 
         Retorna a resposta normalizada (lowercase) ou None se timeout/erro/EOF.
         """
@@ -683,17 +707,25 @@ class InputGate:
         def _approval_sync() -> None:
             import select as _sel
             renderer = self._renderer
-            suspended = False
-            if renderer is not None:
-                try:
-                    renderer.request_floor(timeout=1.0)
-                    suspended = True
-                except Exception:
-                    pass
+            _request_floor = getattr(renderer, "request_floor", None) if renderer is not None else None
+            _release_floor = getattr(renderer, "release_floor", None) if renderer is not None else None
+            if callable(_request_floor):
+                _request_floor()
             try:
                 self._flush_renderer()
                 remaining_s = max(0, int(deadline - _time.monotonic()))
-                sys.stdout.write(question + "\n")
+                # O card é impresso DEPOIS de request_floor: o renderer está suspenso
+                # e o chamador detém o chão, portanto console.print() vai direto ao
+                # terminal sem conflitar com o Live.
+                console = getattr(renderer, "_console", None) if renderer is not None else None
+                if render_card_fn is not None and console is not None:
+                    try:
+                        render_card_fn(console)
+                    except Exception:
+                        sys.stdout.write(question + "\n")
+                        sys.stdout.flush()
+                else:
+                    sys.stdout.write(question + "\n")
                 sys.stdout.write(prompt.rstrip() + f"  [auto em {remaining_s}s] ")
                 sys.stdout.flush()
 
@@ -717,11 +749,8 @@ class InputGate:
                 # já aparece no terminal; não re-ecoar para não duplicar.
                 result[0] = raw_line.rstrip("\n\r").strip().lower()
             finally:
-                if suspended and renderer is not None:
-                    try:
-                        renderer.release_floor(timeout=1.0)
-                    except Exception:
-                        pass
+                if callable(_release_floor):
+                    _release_floor()
                 done.set()
 
         async def _coro() -> None:

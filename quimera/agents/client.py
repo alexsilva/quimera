@@ -17,7 +17,6 @@ from quimera import process_factory as subprocess
 from quimera.sandbox.bwrap import build_bwrap_cmd
 from quimera.spy_output_presenter import SpyOutputPresenter
 from quimera.runtime.drivers.openai_compat import OpenAICompatDriver
-from quimera.runtime.models import ToolCall
 from quimera.runtime.tool_preview import ToolPreview
 from quimera.prompt_templates import PromptText
 
@@ -416,9 +415,28 @@ class AgentClient:
             pause_idle_if=self._pause_idle_if,
         )
 
+        def _pump_tool_input_once() -> bool:
+            """Processa aprovação/ask_user pendente enquanto aguardamos CLI.
+
+            Agentes CLI com MCP podem bloquear esperando a resposta de uma
+            tool. Se essa tool pede aprovação humana, o pedido fica na fila do
+            InputBroker e precisa ser processado pela thread principal que está
+            justamente dentro deste watchdog.
+            """
+            executor = self.tool_executor
+            process_input = getattr(executor, "process_pending_input_once", None)
+            if not callable(process_input):
+                return False
+            try:
+                return bool(process_input())
+            except Exception:
+                _logger.debug("CLI input pump failed", exc_info=True)
+                return False
+
         try:
             if silent:
                 def _on_tick_silent(elapsed):
+                    _pump_tool_input_once()
                     if progress_callback:
                         progress_callback(f"aguardando resposta de {agent or cmd[0]}... {elapsed}s")
 
@@ -506,6 +524,7 @@ class AgentClient:
                     _elapsed = [0]  # mutable cell for on_item closure
 
                     def _on_tick(elapsed):
+                        _pump_tool_input_once()
                         _elapsed[0] = elapsed
                         self.renderer.update_agent_elapsed(agent or cmd[0], elapsed)
                         self.renderer.request_toolbar_refresh()
@@ -822,8 +841,7 @@ class AgentClient:
                 if effective_tool_executor is not None:
                     set_tool_preview = getattr(effective_tool_executor, "set_tool_preview_callback", None)
                     if callable(set_tool_preview):
-                        set_tool_preview(lambda name, args: _logger.info(
-                            "[tool] %s", ToolPreview.build(name, args).removeprefix("⚒ ")))
+                        set_tool_preview(lambda name, args: self._show_muted(ToolPreview.build(name, args)))
                 # Injeta callbacks de spinner no executor para que o approval handler
                 # possa pausar o Live do Rich antes de input() bloqueante, evitando
                 # race condition entre o refresh do spinner e a leitura do stdin.
@@ -848,17 +866,6 @@ class AgentClient:
                             if callable(bind_approval_scope):
                                 previous_scope = bind_approval_scope(approval_scope)
 
-                        def _on_tool_call(name, args):
-                            """Exibe preview formatado para tools sem approval; tools com approval são tratadas pelo approval handler."""
-                            if effective_tool_executor is not None:
-                                try:
-                                    call = ToolCall(name=name, arguments=args)
-                                    if not effective_tool_executor.would_require_approval(call):
-                                        self._show_muted(ToolPreview.build(name, args))
-                                except Exception:
-                                    pass  # preview é best-effort
-
-                        # Registra preview para ferramentas executadas pelo executor
                         result_holder["result"] = driver_instance.run(
                             prompt=prompt,
                             tool_executor=effective_tool_executor,
@@ -867,7 +874,6 @@ class AgentClient:
                             base_dir=self.workspace_tmp_root,
                             quiet=quiet,
                             cancel_event=self._cancel_event,
-                            on_tool_call=_on_tool_call,
                             on_tool_result=(lambda tool_result: self.tool_event_callback(agent, result=tool_result))
                             if self.tool_event_callback else None,
                             on_tool_abort=(
@@ -893,6 +899,14 @@ class AgentClient:
 
                 _api_start = time.time()
                 while t.is_alive():
+                    if effective_tool_executor is not None:
+                        process_input = getattr(
+                            effective_tool_executor,
+                            "process_pending_input_once",
+                            None,
+                        )
+                        if callable(process_input) and process_input():
+                            continue
                     if self._cancel_event.is_set():
                         self.cancel_active_work()
                         t.join(timeout=0.5)

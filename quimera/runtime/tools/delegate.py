@@ -17,7 +17,7 @@ from ...tasks.api import (
     get_job,
     update_job_status,
 )
-from ..approval_broker import TrustedToolExecutionContext
+from ..approval import TrustedToolExecutionContext
 from .base import ToolBase, ValidatableTool
 
 logger = logging.getLogger(__name__)

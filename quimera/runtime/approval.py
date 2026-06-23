@@ -7,7 +7,7 @@ import threading
 import sys
 from abc import ABC, abstractmethod
 
-from .approval_broker import ApprovalBroker
+from .approval_broker import ApprovalBroker, TrustedToolExecutionContext
 
 
 def _emit_approval_message(renderer, message: str) -> None:
@@ -40,6 +40,22 @@ def _extract_renderer(base_handler) -> object | None:
         return None
 
 
+def _static_callable_attr(obj, name: str):
+    """Retorna callable somente quando o atributo existe estaticamente.
+
+    Evita falsos positivos com MagicMock, que fabrica atributos sob demanda.
+    """
+    try:
+        inspect.getattr_static(obj, name)
+    except AttributeError:
+        return None
+    try:
+        value = getattr(obj, name)
+    except Exception:
+        return None
+    return value if callable(value) else None
+
+
 class ApprovalHandler(ABC):
     """Define o contrato de aprovação usado pelo runtime de ferramentas."""
 
@@ -47,6 +63,15 @@ class ApprovalHandler(ABC):
     def approve(self, *, tool_name: str, summary: str) -> bool:
         """Decide se uma ferramenta pode ser executada."""
         raise NotImplementedError
+
+    def approve_request(self, request) -> bool:
+        """Aprova um ApprovalRequest governado pelo ApprovalBroker.
+
+        Handlers continuam sem calcular risco: o request já vem pronto do
+        broker, com summary, risk, route, path, command e contexto auditável.
+        A implementação padrão preserva compatibilidade chamando approve().
+        """
+        return self.approve(tool_name=request.tool_name, summary=request.summary)
 
 
 class _ApprovalCancelled(Exception):
@@ -111,6 +136,9 @@ class ConsoleApprovalHandler(ApprovalHandler):
         self._resume_spinner_fn[thread_id] = resume_spinner_fn
         self._suspend_spinner_fn_default = suspend_spinner_fn
         self._resume_spinner_fn_default = resume_spinner_fn
+        broker_setter = getattr(self._input_broker, "set_spinner_callbacks", None)
+        if callable(broker_setter):
+            broker_setter(suspend_spinner_fn, resume_spinner_fn)
 
     def set_approve_all_callback(self, callback):
         """Define callback chamado quando o usuário digita 'a' (approve all).
@@ -127,6 +155,20 @@ class ConsoleApprovalHandler(ApprovalHandler):
     def set_input_broker(self, broker) -> None:
         """Conecta ao InputBroker centralizado para serializar aprovações."""
         self._input_broker = broker
+        broker_setter = getattr(broker, "set_spinner_callbacks", None)
+        if callable(broker_setter):
+            broker_setter(
+                self._suspend_spinner_fn_default,
+                self._resume_spinner_fn_default,
+            )
+
+    def process_pending_input_once(self) -> bool:
+        """Processa uma pergunta pendente do InputBroker na thread atual."""
+        broker = self._input_broker
+        process = getattr(broker, "process_pending_once", None)
+        if callable(process):
+            return bool(process())
+        return False
 
     def approve(self, *, tool_name: str, summary: str) -> bool:
         """Tenta aprovação interativa, roteando pelo InputBroker quando disponível.
@@ -143,6 +185,10 @@ class ConsoleApprovalHandler(ApprovalHandler):
                 on_approve_all=self._approve_all_callback,
             )
         return self._approve_interactive(tool_name, summary)
+
+    def approve_request(self, request) -> bool:
+        """Renderiza exatamente o preview governado produzido pelo broker."""
+        return self.approve(tool_name=request.tool_name, summary=request.summary)
 
     @staticmethod
     def _is_stdin_interactive() -> bool:
@@ -519,7 +565,8 @@ class PreApprovalHandler(ApprovalHandler):
                 self._thread_scope_keys[thread_id] = scope_key
             return previous
 
-    def approve(self, *, tool_name: str, summary: str) -> bool:
+    def _consume_local_approval(self, tool_name: str, summary: str):
+        """Aplica pre-approve/approve-all local sem chamar handler base."""
         thread_id = threading.get_ident()
         with self._lock:
             if thread_id in self._thread_approve_all:
@@ -551,6 +598,24 @@ class PreApprovalHandler(ApprovalHandler):
                     f"  [pré-aprovado] {tool_name} :: {summary}",
                 )
                 return True
+        return None
+
+    def approve_request(self, request) -> bool:
+        """Aprova request governado sem degradar summary/risco do broker."""
+        local = self._consume_local_approval(request.tool_name, request.summary)
+        if local is not None:
+            return bool(local)
+        approve_request = _static_callable_attr(self._base, "approve_request")
+        if callable(approve_request):
+            return bool(approve_request(request))
+        return self._base.approve(
+            tool_name=request.tool_name, summary=request.summary
+        )
+
+    def approve(self, *, tool_name: str, summary: str) -> bool:
+        local = self._consume_local_approval(tool_name, summary)
+        if local is not None:
+            return bool(local)
         return self._base.approve(tool_name=tool_name, summary=summary)
 
     def reset_approve_all_after_cycle(self) -> None:
@@ -568,17 +633,20 @@ class PreApprovalHandler(ApprovalHandler):
 
 
 class ApprovalManager(ApprovalHandler):
-    """Ponto único de entrada para aprovação de ferramentas.
+    """Composition root local para aprovação de ferramentas.
 
-    Compõe ``ApprovalBroker`` (governança), ``PreApprovalHandler``
-    (pré-aprovação / approve-all) e ``ConsoleApprovalHandler``
-    (prompt interativo) — e delega a cada um conforme a responsabilidade.
+    O manager não reimplementa governança: ele monta o pipeline local de
+    aprovação humana (input/spinner/cancel/approve-all) e usa
+    ``ApprovalBroker`` como engine canônica de autorização, auditoria,
+    escopos e serialização. Assim, handlers continuam pequenos e o broker
+    concentra a decisão robusta usada também pelos boundaries MCP.
     """
 
     def __init__(
         self,
         config,
         *,
+        base_handler: ApprovalHandler | None = None,
         renderer=None,
         input_gate=None,
         input_broker=None,
@@ -591,45 +659,83 @@ class ApprovalManager(ApprovalHandler):
         self.config = config
         self._renderer = renderer
 
-        self._console_handler = ConsoleApprovalHandler(
-            input_fn=input_fn,
-            renderer=renderer,
-            suspend_fn=suspend_fn,
-            resume_fn=resume_fn,
-            cancel_event=cancel_event,
-            cancel_poll_interval=cancel_poll_interval,
-            input_gate=input_gate,
-        )
-        self._console_handler.set_input_broker(input_broker)
+        if base_handler is None:
+            self._console_handler = ConsoleApprovalHandler(
+                input_fn=input_fn,
+                renderer=renderer,
+                suspend_fn=suspend_fn,
+                resume_fn=resume_fn,
+                cancel_event=cancel_event,
+                cancel_poll_interval=cancel_poll_interval,
+                input_gate=input_gate,
+            )
+            self._console_handler.set_input_broker(input_broker)
+        else:
+            self._console_handler = base_handler
+            setter = getattr(self._console_handler, "set_input_broker", None)
+            if callable(setter):
+                setter(input_broker)
 
         self._pre_handler = PreApprovalHandler(self._console_handler)
 
-        self._console_handler.set_approve_all_callback(
-            lambda: self._pre_handler.set_approve_all(True)
-        )
+        setter = getattr(self._console_handler, "set_approve_all_callback", None)
+        if callable(setter):
+            setter(lambda: self._pre_handler.set_approve_all(True))
 
-        self._broker = ApprovalBroker(config, self._pre_handler)
+        self.governance = ApprovalBroker(config, self._pre_handler)
+        # Alias interno mantido para compatibilidade com testes e código legado.
+        self._broker = self.governance
 
     # ── Handler mode (interface ApprovalHandler) ────────────────────
 
     def approve(self, *, tool_name: str, summary: str) -> bool:
         return self._pre_handler.approve(tool_name=tool_name, summary=summary)
 
-    # ── Broker governance ───────────────────────────────────────────
+    def approve_request(self, request) -> bool:
+        """Aprova ApprovalRequest já enriquecido pelo ApprovalBroker."""
+        return self._pre_handler.approve_request(request)
+
+    # ── Authorization governance (ApprovalBroker engine) ─────────────
 
     @property
     def audit_log(self) -> list[dict]:
-        return self._broker.audit_log
+        return self.governance.audit_log
+
+    @property
+    def approval_broker(self):
+        """Engine canônica de governança exposta explicitamente."""
+        return self.governance
 
     def build_context(self, call):
-        return self._broker.build_context(call)
+        return self.governance.build_context(call)
 
     def classify(self, call):
-        return self._broker.classify(call)
+        return self.governance.classify(call)
+
+    def create_authorization_request(
+        self, call, *, permission_error=None, reason=None
+    ):
+        return self.governance.create_request(
+            call, permission_error=permission_error, reason=reason
+        )
 
     def create_request(self, call, *, permission_error=None, reason=None):
-        return self._broker.create_request(
+        """Alias legado para create_authorization_request()."""
+        return self.create_authorization_request(
             call, permission_error=permission_error, reason=reason
+        )
+
+    def authorize_call(
+        self,
+        call,
+        *,
+        needs_policy_approval,
+        permission_error=None,
+    ) -> bool:
+        return self.governance.approve(
+            call,
+            needs_policy_approval=needs_policy_approval,
+            permission_error=permission_error,
         )
 
     def approve_call(
@@ -639,7 +745,21 @@ class ApprovalManager(ApprovalHandler):
         needs_policy_approval,
         permission_error=None,
     ) -> bool:
-        return self._broker.approve(
+        """Alias legado: authorization governada de ToolCall."""
+        return self.authorize_call(
+            call,
+            needs_policy_approval=needs_policy_approval,
+            permission_error=permission_error,
+        )
+
+    def would_prompt_for_call(
+        self,
+        call,
+        *,
+        needs_policy_approval,
+        permission_error=None,
+    ) -> bool:
+        return self.governance.should_request_approval(
             call,
             needs_policy_approval=needs_policy_approval,
             permission_error=permission_error,
@@ -652,22 +772,34 @@ class ApprovalManager(ApprovalHandler):
         needs_policy_approval,
         permission_error=None,
     ) -> bool:
-        return self._broker.should_request_approval(
+        """Alias legado para would_prompt_for_call()."""
+        return self.would_prompt_for_call(
             call,
             needs_policy_approval=needs_policy_approval,
             permission_error=permission_error,
         )
 
+    def guard_execution(self, call):
+        return self.governance.execution_guard(call)
+
     def execution_guard(self, call):
-        return self._broker.execution_guard(call)
+        """Alias legado para guard_execution()."""
+        return self.guard_execution(call)
+
+    def __getattr__(self, name: str):
+        """Delega acessos legados de governança para o broker incorporado."""
+        if name.startswith("__"):
+            raise AttributeError(name)
+        return getattr(self.governance, name)
 
     def approve_scope(self, scope):
-        self._broker.approve_scope(scope)
+        self.governance.approve_scope(scope)
 
     def approve_equivalent(self, request, *, ttl_seconds=None, uses=1):
-        return self._broker.approve_equivalent(
-            request, ttl_seconds=ttl_seconds, uses=uses
-        )
+        kwargs = {"uses": uses}
+        if ttl_seconds is not None:
+            kwargs["ttl_seconds"] = ttl_seconds
+        return self.governance.approve_equivalent(request, **kwargs)
 
     def create_route(
         self,
@@ -677,7 +809,7 @@ class ApprovalManager(ApprovalHandler):
         path=None,
         command=None,
     ):
-        return self._broker.create_route(
+        return self.governance.create_route(
             call, context, path=path, command=command
         )
 
@@ -723,12 +855,22 @@ class ApprovalManager(ApprovalHandler):
     # ── ConsoleHandler (spinner / cancel / input broker) ────────────
 
     def set_spinner_callbacks(self, suspend_spinner_fn, resume_spinner_fn):
-        self._console_handler.set_spinner_callbacks(
-            suspend_spinner_fn, resume_spinner_fn
-        )
+        setter = getattr(self._console_handler, "set_spinner_callbacks", None)
+        if callable(setter):
+            setter(suspend_spinner_fn, resume_spinner_fn)
 
     def set_cancel_event(self, cancel_event) -> None:
-        self._console_handler.set_cancel_event(cancel_event)
+        setter = getattr(self._console_handler, "set_cancel_event", None)
+        if callable(setter):
+            setter(cancel_event)
 
     def set_input_broker(self, broker) -> None:
-        self._console_handler.set_input_broker(broker)
+        setter = getattr(self._console_handler, "set_input_broker", None)
+        if callable(setter):
+            setter(broker)
+
+    def process_pending_input_once(self) -> bool:
+        process = getattr(self._console_handler, "process_pending_input_once", None)
+        if callable(process):
+            return bool(process())
+        return False

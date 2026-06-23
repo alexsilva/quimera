@@ -15,7 +15,6 @@ Cenários tratados:
 from __future__ import annotations
 
 import queue
-import sys
 import threading
 import time
 from dataclasses import dataclass, field
@@ -44,8 +43,13 @@ class _InputRequest:
         self._done.set()
 
     def wait(self) -> Any:
-        self._done.wait()
+        self._done.wait(self.timeout)
+        if not self._done.is_set():
+            self.set_result(self.default)
         return self._result[0]
+
+    def is_done(self) -> bool:
+        return self._done.is_set()
 
 
 class InputBroker:
@@ -58,6 +62,8 @@ class InputBroker:
     def __init__(self, renderer=None, input_gate=None) -> None:
         self._renderer = renderer
         self._input_gate = input_gate
+        self._suspend_spinner_fn = None
+        self._resume_spinner_fn = None
         self._queue: queue.Queue[_InputRequest] = queue.Queue()
         self._consumer = threading.Thread(
             target=self._consumer_loop, daemon=True, name="input-broker"
@@ -69,6 +75,11 @@ class InputBroker:
 
     def set_input_gate(self, gate) -> None:
         self._input_gate = gate
+
+    def set_spinner_callbacks(self, suspend_spinner_fn, resume_spinner_fn) -> None:
+        """Define callbacks para pausar/retomar loading externo durante input."""
+        self._suspend_spinner_fn = suspend_spinner_fn
+        self._resume_spinner_fn = resume_spinner_fn
 
     def _container_for(self, agent: str):
         """Container (janela) do agente, quando o renderer o expõe.
@@ -149,20 +160,55 @@ class InputBroker:
     def _consumer_loop(self) -> None:
         while True:
             req = self._queue.get()
-            pending = self._queue.qsize()
-            if pending > 0:
-                self._emit(f"\n  [{pending} pergunta(s) aguardando na fila]")
-            try:
-                if req.kind == "approval":
-                    result = self._handle_approval(req)
-                else:
-                    result = self._handle_ask_user(req)
-                req.set_result(result)
-            except Exception as exc:
-                req.set_result(req.default)
-                self._emit(f"  [broker de input: erro inesperado: {exc}]")
+            if req.is_done():
+                continue
+            if not self._consumer_can_handle(req):
+                # Sem prompt_toolkit ativo, a thread do broker não deve negar nem
+                # chamar InputGate(prompt). Devolve para a fila para a main thread
+                # processar via process_pending_once() enquanto aguarda o driver.
+                self._queue.put(req)
+                time.sleep(0.05)
+                continue
+            self._process_request(req, allow_direct_gate=False)
 
-    def _handle_approval(self, req: _InputRequest) -> bool:
+    def _consumer_can_handle(self, req: _InputRequest) -> bool:
+        gate = self._input_gate
+        if gate is None:
+            return True
+        is_active = getattr(gate, "is_active", None)
+        return bool(callable(is_active) and is_active())
+
+    def process_pending_once(self) -> bool:
+        """Processa uma pergunta pendente na thread chamadora.
+
+        Deve ser chamado pela main thread enquanto ela aguarda um driver em
+        background. Nesse modo é seguro usar InputGate(prompt), porque estamos
+        no fluxo principal do shell, não na thread consumidora do broker.
+        """
+        try:
+            req = self._queue.get_nowait()
+        except queue.Empty:
+            return False
+        if req.is_done():
+            return False
+        self._process_request(req, allow_direct_gate=True)
+        return True
+
+    def _process_request(self, req: _InputRequest, *, allow_direct_gate: bool) -> None:
+        pending = self._queue.qsize()
+        if pending > 0:
+            self._emit(f"\n  [{pending} pergunta(s) aguardando na fila]")
+        try:
+            if req.kind == "approval":
+                result = self._handle_approval(req, allow_direct_gate=allow_direct_gate)
+            else:
+                result = self._handle_ask_user(req, allow_direct_gate=allow_direct_gate)
+            req.set_result(result)
+        except Exception as exc:
+            req.set_result(req.default)
+            self._emit(f"  [broker de input: erro inesperado: {exc}]")
+
+    def _handle_approval(self, req: _InputRequest, *, allow_direct_gate: bool = False) -> bool:
         start = time.monotonic()
         deadline = start + req.timeout
         prompt = "  Executar? [y/N/a=todas]: "
@@ -201,12 +247,12 @@ class InputBroker:
                         return True
                     return ans in {"y", "yes", "s", "sim"}
 
-        # Sem pt ativo: leitura por linha (cooked mode, sem termios). Mesmo
-        # input usado para escrever no chat — o usuário digita y/n/a + Enter.
+        # Sem pt ativo, não disputamos stdin diretamente. A leitura falha de
+        # forma segura e o pedido segue pelo default/timeout.
         self._suspend_live()
         try:
             self._emit(req.question)
-            answer = self._read_line(prompt, deadline=deadline)
+            answer = self._read_line(prompt, deadline=deadline, allow_direct_gate=allow_direct_gate)
         finally:
             self._resume_live()
         if answer is None:
@@ -226,16 +272,20 @@ class InputBroker:
             return True
         return key in {"y", "yes", "s", "sim"}
 
-    def _handle_ask_user(self, req: _InputRequest) -> tuple[int, str]:
+    def _handle_ask_user(
+        self, req: _InputRequest, *, allow_direct_gate: bool = False
+    ) -> tuple[int, str]:
         start = time.monotonic()
         deadline = start + req.timeout
         if req.options:
             result = self._read_selection(
-                req.question, req.options, deadline=deadline, agent=req.source
+                req.question, req.options, deadline=deadline, agent=req.source,
+                allow_direct_gate=allow_direct_gate,
             )
         else:
             result = self._read_free_text(
-                req.question, deadline=deadline, agent=req.source
+                req.question, deadline=deadline, agent=req.source,
+                allow_direct_gate=allow_direct_gate,
             )
         if result is None:
             idx, val = req.default
@@ -259,6 +309,7 @@ class InputBroker:
         *,
         deadline: float,
         agent: str = "agente",
+        allow_direct_gate: bool = False,
     ) -> tuple[int, str] | None:
         """Lê uma resposta em texto livre com deadline. Retorna (-1, texto)."""
         remaining_s = max(0, int(deadline - time.monotonic()))
@@ -275,12 +326,13 @@ class InputBroker:
                 if answer is None:
                     return None
                 return -1, answer.rstrip("\n\r")
-        # Fallback (sem pt ativo): emite a pergunta e lê por linha.
+        # Fallback (sem pt ativo): emite a pergunta e tenta ler pelo gate.
         self._suspend_live()
         try:
             self._emit(f"\n{question}")
             answer = self._read_line(
-                f"  Resposta (auto em {remaining_s}s): ", deadline=deadline
+                f"  Resposta (auto em {remaining_s}s): ", deadline=deadline,
+                allow_direct_gate=allow_direct_gate,
             )
         finally:
             self._resume_live()
@@ -292,34 +344,38 @@ class InputBroker:
     # Primitivos de leitura com deadline
     # ------------------------------------------------------------------
 
-    def _read_line(self, prompt: str, *, deadline: float) -> str | None:
-        """Lê uma linha com deadline. Usa input_gate se pt ativo, senão select."""
+    def _read_line(
+        self, prompt: str, *, deadline: float, allow_direct_gate: bool = False
+    ) -> str | None:
+        """Lê uma linha somente pelo InputGate seguro.
+
+        Não faça fallback para leitura direta de stdin aqui. O broker pode
+        rodar em thread de background enquanto o prompt principal pertence ao
+        ``prompt_toolkit``; disputar stdin diretamente nessa condição trava o
+        shell inteiro. Usa apenas o caminho ``run_in_terminal`` do gate;
+        chamar ``InputGate(prompt)`` daqui bloquearia porque o broker roda em
+        thread dedicada, fora do loop principal do prompt.
+        """
         gate = self._input_gate
-        if gate is not None:
-            is_active = getattr(gate, "is_active", None)
-            if callable(is_active) and is_active():
-                remaining = max(0.5, deadline - time.monotonic())
-                read_fn = getattr(gate, "read_input_in_terminal", None)
-                if callable(read_fn):
-                    return read_fn(prompt, timeout=remaining)
-        # pt não ativo: select + readline direto
-        import select as _sel
-        sys.stdout.write("\033[?25h")
-        sys.stdout.write(prompt)
-        sys.stdout.flush()
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
+        if gate is None:
             return None
+        read_fn = getattr(gate, "read_input_in_terminal", None)
+        remaining = max(0.5, deadline - time.monotonic())
+        if callable(read_fn):
+            answer = read_fn(prompt, timeout=remaining)
+            if answer is not None:
+                return answer
+        if not allow_direct_gate or deadline - time.monotonic() <= 0:
+            return None
+        plain_read = getattr(gate, "read_plain_input", None)
         try:
-            ready, _, _ = _sel.select([sys.stdin], [], [], remaining)
-        except Exception:
+            if callable(plain_read):
+                return plain_read(prompt)
+            if callable(gate):
+                return gate(prompt)
+        except (EOFError, KeyboardInterrupt, Exception):
             return None
-        if not ready:
-            return None
-        try:
-            return sys.stdin.readline()
-        except (Exception, KeyboardInterrupt):
-            return None
+        return None
 
     def _read_selection(
         self,
@@ -328,23 +384,23 @@ class InputBroker:
         *,
         deadline: float,
         agent: str = "agente",
+        allow_direct_gate: bool = False,
     ) -> tuple[int, str] | None:
         """Seleção interativa com deadline. Usa input_gate se pt ativo."""
         gate = self._input_gate
         if gate is not None:
-            is_active = getattr(gate, "is_active", None)
-            if callable(is_active) and is_active():
-                remaining = max(0.5, deadline - time.monotonic())
-                read_fn = getattr(gate, "read_selection_in_terminal", None)
-                if callable(read_fn):
-                    container, renderer = self._container_for(agent)
-                    if container is not None:
-                        return container.ask_selection(
-                            renderer, gate, question, options, timeout=remaining
-                        )
-                    return read_fn(question, options, timeout=remaining)
-        # pt não ativo: seleção numerada por linha (cooked mode, sem termios)
-        return self._line_select(question, options, deadline=deadline)
+            remaining = max(0.5, deadline - time.monotonic())
+            read_fn = getattr(gate, "read_selection_in_terminal", None)
+            if callable(read_fn):
+                container, renderer = self._container_for(agent)
+                if container is not None:
+                    return container.ask_selection(
+                        renderer, gate, question, options, timeout=remaining
+                    )
+                return read_fn(question, options, timeout=remaining)
+        return self._line_select(
+            question, options, deadline=deadline, allow_direct_gate=allow_direct_gate
+        )
 
     def _line_select(
         self,
@@ -352,9 +408,10 @@ class InputBroker:
         options: list[str],
         *,
         deadline: float,
+        allow_direct_gate: bool = False,
     ) -> tuple[int, str] | None:
-        """Fallback readline sem raw mode (quando termios indisponível ou stdin não-tty)."""
-        if not sys.stdin.isatty():
+        """Seleção numerada usando apenas _read_line/InputGate."""
+        if self._input_gate is None:
             return None
         remaining_s = max(0, int(deadline - time.monotonic()))
         lines = [question]
@@ -368,7 +425,9 @@ class InputBroker:
                 if deadline - time.monotonic() <= 0:
                     return None
                 prompt = f"  Selecione (1-{len(options)}): "
-                answer = self._read_line(prompt, deadline=deadline)
+                answer = self._read_line(
+                    prompt, deadline=deadline, allow_direct_gate=allow_direct_gate
+                )
                 if answer is None:
                     return None
                 stripped = answer.strip()
@@ -392,16 +451,20 @@ class InputBroker:
         impeça o usuário de ver onde digitar.
         """
         renderer = self._renderer
-        if renderer is None:
-            return
-        suspend = getattr(renderer, "suspend_output", None)
-        if callable(suspend):
+        suspend_spinner = self._suspend_spinner_fn
+        if callable(suspend_spinner):
             try:
-                suspend(timeout=1.0)
+                suspend_spinner()
             except Exception:
                 pass
-        sys.stdout.write("\033[?25h")
-        sys.stdout.flush()
+        if renderer is not None:
+            suspend_fn = getattr(renderer, "suspend_output", None)
+            if callable(suspend_fn):
+                try:
+                    suspend_fn()
+                except Exception:
+                    pass
+        print("\033[?25h", end="", flush=True)
 
     def _resume_live(self) -> None:
         """Retoma Rich Live após I/O interativo direto.
@@ -410,12 +473,17 @@ class InputBroker:
         hide explícito aqui para não corromper o prompt_toolkit.
         """
         renderer = self._renderer
-        if renderer is None:
-            return
-        resume = getattr(renderer, "resume_output", None)
-        if callable(resume):
+        if renderer is not None:
+            resume_fn = getattr(renderer, "resume_output", None)
+            if callable(resume_fn):
+                try:
+                    resume_fn()
+                except Exception:
+                    pass
+        resume_spinner = self._resume_spinner_fn
+        if callable(resume_spinner):
             try:
-                resume(timeout=1.0)
+                resume_spinner()
             except Exception:
                 pass
 

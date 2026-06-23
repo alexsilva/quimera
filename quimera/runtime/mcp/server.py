@@ -29,11 +29,10 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import IO, Any
 
-from quimera.runtime.approval import ApprovalManager
+from quimera.runtime.approval import ApprovalManager, TrustedToolExecutionContext
 from quimera.runtime.config import ToolRuntimeConfig
 from quimera.runtime.executor import ToolExecutor
 from quimera.runtime.models import ToolCall
-from quimera.runtime.approval_broker import TrustedToolExecutionContext
 from quimera.runtime.drivers.tool_schemas import resolve_tool_schemas
 from quimera.workspace import Workspace
 

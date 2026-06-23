@@ -429,9 +429,7 @@ class OpenAICompatDriver:
             finally:
                 # Reseta approve-all (não-permanente) ao fim do ciclo de tool hops.
                 if tool_executor is not None:
-                    approval_handler = getattr(tool_executor, "approval_handler", None)
-                    if approval_handler is not None and hasattr(approval_handler, "reset_approve_all_after_cycle"):
-                        approval_handler.reset_approve_all_after_cycle()
+                    tool_executor.reset_approval_cycle()
 
     def _is_invalid_tool_result(self, result: ToolResult) -> bool:
         """Indica se o resultado representa uso de ferramenta fora do contrato conhecido."""
