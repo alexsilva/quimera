@@ -114,6 +114,17 @@ def test_schema_names_match_registered_tools():
     assert actual == expected
 
 
+def test_delegate_schema_mentions_existing_plugins():
+    """Descrição do delegate deve orientar para plugins existentes, não exemplos obsoletos."""
+    schema = next(s for s in TOOL_SCHEMAS if s["function"]["name"] == "delegate")
+    text = json.dumps(schema["function"], ensure_ascii=False)
+
+    for expected_name in {"codex", "claude", "opencode", "antigravity", "ollama-granite4", "list_agents"}:
+        assert expected_name in text
+    assert "opencode-big-pickle" not in text
+    assert "gemini" not in text
+
+
 def test_resolve_tool_schemas_hides_task_tools_without_db():
     """Verifica que Test resolve tool schemas hides task tools without db."""
     mock_executor = MagicMock()
