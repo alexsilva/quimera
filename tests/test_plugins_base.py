@@ -12,6 +12,7 @@ from quimera.plugins.base import (
     PluginRegistry,
     _connection_from_dict,
     _dynamic_plugin_metadata,
+    _sanitize_dynamic_plugin_metadata,
     _humanize_agent_name,
     all_names,
     all_plugins,
@@ -121,6 +122,36 @@ def test_register_dynamic_plugin_with_metadata():
     plugin = register_dynamic_plugin("dyntest3", metadata=meta)
     assert plugin.icon == "🔥"
     assert plugin.base_tier == 3
+
+
+def test_sanitize_dynamic_plugin_metadata_drops_private_and_identity_fields():
+    """Metadata persistido não pode injetar campos privados nem trocar identidade."""
+    sanitized = _sanitize_dynamic_plugin_metadata({
+        "name": "evil",
+        "prefix": "/safe",
+        "_mcp_token": "secret",
+        "_connection_override": {"type": "cli"},
+        "supports_tools": False,
+    })
+
+    assert sanitized == {"prefix": "/safe", "supports_tools": False}
+
+
+def test_register_dynamic_plugin_ignores_unsafe_metadata_fields():
+    """Campos desconhecidos/privados em metadata não quebram nem contaminam plugin."""
+    plugin = register_dynamic_plugin(
+        "safeagent",
+        metadata={
+            "name": "evil",
+            "_mcp_token": "secret",
+            "unknown_field": "boom",
+            "icon": "🛡️",
+        },
+    )
+
+    assert plugin.name == "safeagent"
+    assert plugin.icon == "🛡️"
+    assert plugin._mcp_token is None
 
 
 def test_register_dynamic_plugin_inherits_base():
