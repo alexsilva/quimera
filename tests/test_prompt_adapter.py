@@ -124,7 +124,7 @@ def test_build_openai_messages_uses_plain_titles_without_instructional_text():
     messages = _build_openai_messages_from_prompt(_rendered(prompt, PromptKind.CHAT))
 
     assert messages[0]["content"] == "Identificação\n\nVocê é OPENAI."
-    assert messages[1]["content"] == "Conversa recente\n\nUSER: ação antiga"
+    assert messages[1]["content"] == "USER: ação antiga"
     assert "Não trate este bloco" not in messages[0]["content"]
     assert "Use para evitar duplicação" not in messages[1]["content"]
 

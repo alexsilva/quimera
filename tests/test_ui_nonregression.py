@@ -198,7 +198,7 @@ class TestLongMessages:
         )
         renderer.flush()
         rendered = renderer._console.export_text()
-        assert "exec_command" in rendered
+        assert "TOOLS: 1 chamadas · 1 ok · 0 erro · 100ms" in rendered
 
 
 # ===========================================================================
@@ -246,7 +246,7 @@ class TestStreamSummarySequence:
         )
         rec.flush()
         rendered = rec._console.export_text()
-        assert "bash" in rendered
+        assert "TOOLS: 1 chamadas · 1 ok · 0 erro · 5ms" in rendered
 
     def test_stream_content_then_show_message_different_content_not_suppressed(self, rec):
         """show_message com conteúdo DIFERENTE do stream não é suprimido."""
@@ -283,7 +283,7 @@ class TestStreamSummarySequence:
             )
             rec.flush()
         rendered = rec._console.export_text()
-        assert "write_file" in rendered
+        assert "TOOLS: 1 chamadas · 1 ok · 0 erro · 12ms" in rendered
 
     def test_abort_stream_then_error_does_not_leave_blank_line(self, rec):
         """Fechar stream antes de erro não deve deixar linha vazia extra."""

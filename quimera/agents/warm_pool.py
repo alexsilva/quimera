@@ -64,6 +64,8 @@ class WarmPool:
         Se o processo já expirou (morreu antes do uso), descarta silenciosamente
         e retorna ``None`` para que o chamador crie um novo processo normal.
         """
+        if not cmd:
+            return None
         key = self._make_key(cmd, cwd, extra_env)
         with self._lock:
             slot = self._slots.pop(key, None)
@@ -82,6 +84,8 @@ class WarmPool:
         A deduplicação garante que apenas uma thread de aquecimento esteja em
         andamento por chave a qualquer momento.
         """
+        if not cmd:
+            return
         if self._shutdown:
             return
         key = self._make_key(cmd, cwd, extra_env)

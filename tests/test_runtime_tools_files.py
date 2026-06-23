@@ -147,6 +147,27 @@ def test_write_file_does_not_mutate_allowed_read_root(tmp_path):
     assert not (read_root / "created.txt").exists()
 
 
+def test_write_file_does_not_mutate_allowed_read_root(tmp_path):
+    """allowed_read_roots são leitura; mutações continuam limitadas à workspace."""
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    read_root = tmp_path / "read-root"
+    read_root.mkdir()
+    config = ToolRuntimeConfig(
+        workspace_root=workspace,
+        allowed_read_roots=[workspace, read_root],
+    )
+    tools = FileTools(config)
+
+    call = ToolCall(
+        name="write_file",
+        arguments={"path": f"../{read_root.name}/created.txt", "content": "x"},
+    )
+    with pytest.raises(ValueError, match="Path fora da workspace"):
+        tools.write_file(call)
+    assert not (read_root / "created.txt").exists()
+
+
 def test_file_tools_grep_search_staging(tools, config):
     """Verifica que grep_search busca também no staging."""
     # Line 114-116 coverage
@@ -261,6 +282,29 @@ def test_remove_file_outside_workspace(tools, config):
     call = ToolCall(name="remove_file", arguments={"path": "../../etc/passwd", "dry_run": False})
     with pytest.raises(ValueError, match="Path fora da workspace"):
         tools.remove_file(call)
+
+
+def test_remove_file_does_not_mutate_allowed_read_root(tmp_path):
+    """remove_file também não opera em allowed_read_roots fora da workspace."""
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    read_root = tmp_path / "read-root"
+    read_root.mkdir()
+    protected = read_root / "protected.txt"
+    protected.write_text("keep", encoding="utf-8")
+    config = ToolRuntimeConfig(
+        workspace_root=workspace,
+        allowed_read_roots=[workspace, read_root],
+    )
+    tools = FileTools(config)
+
+    call = ToolCall(
+        name="remove_file",
+        arguments={"path": f"../{read_root.name}/protected.txt", "dry_run": False},
+    )
+    with pytest.raises(ValueError, match="Path fora da workspace"):
+        tools.remove_file(call)
+    assert protected.exists()
 
 
 def test_remove_file_does_not_mutate_allowed_read_root(tmp_path):

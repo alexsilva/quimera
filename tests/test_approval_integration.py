@@ -81,6 +81,12 @@ def _make_handler():
     return ApprovalManager(None, input_fn=lambda _: "n")
 
 
+def _force_console_deny(handler: ApprovalManager) -> None:
+    """Evita prompt real quando o teste espera queda para aprovação humana."""
+    handler._pre_handler._base.approve = lambda *, tool_name, summary: False
+    handler._pre_handler._base.approve_request = lambda request: False
+
+
 def test_pre_approve_consumido_na_proxima_chamada():
     """pre_approve() aprova a próxima approve(); a segunda volta a negar."""
     handler = _make_handler()
@@ -170,6 +176,7 @@ def test_approve_all_command_mantem_aprovacao_apos_ciclo(tmp_path: Path):
     app = QuimeraApp(cwd=tmp_path)
     handler = app._approval_handler
     # No QuimeraApp, approve-all não é permanente por padrão
+    _force_console_deny(handler)
     app.system_layer.handle_command(CMD_APPROVE_ALL)
     handler.reset_approve_all_after_cycle()
     # Não-permanente: reseta
@@ -181,6 +188,7 @@ def test_approve_command_pre_aprova(tmp_path: Path):
     app = QuimeraApp(cwd=tmp_path)
     handler = app._approval_handler
     assert isinstance(handler, ApprovalManager)
+    _force_console_deny(handler)
 
     app.system_layer.handle_command(CMD_APPROVE)
 
@@ -193,6 +201,7 @@ def test_approve_command_multiplas_vezes(tmp_path: Path):
     """Cada /approve dá uma pré-aprovação."""
     app = QuimeraApp(cwd=tmp_path)
     handler = app._approval_handler
+    _force_console_deny(handler)
 
     app.system_layer.handle_command(CMD_APPROVE)
     assert handler.approve(tool_name="test", summary="x") is True
