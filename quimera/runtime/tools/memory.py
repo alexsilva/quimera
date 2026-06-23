@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 
-from quimera.runtime.approval_broker import TrustedToolExecutionContext
+from quimera.runtime.approval import TrustedToolExecutionContext
 from quimera.workspace_memory import WorkspaceMemoryStore
 
 from ..config import ToolRuntimeConfig

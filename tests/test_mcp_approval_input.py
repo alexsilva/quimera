@@ -37,6 +37,7 @@ import pytest
 from quimera.app.prompt_input import InputGate
 from quimera.runtime.approval import ApprovalManager
 from quimera.runtime.config import ToolRuntimeConfig
+from quimera.runtime.input_broker import InputBroker
 
 
 _cfg = ToolRuntimeConfig(workspace_root=Path("/tmp"))
@@ -357,6 +358,58 @@ def test_approval_inactive_gate_xthread_falls_back_to_regular_input():
     assert not t.is_alive(), "approve() ficou bloqueado na thread de background"
     assert result_holder.get("result") is True
     mock_gate.read_input_in_terminal.assert_not_called()
+
+
+def test_input_broker_read_line_uses_gate_even_when_inactive():
+    """InputBroker deve tentar o InputGate mesmo quando is_active() está False."""
+    gate = MagicMock()
+    gate.is_active.return_value = False
+    gate.read_input_in_terminal.return_value = "y"
+
+    broker = InputBroker(input_gate=gate)
+
+    result = broker._read_line("  Executar? [y/N/a=todas]: ", deadline=time.monotonic() + 10)
+
+    assert result == "y"
+    gate.read_input_in_terminal.assert_called_once()
+
+
+def test_input_broker_read_line_does_not_call_input_gate_directly_when_terminal_read_unavailable():
+    """InputBroker não deve chamar InputGate(prompt) pela thread do broker."""
+    gate = MagicMock()
+    gate.read_input_in_terminal.return_value = None
+
+    broker = InputBroker(input_gate=gate)
+
+    result = broker._read_line("  Executar? [y/N/a=todas]: ", deadline=time.monotonic() + 10)
+
+    assert result is None
+    gate.read_input_in_terminal.assert_called_once()
+    gate.assert_not_called()
+
+
+def test_input_broker_read_line_without_gate_fails_safe():
+    """Sem InputGate, InputBroker falha seguro e não consome stdin diretamente."""
+    broker = InputBroker(input_gate=None)
+
+    result = broker._read_line("  Executar? [y/N/a=todas]: ", deadline=time.monotonic() + 10)
+
+    assert result is None
+
+
+def test_input_broker_suspend_live_pauses_and_resumes_spinner_callbacks():
+    """InputBroker deve pausar o loading externo antes de prompt interativo."""
+    events = []
+    broker = InputBroker(input_gate=None)
+    broker.set_spinner_callbacks(
+        lambda: events.append("suspend"),
+        lambda: events.append("resume"),
+    )
+
+    broker._suspend_live()
+    broker._resume_live()
+
+    assert events == ["suspend", "resume"]
 
 
 # ─────────────────────────────────────────────────────────────────────────────

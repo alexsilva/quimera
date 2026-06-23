@@ -4,6 +4,7 @@ from __future__ import annotations
 import threading
 import time
 import uuid
+import inspect
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import Enum
@@ -331,11 +332,17 @@ class ApprovalBroker:
             return True
 
         with self._prompt_lock:
-            approved = bool(
-                self._approval_handler.approve(
-                    tool_name=call.name, summary=request.summary
-                )
+            approve_request = _static_callable_attr(
+                self._approval_handler, "approve_request"
             )
+            if callable(approve_request):
+                approved = bool(approve_request(request))
+            else:
+                approved = bool(
+                    self._approval_handler.approve(
+                        tool_name=call.name, summary=request.summary
+                    )
+                )
         self._record(
             "approved" if approved else "denied",
             request,
@@ -712,3 +719,21 @@ def _extract_command(call: ToolCall) -> str | None:
             str(call.arguments.get("cmd") or call.arguments.get("command") or "")
         ).strip() or None
     return None
+
+
+def _static_callable_attr(obj: Any, name: str):
+    """Retorna atributo chamável somente se ele existir estaticamente.
+
+    Evita falsos positivos com mocks dinâmicos: ``MagicMock`` cria qualquer
+    atributo em ``getattr()``, o que faria o broker acreditar que um handler
+    legado suporta ``approve_request`` e aprovaria com retorno truthy de mock.
+    """
+    try:
+        inspect.getattr_static(obj, name)
+    except AttributeError:
+        return None
+    try:
+        value = getattr(obj, name)
+    except Exception:
+        return None
+    return value if callable(value) else None

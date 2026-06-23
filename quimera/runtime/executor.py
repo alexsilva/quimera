@@ -17,8 +17,7 @@ from .tools import shell as shell_tools
 from .tools import tasks as tasks_tools
 from .tools import todo as todo_tools
 from .tools import web as web_tools
-from .approval_broker import ApprovalBroker
-from .approval import ApprovalManager
+from .approval import ApprovalHandler, ApprovalManager
 
 
 class ToolExecutor:
@@ -32,24 +31,35 @@ class ToolExecutor:
     def __init__(
             self,
             config: ToolRuntimeConfig,
-            approval_handler,
+            approval_handler: ApprovalManager | ApprovalHandler | None,
             registry: ToolRegistry | None = None,
             policy: ToolPolicy | None = None,
     ) -> None:
         """Inicializa uma instância de ToolExecutor."""
         self.config = config
-        self._approval_handler = approval_handler
+        self.approval_manager = self._coerce_approval_manager(config, approval_handler)
+        self._approval_handler = approval_handler or self.approval_manager
+        # Alias público mantido para compatibilidade. O runtime interno usa o
+        # manager; quem precisa da engine canônica pode acessar
+        # ``approval_manager.governance`` explicitamente.
+        self.approval_broker = self.approval_manager
+        self.approval_governance = self.approval_manager.governance
         self.registry = registry or ToolRegistry()
         self.policy = policy or ToolPolicy(config)
         self._tool_preview_callback = None
         self._tool_progress_callback = None
-        if isinstance(approval_handler, ApprovalManager):
-            self.approval_broker = approval_handler
-        else:
-            self.approval_broker = ApprovalBroker(config, approval_handler)
         self._delegate_tools = None
         self._interaction_tools = None
         self._register_builtin_tools()
+
+    @staticmethod
+    def _coerce_approval_manager(
+        config: ToolRuntimeConfig,
+        approval_handler: ApprovalManager | ApprovalHandler | None,
+    ) -> ApprovalManager:
+        if isinstance(approval_handler, ApprovalManager):
+            return approval_handler
+        return ApprovalManager(config, base_handler=approval_handler)
 
     def set_tool_progress_callback(self, fn) -> None:
         """Registra um callback para reporte de progresso durante a execução de tools.
@@ -77,28 +87,29 @@ class ToolExecutor:
         return self._approval_handler
 
     def set_spinner_callbacks(self, suspend_spinner_fn, resume_spinner_fn):
-        setter = getattr(self._approval_handler, 'set_spinner_callbacks', None)
-        if callable(setter):
-            setter(suspend_spinner_fn, resume_spinner_fn)
+        self.approval_manager.set_spinner_callbacks(suspend_spinner_fn, resume_spinner_fn)
 
     def set_approval_cancel_event(self, cancel_event) -> None:
-        setter = getattr(self._approval_handler, "set_cancel_event", None)
-        if callable(setter):
-            setter(cancel_event)
+        self.approval_manager.set_cancel_event(cancel_event)
+
+    def process_pending_input_once(self) -> bool:
+        """Processa uma pergunta pendente do InputBroker na thread atual."""
+        process = getattr(self.approval_manager, "process_pending_input_once", None)
+        if callable(process):
+            return bool(process())
+        return False
+
+    def reset_approval_cycle(self) -> None:
+        """Reseta estado de approve-all não-permanente ao fim do ciclo de tool hops."""
+        self.approval_manager.reset_approve_all_after_cycle()
 
     def get_thread_approval_scope(self) -> str | None:
         """Lê o escopo de aprovação propagável da thread atual."""
-        getter = getattr(self._approval_handler, "get_thread_approval_scope", None)
-        if callable(getter):
-            return getter()
-        return None
+        return self.approval_manager.get_thread_approval_scope()
 
     def bind_thread_approval_scope(self, scope_key: str | None) -> str | None:
         """Associa temporariamente um escopo de aprovação à thread atual."""
-        binder = getattr(self._approval_handler, "bind_thread_approval_scope", None)
-        if callable(binder):
-            return binder(scope_key)
-        return None
+        return self.approval_manager.bind_thread_approval_scope(scope_key)
 
     def would_require_approval(self, call: ToolCall) -> bool:
         """Retorna True se a chamada passaria pelo fluxo de aprovação.
@@ -115,7 +126,7 @@ class ToolExecutor:
             if self.policy.requires_path_permission(normalized_call):
                 permission_error = self.policy.check_path_permission(normalized_call)
             needs_approval = self.policy.requires_approval(normalized_call)
-            return self.approval_broker.should_request_approval(
+            return self.approval_manager.would_prompt_for_call(
                 normalized_call,
                 needs_policy_approval=bool(needs_approval),
                 permission_error=permission_error,
@@ -199,7 +210,7 @@ class ToolExecutor:
             needs_approval = self.policy.requires_approval(normalized_call)
             has_permission_issue = permission_error is not None
 
-            approved = self.approval_broker.approve_call(
+            approved = self.approval_manager.authorize_call(
                 normalized_call,
                 needs_policy_approval=bool(needs_approval),
                 permission_error=permission_error,
@@ -217,7 +228,7 @@ class ToolExecutor:
                     self._tool_preview_callback(normalized_call.name, normalized_call.arguments)
 
             handler = self.registry.get(normalized_call.name)
-            with self.approval_broker.execution_guard(normalized_call):
+            with self.approval_manager.guard_execution(normalized_call):
                 return handler(normalized_call)
         except ToolPolicyError as exc:
             return ToolResult(ok=False, tool_name=normalized_call.name, error=str(exc))

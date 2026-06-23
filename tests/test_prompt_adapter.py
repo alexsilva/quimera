@@ -31,8 +31,10 @@ def test_build_openai_messages_from_prompt_uses_current_turn_as_active_user_mess
     messages = _build_openai_messages_from_prompt(_rendered(prompt))
 
     assert messages[-1] == {"role": "user", "content": "Execute pwd via shell usando MCP"}
-    assert all(message["role"] == "system" for message in messages[:-1])
+    # recent_conversation é injetada como "user" para compatibilidade com modelos como Qwen
+    assert messages[-2]["role"] == "user"
     assert "Leia o README" in messages[-2]["content"]
+    assert all(message["role"] == "system" for message in messages[:-2])
     assert "Execute pwd" not in messages[0]["content"]
 
 
@@ -98,7 +100,7 @@ def test_build_openai_messages_preserves_template_order_and_omits_metrics():
         "Identificação\n\nHEADER",
         "DELEGATION",
         "Debug de render ativo\n\nDEBUG",
-        "Conversa recente\n\nHISTORY",
+        "HISTORY",  # recent_conversation é "user": sem prefixo de título
         "CURRENT",
     ]
 

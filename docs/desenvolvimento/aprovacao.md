@@ -7,7 +7,7 @@ A ideia central é:
 1. o agente pede para usar uma ferramenta;
 2. o `ToolExecutor` normaliza e coordena a execução;
 3. o `ToolPolicy` valida regras duras de segurança;
-4. o `ApprovalBroker` decide aprovação, escopo, orçamento, auditoria e locks;
+4. o `ApprovalManager` decide aprovação, escopo, orçamento, auditoria e locks;
 5. só depois a ferramenta real é executada.
 
 ## Visão geral do fluxo
@@ -22,7 +22,7 @@ ToolCall(name, arguments, metadata)
 ToolExecutor
    ├─ normaliza alias e argumentos básicos
    ├─ chama ToolPolicy para validação
-   ├─ chama ApprovalBroker para approval/autoapproval
+   ├─ chama ApprovalManager para approval/autoapproval
    ├─ entra no lock de concorrência quando necessário
    └─ executa handler registrado no ToolRegistry
 ```
@@ -36,8 +36,8 @@ Ele é responsável por:
 - receber um `ToolCall`;
 - normalizar nomes legados, como alias de shell;
 - chamar o `ToolPolicy` antes de executar;
-- consultar o `ApprovalBroker` para saber se precisa aprovação;
-- bloquear chamadas concorrentes incompatíveis via `ApprovalBroker.execution_guard()`;
+- consultar o `ApprovalManager` para saber se precisa aprovação;
+- bloquear chamadas concorrentes incompatíveis via `ApprovalManager.execution_guard()`;
 - buscar a ferramenta no `ToolRegistry`;
 - retornar um `ToolResult` padronizado.
 
@@ -59,9 +59,9 @@ Exemplos de validação:
 
 O `ToolPolicy` responde à pergunta: **“essa chamada é estruturalmente aceitável e não viola uma regra dura?”**
 
-## Papel do `ApprovalBroker`
+## Papel do `ApprovalManager`
 
-O `ApprovalBroker` é a camada central de governança de aprovação.
+O `ApprovalManager` é a camada central de governança de aprovação. Ele incorpora a governança antes isolada no broker e também concentra o handler interativo, pré-aprovação e approve-all.
 
 Ele responde a perguntas como:
 
@@ -235,7 +235,7 @@ O consumo do budget é atômico: se cinco agentes tentarem delegar ao mesmo temp
 
 ## Locks de concorrência
 
-O `ApprovalBroker` também serializa chamadas que podem conflitar.
+O `ApprovalManager` também serializa chamadas que podem conflitar.
 
 ### `apply_patch`
 
@@ -270,7 +270,7 @@ Isso impede que duas escritas para a mesma sessão intercalem bytes e impede que
 
 ## Como usar `audit_log`
 
-O `audit_log` do `ApprovalBroker` registra eventos de aprovação e autoaprovação.
+O `audit_log` do `ApprovalManager` registra eventos de aprovação e autoaprovação.
 
 Ele deve ser usado para depuração e segurança:
 
@@ -288,7 +288,7 @@ Eventos típicos:
 - `approved`: aprovada pelo handler humano/externo;
 - `denied`: negada.
 
-O `audit_log` não substitui logs persistentes de produção, mas é a fonte imediata para inspecionar decisões do broker durante runtime e testes.
+O `audit_log` não substitui logs persistentes de produção, mas é a fonte imediata para inspecionar decisões de aprovação durante runtime e testes.
 
 ## Exemplos
 
@@ -306,7 +306,7 @@ risk = delegation
 Fluxo:
 
 1. `ToolPolicy` valida `target_agent=codex` e `request`.
-2. `ApprovalBroker` classifica como `delegation`.
+2. `ApprovalManager` classifica como `delegation`.
 3. Como é interno, consulta o budget do run.
 4. Se ainda houver orçamento, autoaprova e registra `auto_approved`.
 5. A chamada segue para a ferramenta `delegate`.
