@@ -6,6 +6,7 @@ import pytest
 
 from quimera.runtime.config import ToolRuntimeConfig
 from quimera.runtime.models import ToolCall
+from quimera.runtime.policy import ToolPolicyError
 from quimera.runtime.tools import shell as shell_module
 from quimera.runtime.tools.shell import CommandSession, ShellTool
 
@@ -112,6 +113,21 @@ def test_exec_command_supports_polling_running_process(tmp_path):
     assert finished.data["diff"] == [{"op": "replace", "text": "start\ndone\n"}]
     assert f"session_id: {session_id}" in finished.content
     assert "status: completed" in finished.content
+
+
+def test_exec_command_rejects_workdir_outside_workspace_at_runtime(tmp_path):
+    """Garante que chamada direta também respeita o limite da workspace."""
+    tool = ShellTool(ToolRuntimeConfig(workspace_root=tmp_path))
+    call = ToolCall(
+        name="exec_command",
+        arguments={
+            "cmd": f'{sys.executable} -u -c "print(\'hello\')"',
+            "workdir": str(tmp_path.parent),
+        },
+    )
+
+    with pytest.raises(ToolPolicyError, match="workdir fora da workspace"):
+        tool.exec_command(call)
 
 
 def test_exec_command_supports_stdin_roundtrip(tmp_path):

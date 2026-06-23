@@ -160,6 +160,9 @@ TOOL_SCHEMA = {
         "parameters": {
             "pattern": {"type": "str", "description": "Substring literal a buscar (não suporta regex)", "required": True},
             "path": {"type": "str", "description": "Diretório base", "required": False},
+            "include_glob": {"type": "str|list[str]", "description": "Filtro glob opcional para paths retornados", "required": False},
+            "exclude_dirs": {"type": "list[str]", "description": "Diretórios adicionais a ignorar", "required": False},
+            "max_results": {"type": "int", "description": "Limite opcional de resultados", "required": False},
         },
     },
     "run_shell": {

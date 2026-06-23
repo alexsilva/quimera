@@ -394,10 +394,15 @@ class InputBroker:
             if callable(read_fn):
                 container, renderer = self._container_for(agent)
                 if container is not None:
-                    return container.ask_selection(
+                    result = container.ask_selection(
                         renderer, gate, question, options, timeout=remaining
                     )
-                return read_fn(question, options, timeout=remaining)
+                    if result is not None:
+                        return result
+                else:
+                    result = read_fn(question, options, timeout=remaining)
+                    if result is not None:
+                        return result
         return self._line_select(
             question, options, deadline=deadline, allow_direct_gate=allow_direct_gate
         )

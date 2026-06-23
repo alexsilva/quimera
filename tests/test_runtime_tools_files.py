@@ -126,6 +126,27 @@ def test_file_tools_write_file_overwrite_requires_replace_existing(tools, config
     assert path.read_text() == "changed"
 
 
+def test_write_file_does_not_mutate_allowed_read_root(tmp_path):
+    """allowed_read_roots são leitura; mutações continuam limitadas à workspace."""
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    read_root = tmp_path / "read-root"
+    read_root.mkdir()
+    config = ToolRuntimeConfig(
+        workspace_root=workspace,
+        allowed_read_roots=[workspace, read_root],
+    )
+    tools = FileTools(config)
+
+    call = ToolCall(
+        name="write_file",
+        arguments={"path": f"../{read_root.name}/created.txt", "content": "x"},
+    )
+    with pytest.raises(ValueError, match="Path fora da workspace"):
+        tools.write_file(call)
+    assert not (read_root / "created.txt").exists()
+
+
 def test_file_tools_grep_search_staging(tools, config):
     """Verifica que grep_search busca também no staging."""
     # Line 114-116 coverage
@@ -242,6 +263,29 @@ def test_remove_file_outside_workspace(tools, config):
         tools.remove_file(call)
 
 
+def test_remove_file_does_not_mutate_allowed_read_root(tmp_path):
+    """remove_file também não opera em allowed_read_roots fora da workspace."""
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    read_root = tmp_path / "read-root"
+    read_root.mkdir()
+    protected = read_root / "protected.txt"
+    protected.write_text("keep", encoding="utf-8")
+    config = ToolRuntimeConfig(
+        workspace_root=workspace,
+        allowed_read_roots=[workspace, read_root],
+    )
+    tools = FileTools(config)
+
+    call = ToolCall(
+        name="remove_file",
+        arguments={"path": f"../{read_root.name}/protected.txt", "dry_run": False},
+    )
+    with pytest.raises(ValueError, match="Path fora da workspace"):
+        tools.remove_file(call)
+    assert protected.exists()
+
+
 # ── read_file range de linhas ─────────────────────────────────
 
 def test_read_file_range_start_only(tools, config):
@@ -338,3 +382,53 @@ def test_read_file_staging_with_range(tools, config, tmp_path):
 
     assert result.ok is True
     assert result.content == "y\nz\n"
+
+def test_file_tools_grep_search_skips_noisy_dirs_by_default(tools, config):
+    """grep_search ignora diretorios que poluem a edicao do workspace."""
+    workspace = config.workspace_root
+    (workspace / "app.py").write_text("marker_token\n", encoding="utf-8")
+    cache_dir = workspace / ".venv" / "lib"
+    cache_dir.mkdir(parents=True)
+    (cache_dir / "noise.py").write_text("marker_token\n", encoding="utf-8")
+
+    result = tools.grep_search(
+        ToolCall(name="grep_search", arguments={"pattern": "marker_token"})
+    )
+
+    assert "app.py:1:marker_token" in result.content
+    assert ".venv" not in result.content
+
+
+def test_file_tools_grep_search_supports_include_glob(tools, config):
+    """include_glob restringe resultados ao tipo de arquivo desejado."""
+    workspace = config.workspace_root
+    (workspace / "app.py").write_text("marker_token\n", encoding="utf-8")
+    (workspace / "notes.md").write_text("marker_token\n", encoding="utf-8")
+
+    result = tools.grep_search(
+        ToolCall(
+            name="grep_search",
+            arguments={"pattern": "marker_token", "include_glob": "*.py"},
+        )
+    )
+
+    assert "app.py:1:marker_token" in result.content
+    assert "notes.md" not in result.content
+
+
+def test_file_tools_grep_search_supports_max_results(tools, config):
+    """max_results permite respostas menores para inspecao incremental."""
+    workspace = config.workspace_root
+    (workspace / "a.txt").write_text("marker_token\n", encoding="utf-8")
+    (workspace / "b.txt").write_text("marker_token\n", encoding="utf-8")
+
+    result = tools.grep_search(
+        ToolCall(
+            name="grep_search",
+            arguments={"pattern": "marker_token", "max_results": 1},
+        )
+    )
+
+    assert result.truncated is True
+    assert len(result.content.splitlines()) == 1
+

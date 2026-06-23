@@ -167,6 +167,22 @@ TOOL_SCHEMAS = [
                         "type": "string",
                         "description": "Caminho relativo onde buscar. Use '.' para todo o workspace.",
                     },
+                    "include_glob": {
+                        "oneOf": [
+                            {"type": "string"},
+                            {"type": "array", "items": {"type": "string"}},
+                        ],
+                        "description": "Filtro glob opcional para paths retornados, como '*.py' ou 'quimera/**/*.py'.",
+                    },
+                    "exclude_dirs": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Diretórios adicionais a ignorar durante a busca.",
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Limite opcional de resultados, limitado pelo máximo global da runtime.",
+                    },
                 },
                 "required": ["pattern"],
             },
