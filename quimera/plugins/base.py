@@ -472,6 +472,25 @@ _registry = PluginRegistry()
 
 
 _DYNAMIC_AGENT_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+_SAFE_DYNAMIC_PLUGIN_METADATA_KEYS = frozenset({
+    "avoid_task_types",
+    "base",
+    "base_tier",
+    "capabilities",
+    "dynamic",
+    "has_builtin_tools",
+    "icon",
+    "prefix",
+    "preferred_task_types",
+    "runtime_rw_paths",
+    "style",
+    "supports_code_editing",
+    "supports_long_context",
+    "supports_task_execution",
+    "supports_tools",
+    "supports_warm_pool",
+    "tool_use_reliability",
+})
 
 
 def is_valid_agent_name(name: str) -> bool:
@@ -504,6 +523,17 @@ def _dynamic_plugin_metadata(name: str) -> dict:
     }
 
 
+def _sanitize_dynamic_plugin_metadata(metadata: dict | None) -> dict:
+    """Mantém apenas metadados persistíveis e seguros para plugins dinâmicos."""
+    if not isinstance(metadata, dict):
+        return {}
+    return {
+        key: value
+        for key, value in metadata.items()
+        if key in _SAFE_DYNAMIC_PLUGIN_METADATA_KEYS
+    }
+
+
 def register_dynamic_plugin(
     name: str,
     connection: Connection | None = None,
@@ -517,8 +547,7 @@ def register_dynamic_plugin(
         raise ValueError(f"Nome de agente inválido: {name}")
 
     plugin_data = _dynamic_plugin_metadata(normalized)
-    if metadata:
-        plugin_data.update(metadata)
+    plugin_data.update(_sanitize_dynamic_plugin_metadata(metadata))
 
     # Inherit non-serializable fields (spy formatter) from a named base plugin
     base_name = plugin_data.pop("base", None)
