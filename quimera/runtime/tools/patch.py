@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from difflib import SequenceMatcher
 from pathlib import Path
 
 from ..config import ToolRuntimeConfig
@@ -146,6 +147,38 @@ class PatchTool(ToolBase):
                 return idx
         return -1
 
+    @staticmethod
+    def _format_lines(lines: list[str], *, limit: int = 5) -> str:
+        """Formata um pequeno bloco de linhas para diagnóstico de patch."""
+        shown = lines[:limit]
+        suffix = "" if len(lines) <= limit else f"\n... (+{len(lines) - limit} linhas)"
+        return "\n".join(shown) + suffix if shown else "<vazio>"
+
+    def _missing_hunk_error(self, op: UpdateFileOp, old_chunk: list[str], lines: list[str]) -> PatchApplyError:
+        """Cria erro acionável quando um hunk não encontra correspondência."""
+        if not old_chunk:
+            return PatchApplyError(f"Hunk vazio não encontrado em {op.path}")
+        window_size = len(old_chunk)
+        best_index = -1
+        best_ratio = -1.0
+        for idx in range(0, max(len(lines) - window_size + 1, 1)):
+            window = lines[idx: idx + window_size]
+            ratio = SequenceMatcher(None, "\n".join(old_chunk), "\n".join(window)).ratio()
+            if ratio > best_ratio:
+                best_ratio = ratio
+                best_index = idx
+        expected = self._format_lines(old_chunk)
+        if best_index < 0:
+            return PatchApplyError(f"Hunk não encontrado em {op.path}. Esperado:\n{expected}")
+        nearby = self._format_lines(lines[best_index: best_index + window_size])
+        return PatchApplyError(
+            f"Hunk não encontrado em {op.path}. "
+            f"Trecho mais próximo começa na linha {best_index + 1} "
+            f"(similaridade {best_ratio:.0%}).\n"
+            f"Esperado:\n{expected}\n"
+            f"Encontrado próximo:\n{nearby}"
+        )
+
     def _apply_update(self, path: Path, op: UpdateFileOp) -> Path:
         """Aplica os hunks de uma UpdateFileOp a um arquivo existente."""
         if not path.exists():
@@ -159,7 +192,7 @@ class PatchTool(ToolBase):
             new_chunk = [line[1:] for line in hunk if line[:1] in {" ", "+"}]
             match_at = self._find_subsequence(original_lines, old_chunk, cursor)
             if match_at < 0:
-                raise PatchApplyError(f"Hunk não encontrado em {op.path}")
+                raise self._missing_hunk_error(op, old_chunk, original_lines)
             original_lines[match_at: match_at + len(old_chunk)] = new_chunk
             cursor = match_at + len(new_chunk)
 
