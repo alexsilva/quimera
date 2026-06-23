@@ -126,6 +126,56 @@ def test_file_tools_write_file_overwrite_requires_replace_existing(tools, config
     assert path.read_text() == "changed"
 
 
+def test_replace_text_replaces_single_exact_occurrence(tools, config):
+    """replace_text faz edição literal quando a ocorrência esperada é única."""
+    path = config.workspace_root / "test.txt"
+    path.write_text("hello world\n", encoding="utf-8")
+
+    result = tools.replace_text(
+        ToolCall(
+            name="replace_text",
+            arguments={"path": "test.txt", "old": "world", "new": "Quimera"},
+        )
+    )
+
+    assert result.ok is True
+    assert result.data["occurrences"] == 1
+    assert path.read_text(encoding="utf-8") == "hello Quimera\n"
+
+
+def test_replace_text_rejects_ambiguous_occurrences(tools, config):
+    """replace_text não altera arquivo quando count não bate exatamente."""
+    path = config.workspace_root / "test.txt"
+    path.write_text("x x\n", encoding="utf-8")
+
+    result = tools.replace_text(
+        ToolCall(
+            name="replace_text",
+            arguments={"path": "test.txt", "old": "x", "new": "y"},
+        )
+    )
+
+    assert result.ok is False
+    assert "encontrou 2 ocorrências" in result.error
+    assert path.read_text(encoding="utf-8") == "x x\n"
+
+
+def test_replace_text_supports_explicit_count(tools, config):
+    """count permite substituição literal de múltiplas ocorrências intencional."""
+    path = config.workspace_root / "test.txt"
+    path.write_text("x x\n", encoding="utf-8")
+
+    result = tools.replace_text(
+        ToolCall(
+            name="replace_text",
+            arguments={"path": "test.txt", "old": "x", "new": "y", "count": 2},
+        )
+    )
+
+    assert result.ok is True
+    assert path.read_text(encoding="utf-8") == "y y\n"
+
+
 def test_write_file_does_not_mutate_allowed_read_root(tmp_path):
     """allowed_read_roots são leitura; mutações continuam limitadas à workspace."""
     workspace = tmp_path / "workspace"
@@ -355,6 +405,25 @@ def test_read_file_range_start_end(tools, config):
     assert result.ok is True
     # end_line é inclusivo: lines[start-1:end_line] → lines[1:4] → b, c, d
     assert result.content == "b\nc\nd\n"
+    assert result.data["start_line"] == 2
+    assert result.data["end_line"] == 4
+    assert result.data["total_lines"] == 5
+    assert result.data["truncated"] is False
+
+
+def test_read_file_returns_line_metadata_without_range(tools, config):
+    """read_file retorna metadados de linhas para navegação incremental segura."""
+    workspace = config.workspace_root
+    (workspace / "test.txt").write_text("a\nb\nc\n", encoding="utf-8")
+
+    call = ToolCall(name="read_file", arguments={"path": "test.txt"})
+    result = tools.read_file(call)
+
+    assert result.ok is True
+    assert result.data["start_line"] == 1
+    assert result.data["end_line"] == 3
+    assert result.data["total_lines"] == 3
+    assert result.data["truncated"] is False
 
 
 def test_read_file_range_end_greater_than_total(tools, config):
@@ -475,4 +544,82 @@ def test_file_tools_grep_search_supports_max_results(tools, config):
 
     assert result.truncated is True
     assert len(result.content.splitlines()) == 1
+
+
+def test_file_tools_grep_search_supports_context_lines(tools, config):
+    """context_lines inclui linhas vizinhas sem alterar o formato path:line:content."""
+    workspace = config.workspace_root
+    (workspace / "app.py").write_text("antes\nmarker_token\ndepois\n", encoding="utf-8")
+
+    result = tools.grep_search(
+        ToolCall(
+            name="grep_search",
+            arguments={"pattern": "marker_token", "context_lines": 1},
+        )
+    )
+
+    assert result.content.splitlines() == [
+        "app.py:1:antes",
+        "app.py:2:marker_token",
+        "app.py:3:depois",
+    ]
+
+
+def test_file_tools_grep_search_context_lines_is_clamped(tools, config):
+    """context_lines é limitado para evitar respostas enormes acidentais."""
+    workspace = config.workspace_root
+    lines = [f"linha {idx}" for idx in range(1, 31)]
+    lines[15] = "marker_token"
+    (workspace / "app.py").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    result = tools.grep_search(
+        ToolCall(
+            name="grep_search",
+            arguments={"pattern": "marker_token", "context_lines": 999},
+        )
+    )
+
+    rendered = result.content.splitlines()
+    assert rendered[0] == "app.py:6:linha 6"
+    assert rendered[-1] == "app.py:26:linha 26"
+    assert len(rendered) == 21
+
+
+def test_inspect_symbols_lists_python_defs_without_execution(tools, config):
+    """inspect_symbols lista símbolos via AST sem importar/executar o arquivo."""
+    workspace = config.workspace_root
+    (workspace / "module.py").write_text(
+        "def top():\n"
+        "    pass\n"
+        "\n"
+        "class Service:\n"
+        "    def run(self):\n"
+        "        pass\n"
+        "\n"
+        "    async def async_run(self):\n"
+        "        pass\n",
+        encoding="utf-8",
+    )
+
+    result = tools.inspect_symbols(ToolCall(name="inspect_symbols", arguments={"path": "module.py"}))
+
+    assert result.ok is True
+    assert result.content.splitlines() == [
+        "def top:1",
+        "class Service:4",
+        "  def run:5",
+        "  async def async_run:8",
+    ]
+    assert result.data["symbols"][1]["methods"][0]["name"] == "run"
+
+
+def test_inspect_symbols_rejects_non_python_file(tools, config):
+    """inspect_symbols recusa arquivos que não são .py."""
+    workspace = config.workspace_root
+    (workspace / "notes.txt").write_text("def fake(): pass\n", encoding="utf-8")
+
+    result = tools.inspect_symbols(ToolCall(name="inspect_symbols", arguments={"path": "notes.txt"}))
+
+    assert result.ok is False
+    assert "Arquivo Python inválido" in result.error
 

@@ -179,8 +179,8 @@ class PatchTool(ToolBase):
             f"Encontrado próximo:\n{nearby}"
         )
 
-    def _apply_update(self, path: Path, op: UpdateFileOp) -> Path:
-        """Aplica os hunks de uma UpdateFileOp a um arquivo existente."""
+    def _apply_update(self, path: Path, op: UpdateFileOp, *, dry_run: bool = False) -> Path:
+        """Aplica ou valida os hunks de uma UpdateFileOp a um arquivo existente."""
         if not path.exists():
             raise PatchApplyError(f"Arquivo não existe para update: {op.path}")
 
@@ -197,6 +197,8 @@ class PatchTool(ToolBase):
             cursor = match_at + len(new_chunk)
 
         target = self._resolve(op.move_to) if op.move_to else path
+        if dry_run:
+            return target
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(_join_patch_lines(original_lines), encoding="utf-8")
         if op.move_to and target != path:
@@ -208,6 +210,7 @@ class PatchTool(ToolBase):
         raw_patch = str(call.arguments.get("patch", ""))
         if not raw_patch.strip():
             return ToolResult(ok=False, tool_name=call.name, error="apply_patch requer 'patch'")
+        dry_run = bool(call.arguments.get("dry_run", False))
 
         try:
             ops = _parse_patch(raw_patch)
@@ -217,18 +220,20 @@ class PatchTool(ToolBase):
                     path = self._resolve(op.path)
                     if path.exists():
                         raise PatchApplyError(f"Arquivo já existe: {op.path}")
-                    path.parent.mkdir(parents=True, exist_ok=True)
-                    path.write_text(op.content, encoding="utf-8")
+                    if not dry_run:
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                        path.write_text(op.content, encoding="utf-8")
                     changed.append(op.path)
                 elif isinstance(op, DeleteFileOp):
                     path = self._resolve(op.path)
                     if not path.exists():
                         raise PatchApplyError(f"Arquivo não existe: {op.path}")
-                    path.unlink()
+                    if not dry_run:
+                        path.unlink()
                     changed.append(op.path)
                 else:
                     path = self._resolve(op.path)
-                    target = self._apply_update(path, op)
+                    target = self._apply_update(path, op, dry_run=dry_run)
                     changed.append(self._display_path(target))
         except Exception as exc:  # noqa: BLE001
             return ToolResult(ok=False, tool_name=call.name, error=str(exc))
@@ -236,8 +241,8 @@ class PatchTool(ToolBase):
         return ToolResult(
             ok=True,
             tool_name=call.name,
-            content="Patch aplicado com sucesso.",
-            data={"changed_files": changed},
+            content="[dry-run] Patch validado com sucesso." if dry_run else "Patch aplicado com sucesso.",
+            data={"changed_files": changed, "dry_run": dry_run},
         )
 
 
