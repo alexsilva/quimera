@@ -42,6 +42,7 @@ HTTP_READ_LOCAL_TOOLS = frozenset({
     "list_files",
     "read_file",
     "grep_search",
+    "inspect_symbols",
     "list_tasks",
     "list_jobs",
     "get_job",
@@ -63,6 +64,7 @@ HTTP_READ_TOOLS = frozenset({
 
 HTTP_AGENT_TOOLS = frozenset({
     *HTTP_READ_TOOLS,
+    "replace_text",
     "memory_save",
     "delegate",
     "list_agents",

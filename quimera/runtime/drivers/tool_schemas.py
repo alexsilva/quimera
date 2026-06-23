@@ -809,16 +809,19 @@ TOOL_SCHEMAS = [
             "name": "delegate",
             "description": (
                 "Delega uma tarefa para outro agente do Quimera. "
-                "Use quando precisar de especialidade específica "
-                "(ex: codex para codificação, claude para revisão, "
-                "gemini para arquitetura, opencode-big-pickle para edição)."
+                "Use quando precisar de especialidade específica, revisão independente, "
+                "execução paralela ou fallback entre agentes existentes. "
+                "Agentes embutidos comuns: codex (edição/testes), claude (arquitetura/revisão), "
+                "opencode (edição via OpenCode), antigravity (refatoração/razonamento), "
+                "ollama-granite4 (local via Ollama). Use list_agents para descobrir agentes ativos, "
+                "incluindo plugins dinâmicos registrados no workspace."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "target_agent": {
                         "type": "string",
-                        "description": "Nome do agente alvo (ex: codex, claude, gemini, opencode-big-pickle).",
+                        "description": "Nome do agente alvo existente (ex: codex, claude, opencode, antigravity, ollama-granite4 ou plugin dinâmico listado por list_agents).",
                     },
                     "request": {
                         "type": "string",

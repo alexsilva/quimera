@@ -630,6 +630,7 @@ class TestToolsCallHTTP:
     def test_read_local_profile_excludes_network_tools(self):
         """Verifica que Test read local profile excludes network tools."""
         assert parse_http_allowed_tools("read-local") == HTTP_READ_LOCAL_TOOLS
+        assert "inspect_symbols" in HTTP_READ_LOCAL_TOOLS
         assert "web_search" not in HTTP_READ_LOCAL_TOOLS
         assert "web_fetch" not in HTTP_READ_LOCAL_TOOLS
 
@@ -646,6 +647,7 @@ class TestToolsCallHTTP:
         assert tools == HTTP_AGENT_TOOLS
         assert "delegate" in tools
         assert "memory_save" in tools
+        assert "replace_text" in tools
         for blocked in {"run_shell", "exec_command", "write_file", "remove_file", "apply_patch"}:
             assert blocked not in tools
 
@@ -681,13 +683,14 @@ class TestToolsCallHTTP:
     def test_profile_allowlists_filter_http_tools_for_external_clients(self):
         """Verifica que Test profile allowlists filter http tools for external clients."""
         executor = _make_executor(tool_names=[
-            "read_file", "grep_search", "web_search", "web_fetch",
+            "read_file", "grep_search", "inspect_symbols", "web_search", "web_fetch",
             "memory_retrieve", "memory_save", "delegate", "run_shell", "write_file", "apply_patch",
+            "replace_text",
         ])
         cases = {
-            "read-local": {"read_file", "grep_search", "memory_retrieve"},
-            "read": {"read_file", "grep_search", "web_search", "web_fetch", "memory_retrieve"},
-            "agent": {"read_file", "grep_search", "web_search", "web_fetch", "memory_retrieve", "memory_save", "delegate"},
+            "read-local": {"read_file", "grep_search", "inspect_symbols", "memory_retrieve"},
+            "read": {"read_file", "grep_search", "inspect_symbols", "web_search", "web_fetch", "memory_retrieve"},
+            "agent": {"read_file", "grep_search", "inspect_symbols", "web_search", "web_fetch", "memory_retrieve", "memory_save", "delegate", "replace_text"},
         }
         for profile, expected_subset in cases.items():
             httpd = MCP_HTTPServer(
@@ -713,6 +716,7 @@ class TestToolsCallHTTP:
                     assert "web_fetch" not in tool_names
                 if profile != "agent":
                     assert "delegate" not in tool_names
+                    assert "replace_text" not in tool_names
                 assert "run_shell" not in tool_names
                 assert "write_file" not in tool_names
                 assert "apply_patch" not in tool_names
