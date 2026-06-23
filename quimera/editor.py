@@ -47,18 +47,32 @@ class Editor:
         return [fallback]
 
     @contextmanager
-    def _suspend_renderer_output(self):
-        suspend = getattr(self._renderer, "suspend_output", None)
-        resume = getattr(self._renderer, "resume_output", None)
-        suspend_attempted = False
-        try:
-            if callable(suspend):
-                suspend_attempted = True
-                suspend()
-            yield
-        finally:
-            if suspend_attempted and callable(resume):
-                resume()
+    def _external_editor_window(self, path: str | Path, command: list[str]):
+        external_window = getattr(self._renderer, "external_window", None)
+        if callable(external_window):
+            with external_window(
+                "external:editor",
+                title="Editor externo",
+                metadata={"path": str(path), "command": command},
+            ) as window:
+                yield window
+            return
+
+        @contextmanager
+        def _legacy_floor():
+            request_floor = getattr(self._renderer, "request_floor", None)
+            release_floor = getattr(self._renderer, "release_floor", None)
+            floor_acquired = False
+            try:
+                if callable(request_floor):
+                    floor_acquired = True
+                    request_floor()
+                yield
+            finally:
+                if floor_acquired and callable(release_floor):
+                    release_floor()
+        with _legacy_floor() as window:
+            yield window
 
     def compose(self, initial_content: str = "") -> str | None:
         """Abre editor com arquivo temporário; retorna conteúdo digitado."""
@@ -73,7 +87,7 @@ class Editor:
             tmp_path = tmp.name
 
         try:
-            with self._suspend_renderer_output():
+            with self._external_editor_window(tmp_path, parts):
                 with (self._output_lock if self._output_lock is not None else nullcontext()):
                     subprocess.run([*parts, tmp_path], check=True)
                     sys.stdout.write("\n")
@@ -97,7 +111,7 @@ class Editor:
         if parts is None:
             return False
         try:
-            with self._suspend_renderer_output():
+            with self._external_editor_window(path, parts):
                 with (self._output_lock if self._output_lock is not None else nullcontext()):
                     subprocess.run([*parts, str(path)], check=True)
                     sys.stdout.write("\n")

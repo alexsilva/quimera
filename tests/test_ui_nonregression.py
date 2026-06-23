@@ -226,14 +226,14 @@ class TestStreamSummarySequence:
         assert "conteúdo após abort" in rendered
 
     def test_finish_stream_isolates_agents(self, rec):
-        """finish_message_stream de um agente não afeta _completed_streams do outro."""
+        """finish_message_stream de um agente não afeta completed_streams do outro."""
         with patch("quimera.ui.Live"):
             rec.start_message_stream("claude")
             rec.start_message_stream("codex")
             rec.finish_message_stream("claude", "resposta claude")
 
-        assert "claude" in rec._completed_streams
-        assert "codex" not in rec._completed_streams
+        assert "claude" in rec._deck.completed_streams
+        assert "codex" not in rec._deck.completed_streams
 
     def test_show_turn_summary_without_stream_does_not_crash(self, rec):
         """show_turn_summary pode ser chamado sem stream precedente."""
@@ -265,8 +265,8 @@ class TestStreamSummarySequence:
             rec.finish_message_stream("codex", "conteúdo final")
             rec.finish_message_stream("codex", "conteúdo final")  # segunda chamada
 
-        # _completed_streams não deve ter duplicatas (só str simples, não lista)
-        assert isinstance(rec._completed_streams.get("codex"), str)
+        # completed_streams não deve ter duplicatas (só str simples, não lista)
+        assert isinstance(rec._deck.completed_streams.get("codex"), str)
 
     def test_summary_after_stream_flush_renders_tool_name(self, rec):
         """show_turn_summary enfileirado após finish_message_stream aparece na saída."""

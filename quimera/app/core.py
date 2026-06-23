@@ -932,20 +932,22 @@ class QuimeraApp:
                 and input_gate.is_active()
             )
             if gate_is_active:
-                get_container = getattr(renderer, "_container", None)
-                if callable(get_container):
-                    container = get_container("agente")
-                    result = container.ask_selection(renderer, input_gate, question, opts)
+                get_controller = getattr(renderer, "_agent_window_controller", None)
+                if callable(get_controller):
+                    controller = get_controller("agente")
+                    result = controller.ask_selection(renderer, input_gate, question, opts)
                 else:
                     result = input_gate.read_selection_in_terminal(question, opts)
                 if result is not None:
                     return result
                 raise EOFError("sem resposta do terminal")
-            # Gate não ativo: leitura por linha (cooked mode) com suspend/resume
-            _suspend = getattr(renderer, "suspend_output", None)
-            _resume = getattr(renderer, "resume_output", None)
-            if callable(_suspend):
-                _suspend()
+            # Gate não ativo: leitura por linha (cooked mode) com posse do chão.
+            _request_floor = getattr(renderer, "request_floor", None)
+            _release_floor = getattr(renderer, "release_floor", None)
+            floor_acquired = False
+            if callable(_request_floor):
+                floor_acquired = True
+                _request_floor(kind="selection", title="Seleção", metadata={"question": question})
             try:
                 error_msg: str | None = None
                 while True:
@@ -970,8 +972,8 @@ class QuimeraApp:
                             return i, opt
                     error_msg = f"'{raw}' não é uma opção válida."
             finally:
-                if callable(_resume):
-                    _resume()
+                if floor_acquired and callable(_release_floor):
+                    _release_floor()
 
         return _ask_user
 

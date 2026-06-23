@@ -82,13 +82,20 @@ class InputBroker:
         self._resume_spinner_fn = resume_spinner_fn
 
     def _container_for(self, agent: str):
-        """Container (janela) do agente, quando o renderer o expõe.
+        """Controller de janela do agente, quando o renderer o expõe.
 
-        Retorna (container, renderer) ou (None, renderer). O container é o dono
-        do output/perguntas do agente: emoldura a pergunta sob o banner, limpa o
-        transient daquele agente e faz flush antes de ceder o chão ao prompt.
+        Retorna (controller, renderer) ou (None, renderer). O controller é dono
+        dos efeitos colaterais de input do agente: emoldura a pergunta sob o
+        banner, limpa o transient daquele agente e faz flush antes de ceder o
+        chão ao prompt.
         """
         renderer = self._renderer
+        get_controller = getattr(renderer, "_agent_window_controller", None)
+        if callable(get_controller):
+            try:
+                return get_controller(agent), renderer
+            except Exception:
+                pass
         get = getattr(renderer, "_container", None)
         if callable(get):
             try:
@@ -463,10 +470,10 @@ class InputBroker:
             except Exception:
                 pass
         if renderer is not None:
-            suspend_fn = getattr(renderer, "suspend_output", None)
+            suspend_fn = getattr(renderer, "request_floor", None)
             if callable(suspend_fn):
                 try:
-                    suspend_fn()
+                    suspend_fn(kind="input", title="Entrada")
                 except Exception:
                     pass
         print("\033[?25h", end="", flush=True)
@@ -479,7 +486,7 @@ class InputBroker:
         """
         renderer = self._renderer
         if renderer is not None:
-            resume_fn = getattr(renderer, "resume_output", None)
+            resume_fn = getattr(renderer, "release_floor", None)
             if callable(resume_fn):
                 try:
                     resume_fn()

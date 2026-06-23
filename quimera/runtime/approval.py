@@ -279,13 +279,13 @@ class ConsoleApprovalHandler(ApprovalHandler):
                 # raw mode residual; no fluxo normal do app isso pode ocorrer
                 # durante tool approval fora do prompt.
                 renderer = self._renderer
-                _suspend_output = getattr(renderer, "suspend_output", None)
-                _resume_output = getattr(renderer, "resume_output", None)
+                _request_floor = getattr(renderer, "request_floor", None)
+                _release_floor = getattr(renderer, "release_floor", None)
                 input_fn = self._input_fn if self._input_fn is not None else input
                 if self._suspend_fn:
                     self._suspend_fn()
-                if callable(_suspend_output):
-                    _suspend_output()
+                if callable(_request_floor):
+                    _request_floor(kind="approval", title="Aprovação")
                 thread_id = threading.get_ident()
                 suspend_fn = (
                     self._suspend_spinner_fn.get(thread_id)
@@ -317,8 +317,8 @@ class ConsoleApprovalHandler(ApprovalHandler):
                     )
                     if resume_fn:
                         resume_fn()
-                    if callable(_resume_output):
-                        _resume_output()
+                    if callable(_release_floor):
+                        _release_floor()
                     if self._resume_fn:
                         self._resume_fn()
             if answer in {"a", "all", "todas"}:

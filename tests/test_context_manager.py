@@ -127,28 +127,24 @@ def test_edit_with_editor_env(mock_run, mock_get, temp_files, renderer):
     """Verifica que edit usa o editor definido em EDITOR."""
 
     mock_get.return_value = "code --wait"
-    renderer.suspend_output.return_value = True
     base, session = temp_files
     cm = ContextManager(base, session, renderer)
     cm.edit()
     mock_run.assert_called_once_with(["code", "--wait", str(base)], check=True)
-    renderer.suspend_output.assert_called_once()
-    renderer.resume_output.assert_called_once()
+    renderer.external_window.assert_called_once()
 
 
 @patch('os.environ.get')
 @patch('subprocess.run')
-def test_edit_resumes_output_even_when_suspend_ack_times_out(mock_run, mock_get, temp_files, renderer):
-    """Verifica que edit retoma a saída mesmo quando o suspend não é confirmado."""
+def test_edit_uses_external_editor_window(mock_run, mock_get, temp_files, renderer):
+    """Verifica que edit usa uma janela externa para posse do terminal."""
 
     mock_get.return_value = "code --wait"
-    renderer.suspend_output.return_value = False
     base, session = temp_files
     cm = ContextManager(base, session, renderer)
     cm.edit()
     mock_run.assert_called_once_with(["code", "--wait", str(base)], check=True)
-    renderer.suspend_output.assert_called_once()
-    renderer.resume_output.assert_called_once()
+    renderer.external_window.assert_called_once()
 
 
 @patch('os.environ.get')

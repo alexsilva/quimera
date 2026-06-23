@@ -432,7 +432,7 @@ class InputGate:
             _request_floor = getattr(renderer, "request_floor", None) if renderer is not None else None
             _release_floor = getattr(renderer, "release_floor", None) if renderer is not None else None
             if callable(_request_floor):
-                _request_floor()
+                _request_floor(kind="selection", title="Seleção", metadata={"question": question})
             try:
                 self._flush_renderer()
                 error: str | None = None
@@ -611,7 +611,7 @@ class InputGate:
             _request_floor = getattr(renderer, "request_floor", None) if renderer is not None else None
             _release_floor = getattr(renderer, "release_floor", None) if renderer is not None else None
             if callable(_request_floor):
-                _request_floor()
+                _request_floor(kind="input", title="Entrada", metadata={"prompt": prompt})
             try:
                 self._flush_renderer()
                 # Exibe card Rich (com contexto) ou cai no prompt cru.
@@ -710,7 +710,7 @@ class InputGate:
             _request_floor = getattr(renderer, "request_floor", None) if renderer is not None else None
             _release_floor = getattr(renderer, "release_floor", None) if renderer is not None else None
             if callable(_request_floor):
-                _request_floor()
+                _request_floor(kind="approval", title="Aprovação", metadata={"question": question})
             try:
                 self._flush_renderer()
                 remaining_s = max(0, int(deadline - _time.monotonic()))

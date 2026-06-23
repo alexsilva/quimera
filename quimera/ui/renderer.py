@@ -16,6 +16,16 @@ _log = logging.getLogger(__name__)
 
 from quimera.runtime.streaming import apply_stream_diff, normalize_stream_diff
 from .audit import RenderAuditLogger
+from .window_manager import WindowManager, WindowRenderPlan
+from .windows import (
+    AgentWindowState,
+    RenderWindowState,
+    RestorePolicy,
+    WindowDeck,
+    WindowKind,
+    WindowLayer,
+    WindowModality,
+)
 
 _UNICODE_CONTROL_RE = re.compile(
     r"[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u061C\u200B-\u200F\u202A-\u202E\u2060-\u2069\uFEFF]"
@@ -253,7 +263,7 @@ class TerminalResizeEvent:
 class PendingInputEvent:
     """Sinaliza que um container aguarda input do usuário (aprovação ou pergunta).
 
-    Atualiza os campos ``pending_kind`` / ``pending_question`` do AgentContainer e
+    Atualiza os campos ``pending_kind`` / ``pending_question`` do AgentWindowState e
     dispara um refresh do Live para exibir o badge inline enquanto o agente está em
     streaming. Quando ``kind`` for vazio, limpa o estado pendente.
     """
@@ -267,88 +277,38 @@ class PendingInputEvent:
 # Container por agente (janela vertical)
 # ---------------------------------------------------------------------------
 
-@dataclass
-class AgentContainer:
-    """Container (janela vertical) de um agente — dono do próprio output e perguntas.
+class AgentWindowController:
+    """Renderer-bound behavior for a pure AgentWindowState."""
 
-    Modelo Windows-OS: cada agente ativo é uma janela empilhada na vertical.
-    O container gerencia ativamente:
-
-      output    -> stream ao vivo (iniciar/atualizar/finalizar/abortar) +
-                   buffer rolling de progresso transitório.
-      perguntas -> input/aprovação/seleção emoldurados sob o banner do agente
-                   (commit do transient + request_floor + render + read + release).
-
-    O stream ao vivo atualiza `stream_content` diretamente no container via
-    writer thread; é a fonte de verdade para leitura externa (ex.: ao compor
-    uma pergunta durante o streaming).
-    """
-
-    agent: str
-    label: str
-    style: str
-    streaming: bool = False
-    stream_content: str = ""
-    stream_theme_name: str = ""
-    transient_active: bool = False
-    elapsed: float | None = None
-    transient: list[str] = field(default_factory=list)
-    pending_kind: str = ""      # "" | "approval" | "ask"
-    pending_question: str = ""  # resumo da pergunta/tool para exibição inline no Live
-
-    def compose_question(self, question: str, options: list[str] | None = None) -> str:
-        """Monta o corpo textual da pergunta exibida sob o banner do agente."""
-        lines = [strip_ansi(str(question or "")).strip()]
-        for i, opt in enumerate(options or []):
-            lines.append(f"  {i + 1}. {strip_ansi(str(opt))}")
-        return "\n".join(line for line in lines if line)
+    def __init__(self, state: AgentWindowState):
+        self.state = state
 
     # -- Output management ------------------------------------------------
 
     def start_stream(self, renderer, theme_name: str) -> None:
         """Inicia streaming de output para este agente."""
-        if self.streaming:
+        if self.state.streaming:
             return
-        self.streaming = True
-        self.stream_content = ""
-        self.stream_theme_name = theme_name
-        renderer._queue.put(LiveStartEvent(self.agent))
+        self.state.streaming = True
+        self.state.stream_content = ""
+        self.state.stream_theme_name = theme_name
+        renderer._queue.put(LiveStartEvent(self.state.agent))
 
     def update_stream(self, renderer, chunk: Any) -> None:
         """Enfileira chunk de streaming."""
-        renderer._queue.put(LiveUpdateChunkEvent(self.agent, chunk))
+        renderer._queue.put(LiveUpdateChunkEvent(self.state.agent, chunk))
 
     def finish_stream(self, renderer, final_content: str, render_mode: str = "auto") -> None:
         """Finaliza streaming e persiste conteúdo completo."""
-        self.streaming = False
         clean = strip_ansi(str(final_content or ""))
         mode = _normalize_render_mode(render_mode)
         with renderer._lock:
-            renderer._completed_streams[self.agent] = clean
-        renderer._queue.put(LiveStopEvent(self.agent, clean, mode))
+            renderer._deck.remember_completed_stream(self.state.agent, clean)
+        renderer._queue.put(LiveStopEvent(self.state.agent, clean, mode))
 
     def abort_stream(self, renderer) -> None:
         """Aborta streaming sem marcar como completo."""
-        self.streaming = False
-        renderer._queue.put(LiveAbortEvent(self.agent))
-
-    # -- Transient management --------------------------------------------
-
-    def push_transient(self, message: str) -> bool:
-        """Adiciona mensagem ao buffer rolling do container. Retorna True se mudou."""
-        clean = strip_ansi(str(message or "")).strip("\r\n")
-        if not clean:
-            return False
-        if self.transient and self.transient[-1] == clean:
-            return False
-        self.transient.append(clean)
-        self.transient = self.transient[-_SCROLLING_WINDOW_SIZE:]
-        return True
-
-    def clear_transient_buffer(self) -> None:
-        """Esvazia o buffer transitório e desativa flag."""
-        self.transient.clear()
-        self.transient_active = False
+        renderer._queue.put(LiveAbortEvent(self.state.agent))
 
     # -- Question management ----------------------------------------------
 
@@ -358,10 +318,10 @@ class AgentContainer:
         Commit do transient, request_floor, render pergunta com banner,
         leitura da resposta, release_floor.
         """
-        renderer.clear_agent_transient(self.agent)
-        composed = self.compose_question(prompt)
-        if self.streaming:
-            renderer.set_agent_pending_input(self.agent, "ask", composed)
+        renderer.clear_agent_transient(self.state.agent)
+        composed = self.state.compose_question(prompt)
+        if self.state.streaming:
+            renderer.set_agent_pending_input(self.state.agent, "ask", composed)
         renderer.flush_quick()
 
         try:
@@ -369,8 +329,8 @@ class AgentContainer:
                 composed + "\n", timeout
             )
         finally:
-            if self.streaming:
-                renderer.clear_agent_pending_input(self.agent)
+            if self.state.streaming:
+                renderer.clear_agent_pending_input(self.state.agent)
 
     def ask_approval(self, renderer, input_gate, question: str,
                      prompt: str = "", timeout: float = 300.0) -> str | None:
@@ -386,10 +346,10 @@ class AgentContainer:
            modo raw.
         4. Limpa o badge pendente ao finalizar.
         """
-        renderer.clear_agent_transient(self.agent)
-        composed = self.compose_question(question)
-        if self.streaming:
-            renderer.set_agent_pending_input(self.agent, "approval", composed)
+        renderer.clear_agent_transient(self.state.agent)
+        composed = self.state.compose_question(question)
+        if self.state.streaming:
+            renderer.set_agent_pending_input(self.state.agent, "approval", composed)
         renderer.flush_quick()
 
         try:
@@ -397,8 +357,8 @@ class AgentContainer:
                 composed, prompt, timeout
             )
         finally:
-            if self.streaming:
-                renderer.clear_agent_pending_input(self.agent)
+            if self.state.streaming:
+                renderer.clear_agent_pending_input(self.state.agent)
 
     def ask_selection(self, renderer, input_gate, question: str,
                       options: list[str], timeout: float = 300.0) -> tuple[int, str] | None:
@@ -407,9 +367,9 @@ class AgentContainer:
         O reader (`read_selection_in_terminal`) já renderiza as opções numeradas;
         compomos apenas o texto da pergunta (sem opções) para não duplicá-las.
         """
-        renderer.clear_agent_transient(self.agent)
+        renderer.clear_agent_transient(self.state.agent)
         renderer.flush_quick()
-        return input_gate.read_selection_in_terminal(self.compose_question(question), options, timeout)
+        return input_gate.read_selection_in_terminal(self.state.compose_question(question), options, timeout)
 
 
 # ---------------------------------------------------------------------------
@@ -647,16 +607,14 @@ class TerminalRenderer:
         # Tempo decorrido por agente (atualizado via _on_tick, lido na toolbar)
         self._agent_elapsed: dict[str, float] = {}
 
-        # Streams completados: agent -> final_content (cache de dedup do render final)
-        self._completed_streams = {}
-        # Registro de containers por agente — dono do estado de output e perguntas.
-        # Consolida o que antes eram dicionários/sets paralelos: stream ativo,
-        # progresso transitório, buffer rolling e tempo decorrido.
-        self._containers: dict[Any, AgentContainer] = {}
+        # Deck de janelas: fonte unica para estado visual por agente.
+        self._deck = WindowDeck()
+        self._window_manager = WindowManager(self._deck)
+        self._floor_windows_by_thread: dict[int, str] = {}
         # Último evento persistente impresso, para evitar espaçamento redundante.
         self._last_persistent_kind: str | None = None
         self._last_persistent_agent: str | None = None
-        # Lock protege _completed_streams, _containers, _statuses e versão
+        # Lock protege _deck, _statuses e versão
         self._lock = threading.RLock()
 
         # Contador de linhas do overlay transitório na tela, compartilhado com
@@ -750,7 +708,6 @@ class TerminalRenderer:
           [histórico] → [overlay N linhas] → [input] → [toolbar]
           overlay gerenciado por _TransientOverlay com closures run_in_terminal
         """
-        _stream_containers: dict[str, AgentContainer] = {}
         _ul: list = [None]  # Live unificado ativo (ou None)
         _local_pending: collections.deque = collections.deque()
         _deferred_post_prompt: collections.deque = collections.deque()
@@ -781,10 +738,11 @@ class TerminalRenderer:
         # -- Live helpers --------------------------------------------------
 
         def _get_renderable():
-            if not _stream_containers:
+            stream_windows = self._deck.active_streams()
+            if not stream_windows:
                 return Text("")
             parts = []
-            for c in _stream_containers.values():
+            for c in stream_windows.values():
                 stream_block = self._build_stream_renderable(
                     c.stream_theme_name, c.label, c.style, c.stream_content
                 )
@@ -799,11 +757,11 @@ class TerminalRenderer:
             if len(parts) > 1:
                 labels = " · ".join(
                     _agent_toolbar_label(agent, c.label)
-                    for agent, c in _stream_containers.items()
+                    for agent, c in stream_windows.items()
                 )
                 toolbar_text = f"[dim]{labels} · Ctrl+C para cancelar[/dim]"
             else:
-                only_agent, only_c = next(iter(_stream_containers.items()))
+                only_agent, only_c = next(iter(stream_windows.items()))
                 label_text = _agent_toolbar_label(only_agent, only_c.label)
                 toolbar_text = (
                     f"[bold {only_c.style}]{label_text}[/] "
@@ -846,7 +804,7 @@ class TerminalRenderer:
                 self._stream_live_active.clear()
 
         def _stop_if_empty():
-            if not _stream_containers:
+            if not self._deck.active_streams():
                 _close_live()
 
         # -- Print helpers -------------------------------------------------
@@ -918,12 +876,10 @@ class TerminalRenderer:
                 elif isinstance(event, LiveStartEvent):
                     _audit("stream_start", agent=event.agent, prompt_active=_prompt_active())
                     with self._lock:
-                        container = self._containers.get(event.agent)
-                    if container:
-                        _stream_containers[event.agent] = container
-                        if container.stream_content.strip():
-                            _ensure_live()
-                            _refresh()
+                        container = self._deck.get(event.agent)
+                    if container and container.streaming and container.stream_content.strip():
+                        _ensure_live()
+                        _refresh()
 
                 elif isinstance(event, LiveUpdateChunkEvent):
                     # Coalescing: drena chunks consecutivos de todos os agentes para um único _refresh()
@@ -941,7 +897,7 @@ class TerminalRenderer:
                             break
 
                     for _a, chunks in batches.items():
-                        container = _stream_containers.get(_a)
+                        container = self._deck.get(_a)
                         if container:
                             for chunk in chunks:
                                 if isinstance(chunk, dict):
@@ -965,7 +921,7 @@ class TerminalRenderer:
                     if batches:
                         has_visible_content = any(
                             container.stream_content.strip()
-                            for container in _stream_containers.values()
+                            for container in self._deck.active_streams().values()
                         )
                         if has_visible_content:
                             _ensure_live()
@@ -978,11 +934,13 @@ class TerminalRenderer:
                         render_mode=event.render_mode,
                         preview=_preview_text(event.final_content),
                     )
-                    container = _stream_containers.pop(event.agent, None)
+                    container = self._deck.get(event.agent)
                     if container:
-                        if _stream_containers:
+                        container.streaming = False
+                        if self._deck.active_streams():
                             _refresh()
-                        _stop_if_empty()
+                        else:
+                            _close_live()
                         final_block = self._render_turn_block(
                             container.stream_theme_name, container.label, container.style,
                             content=event.final_content,
@@ -994,10 +952,13 @@ class TerminalRenderer:
 
                 elif isinstance(event, LiveAbortEvent):
                     _audit("stream_abort", agent=event.agent)
-                    _stream_containers.pop(event.agent, None)
-                    if _stream_containers:
+                    container = self._deck.get(event.agent)
+                    if container is not None:
+                        container.streaming = False
+                    if self._deck.active_streams():
                         _refresh()
-                    _stop_if_empty()
+                    else:
+                        _close_live()
 
                 elif isinstance(event, NoopEvent):
                     _flush_deferred(force=event.force_flush)
@@ -1029,9 +990,9 @@ class TerminalRenderer:
                         # já está no container; reativar aqui evita tela em branco até
                         # o próximo chunk. Só inicia se há conteúdo visível para não
                         # abrir Live vazio desnecessariamente.
-                        if _stream_containers and any(
+                        if self._deck.active_streams() and any(
                             container.stream_content.strip()
-                            for container in _stream_containers.values()
+                            for container in self._deck.active_streams().values()
                         ):
                             _ensure_live()
                             _refresh()
@@ -1047,11 +1008,11 @@ class TerminalRenderer:
                     # Atualiza o estado pendente do container e dispara refresh do Live
                     # para exibir (ou limpar) o badge de aprovação inline.
                     with self._lock:
-                        container = self._containers.get(event.agent)
+                        container = self._deck.get(event.agent)
                         if container is not None:
                             container.pending_kind = event.kind
                             container.pending_question = event.question
-                    if event.agent in _stream_containers:
+                    if event.agent in self._deck.active_streams():
                         _refresh()
 
                 elif isinstance(event, TransientWindowEvent):
@@ -1131,21 +1092,32 @@ class TerminalRenderer:
         except TimeoutError:
             return False
 
-    def suspend_output(self, timeout: float = 2.0) -> bool:
-        """Suspende temporariamente prints no terminal (ex.: editor externo ativo)."""
+    def _freeze_output(self, timeout: float = 2.0) -> bool:
+        """Congela temporariamente a saída do compositor."""
         self._output_suspended.set()
         done = threading.Event()
         self._queue.put(OutputControlEvent(suspend=True, done=done))
         return done.wait(timeout=timeout)
 
-    def resume_output(self, timeout: float = 2.0) -> bool:
-        """Retoma prints no terminal e drena saídas deferidas."""
+    def _thaw_output(self, timeout: float = 2.0) -> bool:
+        """Retoma a saída do compositor e drena saídas deferidas."""
         done = threading.Event()
         self._queue.put(OutputControlEvent(suspend=False, done=done))
         resumed = done.wait(timeout=timeout)
         if not resumed:
             self._output_suspended.clear()
         return resumed
+
+    def _apply_window_render_plan(self, plan: WindowRenderPlan, timeout: float = 2.0) -> bool:
+        """Aplica no terminal o plano produzido pelo WindowManager."""
+        ok = True
+        if plan.suspend_output:
+            ok = self._freeze_output(timeout=timeout) and ok
+        if plan.clear_overlay:
+            self._clear_overlay_sync()
+        if plan.resume_output:
+            ok = self._thaw_output(timeout=timeout) and ok
+        return ok
 
     # ------------------------------------------------------------------
     # Floor (chão do terminal) — transição atômica de posse do stdout
@@ -1157,10 +1129,34 @@ class TerminalRenderer:
     # transitório) e o leitor limpa os artefatos remanescentes antes de desenhar
     # sua própria janela. Ao terminar, devolve o chão e o feed volta a fluir.
     #
-    # Isto formaliza a transição que antes estava implícita e quebrada
-    # (suspend_output + overlay continuando a pintar por cima do prompt).
+    # Isto formaliza a posse do terminal em uma única API de alto nível.
 
-    def request_floor(self, timeout: float = 2.0) -> bool:
+    def _implicit_floor_window(
+        self,
+        kind: WindowKind | str = WindowKind.TERMINAL_FLOOR,
+        title: str = "Terminal floor",
+        owner: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> RenderWindowState:
+        thread_id = threading.get_ident()
+        return self._window_manager.make_floor_window(
+            window_id=f"floor:{thread_id}",
+            kind=kind,
+            title=title,
+            owner=owner,
+            metadata=metadata or {},
+        )
+
+    def request_floor(
+        self,
+        timeout: float = 2.0,
+        *,
+        window: RenderWindowState | None = None,
+        kind: WindowKind | str = WindowKind.TERMINAL_FLOOR,
+        title: str = "Terminal floor",
+        owner: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> bool:
         """Cede o chão do terminal ao chamador (que vira o dono temporário do stdout).
 
         DEVE ser chamado de dentro de run_in_terminal — o chamador é, naquele
@@ -1168,15 +1164,35 @@ class TerminalRenderer:
         e limpa as linhas de overlay que ainda estejam na tela, deixando o chão
         limpo para o prompt do leitor.
         """
-        ok = self.suspend_output(timeout=timeout)
-        # Após a suspensão, o writer não desenha mais overlay (handlers checam
-        # _output_suspended). Limpamos sincronamente o que restou na tela.
-        self._clear_overlay_sync()
-        return ok
+        active_window = window or self._implicit_floor_window(kind, title, owner, metadata)
+        with self._lock:
+            transition = self._window_manager.mount(active_window)
+            self._floor_windows_by_thread[threading.get_ident()] = active_window.id
+        return self._apply_window_render_plan(transition.render_plan, timeout=timeout)
 
     def release_floor(self, timeout: float = 2.0) -> bool:
         """Devolve o chão ao Compositor: retoma o feed e drena prints deferidos."""
-        return self.resume_output(timeout=timeout)
+        with self._lock:
+            window_id = self._floor_windows_by_thread.pop(threading.get_ident(), None)
+            transition = self._window_manager.close(window_id) if window_id else None
+        if transition is None:
+            return True
+        return self._apply_window_render_plan(transition.render_plan, timeout=timeout)
+
+    @contextmanager
+    def external_window(self, window_id: str, title: str = "", metadata: dict[str, Any] | None = None):
+        """Monta uma janela externa modal que recebe posse exclusiva do terminal."""
+        window = self._window_manager.make_external_window(
+            window_id,
+            kind=WindowKind.EDITOR,
+            title=title,
+            metadata=metadata or {},
+        )
+        self.request_floor(window=window)
+        try:
+            yield window
+        finally:
+            self.release_floor()
 
     def _clear_overlay_sync(self) -> None:
         """Apaga as linhas do overlay transitório direto no stdout.
@@ -1222,17 +1238,21 @@ class TerminalRenderer:
         """Retorna (color, label) para o agente."""
         return _public_ui_module()._agent_style(agent, self._get_plugin_style)
 
-    def _container(self, agent) -> AgentContainer:
+    def _container(self, agent) -> AgentWindowState:
         """Get-or-create do container do agente (protegido por _lock reentrante)."""
         with self._lock:
-            container = self._containers.get(agent)
+            container = self._deck.get(agent)
             if container is None:
                 style, label = self._agent_style(agent)
-                container = AgentContainer(
+                container = AgentWindowState(
                     agent=_coerce_agent_name(agent), label=label, style=style
                 )
-                self._containers[agent] = container
+                self._deck.windows[agent] = container
             return container
+
+    def _agent_window_controller(self, agent) -> AgentWindowController:
+        """Cria controller efêmero para mutações do estado de janela do agente."""
+        return AgentWindowController(self._container(agent))
 
     def _combined_transient(self, term_lines: int) -> tuple[str, int]:
         """Empilha verticalmente o progresso transitório de todos os containers.
@@ -1242,8 +1262,8 @@ class TerminalRenderer:
         Retorna (texto_combinado, num_linhas) já limitado a 1/3 do terminal.
         """
         combined: list[str] = []
-        for agt in sorted(self._containers, key=str):
-            container = self._containers[agt]
+        for agt in sorted(self._deck.windows, key=str):
+            container = self._deck.windows[agt]
             for msg in container.transient:
                 combined.append(f"{container.label} {msg}")
         win_limit = max(1, term_lines // 3)
@@ -1419,7 +1439,7 @@ class TerminalRenderer:
             streaming=True,
         )
 
-    def _build_pending_card_renderable(self, container: "AgentContainer"):
+    def _build_pending_card_renderable(self, container: "AgentWindowState"):
         """Monta badge inline de aprovação/input pendente para exibição no Live.
 
         Aparece abaixo do stream_content do agente enquanto o Live está ativo,
@@ -1469,7 +1489,7 @@ class TerminalRenderer:
         imediatamente enquanto o agente estiver em streaming.
         """
         with self._lock:
-            container = self._containers.get(agent)
+            container = self._deck.get(agent)
             if container is not None:
                 container.pending_kind = kind
                 container.pending_question = question
@@ -1512,10 +1532,9 @@ class TerminalRenderer:
         """Evita render final duplicado quando a resposta já foi exibida via streaming."""
         normalized = _normalize_completed_content(content)
         with self._lock:
-            previous = self._completed_streams.get(agent)
+            previous = self._deck.consume_completed_stream(agent)
             if previous is None:
                 return False
-            del self._completed_streams[agent]
         return _normalize_completed_content(previous) == normalized
 
     # ------------------------------------------------------------------
@@ -1527,8 +1546,7 @@ class TerminalRenderer:
         if not self._console:
             return
         with self._lock:
-            container = self._container(agent)
-            container.start_stream(self, self._theme.name)
+            self._agent_window_controller(agent).start_stream(self, self._theme.name)
 
     def update_message_stream(self, agent, chunk):
         """Atualiza a resposta incremental com mais um chunk."""
@@ -1541,14 +1559,14 @@ class TerminalRenderer:
         if not self._console:
             return
         with self._lock:
-            self._container(agent).finish_stream(self, final_content, render_mode)
+            self._agent_window_controller(agent).finish_stream(self, final_content, render_mode)
 
     def abort_message_stream(self, agent):
         """Fecha o stream sem marcar a resposta como completa."""
         if not self._console:
             return
         with self._lock:
-            self._container(agent).abort_stream(self)
+            self._agent_window_controller(agent).abort_stream(self)
 
     def update_agent_transient(self, agent, message: str) -> None:
         """Atualiza progresso transitório do agente sem acumular linhas."""
@@ -1627,7 +1645,7 @@ class TerminalRenderer:
         prompt_active = bool(self._is_prompt_active_fn and self._is_prompt_active_fn())
 
         with self._lock:
-            container = self._containers.get(agent)
+            container = self._deck.get(agent)
             is_transient_agent = bool(container and container.transient_active)
             if container is not None:
                 if container.transient:
@@ -1661,14 +1679,14 @@ class TerminalRenderer:
     def clear_agent_elapsed(self, agent: str) -> None:
         """Remove o tempo decorrido do agente."""
         with self._lock:
-            container = self._containers.get(agent)
+            container = self._deck.get(agent)
             if container is not None:
                 container.elapsed = None
 
     def _get_agent_elapsed(self, agent: str) -> float | None:
         """Retorna o tempo decorrido do agente ou None."""
         with self._lock:
-            container = self._containers.get(agent)
+            container = self._deck.get(agent)
             return container.elapsed if container is not None else None
 
     def reset_visual_state(self, agent: str | None = None) -> None:
@@ -1679,13 +1697,13 @@ class TerminalRenderer:
         """
         with self._lock:
             if agent:
-                container = self._containers.get(agent)
+                container = self._deck.get(agent)
                 stream_agents = [agent] if (container and container.streaming) else []
                 transient_agents = [agent] if (container and container.transient_active) else []
             else:
-                stream_agents = [a for a, c in self._containers.items() if c.streaming]
-                transient_agents = [a for a, c in self._containers.items() if c.transient_active]
-                self._completed_streams.clear()
+                stream_agents = [a for a, c in self._deck.windows.items() if c.streaming]
+                transient_agents = [a for a, c in self._deck.windows.items() if c.transient_active]
+                self._deck.completed_streams.clear()
                 self._statuses.clear()
                 self._last_persistent_kind = None
                 self._last_persistent_agent = None
@@ -1697,11 +1715,11 @@ class TerminalRenderer:
 
         with self._lock:
             if agent:
-                container = self._containers.get(agent)
+                container = self._deck.get(agent)
                 if container is not None:
                     container.elapsed = None
             else:
-                for container in self._containers.values():
+                for container in self._deck.windows.values():
                     container.elapsed = None
 
     def request_toolbar_refresh(self) -> None:

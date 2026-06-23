@@ -218,25 +218,34 @@ class TestTerminalRenderer:
         assert rendered_line.plain.startswith("⚙ System message")
         assert any(span.start == 2 and span.style == "dim" for span in rendered_line.spans)
 
-    def test_suspend_and_resume_output_defers_prints(self, mock_renderer):
-        """Durante suspensão externa, prints ficam deferidos até retomar."""
-        assert mock_renderer.suspend_output(timeout=1.0) is True
+    def test_request_and_release_floor_defers_prints(self, mock_renderer):
+        """Durante posse externa do chão, prints ficam deferidos até liberar."""
+        assert mock_renderer.request_floor(timeout=1.0) is True
 
         mock_renderer.show_plain("mensagem deferida")
         mock_renderer.flush(timeout=1.0)
         assert mock_renderer._console.print.call_count == 0
 
-        assert mock_renderer.resume_output(timeout=1.0) is True
+        assert mock_renderer.release_floor(timeout=1.0) is True
         mock_renderer.flush(timeout=1.0)
         assert mock_renderer._console.print.call_count > 0
 
-    def test_suspend_output_sets_flag_before_writer_ack(self, mock_renderer):
+    def test_request_floor_sets_flag_before_writer_ack(self, mock_renderer):
         """Mesmo sem ack do writer, o bloqueio deve ser aplicado imediatamente."""
         mock_renderer._output_suspended.clear()
         with patch.object(mock_renderer._queue, "put", autospec=True):
-            assert mock_renderer.suspend_output(timeout=0.01) is False
+            assert mock_renderer.request_floor(timeout=0.01) is False
         assert mock_renderer._output_suspended.is_set() is True
         mock_renderer._output_suspended.clear()
+
+    def test_external_window_mounts_exclusive_window(self, mock_renderer):
+        """Janela externa deve existir no deck enquanto detém o terminal."""
+        with mock_renderer.external_window("external:editor", title="Editor externo"):
+            assert "external:editor" in mock_renderer._deck.managed_windows
+            active = mock_renderer._window_manager.active_exclusive_window()
+            assert active is not None
+            assert active.id == "external:editor"
+        assert "external:editor" not in mock_renderer._deck.managed_windows
 
     def test_show_banner_with_rich_preserves_ascii_layout(self, mock_renderer):
         """Banner deve evitar wrap para não distorcer logo ASCII."""
@@ -838,14 +847,14 @@ class TestRenderOrdering:
         assert errors == []
 
     def test_finish_stream_marks_completed_before_enqueue(self, recording_renderer):
-        """_completed_streams é populado sync em finish_message_stream, antes do live_stop."""
+        """WindowDeck registra stream completo antes do live_stop."""
         r = recording_renderer
         with patch("quimera.ui.Live"):
             r.start_message_stream("codex")
             r.finish_message_stream("codex", "ok")
 
-        # Deve estar em _completed_streams imediatamente (sem precisar de flush)
-        assert "codex" in r._completed_streams
+        # Deve estar no deck imediatamente (sem precisar de flush)
+        assert "codex" in r._deck.completed_streams
 
     def test_show_message_suppressed_after_stream_finish(self, recording_renderer):
         """show_message com o mesmo conteúdo do stream é suprimido (sem duplicata)."""
@@ -857,8 +866,8 @@ class TestRenderOrdering:
             r.show_message("codex", "conteúdo final")
             r.flush()
 
-        # _completed_streams deve ter sido consumido pelo show_message
-        assert "codex" not in r._completed_streams
+        # completed_streams deve ter sido consumido pelo show_message
+        assert "codex" not in r._deck.completed_streams
 
     def test_show_message_suppressed_after_stream_finish_with_newline_normalization(self, recording_renderer):
         """Deduplicação do pós-stream ignora diferença de CRLF/trailing spaces."""
@@ -869,7 +878,7 @@ class TestRenderOrdering:
             r.show_message("codex", "linha 1\nlinha 2")
             r.flush()
 
-        assert "codex" not in r._completed_streams
+        assert "codex" not in r._deck.completed_streams
 
     def test_coalescing_keeps_order_for_interleaved_agent_events(self, recording_renderer):
         """Cross-agent coalescing: chunks de agentes distintos são batched num único refresh."""
