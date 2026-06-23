@@ -15,7 +15,7 @@ from quimera import process_factory as subprocess
 from . import files as file_tools
 from ..config import ToolRuntimeConfig
 from ..models import ToolCall, ToolResult
-from ..policy import ToolPolicyError
+from ..policy import ToolPolicyError, is_path_inside
 from .base import ToolBase, ValidatableTool
 
 
@@ -248,7 +248,10 @@ class ShellTool(ToolBase):
         path = Path(raw_workdir)
         if not path.is_absolute():
             path = self.config.workspace_root / path
-        return path.resolve()
+        resolved = path.resolve()
+        if not is_path_inside(resolved, self.config.workspace_root):
+            raise ToolPolicyError(f"workdir fora da workspace: {raw_workdir}")
+        return resolved
 
     def _resolve_yield_time(self, raw_value) -> int:
         """Normaliza o tempo de espera antes de retornar saída parcial."""

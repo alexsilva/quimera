@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import logging
+import fnmatch
+import os
 import threading
 from pathlib import Path
 
@@ -19,6 +21,21 @@ _FILE_TOOL_NAMES = [
     "remove_file",
     "grep_search",
 ]
+_DEFAULT_GREP_EXCLUDED_DIRS = frozenset({
+    ".git",
+    ".hg",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".svn",
+    ".tox",
+    ".venv",
+    "__pycache__",
+    "build",
+    "dist",
+    "node_modules",
+    "venv",
+})
 
 
 def get_staging_root() -> Path | None:
@@ -57,6 +74,25 @@ class FileTools(ToolBase):
         path = (base / normalized).resolve()
 
         if self._is_allowed_path(path):
+            return path
+
+        raise ValueError(f"Path fora da workspace: {raw_path}")
+
+    def _resolve_mutable_path(self, raw_path: str) -> Path:
+        """Resolve path para operações que alteram arquivos.
+
+        Leituras podem usar allowed_read_roots, mas escrita e remoção ficam
+        restritas à workspace ou ao staging ativo. Isso mantém autonomia total
+        no projeto sem transformar roots somente-leitura em superfície mutável.
+        """
+        normalized = raw_path.lstrip("/") or "."
+        staging = get_staging_root()
+        base = staging if staging else self.config.workspace_root
+        path = (base / normalized).resolve()
+
+        if staging and is_path_inside(path, staging):
+            return path
+        if is_path_inside(path, self.config.workspace_root):
             return path
 
         raise ValueError(f"Path fora da workspace: {raw_path}")
@@ -143,7 +179,7 @@ class FileTools(ToolBase):
 
     def write_file(self, call: ToolCall) -> ToolResult:
         """Escreve file."""
-        path = self._resolve(call.arguments["path"])
+        path = self._resolve_mutable_path(call.arguments["path"])
         path.parent.mkdir(parents=True, exist_ok=True)
         mode = str(call.arguments.get("mode", "overwrite"))
         content = str(call.arguments["content"])
@@ -173,7 +209,7 @@ class FileTools(ToolBase):
         confirmação explícita via dry_run=False.
         """
         raw_path = call.arguments["path"]
-        path = self._resolve(raw_path)
+        path = self._resolve_mutable_path(raw_path)
 
         dry_run = bool(call.arguments.get("dry_run", True))
 
@@ -207,6 +243,9 @@ class FileTools(ToolBase):
         raw_path = call.arguments.get("path", ".")
         base = self._resolve(raw_path)
         pattern = str(call.arguments["pattern"])
+        include_glob = call.arguments.get("include_glob") or call.arguments.get("glob")
+        max_results = self._resolve_search_limit(call.arguments.get("max_results"))
+        excluded_dirs = self._resolve_excluded_search_dirs(call.arguments.get("exclude_dirs"))
         results: list[str] = []
 
         # We always want to search the resolved path (which might be in staging)
@@ -223,22 +262,22 @@ class FileTools(ToolBase):
         for search_path in search_paths:
             if not search_path.exists():
                 continue
-            for file_path in search_path.rglob("*"):
-                if not file_path.is_file():
+            for file_path in self._iter_search_files(search_path, excluded_dirs=excluded_dirs):
+                try:
+                    resolved_file = file_path.resolve()
+                except OSError:
                     continue
+                if not self._is_allowed_path(resolved_file):
+                    continue
+
+                display_path = self._display_path(file_path, workspace=workspace, staging=staging)
+                if include_glob and not self._matches_search_glob(display_path, include_glob):
+                    continue
+
                 try:
                     text = file_path.read_text(encoding="utf-8")
                 except Exception:  # noqa: BLE001
                     continue
-
-                # Determine display path
-                try:
-                    display_path = file_path.relative_to(workspace)
-                except ValueError:
-                    if staging and file_path.is_relative_to(staging):
-                        display_path = file_path.relative_to(staging)
-                    else:
-                        display_path = file_path
 
                 for line_no, line in enumerate(text.splitlines(), start=1):
                     if pattern in line:
@@ -248,7 +287,7 @@ class FileTools(ToolBase):
                         seen_results.add(res_key)
 
                         results.append(f"{display_path}:{line_no}:{line}")
-                        if len(results) >= self.config.max_search_results:
+                        if len(results) >= max_results:
                             return ToolResult(
                                 ok=True,
                                 tool_name=call.name,
@@ -256,6 +295,61 @@ class FileTools(ToolBase):
                                 truncated=True,
                             )
         return ToolResult(ok=True, tool_name=call.name, content="\n".join(results))
+
+    def _iter_search_files(self, search_path: Path, *, excluded_dirs: set[str]):
+        """Itera arquivos pesquisáveis podando diretórios ruidosos cedo."""
+        if search_path.is_file():
+            yield search_path
+            return
+        for root, dirs, files in os.walk(search_path):
+            dirs[:] = [name for name in dirs if name not in excluded_dirs]
+            for name in files:
+                yield Path(root) / name
+
+    @staticmethod
+    def _display_path(file_path: Path, *, workspace: Path, staging: Path | None) -> Path:
+        """Normaliza o path exibido nos resultados de grep_search."""
+        try:
+            return file_path.relative_to(workspace)
+        except ValueError:
+            if staging and file_path.is_relative_to(staging):
+                return file_path.relative_to(staging)
+            return file_path
+
+    @staticmethod
+    def _matches_search_glob(display_path: Path, include_glob) -> bool:
+        """Aplica filtro glob opcional ao path exibido."""
+        patterns = include_glob if isinstance(include_glob, list) else [include_glob]
+        path_text = display_path.as_posix()
+        return any(fnmatch.fnmatch(path_text, str(pattern)) for pattern in patterns)
+
+    def _resolve_search_limit(self, raw_limit) -> int:
+        """Normaliza limite de resultados sem exceder a configuração global."""
+        if raw_limit is None:
+            return self.config.max_search_results
+        try:
+            requested = int(raw_limit)
+        except (TypeError, ValueError):
+            return self.config.max_search_results
+        if requested <= 0:
+            return self.config.max_search_results
+        return min(requested, self.config.max_search_results)
+
+    @staticmethod
+    def _resolve_excluded_search_dirs(raw_exclude_dirs) -> set[str]:
+        """Combina exclusões padrão com exclusões adicionais do chamador."""
+        excluded = set(_DEFAULT_GREP_EXCLUDED_DIRS)
+        if raw_exclude_dirs is None:
+            return excluded
+        if isinstance(raw_exclude_dirs, str):
+            raw_items = [raw_exclude_dirs]
+        else:
+            raw_items = raw_exclude_dirs
+        for item in raw_items:
+            name = str(item).strip()
+            if name:
+                excluded.add(name)
+        return excluded
 
 
 class FileToolsValidator(ValidatableTool):
