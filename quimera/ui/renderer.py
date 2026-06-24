@@ -382,6 +382,26 @@ class TerminalRenderer:
         finally:
             self.release_floor(timeout=timeout)
 
+    @contextmanager
+    def input_window(
+        self,
+        *,
+        title: str = "Entrada",
+        metadata: dict[str, Any] | None = None,
+        timeout: float = 2.0,
+    ):
+        """Monta uma janela de entrada com posse exclusiva do terminal."""
+        self.request_floor(
+            timeout=timeout,
+            kind=WindowKind.INPUT,
+            title=title,
+            metadata=metadata or {},
+        )
+        try:
+            yield
+        finally:
+            self.release_floor(timeout=timeout)
+
     def _clear_overlay_sync(self) -> None:
         """Apaga as linhas do overlay transitório direto no stdout.
 

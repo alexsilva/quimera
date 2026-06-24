@@ -27,6 +27,13 @@ from rich.rule import Rule
 from ..config import DEFAULT_USER_NAME
 
 
+def _input_window_context(renderer, *, metadata=None):
+    """Return a context manager for input terminal ownership."""
+    if renderer is None:
+        return nullcontext()
+    return renderer.input_window(metadata=metadata or {})
+
+
 def _approval_window_context(renderer, *, metadata=None):
     """Return a context manager for approval terminal ownership."""
     if renderer is None:
@@ -616,46 +623,41 @@ class InputGate:
         def _read_sync() -> None:
             import select as _sel
             renderer = self._renderer
-            _request_floor = getattr(renderer, "request_floor", None) if renderer is not None else None
-            _release_floor = getattr(renderer, "release_floor", None) if renderer is not None else None
-            if callable(_request_floor):
-                _request_floor(kind="input", title="Entrada", metadata={"prompt": prompt})
             try:
-                self._flush_renderer()
-                # Exibe card Rich (com contexto) ou cai no prompt cru.
-                console = getattr(renderer, "_console", None) if renderer is not None else None
-                if render_card_fn is not None and console is not None:
-                    try:
-                        render_card_fn(console)
-                        # Após o card, exibe apenas o marcador de input.
-                        sys.stdout.write("> ")
-                    except Exception:
+                with _input_window_context(renderer, metadata={"prompt": prompt}):
+                    self._flush_renderer()
+                    # Exibe card Rich (com contexto) ou cai no prompt cru.
+                    console = getattr(renderer, "_console", None) if renderer is not None else None
+                    if render_card_fn is not None and console is not None:
+                        try:
+                            render_card_fn(console)
+                            # Após o card, exibe apenas o marcador de input.
+                            sys.stdout.write("> ")
+                        except Exception:
+                            sys.stdout.write(prompt)
+                    else:
                         sys.stdout.write(prompt)
-                else:
-                    sys.stdout.write(prompt)
-                sys.stdout.flush()
-                try:
-                    ready, _, _ = _sel.select([sys.stdin], [], [], timeout)
-                    if not ready:
+                    sys.stdout.flush()
+                    try:
+                        ready, _, _ = _sel.select([sys.stdin], [], [], timeout)
+                        if not ready:
+                            return
+                    except Exception:
                         return
-                except Exception:
-                    return
-                try:
-                    raw_line = sys.stdin.readline()
-                except (EOFError, OSError):
-                    return
-                # Não re-ecoamos a linha: o terminal está em cooked mode
-                # (ECHO ativo via in_terminal), então o que o usuário digita
-                # já aparece. Escrever de novo duplicaria a linha.
-                if raw_line:
-                    result[0] = raw_line.rstrip("\n\r")
-                else:
-                    result[0] = ""
+                    try:
+                        raw_line = sys.stdin.readline()
+                    except (EOFError, OSError):
+                        return
+                    # Não re-ecoamos a linha: o terminal está em cooked mode
+                    # (ECHO ativo via in_terminal), então o que o usuário digita
+                    # já aparece. Escrever de novo duplicaria a linha.
+                    if raw_line:
+                        result[0] = raw_line.rstrip("\n\r")
+                    else:
+                        result[0] = ""
             except (EOFError, OSError):
                 result[0] = ""
             finally:
-                if callable(_release_floor):
-                    _release_floor()
                 done.set()
 
         async def _coro() -> None:
