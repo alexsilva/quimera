@@ -34,6 +34,7 @@ from .events import (
     TransientClearEvent,
     TransientWindowEvent,
 )
+from .overlay import TransientOverlay
 from .text import (
     _apply_stream_diff,
     _normalize_stream_diff,
@@ -81,6 +82,7 @@ class TerminalCompositor:
 
         # Overlay / transient state (managed by the compositor).
         self._overlay_lines: list[int] = [0]
+        self._overlay = TransientOverlay(self._overlay_lines)
         self._transient_buf_version: int = 0
         self._last_combined_text: str | None = None
 
@@ -354,9 +356,14 @@ class TerminalCompositor:
                 return
             run_above = _renderer._run_above_prompt_fn
             if run_above is not None:
-                def _do_print():
-                    _renderer._console.print(renderable, **kwargs)
-                if run_above(_do_print):
+                clear_and_print = self._overlay.build_print_above(
+                    renderable,
+                    kwargs,
+                    _renderer._console,
+                    _bump_version,
+                    audit_fn=_audit,
+                )
+                if run_above(clear_and_print):
                     _flush_deferred()
                     return
                 _deferred_post_prompt.append((renderable, kwargs))
@@ -535,7 +542,7 @@ class TerminalCompositor:
                         event.done.set()
 
                 elif isinstance(event, TerminalResizeEvent):
-                    self._overlay_lines[0] = 0
+                    self._overlay.reset()
 
                 elif isinstance(event, PendingInputEvent):
                     with _renderer._lock:
@@ -564,21 +571,32 @@ class TerminalCompositor:
                     if not event.text:
                         continue
 
+                    replace_overlay = self._overlay.build_replace(
+                        event.text,
+                        event.buf_version,
+                        _get_version,
+                        audit_fn=_audit,
+                    )
                     run_above = _renderer._run_above_prompt_fn
                     if run_above is not None:
-                        def _show_transient(text=event.text):
-                            sys.stdout.write("\033[2m")
-                            sys.stdout.write(text)
-                            sys.stdout.write("\033[0m")
-                            sys.stdout.write("\n")
-                            sys.stdout.flush()
-                        run_above(_show_transient)
+                        run_above(replace_overlay)
                     elif _renderer._console:
-                        _renderer._console.print(event.text)
+                        replace_overlay()
 
                 elif isinstance(event, TransientClearEvent):
                     if self._output_suspended.is_set():
                         continue
+                    clear_overlay = self._overlay.build_clear(
+                        event.buf_version,
+                        _get_version,
+                        audit_fn=_audit,
+                    )
+                    run_above = _renderer._run_above_prompt_fn
+                    if run_above is not None:
+                        run_above(clear_overlay)
+                    else:
+                        clear_overlay()
+                    self._last_combined_text = None
 
             except Exception:
                 _log.exception(

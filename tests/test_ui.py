@@ -639,6 +639,68 @@ class TestTerminalRenderer:
         assert "\033[2m🔷  Codex pensando alto\033[0m" in joined
         renderer.close(timeout=1.0)
 
+    def test_update_agent_transient_above_prompt_replaces_previous_overlay(self):
+        """Novo transient deve limpar o overlay anterior antes de escrever outro."""
+        import sys
+
+        renderer = TerminalRenderer()
+        renderer._console = Console(width=100, record=True, force_terminal=False)
+        writes = []
+
+        def run_above_fn(fn):
+            fn()
+            return True
+
+        def capture(value):
+            writes.append(value)
+            return len(value)
+
+        renderer.set_prompt_integration(lambda: True, run_above_fn)
+
+        with patch("quimera.ui._agent_style", return_value=("cyan", "🔷  Codex")):
+            with patch.object(sys.stdout, "write", side_effect=capture):
+                renderer.update_agent_transient("codex", "passo 1")
+                renderer.flush()
+                renderer.update_agent_transient("codex", "passo 2")
+                renderer.flush()
+
+        joined = "".join(writes)
+        assert "\033[1A\033[J" in joined
+        assert "\033[2m🔷  Codex passo 1\033[0m" in joined
+        assert "🔷  Codex passo 2" in joined
+        assert renderer._overlay_lines[0] == 2
+        renderer.close(timeout=1.0)
+
+    def test_clear_agent_transient_above_prompt_clears_visible_overlay(self):
+        """TransientClearEvent deve limpar as linhas visíveis do overlay."""
+        import sys
+
+        renderer = TerminalRenderer()
+        renderer._console = Console(width=100, record=True, force_terminal=False)
+        writes = []
+
+        def run_above_fn(fn):
+            fn()
+            return True
+
+        def capture(value):
+            writes.append(value)
+            return len(value)
+
+        renderer.set_prompt_integration(lambda: True, run_above_fn)
+
+        with patch("quimera.ui._agent_style", return_value=("cyan", "🔷  Codex")):
+            with patch.object(sys.stdout, "write", side_effect=capture):
+                renderer.update_agent_transient("codex", "passo 1")
+                renderer.flush()
+                renderer.clear_agent_transient("codex")
+                renderer.flush()
+
+        joined = "".join(writes)
+        assert "\033[1A\033[J" in joined
+        assert renderer._overlay_lines[0] == 0
+        renderer.close(timeout=1.0)
+
     def test_cprint_with_run_above_resets_prev_lines_so_next_transient_is_correct(self):
         """_clear_and_print deve resetar _prev_lines[0]=0 ao executar via run_above.
         Sem o fix, o próximo TransientWindowEvent usaria p=N stale e emitiria
