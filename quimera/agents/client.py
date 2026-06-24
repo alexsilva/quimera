@@ -739,6 +739,13 @@ class AgentClient:
         env_hook = getattr(plugin, "env_for_cli", None)
         if callable(env_hook):
             extra_env.update(env_hook())
+        tool_config = getattr(self.tool_executor, "config", None)
+        if getattr(tool_config, "allow_ask_user", True) is False:
+            current = str(extra_env.get("QUIMERA_MCP_DISABLED_TOOLS") or "")
+            disabled_tools = [name.strip() for name in current.split(",") if name.strip()]
+            if "ask_user" not in disabled_tools:
+                disabled_tools.append("ask_user")
+            extra_env["QUIMERA_MCP_DISABLED_TOOLS"] = ",".join(disabled_tools)
         extra_env = extra_env or None
         cwd = connection.cwd if isinstance(connection, CliConnection) else None
         run_kwargs = {

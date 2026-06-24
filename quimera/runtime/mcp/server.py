@@ -79,7 +79,11 @@ def _proxy_stdio_to_socket(
 
         normalized_token = (token or "").strip() or None
         if normalized_token:
-            auth_line = json.dumps({"quimera_auth_token": normalized_token}) + "\n"
+            auth_payload = {"quimera_auth_token": normalized_token}
+            disabled_tools = (os.environ.get("QUIMERA_MCP_DISABLED_TOOLS") or "").strip()
+            if disabled_tools:
+                auth_payload["quimera_disabled_tools"] = disabled_tools
+            auth_line = json.dumps(auth_payload) + "\n"
             sock_out.write(auth_line)
             sock_out.flush()
 
@@ -243,7 +247,7 @@ class MCPServer:
             return self._err(msg_id, -32002, "Server not initialized")
 
         if method == "tools/list":
-            return self._handle_tools_list(msg_id, params)
+            return self._handle_tools_list(msg_id, params, state=state)
 
         if method == "tools/call":
             return self._handle_tools_call(msg_id, params, out=out, blocking=blocking)
@@ -484,7 +488,33 @@ class MCPServer:
             event.set()
             _logger.debug("MCP cancel event set for id=%s", cancel_id)
 
-    def _handle_tools_list(self, msg_id: Any, params: dict) -> dict:
+    @staticmethod
+    def _disabled_tools_for_state(state: dict | None) -> frozenset[str]:
+        """Retorna a denylist de tools desabilitadas para a conexão MCP."""
+        if not state:
+            return frozenset()
+        value = state.get("quimera_disabled_tools")
+        if value is None:
+            return frozenset()
+        if isinstance(value, str):
+            names = value.split(",")
+        elif isinstance(value, Iterable):
+            names = value
+        else:
+            names = [value]
+        return frozenset(str(name).strip() for name in names if str(name).strip())
+
+    def _filter_schemas_for_state(self, schemas: list[dict], state: dict | None) -> list[dict]:
+        disabled_tools = self._disabled_tools_for_state(state)
+        if not disabled_tools:
+            return schemas
+        return [
+            schema
+            for schema in schemas
+            if schema.get("function", {}).get("name") not in disabled_tools
+        ]
+
+    def _handle_tools_list(self, msg_id: Any, params: dict, state: dict | None = None) -> dict:
         schemas = resolve_tool_schemas(self._executor)
         if self._allowed_tools is not None:
             schemas = [
@@ -492,6 +522,7 @@ class MCPServer:
                 for schema in schemas
                 if schema.get("function", {}).get("name") in self._allowed_tools
             ]
+        schemas = self._filter_schemas_for_state(schemas, state)
         tools = [_openai_schema_to_mcp(s) for s in schemas]
         cursor = params.get("cursor")
         page = 0
@@ -546,6 +577,8 @@ class MCPServer:
             return self._err(msg_id, -32602, f"Unknown tool: {tool_name}")
         if not self.is_tool_allowed(tool_name):
             return self._err(msg_id, -32602, f"Tool not allowed: {tool_name}")
+        if tool_name in self._disabled_tools_for_state(state):
+            return self._err(msg_id, -32602, f"Tool disabled in this MCP context: {tool_name}")
 
         arg_keys = sorted(str(key) for key in arguments.keys()) if isinstance(arguments, dict) else []
         started_at = time.perf_counter()
@@ -781,15 +814,16 @@ class MCPServer:
 
     _AUTH_READLINE_TIMEOUT: float = 5.0
 
-    def _authenticate_socket_connection(self, inp: IO) -> bool:
+    def _authenticate_socket_connection(self, inp: IO) -> dict | None:
         """Valida a linha de autenticação na abertura de uma conexão socket.
 
-        Retorna True imediatamente se auth_token não estiver configurado.
+        Retorna um dict de prelude imediatamente se auth_token não estiver
+        configurado.
         Caso contrário, lê a primeira linha (com timeout) e valida o token
         sem logar seu valor.
         """
         if not self._auth_token:
-            return True
+            return {}
         raw_sock = getattr(inp, "buffer", None)
         raw_sock = getattr(raw_sock, "raw", None)
         underlying = getattr(raw_sock, "_sock", None) if raw_sock else None
@@ -809,15 +843,15 @@ class MCPServer:
             first_line = inp.readline()
             if not first_line:
                 _logger.debug("MCP auth: conexão encerrada antes da autenticação")
-                return False
+                return None
             payload = json.loads(first_line.strip())
             if payload.get("quimera_auth_token") == self._auth_token:
-                return True
+                return payload if isinstance(payload, dict) else {}
             _logger.debug("MCP auth: token inválido — conexão recusada")
-            return False
+            return None
         except Exception:
             _logger.debug("MCP auth: prelude inválido — conexão recusada")
-            return False
+            return None
         finally:
             if underlying is not None:
                 try:
@@ -835,8 +869,12 @@ class MCPServer:
             with conn:
                 inp = conn.makefile("r", encoding="utf-8", errors="replace")
                 out = conn.makefile("w", encoding="utf-8")
-                if not self._authenticate_socket_connection(inp):
+                prelude = self._authenticate_socket_connection(inp)
+                if prelude is None:
                     return
+                disabled_tools = prelude.get("quimera_disabled_tools")
+                if disabled_tools:
+                    setattr(out, "_mcp_state", {"quimera_disabled_tools": disabled_tools})
                 self.serve(stdin=inp, stdout=out)
         except Exception:
             _logger.debug("Conexão MCP encerrada com erro", exc_info=True)

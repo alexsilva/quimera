@@ -632,6 +632,75 @@ class TestSocketAuth:
         assert responses[0]["id"] == 42
         assert responses[0]["result"] == {}
 
+    def test_conexao_com_tool_desabilitada_remove_tool_do_tools_list(self, tmp_path):
+        """Conexão MCP com tool desabilitada não deve anunciar essa tool."""
+        sock_path = str(tmp_path / "mcp_disabled_tool_tools_list.sock")
+        server = MCPServer(_make_executor(tool_names=["read_file", "ask_user"]), auth_token="abc")
+        server.start_background(sock_path)
+        _wait_for_socket(sock_path)
+
+        schemas = [
+            {"type": "function", "function": {"name": "read_file", "description": "desc", "parameters": {}}},
+            {"type": "function", "function": {"name": "ask_user", "description": "desc", "parameters": {}}},
+        ]
+        prelude = json.dumps({"quimera_auth_token": "abc", "quimera_disabled_tools": "ask_user"})
+        with patch("quimera.runtime.mcp.server.resolve_tool_schemas", return_value=schemas):
+            [resp] = _unix_socket_exchange_with_prelude(
+                sock_path,
+                prelude,
+                {"jsonrpc": "2.0", "id": 77, "method": "tools/list"},
+            )
+
+        names = [tool["name"] for tool in resp["result"]["tools"]]
+        assert names == ["read_file"]
+
+    def test_proxy_repassa_disabled_tools_da_env(self, tmp_path, monkeypatch):
+        """Proxy MCP deve transformar QUIMERA_MCP_DISABLED_TOOLS em policy da conexão."""
+        sock_path = str(tmp_path / "mcp_proxy_disabled_tools.sock")
+        server = MCPServer(_make_executor(tool_names=["read_file", "ask_user"]), auth_token="abc")
+        server.start_background(sock_path)
+        _wait_for_socket(sock_path)
+
+        schemas = [
+            {"type": "function", "function": {"name": "read_file", "description": "desc", "parameters": {}}},
+            {"type": "function", "function": {"name": "ask_user", "description": "desc", "parameters": {}}},
+        ]
+        request_line = json.dumps({"jsonrpc": "2.0", "id": 79, "method": "tools/list"}) + "\n"
+        inp = io.StringIO(request_line)
+        out = io.StringIO()
+        monkeypatch.setenv("QUIMERA_MCP_DISABLED_TOOLS", "ask_user")
+
+        with patch("quimera.runtime.mcp.server.resolve_tool_schemas", return_value=schemas):
+            _proxy_stdio_to_socket(sock_path, token="abc", stdin=inp, stdout=out)
+
+        [resp] = [json.loads(l) for l in out.getvalue().splitlines() if l.strip()]
+        names = [tool["name"] for tool in resp["result"]["tools"]]
+        assert names == ["read_file"]
+
+    def test_conexao_com_tool_desabilitada_rejeita_tools_call(self, tmp_path):
+        """Conexão MCP com tool desabilitada deve bloquear antes do executor."""
+        sock_path = str(tmp_path / "mcp_disabled_tool_call.sock")
+        executor = _make_executor(tool_names=["ask_user"])
+        server = MCPServer(executor, auth_token="abc")
+        server.start_background(sock_path)
+        _wait_for_socket(sock_path)
+
+        prelude = json.dumps({"quimera_auth_token": "abc", "quimera_disabled_tools": "ask_user"})
+        [resp] = _unix_socket_exchange_with_prelude(
+            sock_path,
+            prelude,
+            {
+                "jsonrpc": "2.0",
+                "id": 78,
+                "method": "tools/call",
+                "params": {"name": "ask_user", "arguments": {"question": "Continuar?"}},
+            },
+        )
+
+        assert resp["error"]["code"] == -32602
+        assert "Tool disabled" in resp["error"]["message"]
+        executor.execute.assert_not_called()
+
     def test_timeout_de_auth_nao_deve_fechar_conexao_apos_autenticar(self, tmp_path):
         """Timeout usado no prelude não deve permanecer ativo no stream MCP."""
         sock_path = str(tmp_path / "mcp_auth_timeout_scope.sock")
