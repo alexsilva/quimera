@@ -106,6 +106,17 @@ class InputBroker:
                 pass
         return None, renderer
 
+    def _anchored_prompt_available(self, owner: str | None) -> bool:
+        """Return True when renderer can print an owner-anchored prompt card."""
+        renderer = self._renderer
+        if renderer is None or owner is None:
+            return False
+        deck = getattr(renderer, "_deck", None)
+        active_streams = getattr(deck, "active_streams", None)
+        if not callable(active_streams):
+            return False
+        return str(owner) in {str(agent) for agent in active_streams().keys()}
+
     # ------------------------------------------------------------------
     # Public API chamada pelos produtores (approval, ask_user)
     # ------------------------------------------------------------------
@@ -262,7 +273,8 @@ class InputBroker:
             owner=req.source,
             metadata={"question": req.question, "owner": req.source},
         ):
-            self._emit(req.question)
+            if not self._anchored_prompt_available(req.source):
+                self._emit(req.question)
             answer = self._read_line(prompt, deadline=deadline, allow_direct_gate=allow_direct_gate)
         if answer is None:
             elapsed = time.monotonic() - start
@@ -340,7 +352,8 @@ class InputBroker:
             owner=agent,
             metadata={"question": question, "owner": agent},
         ):
-            self._emit(f"\n{question}")
+            if not self._anchored_prompt_available(agent):
+                self._emit(f"\n{question}")
             answer = self._read_line(
                 f"  Resposta (auto em {remaining_s}s): ", deadline=deadline,
                 allow_direct_gate=allow_direct_gate,
@@ -436,9 +449,10 @@ class InputBroker:
         lines.append(f"  (1-{len(options)} · auto em {remaining_s}s)")
         with self._selection_terminal_window(
             owner=agent,
-            metadata={"question": question, "owner": agent},
+            metadata={"question": question, "options": options, "owner": agent},
         ):
-            self._emit("\n".join(lines))
+            if not self._anchored_prompt_available(agent):
+                self._emit("\n".join(lines))
             while True:
                 if deadline - time.monotonic() <= 0:
                     return None
