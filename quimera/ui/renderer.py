@@ -9,13 +9,27 @@ import sys as _sys_module
 import sys
 import threading
 from contextlib import contextmanager
-from dataclasses import dataclass, field
 from typing import Any
 
 _log = logging.getLogger(__name__)
 
 from quimera.runtime.streaming import apply_stream_diff, normalize_stream_diff
+from .agent_window_controller import AgentWindowController
 from .audit import RenderAuditLogger
+from .events import (
+    LiveAbortEvent,
+    LiveStartEvent,
+    LiveStopEvent,
+    LiveUpdateChunkEvent,
+    NoopEvent,
+    OutputControlEvent,
+    PendingInputEvent,
+    PrintEvent,
+    TerminalResizeEvent,
+    ToolbarTickEvent,
+    TransientClearEvent,
+    TransientWindowEvent,
+)
 from .window_manager import WindowManager, WindowRenderPlan
 from .windows import (
     AgentWindowState,
@@ -187,189 +201,6 @@ from quimera.themes import ROLE_STYLES, DEFAULT_DENSITY
 
 # Sentinela para parar o writer thread
 _STOP = object()
-
-
-# ---------------------------------------------------------------------------
-# Eventos tipados
-# ---------------------------------------------------------------------------
-
-@dataclass
-class PrintEvent:
-    renderable: Any
-    kwargs: dict = field(default_factory=dict)
-    kind: str = "generic"
-
-
-@dataclass
-class LiveStartEvent:
-    agent: str
-
-
-@dataclass
-class LiveUpdateChunkEvent:
-    agent: str
-    chunk: Any
-
-
-@dataclass
-class LiveStopEvent:
-    agent: str
-    final_content: str
-    render_mode: str = "auto"
-
-
-@dataclass
-class LiveAbortEvent:
-    agent: str
-
-
-@dataclass
-class NoopEvent:
-    done: threading.Event
-    force_flush: bool = False
-
-
-@dataclass
-class ToolbarTickEvent:
-    """Dispara refresh da toolbar para atualizar contador de tempo."""
-
-
-@dataclass
-class OutputControlEvent:
-    suspend: bool
-    done: threading.Event | None = None
-
-
-@dataclass
-class TransientWindowEvent:
-    """Substitui a janela transient no modo prompt ativo com substituição in-place."""
-    text: str
-    count: int
-    buf_version: int = 0
-
-
-@dataclass
-class TransientClearEvent:
-    """Limpa a janela transient no modo prompt ativo."""
-    buf_version: int = 0
-
-
-@dataclass
-class TerminalResizeEvent:
-    """Terminal foi redimensionado — reseta contador de linhas do overlay."""
-
-
-@dataclass
-class PendingInputEvent:
-    """Sinaliza que um container aguarda input do usuário (aprovação ou pergunta).
-
-    Atualiza os campos ``pending_kind`` / ``pending_question`` do AgentWindowState e
-    dispara um refresh do Live para exibir o badge inline enquanto o agente está em
-    streaming. Quando ``kind`` for vazio, limpa o estado pendente.
-    """
-
-    agent: str
-    kind: str     # "approval" | "ask" | ""
-    question: str = ""
-
-
-# ---------------------------------------------------------------------------
-# Container por agente (janela vertical)
-# ---------------------------------------------------------------------------
-
-class AgentWindowController:
-    """Renderer-bound behavior for a pure AgentWindowState."""
-
-    def __init__(self, state: AgentWindowState):
-        self.state = state
-
-    # -- Output management ------------------------------------------------
-
-    def start_stream(self, renderer, theme_name: str) -> None:
-        """Inicia streaming de output para este agente."""
-        if self.state.streaming:
-            return
-        self.state.streaming = True
-        self.state.stream_content = ""
-        self.state.stream_theme_name = theme_name
-        renderer._queue.put(LiveStartEvent(self.state.agent))
-
-    def update_stream(self, renderer, chunk: Any) -> None:
-        """Enfileira chunk de streaming."""
-        renderer._queue.put(LiveUpdateChunkEvent(self.state.agent, chunk))
-
-    def finish_stream(self, renderer, final_content: str, render_mode: str = "auto") -> None:
-        """Finaliza streaming e persiste conteúdo completo."""
-        clean = strip_ansi(str(final_content or ""))
-        mode = _normalize_render_mode(render_mode)
-        with renderer._lock:
-            renderer._deck.remember_completed_stream(self.state.agent, clean)
-        renderer._queue.put(LiveStopEvent(self.state.agent, clean, mode))
-
-    def abort_stream(self, renderer) -> None:
-        """Aborta streaming sem marcar como completo."""
-        renderer._queue.put(LiveAbortEvent(self.state.agent))
-
-    # -- Question management ----------------------------------------------
-
-    def ask_input(self, renderer, input_gate, prompt: str, timeout: float = 300.0) -> str | None:
-        """Input livre de texto dentro deste container.
-
-        Commit do transient, request_floor, render pergunta com banner,
-        leitura da resposta, release_floor.
-        """
-        renderer.clear_agent_transient(self.state.agent)
-        composed = self.state.compose_question(prompt)
-        if self.state.streaming:
-            renderer.set_agent_pending_input(self.state.agent, "ask", composed)
-        renderer.flush_quick()
-
-        try:
-            return input_gate.read_input_in_terminal(
-                composed + "\n", timeout
-            )
-        finally:
-            if self.state.streaming:
-                renderer.clear_agent_pending_input(self.state.agent)
-
-    def ask_approval(self, renderer, input_gate, question: str,
-                     prompt: str = "", timeout: float = 300.0) -> str | None:
-        """Aprovação y/n/a dentro deste container.
-
-        Fluxo:
-        1. Se streaming ativo: exibe badge inline no Live via ``set_agent_pending_input``.
-        2. Antes de ``request_floor``: imprime o card de aprovação permanentemente no
-           scrollback usando ``console.print()`` diretamente (enquanto o renderer está
-           suspenso e o chão foi cedido ao chamador). O card permanece visível mesmo
-           após o Live fechar.
-        3. ``request_floor`` → Live fecha → apenas o prompt ``[y/N/a]`` é exibido em
-           modo raw.
-        4. Limpa o badge pendente ao finalizar.
-        """
-        renderer.clear_agent_transient(self.state.agent)
-        composed = self.state.compose_question(question)
-        if self.state.streaming:
-            renderer.set_agent_pending_input(self.state.agent, "approval", composed)
-        renderer.flush_quick()
-
-        try:
-            return input_gate.read_approval_in_terminal(
-                composed, prompt, timeout
-            )
-        finally:
-            if self.state.streaming:
-                renderer.clear_agent_pending_input(self.state.agent)
-
-    def ask_selection(self, renderer, input_gate, question: str,
-                      options: list[str], timeout: float = 300.0) -> tuple[int, str] | None:
-        """Seleção numerada dentro deste container.
-
-        O reader (`read_selection_in_terminal`) já renderiza as opções numeradas;
-        compomos apenas o texto da pergunta (sem opções) para não duplicá-las.
-        """
-        renderer.clear_agent_transient(self.state.agent)
-        renderer.flush_quick()
-        return input_gate.read_selection_in_terminal(self.state.compose_question(question), options, timeout)
 
 
 # ---------------------------------------------------------------------------
