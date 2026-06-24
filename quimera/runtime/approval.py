@@ -6,6 +6,7 @@ import select
 import threading
 import sys
 from abc import ABC, abstractmethod
+from contextlib import nullcontext
 
 from .approval_broker import ApprovalBroker, TrustedToolExecutionContext
 
@@ -38,6 +39,13 @@ def _extract_renderer(base_handler) -> object | None:
         return getattr(base_handler, "_renderer", None)
     except Exception:
         return None
+
+
+def _approval_window_context(renderer, *, title: str = "Aprovação", metadata=None):
+    """Return a context manager for approval terminal ownership."""
+    if renderer is None:
+        return nullcontext()
+    return renderer.approval_window(title=title, metadata=metadata or {})
 
 
 def _static_callable_attr(obj, name: str):
@@ -279,48 +287,43 @@ class ConsoleApprovalHandler(ApprovalHandler):
                 # raw mode residual; no fluxo normal do app isso pode ocorrer
                 # durante tool approval fora do prompt.
                 renderer = self._renderer
-                _request_floor = getattr(renderer, "request_floor", None)
-                _release_floor = getattr(renderer, "release_floor", None)
                 input_fn = self._input_fn if self._input_fn is not None else input
                 if self._suspend_fn:
                     self._suspend_fn()
-                if callable(_request_floor):
-                    _request_floor(kind="approval", title="Aprovação")
-                thread_id = threading.get_ident()
-                suspend_fn = (
-                    self._suspend_spinner_fn.get(thread_id)
-                    or self._suspend_spinner_fn_default
-                )
-                if suspend_fn:
-                    suspend_fn()
-                try:
-                    if self._input_fn is None and self._cancel_event is not None:
-                        answer = self._read_builtin_input_with_cancel(
-                            "  Executar? [y/N/a=todas]: "
-                        ).strip().lower()
-                    else:
-                        answer = input_fn(
-                            "  Executar? [y/N/a=todas]: "
-                        ).strip().lower()
-                except _ApprovalCancelled:
-                    return False
-                except EOFError:
-                    self._show(
-                        "  stdin não disponível — negando automaticamente"
-                    )
-                    return False
-                finally:
+                with _approval_window_context(renderer, title="Aprovação"):
                     thread_id = threading.get_ident()
-                    resume_fn = (
-                        self._resume_spinner_fn.get(thread_id)
-                        or self._resume_spinner_fn_default
+                    suspend_fn = (
+                        self._suspend_spinner_fn.get(thread_id)
+                        or self._suspend_spinner_fn_default
                     )
-                    if resume_fn:
-                        resume_fn()
-                    if callable(_release_floor):
-                        _release_floor()
-                    if self._resume_fn:
-                        self._resume_fn()
+                    if suspend_fn:
+                        suspend_fn()
+                    try:
+                        if self._input_fn is None and self._cancel_event is not None:
+                            answer = self._read_builtin_input_with_cancel(
+                                "  Executar? [y/N/a=todas]: "
+                            ).strip().lower()
+                        else:
+                            answer = input_fn(
+                                "  Executar? [y/N/a=todas]: "
+                            ).strip().lower()
+                    except _ApprovalCancelled:
+                        return False
+                    except EOFError:
+                        self._show(
+                            "  stdin não disponível — negando automaticamente"
+                        )
+                        return False
+                    finally:
+                        thread_id = threading.get_ident()
+                        resume_fn = (
+                            self._resume_spinner_fn.get(thread_id)
+                            or self._resume_spinner_fn_default
+                        )
+                        if resume_fn:
+                            resume_fn()
+                        if self._resume_fn:
+                            self._resume_fn()
             if answer in {"a", "all", "todas"}:
                 if self._approve_all_callback:
                     self._approve_all_callback()

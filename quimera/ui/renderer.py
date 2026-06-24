@@ -362,6 +362,26 @@ class TerminalRenderer:
         finally:
             self.release_floor()
 
+    @contextmanager
+    def approval_window(
+        self,
+        *,
+        title: str = "Aprovação",
+        metadata: dict[str, Any] | None = None,
+        timeout: float = 2.0,
+    ):
+        """Monta uma janela de aprovação com posse exclusiva do terminal."""
+        self.request_floor(
+            timeout=timeout,
+            kind=WindowKind.APPROVAL,
+            title=title,
+            metadata=metadata or {},
+        )
+        try:
+            yield
+        finally:
+            self.release_floor(timeout=timeout)
+
     def _clear_overlay_sync(self) -> None:
         """Apaga as linhas do overlay transitório direto no stdout.
 

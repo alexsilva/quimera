@@ -247,6 +247,16 @@ class TestTerminalRenderer:
             assert active.id == "external:editor"
         assert "external:editor" not in mock_renderer._deck.managed_windows
 
+    def test_approval_window_mounts_managed_approval_window(self, mock_renderer):
+        """Approval deve ter lifecycle explícito via WindowManager."""
+        with mock_renderer.approval_window(metadata={"question": "Executar?"}):
+            active = mock_renderer._window_manager.active_exclusive_window()
+            assert active is not None
+            assert active.kind == "approval"
+            assert active.title == "Aprovação"
+            assert active.metadata == {"question": "Executar?"}
+        assert mock_renderer._window_manager.active_exclusive_window() is None
+
     def test_show_banner_with_rich_preserves_ascii_layout(self, mock_renderer):
         """Banner deve evitar wrap para não distorcer logo ASCII."""
         banner = " / __ \\\\__  __(_)___\n/ / / / / / / / __"

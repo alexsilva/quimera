@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import atexit
 import contextvars
+from contextlib import nullcontext
 import shutil
 import sys
 import threading
@@ -24,6 +25,13 @@ from rich.console import Console
 from rich.rule import Rule
 
 from ..config import DEFAULT_USER_NAME
+
+
+def _approval_window_context(renderer, *, metadata=None):
+    """Return a context manager for approval terminal ownership."""
+    if renderer is None:
+        return nullcontext()
+    return renderer.approval_window(metadata=metadata or {})
 
 
 class PromptFormatter:
@@ -707,50 +715,45 @@ class InputGate:
         def _approval_sync() -> None:
             import select as _sel
             renderer = self._renderer
-            _request_floor = getattr(renderer, "request_floor", None) if renderer is not None else None
-            _release_floor = getattr(renderer, "release_floor", None) if renderer is not None else None
-            if callable(_request_floor):
-                _request_floor(kind="approval", title="Aprovação", metadata={"question": question})
             try:
-                self._flush_renderer()
-                remaining_s = max(0, int(deadline - _time.monotonic()))
-                # O card é impresso DEPOIS de request_floor: o renderer está suspenso
-                # e o chamador detém o chão, portanto console.print() vai direto ao
-                # terminal sem conflitar com o Live.
-                console = getattr(renderer, "_console", None) if renderer is not None else None
-                if render_card_fn is not None and console is not None:
-                    try:
-                        render_card_fn(console)
-                    except Exception:
+                with _approval_window_context(renderer, metadata={"question": question}):
+                    self._flush_renderer()
+                    remaining_s = max(0, int(deadline - _time.monotonic()))
+                    # O card é impresso DEPOIS de request_floor: o renderer está suspenso
+                    # e o chamador detém o chão, portanto console.print() vai direto ao
+                    # terminal sem conflitar com o Live.
+                    console = getattr(renderer, "_console", None) if renderer is not None else None
+                    if render_card_fn is not None and console is not None:
+                        try:
+                            render_card_fn(console)
+                        except Exception:
+                            sys.stdout.write(question + "\n")
+                            sys.stdout.flush()
+                    else:
                         sys.stdout.write(question + "\n")
-                        sys.stdout.flush()
-                else:
-                    sys.stdout.write(question + "\n")
-                sys.stdout.write(prompt.rstrip() + f"  [auto em {remaining_s}s] ")
-                sys.stdout.flush()
+                    sys.stdout.write(prompt.rstrip() + f"  [auto em {remaining_s}s] ")
+                    sys.stdout.flush()
 
-                remaining = deadline - _time.monotonic()
-                if remaining <= 0:
-                    return
-
-                try:
-                    ready, _, _ = _sel.select([sys.stdin], [], [], remaining)
-                    if not ready:
+                    remaining = deadline - _time.monotonic()
+                    if remaining <= 0:
                         return
-                except Exception:
-                    return
-                try:
-                    raw_line = sys.stdin.readline()
-                except (EOFError, OSError):
-                    return
-                if not raw_line:
-                    return
-                # Cooked mode (ECHO ativo via in_terminal): a resposta digitada
-                # já aparece no terminal; não re-ecoar para não duplicar.
-                result[0] = raw_line.rstrip("\n\r").strip().lower()
+
+                    try:
+                        ready, _, _ = _sel.select([sys.stdin], [], [], remaining)
+                        if not ready:
+                            return
+                    except Exception:
+                        return
+                    try:
+                        raw_line = sys.stdin.readline()
+                    except (EOFError, OSError):
+                        return
+                    if not raw_line:
+                        return
+                    # Cooked mode (ECHO ativo via in_terminal): a resposta digitada
+                    # já aparece no terminal; não re-ecoar para não duplicar.
+                    result[0] = raw_line.rstrip("\n\r").strip().lower()
             finally:
-                if callable(_release_floor):
-                    _release_floor()
                 done.set()
 
         async def _coro() -> None:

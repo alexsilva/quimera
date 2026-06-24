@@ -29,6 +29,7 @@ import asyncio
 import sys
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -433,6 +434,10 @@ def test_approval_show_calls_renderer_show_system_from_background_thread():
 
         def flush(self):
             flush_calls.append(True)
+
+        @contextmanager
+        def approval_window(self, **_kwargs):
+            yield
 
     renderer = FakeRenderer()
     # input_fn nega imediatamente — só queremos verificar o _show()

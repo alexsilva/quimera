@@ -5,6 +5,7 @@ escopo por thread, cancelamento e governança.
 """
 import io
 import threading
+from contextlib import contextmanager
 from unittest.mock import MagicMock, patch, call
 
 import pytest
@@ -282,6 +283,14 @@ def test_console_approval_handler_with_renderer():
         def show_approval(self, msg):
             self.calls.append(msg)
 
+        @contextmanager
+        def approval_window(self, **_kwargs):
+            self.calls.append("approval_window:enter")
+            try:
+                yield
+            finally:
+                self.calls.append("approval_window:exit")
+
     renderer = FakeRenderer()
     handler = ApprovalManager(None, input_fn=lambda _: "y", renderer=renderer)
     with patch('builtins.print') as mock_print:
@@ -303,6 +312,14 @@ def test_console_approval_handler_renderer_flushes_before_input():
         def flush(self):
             self.calls.append(("flush", None))
 
+        @contextmanager
+        def approval_window(self, **_kwargs):
+            self.calls.append(("approval_window:enter", None))
+            try:
+                yield
+            finally:
+                self.calls.append(("approval_window:exit", None))
+
     renderer = FakeRenderer()
     order = []
     handler = ApprovalManager(None,
@@ -323,6 +340,14 @@ def test_console_approval_handler_renderer_shows_eof_message():
 
         def show_approval(self, msg):
             self.calls.append(msg)
+
+        @contextmanager
+        def approval_window(self, **_kwargs):
+            self.calls.append("approval_window:enter")
+            try:
+                yield
+            finally:
+                self.calls.append("approval_window:exit")
 
     renderer = FakeRenderer()
     handler = ApprovalManager(None,
@@ -685,6 +710,14 @@ def test_console_approval_handler_renderer_with_spinner_callbacks():
 
         def show_approval(self, msg):
             self.calls.append(msg)
+
+        @contextmanager
+        def approval_window(self, **_kwargs):
+            self.calls.append("approval_window:enter")
+            try:
+                yield
+            finally:
+                self.calls.append("approval_window:exit")
 
     order = []
     renderer = FakeRenderer()
