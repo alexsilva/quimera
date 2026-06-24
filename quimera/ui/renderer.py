@@ -762,13 +762,11 @@ class TerminalRenderer:
                 buf.append(clean_message)
                 _term_lines = shutil.get_terminal_size(fallback=(80, 24)).lines
                 buf[:] = buf[-max(_SCROLLING_WINDOW_SIZE, _term_lines // 3):]
-                self._compositor._transient_buf_version += 1
-                buf_version = self._compositor._transient_buf_version
+                buf_version = self._compositor.mark_transient_changed()
 
                 if self._run_above_prompt_fn:
                     combined_text, count = self._combined_transient(_term_lines)
-                    if combined_text and combined_text != self._compositor._last_combined_text:
-                        self._compositor._last_combined_text = combined_text
+                    if self._compositor.remember_combined_transient(combined_text):
                         enqueue_event = TransientWindowEvent(combined_text, count, buf_version)
                 else:
                     fallback = (container.label, container.style)
@@ -814,11 +812,10 @@ class TerminalRenderer:
         with self._lock:
             container = self._deck.get(agent)
             is_transient_agent = bool(container and container.transient_active)
+            changed = bool(container and container.transient)
             if container is not None:
-                if container.transient:
-                    self._compositor._transient_buf_version += 1
                 container.clear_transient_buffer()
-            buf_version = self._compositor._transient_buf_version
+            buf_version = self._compositor.mark_transient_changed(changed=changed)
 
             event = None
             if prompt_active and self._run_above_prompt_fn:
@@ -827,7 +824,7 @@ class TerminalRenderer:
                 if not combined_text:
                     event = TransientClearEvent(buf_version)
                 else:
-                    self._compositor._last_combined_text = combined_text
+                    self._compositor.remember_combined_transient(combined_text)
                     event = TransientWindowEvent(combined_text, count, buf_version)
 
         if event is not None:

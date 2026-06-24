@@ -156,6 +156,24 @@ class TerminalCompositor:
             self._transient_buf_version += 1
             return self._transient_buf_version
 
+    def mark_transient_changed(self, *, changed: bool = True) -> int:
+        """Return the current transient version, bumping it when state changed."""
+        if changed:
+            return self.bump_transient_version()
+        with self._renderer._lock:
+            return self._transient_buf_version
+
+    def remember_combined_transient(self, text: str) -> bool:
+        """Remember combined overlay text; return True when it changed."""
+        if not text or text == self._last_combined_text:
+            return False
+        self._last_combined_text = text
+        return True
+
+    def clear_combined_transient(self) -> None:
+        """Forget the last combined overlay text."""
+        self._last_combined_text = None
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
@@ -596,7 +614,7 @@ class TerminalCompositor:
                         run_above(clear_overlay)
                     else:
                         clear_overlay()
-                    self._last_combined_text = None
+                    self.clear_combined_transient()
 
             except Exception:
                 _log.exception(
