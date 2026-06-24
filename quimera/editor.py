@@ -48,30 +48,11 @@ class Editor:
 
     @contextmanager
     def _external_editor_window(self, path: str | Path, command: list[str]):
-        external_window = getattr(self._renderer, "external_window", None)
-        if callable(external_window):
-            with external_window(
-                "external:editor",
-                title="Editor externo",
-                metadata={"path": str(path), "command": command},
-            ) as window:
-                yield window
-            return
-
-        @contextmanager
-        def _legacy_floor():
-            request_floor = getattr(self._renderer, "request_floor", None)
-            release_floor = getattr(self._renderer, "release_floor", None)
-            floor_acquired = False
-            try:
-                if callable(request_floor):
-                    floor_acquired = True
-                    request_floor()
-                yield
-            finally:
-                if floor_acquired and callable(release_floor):
-                    release_floor()
-        with _legacy_floor() as window:
+        with self._renderer.external_window(
+            "external:editor",
+            title="Editor externo",
+            metadata={"path": str(path), "command": command},
+        ) as window:
             yield window
 
     def compose(self, initial_content: str = "") -> str | None:

@@ -6,6 +6,7 @@ import threading
 import time
 import unittest
 from collections import defaultdict, deque
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, call, patch
@@ -99,6 +100,11 @@ class DummyRenderer:
 
     def show_prompt_preview(self, agent, content):
         self.prompt_previews.append((agent, content))
+
+    @contextmanager
+    def external_window(self, window_id, title="", metadata=None):
+        """Provide explicit external-window ownership for editor tests."""
+        yield None
 
     def reset_visual_state(self, *a, **kw): pass
 

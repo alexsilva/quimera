@@ -315,7 +315,7 @@ class TerminalRenderer:
             metadata=metadata or {},
         )
 
-    def request_floor(
+    def _request_floor(
         self,
         timeout: float = 2.0,
         *,
@@ -338,7 +338,7 @@ class TerminalRenderer:
             self._floor_windows_by_thread[threading.get_ident()] = active_window.id
         return self._apply_window_render_plan(transition.render_plan, timeout=timeout)
 
-    def release_floor(self, timeout: float = 2.0) -> bool:
+    def _release_floor(self, timeout: float = 2.0) -> bool:
         """Devolve o chão ao Compositor: retoma o feed e drena prints deferidos."""
         with self._lock:
             window_id = self._floor_windows_by_thread.pop(threading.get_ident(), None)
@@ -346,6 +346,33 @@ class TerminalRenderer:
         if transition is None:
             return True
         return self._apply_window_render_plan(transition.render_plan, timeout=timeout)
+
+    @contextmanager
+    def _exclusive_window(self, window: RenderWindowState, *, timeout: float = 2.0):
+        """Executa o lifecycle comum de uma janela exclusiva do terminal."""
+        self._request_floor(timeout=timeout, window=window)
+        try:
+            yield window
+        finally:
+            self._release_floor(timeout=timeout)
+
+    @contextmanager
+    def terminal_floor(
+        self,
+        *,
+        title: str = "Terminal floor",
+        metadata: dict[str, Any] | None = None,
+        timeout: float = 2.0,
+    ):
+        """Monta um chão explícito de terminal para I/O baixo nível."""
+        window = self._implicit_floor_window(
+            WindowKind.TERMINAL_FLOOR,
+            title,
+            None,
+            metadata or {},
+        )
+        with self._exclusive_window(window, timeout=timeout) as active:
+            yield active
 
     @contextmanager
     def external_window(self, window_id: str, title: str = "", metadata: dict[str, Any] | None = None):
@@ -356,11 +383,8 @@ class TerminalRenderer:
             title=title,
             metadata=metadata or {},
         )
-        self.request_floor(window=window)
-        try:
-            yield window
-        finally:
-            self.release_floor()
+        with self._exclusive_window(window) as active:
+            yield active
 
     @contextmanager
     def approval_window(
@@ -371,16 +395,14 @@ class TerminalRenderer:
         timeout: float = 2.0,
     ):
         """Monta uma janela de aprovação com posse exclusiva do terminal."""
-        self.request_floor(
-            timeout=timeout,
-            kind=WindowKind.APPROVAL,
-            title=title,
-            metadata=metadata or {},
+        window = self._implicit_floor_window(
+            WindowKind.APPROVAL,
+            title,
+            None,
+            metadata or {},
         )
-        try:
+        with self._exclusive_window(window, timeout=timeout):
             yield
-        finally:
-            self.release_floor(timeout=timeout)
 
     @contextmanager
     def input_window(
@@ -391,16 +413,14 @@ class TerminalRenderer:
         timeout: float = 2.0,
     ):
         """Monta uma janela de entrada com posse exclusiva do terminal."""
-        self.request_floor(
-            timeout=timeout,
-            kind=WindowKind.INPUT,
-            title=title,
-            metadata=metadata or {},
+        window = self._implicit_floor_window(
+            WindowKind.INPUT,
+            title,
+            None,
+            metadata or {},
         )
-        try:
+        with self._exclusive_window(window, timeout=timeout):
             yield
-        finally:
-            self.release_floor(timeout=timeout)
 
     @contextmanager
     def selection_window(
@@ -411,16 +431,14 @@ class TerminalRenderer:
         timeout: float = 2.0,
     ):
         """Monta uma janela de seleção com posse exclusiva do terminal."""
-        self.request_floor(
-            timeout=timeout,
-            kind=WindowKind.SELECTION,
-            title=title,
-            metadata=metadata or {},
+        window = self._implicit_floor_window(
+            WindowKind.SELECTION,
+            title,
+            None,
+            metadata or {},
         )
-        try:
+        with self._exclusive_window(window, timeout=timeout):
             yield
-        finally:
-            self.release_floor(timeout=timeout)
 
     def _clear_overlay_sync(self) -> None:
         """Apaga as linhas do overlay transitório direto no stdout.

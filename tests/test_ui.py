@@ -1,5 +1,6 @@
 """Tests for quimera.ui."""
 import threading
+from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 import pytest
@@ -218,25 +219,51 @@ class TestTerminalRenderer:
         assert rendered_line.plain.startswith("⚙ System message")
         assert any(span.start == 2 and span.style == "dim" for span in rendered_line.spans)
 
-    def test_request_and_release_floor_defers_prints(self, mock_renderer):
+    def test_terminal_floor_defers_prints(self, mock_renderer):
         """Durante posse externa do chão, prints ficam deferidos até liberar."""
-        assert mock_renderer.request_floor(timeout=1.0) is True
+        with mock_renderer.terminal_floor(timeout=1.0):
+            mock_renderer.show_plain("mensagem deferida")
+            mock_renderer.flush(timeout=1.0)
+            assert mock_renderer._console.print.call_count == 0
 
-        mock_renderer.show_plain("mensagem deferida")
-        mock_renderer.flush(timeout=1.0)
-        assert mock_renderer._console.print.call_count == 0
-
-        assert mock_renderer.release_floor(timeout=1.0) is True
         mock_renderer.flush(timeout=1.0)
         assert mock_renderer._console.print.call_count > 0
 
-    def test_request_floor_sets_flag_before_writer_ack(self, mock_renderer):
+    def test_terminal_floor_sets_flag_before_writer_ack(self, mock_renderer):
         """Mesmo sem ack do writer, o bloqueio deve ser aplicado imediatamente."""
         mock_renderer._output_suspended.clear()
         with patch.object(mock_renderer._queue, "put", autospec=True):
-            assert mock_renderer.request_floor(timeout=0.01) is False
-        assert mock_renderer._output_suspended.is_set() is True
+            with mock_renderer.terminal_floor(timeout=0.01):
+                assert mock_renderer._output_suspended.is_set() is True
         mock_renderer._output_suspended.clear()
+
+    def test_floor_request_is_not_public_window_api(self, mock_renderer):
+        """Janelas interativas devem usar APIs explícitas, não floor genérico público."""
+        assert not hasattr(mock_renderer, "request_floor")
+        assert not hasattr(mock_renderer, "release_floor")
+        assert hasattr(mock_renderer, "terminal_floor")
+        assert hasattr(mock_renderer, "approval_window")
+        assert hasattr(mock_renderer, "input_window")
+        assert hasattr(mock_renderer, "selection_window")
+
+    def test_interactive_windows_do_not_call_legacy_floor_kind_api(self):
+        """Approval/input/selection não devem voltar ao padrão request_floor(kind=...)."""
+        root = Path(__file__).resolve().parents[1] / "quimera"
+        forbidden = [
+            'request_floor(kind="approval"',
+            "request_floor(kind='approval'",
+            'request_floor(kind="input"',
+            "request_floor(kind='input'",
+            'request_floor(kind="selection"',
+            "request_floor(kind='selection'",
+        ]
+        matches: list[str] = []
+        for path in root.rglob("*.py"):
+            text = path.read_text(encoding="utf-8")
+            for needle in forbidden:
+                if needle in text:
+                    matches.append(f"{path.relative_to(root.parent)}: {needle}")
+        assert matches == []
 
     def test_external_window_mounts_exclusive_window(self, mock_renderer):
         """Janela externa deve existir no deck enquanto detém o terminal."""

@@ -398,7 +398,7 @@ def test_input_broker_read_line_without_gate_fails_safe():
     assert result is None
 
 
-def test_input_broker_suspend_live_pauses_and_resumes_spinner_callbacks():
+def test_input_broker_interactive_window_pauses_and_resumes_spinner_callbacks():
     """InputBroker deve pausar o loading externo antes de prompt interativo."""
     events = []
     broker = InputBroker(input_gate=None)
@@ -407,10 +407,10 @@ def test_input_broker_suspend_live_pauses_and_resumes_spinner_callbacks():
         lambda: events.append("resume"),
     )
 
-    broker._suspend_live()
-    broker._resume_live()
+    with broker._input_terminal_window():
+        events.append("inside")
 
-    assert events == ["suspend", "resume"]
+    assert events == ["suspend", "inside", "resume"]
 
 
 # ─────────────────────────────────────────────────────────────────────────────

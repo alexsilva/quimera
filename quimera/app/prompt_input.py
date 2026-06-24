@@ -595,8 +595,8 @@ class InputGate:
         de background (ex: servidor MCP) enquanto a main thread está no prompt.
 
         Se ``render_card_fn`` for fornecida, é chamada com o Console do renderer
-        imediatamente após ``request_floor`` para exibir o contexto da pergunta
-        como Rich renderable permanente antes do prompt de input cru.
+        dentro de ``input_window`` para exibir o contexto da pergunta como Rich
+        renderable permanente antes do prompt de input cru.
 
         Returns:
             String com a resposta do usuário, ou None se timeout/erro ou loop parado.
@@ -694,7 +694,7 @@ class InputGate:
         digita y/n/a (ou yes/sim/todas) e confirma com Enter.
 
         Se ``render_card_fn`` for fornecida, é chamada com o Console do renderer
-        depois de ``request_floor`` e imprime o card de aprovação como Rich
+        dentro de ``approval_window`` e imprime o card de aprovação como Rich
         renderable permanente (com contexto e estilo visual). Caso contrário,
         imprime ``question`` como texto cru.
 
@@ -722,9 +722,9 @@ class InputGate:
                 with _approval_window_context(renderer, metadata={"question": question}):
                     self._flush_renderer()
                     remaining_s = max(0, int(deadline - _time.monotonic()))
-                    # O card é impresso DEPOIS de request_floor: o renderer está suspenso
-                    # e o chamador detém o chão, portanto console.print() vai direto ao
-                    # terminal sem conflitar com o Live.
+                    # O card é impresso dentro de approval_window: o renderer está
+                    # suspenso e o chamador detém o chão, portanto console.print()
+                    # vai direto ao terminal sem conflitar com o Live.
                     console = getattr(renderer, "_console", None) if renderer is not None else None
                     if render_card_fn is not None and console is not None:
                         try:

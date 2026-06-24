@@ -17,8 +17,10 @@ from __future__ import annotations
 import queue
 import threading
 import time
+from collections.abc import Callable
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field
-from typing import Any, Callable, Literal
+from typing import Any, Literal
 
 _UNSET = object()
 
@@ -256,12 +258,9 @@ class InputBroker:
 
         # Sem pt ativo, não disputamos stdin diretamente. A leitura falha de
         # forma segura e o pedido segue pelo default/timeout.
-        self._suspend_live()
-        try:
+        with self._approval_terminal_window(metadata={"question": req.question}):
             self._emit(req.question)
             answer = self._read_line(prompt, deadline=deadline, allow_direct_gate=allow_direct_gate)
-        finally:
-            self._resume_live()
         if answer is None:
             elapsed = time.monotonic() - start
             self._emit(
@@ -320,8 +319,8 @@ class InputBroker:
     ) -> tuple[int, str] | None:
         """Lê uma resposta em texto livre com deadline. Retorna (-1, texto)."""
         remaining_s = max(0, int(deadline - time.monotonic()))
-        # Via container: a pergunta vai embutida no prompt e só aparece depois
-        # do request_floor, sem ser emitida no feed antes (evita atropelamento).
+        # Via container: a pergunta vai embutida no prompt e só aparece dentro
+        # da janela explícita de input, sem ser emitida no feed antes.
         gate = self._input_gate
         is_active = getattr(gate, "is_active", None)
         if gate is not None and callable(is_active) and is_active():
@@ -333,16 +332,13 @@ class InputBroker:
                 if answer is None:
                     return None
                 return -1, answer.rstrip("\n\r")
-        # Fallback (sem pt ativo): emite a pergunta e tenta ler pelo gate.
-        self._suspend_live()
-        try:
+        # Sem pt ativo: emite a pergunta sob janela explícita de input.
+        with self._input_terminal_window(metadata={"question": question}):
             self._emit(f"\n{question}")
             answer = self._read_line(
                 f"  Resposta (auto em {remaining_s}s): ", deadline=deadline,
                 allow_direct_gate=allow_direct_gate,
             )
-        finally:
-            self._resume_live()
         if answer is None:
             return None
         return -1, answer.rstrip("\n\r")
@@ -430,8 +426,7 @@ class InputBroker:
         for i, opt in enumerate(options):
             lines.append(f"  {i + 1}. {opt}")
         lines.append(f"  (1-{len(options)} · auto em {remaining_s}s)")
-        self._suspend_live()
-        try:
+        with self._selection_terminal_window(metadata={"question": question}):
             self._emit("\n".join(lines))
             while True:
                 if deadline - time.monotonic() <= 0:
@@ -448,56 +443,63 @@ class InputBroker:
                     if 0 <= num < len(options):
                         return num, options[num]
                 self._emit(f"  [{stripped!r} inválido — esperado 1-{len(options)}]")
-        finally:
-            self._resume_live()
 
     # ------------------------------------------------------------------
     # Utilitário de saída
     # ------------------------------------------------------------------
 
-    def _suspend_live(self) -> None:
-        """Suspende Rich Live antes de I/O interativo direto.
+    @contextmanager
+    def _with_interactive_terminal_window(self, window_factory: Callable[[], Any]):
+        """Suspende Rich Live dentro de uma janela interativa explícita.
 
         Para o Live display e mostra o cursor, evitando que o refresh
         do Live sobrescreva o texto da pergunta ou que o cursor oculto
         impeça o usuário de ver onde digitar.
         """
-        renderer = self._renderer
         suspend_spinner = self._suspend_spinner_fn
         if callable(suspend_spinner):
             try:
                 suspend_spinner()
             except Exception:
                 pass
-        if renderer is not None:
-            suspend_fn = getattr(renderer, "request_floor", None)
-            if callable(suspend_fn):
+        try:
+            with window_factory():
+                print("\033[?25h", end="", flush=True)
+                yield
+        finally:
+            resume_spinner = self._resume_spinner_fn
+            if callable(resume_spinner):
                 try:
-                    suspend_fn(kind="input", title="Entrada")
+                    resume_spinner()
                 except Exception:
                     pass
-        print("\033[?25h", end="", flush=True)
 
-    def _resume_live(self) -> None:
-        """Retoma Rich Live após I/O interativo direto.
-
-        O Live.start() esconde o cursor automaticamente; não fazer
-        hide explícito aqui para não corromper o prompt_toolkit.
-        """
+    def _approval_terminal_window(self, *, metadata: dict[str, Any] | None = None):
+        """Return an explicit approval window context preserving spinner callbacks."""
         renderer = self._renderer
-        if renderer is not None:
-            resume_fn = getattr(renderer, "release_floor", None)
-            if callable(resume_fn):
-                try:
-                    resume_fn()
-                except Exception:
-                    pass
-        resume_spinner = self._resume_spinner_fn
-        if callable(resume_spinner):
-            try:
-                resume_spinner()
-            except Exception:
-                pass
+        if renderer is None:
+            return self._with_interactive_terminal_window(lambda: nullcontext())
+        return self._with_interactive_terminal_window(
+            lambda: renderer.approval_window(metadata=metadata or {})
+        )
+
+    def _input_terminal_window(self, *, metadata: dict[str, Any] | None = None):
+        """Return an explicit input window context preserving spinner callbacks."""
+        renderer = self._renderer
+        if renderer is None:
+            return self._with_interactive_terminal_window(lambda: nullcontext())
+        return self._with_interactive_terminal_window(
+            lambda: renderer.input_window(metadata=metadata or {})
+        )
+
+    def _selection_terminal_window(self, *, metadata: dict[str, Any] | None = None):
+        """Return a selection window context preserving spinner callbacks."""
+        renderer = self._renderer
+        if renderer is None:
+            return self._with_interactive_terminal_window(lambda: nullcontext())
+        return self._with_interactive_terminal_window(
+            lambda: renderer.selection_window(metadata=metadata or {})
+        )
 
     def _emit(self, message: str) -> None:
         """Emite mensagem ao usuário mantendo cursor tracking do Rich correto.
