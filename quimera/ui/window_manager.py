@@ -73,6 +73,74 @@ class WindowManager:
             metadata=metadata or {},
         )
 
+    def make_terminal_floor_window(
+        self,
+        window_id: str,
+        *,
+        title: str = "Terminal floor",
+        owner: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> RenderWindowState:
+        """Create an explicit low-level terminal floor window."""
+        return self.make_floor_window(
+            window_id,
+            kind=WindowKind.TERMINAL_FLOOR,
+            title=title,
+            owner=owner,
+            metadata=metadata or {},
+        )
+
+    def make_approval_window(
+        self,
+        window_id: str,
+        *,
+        title: str = "Aprovação",
+        owner: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> RenderWindowState:
+        """Create an approval modal with exclusive terminal ownership."""
+        return self.make_floor_window(
+            window_id,
+            kind=WindowKind.APPROVAL,
+            title=title,
+            owner=owner,
+            metadata=metadata or {},
+        )
+
+    def make_input_window(
+        self,
+        window_id: str,
+        *,
+        title: str = "Entrada",
+        owner: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> RenderWindowState:
+        """Create an input modal with exclusive terminal ownership."""
+        return self.make_floor_window(
+            window_id,
+            kind=WindowKind.INPUT,
+            title=title,
+            owner=owner,
+            metadata=metadata or {},
+        )
+
+    def make_selection_window(
+        self,
+        window_id: str,
+        *,
+        title: str = "Seleção",
+        owner: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> RenderWindowState:
+        """Create a selection modal with exclusive terminal ownership."""
+        return self.make_floor_window(
+            window_id,
+            kind=WindowKind.SELECTION,
+            title=title,
+            owner=owner,
+            metadata=metadata or {},
+        )
+
     def make_external_window(
         self,
         window_id: str,

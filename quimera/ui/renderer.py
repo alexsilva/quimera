@@ -299,6 +299,10 @@ class TerminalRenderer:
     #
     # Isto formaliza a posse do terminal em uma única API de alto nível.
 
+    def _floor_window_id(self) -> str:
+        """Return the thread-scoped identifier used by exclusive floor windows."""
+        return f"floor:{threading.get_ident()}"
+
     def _implicit_floor_window(
         self,
         kind: WindowKind | str = WindowKind.TERMINAL_FLOOR,
@@ -306,6 +310,7 @@ class TerminalRenderer:
         owner: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> RenderWindowState:
+        """Create the remaining generic floor window used by private low-level code."""
         thread_id = threading.get_ident()
         return self._window_manager.make_floor_window(
             window_id=f"floor:{thread_id}",
@@ -365,11 +370,10 @@ class TerminalRenderer:
         timeout: float = 2.0,
     ):
         """Monta um chão explícito de terminal para I/O baixo nível."""
-        window = self._implicit_floor_window(
-            WindowKind.TERMINAL_FLOOR,
-            title,
-            None,
-            metadata or {},
+        window = self._window_manager.make_terminal_floor_window(
+            self._floor_window_id(),
+            title=title,
+            metadata=metadata or {},
         )
         with self._exclusive_window(window, timeout=timeout) as active:
             yield active
@@ -395,11 +399,10 @@ class TerminalRenderer:
         timeout: float = 2.0,
     ):
         """Monta uma janela de aprovação com posse exclusiva do terminal."""
-        window = self._implicit_floor_window(
-            WindowKind.APPROVAL,
-            title,
-            None,
-            metadata or {},
+        window = self._window_manager.make_approval_window(
+            self._floor_window_id(),
+            title=title,
+            metadata=metadata or {},
         )
         with self._exclusive_window(window, timeout=timeout):
             yield
@@ -413,11 +416,10 @@ class TerminalRenderer:
         timeout: float = 2.0,
     ):
         """Monta uma janela de entrada com posse exclusiva do terminal."""
-        window = self._implicit_floor_window(
-            WindowKind.INPUT,
-            title,
-            None,
-            metadata or {},
+        window = self._window_manager.make_input_window(
+            self._floor_window_id(),
+            title=title,
+            metadata=metadata or {},
         )
         with self._exclusive_window(window, timeout=timeout):
             yield
@@ -431,11 +433,10 @@ class TerminalRenderer:
         timeout: float = 2.0,
     ):
         """Monta uma janela de seleção com posse exclusiva do terminal."""
-        window = self._implicit_floor_window(
-            WindowKind.SELECTION,
-            title,
-            None,
-            metadata or {},
+        window = self._window_manager.make_selection_window(
+            self._floor_window_id(),
+            title=title,
+            metadata=metadata or {},
         )
         with self._exclusive_window(window, timeout=timeout):
             yield
