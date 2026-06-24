@@ -56,7 +56,11 @@ class AgentWindowController:
         renderer.flush_quick()
 
         try:
-            return input_gate.read_input_in_terminal(composed + "\n", timeout)
+            return input_gate.read_input_in_terminal(
+                composed + "\n",
+                timeout,
+                owner=self.state.agent,
+            )
         finally:
             if self.state.streaming:
                 renderer.clear_agent_pending_input(self.state.agent)
@@ -77,7 +81,12 @@ class AgentWindowController:
         renderer.flush_quick()
 
         try:
-            return input_gate.read_approval_in_terminal(composed, prompt, timeout)
+            return input_gate.read_approval_in_terminal(
+                composed,
+                prompt,
+                timeout,
+                owner=self.state.agent,
+            )
         finally:
             if self.state.streaming:
                 renderer.clear_agent_pending_input(self.state.agent)
@@ -97,4 +106,5 @@ class AgentWindowController:
             self.state.compose_question(question),
             options,
             timeout,
+            owner=self.state.agent,
         )

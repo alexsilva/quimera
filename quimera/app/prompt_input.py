@@ -27,25 +27,25 @@ from rich.rule import Rule
 from ..config import DEFAULT_USER_NAME
 
 
-def _input_window_context(renderer, *, metadata=None):
+def _input_window_context(renderer, *, owner=None, metadata=None):
     """Return a context manager for input terminal ownership."""
     if renderer is None:
         return nullcontext()
-    return renderer.input_window(metadata=metadata or {})
+    return renderer.input_window(owner=owner, metadata=metadata or {})
 
 
-def _selection_window_context(renderer, *, metadata=None):
+def _selection_window_context(renderer, *, owner=None, metadata=None):
     """Return a context manager for selection terminal ownership."""
     if renderer is None:
         return nullcontext()
-    return renderer.selection_window(metadata=metadata or {})
+    return renderer.selection_window(owner=owner, metadata=metadata or {})
 
 
-def _approval_window_context(renderer, *, metadata=None):
+def _approval_window_context(renderer, *, owner=None, metadata=None):
     """Return a context manager for approval terminal ownership."""
     if renderer is None:
         return nullcontext()
-    return renderer.approval_window(metadata=metadata or {})
+    return renderer.approval_window(owner=owner, metadata=metadata or {})
 
 
 class PromptFormatter:
@@ -421,7 +421,11 @@ class InputGate:
             self._set_active_state(False)
 
     def read_selection_in_terminal(
-        self, question: str, options: list[str], timeout: float = 300.0
+        self,
+        question: str,
+        options: list[str],
+        timeout: float = 300.0,
+        owner: str | None = None,
     ) -> tuple[int, str] | None:
         """Seleção numerada por linha via run_in_terminal (cooked mode, sem termios).
 
@@ -451,7 +455,11 @@ class InputGate:
             import select as _sel
             renderer = self._renderer
             try:
-                with _selection_window_context(renderer, metadata={"question": question}):
+                with _selection_window_context(
+                    renderer,
+                    owner=owner,
+                    metadata={"question": question, "owner": owner},
+                ):
                     self._flush_renderer()
                     error: str | None = None
                     while True:
@@ -586,7 +594,11 @@ class InputGate:
         return True
 
     def read_input_in_terminal(
-        self, prompt: str, timeout: float = 300.0, render_card_fn=None
+        self,
+        prompt: str,
+        timeout: float = 300.0,
+        render_card_fn=None,
+        owner: str | None = None,
     ) -> str | None:
         """Lê uma linha via run_in_terminal — seguro de chamar de qualquer thread.
 
@@ -625,7 +637,11 @@ class InputGate:
             import select as _sel
             renderer = self._renderer
             try:
-                with _input_window_context(renderer, metadata={"prompt": prompt}):
+                with _input_window_context(
+                    renderer,
+                    owner=owner,
+                    metadata={"prompt": prompt, "owner": owner},
+                ):
                     self._flush_renderer()
                     # Exibe card Rich (com contexto) ou cai no prompt cru.
                     console = getattr(renderer, "_console", None) if renderer is not None else None
@@ -683,6 +699,7 @@ class InputGate:
         prompt: str,
         timeout: float = 300.0,
         render_card_fn=None,
+        owner: str | None = None,
     ) -> str | None:
         """Exibe question+prompt e lê a resposta por linha (cooked mode, sem termios).
 
@@ -719,7 +736,11 @@ class InputGate:
             import select as _sel
             renderer = self._renderer
             try:
-                with _approval_window_context(renderer, metadata={"question": question}):
+                with _approval_window_context(
+                    renderer,
+                    owner=owner,
+                    metadata={"question": question, "owner": owner},
+                ):
                     self._flush_renderer()
                     remaining_s = max(0, int(deadline - _time.monotonic()))
                     # O card é impresso dentro de approval_window: o renderer está

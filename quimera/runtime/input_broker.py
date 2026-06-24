@@ -258,7 +258,10 @@ class InputBroker:
 
         # Sem pt ativo, não disputamos stdin diretamente. A leitura falha de
         # forma segura e o pedido segue pelo default/timeout.
-        with self._approval_terminal_window(metadata={"question": req.question}):
+        with self._approval_terminal_window(
+            owner=req.source,
+            metadata={"question": req.question, "owner": req.source},
+        ):
             self._emit(req.question)
             answer = self._read_line(prompt, deadline=deadline, allow_direct_gate=allow_direct_gate)
         if answer is None:
@@ -333,7 +336,10 @@ class InputBroker:
                     return None
                 return -1, answer.rstrip("\n\r")
         # Sem pt ativo: emite a pergunta sob janela explícita de input.
-        with self._input_terminal_window(metadata={"question": question}):
+        with self._input_terminal_window(
+            owner=agent,
+            metadata={"question": question, "owner": agent},
+        ):
             self._emit(f"\n{question}")
             answer = self._read_line(
                 f"  Resposta (auto em {remaining_s}s): ", deadline=deadline,
@@ -407,7 +413,8 @@ class InputBroker:
                     if result is not None:
                         return result
         return self._line_select(
-            question, options, deadline=deadline, allow_direct_gate=allow_direct_gate
+            question, options, deadline=deadline, agent=agent,
+            allow_direct_gate=allow_direct_gate,
         )
 
     def _line_select(
@@ -416,6 +423,7 @@ class InputBroker:
         options: list[str],
         *,
         deadline: float,
+        agent: str = "agente",
         allow_direct_gate: bool = False,
     ) -> tuple[int, str] | None:
         """Seleção numerada usando apenas _read_line/InputGate."""
@@ -426,7 +434,10 @@ class InputBroker:
         for i, opt in enumerate(options):
             lines.append(f"  {i + 1}. {opt}")
         lines.append(f"  (1-{len(options)} · auto em {remaining_s}s)")
-        with self._selection_terminal_window(metadata={"question": question}):
+        with self._selection_terminal_window(
+            owner=agent,
+            metadata={"question": question, "owner": agent},
+        ):
             self._emit("\n".join(lines))
             while True:
                 if deadline - time.monotonic() <= 0:
@@ -474,31 +485,46 @@ class InputBroker:
                 except Exception:
                     pass
 
-    def _approval_terminal_window(self, *, metadata: dict[str, Any] | None = None):
+    def _approval_terminal_window(
+        self,
+        *,
+        owner: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ):
         """Return an explicit approval window context preserving spinner callbacks."""
         renderer = self._renderer
         if renderer is None:
             return self._with_interactive_terminal_window(lambda: nullcontext())
         return self._with_interactive_terminal_window(
-            lambda: renderer.approval_window(metadata=metadata or {})
+            lambda: renderer.approval_window(owner=owner, metadata=metadata or {})
         )
 
-    def _input_terminal_window(self, *, metadata: dict[str, Any] | None = None):
+    def _input_terminal_window(
+        self,
+        *,
+        owner: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ):
         """Return an explicit input window context preserving spinner callbacks."""
         renderer = self._renderer
         if renderer is None:
             return self._with_interactive_terminal_window(lambda: nullcontext())
         return self._with_interactive_terminal_window(
-            lambda: renderer.input_window(metadata=metadata or {})
+            lambda: renderer.input_window(owner=owner, metadata=metadata or {})
         )
 
-    def _selection_terminal_window(self, *, metadata: dict[str, Any] | None = None):
+    def _selection_terminal_window(
+        self,
+        *,
+        owner: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ):
         """Return a selection window context preserving spinner callbacks."""
         renderer = self._renderer
         if renderer is None:
             return self._with_interactive_terminal_window(lambda: nullcontext())
         return self._with_interactive_terminal_window(
-            lambda: renderer.selection_window(metadata=metadata or {})
+            lambda: renderer.selection_window(owner=owner, metadata=metadata or {})
         )
 
     def _emit(self, message: str) -> None:

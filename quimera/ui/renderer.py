@@ -395,6 +395,7 @@ class TerminalRenderer:
         self,
         *,
         title: str = "Aprovação",
+        owner: str | None = None,
         metadata: dict[str, Any] | None = None,
         timeout: float = 2.0,
     ):
@@ -402,6 +403,7 @@ class TerminalRenderer:
         window = self._window_manager.make_approval_window(
             self._floor_window_id(),
             title=title,
+            owner=owner,
             metadata=metadata or {},
         )
         with self._exclusive_window(window, timeout=timeout):
@@ -412,6 +414,7 @@ class TerminalRenderer:
         self,
         *,
         title: str = "Entrada",
+        owner: str | None = None,
         metadata: dict[str, Any] | None = None,
         timeout: float = 2.0,
     ):
@@ -419,6 +422,7 @@ class TerminalRenderer:
         window = self._window_manager.make_input_window(
             self._floor_window_id(),
             title=title,
+            owner=owner,
             metadata=metadata or {},
         )
         with self._exclusive_window(window, timeout=timeout):
@@ -429,6 +433,7 @@ class TerminalRenderer:
         self,
         *,
         title: str = "Seleção",
+        owner: str | None = None,
         metadata: dict[str, Any] | None = None,
         timeout: float = 2.0,
     ):
@@ -436,6 +441,7 @@ class TerminalRenderer:
         window = self._window_manager.make_selection_window(
             self._floor_window_id(),
             title=title,
+            owner=owner,
             metadata=metadata or {},
         )
         with self._exclusive_window(window, timeout=timeout):

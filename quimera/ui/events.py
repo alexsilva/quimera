@@ -49,8 +49,11 @@ class ToolbarTickEvent:
 
 @dataclass
 class OutputControlEvent:
+    """Pede ao compositor para suspender ou retomar a saída terminal."""
+
     suspend: bool
     done: threading.Event | None = None
+    persist_live_snapshot: bool = False
 
 
 @dataclass

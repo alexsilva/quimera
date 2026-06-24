@@ -56,6 +56,13 @@ class RestorePolicy(str, Enum):
     RESTORE_DECK_AFTER_CLOSE = "restore_deck_after_close"
 
 
+class WindowAnchor(str, Enum):
+    """Declarative placement hint for managed windows."""
+
+    TERMINAL_FLOOR = "terminal_floor"
+    AFTER_OWNER = "after_owner"
+
+
 @dataclass
 class RenderWindowState:
     """Generic window managed by the deck.
@@ -70,6 +77,7 @@ class RenderWindowState:
     layer: WindowLayer
     modality: WindowModality = WindowModality.NON_BLOCKING
     owner: str | None = None
+    anchor: WindowAnchor = WindowAnchor.TERMINAL_FLOOR
     title: str = ""
     restore_policy: RestorePolicy = RestorePolicy.KEEP
     metadata: dict[str, Any] = field(default_factory=dict)

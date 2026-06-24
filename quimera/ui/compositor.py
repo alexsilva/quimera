@@ -208,10 +208,17 @@ class TerminalCompositor:
         except TimeoutError:
             return False
 
-    def freeze_output(self, timeout: float = 2.0) -> bool:
+    def freeze_output(self, timeout: float = 2.0, *, persist_live_snapshot: bool = False) -> bool:
+        """Suspend compositor output, optionally printing current Live content first."""
         self._output_suspended.set()
         done = threading.Event()
-        self._queue.put(OutputControlEvent(suspend=True, done=done))
+        self._queue.put(
+            OutputControlEvent(
+                suspend=True,
+                done=done,
+                persist_live_snapshot=persist_live_snapshot,
+            )
+        )
         return done.wait(timeout=timeout)
 
     def thaw_output(self, timeout: float = 2.0) -> bool:
@@ -223,10 +230,19 @@ class TerminalCompositor:
         return resumed
 
     def apply_window_render_plan(self, plan, timeout: float = 2.0) -> bool:
+        """Apply a declarative window render plan to the terminal compositor."""
         ok = True
+        snapshot_requested = getattr(plan, "persist_live_snapshot", False)
+        overlay_cleared = False
+        if plan.clear_overlay and snapshot_requested:
+            self._clear_overlay_sync()
+            overlay_cleared = True
         if plan.suspend_output:
-            ok = self.freeze_output(timeout=timeout) and ok
-        if plan.clear_overlay:
+            ok = self.freeze_output(
+                timeout=timeout,
+                persist_live_snapshot=snapshot_requested,
+            ) and ok
+        if plan.clear_overlay and not overlay_cleared:
             self._clear_overlay_sync()
         if plan.resume_output:
             ok = self.thaw_output(timeout=timeout) and ok
@@ -326,6 +342,25 @@ class TerminalCompositor:
             infobar = _ui.Rule(toolbar_text, characters="\u00b7", style="dim")
             return _ui.Group(main, infobar)
 
+        def _get_stream_snapshot_renderable():
+            """Build only agent stream content for persistence before raw input."""
+            _ui = _rich()
+            stream_windows = _renderer._deck.active_streams()
+            if not stream_windows:
+                return None
+            parts = []
+            for c in stream_windows.values():
+                if not c.stream_content.strip():
+                    continue
+                parts.append(
+                    _renderer._build_stream_renderable(
+                        c.stream_theme_name, c.label, c.style, c.stream_content
+                    )
+                )
+            if not parts:
+                return None
+            return _ui.Group(*parts) if len(parts) > 1 else parts[0]
+
         def _agent_toolbar_label(agent_name: str, base_label: str) -> str:
             _ui = _rich()
             elapsed = _renderer._get_agent_elapsed(agent_name)
@@ -356,6 +391,14 @@ class TerminalCompositor:
                 _ul[0].stop()
                 _ul[0] = None
                 self._stream_live_active.clear()
+
+        def _persist_live_snapshot():
+            """Print current agent stream content before transient Live stops."""
+            if _ul[0] is None or _renderer._console is None:
+                return
+            snapshot = _get_stream_snapshot_renderable()
+            if snapshot is not None:
+                _renderer._console.print(snapshot)
 
         def _stop_if_empty():
             if not _renderer._deck.active_streams():
@@ -546,6 +589,8 @@ class TerminalCompositor:
                 elif isinstance(event, OutputControlEvent):
                     if event.suspend:
                         self._output_suspended.set()
+                        if event.persist_live_snapshot:
+                            _persist_live_snapshot()
                         _close_live()
                     else:
                         self._output_suspended.clear()

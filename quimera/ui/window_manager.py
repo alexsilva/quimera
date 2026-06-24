@@ -12,6 +12,7 @@ from typing import Any
 from .windows import (
     RenderWindowState,
     RestorePolicy,
+    WindowAnchor,
     WindowDeck,
     WindowKind,
     WindowLayer,
@@ -29,6 +30,7 @@ class WindowRenderPlan:
     suspend_output: bool = False
     clear_overlay: bool = False
     resume_output: bool = False
+    persist_live_snapshot: bool = False
 
 
 @dataclass(frozen=True)
@@ -60,14 +62,17 @@ class WindowManager:
         kind: WindowKind | str = WindowKind.TERMINAL_FLOOR,
         title: str = "Terminal floor",
         owner: str | None = None,
+        anchor: WindowAnchor | str = WindowAnchor.TERMINAL_FLOOR,
         metadata: dict[str, Any] | None = None,
     ) -> RenderWindowState:
+        """Create a modal floor-backed window with explicit placement policy."""
         return RenderWindowState(
             id=window_id,
             kind=self._coerce_kind(kind),
             layer=WindowLayer.MODAL,
             modality=WindowModality.EXCLUSIVE_TERMINAL,
             owner=owner,
+            anchor=self._coerce_anchor(anchor),
             title=title,
             restore_policy=RestorePolicy.RESTORE_DECK_AFTER_CLOSE,
             metadata=metadata or {},
@@ -79,6 +84,7 @@ class WindowManager:
         *,
         title: str = "Terminal floor",
         owner: str | None = None,
+        anchor: WindowAnchor | str = WindowAnchor.TERMINAL_FLOOR,
         metadata: dict[str, Any] | None = None,
     ) -> RenderWindowState:
         """Create an explicit low-level terminal floor window."""
@@ -87,6 +93,7 @@ class WindowManager:
             kind=WindowKind.TERMINAL_FLOOR,
             title=title,
             owner=owner,
+            anchor=anchor,
             metadata=metadata or {},
         )
 
@@ -96,6 +103,7 @@ class WindowManager:
         *,
         title: str = "Aprovação",
         owner: str | None = None,
+        anchor: WindowAnchor | str = WindowAnchor.AFTER_OWNER,
         metadata: dict[str, Any] | None = None,
     ) -> RenderWindowState:
         """Create an approval modal with exclusive terminal ownership."""
@@ -104,6 +112,7 @@ class WindowManager:
             kind=WindowKind.APPROVAL,
             title=title,
             owner=owner,
+            anchor=anchor,
             metadata=metadata or {},
         )
 
@@ -113,6 +122,7 @@ class WindowManager:
         *,
         title: str = "Entrada",
         owner: str | None = None,
+        anchor: WindowAnchor | str = WindowAnchor.AFTER_OWNER,
         metadata: dict[str, Any] | None = None,
     ) -> RenderWindowState:
         """Create an input modal with exclusive terminal ownership."""
@@ -121,6 +131,7 @@ class WindowManager:
             kind=WindowKind.INPUT,
             title=title,
             owner=owner,
+            anchor=anchor,
             metadata=metadata or {},
         )
 
@@ -130,6 +141,7 @@ class WindowManager:
         *,
         title: str = "Seleção",
         owner: str | None = None,
+        anchor: WindowAnchor | str = WindowAnchor.AFTER_OWNER,
         metadata: dict[str, Any] | None = None,
     ) -> RenderWindowState:
         """Create a selection modal with exclusive terminal ownership."""
@@ -138,6 +150,7 @@ class WindowManager:
             kind=WindowKind.SELECTION,
             title=title,
             owner=owner,
+            anchor=anchor,
             metadata=metadata or {},
         )
 
@@ -148,6 +161,7 @@ class WindowManager:
         kind: WindowKind | str = WindowKind.EDITOR,
         title: str = "",
         owner: str | None = None,
+        anchor: WindowAnchor | str = WindowAnchor.TERMINAL_FLOOR,
         metadata: dict[str, Any] | None = None,
     ) -> RenderWindowState:
         return RenderWindowState(
@@ -156,6 +170,7 @@ class WindowManager:
             layer=WindowLayer.EXTERNAL,
             modality=WindowModality.EXCLUSIVE_TERMINAL,
             owner=owner,
+            anchor=self._coerce_anchor(anchor),
             title=title,
             restore_policy=RestorePolicy.RESTORE_DECK_AFTER_CLOSE,
             metadata=metadata or {},
@@ -203,14 +218,31 @@ class WindowManager:
 
     @staticmethod
     def _coerce_kind(kind: WindowKind | str) -> WindowKind:
+        """Normalize caller-provided window kind values."""
         if isinstance(kind, WindowKind):
             return kind
         return WindowKind(str(kind))
 
     @staticmethod
+    def _coerce_anchor(anchor: WindowAnchor | str) -> WindowAnchor:
+        """Normalize caller-provided window anchor values."""
+        if isinstance(anchor, WindowAnchor):
+            return anchor
+        return WindowAnchor(str(anchor))
+
+    @staticmethod
     def _mount_render_plan(window: RenderWindowState) -> WindowRenderPlan:
         if window.modality == WindowModality.EXCLUSIVE_TERMINAL:
-            return WindowRenderPlan(suspend_output=True, clear_overlay=True)
+            persist_live_snapshot = window.kind in {
+                WindowKind.APPROVAL,
+                WindowKind.INPUT,
+                WindowKind.SELECTION,
+            }
+            return WindowRenderPlan(
+                suspend_output=True,
+                clear_overlay=True,
+                persist_live_snapshot=persist_live_snapshot,
+            )
         return WindowRenderPlan()
 
     @staticmethod
