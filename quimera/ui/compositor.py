@@ -208,15 +208,20 @@ class TerminalCompositor:
         except TimeoutError:
             return False
 
-    def freeze_output(self, timeout: float = 2.0, *, persist_live_snapshot: bool = False) -> bool:
-        """Suspend compositor output, optionally printing current Live content first."""
+    def freeze_output(
+        self,
+        timeout: float = 2.0,
+        *,
+        render_anchored_windows: bool = False,
+    ) -> bool:
+        """Suspend compositor output, optionally printing declarative window content first."""
         self._output_suspended.set()
         done = threading.Event()
         self._queue.put(
             OutputControlEvent(
                 suspend=True,
                 done=done,
-                persist_live_snapshot=persist_live_snapshot,
+                render_anchored_windows=render_anchored_windows,
             )
         )
         return done.wait(timeout=timeout)
@@ -232,15 +237,15 @@ class TerminalCompositor:
     def apply_window_render_plan(self, plan, timeout: float = 2.0) -> bool:
         """Apply a declarative window render plan to the terminal compositor."""
         ok = True
-        snapshot_requested = getattr(plan, "persist_live_snapshot", False)
+        anchored_requested = getattr(plan, "render_anchored_windows", False)
         overlay_cleared = False
-        if plan.clear_overlay and snapshot_requested:
+        if plan.clear_overlay and anchored_requested:
             self._clear_overlay_sync()
             overlay_cleared = True
         if plan.suspend_output:
             ok = self.freeze_output(
                 timeout=timeout,
-                persist_live_snapshot=snapshot_requested,
+                render_anchored_windows=anchored_requested,
             ) and ok
         if plan.clear_overlay and not overlay_cleared:
             self._clear_overlay_sync()
@@ -342,21 +347,60 @@ class TerminalCompositor:
             infobar = _ui.Rule(toolbar_text, characters="\u00b7", style="dim")
             return _ui.Group(main, infobar)
 
-        def _get_stream_snapshot_renderable():
-            """Build only agent stream content for persistence before raw input."""
+        def _build_anchored_prompt_card(owner, window):
+            """Build a declarative prompt child renderable for one owner window."""
             _ui = _rich()
+            container = _renderer._deck.get(owner)
+            label = getattr(container, "label", str(owner)) if container else str(owner)
+            style = getattr(container, "style", "yellow") if container else "yellow"
+            metadata = getattr(window, "metadata", {}) or {}
+            question = str(metadata.get("question") or getattr(window, "title", "") or "").strip()
+            kind = getattr(getattr(window, "kind", ""), "value", getattr(window, "kind", ""))
+            if not question:
+                question = "aguardando resposta"
+            card = _renderer._build_approval_card_renderable(
+                label,
+                style,
+                question,
+                kind=str(kind or "input"),
+            )
+            if card is not None:
+                return card
+            return _ui.Text(question)
+
+        def _get_anchored_windows_renderable():
+            """Build agent stream content followed by child prompt windows."""
+            _ui = _rich()
+            manager = getattr(_renderer, "_window_manager", None)
+            if manager is None:
+                return None
             stream_windows = _renderer._deck.active_streams()
             if not stream_windows:
                 return None
             parts = []
-            for c in stream_windows.values():
-                if not c.stream_content.strip():
-                    continue
-                parts.append(
-                    _renderer._build_stream_renderable(
-                        c.stream_theme_name, c.label, c.style, c.stream_content
+            rendered_child_ids: set[str] = set()
+            for owner, container in stream_windows.items():
+                owner_text = getattr(container, "stream_content", "")
+                if owner_text.strip():
+                    parts.append(
+                        _renderer._build_stream_renderable(
+                            container.stream_theme_name,
+                            container.label,
+                            container.style,
+                            owner_text,
+                        )
                     )
-                )
+                for child in manager.anchored_children(str(owner)):
+                    parts.append(_build_anchored_prompt_card(owner, child))
+                    rendered_child_ids.add(child.id)
+            for window in manager.render_order():
+                if window.id in rendered_child_ids:
+                    continue
+                if getattr(window, "anchor", None) is not None and getattr(window, "owner", None) in stream_windows:
+                    continue
+                kind = str(getattr(getattr(window, "kind", ""), "value", getattr(window, "kind", "")))
+                if kind in {"approval", "input", "selection"}:
+                    parts.append(_build_anchored_prompt_card(window.owner or window.id, window))
             if not parts:
                 return None
             return _ui.Group(*parts) if len(parts) > 1 else parts[0]
@@ -392,13 +436,13 @@ class TerminalCompositor:
                 _ul[0] = None
                 self._stream_live_active.clear()
 
-        def _persist_live_snapshot():
-            """Print current agent stream content before transient Live stops."""
+        def _print_anchored_windows():
+            """Print current agent content plus anchored prompt children before Live stops."""
             if _ul[0] is None or _renderer._console is None:
                 return
-            snapshot = _get_stream_snapshot_renderable()
-            if snapshot is not None:
-                _renderer._console.print(snapshot)
+            renderable = _get_anchored_windows_renderable()
+            if renderable is not None:
+                _renderer._console.print(renderable)
 
         def _stop_if_empty():
             if not _renderer._deck.active_streams():
@@ -589,8 +633,8 @@ class TerminalCompositor:
                 elif isinstance(event, OutputControlEvent):
                     if event.suspend:
                         self._output_suspended.set()
-                        if event.persist_live_snapshot:
-                            _persist_live_snapshot()
+                        if event.render_anchored_windows:
+                            _print_anchored_windows()
                         _close_live()
                     else:
                         self._output_suspended.clear()

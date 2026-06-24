@@ -53,7 +53,7 @@ class OutputControlEvent:
 
     suspend: bool
     done: threading.Event | None = None
-    persist_live_snapshot: bool = False
+    render_anchored_windows: bool = False
 
 
 @dataclass

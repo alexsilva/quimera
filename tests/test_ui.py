@@ -1041,6 +1041,38 @@ class TestRenderOrdering:
         no_intermediate = not any("A1A2" in snap and "A1A2A3" not in snap and "B1" in snap for snap in snapshots)
         assert no_intermediate
 
+    def test_approval_window_prints_anchored_prompt_below_agent_stream(self, recording_renderer):
+        """Approval window renders as an anchored child below its owner stream."""
+        r = recording_renderer
+
+        class CapturingLive:
+            def __init__(self, renderable, console, **kwargs):
+                self.console = console
+
+            def start(self):
+                return None
+
+            def update(self, renderable, refresh=True):
+                return None
+
+            def stop(self):
+                return None
+
+        with patch("quimera.ui.Live", CapturingLive):
+            r.start_message_stream("codex")
+            r.update_message_stream("codex", "resposta parcial")
+            r.flush()
+            with r.approval_window(
+                owner="codex",
+                metadata={"question": "Executar comando?"},
+            ):
+                pass
+
+        output = r._console.export_text()
+        response_index = output.index("resposta parcial")
+        prompt_index = output.index("Executar comando?")
+        assert response_index < prompt_index
+
 
 class TestStreamingDiffHelpers:
     def test_normalize_stream_diff_accepts_dict(self):

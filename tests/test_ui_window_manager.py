@@ -20,7 +20,7 @@ def test_mount_exclusive_window_updates_modal_stack_and_transition():
     assert transition.restore_deck_after_close is True
     assert transition.render_plan.suspend_output is True
     assert transition.render_plan.clear_overlay is True
-    assert transition.render_plan.persist_live_snapshot is False
+    assert transition.render_plan.render_anchored_windows is False
     assert transition.render_plan.resume_output is False
     assert deck.managed_windows["external:editor"] is window
     assert manager.modal_stack == ["external:editor"]
@@ -94,8 +94,8 @@ def test_interactive_factories_preserve_owner_anchor_metadata():
     assert window.metadata == {"question": "Escolha"}
 
 
-def test_interactive_mount_plans_persist_live_snapshot_before_prompt():
-    """Interactive windows preserve the current agent render before raw input."""
+def test_interactive_mount_plans_render_anchored_windows_before_prompt():
+    """Interactive windows request declarative anchored rendering, not snapshots."""
     deck = WindowDeck()
     manager = WindowManager(deck)
 
@@ -107,21 +107,66 @@ def test_interactive_mount_plans_persist_live_snapshot_before_prompt():
     manager.close("floor:selection")
     terminal_floor = manager.mount(manager.make_terminal_floor_window("floor:terminal"))
 
-    assert approval.render_plan.persist_live_snapshot is True
-    assert input_window.render_plan.persist_live_snapshot is True
-    assert selection.render_plan.persist_live_snapshot is True
-    assert terminal_floor.render_plan.persist_live_snapshot is False
+    assert approval.render_plan.render_anchored_windows is True
+    assert input_window.render_plan.render_anchored_windows is True
+    assert selection.render_plan.render_anchored_windows is True
+    assert terminal_floor.render_plan.render_anchored_windows is False
 
 
 def test_interactive_mount_plan_clears_overlay_before_snapshot():
-    """Interactive snapshots clear overlay before preserving agent content."""
+    """Interactive anchored windows clear overlay before rendering prompts."""
     deck = WindowDeck()
     manager = WindowManager(deck)
 
     transition = manager.mount(manager.make_approval_window("floor:approval"))
 
     assert transition.render_plan.clear_overlay is True
-    assert transition.render_plan.persist_live_snapshot is True
+    assert transition.render_plan.render_anchored_windows is True
+
+
+def test_visible_windows_returns_only_active_managed_windows():
+    """Visible windows exclude closed managed state."""
+    deck = WindowDeck()
+    manager = WindowManager(deck)
+    first = manager.make_terminal_floor_window("floor:first")
+    second = manager.make_input_window("floor:second", owner="codex")
+
+    manager.mount(first)
+    manager.mount(second)
+    manager.close("floor:first")
+
+    assert manager.visible_windows() == [second]
+    assert manager.windows_by_layer("modal") == [second]
+
+
+def test_anchored_children_returns_prompt_windows_for_owner():
+    """Anchored children select active AFTER_OWNER windows for an owner."""
+    deck = WindowDeck()
+    manager = WindowManager(deck)
+    approval = manager.make_approval_window("floor:approval", owner="codex")
+    selection = manager.make_selection_window("floor:selection", owner="codex")
+    other = manager.make_input_window("floor:input", owner="claude")
+
+    manager.mount(approval)
+    manager.mount(selection)
+    manager.mount(other)
+
+    assert manager.anchored_children("codex") == [approval, selection]
+
+
+def test_render_order_places_children_after_managed_owner():
+    """Render order emits AFTER_OWNER children directly after their owner."""
+    deck = WindowDeck()
+    manager = WindowManager(deck)
+    owner = manager.make_terminal_floor_window("agent:codex")
+    child = manager.make_approval_window("floor:approval", owner="agent:codex")
+    other = manager.make_terminal_floor_window("floor:other")
+
+    manager.mount(owner)
+    manager.mount(child)
+    manager.mount(other)
+
+    assert manager.render_order() == [owner, child, other]
 
 
 def test_non_modal_agent_window_does_not_enter_modal_stack():

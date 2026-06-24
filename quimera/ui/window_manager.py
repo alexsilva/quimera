@@ -30,7 +30,7 @@ class WindowRenderPlan:
     suspend_output: bool = False
     clear_overlay: bool = False
     resume_output: bool = False
-    persist_live_snapshot: bool = False
+    render_anchored_windows: bool = False
 
 
 @dataclass(frozen=True)
@@ -210,11 +210,54 @@ class WindowManager:
         )
 
     def active_exclusive_window(self) -> RenderWindowState | None:
+        """Return the topmost active exclusive terminal window."""
         for window_id in reversed(self.modal_stack):
             window = self.deck.managed_windows.get(window_id)
             if window is not None and window.modality == WindowModality.EXCLUSIVE_TERMINAL:
                 return window
         return None
+
+    def visible_windows(self) -> list[RenderWindowState]:
+        """Return active managed windows in deck insertion order."""
+        return [
+            window
+            for window in self.deck.managed_windows.values()
+            if window.active
+        ]
+
+    def windows_by_layer(self, layer: WindowLayer | str) -> list[RenderWindowState]:
+        """Return active managed windows that belong to one render layer."""
+        target_layer = layer if isinstance(layer, WindowLayer) else WindowLayer(str(layer))
+        return [window for window in self.visible_windows() if window.layer == target_layer]
+
+    def anchored_children(self, owner: str) -> list[RenderWindowState]:
+        """Return active windows declaratively anchored after an owner."""
+        return [
+            window
+            for window in self.visible_windows()
+            if window.owner == owner and window.anchor == WindowAnchor.AFTER_OWNER
+        ]
+
+    def render_order(self) -> list[RenderWindowState]:
+        """Return active managed windows with children placed after owners."""
+        visible = self.visible_windows()
+        visible_by_id = {window.id: window for window in visible}
+        emitted: set[str] = set()
+        ordered: list[RenderWindowState] = []
+
+        def emit(window: RenderWindowState) -> None:
+            if window.id in emitted:
+                return
+            emitted.add(window.id)
+            ordered.append(window)
+            for child in self.anchored_children(window.id):
+                emit(child)
+
+        for window in visible:
+            if window.anchor == WindowAnchor.AFTER_OWNER and window.owner in visible_by_id:
+                continue
+            emit(window)
+        return ordered
 
     @staticmethod
     def _coerce_kind(kind: WindowKind | str) -> WindowKind:
@@ -233,7 +276,7 @@ class WindowManager:
     @staticmethod
     def _mount_render_plan(window: RenderWindowState) -> WindowRenderPlan:
         if window.modality == WindowModality.EXCLUSIVE_TERMINAL:
-            persist_live_snapshot = window.kind in {
+            render_anchored_windows = window.kind in {
                 WindowKind.APPROVAL,
                 WindowKind.INPUT,
                 WindowKind.SELECTION,
@@ -241,7 +284,7 @@ class WindowManager:
             return WindowRenderPlan(
                 suspend_output=True,
                 clear_overlay=True,
-                persist_live_snapshot=persist_live_snapshot,
+                render_anchored_windows=render_anchored_windows,
             )
         return WindowRenderPlan()
 
