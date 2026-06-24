@@ -13,10 +13,12 @@ Uso:
 """
 from __future__ import annotations
 
+import errno
 import json
 import logging
 import os
 import queue
+import sys
 import threading
 import uuid
 import secrets
@@ -31,6 +33,24 @@ from quimera.runtime.mcp.server import MCPServer
 _logger = logging.getLogger(__name__)
 
 _MAX_BODY_SIZE = 1024 * 1024  # 1MB
+
+
+class _QuietThreadingHTTPServer(ThreadingHTTPServer):
+    """Threading HTTP server that treats client disconnects as normal."""
+
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (BrokenPipeError, ConnectionAbortedError, ConnectionResetError)):
+            _logger.debug("MCP HTTP: client disconnected from %s", client_address)
+            return
+        if isinstance(exc, OSError) and exc.errno in {
+            errno.ECONNABORTED,
+            errno.ECONNRESET,
+            errno.EPIPE,
+        }:
+            _logger.debug("MCP HTTP: client disconnected from %s", client_address)
+            return
+        super().handle_error(request, client_address)
 
 _QUIMERA_MCP_HTTP_HOST = "QUIMERA_MCP_HTTP_HOST"
 _QUIMERA_MCP_HTTP_PORT = "QUIMERA_MCP_HTTP_PORT"
@@ -654,7 +674,7 @@ class MCP_HTTPServer:
 
     def serve_forever(self) -> None:
         """Inicia o servidor HTTP e bloqueia até ser interrompido."""
-        server = ThreadingHTTPServer(
+        server = _QuietThreadingHTTPServer(
             (self._host, self._port), _MCPHTTPRequestHandler
         )
         # Captura a porta real após o bind (relevante quando port=0 foi pedido).
