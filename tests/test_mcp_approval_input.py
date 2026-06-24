@@ -255,11 +255,151 @@ def test_read_input_in_terminal_happy_path():
                 patch("select.select", return_value=([fake_stdin], [], [])):
             result = gate.read_input_in_terminal("Executar? [y/N]: ", timeout=5.0)
     finally:
+        asyncio.run_coroutine_threadsafe(asyncio.sleep(0.05), loop).result(timeout=1.0)
         loop.call_soon_threadsafe(loop.stop)
         t.join(timeout=2.0)
         loop.close()
 
     assert result == "y"
+
+
+def test_read_approval_in_terminal_does_not_duplicate_anchored_question():
+    """Anchored approval renders question in compositor; raw input prints only prompt."""
+    gate = InputGate.__new__(InputGate)
+    loop = asyncio.new_event_loop()
+    loop_thread_started = threading.Event()
+
+    def _run_loop():
+        asyncio.set_event_loop(loop)
+        loop_thread_started.set()
+        loop.run_forever()
+
+    class FakeDeck:
+        """Deck stub with one active owner stream."""
+
+        def active_streams(self):
+            """Return active streams keyed by owner."""
+            return {"codex": object()}
+
+    class FakeRenderer:
+        """Renderer stub exposing approval window lifecycle."""
+
+        def __init__(self):
+            self._deck = FakeDeck()
+            self._console = object()
+
+        def flush(self):
+            """Simulate renderer queue drain."""
+
+        @contextmanager
+        def approval_window(self, **_kwargs):
+            """Yield an approval window context."""
+            yield
+
+    t = threading.Thread(target=_run_loop, daemon=True)
+    t.start()
+    loop_thread_started.wait(timeout=2.0)
+
+    gate._renderer = FakeRenderer()
+    gate._active = False
+    gate._active_lock = threading.Lock()
+    gate._owner_thread_id = None
+    gate._session = _make_mock_session(_make_mock_app(is_running=True, loop=loop))
+
+    fake_stdin = MagicMock()
+    fake_stdin.readline.return_value = "1\n"
+    fake_stdout = MagicMock()
+    render_card_fn = MagicMock()
+
+    try:
+        with patch("sys.stdin", fake_stdin), patch("sys.stdout", fake_stdout), \
+                patch("select.select", return_value=([fake_stdin], [], [])):
+            result = gate.read_approval_in_terminal(
+                "Qual ação tomar?\n1. Unificar",
+                "Selecione (1-4): ",
+                timeout=5.0,
+                render_card_fn=render_card_fn,
+                owner="codex",
+            )
+    finally:
+        asyncio.run_coroutine_threadsafe(asyncio.sleep(0.05), loop).result(timeout=1.0)
+        loop.call_soon_threadsafe(loop.stop)
+        t.join(timeout=2.0)
+        loop.close()
+
+    written = "".join(call.args[0] for call in fake_stdout.write.call_args_list)
+    assert result == "1"
+    assert "Qual ação tomar?" not in written
+    assert "1. Unificar" not in written
+    assert "Selecione (1-4):" in written
+    render_card_fn.assert_not_called()
+
+
+def test_read_selection_in_terminal_does_not_duplicate_anchored_options():
+    """Anchored selection renders options once; raw input prints only selector."""
+    gate = InputGate.__new__(InputGate)
+    loop = asyncio.new_event_loop()
+    loop_thread_started = threading.Event()
+
+    def _run_loop():
+        asyncio.set_event_loop(loop)
+        loop_thread_started.set()
+        loop.run_forever()
+
+    class FakeDeck:
+        """Deck stub with one active owner stream."""
+
+        def active_streams(self):
+            """Return active streams keyed by owner."""
+            return {"codex": object()}
+
+    class FakeRenderer:
+        """Renderer stub exposing selection window lifecycle."""
+
+        def __init__(self):
+            self._deck = FakeDeck()
+
+        def flush(self):
+            """Simulate renderer queue drain."""
+
+        @contextmanager
+        def selection_window(self, **_kwargs):
+            """Yield a selection window context."""
+            yield
+
+    t = threading.Thread(target=_run_loop, daemon=True)
+    t.start()
+    loop_thread_started.wait(timeout=2.0)
+
+    gate._renderer = FakeRenderer()
+    gate._active = False
+    gate._active_lock = threading.Lock()
+    gate._owner_thread_id = None
+    gate._session = _make_mock_session(_make_mock_app(is_running=True, loop=loop))
+
+    fake_stdin = MagicMock()
+    fake_stdin.readline.return_value = "1\n"
+    fake_stdout = MagicMock()
+
+    try:
+        with patch("sys.stdin", fake_stdin), patch("sys.stdout", fake_stdout), \
+                patch("select.select", return_value=([fake_stdin], [], [])):
+            result = gate.read_selection_in_terminal(
+                "Qual ação tomar?",
+                ["Unificar", "Manter duplicação"],
+                timeout=5.0,
+                owner="codex",
+            )
+    finally:
+        loop.call_soon_threadsafe(loop.stop)
+        t.join(timeout=2.0)
+        loop.close()
+
+    written = "".join(call.args[0] for call in fake_stdout.write.call_args_list)
+    assert result == (0, "Unificar")
+    assert "Qual ação tomar?" not in written
+    assert "1. Unificar" not in written
+    assert "Selecione (1-2 ou texto" in written
 
 
 # ─────────────────────────────────────────────────────────────────────────────

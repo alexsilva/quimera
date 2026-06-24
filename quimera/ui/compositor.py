@@ -355,6 +355,11 @@ class TerminalCompositor:
             style = getattr(container, "style", "yellow") if container else "yellow"
             metadata = getattr(window, "metadata", {}) or {}
             question = str(metadata.get("question") or getattr(window, "title", "") or "").strip()
+            options = list(metadata.get("options") or [])
+            if options:
+                question = "\n".join(
+                    [question, *[f"  {index + 1}. {option}" for index, option in enumerate(options)]]
+                ).strip()
             kind = getattr(getattr(window, "kind", ""), "value", getattr(window, "kind", ""))
             if not question:
                 question = "aguardando resposta"

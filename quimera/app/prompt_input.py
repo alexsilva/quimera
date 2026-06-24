@@ -48,6 +48,17 @@ def _approval_window_context(renderer, *, owner=None, metadata=None):
     return renderer.approval_window(owner=owner, metadata=metadata or {})
 
 
+def _anchored_prompt_available(renderer, owner: str | None) -> bool:
+    """Return True when the compositor can render the prompt as an owner child."""
+    if renderer is None or owner is None:
+        return False
+    deck = getattr(renderer, "_deck", None)
+    active_streams = getattr(deck, "active_streams", None)
+    if not callable(active_streams):
+        return False
+    return str(owner) in {str(agent) for agent in active_streams().keys()}
+
+
 class PromptFormatter:
     """Formata o prompt visível ao humano."""
 
@@ -458,22 +469,24 @@ class InputGate:
                 with _selection_window_context(
                     renderer,
                     owner=owner,
-                    metadata={"question": question, "owner": owner},
+                    metadata={"question": question, "options": options, "owner": owner},
                 ):
                     self._flush_renderer()
+                    anchored_prompt = _anchored_prompt_available(renderer, owner)
                     error: str | None = None
                     while True:
                         remaining = deadline - _time.monotonic()
                         if remaining <= 0:
                             return
-                        lines = [question]
-                        for i, opt in enumerate(options):
-                            lines.append(f"  {i + 1}. {opt}")
+                        lines = [] if anchored_prompt else [question]
+                        if not anchored_prompt:
+                            for i, opt in enumerate(options):
+                                lines.append(f"  {i + 1}. {opt}")
                         if error:
                             lines.append(f"  ! {error}")
                         remaining_s = max(0, int(remaining))
                         lines.append(
-                            f"  Selecione (1-{len(options)} ou texto"
+                            f"Selecione (1-{len(options)} ou texto"
                             f" \xb7 auto em {remaining_s}s): "
                         )
                         sys.stdout.write("\n".join(lines))
@@ -643,9 +656,12 @@ class InputGate:
                     metadata={"prompt": prompt, "owner": owner},
                 ):
                     self._flush_renderer()
+                    anchored_prompt = _anchored_prompt_available(renderer, owner)
                     # Exibe card Rich (com contexto) ou cai no prompt cru.
                     console = getattr(renderer, "_console", None) if renderer is not None else None
-                    if render_card_fn is not None and console is not None:
+                    if anchored_prompt:
+                        sys.stdout.write("> ")
+                    elif render_card_fn is not None and console is not None:
                         try:
                             render_card_fn(console)
                             # Após o card, exibe apenas o marcador de input.
@@ -710,10 +726,10 @@ class InputGate:
         Lê uma linha com o mesmo input usado para escrever no chat: o usuário
         digita y/n/a (ou yes/sim/todas) e confirma com Enter.
 
-        Se ``render_card_fn`` for fornecida, é chamada com o Console do renderer
-        dentro de ``approval_window`` e imprime o card de aprovação como Rich
-        renderable permanente (com contexto e estilo visual). Caso contrário,
-        imprime ``question`` como texto cru.
+        Quando há owner ativo, ``approval_window`` delega o corpo da pergunta
+        ao compositor ancorado e este método imprime apenas o prompt de entrada.
+        Sem owner ativo, ``render_card_fn`` pode renderizar o card; caso
+        contrário, ``question`` é impressa como texto cru.
 
         Retorna a resposta normalizada (lowercase) ou None se timeout/erro/EOF.
         """
@@ -743,11 +759,13 @@ class InputGate:
                 ):
                     self._flush_renderer()
                     remaining_s = max(0, int(deadline - _time.monotonic()))
-                    # O card é impresso dentro de approval_window: o renderer está
-                    # suspenso e o chamador detém o chão, portanto console.print()
-                    # vai direto ao terminal sem conflitar com o Live.
+                    anchored_prompt = _anchored_prompt_available(renderer, owner)
+                    # Com owner ativo, o compositor já renderizou o corpo como
+                    # child window; o caminho cru imprime apenas o prompt.
                     console = getattr(renderer, "_console", None) if renderer is not None else None
-                    if render_card_fn is not None and console is not None:
+                    if anchored_prompt:
+                        pass
+                    elif render_card_fn is not None and console is not None:
                         try:
                             render_card_fn(console)
                         except Exception:
