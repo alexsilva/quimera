@@ -34,6 +34,13 @@ def _input_window_context(renderer, *, metadata=None):
     return renderer.input_window(metadata=metadata or {})
 
 
+def _selection_window_context(renderer, *, metadata=None):
+    """Return a context manager for selection terminal ownership."""
+    if renderer is None:
+        return nullcontext()
+    return renderer.selection_window(metadata=metadata or {})
+
+
 def _approval_window_context(renderer, *, metadata=None):
     """Return a context manager for approval terminal ownership."""
     if renderer is None:
@@ -441,61 +448,55 @@ class InputGate:
         done = threading.Event()
 
         def _select_sync() -> None:
-            import os as _os
             import select as _sel
             renderer = self._renderer
-            _request_floor = getattr(renderer, "request_floor", None) if renderer is not None else None
-            _release_floor = getattr(renderer, "release_floor", None) if renderer is not None else None
-            if callable(_request_floor):
-                _request_floor(kind="selection", title="Seleção", metadata={"question": question})
             try:
-                self._flush_renderer()
-                error: str | None = None
-                while True:
-                    remaining = deadline - _time.monotonic()
-                    if remaining <= 0:
-                        return
-                    lines = [question]
-                    for i, opt in enumerate(options):
-                        lines.append(f"  {i + 1}. {opt}")
-                    if error:
-                        lines.append(f"  ! {error}")
-                    remaining_s = max(0, int(remaining))
-                    lines.append(
-                        f"  Selecione (1-{len(options)} ou texto"
-                        f" \xb7 auto em {remaining_s}s): "
-                    )
-                    sys.stdout.write("\n".join(lines))
-                    sys.stdout.flush()
+                with _selection_window_context(renderer, metadata={"question": question}):
+                    self._flush_renderer()
+                    error: str | None = None
+                    while True:
+                        remaining = deadline - _time.monotonic()
+                        if remaining <= 0:
+                            return
+                        lines = [question]
+                        for i, opt in enumerate(options):
+                            lines.append(f"  {i + 1}. {opt}")
+                        if error:
+                            lines.append(f"  ! {error}")
+                        remaining_s = max(0, int(remaining))
+                        lines.append(
+                            f"  Selecione (1-{len(options)} ou texto"
+                            f" \xb7 auto em {remaining_s}s): "
+                        )
+                        sys.stdout.write("\n".join(lines))
+                        sys.stdout.flush()
 
-                    try:
-                        ready, _, _ = _sel.select([sys.stdin], [], [], remaining)
-                        if not ready:
+                        try:
+                            ready, _, _ = _sel.select([sys.stdin], [], [], remaining)
+                            if not ready:
+                                return
+                        except Exception:
                             return
-                    except Exception:
-                        return
-                    try:
-                        raw_line = sys.stdin.readline()
-                    except (EOFError, OSError):
-                        return
-                    if not raw_line:
-                        return
-                    # Cooked mode (ECHO ativo via in_terminal): a linha digitada
-                    # já aparece no terminal; não re-ecoar para não duplicar.
-                    raw = raw_line.rstrip("\n\r")
-                    if raw.isdigit():
-                        num = int(raw) - 1
-                        if 0 <= num < len(options):
-                            result[0] = (num, options[num])
+                        try:
+                            raw_line = sys.stdin.readline()
+                        except (EOFError, OSError):
                             return
-                    for i, opt in enumerate(options):
-                        if opt.lower() == raw.lower():
-                            result[0] = (i, opt)
+                        if not raw_line:
                             return
-                    error = f"'{raw}' inválido — use 1-{len(options)} ou o texto exato"
+                        # Cooked mode (ECHO ativo via in_terminal): a linha digitada
+                        # já aparece no terminal; não re-ecoar para não duplicar.
+                        raw = raw_line.rstrip("\n\r")
+                        if raw.isdigit():
+                            num = int(raw) - 1
+                            if 0 <= num < len(options):
+                                result[0] = (num, options[num])
+                                return
+                        for i, opt in enumerate(options):
+                            if opt.lower() == raw.lower():
+                                result[0] = (i, opt)
+                                return
+                        error = f"'{raw}' inválido — use 1-{len(options)} ou o texto exato"
             finally:
-                if callable(_release_floor):
-                    _release_floor()
                 done.set()
 
         async def _coro() -> None:

@@ -942,13 +942,12 @@ class QuimeraApp:
                     return result
                 raise EOFError("sem resposta do terminal")
             # Gate não ativo: leitura por linha (cooked mode) com posse do chão.
-            _request_floor = getattr(renderer, "request_floor", None)
-            _release_floor = getattr(renderer, "release_floor", None)
-            floor_acquired = False
-            if callable(_request_floor):
-                floor_acquired = True
-                _request_floor(kind="selection", title="Seleção", metadata={"question": question})
-            try:
+            selection_context = (
+                renderer.selection_window(metadata={"question": question})
+                if renderer is not None
+                else nullcontext()
+            )
+            with selection_context:
                 error_msg: str | None = None
                 while True:
                     parts: list[str] = []
@@ -971,9 +970,6 @@ class QuimeraApp:
                         if opt.lower() == raw.lower():
                             return i, opt
                     error_msg = f"'{raw}' não é uma opção válida."
-            finally:
-                if floor_acquired and callable(_release_floor):
-                    _release_floor()
 
         return _ask_user
 

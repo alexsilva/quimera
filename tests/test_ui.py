@@ -267,6 +267,16 @@ class TestTerminalRenderer:
             assert active.metadata == {"prompt": "Nome: "}
         assert mock_renderer._window_manager.active_exclusive_window() is None
 
+    def test_selection_window_mounts_managed_selection_window(self, mock_renderer):
+        """Selection deve ter lifecycle explícito via WindowManager."""
+        with mock_renderer.selection_window(metadata={"question": "Escolha:"}):
+            active = mock_renderer._window_manager.active_exclusive_window()
+            assert active is not None
+            assert active.kind == "selection"
+            assert active.title == "Seleção"
+            assert active.metadata == {"question": "Escolha:"}
+        assert mock_renderer._window_manager.active_exclusive_window() is None
+
     def test_show_banner_with_rich_preserves_ascii_layout(self, mock_renderer):
         """Banner deve evitar wrap para não distorcer logo ASCII."""
         banner = " / __ \\\\__  __(_)___\n/ / / / / / / / __"
