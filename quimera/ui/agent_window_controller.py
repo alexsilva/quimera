@@ -29,11 +29,11 @@ class AgentWindowController:
         self.state.streaming = True
         self.state.stream_content = ""
         self.state.stream_theme_name = theme_name
-        renderer._queue.put(LiveStartEvent(self.state.agent))
+        renderer._emit_ui_event(LiveStartEvent(self.state.agent))
 
     def update_stream(self, renderer, chunk: Any) -> None:
         """Enfileira chunk de streaming."""
-        renderer._queue.put(LiveUpdateChunkEvent(self.state.agent, chunk))
+        renderer._emit_ui_event(LiveUpdateChunkEvent(self.state.agent, chunk))
 
     def finish_stream(self, renderer, final_content: str, render_mode: str = "auto") -> None:
         """Finaliza streaming e persiste conteúdo completo."""
@@ -41,11 +41,11 @@ class AgentWindowController:
         mode = _normalize_render_mode(render_mode)
         with renderer._lock:
             renderer._deck.remember_completed_stream(self.state.agent, clean)
-        renderer._queue.put(LiveStopEvent(self.state.agent, clean, mode))
+        renderer._emit_ui_event(LiveStopEvent(self.state.agent, clean, mode))
 
     def abort_stream(self, renderer) -> None:
         """Aborta streaming sem marcar como completo."""
-        renderer._queue.put(LiveAbortEvent(self.state.agent))
+        renderer._emit_ui_event(LiveAbortEvent(self.state.agent))
 
     def ask_input(self, renderer, input_gate, prompt: str, timeout: float = 300.0) -> str | None:
         """Input livre de texto dentro deste agent window."""

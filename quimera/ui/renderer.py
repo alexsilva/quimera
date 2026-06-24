@@ -13,8 +13,8 @@ from typing import Any
 
 _log = logging.getLogger(__name__)
 
-from quimera.runtime.streaming import apply_stream_diff, normalize_stream_diff
 from .agent_window_controller import AgentWindowController
+from .compositor import TerminalCompositor
 from .audit import RenderAuditLogger
 from .events import (
     LiveAbortEvent,
@@ -41,23 +41,22 @@ from .windows import (
     WindowModality,
 )
 
-_UNICODE_CONTROL_RE = re.compile(
-    r"[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u061C\u200B-\u200F\u202A-\u202E\u2060-\u2069\uFEFF]"
+from .text import (
+    _PREVIEW_LIMIT,
+    _UNICODE_CONTROL_RE,
+    _apply_stream_diff,
+    _extract_text_from_renderable,
+    _highlight_tags,
+    _normalize_completed_content,
+    _normalize_stream_diff,
+    _preview_chunk,
+    _preview_text,
+    strip_ansi,
 )
+
 _RENDER_MODES = {"plain", "markdown", "auto"}
-_PREVIEW_LIMIT = 160
 _SEQUENTIAL_STATUS_REFRESH_PER_SECOND = 4
 _SCROLLING_WINDOW_SIZE = 10
-
-
-def strip_ansi(text: str) -> str:
-    """Remove ANSI escape sequences from text."""
-    ansi_real = re.compile(r'\x1b\[[0-9;?]*[a-zA-Z]')
-    text = ansi_real.sub('', text)
-    ansi_orphaned = re.compile(r'\[[0-9;?]+[A-Za-z]')
-    text = ansi_orphaned.sub('', text)
-    text = _UNICODE_CONTROL_RE.sub('', text)
-    return text
 
 
 def _normalize_render_mode(render_mode: str | None) -> str:
@@ -65,21 +64,6 @@ def _normalize_render_mode(render_mode: str | None) -> str:
     if mode in _RENDER_MODES:
         return mode
     return "auto"
-
-
-def _normalize_completed_content(text: str) -> str:
-    normalized = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
-    return "\n".join(line.rstrip() for line in normalized.split("\n")).strip()
-
-
-def _normalize_stream_diff(diff) -> list[dict[str, str]]:
-    """Normaliza o payload incremental aceito pelo renderer."""
-    return normalize_stream_diff(diff, transform_text=strip_ansi)
-
-
-def _apply_stream_diff(content: str, diff: list[dict[str, str]]) -> str:
-    """Aplica operações incrementais de texto no buffer atual."""
-    return apply_stream_diff(content, diff)
 
 
 def _is_interactive_terminal() -> bool:
@@ -92,92 +76,6 @@ def _public_ui_module():
     if module is not None:
         return module
     return _sys_module.modules[__name__]
-
-
-def _extract_text_from_renderable(value: Any) -> str:
-    """Extract human-readable text from Rich renderables without exposing internal repr."""
-    if value is None:
-        return ""
-    if isinstance(value, str):
-        return value
-    if hasattr(value, "title") and hasattr(value, "characters"):
-        return _extract_text_from_renderable(value.title)
-    if hasattr(value, "columns") and hasattr(value, "rows"):
-        parts = []
-        for column in value.columns:
-            parts.append(_extract_text_from_renderable(getattr(column, "header", "")))
-            for cell in getattr(column, "_cells", ()):
-                parts.append(_extract_text_from_renderable(cell))
-        return " ".join(p for p in parts if p)
-    if hasattr(value, "plain"):
-        return str(value.plain)
-    if hasattr(value, "renderables"):
-        parts = []
-        for child in value.renderables:
-            parts.append(_extract_text_from_renderable(child))
-        return " ".join(p for p in parts if p)
-    if hasattr(value, "__rich_text__"):
-        return str(value.__rich_text__())
-    markup = getattr(value, "markup", None)
-    if isinstance(markup, str):
-        return markup
-    panel_renderable = getattr(value, "renderable", None)
-    if panel_renderable is not None:
-        parts = []
-        title = getattr(value, "title", None) or ""
-        if title:
-            parts.append(_extract_text_from_renderable(title))
-        parts.append(_extract_text_from_renderable(panel_renderable))
-        return " ".join(p for p in parts if p)
-    return str(value)
-
-
-def _preview_text(value: Any, limit: int = _PREVIEW_LIMIT) -> str:
-    text = strip_ansi(_extract_text_from_renderable(value)).replace("\r", "\\r").replace("\n", "\\n")
-    if len(text) <= limit:
-        return text
-    return text[: limit - 1] + "…"
-
-
-def _preview_chunk(chunk: Any) -> str:
-    if isinstance(chunk, dict):
-        text = chunk.get("text")
-        if text:
-            return _preview_text(text)
-        diff = chunk.get("diff")
-        if diff:
-            try:
-                normalized = _normalize_stream_diff(diff)
-            except Exception:
-                normalized = []
-            parts = []
-            for item in normalized:
-                if not isinstance(item, dict):
-                    continue
-                if item.get("op") not in {"append", "replace"}:
-                    continue
-                part_text = item.get("text")
-                if part_text:
-                    parts.append(str(part_text))
-            if parts:
-                return _preview_text(" | ".join(parts))
-            return _preview_text(diff)
-    return _preview_text(chunk)
-
-
-_TAG_HIGHLIGHT_RE = re.compile(r'(</?[\w-]+(?:\s+[^>]*?)?\s*/?>)')
-
-
-def _highlight_tags(text: str) -> "Text":
-    result = Text()
-    for token in _TAG_HIGHLIGHT_RE.split(text):
-        if not token:
-            continue
-        if _TAG_HIGHLIGHT_RE.fullmatch(token):
-            result.append(token, style="bold magenta")
-        else:
-            result.append(token)
-    return result
 
 
 try:
@@ -448,48 +346,19 @@ class TerminalRenderer:
         # Lock protege _deck, _statuses e versão
         self._lock = threading.RLock()
 
-        # Contador de linhas do overlay transitório na tela, compartilhado com
-        # o _TransientOverlay do writer thread. Legível por quem detém o "chão"
-        # (request_floor) para limpar o overlay de forma síncrona.
-        self._overlay_lines = [0]
-
-        # Versão monotônica do overlay — usada para invalidar closures stale
-        self._transient_buf_version = 0
-        # Último texto combinado enfileirado — dedup para não enfileirar TWEs idênticos
-        self._last_combined_text: str | None = None
-
-        # Flag: writer thread tem um Live ativo
-        self._stream_live_active = threading.Event()
-
         # Hooks de integração com prompt_toolkit
         self._is_prompt_active_fn = None  # () -> bool
         self._run_above_prompt_fn = None  # (callable) -> bool
-        self._output_suspended = threading.Event()
 
-        self._queue: _queue_module.Queue = _queue_module.Queue(maxsize=512)
-        self._writer_thread = threading.Thread(target=self._writer_loop, daemon=True)
-        self._writer_thread.start()
-        if self._audit_logger is not None:
-            self._audit_logger.start_queue_sampler(self._queue)
+        # Compositor — dono do writer thread, queue e controle de saída
+        self._compositor = TerminalCompositor(self, audit_logger=self._audit_logger)
 
-        # SIGWINCH: sinaliza resize para o writer thread resetar contador do overlay
-        try:
-            import signal as _signal
-            _prev_sigwinch = _signal.getsignal(_signal.SIGWINCH)
-
-            def _on_sigwinch(signum, frame):
-                try:
-                    self._queue.put_nowait(TerminalResizeEvent())
-                except _queue_module.Full:
-                    pass
-                if callable(_prev_sigwinch) and _prev_sigwinch not in (
-                    _signal.SIG_DFL, _signal.SIG_IGN
-                ):
-                    _prev_sigwinch(signum, frame)
-
-            _signal.signal(_signal.SIGWINCH, _on_sigwinch)
-        except (AttributeError, OSError):
-            pass  # SIGWINCH não disponível nesta plataforma
+        # Aliases temporários para compatibilidade com testes e código cliente
+        self._queue = self._compositor.queue
+        self._output_suspended = self._compositor.output_suspended
+        self._stream_live_active = self._compositor.stream_live_active
+        # overlay_lines é uma lista compartilhada (mutável) — alias mantém a mesma referência
+        self._overlay_lines = self._compositor._overlay_lines
 
     # ------------------------------------------------------------------
     # Ciclo de vida
@@ -505,9 +374,8 @@ class TerminalRenderer:
         self._run_above_prompt_fn = run_above_fn
 
     def close(self, timeout: float = 5.0) -> None:
-        """Encerra o writer thread graciosamente, aguardando eventos pendentes."""
-        self._queue.put(_STOP)
-        self._writer_thread.join(timeout=timeout)
+        """Encerra o compositor graciosamente."""
+        self._compositor.close(timeout=timeout)
         if self._audit_logger is not None:
             self._audit_logger.close()
 
@@ -518,437 +386,31 @@ class TerminalRenderer:
         self._audit_logger.log_event(event, **payload)
 
     def __del__(self):
-        try:
-            if self._writer_thread.is_alive():
-                self._queue.put_nowait(_STOP)
-        except Exception:
-            pass
+        self._compositor.stop_nowait()
 
-    # ------------------------------------------------------------------
-    # Writer thread
-    # ------------------------------------------------------------------
-
-    def _writer_loop(self):
-        """Writer thread único: processa todos os eventos de UI sequencialmente.
-
-        Dois modos de exibição:
-        - LIVE (agente respondendo): Rich.Live ativo, prompt_toolkit suspenso
-          [histórico] → [streaming + infobar] ← Rich.Live gerencia
-
-        - PROMPT (aguardando input): prompt_toolkit ativo, overlay via run_in_terminal
-          [histórico] → [overlay N linhas] → [input] → [toolbar]
-          overlay gerenciado por _TransientOverlay com closures run_in_terminal
-        """
-        _ul: list = [None]  # Live unificado ativo (ou None)
-        _local_pending: collections.deque = collections.deque()
-        _deferred_post_prompt: collections.deque = collections.deque()
-
-        # Overlay transitório — único ponto de verdade para o estado da tela.
-        # Compartilha o contador de linhas com a instância (self._overlay_lines)
-        # para que request_floor possa limpá-lo sincronamente de outra thread.
-        _overlay = _TransientOverlay(self._overlay_lines)
-
-        def _prompt_active() -> bool:
-            try:
-                return bool(self._is_prompt_active_fn and self._is_prompt_active_fn())
-            except Exception:
-                return False
-
-        def _get_version() -> int:
-            with self._lock:
-                return self._transient_buf_version
-
-        def _bump_version() -> int:
-            with self._lock:
-                self._transient_buf_version += 1
-                return self._transient_buf_version
-
-        def _audit(event_name: str, **payload) -> None:
-            self.log_debug_event(event_name, **payload)
-
-        # -- Live helpers --------------------------------------------------
-
-        def _get_renderable():
-            stream_windows = self._deck.active_streams()
-            if not stream_windows:
-                return Text("")
-            parts = []
-            for c in stream_windows.values():
-                stream_block = self._build_stream_renderable(
-                    c.stream_theme_name, c.label, c.style, c.stream_content
-                )
-                if c.pending_kind:
-                    pending_card = self._build_pending_card_renderable(c)
-                    parts.append(Group(stream_block, pending_card))
-                else:
-                    parts.append(stream_block)
-            main = Group(*parts) if len(parts) > 1 else parts[0]
-            if self._density == "compact":
-                return main
-            if len(parts) > 1:
-                labels = " · ".join(
-                    _agent_toolbar_label(agent, c.label)
-                    for agent, c in stream_windows.items()
-                )
-                toolbar_text = f"[dim]{labels} · Ctrl+C para cancelar[/dim]"
-            else:
-                only_agent, only_c = next(iter(stream_windows.items()))
-                label_text = _agent_toolbar_label(only_agent, only_c.label)
-                toolbar_text = (
-                    f"[bold {only_c.style}]{label_text}[/] "
-                    f"[dim]· Ctrl+C para cancelar[/dim]"
-                )
-            infobar = Rule(toolbar_text, characters="·", style="dim")
-            return Group(main, infobar)
-
-        def _agent_toolbar_label(agent_name: str, base_label: str) -> str:
-            elapsed = self._get_agent_elapsed(agent_name)
-            if elapsed is not None:
-                return f"{markup_escape(base_label)} [{int(elapsed)}s]"
-            return markup_escape(base_label)
-
-        def _ensure_live():
-            if _ul[0] is None and self._console:
-                # Não inicia Live quando prompt_toolkit está ativo — os dois
-                # controladores de terminal conflitam e corrompem o display.
-                if _prompt_active() or self._output_suspended.is_set():
-                    return
-                _ul[0] = _public_ui_module().Live(
-                    _get_renderable(),
-                    console=self._console,
-                    refresh_per_second=8,
-                    transient=True,
-                    auto_refresh=False,
-                )
-                _ul[0].start()
-                self._stream_live_active.set()
-
-        def _refresh():
-            if _ul[0] is not None and not self._output_suspended.is_set():
-                _ul[0].update(_get_renderable(), refresh=True)
-
-        def _close_live():
-            """Encerra o Live ativo sem refresh vazio residual."""
-            if _ul[0] is not None:
-                _ul[0].stop()
-                _ul[0] = None
-                self._stream_live_active.clear()
-
-        def _stop_if_empty():
-            if not self._deck.active_streams():
-                _close_live()
-
-        # -- Print helpers -------------------------------------------------
-
-        def _cprint(renderable, **kwargs):
-            """Imprime via Live ativo, run_above (se prompt ativo) ou direto ao console."""
-            if self._output_suspended.is_set():
-                _deferred_post_prompt.append((renderable, kwargs))
-                return
-            if _ul[0] is not None:
-                _ul[0].console.print(renderable, **kwargs)
-                return
-            if self._console is None:
-                return
-            run_above = self._run_above_prompt_fn
-            if run_above is not None:
-                cb = _overlay.build_print_above(renderable, kwargs, self._console, _bump_version, _audit)
-                if run_above(cb):
-                    _flush_deferred()
-                    return
-            _deferred_post_prompt.append((renderable, kwargs))
-
-        def _flush_deferred(force=False):
-            """Drena prints deferidos enquanto prompt estava ativo ou saída suspensa."""
-            if self._output_suspended.is_set():
-                return
-            run_above = self._run_above_prompt_fn
-            while _deferred_post_prompt:
-                _r, _k = _deferred_post_prompt.popleft()
-                if _ul[0] is not None:
-                    _ul[0].console.print(_r, **_k)
-                elif force and self._console:
-                    self._console.print(_r, **_k)
-                elif run_above is not None:
-                    cb = _overlay.build_print_above(_r, _k, self._console, _bump_version, _audit)
-                    if not run_above(cb):
-                        _deferred_post_prompt.appendleft((_r, _k))
-                        break
-                else:
-                    _deferred_post_prompt.appendleft((_r, _k))
-                    break
-
-        # -- Event loop ----------------------------------------------------
-
-        def _next_event():
-            if _local_pending:
-                return _local_pending.popleft()
-            return self._queue.get()
-
-        while True:
-            event = _next_event()
-            if event is _STOP:
-                _flush_deferred(force=True)
-                _close_live()
-                break
-
-            try:
-                if isinstance(event, PrintEvent):
-                    preview = _preview_text(event.renderable)
-                    if preview:
-                        _audit(
-                            "print",
-                            kind=event.kind,
-                            prompt_active=_prompt_active(),
-                            preview=preview,
-                        )
-                    _cprint(event.renderable, **event.kwargs)
-
-                elif isinstance(event, LiveStartEvent):
-                    _audit("stream_start", agent=event.agent, prompt_active=_prompt_active())
-                    with self._lock:
-                        container = self._deck.get(event.agent)
-                    if container and container.streaming and container.stream_content.strip():
-                        _ensure_live()
-                        _refresh()
-
-                elif isinstance(event, LiveUpdateChunkEvent):
-                    # Coalescing: drena chunks consecutivos de todos os agentes para um único _refresh()
-                    batches = collections.defaultdict(list)
-                    batches[event.agent].append(event.chunk)
-                    while True:
-                        try:
-                            next_ev = self._queue.get_nowait()
-                        except _queue_module.Empty:
-                            break
-                        if isinstance(next_ev, LiveUpdateChunkEvent):
-                            batches[next_ev.agent].append(next_ev.chunk)
-                        else:
-                            _local_pending.appendleft(next_ev)
-                            break
-
-                    for _a, chunks in batches.items():
-                        container = self._deck.get(_a)
-                        if container:
-                            for chunk in chunks:
-                                if isinstance(chunk, dict):
-                                    container.stream_content = _apply_stream_diff(
-                                        container.stream_content,
-                                        _normalize_stream_diff(chunk.get("diff"))
-                                    )
-                                    text = chunk.get("text")
-                                    if text and not chunk.get("diff"):
-                                        container.stream_content += strip_ansi(str(text))
-                                else:
-                                    container.stream_content += strip_ansi(str(chunk))
-                            _audit(
-                                "stream_chunk",
-                                agent=_a,
-                                chunk_count=len(chunks),
-                                preview=_preview_chunk(chunks[-1]),
-                                previews=[_preview_chunk(c) for c in chunks[:5]],
-                                previews_truncated=len(chunks) > 5,
-                            )
-                    if batches:
-                        has_visible_content = any(
-                            container.stream_content.strip()
-                            for container in self._deck.active_streams().values()
-                        )
-                        if has_visible_content:
-                            _ensure_live()
-                        _refresh()
-
-                elif isinstance(event, LiveStopEvent):
-                    _audit(
-                        "stream_stop",
-                        agent=event.agent,
-                        render_mode=event.render_mode,
-                        preview=_preview_text(event.final_content),
-                    )
-                    container = self._deck.get(event.agent)
-                    if container:
-                        container.streaming = False
-                        if self._deck.active_streams():
-                            _refresh()
-                        else:
-                            _close_live()
-                        final_block = self._render_turn_block(
-                            container.stream_theme_name, container.label, container.style,
-                            content=event.final_content,
-                            include_header=True,
-                            include_footer_rule=True,
-                            render_mode=event.render_mode,
-                        )
-                        _cprint(final_block)
-
-                elif isinstance(event, LiveAbortEvent):
-                    _audit("stream_abort", agent=event.agent)
-                    container = self._deck.get(event.agent)
-                    if container is not None:
-                        container.streaming = False
-                    if self._deck.active_streams():
-                        _refresh()
-                    else:
-                        _close_live()
-
-                elif isinstance(event, NoopEvent):
-                    _flush_deferred(force=event.force_flush)
-                    event.done.set()
-
-                elif isinstance(event, ToolbarTickEvent):
-                    # Drena todos os ticks acumulados para um único _refresh()
-                    while True:
-                        try:
-                            next_ev = self._queue.get_nowait()
-                        except _queue_module.Empty:
-                            break
-                        if isinstance(next_ev, ToolbarTickEvent):
-                            pass  # descarta ticks extras, refresca uma vez só
-                        else:
-                            _local_pending.appendleft(next_ev)
-                            break
-                    _refresh()
-
-                elif isinstance(event, OutputControlEvent):
-                    if event.suspend:
-                        self._output_suspended.set()
-                        _close_live()
-                    else:
-                        self._output_suspended.clear()
-                        _flush_deferred(force=True)
-                        # Restaura o Live se o agente ainda está em streaming.
-                        # stream_content acumulado durante a suspensão (ex.: ask_user)
-                        # já está no container; reativar aqui evita tela em branco até
-                        # o próximo chunk. Só inicia se há conteúdo visível para não
-                        # abrir Live vazio desnecessariamente.
-                        if self._deck.active_streams() and any(
-                            container.stream_content.strip()
-                            for container in self._deck.active_streams().values()
-                        ):
-                            _ensure_live()
-                            _refresh()
-                    if event.done is not None:
-                        event.done.set()
-
-                elif isinstance(event, TerminalResizeEvent):
-                    # Resize invalida a contagem de linhas do overlay —
-                    # o cursor-up usaria um valor obsoleto e corromperia o display.
-                    _overlay.reset()
-
-                elif isinstance(event, PendingInputEvent):
-                    # Atualiza o estado pendente do container e dispara refresh do Live
-                    # para exibir (ou limpar) o badge de aprovação inline.
-                    with self._lock:
-                        container = self._deck.get(event.agent)
-                        if container is not None:
-                            container.pending_kind = event.kind
-                            container.pending_question = event.question
-                    if event.agent in self._deck.active_streams():
-                        _refresh()
-
-                elif isinstance(event, TransientWindowEvent):
-                    # Floor cedido (request_floor): um prompt/leitor é dono do
-                    # terminal. NÃO desenhar overlay por cima — era exatamente
-                    # isso que atropelava o prompt de pergunta/aprovação.
-                    if self._output_suspended.is_set():
-                        continue
-                    # Coalescing: drena eventos consecutivos — o mais recente substitui os anteriores
-                    _coalesced = 0
-                    while True:
-                        try:
-                            _next = self._queue.get_nowait()
-                        except _queue_module.Empty:
-                            break
-                        if isinstance(_next, TransientWindowEvent):
-                            event = _next
-                            _coalesced += 1
-                        else:
-                            _local_pending.appendleft(_next)
-                            break
-
-                    if _coalesced > 0:
-                        _audit("transient_coalesced", count=_coalesced, buf_version=event.buf_version)
-
-                    with self._lock:
-                        current_ver = self._transient_buf_version
-
-                    # Evento stale: verifica se ainda há overlay na tela para limpar
-                    if event.buf_version < current_ver:
-                        if _overlay.lines_on_screen > 0:
-                            run_above = self._run_above_prompt_fn
-                            if run_above is not None:
-                                run_above(_overlay.build_clear(current_ver, _get_version, _audit))
-                        continue
-
-                    if not event.text:
-                        continue
-
-                    run_above = self._run_above_prompt_fn
-                    cb = _overlay.build_replace(event.text, event.buf_version, _get_version, _audit)
-                    if run_above is not None:
-                        run_above(cb)
-                    elif self._console:
-                        self._console.print(event.text)
-
-                elif isinstance(event, TransientClearEvent):
-                    # Floor cedido: nada a (re)desenhar; o detentor do chão já
-                    # limpou o overlay em request_floor.
-                    if self._output_suspended.is_set():
-                        continue
-                    with self._lock:
-                        current_ver = self._transient_buf_version
-                    if event.buf_version < current_ver:
-                        continue
-
-                    run_above = self._run_above_prompt_fn
-                    cb = _overlay.build_clear(event.buf_version, _get_version, _audit)
-                    if run_above is not None:
-                        run_above(cb)
-
-            except Exception:
-                _log.exception("writer thread: erro ao processar evento %r", event)
+    def _emit_ui_event(self, event) -> None:
+        """Enfileira evento de UI no compositor (thread-safe)."""
+        self._compositor.emit(event)
 
     def flush(self, timeout: float = 5.0):
         """Aguarda o writer thread processar todos os eventos pendentes."""
-        done = threading.Event()
-        self._queue.put(NoopEvent(done, force_flush=True))
-        if not done.wait(timeout=timeout):
-            raise TimeoutError(f"TerminalRenderer.flush timed out after {timeout} seconds")
+        self._compositor.flush(timeout=timeout)
 
     def flush_quick(self, timeout: float = 0.15) -> bool:
         """Tenta drenar rapidamente sem bloquear o thread do prompt."""
-        try:
-            self.flush(timeout=timeout)
-            return True
-        except TimeoutError:
-            return False
+        return self._compositor.flush_quick(timeout=timeout)
 
     def _freeze_output(self, timeout: float = 2.0) -> bool:
         """Congela temporariamente a saída do compositor."""
-        self._output_suspended.set()
-        done = threading.Event()
-        self._queue.put(OutputControlEvent(suspend=True, done=done))
-        return done.wait(timeout=timeout)
+        return self._compositor.freeze_output(timeout=timeout)
 
     def _thaw_output(self, timeout: float = 2.0) -> bool:
         """Retoma a saída do compositor e drena saídas deferidas."""
-        done = threading.Event()
-        self._queue.put(OutputControlEvent(suspend=False, done=done))
-        resumed = done.wait(timeout=timeout)
-        if not resumed:
-            self._output_suspended.clear()
-        return resumed
+        return self._compositor.thaw_output(timeout=timeout)
 
     def _apply_window_render_plan(self, plan: WindowRenderPlan, timeout: float = 2.0) -> bool:
         """Aplica no terminal o plano produzido pelo WindowManager."""
-        ok = True
-        if plan.suspend_output:
-            ok = self._freeze_output(timeout=timeout) and ok
-        if plan.clear_overlay:
-            self._clear_overlay_sync()
-        if plan.resume_output:
-            ok = self._thaw_output(timeout=timeout) and ok
-        return ok
+        return self._compositor.apply_window_render_plan(plan, timeout=timeout)
 
     # ------------------------------------------------------------------
     # Floor (chão do terminal) — transição atômica de posse do stdout
@@ -1040,8 +502,7 @@ class TerminalRenderer:
             except Exception:
                 pass
             self._overlay_lines[0] = 0
-        with self._lock:
-            self._transient_buf_version += 1
+        self._compositor.bump_transient_version()
         self.log_debug_event("floor_request", prev_lines=n)
 
     # ------------------------------------------------------------------
@@ -1102,8 +563,8 @@ class TerminalRenderer:
         return "\n".join(combined), len(combined)
 
     def _print(self, renderable, kind: str = "generic", **kwargs):
-        """Enfileira um evento de print para o writer thread."""
-        self._queue.put(PrintEvent(renderable, kwargs, kind=kind))
+        """Enfileira um evento de print para o compositor."""
+        self._compositor.emit(PrintEvent(renderable, kwargs, kind=kind))
 
     def _spacing(self):
         """Imprime linha em branco entre turnos; no-op em modo compact."""
@@ -1324,7 +785,7 @@ class TerminalRenderer:
             if container is not None:
                 container.pending_kind = kind
                 container.pending_question = question
-        self._queue.put(PendingInputEvent(agent, kind, question))
+        self._compositor.emit(PendingInputEvent(agent, kind, question))
 
     def clear_agent_pending_input(self, agent: str) -> None:
         """Remove o badge de input pendente do agente."""
@@ -1383,7 +844,7 @@ class TerminalRenderer:
         """Atualiza a resposta incremental com mais um chunk."""
         if not self._console or not chunk:
             return
-        self._queue.put(LiveUpdateChunkEvent(agent, chunk))
+        self._compositor.emit(LiveUpdateChunkEvent(agent, chunk))
 
     def finish_message_stream(self, agent, final_content: str, render_mode: str = "auto"):
         """Fecha o streaming preservando o conteúdo já mostrado."""
@@ -1426,19 +887,19 @@ class TerminalRenderer:
                 buf.append(clean_message)
                 _term_lines = shutil.get_terminal_size(fallback=(80, 24)).lines
                 buf[:] = buf[-max(_SCROLLING_WINDOW_SIZE, _term_lines // 3):]
-                self._transient_buf_version += 1
-                buf_version = self._transient_buf_version
+                self._compositor._transient_buf_version += 1
+                buf_version = self._compositor._transient_buf_version
 
                 if self._run_above_prompt_fn:
                     combined_text, count = self._combined_transient(_term_lines)
-                    if combined_text and combined_text != self._last_combined_text:
-                        self._last_combined_text = combined_text
+                    if combined_text and combined_text != self._compositor._last_combined_text:
+                        self._compositor._last_combined_text = combined_text
                         enqueue_event = TransientWindowEvent(combined_text, count, buf_version)
                 else:
                     fallback = (container.label, container.style)
 
             if enqueue_event is not None:
-                self._queue.put(enqueue_event)
+                self._compositor.emit(enqueue_event)
             elif fallback is not None:
                 label, style = fallback
                 line = Text.assemble(
@@ -1480,9 +941,9 @@ class TerminalRenderer:
             is_transient_agent = bool(container and container.transient_active)
             if container is not None:
                 if container.transient:
-                    self._transient_buf_version += 1
+                    self._compositor._transient_buf_version += 1
                 container.clear_transient_buffer()
-            buf_version = self._transient_buf_version
+            buf_version = self._compositor._transient_buf_version
 
             event = None
             if prompt_active and self._run_above_prompt_fn:
@@ -1491,11 +952,11 @@ class TerminalRenderer:
                 if not combined_text:
                     event = TransientClearEvent(buf_version)
                 else:
-                    self._last_combined_text = combined_text
+                    self._compositor._last_combined_text = combined_text
                     event = TransientWindowEvent(combined_text, count, buf_version)
 
         if event is not None:
-            self._queue.put(event)
+            self._compositor.emit(event)
             return
 
         if not is_transient_agent:
@@ -1555,7 +1016,7 @@ class TerminalRenderer:
 
     def request_toolbar_refresh(self) -> None:
         """Enfileira evento para refresh periódico da toolbar."""
-        self._queue.put(ToolbarTickEvent())
+        self._compositor.emit(ToolbarTickEvent())
 
     # ------------------------------------------------------------------
     # Exibição de tipos especiais

@@ -16,10 +16,14 @@ from .renderer import sys
 
 if hasattr(_renderer, "Console"):
     Console = _renderer.Console
+if hasattr(_renderer, "Group"):
+    Group = _renderer.Group
 if hasattr(_renderer, "Live"):
     Live = _renderer.Live
 if hasattr(_renderer, "Markdown"):
     Markdown = _renderer.Markdown
+if hasattr(_renderer, "markup_escape"):
+    markup_escape = _renderer.markup_escape
 if hasattr(_renderer, "Panel"):
     Panel = _renderer.Panel
 if hasattr(_renderer, "Rule"):
