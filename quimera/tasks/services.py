@@ -84,6 +84,10 @@ class _BackgroundDispatchAppProxy:
     def renderer(self):
         return self.task_services._get_renderer()
 
+    @property
+    def agent_run_sink(self):
+        return self.task_services._get_agent_run_sink()
+
     def get_agent_plugin(self, agent_name: str):
         return self.task_services._get_agent_plugin(agent_name)
 
@@ -184,6 +188,8 @@ class AppTaskServices:
         get_input_gate: Callable[[], Any] | None = None,
         event_sink: Any = None,
         get_event_sink: Callable[[], Any] | None = None,
+        agent_run_sink: Any = None,
+        get_agent_run_sink: Callable[[], Any] | None = None,
         agent_client: Any = None,
         get_agent_client: Callable[[], Any] | None = None,
         workspace: Any = None,
@@ -258,6 +264,7 @@ class AppTaskServices:
         - ``get_input_services``: retorna os serviços de input atuais.
         - ``get_input_gate``: retorna o gate de input atual.
         - ``get_event_sink``: retorna o event sink atual.
+        - ``get_agent_run_sink``: retorna o sink atual de eventos de execução de agente.
         - ``get_agent_client``: retorna o agent client atual.
         - ``get_workspace``: retorna o workspace atual.
         - ``get_dispatch_tool_executor``: retorna o tool executor primário do dispatch.
@@ -312,6 +319,8 @@ class AppTaskServices:
         self._input_gate_getter = get_input_gate
         self._event_sink = event_sink
         self._event_sink_getter = get_event_sink
+        self._agent_run_sink = agent_run_sink
+        self._agent_run_sink_getter = get_agent_run_sink
         self._agent_client = agent_client
         self._agent_client_getter = get_agent_client
         self._workspace = workspace
@@ -446,6 +455,11 @@ class AppTaskServices:
         if self._event_sink is not None:
             return self._event_sink
         return self._event_sink_getter() if self._event_sink_getter else None
+
+    def _get_agent_run_sink(self):
+        if self._agent_run_sink is not None:
+            return self._agent_run_sink
+        return self._agent_run_sink_getter() if self._agent_run_sink_getter else None
 
     def _get_agent_client(self):
         if self._agent_client is not None:
@@ -619,6 +633,7 @@ class AppTaskServices:
         require_approval_for_mutations: bool = True,
         *,
         register_as_primary: bool = True,
+        allow_ask_user: bool = True,
     ) -> ToolExecutor:
         """Cria o executor de ferramentas do app com a configuração padrão."""
         renderer = self._get_renderer()
@@ -630,6 +645,7 @@ class AppTaskServices:
             db_path=workspace.tasks_db,
             memory_file=getattr(workspace, "memory_file", None),
             require_approval_for_mutations=require_approval_for_mutations,
+            allow_ask_user=allow_ask_user,
         )
         approval_handler = ApprovalManager(
             rt_config,
@@ -871,6 +887,7 @@ class AppTaskServices:
             self._background_tool_executor = self.build_tool_executor(
                 require_approval_for_mutations=not self._get_auto_approve_mutations(),
                 register_as_primary=False,
+                allow_ask_user=False,
             )
         return self._background_tool_executor
 

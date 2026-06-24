@@ -975,6 +975,26 @@ class TestRenderOrdering:
         # Deve estar no deck imediatamente (sem precisar de flush)
         assert "codex" in r._deck.completed_streams
 
+    def test_commit_agent_stream_materializes_active_stream(self, recording_renderer):
+        """Boundary de input humano consolida stream ativo sem depender do WindowManager."""
+        r = recording_renderer
+        with patch("quimera.ui.Live"):
+            r.start_message_stream("codex")
+            r.update_message_stream("codex", "contexto antes da pergunta")
+            r.flush()
+
+            assert r.commit_agent_stream("codex") is True
+
+        assert r._deck.get("codex").streaming is False
+        assert "codex" in r._deck.completed_streams
+
+    def test_commit_agent_stream_noops_without_active_content(self, recording_renderer):
+        """Commit sem stream ativo não cria estado artificial."""
+        r = recording_renderer
+
+        assert r.commit_agent_stream("codex") is False
+        assert "codex" not in r._deck.completed_streams
+
     def test_show_message_suppressed_after_stream_finish(self, recording_renderer):
         """show_message com o mesmo conteúdo do stream é suprimido (sem duplicata)."""
         r = recording_renderer
@@ -1041,8 +1061,8 @@ class TestRenderOrdering:
         no_intermediate = not any("A1A2" in snap and "A1A2A3" not in snap and "B1" in snap for snap in snapshots)
         assert no_intermediate
 
-    def test_approval_window_prints_anchored_prompt_below_agent_stream(self, recording_renderer):
-        """Approval window renders as an anchored child below its owner stream."""
+    def test_approval_window_does_not_materialize_agent_stream_or_prompt_card(self, recording_renderer):
+        """Window lifecycle no longer owns agent context preservation."""
         r = recording_renderer
 
         class CapturingLive:
@@ -1069,9 +1089,8 @@ class TestRenderOrdering:
                 pass
 
         output = r._console.export_text()
-        response_index = output.index("resposta parcial")
-        prompt_index = output.index("Executar comando?")
-        assert response_index < prompt_index
+        assert "resposta parcial" not in output
+        assert "Executar comando?" not in output
 
 
 class TestStreamingDiffHelpers:

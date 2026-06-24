@@ -94,34 +94,37 @@ def test_interactive_factories_preserve_owner_anchor_metadata():
     assert window.metadata == {"question": "Escolha"}
 
 
-def test_interactive_mount_plans_render_anchored_windows_before_prompt():
-    """Interactive windows request declarative anchored rendering, not snapshots."""
+def test_interactive_mount_plans_do_not_render_parallel_prompt_cards():
+    """Interactive windows keep a single visible prompt source."""
     deck = WindowDeck()
     manager = WindowManager(deck)
 
-    approval = manager.mount(manager.make_approval_window("floor:approval"))
+    approval = manager.mount(manager.make_approval_window("floor:approval", owner="codex"))
     manager.close("floor:approval")
-    input_window = manager.mount(manager.make_input_window("floor:input"))
+    input_window = manager.mount(manager.make_input_window("floor:input", owner="codex"))
     manager.close("floor:input")
-    selection = manager.mount(manager.make_selection_window("floor:selection"))
+    selection = manager.mount(manager.make_selection_window("floor:selection", owner="codex"))
     manager.close("floor:selection")
+    unowned_selection = manager.mount(manager.make_selection_window("floor:unowned"))
+    manager.close("floor:unowned")
     terminal_floor = manager.mount(manager.make_terminal_floor_window("floor:terminal"))
 
-    assert approval.render_plan.render_anchored_windows is True
-    assert input_window.render_plan.render_anchored_windows is True
-    assert selection.render_plan.render_anchored_windows is True
+    assert approval.render_plan.render_anchored_windows is False
+    assert input_window.render_plan.render_anchored_windows is False
+    assert selection.render_plan.render_anchored_windows is False
+    assert unowned_selection.render_plan.render_anchored_windows is False
     assert terminal_floor.render_plan.render_anchored_windows is False
 
 
-def test_interactive_mount_plan_clears_overlay_before_snapshot():
-    """Interactive anchored windows clear overlay before rendering prompts."""
+def test_interactive_mount_plan_clears_overlay_without_parallel_prompt_card():
+    """Interactive prompts clear overlay but do not print a duplicate card."""
     deck = WindowDeck()
     manager = WindowManager(deck)
 
-    transition = manager.mount(manager.make_approval_window("floor:approval"))
+    transition = manager.mount(manager.make_approval_window("floor:approval", owner="codex"))
 
     assert transition.render_plan.clear_overlay is True
-    assert transition.render_plan.render_anchored_windows is True
+    assert transition.render_plan.render_anchored_windows is False
 
 
 def test_visible_windows_returns_only_active_managed_windows():

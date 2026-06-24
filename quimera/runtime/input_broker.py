@@ -22,6 +22,8 @@ from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from ..app.agent_run_events import AgentRunEvent, coerce_agent_run_sink
+
 _UNSET = object()
 
 _DEFAULT_APPROVAL_TIMEOUT = 180.0   # 3 min
@@ -61,9 +63,10 @@ class InputBroker:
     ToolExecutor.set_ask_user_fn.
     """
 
-    def __init__(self, renderer=None, input_gate=None) -> None:
+    def __init__(self, renderer=None, input_gate=None, agent_run_sink=None) -> None:
         self._renderer = renderer
         self._input_gate = input_gate
+        self._agent_run_sink = coerce_agent_run_sink(agent_run_sink)
         self._suspend_spinner_fn = None
         self._resume_spinner_fn = None
         self._queue: queue.Queue[_InputRequest] = queue.Queue()
@@ -105,17 +108,6 @@ class InputBroker:
             except Exception:
                 pass
         return None, renderer
-
-    def _anchored_prompt_available(self, owner: str | None) -> bool:
-        """Return True when renderer can print an owner-anchored prompt card."""
-        renderer = self._renderer
-        if renderer is None or owner is None:
-            return False
-        deck = getattr(renderer, "_deck", None)
-        active_streams = getattr(deck, "active_streams", None)
-        if not callable(active_streams):
-            return False
-        return str(owner) in {str(agent) for agent in active_streams().keys()}
 
     # ------------------------------------------------------------------
     # Public API chamada pelos produtores (approval, ask_user)
@@ -218,14 +210,46 @@ class InputBroker:
         pending = self._queue.qsize()
         if pending > 0:
             self._emit(f"\n  [{pending} pergunta(s) aguardando na fila]")
+        self._agent_run_sink.emit(
+            AgentRunEvent(
+                "human_action_requested",
+                req.source,
+                text=req.question,
+                metadata={
+                    "kind": req.kind,
+                    "options": list(req.options),
+                    "timeout": req.timeout,
+                    "pending": pending,
+                },
+            )
+        )
         try:
             if req.kind == "approval":
                 result = self._handle_approval(req, allow_direct_gate=allow_direct_gate)
             else:
                 result = self._handle_ask_user(req, allow_direct_gate=allow_direct_gate)
             req.set_result(result)
+            self._agent_run_sink.emit(
+                AgentRunEvent(
+                    "human_action_answered",
+                    req.source,
+                    text=str(result),
+                    metadata={
+                        "kind": req.kind,
+                        "result": result,
+                    },
+                )
+            )
         except Exception as exc:
             req.set_result(req.default)
+            self._agent_run_sink.emit(
+                AgentRunEvent(
+                    "human_action_failed",
+                    req.source,
+                    text=str(exc),
+                    metadata={"kind": req.kind},
+                )
+            )
             self._emit(f"  [broker de input: erro inesperado: {exc}]")
 
     def _handle_approval(self, req: _InputRequest, *, allow_direct_gate: bool = False) -> bool:
@@ -273,8 +297,7 @@ class InputBroker:
             owner=req.source,
             metadata={"question": req.question, "owner": req.source},
         ):
-            if not self._anchored_prompt_available(req.source):
-                self._emit(req.question)
+            self._emit(req.question)
             answer = self._read_line(prompt, deadline=deadline, allow_direct_gate=allow_direct_gate)
         if answer is None:
             elapsed = time.monotonic() - start
@@ -352,8 +375,7 @@ class InputBroker:
             owner=agent,
             metadata={"question": question, "owner": agent},
         ):
-            if not self._anchored_prompt_available(agent):
-                self._emit(f"\n{question}")
+            self._emit(f"\n{question}")
             answer = self._read_line(
                 f"  Resposta (auto em {remaining_s}s): ", deadline=deadline,
                 allow_direct_gate=allow_direct_gate,
@@ -449,10 +471,9 @@ class InputBroker:
         lines.append(f"  (1-{len(options)} · auto em {remaining_s}s)")
         with self._selection_terminal_window(
             owner=agent,
-            metadata={"question": question, "options": options, "owner": agent},
+            metadata={"question": question, "owner": agent},
         ):
-            if not self._anchored_prompt_available(agent):
-                self._emit("\n".join(lines))
+            self._emit("\n".join(lines))
             while True:
                 if deadline - time.monotonic() <= 0:
                     return None

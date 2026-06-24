@@ -29,7 +29,7 @@ class InteractionTools(ToolBase):
 
     def is_ask_user_available(self) -> bool:
         """Indica se ask_user está operável no contexto atual."""
-        return self._ask_user_fn is not None
+        return bool(getattr(self.config, "allow_ask_user", True)) and self._ask_user_fn is not None
 
     def ask_user(self, call: ToolCall) -> ToolResult:
         """Pergunta ao usuário humano e aguarda a resposta.
@@ -49,6 +49,13 @@ class InteractionTools(ToolBase):
             return ToolResult(ok=False, tool_name=call.name, error="'options' deve ter ao menos 2 itens (ou ser omitido para texto livre)")
 
         options = [str(o) for o in raw_options] if isinstance(raw_options, list) else []
+
+        if not getattr(self.config, "allow_ask_user", True):
+            return ToolResult(
+                ok=False,
+                tool_name=call.name,
+                error="ask_user está desativado neste contexto",
+            )
 
         if self._ask_user_fn is not None:
             try:

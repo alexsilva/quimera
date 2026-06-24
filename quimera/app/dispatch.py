@@ -59,6 +59,7 @@ class AppDispatchServices:
         get_shared_state_lock=None,
         notify_warning=None,
         notify_error=None,
+        agent_run_sink=None,
     ):
         self._agent_client_override = agent_client_override
         self._tool_executor_override = tool_executor_override
@@ -97,6 +98,7 @@ class AppDispatchServices:
         self._get_delegate_fn_override = get_delegate_fn_override
         self._notify_warning = notify_warning
         self._notify_error = notify_error
+        self._agent_run_sink = agent_run_sink
         self._gateway = None
         self._agent_call_service = None
 
@@ -117,6 +119,7 @@ class AppDispatchServices:
             refresh_task_state=lambda: getattr(
                 getattr(app, 'task_services', None), 'refresh_task_shared_state', lambda: None
             )(),
+            agent_run_sink=getattr(app, 'agent_run_sink', None),
             get_round_index=lambda: getattr(app, 'round_index', 0),
             debug_prompt_metrics=lambda: getattr(app, 'debug_prompt_metrics', False),
             redisplay_prompt=lambda **kw: getattr(app, '_redisplay_user_prompt_if_needed', lambda **kw_: None)(**kw),
@@ -252,6 +255,7 @@ class AppDispatchServices:
             output_lock=output_lock,
             counter_lock=counter_lock,
             ui_queue=self._ui_queue,
+            agent_run_sink=self._call(self._agent_run_sink),
         )
 
 

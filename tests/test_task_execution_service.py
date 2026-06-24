@@ -1,7 +1,12 @@
 import threading
 
+from quimera.app.dispatch import AppDispatchServices
 from quimera.tasks.execution import TaskExecutionService
-from quimera.tasks.services import AppTaskServices, _BACKGROUND_AGENT_TIMEOUT_SECONDS
+from quimera.tasks.services import (
+    AppTaskServices,
+    _BACKGROUND_AGENT_TIMEOUT_SECONDS,
+    _BackgroundDispatchAppProxy,
+)
 from quimera.tasks.classifiers import classify_task_execution_result, classify_task_review_result
 from quimera.runtime.models import TaskRecord
 
@@ -25,6 +30,8 @@ def build_task_services(app):
         app.input_gate = None
     if not hasattr(app, "event_sink"):
         app.event_sink = None
+    if not hasattr(app, "agent_run_sink"):
+        app.agent_run_sink = None
     if not hasattr(app, "agent_client"):
         app.agent_client = None
     if not hasattr(app, "workspace"):
@@ -104,6 +111,7 @@ def build_task_services(app):
         get_input_services=lambda: app.input_services,
         get_input_gate=lambda: app.input_gate,
         get_event_sink=lambda: app.event_sink,
+        get_agent_run_sink=lambda: app.agent_run_sink,
         get_agent_client=lambda: app.agent_client,
         get_workspace=lambda: app.workspace,
         get_dispatch_tool_executor=lambda: app.tool_executor,
@@ -203,6 +211,58 @@ class FailoverPolicyStub:
     def can_failover(self, task_id, failed_agent):
         _ = (task_id, failed_agent)
         return self.can_failover_value
+
+
+def test_background_dispatch_proxy_exposes_agent_run_sink():
+    """Background dispatch deve usar o mesmo contrato de eventos do app."""
+    app = type("App", (), {})()
+    class Sink:
+        def emit(self, event):
+            del event
+
+    sink = Sink()
+    app.agent_run_sink = sink
+    task_services = build_task_services(app)
+
+    proxy = _BackgroundDispatchAppProxy(
+        task_services=task_services,
+        get_session_metrics=lambda: None,
+        get_round_index=lambda: 0,
+        get_debug_prompt_metrics=lambda: False,
+        get_redisplay_prompt=lambda: None,
+        get_output_lock=lambda: None,
+        get_counter_lock=lambda: None,
+        get_shared_state_lock=lambda: None,
+        get_session_services=lambda: None,
+        get_rate_limit_backoff_seconds=lambda: 30,
+    )
+    dispatch = AppDispatchServices.from_app(proxy)
+
+    assert proxy.agent_run_sink is sink
+    assert dispatch._agent_run_sink is sink
+
+
+def test_background_task_tool_executor_disables_ask_user(tmp_path):
+    """Executores de /task não devem abrir perguntas interativas ao humano."""
+    class AppStub:
+        pass
+
+    app = AppStub()
+    app.renderer = object()
+    app.agent_client = type("ChatClient", (), {"idle_timeout": 45})()
+    app.workspace = type(
+        "WorkspaceStub",
+        (),
+        {"cwd": tmp_path, "tasks_db": tmp_path / "tasks.db"},
+    )()
+    app.visibility = "summary"
+    app.auto_approve_mutations = False
+
+    services = build_task_services(app)
+    executor = services._get_background_tool_executor()
+
+    assert executor.config.allow_ask_user is False
+    assert executor.is_ask_user_available() is False
 
 
 def test_handler_completes_task_when_no_review_agent_available():

@@ -813,6 +813,23 @@ class TerminalRenderer:
         with self._lock:
             self._agent_window_controller(agent).finish_stream(self, final_content, render_mode)
 
+    def commit_agent_stream(self, agent, render_mode: str = "auto") -> bool:
+        """Materializa o stream ativo do agente no scrollback, se houver."""
+        if not self._console:
+            return False
+        with self._lock:
+            container = self._deck.get(agent)
+            if container is None or not container.streaming:
+                return False
+            content = str(getattr(container, "stream_content", "") or "")
+            if not content.strip():
+                return False
+            container.streaming = False
+            container.pending_kind = ""
+            container.pending_question = ""
+            self._agent_window_controller(agent).finish_stream(self, content, render_mode)
+            return True
+
     def abort_message_stream(self, agent):
         """Fecha o stream sem marcar a resposta como completa."""
         if not self._console:

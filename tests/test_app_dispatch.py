@@ -132,6 +132,7 @@ def dispatch_app():
     app.print_response = MagicMock()
     app.record_failure = MagicMock()
     app._delegate = None
+    app.agent_run_sink = None
     return app
 
 

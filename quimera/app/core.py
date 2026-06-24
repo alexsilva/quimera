@@ -10,6 +10,7 @@ from contextlib import nullcontext
 from pathlib import Path
 
 from .agent_pool import AgentPool, AgentPoolView
+from .agent_run_events import AgentRunController
 from .handlers import PromptAwareStderrHandler
 from ..domain.session_state import SessionState
 from .chat_round import ChatRoundOrchestrator
@@ -158,6 +159,7 @@ class QuimeraApp:
             density=self.config.density,
             audit_logger=render_audit_logger,
         )
+        self.agent_run_sink = AgentRunController(self.renderer)
         self.event_sink = EventSink()
         self.user_name = self.config.user_name
         self.visibility = Visibility(visibility)
@@ -180,6 +182,7 @@ class QuimeraApp:
         self.input_broker = InputBroker(
             renderer=self.renderer,
             input_gate=self.input_gate,
+            agent_run_sink=self.agent_run_sink,
         )
         self.context_manager = ContextManager(
             self.workspace.context_persistent,
@@ -396,6 +399,7 @@ class QuimeraApp:
             input_services=self.input_services,
             input_gate=self.input_gate,
             event_sink=self.event_sink,
+            agent_run_sink=self.agent_run_sink,
             agent_client=self.agent_client,
             workspace=self.workspace,
             get_dispatch_tool_executor=lambda: self.tool_executor,
@@ -469,6 +473,7 @@ class QuimeraApp:
             record_success=self.record_success,
             get_agent_client=lambda: self.agent_client,
             get_tool_executor=lambda: self.tool_executor,
+            agent_run_sink=self.agent_run_sink,
         )
         self.task_services.bind_session_services(self.session_services)
         self.task_services.bind_dispatch_services(self.dispatch_services)

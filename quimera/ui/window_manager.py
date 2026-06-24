@@ -276,15 +276,10 @@ class WindowManager:
     @staticmethod
     def _mount_render_plan(window: RenderWindowState) -> WindowRenderPlan:
         if window.modality == WindowModality.EXCLUSIVE_TERMINAL:
-            render_anchored_windows = window.kind in {
-                WindowKind.APPROVAL,
-                WindowKind.INPUT,
-                WindowKind.SELECTION,
-            }
             return WindowRenderPlan(
                 suspend_output=True,
                 clear_overlay=True,
-                render_anchored_windows=render_anchored_windows,
+                render_anchored_windows=False,
             )
         return WindowRenderPlan()
 

@@ -214,7 +214,7 @@ class TerminalCompositor:
         *,
         render_anchored_windows: bool = False,
     ) -> bool:
-        """Suspend compositor output, optionally printing declarative window content first."""
+        """Suspend compositor output before exclusive terminal input."""
         self._output_suspended.set()
         done = threading.Event()
         self._queue.put(
