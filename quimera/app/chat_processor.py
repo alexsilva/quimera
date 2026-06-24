@@ -125,6 +125,7 @@ def run_chat_loop(
     chat_worker_failure_reported = False
     interrupted_shutdown = False
     swallow_threaded_input_interrupt = False
+    ctrl_c_cancelled = False
     if threaded_chat:
         async_capacity = max(1, int(getattr(app, "threads", 1) or 1))
         chat_executor = executor_cls(
@@ -184,15 +185,18 @@ def run_chat_loop(
                 user = app.read_user_input(app._format_user_prompt(), timeout=0)
                 if user is not None:
                     swallow_threaded_input_interrupt = False
+                    ctrl_c_cancelled = False
             except KeyboardInterrupt:
                 if threaded_chat and swallow_threaded_input_interrupt:
                     swallow_threaded_input_interrupt = False
                     continue
                 if threaded_chat:
                     inflight = app.runtime_state.get_chat_inflight_count()
-                    if inflight > 0:
+                    if inflight > 0 and not ctrl_c_cancelled:
+                        ctrl_c_cancelled = True
                         chat_lifecycle.handle_local_interrupt()
-                        raise
+                        swallow_threaded_input_interrupt = True
+                        continue
                 raise
             if user is None:
                 if not sys.stdin.isatty():
