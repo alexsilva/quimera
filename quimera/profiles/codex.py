@@ -184,6 +184,32 @@ def _format_codex_spy_event(line: str) -> list[SpyEvent]:
 class CodexProfile(ExecutionProfile):
     """Profile do Codex com retomada automática da última sessão por workspace."""
 
+    def configure_with_model(self, model_id: str) -> CliConnection:
+        """Retorna conexão CLI do Codex com --model aplicado."""
+        normalized = (model_id or "").strip()
+        if not normalized:
+            raise ValueError("model_id não pode ser vazio.")
+        connection = self.effective_connection()
+        if not isinstance(connection, CliConnection):
+            raise ValueError(f"Profile '{self.name}' não usa driver CLI.")
+
+        cmd = list(connection.cmd)
+        for idx, arg in enumerate(cmd):
+            if arg.startswith("--model="):
+                cmd[idx] = f"--model={normalized}"
+                return CliConnection(cmd=cmd, prompt_as_arg=connection.prompt_as_arg, output_format=connection.output_format)
+            if arg in {"--model", "-m"} and idx + 1 < len(cmd):
+                cmd[idx + 1] = normalized
+                return CliConnection(cmd=cmd, prompt_as_arg=connection.prompt_as_arg, output_format=connection.output_format)
+
+        if cmd[:2] == ["codex", "exec"]:
+            cmd = ["codex", "exec", "--model", normalized, *cmd[2:]]
+        elif cmd and Path(cmd[0]).name == "codex":
+            cmd = [cmd[0], "--model", normalized, *cmd[1:]]
+        else:
+            cmd = ["codex", "exec", "--model", normalized, *cmd]
+        return CliConnection(cmd=cmd, prompt_as_arg=connection.prompt_as_arg, output_format=connection.output_format)
+
     def mcp_server_args(self, socket_path: str) -> list[str]:
         """Retorna overrides de config para registrar MCP via stdio no Codex."""
         proxy_cmd: list[str] = ["-m", "quimera.runtime.mcp", "--connect-socket", socket_path]

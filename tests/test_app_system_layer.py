@@ -705,25 +705,25 @@ def test_handle_command_connect_applies_profile_and_updates_active_lists():
     """Verifica que Test handle command connect applies profile and updates active lists."""
     app = make_app()
     layer = AppSystemLayer(app)
-    profile = make_profile(name="target")
-    profile = make_profile(name="base")
-    profile.spy_stdout_formatter = lambda raw: []
-    profile.runtime_rw_paths = ["/tmp/work"]
-    app.get_agent_profile = Mock(return_value=profile)
+    target_profile = make_profile(name="target")
+    inherited_profile = make_profile(name="target")
+    inherited_profile.dynamic = True
+    base_profile = make_profile(name="base")
+    base_profile.spy_stdout_formatter = lambda raw: []
+    base_profile.runtime_rw_paths = ["/tmp/work"]
+    app.get_agent_profile = Mock(return_value=target_profile)
 
     with patch.object(
         layer,
         "_configure_connection_interactively",
         return_value=(CliConnection(cmd=["target"]), "base"),
-    ), patch("quimera.app.system_layer._profiles.get", return_value=profile), patch(
+    ), patch("quimera.app.system_layer.register_connection_profile", return_value=inherited_profile) as register_dynamic, patch(
         "quimera.app.system_layer.set_connection"
     ) as set_override:
         handled = layer.handle_command("/connect target")
 
     assert handled is True
-    assert getattr(profile, "_profile_name") == "base"
-    assert profile.spy_stdout_formatter is profile.spy_stdout_formatter
-    assert profile.runtime_rw_paths == ["/tmp/work"]
+    register_dynamic.assert_called_once_with("target", metadata={"profile": "base"}, registry=None)
     assert app.active_agents == ["target"]
     assert app.selected_agents == ["target"]
     set_override.assert_called_once()

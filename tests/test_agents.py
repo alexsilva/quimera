@@ -217,6 +217,47 @@ def test_claude_profile_injects_mcp_server():
         profile.set_mcp_socket_path(original_mcp_socket)
 
 
+def test_claude_profile_configure_with_model_inserts_model_flag():
+    """Claude não usa placeholder --model=, mas deve aceitar modelo nomeado."""
+    profile = get_profile("claude")
+    assert profile is not None
+
+    conn = profile.configure_with_model("sonnet")
+
+    assert isinstance(conn, CliConnection)
+    assert conn.cmd[:3] == ["claude", "--model", "sonnet"]
+    assert conn.output_format == "stream-json"
+
+
+def test_codex_profile_configure_with_model_inserts_model_flag():
+    """Codex não usa placeholder --model=, mas deve aceitar modelo nomeado."""
+    profile = get_profile("codex")
+    assert profile is not None
+
+    conn = profile.configure_with_model("gpt-5.5")
+
+    assert isinstance(conn, CliConnection)
+    assert conn.cmd[:4] == ["codex", "exec", "--model", "gpt-5.5"]
+    assert "--json" in conn.cmd
+    assert conn.output_format == "codex-json"
+
+
+def test_agent_client_cli_attrs_fall_back_to_profile_output_format():
+    """Conexões antigas sem output_format ainda usam parser do perfil herdado."""
+    profile = SimpleNamespace(
+        effective_cmd=lambda: ["opencode", "run"],
+        effective_output_format=lambda: "opencode-json",
+        output_format="opencode-json",
+    )
+    connection = CliConnection(cmd=["opencode", "run"], output_format=None)
+
+    cmd, prompt_as_arg, output_format = AgentClient._resolve_profile_cli_attrs(profile, connection)
+
+    assert cmd == ["opencode", "run"]
+    assert prompt_as_arg is False
+    assert output_format == "opencode-json"
+
+
 
 def test_base_agent_profile_prefers_socket_when_socket_and_http_are_set():
     """Verifica que base agent profile prefers socket when socket and http are set."""

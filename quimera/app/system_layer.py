@@ -549,13 +549,11 @@ class AppSystemLayer:
                 self._display.show_warning_message(str(exc))
                 return True
             if profile_name:
-                profile = _profiles.get(profile_name)
-                if profile is not None:
-                    object.__setattr__(profile, "_profile_name", profile.name)
-                    if profile.spy_stdout_formatter is not None:
-                        profile.spy_stdout_formatter = profile.spy_stdout_formatter
-                    if profile.runtime_rw_paths:
-                        profile.runtime_rw_paths = list(profile.runtime_rw_paths)
+                profile = register_connection_profile(
+                    target,
+                    metadata={"profile": profile_name},
+                    registry=profile_registry,
+                )
             set_connection(target, connection, persist=True, registry=profile_registry)
             active_agents = self._get_active_agents()
             selected_agents = list(self.get_selected_agents() or [])

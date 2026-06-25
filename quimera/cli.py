@@ -76,11 +76,11 @@ def _test_profile_names() -> tuple[str, ...]:
 def _available_agent_names(test_mode: bool = False) -> list[str]:
     if test_mode and hasattr(_profiles, "enable_test_profiles"):
         _profiles.enable_test_profiles()
-    names = _profiles.all_names()
     test_names = set(_test_profile_names())
     if test_mode:
+        names = _profiles.all_names()
         return [name for name in names if name in test_names]
-    return [name for name in names if name not in test_names]
+    return [name for name in load_connections().keys() if name not in test_names]
 
 
 def _test_mode_uses_fake_openai(agents: list[str] | tuple[str, ...] | None) -> bool:
@@ -217,10 +217,12 @@ def _build_connection_from_args(profile, args):
         return _configure_connection_interactively(profile)
     if args.driver == "cli":
         if args.cmd:
+            output_resolver = getattr(profile, "effective_output_format", None)
+            output_format = output_resolver() if callable(output_resolver) else getattr(profile, "output_format", None)
             return CliConnection(
                 cmd=list(args.cmd),
                 prompt_as_arg=False,
-                output_format=None,
+                output_format=output_format,
             )
         return _configure_connection_interactively(profile, driver_hint="cli")
     if args.model:
@@ -323,8 +325,8 @@ def main():
                         help="Driver de conexão (cli ou openai)")
     parser.add_argument("--cmd", dest="cmd", metavar="CMD", nargs=argparse.REMAINDER, default=None,
                         help="Comando CLI (para driver=cli)")
-    parser.add_argument("--model", dest="model", metavar="MODELO", default=None,
-                        help="Modelo (para driver=openai)")
+    parser.add_argument("--model", "--mode", dest="model", metavar="MODELO", default=None,
+                        help="Modelo (para driver=openai ou profile CLI com suporte a modelo)")
     parser.add_argument("--base-url", dest="base_url", metavar="URL", default=None,
                         help="Base URL (para driver=openai)")
     parser.add_argument("--api-key-env", dest="api_key_env", metavar="VAR", default=None,
@@ -417,6 +419,10 @@ def main():
         if agent_name in _test_profile_names():
             parser.error(f"Profile de teste '{agent_name}' não aceita --connect persistente; use --test com configuração local do processo")
         profile = _profiles.get(agent_name)
+        if profile is not None and not getattr(profile, "dynamic", False):
+            parser.error(
+                f"'{agent_name}' é um perfil de execução; escolha um nome de conexão e use --profile {agent_name}."
+            )
         if profile is None:
             if not is_valid_agent_name(agent_name):
                 parser.error(f"Nome de agente inválido em --connect: {agent_name}")
@@ -433,14 +439,10 @@ def main():
             # Profile já existe — atualiza referência de base se --profile foi fornecido
             profile_name = getattr(args, "profile", None)
             if profile_name:
-                profile = _profiles.get(profile_name.strip().lower())
-                if profile is None:
+                execution_profile = _profiles.get(profile_name.strip().lower())
+                if execution_profile is None:
                     parser.error(f"Perfil de execução '{profile_name}' não encontrado em --profile.")
-                object.__setattr__(profile, "_profile_name", profile.name)
-                if profile.spy_stdout_formatter is not None:
-                    profile.spy_stdout_formatter = profile.spy_stdout_formatter
-                if profile.runtime_rw_paths:
-                    profile.runtime_rw_paths = list(profile.runtime_rw_paths)
+                profile = register_connection_profile(agent_name, metadata={"profile": execution_profile.name})
 
         print(f"Configurando conexão para {agent_name}")
         print(f"Built-in atual: {format_connection_label(profile.effective_connection())}")

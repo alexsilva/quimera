@@ -144,7 +144,10 @@ def apply_connections(registry=None, exclude_names: set[str] | frozenset[str] | 
     for name, conn_data in overrides.items():
         if str(name).strip().lower() in excluded:
             continue
-        if target_registry.get(name) is None:
+        existing = target_registry.get(name)
+        if existing is not None and not getattr(existing, "dynamic", False):
+            continue
+        if existing is None:
             try:
                 register_connection_profile(name, metadata=conn_data.get("profile"), registry=target_registry)
             except ValueError:
@@ -193,7 +196,7 @@ def set_connection(agent_name: str, connection: Connection, persist: bool = True
             # Preserve profile reference for formatter inheritance on reload
             base_ref = (
                 getattr(profile, "_profile_name", None)
-                or connections.get(agent_name, {}).get("profile", {}).get("base")
+                or connections.get(agent_name, {}).get("profile", {}).get("profile")
             )
             if base_ref:
                 profile_meta["profile"] = base_ref
@@ -534,6 +537,38 @@ def _sanitize_connection_profile_metadata(metadata: dict | None) -> dict:
     }
 
 
+def _inherit_execution_profile_config(profile_data: dict, execution_profile: "ExecutionProfile") -> None:
+    """Mescla contrato visual/runtime do perfil de execução na conexão nomeada."""
+    current_style = tuple(profile_data.get("style") or ())
+    current_label = current_style[1] if len(current_style) > 1 else None
+    profile_data.update({
+        "icon": execution_profile.icon,
+        "style": (execution_profile.style[0], current_label or execution_profile.style[1]),
+        "cmd": list(execution_profile.cmd),
+        "prompt_as_arg": execution_profile.prompt_as_arg,
+        "output_format": execution_profile.output_format,
+        "capabilities": list(execution_profile.capabilities),
+        "preferred_task_types": list(execution_profile.preferred_task_types),
+        "avoid_task_types": list(execution_profile.avoid_task_types),
+        "supports_tools": execution_profile.supports_tools,
+        "has_builtin_tools": execution_profile.has_builtin_tools,
+        "tool_use_reliability": execution_profile.tool_use_reliability,
+        "supports_code_editing": execution_profile.supports_code_editing,
+        "supports_long_context": execution_profile.supports_long_context,
+        "supports_task_execution": execution_profile.supports_task_execution,
+        "supports_warm_pool": execution_profile.supports_warm_pool,
+        "base_tier": execution_profile.base_tier,
+        "driver": execution_profile.driver,
+        "model": execution_profile.model,
+        "base_url": execution_profile.base_url,
+        "api_key_env": execution_profile.api_key_env,
+        "runtime_rw_paths": list(execution_profile.runtime_rw_paths),
+        "spy_stdout_formatter": execution_profile.spy_stdout_formatter,
+        "stderr_noise": execution_profile.stderr_noise,
+        "stderr_noise_patterns": tuple(execution_profile.stderr_noise_patterns),
+    })
+
+
 def register_connection_profile(
     name: str,
     connection: Connection | None = None,
@@ -545,6 +580,9 @@ def register_connection_profile(
     normalized = (name or "").strip().lower()
     if not is_valid_agent_name(normalized):
         raise ValueError(f"Nome de agente inválido: {name}")
+    existing = target_registry.get(normalized)
+    if existing is not None and not getattr(existing, "dynamic", False):
+        raise ValueError(f"Nome de conexão conflita com perfil de execução: {name}")
 
     profile_data = _connection_profile_metadata(normalized)
     profile_data.update(_sanitize_connection_profile_metadata(metadata))
@@ -556,9 +594,7 @@ def register_connection_profile(
         profile = target_registry.get(profile_name)
         if profile is not None:
             profile_cls = type(profile)
-            profile_data.setdefault("spy_stdout_formatter", profile.spy_stdout_formatter)
-            profile_data.setdefault("has_builtin_tools", profile.has_builtin_tools)
-            profile_data.setdefault("runtime_rw_paths", list(profile.runtime_rw_paths))
+            _inherit_execution_profile_config(profile_data, profile)
 
     prefix = profile_data.pop("prefix", f"/{normalized}")
     style = tuple(profile_data.pop("style", ("bright_cyan", _humanize_agent_name(normalized))))

@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 
 from quimera.agent_events import SpyEvent
-from quimera.profiles.base import ExecutionProfile, register
+from quimera.profiles.base import CliConnection, ExecutionProfile, register
 from quimera.profiles.spy_utils import describe_tool_input, format_agent_message_lines, truncate_spy_text
 
 
@@ -149,6 +149,30 @@ def _format_claude_spy_event(line: str) -> list[SpyEvent]:
 
 
 class ClaudeProfile(ExecutionProfile):
+    def configure_with_model(self, model_id: str) -> CliConnection:
+        """Retorna conexão CLI do Claude com --model aplicado."""
+        normalized = (model_id or "").strip()
+        if not normalized:
+            raise ValueError("model_id não pode ser vazio.")
+        connection = self.effective_connection()
+        if not isinstance(connection, CliConnection):
+            raise ValueError(f"Profile '{self.name}' não usa driver CLI.")
+
+        cmd = list(connection.cmd)
+        for idx, arg in enumerate(cmd):
+            if arg.startswith("--model="):
+                cmd[idx] = f"--model={normalized}"
+                return CliConnection(cmd=cmd, prompt_as_arg=connection.prompt_as_arg, output_format=connection.output_format)
+            if arg == "--model" and idx + 1 < len(cmd):
+                cmd[idx + 1] = normalized
+                return CliConnection(cmd=cmd, prompt_as_arg=connection.prompt_as_arg, output_format=connection.output_format)
+
+        if cmd:
+            cmd = [cmd[0], "--model", normalized, *cmd[1:]]
+        else:
+            cmd = ["claude", "--model", normalized]
+        return CliConnection(cmd=cmd, prompt_as_arg=connection.prompt_as_arg, output_format=connection.output_format)
+
     def mcp_server_args(self, socket_path: str) -> list[str]:
         """Retorna flags para conectar o Claude ao MCP local do Quimera."""
         proxy_args: list[str] = ["-m", "quimera.runtime.mcp", "--connect-socket", socket_path]

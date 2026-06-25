@@ -81,6 +81,7 @@ def _patch_main_basics(monkeypatch, *, agent_names=None, theme_names=None):
     monkeypatch.setattr(cli, "ConfigManager", _FakeConfig)
     monkeypatch.setattr(cli, "QuimeraApp", _FakeApp)
     monkeypatch.setattr(cli._profiles, "all_names", lambda: agent_names or ["claude"])
+    monkeypatch.setattr(cli, "load_connections", lambda: {name: {"type": "cli", "cmd": [name]} for name in (agent_names or ["claude"])})
     monkeypatch.setattr(cli._themes, "names", lambda: theme_names or ["default"])
     monkeypatch.setattr(cli, "_ensure_required_runtime_dependencies", lambda: None)
 
@@ -387,6 +388,17 @@ def test_build_connection_cli_with_cmd_returns_cli_connection():
     assert conn.output_format is None
 
 
+def test_build_connection_cli_with_cmd_inherits_profile_output_format():
+    """Conexão CLI explícita preserva parser do perfil de execução."""
+    profile = SimpleNamespace(effective_output_format=lambda: "opencode-json")
+    args = Namespace(profile=None, model=None, driver="cli", cmd=["opencode", "run"], extra_body=None, base_url=None, api_key_env=None)
+
+    conn = cli._build_connection_from_args(profile, args)
+
+    assert isinstance(conn, CliConnection)
+    assert conn.output_format == "opencode-json"
+
+
 def test_build_connection_cli_without_cmd_falls_back_to_interactive(monkeypatch):
     """Verifica que build connection cli without cmd falls back to interactive."""
     profile = SimpleNamespace()
@@ -457,6 +469,29 @@ def test_main_list_connections_prints_each_entry(monkeypatch):
         cli.main()
 
     mock_print.assert_called_once_with("codex: cli: codex")
+
+
+def test_available_agent_names_uses_persisted_connections_not_profiles(monkeypatch):
+    """Perfis de execução não ativam agentes por si só."""
+    monkeypatch.setattr(cli._profiles, "all_names", lambda: ["claude", "codex", "opencode"])
+    monkeypatch.setattr(cli, "load_connections", lambda: {})
+
+    assert cli._available_agent_names() == []
+
+
+def test_available_agent_names_returns_connection_names(monkeypatch):
+    """Agentes disponíveis são conexões nomeadas persistidas."""
+    monkeypatch.setattr(cli._profiles, "all_names", lambda: ["claude", "codex", "opencode"])
+    monkeypatch.setattr(
+        cli,
+        "load_connections",
+        lambda: {
+            "alice": {"type": "cli", "cmd": ["codex"]},
+            "bob": {"type": "openai", "model": "gpt-4o"},
+        },
+    )
+
+    assert cli._available_agent_names() == ["alice", "bob"]
 
 
 def test_main_connect_registers_dynamic_profile_and_saves_override(monkeypatch):
@@ -541,13 +576,58 @@ def test_main_connect_new_agent_with_base_profile_sets_metadata(monkeypatch):
     register_dynamic.assert_called_once_with("novo-agente", metadata={"profile": "base-ok"})
 
 
+def test_main_connect_profile_model_accepts_mode_alias(monkeypatch):
+    """--mode é alias de --model para perfis CLI com suporte a modelo."""
+    base_profile = SimpleNamespace(
+        name="codex",
+        configure_with_model=lambda model: CliConnection(
+            cmd=["codex", "exec", "--model", model, "--json"],
+            output_format="codex-json",
+        ),
+        effective_connection=lambda: CliConnection(cmd=["codex", "exec", "--json"]),
+    )
+    dynamic_profile = SimpleNamespace(effective_connection=lambda: CliConnection(cmd=["codex", "exec", "--json"]))
+
+    def fake_get(name):
+        if name == "codex-gpt-5-5":
+            return None
+        if name == "codex":
+            return base_profile
+        return None
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["quimera", "--connect", "codex-gpt-5-5", "--profile", "codex", "--mode", "gpt-5.5"],
+    )
+    monkeypatch.setattr(cli._profiles, "get", fake_get)
+    monkeypatch.setattr(cli, "is_valid_agent_name", lambda _name: True)
+
+    with patch("quimera.cli.register_connection_profile", return_value=dynamic_profile) as register_dynamic, \
+            patch("quimera.cli.set_connection") as set_override, \
+            patch("quimera.cli.format_connection_label", return_value="cli: ok"), \
+            patch("builtins.print"):
+        cli.main()
+
+    register_dynamic.assert_called_once_with("codex-gpt-5-5", metadata={"profile": "codex"})
+    saved_connection = set_override.call_args.args[1]
+    assert isinstance(saved_connection, CliConnection)
+    assert saved_connection.cmd == ["codex", "exec", "--model", "gpt-5.5", "--json"]
+    assert saved_connection.output_format == "codex-json"
+
+
 def test_main_connect_existing_profile_inherits_base_settings(monkeypatch):
     """Verifica que main connect existing profile inherits base settings."""
     base_formatter = lambda text: text
     existing_profile = SimpleNamespace(
+        dynamic=True,
         effective_connection=lambda: CliConnection(cmd=["existing"]),
         spy_stdout_formatter=None,
         runtime_rw_paths=[],
+    )
+    inherited_profile = SimpleNamespace(
+        effective_connection=lambda: CliConnection(cmd=["existing"]),
+        effective_output_format=lambda: None,
     )
     base_profile = SimpleNamespace(name="base-ref", spy_stdout_formatter=base_formatter, runtime_rw_paths=["/tmp/rw"])
 
@@ -562,19 +642,19 @@ def test_main_connect_existing_profile_inherits_base_settings(monkeypatch):
     monkeypatch.setattr(cli._profiles, "get", fake_get)
 
     with patch("quimera.cli.set_connection") as set_override, \
+            patch("quimera.cli.register_connection_profile", return_value=inherited_profile) as register_dynamic, \
             patch("quimera.cli.format_connection_label", return_value="cli: ok"), \
             patch("builtins.print"):
         cli.main()
 
-    assert existing_profile._profile_name == "base-ref"
-    assert existing_profile.spy_stdout_formatter is base_formatter
-    assert existing_profile.runtime_rw_paths == ["/tmp/rw"]
+    register_dynamic.assert_called_once_with("codex", metadata={"profile": "base-ref"})
     set_override.assert_called_once()
 
 
 def test_main_connect_existing_profile_with_missing_base_errors(monkeypatch):
     """Verifica que main connect existing profile with missing base errors."""
     existing_profile = SimpleNamespace(
+        dynamic=True,
         effective_connection=lambda: CliConnection(cmd=["existing"]),
         spy_stdout_formatter=None,
         runtime_rw_paths=[],

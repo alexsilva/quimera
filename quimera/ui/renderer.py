@@ -772,7 +772,7 @@ class TerminalRenderer:
                 style,
                 content=clean_content,
                 include_header=True,
-                include_footer_rule=True,
+                include_footer_rule=False,
                 render_mode=render_mode,
             )
             self._print(block, kind="message")

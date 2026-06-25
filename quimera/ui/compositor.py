@@ -603,7 +603,7 @@ class TerminalCompositor:
                             container.style,
                             content=event.final_content,
                             include_header=True,
-                            include_footer_rule=True,
+                            include_footer_rule=False,
                             render_mode=event.render_mode,
                         )
                         _cprint(final_block)

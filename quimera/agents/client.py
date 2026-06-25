@@ -678,7 +678,11 @@ class AgentClient:
         if isinstance(connection, CliConnection):
             cmd_resolver = getattr(profile, "effective_cmd", None)
             cmd = cmd_resolver() if callable(cmd_resolver) else list(connection.cmd)
-            return cmd, connection.prompt_as_arg, connection.output_format
+            output_format = connection.output_format
+            if output_format is None:
+                output_resolver = getattr(profile, "effective_output_format", None)
+                output_format = output_resolver() if callable(output_resolver) else getattr(profile, "output_format", None)
+            return cmd, connection.prompt_as_arg, output_format
         cmd_resolver = getattr(profile, "effective_cmd", None)
         prompt_resolver = getattr(profile, "effective_prompt_as_arg", None)
         output_resolver = getattr(profile, "effective_output_format", None)

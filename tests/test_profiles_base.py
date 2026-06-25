@@ -117,6 +117,14 @@ def test_register_connection_profile_invalid_name():
         register_connection_profile("INVALID NAME!")
 
 
+def test_register_connection_profile_rejects_execution_profile_name():
+    base = ExecutionProfile(name="reserved-profile", prefix="/reserved-profile", style=("blue", "Reserved"))
+    register(base)
+
+    with pytest.raises(ValueError, match="conflita com perfil de execução"):
+        register_connection_profile("reserved-profile")
+
+
 def test_register_connection_profile_with_metadata():
     meta = {"icon": "🔥", "base_tier": 3}
     profile = register_connection_profile("dyntest3", metadata=meta)
@@ -160,6 +168,9 @@ def test_register_connection_profile_inherits_base():
         name="baseagent",
         prefix="/baseagent",
         style=("blue", "Base"),
+        icon="🔷",
+        cmd=["basecmd", "--json"],
+        output_format="base-json",
         spy_stdout_formatter=lambda x: [],
         has_builtin_tools=True,
         runtime_rw_paths=["/tmp"],
@@ -171,6 +182,10 @@ def test_register_connection_profile_inherits_base():
     assert profile.has_builtin_tools is True
     assert "/tmp" in profile.runtime_rw_paths
     assert profile._profile_name == "baseagent"
+    assert profile.icon == "🔷"
+    assert profile.style == ("blue", "Dyntest4")
+    assert profile.cmd == ["basecmd", "--json"]
+    assert profile.output_format == "base-json"
 
 
 def test_register_connection_profile_inherits_base_class():
@@ -409,6 +424,20 @@ def test_set_connection_with_persist_dynamic(tmp_path):
     saved = json.loads(f.read_text())
     assert "sco_dyn1" in saved
     assert saved["sco_dyn1"]["profile"]["dynamic"] is True
+
+
+def test_set_connection_persists_inherited_profile_reference(tmp_path):
+    f = tmp_path / "conn.json"
+    f.write_text(json.dumps({}), encoding="utf-8")
+    profile = register_connection_profile("sco_dyn_profile_ref")
+    object.__setattr__(profile, "_profile_name", "opencode")
+    conn = CliConnection(cmd=["opencode", "run"], output_format="opencode-json")
+
+    with patch("quimera.profiles.base._get_connections_file", return_value=f):
+        set_connection("sco_dyn_profile_ref", conn, persist=True)
+
+    saved = json.loads(f.read_text())
+    assert saved["sco_dyn_profile_ref"]["profile"]["profile"] == "opencode"
 
 
 # ---------------------------------------------------------------------------
