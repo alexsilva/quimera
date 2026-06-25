@@ -1495,6 +1495,18 @@ def test_format_codex_spy_event_reasoning_and_message():
     assert message == [SpyEvent(kind="response", text="Ajustei a saída para mostrar progresso útil ao usuário.", transient=True)]
 
 
+def test_format_codex_spy_event_ignores_lifecycle_boundaries():
+    """Verifica que limites de turno/sessão não duplicam status já emitido pelo runtime."""
+    assert _format_codex_spy_event('{"type":"session.started"}') == []
+    assert _format_codex_spy_event('{"type":"turn.started"}') == []
+    assert _format_codex_spy_event('{"type":"turn.completed"}') == []
+
+
+def test_format_codex_spy_event_ignores_error_items():
+    """Verifica que item de erro não vaza como contexto genérico no overlay."""
+    assert _format_codex_spy_event('{"type":"item.completed","item":{"type":"error","message":"boom"}}') == []
+
+
 def test_format_codex_spy_event_splits_multiline_agent_messages():
     """Verifica que format codex spy event splits multiline agent messages."""
     message = _format_codex_spy_event(
@@ -1885,6 +1897,25 @@ def test_call_api_renders_openai_preview_for_non_approval_tools(renderer):
     message = renderer.show_system_neutral.call_args[0][0]
     assert "⚒ read_file" in message
     assert "read_file" in message
+    assert "README.md" in message
+
+
+def test_agent_client_bind_tool_preview_callback_uses_shared_preview(renderer):
+    """bind_tool_preview_callback deve reutilizar ToolPreview + muted reporter."""
+    from types import SimpleNamespace
+
+    muted_reporter = MagicMock()
+    client = AgentClient(renderer, muted_reporter=muted_reporter)
+    tool_executor = SimpleNamespace(set_tool_preview_callback=MagicMock())
+
+    client.bind_tool_preview_callback(tool_executor)
+
+    callback = tool_executor.set_tool_preview_callback.call_args[0][0]
+    callback("read_file", {"path": "README.md"})
+
+    muted_reporter.assert_called_once()
+    message = muted_reporter.call_args[0][0]
+    assert "⚒ read_file" in message
     assert "README.md" in message
 
 

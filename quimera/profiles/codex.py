@@ -120,10 +120,8 @@ def _format_codex_spy_event(line: str) -> list[SpyEvent]:
         return []
 
     etype = event.get("type")
-    if etype in {"turn.started", "session.started"}:
-        return [SpyEvent(kind="context", text="iniciando execução", transient=True)]
-    if etype == "turn.completed":
-        return [SpyEvent(kind="context", text="execução concluída", transient=True)]
+    if etype in {"turn.started", "session.started", "turn.completed"}:
+        return []
 
     if etype not in {"item.started", "item.completed"}:
         return []
@@ -131,6 +129,8 @@ def _format_codex_spy_event(line: str) -> list[SpyEvent]:
     item = event.get("item", {})
     itype = item.get("type")
     if not itype:
+        return []
+    if itype == "error":
         return []
 
     phase = "iniciado" if etype == "item.started" else "concluído"

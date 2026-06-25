@@ -167,6 +167,12 @@ class AgentClient:
             return
         self.renderer.show_system(message)
 
+    def bind_tool_preview_callback(self, tool_executor) -> None:
+        """Registra o preview operacional compartilhado para tools sem approval."""
+        set_tool_preview = getattr(tool_executor, "set_tool_preview_callback", None)
+        if callable(set_tool_preview):
+            set_tool_preview(lambda name, args: self._show_muted(ToolPreview.build(name, args)))
+
     @staticmethod
     def _is_tool_call_text(text: str) -> bool:
         cleaned = text.strip()
@@ -856,9 +862,7 @@ class AgentClient:
                     if callable(get_approval_scope):
                         approval_scope = get_approval_scope()
                 if effective_tool_executor is not None:
-                    set_tool_preview = getattr(effective_tool_executor, "set_tool_preview_callback", None)
-                    if callable(set_tool_preview):
-                        set_tool_preview(lambda name, args: self._show_muted(ToolPreview.build(name, args)))
+                    self.bind_tool_preview_callback(effective_tool_executor)
                 # Injeta callbacks de spinner no executor para que o approval handler
                 # possa pausar o Live do Rich antes de input() bloqueante, evitando
                 # race condition entre o refresh do spinner e a leitura do stdin.

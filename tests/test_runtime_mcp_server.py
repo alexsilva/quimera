@@ -16,6 +16,8 @@ import pytest
 
 from quimera.runtime.mcp import MCPServer
 from quimera.runtime.mcp.server import _openai_schema_to_mcp, _proxy_stdio_to_socket
+from quimera.runtime.config import ToolRuntimeConfig
+from quimera.runtime.executor import ToolExecutor
 from quimera.runtime.models import ToolCall, ToolResult
 
 
@@ -181,6 +183,43 @@ class TestToolsCall:
         call_arg: ToolCall = executor.execute.call_args[0][0]
         assert call_arg.name == "read_file"
         assert call_arg.arguments == {"path": "foo.py"}
+
+    def test_mcp_socket_reusa_preview_do_executor_para_tool_sem_approval(self, tmp_path):
+        """tools/call via MCP deve acionar o mesmo preview operacional do executor."""
+        file_path = tmp_path / "foo.py"
+        file_path.write_text("print('ok')\n", encoding="utf-8")
+        previews = []
+        executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
+        executor.set_tool_preview_callback(lambda name, args: previews.append((name, args)))
+        server = _make_server(executor)
+
+        [resp] = _exchange(server, {
+            "jsonrpc": "2.0", "id": 101, "method": "tools/call",
+            "params": {"name": "read_file", "arguments": {"path": "foo.py"}},
+        })
+
+        assert resp["result"]["isError"] is False
+        assert previews == [("read_file", {"path": "foo.py"})]
+
+    def test_mcp_socket_nao_duplica_preview_para_tool_com_approval(self, tmp_path):
+        """tools/call via MCP não deve emitir preview operacional quando há approval."""
+        previews = []
+        approval_handler = MagicMock()
+        approval_handler.approve.return_value = False
+        executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), approval_handler)
+        executor.set_tool_preview_callback(lambda name, args: previews.append((name, args)))
+        server = _make_server(executor)
+
+        [resp] = _exchange(server, {
+            "jsonrpc": "2.0", "id": 102, "method": "tools/call",
+            "params": {
+                "name": "write_file",
+                "arguments": {"path": "x.txt", "content": "x", "replace_existing": True},
+            },
+        })
+
+        assert resp["result"]["isError"] is True
+        assert previews == []
 
     def test_retorna_is_error_quando_tool_falha(self):
         """Verifica que Test retorna is error quando tool falha."""

@@ -626,6 +626,31 @@ class TestToolsCallHTTP:
         finally:
             httpd.shutdown()
 
+    def test_tools_call_http_reusa_preview_do_executor_para_tool_sem_approval(self, tmp_path):
+        """POST /message deve acionar o mesmo preview operacional do executor."""
+        (tmp_path / "foo.py").write_text("print('ok')\n", encoding="utf-8")
+        previews = []
+        executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
+        executor.set_tool_preview_callback(lambda name, args: previews.append((name, args)))
+        httpd = _start_http_server(_make_mcp_server(executor))
+        try:
+            body = json.dumps({
+                "jsonrpc": "2.0", "id": 101, "method": "tools/call",
+                "params": {"name": "read_file", "arguments": {"path": "foo.py"}},
+            }).encode("utf-8")
+            resp = _http_request(
+                httpd.host, httpd.port, "POST", "/message",
+                body=body,
+                headers={"Content-Type": "application/json"},
+            )
+
+            assert resp.status == 200
+            result_data = json.loads(resp.data)
+            assert result_data["result"]["isError"] is False
+            assert previews == [("read_file", {"path": "foo.py"})]
+        finally:
+            httpd.shutdown()
+
 
     def test_read_local_profile_excludes_network_tools(self):
         """Verifica que Test read local profile excludes network tools."""

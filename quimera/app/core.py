@@ -505,6 +505,7 @@ class QuimeraApp:
             set_broker(self.input_broker)
         # Injeta o executor nos drivers de API do agent_client.
         self.agent_client.tool_executor = self.tool_executor
+        self.agent_client.bind_tool_preview_callback(self.tool_executor)
         self.tool_executor.set_delegate_fn(self.dispatch_services.delegate)
         # background_delegate_fn usa AgentClient isolado (cancel_event próprio),
         # impedindo que Ctrl+C no fluxo do chat cancele delegates assíncronos
