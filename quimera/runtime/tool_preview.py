@@ -120,11 +120,11 @@ class ToolPreview:
     def _format_approval_write_file(cls, args: dict[str, Any], _omitted: set[str]) -> str:
         path = args.get("path", "?")
         content = str(args.get("content", ""))
-        return cls._render_file_op("write_file", path, content)
+        return cls._render_file_op(path, content)
 
     @classmethod
     def _format_approval_apply_patch(cls, args: dict[str, Any], _omitted: set[str]) -> str:
-        return cls._render_file_op("apply_patch", "patch textual", str(args.get("patch", "")))
+        return cls._render_file_op("patch textual", str(args.get("patch", "")))
 
     @classmethod
     def _format_approval_remove_file(cls, args: dict[str, Any], _omitted: set[str]) -> str:
@@ -136,7 +136,7 @@ class ToolPreview:
     @classmethod
     def _format_approval_run_shell(cls, args: dict[str, Any], omitted: set[str]) -> str:
         cmd = args.get("command", "?")
-        lines = [f"🖥️  run_shell"]
+        lines = []
         if "command" not in omitted and "cmd" not in omitted:
             lines.append(f"   comando: {cmd}")
         if "workdir" in args:
@@ -153,7 +153,7 @@ class ToolPreview:
             flags.append("tty")
         if args.get("yield_time_ms"):
             flags.append(f"yield={args['yield_time_ms']}ms")
-        lines = [f"🖥️  exec_command"]
+        lines = []
         if "command" not in omitted and "cmd" not in omitted:
             lines.append(f"   comando: {cmd}")
         if flags:
@@ -166,7 +166,7 @@ class ToolPreview:
     def _format_approval_write_stdin(cls, args: dict[str, Any], _omitted: set[str]) -> str:
         sid = args.get("session_id", "?")
         chars = str(args.get("chars", ""))
-        lines = [f"⌨️  write_stdin  session={sid}"]
+        lines = [f"session: {sid}"]
         if chars:
             lines.append(f"   dados: {cls._truncate(chars, cls._PREVIEW_MAX_CHARS)}")
         if args.get("close_stdin"):
@@ -178,34 +178,39 @@ class ToolPreview:
         sid = args.get("session_id", "?")
         terminate = args.get("terminate", False)
         extra = " [terminate]" if terminate else ""
-        return f"❌ close_command_session  session={sid}{extra}"
+        return f"session: {sid}{extra}"
+
+    @classmethod
+    def _format_approval_git_add(cls, args: dict[str, Any], _omitted: set[str]) -> str:
+        paths = args.get("paths", ".")
+        return f"git add: {cls._format_paths(paths)}"
 
     @classmethod
     def _format_approval_read_file(cls, args: dict[str, Any], _omitted: set[str]) -> str:
         path = args.get("path", "?")
-        return f"📖 read_file  {path}"
+        return f"path: {path}"
 
     @classmethod
     def _format_approval_list_files(cls, args: dict[str, Any], _omitted: set[str]) -> str:
         path = args.get("path", "?")
-        return f"📂 list_files  {path}"
+        return f"path: {path}"
 
     @classmethod
     def _format_approval_grep_search(cls, args: dict[str, Any], _omitted: set[str]) -> str:
         pattern = args.get("pattern", "?")
         path = args.get("path", ".")
-        return f"🔍 grep_search  pattern={pattern!r}  em {path}"
+        return f"pattern: {pattern!r}\npath: {path}"
 
     @classmethod
     def _format_approval_web_search(cls, args: dict[str, Any], _omitted: set[str]) -> str:
         query = args.get("query", "?")
         n = args.get("num_results", 5)
-        return f"🌐 web_search  query={query!r}  (max {n} resultados)"
+        return f"query: {query!r}\nmax_results: {n}"
 
     @classmethod
     def _format_approval_web_fetch(cls, args: dict[str, Any], _omitted: set[str]) -> str:
         url = args.get("url", "?")
-        return f"🌐 web_fetch  {url}"
+        return f"url: {url}"
 
     @classmethod
     def _format_approval_unknown(cls, tool_name: str, args: dict[str, Any]) -> str:
@@ -217,11 +222,11 @@ class ToolPreview:
             if len(rendered) > cls._MAX_VALUE_LEN:
                 rendered = rendered[: cls._MAX_VALUE_LEN] + "…"
             pairs.append(f"  {key}: {rendered}")
-        return f"{tool_name}\n" + "\n".join(pairs) if pairs else tool_name
+        return "\n".join(pairs) if pairs else "sem argumentos"
 
     @classmethod
-    def _render_file_op(cls, op: str, path: str, content: str) -> str:
-        lines = [f"📝 {op}", f"   path: {path}"]
+    def _render_file_op(cls, path: str, content: str) -> str:
+        lines = [f"path: {path}"]
         if content:
             preview = cls._preview(content)
             lines.append(f"   preview ({len(content)} chars):")
@@ -255,6 +260,15 @@ class ToolPreview:
             if len(value) > cls._MAX_ITEMS:
                 items.append("...")
             return cls._truncate("[" + ", ".join(items) + "]", cls._MAX_VALUE_LEN)
+        return cls._truncate(str(value), cls._MAX_VALUE_LEN)
+
+    @classmethod
+    def _format_paths(cls, value: Any) -> str:
+        if isinstance(value, (list, tuple, set)):
+            items = [cls._truncate(str(item), cls._MAX_VALUE_LEN) for item in list(value)[: cls._MAX_ITEMS]]
+            if len(value) > cls._MAX_ITEMS:
+                items.append("...")
+            return ", ".join(items)
         return cls._truncate(str(value), cls._MAX_VALUE_LEN)
 
     @staticmethod

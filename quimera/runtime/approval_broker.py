@@ -623,12 +623,11 @@ class ApprovalBroker:
         permission_error: PathPermissionError | None,
         reason: str | None,
     ) -> str:
-        details = [
-            f"origem: {self.create_route(call, context, path=path, command=command)}",
-            f"risco: {risk.value}",
-        ]
-        if path:
-            details.append(f"path: {path}")
+        route = self.create_route(call, context, path=path, command=command)
+        details = [f"risco: {risk.value}"]
+        origin = self._origin_context(route, call.name)
+        if origin:
+            details.append(f"origem: {origin}")
         if command:
             details.append(f"comando: {command}")
         if reason:
@@ -646,6 +645,19 @@ class ApprovalBroker:
         )
         details.append(body)
         return "\n".join(details)
+
+    @staticmethod
+    def _origin_context(route: str, tool_name: str) -> str | None:
+        """Extrai só o encadeamento de agentes, sem repetir a ação/tool."""
+        cleaned = route.strip()
+        if not cleaned:
+            return None
+        if " → " not in cleaned:
+            return None
+        parts = [part.strip() for part in cleaned.split(" → ") if part.strip()]
+        if len(parts) <= 1:
+            return None
+        return " → ".join(parts[:-1]) or None
 
     def create_route(
         self,

@@ -144,6 +144,25 @@ def test_exec_command_approval_summary_does_not_duplicate_command(tmp_path):
     assert "flags: tty" in summary
 
 
+def test_git_add_approval_summary_is_not_redundant(tmp_path):
+    """Summary de approval deve evitar origem/tool repetidas para rota simples."""
+    approval = MagicMock()
+    approval.approve.return_value = False
+    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), approval)
+
+    result = executor.execute(
+        ToolCall(
+            name="git_add",
+            arguments={"paths": "."},
+            metadata=_trusted(transport="http_mcp", run_id="external-run"),
+        )
+    )
+
+    assert result.ok is False
+    summary = approval.approve.call_args.kwargs["summary"]
+    assert summary == "risco: write\norigem: claude\ngit add: ."
+
+
 def test_delegate_http_external_requires_approval_even_with_allowlisted_argument(tmp_path):
     """Verifica que Test call agent http external requires approval even with allowlisted argument."""
     approval = MagicMock()

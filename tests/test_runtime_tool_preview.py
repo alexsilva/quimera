@@ -7,11 +7,11 @@ from quimera.runtime.tool_preview import ToolPreview
 class TestBuildDispatch(unittest.TestCase):
     def test_known_tool_dispatches(self):
         result = ToolPreview.build("read_file", {"path": "/tmp/x"}, context="approval")
-        self.assertIn("read_file", result)
+        self.assertEqual("path: /tmp/x", result)
 
     def test_unknown_tool_fallback(self):
         result = ToolPreview.build("my_custom_tool", {"key": "val"}, context="approval")
-        self.assertIn("my_custom_tool", result)
+        self.assertEqual("  key: val", result)
 
 
 class TestApprovalPreview(unittest.TestCase):
@@ -26,7 +26,7 @@ class TestApprovalPreview(unittest.TestCase):
 
     def test_apply_patch(self):
         result = ToolPreview.build("apply_patch", {"patch": "--- a\n+++ b"}, context="approval")
-        self.assertIn("apply_patch", result)
+        self.assertIn("patch textual", result)
 
     def test_remove_file_dry_run(self):
         result = ToolPreview.build("remove_file", {"path": "/tmp/f", "dry_run": True}, context="approval")
@@ -86,6 +86,14 @@ class TestApprovalPreview(unittest.TestCase):
     def test_web_search_defaults(self):
         result = ToolPreview.build("web_search", {"query": "test"}, context="approval")
         self.assertIn("5", result)
+
+    def test_git_add_approval_preview_is_compact(self):
+        result = ToolPreview.build("git_add", {"paths": "."}, context="approval")
+        self.assertEqual("git add: .", result)
+
+    def test_git_add_approval_preview_formats_multiple_paths(self):
+        result = ToolPreview.build("git_add", {"paths": ["a.py", "b.py"]}, context="approval")
+        self.assertEqual("git add: a.py, b.py", result)
 
     def test_unknown_truncates(self):
         long_val = "x" * 200

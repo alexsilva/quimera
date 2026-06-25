@@ -15,10 +15,29 @@ from quimera.runtime.approval import (
     ApprovalManager,
     _ApprovalCancelled,
     _emit_approval_message,
+    format_approval_question,
 )
 
 
 # ── ApprovalHandler (abstract) ──────────────────────────────
+
+
+def test_format_approval_question_compacts_risk_header():
+    result = format_approval_question(
+        "run_shell",
+        "risco: shell\ncomando: pytest tests/test_runtime_tool_preview.py -q",
+    )
+
+    assert result == (
+        "\nAprovar run_shell :: risco: shell\n"
+        "comando: pytest tests/test_runtime_tool_preview.py -q"
+    )
+
+
+def test_format_approval_question_preserves_summary_without_risk():
+    result = format_approval_question("shell", "ls")
+
+    assert result == "\nAprovar shell\nls"
 
 def test_approval_handler_abstract():
     """Classe base levanta NotImplementedError."""

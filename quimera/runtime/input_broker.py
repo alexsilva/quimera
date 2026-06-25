@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from ..app.agent_run_events import AgentRunEvent, coerce_agent_run_sink
+from .approval import format_approval_question
 
 _UNSET = object()
 
@@ -128,7 +129,7 @@ class InputBroker:
         req = _InputRequest(
             kind="approval",
             source=source,
-            question=f"\nAprovar {tool_name}\n{summary}",
+            question=format_approval_question(tool_name, summary),
             options=[],
             timeout=timeout,
             default=False,

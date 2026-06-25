@@ -225,7 +225,7 @@ class ConsoleApprovalHandler(ApprovalHandler):
         try:
             if self._cancel_event and self._cancel_event.is_set():
                 return False
-            self._show(f"\nAprovar {tool_name}\n{summary}")
+            self._show(format_approval_question(tool_name, summary))
 
             is_main = threading.current_thread() is threading.main_thread()
             # input_gate usa prompt_toolkit: seguro na thread principal.
@@ -397,6 +397,20 @@ class AutoApprovalHandler(ApprovalHandler):
 _DRAIN_MAX_ITERATIONS = 1000
 
 
+def format_approval_question(tool_name: str, summary: str) -> str:
+    """Formata o prompt de aprovação com o risco no cabeçalho."""
+    clean_summary = str(summary or "").strip()
+    if not clean_summary:
+        return f"\nAprovar {tool_name}"
+    lines = clean_summary.splitlines()
+    first = lines[0].strip()
+    if first.startswith("risco: "):
+        header = f"\nAprovar {tool_name} :: {first}"
+        rest = "\n".join(lines[1:]).strip()
+        return f"{header}\n{rest}" if rest else header
+    return f"\nAprovar {tool_name}\n{clean_summary}"
+
+
 class NonBlockingConsoleApprovalHandler(ApprovalHandler):
     """Aprovação não-bloqueante com timeout via select —
     ideal para uso em loop principal."""
@@ -406,8 +420,7 @@ class NonBlockingConsoleApprovalHandler(ApprovalHandler):
         self._renderer = renderer
 
     def approve(self, *, tool_name: str, summary: str) -> bool:
-        _emit_approval_message(self._renderer, f"\nAprovar {tool_name}")
-        _emit_approval_message(self._renderer, f"  {summary}")
+        _emit_approval_message(self._renderer, format_approval_question(tool_name, summary))
         _emit_approval_message(
             self._renderer,
             f"  Digite 'y' em até {self._timeout:.0f}s "
