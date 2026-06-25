@@ -325,7 +325,7 @@ def main():
                         help="Driver de conexão (cli ou openai)")
     parser.add_argument("--cmd", dest="cmd", metavar="CMD", nargs=argparse.REMAINDER, default=None,
                         help="Comando CLI (para driver=cli)")
-    parser.add_argument("--model", "--mode", dest="model", metavar="MODELO", default=None,
+    parser.add_argument("--model", dest="model", metavar="MODELO", default=None,
                         help="Modelo (para driver=openai ou profile CLI com suporte a modelo)")
     parser.add_argument("--base-url", dest="base_url", metavar="URL", default=None,
                         help="Base URL (para driver=openai)")

@@ -576,8 +576,8 @@ def test_main_connect_new_agent_with_base_profile_sets_metadata(monkeypatch):
     register_dynamic.assert_called_once_with("novo-agente", metadata={"profile": "base-ok"})
 
 
-def test_main_connect_profile_model_accepts_mode_alias(monkeypatch):
-    """--mode é alias de --model para perfis CLI com suporte a modelo."""
+def test_main_connect_profile_model_uses_model_flag(monkeypatch):
+    """--model funciona para perfis CLI com suporte a modelo."""
     base_profile = SimpleNamespace(
         name="codex",
         configure_with_model=lambda model: CliConnection(
@@ -598,7 +598,7 @@ def test_main_connect_profile_model_accepts_mode_alias(monkeypatch):
     monkeypatch.setattr(
         sys,
         "argv",
-        ["quimera", "--connect", "codex-gpt-5-5", "--profile", "codex", "--mode", "gpt-5.5"],
+        ["quimera", "--connect", "codex-gpt-5-5", "--profile", "codex", "--model", "gpt-5.5"],
     )
     monkeypatch.setattr(cli._profiles, "get", fake_get)
     monkeypatch.setattr(cli, "is_valid_agent_name", lambda _name: True)
