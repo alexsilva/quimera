@@ -527,20 +527,14 @@ class AgentClient:
                                 f"... (stderr truncado, máximo {_stderr_limit} linhas)", agent=agent)
                         stderr_lines_shown += 1
 
-                    _elapsed = [0]  # mutable cell for on_item closure
-
                     def _on_tick(elapsed):
                         _pump_tool_input_once()
-                        _elapsed[0] = elapsed
-                        self.renderer.update_agent_elapsed(agent or cmd[0], elapsed)
-                        self.renderer.request_toolbar_refresh()
                         if progress_callback:
                             progress_callback(f"aguardando resposta de {agent or cmd[0]}...")
 
                     self._spy_output_presenter.notify_agent_started(agent)
                     termination = runner.watch(log_queue=log_queue, on_item=_on_item, on_tick=_on_tick)
                     self.renderer.clear_agent_transient(agent or cmd[0])
-                    self.renderer.clear_agent_elapsed(agent or cmd[0])
                     self.rate_limit_detected = runner.rate_limit_detected
                     self.rate_limit_detected_at = runner.rate_limit_detected_at
 

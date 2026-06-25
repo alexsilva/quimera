@@ -189,31 +189,6 @@ class TestBuildToolbar:
         content = str(toolbar())
         assert "⎇ feature-x" in content
 
-    def test_toolbar_includes_elapsed_when_context_available(self):
-        """Verifica que Test toolbar includes elapsed when context available."""
-        gate = InputGate(
-            toolbar_context_resolver=lambda: {
-                "elapsed": "12m 34s",
-            }
-        )
-        toolbar = gate._build_toolbar()
-        assert callable(toolbar)
-        content = str(toolbar())
-        assert "12m 34s" in content
-
-    def test_toolbar_empty_with_only_elapsed_returns_nonempty(self):
-        """Verifica que Test toolbar empty with only elapsed returns nonempty."""
-        gate = InputGate(
-            toolbar_context_resolver=lambda: {
-                "elapsed": "5m00s",
-            }
-        )
-        toolbar = gate._build_toolbar()
-        assert callable(toolbar)
-        content = str(toolbar())
-        assert content != ""
-
-
 class TestKeyBindings:
     def test_key_bindings_none_without_theme_handler(self):
         """Verifica que Test key bindings none without theme handler."""

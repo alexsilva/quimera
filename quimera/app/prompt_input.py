@@ -161,13 +161,6 @@ class InputGate:
         self._active = False
         self._owner_thread_id: int | None = None
         self._running_context: contextvars.Context | None = None
-        self._clock_condition = threading.Condition()
-        self._clock_active = False
-        self._clock_thread = threading.Thread(
-            target=self._run_toolbar_clock, daemon=True, name="toolbar-clock"
-        )
-        self._clock_thread.start()
-
         history = InMemoryHistory()
         if self._history_file is not None:
             try:
@@ -226,7 +219,6 @@ class InputGate:
             responder = str(context.get("responder", "")).strip()
             model = str(context.get("model", "")).strip()
             branch = str(context.get("branch", "")).strip()
-            elapsed = str(context.get("elapsed", "")).strip()
             active_agents = str(context.get("active_agents", "")).strip()
             parallel = str(context.get("parallel", "")).strip()
             open_bugs = str(context.get("open_bugs", "")).strip()
@@ -236,7 +228,7 @@ class InputGate:
             theme = str(context.get("theme", "")).strip()
 
             visible_values = [
-                responder, model, branch, elapsed, active_agents, parallel,
+                responder, model, branch, active_agents, parallel,
                 open_bugs, mode, turns, session_id, theme,
             ]
             if not any(visible_values):
@@ -252,8 +244,6 @@ class InputGate:
                 left.append(_btn(_clip(model, 24), "btn.model"))
             if branch:
                 left.append(_btn(f"\u2387 {_clip(branch, 20)}", "btn.info"))
-            if elapsed:
-                left.append(_btn(f"\u29d6 {elapsed}", "btn.info"))
             if active_agents:
                 left.append(_btn(f"\u2699 {_clip(active_agents, 30)}", "btn.info"))
             if parallel:
@@ -340,20 +330,6 @@ class InputGate:
         console = Console(highlight=False)
         console.print(Rule(style="dim"))
 
-    def _run_toolbar_clock(self, interval: float = 30.0) -> None:
-        """Thread persistente que invalida o prompt a cada segundo enquanto ativo.
-
-        Dorme indefinidamente quando não há prompt ativo e acorda via
-        _clock_condition quando __call__ sinaliza início/fim do prompt.
-        """
-        while True:
-            with self._clock_condition:
-                self._clock_condition.wait_for(lambda: self._clock_active)
-                self._clock_condition.wait(timeout=interval)
-                should_invalidate = self._clock_active
-            if should_invalidate:
-                self.redisplay()
-
     def __call__(self, prompt: str) -> str:
         """Lê input do usuário.
 
@@ -365,9 +341,6 @@ class InputGate:
         o AssertionError e cai no input() padrão.
         """
         self._set_active_state(True)
-        with self._clock_condition:
-            self._clock_active = True
-            self._clock_condition.notify_all()
         try:
             self._flush_renderer()
             self._print_rule()
@@ -406,18 +379,12 @@ class InputGate:
             result = input(prompt)
             return result
         finally:
-            with self._clock_condition:
-                self._clock_active = False
-                self._clock_condition.notify_all()
             self._running_context = None
             self._set_active_state(False)
 
     def read_plain_input(self, prompt: str) -> str:
         """Le uma resposta curta sem regua, toolbar, placeholder ou completer."""
         self._set_active_state(True)
-        with self._clock_condition:
-            self._clock_active = False
-            self._clock_condition.notify_all()
         try:
             self._flush_renderer()
             if self._session is not None:

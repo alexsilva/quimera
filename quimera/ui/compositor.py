@@ -30,7 +30,6 @@ from .events import (
     PendingInputEvent,
     PrintEvent,
     TerminalResizeEvent,
-    ToolbarTickEvent,
     TransientClearEvent,
     TransientWindowEvent,
 )
@@ -412,9 +411,6 @@ class TerminalCompositor:
 
         def _agent_toolbar_label(agent_name: str, base_label: str) -> str:
             _ui = _rich()
-            elapsed = _renderer._get_agent_elapsed(agent_name)
-            if elapsed is not None:
-                return f"{_ui.markup_escape(base_label)} [{int(elapsed)}s]"
             return _ui.markup_escape(base_label)
 
         def _ensure_live():
@@ -621,19 +617,6 @@ class TerminalCompositor:
                 elif isinstance(event, NoopEvent):
                     _flush_deferred(force=event.force_flush)
                     event.done.set()
-
-                elif isinstance(event, ToolbarTickEvent):
-                    while True:
-                        try:
-                            next_ev = self._queue.get_nowait()
-                        except _queue_module.Empty:
-                            break
-                        if isinstance(next_ev, ToolbarTickEvent):
-                            pass
-                        else:
-                            _local_pending.appendleft(next_ev)
-                            break
-                    _refresh()
 
                 elif isinstance(event, OutputControlEvent):
                     if event.suspend:

@@ -24,7 +24,6 @@ class ToolbarContextRequest:
     responder: str
     model: str
     branch: str
-    elapsed_seconds: float
     theme: str
     mode: str
     threads: int
@@ -178,18 +177,6 @@ class ToolbarManager:
                 config.set_theme(new_name)
 
     @staticmethod
-    def _format_elapsed(elapsed: float) -> str:
-        """Formata o tempo decorrido da sessão."""
-        if elapsed >= 3600:
-            mins = int(elapsed // 60)
-            return f"{mins // 60}h {mins % 60:02d}m"
-        if elapsed >= 60:
-            mins = int(elapsed // 60)
-            secs = int(elapsed % 60)
-            return f"{mins}m {secs:02d}s"
-        return f"{int(elapsed)}s"
-
-    @staticmethod
     def _format_active_agents(active_agents: tuple[str, ...] | list[str]) -> str:
         """Compacta a lista de agentes ativos para a toolbar."""
         normalized_agents = [str(agent).strip() for agent in active_agents if str(agent).strip()]
@@ -243,7 +230,6 @@ class ToolbarManager:
         }
         if request.branch:
             ctx["branch"] = request.branch
-        ctx["elapsed"] = self._format_elapsed(request.elapsed_seconds)
         ctx["theme"] = request.theme
         if request.mode:
             ctx["mode"] = request.mode

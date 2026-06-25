@@ -1,5 +1,4 @@
 """Coordenador de toolbar: resolve labels, estado de paralelismo e ciclo de temas."""
-import time
 
 from .toolbar import (
     ActiveModelRequest,
@@ -92,7 +91,6 @@ class ToolbarCoordinator:
             responder=self.resolve_next_responder_label(),
             model=self.resolve_active_model_label(),
             branch=str(getattr(self._workspace, "branch", "") or ""),
-            elapsed_seconds=time.monotonic() - (self._get_session_started_at() or time.monotonic()),
             theme=str(getattr(self._renderer, "theme_name", "") or ""),
             mode=str(getattr(self._get_execution_mode(), "name", "") or ""),
             threads=int(self._threads or 1),

@@ -26,7 +26,6 @@ from .events import (
     PendingInputEvent,
     PrintEvent,
     TerminalResizeEvent,
-    ToolbarTickEvent,
     TransientClearEvent,
     TransientWindowEvent,
 )
@@ -207,9 +206,6 @@ class TerminalRenderer:
         self._get_profile_style = get_profile_style
         self._live = None
         self._statuses = {}
-
-        # Tempo decorrido por agente (atualizado via _on_tick, lido na toolbar)
-        self._agent_elapsed: dict[str, float] = {}
 
         # Deck de janelas: fonte unica para estado visual por agente.
         self._deck = WindowDeck()
@@ -937,24 +933,6 @@ class TerminalRenderer:
             return
         self.abort_message_stream(agent)
 
-    def update_agent_elapsed(self, agent: str, elapsed: float) -> None:
-        """Armazena o tempo decorrido do agente para exibição na toolbar."""
-        with self._lock:
-            self._container(agent).elapsed = elapsed
-
-    def clear_agent_elapsed(self, agent: str) -> None:
-        """Remove o tempo decorrido do agente."""
-        with self._lock:
-            container = self._deck.get(agent)
-            if container is not None:
-                container.elapsed = None
-
-    def _get_agent_elapsed(self, agent: str) -> float | None:
-        """Retorna o tempo decorrido do agente ou None."""
-        with self._lock:
-            container = self._deck.get(agent)
-            return container.elapsed if container is not None else None
-
     def reset_visual_state(self, agent: str | None = None) -> None:
         """Reseta estado visual após cancelamento (Ctrl+C).
 
@@ -978,19 +956,6 @@ class TerminalRenderer:
             self.abort_message_stream(agt)
         for agt in transient_agents:
             self.clear_agent_transient(agt)
-
-        with self._lock:
-            if agent:
-                container = self._deck.get(agent)
-                if container is not None:
-                    container.elapsed = None
-            else:
-                for container in self._deck.windows.values():
-                    container.elapsed = None
-
-    def request_toolbar_refresh(self) -> None:
-        """Enfileira evento para refresh periódico da toolbar."""
-        self._compositor.emit(ToolbarTickEvent())
 
     # ------------------------------------------------------------------
     # Exibição de tipos especiais

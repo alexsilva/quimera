@@ -95,7 +95,6 @@ class AgentWindowState:
     stream_content: str = ""
     stream_theme_name: str = ""
     transient_active: bool = False
-    elapsed: float | None = None
     transient: list[str] = field(default_factory=list)
     pending_kind: str = ""
     pending_question: str = ""

@@ -43,11 +43,6 @@ class NoopEvent:
 
 
 @dataclass
-class ToolbarTickEvent:
-    """Dispara refresh da toolbar para atualizar contador de tempo."""
-
-
-@dataclass
 class OutputControlEvent:
     """Pede ao compositor para suspender ou retomar a saída terminal."""
 
