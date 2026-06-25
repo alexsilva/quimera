@@ -55,7 +55,7 @@ python -c 'from quimera.cli import main; main()'
    quimera --list-connections
    ```
 
-2. Configure um agente dinâmico ou sobrescreva um plugin existente:
+2. Configure um agente dinâmico ou sobrescreva um profile existente:
 
    ```bash
    quimera --connect meu-agente --driver openai --model gpt-4o --base-url https://api.openai.com/v1 --api-key-env OPENAI_API_KEY

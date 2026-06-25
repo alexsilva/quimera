@@ -78,7 +78,7 @@ def _make_orchestrator(app):
         agent_client=getattr(app, 'agent_client', None),
         turn_manager=getattr(app, 'turn_manager', None),
         task_services=getattr(app, 'task_services', None),
-        get_agent_plugin=getattr(app, 'get_agent_plugin', None),
+        get_agent_profile=getattr(app, 'get_agent_profile', None),
         behavior_metrics=getattr(app, 'behavior_metrics', None),
         threads=getattr(app, 'threads', 1),
         session_state=getattr(app, 'session_state', {"session_id": "test-cr"}),

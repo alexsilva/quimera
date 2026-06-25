@@ -24,7 +24,7 @@ Se um override estiver errado, remova com `/disconnect <agente>` ou edite a cone
 1. Confirme que você não iniciou com `--no-mcp`.
 2. Rode com `--debug` para ver logs do servidor MCP.
 3. Para HTTP, confira `/health` no host/porta configurados.
-4. Para socket Unix, verifique se o plugin selecionado sabe injetar MCP.
+4. Para socket Unix, verifique se o profile selecionado sabe injetar MCP.
 5. Se usar token fixo, exporte a variável antes de iniciar:
 
    ```bash

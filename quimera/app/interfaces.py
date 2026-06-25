@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any, Callable, Protocol, runtime_checkable
 
 from quimera.prompt_templates import PromptText
-from quimera import plugins as _global_plugins
+from quimera import profiles as _global_profiles
 
 
 @runtime_checkable
@@ -33,12 +33,12 @@ class IAgentClient(Protocol):
 
 
 @runtime_checkable
-class IPluginResolver(Protocol):
-    """Resolução de plugins por nome e listagem de todos os plugins registrados."""
+class IProfileResolver(Protocol):
+    """Resolução de perfis por nome e listagem de todos os perfis registrados."""
     def get(self, name: str): ...
 
     @property
-    def plugins(self) -> list: ...
+    def profiles(self) -> list: ...
 
 
 @runtime_checkable
@@ -64,8 +64,8 @@ class IAgentPool(Protocol):
     def __bool__(self) -> bool: ...
 
 
-class PluginResolverAdapter:
-    """Adapter explícito para resolução de plugins sem depender de QuimeraApp."""
+class ProfileResolverAdapter:
+    """Adapter explícito para resolução de profiles sem depender de QuimeraApp."""
 
     def __init__(self, registry: Any, normalize: Callable[[object], str | None]):
         self._registry = registry
@@ -77,38 +77,38 @@ class PluginResolverAdapter:
             return None
         if self._registry is not None:
             return self._registry.get(normalized_name)
-        return _global_plugins.get(normalized_name)
+        return _global_profiles.get(normalized_name)
 
     @property
-    def plugins(self) -> list:
+    def profiles(self) -> list:
         if self._registry is not None:
-            return list(self._registry.all_plugins())
-        return list(_global_plugins.all_plugins())
+            return list(self._registry.all_profiles())
+        return list(_global_profiles.all_profiles())
 
-    def active_plugins(self, agent_pool) -> list:
-        """Retorna os plugins válidos dos agentes ativos no pool."""
+    def active_profiles(self, agent_pool) -> list:
+        """Retorna os perfis válidos dos agentes ativos no pool."""
         result = []
         for agent_name in agent_pool:
-            plugin = self.get(agent_name)
-            if plugin is not None:
-                result.append(plugin)
+            profile = self.get(agent_name)
+            if profile is not None:
+                result.append(profile)
         return result
 
     def configure_mcp_socket(self, agent_pool, socket_path: str | None, token: str | None = None) -> None:
-        """Propaga o socket MCP e token para os plugins dos agentes ativos na sessão."""
-        for plugin in self.active_plugins(agent_pool):
-            config_setter = getattr(plugin, "set_mcp_socket_config", None)
+        """Propaga o socket MCP e token para os perfis dos agentes ativos na sessão."""
+        for profile in self.active_profiles(agent_pool):
+            config_setter = getattr(profile, "set_mcp_socket_config", None)
             if callable(config_setter):
                 config_setter(socket_path, token)
             else:
-                path_setter = getattr(plugin, "set_mcp_socket_path", None)
+                path_setter = getattr(profile, "set_mcp_socket_path", None)
                 if callable(path_setter):
                     path_setter(socket_path)
 
     def configure_mcp_http(self, agent_pool, url: str | None, token: str | None = None) -> None:
-        """Propaga endpoint e token MCP HTTP para plugins de agentes ativos."""
-        for plugin in self.active_plugins(agent_pool):
-            config_setter = getattr(plugin, "set_mcp_http_config", None)
+        """Propaga endpoint e token MCP HTTP para perfis de agentes ativos."""
+        for profile in self.active_profiles(agent_pool):
+            config_setter = getattr(profile, "set_mcp_http_config", None)
             if callable(config_setter):
                 config_setter(url, token)
 

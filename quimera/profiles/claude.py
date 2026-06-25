@@ -1,11 +1,11 @@
-"""Componentes de `quimera.plugins.claude`."""
+"""Componentes de `quimera.profiles.claude`."""
 import json
 import os
 from pathlib import Path
 
 from quimera.agent_events import SpyEvent
-from quimera.plugins.base import AgentPlugin, register
-from quimera.plugins.spy_utils import describe_tool_input, format_agent_message_lines, truncate_spy_text
+from quimera.profiles.base import ExecutionProfile, register
+from quimera.profiles.spy_utils import describe_tool_input, format_agent_message_lines, truncate_spy_text
 
 
 def _claude_runtime_rw_paths() -> list[str]:
@@ -148,7 +148,7 @@ def _format_claude_spy_event(line: str) -> list[SpyEvent]:
     return messages
 
 
-class ClaudePlugin(AgentPlugin):
+class ClaudeProfile(ExecutionProfile):
     def mcp_server_args(self, socket_path: str) -> list[str]:
         """Retorna flags para conectar o Claude ao MCP local do Quimera."""
         proxy_args: list[str] = ["-m", "quimera.runtime.mcp", "--connect-socket", socket_path]
@@ -176,7 +176,7 @@ class ClaudePlugin(AgentPlugin):
         return _extract_model_from_claude_state(cwd=cwd)
 
 
-plugin = ClaudePlugin(
+profile = ClaudeProfile(
     name="claude",
     prefix="/claude",
     icon="🔮",
@@ -195,4 +195,4 @@ plugin = ClaudePlugin(
     supports_long_context=True,
     base_tier=3,
 )
-register(plugin)
+register(profile)

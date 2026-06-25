@@ -26,11 +26,11 @@ quimera [opções] [test_agent]
 | `--theme TEMA` | Tema visual da sessão. |
 | `--set-theme TEMA` | Persiste tema padrão e encerra. |
 | `--set-history-window N` | Persiste janela de histórico e encerra. |
-| `--driver-repl PLUGIN` | Inicia REPL para testar plugin OpenAI-compatible. |
+| `--driver-repl PROFILE` | Inicia REPL para testar profile OpenAI-compatible. |
 | `--working-dir DIR` | Diretório de trabalho para REPL. |
 | `--prompt TEXTO` | Prompt one-shot para REPL. |
 | `--connect AGENTE` | Configura conexão persistida. |
-| `--base PLUGIN` | Herda comando/formatação de plugin base. |
+| `--base PROFILE` | Herda comando/formatação de profile base. |
 | `--driver cli|openai` | Define tipo de conexão. |
 | `--cmd ...` | Comando CLI para conexão `cli`. |
 | `--model MODELO` | Modelo para conexão OpenAI-compatible ou base CLI. |

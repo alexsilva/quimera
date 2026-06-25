@@ -17,13 +17,13 @@ from quimera.agents import (
 )
 from quimera.agents.process_runner import ProcessRunner
 from quimera.constants import MAX_STDERR_LINES, Visibility
-from quimera.plugins import get as get_plugin
+from quimera.profiles import get as get_profile
 from quimera.prompt_templates import PromptText
-from quimera.plugins.base import CliConnection, register_dynamic_plugin
-from quimera.plugins.claude import _format_claude_spy_event
-from quimera.plugins.codex import _format_codex_spy_event
-from quimera.plugins.opencode import OpenCodePlugin, _format_opencode_spy_event
-from quimera.plugins.spy_utils import format_command_output_preview
+from quimera.profiles.base import CliConnection, register_connection_profile
+from quimera.profiles.claude import _format_claude_spy_event
+from quimera.profiles.codex import _format_codex_spy_event
+from quimera.profiles.opencode import OpenCodeProfile, _format_opencode_spy_event
+from quimera.profiles.spy_utils import format_command_output_preview
 from quimera.spy_output_presenter import SpyOutputPresenter
 from quimera.evidence import EvidenceStore
 
@@ -89,19 +89,19 @@ def test_is_rate_limit_signal(text, expected):
     assert _is_rate_limit_signal(text) is expected
 
 
-def test_codex_plugin_reads_prompt_from_stdin():
-    """Verifica que codex plugin reads prompt from stdin."""
-    plugin = get_plugin("codex")
-    assert plugin is not None
-    assert plugin.prompt_as_arg is False
-    assert plugin.aliases == []
+def test_codex_profile_reads_prompt_from_stdin():
+    """Verifica que codex profile reads prompt from stdin."""
+    profile = get_profile("codex")
+    assert profile is not None
+    assert profile.prompt_as_arg is False
+    assert profile.aliases == []
 
 
-def test_codex_plugin_resumes_last_session_in_workspace():
-    """Verifica que codex plugin resumes last session in workspace."""
-    plugin = get_plugin("codex")
-    assert plugin is not None
-    assert plugin.effective_cmd() == [
+def test_codex_profile_resumes_last_session_in_workspace():
+    """Verifica que codex profile resumes last session in workspace."""
+    profile = get_profile("codex")
+    assert profile is not None
+    assert profile.effective_cmd() == [
         "codex",
         "exec",
         "resume",
@@ -113,37 +113,37 @@ def test_codex_plugin_resumes_last_session_in_workspace():
     ]
 
 
-def test_codex_plugin_applies_resume_to_cli_override():
-    """Verifica que codex plugin applies resume to cli override."""
-    plugin = get_plugin("codex")
-    assert plugin is not None
-    original_override = plugin._connection_override
-    original_mcp_socket = plugin._mcp_socket_path
+def test_codex_profile_applies_resume_to_cli_override():
+    """Verifica que codex profile applies resume to cli override."""
+    profile = get_profile("codex")
+    assert profile is not None
+    original_override = profile._connection_override
+    original_mcp_socket = profile._mcp_socket_path
     try:
-        plugin.set_mcp_socket_path(None)
-        plugin._connection_override = CliConnection(
+        profile.set_mcp_socket_path(None)
+        profile._connection_override = CliConnection(
             cmd=["codex", "exec", "--json"],
             prompt_as_arg=False,
             output_format="codex-json",
         )
-        assert plugin.effective_cmd() == ["codex", "exec", "resume", "--last", "--json", "-"]
+        assert profile.effective_cmd() == ["codex", "exec", "resume", "--last", "--json", "-"]
     finally:
-        plugin._connection_override = original_override
-        plugin.set_mcp_socket_path(original_mcp_socket)
+        profile._connection_override = original_override
+        profile.set_mcp_socket_path(original_mcp_socket)
 
 
-def test_codex_plugin_injects_mcp_server_before_stdin_sentinel():
-    """Verifica que codex plugin injects mcp server before stdin sentinel."""
-    plugin = get_plugin("codex")
-    assert plugin is not None
-    original_mcp_socket = plugin._mcp_socket_path
+def test_codex_profile_injects_mcp_server_before_stdin_sentinel():
+    """Verifica que codex profile injects mcp server before stdin sentinel."""
+    profile = get_profile("codex")
+    assert profile is not None
+    original_mcp_socket = profile._mcp_socket_path
     try:
-        plugin.set_mcp_socket_path("/tmp/quimera.sock")
+        profile.set_mcp_socket_path("/tmp/quimera.sock")
         expected_args = json.dumps(
             ["-m", "quimera.runtime.mcp", "--connect-socket", "/tmp/quimera.sock"],
             ensure_ascii=False,
         )
-        assert plugin.effective_cmd() == [
+        assert profile.effective_cmd() == [
             "codex",
             "exec",
             "resume",
@@ -158,18 +158,18 @@ def test_codex_plugin_injects_mcp_server_before_stdin_sentinel():
             "-",
         ]
     finally:
-        plugin.set_mcp_socket_path(original_mcp_socket)
+        profile.set_mcp_socket_path(original_mcp_socket)
 
 
-def test_codex_plugin_does_not_duplicate_existing_mcp_override():
-    """Verifica que codex plugin does not duplicate existing mcp override."""
-    plugin = get_plugin("codex")
-    assert plugin is not None
-    original_override = plugin._connection_override
-    original_mcp_socket = plugin._mcp_socket_path
+def test_codex_profile_does_not_duplicate_existing_mcp_override():
+    """Verifica que codex profile does not duplicate existing mcp override."""
+    profile = get_profile("codex")
+    assert profile is not None
+    original_override = profile._connection_override
+    original_mcp_socket = profile._mcp_socket_path
     try:
-        plugin.set_mcp_socket_path("/tmp/quimera.sock")
-        plugin._connection_override = CliConnection(
+        profile.set_mcp_socket_path("/tmp/quimera.sock")
+        profile._connection_override = CliConnection(
             cmd=[
                 "codex",
                 "exec",
@@ -180,7 +180,7 @@ def test_codex_plugin_does_not_duplicate_existing_mcp_override():
             prompt_as_arg=True,
             output_format="codex-json",
         )
-        assert plugin.effective_cmd() == [
+        assert profile.effective_cmd() == [
             "codex",
             "exec",
             "resume",
@@ -190,19 +190,19 @@ def test_codex_plugin_does_not_duplicate_existing_mcp_override():
             'mcp_servers.quimera.command="python"',
         ]
     finally:
-        plugin._connection_override = original_override
-        plugin.set_mcp_socket_path(original_mcp_socket)
+        profile._connection_override = original_override
+        profile.set_mcp_socket_path(original_mcp_socket)
 
 
-def test_claude_plugin_injects_mcp_server():
-    """Verifica que claude plugin injects mcp server."""
+def test_claude_profile_injects_mcp_server():
+    """Verifica que claude profile injects mcp server."""
     import json as _json
-    plugin = get_plugin("claude")
-    assert plugin is not None
-    original_mcp_socket = plugin._mcp_socket_path
+    profile = get_profile("claude")
+    assert profile is not None
+    original_mcp_socket = profile._mcp_socket_path
     try:
-        plugin.set_mcp_socket_path("/tmp/quimera.sock")
-        cmd = plugin.effective_cmd()
+        profile.set_mcp_socket_path("/tmp/quimera.sock")
+        cmd = profile.effective_cmd()
         base = ["claude", "--permission-mode=bypassPermissions", "--output-format=stream-json", "--verbose", "-p"]
         assert cmd[:len(base)] == base
         assert "--mcp-config" in cmd
@@ -214,44 +214,44 @@ def test_claude_plugin_injects_mcp_server():
         assert "--connect-socket" in proxy_args
         assert "/tmp/quimera.sock" in proxy_args
     finally:
-        plugin.set_mcp_socket_path(original_mcp_socket)
+        profile.set_mcp_socket_path(original_mcp_socket)
 
 
 
-def test_base_agent_plugin_prefers_socket_when_socket_and_http_are_set():
-    """Verifica que base agent plugin prefers socket when socket and http are set."""
-    from quimera.plugins.base import AgentPlugin
+def test_base_agent_profile_prefers_socket_when_socket_and_http_are_set():
+    """Verifica que base agent profile prefers socket when socket and http are set."""
+    from quimera.profiles.base import ExecutionProfile
 
-    class _SocketPlugin(AgentPlugin):
+    class _SocketProfile(ExecutionProfile):
         def mcp_server_args(self, socket_path: str) -> list[str]:
             return ["--mcp-socket", socket_path]
 
         def mcp_http_server_args(self, url: str) -> list[str]:
             return ["--mcp-http", url]
 
-    plugin = _SocketPlugin(name="base-test", prefix="/base-test", style=("white", "Base"), cmd=["agent", "-"])
-    plugin.set_mcp_socket_config("/tmp/quimera.sock", "internal-token")
-    plugin.set_mcp_http_config("https://external.example/mcp", "external-token")
+    profile = _SocketProfile(name="base-test", prefix="/base-test", style=("white", "Base"), cmd=["agent", "-"])
+    profile.set_mcp_socket_config("/tmp/quimera.sock", "internal-token")
+    profile.set_mcp_http_config("https://external.example/mcp", "external-token")
 
-    cmd = plugin.effective_cmd()
+    cmd = profile.effective_cmd()
 
     assert cmd == ["agent", "--mcp-socket", "/tmp/quimera.sock", "-"]
     assert "--mcp-http" not in cmd
-    assert plugin._build_token_args() == ["--token", "internal-token"]
+    assert profile._build_token_args() == ["--token", "internal-token"]
 
 
-def test_claude_plugin_prefers_socket_when_socket_and_http_are_set():
-    """Verifica que claude plugin prefers socket when socket and http are set."""
+def test_claude_profile_prefers_socket_when_socket_and_http_are_set():
+    """Verifica que claude profile prefers socket when socket and http are set."""
     import json as _json
-    plugin = get_plugin("claude")
-    assert plugin is not None
-    original_mcp_socket = plugin._mcp_socket_path
-    original_mcp_http = plugin._mcp_http_url
-    original_token = plugin._mcp_token
+    profile = get_profile("claude")
+    assert profile is not None
+    original_mcp_socket = profile._mcp_socket_path
+    original_mcp_http = profile._mcp_http_url
+    original_token = profile._mcp_token
     try:
-        plugin.set_mcp_socket_config("/tmp/quimera.sock", "internal-token")
-        plugin.set_mcp_http_config("https://external.example/mcp", "external-token")
-        cmd = plugin.effective_cmd()
+        profile.set_mcp_socket_config("/tmp/quimera.sock", "internal-token")
+        profile.set_mcp_http_config("https://external.example/mcp", "external-token")
+        cmd = profile.effective_cmd()
         idx = cmd.index("--mcp-config")
         config_raw = cmd[idx + 1]
         config = _json.loads(config_raw)
@@ -264,22 +264,22 @@ def test_claude_plugin_prefers_socket_when_socket_and_http_are_set():
         assert "type=http" not in config_raw
         assert "https://external.example/mcp" not in config_raw
     finally:
-        plugin._mcp_socket_path = original_mcp_socket
-        plugin._mcp_http_url = original_mcp_http
-        plugin._mcp_token = original_token
+        profile._mcp_socket_path = original_mcp_socket
+        profile._mcp_http_url = original_mcp_http
+        profile._mcp_token = original_token
 
 
-def test_codex_plugin_prefers_socket_when_socket_and_http_are_set():
-    """Verifica que codex plugin prefers socket when socket and http are set."""
-    plugin = get_plugin("codex")
-    assert plugin is not None
-    original_mcp_socket = plugin._mcp_socket_path
-    original_mcp_http = plugin._mcp_http_url
-    original_token = plugin._mcp_token
+def test_codex_profile_prefers_socket_when_socket_and_http_are_set():
+    """Verifica que codex profile prefers socket when socket and http are set."""
+    profile = get_profile("codex")
+    assert profile is not None
+    original_mcp_socket = profile._mcp_socket_path
+    original_mcp_http = profile._mcp_http_url
+    original_token = profile._mcp_token
     try:
-        plugin.set_mcp_socket_config("/tmp/quimera.sock", "internal-token")
-        plugin.set_mcp_http_config("https://external.example/mcp", "external-token")
-        cmd = plugin.effective_cmd()
+        profile.set_mcp_socket_config("/tmp/quimera.sock", "internal-token")
+        profile.set_mcp_http_config("https://external.example/mcp", "external-token")
+        cmd = profile.effective_cmd()
         joined = "\n".join(cmd)
         assert 'mcp_servers.quimera.command="python"' in cmd
         assert "--connect-socket" in joined
@@ -289,22 +289,22 @@ def test_codex_plugin_prefers_socket_when_socket_and_http_are_set():
         assert "mcp_servers.quimera.transport" not in joined
         assert "https://external.example/mcp" not in joined
     finally:
-        plugin._mcp_socket_path = original_mcp_socket
-        plugin._mcp_http_url = original_mcp_http
-        plugin._mcp_token = original_token
+        profile._mcp_socket_path = original_mcp_socket
+        profile._mcp_http_url = original_mcp_http
+        profile._mcp_token = original_token
 
 
-def test_opencode_plugin_prefers_local_socket_env_when_socket_and_http_are_set():
-    """Verifica que opencode plugin prefers local socket env when socket and http are set."""
-    plugin = get_plugin("opencode")
-    assert isinstance(plugin, OpenCodePlugin)
-    original_mcp_socket = plugin._mcp_socket_path
-    original_mcp_http = plugin._mcp_http_url
-    original_token = plugin._mcp_token
+def test_opencode_profile_prefers_local_socket_env_when_socket_and_http_are_set():
+    """Verifica que opencode profile prefers local socket env when socket and http are set."""
+    profile = get_profile("opencode")
+    assert isinstance(profile, OpenCodeProfile)
+    original_mcp_socket = profile._mcp_socket_path
+    original_mcp_http = profile._mcp_http_url
+    original_token = profile._mcp_token
     try:
-        plugin.set_mcp_socket_config("/tmp/quimera.sock", "internal-token")
-        plugin.set_mcp_http_config("https://external.example/mcp", "external-token")
-        env = plugin.env_for_cli()
+        profile.set_mcp_socket_config("/tmp/quimera.sock", "internal-token")
+        profile.set_mcp_http_config("https://external.example/mcp", "external-token")
+        env = profile.env_for_cli()
         config_raw = env["OPENCODE_CONFIG_CONTENT"]
         config = json.loads(config_raw)
         server = config["mcp"]["quimera"]
@@ -315,9 +315,9 @@ def test_opencode_plugin_prefers_local_socket_env_when_socket_and_http_are_set()
         assert '"type": "remote"' not in config_raw
         assert "https://external.example/mcp" not in config_raw
     finally:
-        plugin._mcp_socket_path = original_mcp_socket
-        plugin._mcp_http_url = original_mcp_http
-        plugin._mcp_token = original_token
+        profile._mcp_socket_path = original_mcp_socket
+        profile._mcp_http_url = original_mcp_http
+        profile._mcp_token = original_token
 
 def test_agent_client_run_success(renderer):
     """Verifica que agent client run success."""
@@ -427,8 +427,8 @@ def test_agent_client_run_failure_uses_error_reporter_when_provided(renderer):
     renderer.show_plain.assert_called_once_with("Error detail", agent=None)
 
 
-def test_agent_client_run_failure_uses_plugin_label_when_agent_is_known(renderer):
-    """Verifica que agent client run failure uses plugin label when agent is known."""
+def test_agent_client_run_failure_uses_profile_label_when_agent_is_known(renderer):
+    """Verifica que agent client run failure uses profile label when agent is known."""
     error_reporter = MagicMock()
     client = AgentClient(renderer, error_reporter=error_reporter)
     with patch("subprocess.Popen") as mock_popen:
@@ -451,8 +451,8 @@ def test_agent_client_run_failure_uses_plugin_label_when_agent_is_known(renderer
     renderer.show_plain.assert_called_once_with("Error detail", agent="claude")
 
 
-def test_agent_client_run_failure_uses_agent_name_when_plugin_is_unknown(renderer):
-    """Verifica que agent client run failure uses agent name when plugin is unknown."""
+def test_agent_client_run_failure_uses_agent_name_when_profile_is_unknown(renderer):
+    """Verifica que agent client run failure uses agent name when profile is unknown."""
     error_reporter = MagicMock()
     client = AgentClient(renderer, error_reporter=error_reporter)
     with patch("subprocess.Popen") as mock_popen:
@@ -478,13 +478,13 @@ def test_agent_client_run_failure_uses_agent_name_when_plugin_is_unknown(rendere
 def test_agent_client_call(renderer):
     """Verifica que agent client call."""
     client = AgentClient(renderer)
-    with patch("quimera.plugins.get") as mock_get:
-        mock_plugin = MagicMock()
-        mock_plugin.cmd = ["mock-agent"]
-        mock_plugin.prompt_as_arg = False
-        mock_plugin.effective_cmd.return_value = ["mock-agent"]
-        mock_plugin.effective_prompt_as_arg.return_value = False
-        mock_get.return_value = mock_plugin
+    with patch("quimera.profiles.get") as mock_get:
+        mock_profile = MagicMock()
+        mock_profile.cmd = ["mock-agent"]
+        mock_profile.prompt_as_arg = False
+        mock_profile.effective_cmd.return_value = ["mock-agent"]
+        mock_profile.effective_prompt_as_arg.return_value = False
+        mock_get.return_value = mock_profile
 
         with patch.object(client, "run") as mock_run:
             mock_run.return_value = "output"
@@ -497,13 +497,13 @@ def test_agent_client_call(renderer):
 def test_agent_client_call_prompt_as_arg(renderer):
     """Verifica que agent client call prompt as arg."""
     client = AgentClient(renderer)
-    with patch("quimera.plugins.get") as mock_get:
-        mock_plugin = MagicMock()
-        mock_plugin.cmd = ["mock-agent"]
-        mock_plugin.prompt_as_arg = True
-        mock_plugin.effective_cmd.return_value = ["mock-agent"]
-        mock_plugin.effective_prompt_as_arg.return_value = True
-        mock_get.return_value = mock_plugin
+    with patch("quimera.profiles.get") as mock_get:
+        mock_profile = MagicMock()
+        mock_profile.cmd = ["mock-agent"]
+        mock_profile.prompt_as_arg = True
+        mock_profile.effective_cmd.return_value = ["mock-agent"]
+        mock_profile.effective_prompt_as_arg.return_value = True
+        mock_get.return_value = mock_profile
 
         with patch.object(client, "run") as mock_run:
             mock_run.return_value = "output"
@@ -522,13 +522,13 @@ def test_agent_client_call_passes_prompt_text_unchanged(renderer):
     )
     client.execution_mode = SimpleNamespace(prompt_addon="[MODO: ANÁLISE]")
 
-    with patch("quimera.plugins.get") as mock_get:
-        mock_plugin = MagicMock()
-        mock_plugin.cmd = ["mock-agent"]
-        mock_plugin.prompt_as_arg = False
-        mock_plugin.effective_cmd.return_value = ["mock-agent"]
-        mock_plugin.effective_prompt_as_arg.return_value = False
-        mock_get.return_value = mock_plugin
+    with patch("quimera.profiles.get") as mock_get:
+        mock_profile = MagicMock()
+        mock_profile.cmd = ["mock-agent"]
+        mock_profile.prompt_as_arg = False
+        mock_profile.effective_cmd.return_value = ["mock-agent"]
+        mock_profile.effective_prompt_as_arg.return_value = False
+        mock_get.return_value = mock_profile
 
         with patch.object(client, "run") as mock_run:
             mock_run.return_value = "output"
@@ -1069,10 +1069,10 @@ def test_spy_output_presenter_finalize_turn_renders_human_summary(renderer):
 def test_spy_output_presenter_finalize_turn_skips_summary_for_non_cli(renderer):
     """Verifica que spy output presenter finalize turn skips summary for non cli."""
     presenter = SpyOutputPresenter(renderer, Visibility.SUMMARY)
-    with patch("quimera.spy_output_presenter.plugins.get") as mock_get_plugin:
+    with patch("quimera.spy_output_presenter.profiles.get") as mock_get_profile:
         non_cli = MagicMock()
         non_cli.effective_driver.return_value = "openai"
-        mock_get_plugin.return_value = non_cli
+        mock_get_profile.return_value = non_cli
         for event in _format_codex_spy_event(
             '{"type":"item.started","item":{"type":"command_execution","command":"ls","id":"t_17"}}'
         ):
@@ -1371,15 +1371,15 @@ def test_agent_client_call_api_driver(renderer):
     """Verifica que agent client call api driver."""
     # Line 280-281, 293-325: API driver path
     client = AgentClient(renderer, idle_timeout=60)
-    with patch("quimera.plugins.get") as mock_get:
-        mock_plugin = MagicMock()
-        mock_plugin.driver = "api"
-        mock_plugin.model = "llama3"
-        mock_plugin.base_url = "http://localhost:11434"
-        mock_plugin.api_key_env = "OLLAMA_API_KEY"
-        mock_plugin.supports_tools = True
-        mock_plugin.tool_use_reliability = "medium"
-        mock_get.return_value = mock_plugin
+    with patch("quimera.profiles.get") as mock_get:
+        mock_profile = MagicMock()
+        mock_profile.driver = "api"
+        mock_profile.model = "llama3"
+        mock_profile.base_url = "http://localhost:11434"
+        mock_profile.api_key_env = "OLLAMA_API_KEY"
+        mock_profile.supports_tools = True
+        mock_profile.tool_use_reliability = "medium"
+        mock_get.return_value = mock_profile
 
         with patch("quimera.agents.client.OpenAICompatDriver") as mock_driver_cls:
             mock_driver = MagicMock()
@@ -1445,12 +1445,12 @@ def test_format_codex_spy_event_command():
 def test_format_codex_spy_event_reasoning_and_message():
     """Verifica que format codex spy event reasoning and message."""
     reasoning = _format_codex_spy_event(
-        '{"type":"item.started","item":{"type":"reasoning","summary":"Vou localizar o formatter do plugin e ajustar a mensagem"}}'
+        '{"type":"item.started","item":{"type":"reasoning","summary":"Vou localizar o formatter do profile e ajustar a mensagem"}}'
     )
     message = _format_codex_spy_event(
         '{"type":"item.completed","item":{"type":"agent_message","text":"Ajustei a saída para mostrar progresso útil ao usuário."}}'
     )
-    assert reasoning == [SpyEvent(kind="context", text="Vou localizar o formatter do plugin e ajustar a mensagem", transient=True)]
+    assert reasoning == [SpyEvent(kind="context", text="Vou localizar o formatter do profile e ajustar a mensagem", transient=True)]
     assert message == [SpyEvent(kind="response", text="Ajustei a saída para mostrar progresso útil ao usuário.", transient=True)]
 
 
@@ -1528,37 +1528,37 @@ def test_format_codex_spy_event_reports_tool_calls_as_tool_messages():
     assert message == [SpyEvent(kind="tool", text="usando apply_patch")]
 
 
-def test_codex_plugin_exposes_spy_stdout_formatter():
-    """Verifica que codex plugin exposes spy stdout formatter."""
-    plugin = get_plugin("codex")
-    assert plugin is not None
-    assert plugin.spy_stdout_formatter is _format_codex_spy_event
+def test_codex_profile_exposes_spy_stdout_formatter():
+    """Verifica que codex profile exposes spy stdout formatter."""
+    profile = get_profile("codex")
+    assert profile is not None
+    assert profile.spy_stdout_formatter is _format_codex_spy_event
 
 
-def test_claude_plugin_exposes_spy_stdout_formatter():
-    """Verifica que claude plugin exposes spy stdout formatter."""
-    plugin = get_plugin("claude")
-    assert plugin is not None
-    assert plugin.spy_stdout_formatter is _format_claude_spy_event
+def test_claude_profile_exposes_spy_stdout_formatter():
+    """Verifica que claude profile exposes spy stdout formatter."""
+    profile = get_profile("claude")
+    assert profile is not None
+    assert profile.spy_stdout_formatter is _format_claude_spy_event
 
 
-def test_opencode_plugin_exposes_spy_stdout_formatter_and_json_output():
-    """Verifica que opencode plugin exposes spy stdout formatter and json output."""
-    plugin = get_plugin("opencode")
-    assert plugin is not None
-    assert plugin.spy_stdout_formatter is _format_opencode_spy_event
-    assert plugin.output_format == "opencode-json"
-    assert "--format=json" in plugin.cmd
+def test_opencode_profile_exposes_spy_stdout_formatter_and_json_output():
+    """Verifica que opencode profile exposes spy stdout formatter and json output."""
+    profile = get_profile("opencode")
+    assert profile is not None
+    assert profile.spy_stdout_formatter is _format_opencode_spy_event
+    assert profile.output_format == "opencode-json"
+    assert "--format=json" in profile.cmd
 
 
-def test_opencode_plugin_injects_mcp_via_env_var():
-    """Verifica que opencode plugin injects mcp via env var."""
-    plugin = get_plugin("opencode")
-    assert isinstance(plugin, OpenCodePlugin)
-    original_mcp_socket = plugin._mcp_socket_path
+def test_opencode_profile_injects_mcp_via_env_var():
+    """Verifica que opencode profile injects mcp via env var."""
+    profile = get_profile("opencode")
+    assert isinstance(profile, OpenCodeProfile)
+    original_mcp_socket = profile._mcp_socket_path
     try:
-        plugin.set_mcp_socket_path("/tmp/quimera.sock")
-        env = plugin.env_for_cli()
+        profile.set_mcp_socket_path("/tmp/quimera.sock")
+        env = profile.env_for_cli()
         config_raw = env.get("OPENCODE_CONFIG_CONTENT")
         assert config_raw is not None
         config = json.loads(config_raw)
@@ -1569,64 +1569,64 @@ def test_opencode_plugin_injects_mcp_via_env_var():
         ]
         assert config["mcp"]["quimera"]["enabled"] is True
     finally:
-        plugin.set_mcp_socket_path(original_mcp_socket)
+        profile.set_mcp_socket_path(original_mcp_socket)
 
 
-def test_opencode_plugin_omits_mcp_env_when_no_socket():
-    """Verifica que opencode plugin omits mcp env when no socket."""
-    plugin = get_plugin("opencode")
-    original_mcp_socket = plugin._mcp_socket_path
+def test_opencode_profile_omits_mcp_env_when_no_socket():
+    """Verifica que opencode profile omits mcp env when no socket."""
+    profile = get_profile("opencode")
+    original_mcp_socket = profile._mcp_socket_path
     try:
-        plugin.set_mcp_socket_path(None)
-        assert plugin.env_for_cli() == {}
+        profile.set_mcp_socket_path(None)
+        assert profile.env_for_cli() == {}
     finally:
-        plugin.set_mcp_socket_path(original_mcp_socket)
+        profile.set_mcp_socket_path(original_mcp_socket)
 
 
-def test_opencode_plugin_env_for_cli_independent_of_connection_override():
+def test_opencode_profile_env_for_cli_independent_of_connection_override():
     """env_for_cli() é chamada pelo AgentClient independente de _connection_override."""
-    plugin = get_plugin("opencode")
-    original_mcp_socket = plugin._mcp_socket_path
-    original_override = plugin._connection_override
+    profile = get_profile("opencode")
+    original_mcp_socket = profile._mcp_socket_path
+    original_override = profile._connection_override
     try:
-        plugin.set_mcp_socket_path("/tmp/quimera.sock")
-        plugin._connection_override = CliConnection(
+        profile.set_mcp_socket_path("/tmp/quimera.sock")
+        profile._connection_override = CliConnection(
             cmd=["opencode", "run"],
             prompt_as_arg=True,
         )
-        env = plugin.env_for_cli()
+        env = profile.env_for_cli()
         assert "OPENCODE_CONFIG_CONTENT" in env
     finally:
-        plugin._connection_override = original_override
-        plugin.set_mcp_socket_path(original_mcp_socket)
+        profile._connection_override = original_override
+        profile.set_mcp_socket_path(original_mcp_socket)
 
 
-def test_dynamic_plugin_with_opencode_base_inherits_env_for_cli():
-    """Verifica que dynamic plugin with opencode base inherits env for cli."""
-    plugin = register_dynamic_plugin("opencode-dyn-test", metadata={"base": "opencode"})
-    assert isinstance(plugin, OpenCodePlugin)
+def test_dynamic_profile_with_opencode_base_inherits_env_for_cli():
+    """Verifica que dynamic profile with opencode base inherits env for cli."""
+    profile = register_connection_profile("opencode-dyn-test", metadata={"profile": "opencode"})
+    assert isinstance(profile, OpenCodeProfile)
 
-    plugin.set_mcp_socket_path("/tmp/quimera.sock")
-    env = plugin.env_for_cli()
+    profile.set_mcp_socket_path("/tmp/quimera.sock")
+    env = profile.env_for_cli()
     assert "OPENCODE_CONFIG_CONTENT" in env
 
 
 def test_agent_client_call_dynamic_opencode_base_passes_env_for_cli_to_run(renderer):
     """Verifica que agent client call dynamic opencode base passes env for cli to run."""
     client = AgentClient(renderer)
-    plugin = register_dynamic_plugin("opencode-dyn-call-test", metadata={"base": "opencode"})
-    assert isinstance(plugin, OpenCodePlugin)
+    profile = register_connection_profile("opencode-dyn-call-test", metadata={"profile": "opencode"})
+    assert isinstance(profile, OpenCodeProfile)
 
-    original_mcp_socket = plugin._mcp_socket_path
-    original_override = plugin._connection_override
+    original_mcp_socket = profile._mcp_socket_path
+    original_override = profile._connection_override
     try:
-        plugin.set_mcp_socket_path("/tmp/quimera.sock")
-        plugin._connection_override = CliConnection(
+        profile.set_mcp_socket_path("/tmp/quimera.sock")
+        profile._connection_override = CliConnection(
             cmd=["opencode", "run"],
             env={"BASE_ENV": "1"},
         )
 
-        with patch("quimera.plugins.get", return_value=plugin), patch.object(client, "run") as mock_run:
+        with patch("quimera.profiles.get", return_value=profile), patch.object(client, "run") as mock_run:
             mock_run.return_value = "ok"
             result = client.call("opencode-dyn-call-test", "prompt")
 
@@ -1642,8 +1642,8 @@ def test_agent_client_call_dynamic_opencode_base_passes_env_for_cli_to_run(rende
             "--connect-socket", "/tmp/quimera.sock",
         ]
     finally:
-        plugin._connection_override = original_override
-        plugin.set_mcp_socket_path(original_mcp_socket)
+        profile._connection_override = original_override
+        profile.set_mcp_socket_path(original_mcp_socket)
 
 
 def test_format_claude_spy_event_summarizes_assistant_and_result():
@@ -1702,12 +1702,12 @@ def test_agent_client_call_stream_json_format(renderer):
     """Verifica que agent client call stream json format."""
     # Line 286-288: stream-json format
     client = AgentClient(renderer)
-    with patch("quimera.plugins.get") as mock_get:
-        mock_plugin = MagicMock()
-        mock_plugin.cmd = ["agent"]
-        mock_plugin.prompt_as_arg = False
-        mock_plugin.output_format = "stream-json"
-        mock_get.return_value = mock_plugin
+    with patch("quimera.profiles.get") as mock_get:
+        mock_profile = MagicMock()
+        mock_profile.cmd = ["agent"]
+        mock_profile.prompt_as_arg = False
+        mock_profile.output_format = "stream-json"
+        mock_get.return_value = mock_profile
 
         with patch.object(client, "run") as mock_run:
             mock_run.return_value = '{"type":"result","result":"parsed"}'
@@ -1719,12 +1719,12 @@ def test_agent_client_call_codex_json_format(renderer):
     """Verifica que agent client call codex json format."""
     # Line 289-290: codex-json format
     client = AgentClient(renderer)
-    with patch("quimera.plugins.get") as mock_get:
-        mock_plugin = MagicMock()
-        mock_plugin.cmd = ["agent"]
-        mock_plugin.prompt_as_arg = False
-        mock_plugin.output_format = "codex-json"
-        mock_get.return_value = mock_plugin
+    with patch("quimera.profiles.get") as mock_get:
+        mock_profile = MagicMock()
+        mock_profile.cmd = ["agent"]
+        mock_profile.prompt_as_arg = False
+        mock_profile.output_format = "codex-json"
+        mock_get.return_value = mock_profile
 
         with patch.object(client, "run") as mock_run:
             mock_run.return_value = '{"type":"item.completed","item":{"type":"agent_message","text":"parsed"}}'
@@ -1735,12 +1735,12 @@ def test_agent_client_call_codex_json_format(renderer):
 def test_agent_client_call_opencode_json_format(renderer):
     """Verifica que agent client call opencode json format."""
     client = AgentClient(renderer)
-    with patch("quimera.plugins.get") as mock_get:
-        mock_plugin = MagicMock()
-        mock_plugin.cmd = ["agent"]
-        mock_plugin.prompt_as_arg = False
-        mock_plugin.output_format = "opencode-json"
-        mock_get.return_value = mock_plugin
+    with patch("quimera.profiles.get") as mock_get:
+        mock_profile = MagicMock()
+        mock_profile.cmd = ["agent"]
+        mock_profile.prompt_as_arg = False
+        mock_profile.output_format = "opencode-json"
+        mock_get.return_value = mock_profile
 
         with patch.object(client, "run") as mock_run:
             mock_run.return_value = '{"type":"text","part":{"type":"text","text":"parsed"}}'
@@ -1756,7 +1756,7 @@ def test_call_api_starts_and_stops_esc_monitor(renderer):
     """_start_esc_monitor e _stop_esc_monitor devem ser chamados para agentes API."""
     from types import SimpleNamespace
     client = AgentClient(renderer)
-    plugin = SimpleNamespace(
+    profile = SimpleNamespace(
         driver="openai_compat",
         model="test-model",
         base_url="http://localhost",
@@ -1772,7 +1772,7 @@ def test_call_api_starts_and_stops_esc_monitor(renderer):
         mock_driver.run.return_value = "ok"
         mock_driver_cls.return_value = mock_driver
 
-        result = client._call_api("test-agent", plugin, "prompt")
+        result = client._call_api("test-agent", profile, "prompt")
 
         assert result == "ok"
         mock_start.assert_called_once()
@@ -1783,7 +1783,7 @@ def test_call_api_passes_cancel_event_to_driver(renderer):
     """cancel_event deve ser passado ao driver para cancelamento cooperativo."""
     from types import SimpleNamespace
     client = AgentClient(renderer)
-    plugin = SimpleNamespace(
+    profile = SimpleNamespace(
         driver="openai_compat",
         model="test-model",
         base_url="http://localhost",
@@ -1799,7 +1799,7 @@ def test_call_api_passes_cancel_event_to_driver(renderer):
         mock_driver.run.return_value = "result"
         mock_driver_cls.return_value = mock_driver
 
-        client._call_api("test-agent", plugin, "prompt")
+        client._call_api("test-agent", profile, "prompt")
 
         call_kwargs = mock_driver.run.call_args.kwargs
         assert "cancel_event" in call_kwargs
@@ -1814,7 +1814,7 @@ def test_call_api_renders_openai_preview_for_non_approval_tools(renderer):
     tool_executor = MagicMock()
     client.tool_executor = tool_executor
 
-    plugin = SimpleNamespace(
+    profile = SimpleNamespace(
         driver="openai_compat",
         model="test-model",
         base_url="http://localhost",
@@ -1837,7 +1837,7 @@ def test_call_api_renders_openai_preview_for_non_approval_tools(renderer):
         mock_driver.run.side_effect = run_with_tool
         mock_driver_cls.return_value = mock_driver
 
-        result = client._call_api("test-agent", plugin, "prompt")
+        result = client._call_api("test-agent", profile, "prompt")
 
     assert result == "ok"
     renderer.show_system_neutral.assert_called()
@@ -1856,7 +1856,7 @@ def test_call_api_routes_openai_preview_through_muted_reporter(renderer):
     tool_executor = MagicMock()
     client.tool_executor = tool_executor
 
-    plugin = SimpleNamespace(
+    profile = SimpleNamespace(
         driver="openai_compat",
         model="test-model",
         base_url="http://localhost",
@@ -1878,7 +1878,7 @@ def test_call_api_routes_openai_preview_through_muted_reporter(renderer):
         mock_driver.run.side_effect = run_with_tool
         mock_driver_cls.return_value = mock_driver
 
-        result = client._call_api("test-agent", plugin, "prompt")
+        result = client._call_api("test-agent", profile, "prompt")
 
     assert result == "ok"
     muted_reporter.assert_called_once()
@@ -1897,7 +1897,7 @@ def test_call_api_skips_openai_preview_when_tool_requires_approval(renderer):
     tool_executor = MagicMock()
     client.tool_executor = tool_executor
 
-    plugin = SimpleNamespace(
+    profile = SimpleNamespace(
         driver="openai_compat",
         model="test-model",
         base_url="http://localhost",
@@ -1918,7 +1918,7 @@ def test_call_api_skips_openai_preview_when_tool_requires_approval(renderer):
         mock_driver.run.side_effect = run_with_tool
         mock_driver_cls.return_value = mock_driver
 
-        result = client._call_api("test-agent", plugin, "prompt")
+        result = client._call_api("test-agent", profile, "prompt")
 
     assert result == "ok"
     renderer.show_system_neutral.assert_not_called()
@@ -1933,7 +1933,7 @@ def test_call_api_masks_sensitive_fields_in_openai_preview(renderer):
     tool_executor = MagicMock()
     client.tool_executor = tool_executor
 
-    plugin = SimpleNamespace(
+    profile = SimpleNamespace(
         driver="openai_compat",
         model="test-model",
         base_url="http://localhost",
@@ -1962,7 +1962,7 @@ def test_call_api_masks_sensitive_fields_in_openai_preview(renderer):
         mock_driver.run.side_effect = run_with_tool
         mock_driver_cls.return_value = mock_driver
 
-        result = client._call_api("test-agent", plugin, "prompt")
+        result = client._call_api("test-agent", profile, "prompt")
 
     assert result == "ok"
     message = muted_reporter.call_args[0][0]
@@ -1983,7 +1983,7 @@ def test_call_api_propagates_task_approval_scope_to_driver_thread(renderer):
     tool_executor.bind_thread_approval_scope.side_effect = [None, "driver-prev"]
     client.tool_executor = tool_executor
 
-    plugin = SimpleNamespace(
+    profile = SimpleNamespace(
         driver="openai_compat",
         model="test-model",
         base_url="http://localhost",
@@ -1999,7 +1999,7 @@ def test_call_api_propagates_task_approval_scope_to_driver_thread(renderer):
         mock_driver.run.return_value = "ok"
         mock_driver_cls.return_value = mock_driver
 
-        result = client._call_api("test-agent", plugin, "prompt")
+        result = client._call_api("test-agent", profile, "prompt")
 
     assert result == "ok"
     tool_executor.get_thread_approval_scope.assert_called_once_with()
@@ -2017,7 +2017,7 @@ def test_call_api_cancel_event_detection(renderer):
 
     process_supervisor = MagicMock()
     client = AgentClient(renderer, process_supervisor=process_supervisor)
-    plugin = SimpleNamespace(
+    profile = SimpleNamespace(
         driver="openai_compat",
         model="test-model",
         base_url="http://localhost",
@@ -2049,7 +2049,7 @@ def test_call_api_cancel_event_detection(renderer):
         t = _threading.Thread(target=trigger)
         t.start()
 
-        result = client._call_api("test-agent", plugin, "prompt")
+        result = client._call_api("test-agent", profile, "prompt")
         t.join(timeout=3)
 
     assert result is None
@@ -2229,7 +2229,7 @@ def test_call_api_stop_monitor_called_on_error(renderer):
     """_stop_esc_monitor deve ser chamado mesmo quando o driver lança exceção."""
     from types import SimpleNamespace
     client = AgentClient(renderer)
-    plugin = SimpleNamespace(
+    profile = SimpleNamespace(
         driver="openai_compat",
         model="test-model",
         base_url="http://localhost",
@@ -2245,7 +2245,7 @@ def test_call_api_stop_monitor_called_on_error(renderer):
         mock_driver.run.side_effect = RuntimeError("conexão recusada")
         mock_driver_cls.return_value = mock_driver
 
-        result = client._call_api("test-agent", plugin, "prompt")
+        result = client._call_api("test-agent", profile, "prompt")
 
         assert result is None
         mock_stop.assert_called_once()

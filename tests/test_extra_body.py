@@ -17,9 +17,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from quimera.plugins.base import (
+from quimera.profiles.base import (
     OpenAIConnection,
-    PluginRegistry,
+    ProfileRegistry,
     _connection_from_dict,
     connection_to_dict,
     format_connection_label,
@@ -247,12 +247,12 @@ def test_chat_with_tools_no_extra_body_when_none():
 # Testes de _build_connection_from_args com --extra-body
 # ---------------------------------------------------------------------------
 
-def _fake_plugin(name="test-agent", driver="openai_compat", model="gpt-4o",
+def _fake_profile(name="test-agent", driver="openai_compat", model="gpt-4o",
                  base_url="https://api.openai.com/v1",
                  api_key_env="OPENAI_API_KEY", supports_tools=True):
-    """Cria um plugin falso para testes de _build_connection_from_args."""
-    from quimera.plugins.base import AgentPlugin
-    return AgentPlugin(
+    """Cria um profile falso para testes de _build_connection_from_args."""
+    from quimera.profiles.base import ExecutionProfile
+    return ExecutionProfile(
         name=name,
         prefix=f"/{name}",
         style=("cyan", name.title()),
@@ -266,7 +266,7 @@ def _fake_plugin(name="test-agent", driver="openai_compat", model="gpt-4o",
 
 def test_build_connection_with_model_and_extra_body():
     """--model + --extra-body juntos montam OpenAIConnection com extra_body."""
-    plugin = _fake_plugin()
+    profile = _fake_profile()
     args = Namespace(
         base=None,
         driver="openai",
@@ -276,7 +276,7 @@ def test_build_connection_with_model_and_extra_body():
         extra_body='{"thinking": {"type": "disabled"}}',
         cmd=None,
     )
-    conn = _build_connection_from_args(plugin, args)
+    conn = _build_connection_from_args(profile, args)
     assert isinstance(conn, OpenAIConnection)
     assert conn.model == "deepseek-chat"
     assert conn.extra_body == {"thinking": {"type": "disabled"}}
@@ -284,7 +284,7 @@ def test_build_connection_with_model_and_extra_body():
 
 def test_build_connection_with_model_no_extra_body():
     """--model sem --extra-body: extra_body deve ser None."""
-    plugin = _fake_plugin()
+    profile = _fake_profile()
     args = Namespace(
         base=None,
         driver="openai",
@@ -294,7 +294,7 @@ def test_build_connection_with_model_no_extra_body():
         extra_body=None,
         cmd=None,
     )
-    conn = _build_connection_from_args(plugin, args)
+    conn = _build_connection_from_args(profile, args)
     assert isinstance(conn, OpenAIConnection)
     assert conn.extra_body is None
 
@@ -302,10 +302,10 @@ def test_build_connection_with_model_no_extra_body():
 
 
 def test_build_connection_base_with_model_ignores_extra_body():
-    """--base + --model: caminho configure_with_model ignora extra_body (é CliConnection)."""
-    # Isso testa que o ramo base+model não quebra com extra_body presente
-    from quimera.plugins.base import AgentPlugin, PluginRegistry
-    base_plugin = AgentPlugin(
+    """--profile + --model: caminho configure_with_model ignora extra_body (é CliConnection)."""
+    # Isso testa que o ramo profile+model não quebra com extra_body presente
+    from quimera.profiles.base import ExecutionProfile, ProfileRegistry
+    base_profile = ExecutionProfile(
         name="base-agent",
         prefix="/base-agent",
         style=("green", "Base"),
@@ -313,12 +313,12 @@ def test_build_connection_base_with_model_ignores_extra_body():
         cmd=["my-cli", "--model=PLACEHOLDER"],
     )
 
-    # Precisamos de um registry para o base_plugin
-    reg = PluginRegistry()
-    reg.register(base_plugin)
-    with patch("quimera.plugins.base._registry", reg):
+    # Precisamos de um registry para o base_profile
+    reg = ProfileRegistry()
+    reg.register(base_profile)
+    with patch("quimera.profiles.base._registry", reg):
         args = Namespace(
-            base="base-agent",
+            profile="base-agent",
             driver=None,
             model="gpt-4o",
             base_url=None,
@@ -326,16 +326,16 @@ def test_build_connection_base_with_model_ignores_extra_body():
             extra_body='{"thinking": {"type": "disabled"}}',
             cmd=None,
         )
-        conn = _build_connection_from_args(base_plugin, args)
+        conn = _build_connection_from_args(base_profile, args)
         # Deve retornar CliConnection (base+model sempre é CLI)
-        from quimera.plugins.base import CliConnection
+        from quimera.profiles.base import CliConnection
         assert isinstance(conn, CliConnection)
 
 
 
 def test_build_connection_without_model_falls_to_interactive():
     """--driver=openai sem --model deve cair em modo interativo (raise SystemExit)."""
-    plugin = _fake_plugin()
+    profile = _fake_profile()
     args = Namespace(
         base=None,
         driver="openai",
@@ -348,39 +348,39 @@ def test_build_connection_without_model_falls_to_interactive():
     from unittest.mock import patch as mock_patch
     with mock_patch("quimera.cli._configure_connection_interactively") as mock_interactive:
         mock_interactive.return_value = OpenAIConnection(model="fallback")
-        _build_connection_from_args(plugin, args)
+        _build_connection_from_args(profile, args)
         mock_interactive.assert_called_once()
 
 # ---------------------------------------------------------------------------
-# Testes de persistência de extra_body (set_connection_override / load)
+# Testes de persistência de extra_body (set_connection / load)
 # ---------------------------------------------------------------------------
 
 
 class TestExtraBodyPersistence:
     """Testa o ciclo completo: salvar no JSON e recarregar."""
 
-    def test_set_connection_override_persists_extra_body(self, tmp_path, monkeypatch):
-        """set_connection_override deve salvar extra_body no connections.json."""
-        from quimera.plugins import base as base_mod
-        from quimera.plugins.base import (
+    def test_set_connection_persists_extra_body(self, tmp_path, monkeypatch):
+        """set_connection deve salvar extra_body no connections.json."""
+        from quimera.profiles import base as base_mod
+        from quimera.profiles.base import (
             OpenAIConnection,
-            PluginRegistry,
-            set_connection_override,
-            AgentPlugin,
+            ProfileRegistry,
+            set_connection,
+            ExecutionProfile,
         )
 
         # Redireciona o arquivo de conexões para tmp_path
         conn_file = tmp_path / "connections.json"
         monkeypatch.setattr(base_mod, "_get_connections_file", lambda: conn_file)
-        isolated_reg = PluginRegistry()
-        plugin = AgentPlugin(
+        isolated_reg = ProfileRegistry()
+        profile = ExecutionProfile(
             name="deepseek",
             prefix="/deepseek",
             style=("blue", "DeepSeek"),
             driver="openai_compat",
         )
-        isolated_reg.register(plugin)
-        with patch("quimera.plugins.base._registry", isolated_reg):
+        isolated_reg.register(profile)
+        with patch("quimera.profiles.base._registry", isolated_reg):
             conn = OpenAIConnection(
                 model="deepseek-chat",
                 base_url="https://api.deepseek.com/v1",
@@ -388,7 +388,7 @@ class TestExtraBodyPersistence:
                 provider="openai_compat",
                 extra_body={"thinking": {"type": "disabled"}},
             )
-            set_connection_override("deepseek", conn, persist=True)
+            set_connection("deepseek", conn, persist=True)
 
             # Verifica que foi salvo no arquivo
             assert conn_file.exists()
@@ -397,37 +397,37 @@ class TestExtraBodyPersistence:
             assert saved["deepseek"]["extra_body"] == {"thinking": {"type": "disabled"}}
             assert saved["deepseek"]["model"] == "deepseek-chat"
 
-    def test_set_connection_override_extra_body_none(self, tmp_path, monkeypatch):
+    def test_set_connection_extra_body_none(self, tmp_path, monkeypatch):
         """extra_body=None deve ser persistido como None."""
-        from quimera.plugins import base as base_mod
-        from quimera.plugins.base import (
+        from quimera.profiles import base as base_mod
+        from quimera.profiles.base import (
             OpenAIConnection,
-            PluginRegistry,
-            set_connection_override,
-            AgentPlugin,
+            ProfileRegistry,
+            set_connection,
+            ExecutionProfile,
         )
 
         conn_file = tmp_path / "connections.json"
         monkeypatch.setattr(base_mod, "_get_connections_file", lambda: conn_file)
-        registry = PluginRegistry()
-        plugin = AgentPlugin(
+        registry = ProfileRegistry()
+        profile = ExecutionProfile(
             name="gpt",
             prefix="/gpt",
             style=("green", "GPT"),
             driver="openai_compat",
         )
-        registry.register(plugin)
-        with patch("quimera.plugins.base._registry", registry):
+        registry.register(profile)
+        with patch("quimera.profiles.base._registry", registry):
             conn = OpenAIConnection(model="gpt-4o", extra_body=None)
-            set_connection_override("gpt", conn, persist=True)
+            set_connection("gpt", conn, persist=True)
 
             saved = json.loads(conn_file.read_text(encoding="utf-8"))
             assert saved["gpt"]["extra_body"] is None
 
     def test_load_connections_roundtrip_extra_body(self, tmp_path, monkeypatch):
         """Salva e recarrega conexão com extra_body via JSON."""
-        from quimera.plugins import base as base_mod
-        from quimera.plugins.base import (
+        from quimera.profiles import base as base_mod
+        from quimera.profiles.base import (
             _connection_from_dict,
             save_connections,
             load_connections,
@@ -463,9 +463,9 @@ class TestEffectiveConnectionExtraBody:
 
     def test_effective_connection_returns_extra_body_from_override(self):
         """Quando há override com extra_body, effective_connection deve retorná-lo."""
-        from quimera.plugins.base import AgentPlugin, OpenAIConnection
+        from quimera.profiles.base import ExecutionProfile, OpenAIConnection
 
-        plugin = AgentPlugin(
+        profile = ExecutionProfile(
             name="deepseek",
             prefix="/deepseek",
             style=("blue", "DeepSeek"),
@@ -475,7 +475,7 @@ class TestEffectiveConnectionExtraBody:
         )
 
         # Sem override, não deve ter extra_body
-        conn = plugin.effective_connection()
+        conn = profile.effective_connection()
         assert isinstance(conn, OpenAIConnection)
         assert conn.extra_body is None
 
@@ -485,8 +485,8 @@ class TestEffectiveConnectionExtraBody:
             base_url="https://api.deepseek.com/v1",
             extra_body={"thinking": {"type": "disabled"}},
         )
-        object.__setattr__(plugin, "_connection_override", override)
-        conn = plugin.effective_connection()
+        object.__setattr__(profile, "_connection_override", override)
+        conn = profile.effective_connection()
         assert conn.extra_body == {"thinking": {"type": "disabled"}}
 
 
@@ -497,7 +497,7 @@ class TestEffectiveConnectionExtraBody:
 
 def test_cli_connection_to_dict_has_no_extra_body():
     """CliConnection não deve ter campo extra_body no dict."""
-    from quimera.plugins.base import CliConnection, connection_to_dict
+    from quimera.profiles.base import CliConnection, connection_to_dict
 
     conn = CliConnection(cmd=["my-cli"], prompt_as_arg=True)
     data = connection_to_dict(conn)

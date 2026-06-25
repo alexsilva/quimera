@@ -6,7 +6,7 @@ O Quimera organiza uma sessão de engenharia assistida por múltiplos agentes. O
 
 As funcionalidades centrais são:
 
-1. **Chat multiagente**: cada agente é um plugin com prefixo, comando, driver, capacidades e metadados de roteamento.
+1. **Chat multiagente**: cada agente é um profile com prefixo, comando, driver, capacidades e metadados de roteamento.
 2. **Roteamento explícito**: mensagens podem ir para o agente primário ou para um agente escolhido com `/claude`, `/codex`, `/gemini`, `/opencode` etc.
 3. **Modos de execução**: `/planning`, `/analysis`, `/design`, `/review` e `/execute` mudam o conjunto de ferramentas bloqueadas no turno.
 4. **Tasks em background**: `/task <descrição>` classifica, persiste, atribui e acorda executores para trabalhar fora do turno principal.
@@ -22,7 +22,7 @@ As funcionalidades centrais são:
 |---|---|
 | `quimera/cli.py` | Parse de flags, configuração inicial, seleção de agentes, inicialização MCP e bootstrap da app. |
 | `quimera/app/` | Loop interativo, comandos slash, roteamento, sessão, execução de turnos, tasks e renderização de eventos. |
-| `quimera/plugins/` | Catálogo de agentes, conexões CLI/API, injeção MCP e metadados de capacidade. |
+| `quimera/profiles/` | Catálogo de agentes, conexões CLI/API, injeção MCP e metadados de capacidade. |
 | `quimera/runtime/` | Drivers, schemas de ferramentas, executor, parser, políticas, MCP e execução de tasks. |
 | `quimera/runtime/tools/` | Implementações de ferramentas: arquivos, shell, patch, delegation, tasks, web e TODO. |
 | `quimera/ui/` | Renderer terminal, temas e auditoria visual. |
@@ -33,7 +33,7 @@ As funcionalidades centrais são:
 
 ```text
 Usuário inicia `quimera`
-  -> CLI carrega configuração, plugins e workspace
+  -> CLI carrega configuração, profiles e workspace
   -> app inicia renderer, session state, logs e agentes ativos
   -> MCP embutido é iniciado, salvo `--no-mcp`
   -> usuário envia mensagem ou comando slash

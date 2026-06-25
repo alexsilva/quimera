@@ -10,9 +10,9 @@ from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 
-import quimera.plugins as plugins
+import quimera.profiles as profiles
 from quimera.constants import MAX_STDERR_LINES, Visibility
-from quimera.plugins.base import CliConnection, OpenAIConnection
+from quimera.profiles.base import CliConnection, OpenAIConnection
 from quimera import process_factory as subprocess
 from quimera.sandbox.bwrap import build_bwrap_cmd
 from quimera.spy_output_presenter import SpyOutputPresenter
@@ -234,7 +234,7 @@ class AgentClient:
     # ------------------------------------------------------------------
 
     def _show_formatted_stdout(self, agent: str | None, line: str) -> bool:
-        """Exibe mensagens resumidas de stdout quando o plugin oferece formatter."""
+        """Exibe mensagens resumidas de stdout quando o profile oferece formatter."""
         return self._spy_output_presenter.consume_stdout(agent, line)
 
     def _render_agent_transient(self, message: str, *, agent: str | None, muted: bool = False) -> None:
@@ -309,7 +309,7 @@ class AgentClient:
                 self.execution_mode,
                 effective_cwd,
                 cmd,
-                plugin=plugins.get(agent) if agent else None,
+                profile=profiles.get(agent) if agent else None,
             )
             return effective_cmd, effective_cwd
         return list(cmd), effective_cwd
@@ -646,59 +646,59 @@ class AgentClient:
         return parse_opencode_json(raw, agent, self.tool_event_callback)
 
     # ------------------------------------------------------------------
-    # Plugin resolution
+    # Profile resolution
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _resolve_plugin_connection(plugin):
-        """Resolve a conexão efetiva com fallback para objetos plugin simplificados."""
-        resolver = getattr(plugin, "effective_connection", None)
+    def _resolve_profile_connection(profile):
+        """Resolve a conexão efetiva com fallback para objetos profile simplificados."""
+        resolver = getattr(profile, "effective_connection", None)
         if callable(resolver):
             connection = resolver()
             if isinstance(connection, (OpenAIConnection, CliConnection)):
                 return connection
-        driver = getattr(plugin, "driver", "cli")
+        driver = getattr(profile, "driver", "cli")
         if isinstance(driver, str) and driver != "cli":
             return OpenAIConnection(
-                model=getattr(plugin, "model", None) or "gpt-4o",
-                base_url=getattr(plugin, "base_url", None) or "https://api.openai.com/v1",
-                api_key_env=getattr(plugin, "api_key_env", None) or "OPENAI_API_KEY",
+                model=getattr(profile, "model", None) or "gpt-4o",
+                base_url=getattr(profile, "base_url", None) or "https://api.openai.com/v1",
+                api_key_env=getattr(profile, "api_key_env", None) or "OPENAI_API_KEY",
                 provider=driver,
-                supports_native_tools=getattr(plugin, "supports_tools", True),
+                supports_native_tools=getattr(profile, "supports_tools", True),
             )
         return CliConnection(
-            cmd=list(getattr(plugin, "cmd", None) or []),
-            prompt_as_arg=getattr(plugin, "prompt_as_arg", False),
-            output_format=getattr(plugin, "output_format", None),
+            cmd=list(getattr(profile, "cmd", None) or []),
+            prompt_as_arg=getattr(profile, "prompt_as_arg", False),
+            output_format=getattr(profile, "output_format", None),
         )
 
     @staticmethod
-    def _resolve_plugin_cli_attrs(plugin, connection) -> tuple[list[str], bool, str | None]:
-        """Resolve atributos CLI com fallback para plugins simplificados em testes."""
+    def _resolve_profile_cli_attrs(profile, connection) -> tuple[list[str], bool, str | None]:
+        """Resolve atributos CLI com fallback para profiles simplificados em testes."""
         if isinstance(connection, CliConnection):
-            cmd_resolver = getattr(plugin, "effective_cmd", None)
+            cmd_resolver = getattr(profile, "effective_cmd", None)
             cmd = cmd_resolver() if callable(cmd_resolver) else list(connection.cmd)
             return cmd, connection.prompt_as_arg, connection.output_format
-        cmd_resolver = getattr(plugin, "effective_cmd", None)
-        prompt_resolver = getattr(plugin, "effective_prompt_as_arg", None)
-        output_resolver = getattr(plugin, "effective_output_format", None)
+        cmd_resolver = getattr(profile, "effective_cmd", None)
+        prompt_resolver = getattr(profile, "effective_prompt_as_arg", None)
+        output_resolver = getattr(profile, "effective_output_format", None)
         if callable(cmd_resolver) and callable(prompt_resolver) and callable(output_resolver):
             return cmd_resolver(), prompt_resolver(), output_resolver()
         return (
-            list(getattr(plugin, "cmd", None) or []),
-            bool(getattr(plugin, "prompt_as_arg", False)),
-            getattr(plugin, "output_format", None),
+            list(getattr(profile, "cmd", None) or []),
+            bool(getattr(profile, "prompt_as_arg", False)),
+            getattr(profile, "output_format", None),
         )
 
     @staticmethod
-    def _should_use_warm_pool(plugin, cmd: list[str]) -> bool:
-        """Retorna se o plugin permite processo pré-aquecido para execução CLI."""
+    def _should_use_warm_pool(profile, cmd: list[str]) -> bool:
+        """Retorna se o profile permite processo pré-aquecido para execução CLI."""
         if not cmd:
             return False
-        plugin_hook = getattr(type(plugin), "should_use_warm_pool", None)
-        if callable(plugin_hook):
-            return bool(plugin_hook(plugin, cmd))
-        return bool(getattr(plugin, "supports_warm_pool", True))
+        profile_hook = getattr(type(profile), "should_use_warm_pool", None)
+        if callable(profile_hook):
+            return bool(profile_hook(profile, cmd))
+        return bool(getattr(profile, "supports_warm_pool", True))
 
     # ------------------------------------------------------------------
     # call() — ponto de entrada principal
@@ -717,15 +717,15 @@ class AgentClient:
     ):
         """Resolve o comando do agente e delega a execução."""
         self._user_cancelled = False
-        plugin = plugins.get(agent)
-        if plugin is None:
+        profile = profiles.get(agent)
+        if profile is None:
             self._show_error(f"[erro] agente desconhecido: {agent}")
             return None
-        connection = self._resolve_plugin_connection(plugin)
+        connection = self._resolve_profile_connection(profile)
         if isinstance(connection, OpenAIConnection):
             self._spy_output_presenter.set_turn_runtime("openai")
             return self._call_api(
-                agent, plugin, prompt,
+                agent, profile, prompt,
                 silent=silent,
                 show_status=show_status,
                 quiet=quiet,
@@ -734,9 +734,9 @@ class AgentClient:
                 progress_callback=progress_callback,
             )
         self._spy_output_presenter.set_turn_runtime("cli")
-        cmd, prompt_as_arg, output_format = self._resolve_plugin_cli_attrs(plugin, connection)
+        cmd, prompt_as_arg, output_format = self._resolve_profile_cli_attrs(profile, connection)
         extra_env = dict(connection.env or {}) if isinstance(connection, CliConnection) else {}
-        env_hook = getattr(plugin, "env_for_cli", None)
+        env_hook = getattr(profile, "env_for_cli", None)
         if callable(env_hook):
             extra_env.update(env_hook())
         tool_config = getattr(self.tool_executor, "config", None)
@@ -769,7 +769,7 @@ class AgentClient:
         else:
             _extra_env = run_kwargs.get("extra_env")
             _effective_cmd, _effective_cwd = self._build_effective_cmd(cmd, agent, run_kwargs.get("cwd"))
-            _use_warm_pool = self._should_use_warm_pool(plugin, cmd)
+            _use_warm_pool = self._should_use_warm_pool(profile, cmd)
             _slot = self._warm_pool.take(_effective_cmd, _effective_cwd, _extra_env) if _use_warm_pool else None
             if not _use_warm_pool:
                 # Se houver um slot antigo para esse comando, descarta para evitar
@@ -797,7 +797,7 @@ class AgentClient:
     def _call_api(
         self,
         agent,
-        plugin,
+        profile,
         prompt: PromptText,
         silent=False,
         show_status=True,
@@ -807,7 +807,7 @@ class AgentClient:
         progress_callback=None,
     ):
         """Executa agentes com driver de API (ex: openai_compat para Ollama)."""
-        connection = self._resolve_plugin_connection(plugin)
+        connection = self._resolve_profile_connection(profile)
         if not isinstance(connection, OpenAIConnection):
             self._show_error(f"[erro] conexão inválida para driver de API: {agent}")
             return None
@@ -820,7 +820,7 @@ class AgentClient:
                 base_url=connection.base_url,
                 api_key=api_key,
                 timeout=self.idle_timeout,
-                tool_use_reliability=getattr(plugin, "tool_use_reliability", "medium"),
+                tool_use_reliability=getattr(profile, "tool_use_reliability", "medium"),
                 extra_body=connection.extra_body,
                 max_connections=getattr(connection, "max_connections", 4),
             )
@@ -840,7 +840,7 @@ class AgentClient:
             with status_cm as status:
                 if status is not None:
                     status.update(status_label)
-                if allow_tools and getattr(plugin, "supports_tools", True):
+                if allow_tools and getattr(profile, "supports_tools", True):
                     effective_tool_executor = self.tool_executor
                 if effective_tool_executor is not None:
                     set_cancel_event = getattr(effective_tool_executor, "set_approval_cancel_event", None)
@@ -945,7 +945,7 @@ class AgentClient:
                         self.rate_limit_detected = True
                         if self.rate_limit_detected_at is None:
                             self.rate_limit_detected_at = time.time()
-                    _cmd = getattr(plugin, "cmd", None)
+                    _cmd = getattr(profile, "cmd", None)
                     _name = (
                         (_cmd[0] if isinstance(_cmd, (list, tuple)) and _cmd else None)
                         or connection.model or "driver"

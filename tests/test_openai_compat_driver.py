@@ -27,13 +27,13 @@ from quimera.runtime.drivers.repl import (
     _header,
     _on_tool_call,
     _on_tool_result,
-    _resolve_plugin_connection,
-    _resolve_plugin_driver,
+    _resolve_profile_connection,
+    _resolve_profile_driver,
 )
 from quimera.runtime.drivers.tool_schemas import TOOL_SCHEMAS, resolve_tool_schemas
 from quimera.runtime.errors import ToolPolicyViolationError
 from quimera.runtime.models import ToolCall, ToolResult
-from quimera.plugins.base import OpenAIConnection
+from quimera.profiles.base import OpenAIConnection
 from quimera.prompt_templates import PromptText
 
 
@@ -114,12 +114,12 @@ def test_schema_names_match_registered_tools():
     assert actual == expected
 
 
-def test_delegate_schema_mentions_existing_plugins():
-    """Descrição do delegate deve orientar para plugins existentes, não exemplos obsoletos."""
+def test_delegate_schema_mentions_existing_profiles():
+    """Descrição do delegate deve orientar para perfis existentes, não exemplos obsoletos."""
     schema = next(s for s in TOOL_SCHEMAS if s["function"]["name"] == "delegate")
     text = json.dumps(schema["function"], ensure_ascii=False)
 
-    for expected_name in {"codex", "claude", "opencode", "antigravity", "ollama-granite4", "list_agents"}:
+    for expected_name in {"codex", "claude", "opencode", "antigravity", "list_agents"}:
         assert expected_name in text
     assert "opencode-big-pickle" not in text
     assert "gemini" not in text
@@ -827,7 +827,7 @@ def test_run_api_error_returns_none():
 
 def test_driver_repl_probe_backend_success():
     """Verifica que Test driver repl probe backend success."""
-    fake_plugin = SimpleNamespace(
+    fake_profile = SimpleNamespace(
         name="ollama-qwen",
         driver="openai_compat",
         model="qwen3-coder:30b",
@@ -842,15 +842,15 @@ def test_driver_repl_probe_backend_success():
             patch("quimera.runtime.drivers.repl.OpenAICompatDriver"):
         repl = DriverRepl(
             "ollama-qwen",
-            get_plugin=lambda name: fake_plugin if name == "ollama-qwen" else None,
-            all_plugins=lambda: [fake_plugin],
+            get_profile=lambda name: fake_profile if name == "ollama-qwen" else None,
+            all_profiles=lambda: [fake_profile],
         )
         repl.ensure_backend_available()
 
 
 def test_driver_repl_probe_backend_unavailable_raises_clear_error():
     """Verifica que Test driver repl probe backend unavailable raises clear error."""
-    fake_plugin = SimpleNamespace(
+    fake_profile = SimpleNamespace(
         name="ollama-qwen",
         driver="openai_compat",
         model="qwen3-coder:30b",
@@ -865,8 +865,8 @@ def test_driver_repl_probe_backend_unavailable_raises_clear_error():
             ):
         repl = DriverRepl(
             "ollama-qwen",
-            get_plugin=lambda name: fake_plugin if name == "ollama-qwen" else None,
-            all_plugins=lambda: [fake_plugin],
+            get_profile=lambda name: fake_profile if name == "ollama-qwen" else None,
+            all_profiles=lambda: [fake_profile],
         )
         with pytest.raises(RuntimeError, match="indisponível"):
             repl.ensure_backend_available()
@@ -882,7 +882,7 @@ def test_driver_repl_format_user_prompt_formats_user_name():
 
 def test_driver_repl_run_uses_prompt_from_config_name():
     """Verifica que Test driver repl run uses prompt from config name."""
-    fake_plugin = SimpleNamespace(
+    fake_profile = SimpleNamespace(
         name="ollama-qwen",
         driver="openai_compat",
         model="qwen3-coder:30b",
@@ -893,8 +893,8 @@ def test_driver_repl_run_uses_prompt_from_config_name():
             patch.object(DriverRepl, "_load_user_name_from_config", return_value="Alex"):
         repl = DriverRepl(
             "ollama-qwen",
-            get_plugin=lambda name: fake_plugin if name == "ollama-qwen" else None,
-            all_plugins=lambda: [fake_plugin],
+            get_profile=lambda name: fake_profile if name == "ollama-qwen" else None,
+            all_profiles=lambda: [fake_profile],
         )
 
     with patch.object(repl, "ensure_backend_available"), \
@@ -907,7 +907,7 @@ def test_driver_repl_run_uses_prompt_from_config_name():
 
 def test_driver_repl_with_input_gate_uses_gate_for_prompt_and_approval_handler():
     """Verifica que Test driver repl with input gate uses gate for prompt and approval handler."""
-    fake_plugin = SimpleNamespace(
+    fake_profile = SimpleNamespace(
         name="ollama-qwen",
         driver="openai_compat",
         model="qwen3-coder:30b",
@@ -921,8 +921,8 @@ def test_driver_repl_with_input_gate_uses_gate_for_prompt_and_approval_handler()
             patch.object(DriverRepl, "_load_user_name_from_config", return_value="Alex"):
         repl = DriverRepl(
             "ollama-qwen",
-            get_plugin=lambda name: fake_plugin if name == "ollama-qwen" else None,
-            all_plugins=lambda: [fake_plugin],
+            get_profile=lambda name: fake_profile if name == "ollama-qwen" else None,
+            all_profiles=lambda: [fake_profile],
             input_gate=gate,
         )
 
@@ -939,7 +939,7 @@ def test_driver_repl_with_input_gate_uses_gate_for_prompt_and_approval_handler()
 
 def test_driver_repl_with_input_gate_executes_regular_message_flow():
     """Verifica que Test driver repl with input gate executes regular message flow."""
-    fake_plugin = SimpleNamespace(
+    fake_profile = SimpleNamespace(
         name="ollama-qwen",
         driver="openai_compat",
         model="qwen3-coder:30b",
@@ -952,8 +952,8 @@ def test_driver_repl_with_input_gate_executes_regular_message_flow():
             patch.object(DriverRepl, "_load_user_name_from_config", return_value="Alex"):
         repl = DriverRepl(
             "ollama-qwen",
-            get_plugin=lambda name: fake_plugin if name == "ollama-qwen" else None,
-            all_plugins=lambda: [fake_plugin],
+            get_profile=lambda name: fake_profile if name == "ollama-qwen" else None,
+            all_profiles=lambda: [fake_profile],
             input_gate=gate,
         )
 
@@ -999,9 +999,9 @@ def test_repl_helpers_print_and_truncate_fields():
     assert " …" in printed
 
 
-def test_resolve_plugin_connection_and_driver_with_fallbacks():
-    """Verifica que Test resolve plugin connection and driver with fallbacks."""
-    plugin_with_resolver = SimpleNamespace(
+def test_resolve_profile_connection_and_driver_with_fallbacks():
+    """Verifica que Test resolve profile connection and driver with fallbacks."""
+    profile_with_resolver = SimpleNamespace(
         effective_connection=lambda: OpenAIConnection(
             model="qwen3",
             base_url="http://localhost:11434/v1",
@@ -1010,51 +1010,51 @@ def test_resolve_plugin_connection_and_driver_with_fallbacks():
             supports_native_tools=True,
         )
     )
-    assert isinstance(_resolve_plugin_connection(plugin_with_resolver), OpenAIConnection)
+    assert isinstance(_resolve_profile_connection(profile_with_resolver), OpenAIConnection)
 
-    plugin_non_cli = SimpleNamespace(
+    profile_non_cli = SimpleNamespace(
         driver="openai_compat",
         model="qwen3",
         base_url="http://localhost:11434/v1",
         api_key_env=None,
         supports_tools=False,
     )
-    conn = _resolve_plugin_connection(plugin_non_cli)
+    conn = _resolve_profile_connection(profile_non_cli)
     assert isinstance(conn, OpenAIConnection)
     assert conn.supports_native_tools is False
 
-    plugin_cli = SimpleNamespace(driver="cli")
-    assert _resolve_plugin_connection(plugin_cli) is None
+    profile_cli = SimpleNamespace(driver="cli")
+    assert _resolve_profile_connection(profile_cli) is None
 
-    plugin_driver_resolver = SimpleNamespace(effective_driver=lambda: "openai_compat")
-    assert _resolve_plugin_driver(plugin_driver_resolver) == "openai_compat"
+    profile_driver_resolver = SimpleNamespace(effective_driver=lambda: "openai_compat")
+    assert _resolve_profile_driver(profile_driver_resolver) == "openai_compat"
 
 
-def test_driver_repl_init_fails_when_plugin_not_found_with_compat_list():
-    """Verifica que Test driver repl init fails when plugin not found with compat list."""
-    compat_plugin = SimpleNamespace(
+def test_driver_repl_init_fails_when_profile_not_found_with_compat_list():
+    """Verifica que Test driver repl init fails when profile not found with compat list."""
+    compat_profile = SimpleNamespace(
         name="ollama-qwen",
         driver="openai_compat",
         model="qwen3-coder:30b",
         base_url="http://localhost:11434/v1",
         api_key_env=None,
     )
-    with pytest.raises(ValueError, match="Plugins openai_compat disponíveis: ollama-qwen"):
+    with pytest.raises(ValueError, match="Profiles openai_compat disponíveis: ollama-qwen"):
         DriverRepl(
             "missing",
-            get_plugin=lambda _: None,
-            all_plugins=lambda: [compat_plugin],
+            get_profile=lambda _: None,
+            all_profiles=lambda: [compat_profile],
         )
 
 
-def test_driver_repl_init_rejects_cli_plugins():
-    """Verifica que Test driver repl init rejects cli plugins."""
-    cli_plugin = SimpleNamespace(name="claude", driver="cli", model=None, base_url=None, api_key_env=None)
+def test_driver_repl_init_rejects_cli_profiles():
+    """Verifica que Test driver repl init rejects cli profiles."""
+    cli_profile = SimpleNamespace(name="claude", driver="cli", model=None, base_url=None, api_key_env=None)
     with pytest.raises(ValueError, match="driver='cli'"):
         DriverRepl(
             "claude",
-            get_plugin=lambda _: cli_plugin,
-            all_plugins=lambda: [cli_plugin],
+            get_profile=lambda _: cli_profile,
+            all_profiles=lambda: [cli_profile],
         )
 
 
@@ -1074,7 +1074,7 @@ def test_driver_repl_load_user_name_from_config_falls_back_to_default():
 
 def test_driver_repl_connection_signature_tracks_model_url_and_api_key_env():
     """Verifica que Test driver repl connection signature tracks model url and api key env."""
-    plugin = SimpleNamespace(
+    profile = SimpleNamespace(
         name="ollama-qwen",
         driver="openai_compat",
         model="qwen3-coder:30b",
@@ -1085,8 +1085,8 @@ def test_driver_repl_connection_signature_tracks_model_url_and_api_key_env():
             patch.dict("os.environ", {"MY_TEST_API_KEY": "k1"}, clear=False):
         repl = DriverRepl(
             "ollama-qwen",
-            get_plugin=lambda _: plugin,
-            all_plugins=lambda: [plugin],
+            get_profile=lambda _: profile,
+            all_profiles=lambda: [profile],
         )
         assert repl._connection_has_changed() is True
         assert repl._connection_has_changed() is False
@@ -1094,9 +1094,9 @@ def test_driver_repl_connection_signature_tracks_model_url_and_api_key_env():
             assert repl._connection_has_changed() is True
 
 
-def test_driver_repl_get_current_connection_rejects_when_plugin_driver_changes():
-    """Verifica que Test driver repl get current connection rejects when plugin driver changes."""
-    plugin = SimpleNamespace(
+def test_driver_repl_get_current_connection_rejects_when_profile_driver_changes():
+    """Verifica que Test driver repl get current connection rejects when profile driver changes."""
+    profile = SimpleNamespace(
         name="ollama-qwen",
         driver="openai_compat",
         model="qwen3-coder:30b",
@@ -1106,17 +1106,17 @@ def test_driver_repl_get_current_connection_rejects_when_plugin_driver_changes()
     with patch("quimera.runtime.drivers.repl.OpenAICompatDriver"):
         repl = DriverRepl(
             "ollama-qwen",
-            get_plugin=lambda _: plugin,
-            all_plugins=lambda: [plugin],
+            get_profile=lambda _: profile,
+            all_profiles=lambda: [profile],
         )
-    plugin.driver = "cli"
+    profile.driver = "cli"
     with pytest.raises(ValueError, match="driver='cli'"):
         repl._get_current_connection()
 
 
 def test_driver_repl_backend_probe_handles_status_and_http_errors():
     """Verifica que Test driver repl backend probe handles status and http errors."""
-    plugin = SimpleNamespace(
+    profile = SimpleNamespace(
         name="ollama-qwen",
         driver="openai_compat",
         model="qwen3-coder:30b",
@@ -1132,8 +1132,8 @@ def test_driver_repl_backend_probe_handles_status_and_http_errors():
             patch("quimera.runtime.drivers.repl.urllib_request.urlopen", return_value=bad_response):
         repl = DriverRepl(
             "ollama-qwen",
-            get_plugin=lambda _: plugin,
-            all_plugins=lambda: [plugin],
+            get_profile=lambda _: profile,
+            all_profiles=lambda: [profile],
         )
         with pytest.raises(RuntimeError, match="status HTTP 503"):
             repl.ensure_backend_available()
@@ -1151,8 +1151,8 @@ def test_driver_repl_backend_probe_handles_status_and_http_errors():
             patch("quimera.runtime.drivers.repl.urllib_request.urlopen", side_effect=http_404):
         repl = DriverRepl(
             "ollama-qwen",
-            get_plugin=lambda _: plugin,
-            all_plugins=lambda: [plugin],
+            get_profile=lambda _: profile,
+            all_profiles=lambda: [profile],
         )
         repl.ensure_backend_available()
 
@@ -1167,8 +1167,8 @@ def test_driver_repl_backend_probe_handles_status_and_http_errors():
             patch("quimera.runtime.drivers.repl.urllib_request.urlopen", side_effect=http_500):
         repl = DriverRepl(
             "ollama-qwen",
-            get_plugin=lambda _: plugin,
-            all_plugins=lambda: [plugin],
+            get_profile=lambda _: profile,
+            all_profiles=lambda: [profile],
         )
         with pytest.raises(RuntimeError, match="status HTTP 500"):
             repl.ensure_backend_available()
@@ -1176,7 +1176,7 @@ def test_driver_repl_backend_probe_handles_status_and_http_errors():
 
 def test_driver_repl_probe_uses_executor_toggle():
     """Verifica que Test driver repl probe uses executor toggle."""
-    plugin = SimpleNamespace(
+    profile = SimpleNamespace(
         name="ollama-qwen",
         driver="openai_compat",
         model="qwen3-coder:30b",
@@ -1186,8 +1186,8 @@ def test_driver_repl_probe_uses_executor_toggle():
     with patch("quimera.runtime.drivers.repl.OpenAICompatDriver"):
         repl = DriverRepl(
             "ollama-qwen",
-            get_plugin=lambda _: plugin,
-            all_plugins=lambda: [plugin],
+            get_profile=lambda _: profile,
+            all_profiles=lambda: [profile],
         )
 
     with patch.object(repl, "ensure_backend_available"), \
@@ -1203,7 +1203,7 @@ def test_driver_repl_probe_uses_executor_toggle():
 
 def test_driver_repl_run_one_shot_and_interactive_commands():
     """Verifica que Test driver repl run one shot and interactive commands."""
-    plugin = SimpleNamespace(
+    profile = SimpleNamespace(
         name="ollama-qwen",
         driver="openai_compat",
         model="qwen3-coder:30b",
@@ -1224,8 +1224,8 @@ def test_driver_repl_run_one_shot_and_interactive_commands():
             patch.object(DriverRepl, "_load_user_name_from_config", return_value="Alex"):
         repl = DriverRepl(
             "ollama-qwen",
-            get_plugin=lambda _: plugin,
-            all_plugins=lambda: [plugin],
+            get_profile=lambda _: profile,
+            all_profiles=lambda: [profile],
             input_gate=gate,
         )
 
@@ -1428,19 +1428,19 @@ def test_run_reports_tool_abort_callback():
 # ---------------------------------------------------------------------------
 
 def test_agent_client_dispatches_api_driver():
-    """AgentClient.call() deve chamar _call_api() para plugins com driver != 'cli'."""
+    """AgentClient.call() deve chamar _call_api() para profiles com driver != 'cli'."""
     from quimera.agents import AgentClient
 
     renderer = MagicMock()
     client = AgentClient(renderer)
 
-    mock_plugin = MagicMock()
-    mock_plugin.driver = "openai_compat"
-    mock_plugin.model = "qwen3-coder:30b"
-    mock_plugin.base_url = "http://localhost:11434/v1"
-    mock_plugin.api_key_env = None
+    mock_profile = MagicMock()
+    mock_profile.driver = "openai_compat"
+    mock_profile.model = "qwen3-coder:30b"
+    mock_profile.base_url = "http://localhost:11434/v1"
+    mock_profile.api_key_env = None
 
-    with patch("quimera.plugins.get", return_value=mock_plugin):
+    with patch("quimera.profiles.get", return_value=mock_profile):
         with patch.object(client, "_call_api", return_value="api response") as mock_api:
             result = client.call("ollama-qwen", "prompt")
             mock_api.assert_called_once()
@@ -1453,7 +1453,7 @@ def test_agent_client_passes_tool_use_reliability_to_api_driver():
 
     renderer = MagicMock()
     client = AgentClient(renderer)
-    plugin = SimpleNamespace(
+    profile = SimpleNamespace(
         driver="openai_compat",
         model="qwen3-coder:30b",
         base_url="http://localhost:11434/v1",
@@ -1462,7 +1462,7 @@ def test_agent_client_passes_tool_use_reliability_to_api_driver():
         supports_tools=True,
     )
 
-    with patch("quimera.plugins.get", return_value=plugin), \
+    with patch("quimera.profiles.get", return_value=profile), \
             patch("quimera.agents.client.OpenAICompatDriver") as mock_driver_cls:
         mock_driver = MagicMock()
         mock_driver.run.return_value = "ok"
@@ -1473,38 +1473,38 @@ def test_agent_client_passes_tool_use_reliability_to_api_driver():
     assert mock_driver_cls.call_args.kwargs["tool_use_reliability"] == "low"
 
 
-def test_agent_client_cli_plugins_use_subprocess():
-    """Plugins com driver='cli' continuam usando subprocess."""
+def test_agent_client_cli_profiles_use_subprocess():
+    """Profiles com driver='cli' continuam usando subprocess."""
     from quimera.agents import AgentClient
 
     renderer = MagicMock()
     client = AgentClient(renderer)
 
-    mock_plugin = MagicMock()
-    mock_plugin.driver = "cli"
-    mock_plugin.cmd = ["mock-agent"]
-    mock_plugin.prompt_as_arg = False
+    mock_profile = MagicMock()
+    mock_profile.driver = "cli"
+    mock_profile.cmd = ["mock-agent"]
+    mock_profile.prompt_as_arg = False
 
-    with patch("quimera.plugins.get", return_value=mock_plugin):
+    with patch("quimera.profiles.get", return_value=mock_profile):
         with patch.object(client, "run", return_value="cli output") as mock_run:
             result = client.call("mock", "prompt")
             mock_run.assert_called_once()
             assert result == "cli output"
 
 
-def test_agent_client_mock_plugin_driver_uses_cli():
+def test_agent_client_mock_profile_driver_uses_cli():
     """MagicMock sem driver explícito ainda usa o caminho CLI (isinstance check)."""
     from quimera.agents import AgentClient
 
     renderer = MagicMock()
     client = AgentClient(renderer)
 
-    # Plugin sem atributo driver definido explicitamente (como os mocks dos testes legados)
-    mock_plugin = MagicMock(spec=["name", "cmd", "prompt_as_arg"])
-    mock_plugin.cmd = ["echo"]
-    mock_plugin.prompt_as_arg = False
+    # Profile sem atributo driver definido explicitamente (como os mocks dos testes legados)
+    mock_profile = MagicMock(spec=["name", "cmd", "prompt_as_arg"])
+    mock_profile.cmd = ["echo"]
+    mock_profile.prompt_as_arg = False
 
-    with patch("quimera.plugins.get", return_value=mock_plugin):
+    with patch("quimera.profiles.get", return_value=mock_profile):
         with patch.object(client, "run", return_value="ok") as mock_run:
             client.call("any", "prompt")
             mock_run.assert_called_once()
@@ -1581,14 +1581,14 @@ def test_run_cancel_event_not_set_completes_normally():
 
 
 # ---------------------------------------------------------------------------
-# Testes de AgentPlugin com driver de API
+# Testes de ExecutionProfile com driver de API
 # ---------------------------------------------------------------------------
 
-def test_agent_plugin_api_defaults():
-    """Verifica que Test agent plugin api defaults."""
-    from quimera.plugins.base import AgentPlugin
+def test_agent_profile_api_defaults():
+    """Verifica que Test agent profile api defaults."""
+    from quimera.profiles.base import ExecutionProfile
 
-    plugin = AgentPlugin(
+    profile = ExecutionProfile(
         name="test",
         prefix="/test",
         style=("red", "Test"),
@@ -1596,53 +1596,45 @@ def test_agent_plugin_api_defaults():
         model="llama3",
         base_url="http://localhost:11434/v1",
     )
-    assert plugin.driver == "openai_compat"
-    assert plugin.model == "llama3"
-    assert plugin.cmd == []
+    assert profile.driver == "openai_compat"
+    assert profile.model == "llama3"
+    assert profile.cmd == []
 
 
-def test_agent_plugin_cli_defaults():
-    """Verifica que Test agent plugin cli defaults."""
-    from quimera.plugins.base import AgentPlugin
+def test_agent_profile_cli_defaults():
+    """Verifica que Test agent profile cli defaults."""
+    from quimera.profiles.base import ExecutionProfile
 
-    plugin = AgentPlugin(
+    profile = ExecutionProfile(
         name="test",
         prefix="/test",
         style=("red", "Test"),
         cmd=["my-cli"],
     )
-    assert plugin.driver == "cli"
-    assert plugin.model is None
-    assert plugin.base_url is None
+    assert profile.driver == "cli"
+    assert profile.model is None
+    assert profile.base_url is None
 
 
 # ---------------------------------------------------------------------------
-# Testes de regressão: plugins existentes ainda funcionam
+# Testes de regressão: perfis existentes ainda funcionam
 # ---------------------------------------------------------------------------
 
-def test_existing_plugins_still_register():
-    """Verifica que Test existing plugins still register."""
-    import quimera.plugins.claude  # noqa: F401
-    import quimera.plugins.mock  # noqa: F401
-    import quimera.plugins.ollama  # noqa: F401
-    import quimera.plugins as plugins
+def test_existing_profiles_still_register():
+    """Verifica que os perfis embutidos continuam registrados."""
+    import quimera.profiles.claude  # noqa: F401
+    import quimera.profiles.mock  # noqa: F401
+    import quimera.profiles as profiles
 
-    claude = plugins.get("claude")
+    claude = profiles.get("claude")
     assert claude is not None
     assert claude.driver == "cli"
     assert claude.cmd == ["claude", "--permission-mode=bypassPermissions", "--output-format=stream-json", "--verbose",
                           "-p"]
 
-    mock = plugins.get("mock")
+    mock = profiles.get("mock")
     assert mock is not None
     assert mock.driver == "cli"
-
-    granite = plugins.get("ollama-granite4")
-    assert granite is not None
-    assert granite.driver == "openai_compat"
-    assert granite.model == "granite4.1:8b"
-    assert granite.supports_tools is True
-    assert granite.supports_task_execution is True
 
 
 # ---------------------------------------------------------------------------

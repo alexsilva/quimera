@@ -332,15 +332,15 @@ class TestAgentClientWarmPool:
     def test_call_stdin_agent_calls_take_on_warm_pool(self, renderer):
         """Verifica que call consulta o warm pool antes de executar run."""
         client = AgentClient(renderer)
-        with patch("quimera.plugins.get") as mock_get, \
+        with patch("quimera.profiles.get") as mock_get, \
              patch.object(client._warm_pool, "take", return_value=None) as mock_take, \
              patch.object(client._warm_pool, "schedule_warm") as mock_schedule, \
              patch.object(client, "run", return_value="ok") as mock_run:
-            mock_plugin = MagicMock()
-            mock_plugin.cmd = ["codex"]
-            mock_plugin.prompt_as_arg = False
-            mock_plugin.supports_warm_pool = True
-            mock_get.return_value = mock_plugin
+            mock_profile = MagicMock()
+            mock_profile.cmd = ["codex"]
+            mock_profile.prompt_as_arg = False
+            mock_profile.supports_warm_pool = True
+            mock_get.return_value = mock_profile
 
             client.call("codex", "hello")
 
@@ -356,15 +356,15 @@ class TestAgentClientWarmPool:
         warm_proc.poll.return_value = None
         warm_slot = _WarmSlot(proc=warm_proc, cmd_key=(("codex",), None))
 
-        with patch("quimera.plugins.get") as mock_get, \
+        with patch("quimera.profiles.get") as mock_get, \
              patch.object(client._warm_pool, "take", return_value=warm_slot), \
              patch.object(client._warm_pool, "schedule_warm"), \
              patch.object(client, "run", return_value="ok") as mock_run:
-            mock_plugin = MagicMock()
-            mock_plugin.cmd = ["codex"]
-            mock_plugin.prompt_as_arg = False
-            mock_plugin.supports_warm_pool = True
-            mock_get.return_value = mock_plugin
+            mock_profile = MagicMock()
+            mock_profile.cmd = ["codex"]
+            mock_profile.prompt_as_arg = False
+            mock_profile.supports_warm_pool = True
+            mock_get.return_value = mock_profile
 
             client.call("codex", "hello")
 
@@ -374,14 +374,14 @@ class TestAgentClientWarmPool:
     def test_call_prompt_as_arg_does_not_use_warm_pool(self, renderer):
         """Verifica que call para agente prompt_as_arg não consulta o warm pool."""
         client = AgentClient(renderer)
-        with patch("quimera.plugins.get") as mock_get, \
+        with patch("quimera.profiles.get") as mock_get, \
              patch.object(client._warm_pool, "take") as mock_take, \
              patch.object(client, "run", return_value="ok"):
-            mock_plugin = MagicMock()
-            mock_plugin.cmd = ["gemini"]
-            mock_plugin.prompt_as_arg = True
-            mock_plugin.output_format = None
-            mock_get.return_value = mock_plugin
+            mock_profile = MagicMock()
+            mock_profile.cmd = ["gemini"]
+            mock_profile.prompt_as_arg = True
+            mock_profile.output_format = None
+            mock_get.return_value = mock_profile
 
             client.call("gemini", "hello")
 
@@ -390,15 +390,15 @@ class TestAgentClientWarmPool:
     def test_call_schedules_warm_after_run(self, renderer):
         """Verifica que call agenda aquecimento mesmo quando run falha."""
         client = AgentClient(renderer)
-        with patch("quimera.plugins.get") as mock_get, \
+        with patch("quimera.profiles.get") as mock_get, \
              patch.object(client._warm_pool, "take", return_value=None), \
              patch.object(client._warm_pool, "schedule_warm") as mock_schedule, \
              patch.object(client, "run", return_value=None):  # run retorna None (falha)
-            mock_plugin = MagicMock()
-            mock_plugin.cmd = ["codex"]
-            mock_plugin.prompt_as_arg = False
-            mock_plugin.supports_warm_pool = True
-            mock_get.return_value = mock_plugin
+            mock_profile = MagicMock()
+            mock_profile.cmd = ["codex"]
+            mock_profile.prompt_as_arg = False
+            mock_profile.supports_warm_pool = True
+            mock_get.return_value = mock_profile
 
             client.call("codex", "hello")
 
@@ -408,15 +408,15 @@ class TestAgentClientWarmPool:
         """Verifica que OpenCode não agenda aquecimento e descarta slot obsoleto."""
         client = AgentClient(renderer)
         stale_slot = MagicMock()
-        with patch("quimera.plugins.get") as mock_get, \
+        with patch("quimera.profiles.get") as mock_get, \
              patch.object(client._warm_pool, "take", side_effect=[stale_slot]) as mock_take, \
              patch.object(client._warm_pool, "schedule_warm") as mock_schedule, \
              patch.object(client, "run", return_value="ok"):
-            mock_plugin = MagicMock()
-            mock_plugin.cmd = ["opencode", "--model=x", "run", "--format=json"]
-            mock_plugin.prompt_as_arg = False
-            mock_plugin.supports_warm_pool = False
-            mock_get.return_value = mock_plugin
+            mock_profile = MagicMock()
+            mock_profile.cmd = ["opencode", "--model=x", "run", "--format=json"]
+            mock_profile.prompt_as_arg = False
+            mock_profile.supports_warm_pool = False
+            mock_get.return_value = mock_profile
 
             client.call("opencode", "hello")
 
@@ -426,11 +426,11 @@ class TestAgentClientWarmPool:
 
     def test_should_use_warm_pool_disables_opencode(self):
         """Verifica que _should_use_warm_pool retorna False para OpenCode."""
-        opencode_plugin = MagicMock(supports_warm_pool=False)
-        codex_plugin = MagicMock(supports_warm_pool=True)
-        assert AgentClient._should_use_warm_pool(opencode_plugin, ["opencode"]) is False
-        assert AgentClient._should_use_warm_pool(codex_plugin, ["/usr/local/bin/opencode"]) is True
-        assert AgentClient._should_use_warm_pool(codex_plugin, ["codex"]) is True
+        opencode_profile = MagicMock(supports_warm_pool=False)
+        codex_profile = MagicMock(supports_warm_pool=True)
+        assert AgentClient._should_use_warm_pool(opencode_profile, ["opencode"]) is False
+        assert AgentClient._should_use_warm_pool(codex_profile, ["/usr/local/bin/opencode"]) is True
+        assert AgentClient._should_use_warm_pool(codex_profile, ["codex"]) is True
 
     def test_close_shuts_down_warm_pool(self, renderer):
         """Verifica que close propaga shutdown para o WarmPool."""

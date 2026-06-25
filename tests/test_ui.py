@@ -86,19 +86,19 @@ class TestIsInteractiveTerminal:
 class TestAgentStyle:
     """Test suite for _agent_style function."""
 
-    def test_returns_plugin_style(self):
-        """Test returns style from injected get_plugin_style callable."""
-        def get_plugin_style(agent):
+    def test_returns_profile_style(self):
+        """Test returns style from injected get_profile_style callable."""
+        def get_profile_style(agent):
             if agent == "testagent":
                 return ("cyan", "🤖  TestAgent")
             return None
 
-        color, label = _agent_style("testagent", get_plugin_style=get_plugin_style)
+        color, label = _agent_style("testagent", get_profile_style=get_profile_style)
         assert color == "cyan"
         assert label == "🤖  TestAgent"
 
     def test_fallback_for_unknown_agent(self):
-        """Test fallback when get_plugin_style returns None."""
+        """Test fallback when get_profile_style returns None."""
         color, label = _agent_style("unknownagent")
         assert color == "white"
         assert label == "🤖  Unknownagent"
@@ -653,7 +653,7 @@ class TestTerminalRenderer:
         renderer._console = Console(width=100, record=True, force_terminal=False)
         renderer.set_prompt_integration(lambda: True, None)
 
-        def mock_style(agent, get_plugin_style=None):
+        def mock_style(agent, get_profile_style=None):
             styles = {"codex": ("cyan", "🔷  Codex"), "gemini": ("green", "🟢  Gemini")}
             return styles.get(agent, ("white", agent))
 

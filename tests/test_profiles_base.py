@@ -1,22 +1,22 @@
-"""Tests for quimera/plugins/base.py."""
+"""Tests for quimera/profiles/base.py."""
 import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from quimera.plugins.base import (
-    AgentPlugin,
+from quimera.profiles.base import (
+    ExecutionProfile,
     CliConnection,
     OpenAIConnection,
-    PluginRegistry,
+    ProfileRegistry,
     _connection_from_dict,
-    _dynamic_plugin_metadata,
-    _sanitize_dynamic_plugin_metadata,
+    _connection_profile_metadata,
+    _sanitize_connection_profile_metadata,
     _humanize_agent_name,
     all_names,
-    all_plugins,
-    apply_connection_overrides,
+    all_profiles,
+    apply_connections,
     connection_to_dict,
     extract_model_from_cli_cmd,
     format_connection_label,
@@ -24,15 +24,15 @@ from quimera.plugins.base import (
     is_valid_agent_name,
     load_connections,
     register,
-    register_dynamic_plugin,
-    reload_plugins,
+    register_connection_profile,
+    reload_profiles,
     remove_connection,
     save_connections,
-    set_connection_override,
+    set_connection,
 )
 
 
-class _EnvAwarePlugin(AgentPlugin):
+class _EnvAwareProfile(ExecutionProfile):
     def env_for_cli(self) -> dict:
         return {"DYNAMIC_ENV_HOOK": "ok"}
 
@@ -84,11 +84,11 @@ def test_humanize_agent_name_underscores():
 
 
 # ---------------------------------------------------------------------------
-# _dynamic_plugin_metadata
+# _connection_profile_metadata
 # ---------------------------------------------------------------------------
 
-def test_dynamic_plugin_metadata_structure():
-    meta = _dynamic_plugin_metadata("testbot")
+def test_connection_profile_metadata_structure():
+    meta = _connection_profile_metadata("testbot")
     assert meta["dynamic"] is True
     assert meta["prefix"] == "/testbot"
     assert "general" in meta["capabilities"]
@@ -96,37 +96,37 @@ def test_dynamic_plugin_metadata_structure():
 
 
 # ---------------------------------------------------------------------------
-# register_dynamic_plugin
+# register_connection_profile
 # ---------------------------------------------------------------------------
 
-def test_register_dynamic_plugin_creates_plugin():
-    plugin = register_dynamic_plugin("dyntest1")
-    assert plugin.name == "dyntest1"
-    assert plugin.dynamic is True
-    assert plugin.prefix == "/dyntest1"
+def test_register_connection_profile_creates_profile():
+    profile = register_connection_profile("dyntest1")
+    assert profile.name == "dyntest1"
+    assert profile.dynamic is True
+    assert profile.prefix == "/dyntest1"
 
 
-def test_register_dynamic_plugin_with_connection():
+def test_register_connection_profile_with_connection():
     conn = OpenAIConnection(model="gpt-4", base_url="http://x", api_key_env="K")
-    plugin = register_dynamic_plugin("dyntest2", connection=conn)
-    assert plugin.effective_connection() == conn
+    profile = register_connection_profile("dyntest2", connection=conn)
+    assert profile.effective_connection() == conn
 
 
-def test_register_dynamic_plugin_invalid_name():
+def test_register_connection_profile_invalid_name():
     with pytest.raises(ValueError):
-        register_dynamic_plugin("INVALID NAME!")
+        register_connection_profile("INVALID NAME!")
 
 
-def test_register_dynamic_plugin_with_metadata():
+def test_register_connection_profile_with_metadata():
     meta = {"icon": "🔥", "base_tier": 3}
-    plugin = register_dynamic_plugin("dyntest3", metadata=meta)
-    assert plugin.icon == "🔥"
-    assert plugin.base_tier == 3
+    profile = register_connection_profile("dyntest3", metadata=meta)
+    assert profile.icon == "🔥"
+    assert profile.base_tier == 3
 
 
-def test_sanitize_dynamic_plugin_metadata_drops_private_and_identity_fields():
+def test_sanitize_connection_profile_metadata_drops_private_and_identity_fields():
     """Metadata persistido não pode injetar campos privados nem trocar identidade."""
-    sanitized = _sanitize_dynamic_plugin_metadata({
+    sanitized = _sanitize_connection_profile_metadata({
         "name": "evil",
         "prefix": "/safe",
         "_mcp_token": "secret",
@@ -137,9 +137,9 @@ def test_sanitize_dynamic_plugin_metadata_drops_private_and_identity_fields():
     assert sanitized == {"prefix": "/safe", "supports_tools": False}
 
 
-def test_register_dynamic_plugin_ignores_unsafe_metadata_fields():
-    """Campos desconhecidos/privados em metadata não quebram nem contaminam plugin."""
-    plugin = register_dynamic_plugin(
+def test_register_connection_profile_ignores_unsafe_metadata_fields():
+    """Campos desconhecidos/privados em metadata não quebram nem contaminam profile."""
+    profile = register_connection_profile(
         "safeagent",
         metadata={
             "name": "evil",
@@ -149,14 +149,14 @@ def test_register_dynamic_plugin_ignores_unsafe_metadata_fields():
         },
     )
 
-    assert plugin.name == "safeagent"
-    assert plugin.icon == "🛡️"
-    assert plugin._mcp_token is None
+    assert profile.name == "safeagent"
+    assert profile.icon == "🛡️"
+    assert profile._mcp_token is None
 
 
-def test_register_dynamic_plugin_inherits_base():
-    # Register a base plugin first
-    base = AgentPlugin(
+def test_register_connection_profile_inherits_base():
+    # Register a profile first
+    base = ExecutionProfile(
         name="baseagent",
         prefix="/baseagent",
         style=("blue", "Base"),
@@ -165,25 +165,25 @@ def test_register_dynamic_plugin_inherits_base():
         runtime_rw_paths=["/tmp"],
     )
     register(base)
-    meta = {"base": "baseagent"}
-    plugin = register_dynamic_plugin("dyntest4", metadata=meta)
-    assert plugin.spy_stdout_formatter is not None
-    assert plugin.has_builtin_tools is True
-    assert "/tmp" in plugin.runtime_rw_paths
-    assert plugin._base_plugin_name == "baseagent"
+    meta = {"profile": "baseagent"}
+    profile = register_connection_profile("dyntest4", metadata=meta)
+    assert profile.spy_stdout_formatter is not None
+    assert profile.has_builtin_tools is True
+    assert "/tmp" in profile.runtime_rw_paths
+    assert profile._profile_name == "baseagent"
 
 
-def test_register_dynamic_plugin_inherits_base_class():
-    base = _EnvAwarePlugin(
+def test_register_connection_profile_inherits_base_class():
+    base = _EnvAwareProfile(
         name="envbase",
         prefix="/envbase",
         style=("blue", "Env Base"),
     )
     register(base)
-    plugin = register_dynamic_plugin("dyntest5", metadata={"base": "envbase"})
+    profile = register_connection_profile("dyntest5", metadata={"profile": "envbase"})
 
-    assert isinstance(plugin, _EnvAwarePlugin)
-    assert plugin.env_for_cli() == {"DYNAMIC_ENV_HOOK": "ok"}
+    assert isinstance(profile, _EnvAwareProfile)
+    assert profile.env_for_cli() == {"DYNAMIC_ENV_HOOK": "ok"}
 
 
 # ---------------------------------------------------------------------------
@@ -238,22 +238,22 @@ def test_connection_to_dict_openai():
 
 
 # ---------------------------------------------------------------------------
-# AgentPlugin properties and methods
+# ExecutionProfile properties and methods
 # ---------------------------------------------------------------------------
 
-def _make_plugin(**kwargs) -> AgentPlugin:
-    defaults = dict(name="testplugin", prefix="/test", style=("blue", "Test"), cmd=["claude"])
+def _make_profile(**kwargs) -> ExecutionProfile:
+    defaults = dict(name="testprofile", prefix="/test", style=("blue", "Test"), cmd=["claude"])
     defaults.update(kwargs)
-    return AgentPlugin(**defaults)
+    return ExecutionProfile(**defaults)
 
 
 def test_render_style():
-    p = _make_plugin(icon="🚀", style=("red", "Rocket"))
+    p = _make_profile(icon="🚀", style=("red", "Rocket"))
     assert p.render_style == ("red", "🚀  Rocket")
 
 
 def test_configure_with_model_not_cli():
-    p = _make_plugin(driver="openai_compat", model="gpt-4", base_url="http://x", api_key_env="K")
+    p = _make_profile(driver="openai_compat", model="gpt-4", base_url="http://x", api_key_env="K")
     # Set override to OpenAI so effective_connection is OpenAIConnection
     object.__setattr__(p, "_connection_override", OpenAIConnection())
     with pytest.raises(ValueError, match="não usa driver CLI"):
@@ -261,55 +261,55 @@ def test_configure_with_model_not_cli():
 
 
 def test_configure_with_model_empty_model_id():
-    p = _make_plugin(cmd=["claude", "--model=claude-3"])
+    p = _make_profile(cmd=["claude", "--model=claude-3"])
     with pytest.raises(ValueError, match="não pode ser vazio"):
         p.configure_with_model("")
 
 
 def test_configure_with_model_no_placeholder():
-    p = _make_plugin(cmd=["claude", "--verbose"])
+    p = _make_profile(cmd=["claude", "--verbose"])
     with pytest.raises(ValueError, match="não tem placeholder"):
         p.configure_with_model("gpt-4")
 
 
 def test_configure_with_model_success():
-    p = _make_plugin(cmd=["claude", "--model=old-model", "--verbose"])
+    p = _make_profile(cmd=["claude", "--model=old-model", "--verbose"])
     conn = p.configure_with_model("new-model")
     assert conn.cmd == ["claude", "--model=new-model", "--verbose"]
 
 
 def test_effective_cmd_openai_connection():
-    p = _make_plugin(cmd=["fallback"])
+    p = _make_profile(cmd=["fallback"])
     object.__setattr__(p, "_connection_override", OpenAIConnection(model="gpt-4"))
     # OpenAI connection → returns list(self.cmd)
     assert p.effective_cmd() == ["fallback"]
 
 
 def test_effective_prompt_as_arg_openai():
-    p = _make_plugin(prompt_as_arg=True)
+    p = _make_profile(prompt_as_arg=True)
     object.__setattr__(p, "_connection_override", OpenAIConnection())
     assert p.effective_prompt_as_arg() is True
 
 
 def test_effective_output_format_openai():
-    p = _make_plugin(output_format="stream-json")
+    p = _make_profile(output_format="stream-json")
     object.__setattr__(p, "_connection_override", OpenAIConnection())
     assert p.effective_output_format() == "stream-json"
 
 
 def test_effective_model_cli():
-    p = _make_plugin(model="claude-3")
+    p = _make_profile(model="claude-3")
     # No override, driver is "cli" → CliConnection
     assert p.effective_model() == "claude-3"
 
 
 def test_effective_base_url_cli():
-    p = _make_plugin(base_url="http://cli-url")
+    p = _make_profile(base_url="http://cli-url")
     assert p.effective_base_url() == "http://cli-url"
 
 
 def test_effective_api_key_env_cli():
-    p = _make_plugin(api_key_env="MY_KEY")
+    p = _make_profile(api_key_env="MY_KEY")
     assert p.effective_api_key_env() == "MY_KEY"
 
 
@@ -346,7 +346,7 @@ def test_format_connection_label_openai_no_extra_body():
 # ---------------------------------------------------------------------------
 
 def test_load_connections_file_not_exists(tmp_path):
-    with patch("quimera.plugins.base._get_connections_file", return_value=tmp_path / "conn.json"):
+    with patch("quimera.profiles.base._get_connections_file", return_value=tmp_path / "conn.json"):
         result = load_connections()
     assert result == {}
 
@@ -354,14 +354,14 @@ def test_load_connections_file_not_exists(tmp_path):
 def test_load_connections_file_exists(tmp_path):
     f = tmp_path / "conn.json"
     f.write_text(json.dumps({"agent1": {"model": "gpt-4"}}), encoding="utf-8")
-    with patch("quimera.plugins.base._get_connections_file", return_value=f):
+    with patch("quimera.profiles.base._get_connections_file", return_value=f):
         result = load_connections()
     assert result == {"agent1": {"model": "gpt-4"}}
 
 
 def test_save_connections(tmp_path):
     f = tmp_path / "conn.json"
-    with patch("quimera.plugins.base._get_connections_file", return_value=f):
+    with patch("quimera.profiles.base._get_connections_file", return_value=f):
         save_connections({"a": {"model": "x"}})
     assert json.loads(f.read_text()) == {"a": {"model": "x"}}
 
@@ -369,9 +369,9 @@ def test_save_connections(tmp_path):
 def test_remove_connection_existing(tmp_path):
     f = tmp_path / "conn.json"
     f.write_text(json.dumps({"myagent": {"model": "gpt-4"}}), encoding="utf-8")
-    p = _make_plugin(name="myagent")
+    p = _make_profile(name="myagent")
     register(p)
-    with patch("quimera.plugins.base._get_connections_file", return_value=f):
+    with patch("quimera.profiles.base._get_connections_file", return_value=f):
         result = remove_connection("myagent")
     assert result is True
     assert p._connection_override is None
@@ -380,42 +380,42 @@ def test_remove_connection_existing(tmp_path):
 def test_remove_connection_not_existing(tmp_path):
     f = tmp_path / "conn.json"
     f.write_text(json.dumps({}), encoding="utf-8")
-    with patch("quimera.plugins.base._get_connections_file", return_value=f):
+    with patch("quimera.profiles.base._get_connections_file", return_value=f):
         result = remove_connection("noexist")
     assert result is False
 
 
 # ---------------------------------------------------------------------------
-# set_connection_override
+# set_connection
 # ---------------------------------------------------------------------------
 
-def test_set_connection_override_no_persist():
-    p = _make_plugin(name="sco_test1")
+def test_set_connection_no_persist():
+    p = _make_profile(name="sco_test1")
     register(p)
     conn = OpenAIConnection(model="gpt-4")
-    with patch("quimera.plugins.base.load_connections") as mock_load:
-        set_connection_override("sco_test1", conn, persist=False)
+    with patch("quimera.profiles.base.load_connections") as mock_load:
+        set_connection("sco_test1", conn, persist=False)
         mock_load.assert_not_called()
     assert p._connection_override == conn
 
 
-def test_set_connection_override_with_persist_dynamic(tmp_path):
+def test_set_connection_with_persist_dynamic(tmp_path):
     f = tmp_path / "conn.json"
     f.write_text(json.dumps({}), encoding="utf-8")
-    plugin = register_dynamic_plugin("sco_dyn1")
+    profile = register_connection_profile("sco_dyn1")
     conn = OpenAIConnection(model="gpt-4", base_url="http://x", api_key_env="K")
-    with patch("quimera.plugins.base._get_connections_file", return_value=f):
-        set_connection_override("sco_dyn1", conn, persist=True)
+    with patch("quimera.profiles.base._get_connections_file", return_value=f):
+        set_connection("sco_dyn1", conn, persist=True)
     saved = json.loads(f.read_text())
     assert "sco_dyn1" in saved
-    assert saved["sco_dyn1"]["plugin"]["dynamic"] is True
+    assert saved["sco_dyn1"]["profile"]["dynamic"] is True
 
 
 # ---------------------------------------------------------------------------
-# apply_connection_overrides / reload_plugins
+# apply_connections / reload_profiles
 # ---------------------------------------------------------------------------
 
-def test_apply_connection_overrides_registers_dynamic(tmp_path):
+def test_apply_connections_registers_dynamic(tmp_path):
     f = tmp_path / "conn.json"
     conn_data = {
         "type": "openai",
@@ -425,17 +425,17 @@ def test_apply_connection_overrides_registers_dynamic(tmp_path):
         "provider": "openai",
         "supports_native_tools": True,
         "extra_body": None,
-        "plugin": {"dynamic": True},
+        "profile": {"dynamic": True},
     }
     f.write_text(json.dumps({"newdynagent": conn_data}), encoding="utf-8")
-    with patch("quimera.plugins.base._get_connections_file", return_value=f):
-        apply_connection_overrides()
+    with patch("quimera.profiles.base._get_connections_file", return_value=f):
+        apply_connections()
     p = get("newdynagent")
     assert p is not None
     assert p._connection_override is not None
 
 
-def test_apply_connection_overrides_skips_invalid(tmp_path):
+def test_apply_connections_skips_invalid(tmp_path):
     f = tmp_path / "conn.json"
     conn_data = {
         "type": "openai",
@@ -445,24 +445,24 @@ def test_apply_connection_overrides_skips_invalid(tmp_path):
         "provider": "openai",
         "supports_native_tools": True,
         "extra_body": None,
-        "plugin": {"dynamic": True},
+        "profile": {"dynamic": True},
     }
-    # Invalid agent name → register_dynamic_plugin raises ValueError → skip
+    # Invalid agent name → register_connection_profile raises ValueError → skip
     f.write_text(json.dumps({"INVALID AGENT": conn_data}), encoding="utf-8")
-    with patch("quimera.plugins.base._get_connections_file", return_value=f):
-        apply_connection_overrides()  # should not raise
+    with patch("quimera.profiles.base._get_connections_file", return_value=f):
+        apply_connections()  # should not raise
     assert get("invalid agent") is None
 
 
-def test_reload_plugins_returns_names(tmp_path):
+def test_reload_profiles_returns_names(tmp_path):
     f = tmp_path / "conn.json"
     f.write_text(json.dumps({}), encoding="utf-8")
-    with patch("quimera.plugins.base._get_connections_file", return_value=f):
-        names = reload_plugins()
+    with patch("quimera.profiles.base._get_connections_file", return_value=f):
+        names = reload_profiles()
     assert isinstance(names, list)
 
 
-def test_apply_connection_overrides_uses_explicit_registry(tmp_path):
+def test_apply_connections_uses_explicit_registry(tmp_path):
     f = tmp_path / "conn.json"
     conn_data = {
         "type": "openai",
@@ -472,38 +472,38 @@ def test_apply_connection_overrides_uses_explicit_registry(tmp_path):
         "provider": "openai",
         "supports_native_tools": True,
         "extra_body": None,
-        "plugin": {"dynamic": True},
+        "profile": {"dynamic": True},
     }
     f.write_text(json.dumps({"scoped_agent_zz99": conn_data}), encoding="utf-8")
-    scoped_registry = PluginRegistry()
+    scoped_registry = ProfileRegistry()
 
-    with patch("quimera.plugins.base._get_connections_file", return_value=f):
-        apply_connection_overrides(registry=scoped_registry)
+    with patch("quimera.profiles.base._get_connections_file", return_value=f):
+        apply_connections(registry=scoped_registry)
 
-    plugin = scoped_registry.get("scoped_agent_zz99")
-    assert plugin is not None
-    assert plugin._connection_override is not None
+    profile = scoped_registry.get("scoped_agent_zz99")
+    assert profile is not None
+    assert profile._connection_override is not None
 
 
-def test_set_connection_override_uses_explicit_registry_without_persist():
-    scoped_registry = PluginRegistry()
-    plugin = _make_plugin(name="scoped-agent")
-    scoped_registry.register(plugin)
+def test_set_connection_uses_explicit_registry_without_persist():
+    scoped_registry = ProfileRegistry()
+    profile = _make_profile(name="scoped-agent")
+    scoped_registry.register(profile)
     conn = OpenAIConnection(model="gpt-4")
 
-    set_connection_override("scoped-agent", conn, persist=False, registry=scoped_registry)
+    set_connection("scoped-agent", conn, persist=False, registry=scoped_registry)
 
-    assert plugin._connection_override == conn
+    assert profile._connection_override == conn
 
 
-def test_reload_plugins_uses_explicit_registry(tmp_path):
+def test_reload_profiles_uses_explicit_registry(tmp_path):
     f = tmp_path / "conn.json"
     f.write_text(json.dumps({}), encoding="utf-8")
-    scoped_registry = PluginRegistry()
-    scoped_registry.register(_make_plugin(name="only-local"))
+    scoped_registry = ProfileRegistry()
+    scoped_registry.register(_make_profile(name="only-local"))
 
-    with patch("quimera.plugins.base._get_connections_file", return_value=f):
-        names = reload_plugins(registry=scoped_registry)
+    with patch("quimera.profiles.base._get_connections_file", return_value=f):
+        names = reload_profiles(registry=scoped_registry)
 
     assert names == ["only-local"]
 
@@ -511,16 +511,16 @@ def test_reload_plugins_uses_explicit_registry(tmp_path):
 def test_remove_connection_uses_explicit_registry(tmp_path):
     f = tmp_path / "conn.json"
     f.write_text(json.dumps({"scoped-agent": {"model": "gpt-4"}}), encoding="utf-8")
-    scoped_registry = PluginRegistry()
-    plugin = _make_plugin(name="scoped-agent")
-    object.__setattr__(plugin, "_connection_override", OpenAIConnection(model="gpt-4"))
-    scoped_registry.register(plugin)
+    scoped_registry = ProfileRegistry()
+    profile = _make_profile(name="scoped-agent")
+    object.__setattr__(profile, "_connection_override", OpenAIConnection(model="gpt-4"))
+    scoped_registry.register(profile)
 
-    with patch("quimera.plugins.base._get_connections_file", return_value=f):
+    with patch("quimera.profiles.base._get_connections_file", return_value=f):
         removed = remove_connection("scoped-agent", registry=scoped_registry)
 
     assert removed is True
-    assert plugin._connection_override is None
+    assert profile._connection_override is None
 
 
 # ---------------------------------------------------------------------------
@@ -555,7 +555,7 @@ def test_extract_model_space_flag_returns_model():
 # ---------------------------------------------------------------------------
 
 def test_effective_connection_non_cli_driver():
-    p = _make_plugin(driver="openai_compat", model="gpt-4", base_url="http://x", api_key_env="MY_KEY")
+    p = _make_profile(driver="openai_compat", model="gpt-4", base_url="http://x", api_key_env="MY_KEY")
     conn = p.effective_connection()
     assert isinstance(conn, OpenAIConnection)
     assert conn.model == "gpt-4"
@@ -567,12 +567,12 @@ def test_effective_connection_non_cli_driver():
 # ---------------------------------------------------------------------------
 
 def test_effective_driver_cli():
-    p = _make_plugin(cmd=["echo"])
+    p = _make_profile(cmd=["echo"])
     assert p.effective_driver() == "cli"
 
 
 def test_effective_driver_openai():
-    p = _make_plugin(driver="openai_compat", model="gpt-4", base_url="http://x", api_key_env="K")
+    p = _make_profile(driver="openai_compat", model="gpt-4", base_url="http://x", api_key_env="K")
     assert p.effective_driver() == "openai_compat"
 
 
@@ -581,7 +581,7 @@ def test_effective_driver_openai():
 # ---------------------------------------------------------------------------
 
 def test_effective_cmd_cli_connection():
-    p = _make_plugin(cmd=["echo", "hi"])
+    p = _make_profile(cmd=["echo", "hi"])
     assert p.effective_cmd() == ["echo", "hi"]
 
 
@@ -590,12 +590,12 @@ def test_effective_cmd_cli_connection():
 # ---------------------------------------------------------------------------
 
 def test_resolve_runtime_model():
-    p = _make_plugin(cmd=["claude", "--model=my-model"])
+    p = _make_profile(cmd=["claude", "--model=my-model"])
     assert p.resolve_runtime_model() == "my-model"
 
 
 def test_resolve_runtime_model_with_cwd():
-    p = _make_plugin(cmd=["claude", "--model=my-model"])
+    p = _make_profile(cmd=["claude", "--model=my-model"])
     assert p.resolve_runtime_model(cwd="/tmp") == "my-model"
 
 
@@ -604,7 +604,7 @@ def test_resolve_runtime_model_with_cwd():
 # ---------------------------------------------------------------------------
 
 def test_effective_prompt_as_arg_cli():
-    p = _make_plugin(cmd=["echo"], prompt_as_arg=True)
+    p = _make_profile(cmd=["echo"], prompt_as_arg=True)
     assert p.effective_prompt_as_arg() is True
 
 
@@ -613,7 +613,7 @@ def test_effective_prompt_as_arg_cli():
 # ---------------------------------------------------------------------------
 
 def test_effective_output_format_cli():
-    p = _make_plugin(cmd=["echo"], output_format="json")
+    p = _make_profile(cmd=["echo"], output_format="json")
     assert p.effective_output_format() == "json"
 
 
@@ -622,7 +622,7 @@ def test_effective_output_format_cli():
 # ---------------------------------------------------------------------------
 
 def test_effective_model_openai():
-    p = _make_plugin(driver="openai_compat", model="gpt-4", base_url="http://x", api_key_env="K")
+    p = _make_profile(driver="openai_compat", model="gpt-4", base_url="http://x", api_key_env="K")
     assert p.effective_model() == "gpt-4"
 
 
@@ -631,7 +631,7 @@ def test_effective_model_openai():
 # ---------------------------------------------------------------------------
 
 def test_effective_base_url_openai():
-    p = _make_plugin(driver="openai_compat", model="gpt-4", base_url="http://custom", api_key_env="K")
+    p = _make_profile(driver="openai_compat", model="gpt-4", base_url="http://custom", api_key_env="K")
     assert p.effective_base_url() == "http://custom"
 
 
@@ -640,120 +640,120 @@ def test_effective_base_url_openai():
 # ---------------------------------------------------------------------------
 
 def test_effective_api_key_env_openai():
-    p = _make_plugin(driver="openai_compat", model="gpt-4", base_url="http://x", api_key_env="MY_VAR")
+    p = _make_profile(driver="openai_compat", model="gpt-4", base_url="http://x", api_key_env="MY_VAR")
     assert p.effective_api_key_env() == "MY_VAR"
 
 
 # ---------------------------------------------------------------------------
-# all_plugins (line 437)
+# all_profiles (line 437)
 # ---------------------------------------------------------------------------
 
-def test_all_plugins_returns_list():
-    from quimera.plugins.base import all_plugins
-    result = all_plugins()
+def test_all_profiles_returns_list():
+    from quimera.profiles.base import all_profiles
+    result = all_profiles()
     assert isinstance(result, list)
-    assert all(isinstance(p, AgentPlugin) for p in result)
+    assert all(isinstance(p, ExecutionProfile) for p in result)
 
 
 # ---------------------------------------------------------------------------
-# apply_connection_overrides — plugin is None after register attempt (line 141)
-# Uses a mock where register_dynamic_plugin succeeds but _registry still has None
+# apply_connections — profile is None after register attempt (line 141)
+# Uses a mock where register_connection_profile succeeds but _registry still has None
 # ---------------------------------------------------------------------------
 
-def test_apply_connection_overrides_plugin_none_after_register(tmp_path):
+def test_apply_connections_profile_none_after_register(tmp_path):
     f = tmp_path / "conn.json"
     conn_data = {
         "type": "cli",
         "cmd": ["echo"],
-        "plugin": {"dynamic": True},
+        "profile": {"dynamic": True},
     }
     # Use a valid name not previously registered
     f.write_text(json.dumps({"tempagent99": conn_data}), encoding="utf-8")
 
-    original_get = __import__("quimera.plugins.base", fromlist=["_registry"])
+    original_get = __import__("quimera.profiles.base", fromlist=["_registry"])
     call_count = [0]
 
     def patched_register(name, metadata=None, registry=None):
         # Register succeeds but we simulate the next _registry.get returning None
-        pass  # Don't actually register — so plugin stays None
+        pass  # Don't actually register — so profile stays None
 
-    with patch("quimera.plugins.base._get_connections_file", return_value=f):
-        with patch("quimera.plugins.base.register_dynamic_plugin", side_effect=patched_register):
-            apply_connection_overrides()  # plugin will be None → hits line 141 continue
+    with patch("quimera.profiles.base._get_connections_file", return_value=f):
+        with patch("quimera.profiles.base.register_connection_profile", side_effect=patched_register):
+            apply_connections()  # profile will be None → hits line 141 continue
 
 
 # ---------------------------------------------------------------------------
-# set_connection_override — dynamic plugin with base_ref (line 183)
+# set_connection — dynamic profile with base_ref (line 183)
 # ---------------------------------------------------------------------------
 
-def test_set_connection_override_dynamic_with_base_ref(tmp_path):
+def test_set_connection_dynamic_with_base_ref(tmp_path):
     f = tmp_path / "conn.json"
     f.write_text(json.dumps({}), encoding="utf-8")
     # Register a base
-    base = AgentPlugin(name="mybase2", prefix="/mybase2", style=("green", "Base2"))
+    base = ExecutionProfile(name="mybase2", prefix="/mybase2", style=("green", "Base2"))
     register(base)
     # Register dynamic with base reference
-    plugin = register_dynamic_plugin("dynwithbase1", metadata={"base": "mybase2"})
-    assert plugin._base_plugin_name == "mybase2"
+    profile = register_connection_profile("dynwithbase1", metadata={"profile": "mybase2"})
+    assert profile._profile_name == "mybase2"
 
     conn = OpenAIConnection(model="gpt-4", base_url="http://x", api_key_env="K")
-    with patch("quimera.plugins.base._get_connections_file", return_value=f):
-        set_connection_override("dynwithbase1", conn, persist=True)
+    with patch("quimera.profiles.base._get_connections_file", return_value=f):
+        set_connection("dynwithbase1", conn, persist=True)
 
     saved = json.loads(f.read_text())
-    assert saved["dynwithbase1"]["plugin"]["base"] == "mybase2"
+    assert saved["dynwithbase1"]["profile"]["profile"] == "mybase2"
 
 
 # ---------------------------------------------------------------------------
-# PluginRegistry
+# ProfileRegistry
 # ---------------------------------------------------------------------------
 
-def _make_plugin_for_registry(name: str = "regtest") -> AgentPlugin:
-    return AgentPlugin(name=name, prefix=f"/{name}", style=("blue", name))
+def _make_profile_for_registry(name: str = "regtest") -> ExecutionProfile:
+    return ExecutionProfile(name=name, prefix=f"/{name}", style=("blue", name))
 
 
-def test_plugin_registry_register_and_get():
-    registry = PluginRegistry()
-    p = _make_plugin_for_registry("p1")
+def test_profile_registry_register_and_get():
+    registry = ProfileRegistry()
+    p = _make_profile_for_registry("p1")
     registry.register(p)
     assert registry.get("p1") is p
 
 
-def test_plugin_registry_get_nonexistent():
-    registry = PluginRegistry()
+def test_profile_registry_get_nonexistent():
+    registry = ProfileRegistry()
     assert registry.get("nope") is None
 
 
-def test_plugin_registry_all_names():
-    registry = PluginRegistry()
-    registry.register(_make_plugin_for_registry("b"))
-    registry.register(_make_plugin_for_registry("a"))
+def test_profile_registry_all_names():
+    registry = ProfileRegistry()
+    registry.register(_make_profile_for_registry("b"))
+    registry.register(_make_profile_for_registry("a"))
     assert registry.all_names() == ["b", "a"]
 
 
-def test_plugin_registry_all_plugins():
-    registry = PluginRegistry()
-    p = _make_plugin_for_registry("p1")
+def test_profile_registry_all_profiles():
+    registry = ProfileRegistry()
+    p = _make_profile_for_registry("p1")
     registry.register(p)
-    result = registry.all_plugins()
+    result = registry.all_profiles()
     assert result == [p]
 
 
-def test_plugin_registry_isolation():
-    r1 = PluginRegistry()
-    r2 = PluginRegistry()
-    r1.register(_make_plugin_for_registry("shared"))
+def test_profile_registry_isolation():
+    r1 = ProfileRegistry()
+    r2 = ProfileRegistry()
+    r1.register(_make_profile_for_registry("shared"))
     assert r2.get("shared") is None
 
 
-def test_default_registry_is_plugin_registry_instance():
-    from quimera.plugins.base import _registry
-    assert isinstance(_registry, PluginRegistry)
+def test_default_registry_is_profile_registry_instance():
+    from quimera.profiles.base import _registry
+    assert isinstance(_registry, ProfileRegistry)
 
 
-def test_register_get_all_names_all_plugins_delegate_to_default():
-    p = _make_plugin_for_registry("delegated")
+def test_register_get_all_names_all_profiles_delegate_to_default():
+    p = _make_profile_for_registry("delegated")
     register(p)
     assert get("delegated") is p
     assert "delegated" in all_names()
-    assert p in all_plugins()
+    assert p in all_profiles()

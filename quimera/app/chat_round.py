@@ -41,7 +41,7 @@ class ChatRoundOrchestrator:
         agent_client=None,
         turn_manager=None,
         task_services=None,
-        get_agent_plugin=None,
+        get_agent_profile=None,
         behavior_metrics=None,
         threads=1,
         session_state=None,
@@ -70,7 +70,7 @@ class ChatRoundOrchestrator:
             agent_client = getattr(app, "agent_client", agent_client)
             turn_manager = getattr(app, "turn_manager", turn_manager)
             task_services = getattr(app, "task_services", task_services)
-            get_agent_plugin = getattr(app, "get_agent_plugin", get_agent_plugin)
+            get_agent_profile = getattr(app, "get_agent_profile", get_agent_profile)
             behavior_metrics = getattr(app, "behavior_metrics", behavior_metrics)
             threads = getattr(app, "threads", threads)
             session_state = getattr(app, "_chat_state", getattr(app, "session_state", session_state))
@@ -101,7 +101,7 @@ class ChatRoundOrchestrator:
         self._agent_client = agent_client
         self._turn_manager = turn_manager
         self._task_services = task_services
-        self._get_agent_plugin = get_agent_plugin
+        self._get_agent_profile = get_agent_profile
         self._behavior_metrics = behavior_metrics
         self._threads = threads
         # session_state pode ser SessionState ou dict legado

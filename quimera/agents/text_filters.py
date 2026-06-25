@@ -2,7 +2,7 @@
 import re
 from functools import lru_cache
 
-import quimera.plugins as plugins
+import quimera.profiles as profiles
 
 _BRALLE_RANGE = re.compile(r'[\u2800-\u28FF]')
 _ANSI_ESCAPE = re.compile(r'\x1B\[[0-?]*[ -/]*[@-~]')
@@ -53,14 +53,14 @@ def _should_ignore_stderr_line(agent: str | None, line: str) -> bool:
         return True
     if not agent:
         return False
-    plugin = plugins.get(agent)
-    if not plugin:
+    profile = profiles.get(agent)
+    if not profile:
         return False
     cleaned = _ANSI_ESCAPE.sub("", _strip_spinner(line)).replace("\r", "").strip()
-    if plugin.stderr_noise and cleaned in plugin.stderr_noise:
+    if profile.stderr_noise and cleaned in profile.stderr_noise:
         return True
-    if plugin.stderr_noise_patterns:
-        compiled = _compile_noise_patterns(tuple(plugin.stderr_noise_patterns))
+    if profile.stderr_noise_patterns:
+        compiled = _compile_noise_patterns(tuple(profile.stderr_noise_patterns))
         return any(p.search(cleaned) for p in compiled)
     return False
 

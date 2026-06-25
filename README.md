@@ -19,7 +19,7 @@ O Quimera coordena agentes (CLI e OpenAI-compatible), mantém estado compartilha
 - `quimera/runtime/task_planning.py`: classificação de task e scoring de roteamento.
 - `quimera/runtime/tasks.py`: persistência de jobs/tasks em SQLite.
 - `quimera/runtime/tools/delegate.py`: `delegate` — delegação entre agentes via MCP (cross-MCP).
-- `quimera/plugins/`: catálogo de agentes e metadados de capacidade. Cada plugin injeta configuração MCP no formato nativo do agente.
+- `quimera/profiles/`: catálogo de agentes e metadados de capacidade. Cada profile injeta configuração MCP no formato nativo do agente.
 - `quimera/ui/`: renderização terminal (temas, densidade, stream e resumo).
 - `quimera/prompt.md` / `quimera/task_prompt.md`: templates de prompt com blocos condicionais `<!-- IF:mcp_enabled -->`.
 
@@ -75,7 +75,7 @@ Principais flags:
 - `--set-theme <tema>`: persiste tema e encerra.
 - `--connect <agente>`: cria/edita conexão persistida do agente.
 - `--list-connections`: lista conexões persistidas.
-- `--driver-repl <plugin>`: REPL para testar driver `openai_compat`.
+- `--driver-repl <profile>`: REPL para testar driver `openai_compat`.
 - `--mcp-socket [path]` / `--mcp-http`: seleciona socket Unix ou HTTP; sem flags, usa socket Unix.
 - `--no-mcp`: desativa o servidor MCP.
 - `--mcp-http --mcp-host 127.0.0.1 --mcp-port 9090`: usa MCP HTTP embutido em vez do socket Unix.
@@ -112,7 +112,7 @@ python quimera.py --help
 O Quimera inclui agentes fake para validar o app sem provedores externos. Eles não entram no uso normal: use `--test` para ativar esse conjunto e deixar somente os fake na rodada:
 
 - `fake-cli`: agente CLI local determinístico (`python -m quimera.devtools.fake_agents cli`).
-- `fake-openai`: plugin OpenAI-compatible apontando para um servidor local fake com tool calling nativo.
+- `fake-openai`: profile OpenAI-compatible apontando para um servidor local fake com tool calling nativo.
 - `fake-cli-delegation`: agente CLI que usa MCP `delegate` para delegar ao `fake-openai`.
 - `fake-openai-mcp-cli`: agente CLI que chama o backend OpenAI-compatible fake diretamente e executa tool calls via MCP do Quimera.
 
@@ -122,13 +122,13 @@ Exemplo rápido:
 python quimera.py --test --agents fake-cli-delegation fake-openai --visibility full
 ```
 
-Com `--test`, o app registra os fake plugins, inicia automaticamente o backend OpenAI-compatible fake em uma porta livre e aplica overrides somente no processo. O comando `python -m quimera.devtools.fake_agents openai-server` continua disponível apenas para debug manual.
+Com `--test`, o app registra os fake profiles, inicia automaticamente o backend OpenAI-compatible fake em uma porta livre e aplica overrides somente no processo. O comando `python -m quimera.devtools.fake_agents openai-server` continua disponível apenas para debug manual.
 
 Veja o guia completo em [docs/desenvolvimento/testes.md](./docs/desenvolvimento/testes.md#testador-interativo-local-com-agentes-fake).
 
-## Agentes e plugins
+## Agentes e profiles
 
-O projeto registra plugins para:
+O projeto registra profiles para:
 
 - `claude`
 - `codex`

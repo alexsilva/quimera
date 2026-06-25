@@ -88,8 +88,8 @@ class _BackgroundDispatchAppProxy:
     def agent_run_sink(self):
         return self.task_services._get_agent_run_sink()
 
-    def get_agent_plugin(self, agent_name: str):
-        return self.task_services._get_agent_plugin(agent_name)
+    def get_agent_profile(self, agent_name: str):
+        return self.task_services._get_agent_profile(agent_name)
 
     @property
     def history(self):
@@ -203,9 +203,9 @@ class AppTaskServices:
         approval_handler: Any = None,
         get_approval_handler: Callable[[], Any] | None = None,
         set_approval_handler: Callable[[Any], None] | None = None,
-        get_agent_plugin: Callable[[str], Any],
-        available_plugins: list[Any] | None = None,
-        get_available_plugins: Callable[[], list[Any]] | None = None,
+        get_agent_profile: Callable[[str], Any],
+        available_profiles: list[Any] | None = None,
+        get_available_profiles: Callable[[], list[Any]] | None = None,
         session_state: SessionState | None = None,
         get_session_state: Callable[[], dict[str, Any] | None] | None = None,
         get_history: Callable[[], Any] | None = None,
@@ -272,8 +272,8 @@ class AppTaskServices:
         - ``get_auto_approve_mutations``: informa se mutações são auto-aprovadas.
         - ``get_approval_handler``: retorna o approval handler atual.
         - ``set_approval_handler``: registra o approval handler primário.
-        - ``get_agent_plugin``: resolve o plugin de um agente.
-        - ``get_available_plugins``: retorna plugins disponíveis para roteamento.
+        - ``get_agent_profile``: resolve o profile de um agente.
+        - ``get_available_profiles``: retorna profiles disponíveis para roteamento.
         - ``get_session_state``: retorna o estado atual da sessão.
         - ``get_history``: retorna o histórico atual da sessão.
         - ``get_shared_state``: retorna o shared state atual.
@@ -334,9 +334,9 @@ class AppTaskServices:
         self._approval_handler = approval_handler
         self._approval_handler_getter = get_approval_handler
         self._set_approval_handler = set_approval_handler
-        self._get_agent_plugin = get_agent_plugin
-        self._available_plugins = available_plugins
-        self._available_plugins_getter = get_available_plugins
+        self._get_agent_profile = get_agent_profile
+        self._available_profiles = available_profiles
+        self._available_profiles_getter = get_available_profiles
         # SessionState (preferred) and compat lambda fallbacks
         self._session_state_obj = session_state
         self._get_session_state_fn = get_session_state
@@ -491,10 +491,10 @@ class AppTaskServices:
             return self._approval_handler
         return self._approval_handler_getter() if self._approval_handler_getter else None
 
-    def _get_available_plugins(self) -> list[Any]:
-        if self._available_plugins is not None:
-            return list(self._available_plugins)
-        return list(self._available_plugins_getter() or []) if self._available_plugins_getter else []
+    def _get_available_profiles(self) -> list[Any]:
+        if self._available_profiles is not None:
+            return list(self._available_profiles)
+        return list(self._available_profiles_getter() or []) if self._available_profiles_getter else []
 
     def _delegate_call(self, *args, **kwargs):
         if self._delegate is not None:
@@ -805,9 +805,9 @@ class AppTaskServices:
 
     # ── Task router delegates ──────────────────────────────────────────
 
-    def get_task_routing_plugins(self):
-        """Retorna plugins elegíveis para roteamento de tasks."""
-        return self._build_task_router().get_task_routing_plugins()
+    def get_task_routing_profiles(self):
+        """Retorna profiles elegíveis para roteamento de tasks."""
+        return self._build_task_router().get_task_routing_profiles()
 
     def count_agent_open_tasks(self, agent_name: str) -> int:
         """Conta tasks abertas associadas ao agente."""
@@ -1017,15 +1017,15 @@ class AppTaskServices:
     def _build_task_router(self) -> TaskRouter:
         return TaskRouter(
             active_agents=self._agent_pool_agents(),
-            get_agent_plugin=self._get_agent_plugin,
-            get_available_plugins=self._get_available_plugins,
+            get_agent_profile=self._get_agent_profile,
+            get_available_profiles=self._get_available_profiles,
             repository=self._build_task_repository(),
         )
 
     def _build_task_failover_policy(self) -> TaskFailoverPolicy:
         return TaskFailoverPolicy(
             active_agents=self._agent_pool_agents,
-            get_agent_plugin=self._get_agent_plugin,
+            get_agent_profile=self._get_agent_profile,
             repository=self._build_task_repository(),
         )
 

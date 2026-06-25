@@ -8,7 +8,7 @@ from quimera.context import ContextManager
 from quimera.constants import Visibility
 from quimera.evidence import Evidence, EvidenceStore
 from quimera.modes import get_mode
-from quimera.plugins.codex import _format_codex_spy_event
+from quimera.profiles.codex import _format_codex_spy_event
 from quimera.prompt import PromptBuilder
 from quimera.prompt_kinds import PromptKind
 from quimera.prompt_templates import PromptParser, PromptTemplate, PromptText

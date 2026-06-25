@@ -22,7 +22,7 @@ class ToolbarCoordinator:
         *,
         toolbar_manager: ToolbarManager,
         agent_pool,
-        get_agent_plugin,
+        get_agent_profile,
         workspace,
         get_history,
         storage,
@@ -38,7 +38,7 @@ class ToolbarCoordinator:
     ) -> None:
         self._toolbar = toolbar_manager
         self._agent_pool = agent_pool
-        self._get_agent_plugin = get_agent_plugin
+        self._get_agent_profile = get_agent_profile
         self._workspace = workspace
         self._get_history = get_history
         self._storage = storage
@@ -53,10 +53,10 @@ class ToolbarCoordinator:
         self._threads = threads
 
     def resolve_active_model_label(self) -> str:
-        """Resolve o modelo ativo a partir do primeiro plugin/agente ativo."""
+        """Resolve o modelo ativo a partir do primeiro profile/agente ativo."""
         request = ActiveModelRequest(
             primary_agent=self._agent_pool.primary,
-            get_agent_plugin=self._get_agent_plugin,
+            get_agent_profile=self._get_agent_profile,
             workspace_cwd=str(getattr(self._workspace, "cwd", ".")),
         )
         return self._toolbar.resolve_active_model_label(request)

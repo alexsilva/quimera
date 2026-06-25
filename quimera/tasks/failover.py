@@ -9,8 +9,8 @@ from .planning import can_execute_task
 from .repository import TaskRepository
 
 
-class _TaskPluginProto(Protocol):
-    """Interface mínima de plugin usada pela política de failover."""
+class _TaskProfileProto(Protocol):
+    """Interface mínima de profile usada pela política de failover."""
 
     supports_task_execution: bool
     name: str
@@ -31,14 +31,14 @@ class TaskFailoverPolicy:
     def __init__(
         self,
         active_agents: list[str] | None | Callable[[], list[str] | None],
-        get_agent_plugin: Callable[[str], _TaskPluginProto | None],
+        get_agent_profile: Callable[[str], _TaskProfileProto | None],
         repository: TaskRepository | _TaskRepositoryProto,
     ) -> None:
         if callable(active_agents):
             self._get_active_agents = active_agents
         else:
             self._get_active_agents = lambda: active_agents or []
-        self.get_agent_plugin = get_agent_plugin
+        self.get_agent_profile = get_agent_profile
         self.repository = repository
 
     @property
@@ -54,14 +54,14 @@ class TaskFailoverPolicy:
         return str(agent_name).strip().lower().lstrip("/")
 
     @classmethod
-    def _plugin_lookup_keys(cls, plugin: _TaskPluginProto, fallback_agent_name: str | None = None) -> list[str]:
-        """Retorna chaves aceitas para resolver um plugin por nome/prefixo/alias."""
+    def _profile_lookup_keys(cls, profile: _TaskProfileProto, fallback_agent_name: str | None = None) -> list[str]:
+        """Retorna chaves aceitas para resolver um profile por nome/prefixo/alias."""
         keys: list[str] = []
         for raw in (
-            getattr(plugin, "name", None),
+            getattr(profile, "name", None),
             fallback_agent_name,
-            getattr(plugin, "prefix", None),
-            *(getattr(plugin, "aliases", None) or ()),
+            getattr(profile, "prefix", None),
+            *(getattr(profile, "aliases", None) or ()),
         ):
             normalized = cls._normalize_agent_name(raw)
             if normalized and normalized not in keys:
@@ -69,30 +69,30 @@ class TaskFailoverPolicy:
         return keys
 
     @classmethod
-    def _plugin_canonical_name(
+    def _profile_canonical_name(
         cls,
-        plugin: _TaskPluginProto | None,
+        profile: _TaskProfileProto | None,
         fallback_agent_name: str | None = None,
     ) -> str:
-        """Resolve chave canônica de um plugin, tolerando stubs mínimos em testes."""
-        if plugin is None:
+        """Resolve chave canônica de um profile, tolerando stubs mínimos em testes."""
+        if profile is None:
             return cls._normalize_agent_name(fallback_agent_name)
-        return cls._normalize_agent_name(getattr(plugin, "name", None) or fallback_agent_name)
+        return cls._normalize_agent_name(getattr(profile, "name", None) or fallback_agent_name)
 
-    def _resolve_plugin_from_agent_name(self, agent_name: str) -> _TaskPluginProto | None:
-        """Resolve plugin por nome canônico, prefixo ou alias."""
-        plugin = self.get_agent_plugin(agent_name)
-        if plugin is not None and can_execute_task(plugin):
-            return plugin
+    def _resolve_profile_from_agent_name(self, agent_name: str) -> _TaskProfileProto | None:
+        """Resolve profile por nome canônico, prefixo ou alias."""
+        profile = self.get_agent_profile(agent_name)
+        if profile is not None and can_execute_task(profile):
+            return profile
 
         normalized = self._normalize_agent_name(agent_name)
         if not normalized:
             return None
         for candidate_name in self.active_agents:
-            candidate = self.get_agent_plugin(candidate_name)
+            candidate = self.get_agent_profile(candidate_name)
             if candidate is None or not can_execute_task(candidate):
                 continue
-            if normalized in self._plugin_lookup_keys(candidate, fallback_agent_name=candidate_name):
+            if normalized in self._profile_lookup_keys(candidate, fallback_agent_name=candidate_name):
                 return candidate
         return None
 
@@ -104,15 +104,15 @@ class TaskFailoverPolicy:
             return False
         if left_norm == right_norm:
             return True
-        left_plugin = self._resolve_plugin_from_agent_name(left_norm)
-        right_plugin = self._resolve_plugin_from_agent_name(right_norm)
-        return self._plugin_canonical_name(left_plugin, left_norm) == self._plugin_canonical_name(right_plugin, right_norm)
+        left_profile = self._resolve_profile_from_agent_name(left_norm)
+        right_profile = self._resolve_profile_from_agent_name(right_norm)
+        return self._profile_canonical_name(left_profile, left_norm) == self._profile_canonical_name(right_profile, right_norm)
 
     def is_operational_review_agent(self, agent_name: str) -> bool:
         """Retorna se o agente está ativo e apto a executar task/review."""
         if not any(self._same_agent_identity(agent_name, active) for active in self.active_agents):
             return False
-        return self._resolve_plugin_from_agent_name(agent_name) is not None
+        return self._resolve_profile_from_agent_name(agent_name) is not None
 
     def review_agents_for(
         self,

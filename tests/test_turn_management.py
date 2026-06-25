@@ -1424,7 +1424,7 @@ class TestParallelToolbarState(unittest.TestCase):
         app.toolbar_coordinator = ToolbarCoordinator(
             toolbar_manager=app.toolbar,
             agent_pool=AgentPool([]),
-            get_agent_plugin=lambda name: None,
+            get_agent_profile=lambda name: None,
             workspace=Mock(),
             get_history=lambda: [],
             storage=Mock(),
@@ -1511,7 +1511,7 @@ class TestParallelToolbarState(unittest.TestCase):
         app.toolbar_coordinator = ToolbarCoordinator(
             toolbar_manager=app.toolbar,
             agent_pool=app.agent_pool,
-            get_agent_plugin=lambda name: None,
+            get_agent_profile=lambda name: None,
             workspace=app.workspace,
             get_history=lambda: [],
             storage=MagicMock(),

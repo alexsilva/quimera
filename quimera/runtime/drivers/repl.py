@@ -19,7 +19,7 @@ from urllib import request as urllib_request
 
 from ...config import ConfigManager as GlobalConfigManager, DEFAULT_USER_NAME
 from ...paths import CANDIDATE_DIRS, find_base_writable
-from ...plugins.base import OpenAIConnection
+from ...profiles.base import OpenAIConnection
 from ...app.prompt_input import PromptFormatter
 from .openai_compat import OpenAICompatDriver
 from ..approval import ApprovalManager
@@ -59,63 +59,63 @@ def _on_tool_result(result: ToolResult) -> None:
             print(f"    {line}")
 
 
-def _resolve_plugin_connection(plugin):
-    """Resolve a conexão do plugin com fallback para objetos simplificados."""
-    resolver = getattr(plugin, "effective_connection", None)
+def _resolve_profile_connection(profile):
+    """Resolve a conexão do profile com fallback para objetos simplificados."""
+    resolver = getattr(profile, "effective_connection", None)
     if callable(resolver):
         connection = resolver()
         if isinstance(connection, OpenAIConnection):
             return connection
-    driver = getattr(plugin, "driver", "cli")
+    driver = getattr(profile, "driver", "cli")
     if isinstance(driver, str) and driver != "cli":
         return OpenAIConnection(
-            model=getattr(plugin, "model", None) or "gpt-4o",
-            base_url=getattr(plugin, "base_url", None) or "https://api.openai.com/v1",
-            api_key_env=getattr(plugin, "api_key_env", None) or "OPENAI_API_KEY",
+            model=getattr(profile, "model", None) or "gpt-4o",
+            base_url=getattr(profile, "base_url", None) or "https://api.openai.com/v1",
+            api_key_env=getattr(profile, "api_key_env", None) or "OPENAI_API_KEY",
             provider=driver,
-            supports_native_tools=getattr(plugin, "supports_tools", True),
+            supports_native_tools=getattr(profile, "supports_tools", True),
         )
     return None
 
 
-def _resolve_plugin_driver(plugin) -> str:
-    """Resolve o driver efetivo com fallback para plugins simplificados."""
-    resolver = getattr(plugin, "effective_driver", None)
+def _resolve_profile_driver(profile) -> str:
+    """Resolve o driver efetivo com fallback para profiles simplificados."""
+    resolver = getattr(profile, "effective_driver", None)
     if callable(resolver):
         return resolver()
-    return str(getattr(plugin, "driver", "cli"))
+    return str(getattr(profile, "driver", "cli"))
 
 
 class DriverRepl:
-    """Loop REPL para testar um plugin baseado em openai_compat."""
+    """Loop REPL para testar um profile baseado em openai_compat."""
     _PROMPT_MODE_LABEL = "execute"
 
     def __init__(
         self,
-        plugin_name: str,
+        profile_name: str,
         working_dir: Optional[Path] = None,
         *,
-        get_plugin,
-        all_plugins,
+        get_profile,
+        all_profiles,
         input_gate: Optional[Callable[[str], str]] = None,
     ) -> None:
         """Inicializa uma instância de DriverRepl."""
-        plugin = get_plugin(plugin_name)
-        if plugin is None:
-            compat = [p for p in all_plugins() if isinstance(_resolve_plugin_connection(p), OpenAIConnection)]
+        profile = get_profile(profile_name)
+        if profile is None:
+            compat = [p for p in all_profiles() if isinstance(_resolve_profile_connection(p), OpenAIConnection)]
             names = ", ".join(p.name for p in compat) or "(nenhum)"
             raise ValueError(
-                f"Plugin '{plugin_name}' não encontrado. "
-                f"Plugins openai_compat disponíveis: {names}"
+                f"Profile '{profile_name}' não encontrado. "
+                f"Profiles openai_compat disponíveis: {names}"
             )
-        connection = _resolve_plugin_connection(plugin)
+        connection = _resolve_profile_connection(profile)
         if not isinstance(connection, OpenAIConnection):
             raise ValueError(
-                f"Plugin '{plugin_name}' usa driver='{_resolve_plugin_driver(plugin)}', "
+                f"Profile '{profile_name}' usa driver='{_resolve_profile_driver(profile)}', "
                 "mas o REPL só suporta driver='openai_compat'."
             )
 
-        self.plugin = plugin
+        self.profile = profile
         self.working_dir = (working_dir or Path.cwd()).resolve()
         self._last_connection_signature = None
         self._update_driver()
@@ -150,15 +150,15 @@ class DriverRepl:
 
     @property
     def connection(self) -> OpenAIConnection:
-        """Obtém a conexão atual do plugin, considerando overrides."""
+        """Obtém a conexão atual do profile, considerando overrides."""
         return self._get_current_connection()
 
     def _get_current_connection(self) -> OpenAIConnection:
-        """Obtém a conexão atual do plugin, considerando overrides."""
-        connection = _resolve_plugin_connection(self.plugin)
+        """Obtém a conexão atual do profile, considerando overrides."""
+        connection = _resolve_profile_connection(self.profile)
         if not isinstance(connection, OpenAIConnection):
             raise ValueError(
-                f"Plugin '{self.plugin.name}' usa driver='{_resolve_plugin_driver(self.plugin)}', "
+                f"Profile '{self.profile.name}' usa driver='{_resolve_profile_driver(self.profile)}', "
                 "mas o REPL só suporta driver='openai_compat'."
             )
         return connection
@@ -195,7 +195,7 @@ class DriverRepl:
             model=connection.model,
             base_url=connection.base_url,
             api_key=api_key,
-            tool_use_reliability=getattr(self.plugin, "tool_use_reliability", "medium"),
+            tool_use_reliability=getattr(self.profile, "tool_use_reliability", "medium"),
             extra_body=connection.extra_body,
         )
 
@@ -213,17 +213,17 @@ class DriverRepl:
                 if 200 <= status < 500:
                     return
                 raise RuntimeError(
-                    f"Backend do plugin '{self.plugin.name}' respondeu com status HTTP {status} em {probe_url}."
+                    f"Backend do profile '{self.profile.name}' respondeu com status HTTP {status} em {probe_url}."
                 )
         except urllib_error.HTTPError as exc:
             if 200 <= exc.code < 500:
                 return
             raise RuntimeError(
-                f"Backend do plugin '{self.plugin.name}' respondeu com status HTTP {exc.code} em {probe_url}."
+                f"Backend do profile '{self.profile.name}' respondeu com status HTTP {exc.code} em {probe_url}."
             ) from exc
         except (urllib_error.URLError, OSError) as exc:
             raise RuntimeError(
-                f"Backend do plugin '{self.plugin.name}' indisponível em {probe_url}. "
+                f"Backend do profile '{self.profile.name}' indisponível em {probe_url}. "
                 "Verifique se o serviço está em execução e acessível."
             ) from exc
 
@@ -245,7 +245,7 @@ class DriverRepl:
         """Executa run."""
         self.ensure_backend_available()
         print(f"\n{'=' * 60}")
-        print(f"  Driver REPL  •  {self.plugin.name}")
+        print(f"  Driver REPL  •  {self.profile.name}")
         print(f"  Modelo : {self.connection.model}")
         print(f"  URL    : {self.connection.base_url}")
         print(f"  Dir    : {self.working_dir}")
@@ -293,7 +293,7 @@ class DriverRepl:
                 continue
 
             if raw == "/info":
-                print(f"  plugin      : {self.plugin.name}")
+                print(f"  profile      : {self.profile.name}")
                 print(f"  modelo      : {self._get_current_connection().model}")
                 print(f"  base_url    : {self._get_current_connection().base_url}")
                 print(f"  working_dir : {self.working_dir}")
@@ -302,7 +302,7 @@ class DriverRepl:
 
             if raw == "/reload":
                 self._update_driver()
-                print(f"  [driver recarregado: {self.plugin.name} -> {self.connection.base_url}]")
+                print(f"  [driver recarregado: {self.profile.name} -> {self.connection.base_url}]")
                 continue
 
             if self._connection_has_changed():

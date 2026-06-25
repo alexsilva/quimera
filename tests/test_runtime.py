@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock
 
-import quimera.plugins as plugins
+import quimera.profiles as profiles
 from quimera.runtime.approval import ApprovalHandler
 from quimera.runtime.config import ToolRuntimeConfig
 from quimera.runtime.executor import ToolExecutor
@@ -219,43 +219,43 @@ class InteractionToolTests(unittest.TestCase):
         self.assertEqual(classify_task_type("corrija o parser"), "code_edit")
         self.assertEqual(classify_task_type("investigue por que o delegation falha"), "bug_investigation")
 
-    def test_choose_best_agent_uses_plugin_preferences(self):
-        """Verifica que Test choose best agent uses plugin preferences."""
+    def test_choose_best_agent_uses_profile_preferences(self):
+        """Verifica que choose_best_agent usa preferências dos perfis."""
         selected = choose_best_agent("test_execution",
-                                     [plugins.get("claude"), plugins.get("codex"), plugins.get("ollama-granite4")])
+                                     [profiles.get("claude"), profiles.get("codex"), profiles.get("opencode")])
         self.assertEqual(selected, "codex")
 
     def test_choose_best_agent_prefers_tooling_for_test_execution(self):
-        """Verifica que Test choose best agent prefers tooling for test execution."""
+        """Verifica preferência por perfis com tooling em execução de testes."""
         selected = choose_best_agent("test_execution",
-                                     [plugins.get("claude"), plugins.get("ollama-granite4"), plugins.get("opencode")])
+                                     [profiles.get("claude"), profiles.get("opencode")])
         self.assertEqual(selected, "claude")
 
-    def test_choose_best_agent_penalizes_low_reliability_tool_users_for_bug_investigation(self):
-        """Verifica que Test choose best agent penalizes low reliability tool users for bug investigation."""
-        selected = choose_best_agent("bug_investigation", [plugins.get("ollama-granite4"), plugins.get("codex")])
+    def test_choose_best_agent_prefers_codex_for_bug_investigation(self):
+        """Verifica que investigação de bug prefere perfil especializado."""
+        selected = choose_best_agent("bug_investigation", [profiles.get("opencode"), profiles.get("codex")])
         self.assertEqual(selected, "codex")
 
-    def test_choose_best_agent_does_not_route_tasks_to_qwen_without_explicit_execution_support(self):
-        """Verifica que Test choose best agent does not route tasks to qwen without explicit execution support."""
-        selected = choose_best_agent("code_review", [plugins.get("ollama-granite4"), plugins.get("claude")])
+    def test_choose_best_agent_prefers_claude_for_code_review(self):
+        """Verifica que revisão de código prefere perfil especializado."""
+        selected = choose_best_agent("code_review", [profiles.get("opencode"), profiles.get("claude")])
         self.assertEqual(selected, "claude")
 
-    def test_choose_best_agent_assigns_ollama_when_it_is_the_only_available_agent(self):
-        """Verifica que Test choose best agent assigns ollama when it is the only available agent."""
-        selected = choose_best_agent("code_review", [plugins.get("ollama-granite4")])
-        self.assertEqual(selected, "ollama-granite4")
+    def test_choose_best_agent_assigns_only_available_agent(self):
+        """Verifica que o único agente disponível é escolhido."""
+        selected = choose_best_agent("code_review", [profiles.get("opencode")])
+        self.assertEqual(selected, "opencode")
 
-    def test_choose_best_agent_does_not_route_general_to_ollama_on_tie_order(self):
-        """Verifica que Test choose best agent does not route general to ollama on tie order."""
+    def test_choose_best_agent_does_not_route_general_to_opencode_on_tie_order_first(self):
+        """Verifica que tarefas gerais não preferem opencode em empate."""
         selected = choose_best_agent("general",
-                                     [plugins.get("ollama-granite4"), plugins.get("claude"), plugins.get("codex")])
+                                     [profiles.get("opencode"), profiles.get("claude"), profiles.get("codex")])
         self.assertEqual(selected, "claude")
 
     def test_choose_best_agent_does_not_route_general_to_opencode_on_tie_order(self):
         """Verifica que Test choose best agent does not route general to opencode on tie order."""
         selected = choose_best_agent("general",
-                                     [plugins.get("opencode"), plugins.get("claude"), plugins.get("codex")])
+                                     [profiles.get("opencode"), profiles.get("claude"), profiles.get("codex")])
         self.assertEqual(selected, "claude")
 
     def test_choose_best_agent_prefers_higher_tier_for_general_tasks(self):
@@ -264,14 +264,14 @@ class InteractionToolTests(unittest.TestCase):
         # claude has general preferred (5) + tier 3 (4 boost) = 9
         """Verifica que Test choose best agent prefers higher tier for general tasks."""
         selected = choose_best_agent("general",
-                                     [plugins.get("opencode"), plugins.get("claude"), plugins.get("codex")])
+                                     [profiles.get("opencode"), profiles.get("claude"), profiles.get("codex")])
         self.assertEqual(selected, "claude")
 
     def test_all_code_editing_agents_are_review_eligible(self):
         """Verifica que Test all code editing agents are review eligible."""
-        for plugin in plugins.all_plugins():
-            if plugin.supports_code_editing:
-                self.assertIn("code_review", plugin.preferred_task_types, plugin.name)
+        for profile in profiles.all_profiles():
+            if profile.supports_code_editing:
+                self.assertIn("code_review", profile.preferred_task_types, profile.name)
 
 
 # ---------------------------------------------------------------------------

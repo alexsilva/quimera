@@ -25,7 +25,7 @@ class TaskClassification:
 
 @runtime_checkable
 class _TaskAgentProto(Protocol):
-    """Interface mínima de plugin usada pelo planejamento de tasks."""
+    """Interface mínima de profile usada pelo planejamento de tasks."""
 
     name: str
     base_tier: int
@@ -233,66 +233,66 @@ TOOL_RELIABILITY_SCORES = {
 }
 
 
-def can_execute_task(plugin: _TaskAgentProto) -> bool:
+def can_execute_task(profile: _TaskAgentProto) -> bool:
     """Indica se pode execute task."""
-    return getattr(plugin, "supports_task_execution", True)
+    return getattr(profile, "supports_task_execution", True)
 
 
-def tool_reliability(plugin: _TaskAgentProto) -> str:
+def tool_reliability(profile: _TaskAgentProto) -> str:
     """Retorna a confiabilidade declarada do agente para uso de ferramentas."""
-    return str(getattr(plugin, "tool_use_reliability", "medium") or "medium").lower()
+    return str(getattr(profile, "tool_use_reliability", "medium") or "medium").lower()
 
 
-def score_plugin_for_task(plugin: _TaskAgentProto, task_type: str) -> int:
-    """Executa score plugin for task."""
+def score_profile_for_task(profile: _TaskAgentProto, task_type: str) -> int:
+    """Executa score profile for task."""
     score = 0
-    score += (plugin.base_tier - 1) * 2
+    score += (profile.base_tier - 1) * 2
 
-    if task_type in plugin.preferred_task_types:
+    if task_type in profile.preferred_task_types:
         score += 5
-    if task_type in plugin.avoid_task_types:
+    if task_type in profile.avoid_task_types:
         score -= 5
     if task_type in {TaskType.CODE_EDIT, TaskType.BUG_INVESTIGATION,
-                     TaskType.CODE_REVIEW} and plugin.supports_code_editing:
+                     TaskType.CODE_REVIEW} and profile.supports_code_editing:
         score += 2
     if task_type in {TaskType.ARCHITECTURE, TaskType.CODE_REVIEW,
-                     TaskType.DOCUMENTATION} and plugin.supports_long_context:
+                     TaskType.DOCUMENTATION} and profile.supports_long_context:
         score += 2
-    if plugin.supports_tools and task_type in {TaskType.TEST_EXECUTION, TaskType.BUG_INVESTIGATION}:
+    if profile.supports_tools and task_type in {TaskType.TEST_EXECUTION, TaskType.BUG_INVESTIGATION}:
         score += 1
 
     if task_type in {TaskType.TEST_EXECUTION, TaskType.BUG_INVESTIGATION}:
-        score += TOOL_RELIABILITY_SCORES.get(tool_reliability(plugin), 0)
+        score += TOOL_RELIABILITY_SCORES.get(tool_reliability(profile), 0)
 
-    # Penalty: for bug investigation tasks, penalize plugins without tooling
-    if task_type == TaskType.BUG_INVESTIGATION and not plugin.supports_tools:
+    # Penalty: for bug investigation tasks, penalize profiles without tooling
+    if task_type == TaskType.BUG_INVESTIGATION and not profile.supports_tools:
         score -= 3
 
-    for cap in plugin.capabilities:
+    for cap in profile.capabilities:
         cap_boost = CAPABILITY_BOOST.get(cap, {})
         score += cap_boost.get(task_type, 0)
 
     return score
 
 
-def choose_best_agent(task_type: str, active_plugins: Iterable[_TaskAgentProto]) -> str | None:
+def choose_best_agent(task_type: str, active_profiles: Iterable[_TaskAgentProto]) -> str | None:
     """Seleciona best agent."""
-    plugins = [plugin for plugin in active_plugins if plugin is not None and can_execute_task(plugin)]
-    if not plugins:
+    profiles = [profile for profile in active_profiles if profile is not None and can_execute_task(profile)]
+    if not profiles:
         return None
 
-    best_plugin = None
+    best_profile = None
     best_score = None
-    for plugin in plugins:
-        score = score_plugin_for_task(plugin, task_type)
-        if best_plugin is None or score > best_score:
-            best_plugin = plugin
+    for profile in profiles:
+        score = score_profile_for_task(profile, task_type)
+        if best_profile is None or score > best_score:
+            best_profile = profile
             best_score = score
 
-    if best_plugin is not None and best_score is not None and best_score > -5:
-        return best_plugin.name
+    if best_profile is not None and best_score is not None and best_score > -5:
+        return best_profile.name
 
-    compatible = [plugin for plugin in plugins if task_type not in plugin.avoid_task_types]
+    compatible = [profile for profile in profiles if task_type not in profile.avoid_task_types]
     if compatible:
         return compatible[0].name
-    return plugins[0].name
+    return profiles[0].name

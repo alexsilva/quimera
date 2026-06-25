@@ -18,9 +18,9 @@ Runtime
  ├─ Runtime policies e approval
  ├─ MCP server/socket/http/session
  └─ Tools concretas
-Plugins
- ├─ AgentPlugin e registry
- ├─ Plugins nativos
+Profiles
+ ├─ ExecutionProfile e registry
+ ├─ Profiles nativos
  └─ Conexões dinâmicas persistidas
 Workspace
  ├─ Configuração global
@@ -31,7 +31,7 @@ Workspace
 
 ## CLI e bootstrap
 
-`quimera/cli.py` centraliza o parse de argumentos. Depois de aplicar flags de configuração, ela carrega plugins, expande padrões de agentes, cria o workspace, inicia MCP quando habilitado e instancia `QuimeraApp`.
+`quimera/cli.py` centraliza o parse de argumentos. Depois de aplicar flags de configuração, ela carrega profiles, expande padrões de agentes, cria o workspace, inicia MCP quando habilitado e instancia `QuimeraApp`.
 
 ## App interativa
 
@@ -44,9 +44,9 @@ Workspace
 - `dispatch.py` e `tool_loop.py`: ciclo de tool calls e respostas;
 - `task.py`: adaptador entre `/task`, repositório, roteador e executores.
 
-## Plugins
+## Profiles
 
-`AgentPlugin` funciona como contrato de runtime. Ele sabe resolver conexão efetiva, comando CLI, driver, modelo, variáveis, output format e argumentos/env de MCP. O registry global contém os plugins nativos e recebe plugins dinâmicos criados por conexão persistida.
+`ExecutionProfile` funciona como contrato de runtime. Ele sabe resolver conexão efetiva, comando CLI, driver, modelo, variáveis, output format e argumentos/env de MCP. O registry global contém os profiles nativos e recebe profiles dinâmicos criados por conexão persistida.
 
 ## Runtime de ferramentas
 

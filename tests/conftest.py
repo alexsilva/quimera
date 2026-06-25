@@ -89,7 +89,7 @@ def redirect_workspace_base_to_tmp(monkeypatch, tmp_path):
     monkeypatch.setattr(_ws, "find_base_writable", lambda _candidates: tmp_base)
 
     try:
-        import quimera.plugins.base as _pb
+        import quimera.profiles.base as _pb
         monkeypatch.setattr(_pb, "find_base_writable", lambda _candidates: tmp_base)
     except Exception:
         pass

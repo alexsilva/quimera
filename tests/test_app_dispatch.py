@@ -105,7 +105,7 @@ def dispatch_app():
     app.tool_executor = MagicMock()
     app.task_services = MagicMock()
     app.task_services.truncate_payload = MagicMock(side_effect=lambda x: x)
-    app.get_agent_plugin = MagicMock(return_value=MagicMock())
+    app.get_agent_profile = MagicMock(return_value=MagicMock())
     app.prompt_builder = MagicMock()
     app.agent_client = MagicMock()
     app.agent_client._user_cancelled = False
@@ -407,7 +407,7 @@ class TestCallAgentLowLevel:
     @pytest.fixture
     def ll_app(self, dispatch_app):
         app = dispatch_app
-        app.get_agent_plugin = MagicMock(return_value=MagicMock())
+        app.get_agent_profile = MagicMock(return_value=MagicMock())
         app.prompt_builder.build = MagicMock(return_value="prompt_text")
         app.agent_client.call = MagicMock(return_value="agent response")
         app.renderer.start_message_stream = MagicMock()

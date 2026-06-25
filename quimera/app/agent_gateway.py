@@ -36,7 +36,7 @@ class AgentGateway:
         agent_client,
         prompt_builder,
         renderer,
-        plugin_resolver,
+        profile_resolver,
         get_history,
         get_shared_state,
         get_execution_mode,
@@ -55,7 +55,7 @@ class AgentGateway:
         self._agent_client = agent_client
         self._prompt_builder = prompt_builder
         self._renderer = renderer
-        self._plugin_resolver = plugin_resolver
+        self._profile_resolver = profile_resolver
         self._get_history = get_history
         self._get_shared_state = get_shared_state
         self._get_execution_mode = get_execution_mode

@@ -158,7 +158,7 @@ class TestParseRoutingWithModes(unittest.TestCase):
         app.agent_pool = AgentPool(["claude", "codex"])
         app.active_agents = ["claude", "codex"]
 
-        # Plugins mock
+        # Profiles mock
         mock_claude = MagicMock()
         mock_claude.prefix = "/claude"
         mock_claude.name = "claude"
@@ -187,21 +187,21 @@ class TestParseRoutingWithModes(unittest.TestCase):
         app.command_router = CommandRouter(
             agent_pool=app.agent_pool,
             renderer=app.renderer,
-            get_active_agent_plugins=lambda: [p for p in [mock_claude, mock_codex] if p.name in app.active_agents],
+            get_active_agent_profiles=lambda: [p for p in [mock_claude, mock_codex] if p.name in app.active_agents],
             set_execution_mode=app._set_execution_mode,
             normalize_agent_name=lambda n: n,
             selected_agents=app.selected_agents,
-            get_available_plugins=lambda: [mock_claude, mock_codex],
+            get_available_profiles=lambda: [mock_claude, mock_codex],
         )
 
-        with patch("quimera.app.core.plugins") as mock_plugins:
-            mock_plugins.get = fake_get
-            return app, mock_plugins, None
+        with patch("quimera.app.core.profiles") as mock_profiles:
+            mock_profiles.get = fake_get
+            return app, mock_profiles, None
 
     def test_mode_command_sets_execution_mode(self):
         """Verifica que um comando de modo define execution_mode na instância do app."""
         app, _, _ = self._make_app()
-        with patch("quimera.app.core.plugins") as mp:
+        with patch("quimera.app.core.profiles") as mp:
             mp.get = lambda n: {"claude": MagicMock(prefix="/claude", name="claude"),
                                 "codex": MagicMock(prefix="/codex", name="codex")}.get(n)
             app.parse_routing("/planning")
@@ -210,7 +210,7 @@ class TestParseRoutingWithModes(unittest.TestCase):
 
     def test_mode_propagates_to_policy(self):
         app, _, _ = self._make_app()
-        with patch("quimera.app.core.plugins") as mp:
+        with patch("quimera.app.core.profiles") as mp:
             mp.get = lambda n: {"claude": MagicMock(prefix="/claude", name="claude"),
                                 "codex": MagicMock(prefix="/codex", name="codex")}.get(n)
             app.parse_routing("/planning faz algo")
@@ -218,7 +218,7 @@ class TestParseRoutingWithModes(unittest.TestCase):
 
     def test_mode_propagates_to_agent_client(self):
         app, _, _ = self._make_app()
-        with patch("quimera.app.core.plugins") as mp:
+        with patch("quimera.app.core.profiles") as mp:
             mp.get = lambda n: {"claude": MagicMock(prefix="/claude", name="claude"),
                                 "codex": MagicMock(prefix="/codex", name="codex")}.get(n)
             app.parse_routing("/analysis analise o código")
@@ -229,7 +229,7 @@ class TestParseRoutingWithModes(unittest.TestCase):
         app, _, _ = self._make_app()
         # Primeiro ativa planning
         app.tool_executor.policy.blocked_tools = ["write_file", "apply_patch"]
-        with patch("quimera.app.core.plugins") as mp:
+        with patch("quimera.app.core.profiles") as mp:
             mp.get = lambda n: {"claude": MagicMock(prefix="/claude", name="claude"),
                                 "codex": MagicMock(prefix="/codex", name="codex")}.get(n)
             app.parse_routing("/execute faz a tarefa")
@@ -237,7 +237,7 @@ class TestParseRoutingWithModes(unittest.TestCase):
 
     def test_execute_mode_announces_previous_restrictions_were_removed(self):
         app, _, _ = self._make_app()
-        with patch("quimera.app.core.plugins") as mp:
+        with patch("quimera.app.core.profiles") as mp:
             mp.get = lambda n: {"claude": MagicMock(prefix="/claude", name="claude"),
                                 "codex": MagicMock(prefix="/codex", name="codex")}.get(n)
             app.parse_routing("/execute faz a tarefa")
@@ -256,7 +256,7 @@ class TestParseRoutingWithModes(unittest.TestCase):
 
     def test_planning_alone_returns_none_agent(self):
         app, _, _ = self._make_app()
-        with patch("quimera.app.core.plugins") as mp:
+        with patch("quimera.app.core.profiles") as mp:
             mp.get = lambda n: None
             agent, msg, explicit = app.parse_routing("/planning")
         self.assertIsNone(agent)
@@ -265,28 +265,28 @@ class TestParseRoutingWithModes(unittest.TestCase):
 
     def test_analysis_alone_returns_none_agent(self):
         app, _, _ = self._make_app()
-        with patch("quimera.app.core.plugins") as mp:
+        with patch("quimera.app.core.profiles") as mp:
             mp.get = lambda n: None
             agent, msg, explicit = app.parse_routing("/analysis")
         self.assertIsNone(agent)
 
     def test_design_alone_returns_none_agent(self):
         app, _, _ = self._make_app()
-        with patch("quimera.app.core.plugins") as mp:
+        with patch("quimera.app.core.profiles") as mp:
             mp.get = lambda n: None
             agent, _, _ = app.parse_routing("/design")
         self.assertIsNone(agent)
 
     def test_review_alone_returns_none_agent(self):
         app, _, _ = self._make_app()
-        with patch("quimera.app.core.plugins") as mp:
+        with patch("quimera.app.core.profiles") as mp:
             mp.get = lambda n: None
             agent, _, _ = app.parse_routing("/review")
         self.assertIsNone(agent)
 
     def test_execute_alone_returns_none_agent(self):
         app, _, _ = self._make_app()
-        with patch("quimera.app.core.plugins") as mp:
+        with patch("quimera.app.core.profiles") as mp:
             mp.get = lambda n: None
             agent, _, _ = app.parse_routing("/execute")
         self.assertIsNone(agent)
@@ -306,9 +306,9 @@ class TestParseRoutingWithModes(unittest.TestCase):
         app.agent_pool = AgentPool(["claude", "codex"])
         app.active_agents = ["claude", "codex"]
 
-        with patch("quimera.app.core.plugins") as mp:
+        with patch("quimera.app.core.profiles") as mp:
             mp.get = lambda n: {"claude": mock_claude, "codex": mock_codex}.get(n)
-            with patch.object(app, "get_active_agent_plugins", return_value=[mock_claude, mock_codex]):
+            with patch.object(app, "get_active_agent_profiles", return_value=[mock_claude, mock_codex]):
                 agent, msg, _ = app.parse_routing("/planning analisa o código")
         self.assertIsNotNone(agent)
         self.assertEqual(msg, "analisa o código")
@@ -362,7 +362,7 @@ def _attach_toolbar_coordinator(app):
     """Cria e anexa um ToolbarCoordinator mínimo ao stub de app.
 
     Usa os atributos já presentes no stub (toolbar, agent_pool, runtime_state, etc.)
-    e delega get_agent_plugin ao método do app para que mocks de instância funcionem.
+    e delega get_agent_profile ao método do app para que mocks de instância funcionem.
     """
     from quimera.app.toolbar_coordinator import ToolbarCoordinator
     from quimera.app.agent_pool import AgentPool
@@ -372,7 +372,7 @@ def _attach_toolbar_coordinator(app):
     coordinator = ToolbarCoordinator(
         toolbar_manager=app.toolbar,
         agent_pool=getattr(app, "agent_pool", AgentPool([])),
-        get_agent_plugin=lambda name: app.get_agent_plugin(name),
+        get_agent_profile=lambda name: app.get_agent_profile(name),
         workspace=getattr(app, "workspace", MagicMock()),
         get_history=lambda: getattr(app, "history", None),
         storage=getattr(app, "storage", MagicMock(session_id="")),
@@ -794,7 +794,7 @@ class TestInputContextAndWelcome(unittest.TestCase):
 
     def test_resolve_active_model_label_extracts_model_from_cli_equals(self):
         from quimera.app.core import QuimeraApp
-        from quimera.plugins.base import CliConnection
+        from quimera.profiles.base import CliConnection
 
         app = QuimeraApp.__new__(QuimeraApp)
         from quimera.app.agent_pool import AgentPool
@@ -802,19 +802,19 @@ class TestInputContextAndWelcome(unittest.TestCase):
         app.active_agents = ["codex"]
         app.toolbar = ToolbarManager(threads=1)
 
-        plugin = MagicMock()
-        plugin.name = "codex"
-        plugin.model = None
-        plugin.cmd = ["codex", "exec", "--model=codex-5", "--json"]
-        plugin.effective_connection.return_value = CliConnection(cmd=list(plugin.cmd))
-        app.get_agent_plugin = MagicMock(return_value=plugin)
+        profile = MagicMock()
+        profile.name = "codex"
+        profile.model = None
+        profile.cmd = ["codex", "exec", "--model=codex-5", "--json"]
+        profile.effective_connection.return_value = CliConnection(cmd=list(profile.cmd))
+        app.get_agent_profile = MagicMock(return_value=profile)
         _attach_toolbar_coordinator(app)
 
         self.assertEqual(app._resolve_active_model_label(), "codex-5")
 
     def test_resolve_active_model_label_extracts_model_from_cli_next_arg(self):
         from quimera.app.core import QuimeraApp
-        from quimera.plugins.base import CliConnection
+        from quimera.profiles.base import CliConnection
 
         app = QuimeraApp.__new__(QuimeraApp)
         from quimera.app.agent_pool import AgentPool
@@ -822,19 +822,19 @@ class TestInputContextAndWelcome(unittest.TestCase):
         app.active_agents = ["opencode"]
         app.toolbar = ToolbarManager(threads=1)
 
-        plugin = MagicMock()
-        plugin.name = "opencode"
-        plugin.model = None
-        plugin.cmd = ["opencode", "--model", "gpt-5-mini", "run"]
-        plugin.effective_connection.return_value = CliConnection(cmd=list(plugin.cmd))
-        app.get_agent_plugin = MagicMock(return_value=plugin)
+        profile = MagicMock()
+        profile.name = "opencode"
+        profile.model = None
+        profile.cmd = ["opencode", "--model", "gpt-5-mini", "run"]
+        profile.effective_connection.return_value = CliConnection(cmd=list(profile.cmd))
+        app.get_agent_profile = MagicMock(return_value=profile)
         _attach_toolbar_coordinator(app)
 
         self.assertEqual(app._resolve_active_model_label(), "gpt-5-mini")
 
-    def test_resolve_active_model_label_falls_back_to_plugin_name_when_cli_has_no_model(self):
+    def test_resolve_active_model_label_falls_back_to_profile_name_when_cli_has_no_model(self):
         from quimera.app.core import QuimeraApp
-        from quimera.plugins.base import CliConnection
+        from quimera.profiles.base import CliConnection
 
         app = QuimeraApp.__new__(QuimeraApp)
         from quimera.app.agent_pool import AgentPool
@@ -842,21 +842,21 @@ class TestInputContextAndWelcome(unittest.TestCase):
         app.active_agents = ["claude"]
         app.toolbar = ToolbarManager(threads=1)
 
-        plugin = MagicMock()
-        plugin.name = "claude"
-        plugin.model = None
-        plugin.cmd = ["claude", "--output-format=stream-json", "-p"]
-        plugin.effective_connection.return_value = CliConnection(cmd=list(plugin.cmd))
-        app.get_agent_plugin = MagicMock(return_value=plugin)
+        profile = MagicMock()
+        profile.name = "claude"
+        profile.model = None
+        profile.cmd = ["claude", "--output-format=stream-json", "-p"]
+        profile.effective_connection.return_value = CliConnection(cmd=list(profile.cmd))
+        app.get_agent_profile = MagicMock(return_value=profile)
         _attach_toolbar_coordinator(app)
 
-        plugin.resolve_runtime_model.return_value = None
+        profile.resolve_runtime_model.return_value = None
         self.assertEqual(app._resolve_active_model_label(), "claude")
 
 
 class TestCliRuntimeModelResolution(unittest.TestCase):
-    def test_codex_plugin_resolve_runtime_model_reads_codex_config(self):
-        from quimera.plugins import get
+    def test_codex_profile_resolve_runtime_model_reads_codex_config(self):
+        from quimera.profiles import get
 
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)
@@ -867,15 +867,15 @@ class TestCliRuntimeModelResolution(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            plugin = get("codex")
-            self.assertIsNotNone(plugin)
-            with patch("quimera.plugins.codex.Path.home", return_value=home):
-                model = plugin.resolve_runtime_model(cwd="/tmp")
+            profile = get("codex")
+            self.assertIsNotNone(profile)
+            with patch("quimera.profiles.codex.Path.home", return_value=home):
+                model = profile.resolve_runtime_model(cwd="/tmp")
 
         self.assertEqual(model, "gpt-5.4")
 
-    def test_claude_plugin_resolve_runtime_model_reads_project_last_model_usage(self):
-        from quimera.plugins import get
+    def test_claude_profile_resolve_runtime_model_reads_project_last_model_usage(self):
+        from quimera.profiles import get
 
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)
@@ -895,10 +895,10 @@ class TestCliRuntimeModelResolution(unittest.TestCase):
             }
             (home / ".claude.json").write_text(json.dumps(state), encoding="utf-8")
 
-            plugin = get("claude")
-            self.assertIsNotNone(plugin)
-            with patch("quimera.plugins.claude.Path.home", return_value=home):
-                model = plugin.resolve_runtime_model(cwd="/tmp/projeto")
+            profile = get("claude")
+            self.assertIsNotNone(profile)
+            with patch("quimera.profiles.claude.Path.home", return_value=home):
+                model = profile.resolve_runtime_model(cwd="/tmp/projeto")
 
         self.assertEqual(model, "claude-sonnet-4-6")
 

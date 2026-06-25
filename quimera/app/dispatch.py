@@ -28,7 +28,7 @@ class AppDispatchServices:
         ui_queue: "_queue_module.Queue | None" = None,
         prompt_builder=None,
         renderer=None,
-        get_agent_plugin=None,
+        get_agent_profile=None,
         session_state: "SessionState | None" = None,
         get_execution_mode=None,
         refresh_task_state=None,
@@ -67,7 +67,7 @@ class AppDispatchServices:
         self._ui_queue = ui_queue
         self._prompt_builder = prompt_builder
         self._renderer = renderer
-        self._get_agent_plugin = get_agent_plugin
+        self._get_agent_profile = get_agent_profile
         self._session_state = session_state
         # compat: lambdas individuais (usadas quando session_state é None)
         self._get_history = get_history
@@ -109,8 +109,8 @@ class AppDispatchServices:
         return cls(
             prompt_builder=lambda: getattr(app, 'prompt_builder', None),
             renderer=lambda: getattr(app, 'renderer', None),
-            get_agent_plugin=lambda agent_name: (
-                getattr(app, 'get_agent_plugin', lambda n: None)(agent_name)
+            get_agent_profile=lambda agent_name: (
+                getattr(app, 'get_agent_profile', lambda n: None)(agent_name)
             ),
             get_history=lambda: getattr(app, 'history', []),
             get_shared_state=lambda: getattr(app, 'shared_state', {}),
@@ -213,7 +213,7 @@ class AppDispatchServices:
     def _build_gateway(self) -> AgentGateway:
         prompt_builder = self._call(self._prompt_builder)
         renderer = self._call(self._renderer)
-        plugin_resolver = self._get_agent_plugin
+        profile_resolver = self._get_agent_profile
         refresh_task_state = self._refresh_task_state
         debug_prompt_metrics = self._call(self._debug_prompt_metrics)
         redisplay_prompt = self._redisplay_prompt
@@ -241,7 +241,7 @@ class AppDispatchServices:
             agent_client=self._get_agent_client(),
             prompt_builder=prompt_builder,
             renderer=renderer,
-            plugin_resolver=plugin_resolver,
+            profile_resolver=profile_resolver,
             session_state=session_state,
             get_history=self._history,
             get_shared_state=self._shared_state,

@@ -10,7 +10,7 @@ Explique a arquitetura deste módulo e sugira um plano de refatoração.
 
 ## Enviar para um agente específico
 
-Use o prefixo do plugin:
+Use o prefixo do profile:
 
 ```text
 /codex rode os testes relacionados a tasks

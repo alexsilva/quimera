@@ -1,16 +1,16 @@
-"""Plugins fake embutidos para testes interativos locais."""
+"""Profiles fake embutidos para testes interativos locais."""
 import sys
 
-from quimera.plugins.base import AgentPlugin, register
+from quimera.profiles.base import ExecutionProfile, register
 
 
-class FakeOpenAIMCPCliPlugin(AgentPlugin):
-    """Plugin CLI fake que recebe MCP socket/token via ambiente."""
+class FakeOpenAIMCPCliProfile(ExecutionProfile):
+    """Profile CLI fake que recebe MCP socket/token via ambiente."""
 
     def env_for_cli(self) -> dict:
-        from quimera import plugins
+        from quimera import profiles
 
-        fake_openai = plugins.get("fake-openai")
+        fake_openai = profiles.get("fake-openai")
         base_url = (fake_openai.effective_base_url() if fake_openai is not None else None) or self.effective_base_url()
         model = (fake_openai.effective_model() if fake_openai is not None else None) or self.effective_model()
         env = {
@@ -24,8 +24,8 @@ class FakeOpenAIMCPCliPlugin(AgentPlugin):
         return env
 
 
-class FakeMCPDelegateCliPlugin(AgentPlugin):
-    """Plugin CLI fake que delega para outro agente via delegate no MCP."""
+class FakeMCPDelegateCliProfile(ExecutionProfile):
+    """Profile CLI fake que delega para outro agente via delegate no MCP."""
 
     def env_for_cli(self) -> dict:
         env = {"QUIMERA_FAKE_DELEGATE_TARGET": "fake-openai"}
@@ -36,11 +36,11 @@ class FakeMCPDelegateCliPlugin(AgentPlugin):
         return env
 
 
-def register_fake_plugins(registry=None) -> tuple[str, ...]:
-    """Registra plugins fake no registry informado ou no registry global."""
+def register_fake_profiles(registry=None) -> tuple[str, ...]:
+    """Registra profiles fake no registry informado ou no registry global."""
     target_register = registry.register if registry is not None else register
 
-    target_register(AgentPlugin(
+    target_register(ExecutionProfile(
         name="fake-cli",
         prefix="/fake-cli",
         icon="🧪",
@@ -56,7 +56,7 @@ def register_fake_plugins(registry=None) -> tuple[str, ...]:
         base_tier=1,
     ))
 
-    target_register(FakeMCPDelegateCliPlugin(
+    target_register(FakeMCPDelegateCliProfile(
         name="fake-cli-delegate",
         prefix="/fake-cli-delegate",
         icon="🧪",
@@ -73,7 +73,7 @@ def register_fake_plugins(registry=None) -> tuple[str, ...]:
         base_tier=1,
     ))
 
-    target_register(AgentPlugin(
+    target_register(ExecutionProfile(
         name="fake-openai",
         prefix="/fake-openai",
         icon="🧰",
@@ -93,7 +93,7 @@ def register_fake_plugins(registry=None) -> tuple[str, ...]:
         base_tier=1,
     ))
 
-    target_register(FakeOpenAIMCPCliPlugin(
+    target_register(FakeOpenAIMCPCliProfile(
         name="fake-openai-mcp-cli",
         prefix="/fake-openai-mcp-cli",
         icon="🔌",

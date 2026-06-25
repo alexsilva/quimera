@@ -437,7 +437,7 @@ class OpenAICompatDriver:
 
     def _chat(self, messages: list[dict], tools: list[dict], cancel_event=None, on_text_chunk=None) -> tuple[str, list[dict]]:
         """Despacha para o modo correto conforme presença de ferramentas.
-        extra_body é repassado para permitir que o plugin controle parâmetros como 'thinking'."""
+        extra_body é repassado para permitir que o profile controle parâmetros como 'thinking'."""
         # Cancelamento cooperativo: se já foi solicitado, não iniciar nova interação
         if cancel_event is not None and cancel_event.is_set():
             return "", []

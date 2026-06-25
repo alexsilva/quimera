@@ -1,11 +1,11 @@
-"""Componentes de `quimera.plugins.opencode`."""
+"""Componentes de `quimera.profiles.opencode`."""
 import json
 from pathlib import Path
 from typing import Optional
 
 from quimera.agent_events import SpyEvent
-from quimera.plugins.base import AgentPlugin, CliConnection, Connection, register
-from quimera.plugins.spy_utils import describe_tool_input, format_agent_message_lines
+from quimera.profiles.base import ExecutionProfile, CliConnection, Connection, register
+from quimera.profiles.spy_utils import describe_tool_input, format_agent_message_lines
 
 
 def _format_opencode_spy_event(line: str) -> list[SpyEvent]:
@@ -60,8 +60,8 @@ _BUN_STDERR_NOISE_PATTERNS = (
     r"^\s*at /?bunfs/",       # frame direto sem função: "  at /$bunfs/..."
 )
 
-class OpenCodePlugin(AgentPlugin):
-    """Plugin do OpenCode com suporte a MCP via OPENCODE_CONFIG_CONTENT."""
+class OpenCodeProfile(ExecutionProfile):
+    """Profile do OpenCode com suporte a MCP via OPENCODE_CONFIG_CONTENT."""
 
     def mcp_server_args(self, socket_path: str) -> list[str]:
         """OpenCode não aceita MCP via CLI args."""
@@ -98,7 +98,7 @@ class OpenCodePlugin(AgentPlugin):
         return {"OPENCODE_CONFIG_CONTENT": config_content}
 
 
-register(OpenCodePlugin(
+register(OpenCodeProfile(
     name="opencode",
     prefix="/opencode",
     icon="⚙️",

@@ -1,12 +1,12 @@
-"""Componentes de `quimera.plugins.antigravity`."""
-from quimera.plugins.base import AgentPlugin, register
+"""Componentes de `quimera.profiles.antigravity`."""
+from quimera.profiles.base import ExecutionProfile, register
 
 
-class AntigravityPlugin(AgentPlugin):
-    """Plugin do Antigravity CLI (agy)."""
+class AntigravityProfile(ExecutionProfile):
+    """Profile do Antigravity CLI (agy)."""
 
 
-plugin = AntigravityPlugin(
+profile = AntigravityProfile(
     name="antigravity",
     prefix="/antigravity",
     icon="🪐",
@@ -24,4 +24,4 @@ plugin = AntigravityPlugin(
     supports_long_context=True,
     base_tier=3,
 )
-register(plugin)
+register(profile)

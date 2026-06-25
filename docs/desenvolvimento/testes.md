@@ -29,7 +29,7 @@ A suíte inclui testes para:
 - prompt, modos, contexto, estado compartilhado e TTL;
 - app interativa, handlers, dispatch e turn management;
 - UI, temas, wrapping e fixtures de baseline visual;
-- configuração, plugins, conexões e workspace;
+- configuração, profiles, conexões e workspace;
 - evidências, storage, métricas e bugs.
 
 ## Testes de UI relacionados a estilos (debug para bug de dim/muted)
@@ -67,7 +67,7 @@ def debug_show_plain(self, message, style=None, **kwargs):
 1. Leia `AGENTS.md` antes de editar.
 2. Faça mudanças pequenas e localizadas.
 3. Prefira serviços existentes a adicionar lógica dentro de `QuimeraApp`.
-4. Atualize docs quando alterar comportamento de CLI, comandos, tools, plugins ou persistência.
+4. Atualize docs quando alterar comportamento de CLI, comandos, tools, profiles ou persistência.
 5. Rode testes relacionados e, quando possível, a suíte completa.
 6. Para mudanças perceptíveis na UI, capture evidência visual ou atualize fixtures conscientemente.
 
@@ -75,8 +75,8 @@ def debug_show_plain(self, message, style=None, **kwargs):
 
 ```bash
 rg "CMD_" quimera
-rg "class AgentPlugin" quimera/plugins/base.py
-rg "def score_plugin_for_task" quimera/runtime/task_planning.py
+rg "class ExecutionProfile" quimera/profiles/base.py
+rg "def score_profile_for_task" quimera/runtime/task_planning.py
 python - <<'PY'
 from quimera.runtime.drivers.tool_schemas import resolve_tool_schemas
 print([s['function']['name'] for s in resolve_tool_schemas()])
@@ -85,7 +85,7 @@ PY
 
 ## Testador interativo local com agentes fake
 
-Para validar o fluxo do Quimera sem depender de credenciais ou provedores externos, o projeto inclui mecanismos fake e determinísticos. Esses plugins ficam fora do uso normal: execute o app com `--test` para ativá-los e restringir a rodada aos fake.
+Para validar o fluxo do Quimera sem depender de credenciais ou provedores externos, o projeto inclui mecanismos fake e determinísticos. Esses profiles ficam fora do uso normal: execute o app com `--test` para ativá-los e restringir a rodada aos fake.
 
 ### Agente CLI local
 
@@ -102,7 +102,7 @@ Papéis disponíveis:
 - `architect`: simula uma resposta arquitetural.
 - `coder`: responde como executor local simples.
 
-O plugin embutido `fake-cli` usa esse mecanismo e pode participar de uma sessão do app:
+O profile embutido `fake-cli` usa esse mecanismo e pode participar de uma sessão do app:
 
 ```bash
 python quimera.py --test --agents fake-cli --visibility full
@@ -110,7 +110,7 @@ python quimera.py --test --agents fake-cli --visibility full
 
 ### Backend OpenAI-compatible fake com tool calling
 
-Use o plugin embutido `fake-openai` no REPL do driver. Com `--test`, o app sobe automaticamente o backend OpenAI-compatible fake em uma porta livre e aplica o override somente no processo. Esse caminho usa o driver `openai_compat`, cuja dependência `openai` faz parte da instalação base:
+Use o profile embutido `fake-openai` no REPL do driver. Com `--test`, o app sobe automaticamente o backend OpenAI-compatible fake em uma porta livre e aplica o override somente no processo. Esse caminho usa o driver `openai_compat`, cuja dependência `openai` faz parte da instalação base:
 
 ```bash
 python quimera.py --test --driver-repl fake-openai --prompt "Leia o README usando ferramentas"
@@ -134,9 +134,9 @@ Gatilhos úteis:
 
 ### CLI que delega para um agente OpenAI via MCP
 
-O plugin `fake-cli-delegation` valida o caminho entre dois agentes de execução diferentes: um agente CLI MCP-capaz recebe o socket/token MCP do Quimera por variáveis de ambiente, chama a tool `delegate` e delega para o agente OpenAI-compatible `fake-openai`. A partir daí, o agente OpenAI usa o driver `openai_compat`, emite tool calls nativas e passa pelo fluxo normal de aprovação/execução de ferramentas do runtime.
+O profile `fake-cli-delegation` valida o caminho entre dois agentes de execução diferentes: um agente CLI MCP-capaz recebe o socket/token MCP do Quimera por variáveis de ambiente, chama a tool `delegate` e delega para o agente OpenAI-compatible `fake-openai`. A partir daí, o agente OpenAI usa o driver `openai_compat`, emite tool calls nativas e passa pelo fluxo normal de aprovação/execução de ferramentas do runtime.
 
-O plugin `fake-openai-mcp-cli` continua disponível para validar o caminho direto CLI -> OpenAI-compatible -> MCP, mas ele não exercita delegação entre agentes; para comprovar CLI -> `delegate` -> OpenAI, prefira `fake-cli-delegation`.
+O profile `fake-openai-mcp-cli` continua disponível para validar o caminho direto CLI -> OpenAI-compatible -> MCP, mas ele não exercita delegação entre agentes; para comprovar CLI -> `delegate` -> OpenAI, prefira `fake-cli-delegation`.
 
 Rode o app com MCP habilitado (padrão) e o agente CLI MCP. Não é necessário iniciar um servidor externo antes: `--test` sobe o backend fake em porta livre e aponta `fake-openai` para ele com override não persistente:
 

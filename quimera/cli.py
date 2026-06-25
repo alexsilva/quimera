@@ -16,8 +16,8 @@ except ImportError:
 
 from .connection_configurator import ConnectionConfigurator
 from .constants import Visibility
-from . import plugins as _plugins
-from .plugins.base import (
+from . import profiles as _profiles
+from .profiles.base import (
     CliConnection,
     OpenAIConnection,
     _connection_from_dict,
@@ -25,9 +25,9 @@ from .plugins.base import (
     format_connection_label,
     is_valid_agent_name,
     load_connections,
-    register_dynamic_plugin,
+    register_connection_profile,
     save_connections,
-    set_connection_override,
+    set_connection,
 )
 from . import themes as _themes
 from .app import QuimeraApp
@@ -69,15 +69,15 @@ def _ensure_required_runtime_dependencies() -> None:
         )
 
 
-def _test_plugin_names() -> tuple[str, ...]:
-    return tuple(getattr(_plugins, "TEST_PLUGIN_NAMES", ()))
+def _test_profile_names() -> tuple[str, ...]:
+    return tuple(getattr(_profiles, "TEST_PROFILE_NAMES", ()))
 
 
 def _available_agent_names(test_mode: bool = False) -> list[str]:
-    if test_mode and hasattr(_plugins, "enable_test_plugins"):
-        _plugins.enable_test_plugins()
-    names = _plugins.all_names()
-    test_names = set(_test_plugin_names())
+    if test_mode and hasattr(_profiles, "enable_test_profiles"):
+        _profiles.enable_test_profiles()
+    names = _profiles.all_names()
+    test_names = set(_test_profile_names())
     if test_mode:
         return [name for name in names if name in test_names]
     return [name for name in names if name not in test_names]
@@ -103,7 +103,7 @@ def _start_test_fake_openai_backend() -> object:
     try:
         host, port = httpd.server_address[:2]
         base_url = f"http://{host}:{port}/v1"
-        set_connection_override(
+        set_connection(
             "fake-openai",
             OpenAIConnection(
                 model=DEFAULT_MODEL,
@@ -180,11 +180,11 @@ def _prompt_bool(label: str, default: bool = False) -> bool:
         print("Valor inválido. Use 's' ou 'n'.")
 
 
-def _configure_connection_interactively(plugin, driver_hint: str | None = None):
+def _configure_connection_interactively(profile, driver_hint: str | None = None):
     """Coleta configuração de conexão de forma interativa."""
     configurator = ConnectionConfigurator(_prompt_text, _prompt_bool, print)
     try:
-        return configurator.configure(plugin, driver_hint=driver_hint)
+        return configurator.configure(profile, driver_hint=driver_hint)
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
 
@@ -202,19 +202,19 @@ def _parse_extra_body_arg(raw: str | None) -> dict | None:
         raise SystemExit(f"--extra-body: JSON inválido: {exc}") from exc
 
 
-def _build_connection_from_args(plugin, args):
+def _build_connection_from_args(profile, args):
     """Monta conexão a partir das flags; se estiver incompleta, cai no modo interativo."""
-    base_name = getattr(args, "base", None)
-    if base_name and args.model:
-        base_plugin = _plugins.get(base_name.strip().lower())
-        if base_plugin is None:
-            raise SystemExit(f"Plugin base '{base_name}' não encontrado.")
+    profile_name = getattr(args, "profile", None)
+    if profile_name and args.model:
+        profile = _profiles.get(profile_name.strip().lower())
+        if profile is None:
+            raise SystemExit(f"Perfil de execução '{profile_name}' não encontrado.")
         try:
-            return base_plugin.configure_with_model(args.model)
+            return profile.configure_with_model(args.model)
         except ValueError as exc:
             raise SystemExit(str(exc)) from exc
     if args.driver is None:
-        return _configure_connection_interactively(plugin)
+        return _configure_connection_interactively(profile)
     if args.driver == "cli":
         if args.cmd:
             return CliConnection(
@@ -222,18 +222,18 @@ def _build_connection_from_args(plugin, args):
                 prompt_as_arg=False,
                 output_format=None,
             )
-        return _configure_connection_interactively(plugin, driver_hint="cli")
+        return _configure_connection_interactively(profile, driver_hint="cli")
     if args.model:
         extra_body = _parse_extra_body_arg(getattr(args, "extra_body", None))
         return OpenAIConnection(
             model=args.model,
-            base_url=args.base_url or plugin.effective_base_url() or "https://api.openai.com/v1",
-            api_key_env=args.api_key_env or plugin.effective_api_key_env() or "OPENAI_API_KEY",
-            provider=plugin.effective_driver() if plugin.effective_driver() != "cli" else "openai_compat",
-            supports_native_tools=plugin.supports_tools,
+            base_url=args.base_url or profile.effective_base_url() or "https://api.openai.com/v1",
+            api_key_env=args.api_key_env or profile.effective_api_key_env() or "OPENAI_API_KEY",
+            provider=profile.effective_driver() if profile.effective_driver() != "cli" else "openai_compat",
+            supports_native_tools=profile.supports_tools,
             extra_body=extra_body,
         )
-    return _configure_connection_interactively(plugin, driver_hint="openai")
+    return _configure_connection_interactively(profile, driver_hint="openai")
 
 
 def main():
@@ -279,7 +279,7 @@ def main():
         help="Persiste o idle timeout padrão (em segundos) na config e encerra.",
     )
     parser.add_argument("--test", action="store_true",
-                        help="Ativa modo de teste: somente plugins fake entram na rodada")
+                        help="Ativa modo de teste: somente profiles fake entram na rodada")
     parser.add_argument("--interactive-test", action="store_true",
                         help="Modo de teste interativo para testes automatizados")
     parser.add_argument("test_agent", nargs="?", default=None,
@@ -308,17 +308,17 @@ def main():
         default=None,
         help="Persiste o history_window na config e encerra.",
     )
-    parser.add_argument("--driver-repl", dest="driver_repl", metavar="PLUGIN",
+    parser.add_argument("--driver-repl", dest="driver_repl", metavar="PERFIL",
                         default=None,
-                        help="Inicia REPL interativo para testar um plugin openai_compat (ex: ollama-qwen)")
+                        help="Inicia REPL interativo para testar um profile openai_compat (ex: ollama-qwen)")
     parser.add_argument("--working-dir", dest="working_dir", metavar="DIR", default=None,
                         help="Diretório de trabalho para o REPL (padrão: cwd)")
     parser.add_argument("--prompt", dest="repl_prompt", metavar="TEXTO", default=None,
                         help="Prompt one-shot para --driver-repl (não-interativo, útil para scripts)")
     parser.add_argument("--connect", dest="connect", metavar="AGENTE", default=None,
                         help="Configura interativamente a conexão de um agente e persiste no base_dir")
-    parser.add_argument("--base", dest="base", metavar="PLUGIN", default=None,
-                        help="Plugin base para herdar cmd/output_format (ex: opencode)")
+    parser.add_argument("--profile", dest="profile", metavar="PERFIL", default=None,
+                        help="Perfil de execução para herdar cmd/output_format (ex: opencode)")
     parser.add_argument("--driver", dest="driver", choices=["cli", "openai"], default=None,
                         help="Driver de conexão (cli ou openai)")
     parser.add_argument("--cmd", dest="cmd", metavar="CMD", nargs=argparse.REMAINDER, default=None,
@@ -414,45 +414,45 @@ def main():
 
     if args.connect:
         agent_name = args.connect.strip().lower()
-        if agent_name in _test_plugin_names():
-            parser.error(f"Plugin de teste '{agent_name}' não aceita --connect persistente; use --test com configuração local do processo")
-        plugin = _plugins.get(agent_name)
-        if plugin is None:
+        if agent_name in _test_profile_names():
+            parser.error(f"Profile de teste '{agent_name}' não aceita --connect persistente; use --test com configuração local do processo")
+        profile = _profiles.get(agent_name)
+        if profile is None:
             if not is_valid_agent_name(agent_name):
                 parser.error(f"Nome de agente inválido em --connect: {agent_name}")
-            base_name = getattr(args, "base", None)
-            base_metadata = None
-            if base_name:
-                base_plugin = _plugins.get(base_name.strip().lower())
-                if base_plugin is None:
-                    parser.error(f"Plugin base '{base_name}' não encontrado em --base.")
-                base_metadata = {"base": base_plugin.name}
-            plugin = register_dynamic_plugin(agent_name, metadata=base_metadata)
-            print(f"Agente registrado dinamicamente: {agent_name}")
+            profile_name = getattr(args, "profile", None)
+            profile_metadata = None
+            if profile_name:
+                profile = _profiles.get(profile_name.strip().lower())
+                if profile is None:
+                    parser.error(f"Perfil de execução '{profile_name}' não encontrado em --profile.")
+                profile_metadata = {"profile": profile.name}
+            profile = register_connection_profile(agent_name, metadata=profile_metadata)
+            print(f"Conexão registrada: {agent_name}")
         else:
-            # Plugin já existe — atualiza referência de base se --base foi fornecido
-            base_name = getattr(args, "base", None)
-            if base_name:
-                base_plugin = _plugins.get(base_name.strip().lower())
-                if base_plugin is None:
-                    parser.error(f"Plugin base '{base_name}' não encontrado em --base.")
-                object.__setattr__(plugin, "_base_plugin_name", base_plugin.name)
-                if base_plugin.spy_stdout_formatter is not None:
-                    plugin.spy_stdout_formatter = base_plugin.spy_stdout_formatter
-                if base_plugin.runtime_rw_paths:
-                    plugin.runtime_rw_paths = list(base_plugin.runtime_rw_paths)
+            # Profile já existe — atualiza referência de base se --profile foi fornecido
+            profile_name = getattr(args, "profile", None)
+            if profile_name:
+                profile = _profiles.get(profile_name.strip().lower())
+                if profile is None:
+                    parser.error(f"Perfil de execução '{profile_name}' não encontrado em --profile.")
+                object.__setattr__(profile, "_profile_name", profile.name)
+                if profile.spy_stdout_formatter is not None:
+                    profile.spy_stdout_formatter = profile.spy_stdout_formatter
+                if profile.runtime_rw_paths:
+                    profile.runtime_rw_paths = list(profile.runtime_rw_paths)
 
         print(f"Configurando conexão para {agent_name}")
-        print(f"Built-in atual: {format_connection_label(plugin.effective_connection())}")
-        connection = _build_connection_from_args(plugin, args)
-        set_connection_override(agent_name, connection, persist=True)
+        print(f"Built-in atual: {format_connection_label(profile.effective_connection())}")
+        connection = _build_connection_from_args(profile, args)
+        set_connection(agent_name, connection, persist=True)
         print(f"Conexão salva em base_dir para {agent_name}: {format_connection_label(connection)}")
         return
 
     if args.driver_repl:
         _ensure_required_runtime_dependencies()
-        if args.driver_repl in _test_plugin_names() and not args.test:
-            parser.error(f"Plugin de teste '{args.driver_repl}' exige --test")
+        if args.driver_repl in _test_profile_names() and not args.test:
+            parser.error(f"Profile de teste '{args.driver_repl}' exige --test")
         fake_openai_backend = None
         if args.test and args.driver_repl == "fake-openai":
             fake_openai_backend = _start_test_fake_openai_backend()
@@ -461,8 +461,8 @@ def main():
             repl = DriverRepl(
                 args.driver_repl,
                 working_dir=working_dir,
-                get_plugin=_plugins.get,
-                all_plugins=_plugins.all_plugins,
+                get_profile=_profiles.get,
+                all_profiles=_profiles.all_profiles,
                 input_gate=InputGate(),
             )
             repl.run(one_shot_prompt=args.repl_prompt)

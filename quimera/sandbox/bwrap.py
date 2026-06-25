@@ -7,8 +7,8 @@ from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 @runtime_checkable
-class _AgentPluginProto(Protocol):
-    """Interface mínima de plugin esperada pelo sandbox."""
+class _ExecutionProfileProto(Protocol):
+    """Interface mínima de profile esperada pelo sandbox."""
 
     runtime_rw_paths: list
 
@@ -31,7 +31,7 @@ def is_bwrap_available() -> bool:
 
 
 def build_bwrap_cmd(
-        mode: _ExecutionModeProto, working_dir: str, cmd: list[str], plugin: _AgentPluginProto | None = None
+        mode: _ExecutionModeProto, working_dir: str, cmd: list[str], profile: _ExecutionProfileProto | None = None
 ) -> list[str]:
     """Envolve cmd com bwrap aplicando as restrições do ExecutionMode.
 
@@ -49,7 +49,7 @@ def build_bwrap_cmd(
     if os.path.exists(_QUIMERA_DATA_DIR):
         bwrap += ["--tmpfs", _QUIMERA_DATA_DIR]
 
-    for path in getattr(plugin, "runtime_rw_paths", []):
+    for path in getattr(profile, "runtime_rw_paths", []):
         if os.path.exists(path):
             bwrap += ["--bind", path, path]
 

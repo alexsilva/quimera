@@ -154,7 +154,7 @@ def start_embedded_mcp(
         )
         external_mcp_http_server.start_background()
         external_mcp_http_url = f"http://{http_host}:{http_port}/mcp"
-        # Intencionalmente não propagamos HTTP aos plugins locais: eles devem
+        # Intencionalmente não propagamos HTTP aos profiles locais: eles devem
         # preferir o socket interno mesmo quando o HTTP externo está ativo.
         setattr(app, "mcp_http_url", external_mcp_http_url)
         setattr(app, "external_mcp_http_url", external_mcp_http_url)

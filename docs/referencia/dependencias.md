@@ -30,16 +30,16 @@ pip install -e ".[docs]"
 
 | Ferramenta | Quando precisa |
 |---|---|
-| `claude` CLI | Para usar plugin Claude. |
-| `codex` CLI | Para usar plugin Codex. |
-| `gemini` CLI | Para usar plugin Gemini. |
-| `opencode` CLI | Para usar plugin OpenCode. |
+| `claude` CLI | Para usar profile Claude. |
+| `codex` CLI | Para usar profile Codex. |
+| `gemini` CLI | Para usar profile Gemini. |
+| `opencode` CLI | Para usar profile OpenCode. |
 | Ollama | Para usar `ollama-granite4` local. |
 | `bubblewrap` (`bwrap`) | Para fluxos que usam sandbox por bubblewrap. |
 | `git`, `python`, `pytest`, `sed`, `find` etc. | Usados por agentes via ferramentas de shell permitidas. |
 
 ## Observações
 
-- Nem todo agente precisa estar instalado para iniciar o Quimera, mas a execução falhará se você selecionar um plugin cujo comando não existe.
+- Nem todo agente precisa estar instalado para iniciar o Quimera, mas a execução falhará se você selecionar um profile cujo comando não existe.
 - Para APIs, configure a variável indicada em `--api-key-env` antes de iniciar a sessão.
 - `requirements.txt` contém as dependências de runtime simples; prefira `pip install -e .` para respeitar `pyproject.toml`.

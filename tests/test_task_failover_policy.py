@@ -4,7 +4,7 @@ from quimera.tasks.failover import TaskFailoverPolicy
 
 
 @dataclass
-class PluginStub:
+class ProfileStub:
     name: str = "agent"
     prefix: str = ""
     aliases: list[str] | None = None
@@ -26,7 +26,7 @@ def test_is_operational_review_agent_returns_false_for_inactive_agent():
     repository = RepositorySpy()
     policy = TaskFailoverPolicy(
         active_agents=["codex"],
-        get_agent_plugin=lambda name: PluginStub(name="codex") if name == "codex" else None,
+        get_agent_profile=lambda name: ProfileStub(name="codex") if name == "codex" else None,
         repository=repository,
     )
 
@@ -38,8 +38,8 @@ def test_is_operational_review_agent_returns_false_without_task_execution_suppor
     repository = RepositorySpy()
     policy = TaskFailoverPolicy(
         active_agents=["codex"],
-        get_agent_plugin=lambda name: (
-            PluginStub(name="codex", supports_task_execution=False)
+        get_agent_profile=lambda name: (
+            ProfileStub(name="codex", supports_task_execution=False)
             if name == "codex"
             else None
         ),
@@ -52,14 +52,14 @@ def test_is_operational_review_agent_returns_false_without_task_execution_suppor
 def test_review_agents_for_excludes_executor_and_explicit_excluded_agents():
     """Verifica que review_agents_for exclui o executor e agentes explicitamente excluídos."""
     repository = RepositorySpy()
-    plugins = {
-        "codex": PluginStub(name="codex"),
-        "pickle": PluginStub(name="pickle"),
-        "deepseek-pro-v4": PluginStub(name="deepseek-pro-v4"),
+    profiles = {
+        "codex": ProfileStub(name="codex"),
+        "pickle": ProfileStub(name="pickle"),
+        "deepseek-pro-v4": ProfileStub(name="deepseek-pro-v4"),
     }
     policy = TaskFailoverPolicy(
         active_agents=["codex", "pickle", "deepseek-pro-v4"],
-        get_agent_plugin=lambda name: plugins.get(name),
+        get_agent_profile=lambda name: profiles.get(name),
         repository=repository,
     )
 
@@ -77,7 +77,7 @@ def test_can_failover_delegates_to_repository():
     repository = RepositorySpy(result=True)
     policy = TaskFailoverPolicy(
         active_agents=["codex", "pickle", "deepseek-pro-v4"],
-        get_agent_plugin=lambda name: PluginStub(name=name),
+        get_agent_profile=lambda name: ProfileStub(name=name),
         repository=repository,
     )
 
@@ -90,12 +90,12 @@ def test_has_review_failover_returns_boolean_based_on_remaining_candidates():
     repository = RepositorySpy()
     policy_without_fallback = TaskFailoverPolicy(
         active_agents=["codex", "pickle"],
-        get_agent_plugin=lambda name: PluginStub(name=name),
+        get_agent_profile=lambda name: ProfileStub(name=name),
         repository=repository,
     )
     policy_with_fallback = TaskFailoverPolicy(
         active_agents=["codex", "pickle", "deepseek-pro-v4"],
-        get_agent_plugin=lambda name: PluginStub(name=name),
+        get_agent_profile=lambda name: ProfileStub(name=name),
         repository=repository,
     )
 
@@ -106,13 +106,13 @@ def test_has_review_failover_returns_boolean_based_on_remaining_candidates():
 def test_review_agents_for_treats_alias_as_same_agent_identity():
     """Verifica que review_agents_for trata alias como mesma identidade do agente."""
     repository = RepositorySpy()
-    plugins = {
-        "codex": PluginStub(name="codex", prefix="/codex", aliases=["/code"]),
-        "opencode": PluginStub(name="opencode", prefix="/opencode"),
+    profiles = {
+        "codex": ProfileStub(name="codex", prefix="/codex", aliases=["/code"]),
+        "opencode": ProfileStub(name="opencode", prefix="/opencode"),
     }
     policy = TaskFailoverPolicy(
         active_agents=["codex", "opencode"],
-        get_agent_plugin=lambda name: plugins.get(name),
+        get_agent_profile=lambda name: profiles.get(name),
         repository=repository,
     )
 

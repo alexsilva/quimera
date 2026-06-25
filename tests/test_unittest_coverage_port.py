@@ -6,12 +6,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import quimera.plugins.mock  # noqa: F401
+import quimera.profiles.mock  # noqa: F401
 from quimera.agents import AgentClient, _strip_spinner
 from quimera.constants import Visibility
 from quimera.context import ContextManager
-from quimera.plugins import get
-from quimera.plugins.base import AgentPlugin
+from quimera.profiles import get
+from quimera.profiles.base import ExecutionProfile
 from quimera.runtime.approval import ApprovalHandler, ApprovalManager
 from quimera.runtime.config import ToolRuntimeConfig
 from quimera.runtime.executor import ToolExecutor
@@ -29,7 +29,7 @@ from quimera.constants import TaskType
 from quimera.tasks.planning import (
     choose_best_agent,
     classify_task_type,
-    score_plugin_for_task,
+    score_profile_for_task,
 )
 TASK_TYPE_CODE_EDIT = TaskType.CODE_EDIT
 TASK_TYPE_GENERAL = TaskType.GENERAL
@@ -172,15 +172,15 @@ class AgentsCoverageTests(unittest.TestCase):
         self.assertEqual(self.renderer.show_error.call_count, 1)
         self.assertGreaterEqual(self.renderer.show_plain.call_count, 1)
 
-    def test_call_uses_plugin_and_prompt_mode(self):
-        """Verifica que Test call uses plugin and prompt mode."""
+    def test_call_uses_profile_and_prompt_mode(self):
+        """Verifica que Test call uses profile and prompt mode."""
         client = AgentClient(self.renderer)
-        plugin = MagicMock()
-        plugin.cmd = ["mock-agent"]
-        plugin.prompt_as_arg = False
-        plugin.effective_cmd.return_value = ["mock-agent"]
-        plugin.effective_prompt_as_arg.return_value = False
-        with patch("quimera.plugins.get", return_value=plugin), patch.object(client, "run", return_value="ok") as run:
+        profile = MagicMock()
+        profile.cmd = ["mock-agent"]
+        profile.prompt_as_arg = False
+        profile.effective_cmd.return_value = ["mock-agent"]
+        profile.effective_prompt_as_arg.return_value = False
+        with patch("quimera.profiles.get", return_value=profile), patch.object(client, "run", return_value="ok") as run:
             self.assertEqual(client.call("mock", "hello"), "ok")
         run.assert_called_once_with(
             ["mock-agent"],
@@ -195,12 +195,12 @@ class AgentsCoverageTests(unittest.TestCase):
     def test_call_uses_prompt_as_arg_and_unknown_agent_errors(self):
         """Verifica que Test call uses prompt as arg and unknown agent errors."""
         client = AgentClient(self.renderer)
-        plugin = MagicMock()
-        plugin.cmd = ["mock-agent"]
-        plugin.prompt_as_arg = True
-        plugin.effective_cmd.return_value = ["mock-agent"]
-        plugin.effective_prompt_as_arg.return_value = True
-        with patch("quimera.plugins.get", return_value=plugin), patch.object(client, "run", return_value="ok") as run:
+        profile = MagicMock()
+        profile.cmd = ["mock-agent"]
+        profile.prompt_as_arg = True
+        profile.effective_cmd.return_value = ["mock-agent"]
+        profile.effective_prompt_as_arg.return_value = True
+        with patch("quimera.profiles.get", return_value=profile), patch.object(client, "run", return_value="ok") as run:
             self.assertEqual(client.call("mock", "hello"), "ok")
         run.assert_called_once_with(
             ["mock-agent", "hello"],
@@ -210,7 +210,7 @@ class AgentsCoverageTests(unittest.TestCase):
             show_status=True,
             progress_callback=None,
         )
-        with patch("quimera.plugins.get", return_value=None):
+        with patch("quimera.profiles.get", return_value=None):
             self.assertIsNone(client.call("missing", "hello"))
         self.renderer.show_error.assert_called()
 
@@ -424,7 +424,7 @@ class PolicyCoverageTests(unittest.TestCase):
 
 
 class TaskPlanningCoverageTests(unittest.TestCase):
-    class Plugin(AgentPlugin):
+    class Profile(ExecutionProfile):
         @property
         def name(self):
             return self._name
@@ -450,25 +450,25 @@ class TaskPlanningCoverageTests(unittest.TestCase):
         self.assertEqual(classify_task_type("texto aleatório"), TASK_TYPE_GENERAL)
         self.assertEqual(classify_task_type("corrija o bug"), "code_edit")
         self.assertEqual(classify_task_type("execute os testes"), "test_execution")
-        plugin = self.Plugin("p1", tier=3, preferred=[TASK_TYPE_CODE_EDIT], code=True, tools=True)
-        self.assertEqual(score_plugin_for_task(plugin, TASK_TYPE_CODE_EDIT), 11)
-        avoided = self.Plugin("p2", avoid=[TASK_TYPE_TEST_EXECUTION])
-        self.assertEqual(score_plugin_for_task(avoided, TASK_TYPE_TEST_EXECUTION), -5)
+        profile = self.Profile("p1", tier=3, preferred=[TASK_TYPE_CODE_EDIT], code=True, tools=True)
+        self.assertEqual(score_profile_for_task(profile, TASK_TYPE_CODE_EDIT), 11)
+        avoided = self.Profile("p2", avoid=[TASK_TYPE_TEST_EXECUTION])
+        self.assertEqual(score_profile_for_task(avoided, TASK_TYPE_TEST_EXECUTION), -5)
 
     def test_choose_best_agent_paths(self):
         """Verifica que Test choose best agent paths."""
         self.assertIsNone(choose_best_agent("anything", []))
-        p1 = self.Plugin("p1", tier=1)
-        p2 = self.Plugin("p2", tier=3)
+        p1 = self.Profile("p1", tier=1)
+        p2 = self.Profile("p2", tier=3)
         self.assertEqual(choose_best_agent("anything", [p1, p2]), "p2")
-        long_context = self.Plugin("long", preferred=[TASK_TYPE_GENERAL], long=True)
-        self.assertGreater(score_plugin_for_task(long_context, "documentation"), 0)
-        p3 = self.Plugin("p3", avoid=[TASK_TYPE_CODE_EDIT])
+        long_context = self.Profile("long", preferred=[TASK_TYPE_GENERAL], long=True)
+        self.assertGreater(score_profile_for_task(long_context, "documentation"), 0)
+        p3 = self.Profile("p3", avoid=[TASK_TYPE_CODE_EDIT])
         self.assertEqual(choose_best_agent(TASK_TYPE_CODE_EDIT, [p3]), "p3")
-        p4 = self.Plugin("p4", avoid=[TASK_TYPE_CODE_EDIT])
-        p5 = self.Plugin("p5")
+        p4 = self.Profile("p4", avoid=[TASK_TYPE_CODE_EDIT])
+        p5 = self.Profile("p5")
         self.assertEqual(choose_best_agent(TASK_TYPE_CODE_EDIT, [p4, p5]), "p5")
-        all_avoid = [self.Plugin("p6", avoid=[TASK_TYPE_CODE_EDIT]), self.Plugin("p7", avoid=[TASK_TYPE_CODE_EDIT])]
+        all_avoid = [self.Profile("p6", avoid=[TASK_TYPE_CODE_EDIT]), self.Profile("p7", avoid=[TASK_TYPE_CODE_EDIT])]
         self.assertEqual(choose_best_agent(TASK_TYPE_CODE_EDIT, all_avoid), "p6")
 
 
@@ -713,12 +713,12 @@ class TaskToolsCoverageTests(unittest.TestCase):
         self.assertFalse(failed_job.ok)
 
 
-class MockPluginCoverageTests(unittest.TestCase):
-    def test_mock_plugin_registered(self):
-        """Verifica que Test mock plugin registered."""
-        plugin = get("mock")
-        self.assertIsNotNone(plugin)
-        self.assertEqual(plugin.name, "mock")
-        self.assertEqual(plugin.prefix, "/mock")
-        self.assertIn("echo", plugin.cmd)
-        self.assertTrue(plugin.prompt_as_arg)
+class MockProfileCoverageTests(unittest.TestCase):
+    def test_mock_profile_registered(self):
+        """Verifica que Test mock profile registered."""
+        profile = get("mock")
+        self.assertIsNotNone(profile)
+        self.assertEqual(profile.name, "mock")
+        self.assertEqual(profile.prefix, "/mock")
+        self.assertIn("echo", profile.cmd)
+        self.assertTrue(profile.prompt_as_arg)

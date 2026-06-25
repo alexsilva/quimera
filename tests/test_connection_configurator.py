@@ -4,12 +4,12 @@ import json
 import pytest
 
 from quimera.connection_configurator import ConnectionConfigurator
-from quimera.plugins.base import AgentPlugin, CliConnection, OpenAIConnection
+from quimera.profiles.base import ExecutionProfile, CliConnection, OpenAIConnection
 
 
-def _make_plugin(name="agent", cmd=None, model="gpt-4o", base_url="https://api.openai.com/v1",
+def _make_profile(name="agent", cmd=None, model="gpt-4o", base_url="https://api.openai.com/v1",
                  api_key_env="OPENAI_API_KEY", driver="openai_compat"):
-    return AgentPlugin(
+    return ExecutionProfile(
         name=name,
         prefix=f"/{name}",
         style=("cyan", name.upper()),
@@ -71,15 +71,15 @@ class TestOpenAIUnchanged:
     def _run_configure_unchanged(self, provider="openai_compat"):
         """Simula usuário pressionando Enter em todos os campos."""
         conn = self._make_existing_conn(provider=provider)
-        plugin = _make_plugin()
-        object.__setattr__(plugin, "_connection_override", conn)
+        profile = _make_profile()
+        object.__setattr__(profile, "_connection_override", conn)
 
         # inputs: driver, provider, model, base_url, api_key_env, extra_body, max_connections
         cfg = _make_configurator(
             inputs=["openai", "", "", "", "", "", ""],
             bools=[True],  # supports_native_tools mantém True
         )
-        result = cfg.configure(plugin)
+        result = cfg.configure(profile)
         return conn, result
 
     def test_unchanged_returns_same_object_openai_compat(self):
@@ -95,14 +95,14 @@ class TestOpenAIUnchanged:
     def test_changed_model_returns_new_conn(self):
         """Verifica que alterar o modelo retorna um novo objeto de conexão."""
         conn = self._make_existing_conn()
-        plugin = _make_plugin()
-        object.__setattr__(plugin, "_connection_override", conn)
+        profile = _make_profile()
+        object.__setattr__(profile, "_connection_override", conn)
 
         cfg = _make_configurator(
             inputs=["openai", "", "gpt-4o-mini", "", "", "", ""],
             bools=[True],
         )
-        result = cfg.configure(plugin)
+        result = cfg.configure(profile)
         assert result is not conn
         assert result.model == "gpt-4o-mini"
 
@@ -117,16 +117,16 @@ class TestOpenAIUnchanged:
             extra_body=body,
             max_connections=2,
         )
-        plugin = _make_plugin(model="claude-3-5", base_url="https://api.anthropic.com/v1",
+        profile = _make_profile(model="claude-3-5", base_url="https://api.anthropic.com/v1",
                               api_key_env="ANTHROPIC_API_KEY", driver="anthropic")
-        object.__setattr__(plugin, "_connection_override", conn)
+        object.__setattr__(profile, "_connection_override", conn)
 
         extra_str = json.dumps(body, ensure_ascii=False)
         cfg = _make_configurator(
             inputs=["openai", "", "", "", "", extra_str, "2"],
             bools=[True],  # supports_native_tools mantém True (valor do conn)
         )
-        result = cfg.configure(plugin)
+        result = cfg.configure(profile)
         assert result is conn
 
 
@@ -147,41 +147,41 @@ class TestCLIUnchanged:
     def test_unchanged_returns_same_object(self):
         """Verifica que nenhuma alteração na CLI retorna o mesmo objeto."""
         conn = self._make_existing_conn()
-        plugin = _make_plugin(driver="cli")
-        object.__setattr__(plugin, "_connection_override", conn)
+        profile = _make_profile(driver="cli")
+        object.__setattr__(profile, "_connection_override", conn)
 
         # inputs: driver, output_format (vazio=None mantido), cmd (aceita default)
         cfg = _make_configurator(
             inputs=["cli", "", "ollama run llama3"],
             bools=[False],
         )
-        result = cfg.configure(plugin)
+        result = cfg.configure(profile)
         assert result is conn
 
     def test_changed_cmd_returns_new_conn(self):
         """Verifica que alterar o cmd retorna um novo objeto de conexão."""
         conn = self._make_existing_conn()
-        plugin = _make_plugin(driver="cli")
-        object.__setattr__(plugin, "_connection_override", conn)
+        profile = _make_profile(driver="cli")
+        object.__setattr__(profile, "_connection_override", conn)
 
         cfg = _make_configurator(
             inputs=["cli", "", "ollama run mistral"],
             bools=[False],
         )
-        result = cfg.configure(plugin)
+        result = cfg.configure(profile)
         assert result is not conn
         assert result.cmd == ["ollama", "run", "mistral"]
 
     def test_empty_cmd_returns_existing_cli(self):
         """Enter vazio no campo cmd retorna a conexão CLI existente."""
         conn = self._make_existing_conn()
-        plugin = _make_plugin(driver="cli")
-        object.__setattr__(plugin, "_connection_override", conn)
+        profile = _make_profile(driver="cli")
+        object.__setattr__(profile, "_connection_override", conn)
 
         # cmd vazio → _configure_cli retorna cli_defaults
         cfg = _make_configurator(
             inputs=["cli", "", ""],
             bools=[],
         )
-        result = cfg.configure(plugin)
+        result = cfg.configure(profile)
         assert result is conn

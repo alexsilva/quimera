@@ -4,7 +4,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-import quimera.plugins as plugins
+import quimera.profiles as profiles
 from quimera.agent_events import SpyEvent
 from quimera.constants import Visibility
 from quimera.evidence import Evidence, EvidenceStore, PatternRegistry
@@ -360,10 +360,10 @@ class SpyOutputPresenter:
     def _is_cli_agent(agent: str | None) -> bool:
         if not agent:
             return False
-        plugin = plugins.get(agent)
-        if plugin is None:
+        profile = profiles.get(agent)
+        if profile is None:
             return False
-        effective_driver = getattr(plugin, "effective_driver", None)
+        effective_driver = getattr(profile, "effective_driver", None)
         if callable(effective_driver):
             try:
                 return str(effective_driver()).strip().lower() == "cli"
@@ -423,11 +423,11 @@ class SpyOutputPresenter:
         return f"{base} | {current}"
 
     def format_stdout(self, agent: str | None, line: str) -> list[SpyEvent]:
-        """Converte stdout cru em eventos estruturados via plugin ou fallback."""
+        """Converte stdout cru em eventos estruturados via profile ou fallback."""
         if not agent:
             return []
-        plugin = plugins.get(agent)
-        formatter = getattr(plugin, "spy_stdout_formatter", None) if plugin else None
+        profile = profiles.get(agent)
+        formatter = getattr(profile, "spy_stdout_formatter", None) if profile else None
         if callable(formatter):
             return formatter(line)
 

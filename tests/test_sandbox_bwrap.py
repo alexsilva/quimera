@@ -32,10 +32,10 @@ class TestBuildBwrapCmd(unittest.TestCase):
     """Testes unitários do builder (sem executar bwrap)."""
 
     @staticmethod
-    def _plugin_with_rw_paths(*paths: str):
-        plugin = Mock()
-        plugin.runtime_rw_paths = list(paths)
-        return plugin
+    def _profile_with_rw_paths(*paths: str):
+        profile = Mock()
+        profile.runtime_rw_paths = list(paths)
+        return profile
 
     def test_returns_original_cmd_when_bwrap_unavailable(self):
         """Verifica que retorna o comando original quando bwrap não está disponível."""
@@ -77,11 +77,11 @@ class TestBuildBwrapCmd(unittest.TestCase):
         """Verifica que diretório opencode-data tem --bind dentro do home read-only."""
         from unittest.mock import patch
         opencode_dir = str(Path.home() / ".local" / "share" / "opencode")
-        plugin = self._plugin_with_rw_paths(opencode_dir)
+        profile = self._profile_with_rw_paths(opencode_dir)
         with patch("quimera.sandbox.bwrap.is_bwrap_available", return_value=True), patch(
                 "quimera.sandbox.bwrap.os.path.exists", return_value=True
         ):
-            result = build_bwrap_cmd(PLANNING, "/tmp", ["echo"], plugin=plugin)
+            result = build_bwrap_cmd(PLANNING, "/tmp", ["echo"], profile=profile)
         pairs = list(zip(result, result[1:], result[2:]))
         self.assertTrue(
             any(a == "--bind" and b == opencode_dir and c == opencode_dir for a, b, c in pairs),
@@ -92,11 +92,11 @@ class TestBuildBwrapCmd(unittest.TestCase):
         """Verifica que diretório .claude tem --bind dentro do home read-only."""
         from unittest.mock import patch
         claude_dir = str(Path.home() / ".claude")
-        plugin = self._plugin_with_rw_paths(claude_dir)
+        profile = self._profile_with_rw_paths(claude_dir)
         with patch("quimera.sandbox.bwrap.is_bwrap_available", return_value=True), patch(
                 "quimera.sandbox.bwrap.os.path.exists", return_value=True
         ):
-            result = build_bwrap_cmd(ANALYSIS, "/tmp", ["echo"], plugin=plugin)
+            result = build_bwrap_cmd(ANALYSIS, "/tmp", ["echo"], profile=profile)
         pairs = list(zip(result, result[1:], result[2:]))
         self.assertTrue(
             any(a == "--bind" and b == claude_dir and c == claude_dir for a, b, c in pairs),
@@ -107,11 +107,11 @@ class TestBuildBwrapCmd(unittest.TestCase):
         """Verifica que .claude.json tem --bind dentro do home read-only."""
         from unittest.mock import patch
         claude_auth_file = str(Path.home() / ".claude.json")
-        plugin = self._plugin_with_rw_paths(claude_auth_file)
+        profile = self._profile_with_rw_paths(claude_auth_file)
         with patch("quimera.sandbox.bwrap.is_bwrap_available", return_value=True), patch(
                 "quimera.sandbox.bwrap.os.path.exists", return_value=True
         ):
-            result = build_bwrap_cmd(ANALYSIS, "/tmp", ["echo"], plugin=plugin)
+            result = build_bwrap_cmd(ANALYSIS, "/tmp", ["echo"], profile=profile)
         pairs = list(zip(result, result[1:], result[2:]))
         self.assertTrue(
             any(a == "--bind" and b == claude_auth_file and c == claude_auth_file for a, b, c in pairs),
@@ -122,11 +122,11 @@ class TestBuildBwrapCmd(unittest.TestCase):
         """Verifica que diretório share/claude tem --bind dentro do home read-only."""
         from unittest.mock import patch
         claude_share_dir = str(Path.home() / ".local" / "share" / "claude")
-        plugin = self._plugin_with_rw_paths(claude_share_dir)
+        profile = self._profile_with_rw_paths(claude_share_dir)
         with patch("quimera.sandbox.bwrap.is_bwrap_available", return_value=True), patch(
                 "quimera.sandbox.bwrap.os.path.exists", return_value=True
         ):
-            result = build_bwrap_cmd(ANALYSIS, "/tmp", ["echo"], plugin=plugin)
+            result = build_bwrap_cmd(ANALYSIS, "/tmp", ["echo"], profile=profile)
         pairs = list(zip(result, result[1:], result[2:]))
         self.assertTrue(
             any(a == "--bind" and b == claude_share_dir and c == claude_share_dir for a, b, c in pairs),

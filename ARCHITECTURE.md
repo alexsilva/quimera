@@ -84,22 +84,22 @@ quimera/
 │       └── tasks.py                  # Tool de criação/consulta de tasks
 │
 ├── agents/                           # Infraestrutura de comunicação com agentes LLM
-│   ├── client.py                     # Cliente unificado para agentes (CLI, API, plugin)
+│   ├── client.py                     # Cliente unificado para agentes (CLI, API, profile)
 │   ├── parsers.py                    # Parsers de saída de agentes (JSON, markdown, etc.)
 │   ├── process_runner.py             # Execução e gerenciamento de subprocessos de agentes
 │   ├── signal_guard.py               # Proteção contra sinais durante chamadas de agentes
 │   ├── text_filters.py               # Filtros de texto (strip de ruído, normalização)
 │   └── warm_pool.py                  # Pool de processos pré-aquecidos de agentes
 │
-├── plugins/                          # Sistema de plugins por agente
-│   ├── base.py                       # Registro central (AgentPlugin, _plugin_registry)
-│   ├── claude.py                     # Plugin para Claude (Anthropic CLI)
-│   ├── codex.py                      # Plugin para Codex (OpenAI CLI)
-│   ├── gemini.py                     # Plugin para Gemini (Google CLI)
-│   ├── ollama.py                     # Plugin para Ollama (LLMs locais)
-│   ├── opencode.py                   # Plugin para OpenCode (vários backends)
-│   ├── mock.py                       # Plugin mock para testes
-│   └── spy_utils.py                  # Utilitários de espionagem/observação de plugins
+├── profiles/                          # Sistema de profiles por agente
+│   ├── base.py                       # Registro central (ExecutionProfile, _profile_registry)
+│   ├── claude.py                     # Profile para Claude (Anthropic CLI)
+│   ├── codex.py                      # Profile para Codex (OpenAI CLI)
+│   ├── gemini.py                     # Profile para Gemini (Google CLI)
+│   ├── ollama.py                     # Profile para Ollama (LLMs locais)
+│   ├── opencode.py                   # Profile para OpenCode (vários backends)
+│   ├── mock.py                       # Profile mock para testes
+│   └── spy_utils.py                  # Utilitários de espionagem/observação de profiles
 │
 ├── ui/                               # Camada de apresentação
 │   ├── renderer.py                   # TerminalRenderer (Rich + Rich.Live, ~1200 linhas)
@@ -164,7 +164,7 @@ quimera/
 - **`prompt_input.py`** (`InputGate`): Wrapper sobre `prompt_toolkit.PromptSession`. Gerencia o prompt interativo do usuário, histórico e coordenação com o renderer. `InputGate.is_active()` é a fonte primária de verdade para estado de prompt ativo (substituiu `nonblocking_input_status` como árbitro principal). Fallback para `input()` built-in apenas quando `_session` é `None` (contextos de teste).
 - **`inputs.py`**: Integração de alto nível com `InputGate`, exposta ao `core.py`.
 - **`event_sink.py`**: Publish-subscribe interno. Eventos publicados de worker threads são enfileirados na `ui_event_queue`; publicados da main thread são processados diretamente.
-- **`system_layer.py`**: Processa comandos `/cmd` do usuário. Adaptadores legados (`_LegacyPluginResolver`, `_LegacyAgentPoolAdapter`) mantidos para compatibilidade de migração.
+- **`system_layer.py`**: Processa comandos `/cmd` do usuário. Adaptadores legados (`_LegacyProfileResolver`, `_LegacyAgentPoolAdapter`) mantidos para compatibilidade de migração.
 - **`protocol.py`**: Define e parseia o formato de delegation entre agentes (`type`, `route`, `content`, `metadata`).
 - **`interfaces.py`**: Protocolos (typing) que tentam estabelecer contratos entre camadas — ainda subutilizados.
 
@@ -180,15 +180,15 @@ Executor de tools e agentes em ambiente potencialmente sandboxed.
 
 ### 3.3 Camada de Agentes (`agents/`)
 
-- **`client.py`**: Interface unificada para todos os backends (CLI local, API remota, plugin). Suporta streaming.
+- **`client.py`**: Interface unificada para todos os backends (CLI local, API remota, profile). Suporta streaming.
 - **`warm_pool.py`**: Pool de processos pré-iniciados para reduzir latência de cold start.
 - **`process_runner.py`**: Gerencia subprocessos de agentes (stdin/stdout/stderr, timeout, sinalização).
 
-### 3.4 Camada de Plugins (`plugins/`)
+### 3.4 Camada de Profiles (`profiles/`)
 
-- **`base.py`**: Define `AgentPlugin` (dataclass com metadados: `name`, `driver`, `supports_task_execution`, `runtime_rw_paths`, etc.) e `_plugin_registry`.
-- Plugins concretos (`claude.py`, `codex.py`, `gemini.py`, `ollama.py`, `opencode.py`): cada um registra um `AgentPlugin` com configuração específica do backend.
-- `mock.py`: Plugin para testes unitários.
+- **`base.py`**: Define `ExecutionProfile` (dataclass com metadados: `name`, `driver`, `supports_task_execution`, `runtime_rw_paths`, etc.) e `_profile_registry`.
+- Profiles concretos (`claude.py`, `codex.py`, `gemini.py`, `ollama.py`, `opencode.py`): cada um registra um `ExecutionProfile` com configuração específica do backend.
+- `mock.py`: Profile para testes unitários.
 
 ### 3.5 Camada de Apresentação (`ui/`)
 
@@ -205,7 +205,7 @@ Sistema de rastreamento de contexto verificável. Evidências são extraídas da
 
 ### 3.8 Sandbox (`sandbox/`)
 
-- **`bwrap.py`**: Integração com `bubblewrap` (bwrap) para isolamento de processos. Define paths de leitura/escrita permitidos por agente via `AgentPlugin.runtime_rw_paths`.
+- **`bwrap.py`**: Integração com `bubblewrap` (bwrap) para isolamento de processos. Define paths de leitura/escrita permitidos por agente via `ExecutionProfile.runtime_rw_paths`.
 
 ### 3.9 Sistema MCP (Model Context Protocol)
 
@@ -220,10 +220,10 @@ O Quimera implementa o protocolo MCP (`2025-11-25`, com negociação para versõ
 | **ToolRegistry** | `runtime/registry.py` | Registro nome → handler (dict simples) |
 | **DelegateTools** | `runtime/tools/delegate.py` | Implementa `delegate` — delegação cross-MCP entre agentes |
 | **Proxy stdio→socket** | `runtime/mcp/server.py:_proxy_stdio_to_socket` | Ponte transparente entre stdio do agente e socket Unix do servidor |
-| **Plugin MCP injection** | `plugins/{claude,codex,opencode}.py` | Cada plugin injeta config MCP no formato nativo do agente |
+| **Profile MCP injection** | `profiles/{claude,codex,opencode}.py` | Cada profile injeta config MCP no formato nativo do agente |
 | **Tool schemas** | `runtime/drivers/tool_schemas.py` | Fonte única de schemas: `resolve_tool_schemas()` filtra por registro/política |
 | **Prompt conditionals** | `prompt.md`, `task_prompt.md` | Blocos `<!-- IF:mcp_enabled -->` ativam instruções MCP nos prompts |
-| **Config bridge** | `app/core.py:configure_mcp_socket()` / `configure_mcp_http()` | Propaga socket/http endpoint e token para todos os plugins ativos |
+| **Config bridge** | `app/core.py:configure_mcp_socket()` / `configure_mcp_http()` | Propaga socket/http endpoint e token para todos os profiles ativos |
 
 #### 3.9.2 Fluxo de Inicialização
 
@@ -234,13 +234,13 @@ CLI (socket padrão)
   ├── HTTP opcional: `--mcp-http --mcp-host 127.0.0.1 --mcp-port 9090` expõe `/mcp`; `--mcp-token-env` permite token fixo para clientes remotos
   ├── Cria MCPServer(tool_executor, auth_token=mcp_token)
   ├── inicia socket ou MCP_HTTPServer em background
-  ├── app.configure_mcp_socket(...) ou app.configure_mcp_http(...) → propaga para plugins
+  ├── app.configure_mcp_socket(...) ou app.configure_mcp_http(...) → propaga para profiles
   └── session_state["mcp_enabled"] = True      → ativa blocos no prompt
 ```
 
-#### 3.9.3 Injeção por Plugin
+#### 3.9.3 Injeção por Profile
 
-| Plugin | Formato | Exemplo |
+| Profile | Formato | Exemplo |
 |---|---|---|
 | **Codex** | `-c mcp_servers.quimera.command=python -c mcp_servers.quimera.args=[...]` | Argumentos CLI no estilo TOML |
 | **Claude** | `--mcp-config {"mcpServers":{"quimera":{"type":"stdio","command":"python","args":[...]}}}` | JSON injetado como argumento |
@@ -358,7 +358,7 @@ Tools definidas em `TOOL_SCHEMAS`, filtradas por:
 
 O loop em `quimera/app/core.py:run()` segue este fluxo:
 
-1. **Inicialização**: carrega configuração, plugins, estado de sessão; cria renderer, InputGate, TurnManager, pool de workers, `ui_event_queue`. O servidor MCP é iniciado em `cli.py` antes de `app.run()` — resolve token de autenticação por env ou gera token aleatório, cria socket Unix, inicia MCPServer em background e propaga configuração para todos os plugins ativos.
+1. **Inicialização**: carrega configuração, profiles, estado de sessão; cria renderer, InputGate, TurnManager, pool de workers, `ui_event_queue`. O servidor MCP é iniciado em `cli.py` antes de `app.run()` — resolve token de autenticação por env ou gera token aleatório, cria socket Unix, inicia MCPServer em background e propaga configuração para todos os profiles ativos.
 2. **Loop principal**:
    - Drena `ui_event_queue` → atualiza renderer.
    - Se não for turno do humano: aguarda com timeout (verifica worker vivo).
@@ -375,10 +375,10 @@ O loop em `quimera/app/core.py:run()` segue este fluxo:
 ### 6.1 Integração com Agentes
 
 - `agents/client.py` abstrai todos os backends: CLI local (`claude`, `codex`, `gemini`), API (OpenAI-compat), driver REPL persistente.
-- `plugins/` define metadados por agente: capacidades, paths de sandbox, driver, tipos de task suportados, e mecanismo de injeção MCP via `mcp_server_args()`.
+- `profiles/` define metadados por agente: capacidades, paths de sandbox, driver, tipos de task suportados, e mecanismo de injeção MCP via `mcp_server_args()`.
 - `agents/warm_pool.py` mantém processos pré-aquecidos para reduzir latência.
 - `runtime/mcp/server.py` expõe as ferramentas do runtime via protocolo MCP; o driver OpenAI-compatible também usa tool calling nativo quando disponível, e ambos convergem para `ToolExecutor.execute(ToolCall(...))`.
-- `plugins/{claude,codex,opencode}.py` cada um implementa `mcp_server_args(socket_path)` para injetar a configuração MCP no formato nativo do agente (JSON, CLI args, env vars).
+- `profiles/{claude,codex,opencode}.py` cada um implementa `mcp_server_args(socket_path)` para injetar a configuração MCP no formato nativo do agente (JSON, CLI args, env vars).
 
 ### 6.2 Sistema de Tasks
 
@@ -448,23 +448,23 @@ Quando o MCP está ativo (padrão), os agentes usam a tool `delegate` exposta vi
 
 ### 7.3 Violações de Fronteira de Camadas (Resolvidas)
 
-Imports diretos de `plugins/` que existiam em módulos da camada de runtime/sandbox foram eliminados:
+Imports diretos de `profiles/` que existiam em módulos da camada de runtime/sandbox foram eliminados:
 
 | Módulo | Violação | Status |
 |---|---|---|
-| `sandbox/bwrap.py` | importava `AgentPlugin` de `plugins.base` | **Resolvido** (8c) |
-| `runtime/task_planning.py` | importava `AgentPlugin` de `plugins.base` | **Resolvido** (8a) |
-| `runtime/drivers/repl.py` | chamava `_plugin_registry.all_plugins()` diretamente | **Resolvido** (8b) |
+| `sandbox/bwrap.py` | importava `ExecutionProfile` de `profiles.base` | **Resolvido** (8c) |
+| `runtime/task_planning.py` | importava `ExecutionProfile` de `profiles.base` | **Resolvido** (8a) |
+| `runtime/drivers/repl.py` | chamava `_profile_registry.all_profiles()` diretamente | **Resolvido** (8b) |
 | `app/core.py` | `delegate_for_parallel` exposto via wrapper desnecessário | **Resolvido** (8e) |
-| `ui/renderer.py` | consultava `quimera.plugins.get(...)` para metadados | **Resolvido** (8d) |
+| `ui/renderer.py` | consultava `quimera.profiles.get(...)` para metadados | **Resolvido** (8d) |
 
-### 7.4 Lookups de Plugin Distribuídos (Resolvidos)
+### 7.4 Lookups de Profile Distribuídos (Resolvidos)
 
-Os lookups dispersos de `quimera.plugins.get(...)` em `app/dispatch.py`, `app/task.py`, `app/system_layer.py` e `app/chat_round.py` foram resolvidos. Lookups remanescentes em `cli.py`, `agents/client.py` e `agents/text_filters.py` são legítimos — essas camadas têm acesso intencional ao registro de plugins.
+Os lookups dispersos de `quimera.profiles.get(...)` em `app/dispatch.py`, `app/task.py`, `app/system_layer.py` e `app/chat_round.py` foram resolvidos. Lookups remanescentes em `cli.py`, `agents/client.py` e `agents/text_filters.py` são legítimos — essas camadas têm acesso intencional ao registro de profiles.
 
 ### 7.5 Outros Problemas
 
-- **Adaptadores legados em `system_layer.py`**: `_LegacyPluginResolver` e `_LegacyAgentPoolAdapter` indicam migração de contrato incompleta.
+- **Adaptadores legados em `system_layer.py`**: `_LegacyProfileResolver` e `_LegacyAgentPoolAdapter` indicam migração de contrato incompleta.
 - **Cobertura de testes**: 2209 passando. Lacunas em testes de integração de tasks (criação → execução → revisão), concorrência e cenários de falha.
 - **Logging**: feito via `print` estruturado; sem níveis de gravidade padronizados ou saída JSON.
 - **`renderer.py`** (~1200 linhas): beneficiaria divisão em módulos menores.
@@ -489,4 +489,4 @@ Os lookups dispersos de `quimera.plugins.get(...)` em `app/dispatch.py`, `app/ta
 
 1. **Threading/renderização**: conflito `rich.Live` × `prompt_toolkit` pode causar corrupção de terminal em resize durante streaming. A suspensão do renderer foi estabilizada para o fluxo do editor (`tty_control.py`), mas o caminho geral ainda não usa `run_in_terminal`.
 2. **`core.py` ainda grande**: ~1611 linhas com ~40 lambdas `lambda: self.*` no `__init__` — acoplamento alto que dificulta extração adicional.
-3. **Adaptadores legados em `system_layer.py`**: `_LegacyPluginResolver` e `_LegacyAgentPoolAdapter` indicam migração de contrato incompleta.
+3. **Adaptadores legados em `system_layer.py`**: `_LegacyProfileResolver` e `_LegacyAgentPoolAdapter` indicam migração de contrato incompleta.

@@ -34,7 +34,7 @@ from .toolbar_coordinator import ToolbarCoordinator
 from .session_metrics import SessionMetricsService
 from .dispatch import AppDispatchServices
 from .inputs import AppInputServices
-from .interfaces import PluginResolverAdapter
+from .interfaces import ProfileResolverAdapter
 from .prompt_input import InputGate, PromptFormatter
 from ..runtime.input_broker import InputBroker
 from .runtime_state import AppRuntimeState
@@ -60,8 +60,8 @@ from .turn import TurnManager
 from .event_sink import EventSink
 from .ui_event_handler import UiEventHandler
 from .worker import ChatWorker
-from .. import plugins
-from ..plugins.base import PluginRegistry
+from .. import profiles
+from ..profiles.base import ProfileRegistry
 from ..tasks import api as runtime_tasks
 from ..runtime.process_supervisor import ProcessSupervisor
 from ..ui import RenderAuditLogger, TerminalRenderer
@@ -121,7 +121,7 @@ class QuimeraApp:
                  theme: str | None = None,
                  workspace: Workspace | None = None,
                  auto_approve_mutations: bool = False,
-                 plugin_registry: PluginRegistry | None = None,
+                 profile_registry: ProfileRegistry | None = None,
                  ):
         """Inicializa uma instância de QuimeraApp."""
         self._lock = threading.Lock()
@@ -132,7 +132,7 @@ class QuimeraApp:
         self.threads = int(threads) if threads is not None else 1
         self.toolbar = ToolbarManager(threads=self.threads)
         self.auto_approve_mutations = auto_approve_mutations
-        self._plugin_registry = plugin_registry
+        self._profile_registry = profile_registry
         self.workspace = workspace if workspace is not None else Workspace(cwd)
         EnvConfig(self.workspace.env_file).apply_to_environ()
         self.config = ConfigManager(self.workspace.config_file)
@@ -155,7 +155,7 @@ class QuimeraApp:
         )
         self.renderer = TerminalRenderer(
             theme=active_theme,
-            get_plugin_style=self._resolve_plugin_style,
+            get_profile_style=self._resolve_profile_style,
             density=self.config.density,
             audit_logger=render_audit_logger,
         )
@@ -229,13 +229,13 @@ class QuimeraApp:
             prompt_owner_thread_id_getter=self.input_gate.get_owner_thread_id,
             run_above_active_prompt=self.input_gate.run_in_terminal_message,
         )
-        self._plugin_resolver = PluginResolverAdapter(
-            registry=self._plugin_registry,
+        self._profile_resolver = ProfileResolverAdapter(
+            registry=self._profile_registry,
             normalize=normalize_agent_name,
         )
         self.system_layer = AppSystemLayer(
             display_service=self._display_service,
-            plugin_resolver=self._plugin_resolver,
+            profile_resolver=self._profile_resolver,
             prompt_builder=None,
             history_getter=self.session_state_mgr.history_snapshot,
             shared_state_getter=self.session_state_mgr.shared_state_snapshot,
@@ -250,7 +250,7 @@ class QuimeraApp:
             session_state_manager=self.session_state_mgr,
             approval_handler_getter=lambda: getattr(self, "_approval_handler", None),
             context_manager=self.context_manager,
-            plugin_registry=self._plugin_registry,
+            profile_registry=self._profile_registry,
         )
         self.input_services = AppInputServices(
             self.renderer,
@@ -407,8 +407,8 @@ class QuimeraApp:
             auto_approve_mutations=self.auto_approve_mutations,
             approval_handler=self._approval_handler,
             set_approval_handler=lambda h: setattr(self, "_approval_handler", h),
-            get_agent_plugin=self._plugin_resolver.get,
-            available_plugins=self._plugin_resolver.plugins,
+            get_agent_profile=self._profile_resolver.get,
+            available_profiles=self._profile_resolver.profiles,
             session_state=self._chat_state,
             system_layer=self.system_layer,
             task_classifier=self.task_classifier,
@@ -450,7 +450,7 @@ class QuimeraApp:
         self.dispatch_services = AppDispatchServices(
             prompt_builder=self.prompt_builder,
             renderer=self.renderer,
-            get_agent_plugin=self._plugin_resolver.get,
+            get_agent_profile=self._profile_resolver.get,
             session_state=self._chat_state,
             get_execution_mode=lambda: self.execution_mode,
             refresh_task_state=self.task_services.refresh_task_shared_state,
@@ -486,7 +486,7 @@ class QuimeraApp:
             agent_client=self.agent_client,
             turn_manager=self.turn_manager,
             task_services=self.task_services,
-            get_agent_plugin=self._plugin_resolver.get,
+            get_agent_profile=self._profile_resolver.get,
             behavior_metrics=self.behavior_metrics,
             threads=self.threads,
             session_state=self._chat_state,
@@ -539,7 +539,7 @@ class QuimeraApp:
         self.toolbar_coordinator = ToolbarCoordinator(
             toolbar_manager=self.toolbar,
             agent_pool=self.agent_pool,
-            get_agent_plugin=self._plugin_resolver.get,
+            get_agent_profile=self._profile_resolver.get,
             workspace=self.workspace,
             get_history=lambda: self.history,
             storage=self.storage,
@@ -600,11 +600,11 @@ class QuimeraApp:
         self.command_router = CommandRouter(
             agent_pool=self.agent_pool,
             renderer=self.renderer,
-            get_active_agent_plugins=lambda: self._plugin_resolver.active_plugins(self.agent_pool),
+            get_active_agent_profiles=lambda: self._profile_resolver.active_profiles(self.agent_pool),
             set_execution_mode=self._set_execution_mode,
             normalize_agent_name=normalize_agent_name,
             selected_agents=self.selected_agents,
-            get_available_plugins=lambda: self._plugin_resolver.plugins,
+            get_available_profiles=lambda: self._profile_resolver.profiles,
         )
         self._ui_subscriptions = self._ui_event_handler.wire_event_ui()
 
@@ -667,9 +667,9 @@ class QuimeraApp:
         """Retorna todos os comandos disponíveis para autocomplete."""
         commands = set(self._available_internal_commands())
         for agent_name in self.agent_pool:
-            plugin = self._plugin_resolver.get(agent_name)
-            if plugin and plugin.prefix:
-                commands.add(plugin.prefix)
+            profile = self._profile_resolver.get(agent_name)
+            if profile and profile.prefix:
+                commands.add(profile.prefix)
         return sorted(commands)
 
     def _command_argument_resolver(self, command: str, partial: str) -> list[str]:
@@ -688,62 +688,62 @@ class QuimeraApp:
             return sorted(self.agent_pool)
         return []
 
-    def _resolve_plugin_style(self, agent: str):
+    def _resolve_profile_style(self, agent: str):
         """Resolve (color, label) para o agente; retorna None se não encontrado."""
-        plugin = self._plugin_resolver.get(agent)
-        return plugin.render_style if plugin else None
+        profile = self._profile_resolver.get(agent)
+        return profile.render_style if profile else None
 
     def configure_mcp_socket(self, socket_path: str | None, token: str | None = None) -> None:
-        """Propaga socket MCP e token para os plugins dos agentes ativos."""
-        resolver = getattr(self, "_plugin_resolver", None)
+        """Propaga socket MCP e token para os profiles dos agentes ativos."""
+        resolver = getattr(self, "_profile_resolver", None)
         agent_pool = getattr(self, "agent_pool", None)
         if resolver is not None and agent_pool is not None:
             resolver.configure_mcp_socket(agent_pool, socket_path, token)
             return
-        for plugin in self.get_active_agent_plugins():
-            config_setter = getattr(plugin, "set_mcp_socket_config", None)
+        for profile in self.get_active_agent_profiles():
+            config_setter = getattr(profile, "set_mcp_socket_config", None)
             if callable(config_setter):
                 config_setter(socket_path, token)
             else:
-                path_setter = getattr(plugin, "set_mcp_socket_path", None)
+                path_setter = getattr(profile, "set_mcp_socket_path", None)
                 if callable(path_setter):
                     path_setter(socket_path)
 
     def configure_mcp_http(self, url: str | None, token: str | None = None) -> None:
-        """Propaga endpoint MCP HTTP e token para os plugins dos agentes ativos."""
-        resolver = getattr(self, "_plugin_resolver", None)
+        """Propaga endpoint MCP HTTP e token para os profiles dos agentes ativos."""
+        resolver = getattr(self, "_profile_resolver", None)
         agent_pool = getattr(self, "agent_pool", None)
         if resolver is not None and agent_pool is not None:
             resolver.configure_mcp_http(agent_pool, url, token)
             return
-        for plugin in self.get_active_agent_plugins():
-            config_setter = getattr(plugin, "set_mcp_http_config", None)
+        for profile in self.get_active_agent_profiles():
+            config_setter = getattr(profile, "set_mcp_http_config", None)
             if callable(config_setter):
                 config_setter(url, token)
 
-    def get_agent_plugin(self, agent):
-        """Retorna o plugin associado ao agente, ou None."""
-        resolver = getattr(self, "_plugin_resolver", None)
+    def get_agent_profile(self, agent):
+        """Retorna o profile associado ao agente, ou None."""
+        resolver = getattr(self, "_profile_resolver", None)
         if resolver is not None:
             return resolver.get(agent)
-        return plugins.get(agent)
+        return profiles.get(agent)
 
-    def get_available_plugins(self) -> list:
-        """Retorna todos os plugins disponíveis."""
-        resolver = getattr(self, "_plugin_resolver", None)
+    def get_available_profiles(self) -> list:
+        """Retorna todos os profiles disponíveis."""
+        resolver = getattr(self, "_profile_resolver", None)
         if resolver is not None:
-            return resolver.plugins
-        return plugins.all_plugins()
+            return resolver.profiles
+        return profiles.all_profiles()
 
-    def get_active_agent_plugins(self) -> list:
-        """Retorna plugins dos agentes ativos no pool."""
-        resolver = getattr(self, "_plugin_resolver", None)
+    def get_active_agent_profiles(self) -> list:
+        """Retorna profiles dos agentes ativos no pool."""
+        resolver = getattr(self, "_profile_resolver", None)
         if resolver is not None:
-            return resolver.active_plugins(self.agent_pool)
+            return resolver.active_profiles(self.agent_pool)
         agent_pool = getattr(self, "agent_pool", None)
         if agent_pool is None:
             return []
-        return [p for name in (agent_pool.agents or []) if (p := plugins.get(name)) is not None]
+        return [p for name in (agent_pool.agents or []) if (p := profiles.get(name)) is not None]
 
     def delegate(self, agent, **options):
         """Delega uma mensagem para o agente especificado."""

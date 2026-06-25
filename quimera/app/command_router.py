@@ -19,19 +19,19 @@ class CommandRouter:
         self,
         agent_pool: IAgentPool,
         renderer: IRenderer,
-        get_active_agent_plugins: Callable[[], list],
+        get_active_agent_profiles: Callable[[], list],
         set_execution_mode: Callable[[object], None],
         normalize_agent_name: Callable[[str], str],
         selected_agents: list[str],
-        get_available_plugins: Callable[[], list],
+        get_available_profiles: Callable[[], list],
     ):
         self.agent_pool = agent_pool
         self.renderer = renderer
-        self.get_active_agent_plugins = get_active_agent_plugins
+        self.get_active_agent_profiles = get_active_agent_profiles
         self.set_execution_mode = set_execution_mode
         self.normalize_agent_name = normalize_agent_name
         self.selected_agents = selected_agents
-        self.get_available_plugins = get_available_plugins
+        self.get_available_profiles = get_available_profiles
 
     def parse_routing(self, user_input: str) -> tuple[str | None, str | None, bool]:
         """Extrai o agente inicial e rejeita prefixos duplicados na mesma entrada.
@@ -64,8 +64,8 @@ class CommandRouter:
                 self.agent_pool.set([self.normalize_agent_name(a) for a in self.selected_agents])
             return None, "", False
 
-        active_plugins = self.get_active_agent_plugins()
-        for p in active_plugins:
+        active_profiles = self.get_active_agent_profiles()
+        for p in active_profiles:
             prefixes = [p.prefix, *(getattr(p, "aliases", None) or [])]
             agent = p.name
             for prefix in prefixes:
@@ -75,7 +75,7 @@ class CommandRouter:
                     message = stripped[len(prefix):].lstrip()
                     lowered_message = message.lower()
                     other_prefixes = []
-                    for op in active_plugins:
+                    for op in active_profiles:
                         if op.name == agent:
                             continue
                         other_prefixes.extend([op.prefix, *(getattr(op, "aliases", None) or [])])
@@ -87,8 +87,8 @@ class CommandRouter:
         if not self.agent_pool:
             logger.warning("no active agents, resetting to default")
             logger.debug("selected_agents=%r", self.selected_agents)
-            logger.debug("available=%r", self.get_available_plugins())
-            self.agent_pool.set(self.selected_agents or [p.name for p in self.get_available_plugins()])
+            logger.debug("available=%r", self.get_available_profiles())
+            self.agent_pool.set(self.selected_agents or [p.name for p in self.get_available_profiles()])
             logger.debug("after fallback active_agents=%r", self.agent_pool.agents)
             if not self.agent_pool:
                 raise RuntimeError("No agents available")

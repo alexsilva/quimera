@@ -33,7 +33,7 @@ A classificação também infere complexidade, necessidade de tools, necessidade
 
 ## Scoring de roteamento
 
-Para cada plugin elegível, o roteador calcula um score base:
+Para cada profile elegível, o roteador calcula um score base:
 
 - tier maior soma pontos;
 - tipo preferido soma pontos;

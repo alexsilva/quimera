@@ -44,10 +44,10 @@ def build_task_services(app):
         app.auto_approve_mutations = False
     if not hasattr(app, "_approval_handler"):
         app._approval_handler = None
-    if not hasattr(app, "get_agent_plugin"):
-        app.get_agent_plugin = lambda _agent_name: None
-    if not hasattr(app, "get_available_plugins"):
-        app.get_available_plugins = lambda: []
+    if not hasattr(app, "get_agent_profile"):
+        app.get_agent_profile = lambda _agent_name: None
+    if not hasattr(app, "get_available_profiles"):
+        app.get_available_profiles = lambda: []
     if not hasattr(app, "session_state"):
         app.session_state = None
     if not hasattr(app, "history"):
@@ -119,8 +119,8 @@ def build_task_services(app):
         get_auto_approve_mutations=lambda: app.auto_approve_mutations,
         get_approval_handler=lambda: app._approval_handler,
         set_approval_handler=lambda handler: setattr(app, "_approval_handler", handler),
-        get_agent_plugin=app.get_agent_plugin,
-        get_available_plugins=app.get_available_plugins,
+        get_agent_profile=app.get_agent_profile,
+        get_available_profiles=app.get_available_profiles,
         get_session_state=lambda: app.session_state,
         get_history=lambda: app.history,
         get_shared_state=lambda: app.shared_state,
@@ -433,7 +433,7 @@ def test_app_task_services_execution_isolated_from_chat_cancel_state(monkeypatch
         {"cwd": tmp_path, "tasks_db": tmp_path / "tasks.db"},
     )()
     app.auto_approve_mutations = False
-    app.get_agent_plugin = lambda _agent_name: None
+    app.get_agent_profile = lambda _agent_name: None
 
     services = build_task_services(app)
     monkeypatch.setattr(services, "_build_task_repository", lambda: repo)

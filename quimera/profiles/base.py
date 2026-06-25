@@ -1,4 +1,4 @@
-"""Componentes de `quimera.plugins.base`."""
+"""Componentes de `quimera.profiles.base`."""
 import json
 import re
 import shlex
@@ -89,7 +89,7 @@ def save_connections(connections: dict) -> None:
     f.write_text(json.dumps(connections, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
-def get_connection_overrides() -> dict[str, dict]:
+def get_connections() -> dict[str, dict]:
     """Retorna overrides de conexão persistidos por agente."""
     return load_connections()
 
@@ -136,68 +136,68 @@ def _resolve_registry(registry=None):
     return registry if registry is not None else _registry
 
 
-def apply_connection_overrides(registry=None, exclude_names: set[str] | frozenset[str] | None = None) -> None:
-    """Aplica conexões persistidas aos plugins registrados."""
+def apply_connections(registry=None, exclude_names: set[str] | frozenset[str] | None = None) -> None:
+    """Aplica conexões persistidas aos perfis registrados."""
     target_registry = _resolve_registry(registry)
     excluded = {str(name).strip().lower() for name in (exclude_names or set())}
-    overrides = get_connection_overrides()
+    overrides = get_connections()
     for name, conn_data in overrides.items():
         if str(name).strip().lower() in excluded:
             continue
         if target_registry.get(name) is None:
             try:
-                register_dynamic_plugin(name, metadata=conn_data.get("plugin"), registry=target_registry)
+                register_connection_profile(name, metadata=conn_data.get("profile"), registry=target_registry)
             except ValueError:
                 continue
-        plugin = target_registry.get(name)
-        if plugin is None:
+        profile = target_registry.get(name)
+        if profile is None:
             continue
         conn = _connection_from_dict(conn_data)
-        object.__setattr__(plugin, "_connection_override", conn)
+        object.__setattr__(profile, "_connection_override", conn)
 
 
-def reload_plugins(registry=None) -> list:
-    """Recarrega plugins e retorna nomes disponibles."""
+def reload_profiles(registry=None) -> list:
+    """Recarrega perfis e retorna nomes disponibles."""
     target_registry = _resolve_registry(registry)
-    apply_connection_overrides(registry=target_registry)
+    apply_connections(registry=target_registry)
     return target_registry.all_names()
 
 
-def set_connection_override(agent_name: str, connection: Connection, persist: bool = True, registry=None) -> None:
+def set_connection(agent_name: str, connection: Connection, persist: bool = True, registry=None) -> None:
     """Aplica um override de conexão em memória e opcionalmente persiste."""
     target_registry = _resolve_registry(registry)
-    plugin = target_registry.get(agent_name)
-    if plugin is not None:
-        object.__setattr__(plugin, "_connection_override", connection)
+    profile = target_registry.get(agent_name)
+    if profile is not None:
+        object.__setattr__(profile, "_connection_override", connection)
     if persist:
         connections = load_connections()
         payload = connection_to_dict(connection)
-        if plugin is not None and getattr(plugin, "dynamic", False):
-            plugin_meta: dict = {
+        if profile is not None and getattr(profile, "dynamic", False):
+            profile_meta: dict = {
                 "dynamic": True,
-                "prefix": plugin.prefix,
-                "style": list(plugin.style),
-                "icon": plugin.icon,
-                "capabilities": list(plugin.capabilities),
-                "preferred_task_types": list(plugin.preferred_task_types),
-                "supports_tools": plugin.supports_tools,
-                "has_builtin_tools": plugin.has_builtin_tools,
-                "tool_use_reliability": plugin.tool_use_reliability,
-                "supports_code_editing": plugin.supports_code_editing,
-                "supports_long_context": plugin.supports_long_context,
-                "supports_task_execution": plugin.supports_task_execution,
-                "supports_warm_pool": plugin.supports_warm_pool,
-                "base_tier": plugin.base_tier,
-                "runtime_rw_paths": list(plugin.runtime_rw_paths),
+                "prefix": profile.prefix,
+                "style": list(profile.style),
+                "icon": profile.icon,
+                "capabilities": list(profile.capabilities),
+                "preferred_task_types": list(profile.preferred_task_types),
+                "supports_tools": profile.supports_tools,
+                "has_builtin_tools": profile.has_builtin_tools,
+                "tool_use_reliability": profile.tool_use_reliability,
+                "supports_code_editing": profile.supports_code_editing,
+                "supports_long_context": profile.supports_long_context,
+                "supports_task_execution": profile.supports_task_execution,
+                "supports_warm_pool": profile.supports_warm_pool,
+                "base_tier": profile.base_tier,
+                "runtime_rw_paths": list(profile.runtime_rw_paths),
             }
-            # Preserve base plugin reference for formatter inheritance on reload
+            # Preserve profile reference for formatter inheritance on reload
             base_ref = (
-                getattr(plugin, "_base_plugin_name", None)
-                or connections.get(agent_name, {}).get("plugin", {}).get("base")
+                getattr(profile, "_profile_name", None)
+                or connections.get(agent_name, {}).get("profile", {}).get("base")
             )
             if base_ref:
-                plugin_meta["base"] = base_ref
-            payload["plugin"] = plugin_meta
+                profile_meta["profile"] = base_ref
+            payload["profile"] = profile_meta
         connections[agent_name] = payload
         save_connections(connections)
 
@@ -216,16 +216,16 @@ def remove_connection(agent_name: str, registry=None) -> bool:
         return False
     del connections[agent_name]
     save_connections(connections)
-    # Remove o override em memória se o plugin estiver registrado
-    plugin = _resolve_registry(registry).get(agent_name)
-    if plugin is not None:
-        object.__setattr__(plugin, "_connection_override", None)
+    # Remove o override em memória se o perfil estiver registrado
+    profile = _resolve_registry(registry).get(agent_name)
+    if profile is not None:
+        object.__setattr__(profile, "_connection_override", None)
     return True
 
 
 @dataclass
-class AgentPlugin:
-    """Implementa `AgentPlugin`."""
+class ExecutionProfile:
+    """Implementa `ExecutionProfile`."""
     name: str
     prefix: str
     style: Tuple[str, str]  # (color, label) para UI
@@ -259,8 +259,8 @@ class AgentPlugin:
     dynamic: bool = False
     # Connection override (carregado automaticamente do base_dir)
     _connection_override: Optional[Connection] = field(default=None, repr=False)
-    # Base plugin name (usado para herança de formatter/rw_paths em plugins dinâmicos)
-    _base_plugin_name: Optional[str] = field(default=None, repr=False)
+    # Profile name (usado para herança de formatter/rw_paths em perfis de conexão)
+    _profile_name: Optional[str] = field(default=None, repr=False)
     # Socket MCP do servidor local do Quimera (quando habilitado por --mcp).
     _mcp_socket_path: Optional[str] = field(default=None, repr=False)
     _mcp_http_url: Optional[str] = field(default=None, repr=False)
@@ -277,11 +277,11 @@ class AgentPlugin:
         """Retorna nova CliConnection com model_id substituído no placeholder --model=."""
         conn = self.effective_connection()
         if not isinstance(conn, CliConnection):
-            raise ValueError(f"Plugin '{self.name}' não usa driver CLI.")
+            raise ValueError(f"Profile '{self.name}' não usa driver CLI.")
         if not (model_id or "").strip():
             raise ValueError("model_id não pode ser vazio.")
         if not any(arg.startswith("--model=") for arg in conn.cmd):
-            raise ValueError(f"Plugin '{self.name}' não tem placeholder --model= no cmd.")
+            raise ValueError(f"Profile '{self.name}' não tem placeholder --model= no cmd.")
         new_cmd = [
             f"--model={model_id}" if arg.startswith("--model=") else arg
             for arg in conn.cmd
@@ -321,7 +321,7 @@ class AgentPlugin:
         return self._with_mcp_server_args(self.cmd)
 
     def set_mcp_socket_path(self, socket_path: Optional[str]) -> None:
-        """Configura socket MCP injetado pelo runtime para esse plugin.
+        """Configura socket MCP injetado pelo runtime para esse perfil.
 
         Ao remover o socket (path None/vazio), o token também é limpo para
         evitar vazamento de estado entre reconfigurações.
@@ -332,7 +332,7 @@ class AgentPlugin:
             self._mcp_token = None
 
     def set_mcp_socket_config(self, socket_path: Optional[str], token: Optional[str]) -> None:
-        """Configura socket MCP e token de autenticação para esse plugin."""
+        """Configura socket MCP e token de autenticação para esse perfil."""
         self.set_mcp_socket_path(socket_path)
         normalized = (token or "").strip()
         self._mcp_token = normalized or None
@@ -380,7 +380,7 @@ class AgentPlugin:
         return []
 
     def _with_mcp_server_args(self, cmd: list[str]) -> list[str]:
-        """Anexa argumentos de MCP quando o plugin fornece integração."""
+        """Anexa argumentos de MCP quando o perfil fornece integração."""
         base_cmd = list(cmd)
         socket_path = (self._mcp_socket_path or "").strip()
         if not socket_path:
@@ -398,7 +398,7 @@ class AgentPlugin:
         return [*base_cmd, *mcp_args]
 
     def resolve_runtime_model(self, *, cwd: Optional[str] = None) -> Optional[str]:
-        """Resolve modelo em runtime para CLIs; plugins podem sobrescrever."""
+        """Resolve modelo em runtime para CLIs; perfis podem sobrescrever."""
         _ = cwd
         return extract_model_from_cli_cmd(self.effective_cmd())
 
@@ -449,32 +449,32 @@ def format_connection_label(connection: Connection) -> str:
     return label
 
 
-class PluginRegistry:
-    """Registry for AgentPlugin instances."""
+class ProfileRegistry:
+    """Registry for ExecutionProfile instances."""
 
     def __init__(self):
-        self._plugins: dict[str, AgentPlugin] = {}
+        self._profiles: dict[str, ExecutionProfile] = {}
 
-    def register(self, plugin: AgentPlugin) -> None:
-        self._plugins[plugin.name] = plugin
+    def register(self, profile: ExecutionProfile) -> None:
+        self._profiles[profile.name] = profile
 
-    def get(self, name: str) -> Optional[AgentPlugin]:
-        return self._plugins.get(name)
+    def get(self, name: str) -> Optional[ExecutionProfile]:
+        return self._profiles.get(name)
 
     def all_names(self) -> List[str]:
-        return list(self._plugins.keys())
+        return list(self._profiles.keys())
 
-    def all_plugins(self) -> List[AgentPlugin]:
-        return list(self._plugins.values())
-
-
-_registry = PluginRegistry()
+    def all_profiles(self) -> List[ExecutionProfile]:
+        return list(self._profiles.values())
 
 
-_DYNAMIC_AGENT_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
-_SAFE_DYNAMIC_PLUGIN_METADATA_KEYS = frozenset({
+_registry = ProfileRegistry()
+
+
+_CONNECTION_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+_SAFE_CONNECTION_PROFILE_METADATA_KEYS = frozenset({
     "avoid_task_types",
-    "base",
+    "profile",
     "base_tier",
     "capabilities",
     "dynamic",
@@ -495,7 +495,7 @@ _SAFE_DYNAMIC_PLUGIN_METADATA_KEYS = frozenset({
 
 def is_valid_agent_name(name: str) -> bool:
     """Valida nomes canônicos de agentes dinâmicos."""
-    return bool(name and _DYNAMIC_AGENT_RE.fullmatch(name))
+    return bool(name and _CONNECTION_NAME_RE.fullmatch(name))
 
 
 def _humanize_agent_name(name: str) -> str:
@@ -504,7 +504,7 @@ def _humanize_agent_name(name: str) -> str:
     return " ".join(part.capitalize() for part in parts if part) or name
 
 
-def _dynamic_plugin_metadata(name: str) -> dict:
+def _connection_profile_metadata(name: str) -> dict:
     """Retorna metadados padrão para agentes registrados via conexão."""
     return {
         "dynamic": True,
@@ -523,63 +523,63 @@ def _dynamic_plugin_metadata(name: str) -> dict:
     }
 
 
-def _sanitize_dynamic_plugin_metadata(metadata: dict | None) -> dict:
-    """Mantém apenas metadados persistíveis e seguros para plugins dinâmicos."""
+def _sanitize_connection_profile_metadata(metadata: dict | None) -> dict:
+    """Mantém apenas metadados persistíveis e seguros para perfis de conexão."""
     if not isinstance(metadata, dict):
         return {}
     return {
         key: value
         for key, value in metadata.items()
-        if key in _SAFE_DYNAMIC_PLUGIN_METADATA_KEYS
+        if key in _SAFE_CONNECTION_PROFILE_METADATA_KEYS
     }
 
 
-def register_dynamic_plugin(
+def register_connection_profile(
     name: str,
     connection: Connection | None = None,
     metadata: dict | None = None,
-    registry: PluginRegistry | None = None,
-) -> AgentPlugin:
-    """Cria ou atualiza um plugin dinâmico e o registra no registry."""
+    registry: ProfileRegistry | None = None,
+) -> ExecutionProfile:
+    """Cria ou atualiza um perfil de conexão e o registra no registry."""
     target_registry = _resolve_registry(registry)
     normalized = (name or "").strip().lower()
     if not is_valid_agent_name(normalized):
         raise ValueError(f"Nome de agente inválido: {name}")
 
-    plugin_data = _dynamic_plugin_metadata(normalized)
-    plugin_data.update(_sanitize_dynamic_plugin_metadata(metadata))
+    profile_data = _connection_profile_metadata(normalized)
+    profile_data.update(_sanitize_connection_profile_metadata(metadata))
 
-    # Inherit non-serializable fields (spy formatter) from a named base plugin
-    base_name = plugin_data.pop("base", None)
-    plugin_cls: type[AgentPlugin] = AgentPlugin
-    if base_name:
-        base = target_registry.get(base_name)
-        if base is not None:
-            plugin_cls = type(base)
-            plugin_data.setdefault("spy_stdout_formatter", base.spy_stdout_formatter)
-            plugin_data.setdefault("has_builtin_tools", base.has_builtin_tools)
-            plugin_data.setdefault("runtime_rw_paths", list(base.runtime_rw_paths))
+    # Inherit non-serializable fields (spy formatter) from a named profile
+    profile_name = profile_data.pop("profile", None)
+    profile_cls: type[ExecutionProfile] = ExecutionProfile
+    if profile_name:
+        profile = target_registry.get(profile_name)
+        if profile is not None:
+            profile_cls = type(profile)
+            profile_data.setdefault("spy_stdout_formatter", profile.spy_stdout_formatter)
+            profile_data.setdefault("has_builtin_tools", profile.has_builtin_tools)
+            profile_data.setdefault("runtime_rw_paths", list(profile.runtime_rw_paths))
 
-    prefix = plugin_data.pop("prefix", f"/{normalized}")
-    style = tuple(plugin_data.pop("style", ("bright_cyan", _humanize_agent_name(normalized))))
-    plugin = plugin_cls(name=normalized, prefix=prefix, style=style, **plugin_data)
+    prefix = profile_data.pop("prefix", f"/{normalized}")
+    style = tuple(profile_data.pop("style", ("bright_cyan", _humanize_agent_name(normalized))))
+    profile = profile_cls(name=normalized, prefix=prefix, style=style, **profile_data)
 
-    # Re-attach base reference so set_connection_override can persist it
-    if base_name:
-        object.__setattr__(plugin, "_base_plugin_name", base_name)
+    # Re-attach base reference so set_connection can persist it
+    if profile_name:
+        object.__setattr__(profile, "_profile_name", profile_name)
 
     if connection is not None:
-        object.__setattr__(plugin, "_connection_override", connection)
-    target_registry.register(plugin)
-    return plugin
+        object.__setattr__(profile, "_connection_override", connection)
+    target_registry.register(profile)
+    return profile
 
 
-def register(plugin: AgentPlugin) -> None:
+def register(profile: ExecutionProfile) -> None:
     """Executa register."""
-    _registry.register(plugin)
+    _registry.register(profile)
 
 
-def get(name: str) -> Optional[AgentPlugin]:
+def get(name: str) -> Optional[ExecutionProfile]:
     """Retorna get."""
     return _registry.get(name)
 
@@ -589,6 +589,6 @@ def all_names() -> List[str]:
     return _registry.all_names()
 
 
-def all_plugins() -> List[AgentPlugin]:
-    """Executa all plugins."""
-    return _registry.all_plugins()
+def all_profiles() -> List[ExecutionProfile]:
+    """Executa all profiles."""
+    return _registry.all_profiles()

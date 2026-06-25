@@ -5,7 +5,7 @@ import threading
 from dataclasses import dataclass
 from typing import Callable
 
-from ..plugins.base import extract_model_from_cli_cmd
+from ..profiles.base import extract_model_from_cli_cmd
 
 
 @dataclass(frozen=True)
@@ -13,7 +13,7 @@ class ActiveModelRequest:
     """Dados necessários para resolver o rótulo do modelo ativo."""
 
     primary_agent: str | None
-    get_agent_plugin: Callable[[str], object | None]
+    get_agent_profile: Callable[[str], object | None]
     workspace_cwd: str
 
 
@@ -49,25 +49,25 @@ class ActiveModelResolver:
         agent_name = request.primary_agent
         if not agent_name:
             return "unknown"
-        plugin = request.get_agent_plugin(agent_name)
-        if plugin is None:
+        profile = request.get_agent_profile(agent_name)
+        if profile is None:
             return str(agent_name)
-        connection = plugin.effective_connection() if hasattr(plugin, "effective_connection") else None
+        connection = profile.effective_connection() if hasattr(profile, "effective_connection") else None
         model = getattr(connection, "model", None) if connection is not None else None
         if model:
             return str(model)
 
         cmd = getattr(connection, "cmd", None) if connection is not None else None
-        if not cmd and hasattr(plugin, "effective_cmd"):
+        if not cmd and hasattr(profile, "effective_cmd"):
             try:
-                cmd = plugin.effective_cmd()
+                cmd = profile.effective_cmd()
             except Exception:
                 cmd = None
         if not cmd:
-            cmd = getattr(plugin, "cmd", None)
+            cmd = getattr(profile, "cmd", None)
 
         cli_model: str | None = None
-        resolver = getattr(plugin, "resolve_runtime_model", None)
+        resolver = getattr(profile, "resolve_runtime_model", None)
         if callable(resolver):
             try:
                 resolved = resolver(cwd=request.workspace_cwd)
@@ -82,8 +82,8 @@ class ActiveModelResolver:
         if isinstance(cli_model, str) and cli_model.strip():
             return cli_model.strip()
 
-        plugin_model = getattr(plugin, "model", None)
-        return str(plugin_model) if plugin_model else str(plugin.name)
+        profile_model = getattr(profile, "model", None)
+        return str(profile_model) if profile_model else str(profile.name)
 
 
 class ToolbarManager:

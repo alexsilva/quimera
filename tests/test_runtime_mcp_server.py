@@ -743,19 +743,19 @@ class TestSocketAuth:
 
 
 # ---------------------------------------------------------------------------
-# Testes de plugin com token
+# Testes de profile com token
 # ---------------------------------------------------------------------------
 
-class TestPluginTokenIntegration:
+class TestProfileTokenIntegration:
     def test_codex_inclui_token_no_proxy_args(self):
         """Verifica que Test codex inclui token no proxy args."""
-        from quimera.plugins.codex import CodexPlugin
-        plugin = CodexPlugin(name="codex", prefix="/codex", style=("blue", "Codex"),
+        from quimera.profiles.codex import CodexProfile
+        profile = CodexProfile(name="codex", prefix="/codex", style=("blue", "Codex"),
                              cmd=["codex", "exec"])
-        object.__setattr__(plugin, "_mcp_socket_path", "/tmp/test.sock")
-        object.__setattr__(plugin, "_mcp_token", "mytoken")
+        object.__setattr__(profile, "_mcp_socket_path", "/tmp/test.sock")
+        object.__setattr__(profile, "_mcp_token", "mytoken")
 
-        args = plugin.mcp_server_args("/tmp/test.sock")
+        args = profile.mcp_server_args("/tmp/test.sock")
         args_json = next(v for i, v in enumerate(args) if args[i - 1] == "-c" and "mcp_servers.quimera.args=" in v)
         proxy_cmd = json.loads(args_json.split("=", 1)[1])
         assert "--token" in proxy_cmd
@@ -763,25 +763,25 @@ class TestPluginTokenIntegration:
 
     def test_codex_sem_token_nao_inclui_token_arg(self):
         """Verifica que Test codex sem token nao inclui token arg."""
-        from quimera.plugins.codex import CodexPlugin
-        plugin = CodexPlugin(name="codex", prefix="/codex", style=("blue", "Codex"),
+        from quimera.profiles.codex import CodexProfile
+        profile = CodexProfile(name="codex", prefix="/codex", style=("blue", "Codex"),
                              cmd=["codex", "exec"])
-        object.__setattr__(plugin, "_mcp_socket_path", "/tmp/test.sock")
-        object.__setattr__(plugin, "_mcp_token", None)
+        object.__setattr__(profile, "_mcp_socket_path", "/tmp/test.sock")
+        object.__setattr__(profile, "_mcp_token", None)
 
-        args = plugin.mcp_server_args("/tmp/test.sock")
+        args = profile.mcp_server_args("/tmp/test.sock")
         args_json = next(v for i, v in enumerate(args) if args[i - 1] == "-c" and "mcp_servers.quimera.args=" in v)
         proxy_cmd = json.loads(args_json.split("=", 1)[1])
         assert "--token" not in proxy_cmd
 
     def test_claude_inclui_token_no_mcp_config(self):
         """Verifica que Test claude inclui token no mcp config."""
-        from quimera.plugins.claude import ClaudePlugin
-        plugin = ClaudePlugin(name="claude", prefix="/claude", style=("magenta", "Claude"),
+        from quimera.profiles.claude import ClaudeProfile
+        profile = ClaudeProfile(name="claude", prefix="/claude", style=("magenta", "Claude"),
                               cmd=["claude", "-p"])
-        object.__setattr__(plugin, "_mcp_token", "claudetoken")
+        object.__setattr__(profile, "_mcp_token", "claudetoken")
 
-        args = plugin.mcp_server_args("/tmp/test.sock")
+        args = profile.mcp_server_args("/tmp/test.sock")
         config_json = args[1]  # "--mcp-config", <json>
         config = json.loads(config_json)
         proxy_args = config["mcpServers"]["quimera"]["args"]
@@ -790,25 +790,25 @@ class TestPluginTokenIntegration:
 
     def test_claude_sem_token_nao_inclui_token_arg(self):
         """Verifica que Test claude sem token nao inclui token arg."""
-        from quimera.plugins.claude import ClaudePlugin
-        plugin = ClaudePlugin(name="claude", prefix="/claude", style=("magenta", "Claude"),
+        from quimera.profiles.claude import ClaudeProfile
+        profile = ClaudeProfile(name="claude", prefix="/claude", style=("magenta", "Claude"),
                               cmd=["claude", "-p"])
-        object.__setattr__(plugin, "_mcp_token", None)
+        object.__setattr__(profile, "_mcp_token", None)
 
-        args = plugin.mcp_server_args("/tmp/test.sock")
+        args = profile.mcp_server_args("/tmp/test.sock")
         config = json.loads(args[1])
         proxy_args = config["mcpServers"]["quimera"]["args"]
         assert "--token" not in proxy_args
 
     def test_opencode_inclui_token_na_config(self):
         """Verifica que Test opencode inclui token na config."""
-        from quimera.plugins.opencode import OpenCodePlugin
-        plugin = OpenCodePlugin(name="opencode", prefix="/opencode", style=("blue", "OpenCode"),
+        from quimera.profiles.opencode import OpenCodeProfile
+        profile = OpenCodeProfile(name="opencode", prefix="/opencode", style=("blue", "OpenCode"),
                                 cmd=["opencode", "run"])
-        object.__setattr__(plugin, "_mcp_socket_path", "/tmp/test.sock")
-        object.__setattr__(plugin, "_mcp_token", "opencodetoken")
+        object.__setattr__(profile, "_mcp_socket_path", "/tmp/test.sock")
+        object.__setattr__(profile, "_mcp_token", "opencodetoken")
 
-        env = plugin.env_for_cli()
+        env = profile.env_for_cli()
         config = json.loads(env["OPENCODE_CONFIG_CONTENT"])
         cmd = config["mcp"]["quimera"]["command"]
         assert "--token" in cmd
@@ -816,59 +816,59 @@ class TestPluginTokenIntegration:
 
     def test_opencode_sem_token_nao_inclui_token_arg(self):
         """Verifica que Test opencode sem token nao inclui token arg."""
-        from quimera.plugins.opencode import OpenCodePlugin
-        plugin = OpenCodePlugin(name="opencode", prefix="/opencode", style=("blue", "OpenCode"),
+        from quimera.profiles.opencode import OpenCodeProfile
+        profile = OpenCodeProfile(name="opencode", prefix="/opencode", style=("blue", "OpenCode"),
                                 cmd=["opencode", "run"])
-        object.__setattr__(plugin, "_mcp_socket_path", "/tmp/test.sock")
-        object.__setattr__(plugin, "_mcp_token", None)
+        object.__setattr__(profile, "_mcp_socket_path", "/tmp/test.sock")
+        object.__setattr__(profile, "_mcp_token", None)
 
-        env = plugin.env_for_cli()
+        env = profile.env_for_cli()
         config = json.loads(env["OPENCODE_CONFIG_CONTENT"])
         cmd = config["mcp"]["quimera"]["command"]
         assert "--token" not in cmd
 
     def test_set_mcp_socket_config_configura_path_e_token(self):
         """Verifica que Test set mcp socket config configura path e token."""
-        from quimera.plugins.base import AgentPlugin
-        plugin = AgentPlugin(name="test", prefix="/test", style=("white", "Test"))
-        plugin.set_mcp_socket_config("/tmp/test.sock", "mytoken")
-        assert plugin._mcp_socket_path == "/tmp/test.sock"
-        assert plugin._mcp_token == "mytoken"
+        from quimera.profiles.base import ExecutionProfile
+        profile = ExecutionProfile(name="test", prefix="/test", style=("white", "Test"))
+        profile.set_mcp_socket_config("/tmp/test.sock", "mytoken")
+        assert profile._mcp_socket_path == "/tmp/test.sock"
+        assert profile._mcp_token == "mytoken"
 
     def test_set_mcp_socket_config_com_token_vazio_define_none(self):
         """Verifica que Test set mcp socket config com token vazio define none."""
-        from quimera.plugins.base import AgentPlugin
-        plugin = AgentPlugin(name="test", prefix="/test", style=("white", "Test"))
-        plugin.set_mcp_socket_config("/tmp/test.sock", "  ")
-        assert plugin._mcp_token is None
+        from quimera.profiles.base import ExecutionProfile
+        profile = ExecutionProfile(name="test", prefix="/test", style=("white", "Test"))
+        profile.set_mcp_socket_config("/tmp/test.sock", "  ")
+        assert profile._mcp_token is None
 
     def test_configure_mcp_socket_usa_set_mcp_socket_config_quando_disponivel(self):
-        """configure_mcp_socket usa set_mcp_socket_config quando o plugin tem o método."""
+        """configure_mcp_socket usa set_mcp_socket_config quando o profile tem o método."""
         from unittest.mock import MagicMock, patch
-        plugin = MagicMock()
-        plugin.set_mcp_socket_config = MagicMock()
-        plugin.set_mcp_socket_path = MagicMock()
+        profile = MagicMock()
+        profile.set_mcp_socket_config = MagicMock()
+        profile.set_mcp_socket_path = MagicMock()
 
         from quimera.app.core import QuimeraApp
         app = object.__new__(QuimeraApp)
-        app.get_active_agent_plugins = lambda: [plugin]
+        app.get_active_agent_profiles = lambda: [profile]
 
         app.configure_mcp_socket("/tmp/test.sock", "tok")
-        plugin.set_mcp_socket_config.assert_called_once_with("/tmp/test.sock", "tok")
-        plugin.set_mcp_socket_path.assert_not_called()
+        profile.set_mcp_socket_config.assert_called_once_with("/tmp/test.sock", "tok")
+        profile.set_mcp_socket_path.assert_not_called()
 
     def test_configure_mcp_socket_fallback_para_set_mcp_socket_path(self):
         """configure_mcp_socket cai para set_mcp_socket_path quando set_mcp_socket_config ausente."""
         from unittest.mock import MagicMock
-        plugin = MagicMock(spec=["set_mcp_socket_path"])
-        plugin.set_mcp_socket_path = MagicMock()
+        profile = MagicMock(spec=["set_mcp_socket_path"])
+        profile.set_mcp_socket_path = MagicMock()
 
         from quimera.app.core import QuimeraApp
         app = object.__new__(QuimeraApp)
-        app.get_active_agent_plugins = lambda: [plugin]
+        app.get_active_agent_profiles = lambda: [profile]
 
         app.configure_mcp_socket("/tmp/test.sock", "tok")
-        plugin.set_mcp_socket_path.assert_called_once_with("/tmp/test.sock")
+        profile.set_mcp_socket_path.assert_called_once_with("/tmp/test.sock")
 
     def test_com_token_aceita_conexao_com_token_correto_e_responde_a_initialize(self, tmp_path):
         """MCPServer(auth_token='abc') deve aceitar token correto e responder a initialize."""
@@ -889,26 +889,26 @@ class TestPluginTokenIntegration:
 
     def test_set_mcp_socket_path_none_limpa_token(self):
         """set_mcp_socket_path(None) deve limpar _mcp_token para evitar vazamento de estado."""
-        from quimera.plugins.base import AgentPlugin
-        plugin = AgentPlugin(name="test", prefix="/test", style=("white", "Test"))
-        plugin.set_mcp_socket_config("/tmp/test.sock", "mytoken")
-        assert plugin._mcp_token == "mytoken"
-        plugin.set_mcp_socket_path(None)
-        assert plugin._mcp_socket_path is None
-        assert plugin._mcp_token is None
+        from quimera.profiles.base import ExecutionProfile
+        profile = ExecutionProfile(name="test", prefix="/test", style=("white", "Test"))
+        profile.set_mcp_socket_config("/tmp/test.sock", "mytoken")
+        assert profile._mcp_token == "mytoken"
+        profile.set_mcp_socket_path(None)
+        assert profile._mcp_socket_path is None
+        assert profile._mcp_token is None
 
     def test_build_token_args_retorna_lista_com_token(self):
         """_build_token_args deve retornar ['--token', token] quando token está definido."""
-        from quimera.plugins.base import AgentPlugin
-        plugin = AgentPlugin(name="test", prefix="/test", style=("white", "Test"))
-        object.__setattr__(plugin, "_mcp_token", "tok123")
-        assert plugin._build_token_args() == ["--token", "tok123"]
+        from quimera.profiles.base import ExecutionProfile
+        profile = ExecutionProfile(name="test", prefix="/test", style=("white", "Test"))
+        object.__setattr__(profile, "_mcp_token", "tok123")
+        assert profile._build_token_args() == ["--token", "tok123"]
 
     def test_build_token_args_retorna_lista_vazia_sem_token(self):
         """_build_token_args deve retornar [] quando token é None."""
-        from quimera.plugins.base import AgentPlugin
-        plugin = AgentPlugin(name="test", prefix="/test", style=("white", "Test"))
-        assert plugin._build_token_args() == []
+        from quimera.profiles.base import ExecutionProfile
+        profile = ExecutionProfile(name="test", prefix="/test", style=("white", "Test"))
+        assert profile._build_token_args() == []
 
 class TestLatestMCPFeatures:
     def test_initialize_anuncia_spec_latest_e_capacidades_completas(self):
@@ -969,24 +969,24 @@ class TestLatestMCPFeatures:
         })
         assert "quimera-task" in completion["result"]["completion"]["values"]
 
-class TestPluginHTTPIntegration:
+class TestProfileHTTPIntegration:
     def test_http_config_is_legacy_and_not_injected_without_socket(self):
         """Verifica que Test http config is legacy and not injected without socket."""
-        from quimera.plugins.claude import ClaudePlugin
-        from quimera.plugins.codex import CodexPlugin
-        from quimera.plugins.opencode import OpenCodePlugin
+        from quimera.profiles.claude import ClaudeProfile
+        from quimera.profiles.codex import CodexProfile
+        from quimera.profiles.opencode import OpenCodeProfile
 
-        claude = ClaudePlugin(name="c", prefix="/c", style=("x", "C"), cmd=["claude", "-"])
+        claude = ClaudeProfile(name="c", prefix="/c", style=("x", "C"), cmd=["claude", "-"])
         claude.set_mcp_http_config("http://127.0.0.1:9090/mcp", "tok")
         assert claude.effective_cmd() == ["claude", "-"]
         assert claude.mcp_http_server_args("http://127.0.0.1:9090/mcp") == []
 
-        codex = CodexPlugin(name="x", prefix="/x", style=("x", "X"), cmd=["codex", "exec", "-"])
+        codex = CodexProfile(name="x", prefix="/x", style=("x", "X"), cmd=["codex", "exec", "-"])
         codex.set_mcp_http_config("http://127.0.0.1:9090/mcp", "tok")
         codex_cmd = codex.effective_cmd()
         assert not any("mcp_servers.quimera.url" in str(part) for part in codex_cmd)
         assert not any("mcp_servers.quimera.transport" in str(part) for part in codex_cmd)
 
-        opencode = OpenCodePlugin(name="o", prefix="/o", style=("x", "O"))
+        opencode = OpenCodeProfile(name="o", prefix="/o", style=("x", "O"))
         opencode.set_mcp_http_config("http://127.0.0.1:9090/mcp", "tok")
         assert opencode.env_for_cli() == {}

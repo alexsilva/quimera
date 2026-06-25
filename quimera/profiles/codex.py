@@ -1,12 +1,12 @@
-"""Componentes de `quimera.plugins.codex`."""
+"""Componentes de `quimera.profiles.codex`."""
 import json
 import re
 import shlex
 from pathlib import Path
 
 from quimera.agent_events import SpyEvent
-from quimera.plugins.base import AgentPlugin, CliConnection, register
-from quimera.plugins.spy_utils import (
+from quimera.profiles.base import ExecutionProfile, CliConnection, register
+from quimera.profiles.spy_utils import (
     format_agent_message_lines,
     format_command_output_preview,
     normalize_spy_text,
@@ -181,8 +181,8 @@ def _format_codex_spy_event(line: str) -> list[SpyEvent]:
     return [SpyEvent(kind="context", text=f"{itype} {phase}", transient=True)]
 
 
-class CodexPlugin(AgentPlugin):
-    """Plugin do Codex com retomada automática da última sessão por workspace."""
+class CodexProfile(ExecutionProfile):
+    """Profile do Codex com retomada automática da última sessão por workspace."""
 
     def mcp_server_args(self, socket_path: str) -> list[str]:
         """Retorna overrides de config para registrar MCP via stdio no Codex."""
@@ -215,7 +215,7 @@ class CodexPlugin(AgentPlugin):
         return [*base_cmd, *mcp_args]
 
     def effective_cmd(self) -> list[str]:
-        """Prefere `codex exec resume --last` sem mover a lógica para fora do plugin."""
+        """Prefere `codex exec resume --last` sem mover a lógica para fora do profile."""
         connection = self.effective_connection()
         if isinstance(connection, CliConnection):
             cmd = list(connection.cmd)
@@ -239,7 +239,7 @@ class CodexPlugin(AgentPlugin):
         return _extract_model_from_codex_config()
 
 
-register(CodexPlugin(
+register(CodexProfile(
     name="codex",
     prefix="/codex",
     icon="🔷",

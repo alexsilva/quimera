@@ -10,7 +10,7 @@ quimera_conversa_inicial.txt
 .gemini
 quimera_session_context.md
 quimera_context.md
-quimera/plugins/mock.py
+quimera/profiles/mock.py
 quimera.db
 .coverage
 coverage.json

@@ -1,8 +1,8 @@
 # Agentes e conexões
 
-## Modelo de plugin
+## Modelo de profile
 
-Cada agente é descrito por um `AgentPlugin` com:
+Cada agente é descrito por um `ExecutionProfile` com:
 
 - nome canônico (`name`) e prefixo slash (`prefix`);
 - comando CLI ou driver OpenAI-compatible;
@@ -13,7 +13,7 @@ Cada agente é descrito por um `AgentPlugin` com:
 
 Esses metadados alimentam tanto a UI quanto o roteamento de tasks.
 
-## Plugins nativos
+## Profiles nativos
 
 | Agente | Prefixo | Driver padrão | Uso recomendado |
 |---|---|---|---|
@@ -31,7 +31,7 @@ O arquivo `AGENTS.md` do repositório descreve a taxonomia operacional por tiers
 quimera --agents claude codex gemini
 ```
 
-Padrões com `*` são expandidos contra plugins disponíveis:
+Padrões com `*` são expandidos contra profiles disponíveis:
 
 ```bash
 quimera --agents opencode*
@@ -67,9 +67,9 @@ quimera --connect deepseek --driver openai --model deepseek-reasoner \
   --extra-body '{"thinking":{"type":"enabled"}}'
 ```
 
-## Herdar comando de plugin base
+## Herdar comando de profile base
 
-Alguns plugins CLI têm placeholder `--model=`. É possível criar uma conexão usando `--base` e `--model`:
+Alguns profiles CLI têm placeholder `--model=`. É possível criar uma conexão usando `--base` e `--model`:
 
 ```bash
 quimera --connect opencode-qwen --base opencode --model qwen/qwen3-coder
@@ -88,7 +88,7 @@ No chat, use:
 /reload
 ```
 
-`/reload` reaplica conexões persistidas e atualiza a lista de plugins conhecidos.
+`/reload` reaplica conexões persistidas e atualiza a lista de profiles conhecidos.
 
 ## Integração MCP por agente
 
@@ -96,4 +96,4 @@ No chat, use:
 - Codex recebe argumentos `-c mcp_servers.quimera.*`.
 - OpenCode recebe `OPENCODE_CONFIG_CONTENT`.
 - Agentes OpenAI-compatible usam tools nativas quando suportadas pelo driver.
-- Plugins sem integração MCP continuam podendo rodar como CLI normal, mas não recebem o runtime via MCP.
+- Profiles sem integração MCP continuam podendo rodar como CLI normal, mas não recebem o runtime via MCP.

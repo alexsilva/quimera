@@ -8,7 +8,7 @@
 | `/agents` | — | Lista agentes ativos. |
 | `/connect <agente>` | — | Configura conexão pelo chat. |
 | `/disconnect <agente>` | — | Remove conexão persistida. |
-| `/reload` | — | Recarrega plugins/conexões. |
+| `/reload` | — | Recarrega profiles/conexões. |
 | `/prompt [agente]` | — | Mostra preview do prompt final. |
 | `/context` | `/r` | Mostra contexto. |
 | `/context-edit` | — | Edita contexto persistente. |
@@ -35,7 +35,7 @@
 
 ## Prefixos de agentes
 
-Prefixos dependem dos plugins ativos. Os padrões são:
+Prefixos dependem dos profiles ativos. Os padrões são:
 
 - `/claude`
 - `/codex`

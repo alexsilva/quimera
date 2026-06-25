@@ -1,2 +1,2 @@
 """Componentes de `quimera.__init__`."""
-from . import plugins
+from . import profiles

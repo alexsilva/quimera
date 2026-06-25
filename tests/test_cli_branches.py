@@ -11,7 +11,7 @@ from unittest.mock import patch
 import pytest
 
 import quimera.cli as cli
-from quimera.plugins.base import CliConnection, OpenAIConnection
+from quimera.profiles.base import CliConnection, OpenAIConnection
 from quimera.runtime.mcp.http_server import DEFAULT_HTTP_READ_ONLY_TOOLS
 
 
@@ -80,7 +80,7 @@ def _patch_main_basics(monkeypatch, *, agent_names=None, theme_names=None):
     monkeypatch.setattr(cli, "Workspace", _FakeWorkspace)
     monkeypatch.setattr(cli, "ConfigManager", _FakeConfig)
     monkeypatch.setattr(cli, "QuimeraApp", _FakeApp)
-    monkeypatch.setattr(cli._plugins, "all_names", lambda: agent_names or ["claude"])
+    monkeypatch.setattr(cli._profiles, "all_names", lambda: agent_names or ["claude"])
     monkeypatch.setattr(cli._themes, "names", lambda: theme_names or ["default"])
     monkeypatch.setattr(cli, "_ensure_required_runtime_dependencies", lambda: None)
 
@@ -186,7 +186,7 @@ def test_cli_import_fallback_without_ui_dependencies():
 
 def test_configure_connection_interactively_cli_branch(monkeypatch):
     """Verifica que configure connection interactively cli branch."""
-    plugin = SimpleNamespace(
+    profile = SimpleNamespace(
         cmd=["codex", "exec"],
         model=None,
         base_url=None,
@@ -200,7 +200,7 @@ def test_configure_connection_interactively_cli_branch(monkeypatch):
     monkeypatch.setattr(cli, "_prompt_text", lambda *_args, **_kwargs: next(answers))
     monkeypatch.setattr(cli, "_prompt_bool", lambda *_args, **_kwargs: True)
 
-    conn = cli._configure_connection_interactively(plugin, driver_hint="cli")
+    conn = cli._configure_connection_interactively(profile, driver_hint="cli")
 
     assert isinstance(conn, CliConnection)
     assert conn.cmd == ["codex", "--ask"]
@@ -209,7 +209,7 @@ def test_configure_connection_interactively_cli_branch(monkeypatch):
 
 def test_configure_connection_interactively_cli_empty_cmd_raises(monkeypatch):
     """Verifica que configure connection interactively cli empty cmd raises."""
-    plugin = SimpleNamespace(
+    profile = SimpleNamespace(
         cmd=[],
         model=None,
         base_url=None,
@@ -220,12 +220,12 @@ def test_configure_connection_interactively_cli_empty_cmd_raises(monkeypatch):
     )
     monkeypatch.setattr(cli, "_prompt_text", lambda *_args, **_kwargs: "")
     with pytest.raises(SystemExit, match="comando CLI vazio"):
-        cli._configure_connection_interactively(plugin, driver_hint="cli")
+        cli._configure_connection_interactively(profile, driver_hint="cli")
 
 
 def test_configure_connection_interactively_openai_invalid_driver_then_json_error(monkeypatch):
     """Verifica que configure connection interactively openai invalid driver then json error."""
-    plugin = SimpleNamespace(
+    profile = SimpleNamespace(
         cmd=["codex"],
         model="gpt-x",
         base_url="https://example.test/v1",
@@ -250,7 +250,7 @@ def test_configure_connection_interactively_openai_invalid_driver_then_json_erro
     monkeypatch.setattr(cli, "_prompt_bool", lambda *_args, **_kwargs: True)
 
     with patch("builtins.print") as mock_print:
-        conn = cli._configure_connection_interactively(plugin)
+        conn = cli._configure_connection_interactively(profile)
 
     assert isinstance(conn, OpenAIConnection)
     assert conn.model == "gpt-x"
@@ -272,7 +272,7 @@ def test_configure_connection_interactively_openai_empty_json_clears_extra_body(
         supports_native_tools=True,
         extra_body={"thinking": {"type": "enabled"}},
     )
-    plugin = SimpleNamespace(
+    profile = SimpleNamespace(
         cmd=["codex"],
         model="fallback-model",
         base_url="https://fallback",
@@ -294,7 +294,7 @@ def test_configure_connection_interactively_openai_empty_json_clears_extra_body(
     monkeypatch.setattr(cli, "_prompt_text", lambda *_args, **_kwargs: next(answers))
     monkeypatch.setattr(cli, "_prompt_bool", lambda *_args, **_kwargs: True)
 
-    conn = cli._configure_connection_interactively(plugin, driver_hint="openai")
+    conn = cli._configure_connection_interactively(profile, driver_hint="openai")
 
     assert isinstance(conn, OpenAIConnection)
     assert conn.extra_body is None
@@ -311,7 +311,7 @@ def test_configure_connection_interactively_openai_empty_input_preserves_extra_b
         supports_native_tools=True,
         extra_body={"thinking": {"type": "enabled"}},
     )
-    plugin = SimpleNamespace(
+    profile = SimpleNamespace(
         cmd=["codex"],
         model="fallback-model",
         base_url="https://fallback",
@@ -333,53 +333,53 @@ def test_configure_connection_interactively_openai_empty_input_preserves_extra_b
     monkeypatch.setattr(cli, "_prompt_text", lambda *_args, **_kwargs: next(answers))
     monkeypatch.setattr(cli, "_prompt_bool", lambda *_args, **_kwargs: True)
 
-    conn = cli._configure_connection_interactively(plugin, driver_hint="openai")
+    conn = cli._configure_connection_interactively(profile, driver_hint="openai")
 
     assert isinstance(conn, OpenAIConnection)
     assert conn.extra_body == {"thinking": {"type": "enabled"}}
 
 
-def test_build_connection_base_plugin_not_found_raises(monkeypatch):
-    """Verifica que build connection base plugin not found raises."""
-    plugin = SimpleNamespace()
-    args = Namespace(base="inexistente", model="gpt-4o", driver=None, cmd=None, extra_body=None, base_url=None, api_key_env=None)
-    monkeypatch.setattr(cli._plugins, "get", lambda _name: None)
+def test_build_connection_base_profile_not_found_raises(monkeypatch):
+    """Verifica que build connection profile not found raises."""
+    profile = SimpleNamespace()
+    args = Namespace(profile="inexistente", model="gpt-4o", driver=None, cmd=None, extra_body=None, base_url=None, api_key_env=None)
+    monkeypatch.setattr(cli._profiles, "get", lambda _name: None)
 
-    with pytest.raises(SystemExit, match="Plugin base 'inexistente' não encontrado"):
-        cli._build_connection_from_args(plugin, args)
+    with pytest.raises(SystemExit, match="Perfil de execução 'inexistente' não encontrado"):
+        cli._build_connection_from_args(profile, args)
 
 
-def test_build_connection_base_plugin_value_error_becomes_system_exit(monkeypatch):
-    """Verifica que build connection base plugin value error becomes system exit."""
-    class _BasePlugin:
+def test_build_connection_base_profile_value_error_becomes_system_exit(monkeypatch):
+    """Verifica que build connection profile value error becomes system exit."""
+    class _BaseProfile:
         def configure_with_model(self, _model):
             raise ValueError("modelo inválido")
 
-    plugin = SimpleNamespace()
-    args = Namespace(base="base-x", model="gpt-4o", driver=None, cmd=None, extra_body=None, base_url=None, api_key_env=None)
-    monkeypatch.setattr(cli._plugins, "get", lambda _name: _BasePlugin())
+    profile = SimpleNamespace()
+    args = Namespace(profile="base-x", model="gpt-4o", driver=None, cmd=None, extra_body=None, base_url=None, api_key_env=None)
+    monkeypatch.setattr(cli._profiles, "get", lambda _name: _BaseProfile())
 
     with pytest.raises(SystemExit, match="modelo inválido"):
-        cli._build_connection_from_args(plugin, args)
+        cli._build_connection_from_args(profile, args)
 
 
 def test_build_connection_without_driver_uses_interactive(monkeypatch):
     """Verifica que build connection without driver uses interactive."""
-    plugin = SimpleNamespace()
-    args = Namespace(base=None, model=None, driver=None, cmd=None, extra_body=None, base_url=None, api_key_env=None)
+    profile = SimpleNamespace()
+    args = Namespace(profile=None, model=None, driver=None, cmd=None, extra_body=None, base_url=None, api_key_env=None)
 
     with patch("quimera.cli._configure_connection_interactively", return_value="ok") as mocked:
-        assert cli._build_connection_from_args(plugin, args) == "ok"
+        assert cli._build_connection_from_args(profile, args) == "ok"
 
-    mocked.assert_called_once_with(plugin)
+    mocked.assert_called_once_with(profile)
 
 
 def test_build_connection_cli_with_cmd_returns_cli_connection():
     """Verifica que build connection cli with cmd returns cli connection."""
-    plugin = SimpleNamespace()
-    args = Namespace(base=None, model=None, driver="cli", cmd=["codex", "exec"], extra_body=None, base_url=None, api_key_env=None)
+    profile = SimpleNamespace()
+    args = Namespace(profile=None, model=None, driver="cli", cmd=["codex", "exec"], extra_body=None, base_url=None, api_key_env=None)
 
-    conn = cli._build_connection_from_args(plugin, args)
+    conn = cli._build_connection_from_args(profile, args)
 
     assert isinstance(conn, CliConnection)
     assert conn.cmd == ["codex", "exec"]
@@ -389,13 +389,13 @@ def test_build_connection_cli_with_cmd_returns_cli_connection():
 
 def test_build_connection_cli_without_cmd_falls_back_to_interactive(monkeypatch):
     """Verifica que build connection cli without cmd falls back to interactive."""
-    plugin = SimpleNamespace()
-    args = Namespace(base=None, model=None, driver="cli", cmd=None, extra_body=None, base_url=None, api_key_env=None)
+    profile = SimpleNamespace()
+    args = Namespace(profile=None, model=None, driver="cli", cmd=None, extra_body=None, base_url=None, api_key_env=None)
 
     with patch("quimera.cli._configure_connection_interactively", return_value="interactive") as mocked:
-        assert cli._build_connection_from_args(plugin, args) == "interactive"
+        assert cli._build_connection_from_args(profile, args) == "interactive"
 
-    mocked.assert_called_once_with(plugin, driver_hint="cli")
+    mocked.assert_called_once_with(profile, driver_hint="cli")
 
 
 def test_main_rejects_non_positive_history_window(monkeypatch):
@@ -459,16 +459,16 @@ def test_main_list_connections_prints_each_entry(monkeypatch):
     mock_print.assert_called_once_with("codex: cli: codex")
 
 
-def test_main_connect_registers_dynamic_plugin_and_saves_override(monkeypatch):
-    """Verifica que main connect registers dynamic plugin and saves override."""
-    dynamic_plugin = SimpleNamespace(effective_connection=lambda: CliConnection(cmd=["builtin"]))
+def test_main_connect_registers_dynamic_profile_and_saves_override(monkeypatch):
+    """Verifica que main connect registers dynamic profile and saves override."""
+    dynamic_profile = SimpleNamespace(effective_connection=lambda: CliConnection(cmd=["builtin"]))
 
     monkeypatch.setattr(sys, "argv", ["quimera", "--connect", "novo-agente", "--driver", "cli", "--cmd", "novo-cli"])
-    monkeypatch.setattr(cli._plugins, "get", lambda _name: None)
+    monkeypatch.setattr(cli._profiles, "get", lambda _name: None)
     monkeypatch.setattr(cli, "is_valid_agent_name", lambda _name: True)
 
-    with patch("quimera.cli.register_dynamic_plugin", return_value=dynamic_plugin) as register_dynamic, \
-            patch("quimera.cli.set_connection_override") as set_override, \
+    with patch("quimera.cli.register_connection_profile", return_value=dynamic_profile) as register_dynamic, \
+            patch("quimera.cli.set_connection") as set_override, \
             patch("quimera.cli.format_connection_label", return_value="cli: ok"), \
             patch("builtins.print") as mock_print:
         cli.main()
@@ -476,14 +476,14 @@ def test_main_connect_registers_dynamic_plugin_and_saves_override(monkeypatch):
     register_dynamic.assert_called_once_with("novo-agente", metadata=None)
     set_override.assert_called_once()
     printed_messages = [call.args[0] for call in mock_print.call_args_list]
-    assert any("Agente registrado dinamicamente: novo-agente" in msg for msg in printed_messages)
+    assert any("Conexão registrada: novo-agente" in msg for msg in printed_messages)
     assert any("Conexão salva em base_dir para novo-agente" in msg for msg in printed_messages)
 
 
 def test_main_connect_invalid_agent_name_in_connect_errors(monkeypatch):
     """Verifica que main connect invalid agent name in connect errors."""
     monkeypatch.setattr(sys, "argv", ["quimera", "--connect", "Inválido!", "--driver", "cli", "--cmd", "x"])
-    monkeypatch.setattr(cli._plugins, "get", lambda _name: None)
+    monkeypatch.setattr(cli._profiles, "get", lambda _name: None)
     monkeypatch.setattr(cli, "is_valid_agent_name", lambda _name: False)
 
     with pytest.raises(SystemExit) as exc:
@@ -491,18 +491,18 @@ def test_main_connect_invalid_agent_name_in_connect_errors(monkeypatch):
     assert exc.value.code == 2
 
 
-def test_main_connect_new_agent_with_missing_base_plugin_errors(monkeypatch):
-    """Verifica que main connect new agent with missing base plugin errors."""
+def test_main_connect_new_agent_with_missing_base_profile_errors(monkeypatch):
+    """Verifica que main connect new agent with missing profile errors."""
     monkeypatch.setattr(
         sys,
         "argv",
-        ["quimera", "--connect", "novo-agente", "--base", "base-missing", "--driver", "cli", "--cmd", "x"],
+        ["quimera", "--connect", "novo-agente", "--profile", "base-missing", "--driver", "cli", "--cmd", "x"],
     )
 
     def fake_get(_name):
         return None
 
-    monkeypatch.setattr(cli._plugins, "get", fake_get)
+    monkeypatch.setattr(cli._profiles, "get", fake_get)
     monkeypatch.setattr(cli, "is_valid_agent_name", lambda _name: True)
 
     with pytest.raises(SystemExit) as exc:
@@ -510,10 +510,10 @@ def test_main_connect_new_agent_with_missing_base_plugin_errors(monkeypatch):
     assert exc.value.code == 2
 
 
-def test_main_connect_new_agent_with_base_plugin_sets_metadata(monkeypatch):
-    """Verifica que main connect new agent with base plugin sets metadata."""
-    dynamic_plugin = SimpleNamespace(effective_connection=lambda: CliConnection(cmd=["builtin"]))
-    base_plugin = SimpleNamespace(name="base-ok")
+def test_main_connect_new_agent_with_base_profile_sets_metadata(monkeypatch):
+    """Verifica que main connect new agent with profile sets metadata."""
+    dynamic_profile = SimpleNamespace(effective_connection=lambda: CliConnection(cmd=["builtin"]))
+    base_profile = SimpleNamespace(name="base-ok")
     calls = []
 
     def fake_get(name):
@@ -521,60 +521,60 @@ def test_main_connect_new_agent_with_base_plugin_sets_metadata(monkeypatch):
         if name == "novo-agente":
             return None
         if name == "base-ok":
-            return base_plugin
+            return base_profile
         return None
 
     monkeypatch.setattr(
         sys,
         "argv",
-        ["quimera", "--connect", "novo-agente", "--base", "base-ok", "--driver", "cli", "--cmd", "novo-cli"],
+        ["quimera", "--connect", "novo-agente", "--profile", "base-ok", "--driver", "cli", "--cmd", "novo-cli"],
     )
-    monkeypatch.setattr(cli._plugins, "get", fake_get)
+    monkeypatch.setattr(cli._profiles, "get", fake_get)
     monkeypatch.setattr(cli, "is_valid_agent_name", lambda _name: True)
 
-    with patch("quimera.cli.register_dynamic_plugin", return_value=dynamic_plugin) as register_dynamic, \
-            patch("quimera.cli.set_connection_override"), \
+    with patch("quimera.cli.register_connection_profile", return_value=dynamic_profile) as register_dynamic, \
+            patch("quimera.cli.set_connection"), \
             patch("quimera.cli.format_connection_label", return_value="cli: ok"), \
             patch("builtins.print"):
         cli.main()
 
-    register_dynamic.assert_called_once_with("novo-agente", metadata={"base": "base-ok"})
+    register_dynamic.assert_called_once_with("novo-agente", metadata={"profile": "base-ok"})
 
 
-def test_main_connect_existing_plugin_inherits_base_settings(monkeypatch):
-    """Verifica que main connect existing plugin inherits base settings."""
+def test_main_connect_existing_profile_inherits_base_settings(monkeypatch):
+    """Verifica que main connect existing profile inherits base settings."""
     base_formatter = lambda text: text
-    existing_plugin = SimpleNamespace(
+    existing_profile = SimpleNamespace(
         effective_connection=lambda: CliConnection(cmd=["existing"]),
         spy_stdout_formatter=None,
         runtime_rw_paths=[],
     )
-    base_plugin = SimpleNamespace(name="base-ref", spy_stdout_formatter=base_formatter, runtime_rw_paths=["/tmp/rw"])
+    base_profile = SimpleNamespace(name="base-ref", spy_stdout_formatter=base_formatter, runtime_rw_paths=["/tmp/rw"])
 
     def fake_get(name):
         if name == "codex":
-            return existing_plugin
+            return existing_profile
         if name == "base-ref":
-            return base_plugin
+            return base_profile
         return None
 
-    monkeypatch.setattr(sys, "argv", ["quimera", "--connect", "codex", "--base", "base-ref", "--driver", "cli", "--cmd", "codex-cli"])
-    monkeypatch.setattr(cli._plugins, "get", fake_get)
+    monkeypatch.setattr(sys, "argv", ["quimera", "--connect", "codex", "--profile", "base-ref", "--driver", "cli", "--cmd", "codex-cli"])
+    monkeypatch.setattr(cli._profiles, "get", fake_get)
 
-    with patch("quimera.cli.set_connection_override") as set_override, \
+    with patch("quimera.cli.set_connection") as set_override, \
             patch("quimera.cli.format_connection_label", return_value="cli: ok"), \
             patch("builtins.print"):
         cli.main()
 
-    assert existing_plugin._base_plugin_name == "base-ref"
-    assert existing_plugin.spy_stdout_formatter is base_formatter
-    assert existing_plugin.runtime_rw_paths == ["/tmp/rw"]
+    assert existing_profile._profile_name == "base-ref"
+    assert existing_profile.spy_stdout_formatter is base_formatter
+    assert existing_profile.runtime_rw_paths == ["/tmp/rw"]
     set_override.assert_called_once()
 
 
-def test_main_connect_existing_plugin_with_missing_base_errors(monkeypatch):
-    """Verifica que main connect existing plugin with missing base errors."""
-    existing_plugin = SimpleNamespace(
+def test_main_connect_existing_profile_with_missing_base_errors(monkeypatch):
+    """Verifica que main connect existing profile with missing base errors."""
+    existing_profile = SimpleNamespace(
         effective_connection=lambda: CliConnection(cmd=["existing"]),
         spy_stdout_formatter=None,
         runtime_rw_paths=[],
@@ -582,11 +582,11 @@ def test_main_connect_existing_plugin_with_missing_base_errors(monkeypatch):
 
     def fake_get(name):
         if name == "codex":
-            return existing_plugin
+            return existing_profile
         return None
 
-    monkeypatch.setattr(sys, "argv", ["quimera", "--connect", "codex", "--base", "base-inexistente", "--driver", "cli", "--cmd", "codex-cli"])
-    monkeypatch.setattr(cli._plugins, "get", fake_get)
+    monkeypatch.setattr(sys, "argv", ["quimera", "--connect", "codex", "--profile", "base-inexistente", "--driver", "cli", "--cmd", "codex-cli"])
+    monkeypatch.setattr(cli._profiles, "get", fake_get)
 
     with pytest.raises(SystemExit) as exc:
         cli.main()
@@ -637,7 +637,7 @@ def test_main_test_mode_uses_only_fake_agents(monkeypatch):
 
     backend = FakeBackend()
     _patch_main_basics(monkeypatch, agent_names=["claude", "fake-cli", "fake-cli-delegate", "fake-openai", "fake-openai-mcp-cli"])
-    monkeypatch.setattr(cli._plugins, "enable_test_plugins", lambda: cli._plugins.TEST_PLUGIN_NAMES)
+    monkeypatch.setattr(cli._profiles, "enable_test_profiles", lambda: cli._profiles.TEST_PROFILE_NAMES)
     monkeypatch.setattr(cli, "_start_test_fake_openai_backend", lambda: backend)
     monkeypatch.setattr(sys, "argv", ["quimera", "--test"])
 
@@ -651,7 +651,7 @@ def test_main_test_mode_uses_only_fake_agents(monkeypatch):
 def test_main_test_mode_with_cli_only_fake_agent_does_not_start_openai_backend(monkeypatch):
     """Verifica que main test mode with cli only fake agent does not start openai backend."""
     _patch_main_basics(monkeypatch, agent_names=["fake-cli", "fake-openai"])
-    monkeypatch.setattr(cli._plugins, "enable_test_plugins", lambda: cli._plugins.TEST_PLUGIN_NAMES)
+    monkeypatch.setattr(cli._profiles, "enable_test_profiles", lambda: cli._profiles.TEST_PROFILE_NAMES)
     monkeypatch.setattr(cli, "_start_test_fake_openai_backend", lambda: (_ for _ in ()).throw(AssertionError("should not start")))
     monkeypatch.setattr(sys, "argv", ["quimera", "--test", "--agents", "fake-cli"])
 
@@ -665,12 +665,12 @@ def test_start_test_fake_openai_backend_uses_free_port_and_non_persistent_overri
     """Verifica que start test fake openai backend uses free port and non persistent override."""
     captured = {}
 
-    def fake_set_connection_override(agent_name, connection, persist=True):
+    def fake_set_connection(agent_name, connection, persist=True):
         captured["agent_name"] = agent_name
         captured["connection"] = connection
         captured["persist"] = persist
 
-    monkeypatch.setattr(cli, "set_connection_override", fake_set_connection_override)
+    monkeypatch.setattr(cli, "set_connection", fake_set_connection)
     backend = cli._start_test_fake_openai_backend()
     try:
         connection = captured["connection"]
@@ -686,8 +686,8 @@ def test_start_test_fake_openai_backend_uses_free_port_and_non_persistent_overri
         cli._stop_test_fake_openai_backend(backend)
 
 
-def test_main_connect_fake_plugin_is_blocked_even_in_test_mode(monkeypatch):
-    """Verifica que main connect fake plugin is blocked even in test mode."""
+def test_main_connect_fake_profile_is_blocked_even_in_test_mode(monkeypatch):
+    """Verifica que main connect fake profile is blocked even in test mode."""
     _patch_main_basics(monkeypatch, agent_names=["fake-openai"])
     monkeypatch.setattr(sys, "argv", ["quimera", "--test", "--connect", "fake-openai", "--driver", "openai", "--model", "m"])
 
@@ -790,8 +790,8 @@ def test_main_ignores_stdin_reconfigure_errors_and_still_runs(monkeypatch):
     assert called_path.endswith(".sock")
 
 
-def test_main_mcp_uses_workspace_tmp_and_configures_plugins(monkeypatch):
-    """Verifica que main mcp uses workspace tmp and configures plugins."""
+def test_main_mcp_uses_workspace_tmp_and_configures_profiles(monkeypatch):
+    """Verifica que main mcp uses workspace tmp and configures profiles."""
     _patch_main_basics(monkeypatch)
     monkeypatch.setattr(sys, "argv", ["quimera", "--mcp-socket"])
     monkeypatch.setattr(cli.sys, "stderr", io.StringIO())
@@ -842,7 +842,7 @@ def test_main_mcp_updates_prompt_builder_session_state(monkeypatch):
     monkeypatch.setattr(cli, "Workspace", _FakeWorkspace)
     monkeypatch.setattr(cli, "ConfigManager", _FakeConfig)
     monkeypatch.setattr(cli, "QuimeraApp", _FakeAppWithPromptBuilder)
-    monkeypatch.setattr(cli._plugins, "all_names", lambda: ["claude"])
+    monkeypatch.setattr(cli._profiles, "all_names", lambda: ["claude"])
     monkeypatch.setattr(cli._themes, "names", lambda: ["default"])
     monkeypatch.setattr(sys, "argv", ["quimera", "--mcp-socket", "/tmp/custom-mcp.sock"])
     monkeypatch.setattr(cli.sys, "stderr", io.StringIO())
@@ -948,7 +948,7 @@ def test_main_mcp_http_uses_token_loaded_from_app_env_file(monkeypatch, tmp_path
     monkeypatch.setattr(cli, "Workspace", _FakeWorkspaceWithEnv)
     monkeypatch.setattr(cli, "ConfigManager", _FakeConfig)
     monkeypatch.setattr(cli, "QuimeraApp", _FakeAppLoadsEnv)
-    monkeypatch.setattr(cli._plugins, "all_names", lambda: ["claude"])
+    monkeypatch.setattr(cli._profiles, "all_names", lambda: ["claude"])
     monkeypatch.setattr(cli._themes, "names", lambda: ["default"])
     monkeypatch.setattr(sys, "argv", ["quimera", "--mcp-http", "--mcp-port", "9090"])
     monkeypatch.setattr(cli.sys, "stderr", io.StringIO())

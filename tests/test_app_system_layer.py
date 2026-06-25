@@ -19,8 +19,8 @@ from quimera.constants import (
     CMD_RELOAD,
     CMD_RESET,
 )
-from quimera.plugins import AgentPlugin
-from quimera.plugins.base import CliConnection, OpenAIConnection
+from quimera.profiles import ExecutionProfile
+from quimera.profiles.base import CliConnection, OpenAIConnection
 
 
 class DummyRenderer:
@@ -49,8 +49,8 @@ class DummyRenderer:
     def reset_visual_state(self, *a, **kw): pass
 
 
-def make_plugin(name="codex", prefix="/codex", aliases=None):
-    return AgentPlugin(
+def make_profile(name="codex", prefix="/codex", aliases=None):
+    return ExecutionProfile(
         name=name,
         prefix=prefix,
         style=("cyan", name.upper()),
@@ -78,8 +78,8 @@ def make_app(renderer=None):
     )
 
     app._redisplay_user_prompt_if_needed = Mock()
-    app.get_agent_plugin = Mock(return_value=None)
-    app.get_available_plugins = Mock(return_value=[])
+    app.get_agent_profile = Mock(return_value=None)
+    app.get_available_profiles = Mock(return_value=[])
     app.read_user_input = Mock(return_value="")
     app.clear_terminal_screen = Mock()
     app.session_state_mgr = SimpleNamespace(reset=Mock())
@@ -358,13 +358,13 @@ def test_show_task_response_uses_strip_and_emits_only_non_empty():
 def test_resolve_prompt_target_covers_default_exact_and_alias_paths():
     """Verifica que Test resolve prompt target covers default exact and alias paths."""
     app = make_app()
-    plugin = make_plugin(name="Alpha", prefix="/alpha", aliases=["/a"])  # noqa: N806
+    profile = make_profile(name="Alpha", prefix="/alpha", aliases=["/a"])  # noqa: N806
     app.active_agents = ["ghost", "Alpha"]
 
-    def get_plugin(name):
-        return plugin if name == "Alpha" else None
+    def get_profile(name):
+        return profile if name == "Alpha" else None
 
-    app.get_agent_plugin = Mock(side_effect=get_plugin)
+    app.get_agent_profile = Mock(side_effect=get_profile)
     layer = AppSystemLayer(app)
 
     app.active_agents = ["codex"]
@@ -397,8 +397,8 @@ def test_resolve_prompt_target_prompts_when_ambiguous():
 def test_resolve_connect_target_variants_and_validation_fallback():
     """Verifica que Test resolve connect target variants and validation fallback."""
     app = make_app()
-    plugin = make_plugin(name="chatgpt", prefix="/chatgpt", aliases=["/gpt"])
-    app.get_available_plugins = Mock(return_value=[plugin])
+    profile = make_profile(name="chatgpt", prefix="/chatgpt", aliases=["/gpt"])
+    app.get_available_profiles = Mock(return_value=[profile])
     layer = AppSystemLayer(app)
 
     assert layer._resolve_connect_target(CMD_CONNECT) is None
@@ -454,59 +454,59 @@ def test_prompt_bool_supports_default_and_negative_answer():
     assert layer._prompt_bool("Confirma", default=True) is False
 
 
-def test_configure_connection_interactively_raises_for_unknown_base_plugin():
-    """Verifica que Test configure connection interactively raises for unknown base plugin."""
+def test_configure_connection_interactively_raises_for_unknown_profile():
+    """Verifica que Test configure connection interactively raises for unknown profile."""
     app = make_app()
     app.read_user_input = Mock(side_effect=["desconhecido"])
     layer = AppSystemLayer(app)
-    plugin = make_plugin()
+    profile = make_profile()
 
-    with patch("quimera.app.system_layer._plugins.get", return_value=None):
+    with patch("quimera.app.system_layer._profiles.get", return_value=None):
         with pytest.raises(ValueError, match="não encontrado"):
-            layer._configure_connection_interactively(plugin)
+            layer._configure_connection_interactively(profile)
 
 
-def test_configure_connection_interactively_raises_for_empty_model_in_base_plugin_mode():
-    """Verifica que Test configure connection interactively raises for empty model in base plugin mode."""
+def test_configure_connection_interactively_raises_for_empty_model_in_profile_mode():
+    """Verifica que Test configure connection interactively raises for empty model in profile mode."""
     app = make_app()
     app.read_user_input = Mock(side_effect=["base", ""])
     layer = AppSystemLayer(app)
-    plugin = make_plugin()
-    base_plugin = make_plugin(name="base")
+    profile = make_profile()
+    profile = make_profile(name="base")
 
-    with patch("quimera.app.system_layer._plugins.get", return_value=base_plugin):
+    with patch("quimera.app.system_layer._profiles.get", return_value=profile):
         with pytest.raises(ValueError, match="modelo vazio"):
-            layer._configure_connection_interactively(plugin)
+            layer._configure_connection_interactively(profile)
 
 
-def test_configure_connection_interactively_returns_base_plugin_connection_when_valid():
-    """Verifica que Test configure connection interactively returns base plugin connection when valid."""
+def test_configure_connection_interactively_returns_profile_connection_when_valid():
+    """Verifica que Test configure connection interactively returns profile connection when valid."""
     app = make_app()
     app.read_user_input = Mock(side_effect=["base", "gpt-5"])
     layer = AppSystemLayer(app)
-    plugin = make_plugin()
-    base_plugin = make_plugin(name="base")
-    base_plugin.cmd = ["base", "--model=default"]
+    profile = make_profile()
+    profile = make_profile(name="base")
+    profile.cmd = ["base", "--model=default"]
 
-    with patch("quimera.app.system_layer._plugins.get", return_value=base_plugin):
-        connection, base_name = layer._configure_connection_interactively(plugin)
+    with patch("quimera.app.system_layer._profiles.get", return_value=profile):
+        connection, profile_name = layer._configure_connection_interactively(profile)
 
     assert isinstance(connection, CliConnection)
     assert connection.cmd == ["base", "--model=gpt-5"]
-    assert base_name == "base"
+    assert profile_name == "base"
 
 
 def test_configure_connection_interactively_cli_reprompts_invalid_driver_and_rejects_empty_cmd():
     """Verifica que Test configure connection interactively cli reprompts invalid driver and rejects empty cmd."""
     app = make_app()
-    # plugin_base, driver(invalid), driver(valid), output_format, cmd(empty→ValueError)
+    # profile_base, driver(invalid), driver(valid), output_format, cmd(empty→ValueError)
     app.read_user_input = Mock(side_effect=["", "invalido", "cli", "", ""])
     layer = AppSystemLayer(app)
-    plugin = make_plugin()
-    plugin.cmd = []
+    profile = make_profile()
+    profile.cmd = []
 
     with pytest.raises(ValueError, match="comando CLI vazio"):
-        layer._configure_connection_interactively(plugin)
+        layer._configure_connection_interactively(profile)
 
     assert app.renderer.warning_messages == ["Driver inválido. Use 'cli' ou 'openai'."]
 
@@ -514,54 +514,54 @@ def test_configure_connection_interactively_cli_reprompts_invalid_driver_and_rej
 def test_configure_connection_interactively_cli_returns_connection_when_valid():
     """Verifica que Test configure connection interactively cli returns connection when valid."""
     app = make_app()
-    # plugin_base, driver, output_format, cmd, prompt_as_arg
+    # profile_base, driver, output_format, cmd, prompt_as_arg
     app.read_user_input = Mock(side_effect=["", "cli", "", "codex run", "s"])
     layer = AppSystemLayer(app)
-    plugin = make_plugin()
-    plugin.cmd = []
+    profile = make_profile()
+    profile.cmd = []
 
-    connection, base_name = layer._configure_connection_interactively(plugin)
+    connection, profile_name = layer._configure_connection_interactively(profile)
 
     assert isinstance(connection, CliConnection)
     assert connection.cmd == ["codex", "run"]
     assert connection.prompt_as_arg is True
-    assert base_name is None
+    assert profile_name is None
 
 
 def test_configure_connection_interactively_openai_empty_object_clears_extra_body():
     """Verifica que Test configure connection interactively openai empty object clears extra body."""
     app = make_app()
-    # plugin_base, driver, provider, model, base_url, api_key_env, extra_body("{}"=clear), supports_tools, max_connections
+    # profile_base, driver, provider, model, base_url, api_key_env, extra_body("{}"=clear), supports_tools, max_connections
     app.read_user_input = Mock(side_effect=["", "openai", "", "", "", "", "{}", "", ""])
     layer = AppSystemLayer(app)
-    plugin = make_plugin()
+    profile = make_profile()
     object.__setattr__(
-        plugin,
+        profile,
         "_connection_override",
         OpenAIConnection(model="m1", base_url="https://api.local", api_key_env="KEY", provider="openai", extra_body={"keep": 1}),
     )
 
-    connection, base_name = layer._configure_connection_interactively(plugin)
+    connection, profile_name = layer._configure_connection_interactively(profile)
 
     assert isinstance(connection, OpenAIConnection)
     assert connection.extra_body is None
-    assert base_name is None
+    assert profile_name is None
 
 
 def test_configure_connection_interactively_openai_invalid_json_keeps_previous_extra_body():
     """Verifica que Test configure connection interactively openai invalid json keeps previous extra body."""
     app = make_app()
-    # plugin_base, driver, provider, model, base_url, api_key_env, extra_body("{"=invalid), supports_tools, max_connections
+    # profile_base, driver, provider, model, base_url, api_key_env, extra_body("{"=invalid), supports_tools, max_connections
     app.read_user_input = Mock(side_effect=["", "openai", "", "", "", "", "{", "", ""])
     layer = AppSystemLayer(app)
-    plugin = make_plugin()
+    profile = make_profile()
     object.__setattr__(
-        plugin,
+        profile,
         "_connection_override",
         OpenAIConnection(model="m1", base_url="https://api.local", api_key_env="KEY", provider="openai", extra_body={"keep": 2}),
     )
 
-    connection, _ = layer._configure_connection_interactively(plugin)
+    connection, _ = layer._configure_connection_interactively(profile)
 
     assert connection.extra_body == {"keep": 2}
     assert len(app.renderer.warning_messages) == 1
@@ -571,17 +571,17 @@ def test_configure_connection_interactively_openai_invalid_json_keeps_previous_e
 def test_configure_connection_interactively_openai_blank_input_preserves_extra_body():
     """Verifica que Test configure connection interactively openai blank input preserves extra body."""
     app = make_app()
-    # plugin_base, driver, provider, model, base_url, api_key_env, extra_body(empty=preserve), supports_tools, max_connections
+    # profile_base, driver, provider, model, base_url, api_key_env, extra_body(empty=preserve), supports_tools, max_connections
     app.read_user_input = Mock(side_effect=["", "openai", "", "", "", "", "", "", ""])
     layer = AppSystemLayer(app)
-    plugin = make_plugin()
+    profile = make_profile()
     object.__setattr__(
-        plugin,
+        profile,
         "_connection_override",
         OpenAIConnection(model="m1", base_url="https://api.local", api_key_env="KEY", provider="openai", extra_body={"preserve": 1}),
     )
 
-    connection, _ = layer._configure_connection_interactively(plugin)
+    connection, _ = layer._configure_connection_interactively(profile)
 
     assert connection.extra_body == {"preserve": 1}
 
@@ -682,14 +682,14 @@ def test_build_prompt_preview_message_first_speaker_mode_label():
     assert "follower/reviewer" in result_follower
 
 
-def test_handle_command_connect_dynamic_plugin_and_configure_error():
-    """Verifica que Test handle command connect dynamic plugin and configure error."""
+def test_handle_command_connect_dynamic_profile_and_configure_error():
+    """Verifica que Test handle command connect dynamic profile and configure error."""
     app = make_app()
-    app.get_agent_plugin = Mock(return_value=None)
+    app.get_agent_profile = Mock(return_value=None)
     layer = AppSystemLayer(app)
-    dynamic_plugin = make_plugin(name="dinamico")
+    dynamic_profile = make_profile(name="dinamico")
 
-    with patch("quimera.app.system_layer.register_dynamic_plugin", return_value=dynamic_plugin), patch.object(
+    with patch("quimera.app.system_layer.register_connection_profile", return_value=dynamic_profile), patch.object(
         layer,
         "_configure_connection_interactively",
         side_effect=ValueError("cancelado"),
@@ -698,32 +698,32 @@ def test_handle_command_connect_dynamic_plugin_and_configure_error():
 
     assert handled is True
     assert app.renderer.warning_messages == ["cancelado"]
-    assert any("Agente registrado dinamicamente" in msg for msg in app.renderer.system_messages)
+    assert any("Conexão registrada" in msg for msg in app.renderer.system_messages)
 
 
-def test_handle_command_connect_applies_base_plugin_and_updates_active_lists():
-    """Verifica que Test handle command connect applies base plugin and updates active lists."""
+def test_handle_command_connect_applies_profile_and_updates_active_lists():
+    """Verifica que Test handle command connect applies profile and updates active lists."""
     app = make_app()
     layer = AppSystemLayer(app)
-    plugin = make_plugin(name="target")
-    base_plugin = make_plugin(name="base")
-    base_plugin.spy_stdout_formatter = lambda raw: []
-    base_plugin.runtime_rw_paths = ["/tmp/work"]
-    app.get_agent_plugin = Mock(return_value=plugin)
+    profile = make_profile(name="target")
+    profile = make_profile(name="base")
+    profile.spy_stdout_formatter = lambda raw: []
+    profile.runtime_rw_paths = ["/tmp/work"]
+    app.get_agent_profile = Mock(return_value=profile)
 
     with patch.object(
         layer,
         "_configure_connection_interactively",
         return_value=(CliConnection(cmd=["target"]), "base"),
-    ), patch("quimera.app.system_layer._plugins.get", return_value=base_plugin), patch(
-        "quimera.app.system_layer.set_connection_override"
+    ), patch("quimera.app.system_layer._profiles.get", return_value=profile), patch(
+        "quimera.app.system_layer.set_connection"
     ) as set_override:
         handled = layer.handle_command("/connect target")
 
     assert handled is True
-    assert getattr(plugin, "_base_plugin_name") == "base"
-    assert plugin.spy_stdout_formatter is base_plugin.spy_stdout_formatter
-    assert plugin.runtime_rw_paths == ["/tmp/work"]
+    assert getattr(profile, "_profile_name") == "base"
+    assert profile.spy_stdout_formatter is profile.spy_stdout_formatter
+    assert profile.runtime_rw_paths == ["/tmp/work"]
     assert app.active_agents == ["target"]
     assert app.selected_agents == ["target"]
     set_override.assert_called_once()
@@ -732,21 +732,21 @@ def test_handle_command_connect_applies_base_plugin_and_updates_active_lists():
 def test_handle_command_connect_passes_injected_registry_to_set_override():
     """Verifica que Test handle command connect passes injected registry to set override."""
     app = make_app()
-    app._plugin_registry = object()
+    app._profile_registry = object()
     layer = AppSystemLayer(app)
-    plugin = make_plugin(name="target")
-    app.get_agent_plugin = Mock(return_value=plugin)
+    profile = make_profile(name="target")
+    app.get_agent_profile = Mock(return_value=profile)
 
     with patch.object(
         layer,
         "_configure_connection_interactively",
         return_value=(CliConnection(cmd=["target"]), None),
-    ), patch("quimera.app.system_layer.set_connection_override") as set_override:
+    ), patch("quimera.app.system_layer.set_connection") as set_override:
         handled = layer.handle_command("/connect target")
 
     assert handled is True
     set_override.assert_called_once()
-    assert set_override.call_args.kwargs["registry"] is app._plugin_registry
+    assert set_override.call_args.kwargs["registry"] is app._profile_registry
 
 
 def test_handle_command_reload_preserves_session_agents():
@@ -756,12 +756,12 @@ def test_handle_command_reload_preserves_session_agents():
     app.selected_agents = ["existing_agent", "ghost"]
     layer = AppSystemLayer(app)
 
-    with patch("quimera.app.system_layer.reload_plugins", return_value=["existing_agent", "new_agent"]):
+    with patch("quimera.app.system_layer.reload_profiles", return_value=["existing_agent", "new_agent"]):
         assert layer.handle_command(CMD_RELOAD) is True
 
     assert app.active_agents == ["existing_agent"]
     assert app.selected_agents == ["existing_agent"]
-    assert app.renderer.system_messages[-1] == "Plugins recarregados: 2 plugin(s)"
+    assert app.renderer.system_messages[-1] == "Profiles recarregados: 2 profile(s)"
 
 
 def test_handle_command_reload_and_reset_state_paths():
@@ -771,12 +771,12 @@ def test_handle_command_reload_and_reset_state_paths():
     app.selected_agents = ["a", "ghost"]
     layer = AppSystemLayer(app)
 
-    with patch("quimera.app.system_layer.reload_plugins", return_value=["a", "b"]):
+    with patch("quimera.app.system_layer.reload_profiles", return_value=["a", "b"]):
         assert layer.handle_command(CMD_RELOAD) is True
 
     assert app.active_agents == ["a"]
     assert app.selected_agents == ["a"]
-    assert app.renderer.system_messages[-1] == "Plugins recarregados: 2 plugin(s)"
+    assert app.renderer.system_messages[-1] == "Profiles recarregados: 2 profile(s)"
 
     assert layer.handle_command(CMD_RESET) is True
     app.session_state_mgr.reset.assert_called_once_with("state")
@@ -788,25 +788,25 @@ def test_handle_command_reload_and_reset_state_paths():
 def test_handle_command_reload_passes_injected_registry():
     """Verifica que Test handle command reload passes injected registry."""
     app = make_app()
-    app._plugin_registry = object()
+    app._profile_registry = object()
     layer = AppSystemLayer(app)
 
-    with patch("quimera.app.system_layer.reload_plugins", return_value=["a"]) as reload_mock:
+    with patch("quimera.app.system_layer.reload_profiles", return_value=["a"]) as reload_mock:
         assert layer.handle_command(CMD_RELOAD) is True
 
-    reload_mock.assert_called_once_with(registry=app._plugin_registry)
+    reload_mock.assert_called_once_with(registry=app._profile_registry)
 
 
 def test_handle_command_disconnect_passes_injected_registry():
     """Verifica que Test handle command disconnect passes injected registry."""
     app = make_app()
-    app._plugin_registry = object()
+    app._profile_registry = object()
     layer = AppSystemLayer(app)
 
     with patch("quimera.app.system_layer.remove_connection", return_value=True) as remove_mock:
         assert layer.handle_command("/disconnect target") is True
 
-    remove_mock.assert_called_once_with("target", registry=app._plugin_registry)
+    remove_mock.assert_called_once_with("target", registry=app._profile_registry)
 
 
 def test_handle_command_approve_all_and_approve_available_and_unavailable():

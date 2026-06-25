@@ -31,42 +31,42 @@ from ..constants import (
     build_help,
 )
 from ..connection_configurator import ConnectionConfigurator
-from ..plugins import remove_connection
-from .. import plugins as _plugins
-from ..plugins.base import (
+from ..profiles import remove_connection
+from .. import profiles as _profiles
+from ..profiles.base import (
     CliConnection,
     OpenAIConnection,
     format_connection_label,
-    get_connection_overrides,
+    get_connections,
     is_valid_agent_name,
-    register_dynamic_plugin,
-    reload_plugins,
-    set_connection_override,
+    register_connection_profile,
+    reload_profiles,
+    set_connection,
 )
 
 
-class _NullPluginResolver:
+class _NullProfileResolver:
     def get(self, name: str):
         return None
 
     @property
-    def plugins(self) -> list:
+    def profiles(self) -> list:
         return []
 
 
-class _LegacyPluginResolver:
+class _LegacyProfileResolver:
     def __init__(self, app):
         self._app = app
 
     def get(self, name: str):
-        getter = getattr(self._app, "get_agent_plugin", None)
+        getter = getattr(self._app, "get_agent_profile", None)
         if callable(getter):
             return getter(name)
         return None
 
     @property
-    def plugins(self) -> list:
-        getter = getattr(self._app, "get_available_plugins", None)
+    def profiles(self) -> list:
+        getter = getattr(self._app, "get_available_profiles", None)
         if callable(getter):
             return list(getter())
         return []
@@ -170,7 +170,7 @@ class AppSystemLayer:
         self,
         agent_pool: IAgentPool,
         renderer=None,
-        plugin_resolver=None,
+        profile_resolver=None,
         prompt_builder=None,
         history_getter=None,
         shared_state_getter=None,
@@ -189,7 +189,7 @@ class AppSystemLayer:
         session_state_manager=None,
         approval_handler_getter=None,
         context_manager=None,
-        plugin_registry=None,
+        profile_registry=None,
         deferred_messages_getter=None,
         max_deferred_messages_getter=None,
         display_service=None,
@@ -207,7 +207,7 @@ class AppSystemLayer:
                 agent_pool = getattr(app, "agent_pool", None)
                 if agent_pool is None or not hasattr(agent_pool, "agents"):
                     agent_pool = _LegacyAgentPoolAdapter(app)
-                plugin_resolver = plugin_resolver or _LegacyPluginResolver(app)
+                profile_resolver = profile_resolver or _LegacyProfileResolver(app)
                 prompt_builder = prompt_builder or getattr(app, "prompt_builder", None)
                 history_getter = history_getter or (lambda: list(getattr(app, "history", []) or []))
                 shared_state_getter = shared_state_getter or (lambda: getattr(app, "shared_state", None))
@@ -242,7 +242,7 @@ class AppSystemLayer:
                     lambda: getattr(app, "_approval_handler", None)
                 )
                 context_manager = context_manager or getattr(app, "context_manager", None)
-                plugin_registry = plugin_registry or getattr(app, "_plugin_registry", None)
+                profile_registry = profile_registry or getattr(app, "_profile_registry", None)
                 deferred_messages_getter = deferred_messages_getter or (
                     lambda: getattr(app, "_deferred_system_messages", [])
                 )
@@ -261,7 +261,7 @@ class AppSystemLayer:
                 max_deferred_messages_getter=max_deferred_messages_getter,
             )
 
-        self.plugin_resolver = plugin_resolver or _NullPluginResolver()
+        self.profile_resolver = profile_resolver or _NullProfileResolver()
         self._prompt_builder = prompt_builder
         self._history_getter = history_getter or (lambda: [])
         self._shared_state_getter = shared_state_getter or (lambda: None)
@@ -280,7 +280,7 @@ class AppSystemLayer:
         self.session_state_manager = session_state_manager
         self.approval_handler_getter = approval_handler_getter or (lambda: None)
         self.context_manager = context_manager
-        self.plugin_registry = plugin_registry
+        self.profile_registry = profile_registry
         self._deferred_system_messages: list[tuple[str, str]] = []
         self._deferred_messages_getter = deferred_messages_getter
         self._max_deferred_messages_getter = max_deferred_messages_getter
@@ -363,8 +363,8 @@ class AppSystemLayer:
         if prompt_builder is None:
             raise RuntimeError("prompt_builder indisponível")
 
-        plugin = self.plugin_resolver.get(agent)
-        driver = plugin.effective_driver() if plugin else "cli"
+        profile = self.profile_resolver.get(agent)
+        driver = profile.effective_driver() if profile else "cli"
         prompt, metrics = prompt_builder.build(
             agent,
             history,
@@ -405,18 +405,18 @@ class AppSystemLayer:
         ]
         return "\n".join(analysis_lines)
 
-    def _configure_connection_interactively(self, plugin):
+    def _configure_connection_interactively(self, profile):
         """Coleta configuração de conexão de forma interativa no chat.
 
-        Retorna (connection, base_plugin_name | None).
+        Retorna (connection, profile_name | None).
         """
         configurator = ConnectionConfigurator(
             self._prompt_text,
             self._prompt_bool,
             self._display.show_warning_message,
-            get_plugin=_plugins.get,
+            get_profile=_profiles.get,
         )
-        return configurator.configure_with_base(plugin)
+        return configurator.configure_with_profile(profile)
 
     def _resolve_prompt_target(self, command: str) -> str | None:
         """Resolve o agente alvo para preview de prompt."""
@@ -452,11 +452,11 @@ class AppSystemLayer:
         for agent_name in active_agents:
             if normalized == agent_name.lower():
                 return agent_name
-            plugin = self.plugin_resolver.get(agent_name)
-            if plugin is None:
+            profile = self.profile_resolver.get(agent_name)
+            if profile is None:
                 continue
-            candidates = {plugin.prefix.lower().lstrip("/")}
-            candidates.update(alias.lower().lstrip("/") for alias in (getattr(plugin, "aliases", None) or []))
+            candidates = {profile.prefix.lower().lstrip("/")}
+            candidates.update(alias.lower().lstrip("/") for alias in (getattr(profile, "aliases", None) or []))
             if normalized in candidates:
                 return agent_name
         return None
@@ -468,18 +468,18 @@ class AppSystemLayer:
             return None
 
         normalized = raw_target[1:] if raw_target.startswith("/") else raw_target
-        for plugin in getattr(self.plugin_resolver, "plugins", []):
-            if normalized == plugin.name.lower():
-                return plugin.name
-            candidates = {plugin.prefix.lower().lstrip("/")}
-            candidates.update(alias.lower().lstrip("/") for alias in (getattr(plugin, "aliases", None) or []))
+        for profile in getattr(self.profile_resolver, "profiles", []):
+            if normalized == profile.name.lower():
+                return profile.name
+            candidates = {profile.prefix.lower().lstrip("/")}
+            candidates.update(alias.lower().lstrip("/") for alias in (getattr(profile, "aliases", None) or []))
             if normalized in candidates:
-                return plugin.name
+                return profile.name
         return normalized if is_valid_agent_name(normalized) else None
 
     def list_connected_agents(self) -> list[str]:
         """Retorna nomes dos agentes com conexão persistida."""
-        return sorted(get_connection_overrides().keys())
+        return sorted(get_connections().keys())
 
     # ------------------------------------------------------------------
     # Delegação para DisplayService
@@ -536,27 +536,27 @@ class AppSystemLayer:
             if target is None:
                 self._display.show_warning_message("Uso: /connect <agente>")
                 return True
-            plugin_registry = self.plugin_registry
-            plugin = self.plugin_resolver.get(target)
-            if plugin is None:
-                plugin = register_dynamic_plugin(target, registry=plugin_registry)
-                self.show_system_message(f"Agente registrado dinamicamente: {target}")
+            profile_registry = self.profile_registry
+            profile = self.profile_resolver.get(target)
+            if profile is None:
+                profile = register_connection_profile(target, registry=profile_registry)
+                self.show_system_message(f"Conexão registrada: {target}")
             self.show_system_message(f"Configurando conexão para {target}")
-            self.show_system_message(f"Atual: {format_connection_label(plugin.effective_connection())}")
+            self.show_system_message(f"Atual: {format_connection_label(profile.effective_connection())}")
             try:
-                connection, base_name = self._configure_connection_interactively(plugin)
+                connection, profile_name = self._configure_connection_interactively(profile)
             except ValueError as exc:
                 self._display.show_warning_message(str(exc))
                 return True
-            if base_name:
-                base_plugin = _plugins.get(base_name)
-                if base_plugin is not None:
-                    object.__setattr__(plugin, "_base_plugin_name", base_plugin.name)
-                    if base_plugin.spy_stdout_formatter is not None:
-                        plugin.spy_stdout_formatter = base_plugin.spy_stdout_formatter
-                    if base_plugin.runtime_rw_paths:
-                        plugin.runtime_rw_paths = list(base_plugin.runtime_rw_paths)
-            set_connection_override(target, connection, persist=True, registry=plugin_registry)
+            if profile_name:
+                profile = _profiles.get(profile_name)
+                if profile is not None:
+                    object.__setattr__(profile, "_profile_name", profile.name)
+                    if profile.spy_stdout_formatter is not None:
+                        profile.spy_stdout_formatter = profile.spy_stdout_formatter
+                    if profile.runtime_rw_paths:
+                        profile.runtime_rw_paths = list(profile.runtime_rw_paths)
+            set_connection(target, connection, persist=True, registry=profile_registry)
             active_agents = self._get_active_agents()
             selected_agents = list(self.get_selected_agents() or [])
             if target not in self.agent_pool:
@@ -571,8 +571,8 @@ class AppSystemLayer:
             if not target:
                 self._display.show_warning_message("Uso: /disconnect <agente>")
                 return True
-            plugin_registry = self.plugin_registry
-            if remove_connection(target, registry=plugin_registry):
+            profile_registry = self.profile_registry
+            if remove_connection(target, registry=profile_registry):
                 self._display.show_system(f"Conexão removida para {target}.")
             else:
                 self._display.show_warning_message(f"Nenhuma conexão persistida encontrada para {target}.")
@@ -585,12 +585,12 @@ class AppSystemLayer:
         if command == CMD_RELOAD:
             current_agents = list(self.agent_pool.agents)
             current_selected_agents = list(self.get_selected_agents() or [])
-            all_names = reload_plugins(registry=self.plugin_registry)
+            all_names = reload_profiles(registry=self.profile_registry)
             surviving = [a for a in current_agents if a in all_names]
             surviving_selected = [a for a in current_selected_agents if a in surviving]
             self.agent_pool.set(surviving)
             self.set_selected_agents(surviving_selected)
-            self._display.show_system(f"Plugins recarregados: {len(all_names)} plugin(s)")
+            self._display.show_system(f"Profiles recarregados: {len(all_names)} profile(s)")
             return True
 
         if command == CMD_PROMPT or command.startswith(f"{CMD_PROMPT} "):

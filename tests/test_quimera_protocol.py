@@ -13,7 +13,7 @@ from unittest.mock import Mock, call, patch
 
 import quimera.app as app_module
 import quimera.cli as cli_module
-import quimera.plugins as plugins
+import quimera.profiles as profiles
 from quimera.agents import AgentClient
 from quimera.app import QuimeraApp
 from quimera.app.chat_round import ChatRoundOrchestrator
@@ -37,12 +37,12 @@ from quimera.app.session_bootstrap import (
 from quimera.cli import main as cli_main
 from quimera.config import DEFAULT_HISTORY_WINDOW
 from quimera.constants import CMD_AGENTS, CMD_CLEAR, CMD_CONNECT, CMD_DISCONNECT, CMD_HELP, CMD_PROMPT, EXTEND_MARKER, MSG_SHUTDOWN, TaskStatus, TaskType, Visibility, build_agents_help, build_help
-from quimera.plugins import AgentPlugin
+from quimera.profiles import ExecutionProfile
 from quimera.prompt_templates import PromptText
-from quimera.plugins.base import PluginRegistry
+from quimera.profiles.base import ProfileRegistry
 from quimera.runtime.models import TaskRecord, ToolCall
 from quimera.domain.session_state import SessionState
-from quimera.plugins.base import OpenAIConnection
+from quimera.profiles.base import OpenAIConnection
 from quimera.delegate_presenter import DelegatePresenter
 from quimera.prompt import PromptBuilder
 from quimera.shared_state import AGENT_STATE_KEYS
@@ -210,10 +210,10 @@ def build_task_services(app):
         app.auto_approve_mutations = False
     if not hasattr(app, "_approval_handler"):
         app._approval_handler = None
-    if not hasattr(app, "get_agent_plugin"):
-        app.get_agent_plugin = lambda _agent_name: None
-    if not hasattr(app, "get_available_plugins"):
-        app.get_available_plugins = lambda: []
+    if not hasattr(app, "get_agent_profile"):
+        app.get_agent_profile = lambda _agent_name: None
+    if not hasattr(app, "get_available_profiles"):
+        app.get_available_profiles = lambda: []
     if not hasattr(app, "session_state"):
         app.session_state = None
     if not hasattr(app, "history"):
@@ -284,8 +284,8 @@ def build_task_services(app):
         get_auto_approve_mutations=lambda: app.auto_approve_mutations,
         get_approval_handler=lambda: app._approval_handler,
         set_approval_handler=lambda handler: setattr(app, "_approval_handler", handler),
-        get_agent_plugin=app.get_agent_plugin,
-        get_available_plugins=app.get_available_plugins,
+        get_agent_profile=app.get_agent_profile,
+        get_available_profiles=app.get_available_profiles,
         get_session_state=lambda: app.session_state,
         get_history=lambda: app.history,
         get_shared_state=lambda: app.shared_state,
@@ -492,7 +492,7 @@ def materialize_internal_services(app):
             agent_client=getattr(app, "agent_client", None),
             turn_manager=getattr(app, "turn_manager", None),
             task_services=getattr(app, "task_services", None),
-            get_agent_plugin=getattr(app, "get_agent_plugin", None),
+            get_agent_profile=getattr(app, "get_agent_profile", None),
             behavior_metrics=getattr(app, "behavior_metrics", None),
             threads=getattr(app, "threads", 1),
             session_state=getattr(app, "session_state", {}),
@@ -515,11 +515,11 @@ def materialize_internal_services(app):
         app.command_router = CommandRouter(
             agent_pool=_agent_pool,
             renderer=getattr(app, "renderer", None),
-            get_active_agent_plugins=getattr(app, "get_active_agent_plugins", lambda: []),
+            get_active_agent_profiles=getattr(app, "get_active_agent_profiles", lambda: []),
             set_execution_mode=getattr(app, "_set_execution_mode", lambda mode: None),
             normalize_agent_name=getattr(app, "_normalize_agent_name", lambda n: n),
             selected_agents=getattr(app, "selected_agents", []),
-            get_available_plugins=getattr(app, "get_available_plugins", lambda: []),
+            get_available_profiles=getattr(app, "get_available_profiles", lambda: []),
         )
     if getattr(app, "bug_services", None) is None:
         from unittest.mock import Mock
@@ -558,7 +558,7 @@ def materialize_internal_services(app):
 
 class ProtocolTests(unittest.TestCase):
     def setUp(self):
-        importlib.reload(plugins)
+        importlib.reload(profiles)
 
     @unittest.skipUnless(
         hasattr(cli_module, "TerminalRenderer") and hasattr(cli_module, "AgentClient"),
@@ -967,7 +967,7 @@ class ProtocolTests(unittest.TestCase):
             "total_chars": 7,
             "primary": True,
         })
-        app.get_agent_plugin = Mock(return_value=AgentPlugin(
+        app.get_agent_profile = Mock(return_value=ExecutionProfile(
             name="opencode",
             prefix="/opencode",
             style=("blue", "OpenCode"),
@@ -1001,7 +1001,7 @@ class ProtocolTests(unittest.TestCase):
             "total_chars": 7,
             "primary": True,
         })
-        app.get_agent_plugin = Mock(return_value=AgentPlugin(
+        app.get_agent_profile = Mock(return_value=ExecutionProfile(
             name="codex-cli",
             prefix="/codex-cli",
             style=("blue", "Codex CLI"),
@@ -1035,7 +1035,7 @@ class ProtocolTests(unittest.TestCase):
             "total_chars": 7,
             "primary": True,
         })
-        app.get_agent_plugin = Mock(return_value=AgentPlugin(
+        app.get_agent_profile = Mock(return_value=ExecutionProfile(
             name="chatgpt-api",
             prefix="/chatgpt-api",
             style=("yellow", "ChatGPT API"),
@@ -1085,7 +1085,7 @@ class ProtocolTests(unittest.TestCase):
         app = QuimeraApp.__new__(QuimeraApp)
         layer = AppSystemLayer(app)
 
-        with patch("quimera.app.system_layer.get_connection_overrides", return_value={"codex": {}, "chatgpt": {}}) as get_overrides:
+        with patch("quimera.app.system_layer.get_connections", return_value={"codex": {}, "chatgpt": {}}) as get_overrides:
             result = layer.list_connected_agents()
 
         self.assertEqual(result, ["chatgpt", "codex"])
@@ -1116,7 +1116,7 @@ class ProtocolTests(unittest.TestCase):
         from quimera.app.agent_pool import AgentPool
         app.agent_pool = AgentPool([])
         app.active_agents = []
-        plugin = AgentPlugin(
+        profile = ExecutionProfile(
             name="chatgpt",
             prefix="/chatgpt",
             style=("green", "ChatGPT"),
@@ -1126,13 +1126,13 @@ class ProtocolTests(unittest.TestCase):
             api_key_env="OPENAI_API_KEY",
             supports_tools=True,
         )
-        app.get_available_plugins = Mock(return_value=[plugin])
-        app.get_agent_plugin = Mock(return_value=plugin)
+        app.get_available_profiles = Mock(return_value=[profile])
+        app.get_agent_profile = Mock(return_value=profile)
         answers = iter(["", "openai", "", "gpt-5.1", "http://localhost:1234/v1", "LM_STUDIO_KEY", "", "", ""])
         app.read_user_input = Mock(side_effect=lambda prompt, timeout=-1: next(answers))
         app.system_layer = AppSystemLayer(app)
 
-        with patch("quimera.app.system_layer.set_connection_override") as set_override:
+        with patch("quimera.app.system_layer.set_connection") as set_override:
             materialize_internal_services(app)
             handled = app.system_layer.handle_command("/connect chatgpt")
 
@@ -1194,7 +1194,7 @@ class ProtocolTests(unittest.TestCase):
         """Verifica que configure connection interactively openai returns dataclass connection."""
         app = QuimeraApp.__new__(QuimeraApp)
         app.renderer = DummyRenderer()
-        plugin = AgentPlugin(
+        profile = ExecutionProfile(
             name="qwen2-5",
             prefix="/qwen2-5",
             style=("cyan", "Qwen"),
@@ -1208,7 +1208,7 @@ class ProtocolTests(unittest.TestCase):
         app.read_user_input = Mock(side_effect=lambda prompt, timeout=-1: next(answers))
         layer = AppSystemLayer(app)
 
-        connection, base_name = layer._configure_connection_interactively(plugin)
+        connection, base_name = layer._configure_connection_interactively(profile)
 
         self.assertIsNone(base_name)
         self.assertIsInstance(connection, OpenAIConnection)
@@ -1277,8 +1277,8 @@ class ProtocolTests(unittest.TestCase):
         app.renderer = DummyRenderer()
         app._output_lock = threading.Lock()
         from quimera.app.agent_pool import AgentPool
-        app.agent_pool = AgentPool(["ollama-granite4"])
-        app.active_agents = ["ollama-granite4"]
+        app.agent_pool = AgentPool(["opencode"])
+        app.active_agents = ["opencode"]
         app.user_name = "Alex"
         app.shared_state = {}
         app.current_job_id = 1
@@ -1295,8 +1295,8 @@ class ProtocolTests(unittest.TestCase):
         self.assertTrue(handled)
         tasks = list_tasks({"job_id": 1}, db_path=str(db_path))
         self.assertEqual(len(tasks), 1)
-        self.assertEqual(tasks[0]["assigned_to"], "ollama-granite4")
-        self.assertIn("atribuída para ollama-granite4", app.renderer.system_messages[-1])
+        self.assertEqual(tasks[0]["assigned_to"], "opencode")
+        self.assertIn("atribuída para opencode", app.renderer.system_messages[-1])
 
     def test_handle_task_command_uses_injected_task_classifier(self):
         """Verifica que handle task command uses injected task classifier."""
@@ -2997,8 +2997,8 @@ class ProtocolTests(unittest.TestCase):
         renderer.running_status.return_value = DummyStatusContext(status)
         agent_client = AgentClient(renderer)
 
-        with patch("quimera.plugins.get") as mock_get:
-            mock_plugin = SimpleNamespace(
+        with patch("quimera.profiles.get") as mock_get:
+            mock_profile = SimpleNamespace(
                 driver="openai_compat",
                 model="qwen3-coder:30b",
                 base_url="http://localhost:11434/v1",
@@ -3006,7 +3006,7 @@ class ProtocolTests(unittest.TestCase):
                 tool_use_reliability="medium",
                 supports_tools=True,
             )
-            mock_get.return_value = mock_plugin
+            mock_get.return_value = mock_profile
 
             with patch.object(agent_client, "_api_drivers", {"ollama-qwen": Mock()}):
                 agent_client._api_drivers["ollama-qwen"].run.return_value = "Resumo final"
@@ -3044,7 +3044,7 @@ class ProtocolTests(unittest.TestCase):
         renderer.running_status.return_value = DummyStatusContext(status)
         agent_client = AgentClient(renderer)
 
-        plugin = SimpleNamespace(
+        profile = SimpleNamespace(
             driver="openai_compat",
             model="qwen3-coder:30b",
             base_url="http://localhost:11434/v1",
@@ -3061,7 +3061,7 @@ class ProtocolTests(unittest.TestCase):
 
         with patch.object(agent_client, "_api_drivers", {"ollama-qwen": Mock()}):
             agent_client._api_drivers["ollama-qwen"].run.side_effect = driver_run
-            result = agent_client._call_api("ollama-qwen", plugin, "resuma", quiet=True)
+            result = agent_client._call_api("ollama-qwen", profile, "resuma", quiet=True)
 
         self.assertIsNone(result)
         self.assertTrue(agent_client._user_cancelled)
@@ -3085,7 +3085,7 @@ class ProtocolTests(unittest.TestCase):
         agent_client = AgentClient(renderer)
         agent_client.tool_executor = Mock()
 
-        plugin = SimpleNamespace(
+        profile = SimpleNamespace(
             driver="openai_compat",
             model="qwen3-coder:30b",
             base_url="http://localhost:11434/v1",
@@ -3100,7 +3100,7 @@ class ProtocolTests(unittest.TestCase):
             driver_mock.run.return_value = "Resumo final"
             result = agent_client._call_api(
                 "ollama-qwen",
-                plugin,
+                profile,
                 "resuma",
                 quiet=True,
                 allow_tools=False,
@@ -3110,13 +3110,13 @@ class ProtocolTests(unittest.TestCase):
         self.assertIsNone(driver_mock.run.call_args.kwargs["tool_executor"])
 
 
-class PluginTests(unittest.TestCase):
+class ProfileTests(unittest.TestCase):
     def setUp(self):
-        importlib.reload(plugins)
+        importlib.reload(profiles)
 
-    def test_agent_plugin_fields(self):
-        """Verifica que agent plugin fields."""
-        p = AgentPlugin(name="test", prefix="/test", cmd=["test", "-p"], style=("red", "Test"))
+    def test_agent_profile_fields(self):
+        """Verifica que agent profile fields."""
+        p = ExecutionProfile(name="test", prefix="/test", cmd=["test", "-p"], style=("red", "Test"))
 
         self.assertEqual(p.name, "test")
         self.assertEqual(p.prefix, "/test")
@@ -3125,56 +3125,56 @@ class PluginTests(unittest.TestCase):
 
     def test_register_and_get(self):
         """Verifica que register and get."""
-        p = AgentPlugin(name="dummy", prefix="/dummy", cmd=["dummy"], style=("yellow", "Dummy"))
+        p = ExecutionProfile(name="dummy", prefix="/dummy", cmd=["dummy"], style=("yellow", "Dummy"))
 
-        with patch("quimera.plugins.base._registry", PluginRegistry()):
-            plugins.register(p)
-            self.assertIs(plugins.get("dummy"), p)
+        with patch("quimera.profiles.base._registry", ProfileRegistry()):
+            profiles.register(p)
+            self.assertIs(profiles.get("dummy"), p)
 
     def test_get_returns_none_for_unknown(self):
         """Verifica que get returns none for unknown."""
-        with patch("quimera.plugins.base._registry", PluginRegistry()):
-            self.assertIsNone(plugins.get("naoexiste"))
+        with patch("quimera.profiles.base._registry", ProfileRegistry()):
+            self.assertIsNone(profiles.get("naoexiste"))
 
-    def test_default_plugins_loaded(self):
-        """Verifica que default plugins loaded."""
-        self.assertIn("claude", plugins.all_names())
-        self.assertIn("codex", plugins.all_names())
+    def test_default_profiles_loaded(self):
+        """Verifica que default profiles loaded."""
+        self.assertIn("claude", profiles.all_names())
+        self.assertIn("codex", profiles.all_names())
 
-    def test_all_plugins_returns_agent_plugin_instances(self):
-        """Verifica que all plugins returns agent plugin instances."""
-        for p in plugins.all_plugins():
-            self.assertIsInstance(p, AgentPlugin)
+    def test_all_profiles_returns_agent_profile_instances(self):
+        """Verifica que all profiles returns agent profile instances."""
+        for p in profiles.all_profiles():
+            self.assertIsInstance(p, ExecutionProfile)
 
-    def test_all_names_matches_all_plugins(self):
-        """Verifica que all names matches all plugins."""
-        names = plugins.all_names()
-        self.assertEqual(len(names), len(plugins.all_plugins()))
-        for p in plugins.all_plugins():
+    def test_all_names_matches_all_profiles(self):
+        """Verifica que all names matches all profiles."""
+        names = profiles.all_names()
+        self.assertEqual(len(names), len(profiles.all_profiles()))
+        for p in profiles.all_profiles():
             self.assertIn(p.name, names)
 
-    def test_agent_style_returns_plugin_style(self):
-        """Verifica que agent style returns plugin style."""
+    def test_agent_style_returns_profile_style(self):
+        """Verifica que agent style returns profile style."""
         def get_style(agent):
             return ("magenta", "🤖  Stub") if agent == "stub" else None
 
-        self.assertEqual(_agent_style("stub", get_plugin_style=get_style), ("magenta", "🤖  Stub"))
+        self.assertEqual(_agent_style("stub", get_profile_style=get_style), ("magenta", "🤖  Stub"))
 
     def test_agent_style_fallback_for_unknown(self):
         """Verifica que agent style fallback for unknown."""
-        with patch("quimera.plugins.base._registry", PluginRegistry()):
+        with patch("quimera.profiles.base._registry", ProfileRegistry()):
             color, label = _agent_style("unknown")
             self.assertEqual(color, "white")
             self.assertEqual(label, "🤖  Unknown")
 
-    def test_agent_client_call_uses_plugin_cmd(self):
-        """Verifica que agent client call uses plugin cmd."""
-        stub = AgentPlugin(name="stub", prefix="/stub", cmd=["stub", "-x"], style=("white", "Stub"))
+    def test_agent_client_call_uses_profile_cmd(self):
+        """Verifica que agent client call uses profile cmd."""
+        stub = ExecutionProfile(name="stub", prefix="/stub", cmd=["stub", "-x"], style=("white", "Stub"))
         renderer = Mock()
 
-        reg = PluginRegistry()
+        reg = ProfileRegistry()
         reg.register(stub)
-        with patch("quimera.plugins.base._registry", reg):
+        with patch("quimera.profiles.base._registry", reg):
             client = AgentClient(renderer)
             with patch.object(client, "run", return_value="ok") as mock_run:
                 result = client.call("stub", "hello")
@@ -3188,7 +3188,7 @@ class PluginTests(unittest.TestCase):
     def test_agent_client_call_error_on_unknown_agent(self):
         """Verifica que agent client call error on unknown agent."""
         renderer = Mock()
-        with patch("quimera.plugins.base._registry", PluginRegistry()):
+        with patch("quimera.profiles.base._registry", ProfileRegistry()):
             client = AgentClient(renderer)
             result = client.call("fantasma", "msg")
 
@@ -3196,14 +3196,14 @@ class PluginTests(unittest.TestCase):
         renderer.show_error.assert_called_once()
         self.assertIn("fantasma", renderer.show_error.call_args[0][0])
 
-    def test_new_plugin_registration_visible_via_all_names(self):
-        """Verifica que new plugin registration visible via all names."""
-        novo = AgentPlugin(name="novo", prefix="/novo", cmd=["novo"], style=("cyan", "Novo"))
+    def test_new_profile_registration_visible_via_all_names(self):
+        """Verifica que new profile registration visible via all names."""
+        novo = ExecutionProfile(name="novo", prefix="/novo", cmd=["novo"], style=("cyan", "Novo"))
 
-        with patch("quimera.plugins.base._registry", PluginRegistry()):
-            plugins.register(novo)
-            self.assertEqual(plugins.all_names(), ["novo"])
-            self.assertEqual(plugins.all_plugins(), [novo])
+        with patch("quimera.profiles.base._registry", ProfileRegistry()):
+            profiles.register(novo)
+            self.assertEqual(profiles.all_names(), ["novo"])
+            self.assertEqual(profiles.all_profiles(), [novo])
 
     def test_parallel_threads_initializes_correctly(self):
         """Verifica que parallel threads initializes correctly."""
@@ -3813,8 +3813,8 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(message, "oi")
         self.assertFalse(explicit)
 
-    def test_parse_routing_fallback_normalizes_plugin_objects_to_agent_names(self):
-        """Verifica que parse routing fallback normalizes plugin objects to agent names."""
+    def test_parse_routing_fallback_normalizes_profile_objects_to_agent_names(self):
+        """Verifica que parse routing fallback normalizes profile objects to agent names."""
         app = QuimeraApp.__new__(QuimeraApp)
         from quimera.app.agent_pool import AgentPool
         app.agent_pool = AgentPool([])
@@ -3822,8 +3822,8 @@ class PluginTests(unittest.TestCase):
         app.selected_agents = []
         app.round_index = 0
         app.renderer = DummyRenderer()
-        app.get_active_agent_plugins = Mock(return_value=[])
-        plugin = AgentPlugin(
+        app.get_active_agent_profiles = Mock(return_value=[])
+        profile = ExecutionProfile(
             name=AGENT_CLAUDE,
             prefix="/claude",
             style=("blue", "Claude"),
@@ -3831,7 +3831,7 @@ class PluginTests(unittest.TestCase):
             model="claude-sonnet",
             supports_tools=True,
         )
-        app.get_available_plugins = Mock(return_value=[plugin])
+        app.get_available_profiles = Mock(return_value=[profile])
 
         materialize_internal_services(app)
         agent, message, explicit = app.parse_routing("oi")
@@ -3842,8 +3842,8 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(app.active_agents, [AGENT_CLAUDE])
         self.assertIsInstance(app.active_agents[0], str)
 
-    def test_record_failure_accepts_agent_plugin_instance(self):
-        """Verifica que record failure accepts agent plugin instance."""
+    def test_record_failure_accepts_agent_profile_instance(self):
+        """Verifica que record failure accepts agent profile instance."""
         from quimera.app.agent_failure_tracker import AgentFailureTracker
         from quimera.app.agent_pool import AgentPool
 
@@ -3857,7 +3857,7 @@ class PluginTests(unittest.TestCase):
             file_bug=None,
             get_session_id=lambda: "test",
         )
-        plugin = AgentPlugin(
+        profile = ExecutionProfile(
             name=AGENT_CLAUDE,
             prefix="/claude",
             style=("blue", "Claude"),
@@ -3866,7 +3866,7 @@ class PluginTests(unittest.TestCase):
             supports_tools=True,
         )
 
-        tracker.record_failure(plugin)
+        tracker.record_failure(profile)
 
         self.assertEqual(tracker.failures[AGENT_CLAUDE], 1)
         self.assertEqual(list(tracker.failures.keys()), [AGENT_CLAUDE])
@@ -3924,7 +3924,7 @@ class PluginTests(unittest.TestCase):
         app.agent_client.call.return_value = "resposta"
         app.renderer = DummyRenderer()
         app.session_state = {"session_id": "sessao-teste"}
-        app.get_agent_plugin = Mock(return_value=AgentPlugin(
+        app.get_agent_profile = Mock(return_value=ExecutionProfile(
             name="codex-cli",
             prefix="/codex-cli",
             style=("blue", "Codex CLI"),
@@ -3956,7 +3956,7 @@ class PluginTests(unittest.TestCase):
         app.agent_client.call.return_value = "resposta"
         app.renderer = DummyRenderer()
         app.session_state = {"session_id": "sessao-teste"}
-        app.get_agent_plugin = Mock(return_value=AgentPlugin(
+        app.get_agent_profile = Mock(return_value=ExecutionProfile(
             name="chatgpt-api",
             prefix="/chatgpt-api",
             style=("yellow", "ChatGPT API"),
@@ -3993,7 +3993,7 @@ class PluginTests(unittest.TestCase):
         app.agent_client.call.return_value = "resposta"
         app.renderer = DummyRenderer()
         app.session_state = {"session_id": "sessao-teste"}
-        app.get_agent_plugin = Mock(return_value=AgentPlugin(
+        app.get_agent_profile = Mock(return_value=ExecutionProfile(
             name="codex",
             prefix="/codex",
             style=("blue", "Codex"),
@@ -4029,7 +4029,7 @@ class PluginTests(unittest.TestCase):
         app.prompt_builder.build.return_value = "PROMPT"
         app.renderer = Mock()
         app.session_state = {"session_id": "sessao-teste"}
-        app.get_agent_plugin = Mock(return_value=AgentPlugin(
+        app.get_agent_profile = Mock(return_value=ExecutionProfile(
             name="chatgpt-api",
             prefix="/chatgpt-api",
             style=("yellow", "ChatGPT API"),
@@ -4071,7 +4071,7 @@ class PluginTests(unittest.TestCase):
         app.prompt_builder.build.return_value = "PROMPT"
         app.renderer = Mock()
         app.session_state = {"session_id": "sessao-teste"}
-        app.get_agent_plugin = Mock(return_value=AgentPlugin(
+        app.get_agent_profile = Mock(return_value=ExecutionProfile(
             name="codex-cli",
             prefix="/codex-cli",
             style=("blue", "Codex CLI"),
@@ -4265,7 +4265,7 @@ class PluginTests(unittest.TestCase):
             handlers[agent] = handler
             return FakeExecutor(handler)
 
-        class FakePlugin:
+        class FakeProfile:
             def __init__(self, supports_task_execution):
                 self.supports_task_execution = supports_task_execution
 
@@ -4275,8 +4275,8 @@ class PluginTests(unittest.TestCase):
         app.classify_task_execution_result = lambda response: (True, response)
 
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
-                "quimera.app.core.plugins.get",
-                side_effect=lambda agent: FakePlugin(agent == AGENT_CLAUDE),
+                "quimera.app.core.profiles.get",
+                side_effect=lambda agent: FakeProfile(agent == AGENT_CLAUDE),
         ), patch("quimera.tasks.repository.TaskRepository.submit_for_review") as submit_for_review, patch(
             "quimera.tasks.repository.TaskRepository.complete_task"
         ) as complete_task:
@@ -4524,7 +4524,7 @@ class PluginTests(unittest.TestCase):
         def fake_delegate(*_args, **_kwargs):
             raise RuntimeError("timeout")
 
-        class FakePlugin:
+        class FakeProfile:
             def __init__(self, supports_task_execution):
                 self.supports_task_execution = supports_task_execution
 
@@ -4533,8 +4533,8 @@ class PluginTests(unittest.TestCase):
         app.system_layer.show_muted_message = lambda message: status_updates.append(message)
 
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
-                "quimera.app.core.plugins.get",
-                side_effect=lambda _agent: FakePlugin(True),
+                "quimera.app.core.profiles.get",
+                side_effect=lambda _agent: FakeProfile(True),
         ), patch("quimera.tasks.repository.TaskRepository.transition_task") as transition_task, patch(
             "quimera.tasks.repository.TaskRepository.fail_task"
         ) as fail_task:
@@ -4588,7 +4588,7 @@ class PluginTests(unittest.TestCase):
         def fake_delegate(*_args, **_kwargs):
             raise RuntimeError("timeout")
 
-        class FakePlugin:
+        class FakeProfile:
             def __init__(self, supports_task_execution):
                 self.supports_task_execution = supports_task_execution
 
@@ -4597,8 +4597,8 @@ class PluginTests(unittest.TestCase):
         app.system_layer.show_muted_message = lambda message: status_updates.append(message)
 
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
-                "quimera.app.core.plugins.get",
-                side_effect=lambda _agent: FakePlugin(True),
+                "quimera.app.core.profiles.get",
+                side_effect=lambda _agent: FakeProfile(True),
         ), patch("quimera.tasks.repository.TaskRepository.transition_task") as transition_task, patch(
             "quimera.tasks.repository.TaskRepository.fail_task"
         ) as fail_task:
@@ -4656,7 +4656,7 @@ class PluginTests(unittest.TestCase):
             executor.agent = agent
             return executor
 
-        class FakePlugin:
+        class FakeProfile:
             def __init__(self, supports_task_execution):
                 self.supports_task_execution = supports_task_execution
 
@@ -4668,8 +4668,8 @@ class PluginTests(unittest.TestCase):
         app.system_layer.show_muted_message = lambda message: status_updates.append(message)
 
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
-                "quimera.app.core.plugins.get",
-                side_effect=lambda agent: FakePlugin(agent == AGENT_GEMINI),
+                "quimera.app.core.profiles.get",
+                side_effect=lambda agent: FakeProfile(agent == AGENT_GEMINI),
         ), patch("quimera.tasks.repository.TaskRepository.transition_task") as update_task, patch(
             "quimera.tasks.repository.TaskRepository.fail_task"
         ) as fail_task:
@@ -4721,13 +4721,13 @@ class PluginTests(unittest.TestCase):
             executor.agent = agent
             return executor
 
-        class FakePlugin:
+        class FakeProfile:
             def __init__(self, supports_task_execution):
                 self.supports_task_execution = supports_task_execution
 
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
-                "quimera.app.core.plugins.get",
-                side_effect=lambda agent: FakePlugin(agent == AGENT_GEMINI),
+                "quimera.app.core.profiles.get",
+                side_effect=lambda agent: FakeProfile(agent == AGENT_GEMINI),
         ):
             app._setup_task_executors()
             self.assertFalse(review_eligibility[AGENT_CLAUDE]())
@@ -4764,13 +4764,13 @@ class PluginTests(unittest.TestCase):
             executor.agent = agent
             return executor
 
-        class FakePlugin:
+        class FakeProfile:
             def __init__(self, supports_task_execution):
                 self.supports_task_execution = supports_task_execution
 
         with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
-                "quimera.app.core.plugins.get",
-                side_effect=lambda agent: FakePlugin(True),
+                "quimera.app.core.profiles.get",
+                side_effect=lambda agent: FakeProfile(True),
         ):
             app._setup_task_executors()
             self.assertTrue(review_eligibility[AGENT_GEMINI]())
@@ -5211,31 +5211,31 @@ class MetricsFeedbackTests(unittest.TestCase):
 
         self.assertLess(len(prompt), 6250)
 
-    def test_get_task_routing_plugins_respects_explicit_active_agents(self):
-        """Verifica que get task routing plugins respects explicit active agents."""
+    def test_get_task_routing_profiles_respects_explicit_active_agents(self):
+        """Verifica que get task routing profiles respects explicit active agents."""
         app = QuimeraApp.__new__(QuimeraApp)
         from quimera.app.agent_pool import AgentPool
         app.agent_pool = AgentPool([AGENT_CLAUDE, AGENT_CODEX])
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
         app.tasks_db_path = str(Path(self.enterContext(tempfile.TemporaryDirectory())) / "tasks.db")
 
-        selected = [plugin.name for plugin in build_task_services(app).get_task_routing_plugins()]
+        selected = [profile.name for profile in build_task_services(app).get_task_routing_profiles()]
 
         self.assertEqual(selected, [AGENT_CLAUDE, AGENT_CODEX])
 
-    def test_get_task_routing_plugins_expands_wildcard_to_all_plugins(self):
-        """Verifica que get task routing plugins expands wildcard to all plugins."""
+    def test_get_task_routing_profiles_expands_wildcard_to_all_profiles(self):
+        """Verifica que get task routing profiles expands wildcard to all profiles."""
         app = QuimeraApp.__new__(QuimeraApp)
         from quimera.app.agent_pool import AgentPool
         app.agent_pool = AgentPool(["*"])
         app.active_agents = ["*"]
         app.tasks_db_path = str(Path(self.enterContext(tempfile.TemporaryDirectory())) / "tasks.db")
 
-        selected = [plugin.name for plugin in build_task_services(app).get_task_routing_plugins()]
+        selected = [profile.name for profile in build_task_services(app).get_task_routing_profiles()]
 
         self.assertEqual(
             selected,
-            [plugin.name for plugin in plugins.all_plugins() if getattr(plugin, "supports_task_execution", True)],
+            [profile.name for profile in profiles.all_profiles() if getattr(profile, "supports_task_execution", True)],
         )
 
     def test_delegation_rule_mentions_ack(self):

@@ -1,17 +1,17 @@
 import pytest
 
-from quimera.plugins.base import AgentPlugin
+from quimera.profiles.base import ExecutionProfile
 from quimera.constants import TaskType
 from quimera.tasks.planning import (
     TaskClassification,
     classify_task,
     classify_task_type,
-    score_plugin_for_task,
+    score_profile_for_task,
     choose_best_agent,
 )
 
 
-class MockPlugin(AgentPlugin):
+class MockProfile(ExecutionProfile):
     @property
     def name(self) -> str: return self._name
 
@@ -101,83 +101,83 @@ def test_classify_task_rejects_invalid_classifier_return_type():
         classify_task("qualquer descrição", classifier=InvalidClassifier())
 
 
-def test_score_plugin_for_task():
-    """Verifica o score de um plugin para um tipo de task."""
-    p = MockPlugin("p1", tier=3, preferred=[TaskType.CODE_EDIT], code=True, long=True, tools=True)
+def test_score_profile_for_task():
+    """Verifica o score de um profile para um tipo de task."""
+    p = MockProfile("p1", tier=3, preferred=[TaskType.CODE_EDIT], code=True, long=True, tools=True)
     # Tier 3 -> (3-1)*2 = 4
     # Preferred CODE_EDIT -> +5
     # Supports code editing -> +2
     # Total = 11
-    assert score_plugin_for_task(p, TaskType.CODE_EDIT) == 11
+    assert score_profile_for_task(p, TaskType.CODE_EDIT) == 11
 
     # Avoid
-    p2 = MockPlugin("p2", avoid=[TaskType.TEST_EXECUTION])
+    p2 = MockProfile("p2", avoid=[TaskType.TEST_EXECUTION])
     # Tier 1 -> 0
     # Avoid -> -5
-    assert score_plugin_for_task(p2, TaskType.TEST_EXECUTION) == -5
+    assert score_profile_for_task(p2, TaskType.TEST_EXECUTION) == -5
 
 
 def test_choose_best_agent():
     """Verifica a escolha do melhor agente."""
     assert choose_best_agent("any", []) is None
 
-    p1 = MockPlugin("p1", tier=1)
-    p2 = MockPlugin("p2", tier=3)
+    p1 = MockProfile("p1", tier=1)
+    p2 = MockProfile("p2", tier=3)
     assert choose_best_agent("any", [p1, p2]) == "p2"
 
 
 def test_choose_best_agent_fallback():
     """Verifica o fallback na escolha do melhor agente."""
     # p1 avoids the task
-    p1 = MockPlugin("p1", avoid=[TaskType.CODE_EDIT])
+    p1 = MockProfile("p1", avoid=[TaskType.CODE_EDIT])
     # score will be -5
     assert choose_best_agent(TaskType.CODE_EDIT, [p1]) == "p1"
 
-    p2 = MockPlugin("p2", avoid=[TaskType.CODE_EDIT])
-    p3 = MockPlugin("p3", preferred=[TaskType.GENERAL])
+    p2 = MockProfile("p2", avoid=[TaskType.CODE_EDIT])
+    p3 = MockProfile("p3", preferred=[TaskType.GENERAL])
     # p2 score -5, p3 score 5
     assert choose_best_agent(TaskType.CODE_EDIT, [p2, p3]) == "p3"
 
     # Test compatible fallback
-    p4 = MockPlugin("p4", avoid=[TaskType.CODE_EDIT])  # score -5
-    p5 = MockPlugin("p5")  # score 0
+    p4 = MockProfile("p4", avoid=[TaskType.CODE_EDIT])  # score -5
+    p5 = MockProfile("p5")  # score 0
     assert choose_best_agent(TaskType.CODE_EDIT, [p4, p5]) == "p5"
 
 
 def test_code_editing_agents_can_review():
     """Verifica que agentes com code_editing podem fazer review."""
-    p = MockPlugin("editor", tier=2, code=True)
-    score_review = score_plugin_for_task(p, TaskType.CODE_REVIEW)
-    score_edit = score_plugin_for_task(p, TaskType.CODE_EDIT)
+    p = MockProfile("editor", tier=2, code=True)
+    score_review = score_profile_for_task(p, TaskType.CODE_REVIEW)
+    score_edit = score_profile_for_task(p, TaskType.CODE_EDIT)
     assert score_review >= score_edit - 2, "Agentes com code_editing devem ter bônus para code_review"
     assert score_review > 0, "Agentes com code_editing devem poder ser elegíveis para code_review"
 
-    p2 = MockPlugin("non_editor", tier=2, code=False)
-    assert score_plugin_for_task(p2,
+    p2 = MockProfile("non_editor", tier=2, code=False)
+    assert score_profile_for_task(p2,
                                  TaskType.CODE_REVIEW) < score_review, "Editor deve ter vantagem sobre não-editor para code_review"
 
 
-def test_bug_investigation_penalizes_plugins_without_tools():
-    """Verifica que plugins sem ferramentas são penalizados para bug_investigation."""
-    with_tools = MockPlugin("with_tools", tier=2, code=True, tools=True, caps=["general_coding"])
-    without_tools = MockPlugin("without_tools", tier=2, code=True, tools=False, caps=["general_coding"])
+def test_bug_investigation_penalizes_profiles_without_tools():
+    """Verifica que profiles sem ferramentas são penalizados para bug_investigation."""
+    with_tools = MockProfile("with_tools", tier=2, code=True, tools=True, caps=["general_coding"])
+    without_tools = MockProfile("without_tools", tier=2, code=True, tools=False, caps=["general_coding"])
 
-    score_with = score_plugin_for_task(with_tools, TaskType.BUG_INVESTIGATION)
-    score_without = score_plugin_for_task(without_tools, TaskType.BUG_INVESTIGATION)
+    score_with = score_profile_for_task(with_tools, TaskType.BUG_INVESTIGATION)
+    score_without = score_profile_for_task(without_tools, TaskType.BUG_INVESTIGATION)
 
-    assert score_without < score_with, "Plugin sem tools deve ter score menor para bug_investigation"
+    assert score_without < score_with, "Profile sem tools deve ter score menor para bug_investigation"
 
-    plugin_with_tools = MockPlugin("tool_user", tier=1, tools=True)
-    plugin_without_tools = MockPlugin("no_tools", tier=1, tools=False)
-    score_tools = score_plugin_for_task(plugin_with_tools, TaskType.BUG_INVESTIGATION)
-    score_no_tools = score_plugin_for_task(plugin_without_tools, TaskType.BUG_INVESTIGATION)
+    profile_with_tools = MockProfile("tool_user", tier=1, tools=True)
+    profile_without_tools = MockProfile("no_tools", tier=1, tools=False)
+    score_tools = score_profile_for_task(profile_with_tools, TaskType.BUG_INVESTIGATION)
+    score_no_tools = score_profile_for_task(profile_without_tools, TaskType.BUG_INVESTIGATION)
     assert score_no_tools < score_tools, "Agent sem tools deve ter score menor que agent com tools para bug_investigation"
 
 
 def test_choose_best_agent_penalizes_no_tools_for_bug_investigation():
     """Verifica que agente sem ferramentas é preterido para bug_investigation."""
-    agent_with_tools = MockPlugin("with_tools", tier=2, tools=True)
-    agent_without_tools = MockPlugin("without_tools", tier=2, tools=False)
+    agent_with_tools = MockProfile("with_tools", tier=2, tools=True)
+    agent_without_tools = MockProfile("without_tools", tier=2, tools=False)
 
     selected = choose_best_agent(TaskType.BUG_INVESTIGATION, [agent_with_tools, agent_without_tools])
     assert selected == "with_tools", "Agente com tools deve ser preferido para bug_investigation"
@@ -185,22 +185,22 @@ def test_choose_best_agent_penalizes_no_tools_for_bug_investigation():
 
 def test_test_execution_prefers_high_tool_reliability():
     """Verifica que alta confiabilidade de ferramentas é preferida para test_execution."""
-    low = MockPlugin("low", tier=2, tools=True, tool_reliability="low")
-    high = MockPlugin("high", tier=1, tools=True, tool_reliability="high")
+    low = MockProfile("low", tier=2, tools=True, tool_reliability="low")
+    high = MockProfile("high", tier=1, tools=True, tool_reliability="high")
     assert choose_best_agent(TaskType.TEST_EXECUTION, [low, high]) == "high"
 
 
 def test_bug_investigation_prefers_high_tool_reliability():
     """Verifica que alta confiabilidade de ferramentas é preferida para bug_investigation."""
-    low = MockPlugin("low", tier=2, tools=True, code=True, caps=["general_coding"], tool_reliability="low")
-    high = MockPlugin("high", tier=1, tools=True, tool_reliability="high")
+    low = MockProfile("low", tier=2, tools=True, code=True, caps=["general_coding"], tool_reliability="low")
+    high = MockProfile("high", tier=1, tools=True, tool_reliability="high")
     assert choose_best_agent(TaskType.BUG_INVESTIGATION, [low, high]) == "high"
 
 
 def test_choose_best_agent_ignores_agents_without_task_execution():
     """Verifica que agentes sem execução de tasks são ignorados."""
-    non_executor = MockPlugin("qwen-like", tier=3, preferred=[TaskType.CODE_REVIEW], task_execution=False)
-    executor = MockPlugin("executor", tier=1)
+    non_executor = MockProfile("qwen-like", tier=3, preferred=[TaskType.CODE_REVIEW], task_execution=False)
+    executor = MockProfile("executor", tier=1)
 
     selected = choose_best_agent(TaskType.CODE_REVIEW, [non_executor, executor])
 
@@ -209,6 +209,6 @@ def test_choose_best_agent_ignores_agents_without_task_execution():
 
 def test_choose_best_agent_returns_none_when_only_non_executors_are_available():
     """Verifica que retorna None quando só há não-executores disponíveis."""
-    non_executor = MockPlugin("qwen-like", tier=3, preferred=[TaskType.CODE_REVIEW], task_execution=False)
+    non_executor = MockProfile("qwen-like", tier=3, preferred=[TaskType.CODE_REVIEW], task_execution=False)
 
     assert choose_best_agent(TaskType.CODE_REVIEW, [non_executor]) is None

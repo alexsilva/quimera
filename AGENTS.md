@@ -102,11 +102,11 @@ Isso garante que:
 
 ## Teste Interativo Local
 
-Quando trabalhar neste projeto e precisar comprovar fluxos interativos sem provedores externos, use o modo de teste explícito. Os plugins fake só devem entrar na rodada com `--test`; sem esse parâmetro, eles não fazem parte do uso humano normal.
+Quando trabalhar neste projeto e precisar comprovar fluxos interativos sem provedores externos, use o modo de teste explícito. Os profiles fake só devem entrar na rodada com `--test`; sem esse parâmetro, eles não fazem parte do uso humano normal.
 
 Fluxo recomendado para validar chamadas OpenAI-compatible com ferramentas via MCP:
 
-1. Rode o app em modo de teste. O próprio `--test` registra os fake plugins, sobe o backend OpenAI-compatible fake em uma porta livre e aplica override não persistente para o processo:
+1. Rode o app em modo de teste. O próprio `--test` registra os fake profiles, sobe o backend OpenAI-compatible fake em uma porta livre e aplica override não persistente para o processo:
    ```bash
    python quimera.py --test --agents fake-cli-delegation fake-openai --visibility full
    ```

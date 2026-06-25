@@ -116,11 +116,11 @@ def _coerce_agent_name(agent: Any) -> str:
     return candidate or "unknown"
 
 
-def _agent_style(agent: str, get_plugin_style=None):
+def _agent_style(agent: str, get_profile_style=None):
     """Retorna (color, label) para o agente; fallback para white/capitalize."""
     agent_name = _coerce_agent_name(agent)
-    if get_plugin_style:
-        result = get_plugin_style(agent_name.lower())
+    if get_profile_style:
+        result = get_profile_style(agent_name.lower())
         if result:
             return result
     return ("white", f"🤖  {agent_name.capitalize()}")
@@ -184,7 +184,7 @@ class TerminalRenderer:
     def __init__(
         self,
         theme: str | None = None,
-        get_plugin_style=None,
+        get_profile_style=None,
         density: str | None = None,
         audit_logger: RenderAuditLogger | None = None,
     ):
@@ -204,7 +204,7 @@ class TerminalRenderer:
             self._console = None
         self._theme = themes.get(theme or themes.DEFAULT_THEME)
         self._density = density if density in themes.DENSITY_OPTIONS else DEFAULT_DENSITY
-        self._get_plugin_style = get_plugin_style
+        self._get_profile_style = get_profile_style
         self._live = None
         self._statuses = {}
 
@@ -488,7 +488,7 @@ class TerminalRenderer:
 
     def _agent_style(self, agent: str):
         """Retorna (color, label) para o agente."""
-        return _public_ui_module()._agent_style(agent, self._get_plugin_style)
+        return _public_ui_module()._agent_style(agent, self._get_profile_style)
 
     def _container(self, agent) -> AgentWindowState:
         """Get-or-create do container do agente (protegido por _lock reentrante)."""

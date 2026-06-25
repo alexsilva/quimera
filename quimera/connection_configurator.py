@@ -2,7 +2,7 @@
 import json
 import shlex
 
-from .plugins.base import CliConnection, OpenAIConnection
+from .profiles.base import CliConnection, OpenAIConnection
 
 
 class ConnectionConfigurator:
@@ -15,22 +15,22 @@ class ConnectionConfigurator:
         prompt_text: callable(label, default=None) -> str
         prompt_bool: callable(label, default=False) -> bool
         warn: callable(message) — reporta avisos/erros ao usuário
-        get_plugin: callable(name) -> plugin | None — para resolução de plugin base (opcional)
+        get_profile: callable(name) -> profile | None — para resolução de profile base (opcional)
     """
 
-    def __init__(self, prompt_text, prompt_bool, warn, get_plugin=None):
+    def __init__(self, prompt_text, prompt_bool, warn, get_profile=None):
         self._prompt_text = prompt_text
         self._prompt_bool = prompt_bool
         self._warn = warn
-        self._get_plugin = get_plugin
+        self._get_profile = get_profile
 
-    def configure(self, plugin, driver_hint: str | None = None):
+    def configure(self, profile, driver_hint: str | None = None):
         """Configura conexão interativamente. Retorna Connection.
 
         Raises:
             ValueError: se o usuário cancelar ou fornecer dados inválidos.
         """
-        current = plugin.effective_connection()
+        current = profile.effective_connection()
         current_driver = "cli" if isinstance(current, CliConnection) else "openai"
         driver = (driver_hint or self._prompt_text("Driver", current_driver)).strip().lower()
         while driver not in {"cli", "openai"}:
@@ -38,32 +38,32 @@ class ConnectionConfigurator:
             driver = self._prompt_text("Driver", current_driver).strip().lower()
 
         if driver == "cli":
-            return self._configure_cli(plugin, current)
-        return self._configure_openai(plugin, current)
+            return self._configure_cli(profile, current)
+        return self._configure_openai(profile, current)
 
-    def configure_with_base(self, plugin):
-        """Pergunta por plugin base antes de configurar a conexão.
+    def configure_with_profile(self, profile):
+        """Pergunta por perfil de execução antes de configurar a conexão.
 
-        Retorna (connection, base_plugin_name | None).
+        Retorna (connection, profile_name | None).
 
         Raises:
-            ValueError: se plugin base não encontrado, modelo vazio, ou cancelamento.
+            ValueError: se perfil de execução não encontrado, modelo vazio, ou cancelamento.
         """
-        if self._get_plugin is not None:
-            base_name = self._prompt_text("Plugin base (enter para ignorar)", "").strip().lower()
-            if base_name:
-                base_plugin = self._get_plugin(base_name)
-                if base_plugin is None:
-                    raise ValueError(f"Plugin base '{base_name}' não encontrado.")
+        if self._get_profile is not None:
+            profile_name = self._prompt_text("Perfil de execução (enter para ignorar)", "").strip().lower()
+            if profile_name:
+                profile = self._get_profile(profile_name)
+                if profile is None:
+                    raise ValueError(f"Perfil de execução '{profile_name}' não encontrado.")
                 model_id = self._prompt_text("Modelo", "").strip()
                 if not model_id:
                     raise ValueError("Configuração cancelada: modelo vazio.")
-                return base_plugin.configure_with_model(model_id), base_plugin.name
+                return profile.configure_with_model(model_id), profile.name
 
-        return self.configure(plugin), None
+        return self.configure(profile), None
 
-    def _configure_cli(self, plugin, current):
-        cli_defaults = current if isinstance(current, CliConnection) else CliConnection(cmd=list(plugin.cmd))
+    def _configure_cli(self, profile, current):
+        cli_defaults = current if isinstance(current, CliConnection) else CliConnection(cmd=list(profile.cmd))
 
         # Prompt output_format showing current value as default
         output_fmt_default = cli_defaults.output_format or ""
@@ -96,20 +96,20 @@ class ConnectionConfigurator:
             return current
         return new_conn
 
-    def _configure_openai(self, plugin, current):
-        # Build defaults based on current connection or plugin defaults
+    def _configure_openai(self, profile, current):
+        # Build defaults based on current connection or profile defaults
         if isinstance(current, OpenAIConnection):
             api_defaults = current
         else:
-            raw_provider = plugin.driver if plugin.driver != "cli" else "openai_compat"
+            raw_provider = profile.driver if profile.driver != "cli" else "openai_compat"
             provider_normalized = "openai_compat" if raw_provider == "openai" else raw_provider
             api_defaults = OpenAIConnection(
-                model=plugin.model or "gpt-4o",
-                base_url=plugin.base_url or "https://api.openai.com/v1",
-                api_key_env=plugin.api_key_env or "OPENAI_API_KEY",
+                model=profile.model or "gpt-4o",
+                base_url=profile.base_url or "https://api.openai.com/v1",
+                api_key_env=profile.api_key_env or "OPENAI_API_KEY",
                 provider=provider_normalized,
-                supports_native_tools=plugin.supports_tools,
-                extra_body=getattr(plugin, "extra_body", None),
+                supports_native_tools=profile.supports_tools,
+                extra_body=getattr(profile, "extra_body", None),
             )
 
         # --- Provider ---

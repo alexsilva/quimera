@@ -8,8 +8,8 @@ import urllib.request
 from http.server import ThreadingHTTPServer
 from unittest.mock import patch
 
-from quimera.plugins.base import OpenAIConnection, PluginRegistry, apply_connection_overrides, set_connection_override
-from quimera.plugins.fake import register_fake_plugins
+from quimera.profiles.base import OpenAIConnection, ProfileRegistry, apply_connections, set_connection
+from quimera.profiles.fake import register_fake_profiles
 from quimera.devtools.fake_agents import FakeOpenAIHandler, _build_completion, _extract_quimera_current_turn
 from quimera.runtime.approval import ApprovalManager
 from quimera.runtime.config import ToolRuntimeConfig
@@ -17,13 +17,13 @@ from quimera.runtime.executor import ToolExecutor
 from quimera.runtime.mcp import MCPServer
 
 
-def test_fake_plugins_are_registered_only_when_requested():
-    """Verifica que os plugins fake só são registrados após chamada explícita a register_fake_plugins e que as capacidades de cada um estão corretas."""
-    registry = PluginRegistry()
+def test_fake_profiles_are_registered_only_when_requested():
+    """Verifica que os profiles fake só são registrados após chamada explícita a register_fake_profiles e que as capacidades de cada um estão corretas."""
+    registry = ProfileRegistry()
 
     assert registry.all_names() == []
 
-    names = register_fake_plugins(registry)
+    names = register_fake_profiles(registry)
 
     assert names == ("fake-cli", "fake-cli-delegate", "fake-openai", "fake-openai-mcp-cli")
     assert registry.get("fake-cli") is not None
@@ -295,11 +295,11 @@ def test_fake_openai_ignores_persisted_connection_overrides_in_test_registry(tmp
             "supports_native_tools": True,
         }
     }), encoding="utf-8")
-    registry = PluginRegistry()
-    names = register_fake_plugins(registry)
+    registry = ProfileRegistry()
+    names = register_fake_profiles(registry)
 
-    with patch("quimera.plugins.base._get_connections_file", return_value=conn_file):
-        apply_connection_overrides(registry=registry, exclude_names=set(names))
+    with patch("quimera.profiles.base._get_connections_file", return_value=conn_file):
+        apply_connections(registry=registry, exclude_names=set(names))
 
     connection = registry.get("fake-openai").effective_connection()
     assert connection.model == "quimera-fake-tools"
@@ -310,8 +310,8 @@ def test_fake_openai_ignores_persisted_connection_overrides_in_test_registry(tmp
 def test_fake_openai_allows_explicit_non_persistent_process_override(tmp_path):
     """Verifica que fake openai allows explicit non persistent process override."""
     conn_file = tmp_path / "connections.json"
-    registry = PluginRegistry()
-    register_fake_plugins(registry)
+    registry = ProfileRegistry()
+    register_fake_profiles(registry)
     override = OpenAIConnection(
         model="local-process-model",
         base_url="http://127.0.0.1:9999/v1",
@@ -319,8 +319,8 @@ def test_fake_openai_allows_explicit_non_persistent_process_override(tmp_path):
         provider="openai_compat",
     )
 
-    with patch("quimera.plugins.base._get_connections_file", return_value=conn_file):
-        set_connection_override("fake-openai", override, persist=False, registry=registry)
+    with patch("quimera.profiles.base._get_connections_file", return_value=conn_file):
+        set_connection("fake-openai", override, persist=False, registry=registry)
 
     connection = registry.get("fake-openai").effective_connection()
     assert connection.model == "local-process-model"
@@ -331,17 +331,17 @@ def test_fake_openai_allows_explicit_non_persistent_process_override(tmp_path):
 
 def test_fake_openai_mcp_cli_env_uses_fake_openai_process_override():
     """Verifica que fake openai mcp cli env uses fake openai process override."""
-    registry = PluginRegistry()
-    register_fake_plugins(registry)
+    registry = ProfileRegistry()
+    register_fake_profiles(registry)
     override = OpenAIConnection(
         model="local-process-model",
         base_url="http://127.0.0.1:43210/v1",
         api_key_env="LOCAL_PROCESS_KEY",
         provider="openai_compat",
     )
-    set_connection_override("fake-openai", override, persist=False, registry=registry)
+    set_connection("fake-openai", override, persist=False, registry=registry)
 
-    with patch("quimera.plugins.get", registry.get):
+    with patch("quimera.profiles.get", registry.get):
         env = registry.get("fake-openai-mcp-cli").env_for_cli()
 
     assert env["QUIMERA_FAKE_OPENAI_BASE_URL"] == "http://127.0.0.1:43210/v1"

@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from . import plugins
+from . import profiles
 from .config import DEFAULT_HISTORY_WINDOW, DEFAULT_USER_NAME
 from .constants import EXTEND_MARKER
 from .evidence import EvidenceFormatter, EvidenceStore
@@ -30,7 +30,7 @@ class PromptBuilder:
     ):
         self.context_manager = context_manager
         self.session_state = session_state or {}
-        self.active_agents = list(active_agents) if active_agents is not None else plugins.all_names()
+        self.active_agents = list(active_agents) if active_agents is not None else profiles.all_names()
         self.active_agents_provider = active_agents_provider
         self.metrics_tracker = metrics_tracker
         self.memory_selector = MemorySelector(history_window, user_name)
