@@ -213,7 +213,7 @@ def run_chat_loop(
                 user = content
 
             elif user.strip().startswith(CMD_FILE_PREFIX):
-                path_str = user.strip()[len(CMD_FILE_PREFIX):]
+                path_str = user.strip()[len(CMD_FILE_PREFIX):].strip()
                 content = app.input_services.read_from_file(path_str)
                 if not content:
                     continue

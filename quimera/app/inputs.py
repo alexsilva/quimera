@@ -119,7 +119,7 @@ def read_from_editor(renderer: IRenderer, output_lock=None) -> str | None:
 
 def read_from_file(renderer: IRenderer, path_str):
     """Lê conteúdo de um arquivo fornecido pelo usuário."""
-    path = Path(path_str).expanduser()
+    path = Path(str(path_str or "").strip()).expanduser()
     if not path.exists():
         renderer.show_error(f"\nArquivo não encontrado: {path}\n")
         return None

@@ -410,6 +410,18 @@ class TestReadFromFile:
                 result = read_from_file(mock_app.renderer, "/some/path")
                 assert result == "hello"
 
+    def test_file_found_strips_surrounding_whitespace_from_path(self, mock_app, tmp_path):
+        """/file README.md deve resolver README.md, sem preservar espaço inicial."""
+        from quimera.app.inputs import read_from_file
+
+        target = tmp_path / "README.md"
+        target.write_text("hello\n", encoding="utf-8")
+
+        result = read_from_file(mock_app.renderer, f"  {target}  ")
+
+        assert result == "hello"
+        mock_app.renderer.show_error.assert_not_called()
+
     def test_file_found_empty_content(self, mock_app):
         """Verifica que read_from_file retorna None quando o conteúdo é apenas espaços."""
         from quimera.app.inputs import read_from_file
