@@ -982,32 +982,26 @@ class AppTaskServices:
         )
 
     def _enable_task_tool_auto_approval(self, agent_name: str, approval_handler=None) -> None:
-        plugin = self._get_agent_plugin(agent_name)
-        effective_driver = getattr(plugin, "effective_driver", None)
-        supports_tools = bool(getattr(plugin, "supports_tools", False))
-        driver_name = effective_driver() if callable(effective_driver) else None
-        if plugin is None or driver_name != "openai_compat" or not supports_tools:
-            return
-        if approval_handler is None:
-            approval_handler = self._get_approval_handler()
-        if approval_handler is not None and hasattr(approval_handler, "set_thread_approve_all"):
-            approval_handler.set_thread_approve_all(
+        for handler in self._task_approval_handlers(approval_handler):
+            handler.set_thread_approve_all(
                 True,
                 scope_key=f"task:{agent_name}:{id(self)}",
                 silent=True,
             )
 
     def _disable_task_tool_auto_approval(self, agent_name: str, approval_handler=None) -> None:
-        plugin = self._get_agent_plugin(agent_name)
-        effective_driver = getattr(plugin, "effective_driver", None)
-        supports_tools = bool(getattr(plugin, "supports_tools", False))
-        driver_name = effective_driver() if callable(effective_driver) else None
-        if plugin is None or driver_name != "openai_compat" or not supports_tools:
-            return
-        if approval_handler is None:
-            approval_handler = self._get_approval_handler()
-        if approval_handler is not None and hasattr(approval_handler, "set_thread_approve_all"):
-            approval_handler.set_thread_approve_all(False, scope_key=f"task:{agent_name}:{id(self)}")
+        for handler in self._task_approval_handlers(approval_handler):
+            handler.set_thread_approve_all(False, scope_key=f"task:{agent_name}:{id(self)}")
+
+    def _task_approval_handlers(self, approval_handler=None) -> list[Any]:
+        handlers: list[Any] = []
+        for handler in (approval_handler, self._get_approval_handler()):
+            if handler is None or not hasattr(handler, "set_thread_approve_all"):
+                continue
+            if any(existing is handler for existing in handlers):
+                continue
+            handlers.append(handler)
+        return handlers
 
     def _build_task_review_service(self, failover_policy: TaskFailoverPolicy) -> TaskReviewService:
         return TaskReviewService(

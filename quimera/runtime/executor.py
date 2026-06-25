@@ -210,11 +210,12 @@ class ToolExecutor:
             needs_approval = self.policy.requires_approval(normalized_call)
             has_permission_issue = permission_error is not None
 
-            approved = self.approval_manager.authorize_call(
-                normalized_call,
-                needs_policy_approval=bool(needs_approval),
-                permission_error=permission_error,
-            )
+            with self._approval_scope_from_metadata(normalized_call):
+                approved = self.approval_manager.authorize_call(
+                    normalized_call,
+                    needs_policy_approval=bool(needs_approval),
+                    permission_error=permission_error,
+                )
             if not approved:
                 return ToolResult(
                     ok=False,
@@ -254,3 +255,25 @@ class ToolExecutor:
             call_id=call.call_id,
             metadata=call.metadata,
         )
+
+    def _approval_scope_from_metadata(self, call: ToolCall):
+        """Propaga o escopo de aprovação MCP para a thread da tool call."""
+        from contextlib import contextmanager
+
+        @contextmanager
+        def _ctx():
+            metadata = call.metadata if isinstance(call.metadata, dict) else {}
+            state = metadata.get("_mcp_state") if isinstance(metadata, dict) else None
+            scope_key = state.get("quimera_approval_scope") if isinstance(state, dict) else None
+            bind_scope = getattr(self.approval_manager, "bind_thread_approval_scope", None)
+            if not scope_key or not callable(bind_scope):
+                yield
+                return
+
+            previous_scope = bind_scope(str(scope_key))
+            try:
+                yield
+            finally:
+                bind_scope(previous_scope)
+
+        return _ctx()

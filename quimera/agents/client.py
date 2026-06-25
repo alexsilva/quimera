@@ -746,6 +746,12 @@ class AgentClient:
             if "ask_user" not in disabled_tools:
                 disabled_tools.append("ask_user")
             extra_env["QUIMERA_MCP_DISABLED_TOOLS"] = ",".join(disabled_tools)
+        if self.tool_executor is not None:
+            get_approval_scope = getattr(self.tool_executor, "get_thread_approval_scope", None)
+            if callable(get_approval_scope):
+                approval_scope = get_approval_scope()
+                if approval_scope:
+                    extra_env["QUIMERA_MCP_APPROVAL_SCOPE"] = approval_scope
         extra_env = extra_env or None
         cwd = connection.cwd if isinstance(connection, CliConnection) else None
         run_kwargs = {

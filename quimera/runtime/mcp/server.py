@@ -83,6 +83,9 @@ def _proxy_stdio_to_socket(
             disabled_tools = (os.environ.get("QUIMERA_MCP_DISABLED_TOOLS") or "").strip()
             if disabled_tools:
                 auth_payload["quimera_disabled_tools"] = disabled_tools
+            approval_scope = (os.environ.get("QUIMERA_MCP_APPROVAL_SCOPE") or "").strip()
+            if approval_scope:
+                auth_payload["quimera_approval_scope"] = approval_scope
             auth_line = json.dumps(auth_payload) + "\n"
             sock_out.write(auth_line)
             sock_out.flush()
@@ -872,9 +875,15 @@ class MCPServer:
                 prelude = self._authenticate_socket_connection(inp)
                 if prelude is None:
                     return
+                conn_state = {}
                 disabled_tools = prelude.get("quimera_disabled_tools")
                 if disabled_tools:
-                    setattr(out, "_mcp_state", {"quimera_disabled_tools": disabled_tools})
+                    conn_state["quimera_disabled_tools"] = disabled_tools
+                approval_scope = prelude.get("quimera_approval_scope")
+                if approval_scope:
+                    conn_state["quimera_approval_scope"] = approval_scope
+                if conn_state:
+                    setattr(out, "_mcp_state", conn_state)
                 self.serve(stdin=inp, stdout=out)
         except Exception:
             _logger.debug("Conexão MCP encerrada com erro", exc_info=True)

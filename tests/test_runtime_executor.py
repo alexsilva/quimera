@@ -213,6 +213,27 @@ def test_executor_remove_file_denied_by_approval(tmp_path):
     assert "Execução negada" in result.error
 
 
+def test_executor_allows_mcp_tool_with_propagated_task_scope(tmp_path):
+    """Escopo de task propagado pelo MCP deve autorizar tool mutante."""
+    approval = MagicMock()
+    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), approval)
+    executor.approval_manager.set_thread_approve_all(
+        True, scope_key="task:cli-agent:1", silent=True
+    )
+
+    (tmp_path / "x.txt").write_text("x")
+    call = ToolCall(
+        name="remove_file",
+        arguments={"path": "x.txt", "dry_run": False},
+        metadata={"_mcp_state": {"quimera_approval_scope": "task:cli-agent:1"}},
+    )
+    result = executor.execute(call)
+
+    assert result.ok is True
+    approval.approve.assert_not_called()
+    assert not (tmp_path / "x.txt").exists()
+
+
 def test_executor_remove_file_allowed_and_executes(tmp_path):
     """remove_file com aprovação concedida executa e remove o arquivo."""
     executor = ToolExecutor(

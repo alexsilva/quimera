@@ -265,6 +265,33 @@ def test_background_task_tool_executor_disables_ask_user(tmp_path):
     assert executor.is_ask_user_available() is False
 
 
+def test_task_tool_auto_approval_scope_applies_to_any_background_agent():
+    """Tasks em background devem autorizar tools sem depender do driver do agente."""
+    app = type("App", (), {})()
+    services = build_task_services(app)
+
+    class ApprovalHandler:
+        def __init__(self):
+            self.calls = []
+
+        def set_thread_approve_all(self, enabled, scope_key=None, silent=False):
+            self.calls.append((enabled, scope_key, silent))
+
+    background_handler = ApprovalHandler()
+    app_handler = ApprovalHandler()
+    app._approval_handler = app_handler
+
+    services._enable_task_tool_auto_approval("cli-agent", approval_handler=background_handler)
+    services._disable_task_tool_auto_approval("cli-agent", approval_handler=background_handler)
+
+    expected_calls = [
+        (True, f"task:cli-agent:{id(services)}", True),
+        (False, f"task:cli-agent:{id(services)}", False),
+    ]
+    assert background_handler.calls == expected_calls
+    assert app_handler.calls == expected_calls
+
+
 def test_handler_completes_task_when_no_review_agent_available():
     """Verifica que handler completes task when no review agent available."""
     dispatch = DispatchStub(response="resultado final")
