@@ -3,6 +3,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from quimera.constants import TaskStatus
 from quimera.runtime.models import TaskRecord
 from quimera.tasks.executor import TaskExecutor, create_executor
 
@@ -92,6 +93,36 @@ def test_task_executor_process_pending(db_path, repository):
     repository.claim_sequence = [1]
     assert executor.process_pending() == 1
     mock_handler.assert_called_with(task)
+
+
+def test_task_executor_skips_task_assigned_to_other_agent(db_path, repository):
+    """Executor não deve rodar handler quando a task carregada pertence a outro agente."""
+    executor = TaskExecutor("agent", db_path, repository=repository)
+    mock_handler = MagicMock(return_value=True)
+    executor.set_handler(mock_handler)
+
+    task = TaskRecord(id=1, job_id=0, description="", status=TaskStatus.IN_PROGRESS, assigned_to="other")
+    repository.tasks_by_id[1] = task
+    repository.claim_sequence = [1]
+
+    assert executor.process_pending() is None
+    mock_handler.assert_not_called()
+    assert repository.failed == []
+
+
+def test_task_executor_skips_task_not_in_progress(db_path, repository):
+    """Executor não deve rodar handler para task stale fora de in_progress."""
+    executor = TaskExecutor("agent", db_path, repository=repository)
+    mock_handler = MagicMock(return_value=True)
+    executor.set_handler(mock_handler)
+
+    task = TaskRecord(id=1, job_id=0, description="", status=TaskStatus.PENDING, assigned_to="agent")
+    repository.tasks_by_id[1] = task
+    repository.claim_sequence = [1]
+
+    assert executor.process_pending() is None
+    mock_handler.assert_not_called()
+    assert repository.failed == []
 
 
 def test_create_executor(db_path, repository):

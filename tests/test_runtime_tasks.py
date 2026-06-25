@@ -329,6 +329,21 @@ def test_claim_task_with_job_id(db_path):
     assert claimed == task_id
 
 
+def test_claim_task_respects_existing_assignment(db_path):
+    """Verifica que outro agente não reserva task já atribuída."""
+    job_id = tasks.add_job("job", db_path=db_path)
+    task_id = tasks.create_task(
+        job_id,
+        "t",
+        assigned_to="opencode-north-mini-code-free",
+        status=TaskStatus.APPROVED,
+        db_path=db_path,
+    )
+
+    assert tasks.claim_task("opencode-big-pickle", job_id=job_id, db_path=db_path) is None
+    assert tasks.claim_task("opencode-north-mini-code-free", job_id=job_id, db_path=db_path) == task_id
+
+
 def test_complete_task_with_reviewed_by(db_path):
     """Verifica que complete_task funciona com reviewed_by."""
     job_id = tasks.add_job("job", db_path=db_path)

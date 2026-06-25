@@ -8,6 +8,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Optional
 
+from ..constants import TaskStatus
 from ..runtime.models import TaskRecord
 
 _logger = logging.getLogger("quimera.task_executor")
@@ -93,6 +94,34 @@ class TaskExecutor:
     def _fail_task(self, task_id: int, reason: str) -> None:
         self._repository.fail_task(task_id, reason=reason)
 
+    def _can_execute_task(self, task: TaskRecord) -> bool:
+        if task.status != TaskStatus.IN_PROGRESS:
+            _logger.warning(
+                "task %s claimed by %s has invalid status=%s; skipping dispatch",
+                task.id,
+                self.agent_name,
+                task.status,
+            )
+            return False
+        if task.assigned_to and task.assigned_to != self.agent_name:
+            _logger.warning(
+                "task %s belongs to %s but executor %s loaded it; skipping dispatch",
+                task.id,
+                task.assigned_to,
+                self.agent_name,
+            )
+            return False
+        return True
+
+    def _dispatch_task(self, task: TaskRecord) -> bool:
+        if not self._handler or not self._can_execute_task(task):
+            return False
+        if self._executor is not None:
+            self._executor.submit(self._handler, task)
+        else:
+            self._handler(task)
+        return True
+
     def _poll_loop(self):
         """Executa poll loop — tasks despachadas em paralelo via ThreadPoolExecutor quando ativo."""
         while self._running:
@@ -101,12 +130,9 @@ class TaskExecutor:
                 task_id = self._claim_task()
                 if task_id:
                     task = self._load_task(task_id)
-                    if task and self._handler:
-                        if self._executor is not None:
-                            self._executor.submit(self._handler, task)
-                        else:
-                            self._handler(task)
-                    else:
+                    if task and self._dispatch_task(task):
+                        pass
+                    elif not task or not self._handler:
                         self._fail_task(task_id, "handler unavailable or task not found")
                         _logger.warning("task %s claimed by %s but could not be dispatched", task_id, self.agent_name)
                     task_id = None
@@ -159,10 +185,12 @@ class TaskExecutor:
         if not task_id:
             return None
         task = self._load_task(task_id)
-        if task and self._handler:
-            self._handler(task)
+        if task and self._dispatch_task(task):
             # Note: handler already calls complete_task/fail_task with result
-        return task_id
+            return task_id
+        if not task or not self._handler:
+            self._fail_task(task_id, "handler unavailable or task not found")
+        return None
 
 
 def create_executor(

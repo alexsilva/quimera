@@ -634,10 +634,37 @@ class TaskRepository:
                 return None
             task_id, job_id = row[0], row[1]
             now = self._now()
+            update_params: list = [
+                agent_name,
+                TaskStatus.IN_PROGRESS,
+                now,
+                now,
+                task_id,
+                TaskStatus.PENDING,
+                TaskStatus.APPROVED,
+                agent_name,
+            ]
+            update_job_filter = ""
+            if job_id is not None:
+                update_job_filter = "AND job_id = ?"
+                update_params.append(job_id)
+            update_params.append(f"%{self._failed_agents_token(agent_name)}%")
             cur.execute(
-                "UPDATE tasks SET assigned_to = ?, status = ?, started_at = ?, updated_at = ? WHERE id = ?",
-                (agent_name, TaskStatus.IN_PROGRESS, now, now, task_id),
+                f"""
+                UPDATE tasks
+                SET assigned_to = ?, status = ?, started_at = ?, updated_at = ?
+                WHERE id = ?
+                  AND status IN (?, ?)
+                  AND (assigned_to = ? OR assigned_to IS NULL)
+                  {update_job_filter}
+                  AND COALESCE(failed_agents, '') NOT LIKE ?
+                """,
+                tuple(update_params),
             )
+            if cur.rowcount != 1:
+                conn.rollback()
+                conn.close()
+                return None
             conn.commit()
             conn.close()
             self._publish(TaskStarted(task_id=task_id, job_id=job_id, assigned_to=agent_name))
