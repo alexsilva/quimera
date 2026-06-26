@@ -526,13 +526,56 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
     """Executa a interface Textual como UI principal do Quimera."""
     try:
         from textual.app import App, ComposeResult
+        from textual.binding import Binding
         from textual.containers import Vertical
         from textual.widgets import Header, Input, RichLog, Static
+
+        from quimera.app.completion_dropdown import CompletionDropdown
     except ImportError as exc:
         raise SystemExit(
             "A interface Textual requer a dependência 'textual'. "
             "Reinstale com: pip install -e ."
         ) from exc
+
+    class _CompletionInput(Input):
+        """Input com autocomplete inline: setas navegam, Tab completa, Enter completa e submete."""
+
+        BINDINGS = [
+            Binding("escape", "escape", "Fechar popup"),
+        ]
+
+        async def action_submit(self) -> None:
+            dropdown = self.app.query_one(CompletionDropdown)
+            selected = dropdown.get_selected()
+            if selected is not None:
+                self.value = f"{selected} "
+                self.cursor_position = len(self.value)
+                dropdown.hide()
+                return
+            await super().action_submit()
+
+        def action_escape(self) -> None:
+            dropdown = self.app.query_one(CompletionDropdown)
+            dropdown.hide()
+
+        def key_up(self) -> None:
+            dropdown = self.app.query_one(CompletionDropdown)
+            if dropdown.has_options:
+                dropdown.select_prev()
+
+        def key_down(self) -> None:
+            dropdown = self.app.query_one(CompletionDropdown)
+            if dropdown.has_options:
+                dropdown.select_next()
+
+        def key_tab(self) -> None:
+            dropdown = self.app.query_one(CompletionDropdown)
+            selected = dropdown.get_selected()
+            if selected:
+                self.value = f"{selected} "
+                self.cursor_position = len(self.value)
+                dropdown.hide()
+                return
 
     class QuimeraTextualApp(App):
         """TUI principal do Quimera."""
@@ -566,8 +609,9 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
         }
         """
 
+        TITLE = "Quimera"
+
         BINDINGS = [
-            ("tab", "complete_command", "Completar"),
             ("ctrl+c", "cancel_or_exit", "Cancelar/Sair"),
             ("ctrl+t", "cycle_theme", "Tema"),
         ]
@@ -582,8 +626,9 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             with Vertical(id="main"):
                 yield RichLog(id="feed", markup=True, wrap=True, highlight=False)
                 yield Static("", id="toolbar")
+                yield CompletionDropdown()
                 with Vertical(id="input_bar"):
-                    yield Input(placeholder="mensagem...", id="input")
+                    yield _CompletionInput(placeholder="mensagem...", id="input")
 
         def on_mount(self) -> None:
             bridge.attach_textual_app(self)
@@ -608,6 +653,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
 
         def on_input_submitted(self, event: Input.Submitted) -> None:
             event.stop()
+            self.query_one(CompletionDropdown).hide()
             value = event.value
             event.input.value = ""
             bridge.submit_input(value)
@@ -621,15 +667,26 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             if callable(handler):
                 handler()
 
-        def action_complete_command(self) -> None:
-            input_widget = self.query_one("#input", Input)
-            value = str(input_widget.value or "")
-            if not value.startswith("/") or " " in value:
+        def on_input_changed(self, event: Input.Changed) -> None:
+            if not isinstance(event.input, _CompletionInput):
                 return
-            matches = [command for command in self._commands if command.startswith(value)]
-            if len(matches) == 1:
-                input_widget.value = f"{matches[0]} "
-                input_widget.cursor_position = len(input_widget.value)
+            dropdown = self.query_one(CompletionDropdown)
+            value = str(event.value)
+
+            if not value or " " in value:
+                dropdown.hide()
+                return
+            if value.startswith(("/", "s/", "r/")):
+                gate = getattr(quimera_app, "input_gate", None)
+                if gate and callable(getattr(gate, "completions_for", None)):
+                    extra = gate.completions_for(value)
+                else:
+                    extra = []
+                dropdown.set_completions(extra)
+                dropdown.filter(value)
+            else:
+                dropdown.set_completions([])
+                dropdown.filter("")
 
         def handle_bridge_event(self, event: TextualUiEvent) -> None:
             if event.kind == "prompt":
