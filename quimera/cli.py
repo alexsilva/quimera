@@ -32,6 +32,7 @@ from .profiles.base import (
 from . import themes as _themes
 from .app import QuimeraApp
 from .app.prompt_input import InputGate
+from .app.textual_ui import TextualUiBridge, run_textual_quimera_app
 from .runtime.mcp import start_embedded_mcp
 from .config import ConfigManager
 from .runtime.drivers.repl import DriverRepl
@@ -50,6 +51,7 @@ _REQUIRED_RUNTIME_DEPENDENCIES = {
     "openai": "openai",
     "prompt-toolkit": "prompt_toolkit",
     "rich": "rich",
+    "textual": "textual",
 }
 
 
@@ -129,6 +131,16 @@ def _stop_test_fake_openai_backend(httpd: object | None) -> None:
     server_close = getattr(httpd, "server_close", None)
     if callable(server_close):
         server_close()
+
+
+def _run_app_ui(app, bridge: TextualUiBridge) -> None:
+    """Executa a UI principal do Quimera."""
+    isatty = getattr(sys.stdin, "isatty", None)
+    if not callable(isatty) or not isatty():
+        app.run()
+        return
+    run_textual_quimera_app(app, bridge)
+
 
 def _expand_patterns(agents: list[str], available: list[str]) -> list[str]:
     """Executa expand patterns."""
@@ -521,6 +533,7 @@ def main():
     if args.test and _test_mode_uses_fake_openai(agents):
         fake_openai_backend = _start_test_fake_openai_backend()
     try:
+        textual_bridge = TextualUiBridge()
         app = QuimeraApp(cwd,
                          debug=args.debug,
                          history_window=args.history_window,
@@ -528,7 +541,9 @@ def main():
                          idle_timeout_seconds=args.idle_timeout,
                          workspace=workspace,
                          visibility=visibility,
-                         theme=args.theme)
+                         theme=args.theme,
+                         renderer_override=textual_bridge.create_renderer(),
+                         input_gate_factory=textual_bridge.create_input_gate)
         if args.interactive_test:
             if TerminalRenderer is None or AgentClient is None:
                 raise RuntimeError("Modo interativo não disponível: dependências de UI não instaladas.")
@@ -570,6 +585,6 @@ def main():
             external_http_enabled=args.mcp_http,
         )
 
-        app.run()
+        _run_app_ui(app, textual_bridge)
     finally:
         _stop_test_fake_openai_backend(fake_openai_backend)

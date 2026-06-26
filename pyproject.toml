@@ -9,6 +9,7 @@ requires-python = ">=3.10"
 dependencies = [
     "rich>=14.0",
     "prompt-toolkit>=3.0",
+    "textual>=0.86",
     "openai>=1.0",
 ]
 

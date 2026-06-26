@@ -1,5 +1,6 @@
 """Tests for quimera/app/prompt_input.py — target: 100% coverage."""
 import sys
+import threading
 from unittest.mock import MagicMock, patch, call
 
 
@@ -10,6 +11,37 @@ from unittest.mock import MagicMock, patch, call
 def _make_gate(**kwargs):
     from quimera.app.prompt_input import InputGate
     return InputGate(**kwargs)
+
+
+def test_textual_input_gate_reads_submitted_line():
+    from quimera.app.textual_ui import TextualUiBridge
+
+    bridge = TextualUiBridge()
+    gate = bridge.create_input_gate(command_resolver=lambda: ["/help"])
+    result = []
+
+    thread = threading.Thread(target=lambda: result.append(gate("Alex: ")))
+    thread.start()
+
+    bridge.submit_input("oi")
+    thread.join(timeout=1)
+
+    assert result == ["oi"]
+    assert gate.is_active() is False
+
+
+def test_textual_renderer_buffers_events_until_app_attaches():
+    from quimera.app.textual_ui import TextualUiBridge
+
+    bridge = TextualUiBridge()
+    renderer = bridge.create_renderer()
+    renderer.show_system("iniciando")
+    renderer.show_message("codex", "resposta")
+
+    events = bridge.drain_pending_events()
+
+    assert [event.kind for event in events] == ["system", "agent_message"]
+    assert events[1].agent == "codex"
 
 
 # ---------------------------------------------------------------------------

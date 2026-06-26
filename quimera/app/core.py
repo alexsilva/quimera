@@ -122,6 +122,8 @@ class QuimeraApp:
                  workspace: Workspace | None = None,
                  auto_approve_mutations: bool = False,
                  profile_registry: ProfileRegistry | None = None,
+                 renderer_override=None,
+                 input_gate_factory=None,
                  ):
         """Inicializa uma instância de QuimeraApp."""
         self._lock = threading.Lock()
@@ -153,12 +155,15 @@ class QuimeraApp:
         render_audit_logger = (
             RenderAuditLogger(render_log_path, render_ansi_path) if debug else None
         )
-        self.renderer = TerminalRenderer(
-            theme=active_theme,
-            get_profile_style=self._resolve_profile_style,
-            density=self.config.density,
-            audit_logger=render_audit_logger,
-        )
+        if renderer_override is not None:
+            self.renderer = renderer_override
+        else:
+            self.renderer = TerminalRenderer(
+                theme=active_theme,
+                get_profile_style=self._resolve_profile_style,
+                density=self.config.density,
+                audit_logger=render_audit_logger,
+            )
         self.agent_run_sink = AgentRunController(self.renderer)
         self.event_sink = EventSink()
         self.user_name = self.config.user_name
@@ -173,7 +178,8 @@ class QuimeraApp:
         self.tool_executor = None
         self.dispatch_services = None
         self.history_file = self.workspace.history_file
-        self.input_gate = InputGate(
+        input_gate_builder = input_gate_factory or InputGate
+        self.input_gate = input_gate_builder(
             renderer=self.renderer,
             history_file=self.history_file,
             command_resolver=self._available_commands,
@@ -263,10 +269,12 @@ class QuimeraApp:
             flush_deferred_messages=self.system_layer.flush_deferred_messages,
             output_lock=self._output_lock,
         )
-        self.renderer.set_prompt_integration(
-            is_active_fn=self.input_gate.is_active,
-            run_above_fn=self.input_gate.run_in_terminal_message,
-        )
+        set_prompt_integration = getattr(self.renderer, "set_prompt_integration", None)
+        if callable(set_prompt_integration):
+            set_prompt_integration(
+                is_active_fn=self.input_gate.is_active,
+                run_above_fn=self.input_gate.run_in_terminal_message,
+            )
         migrated = self.workspace.migrate_from_legacy(cwd)
         for item in migrated:
             self.renderer.show_system(MSG_MIGRATION.format(item))
