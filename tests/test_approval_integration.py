@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 
+from unittest.mock import MagicMock
+
 from quimera.app.core import QuimeraApp
 from quimera.constants import CMD_APPROVE, CMD_APPROVE_ALL
 from quimera.runtime.approval import ApprovalManager
@@ -22,21 +24,21 @@ from quimera.runtime.executor import ToolExecutor
 
 def test_approval_handler_is_approval_manager_after_init(tmp_path: Path):
     """Após __init__, _approval_handler é ApprovalManager (não None)."""
-    app = QuimeraApp(cwd=tmp_path)
+    app = QuimeraApp(cwd=tmp_path, input_gate_factory=lambda **kw: MagicMock())
     assert app._approval_handler is not None
     assert isinstance(app._approval_handler, ApprovalManager)
 
 
 def test_system_layer_getter_retorna_mesmo_handler(tmp_path: Path):
     """approval_handler_getter devolve o mesmo objeto de _approval_handler."""
-    app = QuimeraApp(cwd=tmp_path)
+    app = QuimeraApp(cwd=tmp_path, input_gate_factory=lambda **kw: MagicMock())
     getter = app.system_layer.approval_handler_getter
     assert getter() is app._approval_handler
 
 
 def test_build_tool_executor_compartilha_approval_manager(tmp_path: Path):
     """ToolExecutor criado por build_tool_executor usa o ApprovalManager registrado."""
-    app = QuimeraApp(cwd=tmp_path)
+    app = QuimeraApp(cwd=tmp_path, input_gate_factory=lambda **kw: MagicMock())
     te = app.tool_executor
     assert isinstance(te, ToolExecutor)
     assert te.approval_handler is app._approval_handler
@@ -46,7 +48,7 @@ def test_build_tool_executor_compartilha_approval_manager(tmp_path: Path):
 
 def test_approval_manager_metodos_essenciais(tmp_path: Path):
     """ApprovalManager gerado expõe approve, approve_call, set_approve_all, pre_approve."""
-    app = QuimeraApp(cwd=tmp_path)
+    app = QuimeraApp(cwd=tmp_path, input_gate_factory=lambda **kw: MagicMock())
     h = app._approval_handler
     assert callable(h.approve)
     assert callable(h.approve_call)
@@ -59,7 +61,7 @@ def test_approval_manager_metodos_essenciais(tmp_path: Path):
 
 def test_set_approval_handler_callback_funciona(tmp_path: Path):
     """Callback set_approval_handler atualiza _approval_handler no QuimeraApp."""
-    app = QuimeraApp(cwd=tmp_path)
+    app = QuimeraApp(cwd=tmp_path, input_gate_factory=lambda **kw: MagicMock())
     # O callback já foi chamado por build_tool_executor
     assert app._approval_handler is not None
     # Cria um segundo manager e verifica que o callback setter funciona
@@ -161,7 +163,7 @@ def test_set_approve_all_reativo():
 
 def test_approve_all_command_ativa_flag(tmp_path: Path):
     """Comando /approve-all seta approve-all no ApprovalManager real."""
-    app = QuimeraApp(cwd=tmp_path)
+    app = QuimeraApp(cwd=tmp_path, input_gate_factory=lambda **kw: MagicMock())
     handler = app._approval_handler
     assert isinstance(handler, ApprovalManager)
 
@@ -173,7 +175,7 @@ def test_approve_all_command_ativa_flag(tmp_path: Path):
 
 def test_approve_all_command_mantem_aprovacao_apos_ciclo(tmp_path: Path):
     """approve-all ativado por comando sobrevive a reset_approve_all_after_cycle se permanente."""
-    app = QuimeraApp(cwd=tmp_path)
+    app = QuimeraApp(cwd=tmp_path, input_gate_factory=lambda **kw: MagicMock())
     handler = app._approval_handler
     # No QuimeraApp, approve-all não é permanente por padrão
     _force_console_deny(handler)
@@ -185,7 +187,7 @@ def test_approve_all_command_mantem_aprovacao_apos_ciclo(tmp_path: Path):
 
 def test_approve_command_pre_aprova(tmp_path: Path):
     """Comando /approve ativa pré-aprovação única no ApprovalManager real."""
-    app = QuimeraApp(cwd=tmp_path)
+    app = QuimeraApp(cwd=tmp_path, input_gate_factory=lambda **kw: MagicMock())
     handler = app._approval_handler
     assert isinstance(handler, ApprovalManager)
     _force_console_deny(handler)
@@ -199,7 +201,7 @@ def test_approve_command_pre_aprova(tmp_path: Path):
 
 def test_approve_command_multiplas_vezes(tmp_path: Path):
     """Cada /approve dá uma pré-aprovação."""
-    app = QuimeraApp(cwd=tmp_path)
+    app = QuimeraApp(cwd=tmp_path, input_gate_factory=lambda **kw: MagicMock())
     handler = app._approval_handler
     _force_console_deny(handler)
 
@@ -214,7 +216,7 @@ def test_approve_command_multiplas_vezes(tmp_path: Path):
 
 def test_input_broker_conectado_ao_approval_manager(tmp_path: Path):
     """InputBroker do QuimeraApp é propagado para o ConsoleApprovalHandler."""
-    app = QuimeraApp(cwd=tmp_path)
+    app = QuimeraApp(cwd=tmp_path, input_gate_factory=lambda **kw: MagicMock())
     handler = app._approval_handler
     # O input_broker foi setado via set_input_broker em core.py:497-500
     console = handler._console_handler

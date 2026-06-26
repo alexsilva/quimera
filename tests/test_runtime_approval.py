@@ -775,7 +775,7 @@ def test_console_approval_handler_input_gate_with_cancel_pre_set():
 
 
 def test_cli_driver_repl_injects_input_gate_in_driver_repl_mode():
-    """No modo --driver-repl, CLI instancia DriverRepl com InputGate (regressão P5)."""
+    """No modo --driver-repl, CLI instancia DriverRepl com SimpleInputGate (regressão P5)."""
     import quimera.cli as cli_module
 
     captured = {}
@@ -792,7 +792,7 @@ def test_cli_driver_repl_injects_input_gate_in_driver_repl_mode():
             captured["one_shot_prompt"] = one_shot_prompt
 
     with patch.object(cli_module, "DriverRepl", FakeDriverRepl), \
-            patch.object(cli_module, "InputGate", FakeInputGate), \
+            patch.object(cli_module, "SimpleInputGate", FakeInputGate), \
             patch("sys.argv", ["quimera", "--driver-repl", "ollama-qwen"]), \
             patch("builtins.print"):
         cli_module.main()

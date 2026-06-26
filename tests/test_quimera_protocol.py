@@ -9,7 +9,7 @@ from collections import defaultdict, deque
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock, call, patch
+from unittest.mock import MagicMock, Mock, call, patch
 
 import quimera.app as app_module
 import quimera.cli as cli_module
@@ -1846,7 +1846,7 @@ class ProtocolTests(unittest.TestCase):
                                                                                 FakeWorkspace), patch(
                 "quimera.app.core.ContextManager", FakeContextManager
         ), patch("quimera.app.core.SessionStorage", FakeSessionStorage):
-            app = QuimeraApp(Path("/tmp/projeto"))
+            app = QuimeraApp(Path("/tmp/projeto"), input_gate_factory=lambda **kw: MagicMock())
 
         try:
             session_state = app.prompt_builder.session_state
@@ -1924,7 +1924,7 @@ class ProtocolTests(unittest.TestCase):
                                                                                 FakeWorkspace), patch(
                 "quimera.app.core.ContextManager", FakeContextManager
         ), patch("quimera.app.core.SessionStorage", FakeSessionStorage):
-            app = QuimeraApp(Path("/tmp/projeto"))
+            app = QuimeraApp(Path("/tmp/projeto"), input_gate_factory=lambda **kw: MagicMock())
 
         try:
             self.assertEqual(app.prompt_builder.history_window, DEFAULT_HISTORY_WINDOW)
@@ -1991,7 +1991,7 @@ class ProtocolTests(unittest.TestCase):
                                                                                 FakeWorkspace), patch(
                 "quimera.app.core.ContextManager", FakeContextManager
         ), patch("quimera.app.core.SessionStorage", FakeSessionStorage):
-            app = QuimeraApp(Path("/tmp/projeto"), history_window=5)
+            app = QuimeraApp(Path("/tmp/projeto"), history_window=5, input_gate_factory=lambda **kw: MagicMock())
 
         try:
             self.assertEqual(app.prompt_builder.history_window, 5)
@@ -2061,7 +2061,7 @@ class ProtocolTests(unittest.TestCase):
                                                                                 FakeWorkspace), patch(
                 "quimera.app.core.ContextManager", FakeContextManager
         ), patch("quimera.app.core.SessionStorage", FakeSessionStorage):
-            app = QuimeraApp(Path("/tmp/projeto"))
+            app = QuimeraApp(Path("/tmp/projeto"), input_gate_factory=lambda **kw: MagicMock())
 
         try:
             self.assertEqual(len(app.history), 60)
@@ -3208,7 +3208,7 @@ class ProfileTests(unittest.TestCase):
     def test_parallel_threads_initializes_correctly(self):
         """Verifica que parallel threads initializes correctly."""
         tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))
-        app = QuimeraApp(tmp, debug=False, history_window=10, agents=["agent1", "agent2"], threads=3)
+        app = QuimeraApp(tmp, debug=False, history_window=10, agents=["agent1", "agent2"], threads=3, input_gate_factory=lambda **kw: MagicMock())
         self.assertEqual(app.threads, 3)
         self.assertIn("agent1", app.active_agents)
         self.assertIn("agent2", app.active_agents)

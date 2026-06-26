@@ -85,14 +85,14 @@ Isso garante que:
 - **Proibido** usar `termios`, `tty`, `tty.setraw`, `tty.setcbreak` ou
   `termios.tcsetattr`/`tcgetattr` diretamente em qualquer código do projeto.
   O raw-mode manual a partir de threads de background (ex.: aprovação de
-  ferramenta em modo `--threads`) conflita com o terminal gerenciado pelo
-  `prompt_toolkit` e **trava o input, o shell e o sistema**.
+  ferramenta em modo `--threads`) conflita com o terminal gerenciado pela UI e
+  **trava o input, o shell e o sistema**.
 - Todo input interativo (aprovação de ferramenta, `ask_user`, seleção de
-  opções) deve usar **o mesmo input usado para escrever no chat**: leitura por
-  linha (cooked mode) via `InputGate`/`prompt_toolkit`. O usuário digita a
+  opções) deve usar o input gate ativo (`TextualInputGate` na TUI textual,
+  `SimpleInputGate` em modo pipe). O usuário digita a
   resposta (`y`/`n`/`a`, número da opção ou texto) e confirma com **Enter**.
 - A partir de threads de background, leia sempre através dos helpers do
-  `InputGate` baseados em `run_in_terminal` (`read_input_in_terminal`,
+  `InputGate` (`read_input_in_terminal`,
   `read_selection_in_terminal`, `read_approval_in_terminal`) — eles suspendem o
   prompt e restauram o terminal sem manipular flags de TTY manualmente.
 - Não há mais navegação por setas em seleções; isso é intencional. Seleção é

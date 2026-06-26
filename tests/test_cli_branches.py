@@ -99,14 +99,14 @@ def test_required_dependency_check_fails_fast_for_missing_openai(monkeypatch):
 
 def test_required_dependency_check_reports_all_missing_packages(monkeypatch):
     """Verifica que required dependency check reports all missing packages."""
-    missing_modules = {"openai", "prompt_toolkit", "rich"}
+    missing_modules = {"openai", "rich", "textual"}
     monkeypatch.setattr(cli.importlib.util, "find_spec", lambda name: None if name in missing_modules else object())
 
     with pytest.raises(SystemExit) as exc:
         _ORIGINAL_DEPENDENCY_CHECK()
 
     assert exc.value.code == (
-        "Instalação incompleta: dependências obrigatórias 'openai', 'prompt-toolkit', 'rich' "
+        "Instalação incompleta: dependências obrigatórias 'openai', 'rich', 'textual' "
         "não encontradas. Reinstale o projeto com: pip install -e ."
     )
 
@@ -121,14 +121,6 @@ def test_main_help_does_not_check_required_runtime_dependencies(monkeypatch, cap
 
     assert exc.value.code == 0
     assert "usage: quimera" in capsys.readouterr().out
-
-def test_read_input_uses_prompt_toolkit_when_tty(monkeypatch):
-    """Verifica que read input uses prompt toolkit when tty."""
-    monkeypatch.setattr(cli, "_pt_prompt", lambda _text: "  valor  ")
-    monkeypatch.setattr(cli.sys, "stdout", SimpleNamespace(isatty=lambda: True))
-
-    assert cli._read_input("Prompt") == "valor"
-
 
 def test_prompt_text_uses_default_when_empty(monkeypatch):
     """Verifica que prompt text uses default when empty."""

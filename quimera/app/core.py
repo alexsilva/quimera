@@ -35,7 +35,7 @@ from .session_metrics import SessionMetricsService
 from .dispatch import AppDispatchServices
 from .inputs import AppInputServices
 from .interfaces import ProfileResolverAdapter
-from .prompt_input import InputGate, PromptFormatter
+from .prompt_formatter import PromptFormatter
 from ..runtime.input_broker import InputBroker
 from .runtime_state import AppRuntimeState
 from ..tasks.classifiers import (
@@ -178,7 +178,8 @@ class QuimeraApp:
         self.tool_executor = None
         self.dispatch_services = None
         self.history_file = self.workspace.history_file
-        input_gate_builder = input_gate_factory or InputGate
+        assert input_gate_factory is not None, "input_gate_factory é obrigatório"
+        input_gate_builder = input_gate_factory
         self.input_gate = input_gate_builder(
             renderer=self.renderer,
             history_file=self.history_file,
@@ -929,7 +930,7 @@ class QuimeraApp:
     def _make_ask_user_fn(self):
         """Cria callable que exibe seleção interativa e lê a resposta do usuário.
 
-        Quando prompt_toolkit está ativo usa read_selection_in_terminal (seleção
+        Usa read_selection_in_terminal do input_gate ativo (seleção
         numerada por linha — mesmo input usado para escrever no chat). Caso
         contrário, lê por readline com loop de validação. Sem termios/raw-mode.
         """

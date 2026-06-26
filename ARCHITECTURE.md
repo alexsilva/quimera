@@ -51,8 +51,10 @@ quimera/
 │   ├── session.py                    # Gerenciamento de histórico e recuperação de sessão
 │   ├── session_metrics.py            # Métricas de sessão (turnos, latências, etc.)
 │   ├── turn.py                       # Gerenciamento de turno (humano ↔ agente)
-│   ├── inputs.py                     # Integração com InputGate (prompt_toolkit)
-│   ├── prompt_input.py               # InputGate: wrapper sobre prompt_toolkit.PromptSession
+│   ├── inputs.py                     # Integração com InputGate
+│   ├── textual_ui.py                 # TextualInputGate + TextualRenderer para TUI
+│   ├── simple_input_gate.py          # SimpleInputGate para modo pipe/non-TTY
+│   ├── prompt_formatter.py           # Formatação do prompt visível ao humano
 │   ├── interfaces.py                 # Protocolos/interfaces entre camadas
 │   └── config.py                     # Configuração de nível de aplicação
 │
@@ -153,7 +155,7 @@ quimera/
 - **`runtime_state.py`** (`AppRuntimeState`): Container de estado de runtime: status de input não-bloqueante, contadores de chat, semáforo de slots, executor de threads. Substitui o `_BACKWARD_MAP` legado que redirecionava atributos privados.
 - **`session_bootstrap.py`**: Inicialização da sessão: resolução de paths (logs, bugs, debug), análise de bugs de sessão anterior. Extraído de `core.py` para isolar lógica de startup.
 - **`tty_control.py`**: Controle de TTY: suspend e resume do renderer durante operações bloqueantes (editor, aprovação interativa). Coordena `TerminalRenderer` + `InputGate`.
-- **`toolbar.py`** (`ToolbarManager`): Geração e atualização da toolbar dinâmica do `prompt_toolkit`. Renderiza estado atual (agentes, turno, tema, métricas).
+- **`toolbar.py`** (`ToolbarManager`): Geração e atualização da toolbar dinâmica. Renderiza estado atual (agentes, turno, tema, métricas).
 - **`bug_services.py`** (`BugServices`): Detecção, correlação e reporte de bugs de runtime (burst de falhas, timeouts). Extraído de `AppBugServices` via rename + flatten.
 - **`command_router.py`**: Roteamento de comandos slash internos. Mantém o mapeamento de `/cmd` → handler sem exposição direta ao `core.py`.
 - **`chat_processor.py`** (`ChatProcessor`): Processamento de uma rodada de chat completa: input → agente → resultado → update de estado. Orquestra workers e sincronização.
@@ -161,7 +163,9 @@ quimera/
 - **`chat_round.py`**: Encapsula a lógica de uma rodada de chat completa (leitura de input → chamada ao agente → processamento de resultado → update de estado).
 - **`dispatch.py`**: Chama agentes via `AgentClient` e executa tools via `ToolLoop`. Gerencia o ciclo de vida de chamadas e resultados.
 - **`task*.py`**: Conjunto de serviços que implementam o ciclo de vida de tasks: criação, classificação, atribuição, execução, revisão, failover e notificação.
-- **`prompt_input.py`** (`InputGate`): Wrapper sobre `prompt_toolkit.PromptSession`. Gerencia o prompt interativo do usuário, histórico e coordenação com o renderer. `InputGate.is_active()` é a fonte primária de verdade para estado de prompt ativo (substituiu `nonblocking_input_status` como árbitro principal). Fallback para `input()` built-in apenas quando `_session` é `None` (contextos de teste).
+- **`textual_ui.py`** (`TextualInputGate` + `TextualRenderer`): Gate de input e renderer baseados em Textual para a TUI. `TextualInputGate` usa fila thread-safe para receber input do widget `Input` do Textual. `TextualRenderer` emite eventos para o `TextualUiBridge`.
+- **`simple_input_gate.py`** (`SimpleInputGate`): Gate de input para modo pipe/sem TTY, usando `input()` padrão. Mantém a mesma interface pública de `TextualInputGate`.
+- **`prompt_formatter.py`** (`PromptFormatter`): Formata o prompt visível ao humano com nome e modo atual.
 - **`inputs.py`**: Integração de alto nível com `InputGate`, exposta ao `core.py`.
 - **`event_sink.py`**: Publish-subscribe interno. Eventos publicados de worker threads são enfileirados na `ui_event_queue`; publicados da main thread são processados diretamente.
 - **`system_layer.py`**: Processa comandos `/cmd` do usuário. Adaptadores legados (`_LegacyProfileResolver`, `_LegacyAgentPoolAdapter`) mantidos para compatibilidade de migração.
@@ -309,7 +313,7 @@ Tools definidas em `TOOL_SCHEMAS`, filtradas por:
 ### 4.1 Main Thread (UI Thread)
 
 - Executa o loop principal (`core.py:run()`).
-- Lê input do usuário via `InputGate` (wrapper sobre `prompt_toolkit`).
+- Lê input do usuário via `InputGate` (`TextualInputGate` na TUI, `SimpleInputGate` em modo pipe).
 - Drena a `ui_event_queue` e atualiza o `TerminalRenderer` — acesso exclusivo.
 - Gerencia o `TurnManager` (alternância humano ↔ agente).
 - Processa comandos de sistema via `AppSystemLayer`.
@@ -342,15 +346,14 @@ Tools definidas em `TOOL_SCHEMAS`, filtradas por:
 | `EventSink` | `app/event_sink.py` | Publish-subscribe interno |
 | `TurnManager` | `app/turn.py` | Alternância de turno com lock |
 | `SessionState` | `domain/session_state.py` | Estado compartilhado com `threading.RLock` |
-| `InputGate.is_active()` | `app/prompt_input.py` | Árbitro primário de estado de prompt ativo (substitui `nonblocking_input_status` como fonte de verdade) |
+| `InputGate.is_active()` | `app/textual_ui.py` / `simple_input_gate.py` | Árbitro primário de estado de prompt ativo |
 | `AppRuntimeState` | `app/runtime_state.py` | Estado de runtime (slots, contadores, semáforo) — sem mais atributos privados via `_BACKWARD_MAP` |
 
 ### 4.4 Problemas Conhecidos de Threading
 
 - `TerminalRenderer` não é thread-safe. Apesar da `ui_event_queue`, alguns caminhos em `display_service.py` e `agent_gateway.py` ainda chamam métodos do renderer diretamente de worker threads.
-- Conflito entre `rich.Live` e `prompt_toolkit`: dois renderers escrevendo sequências ANSI no mesmo terminal sem coordenação. Em eventos de resize (`SIGWINCH`), os handlers dos dois sistemas intercalam, corrompendo cursor e scroll.
-- A toolbar do `prompt_toolkit` (`refresh_interval=1.0`) só atualiza a cada segundo, causando atraso perceptível após resize ou mudança de tema.
-- **Extrapolação da toolbar**: o conteúdo da toolbar pode ultrapassar a largura do terminal quando há muitos campos (session_id, theme, model, turns, etc.) — o `prompt_toolkit` não faz clipping automático.
+- O `TextualRenderer` não gerencia overlay ou cursor positioning — eventos são emitidos para o bridge Textual que gerencia o ciclo de renderização.
+- A toolbar do Textual (`#toolbar` Static) só é atualizada via eventos `prompt` do bridge.
 
 ---
 
@@ -476,7 +479,7 @@ Os lookups dispersos de `quimera.profiles.get(...)` em `app/dispatch.py`, `app/t
 ### Pontos Fortes
 
 - Separação conceitual entre camadas: apresentação, aplicação, domínio, infraestrutura.
-- Input 100% via `prompt_toolkit`; `InputGate.is_active()` como árbitro único de estado de prompt ativo.
+- Input via `TextualInputGate` (TUI) ou `SimpleInputGate` (pipe); `InputGate.is_active()` como árbitro único de estado de prompt ativo.
 - `_BACKWARD_MAP` removido: estado de runtime acessado diretamente via `AppRuntimeState`.
 - Decomposição de `core.py` em andamento: 8 módulos extraídos, ~689 linhas reduzidas.
 - Violações de fronteira entre camadas (seções 7.3 e 7.4) resolvidas.
@@ -487,6 +490,6 @@ Os lookups dispersos de `quimera.profiles.get(...)` em `app/dispatch.py`, `app/t
 
 ### Problemas Prioritários
 
-1. **Threading/renderização**: conflito `rich.Live` × `prompt_toolkit` pode causar corrupção de terminal em resize durante streaming. A suspensão do renderer foi estabilizada para o fluxo do editor (`tty_control.py`), mas o caminho geral ainda não usa `run_in_terminal`.
+1. **Threading/renderização**: Textual gerencia o ciclo de renderização, mas eventos emitidos de threads de background competem com o loop do Textual. O `TextualUiBridge` usa `call_from_thread` para eventos imediatos e fila para eventos pré-montagem.
 2. **`core.py` ainda grande**: ~1611 linhas com ~40 lambdas `lambda: self.*` no `__init__` — acoplamento alto que dificulta extração adicional.
 3. **Adaptadores legados em `system_layer.py`**: `_LegacyProfileResolver` e `_LegacyAgentPoolAdapter` indicam migração de contrato incompleta.

@@ -8,12 +8,6 @@ import shlex
 import sys
 from pathlib import Path
 
-try:
-    from prompt_toolkit.shortcuts import prompt as _pt_prompt
-    _HAS_PROMPT_TOOLKIT = True
-except ImportError:
-    _HAS_PROMPT_TOOLKIT = False
-
 from .connection_configurator import ConnectionConfigurator
 from .constants import Visibility
 from . import profiles as _profiles
@@ -31,8 +25,8 @@ from .profiles.base import (
 )
 from . import themes as _themes
 from .app import QuimeraApp
-from .app.prompt_input import InputGate
 from .app.textual_ui import TextualUiBridge, run_textual_quimera_app
+from .app.simple_input_gate import SimpleInputGate
 from .runtime.mcp import start_embedded_mcp
 from .config import ConfigManager
 from .runtime.drivers.repl import DriverRepl
@@ -49,7 +43,6 @@ except ImportError:
 
 _REQUIRED_RUNTIME_DEPENDENCIES = {
     "openai": "openai",
-    "prompt-toolkit": "prompt_toolkit",
     "rich": "rich",
     "textual": "textual",
 }
@@ -133,10 +126,15 @@ def _stop_test_fake_openai_backend(httpd: object | None) -> None:
         server_close()
 
 
-def _run_app_ui(app, bridge: TextualUiBridge) -> None:
+def _is_tty() -> bool:
+    """Retorna True quando stdin é um terminal interativo."""
+    isatty_callable = getattr(sys.stdin, "isatty", None)
+    return bool(callable(isatty_callable) and isatty_callable())
+
+
+def _run_app_ui(app, bridge: TextualUiBridge, isatty: bool) -> None:
     """Executa a UI principal do Quimera."""
-    isatty = getattr(sys.stdin, "isatty", None)
-    if not callable(isatty) or not isatty():
+    if not isatty:
         app.run()
         return
     run_textual_quimera_app(app, bridge)
@@ -163,9 +161,7 @@ def _expand_patterns(agents: list[str], available: list[str]) -> list[str]:
 
 
 def _read_input(prompt_text: str) -> str:
-    """Lê entrada interativa usando prompt_toolkit se for um TTY, senão input()."""
-    if sys.stdout.isatty():
-        return _pt_prompt(prompt_text).strip()
+    """Lê entrada interativa usando input() padrão."""
     return input(prompt_text).strip()
 
 
@@ -477,7 +473,7 @@ def main():
                 working_dir=working_dir,
                 get_profile=_profiles.get,
                 all_profiles=_profiles.all_profiles,
-                input_gate=InputGate(),
+                input_gate=SimpleInputGate(),
             )
             repl.run(one_shot_prompt=args.repl_prompt)
         except (RuntimeError, ValueError) as exc:
@@ -533,7 +529,12 @@ def main():
     if args.test and _test_mode_uses_fake_openai(agents):
         fake_openai_backend = _start_test_fake_openai_backend()
     try:
+        isatty = _is_tty()
         textual_bridge = TextualUiBridge()
+        input_gate_factory = (
+            textual_bridge.create_input_gate if isatty
+            else (lambda **kw: SimpleInputGate(**kw))
+        )
         app = QuimeraApp(cwd,
                          debug=args.debug,
                          history_window=args.history_window,
@@ -543,7 +544,7 @@ def main():
                          visibility=visibility,
                          theme=args.theme,
                          renderer_override=textual_bridge.create_renderer(),
-                         input_gate_factory=textual_bridge.create_input_gate)
+                         input_gate_factory=input_gate_factory)
         if args.interactive_test:
             if TerminalRenderer is None or AgentClient is None:
                 raise RuntimeError("Modo interativo não disponível: dependências de UI não instaladas.")
@@ -585,6 +586,6 @@ def main():
             external_http_enabled=args.mcp_http,
         )
 
-        _run_app_ui(app, textual_bridge)
+        _run_app_ui(app, textual_bridge, isatty)
     finally:
         _stop_test_fake_openai_backend(fake_openai_backend)

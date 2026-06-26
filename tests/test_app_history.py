@@ -21,6 +21,15 @@ class TestAppHistory(unittest.TestCase):
         mock_context.SUMMARY_MARKER = "SUMMARY"
         mock_context.load_session.return_value = ""
 
+    def _make_input_gate_factory(self, target_kwargs: dict | None = None):
+        instance = MagicMock()
+        def factory(**kw):
+            if target_kwargs is not None:
+                target_kwargs.update(kw)
+                target_kwargs["instance"] = instance
+            return instance
+        return factory
+
     @patch("quimera.tasks.api.init_db")
     @patch("quimera.tasks.api.add_job")
     @patch("quimera.app.core.TerminalRenderer")
@@ -30,10 +39,8 @@ class TestAppHistory(unittest.TestCase):
     @patch("quimera.app.core.SessionStorage")
     @patch("quimera.app.core.AgentClient")
     @patch("quimera.app.core.SessionSummarizer")
-    @patch("quimera.app.core.InputGate")
     def test_input_gate_receives_history_file_and_command_resolver(
         self,
-        mock_input_gate,
         mock_session_sum,
         mock_agent,
         mock_storage,
@@ -47,8 +54,9 @@ class TestAppHistory(unittest.TestCase):
         """Verifica que o InputGate recebe o history_file e o command_resolver corretamente."""
         mock_add_job.return_value = 1
         self._setup_common_mocks(mock_storage, mock_context)
-        mock_gate_instance = MagicMock()
-        mock_input_gate.return_value = mock_gate_instance
+
+        captured = {}
+        input_gate_factory = self._make_input_gate_factory(captured)
 
         tmp_root = Path("/tmp/quimera_test_workspace_tmp")
         with patch("quimera.app.core.Workspace") as mock_ws:
@@ -65,12 +73,13 @@ class TestAppHistory(unittest.TestCase):
             with patch("quimera.app.core.create_executor"):
                 from quimera.app import QuimeraApp
 
-                app = QuimeraApp(self.tmp_cwd)
+                app = QuimeraApp(self.tmp_cwd, input_gate_factory=input_gate_factory)
 
-        _, kwargs = mock_input_gate.call_args
-        self.assertEqual(kwargs["history_file"], self.history_file)
-        self.assertTrue(callable(kwargs["command_resolver"]))
-        mock_gate_instance.set_toolbar_context_resolver.assert_called_once_with(app.toolbar_coordinator.build_input_toolbar_context)
+        self.assertEqual(captured["history_file"], self.history_file)
+        self.assertTrue(callable(captured["command_resolver"]))
+        captured["instance"].set_toolbar_context_resolver.assert_called_once_with(
+            app.toolbar_coordinator.build_input_toolbar_context
+        )
 
     @patch("quimera.tasks.api.init_db")
     @patch("quimera.tasks.api.add_job")
@@ -80,10 +89,8 @@ class TestAppHistory(unittest.TestCase):
     @patch("quimera.app.core.SessionStorage")
     @patch("quimera.app.core.AgentClient")
     @patch("quimera.app.core.SessionSummarizer")
-    @patch("builtins.input", return_value="test input")
-    def test_read_user_input_uses_input_function(
+    def test_read_user_input_delegates_to_input_gate(
         self,
-        mock_input,
         mock_session_sum,
         mock_agent,
         mock_storage,
@@ -93,9 +100,13 @@ class TestAppHistory(unittest.TestCase):
         mock_add_job,
         mock_init_db,
     ):
-        """Verifica que read_user_input usa a função input built-in quando não há sessão."""
+        """Verifica que read_user_input delega para input_gate.read_input."""
         mock_add_job.return_value = 1
         self._setup_common_mocks(mock_storage, mock_context)
+
+        gate_mock = MagicMock()
+        gate_mock.read_input.return_value = "test input"
+        gate_mock.return_value = "test input"
 
         tmp_root = Path("/tmp/quimera_test_workspace_tmp")
         with patch("quimera.app.core.Workspace") as mock_ws:
@@ -113,14 +124,12 @@ class TestAppHistory(unittest.TestCase):
             with patch("quimera.app.core.create_executor"):
                 from quimera.app import QuimeraApp
 
-                app = QuimeraApp(self.tmp_cwd)
-            app.user_name = "user"
-            app.input_gate._session = None
+                app = QuimeraApp(self.tmp_cwd, input_gate_factory=lambda **kw: gate_mock)
 
             result = app.input_services.read_user_input(prompt="user: ", timeout=-1)
 
             self.assertEqual(result, "test input")
-            mock_input.assert_called_with("user: ")
+            gate_mock.assert_called_once_with("user: ")
 
     @patch("quimera.tasks.api.init_db")
     @patch("quimera.tasks.api.add_job")
@@ -131,10 +140,8 @@ class TestAppHistory(unittest.TestCase):
     @patch("quimera.app.core.SessionStorage")
     @patch("quimera.app.core.AgentClient")
     @patch("quimera.app.core.SessionSummarizer")
-    @patch("quimera.app.core.InputGate")
     def test_debug_mode_injects_render_audit_logger(
         self,
-        mock_input_gate,
         mock_session_sum,
         mock_agent,
         mock_storage,
@@ -148,7 +155,6 @@ class TestAppHistory(unittest.TestCase):
         """Verifica que o modo debug injeta o RenderAuditLogger no renderer."""
         mock_add_job.return_value = 1
         self._setup_common_mocks(mock_storage, mock_context)
-        mock_input_gate.return_value = MagicMock()
 
         tmp_render_logs_dir = Path("/tmp/quimera_test_workspace/data/logs/render")
         audit_instance = MagicMock()
@@ -175,7 +181,7 @@ class TestAppHistory(unittest.TestCase):
             with patch("quimera.app.core.create_executor"):
                 from quimera.app import QuimeraApp
 
-                QuimeraApp(self.tmp_cwd, debug=True)
+                QuimeraApp(self.tmp_cwd, debug=True, input_gate_factory=lambda **kw: MagicMock())
 
         mock_audit_logger.assert_called_once_with(
             tmp_render_logs_dir / "render-test.jsonl",

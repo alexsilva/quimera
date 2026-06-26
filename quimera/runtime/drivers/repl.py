@@ -20,7 +20,7 @@ from urllib import request as urllib_request
 from ...config import ConfigManager as GlobalConfigManager, DEFAULT_USER_NAME
 from ...paths import CANDIDATE_DIRS, find_base_writable
 from ...profiles.base import OpenAIConnection
-from ...app.prompt_input import PromptFormatter
+from ...app.prompt_formatter import PromptFormatter
 from .openai_compat import OpenAICompatDriver
 from ..approval import ApprovalManager
 from ..config import ToolRuntimeConfig
