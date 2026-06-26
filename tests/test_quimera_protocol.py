@@ -6249,11 +6249,16 @@ class TestRunSmoke(unittest.TestCase):
         app.agent_client = DummyAgentClient()
         app.threads = 1
         app.read_user_input = Mock(side_effect=["/exit"])
+        shutdown_order = []
+        app.process_supervisor = Mock()
+        app.process_supervisor.shutdown.side_effect = lambda: shutdown_order.append("process_supervisor")
         app.session_services = Mock()
-        app.session_services.shutdown = Mock()
+        app.session_services.shutdown = Mock(side_effect=lambda **_kwargs: shutdown_order.append("session"))
         materialize_internal_services(app)
         app.run()
         app.session_services.shutdown.assert_called_once()
+        app.process_supervisor.shutdown.assert_called_once()
+        self.assertEqual(shutdown_order, ["session", "process_supervisor"])
 
 
 class TestToolCallGuardrails(unittest.TestCase):

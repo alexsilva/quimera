@@ -1,7 +1,9 @@
 import logging
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import quimera.app.config as app_config
 from quimera.app.handlers import PromptAwareStderrHandler
 
 
@@ -83,3 +85,39 @@ def test_prompt_aware_stderr_handler_shows_mcp_info_while_prompt_reading_in_debu
 
     handler.emit(record)
     app.system_layer.show_muted_message.assert_called_once()
+
+
+def test_quimera_root_logger_does_not_route_internal_warnings_to_ui():
+    system_layer = Mock(show_warning_message=Mock())
+    app = _app_with_system_layer(
+        _nonblocking_input_status="reading",
+        system_layer=system_layer,
+    )
+    previous_app = app_config.handler._app
+    previous_callbacks = app_config.handler._callbacks
+    app_config.handler.bind_app(app)
+    try:
+        logging.getLogger("quimera.runtime.process_supervisor").warning(
+            "registrando processo durante shutdown"
+        )
+    finally:
+        app_config.handler._app = previous_app
+        app_config.handler._callbacks = previous_callbacks
+
+    system_layer.show_warning_message.assert_not_called()
+
+
+def test_quimera_root_logger_remains_audited_after_log_file_change(tmp_path):
+    log_path = tmp_path / "quimera.log"
+    previous_log_path = Path(app_config._file_handler.baseFilename)
+    try:
+        app_config.set_app_log_file(log_path)
+
+        logging.getLogger("quimera.runtime.process_supervisor").warning("audit-only")
+
+        for handler in logging.getLogger("quimera").handlers:
+            handler.flush()
+
+        assert "audit-only" in log_path.read_text(encoding="utf-8")
+    finally:
+        app_config.set_app_log_file(previous_log_path)

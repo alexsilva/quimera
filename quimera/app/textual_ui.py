@@ -6,7 +6,6 @@ import queue
 import sys
 import traceback
 import threading
-from collections import deque
 from collections.abc import Callable
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -22,6 +21,7 @@ from quimera.ui.text import _extract_text_from_renderable, strip_ansi
 from quimera.app.config import handler as _screen_handler
 
 _NO_RESPONSE_MESSAGE = "sem resposta válida"
+_SUMMARY_SPINNER_FRAMES = ("◐", "◓", "◑", "◒")
 
 
 class _TextualConsoleShim:
@@ -47,24 +47,8 @@ class TextualUiEvent:
     agent: str | None = None
 
 
-class _FeedEntryBuffer:
-    """Mantém apenas as últimas entradas visíveis do feed."""
-
-    def __init__(self, limit: int | None = None) -> None:
-        self._limit = limit if isinstance(limit, int) and limit > 0 else None
-        self._entries: deque[Any] = deque()
-
-    def append(self, renderable: Any) -> list[Any]:
-        """Adiciona uma entrada e devolve snapshot já podado."""
-        self._entries.append(renderable)
-        if self._limit is not None:
-            while len(self._entries) > self._limit:
-                self._entries.popleft()
-        return list(self._entries)
-
-
 def _resolve_textual_feed_limit(quimera_app) -> int | None:
-    """Resolve o limite visual do feed a partir da config já carregada no app."""
+    """Resolve o limite de linhas do feed a partir da config já carregada no app."""
     auto_summarize_threshold = getattr(quimera_app, "auto_summarize_threshold", None)
     if isinstance(auto_summarize_threshold, int) and auto_summarize_threshold > 0:
         return auto_summarize_threshold
@@ -73,6 +57,20 @@ def _resolve_textual_feed_limit(quimera_app) -> int | None:
     if isinstance(history_window, int) and history_window > 0:
         return history_window
     return None
+
+
+def _append_post_exit_failure_message(
+    messages: list[tuple[str, str]],
+    event: "TextualUiEvent",
+) -> bool:
+    """Guarda falhas exibidas no alt-screen para reimpressão após a saída."""
+    if event.kind not in {"error", "warning"}:
+        return False
+    content = str(event.payload or "").strip()
+    if not content:
+        return False
+    messages.append((event.kind, content))
+    return True
 
 
 class TextualUiBridge:
@@ -407,6 +405,25 @@ class TextualRenderer:
         self._bridge = bridge
         self._audit_logger = None
         self._console = _TextualConsoleShim(bridge)
+        self._profile_resolver: Callable | None = None
+
+    def set_profile_resolver(self, resolver: Callable) -> None:
+        """Define callback para resolver (color, label) por agente."""
+        self._profile_resolver = resolver
+
+    def _resolve_agent_label(self, agent: str) -> str:
+        """Retorna label formatada com ícone do agente, ex: '🔮  Claude'."""
+        resolver = self._profile_resolver
+        if resolver:
+            try:
+                result = resolver(str(agent).lower())
+                if result:
+                    _, label = result
+                    return label
+            except Exception:
+                pass
+        agent_name = str(agent).capitalize() if agent else "Agente"
+        return f"🤖  {agent_name}"
 
     def set_prompt_integration(self, is_active_fn, run_above_fn) -> None:
         """Compatibilidade com TerminalRenderer."""
@@ -470,12 +487,13 @@ class TextualRenderer:
         self.show_plain(message, agent=agent, muted=muted)
 
     def show_message(self, agent, content, render_mode: str = "auto") -> None:
-        """Exibe resposta final de agente."""
+        """Exibe resposta final de agente com ícone."""
         clean_content = strip_ansi(_extract_text_from_renderable(content))
+        label = self._resolve_agent_label(agent)
         self._bridge.emit(
             TextualUiEvent(
                 "agent_message",
-                {"content": clean_content, "render_mode": render_mode},
+                {"content": clean_content, "render_mode": render_mode, "label": label},
                 agent=str(agent),
             )
         )
@@ -485,8 +503,11 @@ class TextualRenderer:
         self.show_message(agent, _NO_RESPONSE_MESSAGE, render_mode="plain")
 
     def start_message_stream(self, agent) -> None:
-        """Inicia stream visual."""
-        self._bridge.emit(TextualUiEvent("stream_start", "", agent=str(agent)))
+        """Inicia stream visual com ícone do agente."""
+        label = self._resolve_agent_label(agent)
+        self._bridge.emit(
+            TextualUiEvent("stream_start", {"label": label}, agent=str(agent))
+        )
 
     def update_message_stream(self, agent, chunk) -> None:
         """Atualiza stream visual."""
@@ -498,7 +519,7 @@ class TextualRenderer:
         final_content: str,
         render_mode: str = "auto",
     ) -> None:
-        """Finaliza stream visual."""
+        """Finaliza stream visual com ícone do agente."""
         self.show_message(agent, final_content, render_mode=render_mode)
 
     def commit_agent_stream(self, agent, render_mode: str = "auto") -> bool:
@@ -507,7 +528,10 @@ class TextualRenderer:
 
     def abort_message_stream(self, agent) -> None:
         """Aborta stream visual."""
-        self._bridge.emit(TextualUiEvent("stream_abort", "", agent=str(agent)))
+        label = self._resolve_agent_label(agent)
+        self._bridge.emit(
+            TextualUiEvent("stream_abort", {"label": label}, agent=str(agent))
+        )
 
     def update_agent_transient(self, agent, message: str) -> None:
         """Exibe progresso transitório como linha de status."""
@@ -535,9 +559,23 @@ def _render_event(event: TextualUiEvent):
     if event.kind == "agent_message":
         payload = event.payload or {}
         content = str(payload.get("content", ""))
-        agent = event.agent or "agente"
+        label = str(payload.get("label", f"🤖 {event.agent or 'agente'}"))
         body = Markdown(content) if payload.get("render_mode") != "plain" else Text(content)
-        return Panel(body, title=f"🤖 {agent}", border_style="cyan")
+        return Panel(body, title=label, border_style="cyan")
+    if event.kind == "stream_start":
+        payload = event.payload or {}
+        label = str(payload.get("label", f"🤖 {event.agent or 'agente'}"))
+        return Panel(Text("gerando...", style="dim italic"), title=label, border_style="dim")
+    if event.kind == "stream_abort":
+        payload = event.payload or {}
+        label = str(payload.get("label", f"🤖 {event.agent or 'agente'}"))
+        return Panel(Text("interrompido", style="dim red"), title=label, border_style="dim")
+    if event.kind == "stream_chunk":
+        content = str(event.payload) if not isinstance(event.payload, dict) else str(event.payload.get("text", event.payload))
+        if not content.strip():
+            return None
+        agent = event.agent or "agente"
+        return Panel(Text(content), title=f"🤖 {agent} (stream)", border_style="dim")
     if event.kind in {"warning", "error"}:
         style = "yellow" if event.kind == "warning" else "red"
         return Text(str(event.payload), style=style)
@@ -568,6 +606,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
         from textual.binding import Binding
         from textual.containers import Vertical
         from textual.widgets import Header, Input, RichLog, Static
+        from textual.widgets._header import HeaderClock, HeaderClockSpace, HeaderIcon, HeaderTitle
 
         from quimera.app.completion_dropdown import CompletionDropdown
     except ImportError as exc:
@@ -584,6 +623,18 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
         BINDINGS = [
             Binding("escape", "escape", "Fechar popup"),
         ]
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._prompt_history: list[str] = []
+            self._history_index = 0
+            self._saved_draft = ""
+
+        def add_to_history(self, value: str) -> None:
+            if value:
+                self._prompt_history.append(value)
+                self._history_index = 0
+                self._saved_draft = ""
 
         async def action_submit(self) -> None:
             dropdown = self.app.query_one(CompletionDropdown)
@@ -603,11 +654,32 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             dropdown = self.app.query_one(CompletionDropdown)
             if dropdown.has_options:
                 dropdown.select_prev()
+                return
+            if not self._prompt_history:
+                return
+            if self._history_index >= len(self._prompt_history):
+                return
+            if self._history_index == 0:
+                self._saved_draft = self.value
+            self._history_index += 1
+            idx = len(self._prompt_history) - self._history_index
+            self.value = self._prompt_history[idx]
+            self.cursor_position = len(self.value)
 
         def key_down(self) -> None:
             dropdown = self.app.query_one(CompletionDropdown)
             if dropdown.has_options:
                 dropdown.select_next()
+                return
+            if self._history_index == 0:
+                return
+            self._history_index -= 1
+            if self._history_index == 0:
+                self.value = self._saved_draft
+            else:
+                idx = len(self._prompt_history) - self._history_index
+                self.value = self._prompt_history[idx]
+            self.cursor_position = len(self.value)
 
         def key_tab(self) -> None:
             dropdown = self.app.query_one(CompletionDropdown)
@@ -618,7 +690,21 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                 dropdown.hide()
                 return
 
-    _SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
+    class _SummarySpinner(Static):
+        """Indicador discreto de resumo, separado do relógio."""
+
+    class _SummaryHeader(Header):
+        """Header com spinner próprio antes do relógio."""
+
+        def compose(self) -> ComposeResult:
+            yield HeaderIcon().data_bind(Header.icon)
+            yield HeaderTitle()
+            yield _SummarySpinner("", id="summary-spinner")
+            yield (
+                HeaderClock().data_bind(Header.time_format)
+                if self._show_clock
+                else HeaderClockSpace()
+            )
 
     class QuimeraTextualApp(App):
         """TUI principal do Quimera."""
@@ -650,6 +736,16 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
         #input {
             width: 100%;
         }
+        #summary-spinner {
+            dock: right;
+            width: 3;
+            color: $warning;
+            content-align: center middle;
+        }
+        HeaderClock {
+            width: 10;
+            padding: 0 1;
+        }
         """
 
         TITLE = "Quimera"
@@ -666,12 +762,17 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             self._summarizing = False
             self._spinner_index = 0
             self._spinner_timer = None
-            self._feed_buffer = _FeedEntryBuffer(_resolve_textual_feed_limit(quimera_app))
 
         def compose(self) -> ComposeResult:
-            yield Header(show_clock=True)
+            yield _SummaryHeader(show_clock=True, id="header")
             with Vertical(id="main"):
-                yield RichLog(id="feed", markup=True, wrap=True, highlight=False)
+                yield RichLog(
+                    id="feed",
+                    markup=True,
+                    wrap=True,
+                    highlight=False,
+                    max_lines=_resolve_textual_feed_limit(quimera_app),
+                )
                 yield Static("", id="toolbar")
                 yield CompletionDropdown()
                 with Vertical(id="input_bar"):
@@ -690,7 +791,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             self.query_one("#input", Input).focus()
 
         def _start_spinner(self) -> None:
-            """Inicia animação de loading no sub_title do header."""
+            """Inicia animação de loading ao lado do relógio do header."""
             if self._spinner_timer is not None:
                 return
             self._summarizing = True
@@ -699,17 +800,17 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             self._spinner_timer = self.set_interval(0.1, self._update_spinner)
 
         def _stop_spinner(self) -> None:
-            """Para animação de loading e limpa o sub_title."""
+            """Para animação de loading e limpa o indicador do header."""
             self._summarizing = False
             if self._spinner_timer is not None:
                 self._spinner_timer.stop()
                 self._spinner_timer = None
-            self.sub_title = ""
+            self.query_one("#summary-spinner", _SummarySpinner).update("")
 
         def _update_spinner(self) -> None:
-            """Avança o frame do spinner no sub_title."""
-            frame = _SPINNER_FRAMES[self._spinner_index % len(_SPINNER_FRAMES)]
-            self.sub_title = f"{frame} resumindo..."
+            """Avança o frame do spinner no header."""
+            frame = _SUMMARY_SPINNER_FRAMES[self._spinner_index % len(_SUMMARY_SPINNER_FRAMES)]
+            self.query_one("#summary-spinner", _SummarySpinner).update(frame)
             self._spinner_index += 1
 
         def _run_quimera_app(self) -> None:
@@ -730,6 +831,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             self.query_one(CompletionDropdown).hide()
             value = event.value
             event.input.value = ""
+            event.input.add_to_history(value)
             bridge.submit_input(value)
 
         def action_cancel_or_exit(self) -> None:
@@ -763,6 +865,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                 dropdown.filter("")
 
         def handle_bridge_event(self, event: TextualUiEvent) -> None:
+            _append_post_exit_failure_message(_post_exit_messages, event)
             if event.kind == "summarizing":
                 if event.payload:
                     self._start_spinner()
@@ -783,20 +886,19 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             if renderable is None:
                 return
             feed = self.query_one("#feed", RichLog)
-            entries = self._feed_buffer.append(renderable)
-            feed.clear()
-            for entry in entries:
-                feed.write(entry)
+            feed.write(renderable)
 
     bridge.attach_quimera_app(quimera_app)
+    renderer = getattr(quimera_app, "renderer", None)
+    if renderer is not None and hasattr(renderer, "set_profile_resolver"):
+        renderer.set_profile_resolver(quimera_app._resolve_profile_style)
     QuimeraTextualApp().run()
 
     # Após o Textual sair (tela alternativa restaurada), drena eventos pendentes
     # e imprime erros/warnings para a tela normal — assim não desaparecem.
     _screen_handler.drain_to_stderr()
     for _ev in bridge.drain_pending_events():
-        if _ev.kind in {"error", "warning"}:
-            _post_exit_messages.append((_ev.kind, str(_ev.payload or "")))
+        _append_post_exit_failure_message(_post_exit_messages, _ev)
     for _kind, _content in _post_exit_messages:
         if _content:
             print(_content, file=sys.stderr, flush=True)

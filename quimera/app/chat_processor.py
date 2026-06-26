@@ -316,10 +316,11 @@ def run_chat_loop(
         app._refresh_parallel_toolbar()
         try:
             process_supervisor = getattr(app, "process_supervisor", None)
-            if process_supervisor is not None:
-                if not interrupted_shutdown:
+            try:
+                app.session_services.shutdown(interrupted=interrupted_shutdown)
+            finally:
+                if process_supervisor is not None and not interrupted_shutdown:
                     process_supervisor.shutdown()
-            app.session_services.shutdown(interrupted=interrupted_shutdown)
             if hasattr(app, "current_job_id") and app.current_job_id is not None:
                 TodoRegistry.cleanup(app.current_job_id)
             app.agent_client.close()

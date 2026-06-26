@@ -29,10 +29,9 @@ for configured_logger in (logger, mcp_server_logger):
     configured_logger.propagate = False
     configured_logger.setLevel(numeric_level)
 
-# Captura todos os outros loggers quimera.* (agents, session, workspace, etc.)
-# que antes propagavam para o root e caíam no lastResort (stderr flash).
+# Captura todos os outros loggers quimera.* no arquivo de auditoria sem
+# transformar warnings internos em mensagens visuais do app.
 _quimera_root = logging.getLogger("quimera")
-_quimera_root.addHandler(handler)
 _quimera_root.addHandler(_file_handler)
 _quimera_root.propagate = False
 _quimera_root.setLevel(numeric_level)
@@ -43,8 +42,9 @@ def set_app_log_file(path: "Path | str") -> None:
     global _file_handler
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    for lg in (logger, mcp_server_logger):
-        lg.removeHandler(_file_handler)
+    for lg in (logger, mcp_server_logger, _quimera_root):
+        if _file_handler in lg.handlers:
+            lg.removeHandler(_file_handler)
     try:
         _file_handler.close()
     except Exception:
@@ -54,5 +54,5 @@ def set_app_log_file(path: "Path | str") -> None:
         "%(asctime)s %(levelname)s [%(name)s] %(module)s: %(message)s"
     ))
     _file_handler.setLevel(logging.DEBUG)
-    for lg in (logger, mcp_server_logger):
+    for lg in (logger, mcp_server_logger, _quimera_root):
         lg.addHandler(_file_handler)

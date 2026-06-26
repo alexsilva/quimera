@@ -1,4 +1,5 @@
 """Tests for quimera/app/textual_ui.py — Textual UI input gate and renderer."""
+import asyncio
 import threading
 
 from types import SimpleNamespace
@@ -116,17 +117,6 @@ def test_textual_renderer_show_no_response():
     assert "sem resposta" in str(events[0].payload)
 
 
-def test_textual_feed_entry_buffer_keeps_only_last_entries():
-    from quimera.app.textual_ui import _FeedEntryBuffer
-
-    buffer = _FeedEntryBuffer(limit=3)
-
-    assert buffer.append("a") == ["a"]
-    assert buffer.append("b") == ["a", "b"]
-    assert buffer.append("c") == ["a", "b", "c"]
-    assert buffer.append("d") == ["b", "c", "d"]
-
-
 def test_textual_feed_limit_prefers_auto_summarize_threshold():
     from quimera.app.textual_ui import _resolve_textual_feed_limit
 
@@ -147,6 +137,56 @@ def test_textual_feed_limit_falls_back_to_history_window():
     )
 
     assert _resolve_textual_feed_limit(app) == 12
+
+
+def test_textual_rich_log_max_lines_prunes_visible_feed():
+    from textual.app import App, ComposeResult
+    from textual.widgets import RichLog
+
+    class FeedApp(App):
+        def compose(self) -> ComposeResult:
+            yield RichLog(id="feed", max_lines=3, wrap=True)
+
+    async def run_test() -> None:
+        app = FeedApp()
+        async with app.run_test() as pilot:
+            feed = app.query_one("#feed", RichLog)
+            for line in ("a", "b", "c", "d"):
+                feed.write(line)
+            await pilot.pause()
+            assert feed.max_lines == 3
+            assert len(feed.lines) <= 3
+
+    asyncio.run(run_test())
+
+
+def test_textual_summary_spinner_uses_circular_frames():
+    from quimera.app.textual_ui import _SUMMARY_SPINNER_FRAMES
+
+    assert _SUMMARY_SPINNER_FRAMES == ("◐", "◓", "◑", "◒")
+
+
+def test_textual_post_exit_failure_recorder_keeps_errors_and_warnings():
+    from quimera.app.textual_ui import TextualUiEvent, _append_post_exit_failure_message
+
+    messages = []
+
+    assert _append_post_exit_failure_message(messages, TextualUiEvent("error", "falha")) is True
+    assert _append_post_exit_failure_message(messages, TextualUiEvent("warning", "atenção")) is True
+    assert _append_post_exit_failure_message(messages, TextualUiEvent("plain", "ignorar")) is False
+
+    assert messages == [("error", "falha"), ("warning", "atenção")]
+
+
+def test_textual_post_exit_failure_recorder_ignores_empty_payload():
+    from quimera.app.textual_ui import TextualUiEvent, _append_post_exit_failure_message
+
+    messages = []
+
+    assert _append_post_exit_failure_message(messages, TextualUiEvent("error", "")) is False
+    assert _append_post_exit_failure_message(messages, TextualUiEvent("warning", None)) is False
+
+    assert messages == []
 
 
 def test_simple_input_gate_basic():
