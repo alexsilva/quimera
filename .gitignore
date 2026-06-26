@@ -20,3 +20,6 @@ mock.py
 TODO.md
 opencode.json
 site
+build/
+quimera.egg-info
+planning/
