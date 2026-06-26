@@ -4,6 +4,7 @@ from __future__ import annotations
 import queue
 import threading
 from collections.abc import Callable
+from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Any
 
@@ -11,7 +12,23 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.text import Text
 
+from quimera.ui.text import _extract_text_from_renderable, strip_ansi
+
 _NO_RESPONSE_MESSAGE = "sem resposta válida"
+
+
+class _TextualConsoleShim:
+    """Console mínimo para código legado que ainda chama ``console.print``."""
+
+    def __init__(self, bridge: "TextualUiBridge") -> None:
+        self._bridge = bridge
+
+    def print(self, *objects, sep: str = " ", end: str = "\n", **kwargs) -> None:
+        """Roteia prints Rich/legados para o feed Textual."""
+        message = sep.join(str(obj) for obj in objects)
+        if end and end != "\n":
+            message = f"{message}{end}"
+        self._bridge.emit(TextualUiEvent("plain", message))
 
 
 @dataclass
@@ -144,7 +161,19 @@ class TextualInputGate:
         return False
 
     def redisplay(self) -> None:
-        """Compatibilidade: Textual redesenha via event loop."""
+        """Atualiza toolbar/sugestões enquanto o input Textual está ativo."""
+        if not self.is_active():
+            return None
+        self._bridge.emit(
+            TextualUiEvent(
+                "prompt",
+                {
+                    "prompt": "mensagem...",
+                    "toolbar": self._build_toolbar_text(),
+                    "commands": self._commands(),
+                },
+            )
+        )
         return None
 
     def get_line_buffer(self) -> str:
@@ -192,6 +221,36 @@ class TextualInputGate:
         except Exception:
             return []
 
+    def completions_for(self, value: str, cursor_position: int | None = None) -> list[str]:
+        """Retorna sugestões compatíveis com o autocomplete do prompt antigo."""
+        if cursor_position is None:
+            cursor_position = len(value)
+        text_before_cursor = (value[:cursor_position] or "").lstrip()
+        for prefix in ("s/", "r/"):
+            if text_before_cursor.startswith(prefix):
+                partial = text_before_cursor[len(prefix):]
+                suggestions = self._argument_suggestions(prefix.rstrip("/"), partial)
+                return [f"{prefix}{suggestion}" for suggestion in suggestions]
+        if not text_before_cursor.startswith("/"):
+            return []
+        if " " in text_before_cursor:
+            command, partial = text_before_cursor.split(" ", 1)
+            return [
+                f"{command} {suggestion}"
+                for suggestion in self._argument_suggestions(command, partial)
+            ]
+        return [command for command in self._commands() if command.startswith(text_before_cursor)]
+
+    def _argument_suggestions(self, command: str, partial: str) -> list[str]:
+        resolver = self._argument_resolver
+        if not callable(resolver):
+            return []
+        try:
+            suggestions = resolver(command, partial) or []
+        except Exception:
+            return []
+        return [str(item) for item in suggestions if str(item).startswith(partial)]
+
     def __call__(self, prompt: str) -> str:
         """Bloqueia o loop do Quimera até o usuário submeter uma linha na TUI."""
         self._set_active_state(True)
@@ -210,9 +269,54 @@ class TextualInputGate:
         finally:
             self._set_active_state(False)
 
+    def _read_with_textual_prompt(
+        self,
+        prompt: str,
+        *,
+        timeout: float | None = None,
+        question: str | None = None,
+        options: list[str] | None = None,
+        owner: str | None = None,
+    ) -> str | None:
+        """Exibe um pedido interativo no Textual e lê uma submissão do input fixo."""
+        if question is not None:
+            self._bridge.emit(
+                TextualUiEvent(
+                    "question",
+                    {
+                        "question": question,
+                        "options": list(options or []),
+                        "owner": owner,
+                    },
+                )
+            )
+        self._set_active_state(True)
+        self._bridge.emit(
+            TextualUiEvent(
+                "prompt",
+                {
+                    "prompt": prompt,
+                    "toolbar": self._build_toolbar_text(),
+                    "commands": self._commands(),
+                },
+            )
+        )
+        try:
+            if timeout is None:
+                return self._bridge.input_queue.get()
+            return self._bridge.input_queue.get(timeout=timeout)
+        except queue.Empty:
+            return None
+        finally:
+            self._set_active_state(False)
+
     def read_plain_input(self, prompt: str) -> str:
         """Lê uma linha simples pelo mesmo input Textual."""
         return self(prompt)
+
+    def read_input_in_terminal(self, prompt: str, timeout: float = 300.0) -> str | None:
+        """Compatibilidade: lê pelo input fixo do Textual, sem stdin direto."""
+        return self._read_with_textual_prompt(prompt, timeout=timeout)
 
     def read_selection_in_terminal(
         self,
@@ -222,16 +326,16 @@ class TextualInputGate:
         owner: str | None = None,
     ) -> tuple[int, str] | None:
         """Lê seleção por número/texto no input Textual."""
-        self._bridge.emit(
-            TextualUiEvent(
-                "question",
-                {"question": question, "options": list(options), "owner": owner},
-            )
+        raw = self._read_with_textual_prompt(
+            f"Selecione (1-{len(options)}): ",
+            timeout=timeout,
+            question=question,
+            options=options,
+            owner=owner,
         )
-        try:
-            raw = self._bridge.input_queue.get(timeout=timeout).strip()
-        except queue.Empty:
+        if raw is None:
             return None
+        raw = raw.strip()
         try:
             index = int(raw) - 1
             if 0 <= index < len(options):
@@ -251,16 +355,12 @@ class TextualInputGate:
         owner: str | None = None,
     ) -> str | None:
         """Lê aprovação pelo input Textual."""
-        self._bridge.emit(
-            TextualUiEvent(
-                "question",
-                {"question": f"{question}\n{prompt}", "options": [], "owner": owner},
-            )
+        return self._read_with_textual_prompt(
+            prompt,
+            timeout=timeout,
+            question=question,
+            owner=owner,
         )
-        try:
-            return self._bridge.input_queue.get(timeout=timeout)
-        except queue.Empty:
-            return None
 
 
 class TextualRenderer:
@@ -271,6 +371,7 @@ class TextualRenderer:
     def __init__(self, bridge: TextualUiBridge) -> None:
         self._bridge = bridge
         self._audit_logger = None
+        self._console = _TextualConsoleShim(bridge)
 
     def set_prompt_integration(self, is_active_fn, run_above_fn) -> None:
         """Compatibilidade com TerminalRenderer."""
@@ -279,6 +380,26 @@ class TextualRenderer:
     def close(self, timeout: float = 5.0) -> None:
         """Compatibilidade com TerminalRenderer."""
         return None
+
+    def external_window(self, window_id: str, title: str = "", metadata=None):
+        """Compatibilidade: Textual mantém a UI como dona do terminal."""
+        self._bridge.emit(TextualUiEvent("system", title or window_id))
+        return nullcontext()
+
+    def approval_window(self, *, title: str = "Aprovação", **kwargs):
+        """Compatibilidade com fluxos legados de aprovação."""
+        self._bridge.emit(TextualUiEvent("system", title))
+        return nullcontext()
+
+    def input_window(self, *, title: str = "Entrada", **kwargs):
+        """Compatibilidade com fluxos legados de entrada."""
+        self._bridge.emit(TextualUiEvent("system", title))
+        return nullcontext()
+
+    def selection_window(self, *, title: str = "Seleção", **kwargs):
+        """Compatibilidade com fluxos legados de seleção."""
+        self._bridge.emit(TextualUiEvent("system", title))
+        return nullcontext()
 
     def flush(self, timeout: float = 5.0) -> None:
         """Textual processa eventos pelo próprio loop."""
@@ -315,10 +436,11 @@ class TextualRenderer:
 
     def show_message(self, agent, content, render_mode: str = "auto") -> None:
         """Exibe resposta final de agente."""
+        clean_content = strip_ansi(_extract_text_from_renderable(content))
         self._bridge.emit(
             TextualUiEvent(
                 "agent_message",
-                {"content": str(content or ""), "render_mode": render_mode},
+                {"content": clean_content, "render_mode": render_mode},
                 agent=str(agent),
             )
         )
@@ -418,17 +540,29 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
         CSS = """
         Screen {
             layout: vertical;
+            background: $surface;
+        }
+        #main {
+            height: 1fr;
         }
         #feed {
             height: 1fr;
+            padding: 0 1;
+            background: $background;
         }
         #toolbar {
             height: 1;
+            padding: 0 1;
             color: $text-muted;
             background: $surface;
         }
+        #input_bar {
+            height: 3;
+            padding: 0 1;
+            background: $surface;
+        }
         #input {
-            dock: bottom;
+            width: 100%;
         }
         """
 
@@ -445,10 +579,11 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
 
         def compose(self) -> ComposeResult:
             yield Header(show_clock=True)
-            with Vertical():
+            with Vertical(id="main"):
                 yield RichLog(id="feed", markup=True, wrap=True, highlight=False)
                 yield Static("", id="toolbar")
-                yield Input(placeholder="mensagem...", id="input")
+                with Vertical(id="input_bar"):
+                    yield Input(placeholder="mensagem...", id="input")
 
         def on_mount(self) -> None:
             bridge.attach_textual_app(self)
@@ -503,7 +638,8 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                 self._commands = list(payload.get("commands", []) or [])
                 self.query_one("#toolbar", Static).update(toolbar)
                 input_widget = self.query_one("#input", Input)
-                input_widget.placeholder = "mensagem..."
+                prompt = str(payload.get("prompt") or "mensagem...").strip()
+                input_widget.placeholder = prompt or "mensagem..."
                 input_widget.focus()
                 return
             renderable = _render_event(event)

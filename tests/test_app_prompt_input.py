@@ -44,6 +44,34 @@ def test_textual_renderer_buffers_events_until_app_attaches():
     assert events[1].agent == "codex"
 
 
+def test_textual_renderer_extracts_text_from_rich_renderable():
+    from rich.panel import Panel
+    from rich.text import Text
+
+    from quimera.app.textual_ui import TextualUiBridge
+
+    bridge = TextualUiBridge()
+    renderer = bridge.create_renderer()
+    renderer.show_message("codex", Panel(Text("conteudo interno"), title="Titulo"))
+
+    events = bridge.drain_pending_events()
+
+    assert "conteudo interno" in events[0].payload["content"]
+    assert "rich.panel.Panel object" not in events[0].payload["content"]
+
+
+def test_textual_renderer_strips_ansi_from_agent_message():
+    from quimera.app.textual_ui import TextualUiBridge
+
+    bridge = TextualUiBridge()
+    renderer = bridge.create_renderer()
+    renderer.show_message("codex", "\x1b[31mconteudo\x1b[0m")
+
+    events = bridge.drain_pending_events()
+
+    assert events[0].payload["content"] == "conteudo"
+
+
 # ---------------------------------------------------------------------------
 # InputGate
 # ---------------------------------------------------------------------------
