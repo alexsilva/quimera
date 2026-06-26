@@ -29,6 +29,14 @@ for configured_logger in (logger, mcp_server_logger):
     configured_logger.propagate = False
     configured_logger.setLevel(numeric_level)
 
+# Captura todos os outros loggers quimera.* (agents, session, workspace, etc.)
+# que antes propagavam para o root e caíam no lastResort (stderr flash).
+_quimera_root = logging.getLogger("quimera")
+_quimera_root.addHandler(handler)
+_quimera_root.addHandler(_file_handler)
+_quimera_root.propagate = False
+_quimera_root.setLevel(numeric_level)
+
 
 def set_app_log_file(path: "Path | str") -> None:
     """Redireciona o FileHandler para o path definitivo do workspace."""

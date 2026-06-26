@@ -1,6 +1,7 @@
 """Serviços de sessão, persistência e sumarização."""
 from __future__ import annotations
 
+import logging
 import sys
 import threading
 import time
@@ -8,6 +9,8 @@ import time
 from ..constants import MSG_MEMORY_FAILED, MSG_MEMORY_SAVING
 from ..domain.session_state import SessionState
 from .interfaces import IAgentPool, IRenderer, ISessionStorage
+
+logger = logging.getLogger(__name__)
 
 # Debounce para save_history: evita serializar JSON inteiro a cada mensagem.
 _SAVE_DEBOUNCE_SECONDS = 5.0
@@ -74,11 +77,11 @@ class AppSessionServices:
         self._pending_summary_completion: str | None = None
 
     def _flush_pending_summary_completion(self) -> None:
-        """Exibe, uma única vez, a mensagem pendente do último resumo automático."""
+        """Registra no log a mensagem pendente do último resumo automático."""
         pending = self._pending_summary_completion
         if not pending:
             return
-        self._renderer.show_system(pending)
+        logger.info(pending)
         self._pending_summary_completion = None
 
     def _history_hard_limit(self) -> int:
@@ -151,11 +154,12 @@ class AppSessionServices:
         summary_agent = preferred_agent or self._summary_agent_preference or self._agent_pool.primary
 
         def _run_summarize():
+            set_summarizing = getattr(self._renderer, "set_summarizing", None)
             try:
+                if callable(set_summarizing):
+                    set_summarizing(True)
                 existing_summary = self._context_manager.load_session_summary()
-                self._renderer.show_system(
-                    f"[memória] {history_len} mensagens — gerando resumo automático..."
-                )
+                logger.info("[memória] %d mensagens — gerando resumo automático...", history_len)
                 summary = self._session_summarizer.summarize(
                     to_summarize,
                     existing_summary=existing_summary,
@@ -191,6 +195,8 @@ class AppSessionServices:
                 )
             finally:
                 self._summarization_running.clear()
+                if callable(set_summarizing):
+                    set_summarizing(False)
 
         # Seta o guard no thread principal para eliminar a janela de corrida
         # entre a verificação is_set() e o início real da thread.
@@ -234,7 +240,10 @@ class AppSessionServices:
         if not history_snapshot or interrupted:
             return
 
-        self._renderer.show_system(MSG_MEMORY_SAVING)
+        set_summarizing = getattr(self._renderer, "set_summarizing", None)
+        logger.info(MSG_MEMORY_SAVING)
+        if callable(set_summarizing):
+            set_summarizing(True)
 
         result = [None]
 
@@ -260,14 +269,18 @@ class AppSessionServices:
                     cancel_event.set()
             sys.stdout.write('\r\033[K')
             sys.stdout.flush()
-            self._renderer.show_system(MSG_MEMORY_FAILED)
+            logger.warning(MSG_MEMORY_FAILED)
             try:
                 worker.join(timeout=1)
             except KeyboardInterrupt:
                 pass
+            if callable(set_summarizing):
+                set_summarizing(False)
             return
+        if callable(set_summarizing):
+            set_summarizing(False)
         summary = result[0]
         if summary:
             self._context_manager.update_with_summary(summary)
         else:
-            self._renderer.show_system(MSG_MEMORY_FAILED)
+            logger.warning(MSG_MEMORY_FAILED)

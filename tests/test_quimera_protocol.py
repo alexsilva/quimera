@@ -2762,10 +2762,8 @@ class ProtocolTests(unittest.TestCase):
             ],
         )
         self.assertEqual(app.context_manager.saved_summary, "## Resumo da Conversa\n\n- Memória consolidada")
-        self.assertEqual(
-            app.renderer.system_messages,
-            ["[memória] histórico salvo. Gerando resumo da sessão..."],
-        )
+        # Mensagens de resumo agora vão apenas para o log, não mais para a UI.
+        self.assertEqual(app.renderer.system_messages, [])
 
     def test_shutdown_skips_summary_when_interrupted(self):
         """Verifica que shutdown skips summary when interrupted."""
@@ -2815,7 +2813,8 @@ class ProtocolTests(unittest.TestCase):
 
         self.assertTrue(app.agent_client._user_cancelled)
         self.assertTrue(app.agent_client._cancel_event.is_set())
-        self.assertEqual(app.renderer.system_messages[-1], "[memória] não foi possível gerar o resumo.")
+        # Mensagem de falha agora vai para o log, não mais para a UI.
+        self.assertEqual(app.renderer.system_messages, [])
 
     def test_summarize_session_returns_none_when_all_backends_unavailable(self):
         """Verifica que summarize session returns none when all backends unavailable."""

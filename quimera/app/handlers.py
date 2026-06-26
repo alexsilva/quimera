@@ -27,6 +27,7 @@ class PromptAwareStderrHandler(logging.StreamHandler):
         super().__init__(stream or sys.stderr)
         self._callbacks: AppCallbacks | None = None
         self._app = None
+        self._early_buffer: list[logging.LogRecord] = []
 
     def bind_app(self, app) -> None:
         """Compat shim para testes e call sites legados.
@@ -77,6 +78,9 @@ class PromptAwareStderrHandler(logging.StreamHandler):
             is_reading=is_reading,
             debug_enabled=debug_enabled,
         )
+        buffered, self._early_buffer = self._early_buffer, []
+        for record in buffered:
+            self.emit(record)
 
     def emit(self, record):
         """Executa emit."""
@@ -98,7 +102,8 @@ class PromptAwareStderrHandler(logging.StreamHandler):
 
         # WARNING/ERROR → chat com formato amigável
         if callbacks is None:
-            super().emit(record)
+            # callbacks ainda não configurados: bufferizar para exibir no feed quando a UI iniciar
+            self._early_buffer.append(record)
             return
 
         message = _friendly_message(record)
@@ -109,6 +114,15 @@ class PromptAwareStderrHandler(logging.StreamHandler):
                 return
         if callable(callbacks.show_warning):
             callbacks.show_warning(message)
+
+    def drain_to_stderr(self) -> None:
+        """Drena buffer inicial para stderr (fallback quando bind_callbacks nunca foi chamado)."""
+        buffered, self._early_buffer = self._early_buffer, []
+        for record in buffered:
+            try:
+                super().emit(record)
+            except Exception:
+                pass
 
 
 _AGENT_QUOTED = re.compile(r'"([^"]+)"')

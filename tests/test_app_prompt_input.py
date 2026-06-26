@@ -1,6 +1,7 @@
 """Tests for quimera/app/textual_ui.py — Textual UI input gate and renderer."""
 import threading
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 
@@ -113,6 +114,39 @@ def test_textual_renderer_show_no_response():
     events = bridge.drain_pending_events()
     assert events[0].kind == "agent_message"
     assert "sem resposta" in str(events[0].payload)
+
+
+def test_textual_feed_entry_buffer_keeps_only_last_entries():
+    from quimera.app.textual_ui import _FeedEntryBuffer
+
+    buffer = _FeedEntryBuffer(limit=3)
+
+    assert buffer.append("a") == ["a"]
+    assert buffer.append("b") == ["a", "b"]
+    assert buffer.append("c") == ["a", "b", "c"]
+    assert buffer.append("d") == ["b", "c", "d"]
+
+
+def test_textual_feed_limit_prefers_auto_summarize_threshold():
+    from quimera.app.textual_ui import _resolve_textual_feed_limit
+
+    app = SimpleNamespace(
+        auto_summarize_threshold=5,
+        prompt_builder=SimpleNamespace(history_window=12),
+    )
+
+    assert _resolve_textual_feed_limit(app) == 5
+
+
+def test_textual_feed_limit_falls_back_to_history_window():
+    from quimera.app.textual_ui import _resolve_textual_feed_limit
+
+    app = SimpleNamespace(
+        auto_summarize_threshold=0,
+        prompt_builder=SimpleNamespace(history_window=12),
+    )
+
+    assert _resolve_textual_feed_limit(app) == 12
 
 
 def test_simple_input_gate_basic():

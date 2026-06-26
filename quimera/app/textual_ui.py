@@ -1,18 +1,25 @@
 """Interface Textual principal do Quimera."""
 from __future__ import annotations
 
+import logging
 import queue
+import sys
+import traceback
 import threading
+from collections import deque
 from collections.abc import Callable
 from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.text import Text
 
 from quimera.ui.text import _extract_text_from_renderable, strip_ansi
+from quimera.app.config import handler as _screen_handler
 
 _NO_RESPONSE_MESSAGE = "sem resposta válida"
 
@@ -38,6 +45,34 @@ class TextualUiEvent:
     kind: str
     payload: Any = None
     agent: str | None = None
+
+
+class _FeedEntryBuffer:
+    """Mantém apenas as últimas entradas visíveis do feed."""
+
+    def __init__(self, limit: int | None = None) -> None:
+        self._limit = limit if isinstance(limit, int) and limit > 0 else None
+        self._entries: deque[Any] = deque()
+
+    def append(self, renderable: Any) -> list[Any]:
+        """Adiciona uma entrada e devolve snapshot já podado."""
+        self._entries.append(renderable)
+        if self._limit is not None:
+            while len(self._entries) > self._limit:
+                self._entries.popleft()
+        return list(self._entries)
+
+
+def _resolve_textual_feed_limit(quimera_app) -> int | None:
+    """Resolve o limite visual do feed a partir da config já carregada no app."""
+    auto_summarize_threshold = getattr(quimera_app, "auto_summarize_threshold", None)
+    if isinstance(auto_summarize_threshold, int) and auto_summarize_threshold > 0:
+        return auto_summarize_threshold
+    prompt_builder = getattr(quimera_app, "prompt_builder", None)
+    history_window = getattr(prompt_builder, "history_window", None) if prompt_builder else None
+    if isinstance(history_window, int) and history_window > 0:
+        return history_window
+    return None
 
 
 class TextualUiBridge:
@@ -490,6 +525,10 @@ class TextualRenderer:
         """Exibe preview de prompt."""
         self._bridge.emit(TextualUiEvent("plain", preview, agent=agent))
 
+    def set_summarizing(self, active: bool) -> None:
+        """Sinaliza início/fim de sumarização para animação no header."""
+        self._bridge.emit(TextualUiEvent("summarizing", active))
+
 
 def _render_event(event: TextualUiEvent):
     """Converte eventos do bridge para renderables Rich."""
@@ -537,6 +576,8 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             "Reinstale com: pip install -e ."
         ) from exc
 
+    _post_exit_messages: list[tuple[str, str]] = []
+
     class _CompletionInput(Input):
         """Input com autocomplete inline: setas navegam, Tab completa, Enter completa e submete."""
 
@@ -576,6 +617,8 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                 self.cursor_position = len(self.value)
                 dropdown.hide()
                 return
+
+    _SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
 
     class QuimeraTextualApp(App):
         """TUI principal do Quimera."""
@@ -620,6 +663,10 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             super().__init__()
             self._worker_thread: threading.Thread | None = None
             self._commands: list[str] = []
+            self._summarizing = False
+            self._spinner_index = 0
+            self._spinner_timer = None
+            self._feed_buffer = _FeedEntryBuffer(_resolve_textual_feed_limit(quimera_app))
 
         def compose(self) -> ComposeResult:
             yield Header(show_clock=True)
@@ -642,9 +689,36 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             self._worker_thread.start()
             self.query_one("#input", Input).focus()
 
+        def _start_spinner(self) -> None:
+            """Inicia animação de loading no sub_title do header."""
+            if self._spinner_timer is not None:
+                return
+            self._summarizing = True
+            self._spinner_index = 0
+            self._update_spinner()
+            self._spinner_timer = self.set_interval(0.1, self._update_spinner)
+
+        def _stop_spinner(self) -> None:
+            """Para animação de loading e limpa o sub_title."""
+            self._summarizing = False
+            if self._spinner_timer is not None:
+                self._spinner_timer.stop()
+                self._spinner_timer = None
+            self.sub_title = ""
+
+        def _update_spinner(self) -> None:
+            """Avança o frame do spinner no sub_title."""
+            frame = _SPINNER_FRAMES[self._spinner_index % len(_SPINNER_FRAMES)]
+            self.sub_title = f"{frame} resumindo..."
+            self._spinner_index += 1
+
         def _run_quimera_app(self) -> None:
             try:
                 quimera_app.run()
+            except Exception as exc:  # noqa: BLE001
+                _post_exit_messages.append(
+                    ("error", "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)))
+                )
             finally:
                 try:
                     self.call_from_thread(self.exit)
@@ -689,6 +763,12 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                 dropdown.filter("")
 
         def handle_bridge_event(self, event: TextualUiEvent) -> None:
+            if event.kind == "summarizing":
+                if event.payload:
+                    self._start_spinner()
+                else:
+                    self._stop_spinner()
+                return
             if event.kind == "prompt":
                 payload = event.payload or {}
                 toolbar = str(payload.get("toolbar", ""))
@@ -703,7 +783,20 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             if renderable is None:
                 return
             feed = self.query_one("#feed", RichLog)
-            feed.write(renderable)
+            entries = self._feed_buffer.append(renderable)
+            feed.clear()
+            for entry in entries:
+                feed.write(entry)
 
     bridge.attach_quimera_app(quimera_app)
     QuimeraTextualApp().run()
+
+    # Após o Textual sair (tela alternativa restaurada), drena eventos pendentes
+    # e imprime erros/warnings para a tela normal — assim não desaparecem.
+    _screen_handler.drain_to_stderr()
+    for _ev in bridge.drain_pending_events():
+        if _ev.kind in {"error", "warning"}:
+            _post_exit_messages.append((_ev.kind, str(_ev.payload or "")))
+    for _kind, _content in _post_exit_messages:
+        if _content:
+            print(_content, file=sys.stderr, flush=True)
