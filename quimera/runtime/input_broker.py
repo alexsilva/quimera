@@ -87,6 +87,10 @@ class InputBroker:
         self._suspend_spinner_fn = suspend_spinner_fn
         self._resume_spinner_fn = resume_spinner_fn
 
+    def set_qapp(self, qapp) -> None:
+        """Registra QuimeraApplication para overlay de approval/ask_user no modo split."""
+        self._qapp = qapp
+
     def _container_for(self, agent: str):
         """Controller de janela do agente, quando o renderer o expõe.
 
@@ -258,6 +262,28 @@ class InputBroker:
         deadline = start + req.timeout
         prompt = "  Executar? [y/N/a=todas]: "
 
+        # Modo split-UI: delega ao overlay do QuimeraApplication.
+        qapp = getattr(self, "_qapp", None)
+        if qapp is not None:
+            remaining = max(0.5, deadline - time.monotonic())
+            answer = qapp.request_approval(req.question, timeout=remaining)
+            if answer is None:
+                elapsed = time.monotonic() - start
+                self._emit(
+                    f"  [sem resposta em {elapsed:.0f}s — negado automaticamente]"
+                    f" ({req.source})"
+                )
+                return False
+            ans = answer.strip().lower()
+            if ans in {"a", "all", "todas"}:
+                if req.on_approve_all is not None:
+                    try:
+                        req.on_approve_all()
+                    except Exception:
+                        pass
+                return True
+            return ans in {"y", "yes", "s", "sim"}
+
         # Quando pt está ativo: questão + input num único run_in_terminal para
         # evitar que o pt reexiba o CLI entre a exibição da pergunta e a leitura
         # (que apagaria a pergunta antes do usuário responder).
@@ -358,6 +384,16 @@ class InputBroker:
     ) -> tuple[int, str] | None:
         """Lê uma resposta em texto livre com deadline. Retorna (-1, texto)."""
         remaining_s = max(0, int(deadline - time.monotonic()))
+
+        # Modo split-UI: overlay do QuimeraApplication.
+        qapp = getattr(self, "_qapp", None)
+        if qapp is not None:
+            remaining = max(0.5, deadline - time.monotonic())
+            answer = qapp.request_ask_user(question, options=None, timeout=remaining)
+            if answer is None:
+                return None
+            return -1, answer.rstrip("\n\r")
+
         # Via container: a pergunta vai embutida no prompt e só aparece dentro
         # da janela explícita de input, sem ser emitida no feed antes.
         gate = self._input_gate
@@ -432,6 +468,25 @@ class InputBroker:
         allow_direct_gate: bool = False,
     ) -> tuple[int, str] | None:
         """Seleção interativa com deadline. Usa input_gate se pt ativo."""
+        # Modo split-UI: overlay com opções numeradas.
+        qapp = getattr(self, "_qapp", None)
+        if qapp is not None:
+            remaining = max(0.5, deadline - time.monotonic())
+            answer = qapp.request_ask_user(question, options=options, timeout=remaining)
+            if answer is None:
+                return None
+            stripped = answer.strip()
+            if stripped.isdigit():
+                num = int(stripped) - 1
+                if 0 <= num < len(options):
+                    return num, options[num]
+            # Texto completo — tenta corresponder a uma opção
+            for i, opt in enumerate(options):
+                if stripped.lower() == opt.lower():
+                    return i, opt
+            # Fallback: primeira opção
+            return 0, options[0]
+
         gate = self._input_gate
         if gate is not None:
             remaining = max(0.5, deadline - time.monotonic())

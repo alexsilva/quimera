@@ -85,6 +85,8 @@ class TerminalCompositor:
         self._transient_buf_version: int = 0
         self._last_combined_text: str | None = None
 
+        self._app_sink = None  # set by set_app_sink() for split-UI mode
+
         self._writer_thread = threading.Thread(target=self._writer_loop, daemon=True)
         self._writer_thread.start()
 
@@ -133,6 +135,10 @@ class TerminalCompositor:
     @property
     def last_combined_text(self) -> str | None:
         return self._last_combined_text
+
+    def set_app_sink(self, sink) -> None:
+        """Route compositor output to sink.append_output() instead of stdout (split-UI mode)."""
+        self._app_sink = sink
 
     # ------------------------------------------------------------------
     # Event emission
@@ -284,6 +290,7 @@ class TerminalCompositor:
         _ul: list = [None]
         _local_pending: deque = deque()
         _deferred_post_prompt: deque = deque()
+        _sink_sent_len: dict = {}  # agent → chars already sent to sink during streaming
 
         _renderer = self._renderer
 
@@ -414,6 +421,8 @@ class TerminalCompositor:
             return _ui.markup_escape(base_label)
 
         def _ensure_live():
+            if self._app_sink is not None:
+                return
             if _ul[0] is None and _renderer._console:
                 if _prompt_active() or self._output_suspended.is_set():
                     return
@@ -454,6 +463,16 @@ class TerminalCompositor:
         def _cprint(renderable, **kwargs):
             if self._output_suspended.is_set():
                 _deferred_post_prompt.append((renderable, kwargs))
+                return
+            sink = self._app_sink
+            if sink is not None:
+                import io as _io
+                from rich.console import Console as _RichConsole
+                _buf = _io.StringIO()
+                _w = _renderer._console.width if _renderer._console else 80
+                _tmp = _RichConsole(file=_buf, force_terminal=True, width=_w, no_color=False)
+                _tmp.print(renderable, **{k: v for k, v in kwargs.items() if k != "file"})
+                sink.append_output(_buf.getvalue())
                 return
             if _ul[0] is not None:
                 _ul[0].console.print(renderable, **kwargs)
@@ -530,7 +549,18 @@ class TerminalCompositor:
                     )
                     with _renderer._lock:
                         container = _renderer._deck.get(event.agent)
-                    if container and container.streaming and container.stream_content.strip():
+                    sink = self._app_sink
+                    if sink is not None:
+                        _label = container.label if container else str(event.agent)
+                        _style = (container.style if container else "dim") or "dim"
+                        _ui = _rich()
+                        _cprint(_ui.Rule(
+                            f"[bold {_style}]{_ui.markup_escape(_label)}[/bold {_style}]",
+                            style=f"dim {_style}",
+                        ))
+                        sink.mark_stream_start(event.agent)
+                        _sink_sent_len[event.agent] = 0
+                    elif container and container.streaming and container.stream_content.strip():
                         _ensure_live()
                         _refresh()
 
@@ -571,13 +601,24 @@ class TerminalCompositor:
                                 previews_truncated=len(chunks) > 5,
                             )
                     if batches:
-                        has_visible_content = any(
-                            container.stream_content.strip()
-                            for container in _renderer._deck.active_streams().values()
-                        )
-                        if has_visible_content:
-                            _ensure_live()
-                        _refresh()
+                        sink = self._app_sink
+                        if sink is not None:
+                            for _a in batches:
+                                _c = _renderer._deck.get(_a)
+                                if _c:
+                                    _already = _sink_sent_len.get(_a, 0)
+                                    _delta = _c.stream_content[_already:]
+                                    if _delta:
+                                        sink.append_output(_delta)
+                                        _sink_sent_len[_a] = len(_c.stream_content)
+                        else:
+                            has_visible_content = any(
+                                container.stream_content.strip()
+                                for container in _renderer._deck.active_streams().values()
+                            )
+                            if has_visible_content:
+                                _ensure_live()
+                            _refresh()
 
                 elif isinstance(event, LiveStopEvent):
                     _audit(
@@ -602,7 +643,18 @@ class TerminalCompositor:
                             include_footer_rule=False,
                             render_mode=event.render_mode,
                         )
-                        _cprint(final_block)
+                        sink = self._app_sink
+                        if sink is not None:
+                            import io as _io
+                            from rich.console import Console as _RichConsole
+                            _buf = _io.StringIO()
+                            _w = _renderer._console.width if _renderer._console else 80
+                            _tmp = _RichConsole(file=_buf, force_terminal=True, width=_w, no_color=False)
+                            _tmp.print(final_block)
+                            _sink_sent_len.pop(event.agent, None)
+                            sink.replace_stream(event.agent, _buf.getvalue())
+                        else:
+                            _cprint(final_block)
 
                 elif isinstance(event, LiveAbortEvent):
                     _audit("stream_abort", agent=event.agent)
@@ -649,7 +701,7 @@ class TerminalCompositor:
                         _refresh()
 
                 elif isinstance(event, TransientWindowEvent):
-                    if self._output_suspended.is_set():
+                    if self._output_suspended.is_set() or self._app_sink is not None:
                         continue
 
                     while True:
@@ -679,7 +731,7 @@ class TerminalCompositor:
                         replace_overlay()
 
                 elif isinstance(event, TransientClearEvent):
-                    if self._output_suspended.is_set():
+                    if self._output_suspended.is_set() or self._app_sink is not None:
                         continue
                     clear_overlay = self._overlay.build_clear(
                         event.buf_version,

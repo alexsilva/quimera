@@ -181,7 +181,17 @@ class AppInputServices:
     def set_wakeup_event(self, event: threading.Event | None) -> None:
         self._wakeup_event = event
 
+    def set_split_queue(self, q: queue.Queue | None) -> None:
+        """Use a queue as input source instead of stdin (split-UI mode)."""
+        self._split_queue = q
+
     def read_user_input(self, prompt, timeout: int) -> str | None:
+        split_q = getattr(self, "_split_queue", None)
+        if split_q is not None:
+            try:
+                return split_q.get(timeout=0.05)
+            except queue.Empty:
+                return None
         if timeout == 0 and self._nonblocking_tty:
             stdin = _tty._stdin()
             if stdin is not None and stdin.isatty():
