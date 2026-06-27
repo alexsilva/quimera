@@ -23,6 +23,7 @@ from typing import Callable
 
 from prompt_toolkit import Application
 from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
+from prompt_toolkit.data_structures import Point
 from prompt_toolkit.formatted_text import ANSI, FormattedText, to_formatted_text
 from prompt_toolkit.history import InMemoryHistory
 from prompt_toolkit.filters import completion_is_selected, has_completions
@@ -30,11 +31,13 @@ from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout import Layout
 from prompt_toolkit.layout.containers import DynamicContainer, Float, FloatContainer, HSplit, Window
 from prompt_toolkit.layout.menus import CompletionsMenu
-from prompt_toolkit.layout.controls import FormattedTextControl
+from prompt_toolkit.layout.controls import FormattedTextControl, UIContent
 from prompt_toolkit.layout.dimension import Dimension as D
+from prompt_toolkit.mouse_events import MouseEvent, MouseEventType
 from prompt_toolkit.widgets import HorizontalLine, TextArea
 from prompt_toolkit.styles import Style
 
+from ..constants import CMD_EXIT
 from ..app.prompt_input import _SlashCommandCompleter
 
 _MAX_OUTPUT_LINES = 10_000
@@ -61,6 +64,83 @@ class _PendingPromptRequest:
         return self._done.is_set()
 
 
+class _ScrollableOutputWindow(Window):
+    """Window de output com scroll manual mesmo quando wrap_lines=True."""
+
+    def __init__(self, *, scroll_owner, **kwargs) -> None:
+        self._scroll_owner = scroll_owner
+        super().__init__(**kwargs)
+
+    def _scroll_when_linewrapping(
+        self,
+        ui_content: UIContent,
+        width: int,
+        height: int,
+    ) -> None:
+        self.horizontal_scroll = 0
+        self.vertical_scroll_2 = 0
+
+        if width <= 0 or height <= 0 or ui_content.line_count <= 0:
+            self.vertical_scroll = 0
+            self._scroll_owner._set_output_scroll_metrics(
+                0,
+                0,
+                ui_content.line_count,
+            )
+            return
+
+        max_top, tail_inner_scroll = self._find_tail_position(
+            ui_content,
+            width,
+            height,
+        )
+        preferred_top = self._scroll_owner._resolve_output_scroll_top(
+            max_top,
+            ui_content.line_count,
+        )
+        self.vertical_scroll = max(0, min(preferred_top, max_top))
+        if self.vertical_scroll == max_top:
+            self.vertical_scroll_2 = tail_inner_scroll
+        self._scroll_owner._set_output_scroll_metrics(
+            self.vertical_scroll,
+            max_top,
+            ui_content.line_count,
+        )
+
+    def _mouse_handler(self, mouse_event: MouseEvent):
+        if mouse_event.event_type == MouseEventType.SCROLL_UP:
+            self._scroll_owner.scroll_output_lines(-3)
+            return None
+        if mouse_event.event_type == MouseEventType.SCROLL_DOWN:
+            self._scroll_owner.scroll_output_lines(3)
+            return None
+        return super()._mouse_handler(mouse_event)
+
+    def _find_tail_position(
+        self,
+        ui_content: UIContent,
+        width: int,
+        height: int,
+    ) -> tuple[int, int]:
+        previous = ui_content.line_count - 1
+        used_height = 0
+
+        for lineno in range(ui_content.line_count - 1, -1, -1):
+            line_height = ui_content.get_height_for_line(
+                lineno,
+                width,
+                self.get_line_prefix,
+            )
+            if used_height + line_height > height:
+                if used_height == 0:
+                    return lineno, max(0, line_height - height)
+                return previous, 0
+            used_height += line_height
+            previous = lineno
+
+        return previous, 0
+
+
 class QuimeraApplication:
     """Application prompt_toolkit com dock de input permanente.
 
@@ -81,11 +161,17 @@ class QuimeraApplication:
         toolbar_context_resolver: Callable[[], dict] | None = None,
         command_resolver: Callable[[], list] | None = None,
         argument_resolver: Callable[[str, str], list] | None = None,
+        full_screen: bool = False,
+        mouse_support: bool = False,
     ) -> None:
         self._submit_fn = submit_fn
         self._toolbar_context_resolver = toolbar_context_resolver
         self._output_text: str = ""
         self._output_lock = threading.Lock()
+        self._output_follow_tail = True
+        self._output_scroll_top = 0
+        self._output_max_scroll_top = 0
+        self._output_line_count = 0
         self._stream_marks: dict[str, int] = {}
         self._app: Application | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -96,7 +182,11 @@ class QuimeraApplication:
         self._pending_req: _PendingPromptRequest | None = None
 
         history = history or InMemoryHistory()
-        completer = _SlashCommandCompleter(command_resolver, argument_resolver) if command_resolver else None
+        completer = (
+            _SlashCommandCompleter(command_resolver, argument_resolver)
+            if command_resolver
+            else None
+        )
 
         # Chat input (IDLE state)
         self._input_area = TextArea(
@@ -124,7 +214,14 @@ class QuimeraApplication:
         self._output_control = FormattedTextControl(
             self._get_output_fragments,
             focusable=False,
+            get_cursor_position=self._get_output_cursor_position,
             show_cursor=False,
+        )
+        self._output_window = _ScrollableOutputWindow(
+            scroll_owner=self,
+            content=self._output_control,
+            dont_extend_height=False,
+            wrap_lines=True,
         )
 
         app_kb = self._build_app_key_bindings()
@@ -138,11 +235,7 @@ class QuimeraApplication:
         layout = Layout(
             FloatContainer(
                 content=HSplit([
-                    Window(
-                        content=self._output_control,
-                        dont_extend_height=False,
-                        wrap_lines=True,
-                    ),
+                    self._output_window,
                     HorizontalLine(),
                     DynamicContainer(self._get_bottom_pane),
                     Window(
@@ -166,8 +259,8 @@ class QuimeraApplication:
         self._app = Application(
             layout=layout,
             key_bindings=app_kb,
-            full_screen=True,
-            mouse_support=True,
+            full_screen=full_screen,
+            mouse_support=mouse_support,
             style=Style.from_dict({
                 "bottom-toolbar": "bg:#252526",
                 "toolbar.btn": "bg:#3e3e3e",
@@ -214,6 +307,11 @@ class QuimeraApplication:
         with self._output_lock:
             text = self._output_text
         return to_formatted_text(ANSI(text)) if text else []
+
+    def _get_output_cursor_position(self) -> Point:
+        with self._output_lock:
+            line_count = len(self._output_text.split("\n")) if self._output_text else 1
+        return Point(x=0, y=max(0, line_count - 1))
 
     def _get_toolbar_text(self):
         if self._dock_state != "idle":
@@ -311,6 +409,11 @@ class QuimeraApplication:
             self.append_output(f"\033[1;36m>>> \033[0m{text}\n")
             self._awaiting_response = True
             self._submit_fn(text)
+            if text == CMD_EXIT and self._app is not None:
+                try:
+                    self._app.exit()
+                except Exception:
+                    pass
         # Re-foca via call_soon para disparar evento de foco no Android
         if self._loop is not None and not self._loop.is_closed():
             self._loop.call_soon(self._focus_input_area)
@@ -375,6 +478,22 @@ class QuimeraApplication:
         def _escape_close(event):
             event.current_buffer.cancel_completion()
 
+        @kb.add("pageup", eager=True)
+        def _output_page_up(event):
+            self.scroll_output_pages(-1)
+
+        @kb.add("pagedown", eager=True)
+        def _output_page_down(event):
+            self.scroll_output_pages(1)
+
+        @kb.add("c-home", eager=True)
+        def _output_top(event):
+            self.scroll_output_to_top()
+
+        @kb.add("c-end", eager=True)
+        def _output_bottom(event):
+            self.scroll_output_to_bottom()
+
         return kb
 
     # ------------------------------------------------------------------
@@ -389,7 +508,9 @@ class QuimeraApplication:
             self._output_text += ansi_text
             lines = self._output_text.split("\n")
             if len(lines) > _MAX_OUTPUT_LINES:
+                dropped = len(lines) - _MAX_OUTPUT_LINES
                 self._output_text = "\n".join(lines[-_MAX_OUTPUT_LINES:])
+                self._shift_output_scroll_after_trim_locked(dropped)
         self.invalidate()
         # Re-foca ao receber primeira resposta do agente para reabrir teclado
         if was_awaiting and self._loop is not None and not self._loop.is_closed():
@@ -412,10 +533,85 @@ class QuimeraApplication:
                 self._output_text += ansi_text
             lines = self._output_text.split("\n")
             if len(lines) > _MAX_OUTPUT_LINES:
+                dropped = len(lines) - _MAX_OUTPUT_LINES
                 self._output_text = "\n".join(lines[-_MAX_OUTPUT_LINES:])
+                self._shift_output_scroll_after_trim_locked(dropped)
         self.invalidate()
         if was_awaiting and self._loop is not None and not self._loop.is_closed():
             self._loop.call_soon_threadsafe(self._focus_input_area)
+
+    def _shift_output_scroll_after_trim_locked(self, dropped_lines: int) -> None:
+        if dropped_lines <= 0:
+            return
+        self._output_scroll_top = max(0, self._output_scroll_top - dropped_lines)
+        self._output_max_scroll_top = max(0, self._output_max_scroll_top - dropped_lines)
+
+    def _resolve_output_scroll_top(self, max_top: int, line_count: int) -> int:
+        with self._output_lock:
+            self._output_max_scroll_top = max(0, max_top)
+            self._output_line_count = max(0, line_count)
+            if self._output_max_scroll_top == 0:
+                self._output_follow_tail = True
+            if self._output_follow_tail:
+                self._output_scroll_top = self._output_max_scroll_top
+            else:
+                self._output_scroll_top = max(
+                    0,
+                    min(self._output_scroll_top, self._output_max_scroll_top),
+                )
+            return self._output_scroll_top
+
+    def _set_output_scroll_metrics(
+        self,
+        top: int,
+        max_top: int,
+        line_count: int,
+    ) -> None:
+        with self._output_lock:
+            self._output_scroll_top = max(0, top)
+            self._output_max_scroll_top = max(0, max_top)
+            self._output_line_count = max(0, line_count)
+            if self._output_max_scroll_top == 0:
+                self._output_follow_tail = True
+
+    def scroll_output_lines(self, delta: int) -> None:
+        if delta == 0:
+            return
+        with self._output_lock:
+            max_top = self._output_max_scroll_top
+            if max_top <= 0:
+                self._output_scroll_top = 0
+                self._output_follow_tail = True
+                return
+
+            if delta < 0:
+                self._output_follow_tail = False
+
+            self._output_scroll_top = max(
+                0,
+                min(self._output_scroll_top + delta, max_top),
+            )
+            if self._output_scroll_top >= max_top and delta > 0:
+                self._output_follow_tail = True
+
+        self.invalidate()
+
+    def scroll_output_pages(self, direction: int) -> None:
+        info = self._output_window.render_info
+        page = max(1, (info.window_height - 2) if info is not None else 10)
+        self.scroll_output_lines(page * (1 if direction > 0 else -1))
+
+    def scroll_output_to_top(self) -> None:
+        with self._output_lock:
+            self._output_scroll_top = 0
+            self._output_follow_tail = False
+        self.invalidate()
+
+    def scroll_output_to_bottom(self) -> None:
+        with self._output_lock:
+            self._output_scroll_top = self._output_max_scroll_top
+            self._output_follow_tail = True
+        self.invalidate()
 
     def invalidate(self) -> None:
         """Solicita redraw (thread-safe)."""
