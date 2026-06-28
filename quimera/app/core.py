@@ -627,6 +627,14 @@ class QuimeraApp:
         return None
 
     @property
+    def is_agent_running(self) -> bool:
+        """True quando qualquer agente (CLI ou API) está em execução."""
+        client = getattr(self, 'agent_client', None)
+        if client is not None:
+            return bool(getattr(client, '_agent_running', False))
+        return False
+
+    @property
     def summary_agent_preference(self):
         """Retorna o agente preferido para sumarização."""
         chat_state = getattr(self, "_chat_state", None)

@@ -13,6 +13,7 @@ profile = AntigravityProfile(
     cmd=["agy", "--dangerously-skip-permissions", "-p"],
     style=("cyan", "Antigravity"),
     prompt_as_arg=True,
+    keep_stdin_open=True,
     output_format=None,
     capabilities=["code_review", "documentation", "general_reasoning", "code_editing", "complex_refactoring"],
     preferred_task_types=["code_review", "documentation", "general", "code_edit", "architecture", "bug_investigation"],

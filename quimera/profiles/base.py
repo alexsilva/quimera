@@ -109,6 +109,7 @@ def _connection_from_dict(data: dict) -> Connection:
             output_format=data.get("output_format"),
             env=data.get("env"),
             cwd=data.get("cwd"),
+            keep_stdin_open=data.get("keep_stdin_open", False),
         )
     return OpenAIConnection(
         model=data.get("model", "gpt-4o"),
@@ -239,6 +240,7 @@ class ExecutionProfile:
     # CLI fields
     cmd: List[str] = field(default_factory=list)
     prompt_as_arg: bool = False  # se True, prompt é passado como argumento CLI em vez de stdin
+    keep_stdin_open: bool = False  # True = não fecha stdin após prompt; permite injeção contínua
     # Agent capabilities
     capabilities: List[str] = field(default_factory=list)
     preferred_task_types: List[str] = field(default_factory=list)
@@ -308,6 +310,7 @@ class ExecutionProfile:
             cmd=list(self.cmd),
             prompt_as_arg=self.prompt_as_arg,
             output_format=self.output_format,
+            keep_stdin_open=self.keep_stdin_open,
         )
 
     def effective_driver(self) -> str:
@@ -547,6 +550,7 @@ def _inherit_execution_profile_config(profile_data: dict, execution_profile: "Ex
         "style": (execution_profile.style[0], current_label or execution_profile.style[1]),
         "cmd": list(execution_profile.cmd),
         "prompt_as_arg": execution_profile.prompt_as_arg,
+        "keep_stdin_open": execution_profile.keep_stdin_open,
         "output_format": execution_profile.output_format,
         "capabilities": list(execution_profile.capabilities),
         "preferred_task_types": list(execution_profile.preferred_task_types),

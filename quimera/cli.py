@@ -596,6 +596,10 @@ def main():
                     return True
                 except (OSError, ValueError, AttributeError):
                     pass
+            # API driver (sem subprocess): queue silenciosamente se agente ativo
+            if getattr(app, 'is_agent_running', False):
+                _split_q.put(text)
+                return True
             return False
 
         qapp = QuimeraApplication(

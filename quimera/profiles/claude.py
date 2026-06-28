@@ -162,16 +162,16 @@ class ClaudeProfile(ExecutionProfile):
         for idx, arg in enumerate(cmd):
             if arg.startswith("--model="):
                 cmd[idx] = f"--model={normalized}"
-                return CliConnection(cmd=cmd, prompt_as_arg=connection.prompt_as_arg, output_format=connection.output_format)
+                return CliConnection(cmd=cmd, prompt_as_arg=connection.prompt_as_arg, output_format=connection.output_format, keep_stdin_open=connection.keep_stdin_open)
             if arg == "--model" and idx + 1 < len(cmd):
                 cmd[idx + 1] = normalized
-                return CliConnection(cmd=cmd, prompt_as_arg=connection.prompt_as_arg, output_format=connection.output_format)
+                return CliConnection(cmd=cmd, prompt_as_arg=connection.prompt_as_arg, output_format=connection.output_format, keep_stdin_open=connection.keep_stdin_open)
 
         if cmd:
             cmd = [cmd[0], "--model", normalized, *cmd[1:]]
         else:
             cmd = ["claude", "--model", normalized]
-        return CliConnection(cmd=cmd, prompt_as_arg=connection.prompt_as_arg, output_format=connection.output_format)
+        return CliConnection(cmd=cmd, prompt_as_arg=connection.prompt_as_arg, output_format=connection.output_format, keep_stdin_open=connection.keep_stdin_open)
 
     def mcp_server_args(self, socket_path: str) -> list[str]:
         """Retorna flags para conectar o Claude ao MCP local do Quimera."""
@@ -207,6 +207,7 @@ profile = ClaudeProfile(
     runtime_rw_paths=_claude_runtime_rw_paths(),
     cmd=["claude", "--permission-mode=bypassPermissions", "--output-format=stream-json", "--verbose", "-p"],
     output_format="stream-json",
+    keep_stdin_open=True,
     style=("magenta", "Claude"),
     capabilities=["architecture", "code_review", "planning", "documentation", "code_editing"],
     preferred_task_types=["architecture", "code_review", "documentation", "code_edit", "general"],

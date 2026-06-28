@@ -197,10 +197,10 @@ class CodexProfile(ExecutionProfile):
         for idx, arg in enumerate(cmd):
             if arg.startswith("--model="):
                 cmd[idx] = f"--model={normalized}"
-                return CliConnection(cmd=cmd, prompt_as_arg=connection.prompt_as_arg, output_format=connection.output_format)
+                return CliConnection(cmd=cmd, prompt_as_arg=connection.prompt_as_arg, output_format=connection.output_format, keep_stdin_open=connection.keep_stdin_open)
             if arg in {"--model", "-m"} and idx + 1 < len(cmd):
                 cmd[idx + 1] = normalized
-                return CliConnection(cmd=cmd, prompt_as_arg=connection.prompt_as_arg, output_format=connection.output_format)
+                return CliConnection(cmd=cmd, prompt_as_arg=connection.prompt_as_arg, output_format=connection.output_format, keep_stdin_open=connection.keep_stdin_open)
 
         if cmd[:2] == ["codex", "exec"]:
             cmd = ["codex", "exec", "--model", normalized, *cmd[2:]]
@@ -208,7 +208,7 @@ class CodexProfile(ExecutionProfile):
             cmd = [cmd[0], "--model", normalized, *cmd[1:]]
         else:
             cmd = ["codex", "exec", "--model", normalized, *cmd]
-        return CliConnection(cmd=cmd, prompt_as_arg=connection.prompt_as_arg, output_format=connection.output_format)
+        return CliConnection(cmd=cmd, prompt_as_arg=connection.prompt_as_arg, output_format=connection.output_format, keep_stdin_open=connection.keep_stdin_open)
 
     def mcp_server_args(self, socket_path: str) -> list[str]:
         """Retorna overrides de config para registrar MCP via stdio no Codex."""
@@ -273,6 +273,7 @@ register(CodexProfile(
     cmd=["codex", "exec", "--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check", "--json"],
     output_format="codex-json",
     prompt_as_arg=False,
+    keep_stdin_open=True,
     style=("blue", "Codex"),
     capabilities=["code_editing", "code_review", "test_execution", "bug_investigation", "tool_use"],
     preferred_task_types=["code_edit", "code_review", "test_execution", "bug_investigation", "general"],
