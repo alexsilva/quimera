@@ -394,13 +394,6 @@ def main():
         metavar="read-local|read|agent|all|CSV",
         help="Allowlist de tools para MCP HTTP externo: read-local (sem rede), read (padrão), agent, all ou lista CSV de nomes.",
     )
-    parser.add_argument(
-        "--ui",
-        dest="ui",
-        choices=["classic", "split"],
-        default="classic",
-        help="Modo de interface: classic (padrão, comportamento atual) ou split (input dock persistente, experimental).",
-    )
 
     args, unknown = parser.parse_known_args()
 
@@ -577,60 +570,55 @@ def main():
             external_http_enabled=args.mcp_http,
         )
 
-        if args.ui == "split":
-            import queue as _queue
-            import threading as _threading
-            from .ui.application import QuimeraApplication
-            from .constants import CMD_EXIT
+        import queue as _queue
+        import threading as _threading
+        from .ui.application import QuimeraApplication
+        from .constants import CMD_EXIT
 
-            _split_q: _queue.Queue = _queue.Queue()
+        _split_q: _queue.Queue = _queue.Queue()
 
-            def _submit(text: str) -> None:
-                _split_q.put(text)
+        def _submit(text: str) -> None:
+            _split_q.put(text)
 
-            _toolbar_resolver = None
-            if hasattr(app, "toolbar_coordinator"):
-                _toolbar_resolver = app.toolbar_coordinator.build_input_toolbar_context
+        _toolbar_resolver = None
+        if hasattr(app, "toolbar_coordinator"):
+            _toolbar_resolver = app.toolbar_coordinator.build_input_toolbar_context
 
-            _command_resolver = getattr(app, "_available_commands", None)
-            _argument_resolver = getattr(app, "_command_argument_resolver", None)
+        _command_resolver = getattr(app, "_available_commands", None)
+        _argument_resolver = getattr(app, "_command_argument_resolver", None)
 
-            qapp = QuimeraApplication(
-                submit_fn=_submit,
-                toolbar_context_resolver=_toolbar_resolver,
-                command_resolver=_command_resolver,
-                argument_resolver=_argument_resolver,
-            )
-            app.input_services.set_split_queue(_split_q)
+        qapp = QuimeraApplication(
+            submit_fn=_submit,
+            toolbar_context_resolver=_toolbar_resolver,
+            command_resolver=_command_resolver,
+            argument_resolver=_argument_resolver,
+        )
+        app.input_services.set_split_queue(_split_q)
 
-            if hasattr(app, "renderer") and hasattr(app.renderer, "_compositor"):
-                app.renderer._compositor.set_app_sink(qapp)
+        if hasattr(app, "renderer") and hasattr(app.renderer, "_compositor"):
+            app.renderer._compositor.set_app_sink(qapp)
 
-            if hasattr(app, "input_broker"):
-                app.input_broker.set_qapp(qapp)
+        if hasattr(app, "input_broker"):
+            app.input_broker.set_qapp(qapp)
 
-            # toolbar_coordinator.refresh() invalida a toolbar do input_gate no modo classic;
-            # no split mode, basta chamar qapp.invalidate() para redesenhar a toolbar.
-            if hasattr(app, "toolbar_coordinator"):
-                _orig_refresh = app.toolbar_coordinator.refresh
+        if hasattr(app, "toolbar_coordinator"):
+            _orig_refresh = app.toolbar_coordinator.refresh
 
-                def _patched_refresh():
-                    _orig_refresh()
-                    qapp.invalidate()
+            def _patched_refresh():
+                _orig_refresh()
+                qapp.invalidate()
 
-                app.toolbar_coordinator.refresh = _patched_refresh
+            app.toolbar_coordinator.refresh = _patched_refresh
 
-            _chat_thread = _threading.Thread(
-                target=app.run, daemon=True, name="quimera-split-chat"
-            )
-            _chat_thread.start()
+        _chat_thread = _threading.Thread(
+            target=app.run, daemon=True, name="quimera-split-chat"
+        )
+        _chat_thread.start()
 
-            try:
-                qapp.run()
-            finally:
-                _split_q.put(CMD_EXIT)
-                _chat_thread.join(timeout=3)
-        else:
-            app.run()
+        try:
+            qapp.run()
+        finally:
+            _split_q.put(CMD_EXIT)
+            _chat_thread.join(timeout=3)
     finally:
         _stop_test_fake_openai_backend(fake_openai_backend)
