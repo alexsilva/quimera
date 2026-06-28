@@ -472,6 +472,7 @@ class TerminalCompositor:
                 _w = _renderer._console.width if _renderer._console else 80
                 _tmp = _RichConsole(file=_buf, force_terminal=True, width=_w, no_color=False)
                 _tmp.print(renderable, **{k: v for k, v in kwargs.items() if k != "file"})
+                sink.ensure_trailing_newline()
                 sink.append_output(_buf.getvalue())
                 return
             if _ul[0] is not None:
