@@ -115,6 +115,6 @@ register(OpenCodeProfile(
     supports_long_context=False,
     supports_warm_pool=False,
     base_tier=2,
-    keep_stdin_open=True,
+    keep_stdin_open=False,
     stderr_noise_patterns=_BUN_STDERR_NOISE_PATTERNS,
 ))

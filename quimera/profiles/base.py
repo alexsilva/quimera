@@ -263,6 +263,7 @@ class ExecutionProfile:
     stderr_noise: FrozenSet[str] = field(default_factory=frozenset)
     stderr_noise_patterns: Tuple[str, ...] = field(default_factory=tuple)
     dynamic: bool = False
+    supports_persistent_session: bool = False  # True = perfil pode manter processo vivo entre turnos
     # Connection override (carregado automaticamente do base_dir)
     _connection_override: Optional[Connection] = field(default=None, repr=False)
     # Profile name (usado para herança de formatter/rw_paths em perfis de conexão)
@@ -375,6 +376,31 @@ class ExecutionProfile:
         Não deve modificar os.environ — apenas retornar um dict plano.
         """
         return {}
+
+    def format_stdin_input(self, prompt) -> str:
+        """Transforma o prompt antes de escrevê-lo no stdin do processo.
+
+        Perfis que usam protocolos de entrada estruturados (ex: stream-json)
+        sobrescrevem este método. O default repassa sem alterações.
+        """
+        return prompt
+
+    def extract_session_id(self, raw: str) -> str | None:
+        """Extrai o ID de sessão do output bruto do CLI após cada turno.
+
+        Retorna o session_id a ser injetado via --resume no próximo turno.
+        O default retorna None (sem suporte a sessão). Perfis CLI que suportam
+        continuidade de contexto sobrescrevem este método.
+        """
+        return None
+
+    def inject_resume_arg(self, cmd: list[str], session_id: str) -> list[str]:
+        """Retorna cmd com argumento de retomada de sessão inserido.
+
+        O default devolve o cmd sem alteração. Perfis que suportam --resume
+        (ou equivalente) sobrescrevem para injetar o argumento correto.
+        """
+        return cmd
 
     def mcp_server_args(self, socket_path: str) -> list[str]:
         """Retorna args CLI para conectar no MCP local (default: sem suporte)."""

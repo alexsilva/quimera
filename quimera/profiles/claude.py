@@ -149,6 +149,30 @@ def _format_claude_spy_event(line: str) -> list[SpyEvent]:
 
 
 class ClaudeProfile(ExecutionProfile):
+    def format_stdin_input(self, prompt) -> str:
+        """Serializa o prompt como evento stream-json para --input-format=stream-json."""
+        event = {"type": "user", "message": {"role": "user", "content": str(prompt)}}
+        return json.dumps(event, ensure_ascii=False) + "\n"
+
+    def extract_session_id(self, raw: str) -> str | None:
+        """Extrai session_id do evento 'result' no output stream-json do Claude."""
+        for line in raw.splitlines():
+            try:
+                obj = json.loads(line)
+                if obj.get("type") == "result":
+                    sid = obj.get("session_id")
+                    if sid:
+                        return str(sid)
+            except (json.JSONDecodeError, AttributeError, ValueError):
+                pass
+        return None
+
+    def inject_resume_arg(self, cmd: list[str], session_id: str) -> list[str]:
+        """Injeta --resume <session_id> no cmd do Claude para continuar a conversa."""
+        if not cmd:
+            return cmd
+        return [cmd[0], "--resume", session_id, *cmd[1:]]
+
     def configure_with_model(self, model_id: str) -> CliConnection:
         """Retorna conexão CLI do Claude com --model aplicado."""
         normalized = (model_id or "").strip()
@@ -205,9 +229,11 @@ profile = ClaudeProfile(
     prefix="/claude",
     icon="🔮",
     runtime_rw_paths=_claude_runtime_rw_paths(),
-    cmd=["claude", "--permission-mode=bypassPermissions", "--output-format=stream-json", "--verbose", "-p"],
+    cmd=["claude", "--permission-mode=bypassPermissions", "--output-format=stream-json", "--verbose", "--print", "--input-format=stream-json"],
+    prompt_as_arg=False,
     output_format="stream-json",
-    keep_stdin_open=True,
+    keep_stdin_open=False,
+    supports_persistent_session=True,
     style=("magenta", "Claude"),
     capabilities=["architecture", "code_review", "planning", "documentation", "code_editing"],
     preferred_task_types=["architecture", "code_review", "documentation", "code_edit", "general"],

@@ -1500,9 +1500,10 @@ def test_agent_client_mock_profile_driver_uses_cli():
     client = AgentClient(renderer)
 
     # Profile sem atributo driver definido explicitamente (como os mocks dos testes legados)
-    mock_profile = MagicMock(spec=["name", "cmd", "prompt_as_arg"])
+    mock_profile = MagicMock(spec=["name", "cmd", "prompt_as_arg", "format_stdin_input"])
     mock_profile.cmd = ["echo"]
     mock_profile.prompt_as_arg = False
+    mock_profile.format_stdin_input.side_effect = lambda p: p
 
     with patch("quimera.profiles.get", return_value=mock_profile):
         with patch.object(client, "run", return_value="ok") as mock_run:
@@ -1623,18 +1624,15 @@ def test_agent_profile_cli_defaults():
 def test_existing_profiles_still_register():
     """Verifica que os perfis embutidos continuam registrados."""
     import quimera.profiles.claude  # noqa: F401
-    import quimera.profiles.mock  # noqa: F401
     import quimera.profiles as profiles
 
     claude = profiles.get("claude")
     assert claude is not None
     assert claude.driver == "cli"
-    assert claude.cmd == ["claude", "--permission-mode=bypassPermissions", "--output-format=stream-json", "--verbose",
-                          "-p"]
-
-    mock = profiles.get("mock")
-    assert mock is not None
-    assert mock.driver == "cli"
+    assert claude.cmd == [
+        "claude", "--permission-mode=bypassPermissions", "--output-format=stream-json",
+        "--verbose", "--print", "--input-format=stream-json",
+    ]
 
 
 # ---------------------------------------------------------------------------

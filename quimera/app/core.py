@@ -288,6 +288,10 @@ class QuimeraApp:
             process_supervisor=self.process_supervisor,
             pause_idle_if=self._has_mcp_pending,
         )
+        self.agent_pool.set_freeze_hooks(
+            on_freeze=self.agent_client.open_persistent_session,
+            on_unfreeze=self.agent_client.close_persistent_session,
+        )
         self.task_executor_factory = create_executor
         self.session_summarizer = SessionSummarizer(
             self.renderer,

@@ -203,7 +203,7 @@ def test_claude_profile_injects_mcp_server():
     try:
         profile.set_mcp_socket_path("/tmp/quimera.sock")
         cmd = profile.effective_cmd()
-        base = ["claude", "--permission-mode=bypassPermissions", "--output-format=stream-json", "--verbose", "-p"]
+        base = ["claude", "--permission-mode=bypassPermissions", "--output-format=stream-json", "--verbose", "--print", "--input-format=stream-json"]
         assert cmd[:len(base)] == base
         assert "--mcp-config" in cmd
         idx = cmd.index("--mcp-config")
@@ -525,6 +525,7 @@ def test_agent_client_call(renderer):
         mock_profile.prompt_as_arg = False
         mock_profile.effective_cmd.return_value = ["mock-agent"]
         mock_profile.effective_prompt_as_arg.return_value = False
+        mock_profile.format_stdin_input.side_effect = lambda p: p
         mock_get.return_value = mock_profile
 
         with patch.object(client, "run") as mock_run:
@@ -569,6 +570,7 @@ def test_agent_client_call_passes_prompt_text_unchanged(renderer):
         mock_profile.prompt_as_arg = False
         mock_profile.effective_cmd.return_value = ["mock-agent"]
         mock_profile.effective_prompt_as_arg.return_value = False
+        mock_profile.format_stdin_input.side_effect = lambda p: p
         mock_get.return_value = mock_profile
 
         with patch.object(client, "run") as mock_run:
@@ -648,7 +650,8 @@ def test_agent_client_run_input_failure(renderer):
     client = AgentClient(renderer)
     with patch("subprocess.Popen") as mock_popen:
         mock_proc = MagicMock()
-        mock_proc.stdin.write.side_effect = Exception("broken pipe")
+        mock_proc.stdin.closed = False
+        mock_proc.stdin.write.side_effect = BrokenPipeError("broken pipe")
         mock_popen.return_value = mock_proc
 
         result = client.run(["cmd"], input_text="input", silent=True)
@@ -1593,6 +1596,28 @@ def test_claude_profile_exposes_spy_stdout_formatter():
     profile = get_profile("claude")
     assert profile is not None
     assert profile.spy_stdout_formatter is _format_claude_spy_event
+
+
+def test_claude_profile_format_stdin_input_produces_stream_json_event():
+    """format_stdin_input serializa o prompt como evento stream-json."""
+    import json as _json
+    profile = get_profile("claude")
+    assert profile is not None
+    result = profile.format_stdin_input("olá mundo")
+    event = _json.loads(result.strip())
+    assert event["type"] == "user"
+    assert event["message"]["role"] == "user"
+    assert event["message"]["content"] == "olá mundo"
+    assert result.endswith("\n")
+
+
+def test_claude_profile_uses_stream_json_input_format():
+    """Perfil Claude deve usar --input-format=stream-json e prompt_as_arg=False."""
+    profile = get_profile("claude")
+    assert profile is not None
+    assert "--print" in profile.cmd
+    assert "--input-format=stream-json" in profile.cmd
+    assert profile.prompt_as_arg is False
 
 
 def test_opencode_profile_exposes_spy_stdout_formatter_and_json_output():

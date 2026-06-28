@@ -34,6 +34,21 @@ from quimera.agents.text_filters import (
 
 _logger = logging.getLogger(__name__)
 
+
+class _FrozenSession:
+    """Rastreador de sessão para agentes fixados com s/<agent>.
+
+    Não mantém processo vivo — cada turno abre um processo novo com --print (modo
+    suportado pelo Claude CLI). Quando o profile fornece extract_session_id() e
+    inject_resume_arg(), o session_id extraído do output é injetado via --resume
+    no próximo turno, continuando a conversa no servidor.
+    """
+
+    def __init__(self, agent: str):
+        self.agent = agent
+        self.session_id: str | None = None
+
+
 _GUI_VARS = frozenset({
     "DISPLAY", "WAYLAND_DISPLAY", "DBUS_SESSION_BUS_ADDRESS",
     "DBUS_SYSTEM_BUS_ADDRESS", "XAUTHORITY", "XDG_RUNTIME_DIR",
@@ -89,6 +104,7 @@ class AgentClient:
         self.rate_limit_detected_at: float | None = None
         self._warm_pool = WarmPool()
         self.process_supervisor: ProcessSupervisor | None = process_supervisor
+        self._persistent_sessions: dict[str, _FrozenSession] = {}
 
     def _show_error(
         self,
@@ -344,6 +360,14 @@ class AgentClient:
         self._start_esc_monitor()
         env = self._build_run_env(extra_env)
         effective_cmd, effective_cwd = self._build_effective_cmd(cmd, agent, cwd)
+        # Resolve keep_stdin_open antes de criar o processo para decidir o stdin mode
+        _keep_open = False
+        if agent:
+            _profile = profiles.get(agent)
+            if _profile is not None:
+                _conn = _profile.effective_connection() if callable(getattr(_profile, "effective_connection", None)) else None
+                _keep_open = getattr(_conn, "keep_stdin_open", False)
+
         if _primed_proc is not None and _primed_proc.poll() is None:
             proc = _primed_proc
             _logger.debug("[warm-pool] reutilizando processo pré-aquecido: %s", cmd[0])
@@ -351,8 +375,12 @@ class AgentClient:
             if _primed_proc is not None:
                 _logger.debug("[warm-pool] processo pré-aquecido expirou: %s", cmd[0])
             try:
+                # stdin=PIPE se vamos escrever input ou manter aberto para injeção;
+                # stdin=DEVNULL se o prompt já vai como argumento CLI (prompt_as_arg)
+                _stdin = subprocess.PIPE if (input_text is not None or _keep_open) else subprocess.DEVNULL
                 proc = subprocess.popen_text(
                     effective_cmd,
+                    stdin=_stdin,
                     env=env,
                     cwd=effective_cwd,
                     start_new_session=True,
@@ -406,13 +434,6 @@ class AgentClient:
             if input_text and proc.stdin and not proc.stdin.closed:
                 proc.stdin.write(input_text)
                 proc.stdin.flush()
-
-            _keep_open = False
-            if agent:
-                _profile = profiles.get(agent)
-                if _profile is not None:
-                    _conn = _profile.effective_connection() if callable(getattr(_profile, "effective_connection", None)) else None
-                    _keep_open = getattr(_conn, "keep_stdin_open", False)
 
             if not _keep_open and proc.stdin and not proc.stdin.closed:
                 proc.stdin.close()
@@ -714,6 +735,31 @@ class AgentClient:
         return bool(getattr(profile, "supports_warm_pool", True))
 
     # ------------------------------------------------------------------
+    # Sessão persistente — processo CLI reutilizado entre turnos
+    # ------------------------------------------------------------------
+
+    def open_persistent_session(self, agent: str) -> bool:
+        """Inicializa rastreador de sessão para o agente (chamado ao fixar com s/<agent>).
+
+        Não abre processo — apenas cria a entrada no dict para que call() saiba
+        que deve rastrear session_id e injetá-lo via --resume no próximo turno.
+        Retorna True se o perfil suporta sessão; False caso contrário.
+        """
+        profile = profiles.get(agent)
+        if profile is None or not getattr(profile, "supports_persistent_session", False):
+            return False
+
+        if agent not in self._persistent_sessions:
+            self._persistent_sessions[agent] = _FrozenSession(agent)
+            _logger.debug("[frozen] sessão iniciada para %s", agent)
+        return True
+
+    def close_persistent_session(self, agent: str) -> None:
+        """Encerra o rastreador de sessão do agente (chamado ao descongelar com r/)."""
+        if self._persistent_sessions.pop(agent, None) is not None:
+            _logger.debug("[frozen] sessão encerrada para %s", agent)
+
+    # ------------------------------------------------------------------
     # call() — ponto de entrada principal
     # ------------------------------------------------------------------
 
@@ -747,7 +793,16 @@ class AgentClient:
                 progress_callback=progress_callback,
             )
         self._spy_output_presenter.set_turn_runtime("cli")
+        # Sessão fixa (s/<agent>): rastreia session_id para --resume no próximo turno.
+        frozen_session = self._persistent_sessions.get(agent)
         cmd, prompt_as_arg, output_format = self._resolve_profile_cli_attrs(profile, connection)
+        # Injeta --resume se o agente está fixo e tem session_id de turno anterior.
+        # Claude CLI requer --print para I/O via pipe; sessão persistente é feita via
+        # --resume (continuidade de contexto no servidor), não via processo vivo.
+        if frozen_session is not None and frozen_session.session_id:
+            inject_fn = getattr(profile, "inject_resume_arg", None)
+            if callable(inject_fn):
+                cmd = inject_fn(cmd, frozen_session.session_id)
         extra_env = dict(connection.env or {}) if isinstance(connection, CliConnection) else {}
         env_hook = getattr(profile, "env_for_cli", None)
         if callable(env_hook):
@@ -782,7 +837,9 @@ class AgentClient:
         else:
             _extra_env = run_kwargs.get("extra_env")
             _effective_cmd, _effective_cwd = self._build_effective_cmd(cmd, agent, run_kwargs.get("cwd"))
-            _use_warm_pool = self._should_use_warm_pool(profile, cmd)
+            # Sessões fixas desabilitam warm pool: o cmd inclui --resume com session_id
+            # que muda a cada turno; um slot pré-aquecido teria o session_id errado.
+            _use_warm_pool = frozen_session is None and self._should_use_warm_pool(profile, cmd)
             _slot = self._warm_pool.take(_effective_cmd, _effective_cwd, _extra_env) if _use_warm_pool else None
             if not _use_warm_pool:
                 # Se houver um slot antigo para esse comando, descarta para evitar
@@ -790,7 +847,8 @@ class AgentClient:
                 _stale_slot = self._warm_pool.take(_effective_cmd, _effective_cwd, _extra_env)
                 if _stale_slot is not None:
                     _stale_slot.discard()
-            raw = self.run(cmd, input_text=prompt, _primed_proc=_slot.proc if _slot else None, **run_kwargs)
+            _stdin_input = profile.format_stdin_input(prompt)
+            raw = self.run(cmd, input_text=_stdin_input, _primed_proc=_slot.proc if _slot else None, **run_kwargs)
             if _use_warm_pool:
                 self._warm_pool.schedule_warm(
                     _effective_cmd,
@@ -798,6 +856,14 @@ class AgentClient:
                     _effective_cwd,
                     _extra_env,
                 )
+        # Extrai e armazena session_id para sessões fixas (usado via --resume no próximo turno).
+        if frozen_session is not None and raw:
+            extract_fn = getattr(profile, "extract_session_id", None)
+            if callable(extract_fn):
+                new_id = extract_fn(raw)
+                if new_id and new_id != frozen_session.session_id:
+                    frozen_session.session_id = new_id
+                    _logger.debug("[frozen] session_id atualizado para %s: %s", agent, new_id[:8])
         fmt = output_format
         if fmt == "stream-json" and raw is not None:
             return parse_stream_json(raw, agent, self.tool_event_callback)
@@ -988,8 +1054,9 @@ class AgentClient:
             self._spy_output_presenter._render_turn_summary(agent, detail)
 
     def close(self) -> None:
-        """Encerra o cliente, liberando processos pré-aquecidos pendentes."""
+        """Encerra o cliente, liberando processos pré-aquecidos."""
         self._warm_pool.shutdown()
+        self._persistent_sessions.clear()
 
     @property
     def active_stdin(self):
