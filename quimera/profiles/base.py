@@ -21,6 +21,7 @@ class CliConnection:
     output_format: Optional[str] = None
     env: Optional[dict] = None
     cwd: Optional[str] = None
+    keep_stdin_open: bool = False  # True = não fecha stdin após prompt; opt-in por perfil
 
 
 @dataclass

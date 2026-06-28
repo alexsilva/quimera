@@ -24,7 +24,7 @@ from typing import Callable
 from prompt_toolkit import Application
 from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
 from prompt_toolkit.data_structures import Point
-from prompt_toolkit.formatted_text import ANSI, FormattedText, to_formatted_text
+from prompt_toolkit.formatted_text import ANSI, FormattedText, HTML, to_formatted_text
 from prompt_toolkit.history import InMemoryHistory
 from prompt_toolkit.filters import completion_is_selected, has_completions
 from prompt_toolkit.key_binding import KeyBindings
@@ -33,14 +33,27 @@ from prompt_toolkit.layout.containers import DynamicContainer, Float, FloatConta
 from prompt_toolkit.layout.menus import CompletionsMenu
 from prompt_toolkit.layout.controls import FormattedTextControl, UIContent
 from prompt_toolkit.layout.dimension import Dimension as D
+from prompt_toolkit.layout.processors import Processor, Transformation
 from prompt_toolkit.mouse_events import MouseEvent, MouseEventType
 from prompt_toolkit.widgets import HorizontalLine, TextArea
 from prompt_toolkit.styles import Style
 
 from ..constants import CMD_EXIT
-from ..app.prompt_input import _SlashCommandCompleter
+from ..app.prompt_input import _SlashCommandCompleter, PromptFormatter
 
 _MAX_OUTPUT_LINES = 10_000
+
+_PLACEHOLDER_FRAGMENTS = to_formatted_text(HTML('<style fg="#606060">mensagem...</style>'))
+
+
+class _PlaceholderProcessor(Processor):
+    """Mostra texto cinza de placeholder quando o buffer está vazio."""
+
+    def apply_transformation(self, ti):
+        if not ti.document.text:
+            # Append placeholder after existing fragments (e.g. BeforeInput ">>> " prefix)
+            return Transformation(list(ti.fragments) + list(_PLACEHOLDER_FRAGMENTS))
+        return Transformation(ti.fragments)
 
 
 @dataclass
@@ -157,14 +170,19 @@ class QuimeraApplication:
         self,
         *,
         submit_fn: Callable[[str], None] | None = None,
+        inject_fn: Callable[[str], bool] | None = None,
         history=None,
         toolbar_context_resolver: Callable[[], dict] | None = None,
         command_resolver: Callable[[], list] | None = None,
         argument_resolver: Callable[[str, str], list] | None = None,
         full_screen: bool = False,
         mouse_support: bool = False,
+        user_name: str | None = None,
     ) -> None:
         self._submit_fn = submit_fn
+        self._inject_fn = inject_fn
+        self._prompt_prefix = PromptFormatter.format_user_prompt(user_name)
+        self._agent_label: str | None = None
         self._toolbar_context_resolver = toolbar_context_resolver
         self._output_text: str = ""
         self._output_lock = threading.Lock()
@@ -191,7 +209,7 @@ class QuimeraApplication:
         # Chat input (IDLE state)
         self._input_area = TextArea(
             multiline=False,
-            prompt=">>> ",
+            prompt=self._prompt_prefix,
             history=history,
             accept_handler=self._on_submit,
             focusable=True,
@@ -199,6 +217,7 @@ class QuimeraApplication:
             completer=completer,
             complete_while_typing=False,
             auto_suggest=AutoSuggestFromHistory(),
+            input_processors=[_PlaceholderProcessor()],
         )
 
         # Overlay input (AWAITING_* state)
@@ -313,12 +332,25 @@ class QuimeraApplication:
             line_count = len(self._output_text.split("\n")) if self._output_text else 1
         return Point(x=0, y=max(0, line_count - 1))
 
+    def set_active_agent(self, agent_name: str | None) -> None:
+        """Atualiza o label do agente ativo na toolbar (thread-safe via invalidate)."""
+        self._agent_label = agent_name
+        self.invalidate()
+
     def _get_toolbar_text(self):
         if self._dock_state != "idle":
             return FormattedText([
                 ("class:toolbar.btn.accent", " Enter: confirmar "),
                 ("", "  "),
                 ("class:toolbar.btn.dim", " Ctrl+C: cancelar "),
+            ])
+
+        if self._agent_label:
+            return FormattedText([
+                ("", " "),
+                ("class:toolbar.btn.accent", f" ⟳ {self._agent_label} "),
+                ("", "  "),
+                ("class:toolbar.btn.dim", " Enter: injetar  Ctrl+Q: sair "),
             ])
 
         if self._awaiting_response:
@@ -405,18 +437,37 @@ class QuimeraApplication:
 
     def _on_submit(self, buffer) -> None:
         text = buffer.text.strip()
-        if text and self._submit_fn is not None:
-            self.append_output(f"\033[1;36m>>> \033[0m{text}\n")
-            self._awaiting_response = True
-            self._submit_fn(text)
-            if text == CMD_EXIT and self._app is not None:
+        if not text:
+            return
+        if text == CMD_EXIT:
+            if self._app is not None:
                 try:
                     self._app.exit()
                 except Exception:
                     pass
-        # Re-foca via call_soon para disparar evento de foco no Android
-        if self._loop is not None and not self._loop.is_closed():
-            self._loop.call_soon(self._focus_input_area)
+            if self._submit_fn is not None:
+                self._submit_fn(text)
+            return
+
+        self.append_output(f"\033[1;36m{self._prompt_prefix}\033[0m{text}\n")
+
+        injected = False
+        if self._inject_fn is not None:
+            try:
+                injected = self._inject_fn(text)
+            except Exception:
+                pass
+
+        if injected:
+            self._focus_input_area()
+        else:
+            self._awaiting_response = True
+            if self._submit_fn is not None:
+                self._submit_fn(text)
+            # Re-foca via call_soon para disparar evento de foco no Android
+            if self._loop is not None and not self._loop.is_closed():
+                self._loop.call_soon(self._focus_input_area)
+
         self.invalidate()
 
     def _on_overlay_submit(self, buffer) -> None:

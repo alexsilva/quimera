@@ -619,6 +619,14 @@ class QuimeraApp:
         self.agent_pool.set(list(agents or []))
 
     @property
+    def active_agent_stdin(self):
+        """Property lazy — consultada em runtime, nunca stale."""
+        client = getattr(self, 'agent_client', None)
+        if client is not None:
+            return client.active_stdin
+        return None
+
+    @property
     def summary_agent_preference(self):
         """Retorna o agente preferido para sumarização."""
         chat_state = getattr(self, "_chat_state", None)

@@ -403,12 +403,20 @@ class AgentClient:
         stderr_thread.start()
 
         try:
-            if input_text and proc.stdin:
+            if input_text and proc.stdin and not proc.stdin.closed:
                 proc.stdin.write(input_text)
                 proc.stdin.flush()
-            if proc.stdin:
+
+            _keep_open = False
+            if agent:
+                _profile = profiles.get(agent)
+                if _profile is not None:
+                    _conn = _profile.effective_connection() if callable(getattr(_profile, "effective_connection", None)) else None
+                    _keep_open = getattr(_conn, "keep_stdin_open", False)
+
+            if not _keep_open and proc.stdin and not proc.stdin.closed:
                 proc.stdin.close()
-        except Exception as exc:
+        except (OSError, ValueError, AttributeError) as exc:
             self._agent_running = False
             self._stop_esc_monitor()
             self._show_error(f"[erro] falha ao enviar input para {cmd[0]}: {exc}")
@@ -595,6 +603,7 @@ class AgentClient:
             )
             self._pending_summary_render = (agent, self.last_spy_turn_detail, should_render_turn_summary)
             self._agent_running = False
+            self._current_proc = None
             self._stop_esc_monitor()
             self._spy_output_presenter.reset()
 
@@ -981,6 +990,16 @@ class AgentClient:
     def close(self) -> None:
         """Encerra o cliente, liberando processos pré-aquecidos pendentes."""
         self._warm_pool.shutdown()
+
+    @property
+    def active_stdin(self):
+        """Retorna stdin do processo ativo, ou None se nenhum agente rodando."""
+        proc = self._current_proc
+        if proc is not None and proc.poll() is None:
+            stdin = getattr(proc, 'stdin', None)
+            if stdin is not None and not stdin.closed:
+                return stdin
+        return None
 
     # ------------------------------------------------------------------
     # Métricas

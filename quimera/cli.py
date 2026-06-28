@@ -587,11 +587,24 @@ def main():
         _command_resolver = getattr(app, "_available_commands", None)
         _argument_resolver = getattr(app, "_command_argument_resolver", None)
 
+        def _inject(text: str) -> bool:
+            stdin = app.active_agent_stdin
+            if stdin is not None:
+                try:
+                    stdin.write(text + "\n")
+                    stdin.flush()
+                    return True
+                except (OSError, ValueError, AttributeError):
+                    pass
+            return False
+
         qapp = QuimeraApplication(
             submit_fn=_submit,
+            inject_fn=_inject,
             toolbar_context_resolver=_toolbar_resolver,
             command_resolver=_command_resolver,
             argument_resolver=_argument_resolver,
+            user_name=getattr(app, "user_name", None),
         )
         app.input_services.set_split_queue(_split_q)
 

@@ -91,6 +91,18 @@ Após validação dos passos A–D:
 
 ---
 
+## Passo F — Injeção de prompt em agente ativo via stdin
+
+**Plano detalhado:** `PLAN_STDIN_INJECTION.md`
+
+O input dock fixo permite que o usuário digite enquanto um agente está rodando. Em single-thread, o texto deve ser injetado diretamente no stdin do processo do agente em vez de ser enfileirado no `chat_queue`.
+
+**Subpassos:** F1 (flag `keep_stdin_open` no perfil) → F2 (`AgentClient.active_stdin`) → F3 (`QuimeraApp.active_agent_stdin` + `inject_fn`) → F4 (`_on_submit` bifurcado na TUI) → F5 (toolbar com nome do agente ativo)
+
+**Requisito externo:** o agente CLI alvo (ex: OpenCode) precisa ler stdin de forma contínua — configurado via `supports_stdin_injection = True` no perfil.
+
+---
+
 ## Testes novos
 
 | Grupo | Cobertura |
@@ -110,6 +122,7 @@ Após validação dos passos A–D:
 | C | Baixo — `chat_queue` já existe | `run_chat_loop_split` é nova função, não altera a atual |
 | D | Médio — `threading.Event` timeout | Mesmo mecanismo de timeout já usado no broker |
 | E | Alto — remove floor logic | Só executar após D estável com `--ui=split` por padrão em staging |
+| F | Médio — race condition stdin | `inject_fn` captura `OSError`; flag `supports_stdin_injection` é opt-in por perfil |
 
 ---
 
