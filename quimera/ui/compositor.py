@@ -665,6 +665,9 @@ class TerminalCompositor:
                         _refresh()
                     else:
                         _close_live()
+                    sink = self._app_sink
+                    if sink is not None and _sink_sent_len.pop(event.agent, 0) > 0:
+                        sink.ensure_trailing_newline()
 
                 elif isinstance(event, NoopEvent):
                     _flush_deferred(force=event.force_flush)

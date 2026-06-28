@@ -516,6 +516,13 @@ class QuimeraApplication:
         if was_awaiting and self._loop is not None and not self._loop.is_closed():
             self._loop.call_soon_threadsafe(self._focus_input_area)
 
+    def ensure_trailing_newline(self) -> None:
+        """Garante que o output termina com newline (evita colagem na próxima linha)."""
+        with self._output_lock:
+            if self._output_text and not self._output_text.endswith("\n"):
+                self._output_text += "\n"
+        self.invalidate()
+
     def mark_stream_start(self, agent: str) -> None:
         """Marca posição atual no output como início de stream do agente."""
         with self._output_lock:
