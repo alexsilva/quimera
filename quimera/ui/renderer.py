@@ -773,6 +773,22 @@ class TerminalRenderer:
                 include_footer_rule=(theme_name == "rule"),
                 render_mode=render_mode,
             )
+            sink = self._compositor._app_sink
+            if sink is not None:
+                import io as _io
+                from rich.console import Console as _RichConsole
+
+                _buf = _io.StringIO()
+                _tmp = _RichConsole(
+                    file=_buf,
+                    force_terminal=True,
+                    width=self._console.width if self._console else 80,
+                    no_color=False,
+                )
+                _tmp.print(block)
+                sink.replace_stream(agent, _buf.getvalue())
+                self._remember_persistent_event("message", agent)
+                return
             self._print(block, kind="message")
             self._remember_persistent_event("message", agent)
         else:

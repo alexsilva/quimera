@@ -132,6 +132,41 @@ class TestTerminalRenderer:
         yield renderer
         renderer.close(timeout=1.0)
 
+
+
+    def test_split_show_message_replaces_agent_lifecycle_transient(self):
+        """Resposta final no split deve substituir lifecycle/transient do agente."""
+
+        class FakeSink:
+            def __init__(self):
+                self.streams = {}
+                self.calls = []
+
+            def update_stream(self, agent, text):
+                self.streams[agent] = text
+                self.calls.append(("update", agent, text))
+
+            def replace_stream(self, agent, text):
+                self.streams[agent] = text
+                self.calls.append(("replace", agent, text))
+
+        renderer = TerminalRenderer()
+        renderer._console = Console(width=80, record=True, force_terminal=True)
+        sink = FakeSink()
+        renderer._compositor.set_app_sink(sink)
+
+        with patch("quimera.ui._agent_style", return_value=("magenta", "🔮  Claude Sonnet")):
+            renderer.show_agent_lifecycle("claude", "completed", "execução concluída")
+            renderer.flush()
+            assert "execução concluída" in sink.streams["claude"]
+
+            renderer.show_message("claude", "Oi, Alex!")
+            renderer.flush()
+
+        assert "Oi, Alex!" in sink.streams["claude"]
+        assert "execução concluída" not in sink.streams["claude"]
+        renderer.close(timeout=1.0)
+
     def test_show_message_with_rich(self, mock_renderer):
         """Test show_message with Rich available."""
         mock_panel = MagicMock()
