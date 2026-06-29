@@ -97,6 +97,15 @@ def test_textual_feed_preserves_other_agents_when_one_agent_finishes():
     assert events[1].kind == "agent_update"
 
 
+def test_textual_feed_ignores_interactive_question_events():
+    model = TextualFeedModel()
+
+    assert model.apply(TextualUiEvent("question", {"question": "aprovar?"})) is False
+    assert model.apply(TextualUiEvent("question_clear")) is False
+
+    assert model.items == []
+
+
 def test_textual_renderer_emits_agent_lifecycle_event():
     bridge = TextualUiBridge()
     bridge.emit = Mock()
@@ -152,6 +161,18 @@ def test_textual_input_gate_is_active_while_textual_is_mounted():
     gate = TextualInputGate(TextualUiBridge())
 
     assert gate.is_active() is False
+
+
+def test_textual_input_gate_clears_question_overlay_after_selection_timeout():
+    bridge = TextualUiBridge()
+    emitted = []
+    bridge.emit = emitted.append
+    gate = TextualInputGate(bridge)
+
+    result = gate.read_selection_in_terminal("Escolha", ["sim", "não"], timeout=0.001)
+
+    assert result is None
+    assert [event.kind for event in emitted] == ["question", "input_active", "prompt", "input_active", "question_clear"]
 
     gate.set_textual_mounted(True)
 

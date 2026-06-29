@@ -188,6 +188,8 @@ class TextualFeedModel:
         """Aplica evento e retorna se o feed visual precisa ser redesenhado."""
         if event.kind in self._IGNORED_KINDS:
             return False
+        if event.kind in {"question", "question_clear"}:
+            return False
         if event.kind == "agent_message":
             self._replace_transient_with_final(event)
             return True
@@ -587,6 +589,8 @@ class TextualInputGate:
             return None
         finally:
             self._set_active_state(False)
+            if question is not None:
+                self._bridge.emit(TextualUiEvent("question_clear"))
 
     def read_plain_input(self, prompt: str) -> str:
         """Lê uma linha simples pelo mesmo input Textual."""
@@ -686,17 +690,14 @@ class TextualRenderer:
 
     def approval_window(self, *, title: str = "Aprovação", **kwargs):
         """Compatibilidade com fluxos legados de aprovação."""
-        self._bridge.emit(TextualUiEvent("system", title))
         return nullcontext()
 
     def input_window(self, *, title: str = "Entrada", **kwargs):
         """Compatibilidade com fluxos legados de entrada."""
-        self._bridge.emit(TextualUiEvent("system", title))
         return nullcontext()
 
     def selection_window(self, *, title: str = "Seleção", **kwargs):
         """Compatibilidade com fluxos legados de seleção."""
-        self._bridge.emit(TextualUiEvent("system", title))
         return nullcontext()
 
     def flush(self, timeout: float = 5.0) -> None:
@@ -1024,6 +1025,12 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             color: $text-muted;
             background: $surface;
         }
+        #question_overlay {
+            display: none;
+            height: auto;
+            padding: 0 1;
+            background: $surface;
+        }
         #input_bar {
             height: 3;
             padding: 0 1;
@@ -1074,6 +1081,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                     max_lines=_resolve_textual_feed_limit(quimera_app),
                 )
                 yield Static("", id="toolbar")
+                yield Static("", id="question_overlay")
                 yield CompletionDropdown()
                 with Vertical(id="input_bar"):
                     yield _CompletionInput(placeholder="mensagem...", id="input")
@@ -1145,10 +1153,27 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
         def on_input_submitted(self, event: Input.Submitted) -> None:
             event.stop()
             self.query_one(CompletionDropdown).hide()
+            self._clear_question_overlay()
             value = event.value
             event.input.value = ""
             event.input.add_to_history(value)
             bridge.submit_input(value)
+
+        def _set_question_overlay(self, payload) -> None:
+            overlay = self.query_one("#question_overlay", Static)
+            data = payload or {}
+            question = str(data.get("question", "")).strip()
+            options = list(data.get("options", []) or [])
+            lines = [question] if question else []
+            for index, option in enumerate(options, 1):
+                lines.append(f"{index}. {option}")
+            overlay.update(Panel("\n".join(lines), title="input solicitado", border_style="yellow"))
+            overlay.display = True
+
+        def _clear_question_overlay(self) -> None:
+            overlay = self.query_one("#question_overlay", Static)
+            overlay.update("")
+            overlay.display = False
 
         def action_cancel_or_exit(self) -> None:
             bridge.cancel_or_exit()
@@ -1188,6 +1213,12 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             if event.kind == "clear":
                 self._feed_model.clear()
                 self.query_one("#feed", RichLog).clear()
+                return
+            if event.kind == "question":
+                self._set_question_overlay(event.payload)
+                return
+            if event.kind == "question_clear":
+                self._clear_question_overlay()
                 return
             if event.kind == "summarizing":
                 if event.payload:
