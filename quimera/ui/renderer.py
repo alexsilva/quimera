@@ -214,6 +214,7 @@ class TerminalRenderer:
         # Último evento persistente impresso, para evitar espaçamento redundante.
         self._last_persistent_kind: str | None = None
         self._last_persistent_agent: str | None = None
+        self._banner_shown: bool = False
         # Lock protege _deck, _statuses e versão
         self._lock = threading.RLock()
 
@@ -980,6 +981,12 @@ class TerminalRenderer:
 
     def show_banner(self, message):
         """Exibe mensagem sem ícone (ex: logo de boas-vindas)."""
+        if self._compositor._app_sink is not None:
+            # In split-UI mode only show the banner once; subsequent calls come
+            # from resize events that reset scroll and would re-print the logo.
+            if self._banner_shown:
+                return
+            self._banner_shown = True
         clean_message = strip_ansi(str(message)).strip("\r\n")
         if self._console:
             line = Text(clean_message, style="bold cyan")
