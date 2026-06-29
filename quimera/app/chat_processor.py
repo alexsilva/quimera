@@ -293,6 +293,10 @@ def run_chat_loop(
                     app.runtime_state.chat_inflight_count = 0
             else:
                 app.runtime_state.chat_inflight_count = 0
+        if interrupted_shutdown:
+            supervisor = getattr(app, "process_supervisor", None)
+            if supervisor is not None:
+                supervisor.shutdown()
         try:
             if threaded_chat and chat_queue is not None:
                 chat_queue.put(None)
