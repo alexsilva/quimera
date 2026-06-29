@@ -57,6 +57,24 @@ def _restore_terminal_modes() -> None:
         return
 
 
+def _restore_textual_input_focus(textual_app) -> None:
+    """Restaura foco e cursor do input fixo depois de janelas externas."""
+    if textual_app is None:
+        return
+    try:
+        input_widget = textual_app.query_one("#input")
+    except Exception:
+        return
+    try:
+        input_widget.focus()
+    except Exception:
+        pass
+    try:
+        input_widget.cursor_position = len(str(getattr(input_widget, "value", "") or ""))
+    except Exception:
+        pass
+
+
 @contextmanager
 def _external_textual_window(textual_app):
     """Suspende Textual para processo externo sem vazar modos de terminal."""
@@ -80,6 +98,7 @@ def _external_textual_window(textual_app):
                     yield
                 finally:
                     _restore_terminal_modes()
+            _restore_textual_input_focus(textual_app)
             return
         _restore_terminal_modes()
         try:
@@ -111,6 +130,7 @@ def _external_textual_window(textual_app):
             textual_app.refresh(layout=True)
         except Exception:
             pass
+        _restore_textual_input_focus(textual_app)
 
     try:
         call_from_thread(_suspend_driver)

@@ -320,6 +320,13 @@ def test_textual_renderer_external_window_suspends_textual_app():
     bridge = TextualUiBridge()
     events = []
 
+    class FakeInput:
+        value = "rascunho"
+        cursor_position = 0
+
+        def focus(self):
+            events.append("focus")
+
     class FakeTextualApp:
         @contextmanager
         def suspend(self):
@@ -327,13 +334,18 @@ def test_textual_renderer_external_window_suspends_textual_app():
             yield
             events.append("resume")
 
+        def query_one(self, selector):
+            if selector != "#input":
+                raise LookupError(selector)
+            return FakeInput()
+
     bridge.attach_textual_app(FakeTextualApp())
     renderer = TextualRenderer(bridge)
 
     with renderer.external_window("external:editor", title="Editor externo"):
         events.append("editor")
 
-    assert events == ["suspend", "editor", "resume"]
+    assert events == ["suspend", "editor", "resume", "focus"]
 
 
 def test_textual_renderer_external_window_resets_terminal_modes():
