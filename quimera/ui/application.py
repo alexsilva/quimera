@@ -34,9 +34,10 @@ from prompt_toolkit.layout.containers import DynamicContainer, Float, FloatConta
 from prompt_toolkit.layout.menus import CompletionsMenu
 from prompt_toolkit.layout.controls import FormattedTextControl, UIContent
 from prompt_toolkit.layout.dimension import Dimension as D
+from prompt_toolkit.layout.margins import ScrollbarMargin
 from prompt_toolkit.layout.processors import Processor, Transformation
 from prompt_toolkit.mouse_events import MouseEvent, MouseEventType
-from prompt_toolkit.widgets import HorizontalLine, TextArea
+from prompt_toolkit.widgets import TextArea
 from prompt_toolkit.styles import Style
 
 from ..constants import CMD_EXIT
@@ -233,7 +234,7 @@ class QuimeraApplication:
             accept_handler=self._on_submit,
             focusable=True,
             wrap_lines=True,
-            height=D(min=1, max=_CHAT_INPUT_MAX_HEIGHT),
+            height=self._get_input_height,
             completer=completer,
             complete_while_typing=False,
             auto_suggest=AutoSuggestFromHistory(),
@@ -266,6 +267,7 @@ class QuimeraApplication:
             ),
             dont_extend_height=False,
             wrap_lines=True,
+            right_margins=[ScrollbarMargin(display_arrows=True)],
         )
 
         app_kb = self._build_app_key_bindings()
@@ -280,7 +282,11 @@ class QuimeraApplication:
             FloatContainer(
                 content=HSplit([
                     self._output_window,
-                    HorizontalLine(),
+                    Window(
+                        content=FormattedTextControl(self._get_history_separator),
+                        height=1,
+                        dont_extend_height=True,
+                    ),
                     DynamicContainer(self._get_bottom_pane),
                     Window(
                         content=self._toolbar_control,
@@ -313,6 +319,8 @@ class QuimeraApplication:
                 "toolbar.btn.info": "fg:#d4d4d4",
                 "toolbar.btn.dim": "fg:#9e9e9e",
                 "toolbar.btn.err": "fg:#fc7b5f bold",
+                "history.separator": "fg:#3a3a3a",
+                "history.hint": "fg:#9e9e9e",
             }),
         )
 
@@ -323,8 +331,39 @@ class QuimeraApplication:
     def _preferred_output_height(self) -> int:
         """Altura inicial do histórico sem ativar full_screen/alternate screen."""
         rows = shutil.get_terminal_size(fallback=(80, 24)).lines
-        reserved = _CHAT_INPUT_MAX_HEIGHT + 2  # input + separator + toolbar
+        reserved = 3  # input mínimo + separador + toolbar
         return max(_OUTPUT_MIN_HEIGHT, rows - reserved)
+
+    def _get_history_separator(self):
+        cols = shutil.get_terminal_size(fallback=(80, 24)).columns
+        with self._output_lock:
+            top = self._output_scroll_top
+            max_top = self._output_max_scroll_top
+            line_count = self._output_line_count
+            follow_tail = self._output_follow_tail
+
+        if max_top <= 0:
+            return FormattedText([("class:history.separator", "─" * cols)])
+
+        parts = []
+        if top > 0:
+            parts.append("↑ histórico acima")
+        if top < max_top:
+            parts.append("↓ conteúdo abaixo")
+        if follow_tail and top >= max_top:
+            parts.append("↑ histórico acima")
+        parts.append("PgUp/PgDn")
+        parts.append("Ctrl+End=fim")
+        label = f" histórico {line_count} linhas · " + " · ".join(parts) + " "
+        if len(label) >= cols:
+            label = label[: max(0, cols - 1)] + "…"
+        left = max(0, (cols - len(label)) // 2)
+        right = max(0, cols - left - len(label))
+        return FormattedText([
+            ("class:history.separator", "─" * left),
+            ("class:history.hint", label),
+            ("class:history.separator", "─" * right),
+        ])
 
     def _get_bottom_pane(self):
         if self._dock_state != "idle":
@@ -337,6 +376,16 @@ class QuimeraApplication:
                 self._overlay_input,
             ])
         return self._input_area
+
+    def _get_input_height(self):
+        text = self._input_area.text if hasattr(self, "_input_area") else ""
+        cols = shutil.get_terminal_size(fallback=(80, 24)).columns
+        prompt_width = len(str(self._prompt_prefix))
+        usable = max(20, cols - prompt_width - 2)
+        visual_lines = 1
+        for line in (text.splitlines() or [""]):
+            visual_lines += max(0, len(line) - 1) // usable
+        return D.exact(max(1, min(_CHAT_INPUT_MAX_HEIGHT, visual_lines)))
 
     def _get_overlay_label(self):
         req = self._pending_req

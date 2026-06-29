@@ -38,7 +38,9 @@ def test_split_chat_input_can_grow_without_fullscreen():
     app = QuimeraApplication()
 
     assert app._input_area.buffer.multiline() is True
-    assert app._input_area.window.height.max == 5
+    assert app._input_area.window.height().max == 1
+    app._input_area.text = "x" * 200
+    assert 1 < app._input_area.window.height().max <= 5
     assert app._app.full_screen is False
 
 
@@ -47,7 +49,20 @@ def test_split_output_pane_reserves_visible_history_without_fullscreen():
 
     assert app._output_window.height.min >= 8
     assert app._output_window.height.preferred >= app._output_window.height.min
+    assert app._output_window.right_margins
     assert app._app.full_screen is False
+
+
+def test_split_history_separator_indicates_hidden_output():
+    app = QuimeraApplication()
+    _render_output_window(app, line_count=30, height=5)
+
+    fragments = app._get_history_separator()
+    text = "".join(fragment[1] for fragment in fragments)
+
+    assert "histórico" in text
+    assert "↑ histórico acima" in text
+    assert "PgUp/PgDn" in text
 
 
 def test_split_application_uses_persistent_history_file(tmp_path):
