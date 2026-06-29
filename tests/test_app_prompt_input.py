@@ -117,7 +117,7 @@ def test_textual_renderer_show_no_response():
     assert "sem resposta" in str(events[0].payload)
 
 
-def test_textual_feed_limit_prefers_auto_summarize_threshold():
+def test_textual_feed_limit_ignores_auto_summarize_threshold():
     from quimera.app.textual_ui import _resolve_textual_feed_limit
 
     app = SimpleNamespace(
@@ -125,10 +125,10 @@ def test_textual_feed_limit_prefers_auto_summarize_threshold():
         prompt_builder=SimpleNamespace(history_window=12),
     )
 
-    assert _resolve_textual_feed_limit(app) == 5
+    assert _resolve_textual_feed_limit(app) is None
 
 
-def test_textual_feed_limit_falls_back_to_history_window():
+def test_textual_feed_limit_ignores_history_window():
     from quimera.app.textual_ui import _resolve_textual_feed_limit
 
     app = SimpleNamespace(
@@ -136,7 +136,7 @@ def test_textual_feed_limit_falls_back_to_history_window():
         prompt_builder=SimpleNamespace(history_window=12),
     )
 
-    assert _resolve_textual_feed_limit(app) == 12
+    assert _resolve_textual_feed_limit(app) is None
 
 
 def test_textual_rich_log_max_lines_prunes_visible_feed():

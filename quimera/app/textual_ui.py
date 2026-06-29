@@ -290,14 +290,12 @@ class TextualFeedModel:
 
 
 def _resolve_textual_feed_limit(quimera_app) -> int | None:
-    """Resolve o limite de linhas do feed a partir da config já carregada no app."""
-    auto_summarize_threshold = getattr(quimera_app, "auto_summarize_threshold", None)
-    if isinstance(auto_summarize_threshold, int) and auto_summarize_threshold > 0:
-        return auto_summarize_threshold
-    prompt_builder = getattr(quimera_app, "prompt_builder", None)
-    history_window = getattr(prompt_builder, "history_window", None) if prompt_builder else None
-    if isinstance(history_window, int) and history_window > 0:
-        return history_window
+    """Retorna o limite visual do feed Textual.
+
+    O feed é scrollback visual, não janela de contexto. Configurações como
+    history_window e auto_summarize_threshold limitam memória/prompt, mas não
+    podem truncar a saída rolável dos agentes.
+    """
     return None
 
 
@@ -558,11 +556,6 @@ class TextualInputGate:
             value = str(context.get(key, "")).strip()
             if value:
                 parts.append(value)
-        if not parts:
-            return "Enter: enviar  |  Ctrl+C: interromper  |  Ctrl+Q: sair"
-        parts.append("Enter: enviar")
-        parts.append("Ctrl+C: interromper")
-        parts.append("Ctrl+Q: sair")
         return "  |  ".join(parts)
 
     def _commands(self) -> list[str]:
@@ -630,6 +623,7 @@ class TextualInputGate:
         question: str | None = None,
         options: list[str] | None = None,
         owner: str | None = None,
+        kind: str = "input",
     ) -> str | None:
         """Exibe um pedido interativo no Textual e lê uma submissão do input fixo."""
         if question is not None:
@@ -641,6 +635,7 @@ class TextualInputGate:
                         "question": question,
                         "options": list(options or []),
                         "owner": owner,
+                        "kind": kind,
                     },
                 )
             )
@@ -689,6 +684,7 @@ class TextualInputGate:
             question=question,
             options=options,
             owner=owner,
+            kind="selection",
         )
         if raw is None:
             return None
@@ -717,6 +713,7 @@ class TextualInputGate:
             timeout=timeout,
             question=question,
             owner=owner,
+            kind="approval",
         )
 
 
@@ -1245,10 +1242,12 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             data = payload or {}
             question = str(data.get("question", "")).strip()
             options = list(data.get("options", []) or [])
+            kind = str(data.get("kind", "input")).strip().lower()
+            title = "Permissão solicitada" if kind == "approval" else "input solicitado"
             lines = [question] if question else []
             for index, option in enumerate(options, 1):
                 lines.append(f"{index}. {option}")
-            overlay.update(Panel("\n".join(lines), title="input solicitado", border_style="yellow"))
+            overlay.update(Panel("\n".join(lines), title=title, border_style="yellow"))
             overlay.display = True
 
         def _clear_question_overlay(self) -> None:

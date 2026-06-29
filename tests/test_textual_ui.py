@@ -233,7 +233,7 @@ def test_textual_toolbar_shows_active_agent_contract():
     assert "Ctrl+Q: sair" in text
 
 
-def test_textual_toolbar_includes_default_controls_with_context():
+def test_textual_toolbar_shows_context_without_obvious_controls():
     gate = TextualInputGate(
         TextualUiBridge(),
         toolbar_context_resolver=lambda: {"responder": "claude", "branch": "main-ui"},
@@ -243,8 +243,8 @@ def test_textual_toolbar_includes_default_controls_with_context():
 
     assert "claude" in text
     assert "main-ui" in text
-    assert "Enter: enviar" in text
-    assert "Ctrl+C: interromper" in text
+    assert "Enter: enviar" not in text
+    assert "Ctrl+C: interromper" not in text
 
 
 def test_textual_input_gate_clears_question_overlay_after_selection_timeout():
@@ -265,6 +265,34 @@ def test_textual_input_gate_clears_question_overlay_after_selection_timeout():
     gate.set_textual_mounted(False)
 
     assert gate.is_active() is False
+
+
+def test_textual_input_gate_marks_approval_questions_as_permission_requests():
+    bridge = TextualUiBridge()
+    emitted = []
+    bridge.emit = emitted.append
+    gate = TextualInputGate(bridge)
+
+    result = gate.read_approval_in_terminal("Pode executar?", "Executar? ", timeout=0.001)
+
+    assert result is None
+    question_event = emitted[0]
+    assert question_event.kind == "question"
+    assert question_event.payload["kind"] == "approval"
+
+
+def test_textual_input_gate_marks_selection_questions_as_selection_requests():
+    bridge = TextualUiBridge()
+    emitted = []
+    bridge.emit = emitted.append
+    gate = TextualInputGate(bridge)
+
+    result = gate.read_selection_in_terminal("Escolha", ["sim", "não"], timeout=0.001)
+
+    assert result is None
+    question_event = emitted[0]
+    assert question_event.kind == "question"
+    assert question_event.payload["kind"] == "selection"
 
 
 def test_textual_input_gate_completes_command_arguments_with_spaces():
