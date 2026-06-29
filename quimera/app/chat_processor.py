@@ -293,10 +293,6 @@ def run_chat_loop(
                     app.runtime_state.chat_inflight_count = 0
             else:
                 app.runtime_state.chat_inflight_count = 0
-        if interrupted_shutdown:
-            _process_supervisor = getattr(app, "process_supervisor", None)
-            if _process_supervisor is not None:
-                _process_supervisor.shutdown()
         try:
             if threaded_chat and chat_queue is not None:
                 chat_queue.put(None)
@@ -314,15 +310,19 @@ def run_chat_loop(
         app.runtime_state.chat_slot_semaphore = None
         app.runtime_state.chat_queue = None
         app._refresh_parallel_toolbar()
+
+        _agent_client = getattr(app, "agent_client", None)
+        if _agent_client is not None:
+            _agent_client.close()
+
+        _process_supervisor = getattr(app, "process_supervisor", None)
+        if _process_supervisor is not None:
+            _process_supervisor.shutdown()
+
         try:
-            process_supervisor = getattr(app, "process_supervisor", None)
-            if process_supervisor is not None:
-                if not interrupted_shutdown:
-                    process_supervisor.shutdown()
             app.session_services.shutdown(interrupted=interrupted_shutdown)
             if hasattr(app, "current_job_id") and app.current_job_id is not None:
                 TodoRegistry.cleanup(app.current_job_id)
-            app.agent_client.close()
             renderer = getattr(app, "renderer", None)
             if renderer is not None and hasattr(renderer, "close"):
                 renderer.close()
