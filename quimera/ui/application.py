@@ -34,7 +34,6 @@ from prompt_toolkit.layout.containers import DynamicContainer, Float, FloatConta
 from prompt_toolkit.layout.menus import CompletionsMenu
 from prompt_toolkit.layout.controls import FormattedTextControl, UIContent
 from prompt_toolkit.layout.dimension import Dimension as D
-from prompt_toolkit.layout.margins import ScrollbarMargin
 from prompt_toolkit.layout.processors import Processor, Transformation
 from prompt_toolkit.mouse_events import MouseEvent, MouseEventType
 from prompt_toolkit.widgets import TextArea
@@ -205,6 +204,7 @@ class QuimeraApplication:
         self._awaiting_response: bool = False
         self._invalidate_scheduled: bool = False
         self._invalidate_lock = threading.Lock()
+        self._last_render_size = shutil.get_terminal_size(fallback=(80, 24))
 
         # Overlay state
         self._dock_state: str = "idle"  # "idle" | "awaiting_input"
@@ -267,7 +267,6 @@ class QuimeraApplication:
             ),
             dont_extend_height=False,
             wrap_lines=True,
-            right_margins=[ScrollbarMargin(display_arrows=True)],
         )
 
         app_kb = self._build_app_key_bindings()
@@ -311,6 +310,7 @@ class QuimeraApplication:
             key_bindings=app_kb,
             full_screen=full_screen,
             mouse_support=mouse_support,
+            before_render=self._before_render,
             style=Style.from_dict({
                 "bottom-toolbar": "bg:#252526",
                 "toolbar.btn": "bg:#3e3e3e",
@@ -327,6 +327,27 @@ class QuimeraApplication:
     # ------------------------------------------------------------------
     # Layout callbacks
     # ------------------------------------------------------------------
+
+    def _before_render(self, *_) -> None:
+        current_size = shutil.get_terminal_size(fallback=(80, 24))
+        if current_size == self._last_render_size:
+            return
+        self._last_render_size = current_size
+
+        with self._output_lock:
+            self._output_follow_tail = True
+            self._output_scroll_top = self._output_max_scroll_top
+
+        app = self._app
+        output = getattr(app, "output", None) if app is not None else None
+        if output is None:
+            return
+        try:
+            output.erase_screen()
+            output.cursor_goto(0, 0)
+            output.flush()
+        except Exception:
+            pass
 
     def _preferred_output_height(self) -> int:
         """Altura inicial do histórico sem ativar full_screen/alternate screen."""

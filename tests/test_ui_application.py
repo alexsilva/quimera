@@ -1,5 +1,7 @@
 from prompt_toolkit.data_structures import Point
 from prompt_toolkit.layout.controls import UIContent
+from os import terminal_size
+from shutil import get_terminal_size
 
 from quimera.constants import CMD_EXIT
 from quimera.ui.application import QuimeraApplication
@@ -49,7 +51,6 @@ def test_split_output_pane_reserves_visible_history_without_fullscreen():
 
     assert app._output_window.height.min >= 8
     assert app._output_window.height.preferred >= app._output_window.height.min
-    assert app._output_window.right_margins
     assert app._app.full_screen is False
 
 
@@ -63,6 +64,34 @@ def test_split_history_separator_indicates_hidden_output():
     assert "histórico" in text
     assert "↑ histórico acima" in text
     assert "PgUp/PgDn" in text
+
+
+def test_split_resize_clears_stale_frame_and_returns_to_tail():
+    app = QuimeraApplication()
+    app._output_follow_tail = False
+    app._output_scroll_top = 1
+    app._output_max_scroll_top = 10
+    current_size = get_terminal_size(fallback=(80, 24))
+    app._last_render_size = terminal_size((current_size.columns + 1, current_size.lines))
+    calls = []
+
+    class FakeOutput:
+        def erase_screen(self):
+            calls.append("erase")
+
+        def cursor_goto(self, row, column):
+            calls.append(("goto", row, column))
+
+        def flush(self):
+            calls.append("flush")
+
+    app._app.output = FakeOutput()
+
+    app._before_render()
+
+    assert app._output_follow_tail is True
+    assert app._output_scroll_top == 10
+    assert calls == ["erase", ("goto", 0, 0), "flush"]
 
 
 def test_split_application_uses_persistent_history_file(tmp_path):
