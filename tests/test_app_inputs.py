@@ -63,6 +63,27 @@ class TestAppInputServices:
             result = srv.read_user_input(">", 30)
             assert result == "hello"
 
+    def test_read_user_input_split_queue_uses_bounded_timeout(self, mock_app, resolver):
+        """No split, a fila da TUI deve preservar bloqueio curto sem busy-loop agressivo."""
+        from quimera.app.inputs import AppInputServices
+
+        class FakeQueue:
+            def __init__(self):
+                self.timeout = None
+
+            def get(self, timeout=None):
+                self.timeout = timeout
+                raise queue.Empty
+
+        split_q = FakeQueue()
+        srv = AppInputServices(mock_app.renderer, resolver)
+        srv.set_split_queue(split_q)
+
+        result = srv.read_user_input(">", 30)
+
+        assert result is None
+        assert split_q.timeout == 0.5
+
     def test_read_from_editor_delegates(self, mock_app, resolver):
         """Verifica que read_from_editor delega para a função de editor."""
         from quimera.app.inputs import AppInputServices

@@ -188,8 +188,11 @@ class AppInputServices:
     def read_user_input(self, prompt, timeout: int) -> str | None:
         split_q = getattr(self, "_split_queue", None)
         if split_q is not None:
+            # No split mode, input comes from the TUI queue. Preserve the old
+            # blocking contract instead of polling every 50ms forever.
+            wait_s = max(0.05, min(float(timeout or 0.5), 0.5))
             try:
-                return split_q.get(timeout=0.05)
+                return split_q.get(timeout=wait_s)
             except queue.Empty:
                 return None
         if timeout == 0 and self._nonblocking_tty:
