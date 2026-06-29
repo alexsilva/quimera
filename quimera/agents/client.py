@@ -105,6 +105,7 @@ class AgentClient:
         self._warm_pool = WarmPool()
         self.process_supervisor: ProcessSupervisor | None = process_supervisor
         self._persistent_sessions: dict[str, _FrozenSession] = {}
+        self._closed = False
 
     def _show_error(
         self,
@@ -353,6 +354,9 @@ class AgentClient:
         progress_callback=None,
     ):
         """Executa um comando (agente CLI) e retorna o stdout completo."""
+        if self._closed:
+            _logger.debug("agent_client: run() ignorado — cliente já fechado")
+            return None
         self._cancel_event.clear()
         self.rate_limit_detected = False
         self.rate_limit_detected_at = None
@@ -391,6 +395,25 @@ class AgentClient:
                 self._show_error(f"[erro] não foi possível iniciar {cmd[0]}: {exc}")
                 return None
         self._current_proc = proc
+        if self._closed:
+            _logger.debug("agent_client: run() — cliente fechado após Popen, terminando processo %d", proc.pid)
+            proc.terminate()
+            try:
+                proc.wait(timeout=3)
+            except Exception:
+                pass
+            return None
+        # Second check: ensure client wasn't closed while we were creating the process
+        # and before registering with the supervisor. This prevents the race where
+        # close() -> shutdown() sets _shutting_down before we call register().
+        if self._closed:
+            _logger.debug("agent_client: run() — cliente fechado antes de registrar, terminando processo %d", proc.pid)
+            proc.terminate()
+            try:
+                proc.wait(timeout=3)
+            except Exception:
+                pass
+            return None
         if self.process_supervisor is not None:
             self.process_supervisor.register(proc, owner=agent or "cli", label=cmd[0] if cmd else None)
 
@@ -1059,6 +1082,8 @@ class AgentClient:
 
     def close(self) -> None:
         """Encerra o cliente, liberando processos pré-aquecidos."""
+        self._closed = True
+        self._cancel_event.set()
         self._warm_pool.shutdown()
         self._persistent_sessions.clear()
 
