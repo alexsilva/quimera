@@ -112,7 +112,7 @@ def test_textual_feed_accumulates_stream_chunk_and_replaces_with_final_message()
     assert len(model.items) == 1
     assert model.items[0].transient is True
     assert model.items[0].event.kind == "stream_chunk"
-    assert model.items[0].event.payload == "Oi, Alex"
+    assert model.items[0].event.payload["content"] == "Oi, Alex"
 
     model.apply(TextualUiEvent("agent_message", {"content": "Oi, Alex!", "label": "Claude"}, agent="claude"))
 
@@ -358,3 +358,113 @@ def test_textual_renderer_external_window_resets_terminal_modes():
     assert "\x1b[?1003l" in text
     assert "\x1b[?2004l" in text
     assert writes.count("editor") == 1
+
+
+def test_textual_renderer_cycles_theme_and_tags_agent_events():
+    bridge = TextualUiBridge()
+    emitted = []
+    bridge.emit = emitted.append
+    renderer = TextualRenderer(bridge)
+
+    next_theme = renderer.cycle_theme()
+    renderer.show_message("claude", "olá", render_mode="plain")
+
+    assert next_theme == renderer.theme_name
+    assert emitted[0].kind == "theme_changed"
+    assert emitted[1].kind == "agent_message"
+    assert emitted[1].payload["theme"] == next_theme
+
+
+def test_textual_renderer_exposes_legacy_visual_methods():
+    bridge = TextualUiBridge()
+    emitted = []
+    bridge.emit = emitted.append
+    renderer = TextualRenderer(bridge)
+
+    renderer.show_banner("Quimera")
+    renderer.show_approval("Pode executar?")
+    renderer.show_delegation("claude", "codex", task="revisar")
+    renderer.show_turn_summary(
+        "claude",
+        {"runtime": "cli", "tools": [{"status": "ok", "duration_ms": 20}]},
+    )
+
+    assert [event.kind for event in emitted] == ["banner", "approval", "delegation", "turn_summary"]
+
+
+def test_textual_renderer_formats_agent_error_metadata():
+    bridge = TextualUiBridge()
+    emitted = []
+    bridge.emit = emitted.append
+    renderer = TextualRenderer(bridge)
+
+    renderer.show_error("raw", agent="claude", error_kind="agent_invalid_output")
+
+    assert emitted[-1].kind == "error"
+    assert emitted[-1].agent == "claude"
+    assert "não retornou saída válida" in emitted[-1].payload
+
+
+def test_textual_feed_visual_reset_clears_only_transients():
+    model = TextualFeedModel()
+    model.apply(TextualUiEvent("plain", "persistente"))
+    model.apply(TextualUiEvent("agent_update", "rodando", agent="claude"))
+
+    assert model.apply(TextualUiEvent("visual_reset")) is True
+
+    assert [item.event.kind for item in model.items] == ["plain"]
+
+
+def test_textual_render_event_varies_agent_theme_shape():
+    from rich.panel import Panel
+    from rich.table import Table
+    from quimera.app.textual_ui import _render_event
+
+    panel_event = TextualUiEvent(
+        "agent_message",
+        {"content": "olá", "label": "Claude", "style": "cyan", "theme": "panel", "render_mode": "plain"},
+        agent="claude",
+    )
+    chat_event = TextualUiEvent(
+        "agent_message",
+        {"content": "olá", "label": "Claude", "style": "cyan", "theme": "chat", "render_mode": "plain"},
+        agent="claude",
+    )
+
+    assert isinstance(_render_event(panel_event), Panel)
+    assert isinstance(_render_event(chat_event), Table)
+
+
+def test_textual_renderer_interactive_windows_emit_semantic_overlay_events():
+    bridge = TextualUiBridge()
+    emitted = []
+    bridge.emit = emitted.append
+    renderer = TextualRenderer(bridge)
+
+    with renderer.approval_window(owner="claude"):
+        pass
+    with renderer.input_window(owner="codex"):
+        pass
+    with renderer.selection_window(owner="opencode"):
+        pass
+
+    assert [event.kind for event in emitted] == [
+        "window_open",
+        "window_clear",
+        "window_open",
+        "window_clear",
+        "window_open",
+        "window_clear",
+    ]
+    assert emitted[0].payload["kind"] == "approval"
+    assert emitted[0].payload["title"] == "Permissão solicitada"
+    assert emitted[2].payload["kind"] == "input"
+    assert emitted[4].payload["kind"] == "selection"
+
+
+def test_textual_feed_ignores_interactive_window_events():
+    model = TextualFeedModel()
+
+    assert model.apply(TextualUiEvent("window_open", {"kind": "approval"})) is False
+    assert model.apply(TextualUiEvent("window_clear", {"kind": "approval"})) is False
+    assert model.items == []

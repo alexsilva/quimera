@@ -14,10 +14,15 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+from rich.console import Group
 from rich.markdown import Markdown
+from rich.padding import Padding
 from rich.panel import Panel
+from rich.rule import Rule
+from rich.table import Table
 from rich.text import Text
 
+import quimera.themes as themes
 from quimera.ui.text import (
     _apply_stream_diff,
     _extract_text_from_renderable,
@@ -142,6 +147,26 @@ class _TextualConsoleShim:
         self._bridge.emit(TextualUiEvent("plain", message))
 
 
+class _TextualStatus:
+    """Context manager simples para contratos running_status/live_status no Textual."""
+
+    def __init__(self, renderer: "TextualRenderer", agent: str | None = None, initial: str = "") -> None:
+        self._renderer = renderer
+        self._agent = agent
+        self._initial = initial
+
+    def update(self, text: str) -> None:
+        self._renderer.update_status(self._agent, text)
+
+    def __enter__(self):
+        if self._initial:
+            self.update(self._initial)
+        return self
+
+    def __exit__(self, *args) -> None:
+        self._renderer.update_status(self._agent, "concluído")
+
+
 @dataclass
 class TextualUiEvent:
     """Evento thread-safe enviado do runtime para a UI Textual."""
@@ -173,12 +198,13 @@ class TextualFeedModel:
 
     _TRANSIENT_KINDS = {"stream_start", "stream_chunk", "stream_abort", "agent_update", "agent_lifecycle"}
 
-    _IGNORED_KINDS = {"prompt", "input_active", "summarizing"}
+    _IGNORED_KINDS = {"prompt", "input_active", "summarizing", "window_open", "window_clear"}
 
     def __init__(self) -> None:
         self._items: list[TextualFeedItem] = []
         self._transient_index_by_agent: dict[str, int] = {}
         self._stream_buffer_by_agent: dict[str, str] = {}
+        self._stream_meta_by_agent: dict[str, dict[str, Any]] = {}
         self._finalized_agents: set[str] = set()
         self._last_change = TextualFeedChange(False)
 
@@ -197,6 +223,7 @@ class TextualFeedModel:
         self._items.clear()
         self._transient_index_by_agent.clear()
         self._stream_buffer_by_agent.clear()
+        self._stream_meta_by_agent.clear()
         self._finalized_agents.clear()
         self._last_change = TextualFeedChange(True, redraw=True)
 
@@ -207,6 +234,8 @@ class TextualFeedModel:
             return False
         if event.kind in {"question", "question_clear"}:
             return False
+        if event.kind == "visual_reset":
+            return self._apply_visual_reset(event)
         if event.kind == "agent_message":
             replaced = self._replace_transient_with_final(event)
             self._last_change = TextualFeedChange(True, redraw=replaced, appended=None if replaced else self._items[-1])
@@ -215,6 +244,7 @@ class TextualFeedModel:
             agent = self._agent_key(event)
             self._finalized_agents.discard(agent)
             self._stream_buffer_by_agent[agent] = ""
+            self._stream_meta_by_agent[agent] = dict(event.payload or {}) if isinstance(event.payload, dict) else {}
             replaced = self._upsert_transient(event)
             self._last_change = TextualFeedChange(True, redraw=replaced, appended=None if replaced else self._items[-1])
             return True
@@ -248,6 +278,7 @@ class TextualFeedModel:
     def _replace_transient_with_final(self, event: TextualUiEvent) -> bool:
         agent = self._agent_key(event)
         self._stream_buffer_by_agent.pop(agent, None)
+        self._stream_meta_by_agent.pop(agent, None)
         self._finalized_agents.add(agent)
         item = TextualFeedItem(event, transient=False)
         index = self._transient_index_by_agent.pop(agent, None)
@@ -282,11 +313,45 @@ class TextualFeedModel:
             current += strip_ansi(str(payload))
         self._stream_buffer_by_agent[agent] = current
         if current.strip():
-            replaced = self._upsert_transient(TextualUiEvent("stream_chunk", current, agent=event.agent))
+            payload: Any = current
+            meta = self._stream_meta_by_agent.get(agent)
+            if meta:
+                payload = {**meta, "content": current}
+            replaced = self._upsert_transient(TextualUiEvent("stream_chunk", payload, agent=event.agent))
             self._last_change = TextualFeedChange(True, redraw=replaced, appended=None if replaced else self._items[-1])
             return True
         self._last_change = TextualFeedChange(False)
         return False
+
+    def _apply_visual_reset(self, event: TextualUiEvent) -> bool:
+        """Remove estado visual transitório sem apagar mensagens persistentes."""
+        agent = str(event.agent or "").strip()
+        if agent:
+            index = self._transient_index_by_agent.pop(agent, None)
+            self._stream_buffer_by_agent.pop(agent, None)
+            self._stream_meta_by_agent.pop(agent, None)
+            if index is None or not (0 <= index < len(self._items)):
+                self._last_change = TextualFeedChange(False)
+                return False
+            del self._items[index]
+            self._reindex_transients()
+            self._last_change = TextualFeedChange(True, redraw=True)
+            return True
+
+        before = len(self._items)
+        self._items = [item for item in self._items if not item.transient]
+        self._transient_index_by_agent.clear()
+        self._stream_buffer_by_agent.clear()
+        self._stream_meta_by_agent.clear()
+        changed = len(self._items) != before
+        self._last_change = TextualFeedChange(changed, redraw=changed)
+        return changed
+
+    def _reindex_transients(self) -> None:
+        self._transient_index_by_agent.clear()
+        for index, item in enumerate(self._items):
+            if item.transient:
+                self._transient_index_by_agent[self._agent_key(item.event)] = index
 
 
 def _resolve_textual_feed_limit(quimera_app) -> int | None:
@@ -727,6 +792,25 @@ class TextualRenderer:
         self._audit_logger = None
         self._console = _TextualConsoleShim(bridge)
         self._profile_resolver: Callable | None = None
+        self._theme = themes.get(themes.DEFAULT_THEME)
+        self._statuses: dict[str, str] = {}
+
+    @property
+    def theme_name(self) -> str:
+        """Retorna o nome do tema ativo."""
+        return self._theme.name
+
+    def cycle_theme(self) -> str:
+        """Avança para o próximo tema compartilhado com o renderer legado."""
+        all_names = themes.names()
+        try:
+            idx = all_names.index(self._theme.name)
+        except ValueError:
+            idx = 0
+        next_name = all_names[(idx + 1) % len(all_names)]
+        self._theme = themes.get(next_name)
+        self._bridge.emit(TextualUiEvent("theme_changed", {"theme": next_name}))
+        return next_name
 
     def set_profile_resolver(self, resolver: Callable) -> None:
         """Define callback para resolver (color, label) por agente."""
@@ -734,17 +818,34 @@ class TextualRenderer:
 
     def _resolve_agent_label(self, agent: str) -> str:
         """Retorna label formatada com ícone do agente, ex: '🔮  Claude'."""
+        _style, label = self._resolve_agent_style(agent)
+        return label
+
+    def _resolve_agent_style(self, agent: str) -> tuple[str, str]:
+        """Retorna (style, label) para o agente usando o resolver existente."""
         resolver = self._profile_resolver
         if resolver:
             try:
                 result = resolver(str(agent).lower())
                 if result:
-                    _, label = result
-                    return label
+                    style, label = result
+                    return str(style or "cyan"), str(label)
             except Exception:
                 pass
         agent_name = str(agent).capitalize() if agent else "Agente"
-        return f"🤖  {agent_name}"
+        return "cyan", f"🤖  {agent_name}"
+
+    def _agent_event_payload(
+        self,
+        agent,
+        extra: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Monta payload visual comum para eventos de agente."""
+        style, label = self._resolve_agent_style(str(agent or ""))
+        payload = {"label": label, "style": style, "theme": self._theme.name}
+        if extra:
+            payload.update(extra)
+        return payload
 
     def set_prompt_integration(self, is_active_fn, run_above_fn) -> None:
         """Compatibilidade com TerminalRenderer."""
@@ -760,17 +861,36 @@ class TextualRenderer:
             textual_app = self._bridge.textual_app
         return _external_textual_window(textual_app)
 
-    def approval_window(self, *, title: str = "Aprovação", **kwargs):
+    @contextmanager
+    def _interactive_window(self, kind: str, title: str, owner: str | None = None, metadata=None):
+        """Sinaliza janela interativa sem ceder stdout fora do Textual."""
+        self._bridge.emit(
+            TextualUiEvent(
+                "window_open",
+                {
+                    "kind": kind,
+                    "title": title,
+                    "owner": owner,
+                    "metadata": dict(metadata or {}),
+                },
+            )
+        )
+        try:
+            yield
+        finally:
+            self._bridge.emit(TextualUiEvent("window_clear", {"kind": kind}))
+
+    def approval_window(self, *, title: str = "Permissão solicitada", owner: str | None = None, metadata=None, **kwargs):
         """Compatibilidade com fluxos legados de aprovação."""
-        return nullcontext()
+        return self._interactive_window("approval", title, owner=owner, metadata=metadata)
 
-    def input_window(self, *, title: str = "Entrada", **kwargs):
+    def input_window(self, *, title: str = "Entrada solicitada", owner: str | None = None, metadata=None, **kwargs):
         """Compatibilidade com fluxos legados de entrada."""
-        return nullcontext()
+        return self._interactive_window("input", title, owner=owner, metadata=metadata)
 
-    def selection_window(self, *, title: str = "Seleção", **kwargs):
+    def selection_window(self, *, title: str = "Seleção solicitada", owner: str | None = None, metadata=None, **kwargs):
         """Compatibilidade com fluxos legados de seleção."""
-        return nullcontext()
+        return self._interactive_window("selection", title, owner=owner, metadata=metadata)
 
     def flush(self, timeout: float = 5.0) -> None:
         """Textual processa eventos pelo próprio loop."""
@@ -784,6 +904,10 @@ class TextualRenderer:
         """Exibe mensagem de sistema."""
         self._bridge.emit(TextualUiEvent("system", str(message)))
 
+    def show_banner(self, message: str) -> None:
+        """Exibe banner de boas-vindas/logo no feed Textual."""
+        self._bridge.emit(TextualUiEvent("banner", strip_ansi(str(message)).strip("\r\n")))
+
     def show_system_neutral(self, message: str) -> None:
         """Exibe mensagem neutra."""
         self._bridge.emit(TextualUiEvent("muted", str(message)))
@@ -794,7 +918,35 @@ class TextualRenderer:
 
     def show_error(self, message: str, **metadata) -> None:
         """Exibe erro."""
-        self._bridge.emit(TextualUiEvent("error", str(message)))
+        agent = metadata.get("agent")
+        command_name = metadata.get("command_name")
+        error_kind = metadata.get("error_kind")
+        return_code = metadata.get("return_code")
+        clean_message = strip_ansi(str(message)).strip("\r\n")
+        subject = str(agent or command_name or "").strip()
+        if error_kind == "agent_exit" and return_code is not None:
+            clean_message = (
+                f"[erro] retornou código {return_code}"
+                if agent
+                else f"[erro] agente {subject or 'unknown'} retornou código {return_code}"
+            )
+        elif error_kind == "agent_comm":
+            clean_message = (
+                f"[erro] falha ao comunicar: {clean_message}"
+                if agent
+                else f"[erro] falha ao comunicar com {subject or 'unknown'}: {clean_message}"
+            )
+        elif error_kind == "agent_invalid_output":
+            clean_message = (
+                "[erro] não retornou saída válida"
+                if agent
+                else f"[erro] agente {subject or 'unknown'} não retornou saída válida"
+            )
+        self._bridge.emit(TextualUiEvent("error", clean_message, agent=str(agent) if agent else None))
+
+    def show_approval(self, message: str) -> None:
+        """Exibe bloco persistente de aprovação no feed."""
+        self._bridge.emit(TextualUiEvent("approval", strip_ansi(str(message)).strip("\r\n")))
 
     def clear_screen(self) -> None:
         """Limpa o feed Textual sem escrever ANSI direto no terminal."""
@@ -809,6 +961,53 @@ class TextualRenderer:
         """Exibe texto no feed."""
         self.show_plain(message, agent=agent, muted=muted)
 
+    def show_turn_summary(self, agent: str | None, detail: dict) -> None:
+        """Exibe resumo compacto de tools do turno."""
+        runtime = str((detail or {}).get("runtime") or "").strip().lower()
+        if runtime and runtime != "cli":
+            return
+        tools = detail.get("tools", []) if isinstance(detail, dict) else []
+        if not isinstance(tools, list) or not tools:
+            return
+        total = 0
+        ok_count = 0
+        err_count = 0
+        total_ms = 0
+        for tool in tools:
+            if not isinstance(tool, dict):
+                continue
+            total += 1
+            status = str(tool.get("status") or "").strip().lower()
+            if status in {"ok", "success", "succeeded"}:
+                ok_count += 1
+            if status in {"error", "failed", "fail", "timeout"}:
+                err_count += 1
+            duration_ms = tool.get("duration_ms")
+            if isinstance(duration_ms, int) and duration_ms >= 0:
+                total_ms += duration_ms
+        if total <= 0:
+            return
+        duration = f"{total_ms}ms" if total_ms < 1000 else f"{total_ms / 1000:.1f}s"
+        summary = f"TOOLS: {total} chamadas · {ok_count} ok · {err_count} erro · {duration}"
+        self._bridge.emit(TextualUiEvent("turn_summary", summary, agent=agent))
+
+    def show_delegation(self, from_agent, to_agent, task=None) -> None:
+        """Exibe delegação entre agentes."""
+        from_style, from_label = self._resolve_agent_style(str(from_agent))
+        to_style, to_label = self._resolve_agent_style(str(to_agent))
+        self._bridge.emit(
+            TextualUiEvent(
+                "delegation",
+                {
+                    "from_label": from_label,
+                    "from_style": from_style,
+                    "to_label": to_label,
+                    "to_style": to_style,
+                    "task": str(task or "").strip(),
+                },
+            )
+        )
+
     def show_agent_lifecycle(self, agent: str, status: str, message: str) -> None:
         """Exibe lifecycle transitório de agente como evento semântico."""
         self._bridge.emit(
@@ -822,12 +1021,14 @@ class TextualRenderer:
     def show_message(self, agent, content, render_mode: str = "auto") -> None:
         """Exibe resposta final de agente com ícone."""
         clean_content = strip_ansi(_extract_text_from_renderable(content))
-        label = self._resolve_agent_label(agent)
         self._bridge.clear_agent_active(str(agent))
         self._bridge.emit(
             TextualUiEvent(
                 "agent_message",
-                {"content": clean_content, "render_mode": render_mode, "label": label},
+                self._agent_event_payload(
+                    agent,
+                    {"content": clean_content, "render_mode": render_mode},
+                ),
                 agent=str(agent),
             )
         )
@@ -841,7 +1042,7 @@ class TextualRenderer:
         label = self._resolve_agent_label(agent)
         self._bridge.set_agent_active(str(agent), label)
         self._bridge.emit(
-            TextualUiEvent("stream_start", {"label": label}, agent=str(agent))
+            TextualUiEvent("stream_start", self._agent_event_payload(agent), agent=str(agent))
         )
 
     def update_message_stream(self, agent, chunk) -> None:
@@ -863,10 +1064,9 @@ class TextualRenderer:
 
     def abort_message_stream(self, agent) -> None:
         """Aborta stream visual."""
-        label = self._resolve_agent_label(agent)
         self._bridge.clear_agent_active(str(agent))
         self._bridge.emit(
-            TextualUiEvent("stream_abort", {"label": label}, agent=str(agent))
+            TextualUiEvent("stream_abort", self._agent_event_payload(agent), agent=str(agent))
         )
 
     def update_agent_transient(self, agent, message: str) -> None:
@@ -875,7 +1075,47 @@ class TextualRenderer:
 
     def clear_agent_transient(self, agent) -> None:
         """Compatibilidade com TerminalRenderer."""
-        return None
+        self._bridge.emit(TextualUiEvent("visual_reset", agent=str(agent)))
+
+    def reset_visual_state(self, agent: str | None = None) -> None:
+        """Limpa estados visuais transitórios após cancelamento."""
+        if agent:
+            self._bridge.clear_agent_active(str(agent))
+            self._bridge.emit(TextualUiEvent("visual_reset", agent=str(agent)))
+            return
+        self._statuses.clear()
+        self._bridge.emit(TextualUiEvent("visual_reset"))
+
+    def set_agent_pending_input(self, agent: str, kind: str, question: str = "") -> None:
+        """Sinaliza input pendente de agente como status visual."""
+        label = "aprovação pendente" if str(kind) == "approval" else "input pendente"
+        first_line = str(question or label).strip().splitlines()[0] if str(question or "").strip() else label
+        self._bridge.emit(TextualUiEvent("agent_update", first_line, agent=str(agent)))
+
+    def clear_agent_pending_input(self, agent: str) -> None:
+        """Remove status transitório de input pendente."""
+        self.clear_agent_transient(agent)
+
+    def update_status(self, agent, message) -> None:
+        """Atualiza status de agente paralelo no feed Textual."""
+        key = str(agent or "global")
+        self._statuses[key] = str(message)
+        self._bridge.emit(TextualUiEvent("agent_lifecycle", {"status": "running", "message": str(message)}, agent=key))
+
+    @contextmanager
+    def live_status(self, agents):
+        """Context manager de status para múltiplos agentes."""
+        for agent in agents or []:
+            self.update_status(agent, "inicializando...")
+        try:
+            yield
+        finally:
+            for agent in agents or []:
+                self.update_status(agent, "concluído")
+
+    def running_status(self, initial="", agent=None):
+        """Retorna context manager compatível com status Rich."""
+        return _TextualStatus(self, str(agent) if agent else None, str(initial or ""))
 
     def show_newline(self) -> None:
         """Exibe linha vazia."""
@@ -896,22 +1136,31 @@ def _render_event(event: TextualUiEvent):
         payload = event.payload or {}
         content = str(payload.get("content", ""))
         label = str(payload.get("label", f"🤖 {event.agent or 'agente'}"))
+        style = str(payload.get("style", "cyan") or "cyan")
+        theme_name = str(payload.get("theme", themes.DEFAULT_THEME) or themes.DEFAULT_THEME)
         body = Markdown(content) if payload.get("render_mode") != "plain" else Text(content)
-        return Panel(body, title=label, border_style="cyan")
+        return _render_themed_agent_block(theme_name, label, style, body)
     if event.kind == "stream_start":
         payload = event.payload or {}
         label = str(payload.get("label", f"🤖 {event.agent or 'agente'}"))
-        return Panel(Text("gerando...", style="dim italic"), title=label, border_style="dim")
+        style = str(payload.get("style", "cyan") or "cyan")
+        theme_name = str(payload.get("theme", themes.DEFAULT_THEME) or themes.DEFAULT_THEME)
+        return _render_themed_agent_block(theme_name, label, style, Text("gerando...", style="dim italic"), streaming=True)
     if event.kind == "stream_abort":
         payload = event.payload or {}
         label = str(payload.get("label", f"🤖 {event.agent or 'agente'}"))
-        return Panel(Text("interrompido", style="dim red"), title=label, border_style="dim")
+        style = str(payload.get("style", "red") or "red")
+        theme_name = str(payload.get("theme", themes.DEFAULT_THEME) or themes.DEFAULT_THEME)
+        return _render_themed_agent_block(theme_name, label, style, Text("interrompido", style="dim red"), streaming=True)
     if event.kind == "stream_chunk":
-        content = str(event.payload) if not isinstance(event.payload, dict) else str(event.payload.get("text", event.payload))
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        content = str(payload.get("content") or payload.get("text") or event.payload)
         if not content.strip():
             return None
-        agent = event.agent or "agente"
-        return Panel(Text(content), title=f"🤖 {agent} (stream)", border_style="dim")
+        label = str(payload.get("label", f"🤖 {event.agent or 'agente'}"))
+        style = str(payload.get("style", "cyan") or "cyan")
+        theme_name = str(payload.get("theme", themes.DEFAULT_THEME) or themes.DEFAULT_THEME)
+        return _render_themed_agent_block(theme_name, label, style, Text(content), streaming=True)
     if event.kind == "agent_lifecycle":
         payload = event.payload or {}
         message = str(payload.get("message", "")) if isinstance(payload, dict) else str(payload)
@@ -922,6 +1171,26 @@ def _render_event(event: TextualUiEvent):
     if event.kind in {"warning", "error"}:
         style = "yellow" if event.kind == "warning" else "red"
         return Text(str(event.payload), style=style)
+    if event.kind == "banner":
+        return Group(Text(str(event.payload), style="bold cyan"), Rule(style="dim cyan"))
+    if event.kind == "approval":
+        lines = str(event.payload or "").splitlines()
+        title = lines[0] if lines else "Permissão solicitada"
+        body = "\n".join(lines[1:]) if len(lines) > 1 else str(event.payload or "")
+        return Panel(Text(body, style="yellow"), title=f"[bold yellow]{title}[/bold yellow]", border_style="yellow")
+    if event.kind == "delegation":
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        task = str(payload.get("task", "")).strip()
+        text = Text()
+        text.append(str(payload.get("from_label", "agente")), style=f"bold {payload.get('from_style', 'cyan')}")
+        text.append(" → ", style="dim")
+        text.append(str(payload.get("to_label", "agente")), style=f"bold {payload.get('to_style', 'cyan')}")
+        if task:
+            text.append(f" · {task}", style="dim")
+        return Rule(text, style="dim")
+    if event.kind == "turn_summary":
+        prefix = f"{event.agent} " if event.agent else ""
+        return Text(f"{prefix}{event.payload}", style="dim")
     if event.kind == "question":
         payload = event.payload or {}
         lines = [str(payload.get("question", ""))]
@@ -941,7 +1210,51 @@ def _render_event(event: TextualUiEvent):
         return Text(str(event.payload), style="dim")
     if event.kind == "system":
         return Text(str(event.payload), style="blue")
+    if event.kind == "theme_changed":
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        theme_name = str(payload.get("theme", "")).strip()
+        return Text(f"tema: {theme_name}" if theme_name else "tema atualizado", style="dim cyan")
     return Text(str(event.payload))
+
+
+def _render_themed_agent_block(theme_name: str, label: str, style: str, body, *, streaming: bool = False):
+    """Renderiza bloco de agente na Textual usando os mesmos nomes de tema do renderer legado."""
+    name = themes.get(theme_name).name
+    if name == "panel":
+        title = f"[bold {style}]{label}[/bold {style}]"
+        return Panel(body, title=title, border_style=style, padding=(0, 1))
+    if name == "chat":
+        table = Table.grid(expand=True, padding=(0, 1))
+        table.add_column(width=2)
+        table.add_column(ratio=1)
+        table.add_row(
+            Text("●", style=f"bold {style}"),
+            Group(
+                Text(label, style=f"bold {style}"),
+                Padding(body, pad=(0, 0, 0, 2)),
+            ),
+        )
+        return table
+    if name == "rule":
+        return Group(
+            Rule(f"[bold {style}]{label}[/bold {style}]", style=f"dim {style}"),
+            body,
+            Rule(style="dim"),
+        )
+    if name == "minimal":
+        return Group(Text(f"▶ {label}", style=f"bold {style}"), Padding(body, pad=(0, 0, 0, 2)))
+    if name == "card":
+        return Panel(
+            body,
+            title=f"[bold {style}]{label}[/bold {style}]",
+            border_style=f"dim {style}",
+            padding=(0, 1),
+            subtitle="▸" if not streaming else None,
+            subtitle_align="right",
+        )
+    if name == "line":
+        return Group(Text(label, style=f"bold {style}"), body)
+    return Panel(body, title=label, border_style=style)
 
 
 def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
@@ -1243,7 +1556,9 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             question = str(data.get("question", "")).strip()
             options = list(data.get("options", []) or [])
             kind = str(data.get("kind", "input")).strip().lower()
-            title = "Permissão solicitada" if kind == "approval" else "input solicitado"
+            title = str(data.get("title") or "").strip()
+            if not title:
+                title = "Permissão solicitada" if kind == "approval" else "input solicitado"
             lines = [question] if question else []
             for index, option in enumerate(options, 1):
                 lines.append(f"{index}. {option}")
@@ -1305,7 +1620,18 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                 self._set_question_overlay(event.payload)
                 self._refresh_toolbar()
                 return
+            if event.kind == "window_open":
+                payload = dict(event.payload or {}) if isinstance(event.payload, dict) else {}
+                title = str(payload.get("title") or "input solicitado")
+                kind = str(payload.get("kind") or "input")
+                self._set_question_overlay({"question": "", "options": [], "title": title, "kind": kind})
+                self._refresh_toolbar()
+                return
             if event.kind == "question_clear":
+                self._clear_question_overlay()
+                self._refresh_toolbar()
+                return
+            if event.kind == "window_clear":
                 self._clear_question_overlay()
                 self._refresh_toolbar()
                 return
