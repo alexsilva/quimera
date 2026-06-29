@@ -486,8 +486,7 @@ class InputBroker:
             for i, opt in enumerate(options):
                 if stripped.lower() == opt.lower():
                     return i, opt
-            # Fallback: primeira opção
-            return 0, options[0]
+            return None
 
         gate = self._input_gate
         if gate is not None:
