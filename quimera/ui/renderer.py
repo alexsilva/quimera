@@ -769,7 +769,7 @@ class TerminalRenderer:
                 style,
                 content=clean_content,
                 include_header=True,
-                include_footer_rule=False,
+                include_footer_rule=(theme_name == "rule"),
                 render_mode=render_mode,
             )
             self._print(block, kind="message")
