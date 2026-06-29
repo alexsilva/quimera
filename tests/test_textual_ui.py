@@ -3,7 +3,7 @@
 from unittest.mock import Mock, patch
 from contextlib import contextmanager
 
-from quimera.app.textual_ui import TextualFeedModel, TextualInputGate, TextualRenderer, TextualUiBridge, TextualUiEvent
+from quimera.app.textual_ui import TextualFeedModel, TextualInputGate, TextualRenderer, TextualUiBridge, TextualUiEvent, _split_prompt_for_input
 
 
 def _events(model: TextualFeedModel):
@@ -133,6 +133,12 @@ def test_textual_input_gate_completes_command_arguments_with_spaces():
     )
 
     assert gate.completions_for("/context s") == ["/context show"]
+
+
+def test_textual_prompt_is_split_between_label_and_placeholder():
+    assert _split_prompt_for_input("Alex: ") == ("Alex:", "mensagem...")
+    assert _split_prompt_for_input("Selecione (1-3): ") == ("Selecione (1-3):", "mensagem...")
+    assert _split_prompt_for_input("") == ("Alex:", "mensagem...")
 
 
 def test_textual_renderer_clear_screen_emits_clear_event():
