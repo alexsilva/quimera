@@ -27,7 +27,6 @@ class ToolRuntimeConfig:
             "cat",
             "echo",
             "find",
-            "git",
             "grep",
             "head",
             "ls",

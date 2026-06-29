@@ -679,9 +679,8 @@ class ShellToolValidator(ValidatableTool):
         except Exception as exc:  # noqa: BLE001
             raise ToolPolicyError(f"Comando inválido: {command}") from exc
         if first_token not in self.config.shell_allowlist:
-            raise ToolPolicyError(f"Comando fora da allowlist: {first_token}")
-        if first_token == "git" and len(tokens) > 1 and tokens[1] in {"push"}:
-            raise ToolPolicyError("Comando bloqueado: git push exige confirmação forte fora do shell MCP")
+            allowed = ", ".join(sorted(self.config.shell_allowlist))
+            raise ToolPolicyError(f"Comando fora da allowlist: {first_token!r}. Permitidos: {allowed}")
         if first_token in self._FILE_PATH_CMDS:
             self._validate_shell_file_paths(tokens[1:])
 
