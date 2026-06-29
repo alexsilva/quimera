@@ -7,7 +7,7 @@ import sys
 import traceback
 import threading
 from collections.abc import Callable
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -28,6 +28,104 @@ from quimera.app.config import handler as _screen_handler
 
 _NO_RESPONSE_MESSAGE = "sem resposta válida"
 _SUMMARY_SPINNER_FRAMES = ("◐", "◓", "◑", "◒")
+_TERMINAL_MODE_RESET = (
+    "\x1b[?1000l"  # mouse click tracking
+    "\x1b[?1002l"  # mouse button-event tracking
+    "\x1b[?1003l"  # any-event mouse tracking
+    "\x1b[?1005l"  # UTF-8 mouse mode
+    "\x1b[?1006l"  # SGR mouse mode
+    "\x1b[?1015l"  # urxvt mouse mode
+    "\x1b[?2004l"  # bracketed paste
+    "\x1b[?25h"    # cursor visible
+)
+
+
+def _restore_terminal_modes() -> None:
+    """Desativa modos interativos que não podem vazar para editor/shell."""
+    stdout = getattr(sys, "__stdout__", None) or sys.stdout
+    if stdout is None:
+        return
+    try:
+        stdout.write(_TERMINAL_MODE_RESET)
+        stdout.flush()
+    except Exception:
+        return
+
+
+@contextmanager
+def _external_textual_window(textual_app):
+    """Suspende Textual para processo externo sem vazar modos de terminal."""
+    if textual_app is None:
+        _restore_terminal_modes()
+        try:
+            yield
+        finally:
+            _restore_terminal_modes()
+        return
+
+    driver = getattr(textual_app, "_driver", None)
+    call_from_thread = getattr(textual_app, "call_from_thread", None)
+
+    if driver is None or not callable(call_from_thread):
+        suspend = getattr(textual_app, "suspend", None)
+        if callable(suspend):
+            with suspend():
+                _restore_terminal_modes()
+                try:
+                    yield
+                finally:
+                    _restore_terminal_modes()
+            return
+        _restore_terminal_modes()
+        try:
+            yield
+        finally:
+            _restore_terminal_modes()
+        return
+
+    can_suspend = bool(getattr(driver, "can_suspend", False))
+
+    def _suspend_driver() -> None:
+        if not can_suspend:
+            return
+        try:
+            textual_app._suspend_signal()
+        except Exception:
+            pass
+        driver.suspend_application_mode()
+
+    def _resume_driver() -> None:
+        if not can_suspend:
+            return
+        driver.resume_application_mode()
+        try:
+            textual_app._resume_signal()
+        except Exception:
+            pass
+        try:
+            textual_app.refresh(layout=True)
+        except Exception:
+            pass
+
+    try:
+        call_from_thread(_suspend_driver)
+    except Exception:
+        _restore_terminal_modes()
+        try:
+            yield
+        finally:
+            _restore_terminal_modes()
+        return
+
+    _restore_terminal_modes()
+    try:
+        yield
+    finally:
+        _restore_terminal_modes()
+        try:
+            call_from_thread(_resume_driver)
+        finally:
+            _restore_terminal_modes()
 
 
 class _TextualConsoleShim:
@@ -558,10 +656,7 @@ class TextualRenderer:
         """Entrega temporariamente o terminal para uma janela/processo externo."""
         with self._bridge._lock:
             textual_app = self._bridge.textual_app
-        suspend = getattr(textual_app, "suspend", None)
-        if callable(suspend):
-            return suspend()
-        return nullcontext()
+        return _external_textual_window(textual_app)
 
     def approval_window(self, *, title: str = "Aprovação", **kwargs):
         """Compatibilidade com fluxos legados de aprovação."""
@@ -1097,7 +1192,10 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
     renderer = getattr(quimera_app, "renderer", None)
     if renderer is not None and hasattr(renderer, "set_profile_resolver"):
         renderer.set_profile_resolver(quimera_app._resolve_profile_style)
-    QuimeraTextualApp().run()
+    try:
+        QuimeraTextualApp().run()
+    finally:
+        _restore_terminal_modes()
 
     # Após o Textual sair (tela alternativa restaurada), drena eventos pendentes
     # e imprime erros/warnings para a tela normal — assim não desaparecem.

@@ -1,6 +1,6 @@
 """Tests for the Textual UI bridge/feed model."""
 
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 from contextlib import contextmanager
 
 from quimera.app.textual_ui import TextualFeedModel, TextualInputGate, TextualRenderer, TextualUiBridge, TextualUiEvent
@@ -164,3 +164,27 @@ def test_textual_renderer_external_window_suspends_textual_app():
         events.append("editor")
 
     assert events == ["suspend", "editor", "resume"]
+
+
+def test_textual_renderer_external_window_resets_terminal_modes():
+    bridge = TextualUiBridge()
+    writes = []
+
+    class FakeStdout:
+        def write(self, value):
+            writes.append(value)
+
+        def flush(self):
+            writes.append("flush")
+
+    renderer = TextualRenderer(bridge)
+
+    with patch("quimera.app.textual_ui.sys.__stdout__", FakeStdout()):
+        with renderer.external_window("external:editor", title="Editor externo"):
+            writes.append("editor")
+
+    text = "".join(value for value in writes if value != "flush")
+    assert "\x1b[?1006l" in text
+    assert "\x1b[?1003l" in text
+    assert "\x1b[?2004l" in text
+    assert writes.count("editor") == 1
