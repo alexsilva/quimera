@@ -548,7 +548,7 @@ class QuimeraApplication:
                 self._submit_fn(text)
             return
 
-        self.append_output(f"\033[1;36m{self._prompt_prefix}\033[0m{text}\n")
+        was_awaiting = self._awaiting_response
 
         injected = False
         if self._inject_fn is not None:
@@ -556,6 +556,9 @@ class QuimeraApplication:
                 injected = self._inject_fn(text)
             except Exception:
                 pass
+
+        if not was_awaiting and not injected:
+            self._append_user_prompt_echo(text)
 
         if injected:
             self._awaiting_response = True
@@ -568,6 +571,13 @@ class QuimeraApplication:
             if self._loop is not None and not self._loop.is_closed():
                 self._loop.call_soon(self._focus_input_area)
 
+        self.invalidate()
+
+    def _append_user_prompt_echo(self, text: str) -> None:
+        with self._output_lock:
+            if self._output_text and not self._output_text.endswith("\n"):
+                self._output_text += "\n"
+            self._output_text += f"\033[1;36m{self._prompt_prefix}\033[0m{text}\n"
         self.invalidate()
 
     def _on_overlay_submit(self, buffer) -> None:

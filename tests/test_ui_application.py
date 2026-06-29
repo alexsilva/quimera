@@ -134,7 +134,36 @@ def test_split_submit_falls_back_to_submit_when_not_injected():
     app._on_submit(DummyBuffer())
 
     assert submitted == ["hello"]
+    assert "hello" in app._output_text
     assert app._awaiting_response is True
+
+
+def test_split_submit_does_not_echo_queued_prompt_while_awaiting():
+    submitted = []
+    app = QuimeraApplication(submit_fn=submitted.append, inject_fn=lambda _text: False)
+    app._awaiting_response = True
+    app._output_text = "iniciando execução"
+
+    class DummyBuffer:
+        text = "segundo prompt"
+
+    app._on_submit(DummyBuffer())
+
+    assert submitted == ["segundo prompt"]
+    assert app._output_text == "iniciando execução"
+
+
+def test_split_user_prompt_echo_starts_on_new_line():
+    app = QuimeraApplication(submit_fn=lambda _text: None, inject_fn=lambda _text: False)
+    app._output_text = "iniciando execução"
+
+    class DummyBuffer:
+        text = "oi"
+
+    app._on_submit(DummyBuffer())
+
+    assert "iniciando execução\n" in app._output_text
+    assert "oi" in app._output_text
 
 
 def test_split_submit_does_not_queue_when_injected():
