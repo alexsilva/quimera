@@ -323,6 +323,7 @@ class TextualUiBridge:
         self.ui_queue: queue.Queue[TextualUiEvent] = queue.Queue()
         self.textual_app = None
         self.quimera_app = None
+        self._input_value = ""
         self._lock = threading.Lock()
 
     def attach_textual_app(self, textual_app) -> None:
@@ -349,6 +350,16 @@ class TextualUiBridge:
         if self._try_inject_active_agent(text):
             return
         self.input_queue.put(value)
+
+    def set_input_value(self, value: str) -> None:
+        """Atualiza snapshot thread-safe do buffer editável atual."""
+        with self._lock:
+            self._input_value = str(value or "")
+
+    def get_input_value(self) -> str:
+        """Retorna snapshot thread-safe do buffer editável atual."""
+        with self._lock:
+            return self._input_value
 
     def _try_inject_active_agent(self, text: str) -> bool:
         """Tenta enviar texto ao stdin do agente ativo, preservando contrato do split."""
@@ -485,7 +496,7 @@ class TextualInputGate:
 
     def get_line_buffer(self) -> str:
         """Compatibilidade com callers que consultam buffer atual."""
-        return ""
+        return self._bridge.get_input_value()
 
     def _set_active_state(self, active: bool) -> None:
         with self._active_lock:
@@ -1115,6 +1126,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
 
         def on_mount(self) -> None:
             bridge.attach_textual_app(self)
+            bridge.set_input_value("")
             gate = getattr(quimera_app, "input_gate", None)
             if hasattr(gate, "set_textual_mounted"):
                 gate.set_textual_mounted(True)
@@ -1183,6 +1195,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             self._clear_question_overlay()
             value = event.value
             event.input.value = ""
+            bridge.set_input_value("")
             event.input.add_to_history(value)
             bridge.submit_input(value)
 
@@ -1216,6 +1229,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                 return
             dropdown = self.query_one(CompletionDropdown)
             value = str(event.value)
+            bridge.set_input_value(value)
 
             if not value:
                 dropdown.hide()

@@ -195,6 +195,19 @@ def test_textual_input_gate_is_active_while_textual_is_mounted():
     assert gate.is_active() is False
 
 
+def test_textual_input_gate_returns_current_line_buffer():
+    bridge = TextualUiBridge()
+    gate = TextualInputGate(bridge)
+
+    bridge.set_input_value("/context show")
+
+    assert gate.get_line_buffer() == "/context show"
+
+    bridge.set_input_value("")
+
+    assert gate.get_line_buffer() == ""
+
+
 def test_textual_input_gate_clears_question_overlay_after_selection_timeout():
     bridge = TextualUiBridge()
     emitted = []
