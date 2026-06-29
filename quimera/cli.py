@@ -575,6 +575,12 @@ def main():
         from .ui.application import QuimeraApplication
         from .constants import CMD_EXIT
 
+        input_services = getattr(app, "input_services", None)
+        set_split_queue = getattr(input_services, "set_split_queue", None)
+        if not callable(set_split_queue):
+            app.run()
+            return
+
         _split_q: _queue.Queue = _queue.Queue()
 
         def _submit(text: str) -> None:
@@ -587,8 +593,18 @@ def main():
         _command_resolver = getattr(app, "_available_commands", None)
         _argument_resolver = getattr(app, "_command_argument_resolver", None)
 
+        def _cancel_active_agent() -> bool:
+            if not getattr(app, "is_agent_running", False):
+                return False
+            agent_client = getattr(app, "agent_client", None)
+            cancel = getattr(agent_client, "cancel_active_work", None)
+            if callable(cancel):
+                cancel()
+                return True
+            return False
+
         def _inject(text: str) -> bool:
-            stdin = app.active_agent_stdin
+            stdin = getattr(app, "active_agent_stdin", None)
             if stdin is not None:
                 try:
                     stdin.write(text + "\n")
@@ -596,21 +612,20 @@ def main():
                     return True
                 except (OSError, ValueError, AttributeError):
                     pass
-            # API driver (sem subprocess): queue silenciosamente se agente ativo
-            if getattr(app, 'is_agent_running', False):
-                _split_q.put(text)
-                return True
             return False
 
         qapp = QuimeraApplication(
             submit_fn=_submit,
             inject_fn=_inject,
+            cancel_agent_fn=_cancel_active_agent,
+            theme_cycle_fn=getattr(getattr(app, "toolbar_coordinator", None), "cycle_renderer_theme", None),
+            history_file=str(getattr(getattr(app, "input_gate", None), "_history_file", "") or "") or None,
             toolbar_context_resolver=_toolbar_resolver,
             command_resolver=_command_resolver,
             argument_resolver=_argument_resolver,
             user_name=getattr(app, "user_name", None),
         )
-        app.input_services.set_split_queue(_split_q)
+        set_split_queue(_split_q)
 
         if hasattr(app, "renderer") and hasattr(app.renderer, "_compositor"):
             app.renderer._compositor.set_app_sink(qapp)
@@ -636,6 +651,6 @@ def main():
             qapp.run()
         finally:
             _split_q.put(CMD_EXIT)
-            _chat_thread.join(timeout=3)
+            _chat_thread.join(timeout=30)
     finally:
         _stop_test_fake_openai_backend(fake_openai_backend)

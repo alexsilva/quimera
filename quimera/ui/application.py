@@ -19,13 +19,14 @@ import asyncio
 import shutil
 import threading
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable
 
 from prompt_toolkit import Application
 from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
 from prompt_toolkit.data_structures import Point
 from prompt_toolkit.formatted_text import ANSI, FormattedText, HTML, to_formatted_text
-from prompt_toolkit.history import InMemoryHistory
+from prompt_toolkit.history import FileHistory, InMemoryHistory
 from prompt_toolkit.filters import completion_is_selected, has_completions
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout import Layout
@@ -171,7 +172,10 @@ class QuimeraApplication:
         *,
         submit_fn: Callable[[str], None] | None = None,
         inject_fn: Callable[[str], bool] | None = None,
+        cancel_agent_fn: Callable[[], bool] | None = None,
+        theme_cycle_fn: Callable[[], None] | None = None,
         history=None,
+        history_file: str | None = None,
         toolbar_context_resolver: Callable[[], dict] | None = None,
         command_resolver: Callable[[], list] | None = None,
         argument_resolver: Callable[[str, str], list] | None = None,
@@ -181,6 +185,8 @@ class QuimeraApplication:
     ) -> None:
         self._submit_fn = submit_fn
         self._inject_fn = inject_fn
+        self._cancel_agent_fn = cancel_agent_fn
+        self._theme_cycle_fn = theme_cycle_fn
         self._prompt_prefix = PromptFormatter.format_user_prompt(user_name)
         self._agent_label: str | None = None
         self._toolbar_context_resolver = toolbar_context_resolver
@@ -201,7 +207,16 @@ class QuimeraApplication:
         self._dock_state: str = "idle"  # "idle" | "awaiting_input"
         self._pending_req: _PendingPromptRequest | None = None
 
-        history = history or InMemoryHistory()
+        if history is None:
+            if history_file:
+                try:
+                    path = Path(history_file).expanduser()
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    history = FileHistory(str(path))
+                except Exception:
+                    history = InMemoryHistory()
+            else:
+                history = InMemoryHistory()
         completer = (
             _SlashCommandCompleter(command_resolver, argument_resolver)
             if command_resolver
@@ -500,14 +515,32 @@ class QuimeraApplication:
         def _ctrl_c(event):
             if self._dock_state != "idle":
                 self._resolve_pending(None)
-            else:
-                event.app.exit()
+                return
+            cancel_fn = self._cancel_agent_fn
+            if callable(cancel_fn):
+                try:
+                    if cancel_fn():
+                        return
+                except Exception:
+                    pass
+            event.app.exit()
 
         @kb.add("c-q")
         def _quit(event):
             if self._dock_state != "idle":
                 self._resolve_pending(None)
             event.app.exit()
+
+        @kb.add("c-t", eager=True)
+        @kb.add("f6", eager=True)
+        def _cycle_theme(event):
+            theme_fn = self._theme_cycle_fn
+            if callable(theme_fn):
+                try:
+                    theme_fn()
+                except Exception:
+                    pass
+                event.app.invalidate()
 
         # Quando há uma completion selecionada, Enter aplica ela (não submete).
         # eager=True garante prioridade sobre o accept_handler do TextArea.

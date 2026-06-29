@@ -34,6 +34,22 @@ def test_split_application_keeps_terminal_scrollback_by_default():
     assert app._app.renderer.mouse_support() is False
 
 
+def test_split_application_uses_persistent_history_file(tmp_path):
+    app = QuimeraApplication(history_file=str(tmp_path / "history.txt"))
+
+    assert app._input_area.buffer.history.__class__.__name__ == "FileHistory"
+
+
+def test_split_application_keeps_migrated_callbacks():
+    cancel = lambda: True
+    theme = lambda: None
+
+    app = QuimeraApplication(cancel_agent_fn=cancel, theme_cycle_fn=theme)
+
+    assert app._cancel_agent_fn is cancel
+    assert app._theme_cycle_fn is theme
+
+
 def test_split_application_exit_command_closes_prompt_app():
     submitted = []
     app = QuimeraApplication(submit_fn=submitted.append)
@@ -52,6 +68,37 @@ def test_split_application_exit_command_closes_prompt_app():
 
     assert submitted == [CMD_EXIT]
     assert exited == [True]
+
+
+def test_split_submit_falls_back_to_submit_when_not_injected():
+    submitted = []
+    app = QuimeraApplication(submit_fn=submitted.append, inject_fn=lambda _text: False)
+
+    class DummyBuffer:
+        text = "hello"
+
+    app._on_submit(DummyBuffer())
+
+    assert submitted == ["hello"]
+    assert app._awaiting_response is True
+
+
+def test_split_submit_does_not_queue_when_injected():
+    submitted = []
+    injected = []
+    app = QuimeraApplication(
+        submit_fn=submitted.append,
+        inject_fn=lambda text: injected.append(text) or True,
+    )
+
+    class DummyBuffer:
+        text = "continue"
+
+    app._on_submit(DummyBuffer())
+
+    assert injected == ["continue"]
+    assert submitted == []
+    assert app._awaiting_response is True
 
 
 def test_split_output_window_follows_tail_by_default():
