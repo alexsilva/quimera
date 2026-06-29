@@ -808,10 +808,9 @@ class AgentClient:
                 progress_callback=progress_callback,
             )
         self._spy_output_presenter.set_turn_runtime("cli")
-        # Sessão de resume: cria automaticamente para perfis com supports_resume=True.
-        # s/<agent> pode pre-criar antes; se já existir, mantém o session_id acumulado.
-        if agent not in self._persistent_sessions and getattr(profile, "supports_resume", False):
-            self._persistent_sessions[agent] = _FrozenSession(agent)
+        # Sessão de resume é opt-in: só existe quando o usuário fixa o agente
+        # explicitamente via s/<agent> (open_persistent_session). A main não
+        # retomava contexto automaticamente entre turnos.
         frozen_session = self._persistent_sessions.get(agent)
         cmd, prompt_as_arg, output_format = self._resolve_profile_cli_attrs(profile, connection)
         # Injeta --resume se o agente está fixo e tem session_id de turno anterior.
