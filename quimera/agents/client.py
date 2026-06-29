@@ -395,17 +395,9 @@ class AgentClient:
                 self._show_error(f"[erro] não foi possível iniciar {cmd[0]}: {exc}")
                 return None
         self._current_proc = proc
-        if self._closed:
-            _logger.debug("agent_client: run() — cliente fechado após Popen, terminando processo %d", proc.pid)
-            proc.terminate()
-            try:
-                proc.wait(timeout=3)
-            except Exception:
-                pass
-            return None
-        # Second check: ensure client wasn't closed while we were creating the process
-        # and before registering with the supervisor. This prevents the race where
-        # close() -> shutdown() sets _shutting_down before we call register().
+        # Check if client was closed while creating the process, before registering
+        # with the supervisor. This prevents the race where close() -> shutdown()
+        # sets _shutting_down before we call register().
         if self._closed:
             _logger.debug("agent_client: run() — cliente fechado antes de registrar, terminando processo %d", proc.pid)
             proc.terminate()
