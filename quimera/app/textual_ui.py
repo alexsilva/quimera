@@ -286,14 +286,6 @@ def _append_post_exit_failure_message(
     return True
 
 
-def _split_prompt_for_input(prompt: str | None) -> tuple[str, str]:
-    """Separa label visual do prompt do placeholder editável do Input."""
-    text = str(prompt or "").strip()
-    if not text or text == "mensagem...":
-        return "Alex:", "mensagem..."
-    return text, "mensagem..."
-
-
 class TextualUiBridge:
     """Bridge thread-safe entre o loop legado do Quimera e o app Textual."""
 
@@ -855,7 +847,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
     try:
         from textual.app import App, ComposeResult
         from textual.binding import Binding
-        from textual.containers import Horizontal, Vertical
+        from textual.containers import Vertical
         from textual.widgets import Header, Input, RichLog, Static
         from textual.widgets._header import HeaderClock, HeaderClockSpace, HeaderIcon, HeaderTitle
 
@@ -1011,17 +1003,8 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             padding: 0 1;
             background: $surface;
         }
-        #input_row {
-            height: 3;
-        }
-        #prompt_label {
-            width: auto;
-            padding: 0 1 0 0;
-            content-align: left middle;
-            color: $accent;
-        }
         #input {
-            width: 1fr;
+            width: 100%;
         }
         #summary-spinner {
             dock: right;
@@ -1067,9 +1050,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                 yield Static("", id="toolbar")
                 yield CompletionDropdown()
                 with Vertical(id="input_bar"):
-                    with Horizontal(id="input_row"):
-                        yield Static("Alex:", id="prompt_label")
-                        yield _CompletionInput(placeholder="mensagem...", id="input")
+                    yield _CompletionInput(placeholder="mensagem...", id="input")
 
         def on_mount(self) -> None:
             bridge.attach_textual_app(self)
@@ -1193,11 +1174,9 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                 toolbar = str(payload.get("toolbar", ""))
                 self._commands = list(payload.get("commands", []) or [])
                 self.query_one("#toolbar", Static).update(toolbar)
-                prompt_label = self.query_one("#prompt_label", Static)
                 input_widget = self.query_one("#input", Input)
-                label, placeholder = _split_prompt_for_input(payload.get("prompt"))
-                prompt_label.update(label)
-                input_widget.placeholder = placeholder
+                prompt = str(payload.get("prompt") or "mensagem...").strip()
+                input_widget.placeholder = prompt or "mensagem..."
                 input_widget.focus()
                 return
             if not self._feed_model.apply(event):
