@@ -459,6 +459,7 @@ class QuimeraApplication:
                 pass
 
         if injected:
+            self._awaiting_response = True
             self._focus_input_area()
         else:
             self._awaiting_response = True
