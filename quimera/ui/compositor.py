@@ -21,6 +21,7 @@ from collections import defaultdict, deque
 from typing import Any
 
 from .events import (
+    AgentLifecycleEvent,
     LiveAbortEvent,
     LiveStartEvent,
     LiveStopEvent,
@@ -420,6 +421,15 @@ class TerminalCompositor:
             _ui = _rich()
             return _ui.markup_escape(base_label)
 
+        def _build_agent_lifecycle_renderable(event: AgentLifecycleEvent):
+            _ui = _rich()
+            style, label = _renderer._agent_style(event.agent)
+            return _ui.Text.assemble(
+                (label, f"dim {style}"),
+                (" "),
+                (event.message, "dim"),
+            )
+
         def _ensure_live():
             if self._app_sink is not None:
                 return
@@ -685,6 +695,23 @@ class TerminalCompositor:
                     sink = self._app_sink
                     if sink is not None and _sink_sent_len.pop(event.agent, 0) > 0:
                         sink.ensure_trailing_newline()
+
+                elif isinstance(event, AgentLifecycleEvent):
+                    _audit(
+                        "agent_lifecycle",
+                        agent=event.agent,
+                        status=event.status,
+                    )
+                    sink = self._app_sink
+                    if sink is not None:
+                        update_stream = getattr(sink, "update_stream", None)
+                        if callable(update_stream):
+                            update_stream(event.agent, f"\033[2m{event.message}\033[0m")
+                        else:
+                            sink.append_output(f"\033[2m{event.message}\033[0m")
+                        _sink_sent_len[event.agent] = len(event.message)
+                    else:
+                        _cprint(_build_agent_lifecycle_renderable(event))
 
                 elif isinstance(event, NoopEvent):
                     _flush_deferred(force=event.force_flush)

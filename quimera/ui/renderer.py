@@ -17,6 +17,7 @@ from .agent_window_controller import AgentWindowController
 from .compositor import TerminalCompositor
 from .audit import RenderAuditLogger
 from .events import (
+    AgentLifecycleEvent,
     LiveAbortEvent,
     LiveStartEvent,
     LiveStopEvent,
@@ -1051,6 +1052,24 @@ class TerminalRenderer:
         if agent:
             self.clear_agent_transient(agent)
         self.show_feed(message, agent=agent, muted=muted)
+
+    def show_agent_lifecycle(self, agent: str, status: str, message: str):
+        """Exibe estado transitório de lifecycle como entidade semântica."""
+        clean_message = strip_ansi(str(message)).strip("\r\n")
+        clean_status = strip_ansi(str(status)).strip().lower()
+        if not agent:
+            self.show_feed(clean_message, muted=True)
+            return
+        if self._console:
+            self._compositor.emit(
+                AgentLifecycleEvent(
+                    agent=agent,
+                    status=clean_status,
+                    message=clean_message,
+                )
+            )
+        else:
+            print(f"{agent}: {clean_message}")
 
     def show_feed(self, message, agent=None, muted=False):
         """Exibe linha persistente no feed sem limpar o transient/live do agente."""

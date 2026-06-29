@@ -896,7 +896,7 @@ def test_agent_client_run_summary_shows_formatted_codex_stdout(renderer):
     renderer.update_agent_transient.assert_any_call("codex", "message 2")
     renderer.update_agent_transient.assert_any_call("codex", "message 3")
     renderer.clear_agent_transient.assert_called_with("codex")
-    renderer.show_plain.assert_any_call("execução concluída", agent="codex", muted=True)
+    renderer.show_agent_lifecycle.assert_any_call("codex", "completed", "execução concluída")
 
 
 def test_agent_client_run_summary_flushes_compacted_responses_before_context(renderer):
@@ -2207,6 +2207,7 @@ def test_spy_output_presenter_uses_muted_feed_for_summary_response_when_supporte
         def __init__(self):
             self.show_feed = MagicMock()
             self.show_plain = MagicMock()
+            self.show_agent_lifecycle = MagicMock()
             self.update_agent_transient = MagicMock()
 
     renderer = FeedRenderer()
@@ -2227,6 +2228,7 @@ def test_agent_client_uses_transient_for_live_stderr_when_renderer_supports_it()
         def __init__(self):
             self.show_feed = MagicMock()
             self.show_plain = MagicMock()
+            self.show_agent_lifecycle = MagicMock()
             self.update_agent_transient = MagicMock()
             self.clear_agent_transient = MagicMock()
             self.show_error = MagicMock()
@@ -2248,7 +2250,7 @@ def test_agent_client_uses_transient_for_live_stderr_when_renderer_supports_it()
     assert "output" in result
     renderer.update_agent_transient.assert_any_call("codex", "stderr line")
     renderer.show_feed.assert_not_called()
-    renderer.show_plain.assert_any_call("execução concluída", agent="codex", muted=True)
+    renderer.show_agent_lifecycle.assert_any_call("codex", "completed", "execução concluída")
 
 
 def test_spy_output_presenter_summary_keeps_lifecycle_context_only_in_status(renderer):

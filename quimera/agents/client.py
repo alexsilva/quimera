@@ -615,7 +615,11 @@ class AgentClient:
             proc.wait()
             if not silent and self.visibility == Visibility.SUMMARY and proc.returncode == 0 and not self._cancel_event.is_set():
                 if agent:
-                    self.renderer.show_plain("execução concluída", agent=agent, muted=True)
+                    show_lifecycle = getattr(self.renderer, "show_agent_lifecycle", None)
+                    if callable(show_lifecycle):
+                        show_lifecycle(agent, "completed", "execução concluída")
+                    else:
+                        self.renderer.show_plain("execução concluída", agent=agent, muted=True)
                 else:
                     self._show_muted(f"← {cmd[0]} concluído")
             if result_holder["error"]:

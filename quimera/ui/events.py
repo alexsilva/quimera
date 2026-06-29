@@ -36,6 +36,15 @@ class LiveAbortEvent:
     agent: str
 
 
+@dataclass(frozen=True)
+class AgentLifecycleEvent:
+    """Estado transitório verificável do lifecycle de execução de um agente."""
+
+    agent: str
+    status: str
+    message: str
+
+
 @dataclass
 class NoopEvent:
     done: threading.Event
