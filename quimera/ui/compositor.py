@@ -604,14 +604,30 @@ class TerminalCompositor:
                     if batches:
                         sink = self._app_sink
                         if sink is not None:
-                            for _a in batches:
+                            for _a, _chunks in batches.items():
                                 _c = _renderer._deck.get(_a)
                                 if _c:
                                     _already = _sink_sent_len.get(_a, 0)
-                                    _delta = _c.stream_content[_already:]
-                                    if _delta:
-                                        sink.append_output(_delta)
-                                        _sink_sent_len[_a] = len(_c.stream_content)
+                                    _new_len = len(_c.stream_content)
+                                    # Detect replace-style diffs (CLI agents' transient updates)
+                                    _had_replace = any(
+                                        isinstance(ch, dict) and ch.get("diff") and
+                                        any(d.get("op") == "replace" for d in (ch.get("diff") or []))
+                                        for ch in _chunks
+                                    )
+                                    if _had_replace or _new_len < _already:
+                                        # Content was replaced in-place: overwrite from stream mark
+                                        update_stream = getattr(sink, "update_stream", None)
+                                        if callable(update_stream):
+                                            update_stream(_a, _c.stream_content)
+                                        else:
+                                            sink.append_output(_c.stream_content[_already:])
+                                        _sink_sent_len[_a] = _new_len
+                                    else:
+                                        _delta = _c.stream_content[_already:]
+                                        if _delta:
+                                            sink.append_output(_delta)
+                                            _sink_sent_len[_a] = _new_len
                         else:
                             has_visible_content = any(
                                 container.stream_content.strip()
