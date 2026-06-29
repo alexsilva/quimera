@@ -207,6 +207,11 @@ def run_chat_loop(
                 break
 
             if user.strip() == CMD_EDIT:
+                if getattr(app.input_services, "_split_queue", None) is not None:
+                    app.system_layer.show_error_message(
+                        "[erro] /edit não disponível no modo split"
+                    )
+                    continue
                 content = app.input_services.read_from_editor()
                 if not content:
                     continue

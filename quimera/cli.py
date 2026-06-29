@@ -596,6 +596,11 @@ def main():
         def _cancel_active_agent() -> bool:
             if not getattr(app, "is_agent_running", False):
                 return False
+            lifecycle = getattr(app, "chat_lifecycle", None)
+            handle_interrupt = getattr(lifecycle, "handle_local_interrupt", None)
+            if callable(handle_interrupt):
+                handle_interrupt()
+                return True
             agent_client = getattr(app, "agent_client", None)
             cancel = getattr(agent_client, "cancel_active_work", None)
             if callable(cancel):
