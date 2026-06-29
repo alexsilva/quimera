@@ -317,6 +317,10 @@ class TerminalCompositor:
         def _audit(event_name: str, **payload) -> None:
             self._log_debug(event_name, **payload)
 
+        def _is_split_lifecycle_noise(renderable) -> bool:
+            text = strip_ansi(str(_preview_text(renderable) or renderable)).strip().lower()
+            return text in {"iniciando execução", "execução concluída"}
+
         # -- Live helpers --------------------------------------------------
 
         def _get_renderable():
@@ -466,6 +470,8 @@ class TerminalCompositor:
                 return
             sink = self._app_sink
             if sink is not None:
+                if _is_split_lifecycle_noise(renderable):
+                    return
                 import io as _io
                 from rich.console import Console as _RichConsole
                 _buf = _io.StringIO()
@@ -554,12 +560,9 @@ class TerminalCompositor:
                     if sink is not None:
                         _label = container.label if container else str(event.agent)
                         _style = (container.style if container else "dim") or "dim"
-                        _ui = _rich()
-                        _cprint(_ui.Rule(
-                            f"[bold {_style}]{_ui.markup_escape(_label)}[/bold {_style}]",
-                            style=f"dim {_style}",
-                        ))
-                        sink.mark_stream_start(event.agent)
+                        set_active = getattr(sink, "set_active_agent", None)
+                        if callable(set_active):
+                            set_active(_label)
                         _sink_sent_len[event.agent] = 0
                     elif container and container.streaming and container.stream_content.strip():
                         _ensure_live()
@@ -604,30 +607,12 @@ class TerminalCompositor:
                     if batches:
                         sink = self._app_sink
                         if sink is not None:
-                            for _a, _chunks in batches.items():
+                            # Split mode keeps streaming/progress in toolbar only.
+                            # The persistent history receives just the final block.
+                            for _a in batches:
                                 _c = _renderer._deck.get(_a)
-                                if _c:
-                                    _already = _sink_sent_len.get(_a, 0)
-                                    _new_len = len(_c.stream_content)
-                                    # Detect replace-style diffs (CLI agents' transient updates)
-                                    _had_replace = any(
-                                        isinstance(ch, dict) and ch.get("diff") and
-                                        any(d.get("op") == "replace" for d in (ch.get("diff") or []))
-                                        for ch in _chunks
-                                    )
-                                    if _had_replace or _new_len < _already:
-                                        # Content was replaced in-place: overwrite from stream mark
-                                        update_stream = getattr(sink, "update_stream", None)
-                                        if callable(update_stream):
-                                            update_stream(_a, f"\033[2m{_c.stream_content}\033[0m")
-                                        else:
-                                            sink.append_output(f"\033[2m{_c.stream_content[_already:]}\033[0m")
-                                        _sink_sent_len[_a] = _new_len
-                                    else:
-                                        _delta = _c.stream_content[_already:]
-                                        if _delta:
-                                            sink.append_output(f"\033[2m{_delta}\033[0m")
-                                            _sink_sent_len[_a] = _new_len
+                                if _c is not None:
+                                    _sink_sent_len[_a] = len(_c.stream_content)
                         else:
                             has_visible_content = any(
                                 container.stream_content.strip()
@@ -670,6 +655,9 @@ class TerminalCompositor:
                             _tmp.print(final_block)
                             _sink_sent_len.pop(event.agent, None)
                             sink.replace_stream(event.agent, _buf.getvalue())
+                            set_active = getattr(sink, "set_active_agent", None)
+                            if callable(set_active):
+                                set_active(None)
                         else:
                             _cprint(final_block)
 
@@ -685,6 +673,10 @@ class TerminalCompositor:
                     sink = self._app_sink
                     if sink is not None and _sink_sent_len.pop(event.agent, 0) > 0:
                         sink.ensure_trailing_newline()
+                    if sink is not None:
+                        set_active = getattr(sink, "set_active_agent", None)
+                        if callable(set_active):
+                            set_active(None)
 
                 elif isinstance(event, NoopEvent):
                     _flush_deferred(force=event.force_flush)
