@@ -9,6 +9,7 @@ import threading
 from collections.abc import Callable
 from contextlib import nullcontext
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -17,7 +18,12 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.text import Text
 
-from quimera.ui.text import _extract_text_from_renderable, strip_ansi
+from quimera.ui.text import (
+    _apply_stream_diff,
+    _extract_text_from_renderable,
+    _normalize_stream_diff,
+    strip_ansi,
+)
 from quimera.app.config import handler as _screen_handler
 
 _NO_RESPONSE_MESSAGE = "sem resposta válida"
@@ -45,6 +51,100 @@ class TextualUiEvent:
     kind: str
     payload: Any = None
     agent: str | None = None
+
+
+@dataclass
+class TextualFeedItem:
+    """Item lógico do feed Textual."""
+
+    event: TextualUiEvent
+    transient: bool = False
+
+
+class TextualFeedModel:
+    """Modelo testável do feed: transitórios por agente são substituíveis."""
+
+    _TRANSIENT_KINDS = {"stream_start", "stream_chunk", "stream_abort", "agent_update", "agent_lifecycle"}
+
+    _IGNORED_KINDS = {"prompt", "input_active", "summarizing"}
+
+    def __init__(self) -> None:
+        self._items: list[TextualFeedItem] = []
+        self._transient_index_by_agent: dict[str, int] = {}
+        self._stream_buffer_by_agent: dict[str, str] = {}
+
+    @property
+    def items(self) -> list[TextualFeedItem]:
+        """Snapshot dos itens atuais do feed."""
+        return list(self._items)
+
+    def clear(self) -> None:
+        """Limpa estado do feed."""
+        self._items.clear()
+        self._transient_index_by_agent.clear()
+        self._stream_buffer_by_agent.clear()
+
+    def apply(self, event: TextualUiEvent) -> bool:
+        """Aplica evento e retorna se o feed visual precisa ser redesenhado."""
+        if event.kind in self._IGNORED_KINDS:
+            return False
+        if event.kind == "agent_message":
+            self._replace_transient_with_final(event)
+            return True
+        if event.kind == "stream_start":
+            agent = self._agent_key(event)
+            self._stream_buffer_by_agent[agent] = ""
+            self._upsert_transient(event)
+            return True
+        if event.kind == "stream_chunk":
+            self._apply_stream_chunk(event)
+            return True
+        if event.kind in self._TRANSIENT_KINDS:
+            self._upsert_transient(event)
+            return True
+        self._items.append(TextualFeedItem(event, transient=False))
+        return True
+
+    def _agent_key(self, event: TextualUiEvent) -> str:
+        return str(event.agent or "__global__")
+
+    def _upsert_transient(self, event: TextualUiEvent) -> None:
+        agent = self._agent_key(event)
+        item = TextualFeedItem(event, transient=True)
+        index = self._transient_index_by_agent.get(agent)
+        if index is not None and 0 <= index < len(self._items):
+            self._items[index] = item
+            return
+        self._transient_index_by_agent[agent] = len(self._items)
+        self._items.append(item)
+
+    def _replace_transient_with_final(self, event: TextualUiEvent) -> None:
+        agent = self._agent_key(event)
+        self._stream_buffer_by_agent.pop(agent, None)
+        item = TextualFeedItem(event, transient=False)
+        index = self._transient_index_by_agent.pop(agent, None)
+        if index is not None and 0 <= index < len(self._items):
+            self._items[index] = item
+            return
+        self._items.append(item)
+
+    def _apply_stream_chunk(self, event: TextualUiEvent) -> None:
+        agent = self._agent_key(event)
+        current = self._stream_buffer_by_agent.get(agent, "")
+        payload = event.payload
+        if isinstance(payload, dict):
+            diff = _normalize_stream_diff(payload.get("diff"))
+            if diff:
+                current = _apply_stream_diff(current, diff)
+            elif payload.get("text"):
+                current += strip_ansi(str(payload.get("text")))
+            else:
+                current += strip_ansi(str(payload))
+        else:
+            current += strip_ansi(str(payload))
+        self._stream_buffer_by_agent[agent] = current
+        if current.strip():
+            self._upsert_transient(TextualUiEvent("stream_chunk", current, agent=event.agent))
 
 
 def _resolve_textual_feed_limit(quimera_app) -> int | None:
@@ -159,6 +259,7 @@ class TextualInputGate:
         self._argument_resolver = argument_resolver
         self._theme_cycle_handler = None
         self._history_file = history_file
+        self._textual_mounted = False
         self._active_lock = threading.Lock()
         self._active = False
         self._owner_thread_id: int | None = None
@@ -182,7 +283,12 @@ class TextualInputGate:
     def is_active(self) -> bool:
         """Indica se o loop está aguardando input humano."""
         with self._active_lock:
-            return self._active
+            return self._active or self._textual_mounted
+
+    def set_textual_mounted(self, mounted: bool) -> None:
+        """Indica que a UI Textual está pronta para receber input interativo."""
+        with self._active_lock:
+            self._textual_mounted = bool(mounted)
 
     def get_owner_thread_id(self) -> int | None:
         """Retorna o thread atualmente bloqueado aguardando input."""
@@ -477,6 +583,10 @@ class TextualRenderer:
         """Exibe erro."""
         self._bridge.emit(TextualUiEvent("error", str(message)))
 
+    def clear_screen(self) -> None:
+        """Limpa o feed Textual sem escrever ANSI direto no terminal."""
+        self._bridge.emit(TextualUiEvent("clear"))
+
     def show_plain(self, message: str, agent=None, muted: bool = False) -> None:
         """Exibe texto simples."""
         kind = "muted" if muted else "plain"
@@ -485,6 +595,16 @@ class TextualRenderer:
     def show_feed(self, message: str, agent=None, muted: bool = False) -> None:
         """Exibe texto no feed."""
         self.show_plain(message, agent=agent, muted=muted)
+
+    def show_agent_lifecycle(self, agent: str, status: str, message: str) -> None:
+        """Exibe lifecycle transitório de agente como evento semântico."""
+        self._bridge.emit(
+            TextualUiEvent(
+                "agent_lifecycle",
+                {"status": str(status), "message": str(message)},
+                agent=str(agent),
+            )
+        )
 
     def show_message(self, agent, content, render_mode: str = "auto") -> None:
         """Exibe resposta final de agente com ícone."""
@@ -576,6 +696,13 @@ def _render_event(event: TextualUiEvent):
             return None
         agent = event.agent or "agente"
         return Panel(Text(content), title=f"🤖 {agent} (stream)", border_style="dim")
+    if event.kind == "agent_lifecycle":
+        payload = event.payload or {}
+        message = str(payload.get("message", "")) if isinstance(payload, dict) else str(payload)
+        if not message.strip():
+            return None
+        agent = event.agent or "agente"
+        return Panel(Text(message, style="dim"), title=f"🤖 {agent}", border_style="dim")
     if event.kind in {"warning", "error"}:
         style = "yellow" if event.kind == "warning" else "red"
         return Text(str(event.payload), style=style)
@@ -591,6 +718,8 @@ def _render_event(event: TextualUiEvent):
     if event.kind == "prompt":
         return None
     if event.kind == "input_active":
+        return None
+    if event.kind == "clear":
         return None
     if event.kind == "muted":
         return Text(str(event.payload), style="dim")
@@ -635,6 +764,33 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                 self._prompt_history.append(value)
                 self._history_index = 0
                 self._saved_draft = ""
+
+        def load_history(self, path: Path | None) -> None:
+            """Carrega histórico persistente do input, quando disponível."""
+            if path is None or not path.exists():
+                return
+            try:
+                lines = path.read_text(encoding="utf-8").splitlines()
+            except OSError:
+                return
+            entries = []
+            for line in lines:
+                value = line.removeprefix("+").strip()
+                if value:
+                    entries.append(value)
+            self._prompt_history = entries[-1000:]
+            self._history_index = 0
+            self._saved_draft = ""
+
+        def save_history(self, path: Path | None) -> None:
+            """Persiste histórico do input para próxima sessão."""
+            if path is None:
+                return
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("\n".join(self._prompt_history[-1000:]) + "\n", encoding="utf-8")
+            except OSError:
+                return
 
         async def action_submit(self) -> None:
             dropdown = self.app.query_one(CompletionDropdown)
@@ -752,7 +908,9 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
 
         BINDINGS = [
             ("ctrl+c", "cancel_or_exit", "Cancelar/Sair"),
+            ("ctrl+q", "cancel_or_exit", "Sair"),
             ("ctrl+t", "cycle_theme", "Tema"),
+            ("f6", "cycle_theme", "Tema"),
         ]
 
         def __init__(self) -> None:
@@ -762,6 +920,8 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             self._summarizing = False
             self._spinner_index = 0
             self._spinner_timer = None
+            self._feed_model = TextualFeedModel()
+            self._history_file_path: Path | None = None
 
         def compose(self) -> ComposeResult:
             yield _SummaryHeader(show_clock=True, id="header")
@@ -780,6 +940,9 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
 
         def on_mount(self) -> None:
             bridge.attach_textual_app(self)
+            gate = getattr(quimera_app, "input_gate", None)
+            if hasattr(gate, "set_textual_mounted"):
+                gate.set_textual_mounted(True)
             for event in bridge.drain_pending_events():
                 self.handle_bridge_event(event)
             self._worker_thread = threading.Thread(
@@ -788,7 +951,20 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                 name="quimera-textual-loop",
             )
             self._worker_thread.start()
-            self.query_one("#input", Input).focus()
+            input_widget = self.query_one("#input", _CompletionInput)
+            history_file = getattr(gate, "_history_file", None)
+            self._history_file_path = Path(history_file).expanduser() if history_file else None
+            input_widget.load_history(self._history_file_path)
+            input_widget.focus()
+
+        def on_unmount(self) -> None:
+            gate = getattr(quimera_app, "input_gate", None)
+            if hasattr(gate, "set_textual_mounted"):
+                gate.set_textual_mounted(False)
+            try:
+                self.query_one("#input", _CompletionInput).save_history(self._history_file_path)
+            except Exception:
+                pass
 
         def _start_spinner(self) -> None:
             """Inicia animação de loading ao lado do relógio do header."""
@@ -849,7 +1025,10 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             dropdown = self.query_one(CompletionDropdown)
             value = str(event.value)
 
-            if not value or " " in value:
+            if not value:
+                dropdown.hide()
+                return
+            if " " in value and not value.startswith(("/", "s/", "r/")):
                 dropdown.hide()
                 return
             if value.startswith(("/", "s/", "r/")):
@@ -866,6 +1045,10 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
 
         def handle_bridge_event(self, event: TextualUiEvent) -> None:
             _append_post_exit_failure_message(_post_exit_messages, event)
+            if event.kind == "clear":
+                self._feed_model.clear()
+                self.query_one("#feed", RichLog).clear()
+                return
             if event.kind == "summarizing":
                 if event.payload:
                     self._start_spinner()
@@ -882,11 +1065,14 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                 input_widget.placeholder = prompt or "mensagem..."
                 input_widget.focus()
                 return
-            renderable = _render_event(event)
-            if renderable is None:
+            if not self._feed_model.apply(event):
                 return
             feed = self.query_one("#feed", RichLog)
-            feed.write(renderable)
+            feed.clear()
+            for item in self._feed_model.items:
+                renderable = _render_event(item.event)
+                if renderable is not None:
+                    feed.write(renderable)
 
     bridge.attach_quimera_app(quimera_app)
     renderer = getattr(quimera_app, "renderer", None)
