@@ -111,6 +111,43 @@ def test_textual_renderer_emits_agent_lifecycle_event():
     assert event.payload == {"status": "completed", "message": "execução concluída"}
 
 
+def test_textual_bridge_injects_input_into_active_agent_stdin():
+    bridge = TextualUiBridge()
+    stdin = Mock()
+    app = Mock(is_agent_running=True, active_agent_stdin=stdin)
+    bridge.attach_quimera_app(app)
+
+    bridge.submit_input("continua")
+
+    stdin.write.assert_called_once_with("continua\n")
+    stdin.flush.assert_called_once()
+    assert bridge.input_queue.empty()
+
+
+def test_textual_bridge_falls_back_to_queue_when_no_active_stdin():
+    bridge = TextualUiBridge()
+    app = Mock(is_agent_running=True, active_agent_stdin=None)
+    bridge.attach_quimera_app(app)
+
+    bridge.submit_input("proxima rodada")
+
+    assert bridge.input_queue.get_nowait() == "proxima rodada"
+
+
+def test_textual_bridge_cancel_uses_chat_lifecycle_before_agent_client():
+    bridge = TextualUiBridge()
+    lifecycle = Mock()
+    agent_client = Mock(_agent_running=True)
+    app = Mock(is_agent_running=True, chat_lifecycle=lifecycle, agent_client=agent_client)
+    bridge.emit = Mock()
+    bridge.attach_quimera_app(app)
+
+    bridge.cancel_or_exit()
+
+    lifecycle.handle_local_interrupt.assert_called_once_with()
+    agent_client.cancel_active_work.assert_not_called()
+
+
 def test_textual_input_gate_is_active_while_textual_is_mounted():
     gate = TextualInputGate(TextualUiBridge())
 

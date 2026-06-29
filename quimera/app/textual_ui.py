@@ -316,7 +316,26 @@ class TextualUiBridge:
 
     def submit_input(self, value: str) -> None:
         """Envia uma linha digitada pelo usuário para o loop do Quimera."""
+        text = str(value)
+        if self._try_inject_active_agent(text):
+            return
         self.input_queue.put(value)
+
+    def _try_inject_active_agent(self, text: str) -> bool:
+        """Tenta enviar texto ao stdin do agente ativo, preservando contrato do split."""
+        with self._lock:
+            quimera_app = self.quimera_app
+        if not bool(getattr(quimera_app, "is_agent_running", False)):
+            return False
+        stdin = getattr(quimera_app, "active_agent_stdin", None)
+        if stdin is None:
+            return False
+        try:
+            stdin.write(text + "\n")
+            stdin.flush()
+            return True
+        except (OSError, ValueError, AttributeError):
+            return False
 
     def emit(self, event: TextualUiEvent) -> None:
         """Envia evento visual para a UI, com fallback para fila interna."""
@@ -343,6 +362,13 @@ class TextualUiBridge:
         """Cancela agente ativo ou solicita saída limpa."""
         with self._lock:
             quimera_app = self.quimera_app
+        if bool(getattr(quimera_app, "is_agent_running", False)):
+            lifecycle = getattr(quimera_app, "chat_lifecycle", None)
+            handle_interrupt = getattr(lifecycle, "handle_local_interrupt", None)
+            if callable(handle_interrupt):
+                handle_interrupt()
+                self.emit(TextualUiEvent("system", "cancelamento solicitado"))
+                return
         agent_client = getattr(quimera_app, "agent_client", None)
         if bool(getattr(agent_client, "_agent_running", False)):
             cancel = getattr(agent_client, "cancel_active_work", None)
