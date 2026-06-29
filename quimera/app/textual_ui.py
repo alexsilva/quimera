@@ -875,6 +875,21 @@ class TextualRenderer:
         """Compatibilidade com TerminalRenderer."""
         return None
 
+    def log_debug_event(self, event: str, **payload) -> None:
+        """Compatibilidade com auditoria do TerminalRenderer."""
+        if self._audit_logger is None:
+            return
+        try:
+            self._audit_logger.log_event(event, **payload)
+        except Exception:
+            return
+
+    @contextmanager
+    def terminal_floor(self, *, title: str = "Terminal floor", metadata: dict[str, Any] | None = None, timeout: float = 2.0):
+        """Compatibilidade para I/O baixo nível que pede posse do terminal."""
+        with self._interactive_window("terminal_floor", title, metadata=metadata):
+            yield
+
     def external_window(self, window_id: str, title: str = "", metadata=None):
         """Entrega temporariamente o terminal para uma janela/processo externo."""
         with self._bridge._lock:
