@@ -194,6 +194,8 @@ class QuimeraApplication:
         self._app: Application | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._awaiting_response: bool = False
+        self._invalidate_scheduled: bool = False
+        self._invalidate_lock = threading.Lock()
 
         # Overlay state
         self._dock_state: str = "idle"  # "idle" | "awaiting_input"
@@ -673,9 +675,26 @@ class QuimeraApplication:
         self.invalidate()
 
     def invalidate(self) -> None:
-        """Solicita redraw (thread-safe)."""
-        if self._app is not None and self._loop is not None and not self._loop.is_closed():
-            self._loop.call_soon_threadsafe(self._app.invalidate)
+        """Solicita redraw (thread-safe, coalesce bursts)."""
+        loop = self._loop
+        if self._app is None or loop is None or loop.is_closed():
+            return
+        with self._invalidate_lock:
+            if self._invalidate_scheduled:
+                return
+            self._invalidate_scheduled = True
+
+        def _fire():
+            with self._invalidate_lock:
+                self._invalidate_scheduled = False
+            if self._app is not None:
+                self._app.invalidate()
+
+        try:
+            loop.call_soon_threadsafe(_fire)
+        except RuntimeError:
+            with self._invalidate_lock:
+                self._invalidate_scheduled = False
 
     def get_loop(self) -> asyncio.AbstractEventLoop | None:
         """Retorna o event loop do Application (disponível após run())."""
