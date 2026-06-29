@@ -42,6 +42,14 @@ def test_split_chat_input_can_grow_without_fullscreen():
     assert app._app.full_screen is False
 
 
+def test_split_output_pane_reserves_visible_history_without_fullscreen():
+    app = QuimeraApplication()
+
+    assert app._output_window.height.min >= 8
+    assert app._output_window.height.preferred >= app._output_window.height.min
+    assert app._app.full_screen is False
+
+
 def test_split_application_uses_persistent_history_file(tmp_path):
     app = QuimeraApplication(history_file=str(tmp_path / "history.txt"))
 

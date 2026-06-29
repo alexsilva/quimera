@@ -44,6 +44,7 @@ from ..app.prompt_input import _SlashCommandCompleter, PromptFormatter
 
 _MAX_OUTPUT_LINES = 10_000
 _CHAT_INPUT_MAX_HEIGHT = 5
+_OUTPUT_MIN_HEIGHT = 8
 
 _PLACEHOLDER_FRAGMENTS = to_formatted_text(HTML('<style fg="#606060">mensagem...</style>'))
 
@@ -258,6 +259,11 @@ class QuimeraApplication:
         self._output_window = _ScrollableOutputWindow(
             scroll_owner=self,
             content=self._output_control,
+            height=D(
+                min=_OUTPUT_MIN_HEIGHT,
+                preferred=self._preferred_output_height(),
+                weight=1,
+            ),
             dont_extend_height=False,
             wrap_lines=True,
         )
@@ -313,6 +319,12 @@ class QuimeraApplication:
     # ------------------------------------------------------------------
     # Layout callbacks
     # ------------------------------------------------------------------
+
+    def _preferred_output_height(self) -> int:
+        """Altura inicial do histórico sem ativar full_screen/alternate screen."""
+        rows = shutil.get_terminal_size(fallback=(80, 24)).lines
+        reserved = _CHAT_INPUT_MAX_HEIGHT + 2  # input + separator + toolbar
+        return max(_OUTPUT_MIN_HEIGHT, rows - reserved)
 
     def _get_bottom_pane(self):
         if self._dock_state != "idle":
