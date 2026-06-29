@@ -75,23 +75,17 @@ def test_split_resize_clears_stale_frame_and_returns_to_tail():
     app._last_render_size = terminal_size((current_size.columns + 1, current_size.lines))
     calls = []
 
-    class FakeOutput:
-        def erase_screen(self):
+    class FakeRenderer:
+        def erase(self):
             calls.append("erase")
 
-        def cursor_goto(self, row, column):
-            calls.append(("goto", row, column))
-
-        def flush(self):
-            calls.append("flush")
-
-    app._app.output = FakeOutput()
+    app._app.renderer = FakeRenderer()
 
     app._before_render()
 
     assert app._output_follow_tail is True
     assert app._output_scroll_top == 10
-    assert calls == ["erase", ("goto", 0, 0), "flush"]
+    assert calls == ["erase"]
 
 
 def test_split_application_uses_persistent_history_file(tmp_path):

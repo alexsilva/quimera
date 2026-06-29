@@ -339,13 +339,11 @@ class QuimeraApplication:
             self._output_scroll_top = self._output_max_scroll_top
 
         app = self._app
-        output = getattr(app, "output", None) if app is not None else None
-        if output is None:
+        renderer = getattr(app, "renderer", None) if app is not None else None
+        if renderer is None:
             return
         try:
-            output.erase_screen()
-            output.cursor_goto(0, 0)
-            output.flush()
+            renderer.erase()
         except Exception:
             pass
 
