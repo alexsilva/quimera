@@ -582,6 +582,21 @@ class QuimeraApplication:
         with self._output_lock:
             self._stream_marks[agent] = len(self._output_text)
 
+    def update_stream(self, agent: str, ansi_text: str) -> None:
+        """Substitui o conteúdo do stream do agente desde o mark (mantém mark para futuras atualizações)."""
+        with self._output_lock:
+            mark = self._stream_marks.get(agent)
+            if mark is not None and mark <= len(self._output_text):
+                self._output_text = self._output_text[:mark] + ansi_text
+            else:
+                self._output_text += ansi_text
+            lines = self._output_text.split("\n")
+            if len(lines) > _MAX_OUTPUT_LINES:
+                dropped = len(lines) - _MAX_OUTPUT_LINES
+                self._output_text = "\n".join(lines[-_MAX_OUTPUT_LINES:])
+                self._shift_output_scroll_after_trim_locked(dropped)
+        self.invalidate()
+
     def replace_stream(self, agent: str, ansi_text: str) -> None:
         """Substitui o conteúdo desde o mark do agente pelo bloco formatado final."""
         was_awaiting = self._awaiting_response
