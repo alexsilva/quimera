@@ -619,14 +619,14 @@ class TerminalCompositor:
                                         # Content was replaced in-place: overwrite from stream mark
                                         update_stream = getattr(sink, "update_stream", None)
                                         if callable(update_stream):
-                                            update_stream(_a, _c.stream_content)
+                                            update_stream(_a, f"\033[2m{_c.stream_content}\033[0m")
                                         else:
-                                            sink.append_output(_c.stream_content[_already:])
+                                            sink.append_output(f"\033[2m{_c.stream_content[_already:]}\033[0m")
                                         _sink_sent_len[_a] = _new_len
                                     else:
                                         _delta = _c.stream_content[_already:]
                                         if _delta:
-                                            sink.append_output(_delta)
+                                            sink.append_output(f"\033[2m{_delta}\033[0m")
                                             _sink_sent_len[_a] = _new_len
                         else:
                             has_visible_content = any(
