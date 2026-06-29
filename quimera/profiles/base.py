@@ -263,7 +263,7 @@ class ExecutionProfile:
     stderr_noise: FrozenSet[str] = field(default_factory=frozenset)
     stderr_noise_patterns: Tuple[str, ...] = field(default_factory=tuple)
     dynamic: bool = False
-    supports_persistent_session: bool = False  # True = perfil pode manter processo vivo entre turnos
+    supports_resume: bool = False  # True = perfil rastreia session_id e retoma sessão automaticamente
     # Connection override (carregado automaticamente do base_dir)
     _connection_override: Optional[Connection] = field(default=None, repr=False)
     # Profile name (usado para herança de formatter/rw_paths em perfis de conexão)

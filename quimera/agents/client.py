@@ -36,12 +36,12 @@ _logger = logging.getLogger(__name__)
 
 
 class _FrozenSession:
-    """Rastreador de sessão para agentes fixados com s/<agent>.
+    """Rastreador de sessão para perfis com supports_resume=True.
 
-    Não mantém processo vivo — cada turno abre um processo novo com --print (modo
-    suportado pelo Claude CLI). Quando o profile fornece extract_session_id() e
-    inject_resume_arg(), o session_id extraído do output é injetado via --resume
-    no próximo turno, continuando a conversa no servidor.
+    Não mantém processo vivo — cada turno abre um processo novo. Quando o profile
+    fornece extract_session_id() e inject_resume_arg(), o session_id extraído do
+    output é injetado via --resume no próximo turno, continuando a conversa no
+    servidor. Criado automaticamente em call() para perfis com supports_resume=True.
     """
 
     def __init__(self, agent: str):
@@ -746,7 +746,7 @@ class AgentClient:
         Retorna True se o perfil suporta sessão; False caso contrário.
         """
         profile = profiles.get(agent)
-        if profile is None or not getattr(profile, "supports_persistent_session", False):
+        if profile is None or not getattr(profile, "supports_resume", False):
             return False
 
         if agent not in self._persistent_sessions:
@@ -793,7 +793,10 @@ class AgentClient:
                 progress_callback=progress_callback,
             )
         self._spy_output_presenter.set_turn_runtime("cli")
-        # Sessão fixa (s/<agent>): rastreia session_id para --resume no próximo turno.
+        # Sessão de resume: cria automaticamente para perfis com supports_resume=True.
+        # s/<agent> pode pre-criar antes; se já existir, mantém o session_id acumulado.
+        if agent not in self._persistent_sessions and getattr(profile, "supports_resume", False):
+            self._persistent_sessions[agent] = _FrozenSession(agent)
         frozen_session = self._persistent_sessions.get(agent)
         cmd, prompt_as_arg, output_format = self._resolve_profile_cli_attrs(profile, connection)
         # Injeta --resume se o agente está fixo e tem session_id de turno anterior.
@@ -837,9 +840,10 @@ class AgentClient:
         else:
             _extra_env = run_kwargs.get("extra_env")
             _effective_cmd, _effective_cwd = self._build_effective_cmd(cmd, agent, run_kwargs.get("cwd"))
-            # Sessões fixas desabilitam warm pool: o cmd inclui --resume com session_id
-            # que muda a cada turno; um slot pré-aquecido teria o session_id errado.
-            _use_warm_pool = frozen_session is None and self._should_use_warm_pool(profile, cmd)
+            # Warm pool desabilitado quando há session_id ativo: o cmd inclui --resume
+            # com id que muda a cada turno; um slot pré-aquecido teria o id errado.
+            _has_active_session_id = frozen_session is not None and bool(frozen_session.session_id)
+            _use_warm_pool = not _has_active_session_id and self._should_use_warm_pool(profile, cmd)
             _slot = self._warm_pool.take(_effective_cmd, _effective_cwd, _extra_env) if _use_warm_pool else None
             if not _use_warm_pool:
                 # Se houver um slot antigo para esse comando, descarta para evitar

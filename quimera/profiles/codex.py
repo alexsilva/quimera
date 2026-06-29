@@ -274,6 +274,7 @@ register(CodexProfile(
     output_format="codex-json",
     prompt_as_arg=False,
     keep_stdin_open=False,
+    supports_resume=True,
     style=("blue", "Codex"),
     capabilities=["code_editing", "code_review", "test_execution", "bug_investigation", "tool_use"],
     preferred_task_types=["code_edit", "code_review", "test_execution", "bug_investigation", "general"],
