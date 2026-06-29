@@ -24,6 +24,38 @@ def test_textual_feed_replaces_agent_lifecycle_with_final_message():
     assert len(model.items) == 1
     assert model.items[0].transient is False
     assert model.items[0].event is final
+    assert model.last_change.redraw is True
+
+
+def test_textual_feed_marks_plain_events_as_append_only():
+    model = TextualFeedModel()
+
+    event = TextualUiEvent("plain", "linha")
+
+    assert model.apply(event) is True
+    assert model.last_change.redraw is False
+    assert model.last_change.appended is model.items[-1]
+
+
+def test_textual_feed_marks_transient_replacement_as_redraw():
+    model = TextualFeedModel()
+
+    model.apply(TextualUiEvent("stream_start", {"label": "Claude"}, agent="claude"))
+    assert model.last_change.redraw is False
+
+    model.apply(TextualUiEvent("stream_chunk", "Oi", agent="claude"))
+
+    assert model.last_change.redraw is True
+    assert model.last_change.appended is None
+
+
+def test_textual_feed_final_message_without_transient_is_append_only():
+    model = TextualFeedModel()
+
+    model.apply(TextualUiEvent("agent_message", {"content": "final", "label": "Claude"}, agent="claude"))
+
+    assert model.last_change.redraw is False
+    assert model.last_change.appended is model.items[-1]
 
 
 def test_textual_feed_ignores_late_completed_lifecycle_after_final_message():

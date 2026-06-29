@@ -159,6 +159,15 @@ class TextualFeedItem:
     transient: bool = False
 
 
+@dataclass(frozen=True)
+class TextualFeedChange:
+    """Resultado da aplicação de um evento no feed Textual."""
+
+    changed: bool
+    redraw: bool = False
+    appended: TextualFeedItem | None = None
+
+
 class TextualFeedModel:
     """Modelo testável do feed: transitórios por agente são substituíveis."""
 
@@ -171,11 +180,17 @@ class TextualFeedModel:
         self._transient_index_by_agent: dict[str, int] = {}
         self._stream_buffer_by_agent: dict[str, str] = {}
         self._finalized_agents: set[str] = set()
+        self._last_change = TextualFeedChange(False)
 
     @property
     def items(self) -> list[TextualFeedItem]:
         """Snapshot dos itens atuais do feed."""
         return list(self._items)
+
+    @property
+    def last_change(self) -> TextualFeedChange:
+        """Última mudança aplicada ao feed."""
+        return self._last_change
 
     def clear(self) -> None:
         """Limpa estado do feed."""
@@ -183,47 +198,54 @@ class TextualFeedModel:
         self._transient_index_by_agent.clear()
         self._stream_buffer_by_agent.clear()
         self._finalized_agents.clear()
+        self._last_change = TextualFeedChange(True, redraw=True)
 
     def apply(self, event: TextualUiEvent) -> bool:
         """Aplica evento e retorna se o feed visual precisa ser redesenhado."""
+        self._last_change = TextualFeedChange(False)
         if event.kind in self._IGNORED_KINDS:
             return False
         if event.kind in {"question", "question_clear"}:
             return False
         if event.kind == "agent_message":
-            self._replace_transient_with_final(event)
+            replaced = self._replace_transient_with_final(event)
+            self._last_change = TextualFeedChange(True, redraw=replaced, appended=None if replaced else self._items[-1])
             return True
         if event.kind == "stream_start":
             agent = self._agent_key(event)
             self._finalized_agents.discard(agent)
             self._stream_buffer_by_agent[agent] = ""
-            self._upsert_transient(event)
+            replaced = self._upsert_transient(event)
+            self._last_change = TextualFeedChange(True, redraw=replaced, appended=None if replaced else self._items[-1])
             return True
         if event.kind == "stream_chunk":
-            self._apply_stream_chunk(event)
-            return True
+            return self._apply_stream_chunk(event)
         if event.kind in self._TRANSIENT_KINDS:
             if self._is_late_completed_lifecycle(event):
                 return False
-            self._upsert_transient(event)
+            replaced = self._upsert_transient(event)
+            self._last_change = TextualFeedChange(True, redraw=replaced, appended=None if replaced else self._items[-1])
             return True
-        self._items.append(TextualFeedItem(event, transient=False))
+        item = TextualFeedItem(event, transient=False)
+        self._items.append(item)
+        self._last_change = TextualFeedChange(True, appended=item)
         return True
 
     def _agent_key(self, event: TextualUiEvent) -> str:
         return str(event.agent or "__global__")
 
-    def _upsert_transient(self, event: TextualUiEvent) -> None:
+    def _upsert_transient(self, event: TextualUiEvent) -> bool:
         agent = self._agent_key(event)
         item = TextualFeedItem(event, transient=True)
         index = self._transient_index_by_agent.get(agent)
         if index is not None and 0 <= index < len(self._items):
             self._items[index] = item
-            return
+            return True
         self._transient_index_by_agent[agent] = len(self._items)
         self._items.append(item)
+        return False
 
-    def _replace_transient_with_final(self, event: TextualUiEvent) -> None:
+    def _replace_transient_with_final(self, event: TextualUiEvent) -> bool:
         agent = self._agent_key(event)
         self._stream_buffer_by_agent.pop(agent, None)
         self._finalized_agents.add(agent)
@@ -231,8 +253,9 @@ class TextualFeedModel:
         index = self._transient_index_by_agent.pop(agent, None)
         if index is not None and 0 <= index < len(self._items):
             self._items[index] = item
-            return
+            return True
         self._items.append(item)
+        return False
 
     def _is_late_completed_lifecycle(self, event: TextualUiEvent) -> bool:
         if event.kind != "agent_lifecycle":
@@ -243,7 +266,7 @@ class TextualFeedModel:
         payload = event.payload if isinstance(event.payload, dict) else {}
         return str(payload.get("status", "")).strip().lower() == "completed"
 
-    def _apply_stream_chunk(self, event: TextualUiEvent) -> None:
+    def _apply_stream_chunk(self, event: TextualUiEvent) -> bool:
         agent = self._agent_key(event)
         current = self._stream_buffer_by_agent.get(agent, "")
         payload = event.payload
@@ -259,7 +282,11 @@ class TextualFeedModel:
             current += strip_ansi(str(payload))
         self._stream_buffer_by_agent[agent] = current
         if current.strip():
-            self._upsert_transient(TextualUiEvent("stream_chunk", current, agent=event.agent))
+            replaced = self._upsert_transient(TextualUiEvent("stream_chunk", current, agent=event.agent))
+            self._last_change = TextualFeedChange(True, redraw=replaced, appended=None if replaced else self._items[-1])
+            return True
+        self._last_change = TextualFeedChange(False)
+        return False
 
 
 def _resolve_textual_feed_limit(quimera_app) -> int | None:
@@ -1239,9 +1266,16 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             if not self._feed_model.apply(event):
                 return
             feed = self.query_one("#feed", RichLog)
-            feed.clear()
-            for item in self._feed_model.items:
-                renderable = _render_event(item.event)
+            change = self._feed_model.last_change
+            if change.redraw:
+                feed.clear()
+                for item in self._feed_model.items:
+                    renderable = _render_event(item.event)
+                    if renderable is not None:
+                        feed.write(renderable)
+                return
+            if change.appended is not None:
+                renderable = _render_event(change.appended.event)
                 if renderable is not None:
                     feed.write(renderable)
 
