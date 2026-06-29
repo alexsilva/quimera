@@ -496,7 +496,11 @@ class InputGate:
             return None
 
         future.add_done_callback(lambda _: done.set())
-        done.wait(timeout=timeout + 1.0)
+        if done.wait(timeout=timeout + 1.0):
+            try:
+                future.result(timeout=1.0)
+            except Exception:
+                pass
         return result[0]
 
     def get_line_buffer(self) -> str:
@@ -673,7 +677,11 @@ class InputGate:
         # que done seja setado sem depender de um timeout arbitrário.
         future.add_done_callback(lambda _: done.set())
 
-        done.wait(timeout=timeout)
+        if done.wait(timeout=timeout):
+            try:
+                future.result(timeout=1.0)
+            except Exception:
+                pass
         return result[0]
 
     def read_approval_in_terminal(
@@ -774,5 +782,9 @@ class InputGate:
             return None
 
         future.add_done_callback(lambda _: done.set())
-        done.wait(timeout=timeout + 1.0)
+        if done.wait(timeout=timeout + 1.0):
+            try:
+                future.result(timeout=1.0)
+            except Exception:
+                pass
         return result[0]
