@@ -27,7 +27,7 @@ from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
 from prompt_toolkit.data_structures import Point
 from prompt_toolkit.formatted_text import ANSI, FormattedText, HTML, to_formatted_text
 from prompt_toolkit.history import FileHistory, InMemoryHistory
-from prompt_toolkit.filters import completion_is_selected, has_completions
+from prompt_toolkit.filters import completion_is_selected, has_completions, has_focus
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout import Layout
 from prompt_toolkit.layout.containers import DynamicContainer, Float, FloatContainer, HSplit, Window
@@ -43,6 +43,7 @@ from ..constants import CMD_EXIT
 from ..app.prompt_input import _SlashCommandCompleter, PromptFormatter
 
 _MAX_OUTPUT_LINES = 10_000
+_CHAT_INPUT_MAX_HEIGHT = 5
 
 _PLACEHOLDER_FRAGMENTS = to_formatted_text(HTML('<style fg="#606060">mensagem...</style>'))
 
@@ -225,12 +226,13 @@ class QuimeraApplication:
 
         # Chat input (IDLE state)
         self._input_area = TextArea(
-            multiline=False,
+            multiline=True,
             prompt=self._prompt_prefix,
             history=history,
             accept_handler=self._on_submit,
             focusable=True,
             wrap_lines=True,
+            height=D(min=1, max=_CHAT_INPUT_MAX_HEIGHT),
             completer=completer,
             complete_while_typing=False,
             auto_suggest=AutoSuggestFromHistory(),
@@ -550,6 +552,15 @@ class QuimeraApplication:
             state = buf.complete_state
             if state and state.current_completion:
                 buf.apply_completion(state.current_completion)
+
+        @kb.add(
+            "enter",
+            filter=has_focus(self._input_area.buffer)
+            & ~(has_completions & completion_is_selected),
+            eager=True,
+        )
+        def _enter_submit_chat(event):
+            event.current_buffer.validate_and_handle()
 
         # Tab avança na lista; Shift+Tab recua — idêntico ao PromptSession.
         @kb.add("tab", filter=has_completions, eager=True)

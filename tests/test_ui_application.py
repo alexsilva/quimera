@@ -34,6 +34,14 @@ def test_split_application_keeps_terminal_scrollback_by_default():
     assert app._app.renderer.mouse_support() is False
 
 
+def test_split_chat_input_can_grow_without_fullscreen():
+    app = QuimeraApplication()
+
+    assert app._input_area.buffer.multiline() is True
+    assert app._input_area.window.height.max == 5
+    assert app._app.full_screen is False
+
+
 def test_split_application_uses_persistent_history_file(tmp_path):
     app = QuimeraApplication(history_file=str(tmp_path / "history.txt"))
 
