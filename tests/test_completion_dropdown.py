@@ -6,7 +6,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.widgets import Input
 
-from quimera.app.completion_dropdown import CompletionDropdown
+from quimera.app.completion_dropdown import CompletionDropdown, history_suggestion_for
 
 COMPLETIONS = ["/agents", "/agent-status", "/agent-run"]
 
@@ -264,3 +264,22 @@ class TestCompletionDropdownUnit(unittest.TestCase):
         self.assertFalse(dd.has_options)
         dd._filtered = ["/agents", "/agent-status"]
         self.assertTrue(dd.has_options)
+
+    def test_history_suggestion_prefere_match_mais_recente(self):
+        history = [
+            "corrige a toolbar",
+            "continua a migracao textual",
+            "continua validando approval",
+        ]
+
+        self.assertEqual(
+            history_suggestion_for(history, "continua"),
+            "continua validando approval",
+        )
+
+    def test_history_suggestion_ignora_match_exato_e_prefixo_vazio(self):
+        history = ["/context show", "/context reset"]
+
+        self.assertIsNone(history_suggestion_for(history, ""))
+        self.assertIsNone(history_suggestion_for(history, "/context reset"))
+        self.assertIsNone(history_suggestion_for(history, "/missing"))

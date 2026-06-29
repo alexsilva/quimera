@@ -956,7 +956,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
         from textual.widgets import Header, Input, RichLog, Static
         from textual.widgets._header import HeaderClock, HeaderClockSpace, HeaderIcon, HeaderTitle
 
-        from quimera.app.completion_dropdown import CompletionDropdown
+        from quimera.app.completion_dropdown import CompletionDropdown, PromptHistorySuggester
     except ImportError as exc:
         raise SystemExit(
             "A interface Textual requer a dependência 'textual'. "
@@ -977,6 +977,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             self._prompt_history: list[str] = []
             self._history_index = 0
             self._saved_draft = ""
+            self.suggester = PromptHistorySuggester(lambda: self._prompt_history)
 
         def add_to_history(self, value: str) -> None:
             if value:

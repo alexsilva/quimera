@@ -3,7 +3,13 @@
 from unittest.mock import Mock, patch
 from contextlib import contextmanager
 
-from quimera.app.textual_ui import TextualFeedModel, TextualInputGate, TextualRenderer, TextualUiBridge, TextualUiEvent
+from quimera.app.textual_ui import (
+    TextualFeedModel,
+    TextualInputGate,
+    TextualRenderer,
+    TextualUiBridge,
+    TextualUiEvent,
+)
 
 
 def _events(model: TextualFeedModel):

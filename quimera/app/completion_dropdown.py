@@ -1,9 +1,38 @@
 """Dropdown inline de autocomplete com filtragem e navegação por setas."""
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from textual.app import ComposeResult
 from textual.containers import Vertical
+from textual.suggester import Suggester
 from textual.widgets import Static
+
+
+def history_suggestion_for(history: list[str], value: str) -> str | None:
+    """Retorna a sugestão mais recente do histórico para o prefixo digitado."""
+    prefix = str(value or "")
+    if not prefix:
+        return None
+    for entry in reversed(history):
+        candidate = str(entry or "")
+        if candidate == prefix:
+            continue
+        if candidate.startswith(prefix):
+            return candidate
+    return None
+
+
+class PromptHistorySuggester(Suggester):
+    """Suggester Textual que replica AutoSuggestFromHistory do prompt antigo."""
+
+    def __init__(self, history_provider: Callable[[], list[str]]) -> None:
+        super().__init__(use_cache=False, case_sensitive=True)
+        self._history_provider = history_provider
+
+    async def get_suggestion(self, value: str) -> str | None:
+        """Busca no histórico do input a continuação mais recente para value."""
+        return history_suggestion_for(list(self._history_provider() or []), value)
 
 
 class CompletionDropdown(Vertical):

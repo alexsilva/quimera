@@ -32,6 +32,7 @@ import pytest
 from quimera.runtime.approval import ApprovalManager
 from quimera.runtime.config import ToolRuntimeConfig
 from quimera.runtime.input_broker import InputBroker
+from quimera.app.textual_ui import TextualInputGate, TextualUiBridge
 
 
 _cfg = ToolRuntimeConfig(workspace_root=Path("/tmp"))
@@ -186,6 +187,43 @@ def test_input_broker_interactive_window_pauses_and_resumes_spinner_callbacks():
         events.append("inside")
 
     assert events == ["suspend", "inside", "resume"]
+
+
+def test_input_broker_routes_approval_to_textual_input_gate():
+    """InputBroker deve usar TextualInputGate ativo para aprovação interativa."""
+    bridge = TextualUiBridge()
+    gate = TextualInputGate(bridge)
+    gate.set_textual_mounted(True)
+    broker = InputBroker(input_gate=gate)
+
+    def _answer():
+        time.sleep(0.05)
+        bridge.submit_input("s")
+
+    threading.Thread(target=_answer, daemon=True).start()
+
+    assert broker.request_approval("run_shell", "pwd", source="claude", timeout=1.0) is True
+
+
+def test_input_broker_routes_selection_to_textual_input_gate():
+    """InputBroker deve usar TextualInputGate ativo para seleção numerada."""
+    bridge = TextualUiBridge()
+    gate = TextualInputGate(bridge)
+    gate.set_textual_mounted(True)
+    broker = InputBroker(input_gate=gate)
+
+    def _answer():
+        time.sleep(0.05)
+        bridge.submit_input("2")
+
+    threading.Thread(target=_answer, daemon=True).start()
+
+    assert broker.request_ask_user(
+        "Escolha",
+        ["sim", "não"],
+        source="claude",
+        timeout=1.0,
+    ) == (1, "não")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
