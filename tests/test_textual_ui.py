@@ -208,6 +208,39 @@ def test_textual_input_gate_returns_current_line_buffer():
     assert gate.get_line_buffer() == ""
 
 
+def test_textual_toolbar_shows_interactive_prompt_contract():
+    gate = TextualInputGate(TextualUiBridge())
+    gate._interactive_prompt_active = True
+
+    assert gate._build_toolbar_text() == "Enter: confirmar  |  Ctrl+C: cancelar"
+
+
+def test_textual_toolbar_shows_active_agent_contract():
+    bridge = TextualUiBridge()
+    gate = TextualInputGate(bridge)
+    bridge.set_agent_active("claude", "🔮 Claude Sonnet")
+
+    text = gate._build_toolbar_text()
+
+    assert "🔮 Claude Sonnet" in text
+    assert "Enter: injetar" in text
+    assert "Ctrl+Q: sair" in text
+
+
+def test_textual_toolbar_includes_default_controls_with_context():
+    gate = TextualInputGate(
+        TextualUiBridge(),
+        toolbar_context_resolver=lambda: {"responder": "claude", "branch": "main-ui"},
+    )
+
+    text = gate._build_toolbar_text()
+
+    assert "claude" in text
+    assert "main-ui" in text
+    assert "Enter: enviar" in text
+    assert "Ctrl+C: interromper" in text
+
+
 def test_textual_input_gate_clears_question_overlay_after_selection_timeout():
     bridge = TextualUiBridge()
     emitted = []

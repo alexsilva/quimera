@@ -324,6 +324,7 @@ class TextualUiBridge:
         self.textual_app = None
         self.quimera_app = None
         self._input_value = ""
+        self._active_agent_labels: dict[str, str] = {}
         self._lock = threading.Lock()
 
     def attach_textual_app(self, textual_app) -> None:
@@ -360,6 +361,27 @@ class TextualUiBridge:
         """Retorna snapshot thread-safe do buffer editável atual."""
         with self._lock:
             return self._input_value
+
+    def set_agent_active(self, agent: str, label: str) -> None:
+        """Marca agente como ativo para estado da toolbar."""
+        key = str(agent or "")
+        if not key:
+            return
+        with self._lock:
+            self._active_agent_labels[key] = str(label or key)
+
+    def clear_agent_active(self, agent: str) -> None:
+        """Remove agente ativo da toolbar."""
+        key = str(agent or "")
+        with self._lock:
+            self._active_agent_labels.pop(key, None)
+
+    def active_agent_label(self) -> str | None:
+        """Retorna o agente ativo mais recente para exibição na toolbar."""
+        with self._lock:
+            if not self._active_agent_labels:
+                return None
+            return next(reversed(self._active_agent_labels.values()))
 
     def _try_inject_active_agent(self, text: str) -> bool:
         """Tenta enviar texto ao stdin do agente ativo, preservando contrato do split."""
@@ -441,6 +463,7 @@ class TextualInputGate:
         self._textual_mounted = False
         self._active_lock = threading.Lock()
         self._active = False
+        self._interactive_prompt_active = False
         self._owner_thread_id: int | None = None
 
     def set_toolbar_context_resolver(self, resolver) -> None:
@@ -505,6 +528,13 @@ class TextualInputGate:
         self._bridge.emit(TextualUiEvent("input_active", active))
 
     def _build_toolbar_text(self) -> str:
+        if self._interactive_prompt_active:
+            return "Enter: confirmar  |  Ctrl+C: cancelar"
+
+        active_agent = self._bridge.active_agent_label()
+        if active_agent:
+            return f"⟳ {active_agent}  |  Enter: injetar  |  Ctrl+Q: sair"
+
         resolver = self._toolbar_context_resolver
         if not callable(resolver):
             return ""
@@ -528,6 +558,11 @@ class TextualInputGate:
             value = str(context.get(key, "")).strip()
             if value:
                 parts.append(value)
+        if not parts:
+            return "Enter: enviar  |  Ctrl+C: interromper  |  Ctrl+Q: sair"
+        parts.append("Enter: enviar")
+        parts.append("Ctrl+C: interromper")
+        parts.append("Ctrl+Q: sair")
         return "  |  ".join(parts)
 
     def _commands(self) -> list[str]:
@@ -598,6 +633,7 @@ class TextualInputGate:
     ) -> str | None:
         """Exibe um pedido interativo no Textual e lê uma submissão do input fixo."""
         if question is not None:
+            self._interactive_prompt_active = True
             self._bridge.emit(
                 TextualUiEvent(
                     "question",
@@ -628,6 +664,7 @@ class TextualInputGate:
         finally:
             self._set_active_state(False)
             if question is not None:
+                self._interactive_prompt_active = False
                 self._bridge.emit(TextualUiEvent("question_clear"))
 
     def read_plain_input(self, prompt: str) -> str:
@@ -789,6 +826,7 @@ class TextualRenderer:
         """Exibe resposta final de agente com ícone."""
         clean_content = strip_ansi(_extract_text_from_renderable(content))
         label = self._resolve_agent_label(agent)
+        self._bridge.clear_agent_active(str(agent))
         self._bridge.emit(
             TextualUiEvent(
                 "agent_message",
@@ -804,6 +842,7 @@ class TextualRenderer:
     def start_message_stream(self, agent) -> None:
         """Inicia stream visual com ícone do agente."""
         label = self._resolve_agent_label(agent)
+        self._bridge.set_agent_active(str(agent), label)
         self._bridge.emit(
             TextualUiEvent("stream_start", {"label": label}, agent=str(agent))
         )
@@ -828,6 +867,7 @@ class TextualRenderer:
     def abort_message_stream(self, agent) -> None:
         """Aborta stream visual."""
         label = self._resolve_agent_label(agent)
+        self._bridge.clear_agent_active(str(agent))
         self._bridge.emit(
             TextualUiEvent("stream_abort", {"label": label}, agent=str(agent))
         )
@@ -1215,6 +1255,12 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             overlay.update("")
             overlay.display = False
 
+        def _refresh_toolbar(self) -> None:
+            gate = getattr(quimera_app, "input_gate", None)
+            builder = getattr(gate, "_build_toolbar_text", None)
+            if callable(builder):
+                self.query_one("#toolbar", Static).update(builder())
+
         def action_cancel_or_exit(self) -> None:
             bridge.cancel_or_exit()
 
@@ -1257,9 +1303,11 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                 return
             if event.kind == "question":
                 self._set_question_overlay(event.payload)
+                self._refresh_toolbar()
                 return
             if event.kind == "question_clear":
                 self._clear_question_overlay()
+                self._refresh_toolbar()
                 return
             if event.kind == "summarizing":
                 if event.payload:
@@ -1287,11 +1335,13 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                     renderable = _render_event(item.event)
                     if renderable is not None:
                         feed.write(renderable)
+                self._refresh_toolbar()
                 return
             if change.appended is not None:
                 renderable = _render_event(change.appended.event)
                 if renderable is not None:
                     feed.write(renderable)
+            self._refresh_toolbar()
 
     bridge.attach_quimera_app(quimera_app)
     renderer = getattr(quimera_app, "renderer", None)
