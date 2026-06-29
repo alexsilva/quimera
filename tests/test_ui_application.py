@@ -108,3 +108,57 @@ def test_split_output_window_tails_inside_a_wrapped_line():
     assert app._output_window.vertical_scroll == 0
     assert app._output_window.vertical_scroll_2 > 0
     assert app._output_follow_tail is True
+
+
+# ------------------------------------------------------------------
+# update_stream / replace_stream region tests
+# ------------------------------------------------------------------
+
+def test_update_stream_replaces_from_mark():
+    app = QuimeraApplication()
+    app.append_output("before\n")
+    app.mark_stream_start("a")
+    app.append_output("status 1\n")
+    app.update_stream("a", "status 2\n")
+    assert app._output_text == "before\nstatus 2\n"
+    assert app._stream_marks["a"] is not None
+
+
+def test_update_stream_keeps_mark_for_replace_stream():
+    app = QuimeraApplication()
+    app.mark_stream_start("a")
+    app.update_stream("a", "live text\n")
+    app.replace_stream("a", "final text\n")
+    assert app._output_text == "final text\n"
+    assert "a" not in app._stream_marks
+
+
+def test_update_stream_multiple_sequential_replaces():
+    app = QuimeraApplication()
+    app.mark_stream_start("a")
+    app.update_stream("a", "status 1\n")
+    app.update_stream("a", "status 2\n")
+    app.update_stream("a", "status 3\n")
+    assert app._output_text == "status 3\n"
+    app.replace_stream("a", "done\n")
+    assert app._output_text == "done\n"
+
+
+def test_replace_stream_without_update_stream():
+    app = QuimeraApplication()
+    app.append_output("prefix\n")
+    app.mark_stream_start("a")
+    app.append_output("stream delta\n")
+    app.replace_stream("a", "final\n")
+    assert app._output_text == "prefix\nfinal\n"
+
+
+def test_update_stream_replaces_to_end():
+    app = QuimeraApplication()
+    app.append_output("before\n")
+    app.mark_stream_start("a")
+    app.append_output("v1\n")
+    app.append_output("after\n")
+    app.update_stream("a", "v2\n")
+    # update_stream replaces from mark to end (entire tail replaced)
+    assert app._output_text == "before\nv2\n"
