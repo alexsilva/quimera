@@ -319,7 +319,9 @@ class TerminalCompositor:
 
         def _is_split_lifecycle_noise(renderable) -> bool:
             text = strip_ansi(str(_preview_text(renderable) or renderable)).strip().lower()
-            return text in {"iniciando execução", "execução concluída"}
+            text = " ".join(text.split())
+            lifecycle_suffixes = ("iniciando execução", "execução concluída")
+            return text in lifecycle_suffixes or text.endswith(lifecycle_suffixes)
 
         # -- Live helpers --------------------------------------------------
 
