@@ -515,6 +515,16 @@ def test_input_broker_read_line_uses_gate_even_when_inactive():
     gate.read_input_in_terminal.assert_called_once()
 
 
+def test_input_broker_consumer_can_handle_when_split_qapp_is_registered():
+    """No split, qapp deve processar approval/ask_user mesmo sem InputGate ativo."""
+    gate = MagicMock()
+    gate.is_active.return_value = False
+    broker = InputBroker(input_gate=gate)
+    broker.set_qapp(MagicMock())
+
+    assert broker._consumer_can_handle(MagicMock()) is True
+
+
 def test_input_broker_read_line_does_not_call_input_gate_directly_when_terminal_read_unavailable():
     """InputBroker não deve chamar InputGate(prompt) pela thread do broker."""
     gate = MagicMock()

@@ -189,6 +189,8 @@ class InputBroker:
             self._process_request(req, allow_direct_gate=False)
 
     def _consumer_can_handle(self, req: _InputRequest) -> bool:
+        if getattr(self, "_qapp", None) is not None:
+            return True
         gate = self._input_gate
         if gate is None:
             return True
