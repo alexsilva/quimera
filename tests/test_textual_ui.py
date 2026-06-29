@@ -1,6 +1,7 @@
 """Tests for the Textual UI bridge/feed model."""
 
 from unittest.mock import Mock
+from contextlib import contextmanager
 
 from quimera.app.textual_ui import TextualFeedModel, TextualInputGate, TextualRenderer, TextualUiBridge, TextualUiEvent
 
@@ -23,6 +24,44 @@ def test_textual_feed_replaces_agent_lifecycle_with_final_message():
     assert len(model.items) == 1
     assert model.items[0].transient is False
     assert model.items[0].event is final
+
+
+def test_textual_feed_ignores_late_completed_lifecycle_after_final_message():
+    model = TextualFeedModel()
+
+    final = TextualUiEvent("agent_message", {"content": "Oi, Alex!", "label": "Claude"}, agent="claude")
+    assert model.apply(final)
+
+    changed = model.apply(
+        TextualUiEvent(
+            "agent_lifecycle",
+            {"status": "completed", "message": "execução concluída"},
+            agent="claude",
+        )
+    )
+
+    assert changed is False
+    assert len(model.items) == 1
+    assert model.items[0].event is final
+
+
+def test_textual_feed_accepts_lifecycle_again_after_new_stream_start():
+    model = TextualFeedModel()
+
+    model.apply(TextualUiEvent("agent_message", {"content": "primeira", "label": "Claude"}, agent="claude"))
+    model.apply(TextualUiEvent("stream_start", {"label": "Claude"}, agent="claude"))
+    model.apply(
+        TextualUiEvent(
+            "agent_lifecycle",
+            {"status": "completed", "message": "execução concluída"},
+            agent="claude",
+        )
+    )
+
+    assert len(model.items) == 2
+    assert model.items[0].event.kind == "agent_message"
+    assert model.items[1].event.kind == "agent_lifecycle"
+    assert model.items[1].transient is True
 
 
 def test_textual_feed_accumulates_stream_chunk_and_replaces_with_final_message():
@@ -105,3 +144,23 @@ def test_textual_renderer_clear_screen_emits_clear_event():
 
     bridge.emit.assert_called_once()
     assert bridge.emit.call_args.args[0].kind == "clear"
+
+
+def test_textual_renderer_external_window_suspends_textual_app():
+    bridge = TextualUiBridge()
+    events = []
+
+    class FakeTextualApp:
+        @contextmanager
+        def suspend(self):
+            events.append("suspend")
+            yield
+            events.append("resume")
+
+    bridge.attach_textual_app(FakeTextualApp())
+    renderer = TextualRenderer(bridge)
+
+    with renderer.external_window("external:editor", title="Editor externo"):
+        events.append("editor")
+
+    assert events == ["suspend", "editor", "resume"]

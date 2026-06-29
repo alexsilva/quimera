@@ -72,6 +72,7 @@ class TextualFeedModel:
         self._items: list[TextualFeedItem] = []
         self._transient_index_by_agent: dict[str, int] = {}
         self._stream_buffer_by_agent: dict[str, str] = {}
+        self._finalized_agents: set[str] = set()
 
     @property
     def items(self) -> list[TextualFeedItem]:
@@ -83,6 +84,7 @@ class TextualFeedModel:
         self._items.clear()
         self._transient_index_by_agent.clear()
         self._stream_buffer_by_agent.clear()
+        self._finalized_agents.clear()
 
     def apply(self, event: TextualUiEvent) -> bool:
         """Aplica evento e retorna se o feed visual precisa ser redesenhado."""
@@ -93,6 +95,7 @@ class TextualFeedModel:
             return True
         if event.kind == "stream_start":
             agent = self._agent_key(event)
+            self._finalized_agents.discard(agent)
             self._stream_buffer_by_agent[agent] = ""
             self._upsert_transient(event)
             return True
@@ -100,6 +103,8 @@ class TextualFeedModel:
             self._apply_stream_chunk(event)
             return True
         if event.kind in self._TRANSIENT_KINDS:
+            if self._is_late_completed_lifecycle(event):
+                return False
             self._upsert_transient(event)
             return True
         self._items.append(TextualFeedItem(event, transient=False))
@@ -121,12 +126,22 @@ class TextualFeedModel:
     def _replace_transient_with_final(self, event: TextualUiEvent) -> None:
         agent = self._agent_key(event)
         self._stream_buffer_by_agent.pop(agent, None)
+        self._finalized_agents.add(agent)
         item = TextualFeedItem(event, transient=False)
         index = self._transient_index_by_agent.pop(agent, None)
         if index is not None and 0 <= index < len(self._items):
             self._items[index] = item
             return
         self._items.append(item)
+
+    def _is_late_completed_lifecycle(self, event: TextualUiEvent) -> bool:
+        if event.kind != "agent_lifecycle":
+            return False
+        agent = self._agent_key(event)
+        if agent not in self._finalized_agents:
+            return False
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        return str(payload.get("status", "")).strip().lower() == "completed"
 
     def _apply_stream_chunk(self, event: TextualUiEvent) -> None:
         agent = self._agent_key(event)
@@ -540,8 +555,12 @@ class TextualRenderer:
         return None
 
     def external_window(self, window_id: str, title: str = "", metadata=None):
-        """Compatibilidade: Textual mantém a UI como dona do terminal."""
-        self._bridge.emit(TextualUiEvent("system", title or window_id))
+        """Entrega temporariamente o terminal para uma janela/processo externo."""
+        with self._bridge._lock:
+            textual_app = self._bridge.textual_app
+        suspend = getattr(textual_app, "suspend", None)
+        if callable(suspend):
+            return suspend()
         return nullcontext()
 
     def approval_window(self, *, title: str = "Aprovação", **kwargs):
