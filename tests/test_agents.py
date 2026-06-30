@@ -2194,6 +2194,26 @@ def test_spy_output_presenter_uses_muted_feed_for_summary_response_when_supporte
     renderer.show_plain.assert_not_called()
 
 
+def test_spy_output_presenter_persists_tool_preview_when_feed_is_supported():
+    """Verifica que tool preview fica visível no feed Textual, não só como transient."""
+    class FeedRenderer:
+        supports_agent_feed = True
+
+        def __init__(self):
+            self.show_feed = MagicMock()
+            self.show_plain = MagicMock()
+            self.update_agent_transient = MagicMock()
+
+    renderer = FeedRenderer()
+    presenter = SpyOutputPresenter(renderer, Visibility.SUMMARY)
+
+    presenter.emit("codex", SpyEvent(kind="tool", text="usando apply_patch", transient=True))
+
+    renderer.update_agent_transient.assert_called_once_with("codex", "usando apply_patch")
+    renderer.show_feed.assert_called_once_with("usando apply_patch", agent="codex", muted=True)
+    renderer.show_plain.assert_not_called()
+
+
 def test_agent_client_uses_transient_for_live_stderr_when_renderer_supports_it():
     """Verifica que stderr ao vivo volta para a janela transient mesmo com feed disponível."""
     class FeedRenderer:

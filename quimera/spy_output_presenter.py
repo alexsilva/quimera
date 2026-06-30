@@ -572,7 +572,8 @@ class SpyOutputPresenter:
         if event.transient and agent and hasattr(self.renderer, "update_agent_transient"):
             self.renderer.update_agent_transient(agent, rendered)
             self.last_message = dedupe_key
-            return
+            if event.kind != "tool" or getattr(self.renderer, "supports_agent_feed", False) is not True:
+                return
         if event.kind == "tool":
             self._show_persistent_line(rendered, agent=agent, muted=True)
         else:
