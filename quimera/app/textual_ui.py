@@ -149,10 +149,13 @@ def _external_textual_window(textual_app):
         yield
     finally:
         _restore_terminal_modes()
+        resumed = False
         try:
             call_from_thread(_resume_driver)
+            resumed = True
         finally:
-            _restore_terminal_modes()
+            if not resumed:
+                _restore_terminal_modes()
 
 
 class _TextualConsoleShim:
