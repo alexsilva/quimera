@@ -1919,6 +1919,36 @@ def test_agent_client_bind_tool_preview_callback_uses_shared_preview(renderer):
     assert "README.md" in message
 
 
+def test_agent_client_tool_preview_uses_agent_feed_when_supported():
+    """Preview de tool sem approval deve aparecer no feed do agente na Textual."""
+    from types import SimpleNamespace
+
+    class FeedRenderer:
+        supports_agent_feed = True
+
+        def __init__(self):
+            self.show_feed = MagicMock()
+            self.show_system_neutral = MagicMock()
+
+    renderer = FeedRenderer()
+    muted_reporter = MagicMock()
+    client = AgentClient(renderer, muted_reporter=muted_reporter)
+    tool_executor = SimpleNamespace(set_tool_preview_callback=MagicMock())
+
+    client.bind_tool_preview_callback(tool_executor, agent="codex")
+
+    callback = tool_executor.set_tool_preview_callback.call_args[0][0]
+    callback("read_file", {"path": "README.md"})
+
+    renderer.show_feed.assert_called_once()
+    message = renderer.show_feed.call_args.args[0]
+    assert "⚒ read_file" in message
+    assert "README.md" in message
+    assert renderer.show_feed.call_args.kwargs == {"agent": "codex", "muted": True}
+    renderer.show_system_neutral.assert_not_called()
+    muted_reporter.assert_not_called()
+
+
 def test_call_api_routes_openai_preview_through_muted_reporter(renderer):
     """Preview operacional deve usar muted_reporter quando fornecido pelo app."""
     from types import SimpleNamespace

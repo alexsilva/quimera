@@ -167,11 +167,25 @@ class AgentClient:
             return
         self.renderer.show_system(message)
 
-    def bind_tool_preview_callback(self, tool_executor) -> None:
+    def _show_tool_preview(self, message: str, *, agent: str | None = None) -> None:
+        """Exibe preview operacional de tool no feed do agente quando possível."""
+        if agent and getattr(self.renderer, "supports_agent_feed", False) is True:
+            show_feed = getattr(self.renderer, "show_feed", None)
+            if callable(show_feed):
+                show_feed(message, agent=agent, muted=True)
+                return
+        self._show_muted(message)
+
+    def bind_tool_preview_callback(self, tool_executor, *, agent: str | None = None) -> None:
         """Registra o preview operacional compartilhado para tools sem approval."""
         set_tool_preview = getattr(tool_executor, "set_tool_preview_callback", None)
         if callable(set_tool_preview):
-            set_tool_preview(lambda name, args: self._show_muted(ToolPreview.build(name, args)))
+            set_tool_preview(
+                lambda name, args: self._show_tool_preview(
+                    ToolPreview.build(name, args),
+                    agent=agent,
+                )
+            )
 
     @staticmethod
     def _is_tool_call_text(text: str) -> bool:
@@ -856,7 +870,7 @@ class AgentClient:
                     if callable(get_approval_scope):
                         approval_scope = get_approval_scope()
                 if effective_tool_executor is not None:
-                    self.bind_tool_preview_callback(effective_tool_executor)
+                    self.bind_tool_preview_callback(effective_tool_executor, agent=agent)
                 # Injeta callbacks de spinner no executor para que o approval handler
                 # possa pausar o Live do Rich antes de input() bloqueante, evitando
                 # race condition entre o refresh do spinner e a leitura do stdin.
