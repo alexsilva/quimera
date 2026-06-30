@@ -583,6 +583,21 @@ class TextualUiBridge:
         except RuntimeError:
             self.ui_queue.put(event)
 
+    def flush_ui_events(self) -> bool:
+        """Força o app Textual a drenar eventos visuais pendentes agora."""
+        with self._lock:
+            textual_app = self.textual_app
+        if textual_app is None:
+            return False
+        flush_bridge_events = getattr(textual_app, "flush_bridge_events", None)
+        if not callable(flush_bridge_events):
+            return False
+        try:
+            textual_app.call_from_thread(flush_bridge_events)
+            return True
+        except RuntimeError:
+            return False
+
     def drain_pending_events(self) -> list[TextualUiEvent]:
         """Drena eventos acumulados antes da montagem do app."""
         events: list[TextualUiEvent] = []
@@ -1099,12 +1114,12 @@ class TextualRenderer:
         return self._interactive_window("selection", title, owner=owner, metadata=metadata)
 
     def flush(self, timeout: float = 5.0) -> None:
-        """Textual processa eventos pelo próprio loop."""
-        return None
+        """Drena eventos visuais pendentes no app Textual."""
+        self._bridge.flush_ui_events()
 
     def flush_quick(self, timeout: float = 0.15) -> bool:
-        """Textual processa eventos pelo próprio loop."""
-        return True
+        """Drena eventos visuais pendentes sem bloquear o prompt."""
+        return self._bridge.flush_ui_events()
 
     def show_system(self, message: str) -> None:
         """Exibe mensagem de sistema."""
@@ -1688,6 +1703,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             self._summarizing = False
             self._spinner_index = 0
             self._spinner_timer = None
+            self._bridge_drain_timer = None
             self._feed_model = TextualFeedModel()
             self._history_file_path: Path | None = None
 
@@ -1715,6 +1731,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                 gate.set_textual_mounted(True)
             for event in bridge.drain_pending_events():
                 self.handle_bridge_event(event)
+            self._bridge_drain_timer = self.set_interval(0.05, self._drain_bridge_events)
             self._worker_thread = threading.Thread(
                 target=self._run_quimera_app,
                 daemon=True,
@@ -1731,10 +1748,28 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             gate = getattr(quimera_app, "input_gate", None)
             if hasattr(gate, "set_textual_mounted"):
                 gate.set_textual_mounted(False)
+            if self._bridge_drain_timer is not None:
+                try:
+                    self._bridge_drain_timer.stop()
+                except Exception:
+                    pass
+                self._bridge_drain_timer = None
             try:
                 self.query_one("#input", _CompletionInput).save_history(self._history_file_path)
             except Exception:
                 pass
+
+        def _drain_bridge_events(self) -> None:
+            drained = False
+            for event in bridge.drain_pending_events():
+                drained = True
+                self.handle_bridge_event(event)
+            if drained:
+                self._refresh_now(layout=True)
+
+        def flush_bridge_events(self) -> None:
+            self._drain_bridge_events()
+            self._refresh_now(layout=True)
 
         def _start_spinner(self) -> None:
             """Inicia animação de loading ao lado do relógio do header."""

@@ -883,3 +883,52 @@ def test_textual_bridge_handler_refreshes_after_visual_event_updates():
     assert "def _refresh_now" in source
     assert "self._refresh_now(layout=True)" in source
     assert "self._refresh_now()" in source
+
+
+
+def test_textual_app_periodically_drains_bridge_event_queue():
+    import inspect
+
+    from quimera.app.textual_ui import run_textual_quimera_app
+
+    source = inspect.getsource(run_textual_quimera_app)
+
+    assert "self.set_interval(0.05, self._drain_bridge_events)" in source
+    assert "def _drain_bridge_events" in source
+    assert "bridge.drain_pending_events()" in source
+
+
+def test_textual_renderer_flush_drains_bridge_events_for_tool_previews():
+    bridge = TextualUiBridge()
+    calls = []
+
+    class FakeTextualApp:
+        def handle_bridge_event(self, event):
+            calls.append(event.kind)
+
+        def flush_bridge_events(self):
+            calls.append("flush")
+
+        def call_from_thread(self, callback, *args):
+            callback(*args)
+
+    bridge.attach_textual_app(FakeTextualApp())
+    renderer = TextualRenderer(bridge)
+
+    renderer.show_system_neutral("tool: list_files")
+    assert renderer.flush_quick() is True
+    renderer.flush()
+
+    assert calls == ["muted", "flush", "flush"]
+
+
+def test_textual_app_exposes_flush_bridge_events_for_immediate_tool_preview_rendering():
+    import inspect
+
+    from quimera.app.textual_ui import run_textual_quimera_app
+
+    source = inspect.getsource(run_textual_quimera_app)
+
+    assert "def flush_bridge_events" in source
+    assert "self._drain_bridge_events()" in source
+    assert "self._refresh_now(layout=True)" in source
