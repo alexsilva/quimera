@@ -2,6 +2,7 @@
 
 from unittest.mock import Mock, patch
 from contextlib import contextmanager
+from types import SimpleNamespace
 
 from quimera.app.textual_ui import (
     TextualFeedModel,
@@ -614,3 +615,110 @@ def test_textual_toolbar_renderable_uses_main_tui_chip_styles():
     assert "⎇ main-ui" in plain
     assert "↺ 13" in plain
     assert "✨ chat" in plain
+
+
+def test_textual_theme_cycle_bindings_include_main_tui_fallbacks():
+    import inspect
+
+    from quimera.app.textual_ui import run_textual_quimera_app
+
+    source = inspect.getsource(run_textual_quimera_app)
+
+    assert '"ctrl+t", "cycle_theme"' in source
+    assert '"alt+t", "cycle_theme"' in source
+    assert '"f6", "cycle_theme"' in source
+
+
+def test_external_textual_window_does_not_reset_after_successful_driver_resume():
+    from quimera.app.textual_ui import _external_textual_window
+
+    events = []
+
+    class FakeDriver:
+        can_suspend = True
+
+        def suspend_application_mode(self):
+            events.append("driver_suspend")
+
+        def resume_application_mode(self):
+            events.append("driver_resume")
+
+    class FakeTextualApp:
+        _driver = FakeDriver()
+
+        def call_from_thread(self, callback):
+            callback()
+
+        def _suspend_signal(self):
+            events.append("suspend_signal")
+
+        def _resume_signal(self):
+            events.append("resume_signal")
+
+        def refresh(self, layout=False):
+            events.append(f"refresh:{layout}")
+
+        def query_one(self, selector):
+            raise LookupError(selector)
+
+    with patch("quimera.app.textual_ui._restore_terminal_modes", lambda: events.append("reset")):
+        with _external_textual_window(FakeTextualApp()):
+            events.append("editor")
+
+    assert events == [
+        "suspend_signal",
+        "driver_suspend",
+        "reset",
+        "editor",
+        "reset",
+        "driver_resume",
+        "resume_signal",
+        "refresh:True",
+    ]
+
+
+def test_textual_bridge_routes_inline_prompt_answers_to_input_queue_even_with_active_agent():
+    bridge = TextualUiBridge()
+
+    class FakeStdin:
+        def __init__(self):
+            self.writes = []
+
+        def write(self, value):
+            self.writes.append(value)
+
+        def flush(self):
+            self.writes.append("flush")
+
+    stdin = FakeStdin()
+    bridge.attach_quimera_app(
+        SimpleNamespace(
+            is_agent_running=True,
+            active_agent_stdin=stdin,
+        )
+    )
+
+    bridge.begin_direct_input()
+    try:
+        bridge.submit_input("cli")
+    finally:
+        bridge.end_direct_input()
+
+    assert bridge.input_queue.get_nowait() == "cli"
+    assert stdin.writes == []
+
+
+def test_textual_input_gate_marks_inline_connection_prompts_as_direct_input():
+    bridge = TextualUiBridge()
+    gate = TextualInputGate(bridge)
+    emitted = []
+    bridge.emit = emitted.append
+
+    assert bridge.is_direct_input_active() is False
+
+    bridge.input_queue.put("cmd")
+    result = gate("Tipo de conexão")
+
+    assert result == "cmd"
+    assert bridge.is_direct_input_active() is False
+    assert [event.kind for event in emitted].count("prompt") == 1

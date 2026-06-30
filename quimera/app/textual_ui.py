@@ -413,6 +413,7 @@ class TextualUiBridge:
         self.quimera_app = None
         self._input_value = ""
         self._active_agent_labels: dict[str, str] = {}
+        self._direct_input_depth = 0
         self._lock = threading.Lock()
 
     def attach_textual_app(self, textual_app) -> None:
@@ -439,9 +440,27 @@ class TextualUiBridge:
         if text.strip() == CMD_EXIT:
             self.input_queue.put(CMD_EXIT)
             return
+        if self.is_direct_input_active():
+            self.input_queue.put(value)
+            return
         if self._try_inject_active_agent(text):
             return
         self.input_queue.put(value)
+
+    def begin_direct_input(self) -> None:
+        """Força submissões seguintes a irem para o prompt inline ativo."""
+        with self._lock:
+            self._direct_input_depth += 1
+
+    def end_direct_input(self) -> None:
+        """Libera roteamento direto quando o prompt inline termina."""
+        with self._lock:
+            self._direct_input_depth = max(0, self._direct_input_depth - 1)
+
+    def is_direct_input_active(self) -> bool:
+        """Retorna True se há prompt inline aguardando resposta."""
+        with self._lock:
+            return self._direct_input_depth > 0
 
     def set_input_value(self, value: str) -> None:
         """Atualiza snapshot thread-safe do buffer editável atual."""
@@ -755,6 +774,7 @@ class TextualInputGate:
 
     def __call__(self, prompt: str) -> str:
         """Bloqueia o loop do Quimera até o usuário submeter uma linha na TUI."""
+        self._bridge.begin_direct_input()
         self._set_active_state(True)
         self._bridge.emit(
             TextualUiEvent(
@@ -770,6 +790,7 @@ class TextualInputGate:
             return self._bridge.input_queue.get()
         finally:
             self._set_active_state(False)
+            self._bridge.end_direct_input()
 
     def _read_with_textual_prompt(
         self,
@@ -795,6 +816,7 @@ class TextualInputGate:
                     },
                 )
             )
+        self._bridge.begin_direct_input()
         self._set_active_state(True)
         self._bridge.emit(
             TextualUiEvent(
@@ -814,6 +836,7 @@ class TextualInputGate:
             return None
         finally:
             self._set_active_state(False)
+            self._bridge.end_direct_input()
             if question is not None:
                 self._interactive_prompt_active = False
                 self._bridge.emit(TextualUiEvent("question_clear"))
@@ -1556,6 +1579,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             ("ctrl+c", "cancel_or_exit", "Cancelar/Sair"),
             ("ctrl+q", "cancel_or_exit", "Sair"),
             ("ctrl+t", "cycle_theme", "Tema"),
+            ("alt+t", "cycle_theme", "Tema"),
             ("f6", "cycle_theme", "Tema"),
         ]
 
