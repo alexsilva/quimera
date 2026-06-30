@@ -145,6 +145,9 @@ class ToolPolicy:
         command = str(call.arguments.get("command", "")).strip()
         if not command:
             raise ToolPolicyError("run_shell_command requer um comando não vazio")
+        policy = self.config.workspace_policy
+        if policy is not None and policy.shell_allow_chaining:
+            return
         for op in self._SHELL_CHAIN_OPERATORS:
             if op in command:
                 raise ToolPolicyError(

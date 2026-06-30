@@ -666,13 +666,20 @@ class ShellToolValidator(ValidatableTool):
         """Aplica a política comum de shell para ferramentas de comando."""
         if not command:
             raise ToolPolicyError(f"{tool_name} requer um comando não vazio")
-        for op in self._SHELL_CHAIN_OPERATORS:
-            if op in command:
-                raise ToolPolicyError(f"Comando bloqueado: operador de encadeamento proibido: '{op}'")
+        # Denylist sempre se aplica, mesmo em modo autônomo
         lowered = f" {command.lower()} "
         for pattern in self.config.shell_denylist_patterns:
             if pattern.lower() in lowered:
                 raise ToolPolicyError(f"Comando bloqueado pela denylist: {pattern}")
+        policy = self.config.workspace_policy
+        chaining_allowed = policy is not None and policy.shell_allow_chaining
+        allowlist_skipped = policy is not None and policy.shell_skip_allowlist
+        if not chaining_allowed:
+            for op in self._SHELL_CHAIN_OPERATORS:
+                if op in command:
+                    raise ToolPolicyError(f"Comando bloqueado: operador de encadeamento proibido: '{op}'")
+        if allowlist_skipped:
+            return
         try:
             tokens = shlex.split(command)
             first_token = tokens[0]

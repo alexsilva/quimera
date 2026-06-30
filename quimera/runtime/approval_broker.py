@@ -437,6 +437,14 @@ class ApprovalBroker:
             ):
                 return False
             return self._delegation_within_budget(request, consume=consume)
+        policy = getattr(self.config, "workspace_policy", None)
+        if policy is not None and request.reason is None:
+            from .workspace_policy import AutonomyLevel
+            level = policy.level_for(request.risk)
+            if level == AutonomyLevel.DENY:
+                return False
+            if level == AutonomyLevel.AUTO:
+                return True
         return not needs_policy_approval and request.reason is None
 
     def _delegation_within_budget(
