@@ -4,7 +4,7 @@ from unittest.mock import Mock, patch
 from contextlib import contextmanager
 from types import SimpleNamespace
 
-from rich.console import Console
+from rich.console import Console, Group
 
 from quimera.app.textual_ui import (
     TextualFeedModel,
@@ -15,6 +15,7 @@ from quimera.app.textual_ui import (
     _build_question_overlay,
     _build_window_overlay_payload,
     _clear_question_overlay_widget,
+    _render_event,
 )
 
 
@@ -280,7 +281,14 @@ def test_textual_input_gate_clears_question_overlay_after_selection_timeout():
     result = gate.read_selection_in_terminal("Escolha", ["sim", "não"], timeout=0.001)
 
     assert result is None
-    assert [event.kind for event in emitted] == ["question", "input_active", "prompt", "input_active", "question_clear"]
+    assert [event.kind for event in emitted] == [
+        "question",
+        "input_active",
+        "prompt",
+        "input_active",
+        "question_clear",
+        "prompt_clear",
+    ]
 
     gate.set_textual_mounted(True)
 
@@ -458,8 +466,6 @@ def test_textual_feed_visual_reset_clears_only_transients():
 
 
 def test_textual_render_event_varies_agent_theme_shape():
-    from rich.panel import Panel
-    from rich.table import Table
     from quimera.app.textual_ui import _render_event
 
     panel_event = TextualUiEvent(
@@ -473,8 +479,8 @@ def test_textual_render_event_varies_agent_theme_shape():
         agent="claude",
     )
 
-    assert isinstance(_render_event(panel_event), Panel)
-    assert isinstance(_render_event(chat_event), Table)
+    assert isinstance(_render_event(panel_event), Group)
+    assert isinstance(_render_event(chat_event), Group)
 
 
 def test_textual_renderer_interactive_windows_emit_semantic_overlay_events():
@@ -804,6 +810,64 @@ def test_textual_bridge_routes_inline_prompt_answers_to_input_queue_even_with_ac
     assert stdin.writes == []
 
 
+def test_textual_bridge_question_event_routes_approval_answer_to_queue_even_with_active_agent():
+    bridge = TextualUiBridge()
+
+    class FakeStdin:
+        def __init__(self):
+            self.writes = []
+
+        def write(self, value):
+            self.writes.append(value)
+
+        def flush(self):
+            self.writes.append("flush")
+
+    stdin = FakeStdin()
+    bridge.attach_quimera_app(
+        SimpleNamespace(
+            is_agent_running=True,
+            active_agent_stdin=stdin,
+        )
+    )
+
+    bridge.emit(TextualUiEvent("question", {"kind": "approval", "question": "Aprovar?"}))
+    bridge.submit_input("y")
+
+    assert bridge.input_queue.get_nowait() == "y"
+    assert stdin.writes == []
+    assert bridge.is_direct_input_active() is False
+
+
+def test_textual_bridge_pending_input_routes_approval_answer_to_queue_even_with_active_agent():
+    bridge = TextualUiBridge()
+
+    class FakeStdin:
+        def __init__(self):
+            self.writes = []
+
+        def write(self, value):
+            self.writes.append(value)
+
+        def flush(self):
+            self.writes.append("flush")
+
+    stdin = FakeStdin()
+    bridge.attach_quimera_app(
+        SimpleNamespace(
+            is_agent_running=True,
+            active_agent_stdin=stdin,
+        )
+    )
+
+    bridge.emit(TextualUiEvent("pending_input", {"kind": "approval", "question": "Aprovar?"}, agent="local"))
+    bridge.submit_input("y")
+
+    assert bridge.input_queue.get_nowait() == "y"
+    assert stdin.writes == []
+    assert bridge.is_direct_input_active() is False
+
+
 def test_textual_input_gate_marks_inline_connection_prompts_as_direct_input():
     bridge = TextualUiBridge()
     gate = TextualInputGate(bridge)
@@ -818,6 +882,41 @@ def test_textual_input_gate_marks_inline_connection_prompts_as_direct_input():
     assert result == "cmd"
     assert bridge.is_direct_input_active() is False
     assert [event.kind for event in emitted].count("prompt") == 1
+    assert emitted[-1].kind == "prompt_clear"
+
+
+def test_textual_input_gate_clear_interactive_prompt_state_resets_toolbar_mode():
+    bridge = TextualUiBridge()
+    gate = TextualInputGate(bridge)
+
+    gate._interactive_prompt_active = True
+    assert gate._build_toolbar_text() == "Enter: confirmar  |  Ctrl+C: cancelar"
+
+    gate.clear_interactive_prompt_state()
+
+    assert gate._build_toolbar_text() == ""
+
+
+def test_textual_input_gate_arms_direct_input_before_approval_question_event():
+    bridge = TextualUiBridge()
+    gate = TextualInputGate(bridge)
+    direct_state_at_question = []
+    emitted = []
+
+    def capture(event):
+        emitted.append(event)
+        if event.kind == "question":
+            direct_state_at_question.append(bridge.is_direct_input_active())
+
+    bridge.emit = capture
+    bridge.input_queue.put("y")
+
+    result = gate.read_approval_in_terminal("Aprovar shell?", "Executar? ")
+
+    assert result == "y"
+    assert direct_state_at_question == [True]
+    assert bridge.is_direct_input_active() is False
+    assert [event.kind for event in emitted][-2:] == ["question_clear", "prompt_clear"]
 
 
 def test_textual_renderer_commit_agent_stream_materializes_active_stream():
@@ -932,3 +1031,51 @@ def test_textual_app_exposes_flush_bridge_events_for_immediate_tool_preview_rend
     assert "def flush_bridge_events" in source
     assert "self._drain_bridge_events()" in source
     assert "self._refresh_now(layout=True)" in source
+
+
+def test_textual_app_arms_bridge_direct_routing_while_question_overlay_is_visible():
+    import inspect
+
+    from quimera.app.textual_ui import run_textual_quimera_app
+
+    source = inspect.getsource(run_textual_quimera_app)
+
+    assert "def _arm_question_routing" in source
+    assert "bridge.begin_direct_input()" in source
+    assert "def _disarm_question_routing" in source
+    assert "bridge.end_direct_input()" in source
+    assert "self._arm_question_routing()" in source
+    assert "self._disarm_question_routing()" in source
+    assert "self._clear_prompt_state()" in source
+    assert "clear_interactive_prompt_state" in source
+
+
+def test_textual_renderer_emits_pending_input_card_event():
+    bridge = TextualUiBridge()
+    emitted = []
+    bridge.emit = emitted.append
+    renderer = TextualRenderer(bridge)
+
+    renderer.set_agent_pending_input("claude", "approval", "Executar comando?\npytest")
+
+    assert emitted[-1].kind == "pending_input"
+    assert emitted[-1].agent == "claude"
+    assert emitted[-1].payload["kind"] == "approval"
+    assert emitted[-1].payload["question"] == "Executar comando?\npytest"
+
+
+def test_textual_feed_treats_pending_input_as_transient_agent_state():
+    model = TextualFeedModel()
+    pending = TextualUiEvent(
+        "pending_input",
+        {"label": "Claude", "kind": "input", "question": "Responder?"},
+        agent="claude",
+    )
+    final = TextualUiEvent("agent_message", {"content": "feito", "label": "Claude"}, agent="claude")
+
+    assert model.apply(pending) is True
+    assert model.items[-1].transient is True
+    assert model.apply(final) is True
+
+    assert len(model.items) == 1
+    assert model.items[0].event is final

@@ -282,9 +282,17 @@ class TextualFeedChange:
 class TextualFeedModel:
     """Modelo testável do feed: transitórios por agente são substituíveis."""
 
-    _TRANSIENT_KINDS = {"stream_start", "stream_chunk", "stream_abort", "agent_update", "agent_lifecycle"}
+    _TRANSIENT_KINDS = {"stream_start", "stream_chunk", "stream_abort", "agent_update", "agent_lifecycle", "pending_input"}
 
-    _IGNORED_KINDS = {"prompt", "input_active", "summarizing", "window_open", "window_clear", "theme_changed"}
+    _IGNORED_KINDS = {
+        "prompt",
+        "prompt_clear",
+        "input_active",
+        "summarizing",
+        "window_open",
+        "window_clear",
+        "theme_changed",
+    }
 
     def __init__(self) -> None:
         self._items: list[TextualFeedItem] = []
@@ -573,6 +581,7 @@ class TextualUiBridge:
 
     def emit(self, event: TextualUiEvent) -> None:
         """Envia evento visual para a UI, com fallback para fila interna."""
+        self._sync_direct_input_from_event(event)
         with self._lock:
             textual_app = self.textual_app
         if textual_app is None:
@@ -582,6 +591,14 @@ class TextualUiBridge:
             textual_app.call_from_thread(textual_app.handle_bridge_event, event)
         except RuntimeError:
             self.ui_queue.put(event)
+
+    def _sync_direct_input_from_event(self, event: TextualUiEvent) -> None:
+        """Mantém roteamento direto no bridge enquanto há pergunta ativa."""
+        if event.kind in {"question", "window_open", "pending_input"}:
+            self.begin_direct_input()
+            return
+        if event.kind in {"question_clear", "window_clear", "prompt_clear"}:
+            self.end_direct_input()
 
     def flush_ui_events(self) -> bool:
         """Força o app Textual a drenar eventos visuais pendentes agora."""
@@ -707,6 +724,10 @@ class TextualInputGate:
     def get_line_buffer(self) -> str:
         """Compatibilidade com callers que consultam buffer atual."""
         return self._bridge.get_input_value()
+
+    def clear_interactive_prompt_state(self) -> None:
+        """Força limpeza visual do estado de prompt interativo."""
+        self._interactive_prompt_active = False
 
     def _set_active_state(self, active: bool) -> None:
         with self._active_lock:
@@ -868,6 +889,7 @@ class TextualInputGate:
         finally:
             self._set_active_state(False)
             self._bridge.end_direct_input()
+            self._bridge.emit(TextualUiEvent("prompt_clear"))
 
     def _read_with_textual_prompt(
         self,
@@ -881,6 +903,7 @@ class TextualInputGate:
         title: str | None = None,
     ) -> str | None:
         """Exibe um pedido interativo no Textual e lê uma submissão do input fixo."""
+        self._bridge.begin_direct_input()
         if question is not None:
             self._interactive_prompt_active = True
             self._bridge.emit(
@@ -895,7 +918,6 @@ class TextualInputGate:
                     },
                 )
             )
-        self._bridge.begin_direct_input()
         self._set_active_state(True)
         self._bridge.emit(
             TextualUiEvent(
@@ -919,6 +941,7 @@ class TextualInputGate:
             if question is not None:
                 self._interactive_prompt_active = False
                 self._bridge.emit(TextualUiEvent("question_clear"))
+            self._bridge.emit(TextualUiEvent("prompt_clear"))
 
     def read_plain_input(self, prompt: str) -> str:
         """Lê uma linha simples pelo mesmo input Textual."""
@@ -1329,10 +1352,14 @@ class TextualRenderer:
         self._bridge.emit(TextualUiEvent("visual_reset"))
 
     def set_agent_pending_input(self, agent: str, kind: str, question: str = "") -> None:
-        """Sinaliza input pendente de agente como status visual."""
+        """Sinaliza input pendente de agente como card visual."""
         label = "aprovação pendente" if str(kind) == "approval" else "input pendente"
         first_line = str(question or label).strip().splitlines()[0] if str(question or "").strip() else label
-        self._bridge.emit(TextualUiEvent("agent_update", first_line, agent=str(agent)))
+        payload = self._agent_event_payload(
+            agent,
+            {"kind": str(kind or "input"), "question": str(question or first_line)},
+        )
+        self._bridge.emit(TextualUiEvent("pending_input", payload, agent=str(agent)))
 
     def clear_agent_pending_input(self, agent: str) -> None:
         """Remove status transitório de input pendente."""
@@ -1380,20 +1407,25 @@ def _render_event(event: TextualUiEvent):
         label = str(payload.get("label", f"🤖 {event.agent or 'agente'}"))
         style = str(payload.get("style", "cyan") or "cyan")
         theme_name = str(payload.get("theme", themes.DEFAULT_THEME) or themes.DEFAULT_THEME)
-        body = Markdown(content) if payload.get("render_mode") != "plain" else Text(content)
-        return _render_themed_agent_block(theme_name, label, style, body)
+        return _render_turn_block(
+            theme_name,
+            label,
+            style,
+            content=content,
+            render_mode=str(payload.get("render_mode") or "auto"),
+        )
     if event.kind == "stream_start":
         payload = event.payload or {}
         label = str(payload.get("label", f"🤖 {event.agent or 'agente'}"))
         style = str(payload.get("style", "cyan") or "cyan")
         theme_name = str(payload.get("theme", themes.DEFAULT_THEME) or themes.DEFAULT_THEME)
-        return _render_themed_agent_block(theme_name, label, style, Text("gerando...", style="dim italic"), streaming=True)
+        return _build_stream_renderable(theme_name, label, style, "gerando...")
     if event.kind == "stream_abort":
         payload = event.payload or {}
         label = str(payload.get("label", f"🤖 {event.agent or 'agente'}"))
         style = str(payload.get("style", "red") or "red")
         theme_name = str(payload.get("theme", themes.DEFAULT_THEME) or themes.DEFAULT_THEME)
-        return _render_themed_agent_block(theme_name, label, style, Text("interrompido", style="dim red"), streaming=True)
+        return _build_stream_renderable(theme_name, label, style, "interrompido")
     if event.kind == "stream_chunk":
         payload = event.payload if isinstance(event.payload, dict) else {}
         content = str(payload.get("content") or payload.get("text") or event.payload)
@@ -1402,7 +1434,14 @@ def _render_event(event: TextualUiEvent):
         label = str(payload.get("label", f"🤖 {event.agent or 'agente'}"))
         style = str(payload.get("style", "cyan") or "cyan")
         theme_name = str(payload.get("theme", themes.DEFAULT_THEME) or themes.DEFAULT_THEME)
-        return _render_themed_agent_block(theme_name, label, style, Text(content), streaming=True)
+        return _build_stream_renderable(theme_name, label, style, content)
+    if event.kind == "pending_input":
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        label = str(payload.get("label", f"🤖 {event.agent or 'agente'}"))
+        style = str(payload.get("style", "cyan") or "cyan")
+        question = str(payload.get("question") or "")
+        kind = str(payload.get("kind") or "input")
+        return _build_pending_card_renderable(label, style, question, kind=kind)
     if event.kind == "agent_lifecycle":
         payload = event.payload or {}
         message = str(payload.get("message", "")) if isinstance(payload, dict) else str(payload)
@@ -1497,6 +1536,161 @@ def _render_themed_agent_block(theme_name: str, label: str, style: str, body, *,
     if name == "line":
         return Group(Text(label, style=f"bold {style}"), body)
     return Panel(body, title=label, border_style=style)
+
+
+def _build_turn_header(theme_name: str, label: str, style: str):
+    """Monta cabeçalho de turno seguindo o renderer main-tui."""
+    name = themes.get(theme_name).name
+    if name == "chat":
+        header = Table.grid(expand=True, padding=(0, 1))
+        header.add_column(width=2)
+        header.add_column(ratio=1)
+        header.add_row(Text("●", style=f"bold {style}"), Text(label, style=f"bold {style}"))
+        return header
+    if name == "rule":
+        return Rule(f"[bold {style}]{label}[/bold {style}]", style=f"dim {style}")
+    if name == "minimal":
+        return Text(f"▶ {label}", style=f"bold {style}")
+    if name == "card":
+        return Text(f"▎ {label}", style=f"bold {style}")
+    if name == "line":
+        return Text(label, style=f"bold {style}")
+    return Text(label, style=f"bold {style}")
+
+
+def _build_turn_body(
+    theme_name: str,
+    label: str,
+    style: str,
+    content: str,
+    *,
+    streaming: bool = False,
+    render_mode: str = "auto",
+):
+    """Monta corpo textual do turno seguindo o renderer main-tui."""
+    name = themes.get(theme_name).name
+    mode = str(render_mode or "auto").strip().lower()
+    if mode == "auto":
+        mode = "markdown"
+    body_content = Text(content or "", no_wrap=False, overflow="fold") if streaming or mode == "plain" else Markdown(content or "")
+    if name == "panel":
+        title = f"[bold {style}]{label}[/bold {style}]" if streaming else None
+        return Panel(body_content, title=title, border_style=style, padding=(0, 1))
+    if name == "chat":
+        return Padding(body_content, pad=(0, 0, 0, 4))
+    if name == "minimal":
+        return Padding(body_content, pad=(0, 0, 0, 2))
+    if name == "card":
+        return Panel(body_content, border_style=f"dim {style}", padding=(0, 1))
+    if name == "line":
+        return body_content
+    return body_content
+
+
+def _render_turn_block(
+    theme_name: str,
+    label: str,
+    style: str,
+    *,
+    content: str | None = None,
+    tools_table=None,
+    turn_id: str = "",
+    include_header: bool = True,
+    include_footer_rule: bool = False,
+    streaming: bool = False,
+    render_mode: str = "auto",
+):
+    """Monta bloco estruturado de turno: header -> corpo -> tools."""
+    parts = []
+    if include_header:
+        parts.append(_build_turn_header(theme_name, label, style))
+    if content:
+        parts.append(
+            _build_turn_body(
+                theme_name,
+                label,
+                style,
+                content,
+                streaming=streaming,
+                render_mode=render_mode,
+            )
+        )
+    if tools_table is not None:
+        parts.append(_build_turn_tools(theme_name, label, style, tools_table, turn_id))
+    if include_footer_rule and themes.get(theme_name).name == "rule":
+        parts.append(Rule(style="dim"))
+    if not parts:
+        return ""
+    if len(parts) == 1:
+        return parts[0]
+    return Group(*parts)
+
+
+def _build_turn_tools(theme_name: str, label: str, style: str, tools_table, turn_id: str):
+    """Monta seção de tools vinculada visualmente ao turno."""
+    name = themes.get(theme_name).name
+    title = f"tools · {turn_id}" if turn_id else "tools"
+    if name == "panel":
+        return Panel(
+            tools_table,
+            title=f"[bold {style}]{label} · {title}[/bold {style}]",
+            border_style=style,
+            padding=(0, 0),
+        )
+    if name == "chat":
+        row = Table.grid(expand=True, padding=(0, 1))
+        row.add_column(width=2)
+        row.add_column(ratio=1)
+        row.add_row(
+            Text("◦", style=f"dim {style}"),
+            Group(Text(title, style=f"bold {style}"), Padding(tools_table, pad=(0, 0, 0, 2))),
+        )
+        return row
+    if name == "rule":
+        return Group(Text(title, style=f"bold {style}"), tools_table)
+    if name == "minimal":
+        return Group(Text(f"◦ {title}", style=f"bold {style}"), Padding(tools_table, pad=(0, 0, 0, 2)))
+    if name == "card":
+        return Panel(
+            tools_table,
+            border_style=f"dim {style}",
+            padding=(0, 1),
+            title=f"[bold {style}]{title}[/bold {style}]" if turn_id else None,
+        )
+    if name == "line":
+        return Group(Text(title, style=f"bold {style}"), tools_table)
+    return tools_table
+
+
+def _build_stream_renderable(theme_name: str, label: str, style: str, content: str):
+    """Monta o renderable dinâmico usado no streaming."""
+    return _render_turn_block(
+        theme_name,
+        label,
+        style,
+        content=content,
+        include_header=True,
+        streaming=True,
+        render_mode="plain",
+    )
+
+
+def _build_pending_card_renderable(label: str, style: str, question: str, *, kind: str = "input"):
+    """Monta badge inline de aprovação/input pendente."""
+    icon = "⚠" if str(kind).strip().lower() == "approval" else "❓"
+    fallback = "aguardando aprovação" if icon == "⚠" else "aguardando input"
+    first_line = str(question or "").strip().splitlines()[0] if str(question or "").strip() else fallback
+    content = Text.assemble(
+        (f"\n{icon} ", "bold yellow"),
+        (first_line, "bold yellow"),
+        ("\n  Executar? [y/N/a=todas]\n" if icon == "⚠" else "\n  aguardando resposta do usuário\n", "dim yellow"),
+    )
+    return Panel(
+        Padding(content, pad=(0, 0, 0, 2)),
+        title=f"[bold {style}]{label}[/bold {style}] · pendente",
+        border_style="yellow",
+        padding=(0, 1),
+    )
 
 
 def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
@@ -1706,6 +1900,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             self._bridge_drain_timer = None
             self._feed_model = TextualFeedModel()
             self._history_file_path: Path | None = None
+            self._ui_direct_input_armed = False
 
         def compose(self) -> ComposeResult:
             yield _SummaryHeader(show_clock=True, id="header")
@@ -1745,6 +1940,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             input_widget.focus()
 
         def on_unmount(self) -> None:
+            self._disarm_question_routing()
             gate = getattr(quimera_app, "input_gate", None)
             if hasattr(gate, "set_textual_mounted"):
                 gate.set_textual_mounted(False)
@@ -1810,7 +2006,6 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
         def on_input_submitted(self, event: Input.Submitted) -> None:
             event.stop()
             self.query_one(CompletionDropdown).hide()
-            self._clear_question_overlay()
             value = event.value
             event.input.value = ""
             bridge.set_input_value("")
@@ -1818,6 +2013,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             bridge.submit_input(value)
 
         def _set_question_overlay(self, payload) -> None:
+            self._arm_question_routing()
             overlay = self.query_one("#question_overlay", Static)
             overlay.update(_build_question_overlay(payload))
             overlay.display = True
@@ -1826,6 +2022,28 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
         def _clear_question_overlay(self) -> None:
             overlay = self.query_one("#question_overlay", Static)
             _clear_question_overlay_widget(overlay)
+            self._disarm_question_routing()
+
+        def _arm_question_routing(self) -> None:
+            if self._ui_direct_input_armed:
+                return
+            self._ui_direct_input_armed = True
+            bridge.begin_direct_input()
+
+        def _disarm_question_routing(self) -> None:
+            if not self._ui_direct_input_armed:
+                return
+            self._ui_direct_input_armed = False
+            bridge.end_direct_input()
+
+        def _clear_prompt_state(self) -> None:
+            gate = getattr(quimera_app, "input_gate", None)
+            clearer = getattr(gate, "clear_interactive_prompt_state", None)
+            if callable(clearer):
+                clearer()
+            input_widget = self.query_one("#input", Input)
+            input_widget.placeholder = "mensagem..."
+            self._refresh_toolbar()
 
         def _refresh_now(self, *, layout: bool = False) -> None:
             try:
@@ -1893,12 +2111,16 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                 return
             if event.kind == "question_clear":
                 self._clear_question_overlay()
-                self._refresh_toolbar()
+                self._clear_prompt_state()
                 self._refresh_now(layout=True)
                 return
             if event.kind == "window_clear":
                 self._clear_question_overlay()
                 self._refresh_toolbar()
+                self._refresh_now(layout=True)
+                return
+            if event.kind == "prompt_clear":
+                self._clear_prompt_state()
                 self._refresh_now(layout=True)
                 return
             if event.kind == "theme_changed":
