@@ -15,6 +15,7 @@ from quimera.constants import (
     CMD_CONTEXT,
     CMD_CONTEXT_BRANCH,
     CMD_CONTEXT_EDIT,
+    CMD_POLICY,
     CMD_PROMPT,
     CMD_RELOAD,
     CMD_RESET,
@@ -830,6 +831,34 @@ def test_handle_command_approve_all_and_approve_available_and_unavailable():
         "[aprovação] mecanismo de aprovação não disponível.",
         "[aprovação] mecanismo de aprovação não disponível.",
     ]
+
+
+def test_handle_command_policy_status_and_setter():
+    """Verifica que /policy mostra e altera o preset do workspace."""
+    app = make_app()
+    policy_name = {"value": "strict"}
+    app.get_workspace_policy_name = Mock(side_effect=lambda: policy_name["value"])
+    app.set_workspace_policy_name = Mock(side_effect=lambda value: policy_name.update(value=value))
+    layer = AppSystemLayer(app)
+
+    assert layer.handle_command(CMD_POLICY) is True
+    assert "atual: strict" in app.renderer.system_messages[-1]
+
+    assert layer.handle_command("/policy autonomous") is True
+    app.set_workspace_policy_name.assert_called_once_with("autonomous")
+    assert "workspace_policy=autonomous" in app.renderer.system_messages[-1]
+
+
+def test_handle_command_policy_rejects_unknown_preset():
+    """Verifica que /policy rejeita presets desconhecidos."""
+    app = make_app()
+    app.get_workspace_policy_name = Mock(return_value="strict")
+    app.set_workspace_policy_name = Mock()
+    layer = AppSystemLayer(app)
+
+    assert layer.handle_command("/policy unsafe") is True
+    app.set_workspace_policy_name.assert_not_called()
+    assert app.renderer.warning_messages[-1] == "Uso: /policy [status|strict|autonomous]"
 
 
 def test_handle_command_context_variants():

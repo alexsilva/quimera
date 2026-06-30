@@ -9,6 +9,8 @@ DEFAULT_AUTO_SUMMARIZE_THRESHOLD = 30
 DEFAULT_IDLE_TIMEOUT_SECONDS = 360
 DEFAULT_MAX_CONVERSATION_ENTRY_CHARS = 8000
 DEFAULT_MAX_PROMPT_CHARS = 128000
+DEFAULT_WORKSPACE_POLICY = "strict"
+WORKSPACE_POLICY_PRESETS = {"strict", "autonomous"}
 
 
 class ConfigManager:
@@ -68,6 +70,24 @@ class ConfigManager:
             data["idle_timeout_seconds"] = value
         else:
             data.pop("idle_timeout_seconds", None)
+        self._save(data)
+
+    @property
+    def workspace_policy(self) -> str:
+        """Retorna o preset de policy do workspace."""
+        value = str(self._load().get("workspace_policy") or "").strip().lower()
+        if value in WORKSPACE_POLICY_PRESETS:
+            return value
+        return DEFAULT_WORKSPACE_POLICY
+
+    def set_workspace_policy(self, value: str | None):
+        """Persiste o preset de policy do workspace."""
+        data = self._load()
+        normalized = str(value or "").strip().lower()
+        if normalized in WORKSPACE_POLICY_PRESETS:
+            data["workspace_policy"] = normalized
+        else:
+            data.pop("workspace_policy", None)
         self._save(data)
 
     def set_user_name(self, name: str):

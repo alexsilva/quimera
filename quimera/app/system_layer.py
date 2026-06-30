@@ -22,6 +22,7 @@ from ..constants import (
     CMD_DISCONNECT,
     CMD_CONTEXT,
     CMD_HELP,
+    CMD_POLICY,
     CMD_PROMPT,
     CMD_RELOAD,
     CMD_RESET,
@@ -192,6 +193,8 @@ class AppSystemLayer:
         profile_registry=None,
         deferred_messages_getter=None,
         max_deferred_messages_getter=None,
+        workspace_policy_getter=None,
+        workspace_policy_setter=None,
         display_service=None,
     ):
         """Inicializa uma instância de AppSystemLayer."""
@@ -249,6 +252,12 @@ class AppSystemLayer:
                 max_deferred_messages_getter = max_deferred_messages_getter or (
                     lambda: getattr(app, "_MAX_DEFERRED_SYSTEM_MESSAGES", 20)
                 )
+                workspace_policy_getter = workspace_policy_getter or getattr(
+                    app, "get_workspace_policy_name", None
+                )
+                workspace_policy_setter = workspace_policy_setter or getattr(
+                    app, "set_workspace_policy_name", None
+                )
 
             self._display = DisplayService(
                 renderer=renderer,
@@ -284,6 +293,8 @@ class AppSystemLayer:
         self._deferred_system_messages: list[tuple[str, str]] = []
         self._deferred_messages_getter = deferred_messages_getter
         self._max_deferred_messages_getter = max_deferred_messages_getter
+        self.workspace_policy_getter = workspace_policy_getter
+        self.workspace_policy_setter = workspace_policy_setter
 
     @property
     def _display(self):
@@ -301,6 +312,17 @@ class AppSystemLayer:
 
     def _get_active_agents(self) -> list[str]:
         return self.agent_pool.agents
+
+    def _current_workspace_policy_name(self) -> str:
+        """Retorna o preset de policy atual para exibição."""
+        if callable(self.workspace_policy_getter):
+            try:
+                name = str(self.workspace_policy_getter() or "").strip().lower()
+            except Exception:
+                name = ""
+            if name in {"strict", "autonomous"}:
+                return name
+        return "strict"
 
     def _read_command_input(self, prompt: str) -> str | None:
         """Lê input síncrono para comandos interativos do chat."""
@@ -636,6 +658,26 @@ class AppSystemLayer:
                 self._display.show_system("[aprovação] próxima ferramenta será pré-aprovada.")
             else:
                 self._display.show_warning_message("[aprovação] mecanismo de aprovação não disponível.")
+            return True
+
+        if command == CMD_POLICY or command.startswith(f"{CMD_POLICY} "):
+            raw_target = command[len(CMD_POLICY):].strip().lower()
+            if raw_target in {"", "status", "show"}:
+                current = self._current_workspace_policy_name()
+                self._display.show_system(
+                    f"[policy] atual: {current}. Opções: strict, autonomous."
+                )
+                return True
+            if raw_target not in {"strict", "autonomous"}:
+                self._display.show_warning_message(
+                    "Uso: /policy [status|strict|autonomous]"
+                )
+                return True
+            if callable(self.workspace_policy_setter):
+                self.workspace_policy_setter(raw_target)
+                self._display.show_system(f"[policy] workspace_policy={raw_target}")
+            else:
+                self._display.show_warning_message("[policy] configuração indisponível.")
             return True
 
         if command == CMD_CONTEXT_EDIT or command.startswith(f"{CMD_CONTEXT_EDIT} "):

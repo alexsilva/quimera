@@ -247,6 +247,7 @@ class AppTaskServices:
         retry_backoff_seconds: int = 1,
         rate_limit_backoff_seconds: int | None = None,
         get_rate_limit_backoff_seconds: Callable[[], int] | None = None,
+        get_workspace_policy: Callable[[], Any] | None = None,
         delegate: Callable[..., Any] | None = None,
         parse_response: Callable[[Any], tuple[Any, Any, Any, Any, Any, Any]],
         classify_task_execution_result: Callable[[str | None], tuple[bool, str]] = classify_task_execution_result,
@@ -379,6 +380,7 @@ class AppTaskServices:
         self._retry_backoff_seconds = retry_backoff_seconds
         self._rate_limit_backoff_seconds = rate_limit_backoff_seconds
         self._rate_limit_backoff_seconds_getter = get_rate_limit_backoff_seconds
+        self._workspace_policy_getter = get_workspace_policy
         self._delegate = delegate
         self._parse_response = parse_response
         self._classify_task_execution_result = classify_task_execution_result
@@ -584,6 +586,9 @@ class AppTaskServices:
             return self._rate_limit_backoff_seconds
         return self._rate_limit_backoff_seconds_getter() if self._rate_limit_backoff_seconds_getter else 30
 
+    def _get_workspace_policy(self):
+        return self._workspace_policy_getter() if callable(self._workspace_policy_getter) else None
+
     def bind_dispatch_services(self, dispatch_services: AppDispatchServices | None) -> None:
         """Associa explicitamente os serviços primários de dispatch após o bootstrap."""
         self._dispatch_services = dispatch_services
@@ -646,6 +651,7 @@ class AppTaskServices:
             memory_file=getattr(workspace, "memory_file", None),
             require_approval_for_mutations=require_approval_for_mutations,
             allow_ask_user=allow_ask_user,
+            workspace_policy=self._get_workspace_policy(),
         )
         approval_handler = ApprovalManager(
             rt_config,

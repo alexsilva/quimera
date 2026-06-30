@@ -164,6 +164,21 @@ class TestConfigManagerWithTempDir:
         cm.set_history_window(None)
         assert "history_window" not in json.loads(config_file.read_text())
 
+    def test_workspace_policy_property_and_setter(self, temp_dir):
+        """Test workspace_policy reads and persists valid presets."""
+        from quimera.config import ConfigManager
+
+        config_file = temp_dir / "config.json"
+        cm = ConfigManager(config_file)
+
+        assert cm.workspace_policy == "strict"
+
+        cm.set_workspace_policy("autonomous")
+        assert ConfigManager(config_file).workspace_policy == "autonomous"
+
+        cm.set_workspace_policy("invalid")
+        assert ConfigManager(config_file).workspace_policy == "strict"
+
     def test_preserves_existing_keys(self, temp_dir):
         """Test setting one value preserves others."""
         from quimera.config import ConfigManager

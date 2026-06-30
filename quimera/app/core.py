@@ -85,12 +85,13 @@ from ..bugs import (
 from ..constants import (
     CMD_AGENTS, CMD_ALIASES, CMD_BUGS, CMD_CLEAR, CMD_CONNECT, CMD_DISCONNECT, CMD_CONTEXT, CMD_EDIT, CMD_EXIT,
     CMD_APPROVE, CMD_APPROVE_ALL, CMD_FILE_PREFIX, CMD_HELP,
-    CMD_PROMPT, CMD_RELOAD, CMD_RESET, CMD_TASK,
+    CMD_POLICY, CMD_PROMPT, CMD_RELOAD, CMD_RESET, CMD_TASK,
     MSG_CHAT_STARTED, MSG_SESSION_LOG, MSG_SESSION_STATUS, MSG_MIGRATION,
     MSG_SHUTDOWN,
     Visibility,
 )
 from ..modes import MODES
+from ..runtime.workspace_policy import WorkspacePolicy
 from ..shared_state import bootstrap_state_key_stamps, clear_agent_state_for_session_start
 from .session_state import SessionStateManager
 from .agent_failure_tracker import AgentFailureTracker
@@ -138,6 +139,10 @@ class QuimeraApp:
         self.workspace = workspace if workspace is not None else Workspace(cwd)
         EnvConfig(self.workspace.env_file).apply_to_environ()
         self.config = ConfigManager(self.workspace.config_file)
+        self.workspace_policy_name = WorkspacePolicy.normalize_name(
+            getattr(self.config, "workspace_policy", "strict")
+        )
+        self.workspace_policy = WorkspacePolicy.from_name(self.workspace_policy_name)
         active_theme = theme if theme is not None else self.config.theme
         self.storage = SessionStorage(self.workspace.logs_dir)
         self._session_started_at = time.monotonic()
@@ -258,6 +263,8 @@ class QuimeraApp:
             approval_handler_getter=lambda: getattr(self, "_approval_handler", None),
             context_manager=self.context_manager,
             profile_registry=self._profile_registry,
+            workspace_policy_getter=self.get_workspace_policy_name,
+            workspace_policy_setter=self.set_workspace_policy_name,
         )
         self.input_services = AppInputServices(
             self.renderer,
@@ -431,6 +438,7 @@ class QuimeraApp:
             record_failure=self.record_failure,
             session_metrics=self.session_metrics,
             get_debug_prompt_metrics=lambda: self.debug_prompt_metrics,
+            get_workspace_policy=lambda: self.workspace_policy,
             redisplay_prompt=self._redisplay_user_prompt_if_needed,
             output_lock=self._output_lock,
             counter_lock=self._counter_lock,
@@ -659,6 +667,7 @@ class QuimeraApp:
             CMD_EXIT,
             CMD_FILE_PREFIX,
             CMD_HELP,
+            CMD_POLICY,
             CMD_PROMPT,
             CMD_RELOAD,
             CMD_RESET,
@@ -692,6 +701,8 @@ class QuimeraApp:
             return self.system_layer.list_connected_agents()
         if command == CMD_BUGS:
             return ["list", "show", "close", "analyze", "stats"]
+        if command == CMD_POLICY:
+            return ["status", "strict", "autonomous"]
         if command == CMD_RESET:
             return ["state", "history", "all"]
         if command in ("s", "r"):
@@ -1045,6 +1056,33 @@ class QuimeraApp:
     def classify_task_execution_result(response: str | None) -> tuple[bool, str]:
         """Return whether the task execution can be considered completed."""
         return classify_task_execution_result(response)
+
+    def get_workspace_policy_name(self) -> str:
+        """Retorna o preset de autonomia ativo no workspace."""
+        return self.workspace_policy_name
+
+    def set_workspace_policy_name(self, name: str) -> str:
+        """Define, persiste e propaga o preset de autonomia do workspace."""
+        normalized = WorkspacePolicy.normalize_name(name)
+        self.workspace_policy_name = normalized
+        self.workspace_policy = WorkspacePolicy.from_name(normalized)
+        setter = getattr(self.config, "set_workspace_policy", None)
+        if callable(setter):
+            setter(normalized)
+        self._apply_workspace_policy_to_tool_executor(getattr(self, "tool_executor", None))
+        return normalized
+
+    def _apply_workspace_policy_to_tool_executor(self, executor) -> None:
+        """Propaga policy para o executor e approval handler associados."""
+        if executor is None:
+            return
+        config = getattr(executor, "config", None)
+        if config is not None:
+            config.workspace_policy = self.workspace_policy
+        approval = getattr(executor, "approval_manager", None)
+        approval_config = getattr(approval, "config", None)
+        if approval_config is not None:
+            approval_config.workspace_policy = self.workspace_policy
 
     def _set_execution_mode(self, mode):
         """Define o modo de execução ativo e propaga para policy e agent_client."""

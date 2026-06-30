@@ -36,7 +36,7 @@ from quimera.app.session_bootstrap import (
 )
 from quimera.cli import main as cli_main
 from quimera.config import DEFAULT_HISTORY_WINDOW
-from quimera.constants import CMD_AGENTS, CMD_CLEAR, CMD_CONNECT, CMD_DISCONNECT, CMD_HELP, CMD_PROMPT, EXTEND_MARKER, MSG_SHUTDOWN, TaskStatus, TaskType, Visibility, build_agents_help, build_help
+from quimera.constants import CMD_AGENTS, CMD_CLEAR, CMD_CONNECT, CMD_DISCONNECT, CMD_HELP, CMD_POLICY, CMD_PROMPT, EXTEND_MARKER, MSG_SHUTDOWN, TaskStatus, TaskType, Visibility, build_agents_help, build_help
 from quimera.profiles import ExecutionProfile
 from quimera.prompt_templates import PromptText
 from quimera.profiles.base import ProfileRegistry
@@ -1079,6 +1079,18 @@ class ProtocolTests(unittest.TestCase):
     def test_available_internal_commands_include_disconnect(self):
         """Verifica que available internal commands include disconnect."""
         self.assertIn(CMD_DISCONNECT, QuimeraApp._available_internal_commands())
+
+    def test_available_internal_commands_include_policy(self):
+        """Verifica que available internal commands include policy."""
+        self.assertIn(CMD_POLICY, QuimeraApp._available_internal_commands())
+
+    def test_policy_command_argument_resolver_suggests_presets(self):
+        """Verifica que policy command argument resolver suggests presets."""
+        app = QuimeraApp.__new__(QuimeraApp)
+        self.assertEqual(
+            app._command_argument_resolver(CMD_POLICY, ""),
+            ["status", "strict", "autonomous"],
+        )
 
     def test_list_connected_agents_returns_sorted_names(self):
         """Verifica que list connected agents returns sorted names."""
