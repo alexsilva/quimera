@@ -490,14 +490,7 @@ def test_textual_renderer_interactive_windows_emit_semantic_overlay_events():
     with renderer.selection_window(owner="opencode"):
         pass
 
-    assert [event.kind for event in emitted] == [
-        "window_open",
-        "window_clear",
-        "window_open",
-        "window_clear",
-        "window_open",
-        "window_clear",
-    ]
+    assert [event.kind for event in emitted] == ["window_open", "window_clear"]
     assert emitted[0].payload["kind"] == "approval"
     assert emitted[0].payload["title"] == "Permissão solicitada"
     assert emitted[0].payload["question"] == "Executar shell?"
@@ -513,8 +506,20 @@ def test_textual_renderer_interactive_windows_emit_semantic_overlay_events():
         "kind": "approval",
         "owner": "claude",
     }
-    assert emitted[2].payload["kind"] == "input"
-    assert emitted[4].payload["kind"] == "selection"
+
+
+def test_textual_renderer_interactive_input_window_with_question_emits_overlay_events():
+    bridge = TextualUiBridge()
+    emitted = []
+    bridge.emit = emitted.append
+    renderer = TextualRenderer(bridge)
+
+    with renderer.input_window(owner="codex", metadata={"question": "Informe o comando"}):
+        pass
+
+    assert [event.kind for event in emitted] == ["window_open", "window_clear"]
+    assert emitted[0].payload["kind"] == "input"
+    assert emitted[0].payload["question"] == "Informe o comando"
 
 
 def test_textual_approval_overlay_renders_title_question_and_options():
@@ -813,3 +818,68 @@ def test_textual_input_gate_marks_inline_connection_prompts_as_direct_input():
     assert result == "cmd"
     assert bridge.is_direct_input_active() is False
     assert [event.kind for event in emitted].count("prompt") == 1
+
+
+def test_textual_renderer_commit_agent_stream_materializes_active_stream():
+    bridge = TextualUiBridge()
+    emitted = []
+    bridge.emit = emitted.append
+    renderer = TextualRenderer(bridge)
+
+    renderer.start_message_stream("claude")
+    renderer.update_message_stream("claude", "linha 1\n")
+    renderer.update_message_stream("claude", {"text": "linha 2"})
+
+    assert renderer.commit_agent_stream("claude", render_mode="plain") is True
+
+    assert emitted[-1].kind == "agent_message"
+    assert emitted[-1].agent == "claude"
+    assert emitted[-1].payload["content"] == "linha 1\nlinha 2"
+
+
+def test_textual_renderer_commit_agent_stream_returns_false_without_content():
+    renderer = TextualRenderer(TextualUiBridge())
+
+    renderer.start_message_stream("claude")
+
+    assert renderer.commit_agent_stream("claude") is False
+
+
+def test_textual_direct_input_submission_clears_approval_overlay_before_queueing_answer():
+    bridge = TextualUiBridge()
+    emitted = []
+    bridge.emit = emitted.append
+
+    bridge.begin_direct_input()
+    try:
+        bridge.submit_input("a")
+    finally:
+        bridge.end_direct_input()
+
+    assert emitted[-1].kind == "question_clear"
+    assert bridge.input_queue.get_nowait() == "a"
+
+
+def test_textual_input_window_without_question_does_not_leave_visual_overlay_active():
+    bridge = TextualUiBridge()
+    emitted = []
+    bridge.emit = emitted.append
+    renderer = TextualRenderer(bridge)
+
+    with renderer.input_window(owner="claude"):
+        pass
+
+    assert emitted == []
+    assert bridge.is_direct_input_active() is False
+
+
+def test_textual_bridge_handler_refreshes_after_visual_event_updates():
+    import inspect
+
+    from quimera.app.textual_ui import run_textual_quimera_app
+
+    source = inspect.getsource(run_textual_quimera_app)
+
+    assert "def _refresh_now" in source
+    assert "self._refresh_now(layout=True)" in source
+    assert "self._refresh_now()" in source

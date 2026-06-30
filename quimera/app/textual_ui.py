@@ -502,6 +502,7 @@ class TextualUiBridge:
             self.input_queue.put(CMD_EXIT)
             return
         if self.is_direct_input_active():
+            self.emit(TextualUiEvent("question_clear"))
             self.input_queue.put(value)
             return
         if self._try_inject_active_agent(text):
@@ -973,6 +974,7 @@ class TextualRenderer:
         self._profile_resolver: Callable | None = None
         self._theme = themes.get(themes.DEFAULT_THEME)
         self._statuses: dict[str, str] = {}
+        self._stream_content_by_agent: dict[str, str] = {}
 
     @property
     def theme_name(self) -> str:
@@ -1060,24 +1062,28 @@ class TextualRenderer:
         """Sinaliza janela interativa sem ceder stdout fora do Textual."""
         metadata_dict = dict(metadata or {})
         options = _approval_options() if kind == "approval" else []
+        question = str(metadata_dict.get("question") or "")
+        should_show_overlay = kind == "approval" or bool(question) or bool(options)
         self._bridge.begin_direct_input()
-        self._bridge.emit(
-            TextualUiEvent(
-                "window_open",
-                {
-                    "kind": kind,
-                    "title": title,
-                    "owner": owner,
-                    "metadata": metadata_dict,
-                    "question": str(metadata_dict.get("question") or ""),
-                    "options": options,
-                },
+        if should_show_overlay:
+            self._bridge.emit(
+                TextualUiEvent(
+                    "window_open",
+                    {
+                        "kind": kind,
+                        "title": title,
+                        "owner": owner,
+                        "metadata": metadata_dict,
+                        "question": question,
+                        "options": options,
+                    },
+                )
             )
-        )
         try:
             yield
         finally:
-            self._bridge.emit(TextualUiEvent("window_clear", {"kind": kind}))
+            if should_show_overlay:
+                self._bridge.emit(TextualUiEvent("window_clear", {"kind": kind}))
             self._bridge.end_direct_input()
 
     def approval_window(self, *, title: str = "Permissão solicitada", owner: str | None = None, metadata=None, **kwargs):
@@ -1221,6 +1227,7 @@ class TextualRenderer:
     def show_message(self, agent, content, render_mode: str = "auto") -> None:
         """Exibe resposta final de agente com ícone."""
         clean_content = strip_ansi(_extract_text_from_renderable(content))
+        self._stream_content_by_agent.pop(str(agent), None)
         self._bridge.clear_agent_active(str(agent))
         self._bridge.emit(
             TextualUiEvent(
@@ -1241,12 +1248,26 @@ class TextualRenderer:
         """Inicia stream visual com ícone do agente."""
         label = self._resolve_agent_label(agent)
         self._bridge.set_agent_active(str(agent), label)
+        self._stream_content_by_agent[str(agent)] = ""
         self._bridge.emit(
             TextualUiEvent("stream_start", self._agent_event_payload(agent), agent=str(agent))
         )
 
     def update_message_stream(self, agent, chunk) -> None:
         """Atualiza stream visual."""
+        agent_key = str(agent)
+        current = self._stream_content_by_agent.get(agent_key, "")
+        if isinstance(chunk, dict):
+            diff = _normalize_stream_diff(chunk.get("diff"))
+            if diff:
+                current = _apply_stream_diff(current, diff)
+            elif chunk.get("text"):
+                current += strip_ansi(str(chunk.get("text")))
+            else:
+                current += strip_ansi(str(chunk))
+        else:
+            current += strip_ansi(str(chunk))
+        self._stream_content_by_agent[agent_key] = current
         self._bridge.emit(TextualUiEvent("stream_chunk", chunk, agent=str(agent)))
 
     def finish_message_stream(
@@ -1260,10 +1281,16 @@ class TextualRenderer:
 
     def commit_agent_stream(self, agent, render_mode: str = "auto") -> bool:
         """Compatibilidade com TerminalRenderer."""
-        return False
+        agent_key = str(agent)
+        content = self._stream_content_by_agent.get(agent_key, "")
+        if not str(content or "").strip():
+            return False
+        self.show_message(agent_key, content, render_mode=render_mode)
+        return True
 
     def abort_message_stream(self, agent) -> None:
         """Aborta stream visual."""
+        self._stream_content_by_agent.pop(str(agent), None)
         self._bridge.clear_agent_active(str(agent))
         self._bridge.emit(
             TextualUiEvent("stream_abort", self._agent_event_payload(agent), agent=str(agent))
@@ -1765,6 +1792,12 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             overlay = self.query_one("#question_overlay", Static)
             _clear_question_overlay_widget(overlay)
 
+        def _refresh_now(self, *, layout: bool = False) -> None:
+            try:
+                self.refresh(layout=layout)
+            except Exception:
+                return
+
         def _refresh_toolbar(self) -> None:
             gate = getattr(quimera_app, "input_gate", None)
             builder = getattr(gate, "_build_toolbar_renderable", None)
@@ -1811,31 +1844,38 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             if event.kind == "clear":
                 self._feed_model.clear()
                 self.query_one("#feed", RichLog).clear()
+                self._refresh_now(layout=True)
                 return
             if event.kind == "question":
                 self._set_question_overlay(event.payload)
                 self._refresh_toolbar()
+                self._refresh_now(layout=True)
                 return
             if event.kind == "window_open":
                 self._set_question_overlay(_build_window_overlay_payload(event.payload))
                 self._refresh_toolbar()
+                self._refresh_now(layout=True)
                 return
             if event.kind == "question_clear":
                 self._clear_question_overlay()
                 self._refresh_toolbar()
+                self._refresh_now(layout=True)
                 return
             if event.kind == "window_clear":
                 self._clear_question_overlay()
                 self._refresh_toolbar()
+                self._refresh_now(layout=True)
                 return
             if event.kind == "theme_changed":
                 self._refresh_toolbar()
+                self._refresh_now()
                 return
             if event.kind == "summarizing":
                 if event.payload:
                     self._start_spinner()
                 else:
                     self._stop_spinner()
+                self._refresh_now()
                 return
             if event.kind == "prompt":
                 payload = event.payload or {}
@@ -1846,6 +1886,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                 prompt = str(payload.get("prompt") or "mensagem...").strip()
                 input_widget.placeholder = prompt or "mensagem..."
                 input_widget.focus()
+                self._refresh_now(layout=True)
                 return
             if not self._feed_model.apply(event):
                 return
@@ -1858,12 +1899,14 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                     if renderable is not None:
                         feed.write(renderable)
                 self._refresh_toolbar()
+                self._refresh_now(layout=True)
                 return
             if change.appended is not None:
                 renderable = _render_event(change.appended.event)
                 if renderable is not None:
                     feed.write(renderable)
             self._refresh_toolbar()
+            self._refresh_now()
 
     bridge.attach_quimera_app(quimera_app)
     renderer = getattr(quimera_app, "renderer", None)
