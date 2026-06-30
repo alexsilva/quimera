@@ -229,20 +229,38 @@ def test_textual_toolbar_shows_active_agent_contract():
     text = gate._build_toolbar_text()
 
     assert "🔮 Claude Sonnet" in text
-    assert "Enter: injetar" in text
-    assert "Ctrl+Q: sair" in text
+    assert "⚙ 🔮 Claude Sonnet" in text
+    assert "Enter: injetar" not in text
+    assert "Ctrl+Q: sair" not in text
+
+
+def test_textual_toolbar_shows_theme_with_active_agent():
+    bridge = TextualUiBridge()
+    gate = TextualInputGate(
+        bridge,
+        toolbar_context_resolver=lambda: {"theme": "panel"},
+    )
+    bridge.set_agent_active("claude", "🔮 Claude Sonnet")
+
+    text = gate._build_toolbar_text()
+
+    assert "🔮 Claude Sonnet" in text
+    assert "✨ panel" in text
 
 
 def test_textual_toolbar_shows_context_without_obvious_controls():
     gate = TextualInputGate(
         TextualUiBridge(),
-        toolbar_context_resolver=lambda: {"responder": "claude", "branch": "main-ui"},
+        toolbar_context_resolver=lambda: {"responder": "🔮 Claude", "branch": "main-ui", "theme": "chat"},
     )
 
     text = gate._build_toolbar_text()
 
-    assert "claude" in text
+    assert "🔮 Claude" in text
     assert "main-ui" in text
+    assert "🤖 🔮" not in text
+    assert "⎇ main-ui" in text
+    assert "✨ chat" in text
     assert "Enter: enviar" not in text
     assert "Ctrl+C: interromper" not in text
 
@@ -480,3 +498,119 @@ def test_textual_feed_ignores_interactive_window_events():
     assert model.apply(TextualUiEvent("window_open", {"kind": "approval"})) is False
     assert model.apply(TextualUiEvent("window_clear", {"kind": "approval"})) is False
     assert model.items == []
+
+
+def test_textual_feed_ignores_theme_changed_events():
+    model = TextualFeedModel()
+
+    assert model.apply(TextualUiEvent("theme_changed", {"theme": "panel"})) is False
+    assert model.items == []
+
+
+def test_textual_bridge_routes_exit_to_app_even_when_agent_is_active():
+    from types import SimpleNamespace
+
+    class FakeStdin:
+        def __init__(self):
+            self.writes = []
+
+        def write(self, value):
+            self.writes.append(value)
+
+        def flush(self):
+            self.writes.append("flush")
+
+    stdin = FakeStdin()
+    bridge = TextualUiBridge()
+    bridge.attach_quimera_app(
+        SimpleNamespace(is_agent_running=True, active_agent_stdin=stdin)
+    )
+
+    bridge.submit_input("/exit ")
+
+    assert bridge.input_queue.get_nowait() == "/exit"
+    assert stdin.writes == []
+
+
+def test_textual_feed_reserves_at_least_ten_lines_for_agent_output():
+    import inspect
+
+    from quimera.app.textual_ui import run_textual_quimera_app
+
+    css = inspect.getsource(run_textual_quimera_app)
+
+    assert "#main" in css
+    assert "min-height: 14;" in css
+    assert "#feed" in css
+    assert "min-height: 10;" in css
+    assert "max-height: 3;" in css
+
+
+def test_toolbar_coordinator_formats_agent_names_with_profile_icons():
+    from types import SimpleNamespace
+
+    from quimera.app.agent_pool import AgentPool
+    from quimera.app.runtime_state import AppRuntimeState
+    from quimera.app.toolbar import ToolbarManager
+    from quimera.app.toolbar_coordinator import ToolbarCoordinator
+
+    runtime_state = AppRuntimeState()
+    coordinator = ToolbarCoordinator(
+        toolbar_manager=ToolbarManager(threads=2),
+        agent_pool=AgentPool(["claude"]),
+        get_agent_profile=lambda name: SimpleNamespace(name=name, icon="🔮") if name == "claude" else None,
+        workspace=SimpleNamespace(cwd=".", branch="main-ui"),
+        get_history=lambda: [],
+        storage=SimpleNamespace(session_id="s1"),
+        bug_store=None,
+        get_session_started_at=lambda: None,
+        renderer=SimpleNamespace(theme_name="chat"),
+        config=None,
+        runtime_state=runtime_state,
+        input_gate=None,
+        get_pending_input_for=lambda: "claude",
+        get_execution_mode=lambda: SimpleNamespace(name="default"),
+        threads=2,
+    )
+    coordinator.set_parallel_toolbar_state(active_agents=["claude"])
+
+    context = coordinator.build_input_toolbar_context()
+
+    assert context["responder"] == "🔮 Claude"
+    assert context["active_agents"] == "🔮 Claude"
+
+
+def test_textual_toolbar_info_bar_uses_distinct_background():
+    import inspect
+
+    from quimera.app.textual_ui import run_textual_quimera_app
+
+    css = inspect.getsource(run_textual_quimera_app)
+
+    assert "#toolbar" in css
+    assert "background: #252526;" in css
+
+
+def test_textual_toolbar_renderable_uses_main_tui_chip_styles():
+    from rich.text import Text
+
+    gate = TextualInputGate(
+        TextualUiBridge(),
+        toolbar_context_resolver=lambda: {
+            "responder": "🔮 Claude",
+            "model": "sonnet",
+            "branch": "main-ui",
+            "turns": "13",
+            "theme": "chat",
+        },
+    )
+
+    renderable = gate._build_toolbar_renderable()
+
+    assert isinstance(renderable, Text)
+    plain = renderable.plain
+    assert "🔮 Claude" in plain
+    assert "sonnet" in plain
+    assert "⎇ main-ui" in plain
+    assert "↺ 13" in plain
+    assert "✨ chat" in plain

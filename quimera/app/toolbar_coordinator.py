@@ -60,12 +60,27 @@ class ToolbarCoordinator:
         )
         return self._toolbar.resolve_active_model_label(request)
 
+    def _format_agent_label(self, agent: str | None) -> str:
+        """Formata nome de agente com ícone do profile, sem duplicar ícone existente."""
+        name = str(agent or "").strip()
+        if not name:
+            return ""
+        profile = self._get_agent_profile(name)
+        icon = str(getattr(profile, "icon", "") or "").strip() if profile is not None else ""
+        display_name = str(getattr(profile, "name", "") or name).strip()
+        if display_name and display_name != display_name.upper():
+            display_name = display_name.capitalize()
+        if icon and not display_name.startswith(icon):
+            return f"{icon} {display_name}"
+        return display_name
+
     def resolve_next_responder_label(self) -> str:
         """Resolve o agente que deve responder na próxima rodada."""
-        return self._toolbar.resolve_next_responder_label(
+        responder = self._toolbar.resolve_next_responder_label(
             self._get_pending_input_for() or "",
             self._agent_pool.primary,
         )
+        return self._format_agent_label(responder) or responder
 
     def cycle_renderer_theme(self) -> None:
         """Avança para o próximo tema no TerminalRenderer e persiste na config."""
@@ -98,9 +113,16 @@ class ToolbarCoordinator:
             session_id=str(session_id or ""),
             query_open_bugs=_query_open_bugs,
         )
+        parallel_state = self.get_parallel_toolbar_state()
+        active_agents = parallel_state.get("active_agents", ())
+        if active_agents:
+            parallel_state["active_agents"] = tuple(
+                self._format_agent_label(agent) or str(agent)
+                for agent in active_agents
+            )
         return self._toolbar.build_input_toolbar_context(
             request,
-            self.get_parallel_toolbar_state(),
+            parallel_state,
         )
 
     def set_parallel_toolbar_state(

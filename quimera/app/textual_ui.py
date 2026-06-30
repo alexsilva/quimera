@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import queue
+import shutil
 import sys
 import traceback
 import threading
@@ -30,6 +31,7 @@ from quimera.ui.text import (
     strip_ansi,
 )
 from quimera.app.config import handler as _screen_handler
+from quimera.constants import CMD_EXIT
 
 _NO_RESPONSE_MESSAGE = "sem resposta válida"
 _SUMMARY_SPINNER_FRAMES = ("◐", "◓", "◑", "◒")
@@ -218,7 +220,7 @@ class TextualFeedModel:
 
     _TRANSIENT_KINDS = {"stream_start", "stream_chunk", "stream_abort", "agent_update", "agent_lifecycle"}
 
-    _IGNORED_KINDS = {"prompt", "input_active", "summarizing", "window_open", "window_clear"}
+    _IGNORED_KINDS = {"prompt", "input_active", "summarizing", "window_open", "window_clear", "theme_changed"}
 
     def __init__(self) -> None:
         self._items: list[TextualFeedItem] = []
@@ -431,6 +433,9 @@ class TextualUiBridge:
     def submit_input(self, value: str) -> None:
         """Envia uma linha digitada pelo usuário para o loop do Quimera."""
         text = str(value)
+        if text.strip() == CMD_EXIT:
+            self.input_queue.put(CMD_EXIT)
+            return
         if self._try_inject_active_agent(text):
             return
         self.input_queue.put(value)
@@ -593,7 +598,7 @@ class TextualInputGate:
                 "prompt",
                 {
                     "prompt": "mensagem...",
-                    "toolbar": self._build_toolbar_text(),
+                    "toolbar": self._build_toolbar_renderable(),
                     "commands": self._commands(),
                 },
             )
@@ -610,38 +615,101 @@ class TextualInputGate:
             self._owner_thread_id = threading.get_ident() if active else None
         self._bridge.emit(TextualUiEvent("input_active", active))
 
+    def _toolbar_context(self) -> dict[str, str]:
+        resolver = self._toolbar_context_resolver
+        if callable(resolver):
+            try:
+                context = dict(resolver() or {})
+            except Exception:
+                context = {}
+        else:
+            context = {}
+        active_agent = self._bridge.active_agent_label()
+        if active_agent and not str(context.get("active_agents", "")).strip():
+            context["active_agents"] = active_agent
+        return context
+
+    @staticmethod
+    def _clip_toolbar_value(value: str, max_len: int) -> str:
+        if len(value) <= max_len:
+            return value
+        return value[: max(1, max_len - 1)].rstrip() + "…"
+
+    def _toolbar_segments(self) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+        context = self._toolbar_context()
+        responder = str(context.get("responder", "")).strip()
+        model = str(context.get("model", "")).strip()
+        branch = str(context.get("branch", "")).strip()
+        active_agents = str(context.get("active_agents", "")).strip()
+        parallel = str(context.get("parallel", "")).strip()
+        open_bugs = str(context.get("open_bugs", "")).strip()
+        mode = str(context.get("mode", "")).strip()
+        turns = str(context.get("turns", "")).strip()
+        session_id = str(context.get("session", "")).strip()
+        theme = str(context.get("theme", "")).strip()
+
+        left: list[tuple[str, str]] = []
+        if responder:
+            left.append((self._clip_toolbar_value(responder, 24), "accent"))
+        if model:
+            left.append((self._clip_toolbar_value(model, 24), "model"))
+        if branch:
+            left.append((f"⎇ {self._clip_toolbar_value(branch, 20)}", "info"))
+        if active_agents:
+            left.append((f"⚙ {self._clip_toolbar_value(active_agents, 30)}", "info"))
+        if parallel:
+            left.append((f"⚡ {parallel}", "info"))
+
+        right: list[tuple[str, str]] = []
+        if open_bugs:
+            right.append((f"✗ {open_bugs}", "err"))
+        if turns:
+            right.append((f"↺ {turns}", "dim"))
+        if mode:
+            right.append((f"◈ {mode}", "dim"))
+        if theme:
+            right.append((f"✨ {self._clip_toolbar_value(theme, 12)}", "dim"))
+        if session_id:
+            right.append((f"🔗 {self._clip_toolbar_value(session_id, 22)}", "dim"))
+        return left, right
+
     def _build_toolbar_text(self) -> str:
         if self._interactive_prompt_active:
             return "Enter: confirmar  |  Ctrl+C: cancelar"
-
-        active_agent = self._bridge.active_agent_label()
-        if active_agent:
-            return f"⟳ {active_agent}  |  Enter: injetar  |  Ctrl+Q: sair"
-
-        resolver = self._toolbar_context_resolver
-        if not callable(resolver):
-            return ""
-        try:
-            context = resolver() or {}
-        except Exception:
-            return ""
-        parts = []
-        for key in (
-            "responder",
-            "model",
-            "branch",
-            "active_agents",
-            "parallel",
-            "open_bugs",
-            "mode",
-            "turns",
-            "session",
-            "theme",
-        ):
-            value = str(context.get(key, "")).strip()
-            if value:
-                parts.append(value)
+        left, right = self._toolbar_segments()
+        parts = [label for label, _ in left]
+        parts.extend(label for label, _ in right)
         return "  |  ".join(parts)
+
+    def _build_toolbar_renderable(self):
+        if self._interactive_prompt_active:
+            return Text("Enter: confirmar  |  Ctrl+C: cancelar", style="bold yellow on #252526")
+        left, right = self._toolbar_segments()
+        if not left and not right:
+            return Text("")
+        style_by_kind = {
+            "accent": "bold #5fc3ff on #3e3e3e",
+            "model": "#9cdcfe on #3e3e3e",
+            "info": "#d4d4d4 on #3e3e3e",
+            "dim": "#9e9e9e on #3e3e3e",
+            "err": "bold #fc7b5f on #3e3e3e",
+        }
+
+        def _chip_width(items: list[tuple[str, str]]) -> int:
+            return sum(len(label) + 2 for label, _ in items)
+
+        term_w = shutil.get_terminal_size(fallback=(80, 24)).columns
+        left_width = _chip_width(left)
+        right_width = _chip_width(right)
+        padding = max(1, term_w - left_width - right_width) if right else 1
+        text = Text(" ", style="on #252526")
+        for label, kind in left:
+            text.append(f" {label} ", style=style_by_kind.get(kind, "white on #3e3e3e"))
+        if right:
+            text.append(" " * max(1, padding - 1), style="on #252526")
+        for label, kind in right:
+            text.append(f" {label} ", style=style_by_kind.get(kind, "white on #3e3e3e"))
+        return text
 
     def _commands(self) -> list[str]:
         resolver = self._command_resolver
@@ -690,7 +758,7 @@ class TextualInputGate:
                 "prompt",
                 {
                     "prompt": prompt,
-                    "toolbar": self._build_toolbar_text(),
+                    "toolbar": self._build_toolbar_renderable(),
                     "commands": self._commands(),
                 },
             )
@@ -730,7 +798,7 @@ class TextualInputGate:
                 "prompt",
                 {
                     "prompt": prompt,
-                    "toolbar": self._build_toolbar_text(),
+                    "toolbar": self._build_toolbar_renderable(),
                     "commands": self._commands(),
                 },
             )
@@ -1437,26 +1505,30 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
         }
         #main {
             height: 1fr;
+            min-height: 14;
         }
         #feed {
             height: 1fr;
+            min-height: 10;
             padding: 0 1;
             background: $background;
         }
         #toolbar {
             height: 1;
             padding: 0 1;
-            color: $text-muted;
-            background: $surface;
+            color: $text;
+            background: #252526;
         }
         #question_overlay {
             display: none;
             height: auto;
+            max-height: 6;
             padding: 0 1;
             background: $surface;
         }
         #input_bar {
             height: 3;
+            max-height: 3;
             padding: 0 1;
             background: $surface;
         }
@@ -1607,7 +1679,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
 
         def _refresh_toolbar(self) -> None:
             gate = getattr(quimera_app, "input_gate", None)
-            builder = getattr(gate, "_build_toolbar_text", None)
+            builder = getattr(gate, "_build_toolbar_renderable", None)
             if callable(builder):
                 self.query_one("#toolbar", Static).update(builder())
 
@@ -1619,6 +1691,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             handler = getattr(gate, "_theme_cycle_handler", None)
             if callable(handler):
                 handler()
+            self._refresh_toolbar()
 
         def on_input_changed(self, event: Input.Changed) -> None:
             if not isinstance(event.input, _CompletionInput):
@@ -1670,6 +1743,9 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                 self._clear_question_overlay()
                 self._refresh_toolbar()
                 return
+            if event.kind == "theme_changed":
+                self._refresh_toolbar()
+                return
             if event.kind == "summarizing":
                 if event.payload:
                     self._start_spinner()
@@ -1678,7 +1754,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                 return
             if event.kind == "prompt":
                 payload = event.payload or {}
-                toolbar = str(payload.get("toolbar", ""))
+                toolbar = payload.get("toolbar", "")
                 self._commands = list(payload.get("commands", []) or [])
                 self.query_one("#toolbar", Static).update(toolbar)
                 input_widget = self.query_one("#input", Input)
