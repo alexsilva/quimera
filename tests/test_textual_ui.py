@@ -839,6 +839,36 @@ def test_textual_bridge_question_event_routes_approval_answer_to_queue_even_with
     assert bridge.is_direct_input_active() is False
 
 
+def test_textual_bridge_prompt_clear_does_not_disarm_visible_approval():
+    bridge = TextualUiBridge()
+
+    class FakeStdin:
+        def __init__(self):
+            self.writes = []
+
+        def write(self, value):
+            self.writes.append(value)
+
+        def flush(self):
+            self.writes.append("flush")
+
+    stdin = FakeStdin()
+    bridge.attach_quimera_app(
+        SimpleNamespace(
+            is_agent_running=True,
+            active_agent_stdin=stdin,
+        )
+    )
+
+    bridge.emit(TextualUiEvent("question", {"kind": "approval", "question": "Aprovar?"}))
+    bridge.emit(TextualUiEvent("prompt_clear"))
+    bridge.submit_input("y")
+
+    assert bridge.input_queue.get_nowait() == "y"
+    assert stdin.writes == []
+    assert bridge.is_direct_input_active() is False
+
+
 def test_textual_bridge_pending_input_routes_approval_answer_to_queue_even_with_active_agent():
     bridge = TextualUiBridge()
 

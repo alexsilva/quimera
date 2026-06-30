@@ -226,7 +226,17 @@ class ToolExecutor:
             if not (has_permission_issue or needs_approval):
                 # Tool sem approval humano: exibe preview informativo se houver callback
                 if self._tool_preview_callback is not None:
-                    self._tool_preview_callback(normalized_call.name, normalized_call.arguments)
+                    try:
+                        self._tool_preview_callback(
+                            normalized_call.name,
+                            normalized_call.arguments,
+                            normalized_call.metadata,
+                        )
+                    except TypeError:
+                        self._tool_preview_callback(
+                            normalized_call.name,
+                            normalized_call.arguments,
+                        )
 
             handler = self.registry.get(normalized_call.name)
             with self.approval_manager.guard_execution(normalized_call):

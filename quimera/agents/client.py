@@ -181,11 +181,25 @@ class AgentClient:
         set_tool_preview = getattr(tool_executor, "set_tool_preview_callback", None)
         if callable(set_tool_preview):
             set_tool_preview(
-                lambda name, args: self._show_tool_preview(
+                lambda name, args, metadata=None: self._show_tool_preview(
                     ToolPreview.build(name, args),
-                    agent=agent,
+                    agent=agent or self._agent_from_tool_metadata(metadata),
                 )
             )
+
+    @staticmethod
+    def _agent_from_tool_metadata(metadata) -> str | None:
+        """Extrai o agente chamador de metadata MCP confiável."""
+        if not isinstance(metadata, dict):
+            return None
+        context = metadata.get("trusted_context")
+        agent_name = getattr(context, "agent_name", None)
+        if agent_name:
+            return str(agent_name)
+        state = metadata.get("_mcp_state")
+        if isinstance(state, dict) and state.get("agent_name"):
+            return str(state["agent_name"])
+        return None
 
     @staticmethod
     def _is_tool_call_text(text: str) -> bool:
@@ -757,6 +771,14 @@ class AgentClient:
         env_hook = getattr(profile, "env_for_cli", None)
         if callable(env_hook):
             extra_env.update(env_hook())
+        socket_path = getattr(profile, "_mcp_socket_path", None)
+        has_mcp_context = (
+            bool(isinstance(socket_path, str) and socket_path.strip())
+            or "OPENCODE_CONFIG_CONTENT" in extra_env
+            or "QUIMERA_FAKE_MCP_SOCKET" in extra_env
+        )
+        if agent and has_mcp_context:
+            extra_env["QUIMERA_MCP_AGENT_NAME"] = str(agent)
         tool_config = getattr(self.tool_executor, "config", None)
         if getattr(tool_config, "allow_ask_user", True) is False:
             current = str(extra_env.get("QUIMERA_MCP_DISABLED_TOOLS") or "")

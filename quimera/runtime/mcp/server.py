@@ -86,6 +86,9 @@ def _proxy_stdio_to_socket(
             approval_scope = (os.environ.get("QUIMERA_MCP_APPROVAL_SCOPE") or "").strip()
             if approval_scope:
                 auth_payload["quimera_approval_scope"] = approval_scope
+            agent_name = (os.environ.get("QUIMERA_MCP_AGENT_NAME") or "").strip()
+            if agent_name:
+                auth_payload["quimera_agent_name"] = agent_name
             auth_line = json.dumps(auth_payload) + "\n"
             sock_out.write(auth_line)
             sock_out.flush()
@@ -882,6 +885,9 @@ class MCPServer:
                 approval_scope = prelude.get("quimera_approval_scope")
                 if approval_scope:
                     conn_state["quimera_approval_scope"] = approval_scope
+                agent_name = prelude.get("quimera_agent_name")
+                if agent_name:
+                    conn_state["agent_name"] = str(agent_name)
                 if conn_state:
                     setattr(out, "_mcp_state", conn_state)
                 self.serve(stdin=inp, stdout=out)

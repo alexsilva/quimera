@@ -201,6 +201,40 @@ class TestToolsCall:
         assert resp["result"]["isError"] is False
         assert previews == [("read_file", {"path": "foo.py"})]
 
+    def test_mcp_socket_preview_inclui_metadata_do_agente_para_tool_sem_approval(self, tmp_path):
+        """Preview de tool sem approval deve receber metadata com agente do socket."""
+        file_path = tmp_path / "foo.py"
+        file_path.write_text("print('ok')\n", encoding="utf-8")
+        previews = []
+        executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
+        executor.set_tool_preview_callback(
+            lambda name, args, metadata=None: previews.append((name, args, metadata))
+        )
+        server = _make_server(executor)
+
+        out = io.StringIO()
+        setattr(out, "_mcp_state", {"agent_name": "codex"})
+        server.serve(
+            stdin=io.StringIO(
+                json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 103,
+                        "method": "tools/call",
+                        "params": {"name": "read_file", "arguments": {"path": "foo.py"}},
+                    }
+                )
+                + "\n"
+            ),
+            stdout=out,
+        )
+        [resp] = [json.loads(line) for line in out.getvalue().splitlines()]
+
+        assert resp["result"]["isError"] is False
+        assert previews[0][0] == "read_file"
+        assert previews[0][1] == {"path": "foo.py"}
+        assert previews[0][2]["trusted_context"].agent_name == "codex"
+
     def test_mcp_socket_nao_duplica_preview_para_tool_com_approval(self, tmp_path):
         """tools/call via MCP não deve emitir preview operacional quando há approval."""
         previews = []

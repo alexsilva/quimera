@@ -597,7 +597,7 @@ class TextualUiBridge:
         if event.kind in {"question", "window_open", "pending_input"}:
             self.begin_direct_input()
             return
-        if event.kind in {"question_clear", "window_clear", "prompt_clear"}:
+        if event.kind in {"question_clear", "window_clear"}:
             self.end_direct_input()
 
     def flush_ui_events(self) -> bool:

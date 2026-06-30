@@ -1949,6 +1949,32 @@ def test_agent_client_tool_preview_uses_agent_feed_when_supported():
     muted_reporter.assert_not_called()
 
 
+def test_agent_client_tool_preview_uses_mcp_metadata_agent_when_available():
+    """Preview de tool MCP sem approval deve usar agente vindo do trusted_context."""
+    from types import SimpleNamespace
+
+    class FeedRenderer:
+        supports_agent_feed = True
+
+        def __init__(self):
+            self.show_feed = MagicMock()
+
+    renderer = FeedRenderer()
+    muted_reporter = MagicMock()
+    client = AgentClient(renderer, muted_reporter=muted_reporter)
+    tool_executor = SimpleNamespace(set_tool_preview_callback=MagicMock())
+    metadata = {"trusted_context": SimpleNamespace(agent_name="opencode")}
+
+    client.bind_tool_preview_callback(tool_executor)
+
+    callback = tool_executor.set_tool_preview_callback.call_args[0][0]
+    callback("read_file", {"path": "README.md"}, metadata)
+
+    renderer.show_feed.assert_called_once()
+    assert renderer.show_feed.call_args.kwargs == {"agent": "opencode", "muted": True}
+    muted_reporter.assert_not_called()
+
+
 def test_call_api_routes_openai_preview_through_muted_reporter(renderer):
     """Preview operacional deve usar muted_reporter quando fornecido pelo app."""
     from types import SimpleNamespace
