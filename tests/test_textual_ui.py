@@ -4,12 +4,17 @@ from unittest.mock import Mock, patch
 from contextlib import contextmanager
 from types import SimpleNamespace
 
+from rich.console import Console
+
 from quimera.app.textual_ui import (
     TextualFeedModel,
     TextualInputGate,
     TextualRenderer,
     TextualUiBridge,
     TextualUiEvent,
+    _build_question_overlay,
+    _build_window_overlay_payload,
+    _clear_question_overlay_widget,
 )
 
 
@@ -298,6 +303,12 @@ def test_textual_input_gate_marks_approval_questions_as_permission_requests():
     question_event = emitted[0]
     assert question_event.kind == "question"
     assert question_event.payload["kind"] == "approval"
+    assert question_event.payload["title"] == "Permissão solicitada"
+    assert question_event.payload["options"] == [
+        "s/sim/y/yes = aprovar",
+        "n/não/no/enter = negar",
+        "a/all/todas = aprovar todas",
+    ]
 
 
 def test_textual_input_gate_marks_selection_questions_as_selection_requests():
@@ -472,7 +483,7 @@ def test_textual_renderer_interactive_windows_emit_semantic_overlay_events():
     bridge.emit = emitted.append
     renderer = TextualRenderer(bridge)
 
-    with renderer.approval_window(owner="claude"):
+    with renderer.approval_window(owner="claude", metadata={"question": "Executar shell?"}):
         pass
     with renderer.input_window(owner="codex"):
         pass
@@ -489,8 +500,88 @@ def test_textual_renderer_interactive_windows_emit_semantic_overlay_events():
     ]
     assert emitted[0].payload["kind"] == "approval"
     assert emitted[0].payload["title"] == "Permissão solicitada"
+    assert emitted[0].payload["question"] == "Executar shell?"
+    assert "s/sim/y/yes = aprovar" in emitted[0].payload["options"]
+    assert _build_window_overlay_payload(emitted[0].payload) == {
+        "question": "Executar shell?",
+        "options": [
+            "s/sim/y/yes = aprovar",
+            "n/não/no/enter = negar",
+            "a/all/todas = aprovar todas",
+        ],
+        "title": "Permissão solicitada",
+        "kind": "approval",
+        "owner": "claude",
+    }
     assert emitted[2].payload["kind"] == "input"
     assert emitted[4].payload["kind"] == "selection"
+
+
+def test_textual_approval_overlay_renders_title_question_and_options():
+    renderable = _build_question_overlay(
+        {
+            "kind": "approval",
+            "title": "Permissão solicitada",
+            "question": "Executar comando via shell?",
+            "options": [
+                "s/sim/y/yes = aprovar",
+                "n/não/no/enter = negar",
+            ],
+        }
+    )
+    console = Console(width=80, record=True, force_terminal=False)
+
+    console.print(renderable)
+    output = console.export_text()
+
+    assert "Permissão solicitada" in output
+    assert "Executar comando via shell?" in output
+    assert "s/sim/y/yes = aprovar" in output
+    assert "n/não/no/enter = negar" in output
+
+
+def test_textual_clear_question_overlay_widget_hides_approval_overlay():
+    class FakeOverlay:
+        display = True
+
+        def __init__(self):
+            self.value = "conteúdo anterior"
+
+        def update(self, value):
+            self.value = value
+
+    overlay = FakeOverlay()
+
+    _clear_question_overlay_widget(overlay)
+
+    assert overlay.value == ""
+    assert overlay.display is False
+
+
+def test_textual_renderer_interactive_window_routes_answers_away_from_active_agent():
+    bridge = TextualUiBridge()
+    renderer = TextualRenderer(bridge)
+
+    class FakeStdin:
+        def __init__(self):
+            self.writes = []
+
+        def write(self, value):
+            self.writes.append(value)
+
+        def flush(self):
+            self.writes.append("flush")
+
+    stdin = FakeStdin()
+    bridge.attach_quimera_app(
+        SimpleNamespace(is_agent_running=True, active_agent_stdin=stdin)
+    )
+
+    with renderer.approval_window(owner="claude"):
+        bridge.submit_input("a")
+
+    assert bridge.input_queue.get_nowait() == "a"
+    assert stdin.writes == []
 
 
 def test_textual_feed_ignores_interactive_window_events():

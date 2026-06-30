@@ -35,6 +35,12 @@ from quimera.constants import CMD_EXIT
 
 _NO_RESPONSE_MESSAGE = "sem resposta válida"
 _SUMMARY_SPINNER_FRAMES = ("◐", "◓", "◑", "◒")
+_APPROVAL_TITLE = "Permissão solicitada"
+_APPROVAL_OPTIONS = (
+    "s/sim/y/yes = aprovar",
+    "n/não/no/enter = negar",
+    "a/all/todas = aprovar todas",
+)
 _TERMINAL_MODE_RESET = (
     "\x1b[?1000l"  # mouse click tracking
     "\x1b[?1002l"  # mouse button-event tracking
@@ -75,6 +81,61 @@ def _restore_textual_input_focus(textual_app) -> None:
         input_widget.cursor_position = len(str(getattr(input_widget, "value", "") or ""))
     except Exception:
         pass
+
+
+def _approval_options() -> list[str]:
+    """Retorna as opções visuais padrão para confirmação de permissão."""
+    return list(_APPROVAL_OPTIONS)
+
+
+def _build_question_overlay(payload) -> Panel:
+    """Monta o overlay visual de pergunta usado pela UI Textual."""
+    data = payload or {}
+    question = str(data.get("question", "")).strip()
+    kind = str(data.get("kind", "input")).strip().lower()
+    title = str(data.get("title") or "").strip()
+    options = list(data.get("options", []) or [])
+    if kind == "approval":
+        title = title or _APPROVAL_TITLE
+        options = options or _approval_options()
+    elif not title:
+        title = "input solicitado"
+
+    lines = [question] if question else []
+    if options:
+        if lines:
+            lines.append("")
+        lines.append("Opções:")
+        lines.extend(f"- {option}" for option in options)
+
+    body = "\n".join(lines) if lines else "Aguardando resposta..."
+    border_style = "bold yellow" if kind == "approval" else "yellow"
+    return Panel(body, title=title, border_style=border_style)
+
+
+def _build_window_overlay_payload(payload) -> dict[str, Any]:
+    """Converte evento de janela interativa no payload do overlay."""
+    data = dict(payload or {}) if isinstance(payload, dict) else {}
+    metadata = dict(data.get("metadata") or {}) if isinstance(data.get("metadata"), dict) else {}
+    kind = str(data.get("kind") or "input")
+    title = str(data.get("title") or (_APPROVAL_TITLE if kind == "approval" else "input solicitado"))
+    question = str(metadata.get("question") or data.get("question") or "")
+    options = data.get("options")
+    if kind == "approval" and not options:
+        options = _approval_options()
+    return {
+        "question": question,
+        "options": list(options or []),
+        "title": title,
+        "kind": kind,
+        "owner": data.get("owner"),
+    }
+
+
+def _clear_question_overlay_widget(overlay) -> None:
+    """Remove o overlay de pergunta/permissão do widget Textual."""
+    overlay.update("")
+    overlay.display = False
 
 
 @contextmanager
@@ -801,6 +862,7 @@ class TextualInputGate:
         options: list[str] | None = None,
         owner: str | None = None,
         kind: str = "input",
+        title: str | None = None,
     ) -> str | None:
         """Exibe um pedido interativo no Textual e lê uma submissão do input fixo."""
         if question is not None:
@@ -813,6 +875,7 @@ class TextualInputGate:
                         "options": list(options or []),
                         "owner": owner,
                         "kind": kind,
+                        "title": title,
                     },
                 )
             )
@@ -891,8 +954,10 @@ class TextualInputGate:
             prompt,
             timeout=timeout,
             question=question,
+            options=_approval_options(),
             owner=owner,
             kind="approval",
+            title=_APPROVAL_TITLE,
         )
 
 
@@ -993,6 +1058,9 @@ class TextualRenderer:
     @contextmanager
     def _interactive_window(self, kind: str, title: str, owner: str | None = None, metadata=None):
         """Sinaliza janela interativa sem ceder stdout fora do Textual."""
+        metadata_dict = dict(metadata or {})
+        options = _approval_options() if kind == "approval" else []
+        self._bridge.begin_direct_input()
         self._bridge.emit(
             TextualUiEvent(
                 "window_open",
@@ -1000,7 +1068,9 @@ class TextualRenderer:
                     "kind": kind,
                     "title": title,
                     "owner": owner,
-                    "metadata": dict(metadata or {}),
+                    "metadata": metadata_dict,
+                    "question": str(metadata_dict.get("question") or ""),
+                    "options": options,
                 },
             )
         )
@@ -1008,6 +1078,7 @@ class TextualRenderer:
             yield
         finally:
             self._bridge.emit(TextualUiEvent("window_clear", {"kind": kind}))
+            self._bridge.end_direct_input()
 
     def approval_window(self, *, title: str = "Permissão solicitada", owner: str | None = None, metadata=None, **kwargs):
         """Compatibilidade com fluxos legados de aprovação."""
@@ -1686,23 +1757,13 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
 
         def _set_question_overlay(self, payload) -> None:
             overlay = self.query_one("#question_overlay", Static)
-            data = payload or {}
-            question = str(data.get("question", "")).strip()
-            options = list(data.get("options", []) or [])
-            kind = str(data.get("kind", "input")).strip().lower()
-            title = str(data.get("title") or "").strip()
-            if not title:
-                title = "Permissão solicitada" if kind == "approval" else "input solicitado"
-            lines = [question] if question else []
-            for index, option in enumerate(options, 1):
-                lines.append(f"{index}. {option}")
-            overlay.update(Panel("\n".join(lines), title=title, border_style="yellow"))
+            overlay.update(_build_question_overlay(payload))
             overlay.display = True
+            _restore_textual_input_focus(self)
 
         def _clear_question_overlay(self) -> None:
             overlay = self.query_one("#question_overlay", Static)
-            overlay.update("")
-            overlay.display = False
+            _clear_question_overlay_widget(overlay)
 
         def _refresh_toolbar(self) -> None:
             gate = getattr(quimera_app, "input_gate", None)
@@ -1756,10 +1817,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                 self._refresh_toolbar()
                 return
             if event.kind == "window_open":
-                payload = dict(event.payload or {}) if isinstance(event.payload, dict) else {}
-                title = str(payload.get("title") or "input solicitado")
-                kind = str(payload.get("kind") or "input")
-                self._set_question_overlay({"question": "", "options": [], "title": title, "kind": kind})
+                self._set_question_overlay(_build_window_overlay_payload(event.payload))
                 self._refresh_toolbar()
                 return
             if event.kind == "question_clear":
