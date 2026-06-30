@@ -82,6 +82,9 @@ class AppSessionServices:
         if not pending:
             return
         logger.info(pending)
+        show_system = getattr(self._renderer, "show_system", None)
+        if callable(show_system):
+            show_system(pending)
         self._pending_summary_completion = None
 
     def _history_hard_limit(self) -> int:
