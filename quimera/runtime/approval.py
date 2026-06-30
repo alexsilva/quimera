@@ -41,7 +41,7 @@ def _extract_renderer(base_handler) -> object | None:
         return None
 
 
-def _approval_window_context(renderer, *, title: str = "Aprovação", metadata=None):
+def _approval_window_context(renderer, *, title: str = "Permissão solicitada", metadata=None):
     """Return a context manager for approval terminal ownership."""
     if renderer is None:
         return nullcontext()
@@ -225,19 +225,48 @@ class ConsoleApprovalHandler(ApprovalHandler):
         try:
             if self._cancel_event and self._cancel_event.is_set():
                 return False
-            self._show(format_approval_question(tool_name, summary))
+            question = format_approval_question(tool_name, summary)
+            self._show(question)
 
             is_main = threading.current_thread() is threading.main_thread()
             # input_gate usa prompt_toolkit: seguro na thread principal.
             use_input_gate = self._input_gate is not None and is_main
-            # Threads de background com pt ativo: delegar ao pt via run_in_terminal.
+            # Threads de background devem preferir o input_gate semântico sempre
+            # que ele souber abrir um prompt próprio. No Textual, is_active()
+            # pode estar falso durante uma aprovação disparada fora do prompt
+            # principal; cair para input() nesse caso faz a resposta digitada
+            # no input fixo virar mensagem de agente em vez de aprovação.
             gate_is_active = getattr(self._input_gate, "is_active", None)
             input_gate_active = (
                 self._input_gate is not None
                 and callable(gate_is_active)
                 and gate_is_active()
             )
-            use_input_gate_xthread = not is_main and input_gate_active
+            read_approval_xthread = (
+                _static_callable_attr(
+                    self._input_gate,
+                    "read_approval_in_terminal",
+                )
+                if self._input_gate is not None
+                else None
+            )
+            read_input_xthread = (
+                _static_callable_attr(
+                    self._input_gate,
+                    "read_input_in_terminal",
+                )
+                if self._input_gate is not None
+                else None
+            )
+            use_input_gate_xthread = (
+                not is_main
+                and self._input_gate is not None
+                and (
+                    input_gate_active
+                    or callable(read_approval_xthread)
+                    or callable(read_input_xthread)
+                )
+            )
 
             if use_input_gate:
                 if self._cancel_event and self._cancel_event.is_set():
@@ -272,9 +301,19 @@ class ConsoleApprovalHandler(ApprovalHandler):
                 # Background thread + prompt_toolkit ativo: usa run_in_terminal
                 # para suspender o app, restaurar o terminal e ler do usuário sem
                 # conflitar com o raw mode do pt nem duplicar a saída.
-                raw = self._input_gate.read_input_in_terminal(
-                    "  Executar? [y/N/a=todas]: "
-                )
+                if callable(read_approval_xthread):
+                    raw = read_approval_xthread(
+                        question,
+                        "  Executar? [y/N/a=todas]: ",
+                    )
+                elif callable(read_input_xthread):
+                    raw = read_input_xthread(
+                        "  Executar? [y/N/a=todas]: "
+                    )
+                else:
+                    raw = self._input_gate.read_input_in_terminal(
+                        "  Executar? [y/N/a=todas]: "
+                    )
                 if raw is None:
                     self._show(
                         "  sem resposta — negando automaticamente"
@@ -290,7 +329,10 @@ class ConsoleApprovalHandler(ApprovalHandler):
                 input_fn = self._input_fn if self._input_fn is not None else input
                 if self._suspend_fn:
                     self._suspend_fn()
-                with _approval_window_context(renderer, title="Aprovação"):
+                with _approval_window_context(
+                    renderer,
+                    metadata={"question": question},
+                ):
                     thread_id = threading.get_ident()
                     suspend_fn = (
                         self._suspend_spinner_fn.get(thread_id)

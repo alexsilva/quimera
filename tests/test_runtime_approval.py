@@ -759,6 +759,104 @@ def test_console_approval_handler_renderer_with_spinner_callbacks():
     assert order == ["suspend_spinner", "input", "resume_spinner"]
 
 
+def test_console_approval_handler_textual_xthread_uses_approval_gate():
+    """Em thread de background com gate ativo, approval deve emitir pergunta semântica."""
+    calls = []
+
+    class FakeGate:
+        def is_active(self):
+            return True
+
+        def read_approval_in_terminal(self, question, prompt):
+            calls.append(("approval", question, prompt))
+            return "s"
+
+        def read_input_in_terminal(self, _prompt):
+            raise AssertionError("approval não deve usar input genérico")
+
+    handler = ApprovalManager(None, input_gate=FakeGate())
+    result = {}
+
+    def run_approval():
+        result["approved"] = handler.approve(tool_name="run_shell", summary="risco: shell\ncomando: pwd")
+
+    with patch("builtins.print"):
+        thread = threading.Thread(target=run_approval)
+        thread.start()
+        thread.join(timeout=1)
+
+    assert result["approved"] is True
+    assert calls == [
+        (
+            "approval",
+            "\nAprovar run_shell :: risco: shell\ncomando: pwd",
+            "  Executar? [y/N/a=todas]: ",
+        )
+    ]
+
+
+def test_console_approval_handler_textual_xthread_prefers_approval_gate_even_when_inactive():
+    """Aprovação Textual fora do prompt principal não deve cair para input()."""
+    calls = []
+
+    class FakeGate:
+        def is_active(self):
+            return False
+
+        def read_approval_in_terminal(self, question, prompt):
+            calls.append((question, prompt))
+            return "y"
+
+    handler = ApprovalManager(
+        None,
+        input_gate=FakeGate(),
+        input_fn=lambda _: "n",
+    )
+    result = {}
+
+    def run_approval():
+        result["approved"] = handler.approve(tool_name="run_shell", summary="risco: shell")
+
+    with patch("builtins.print"):
+        thread = threading.Thread(target=run_approval)
+        thread.start()
+        thread.join(timeout=1)
+
+    assert result["approved"] is True
+    assert calls == [("\nAprovar run_shell :: risco: shell", "  Executar? [y/N/a=todas]: ")]
+
+
+def test_console_approval_handler_renderer_window_receives_question_metadata():
+    """Fallback com renderer deve abrir approval_window com pergunta completa."""
+    class FakeRenderer:
+        def __init__(self):
+            self.windows = []
+            self.messages = []
+
+        def show_approval(self, message):
+            self.messages.append(message)
+
+        @contextmanager
+        def approval_window(self, **kwargs):
+            self.windows.append(kwargs)
+            yield
+
+    renderer = FakeRenderer()
+    handler = ApprovalManager(None, input_fn=lambda _: "y", renderer=renderer)
+
+    result = handler.approve(tool_name="write_file", summary="risco: write\narquivo: README.md")
+
+    assert result is True
+    assert renderer.windows == [
+        {
+            "title": "Permissão solicitada",
+            "metadata": {
+                "question": "\nAprovar write_file :: risco: write\narquivo: README.md",
+            },
+        }
+    ]
+
+
 # ── ApprovalManager + input_gate + cancel_event ─────────────
 
 
