@@ -331,7 +331,7 @@ class OpenAICompatDriver:
                             messages,
                             tools,
                             cancel_event=cancel_event,
-                            on_text_chunk=on_text_chunk if not tools else None,
+                            on_text_chunk=on_text_chunk,
                         )
                     except Exception as exc:
                         _logger.error("OpenAICompatDriver: API error on hop %d: %s", hop, exc)
@@ -442,15 +442,18 @@ class OpenAICompatDriver:
         if cancel_event is not None and cancel_event.is_set():
             return "", []
         if tools:
-            return self._chat_with_tools(messages, tools)
+            return self._chat_with_tools(messages, tools, on_text_chunk=on_text_chunk)
         return self._chat_streaming(messages, cancel_event=cancel_event, on_text_chunk=on_text_chunk)
 
-    def _chat_with_tools(self, messages: list[dict], tools: list[dict]) -> tuple[str, list[dict]]:
+    def _chat_with_tools(self, messages: list[dict], tools: list[dict], on_text_chunk=None) -> tuple[str, list[dict]]:
         """
         Chamada não-streaming quando há ferramentas.
 
         O modo não-streaming permite receber message.tool_calls estruturados
         dos endpoints compatíveis com OpenAI que suportam tool calling nativo.
+        A resposta chega de uma vez (sem streaming real), mas o texto bruto
+        (incluindo blocos <think>) ainda é repassado a on_text_chunk para que
+        o raciocínio apareça no feed do agente, como ocorre no modo streaming.
         """
         response = self._client.chat.completions.create(
             model=self.model,
@@ -467,6 +470,8 @@ class OpenAICompatDriver:
             )
         choice = response.choices[0]
         text = (choice.message.content or "").strip()
+        if text and on_text_chunk is not None:
+            on_text_chunk(text)
         tool_calls: list[dict] = []
         if choice.message.tool_calls:
             for tc in choice.message.tool_calls:
