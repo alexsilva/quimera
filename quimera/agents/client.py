@@ -178,8 +178,8 @@ class AgentClient:
         self.renderer.show_system(message)
 
     def _show_tool_preview(self, message: str, *, agent: str | None = None) -> None:
-        """Exibe preview operacional de tool no feed do agente quando possível."""
-        if agent and getattr(self.renderer, "supports_agent_feed", False) is True:
+        """Exibe preview operacional de tool no feed quando possível."""
+        if getattr(self.renderer, "supports_agent_feed", False) is True:
             show_feed = getattr(self.renderer, "show_feed", None)
             if callable(show_feed):
                 show_feed(message, agent=agent, muted=True)

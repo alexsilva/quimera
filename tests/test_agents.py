@@ -2014,6 +2014,35 @@ def test_agent_client_tool_preview_uses_agent_feed_when_supported():
     muted_reporter.assert_not_called()
 
 
+def test_agent_client_tool_preview_uses_global_feed_for_http_without_agent_metadata():
+    """Preview MCP HTTP sem agent_name deve aparecer no feed global, não ficar deferred."""
+    from types import SimpleNamespace
+
+    class FeedRenderer:
+        supports_agent_feed = True
+
+        def __init__(self):
+            self.show_feed = MagicMock()
+
+    renderer = FeedRenderer()
+    muted_reporter = MagicMock()
+    client = AgentClient(renderer, muted_reporter=muted_reporter)
+    tool_executor = SimpleNamespace(set_tool_preview_callback=MagicMock())
+    metadata = {"trusted_context": SimpleNamespace(transport="http_mcp", agent_name=None)}
+
+    client.bind_tool_preview_callback(tool_executor)
+
+    callback = tool_executor.set_tool_preview_callback.call_args[0][0]
+    callback("read_file", {"path": "README.md"}, metadata)
+
+    renderer.show_feed.assert_called_once()
+    message = renderer.show_feed.call_args.args[0]
+    assert "⚒ read_file" in message
+    assert "README.md" in message
+    assert renderer.show_feed.call_args.kwargs == {"agent": None, "muted": True}
+    muted_reporter.assert_not_called()
+
+
 def test_agent_client_tool_preview_uses_mcp_metadata_agent_when_available():
     """Preview de tool MCP sem approval deve usar agente vindo do trusted_context."""
     from types import SimpleNamespace
