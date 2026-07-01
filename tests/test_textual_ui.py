@@ -1119,3 +1119,60 @@ def test_textual_feed_treats_pending_input_as_transient_agent_state():
 
     assert len(model.items) == 1
     assert model.items[0].event is final
+
+
+def test_textual_normal_chat_input_goes_to_main_input_queue():
+    bridge = TextualUiBridge()
+    gate = TextualInputGate(bridge)
+    emitted = []
+    bridge.emit = emitted.append
+
+    assert not bridge.is_direct_input_active()
+
+    bridge.input_queue.put("mensagem normal")
+    result = gate("mensagem...")
+
+    assert result == "mensagem normal"
+    assert bridge.direct_input_queue.empty()
+    assert bridge.input_queue.empty()
+
+
+def test_textual_modal_question_input_goes_to_direct_input_queue():
+    bridge = TextualUiBridge()
+    emitted = []
+    bridge.emit = emitted.append
+
+    bridge.begin_direct_input()
+    bridge.direct_input_queue.put("resposta modal")
+    result = bridge.direct_input_queue.get(timeout=1)
+
+    assert result == "resposta modal"
+    assert bridge.input_queue.empty()
+    bridge.end_direct_input()
+
+
+def test_textual_approval_answer_does_not_enter_main_input_queue():
+    bridge = TextualUiBridge()
+
+    bridge.emit(TextualUiEvent("question", {"kind": "approval", "question": "Aprovar?"}))
+    bridge.submit_input("y")
+
+    assert bridge.input_queue.empty()
+    assert bridge.direct_input_queue.get_nowait() == "y"
+
+
+def test_textual_chat_prompt_active_does_not_steal_normal_input():
+    bridge = TextualUiBridge()
+    gate = TextualInputGate(bridge)
+    emitted = []
+    bridge.emit = emitted.append
+
+    assert not bridge.is_direct_input_active()
+
+    bridge.input_queue.put("comando para agente")
+    result = gate("mensagem...")
+
+    assert result == "comando para agente"
+    assert bridge.direct_input_queue.empty()
+    assert bridge.input_queue.empty()
+    assert not bridge.is_direct_input_active()

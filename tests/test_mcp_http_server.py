@@ -28,6 +28,7 @@ from quimera.runtime.mcp.session import parse_http_allowed_tools
 from quimera.runtime.config import ToolRuntimeConfig
 from quimera.runtime.executor import ToolExecutor
 from quimera.runtime.models import ToolResult
+from quimera.runtime.workspace_policy import WorkspacePolicy
 
 
 # ---------------------------------------------------------------------------
@@ -648,6 +649,49 @@ class TestToolsCallHTTP:
             result_data = json.loads(resp.data)
             assert result_data["result"]["isError"] is False
             assert previews == [("read_file", {"path": "foo.py"})]
+        finally:
+            httpd.shutdown()
+
+    def test_tools_call_http_reusa_preview_para_tool_auto_aprovada_por_policy(self, tmp_path):
+        """POST /message deve exibir preview para tool auto-aprovada por policy."""
+        previews = []
+        approval_handler = MagicMock()
+        executor = ToolExecutor(
+            ToolRuntimeConfig(
+                workspace_root=tmp_path,
+                workspace_policy=WorkspacePolicy.autonomous(),
+            ),
+            approval_handler,
+        )
+        executor.set_tool_preview_callback(
+            lambda name, args, metadata=None: previews.append((name, args, metadata))
+        )
+        httpd = MCP_HTTPServer(
+            _make_mcp_server(executor),
+            host="127.0.0.1",
+            port=0,
+            allowed_tools=None,
+        )
+        httpd.start_background()
+        _wait_for_server(httpd.host, httpd.port)
+        try:
+            body = json.dumps({
+                "jsonrpc": "2.0", "id": 102, "method": "tools/call",
+                "params": {"name": "run_shell", "arguments": {"command": "pwd"}},
+            }).encode("utf-8")
+            resp = _http_request(
+                httpd.host, httpd.port, "POST", "/message",
+                body=body,
+                headers={"Content-Type": "application/json"},
+            )
+
+            assert resp.status == 200
+            result_data = json.loads(resp.data)
+            assert result_data["result"]["isError"] is False
+            assert previews[0][0] == "run_shell"
+            assert previews[0][1] == {"command": "pwd"}
+            assert previews[0][2]["trusted_context"].transport == "http_mcp"
+            assert approval_handler.approve.call_count == 0
         finally:
             httpd.shutdown()
 

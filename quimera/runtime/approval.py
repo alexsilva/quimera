@@ -229,13 +229,10 @@ class ConsoleApprovalHandler(ApprovalHandler):
             self._show(question)
 
             is_main = threading.current_thread() is threading.main_thread()
-            # input_gate usa prompt_toolkit: seguro na thread principal.
-            use_input_gate = self._input_gate is not None and is_main
-            # Threads de background devem preferir o input_gate semântico sempre
-            # que ele souber abrir um prompt próprio. No Textual, is_active()
-            # pode estar falso durante uma aprovação disparada fora do prompt
-            # principal; cair para input() nesse caso faz a resposta digitada
-            # no input fixo virar mensagem de agente em vez de aprovação.
+            # Approval deve preferir o input_gate semântico sempre que possível.
+            # Na UI Textual, usar o gate como input genérico ou cair para input()
+            # deixa a resposta no input fixo vulnerável ao roteamento para o
+            # stdin do agente ativo, em vez de consumir a fila de aprovação.
             gate_is_active = getattr(self._input_gate, "is_active", None)
             input_gate_active = (
                 self._input_gate is not None
@@ -258,14 +255,11 @@ class ConsoleApprovalHandler(ApprovalHandler):
                 if self._input_gate is not None
                 else None
             )
-            use_input_gate_xthread = (
-                not is_main
-                and self._input_gate is not None
-                and (
-                    input_gate_active
-                    or callable(read_approval_xthread)
-                    or callable(read_input_xthread)
-                )
+            use_input_gate = self._input_gate is not None and (
+                is_main
+                or input_gate_active
+                or callable(read_approval_xthread)
+                or callable(read_input_xthread)
             )
 
             if use_input_gate:
@@ -279,11 +273,23 @@ class ConsoleApprovalHandler(ApprovalHandler):
                 if suspend_fn:
                     suspend_fn()
                 try:
-                    answer = (
-                        self._input_gate("  Executar? [y/N/a=todas]: ")
-                        .strip()
-                        .lower()
-                    )
+                    if callable(read_approval_xthread):
+                        raw = read_approval_xthread(
+                            question,
+                            "  Executar? [y/N/a=todas]: ",
+                        )
+                    elif callable(read_input_xthread):
+                        raw = read_input_xthread(
+                            "  Executar? [y/N/a=todas]: "
+                        )
+                    else:
+                        raw = self._input_gate("  Executar? [y/N/a=todas]: ")
+                    if raw is None:
+                        self._show(
+                            "  sem resposta — negando automaticamente"
+                        )
+                        return False
+                    answer = raw.strip().lower()
                 except (EOFError, KeyboardInterrupt):
                     self._show(
                         "  stdin não disponível — negando automaticamente"
@@ -297,29 +303,6 @@ class ConsoleApprovalHandler(ApprovalHandler):
                     )
                     if resume_fn:
                         resume_fn()
-            elif use_input_gate_xthread:
-                # Background thread + prompt_toolkit ativo: usa run_in_terminal
-                # para suspender o app, restaurar o terminal e ler do usuário sem
-                # conflitar com o raw mode do pt nem duplicar a saída.
-                if callable(read_approval_xthread):
-                    raw = read_approval_xthread(
-                        question,
-                        "  Executar? [y/N/a=todas]: ",
-                    )
-                elif callable(read_input_xthread):
-                    raw = read_input_xthread(
-                        "  Executar? [y/N/a=todas]: "
-                    )
-                else:
-                    raw = self._input_gate.read_input_in_terminal(
-                        "  Executar? [y/N/a=todas]: "
-                    )
-                if raw is None:
-                    self._show(
-                        "  sem resposta — negando automaticamente"
-                    )
-                    return False
-                answer = raw.strip().lower()
             else:
                 # Background thread sem prompt_toolkit ativo: usa o caminho
                 # padrão com suspend/resume. InputGate inativo não é prova de

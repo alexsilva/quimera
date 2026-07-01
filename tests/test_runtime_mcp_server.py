@@ -19,6 +19,7 @@ from quimera.runtime.mcp.server import _openai_schema_to_mcp, _proxy_stdio_to_so
 from quimera.runtime.config import ToolRuntimeConfig
 from quimera.runtime.executor import ToolExecutor
 from quimera.runtime.models import ToolCall, ToolResult
+from quimera.runtime.workspace_policy import WorkspacePolicy
 
 
 # ---------------------------------------------------------------------------
@@ -254,6 +255,35 @@ class TestToolsCall:
 
         assert resp["result"]["isError"] is True
         assert previews == []
+
+    def test_mcp_socket_preview_para_tool_auto_aprovada_por_policy(self, tmp_path):
+        """Tool auto-aprovada por workspace_policy deve usar preview, não card de approval."""
+        previews = []
+        approval_handler = MagicMock()
+        executor = ToolExecutor(
+            ToolRuntimeConfig(
+                workspace_root=tmp_path,
+                workspace_policy=WorkspacePolicy.autonomous(),
+            ),
+            approval_handler,
+        )
+        executor.set_tool_preview_callback(
+            lambda name, args, metadata=None: previews.append((name, args, metadata))
+        )
+        server = _make_server(executor)
+
+        [resp] = _exchange(server, {
+            "jsonrpc": "2.0", "id": 104, "method": "tools/call",
+            "params": {
+                "name": "run_shell",
+                "arguments": {"command": "pwd"},
+            },
+        })
+
+        assert resp["result"]["isError"] is False
+        assert previews[0][0] == "run_shell"
+        assert previews[0][1] == {"command": "pwd"}
+        assert approval_handler.approve.call_count == 0
 
     def test_retorna_is_error_quando_tool_falha(self):
         """Verifica que Test retorna is error quando tool falha."""

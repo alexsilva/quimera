@@ -208,9 +208,13 @@ class ToolExecutor:
             if self.policy.requires_path_permission(normalized_call):
                 permission_error = self.policy.check_path_permission(normalized_call)
             needs_approval = self.policy.requires_approval(normalized_call)
-            has_permission_issue = permission_error is not None
 
             with self._approval_scope_from_metadata(normalized_call):
+                will_prompt_for_approval = self.approval_manager.would_prompt_for_call(
+                    normalized_call,
+                    needs_policy_approval=bool(needs_approval),
+                    permission_error=permission_error,
+                )
                 approved = self.approval_manager.authorize_call(
                     normalized_call,
                     needs_policy_approval=bool(needs_approval),
@@ -223,8 +227,10 @@ class ToolExecutor:
                     error="Execução negada pelo usuário",
                 )
 
-            if not (has_permission_issue or needs_approval):
-                # Tool sem approval humano: exibe preview informativo se houver callback
+            if not will_prompt_for_approval:
+                # Tool sem prompt humano: exibe preview informativo se houver callback.
+                # Isso inclui read/network, escopos já aprovados e tools auto-aprovadas
+                # pela workspace_policy, inclusive quando chamadas via MCP HTTP.
                 if self._tool_preview_callback is not None:
                     try:
                         self._tool_preview_callback(

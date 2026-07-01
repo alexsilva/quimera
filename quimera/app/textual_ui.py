@@ -873,7 +873,6 @@ class TextualInputGate:
 
     def __call__(self, prompt: str) -> str:
         """Bloqueia o loop do Quimera até o usuário submeter uma linha na TUI."""
-        self._bridge.begin_direct_input()
         self._set_active_state(True)
         self._bridge.emit(
             TextualUiEvent(
@@ -889,7 +888,6 @@ class TextualInputGate:
             return self._bridge.input_queue.get()
         finally:
             self._set_active_state(False)
-            self._bridge.end_direct_input()
             self._bridge.emit(TextualUiEvent("prompt_clear"))
 
     def _read_with_textual_prompt(
