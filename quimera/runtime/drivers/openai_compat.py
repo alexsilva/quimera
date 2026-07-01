@@ -469,6 +469,9 @@ class OpenAICompatDriver:
                 f"API retornou choices vazio ou None (model={self.model!r}): {response!r}"
             )
         choice = response.choices[0]
+        reasoning = getattr(choice.message, "reasoning", None) or getattr(choice.message, "reasoning_content", None)
+        if reasoning and on_text_chunk is not None:
+            on_text_chunk(f"<think>{reasoning}</think>")
         text = (choice.message.content or "").strip()
         if text and on_text_chunk is not None:
             on_text_chunk(text)
@@ -499,6 +502,7 @@ class OpenAICompatDriver:
             stream=True,
         )
         text = ""
+        reasoning_open = False
         for chunk in stream:
             if cancel_event is not None and cancel_event.is_set():
                 break
@@ -506,7 +510,20 @@ class OpenAICompatDriver:
                 continue
             delta = chunk.choices[0].delta
             content = getattr(delta, "content", None)
+            reasoning = getattr(delta, "reasoning", None) or getattr(delta, "reasoning_content", None)
             diff = normalize_stream_diff(getattr(delta, "diff", None))
+
+            if reasoning:
+                if on_text_chunk is not None:
+                    piece = f"<think>{reasoning}" if not reasoning_open else reasoning
+                    on_text_chunk(piece)
+                reasoning_open = True
+                continue
+
+            if reasoning_open and (content or diff):
+                reasoning_open = False
+                if on_text_chunk is not None:
+                    on_text_chunk("</think>")
 
             if diff:
                 text = apply_stream_diff(text, diff)
@@ -518,6 +535,9 @@ class OpenAICompatDriver:
                 text += content
                 if on_text_chunk is not None:
                     on_text_chunk(content)
+
+        if reasoning_open and on_text_chunk is not None:
+            on_text_chunk("</think>")
         return text.strip(), []
 
     def _execute_tool(
