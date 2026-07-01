@@ -528,6 +528,25 @@ def test_textual_renderer_interactive_input_window_with_question_emits_overlay_e
     assert emitted[0].payload["question"] == "Informe o comando"
 
 
+def test_textual_renderer_selection_window_preserves_question_and_options():
+    bridge = TextualUiBridge()
+    emitted = []
+    bridge.emit = emitted.append
+    renderer = TextualRenderer(bridge)
+
+    with renderer.selection_window(
+        owner="opencode",
+        metadata={"question": "Escolha uma opção", "options": ["sim", "não"]},
+    ):
+        pass
+
+    assert [event.kind for event in emitted] == ["window_open", "window_clear"]
+    assert emitted[0].payload["kind"] == "selection"
+    assert emitted[0].payload["question"] == "Escolha uma opção"
+    assert emitted[0].payload["options"] == ["sim", "não"]
+    assert _build_window_overlay_payload(emitted[0].payload)["options"] == ["sim", "não"]
+
+
 def test_textual_approval_overlay_renders_title_question_and_options():
     renderable = _build_question_overlay(
         {
@@ -549,6 +568,26 @@ def test_textual_approval_overlay_renders_title_question_and_options():
     assert "Executar comando via shell?" in output
     assert "s/sim/y/yes = aprovar" in output
     assert "n/não/no/enter = negar" in output
+
+
+def test_textual_selection_overlay_renders_numbered_options():
+    renderable = _build_question_overlay(
+        {
+            "kind": "selection",
+            "title": "Seleção solicitada",
+            "question": "Escolha uma opção",
+            "options": ["sim", "não"],
+        }
+    )
+    console = Console(width=80, record=True, force_terminal=False)
+
+    console.print(renderable)
+    output = console.export_text()
+
+    assert "Seleção solicitada" in output
+    assert "Escolha uma opção" in output
+    assert "1. sim" in output
+    assert "2. não" in output
 
 
 def test_textual_clear_question_overlay_widget_hides_approval_overlay():

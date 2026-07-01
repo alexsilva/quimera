@@ -973,7 +973,7 @@ class QuimeraApp:
                 raise EOFError("sem resposta do terminal")
             # Gate não ativo: leitura por linha (cooked mode) com posse do chão.
             selection_context = (
-                renderer.selection_window(metadata={"question": question})
+                renderer.selection_window(metadata={"question": question, "options": opts})
                 if renderer is not None
                 else nullcontext()
             )

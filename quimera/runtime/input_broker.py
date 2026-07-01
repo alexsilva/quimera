@@ -472,7 +472,7 @@ class InputBroker:
         lines.append(f"  (1-{len(options)} · auto em {remaining_s}s)")
         with self._selection_terminal_window(
             owner=agent,
-            metadata={"question": question, "owner": agent},
+            metadata={"question": question, "owner": agent, "options": list(options)},
         ):
             self._emit("\n".join(lines))
             while True:

@@ -98,6 +98,8 @@ def _build_question_overlay(payload) -> Panel:
     if kind == "approval":
         title = title or _APPROVAL_TITLE
         options = options or _approval_options()
+    elif kind == "selection":
+        title = title or "Seleção solicitada"
     elif not title:
         title = "input solicitado"
 
@@ -106,7 +108,10 @@ def _build_question_overlay(payload) -> Panel:
         if lines:
             lines.append("")
         lines.append("Opções:")
-        lines.extend(f"- {option}" for option in options)
+        if kind == "selection":
+            lines.extend(f"{index}. {option}" for index, option in enumerate(options, 1))
+        else:
+            lines.extend(f"- {option}" for option in options)
 
     body = "\n".join(lines) if lines else "Aguardando resposta..."
     border_style = "bold yellow" if kind == "approval" else "yellow"
@@ -120,7 +125,7 @@ def _build_window_overlay_payload(payload) -> dict[str, Any]:
     kind = str(data.get("kind") or "input")
     title = str(data.get("title") or (_APPROVAL_TITLE if kind == "approval" else "input solicitado"))
     question = str(metadata.get("question") or data.get("question") or "")
-    options = data.get("options")
+    options = data.get("options") or metadata.get("options")
     if kind == "approval" and not options:
         options = _approval_options()
     return {
@@ -1089,7 +1094,8 @@ class TextualRenderer:
     def _interactive_window(self, kind: str, title: str, owner: str | None = None, metadata=None):
         """Sinaliza janela interativa sem ceder stdout fora do Textual."""
         metadata_dict = dict(metadata or {})
-        options = _approval_options() if kind == "approval" else []
+        metadata_options = metadata_dict.get("options") or []
+        options = _approval_options() if kind == "approval" else list(metadata_options or [])
         question = str(metadata_dict.get("question") or "")
         should_show_overlay = kind == "approval" or bool(question) or bool(options)
         self._bridge.begin_direct_input()
@@ -1122,9 +1128,20 @@ class TextualRenderer:
         """Compatibilidade com fluxos legados de entrada."""
         return self._interactive_window("input", title, owner=owner, metadata=metadata)
 
-    def selection_window(self, *, title: str = "Seleção solicitada", owner: str | None = None, metadata=None, **kwargs):
+    def selection_window(
+        self,
+        *,
+        title: str = "Seleção solicitada",
+        owner: str | None = None,
+        metadata=None,
+        options: list[str] | None = None,
+        **kwargs,
+    ):
         """Compatibilidade com fluxos legados de seleção."""
-        return self._interactive_window("selection", title, owner=owner, metadata=metadata)
+        metadata_dict = dict(metadata or {})
+        if options is not None:
+            metadata_dict["options"] = list(options)
+        return self._interactive_window("selection", title, owner=owner, metadata=metadata_dict)
 
     def flush(self, timeout: float = 5.0) -> None:
         """Drena eventos visuais pendentes no app Textual."""
