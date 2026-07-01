@@ -1,6 +1,7 @@
 """Serviços de sessão, persistência e sumarização."""
 from __future__ import annotations
 
+import inspect
 import logging
 import sys
 import threading
@@ -252,11 +253,23 @@ class AppSessionServices:
 
         def _run_summary():
             try:
-                result[0] = self._session_summarizer.summarize(
-                    history_snapshot,
-                    existing_summary=self._context_manager.load_session_summary(),
-                    preferred_agent=self._summary_agent_preference,
-                )
+                summarize = self._session_summarizer.summarize
+                kwargs = {
+                    "existing_summary": self._context_manager.load_session_summary(),
+                    "preferred_agent": self._summary_agent_preference,
+                }
+                try:
+                    signature = inspect.signature(summarize)
+                    params = signature.parameters.values()
+                    accepts_fallback = any(
+                        param.kind is inspect.Parameter.VAR_KEYWORD or param.name == "fallback"
+                        for param in params
+                    )
+                except (TypeError, ValueError):
+                    accepts_fallback = True
+                if accepts_fallback:
+                    kwargs["fallback"] = False
+                result[0] = summarize(history_snapshot, **kwargs)
             except Exception:
                 pass
 

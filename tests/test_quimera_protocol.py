@@ -2951,6 +2951,29 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(renderer.system_messages, [])
         self.assertEqual(summarizer_call.last_outcome, "cancelled")
 
+    def test_chain_summarizer_can_disable_fallback_for_summary(self):
+        class DummyAgentClient:
+            def __init__(self, renderer):
+                self.renderer = renderer
+                self._user_cancelled = False
+                self._cancel_event = threading.Event()
+                self.calls = []
+
+            def call(self, agent, prompt, silent=False, allow_tools=True):
+                self.calls.append((agent, prompt, silent, allow_tools))
+                return None
+
+        renderer = DummyRenderer()
+        agent_client = DummyAgentClient(renderer)
+        summarizer_call = build_chain_summarizer(agent_client, ["chatgpt", "codex"])
+
+        result = summarizer_call("resuma", preferred_agent="chatgpt", fallback=False)
+
+        self.assertIsNone(result)
+        self.assertEqual(agent_client.calls, [("chatgpt", "resuma", True, False)])
+        self.assertEqual(summarizer_call.last_outcome, "unavailable")
+
+
     def test_chain_summarizer_does_not_emit_per_agent_unavailable_messages(self):
         """Verifica que chain summarizer does not emit per agent unavailable messages."""
         class DummyAgentClient:

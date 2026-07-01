@@ -1,4 +1,5 @@
 """Componentes de `quimera.session_summary`."""
+import inspect
 
 
 def _is_cancelled(agent_client) -> bool:
@@ -16,15 +17,19 @@ def build_chain_summarizer(agent_client, agents_or_fn):
     no momento da chamada (útil para refletir o pool atual após remoções).
     """
 
-    def _ordered_agents(preferred_agent=None):
+    def _ordered_agents(preferred_agent=None, fallback=True):
         agents = agents_or_fn() if callable(agents_or_fn) else agents_or_fn
         if preferred_agent and preferred_agent in agents:
+            if not fallback:
+                return [preferred_agent]
             return [preferred_agent, *[agent for agent in agents if agent != preferred_agent]]
+        if not fallback:
+            return list(agents[:1])
         return list(agents)
 
-    def _call(prompt, preferred_agent=None):
+    def _call(prompt, preferred_agent=None, fallback=True):
         _call.last_outcome = "unavailable"
-        for agent in _ordered_agents(preferred_agent):
+        for agent in _ordered_agents(preferred_agent, fallback=fallback):
             if _is_cancelled(agent_client):
                 _call.last_outcome = "cancelled"
                 return None
@@ -52,7 +57,7 @@ class SessionSummarizer:
         self.renderer = renderer
         self.summarizer_call = summarizer_call
 
-    def summarize(self, history, existing_summary=None, preferred_agent=None):
+    def summarize(self, history, existing_summary=None, preferred_agent=None, fallback=True):
         """Executa summarize."""
         if not history and not existing_summary:
             return None
@@ -63,7 +68,19 @@ class SessionSummarizer:
 
         prompt = self._build_prompt(history, existing_summary)
         try:
-            summary = self.summarizer_call(prompt, preferred_agent=preferred_agent)
+            kwargs = {"preferred_agent": preferred_agent}
+            try:
+                signature = inspect.signature(self.summarizer_call)
+                params = signature.parameters.values()
+                accepts_fallback = any(
+                    param.kind is inspect.Parameter.VAR_KEYWORD or param.name == "fallback"
+                    for param in params
+                )
+            except (TypeError, ValueError):
+                accepts_fallback = True
+            if accepts_fallback:
+                kwargs["fallback"] = fallback
+            summary = self.summarizer_call(prompt, **kwargs)
         except Exception:
             summary = None
         if not summary:

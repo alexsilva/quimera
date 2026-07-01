@@ -341,9 +341,11 @@ def test_session_shutdown_summarizes_stable_history_snapshot_after_pending_save(
         def __init__(self):
             self.service = None
             self.messages_seen = None
+            self.fallback_seen = None
 
-        def summarize(self, messages, existing_summary=None, preferred_agent=None):
+        def summarize(self, messages, existing_summary=None, preferred_agent=None, fallback=True):
             self.messages_seen = messages
+            self.fallback_seen = fallback
             self.service.persist_message("assistant", "mutated during shutdown summary")
             return "shutdown summary"
 
@@ -368,6 +370,7 @@ def test_session_shutdown_summarizes_stable_history_snapshot_after_pending_save(
     assert storage.saved_shared_state == {"goal": "persist me"}
     assert summarizer.messages_seen == [{"role": "human", "content": "before shutdown"}]
     assert summarizer.messages_seen is not history
+    assert summarizer.fallback_seen is False
     assert history == [
         {"role": "human", "content": "before shutdown"},
         {"role": "assistant", "content": "mutated during shutdown summary"},
