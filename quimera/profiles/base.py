@@ -21,6 +21,7 @@ class CliConnection:
     output_format: Optional[str] = None
     env: Optional[dict] = None
     cwd: Optional[str] = None
+    keep_stdin_open: bool = False
 
 
 @dataclass
@@ -108,6 +109,7 @@ def _connection_from_dict(data: dict) -> Connection:
             output_format=data.get("output_format"),
             env=data.get("env"),
             cwd=data.get("cwd"),
+            keep_stdin_open=data.get("keep_stdin_open", False),
         )
     return OpenAIConnection(
         model=data.get("model", "gpt-4o"),
@@ -238,6 +240,7 @@ class ExecutionProfile:
     # CLI fields
     cmd: List[str] = field(default_factory=list)
     prompt_as_arg: bool = False  # se True, prompt é passado como argumento CLI em vez de stdin
+    keep_stdin_open: bool = False
     # Agent capabilities
     capabilities: List[str] = field(default_factory=list)
     preferred_task_types: List[str] = field(default_factory=list)
@@ -260,6 +263,7 @@ class ExecutionProfile:
     stderr_noise: FrozenSet[str] = field(default_factory=frozenset)
     stderr_noise_patterns: Tuple[str, ...] = field(default_factory=tuple)
     dynamic: bool = False
+    supports_resume: bool = False
     # Connection override (carregado automaticamente do base_dir)
     _connection_override: Optional[Connection] = field(default=None, repr=False)
     # Profile name (usado para herança de formatter/rw_paths em perfis de conexão)
@@ -289,7 +293,14 @@ class ExecutionProfile:
             f"--model={model_id}" if arg.startswith("--model=") else arg
             for arg in conn.cmd
         ]
-        return CliConnection(cmd=new_cmd, prompt_as_arg=conn.prompt_as_arg, output_format=conn.output_format)
+        return CliConnection(
+            cmd=new_cmd,
+            prompt_as_arg=conn.prompt_as_arg,
+            output_format=conn.output_format,
+            env=conn.env,
+            cwd=conn.cwd,
+            keep_stdin_open=conn.keep_stdin_open,
+        )
 
     def effective_connection(self) -> Optional[Connection]:
         """Retorna a conexão efetiva, priorizando override persistido."""
@@ -307,6 +318,7 @@ class ExecutionProfile:
             cmd=list(self.cmd),
             prompt_as_arg=self.prompt_as_arg,
             output_format=self.output_format,
+            keep_stdin_open=self.keep_stdin_open,
         )
 
     def effective_driver(self) -> str:
@@ -371,6 +383,20 @@ class ExecutionProfile:
         Não deve modificar os.environ — apenas retornar um dict plano.
         """
         return {}
+
+    def format_stdin_input(self, prompt) -> str:
+        """Transforma o prompt antes de enviá-lo ao stdin do CLI."""
+        return prompt
+
+    def extract_session_id(self, raw: str) -> str | None:
+        """Extrai session_id do output bruto do CLI quando o perfil suporta resume."""
+        _ = raw
+        return None
+
+    def inject_resume_arg(self, cmd: list[str], session_id: str) -> list[str]:
+        """Retorna o comando com argumento de retomada de sessão."""
+        _ = session_id
+        return cmd
 
     def mcp_server_args(self, socket_path: str) -> list[str]:
         """Retorna args CLI para conectar no MCP local (default: sem suporte)."""

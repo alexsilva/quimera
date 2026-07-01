@@ -34,6 +34,15 @@ from quimera.agents.text_filters import (
 
 _logger = logging.getLogger(__name__)
 
+
+class _FrozenSession:
+    """Rastreia session_id para agente fixado com suporte a resume."""
+
+    def __init__(self, agent: str):
+        self.agent = agent
+        self.session_id: str | None = None
+
+
 _GUI_VARS = frozenset({
     "DISPLAY", "WAYLAND_DISPLAY", "DBUS_SESSION_BUS_ADDRESS",
     "DBUS_SYSTEM_BUS_ADDRESS", "XAUTHORITY", "XDG_RUNTIME_DIR",
@@ -89,6 +98,7 @@ class AgentClient:
         self.rate_limit_detected_at: float | None = None
         self._warm_pool = WarmPool()
         self.process_supervisor: ProcessSupervisor | None = process_supervisor
+        self._persistent_sessions: dict[str, _FrozenSession] = {}
 
     def _show_error(
         self,
@@ -732,6 +742,29 @@ class AgentClient:
             return bool(profile_hook(profile, cmd))
         return bool(getattr(profile, "supports_warm_pool", True))
 
+    @staticmethod
+    def _profile_callable(profile, name: str):
+        """Resolve callable real do profile sem aceitar atributos fabricados por mocks."""
+        class_attr = getattr(type(profile), name, None)
+        if callable(class_attr):
+            return lambda *args, **kwargs: class_attr(profile, *args, **kwargs)
+        profile_dict = getattr(profile, "__dict__", {})
+        explicit_attr = profile_dict.get(name) if isinstance(profile_dict, dict) else None
+        return explicit_attr if callable(explicit_attr) else None
+
+    def open_persistent_session(self, agent: str) -> bool:
+        """Ativa rastreamento de sessão para agente fixado, quando o perfil suporta."""
+        profile = profiles.get(agent)
+        if profile is None or not getattr(profile, "supports_resume", False):
+            return False
+        if agent not in self._persistent_sessions:
+            self._persistent_sessions[agent] = _FrozenSession(agent)
+        return True
+
+    def close_persistent_session(self, agent: str) -> None:
+        """Remove rastreamento de sessão do agente ao descongelar."""
+        self._persistent_sessions.pop(agent, None)
+
     # ------------------------------------------------------------------
     # call() — ponto de entrada principal
     # ------------------------------------------------------------------
@@ -764,9 +797,14 @@ class AgentClient:
                 on_text_chunk=on_text_chunk,
                 allow_tools=allow_tools,
                 progress_callback=progress_callback,
-            )
+        )
         self._spy_output_presenter.set_turn_runtime("cli")
+        frozen_session = self._persistent_sessions.get(agent)
         cmd, prompt_as_arg, output_format = self._resolve_profile_cli_attrs(profile, connection)
+        if frozen_session is not None and frozen_session.session_id:
+            inject_resume_arg = self._profile_callable(profile, "inject_resume_arg")
+            if callable(inject_resume_arg):
+                cmd = inject_resume_arg(cmd, frozen_session.session_id)
         extra_env = dict(connection.env or {}) if isinstance(connection, CliConnection) else {}
         env_hook = getattr(profile, "env_for_cli", None)
         if callable(env_hook):
@@ -809,7 +847,8 @@ class AgentClient:
         else:
             _extra_env = run_kwargs.get("extra_env")
             _effective_cmd, _effective_cwd = self._build_effective_cmd(cmd, agent, run_kwargs.get("cwd"))
-            _use_warm_pool = self._should_use_warm_pool(profile, cmd)
+            _has_active_session_id = frozen_session is not None and bool(frozen_session.session_id)
+            _use_warm_pool = not _has_active_session_id and self._should_use_warm_pool(profile, cmd)
             _slot = self._warm_pool.take(_effective_cmd, _effective_cwd, _extra_env) if _use_warm_pool else None
             if not _use_warm_pool:
                 # Se houver um slot antigo para esse comando, descarta para evitar
@@ -817,7 +856,9 @@ class AgentClient:
                 _stale_slot = self._warm_pool.take(_effective_cmd, _effective_cwd, _extra_env)
                 if _stale_slot is not None:
                     _stale_slot.discard()
-            raw = self.run(cmd, input_text=prompt, _primed_proc=_slot.proc if _slot else None, **run_kwargs)
+            format_stdin_input = self._profile_callable(profile, "format_stdin_input")
+            stdin_input = format_stdin_input(prompt) if callable(format_stdin_input) else prompt
+            raw = self.run(cmd, input_text=stdin_input, _primed_proc=_slot.proc if _slot else None, **run_kwargs)
             if _use_warm_pool:
                 self._warm_pool.schedule_warm(
                     _effective_cmd,
@@ -825,6 +866,11 @@ class AgentClient:
                     _effective_cwd,
                     _extra_env,
                 )
+        if frozen_session is not None and raw:
+            extract_session_id = self._profile_callable(profile, "extract_session_id")
+            new_session_id = extract_session_id(raw) if callable(extract_session_id) else None
+            if new_session_id:
+                frozen_session.session_id = new_session_id
         fmt = output_format
         if fmt == "stream-json" and raw is not None:
             return parse_stream_json(raw, agent, self.tool_event_callback)
@@ -1017,6 +1063,7 @@ class AgentClient:
     def close(self) -> None:
         """Encerra o cliente, liberando processos pré-aquecidos pendentes."""
         self._warm_pool.shutdown()
+        self._persistent_sessions.clear()
 
     # ------------------------------------------------------------------
     # Métricas

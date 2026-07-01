@@ -1629,8 +1629,14 @@ def test_existing_profiles_still_register():
     claude = profiles.get("claude")
     assert claude is not None
     assert claude.driver == "cli"
-    assert claude.cmd == ["claude", "--permission-mode=bypassPermissions", "--output-format=stream-json", "--verbose",
-                          "-p"]
+    assert claude.cmd == [
+        "claude",
+        "--permission-mode=bypassPermissions",
+        "--output-format=stream-json",
+        "--verbose",
+        "--print",
+        "--input-format=stream-json",
+    ]
 
     mock = profiles.get("mock")
     assert mock is not None

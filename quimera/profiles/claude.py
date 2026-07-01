@@ -149,6 +149,28 @@ def _format_claude_spy_event(line: str) -> list[SpyEvent]:
 
 
 class ClaudeProfile(ExecutionProfile):
+    def format_stdin_input(self, prompt) -> str:
+        """Serializa o prompt como evento stream-json para o Claude CLI."""
+        event = {"type": "user", "message": {"role": "user", "content": str(prompt)}}
+        return json.dumps(event, ensure_ascii=False) + "\n"
+
+    def extract_session_id(self, raw: str) -> str | None:
+        """Extrai session_id do evento result emitido pelo Claude CLI."""
+        for line in str(raw or "").splitlines():
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if payload.get("type") == "result" and payload.get("session_id"):
+                return str(payload["session_id"])
+        return None
+
+    def inject_resume_arg(self, cmd: list[str], session_id: str) -> list[str]:
+        """Injeta --resume <session_id> no comando do Claude CLI."""
+        if not cmd:
+            return cmd
+        return [cmd[0], "--resume", session_id, *cmd[1:]]
+
     def configure_with_model(self, model_id: str) -> CliConnection:
         """Retorna conexão CLI do Claude com --model aplicado."""
         normalized = (model_id or "").strip()
@@ -205,8 +227,17 @@ profile = ClaudeProfile(
     prefix="/claude",
     icon="🔮",
     runtime_rw_paths=_claude_runtime_rw_paths(),
-    cmd=["claude", "--permission-mode=bypassPermissions", "--output-format=stream-json", "--verbose", "-p"],
+    cmd=[
+        "claude",
+        "--permission-mode=bypassPermissions",
+        "--output-format=stream-json",
+        "--verbose",
+        "--print",
+        "--input-format=stream-json",
+    ],
+    prompt_as_arg=False,
     output_format="stream-json",
+    supports_resume=True,
     style=("magenta", "Claude"),
     capabilities=["architecture", "code_review", "planning", "documentation", "code_editing"],
     preferred_task_types=["architecture", "code_review", "documentation", "code_edit", "general"],

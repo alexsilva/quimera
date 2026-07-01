@@ -1331,6 +1331,21 @@ def test_unfreeze_descongela_pool():
     assert pool.frozen_agent is None
 
 
+def test_agent_pool_freeze_hooks_recebem_agente_congelado():
+    """Verifica que AgentPool notifica freeze/unfreeze sem depender da UI."""
+    pool = AgentPool(["claude", "codex"])
+    events = []
+    pool.set_freeze_hooks(
+        on_freeze=lambda agent: events.append(("freeze", agent)),
+        on_unfreeze=lambda agent: events.append(("unfreeze", agent)),
+    )
+
+    pool.freeze("codex")
+    pool.unfreeze()
+
+    assert events == [("freeze", "codex"), ("unfreeze", "codex")]
+
+
 def test_unfreeze_exibe_mensagem_sistema():
     """Verifica que Test unfreeze exibe mensagem sistema."""
     layer, pool, app = _make_layer_with_pool()

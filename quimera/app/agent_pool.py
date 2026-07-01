@@ -12,6 +12,13 @@ class AgentPool:
         self._lock = threading.Lock()
         self._agents = list(agents)
         self._frozen_agent: str | None = None
+        self._on_freeze = None
+        self._on_unfreeze = None
+
+    def set_freeze_hooks(self, on_freeze=None, on_unfreeze=None) -> None:
+        """Registra callbacks chamados ao congelar/descongelar o agente primário."""
+        self._on_freeze = on_freeze
+        self._on_unfreeze = on_unfreeze
 
     @property
     def agents(self) -> list[str]:
@@ -43,11 +50,22 @@ class AgentPool:
             if agent_name not in self._agents:
                 raise ValueError(f"Agente {agent_name} não está no pool")
             self._frozen_agent = agent_name
+        if self._on_freeze:
+            try:
+                self._on_freeze(agent_name)
+            except Exception:
+                pass
 
     def unfreeze(self) -> None:
         """Descongela: take_primary() volta a rotacionar."""
         with self._lock:
+            previous = self._frozen_agent
             self._frozen_agent = None
+        if previous is not None and self._on_unfreeze:
+            try:
+                self._on_unfreeze(previous)
+            except Exception:
+                pass
 
     @property
     def frozen_agent(self) -> str | None:
