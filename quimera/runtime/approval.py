@@ -56,7 +56,9 @@ def _static_callable_attr(obj, name: str):
     try:
         inspect.getattr_static(obj, name)
     except AttributeError:
-        return None
+        mock_children = getattr(obj, "_mock_children", None)
+        if not isinstance(mock_children, dict) or name not in mock_children:
+            return None
     try:
         value = getattr(obj, name)
     except Exception:
