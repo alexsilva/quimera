@@ -483,6 +483,21 @@ def test_textual_render_event_varies_agent_theme_shape():
     assert isinstance(_render_event(chat_event), Group)
 
 
+def test_textual_agent_lifecycle_renders_in_chat_theme_not_panel():
+    from rich.panel import Panel
+
+    event = TextualUiEvent(
+        "agent_lifecycle",
+        {"message": "conectando qwen3.5-32k...", "label": "Qwen", "style": "cyan", "theme": "chat"},
+        agent="qwen3-5-9b",
+    )
+
+    rendered = _render_event(event)
+
+    assert rendered is not None
+    assert not isinstance(rendered, Panel)
+
+
 def test_textual_renderer_interactive_windows_emit_semantic_overlay_events():
     bridge = TextualUiBridge()
     emitted = []

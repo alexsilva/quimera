@@ -1454,8 +1454,10 @@ def _render_event(event: TextualUiEvent):
         message = str(payload.get("message", "")) if isinstance(payload, dict) else str(payload)
         if not message.strip():
             return None
-        agent = event.agent or "agente"
-        return Panel(Text(message, style="dim"), title=f"🤖 {agent}", border_style="dim")
+        label = str(payload.get("label", f"🤖 {event.agent or 'agente'}")) if isinstance(payload, dict) else f"🤖 {event.agent or 'agente'}"
+        style = str(payload.get("style", "cyan") or "cyan") if isinstance(payload, dict) else "cyan"
+        theme_name = str(payload.get("theme", themes.DEFAULT_THEME) or themes.DEFAULT_THEME) if isinstance(payload, dict) else themes.DEFAULT_THEME
+        return _build_stream_renderable(theme_name, label, style, message)
     if event.kind in {"warning", "error"}:
         style = "yellow" if event.kind == "warning" else "red"
         return Text(str(event.payload), style=style)
