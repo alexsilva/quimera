@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import queue
+import re
 import shutil
 import sys
 import traceback
@@ -41,6 +42,7 @@ _APPROVAL_OPTIONS = (
     "n/não/no/enter = negar",
     "a/all/todas = aprovar todas",
 )
+_RICH_MARKUP_TAG_RE = re.compile(r"\[/?[a-zA-Z][a-zA-Z0-9_#= .:-]*\]")
 _TERMINAL_MODE_RESET = (
     "\x1b[?1000l"  # mouse click tracking
     "\x1b[?1002l"  # mouse button-event tracking
@@ -86,6 +88,11 @@ def _restore_textual_input_focus(textual_app) -> None:
 def _approval_options() -> list[str]:
     """Retorna as opções visuais padrão para confirmação de permissão."""
     return list(_APPROVAL_OPTIONS)
+
+
+def _strip_rich_markup_tags(value: str) -> str:
+    """Remove tags Rich inline que chegam como texto de eventos transitórios."""
+    return _RICH_MARKUP_TAG_RE.sub("", str(value or ""))
 
 
 def _build_question_overlay(payload) -> Panel:
@@ -521,7 +528,25 @@ class TextualUiBridge:
             return
         if self._try_inject_active_agent(text):
             return
+        self._emit_user_message(text)
         self.input_queue.put(value)
+
+    def _emit_user_message(self, text: str) -> None:
+        """Espelha mensagens humanas no feed antes de despachar para o agente."""
+        clean = str(text).strip()
+        if not clean or clean.startswith("/"):
+            return
+        label = "Alex"
+        with self._lock:
+            user_name = getattr(self.quimera_app, "user_name", None)
+        if str(user_name or "").strip():
+            label = str(user_name).strip()
+        self.emit(
+            TextualUiEvent(
+                "user_message",
+                {"content": clean, "label": label, "style": "green", "theme": themes.DEFAULT_THEME},
+            )
+        )
 
     def begin_direct_input(self) -> None:
         """Força submissões seguintes a irem para o prompt inline ativo."""
@@ -1408,6 +1433,21 @@ class TextualRenderer:
 
 def _render_event(event: TextualUiEvent):
     """Converte eventos do bridge para renderables Rich."""
+    if event.kind == "user_message":
+        payload = event.payload or {}
+        content = str(payload.get("content", "")) if isinstance(payload, dict) else str(payload)
+        if not content.strip():
+            return None
+        label = str(payload.get("label", "Alex")) if isinstance(payload, dict) else "Alex"
+        style = str(payload.get("style", "green") or "green") if isinstance(payload, dict) else "green"
+        theme_name = str(payload.get("theme", themes.DEFAULT_THEME) or themes.DEFAULT_THEME) if isinstance(payload, dict) else themes.DEFAULT_THEME
+        return _render_turn_block(
+            theme_name,
+            label,
+            style,
+            content=content,
+            render_mode="plain",
+        )
     if event.kind == "agent_message":
         payload = event.payload or {}
         content = str(payload.get("content", ""))
@@ -1451,7 +1491,8 @@ def _render_event(event: TextualUiEvent):
         return _build_pending_card_renderable(label, style, question, kind=kind)
     if event.kind == "agent_lifecycle":
         payload = event.payload or {}
-        message = str(payload.get("message", "")) if isinstance(payload, dict) else str(payload)
+        raw_message = str(payload.get("message", "")) if isinstance(payload, dict) else str(payload)
+        message = _strip_rich_markup_tags(raw_message)
         if not message.strip():
             return None
         label = str(payload.get("label", f"🤖 {event.agent or 'agente'}")) if isinstance(payload, dict) else f"🤖 {event.agent or 'agente'}"

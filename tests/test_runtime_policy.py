@@ -513,6 +513,35 @@ def test_policy_shell_allowlist_validation(shell_validator):
     shell_validator.validate(call)  # não deve lançar
 
 
+def test_policy_run_shell_allows_mkdir_inside_workspace(tmp_path):
+    """mkdir é permitido no shell, mas restrito ao workspace."""
+    config = ToolRuntimeConfig(workspace_root=tmp_path)
+    validator = ShellToolValidator(config)
+    call = ToolCall(name="run_shell", arguments={"command": "mkdir -p nova/pasta"})
+
+    validator.validate(call)
+
+
+def test_policy_run_shell_blocks_mkdir_outside_workspace(tmp_path):
+    """mkdir não pode criar diretórios fora do workspace."""
+    config = ToolRuntimeConfig(workspace_root=tmp_path)
+    validator = ShellToolValidator(config)
+    call = ToolCall(name="run_shell", arguments={"command": "mkdir ../fora"})
+
+    with pytest.raises(ToolPolicyError, match="Caminho fora do workspace"):
+        validator.validate(call)
+
+
+def test_policy_run_shell_blocks_unsafe_mkdir_flags(tmp_path):
+    """mkdir só aceita flags simples de criação/verbose."""
+    config = ToolRuntimeConfig(workspace_root=tmp_path)
+    validator = ShellToolValidator(config)
+    call = ToolCall(name="run_shell", arguments={"command": "mkdir -m 777 pasta"})
+
+    with pytest.raises(ToolPolicyError, match="Flag não permitida"):
+        validator.validate(call)
+
+
 # ── blocked_tools ───────────────────────────────────────────
 
 # ── delegate policy ─────────────────────────────────────────

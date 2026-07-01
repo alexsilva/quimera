@@ -36,6 +36,7 @@ class ToolRuntimeConfig:
             "grep",
             "head",
             "ls",
+            "mkdir",
             "pwd",
             "pytest",
             "python",

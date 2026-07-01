@@ -488,7 +488,7 @@ def test_textual_agent_lifecycle_renders_in_chat_theme_not_panel():
 
     event = TextualUiEvent(
         "agent_lifecycle",
-        {"message": "conectando qwen3.5-32k...", "label": "Qwen", "style": "cyan", "theme": "chat"},
+        {"message": "[dim]conectando qwen3.5-32k...[/dim]", "label": "Qwen", "style": "cyan", "theme": "chat"},
         agent="qwen3-5-9b",
     )
 
@@ -496,6 +496,8 @@ def test_textual_agent_lifecycle_renders_in_chat_theme_not_panel():
 
     assert rendered is not None
     assert not isinstance(rendered, Panel)
+    assert "[dim]" not in str(rendered)
+    assert "[/dim]" not in str(rendered)
 
 
 def test_textual_renderer_interactive_windows_emit_semantic_overlay_events():
@@ -687,6 +689,37 @@ def test_textual_bridge_routes_exit_to_app_even_when_agent_is_active():
 
     assert bridge.input_queue.get_nowait() == "/exit"
     assert stdin.writes == []
+
+
+def test_textual_bridge_echoes_regular_user_message_to_feed():
+    bridge = TextualUiBridge()
+    emitted = []
+    bridge.emit = emitted.append
+    bridge.attach_quimera_app(SimpleNamespace(user_name="Alex"))
+
+    bridge.submit_input("oi agente")
+
+    assert bridge.input_queue.get_nowait() == "oi agente"
+    assert emitted[-1].kind == "user_message"
+    assert emitted[-1].payload["content"] == "oi agente"
+    assert emitted[-1].payload["label"] == "Alex"
+
+
+def test_textual_bridge_does_not_echo_slash_command_as_user_message():
+    bridge = TextualUiBridge()
+    emitted = []
+    bridge.emit = emitted.append
+
+    bridge.submit_input("/agents")
+
+    assert bridge.input_queue.get_nowait() == "/agents"
+    assert emitted == []
+
+
+def test_textual_user_message_renders_as_chat_turn():
+    rendered = _render_event(TextualUiEvent("user_message", {"content": "oi", "label": "Alex"}))
+
+    assert rendered is not None
 
 
 def test_textual_feed_reserves_at_least_ten_lines_for_agent_output():

@@ -625,6 +625,7 @@ class ShellToolValidator(ValidatableTool):
 
     _SHELL_CHAIN_OPERATORS = (";", "&&", "||", "|", "`", "$(")
     _FILE_PATH_CMDS = frozenset({"cat", "head", "tail", "less", "grep", "sed", "find", "ls"})
+    _MKDIR_ALLOWED_FLAGS = frozenset({"-p", "--parents", "-v", "--verbose"})
 
     def _validate_run_shell(self, call: ToolCall) -> None:
         """Executa validate run shell."""
@@ -691,6 +692,31 @@ class ShellToolValidator(ValidatableTool):
             raise ToolPolicyError("Comando bloqueado: git push exige confirmação forte fora do shell MCP")
         if first_token in self._FILE_PATH_CMDS:
             self._validate_shell_file_paths(tokens[1:])
+        if first_token == "mkdir":
+            self._validate_mkdir_args(tokens[1:])
+
+    def _validate_mkdir_args(self, args: list[str]) -> None:
+        """Valida mkdir como mutação restrita ao workspace e sem flags perigosas."""
+        paths: list[str] = []
+        parse_flags = True
+        for arg in args:
+            if parse_flags and arg == "--":
+                parse_flags = False
+                continue
+            if parse_flags and arg.startswith("-"):
+                if arg not in self._MKDIR_ALLOWED_FLAGS:
+                    raise ToolPolicyError(f"Flag não permitida para mkdir: {arg}")
+                continue
+            paths.append(arg)
+        if not paths:
+            raise ToolPolicyError("mkdir requer ao menos um diretório")
+        for raw_path in paths:
+            candidate = Path(raw_path).expanduser()
+            if not candidate.is_absolute():
+                candidate = self.config.workspace_root / candidate
+            resolved = candidate.resolve()
+            if not is_path_inside(resolved, self.config.workspace_root):
+                raise ToolPolicyError(f"Caminho fora do workspace: {raw_path}")
 
     def _validate_shell_file_paths(self, args: list[str]) -> None:
         """Valida que paths absolutos em argumentos de comandos de leitura ficam dentro do workspace."""
