@@ -209,12 +209,23 @@ class ToolExecutor:
                 permission_error = self.policy.check_path_permission(normalized_call)
             needs_approval = self.policy.requires_approval(normalized_call)
 
+            # Emite preview operacional antes do approval para que o usuário
+            # veja qual ferramenta está prestes a ser executada,
+            # independentemente de approval ser necessário ou não.
+            if self._tool_preview_callback is not None:
+                try:
+                    self._tool_preview_callback(
+                        normalized_call.name,
+                        normalized_call.arguments,
+                        normalized_call.metadata,
+                    )
+                except TypeError:
+                    self._tool_preview_callback(
+                        normalized_call.name,
+                        normalized_call.arguments,
+                    )
+
             with self._approval_scope_from_metadata(normalized_call):
-                will_prompt_for_approval = self.approval_manager.would_prompt_for_call(
-                    normalized_call,
-                    needs_policy_approval=bool(needs_approval),
-                    permission_error=permission_error,
-                )
                 approved = self.approval_manager.authorize_call(
                     normalized_call,
                     needs_policy_approval=bool(needs_approval),
@@ -226,23 +237,6 @@ class ToolExecutor:
                     tool_name=normalized_call.name,
                     error="Execução negada pelo usuário",
                 )
-
-            if not will_prompt_for_approval:
-                # Tool sem prompt humano: exibe preview informativo se houver callback.
-                # Isso inclui read/network, escopos já aprovados e tools auto-aprovadas
-                # pela workspace_policy, inclusive quando chamadas via MCP HTTP.
-                if self._tool_preview_callback is not None:
-                    try:
-                        self._tool_preview_callback(
-                            normalized_call.name,
-                            normalized_call.arguments,
-                            normalized_call.metadata,
-                        )
-                    except TypeError:
-                        self._tool_preview_callback(
-                            normalized_call.name,
-                            normalized_call.arguments,
-                        )
 
             handler = self.registry.get(normalized_call.name)
             with self.approval_manager.guard_execution(normalized_call):

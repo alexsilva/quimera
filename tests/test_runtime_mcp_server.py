@@ -236,14 +236,16 @@ class TestToolsCall:
         assert previews[0][1] == {"path": "foo.py"}
         assert previews[0][2]["trusted_context"].agent_name == "codex"
 
-    def test_mcp_socket_nao_duplica_preview_para_tool_com_approval(self, tmp_path):
-        """tools/call via MCP não deve emitir preview operacional quando há approval."""
+    def test_mcp_socket_preview_com_approval_negado_nao_executa_handler(self, tmp_path):
+        """Tool com approval negado: preview emitido, handler não executa."""
         previews = []
         approval_handler = MagicMock()
         approval_handler.approve.return_value = False
         executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), approval_handler)
         executor.set_tool_preview_callback(lambda name, args: previews.append((name, args)))
         server = _make_server(executor)
+
+        target_file = tmp_path / "x.txt"
 
         [resp] = _exchange(server, {
             "jsonrpc": "2.0", "id": 102, "method": "tools/call",
@@ -254,7 +256,38 @@ class TestToolsCall:
         })
 
         assert resp["result"]["isError"] is True
-        assert previews == []
+        assert len(previews) == 1
+        assert previews[0][0] == "write_file"
+        assert previews[0][1] == {"path": "x.txt", "content": "x", "replace_existing": True}
+        assert approval_handler.approve.call_count == 1
+        assert not target_file.exists()
+
+    def test_mcp_socket_com_approval_aprovado_emite_preview_executa_handler(self, tmp_path):
+        """Tool com approval aprovado: preview emitido, handler executado."""
+        previews = []
+        approval_handler = MagicMock()
+        approval_handler.approve.return_value = True
+        executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), approval_handler)
+        executor.set_tool_preview_callback(lambda name, args: previews.append((name, args)))
+        server = _make_server(executor)
+
+        target_file = tmp_path / "y.txt"
+
+        [resp] = _exchange(server, {
+            "jsonrpc": "2.0", "id": 105, "method": "tools/call",
+            "params": {
+                "name": "write_file",
+                "arguments": {"path": "y.txt", "content": "conteudo", "replace_existing": True},
+            },
+        })
+
+        assert resp["result"]["isError"] is False
+        assert len(previews) == 1
+        assert previews[0][0] == "write_file"
+        assert previews[0][1] == {"path": "y.txt", "content": "conteudo", "replace_existing": True}
+        assert approval_handler.approve.call_count == 1
+        assert target_file.exists()
+        assert target_file.read_text(encoding="utf-8") == "conteudo"
 
     def test_mcp_socket_preview_para_tool_auto_aprovada_por_policy(self, tmp_path):
         """Tool auto-aprovada por workspace_policy deve usar preview, não card de approval."""
