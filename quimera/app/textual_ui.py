@@ -477,6 +477,7 @@ class TextualUiBridge:
 
     def __init__(self) -> None:
         self.input_queue: queue.Queue[str] = queue.Queue()
+        self.direct_input_queue: queue.Queue[str] = queue.Queue()
         self.ui_queue: queue.Queue[TextualUiEvent] = queue.Queue()
         self.textual_app = None
         self.quimera_app = None
@@ -511,7 +512,7 @@ class TextualUiBridge:
             return
         if self.is_direct_input_active():
             self.emit(TextualUiEvent("question_clear"))
-            self.input_queue.put(value)
+            self.direct_input_queue.put(value)
             return
         if self._try_inject_active_agent(text):
             return
@@ -931,8 +932,8 @@ class TextualInputGate:
         )
         try:
             if timeout is None:
-                return self._bridge.input_queue.get()
-            return self._bridge.input_queue.get(timeout=timeout)
+                return self._bridge.direct_input_queue.get()
+            return self._bridge.direct_input_queue.get(timeout=timeout)
         except queue.Empty:
             return None
         finally:

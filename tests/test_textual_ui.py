@@ -591,7 +591,7 @@ def test_textual_renderer_interactive_window_routes_answers_away_from_active_age
     with renderer.approval_window(owner="claude"):
         bridge.submit_input("a")
 
-    assert bridge.input_queue.get_nowait() == "a"
+    assert bridge.direct_input_queue.get_nowait() == "a"
     assert stdin.writes == []
 
 
@@ -806,7 +806,7 @@ def test_textual_bridge_routes_inline_prompt_answers_to_input_queue_even_with_ac
     finally:
         bridge.end_direct_input()
 
-    assert bridge.input_queue.get_nowait() == "cli"
+    assert bridge.direct_input_queue.get_nowait() == "cli"
     assert stdin.writes == []
 
 
@@ -834,7 +834,7 @@ def test_textual_bridge_question_event_routes_approval_answer_to_queue_even_with
     bridge.emit(TextualUiEvent("question", {"kind": "approval", "question": "Aprovar?"}))
     bridge.submit_input("y")
 
-    assert bridge.input_queue.get_nowait() == "y"
+    assert bridge.direct_input_queue.get_nowait() == "y"
     assert stdin.writes == []
     assert bridge.is_direct_input_active() is False
 
@@ -864,7 +864,7 @@ def test_textual_bridge_prompt_clear_does_not_disarm_visible_approval():
     bridge.emit(TextualUiEvent("prompt_clear"))
     bridge.submit_input("y")
 
-    assert bridge.input_queue.get_nowait() == "y"
+    assert bridge.direct_input_queue.get_nowait() == "y"
     assert stdin.writes == []
     assert bridge.is_direct_input_active() is False
 
@@ -893,9 +893,19 @@ def test_textual_bridge_pending_input_routes_approval_answer_to_queue_even_with_
     bridge.emit(TextualUiEvent("pending_input", {"kind": "approval", "question": "Aprovar?"}, agent="local"))
     bridge.submit_input("y")
 
-    assert bridge.input_queue.get_nowait() == "y"
+    assert bridge.direct_input_queue.get_nowait() == "y"
     assert stdin.writes == []
     assert bridge.is_direct_input_active() is False
+
+
+def test_textual_bridge_approval_answer_cannot_be_consumed_by_normal_input_queue():
+    bridge = TextualUiBridge()
+
+    bridge.emit(TextualUiEvent("question", {"kind": "approval", "question": "Aprovar?"}))
+    bridge.submit_input("a")
+
+    assert bridge.input_queue.empty()
+    assert bridge.direct_input_queue.get_nowait() == "a"
 
 
 def test_textual_input_gate_marks_inline_connection_prompts_as_direct_input():
@@ -986,7 +996,7 @@ def test_textual_direct_input_submission_clears_approval_overlay_before_queueing
         bridge.end_direct_input()
 
     assert emitted[-1].kind == "question_clear"
-    assert bridge.input_queue.get_nowait() == "a"
+    assert bridge.direct_input_queue.get_nowait() == "a"
 
 
 def test_textual_input_window_without_question_does_not_leave_visual_overlay_active():
