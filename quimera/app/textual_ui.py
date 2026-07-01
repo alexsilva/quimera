@@ -582,7 +582,6 @@ class TextualUiBridge:
 
     def emit(self, event: TextualUiEvent) -> None:
         """Envia evento visual para a UI, com fallback para fila interna."""
-        self._sync_direct_input_from_event(event)
         with self._lock:
             textual_app = self.textual_app
         if textual_app is None:
@@ -592,14 +591,6 @@ class TextualUiBridge:
             textual_app.call_from_thread(textual_app.handle_bridge_event, event)
         except RuntimeError:
             self.ui_queue.put(event)
-
-    def _sync_direct_input_from_event(self, event: TextualUiEvent) -> None:
-        """Mantém roteamento direto no bridge enquanto há pergunta ativa."""
-        if event.kind in {"question", "window_open", "pending_input"}:
-            self.begin_direct_input()
-            return
-        if event.kind in {"question_clear", "window_clear"}:
-            self.end_direct_input()
 
     def flush_ui_events(self) -> bool:
         """Força o app Textual a drenar eventos visuais pendentes agora."""
@@ -1899,7 +1890,6 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             self._bridge_drain_timer = None
             self._feed_model = TextualFeedModel()
             self._history_file_path: Path | None = None
-            self._ui_direct_input_armed = False
 
         def compose(self) -> ComposeResult:
             yield _SummaryHeader(show_clock=True, id="header")
@@ -1939,7 +1929,6 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             input_widget.focus()
 
         def on_unmount(self) -> None:
-            self._disarm_question_routing()
             gate = getattr(quimera_app, "input_gate", None)
             if hasattr(gate, "set_textual_mounted"):
                 gate.set_textual_mounted(False)
@@ -2012,7 +2001,6 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             bridge.submit_input(value)
 
         def _set_question_overlay(self, payload) -> None:
-            self._arm_question_routing()
             overlay = self.query_one("#question_overlay", Static)
             overlay.update(_build_question_overlay(payload))
             overlay.display = True
@@ -2021,19 +2009,6 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
         def _clear_question_overlay(self) -> None:
             overlay = self.query_one("#question_overlay", Static)
             _clear_question_overlay_widget(overlay)
-            self._disarm_question_routing()
-
-        def _arm_question_routing(self) -> None:
-            if self._ui_direct_input_armed:
-                return
-            self._ui_direct_input_armed = True
-            bridge.begin_direct_input()
-
-        def _disarm_question_routing(self) -> None:
-            if not self._ui_direct_input_armed:
-                return
-            self._ui_direct_input_armed = False
-            bridge.end_direct_input()
 
         def _clear_prompt_state(self) -> None:
             gate = getattr(quimera_app, "input_gate", None)

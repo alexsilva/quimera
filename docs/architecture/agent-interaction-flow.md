@@ -81,7 +81,47 @@ Agente chama tools/call via MCP socket
 - Tool WRITE com approval → preview + card laranja + aguarda `y/s/a/n`.
 - Tool negada → preview é emitido, handler **não** executa, retorna erro.
 
-## 5. Invariantes do Sistema
+## 5. Fluxo de Feed de Mensagens (Runtime → UI)
+
+```
+Agente/Executor produz saída
+  -> TextualRenderer.show_message / show_feed / show_approval / show_plain
+     -> bridge.emit(TextualUiEvent(kind, payload, agent))     # textual_ui.py:583
+        -> call_from_thread(textual_app.handle_bridge_event)  # enfileira no event loop do Textual
+        -> se app não attached: fallback para ui_queue interna
+  -> QuimeraTextualApp.handle_bridge_event                    # textual_ui.py:2094
+     -> eventos especiais:
+        "clear"       -> feed_model.clear()
+        "question"    -> _set_question_overlay()
+        "question_clear" -> overlay hidden
+        "window_open" -> _set_question_overlay(_build_window_overlay_payload(...))
+        "window_clear" -> overlay hidden
+        "prompt_clear" -> reset estado active do gate
+        "summarizing" -> card de sumarização
+     -> outros eventos passam por:
+        TextualFeedModel.apply(event)                          # textual_ui.py:324
+           -> se transient kind: upsert/substitui item
+           -> se final: remove transiente correspondente
+           -> se permanente: append
+        -> _render_event(kind, payload)                        # textual_ui.py:1401
+           -> Rich renderable convertido para exibição no RichLog
+```
+
+**Regras do feed model:**
+- `TextualFeedModel._TRANSIENT_KINDS` (`stream_start`, `stream_chunk`, `stream_abort`, `agent_update`, `agent_lifecycle`, `pending_input`): itens substituíveis que desaparecem quando o final chega.
+- Itens muted (tool preview) são permanentes: uma vez emitidos, ficam no feed.
+- `visual_reset` no sync: remove todos os transientes do agente atual.
+
+**Separação importante:**
+- Eventos visuais (`question`, `window_open`, `pending_input`) não armam roteamento por si só.
+- O roteamento modal é armado pelo consumidor real (`_read_with_textual_prompt()` / `_interactive_window()`) antes de esperar `direct_input_queue`.
+- Isso impede que um evento visual desvie input normal do chat para a fila modal.
+
+**Dreno periódico:**
+- `_bridge_drain_timer` (50ms) na `on_mount` coleta eventos que chegaram antes do Textual estar pronto.
+- Garante que nenhum evento se perca na janela entre `bridge.emit` e `handle_bridge_event` registrar o callback.
+
+## 6. Invariantes do Sistema
 
 | Invariante | Garantido por |
 |---|---|

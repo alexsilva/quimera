@@ -831,11 +831,14 @@ def test_textual_bridge_question_event_routes_approval_answer_to_queue_even_with
         )
     )
 
+    bridge.begin_direct_input()
     bridge.emit(TextualUiEvent("question", {"kind": "approval", "question": "Aprovar?"}))
     bridge.submit_input("y")
 
     assert bridge.direct_input_queue.get_nowait() == "y"
     assert stdin.writes == []
+
+    bridge.end_direct_input()
     assert bridge.is_direct_input_active() is False
 
 
@@ -860,12 +863,15 @@ def test_textual_bridge_prompt_clear_does_not_disarm_visible_approval():
         )
     )
 
+    bridge.begin_direct_input()
     bridge.emit(TextualUiEvent("question", {"kind": "approval", "question": "Aprovar?"}))
     bridge.emit(TextualUiEvent("prompt_clear"))
     bridge.submit_input("y")
 
     assert bridge.direct_input_queue.get_nowait() == "y"
     assert stdin.writes == []
+
+    bridge.end_direct_input()
     assert bridge.is_direct_input_active() is False
 
 
@@ -890,22 +896,27 @@ def test_textual_bridge_pending_input_routes_approval_answer_to_queue_even_with_
         )
     )
 
+    bridge.begin_direct_input()
     bridge.emit(TextualUiEvent("pending_input", {"kind": "approval", "question": "Aprovar?"}, agent="local"))
     bridge.submit_input("y")
 
     assert bridge.direct_input_queue.get_nowait() == "y"
     assert stdin.writes == []
+
+    bridge.end_direct_input()
     assert bridge.is_direct_input_active() is False
 
 
 def test_textual_bridge_approval_answer_cannot_be_consumed_by_normal_input_queue():
     bridge = TextualUiBridge()
 
+    bridge.begin_direct_input()
     bridge.emit(TextualUiEvent("question", {"kind": "approval", "question": "Aprovar?"}))
     bridge.submit_input("a")
 
     assert bridge.input_queue.empty()
     assert bridge.direct_input_queue.get_nowait() == "a"
+    bridge.end_direct_input()
 
 
 def test_textual_input_gate_marks_inline_connection_prompts_as_direct_input():
@@ -949,7 +960,7 @@ def test_textual_input_gate_arms_direct_input_before_approval_question_event():
             direct_state_at_question.append(bridge.is_direct_input_active())
 
     bridge.emit = capture
-    bridge.input_queue.put("y")
+    bridge.direct_input_queue.put("y")
 
     result = gate.read_approval_in_terminal("Aprovar shell?", "Executar? ")
 
@@ -1073,19 +1084,15 @@ def test_textual_app_exposes_flush_bridge_events_for_immediate_tool_preview_rend
     assert "self._refresh_now(layout=True)" in source
 
 
-def test_textual_app_arms_bridge_direct_routing_while_question_overlay_is_visible():
+def test_textual_app_uses_question_overlay_for_prompt_routing():
     import inspect
 
     from quimera.app.textual_ui import run_textual_quimera_app
 
     source = inspect.getsource(run_textual_quimera_app)
 
-    assert "def _arm_question_routing" in source
-    assert "bridge.begin_direct_input()" in source
-    assert "def _disarm_question_routing" in source
-    assert "bridge.end_direct_input()" in source
-    assert "self._arm_question_routing()" in source
-    assert "self._disarm_question_routing()" in source
+    assert "def _set_question_overlay" in source
+    assert "def _clear_question_overlay" in source
     assert "self._clear_prompt_state()" in source
     assert "clear_interactive_prompt_state" in source
 
@@ -1154,11 +1161,13 @@ def test_textual_modal_question_input_goes_to_direct_input_queue():
 def test_textual_approval_answer_does_not_enter_main_input_queue():
     bridge = TextualUiBridge()
 
+    bridge.begin_direct_input()
     bridge.emit(TextualUiEvent("question", {"kind": "approval", "question": "Aprovar?"}))
     bridge.submit_input("y")
 
     assert bridge.input_queue.empty()
     assert bridge.direct_input_queue.get_nowait() == "y"
+    bridge.end_direct_input()
 
 
 def test_textual_chat_prompt_active_does_not_steal_normal_input():
