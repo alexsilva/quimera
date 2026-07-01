@@ -410,7 +410,7 @@ class TestInputContextAndWelcome(unittest.TestCase):
         _attach_toolbar_coordinator(app)
 
         context = app._build_input_toolbar_context()
-        self.assertEqual(context["responder"], "unknown")
+        self.assertEqual(context["responder"], "Unknown")
         self.assertEqual(context["model"], "unknown")
         self.assertNotIn("cwd", context)
 
@@ -625,7 +625,7 @@ class TestInputContextAndWelcome(unittest.TestCase):
         _attach_toolbar_coordinator(app)
 
         context = app._build_input_toolbar_context()
-        self.assertEqual(context.get("active_agents"), "codex, claude")
+        self.assertEqual(context.get("active_agents"), "🔷 Codex, 🔮 Claude")
 
     def test_build_input_toolbar_context_compacts_many_active_agents(self):
         from quimera.app.core import QuimeraApp
@@ -646,7 +646,7 @@ class TestInputContextAndWelcome(unittest.TestCase):
         _attach_toolbar_coordinator(app)
 
         context = app._build_input_toolbar_context()
-        self.assertEqual(context.get("active_agents"), "codex, claude, qwen +1")
+        self.assertEqual(context.get("active_agents"), "🔷 Codex, 🔮 Claude, Qwen +1")
 
     def test_build_input_toolbar_context_exposes_branch_when_set(self):
         from quimera.app.core import QuimeraApp
@@ -733,7 +733,7 @@ class TestInputContextAndWelcome(unittest.TestCase):
         app._pending_input_for = "claude"
         _attach_toolbar_coordinator(app)
 
-        self.assertEqual(app._resolve_next_responder_label(), "claude")
+        self.assertEqual(app._resolve_next_responder_label(), "🔮 Claude")
 
     def test_resolve_active_model_label_extracts_model_from_cli_equals(self):
         from quimera.app.core import QuimeraApp
