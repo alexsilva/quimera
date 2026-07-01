@@ -607,8 +607,13 @@ class AppTaskServices:
 
     # ── Setup / bootstrap ──────────────────────────────────────────────
 
-    def setup_task_executors(self):
-        """Inicializa executores assíncronos para tasks humanas."""
+    def setup_task_executors(self, claim_gate=None):
+        """Inicializa executores assíncronos para tasks humanas.
+
+        ``claim_gate`` é um callable opcional que retorna True quando o executor
+        pode reivindicar tasks. Em modo single-thread, deve retornar False enquanto
+        o loop de chat estiver processando uma mensagem.
+        """
         failover_policy = self._build_task_failover_policy()
         task_execution_service = self._build_task_execution_service(failover_policy)
         task_review_service = self._build_task_review_service(failover_policy)
@@ -629,6 +634,8 @@ class AppTaskServices:
                 )
             if agent in failover_policy.review_agents_for():
                 executor.set_review_handler(task_review_service.handler_for(agent))
+            if claim_gate is not None and hasattr(executor, "set_claim_gate"):
+                executor.set_claim_gate(claim_gate)
             executor.start()
             executors.append(executor)
         self._replace_task_executors(executors)

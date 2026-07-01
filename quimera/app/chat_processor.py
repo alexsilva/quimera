@@ -20,6 +20,7 @@ from .session_bootstrap import (
 from .turn import TurnManager
 from .worker import ChatWorker
 from ..constants import (
+    CMD_ALIASES,
     CMD_EDIT,
     CMD_EXIT,
     CMD_FILE_PREFIX,
@@ -113,7 +114,12 @@ def run_chat_loop(
         app.event_sink._ui_queue = _ui_event_queue
     if not hasattr(app, "turn_manager") or app.turn_manager is None:
         app.turn_manager = turn_manager_cls()
-    threaded_chat = app.threads > 1
+    # O plano de controle (leitura de input/comandos) roda sempre em modo assíncrono,
+    # independente de --threads. Isso mantém o loop principal responsivo a comandos
+    # mesmo com capacidade de execução 1 (--threads 1): a mensagem do usuário é
+    # despachada para o ChatWorker/executor em background e o loop segue lendo input.
+    # A concorrência real de agentes continua limitada por async_capacity abaixo.
+    threaded_chat = True
     if hasattr(app, "input_services") and app.input_services is not None:
         app.input_services.set_nonblocking_tty(threaded_chat)
         if threaded_chat:
@@ -174,7 +180,23 @@ def run_chat_loop(
                 and not app.turn_manager.is_human_turn
             ):
                 if not threaded_chat:
-                    if not getattr(app, "_turn_blocked_warning_shown", False):
+                    _ai_turn_input = None
+                    try:
+                        _ai_turn_input = app.read_user_input("", timeout=0)
+                    except Exception:
+                        pass
+                    if _ai_turn_input is not None:
+                        _stripped_ai_turn_input = _ai_turn_input.strip()
+                        _resolved_cmd = CMD_ALIASES.get(_stripped_ai_turn_input, _stripped_ai_turn_input)
+                        if _resolved_cmd.startswith("/"):
+                            _cmd_result = app.handle_command(_ai_turn_input)
+                            if _cmd_result is not True and not getattr(app, "_turn_blocked_warning_shown", False):
+                                app.renderer.show_system("[Aguardando resposta do agente...]")
+                                app._turn_blocked_warning_shown = True
+                        elif not getattr(app, "_turn_blocked_warning_shown", False):
+                            app.renderer.show_system("[Aguardando resposta do agente...]")
+                            app._turn_blocked_warning_shown = True
+                    elif not getattr(app, "_turn_blocked_warning_shown", False):
                         app.renderer.show_system("[Aguardando resposta do agente...]")
                         app._turn_blocked_warning_shown = True
                     app.turn_manager.wait_for_human_turn(timeout=0.01)
@@ -233,16 +255,16 @@ def run_chat_loop(
                     acquired_async_slot = chat_slot_semaphore.acquire(blocking=False)
                 if acquired_async_slot:
                     app.runtime_state.increment_chat_inflight(app._refresh_parallel_toolbar)
-                    _pending_async_slot = True
-                    chat_queue.put(user)
-                    _pending_async_slot = False
-                    app._refresh_parallel_toolbar()
-                    time.sleep(0.001)
                     if (
                         hasattr(app, "turn_manager")
                         and app.turn_manager.is_human_turn
                     ):
                         app.turn_manager.next_turn()
+                    _pending_async_slot = True
+                    chat_queue.put(user)
+                    _pending_async_slot = False
+                    app._refresh_parallel_toolbar()
+                    time.sleep(0.001)
                 else:
                     if hasattr(app, "turn_manager") and app.turn_manager.is_human_turn:
                         app.turn_manager.next_turn()

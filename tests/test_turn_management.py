@@ -918,7 +918,13 @@ class TestTurnCycle(unittest.TestCase):
         self.assertGreaterEqual(elapsed, 0.20)
 
     def test_threads_one_is_serial(self):
-        """Com threads=1, todos os prompts rodam serialmente no thread principal."""
+        """Com threads=1, no máximo uma execução de agente roda por vez (sem overlap).
+
+        O plano de controle (leitura de input) roda sempre em modo assíncrono — a
+        execução em si pode ocorrer em uma thread de background — mas a capacidade
+        de execução concorrente continua limitada a 1: "m2" só começa depois que
+        "m1" termina completamente.
+        """
         app = QuimeraApp.__new__(QuimeraApp)
         from quimera.app.runtime_state import AppRuntimeState
         app.runtime_state = AppRuntimeState()
@@ -941,21 +947,39 @@ class TestTurnCycle(unittest.TestCase):
         app._format_user_prompt = lambda: "User: "
         reads = iter(["m1", "m2", CMD_EXIT])
         app.read_user_input = lambda prompt, timeout: next(reads)
-        calls = []
+        intervals = []
+        active_lock = threading.Lock()
+        active_count = [0]
 
         def observed_process(user):
-            calls.append((user, threading.current_thread() is threading.main_thread()))
+            with active_lock:
+                active_count[0] += 1
+                concurrent_at_start = active_count[0]
+            time.sleep(0.05)
+            with active_lock:
+                active_count[0] -= 1
+            intervals.append((user, concurrent_at_start))
 
-        app._do_process_chat_message =observed_process
+        app._do_process_chat_message = observed_process
         app.bug_services = Mock()
 
         _materialize_ui_event_handler(app)
         QuimeraApp.run(app)
 
-        self.assertEqual(calls, [("m1", True), ("m2", True)])
+        self.assertEqual([user for user, _ in intervals], ["m1", "m2"])
+        self.assertTrue(
+            all(concurrent == 1 for _, concurrent in intervals),
+            f"execução sobreposta detectada com threads=1: {intervals}",
+        )
 
     def test_run_enqueues_before_switching_turn_with_worker(self):
-        """No modo com worker, run() deve enfileirar a mensagem antes de ceder o turno."""
+        """No modo com worker, run() deve ceder o turno antes de enfileirar a mensagem.
+
+        Ordem inversa (enfileirar e só depois marcar turno da IA) é uma corrida real:
+        se o worker processar a mensagem antes do turno mudar, o `finally` de
+        `process_message` não devolve o turno ao humano (ainda o vê como humano) e o
+        turno fica preso em IA para sempre.
+        """
         app = QuimeraApp.__new__(QuimeraApp)
         from quimera.app.runtime_state import AppRuntimeState
         app.runtime_state = AppRuntimeState()
@@ -1041,7 +1065,7 @@ class TestTurnCycle(unittest.TestCase):
             _materialize_ui_event_handler(app)
             QuimeraApp.run(app)
 
-        self.assertEqual(order[:2], ["put:mensagem", "next_turn"])
+        self.assertEqual(order[:2], ["next_turn", "put:mensagem"])
 
 
 class TestChatWorker(unittest.TestCase):
@@ -1663,6 +1687,118 @@ class TestTurnManagerGuardrails(unittest.TestCase):
             tm.next_turn()
         # Após número par de alternâncias, volta ao estado inicial
         self.assertTrue(tm.is_human_turn)
+
+
+class TestAiTurnControlPlaneCommands(unittest.TestCase):
+    """Regressão: com --threads 1, comandos slash devem responder mesmo enquanto uma
+    mensagem ainda está sendo processada pelo agente.
+
+    Bug original: o loop principal chamava ``chat_lifecycle.process_message`` de
+    forma síncrona na mesma thread do input quando ``--threads 1``. Enquanto essa
+    chamada não retornava, o loop nunca voltava a ``read_user_input``/``handle_command``,
+    então nenhum comando digitado durante o processamento era atendido. A correção
+    (chat_processor.py) faz o plano de controle rodar sempre via
+    fila/worker/executor assíncronos, com capacidade de execução limitada a
+    ``max(1, threads)`` — em ``--threads 1`` isso garante no máximo 1 execução de
+    agente simultânea sem travar o loop de input.
+    """
+
+    def _make_app(self):
+        """App mínimo com threads=1 e infraestrutura real de worker/executor."""
+        from quimera.app.runtime_state import AppRuntimeState
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.runtime_state = AppRuntimeState()
+        app.renderer = DummyRenderer()
+        app.threads = 1
+        app.user_name = "User"
+        app._format_user_prompt = lambda: "User: "
+        app.session_state = {"session_id": "test", "history_count": 0, "summary_loaded": False}
+        app._format_yes_no = lambda x: "sim" if x else "não"
+        storage = Mock()
+        storage.get_log_file.return_value = Path("/tmp/quimera-test.log")
+        app.storage = storage
+        app.session_services = Mock()
+        app.agent_client = Mock()
+        app.turn_manager = TurnManager()
+        app.system_layer = Mock()
+        app.bug_services = Mock()
+        return app
+
+    def test_slash_command_responds_while_agent_still_processing_single_thread(self):
+        """/agentes deve ser atendido enquanto a primeira mensagem ainda está em processamento."""
+        from quimera.constants import CMD_AGENTS, CMD_ALIASES, CMD_EXIT
+        app = self._make_app()
+
+        handle_calls = []
+
+        def mock_handle_command(cmd):
+            normalized = CMD_ALIASES.get(cmd.strip(), cmd.strip())
+            if normalized == CMD_AGENTS:
+                handle_calls.append((normalized, time.monotonic()))
+                return True
+            return False
+
+        app.handle_command = mock_handle_command
+
+        process_started = threading.Event()
+        finished_at = [None]
+
+        def slow_process(user):
+            process_started.set()
+            time.sleep(0.3)
+            finished_at[0] = time.monotonic()
+
+        app._do_process_chat_message = slow_process
+
+        call_index = [0]
+
+        def mock_read(prompt, timeout):
+            call_index[0] += 1
+            if call_index[0] == 1:
+                return "oi"
+            if call_index[0] == 2:
+                # Só entrega o comando depois que o processamento realmente começou,
+                # garantindo overlap real (não apenas um turno_manager forjado).
+                self.assertTrue(process_started.wait(timeout=2), "processamento não iniciou a tempo")
+                return "/agentes"
+            return CMD_EXIT
+
+        app.read_user_input = mock_read
+        _materialize_ui_event_handler(app)
+        QuimeraApp.run(app)
+
+        self.assertEqual(len(handle_calls), 1)
+        agents_cmd, handled_at = handle_calls[0]
+        self.assertEqual(agents_cmd, CMD_AGENTS)
+        self.assertIsNotNone(finished_at[0], "a mensagem lenta deveria ter concluído até o fim do run()")
+        self.assertLess(
+            handled_at,
+            finished_at[0],
+            "/agentes só foi atendido depois que o processamento terminou — loop ainda bloqueia comandos",
+        )
+
+    def test_regular_message_waits_for_free_slot_instead_of_being_dropped(self):
+        """Uma segunda mensagem real aguarda o slot liberar (mesma regra do modo threads>1), sem se perder."""
+        from quimera.constants import CMD_EXIT
+        app = self._make_app()
+        app.handle_command = Mock(return_value=False)
+
+        process_calls = []
+
+        def observed_process(user):
+            process_calls.append(user)
+            if user == "m1":
+                time.sleep(0.2)
+
+        app._do_process_chat_message = observed_process
+
+        reads = iter(["m1", "m2", CMD_EXIT])
+        app.read_user_input = lambda prompt, timeout: next(reads)
+
+        _materialize_ui_event_handler(app)
+        QuimeraApp.run(app)
+
+        self.assertEqual(process_calls, ["m1", "m2"])
 
 
 if __name__ == "__main__":

@@ -46,6 +46,15 @@ class TaskExecutor:
         self._handler: Optional[Callable] = None
         self._review_handler: Optional[Callable] = None
         self._review_eligibility: Optional[Callable[[], bool]] = None
+        self._claim_gate: Optional[Callable[[], bool]] = None
+
+    def set_claim_gate(self, gate: Callable[[], bool]) -> None:
+        """Define um predicado que deve retornar True para permitir o claim de tasks.
+
+        Usado em modo single-thread para impedir que o executor reivindique tasks
+        enquanto o loop principal de chat está processando uma mensagem.
+        """
+        self._claim_gate = gate
 
     def set_handler(self, handler: Callable[[TaskRecord], bool]):
         """Set the task execution handler. Handler receives TaskRecord and returns True on success."""
@@ -125,6 +134,10 @@ class TaskExecutor:
     def _poll_loop(self):
         """Executa poll loop — tasks despachadas em paralelo via ThreadPoolExecutor quando ativo."""
         while self._running:
+            if self._claim_gate is not None and not self._claim_gate():
+                if self._wait_or_stop(0.5):
+                    break
+                continue
             task_id = None
             try:
                 task_id = self._claim_task()

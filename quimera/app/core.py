@@ -936,7 +936,17 @@ class QuimeraApp:
 
     def _setup_task_executors(self):
         """Set up task executors for explicit human-created task execution."""
-        self.task_services.setup_task_executors()
+        claim_gate = None
+        if int(getattr(self, "threads", 1) or 1) <= 1:
+            # Em modo single-thread, tasks só podem ser reivindicadas quando o loop
+            # de chat não está processando uma mensagem (turno do humano).
+            app_ref = self
+            claim_gate = lambda: not (
+                hasattr(app_ref, "turn_manager")
+                and app_ref.turn_manager is not None
+                and not app_ref.turn_manager.is_human_turn
+            )
+        self.task_services.setup_task_executors(claim_gate=claim_gate)
 
     def _stop_task_executors(self):
         """Executa stop task executors."""
