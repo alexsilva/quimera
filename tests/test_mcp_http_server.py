@@ -1019,6 +1019,67 @@ class TestStreamableHTTP:
         finally:
             httpd.shutdown()
 
+    def test_mcp_post_tools_call_reusa_preview_do_executor(self, tmp_path):
+        """POST /mcp deve acionar preview operacional como /message."""
+        (tmp_path / "foo.py").write_text("print('ok')\n", encoding="utf-8")
+        previews = []
+        executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
+        executor.set_tool_preview_callback(
+            lambda name, args, metadata=None: previews.append((name, args, metadata))
+        )
+        httpd = _start_http_server(_make_mcp_server(executor))
+        try:
+            init_body = json.dumps({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-11-25",
+                    "capabilities": {},
+                    "clientInfo": {"name": "test"},
+                },
+            }).encode("utf-8")
+            init_resp = _http_request(
+                httpd.host,
+                httpd.port,
+                "POST",
+                "/mcp",
+                body=init_body,
+                headers={"Content-Type": "application/json"},
+            )
+            assert init_resp.status == 200
+            session_id = init_resp.header("MCP-Session-Id")
+            assert session_id
+
+            call_body = json.dumps({
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {"name": "read_file", "arguments": {"path": "foo.py"}},
+            }).encode("utf-8")
+            call_resp = _http_request(
+                httpd.host,
+                httpd.port,
+                "POST",
+                "/mcp",
+                body=call_body,
+                headers={
+                    "Content-Type": "application/json",
+                    "MCP-Session-Id": session_id,
+                    "MCP-Protocol-Version": "2025-11-25",
+                },
+            )
+
+            assert call_resp.status == 200
+            result_data = json.loads(call_resp.data)
+            assert result_data["result"]["isError"] is False
+            assert previews[0][0] == "read_file"
+            assert previews[0][1] == {"path": "foo.py"}
+            assert previews[0][2]["trusted_context"].transport == "http_mcp"
+        finally:
+            getattr(httpd, "shutdown")()
+
+
     def test_mcp_http_respeita_bearer_token(self):
         """Verifica que Test mcp http respeita bearer token."""
         mcp = MCPServer(_make_executor(), auth_token="secret")
