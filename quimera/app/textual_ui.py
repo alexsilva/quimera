@@ -1862,6 +1862,8 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
         #question_overlay {
             display: none;
             height: auto;
+            max-height: 12;
+            overflow-y: auto;
             padding: 0 1;
             background: $surface;
         }

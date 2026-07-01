@@ -685,6 +685,10 @@ def test_textual_feed_reserves_at_least_ten_lines_for_agent_output():
     assert "min-height: 14;" in css
     assert "#feed" in css
     assert "min-height: 10;" in css
+    assert "#question_overlay" in css
+    assert "max-height: 12;" in css
+    assert "overflow-y: auto;" in css
+    assert "#input_bar" in css
     assert "max-height: 3;" in css
 
 
