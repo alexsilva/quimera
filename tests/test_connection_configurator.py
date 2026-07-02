@@ -185,3 +185,71 @@ class TestCLIUnchanged:
         )
         result = cfg.configure(profile)
         assert result is conn
+
+
+class TestExistingConnectionEdit:
+    """Edição curta para conexões já persistidas."""
+
+    def test_existing_openai_connection_updates_only_model(self):
+        conn = OpenAIConnection(
+            model="qwen-old",
+            base_url="http://localhost:1234/v1",
+            api_key_env="OPENAI_API_KEY",
+            provider="openai_compat",
+            supports_native_tools=True,
+            max_connections=2,
+        )
+        profile = _make_profile()
+        object.__setattr__(profile, "_connection_override", conn)
+        cfg = _make_configurator(inputs=["1", "qwen-new"])
+
+        result, profile_name = cfg.configure_with_profile(profile)
+
+        assert profile_name is None
+        assert result is not conn
+        assert result.model == "qwen-new"
+        assert result.base_url == conn.base_url
+        assert result.api_key_env == conn.api_key_env
+        assert result.provider == conn.provider
+        assert result.supports_native_tools is conn.supports_native_tools
+        assert result.max_connections == conn.max_connections
+
+    def test_existing_openai_connection_enter_cancels_without_changes(self):
+        conn = OpenAIConnection(model="qwen-old")
+        profile = _make_profile()
+        object.__setattr__(profile, "_connection_override", conn)
+        cfg = _make_configurator(inputs=[""])
+
+        result, profile_name = cfg.configure_with_profile(profile)
+
+        assert profile_name is None
+        assert result is conn
+
+    def test_existing_openai_connection_advanced_uses_full_flow(self):
+        conn = OpenAIConnection(model="qwen-old", base_url="http://old/v1")
+        profile = _make_profile()
+        object.__setattr__(profile, "_connection_override", conn)
+        cfg = _make_configurator(
+            inputs=["", "", "qwen-new", "", "", "", ""],
+            bools=[conn.supports_native_tools],
+        )
+
+        result, profile_name = cfg.configure_with_profile(profile, advanced=True)
+
+        assert profile_name is None
+        assert result.model == "qwen-new"
+        assert result.base_url == conn.base_url
+
+    def test_existing_cli_connection_updates_only_command(self):
+        conn = CliConnection(cmd=["ollama", "run", "llama3"], prompt_as_arg=False, output_format=None)
+        profile = _make_profile(driver="cli")
+        object.__setattr__(profile, "_connection_override", conn)
+        cfg = _make_configurator(inputs=["1", "ollama run mistral"])
+
+        result, profile_name = cfg.configure_with_profile(profile)
+
+        assert profile_name is None
+        assert result is not conn
+        assert result.cmd == ["ollama", "run", "mistral"]
+        assert result.prompt_as_arg is conn.prompt_as_arg
+        assert result.output_format == conn.output_format

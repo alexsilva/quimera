@@ -427,7 +427,7 @@ class AppSystemLayer:
         ]
         return "\n".join(analysis_lines)
 
-    def _configure_connection_interactively(self, profile):
+    def _configure_connection_interactively(self, profile, *, advanced: bool = True):
         """Coleta configuração de conexão de forma interativa no chat.
 
         Retorna (connection, profile_name | None).
@@ -438,7 +438,7 @@ class AppSystemLayer:
             self._display.show_warning_message,
             get_profile=_profiles.get,
         )
-        return configurator.configure_with_profile(profile)
+        return configurator.configure_with_profile(profile, advanced=advanced)
 
     def _resolve_prompt_target(self, command: str) -> str | None:
         """Resolve o agente alvo para preview de prompt."""
@@ -554,9 +554,11 @@ class AppSystemLayer:
             return True
 
         if command == CMD_CONNECT or command.startswith(f"{CMD_CONNECT} "):
-            target = self._resolve_connect_target(command)
+            advanced = " --advanced" in f" {command}" or " --full" in f" {command}"
+            command_for_target = command.replace(" --advanced", "").replace(" --full", "")
+            target = self._resolve_connect_target(command_for_target)
             if target is None:
-                self._display.show_warning_message("Uso: /connect <agente>")
+                self._display.show_warning_message("Uso: /connect <agente> [--advanced]")
                 return True
             profile_registry = self.profile_registry
             profile = self.profile_resolver.get(target)
@@ -566,7 +568,7 @@ class AppSystemLayer:
             self.show_system_message(f"Configurando conexão para {target}")
             self.show_system_message(f"Atual: {format_connection_label(profile.effective_connection())}")
             try:
-                connection, profile_name = self._configure_connection_interactively(profile)
+                connection, profile_name = self._configure_connection_interactively(profile, advanced=advanced)
             except ValueError as exc:
                 self._display.show_warning_message(str(exc))
                 return True
