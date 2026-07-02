@@ -125,6 +125,22 @@ def _build_question_overlay(payload) -> Panel:
     return Panel(body, title=title, border_style=border_style)
 
 
+def _build_approval_line_renderable(payload) -> Text:
+    """Renderiza aprovação no feed como linha compacta, sem caixa."""
+    lines = [line.strip() for line in str(payload or "").splitlines() if line.strip()]
+    if not lines:
+        return Text("⚠ aprovação solicitada", style="bold orange1")
+    title = lines[0]
+    title = title.removeprefix("Aprovar ").strip() or title
+    text = Text()
+    text.append("⚠ ", style="bold orange1")
+    text.append(title, style="bold orange1")
+    for line in lines[1:]:
+        text.append("\n  ", style="orange1")
+        text.append(line, style="orange1")
+    return text
+
+
 def _build_window_overlay_payload(payload) -> dict[str, Any]:
     """Converte evento de janela interativa no payload do overlay."""
     data = dict(payload or {}) if isinstance(payload, dict) else {}
@@ -1505,10 +1521,7 @@ def _render_event(event: TextualUiEvent):
     if event.kind == "banner":
         return Group(Text(str(event.payload), style="bold cyan"), Rule(style="dim cyan"))
     if event.kind == "approval":
-        lines = str(event.payload or "").splitlines()
-        title = lines[0] if lines else "Permissão solicitada"
-        body = "\n".join(lines[1:]) if len(lines) > 1 else str(event.payload or "")
-        return Panel(Text(body, style="yellow"), title=f"[bold yellow]{title}[/bold yellow]", border_style="yellow")
+        return _build_approval_line_renderable(event.payload)
     if event.kind == "delegation":
         payload = event.payload if isinstance(event.payload, dict) else {}
         task = str(payload.get("task", "")).strip()

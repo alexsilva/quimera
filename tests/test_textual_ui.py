@@ -500,6 +500,23 @@ def test_textual_agent_lifecycle_renders_in_chat_theme_not_panel():
     assert "[/dim]" not in str(rendered)
 
 
+def test_textual_approval_event_renders_as_compact_line_not_panel():
+    from rich.panel import Panel
+
+    event = TextualUiEvent(
+        "approval",
+        "\nAprovar git_commit :: risco: write\norigem: opencode-big-pickle\nmessage: fix something",
+    )
+
+    rendered = _render_event(event)
+
+    assert rendered is not None
+    assert not isinstance(rendered, Panel)
+    assert "⚠" in str(rendered)
+    assert "git_commit :: risco: write" in str(rendered)
+    assert "opencode-big-pickle" in str(rendered)
+
+
 def test_textual_renderer_interactive_windows_emit_semantic_overlay_events():
     bridge = TextualUiBridge()
     emitted = []
