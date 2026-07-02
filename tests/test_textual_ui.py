@@ -7,14 +7,17 @@ from types import SimpleNamespace
 from rich.console import Console, Group
 
 from quimera.app.textual_ui import (
+    AgentLifecycleStatus,
     TextualFeedModel,
     TextualInputGate,
     TextualRenderer,
     TextualUiBridge,
     TextualUiEvent,
+    _TextualStatus,
     _build_question_overlay,
     _build_window_overlay_payload,
     _clear_question_overlay_widget,
+    _agent_lifecycle_payload,
     _render_event,
 )
 
@@ -60,6 +63,110 @@ def test_textual_feed_marks_transient_replacement_as_redraw():
 
     assert model.last_change.redraw is True
     assert model.last_change.appended is None
+
+
+def test_textual_feed_attaches_tool_preview_to_agent_transient():
+    model = TextualFeedModel()
+
+    model.apply(TextualUiEvent("agent_update", "[thinking] analisando", agent="openai"))
+    model.apply(TextualUiEvent("tool_preview", "⌘ read_file a.py", agent="openai"))
+
+    assert len(model.items) == 1
+    assert model.items[0].transient is True
+    assert model.items[0].event.kind == "agent_update"
+    assert model.items[0].event.payload["content"] == "[thinking] analisando"
+    assert model.items[0].event.payload["tools"] == ["⌘ read_file a.py"]
+
+    model.apply(TextualUiEvent("agent_update", "[thinking] analisando mais", agent="openai"))
+
+    assert len(model.items) == 1
+    assert model.items[0].event.payload["content"] == "[thinking] analisando mais"
+    assert model.items[0].event.payload["tools"] == ["⌘ read_file a.py"]
+
+
+def test_textual_feed_clears_tool_preview_with_final_agent_message():
+    model = TextualFeedModel()
+
+    model.apply(TextualUiEvent("agent_update", "[thinking] analisando", agent="openai"))
+    model.apply(TextualUiEvent("tool_preview", "⌘ read_file a.py", agent="openai"))
+    model.apply(TextualUiEvent("agent_message", {"content": "final", "label": "OpenAI"}, agent="openai"))
+
+    assert len(model.items) == 1
+    assert model.items[0].transient is False
+    assert model.items[0].event.kind == "agent_message"
+    assert "tools" not in model.items[0].event.payload
+
+
+def test_textual_feed_clears_tool_preview_on_failed_lifecycle_before_retry():
+    model = TextualFeedModel()
+
+    model.apply(TextualUiEvent("agent_update", "[thinking] analisando", agent="openai"))
+    model.apply(TextualUiEvent("tool_preview", "⌘ read_file a.py", agent="openai"))
+    model.apply(
+        TextualUiEvent(
+            "agent_lifecycle",
+            {"status": "failed", "message": "falha ao comunicar; reconectando"},
+            agent="openai",
+        )
+    )
+
+    assert len(model.items) == 1
+    assert model.items[0].transient is True
+    assert model.items[0].event.kind == "agent_lifecycle"
+    assert "tools" not in model.items[0].event.payload
+
+    model.apply(TextualUiEvent("agent_update", "[thinking] nova tentativa", agent="openai"))
+
+    assert model.items[0].event.kind == "agent_update"
+    assert model.items[0].event.payload == "[thinking] nova tentativa"
+
+
+def test_textual_feed_clears_tool_preview_on_completed_lifecycle():
+    model = TextualFeedModel()
+
+    model.apply(TextualUiEvent("agent_update", "[thinking] analisando", agent="openai"))
+    model.apply(TextualUiEvent("tool_preview", "⌘ read_file a.py", agent="openai"))
+    model.apply(
+        TextualUiEvent(
+            "agent_lifecycle",
+            _agent_lifecycle_payload("concluído", status=AgentLifecycleStatus.COMPLETED),
+            agent="openai",
+        )
+    )
+
+    assert len(model.items) == 1
+    assert model.items[0].transient is True
+    assert model.items[0].event.kind == "agent_lifecycle"
+    assert model.items[0].event.payload == {"status": "completed", "message": "concluído"}
+
+
+def test_textual_feed_lifecycle_boundary_uses_status_not_message_text():
+    model = TextualFeedModel()
+
+    model.apply(TextualUiEvent("agent_update", "[thinking] analisando", agent="openai"))
+    model.apply(TextualUiEvent("tool_preview", "⌘ read_file a.py", agent="openai"))
+    model.apply(
+        TextualUiEvent(
+            "agent_lifecycle",
+            _agent_lifecycle_payload("concluído textual, mas ainda running", status=AgentLifecycleStatus.RUNNING),
+            agent="openai",
+        )
+    )
+
+    assert model.items[0].event.payload["status"] == "running"
+    assert model.items[0].event.payload["tools"] == ["⌘ read_file a.py"]
+
+
+def test_textual_feed_clears_tool_preview_on_stream_abort():
+    model = TextualFeedModel()
+
+    model.apply(TextualUiEvent("agent_update", "[thinking] analisando", agent="openai"))
+    model.apply(TextualUiEvent("tool_preview", "⌘ read_file a.py", agent="openai"))
+    model.apply(TextualUiEvent("stream_abort", {"label": "OpenAI"}, agent="openai"))
+
+    assert len(model.items) == 1
+    assert model.items[0].event.kind == "stream_abort"
+    assert "tools" not in model.items[0].event.payload
 
 
 def test_textual_feed_final_message_without_transient_is_append_only():
@@ -163,6 +270,32 @@ def test_textual_renderer_emits_agent_lifecycle_event():
     assert event.kind == "agent_lifecycle"
     assert event.agent == "claude"
     assert event.payload == {"status": "completed", "message": "execução concluída"}
+
+
+def test_textual_status_exit_marks_success_as_completed():
+    renderer = Mock()
+    status = _TextualStatus(renderer, agent="openai")
+
+    status.__exit__(None, None, None)
+
+    renderer.update_status.assert_called_once_with(
+        "openai",
+        "concluído",
+        status=AgentLifecycleStatus.COMPLETED,
+    )
+
+
+def test_textual_status_exit_marks_exception_as_failed():
+    renderer = Mock()
+    status = _TextualStatus(renderer, agent="openai")
+
+    status.__exit__(RuntimeError, RuntimeError("boom"), None)
+
+    renderer.update_status.assert_called_once_with(
+        "openai",
+        "falhou",
+        status=AgentLifecycleStatus.FAILED,
+    )
 
 
 def test_textual_bridge_handles_events_synchronously_on_textual_thread():
