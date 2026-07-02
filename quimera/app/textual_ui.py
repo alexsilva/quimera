@@ -4,7 +4,6 @@ from __future__ import annotations
 import logging
 import queue
 import re
-import shutil
 import sys
 import traceback
 import threading
@@ -963,7 +962,7 @@ class TextualInputGate:
 
     def _build_toolbar_renderable(self):
         if self._interactive_prompt_active:
-            return Text("Enter: confirmar  |  Ctrl+C: cancelar", style="bold yellow on #252526")
+            return Text("Enter: confirmar  |  Ctrl+C: cancelar", style="bold yellow on #1a1a1a")
         left, right = self._toolbar_segments()
         if not left and not right:
             return Text("")
@@ -975,20 +974,10 @@ class TextualInputGate:
             "err": "bold #fc7b5f on #3e3e3e",
         }
 
-        def _chip_width(items: list[tuple[str, str]]) -> int:
-            return sum(len(label) + 2 for label, _ in items)
-
-        term_w = shutil.get_terminal_size(fallback=(80, 24)).columns
-        left_width = _chip_width(left)
-        right_width = _chip_width(right)
-        padding = max(1, term_w - left_width - right_width) if right else 1
-        text = Text(" ", style="on #252526")
-        for label, kind in left:
+        text = Text(" ", style="on #1a1a1a")
+        for label, kind in (*left, *right):
             text.append(f" {label} ", style=style_by_kind.get(kind, "white on #3e3e3e"))
-        if right:
-            text.append(" " * max(1, padding - 1), style="on #252526")
-        for label, kind in right:
-            text.append(f" {label} ", style=style_by_kind.get(kind, "white on #3e3e3e"))
+        text.append(" ", style="on #1a1a1a")
         return text
 
     def _commands(self) -> list[str]:
@@ -2060,7 +2049,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             height: 1;
             padding: 0 1;
             color: $text;
-            background: #252526;
+            background: #1a1a1a;
         }
         #question_overlay {
             display: none;

@@ -966,7 +966,7 @@ def test_textual_toolbar_info_bar_uses_distinct_background():
     css = inspect.getsource(run_textual_quimera_app)
 
     assert "#toolbar" in css
-    assert "background: #252526;" in css
+    assert "background: #1a1a1a;" in css
 
 
 def test_textual_toolbar_renderable_uses_main_tui_chip_styles():
