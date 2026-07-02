@@ -274,7 +274,7 @@ class AgentGateway:
         finish_metadata["elapsed"] = elapsed
         self._agent_run_sink.emit(
             AgentRunEvent(
-                "finished" if result is not None else "failed",
+                "finished" if result else "failed",
                 str(agent),
                 text=str(result or ""),
                 metadata=finish_metadata,

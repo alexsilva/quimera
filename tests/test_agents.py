@@ -1924,6 +1924,53 @@ def test_call_api_passes_cancel_event_to_driver(renderer):
         assert call_kwargs["cancel_event"] is client._cancel_event
 
 
+def test_call_api_recreates_cached_driver_when_connection_changes(renderer):
+    """O cache do driver API deve ser invalidado quando a conexão efetiva muda."""
+    from types import SimpleNamespace
+
+    client = AgentClient(renderer)
+    profile = SimpleNamespace(
+        driver="openai_compat",
+        model="modelo-antigo",
+        base_url="http://localhost:11434",
+        api_key_env=None,
+        tool_use_reliability="medium",
+        supports_tools=True,
+    )
+
+    with patch("quimera.agents.client.OpenAICompatDriver") as mock_driver_cls, \
+            patch.object(client, "_start_esc_monitor"), \
+            patch.object(client, "_stop_esc_monitor"):
+        first_driver = MagicMock()
+        first_driver.run.return_value = "primeira resposta"
+        second_driver = MagicMock()
+        second_driver.run.return_value = "segunda resposta"
+        mock_driver_cls.side_effect = [first_driver, second_driver]
+
+        assert client._call_api("openai", profile, "prompt 1") == "primeira resposta"
+        profile.model = "modelo-novo"
+        assert client._call_api("openai", profile, "prompt 2") == "segunda resposta"
+
+    assert mock_driver_cls.call_count == 2
+    assert mock_driver_cls.call_args_list[0].kwargs["model"] == "modelo-antigo"
+    assert mock_driver_cls.call_args_list[1].kwargs["model"] == "modelo-novo"
+
+
+def test_agent_client_can_invalidate_api_driver_explicitly(renderer):
+    """invalidate_api_driver remove o driver cacheado de um agente específico."""
+    client = AgentClient(renderer)
+    client._api_drivers["openai"] = object()
+    client._api_driver_signatures["openai"] = ("modelo",)
+    client._api_drivers["outro"] = object()
+    client._api_driver_signatures["outro"] = ("outro-modelo",)
+
+    client.invalidate_api_driver("openai")
+
+    assert "openai" not in client._api_drivers
+    assert "openai" not in client._api_driver_signatures
+    assert "outro" in client._api_drivers
+
+
 def test_call_api_renders_openai_preview_for_non_approval_tools(renderer):
     """No driver OpenAI, o set_tool_preview_callback deve chamar _show_muted com o ToolPreview."""
     from types import SimpleNamespace

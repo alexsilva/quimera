@@ -74,6 +74,7 @@ class AgentClient:
         self.tool_executor = tool_executor
         # Cache de instâncias de driver por nome de agente.
         self._api_drivers: dict = {}
+        self._api_driver_signatures: dict = {}
         self.tool_event_callback = None
         # Modo de execução ativo; quando definido, subprocessos são envolvidos com bwrap.
         self.execution_mode = None
@@ -765,6 +766,33 @@ class AgentClient:
         """Remove rastreamento de sessão do agente ao descongelar."""
         self._persistent_sessions.pop(agent, None)
 
+    @staticmethod
+    def _api_connection_signature(connection: OpenAIConnection) -> tuple:
+        """Retorna assinatura estável da conexão usada para cache do driver API."""
+        extra_body = getattr(connection, "extra_body", None)
+        if isinstance(extra_body, dict):
+            extra_body_sig = tuple(sorted(extra_body.items()))
+        else:
+            extra_body_sig = extra_body
+        return (
+            getattr(connection, "model", None),
+            getattr(connection, "base_url", None),
+            getattr(connection, "api_key_env", None),
+            getattr(connection, "provider", None),
+            getattr(connection, "supports_native_tools", None),
+            getattr(connection, "max_connections", None),
+            extra_body_sig,
+        )
+
+    def invalidate_api_driver(self, agent: str | None = None) -> None:
+        """Invalida driver OpenAI-compatible cacheado para um agente ou todos."""
+        if agent is None:
+            self._api_drivers.clear()
+            self._api_driver_signatures.clear()
+            return
+        self._api_drivers.pop(agent, None)
+        self._api_driver_signatures.pop(agent, None)
+
     # ------------------------------------------------------------------
     # call() — ponto de entrada principal
     # ------------------------------------------------------------------
@@ -897,6 +925,10 @@ class AgentClient:
         if not isinstance(connection, OpenAIConnection):
             self._show_error(f"[erro] conexão inválida para driver de API: {agent}")
             return None
+        signature = self._api_connection_signature(connection)
+        cached_signature = self._api_driver_signatures.get(agent)
+        if cached_signature is not None and cached_signature != signature:
+            self.invalidate_api_driver(agent)
         is_first_call = agent not in self._api_drivers
         if is_first_call:
             api_key_env = connection.api_key_env
@@ -910,6 +942,7 @@ class AgentClient:
                 extra_body=connection.extra_body,
                 max_connections=getattr(connection, "max_connections", 4),
             )
+            self._api_driver_signatures[agent] = signature
 
         driver_instance = self._api_drivers[agent]
         self._cancel_event.clear()

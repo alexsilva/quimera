@@ -103,6 +103,16 @@ def test_agent_gateway_emits_failed_event_when_backend_raises():
     assert sink.events[-1].metadata["error"] == "boom"
 
 
+def test_agent_gateway_emits_failed_event_for_empty_response():
+    sink = RecordingSink()
+    gateway = make_gateway(FakeAgentClient(result=""), sink=sink)
+
+    assert gateway.call("openai") == ""
+    assert [event.kind for event in sink.events] == ["started", "failed"]
+    assert sink.events[-1].agent == "openai"
+    assert sink.events[-1].text == ""
+
+
 def test_input_broker_emits_human_action_events_without_changing_default_flow():
     sink = RecordingSink()
     broker = InputBroker(renderer=None, input_gate=None, agent_run_sink=sink)
