@@ -270,6 +270,50 @@ class TestProcessMainFlow(unittest.TestCase):
         self.assertEqual(delegated_agents[:2], ["codex", "claude"])
         self.assertEqual(delegated_agents[2:], ["opencode", "claude", "opencode"])
 
+    def test_extend_follow_up_does_not_reuse_stale_user_only_history_snapshot(self):
+        """Após persistir resposta, chamadas seguintes não devem receber snapshot antigo."""
+        app = _make_app(active_agents=["openai", "codex"], threads=1)
+        app.session_state["history"] = []
+        app.parse_routing = Mock(return_value=("openai", "segunda mensagem", False))
+        responses = iter([
+            "resposta openai",
+            "resposta codex",
+            "resposta openai 2",
+            "resposta codex 2",
+        ])
+        app.dispatch_services.delegate = Mock(side_effect=lambda *a, **kw: next(responses))
+
+        def persist_message(role, content, *, return_history_snapshot=False):
+            app.session_state["history"].append({"role": role, "content": content})
+            if return_history_snapshot:
+                return list(app.session_state["history"])
+            return None
+
+        app.session_services.persist_message = persist_message
+
+        def fake_parse(resp):
+            if resp == "resposta openai":
+                return (resp, None, None, True, False, None)
+            return (resp, None, None, False, False, None)
+
+        app.parse_response = Mock(side_effect=fake_parse)
+
+        app.chat_round_orchestrator.process("segunda mensagem")
+
+        first_call_kwargs = app.dispatch_services.delegate.call_args_list[0].kwargs
+        follow_up_kwargs = [call.kwargs for call in app.dispatch_services.delegate.call_args_list[1:]]
+
+        self.assertEqual(
+            first_call_kwargs["history_snapshot"],
+            [{"role": "human", "content": "segunda mensagem"}],
+        )
+        self.assertTrue(follow_up_kwargs)
+        self.assertTrue(all("history_snapshot" not in kwargs for kwargs in follow_up_kwargs))
+        self.assertIn(
+            {"role": "openai", "content": "resposta openai"},
+            app.session_state["history"],
+        )
+
     def test_main_flow_fallback_cancelled_resets_turn_without_warning(self):
         """Cancelamento após fallback no fluxo principal deve resetar turno e retornar."""
         app = _make_app(active_agents=["codex", "claude", "opencode"], threads=2)

@@ -512,12 +512,14 @@ class TextualUiBridge:
         self._input_value = ""
         self._active_agent_labels: dict[str, str] = {}
         self._direct_input_depth = 0
+        self._textual_thread_id: int | None = None
         self._lock = threading.Lock()
 
     def attach_textual_app(self, textual_app) -> None:
         """Registra a instância Textual ativa."""
         with self._lock:
             self.textual_app = textual_app
+            self._textual_thread_id = threading.get_ident()
 
     def attach_quimera_app(self, quimera_app) -> None:
         """Registra a instância Quimera controlada pela UI."""
@@ -630,8 +632,12 @@ class TextualUiBridge:
         """Envia evento visual para a UI, com fallback para fila interna."""
         with self._lock:
             textual_app = self.textual_app
+            textual_thread_id = self._textual_thread_id
         if textual_app is None:
             self.ui_queue.put(event)
+            return
+        if threading.get_ident() == textual_thread_id:
+            textual_app.handle_bridge_event(event)
             return
         try:
             textual_app.call_from_thread(textual_app.handle_bridge_event, event)

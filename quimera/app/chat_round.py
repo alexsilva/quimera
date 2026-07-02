@@ -468,7 +468,7 @@ class ChatRoundOrchestrator:
             extend,
             other_agents,
             request_override=message,
-            history_snapshot=history_snapshot if history_snapshot else None,
+            history_snapshot=None,
         )
 
         if self._get_pending_input_for() is not None:
