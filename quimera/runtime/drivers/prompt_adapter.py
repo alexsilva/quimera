@@ -1,6 +1,8 @@
 """Converte prompts estruturados do Quimera para mensagens do driver."""
 from __future__ import annotations
 
+import re
+
 from ...prompt_kinds import PromptKind, coerce_prompt_kind
 from ...prompt_templates import PromptText
 
@@ -23,7 +25,7 @@ ROLES_BY_KIND = {
         "execution_state": "system",
         "execution_mode": "system",
         "persistent_context": "system",
-        "recent_conversation": "user",
+        "recent_conversation": "history",
         "delegation": "user",
         "current_turn": "user",
     },
@@ -58,6 +60,69 @@ def _message_from_block(block, role: str) -> dict:
     return _message("user", block.content)
 
 
+_RECENT_CONVERSATION_ENTRY_RE = re.compile(
+    r"^\s*(?:\[(?P<bracketed>[^\]]+)\]|(?P<plain>[A-Za-z0-9_. -]{1,64})):\s*(?P<content>.*)$"
+)
+
+
+_USER_ROLE_LABELS = {"user", "human", "alex"}
+
+
+def _conversation_role_from_label(label: str) -> str:
+    """Converte label textual do histórico para role OpenAI chat."""
+    normalized = str(label or "").strip().lower()
+    return "user" if normalized in _USER_ROLE_LABELS else "assistant"
+
+
+def _conversation_content_from_label(label: str, role: str, content: str) -> str:
+    """Preserva identidade de agentes quando várias IAs aparecem no histórico."""
+    clean = str(content or "").strip()
+    clean_label = str(label or "").strip()
+    if role == "assistant" and clean_label and clean_label.lower() != "assistant":
+        return f"[{clean_label}]\n{clean}" if clean else f"[{clean_label}]"
+    return clean
+
+
+def _parse_recent_conversation_messages(content: str) -> list[dict]:
+    """Converte bloco recent_conversation em mensagens chat reais quando possível."""
+    messages: list[dict] = []
+    current_label: str | None = None
+    current_role: str | None = None
+    current_lines: list[str] = []
+
+    def flush_current() -> None:
+        nonlocal current_label, current_role, current_lines
+        if current_label is None or current_role is None:
+            return
+        body = "\n".join(current_lines).strip()
+        if body:
+            messages.append(
+                {
+                    "role": current_role,
+                    "content": _conversation_content_from_label(current_label, current_role, body),
+                }
+            )
+        current_label = None
+        current_role = None
+        current_lines = []
+
+    for line in str(content or "").splitlines():
+        match = _RECENT_CONVERSATION_ENTRY_RE.match(line)
+        if match:
+            label = (match.group("bracketed") or match.group("plain") or "").strip()
+            entry_content = match.group("content") or ""
+            flush_current()
+            current_label = label
+            current_role = _conversation_role_from_label(label)
+            current_lines = [entry_content]
+            continue
+        if current_label is not None:
+            current_lines.append(line)
+
+    flush_current()
+    return messages
+
+
 def _build_openai_messages_from_prompt(
     prompt: PromptText,
     prompt_kind: PromptKind | str | None = None,
@@ -80,7 +145,13 @@ def _build_openai_messages_from_prompt(
 
     for block in blocks:
         role = roles.get(block.name)
-        if role:
+        if role == "history":
+            history_messages = _parse_recent_conversation_messages(block.content)
+            if history_messages:
+                messages.extend(history_messages)
+            elif block.content.strip():
+                messages.append(_message("user", block.content))
+        elif role:
             messages.append(_message_from_block(block, role))
 
     return messages

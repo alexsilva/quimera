@@ -17,7 +17,7 @@ def _rendered(text="", kind=PromptKind.CHAT):
 
 
 def test_build_openai_messages_from_prompt_uses_current_turn_as_active_user_message():
-    """current_turn vira a última mensagem user ativa."""
+    """current_turn vira a última mensagem user ativa após histórico com roles."""
     prompt = (
         '<rules title="Suas regras">contexto</rules>\n'
         '<recent_conversation title="Conversa recente">\n'
@@ -31,11 +31,31 @@ def test_build_openai_messages_from_prompt_uses_current_turn_as_active_user_mess
     messages = _build_openai_messages_from_prompt(_rendered(prompt))
 
     assert messages[-1] == {"role": "user", "content": "Execute pwd via shell usando MCP"}
-    # recent_conversation é injetada como "user" para compatibilidade com modelos como Qwen
-    assert messages[-2]["role"] == "user"
-    assert "Leia o README" in messages[-2]["content"]
-    assert all(message["role"] == "system" for message in messages[:-2])
+    assert messages[-3] == {"role": "user", "content": "Leia o README"}
+    assert messages[-2] == {"role": "assistant", "content": "já li"}
+    assert all(message["role"] == "system" for message in messages[:-3])
     assert "Execute pwd" not in messages[0]["content"]
+
+
+def test_build_openai_messages_maps_bracketed_agents_to_assistant_messages():
+    """Histórico do Quimera vira chat OpenAI real com agentes como assistant."""
+    prompt = (
+        '<recent_conversation title="Conversa recente">\n'
+        '[ALEX]: primeira pergunta\n'
+        '[ollama-qwen3]: primeira resposta\ncontinuação da resposta\n'
+        '[ALEX]: segunda pergunta\n'
+        '</recent_conversation>\n'
+        '<current_turn title="Pedido atual">terceira pergunta</current_turn>'
+    )
+
+    messages = _build_openai_messages_from_prompt(_rendered(prompt))
+
+    assert messages == [
+        {"role": "user", "content": "primeira pergunta"},
+        {"role": "assistant", "content": "[ollama-qwen3]\nprimeira resposta\ncontinuação da resposta"},
+        {"role": "user", "content": "segunda pergunta"},
+        {"role": "user", "content": "terceira pergunta"},
+    ]
 
 
 def test_build_openai_messages_returns_empty_for_blank_prompt():
@@ -84,13 +104,13 @@ def test_build_openai_messages_keeps_current_turn_last_and_omits_metrics():
 
 
 def test_build_openai_messages_preserves_template_order_and_omits_metrics():
-    """Adapter preserva ordem do template; agent_metrics é omitido."""
+    """Adapter preserva ordem de blocos reconhecidos; agent_metrics é omitido."""
     prompt = (
         '<header title="Identificação">\nHEADER\n</header>\n'
         '<delegation title="Mensagem direta do outro agente">\nDELEGATION\n</delegation>\n'
         '<debug_state title="Debug de render ativo">\nDEBUG\n</debug_state>\n'
         '<agent_metrics title="Métricas">\nMETRICS\n</agent_metrics>\n'
-        '<recent_conversation title="Conversa recente">\nHISTORY\n</recent_conversation>\n'
+        '<recent_conversation title="Conversa recente">\nUSER: HISTORY\nASSISTANT: PREVIOUS\n</recent_conversation>\n'
         '<current_turn title="Pedido atual">\nCURRENT\n</current_turn>'
     )
 
@@ -100,8 +120,17 @@ def test_build_openai_messages_preserves_template_order_and_omits_metrics():
         "Identificação\n\nHEADER",
         "DELEGATION",
         "Debug de render ativo\n\nDEBUG",
-        "HISTORY",  # recent_conversation é "user": sem prefixo de título
+        "HISTORY",
+        "PREVIOUS",
         "CURRENT",
+    ]
+    assert [message["role"] for message in messages] == [
+        "system",
+        "user",
+        "system",
+        "user",
+        "assistant",
+        "user",
     ]
 
 
@@ -124,7 +153,7 @@ def test_build_openai_messages_uses_plain_titles_without_instructional_text():
     messages = _build_openai_messages_from_prompt(_rendered(prompt, PromptKind.CHAT))
 
     assert messages[0]["content"] == "Identificação\n\nVocê é OPENAI."
-    assert messages[1]["content"] == "USER: ação antiga"
+    assert messages[1] == {"role": "user", "content": "ação antiga"}
     assert "Não trate este bloco" not in messages[0]["content"]
     assert "Use para evitar duplicação" not in messages[1]["content"]
 
