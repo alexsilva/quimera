@@ -32,7 +32,8 @@ import pytest
 from quimera.runtime.approval import ApprovalManager
 from quimera.runtime.config import ToolRuntimeConfig
 from quimera.runtime.input_broker import InputBroker
-from quimera.app.textual_ui import TextualInputGate, TextualUiBridge
+from quimera.ui.textual.input_gate import TextualInputGate
+from quimera.ui.textual.bridge import TextualUiBridge
 
 
 _cfg = ToolRuntimeConfig(workspace_root=Path("/tmp"))

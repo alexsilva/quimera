@@ -25,7 +25,7 @@ from .profiles.base import (
 )
 from . import themes as _themes
 from .app import QuimeraApp
-from .app.textual_ui import TextualUiBridge, run_textual_quimera_app
+from .ui.textual import TextualUiBridge, run_textual_quimera_app
 from .app.simple_input_gate import SimpleInputGate
 from .runtime.mcp import start_embedded_mcp
 from .config import ConfigManager

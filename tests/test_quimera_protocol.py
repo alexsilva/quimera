@@ -1113,7 +1113,7 @@ class ProtocolTests(unittest.TestCase):
         handled = app.system_layer.handle_command(CMD_CONNECT)
 
         self.assertTrue(handled)
-        self.assertEqual(app.renderer.warnings, ["Uso: /connect <agente>"])
+        self.assertEqual(app.renderer.warnings, ["Uso: /connect <agente> [--advanced]"])
 
     def test_handle_command_connects_agent_interactively(self):
         """Verifica que handle command connects agent interactively."""

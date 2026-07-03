@@ -6,20 +6,23 @@ from types import SimpleNamespace
 
 from rich.console import Console, Group
 
-from quimera.app.textual_ui import (
+from quimera.ui.textual.app import run_textual_quimera_app
+from quimera.ui.textual.bridge import TextualUiBridge
+from quimera.ui.textual.events import TextualUiEvent
+from quimera.ui.textual.feed_model import (
     AgentLifecycleStatus,
     TextualFeedModel,
-    TextualInputGate,
-    TextualRenderer,
-    TextualUiBridge,
-    TextualUiEvent,
-    _TextualStatus,
+    _agent_lifecycle_payload,
+)
+from quimera.ui.textual.input_gate import TextualInputGate
+from quimera.ui.textual.renderer import TextualRenderer, _TextualStatus
+from quimera.ui.textual.renderables import (
     _build_question_overlay,
     _build_window_overlay_payload,
     _clear_question_overlay_widget,
-    _agent_lifecycle_payload,
     _render_event,
 )
+from quimera.ui.textual.terminal_modes import _external_textual_window
 
 
 def _events(model: TextualFeedModel):
@@ -566,7 +569,7 @@ def test_textual_renderer_external_window_resets_terminal_modes():
 
     renderer = TextualRenderer(bridge)
 
-    with patch("quimera.app.textual_ui.sys.__stdout__", FakeStdout()):
+    with patch("quimera.ui.textual.terminal_modes.sys.__stdout__", FakeStdout()):
         with renderer.external_window("external:editor", title="Editor externo"):
             writes.append("editor")
 
@@ -633,8 +636,7 @@ def test_textual_feed_visual_reset_clears_only_transients():
 
 
 def test_textual_render_event_varies_agent_theme_shape():
-    from quimera.app.textual_ui import _render_event
-
+    
     panel_event = TextualUiEvent(
         "agent_message",
         {"content": "olá", "label": "Claude", "style": "cyan", "theme": "panel", "render_mode": "plain"},
@@ -907,11 +909,9 @@ def test_textual_user_message_renders_as_chat_turn():
 
 
 def test_textual_feed_reserves_at_least_ten_lines_for_agent_output():
-    import inspect
+    from quimera.ui.textual.styles import TEXTUAL_APP_CSS
 
-    from quimera.app.textual_ui import run_textual_quimera_app
-
-    css = inspect.getsource(run_textual_quimera_app)
+    css = TEXTUAL_APP_CSS
 
     assert "#main" in css
     assert "min-height: 14;" in css
@@ -959,11 +959,9 @@ def test_toolbar_coordinator_formats_agent_names_with_profile_icons():
 
 
 def test_textual_toolbar_info_bar_uses_distinct_background():
-    import inspect
+    from quimera.ui.textual.styles import TEXTUAL_APP_CSS
 
-    from quimera.app.textual_ui import run_textual_quimera_app
-
-    css = inspect.getsource(run_textual_quimera_app)
+    css = TEXTUAL_APP_CSS
 
     assert "#toolbar" in css
     assert "background: #1a1a1a;" in css
@@ -997,8 +995,7 @@ def test_textual_toolbar_renderable_uses_main_tui_chip_styles():
 def test_textual_theme_cycle_bindings_include_main_tui_fallbacks():
     import inspect
 
-    from quimera.app.textual_ui import run_textual_quimera_app
-
+    
     source = inspect.getsource(run_textual_quimera_app)
 
     assert '"ctrl+t", "cycle_theme"' in source
@@ -1007,8 +1004,7 @@ def test_textual_theme_cycle_bindings_include_main_tui_fallbacks():
 
 
 def test_external_textual_window_does_not_reset_after_successful_driver_resume():
-    from quimera.app.textual_ui import _external_textual_window
-
+    
     events = []
 
     class FakeDriver:
@@ -1038,7 +1034,7 @@ def test_external_textual_window_does_not_reset_after_successful_driver_resume()
         def query_one(self, selector):
             raise LookupError(selector)
 
-    with patch("quimera.app.textual_ui._restore_terminal_modes", lambda: events.append("reset")):
+    with patch("quimera.ui.textual.terminal_modes._restore_terminal_modes", lambda: events.append("reset")):
         with _external_textual_window(FakeTextualApp()):
             events.append("editor")
 
@@ -1301,8 +1297,7 @@ def test_textual_input_window_without_question_does_not_leave_visual_overlay_act
 def test_textual_bridge_handler_refreshes_after_visual_event_updates():
     import inspect
 
-    from quimera.app.textual_ui import run_textual_quimera_app
-
+    
     source = inspect.getsource(run_textual_quimera_app)
 
     assert "def _refresh_now" in source
@@ -1314,8 +1309,7 @@ def test_textual_bridge_handler_refreshes_after_visual_event_updates():
 def test_textual_app_periodically_drains_bridge_event_queue():
     import inspect
 
-    from quimera.app.textual_ui import run_textual_quimera_app
-
+    
     source = inspect.getsource(run_textual_quimera_app)
 
     assert "self.set_interval(0.05, self._drain_bridge_events)" in source
@@ -1350,8 +1344,7 @@ def test_textual_renderer_flush_drains_bridge_events_for_tool_previews():
 def test_textual_app_exposes_flush_bridge_events_for_immediate_tool_preview_rendering():
     import inspect
 
-    from quimera.app.textual_ui import run_textual_quimera_app
-
+    
     source = inspect.getsource(run_textual_quimera_app)
 
     assert "def flush_bridge_events" in source
@@ -1362,8 +1355,7 @@ def test_textual_app_exposes_flush_bridge_events_for_immediate_tool_preview_rend
 def test_textual_app_uses_question_overlay_for_prompt_routing():
     import inspect
 
-    from quimera.app.textual_ui import run_textual_quimera_app
-
+    
     source = inspect.getsource(run_textual_quimera_app)
 
     assert "def _set_question_overlay" in source
@@ -1460,3 +1452,14 @@ def test_textual_chat_prompt_active_does_not_steal_normal_input():
     assert bridge.direct_input_queue.empty()
     assert bridge.input_queue.empty()
     assert not bridge.is_direct_input_active()
+
+
+def test_textual_app_imports_summary_spinner_used_by_spinner_update():
+    import inspect
+
+    from quimera.ui.textual.app import run_textual_quimera_app
+
+    source = inspect.getsource(run_textual_quimera_app)
+
+    assert "_SummarySpinner" in source
+    assert "from quimera.ui.textual.widgets import" in source

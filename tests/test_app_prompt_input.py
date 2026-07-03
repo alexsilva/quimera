@@ -1,4 +1,4 @@
-"""Tests for quimera/app/textual_ui.py — Textual UI input gate and renderer."""
+"""Tests for Textual UI input gate and renderer modules."""
 import asyncio
 import threading
 
@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 
 
 def test_textual_input_gate_reads_submitted_line():
-    from quimera.app.textual_ui import TextualUiBridge
+    from quimera.ui.textual.bridge import TextualUiBridge
 
     bridge = TextualUiBridge()
     gate = bridge.create_input_gate(command_resolver=lambda: ["/help"])
@@ -24,7 +24,7 @@ def test_textual_input_gate_reads_submitted_line():
 
 
 def test_textual_renderer_buffers_events_until_app_attaches():
-    from quimera.app.textual_ui import TextualUiBridge
+    from quimera.ui.textual.bridge import TextualUiBridge
 
     bridge = TextualUiBridge()
     renderer = bridge.create_renderer()
@@ -41,7 +41,7 @@ def test_textual_renderer_extracts_text_from_rich_renderable():
     from rich.panel import Panel
     from rich.text import Text
 
-    from quimera.app.textual_ui import TextualUiBridge
+    from quimera.ui.textual.bridge import TextualUiBridge
 
     bridge = TextualUiBridge()
     renderer = bridge.create_renderer()
@@ -54,7 +54,7 @@ def test_textual_renderer_extracts_text_from_rich_renderable():
 
 
 def test_textual_renderer_strips_ansi_from_agent_message():
-    from quimera.app.textual_ui import TextualUiBridge
+    from quimera.ui.textual.bridge import TextualUiBridge
 
     bridge = TextualUiBridge()
     renderer = bridge.create_renderer()
@@ -66,7 +66,7 @@ def test_textual_renderer_strips_ansi_from_agent_message():
 
 
 def test_textual_input_gate_redisplay_sends_prompt_event():
-    from quimera.app.textual_ui import TextualUiBridge
+    from quimera.ui.textual.bridge import TextualUiBridge
 
     bridge = TextualUiBridge()
     gate = bridge.create_input_gate(command_resolver=lambda: ["/help"])
@@ -83,7 +83,7 @@ def test_textual_input_gate_redisplay_sends_prompt_event():
 
 
 def test_textual_input_gate_completions():
-    from quimera.app.textual_ui import TextualUiBridge
+    from quimera.ui.textual.bridge import TextualUiBridge
 
     bridge = TextualUiBridge()
     gate = bridge.create_input_gate(
@@ -97,7 +97,7 @@ def test_textual_input_gate_completions():
 
 
 def test_textual_input_gate_get_line_buffer_returns_empty():
-    from quimera.app.textual_ui import TextualUiBridge
+    from quimera.ui.textual.bridge import TextualUiBridge
 
     bridge = TextualUiBridge()
     gate = bridge.create_input_gate()
@@ -106,7 +106,7 @@ def test_textual_input_gate_get_line_buffer_returns_empty():
 
 
 def test_textual_renderer_show_no_response():
-    from quimera.app.textual_ui import TextualUiBridge
+    from quimera.ui.textual.bridge import TextualUiBridge
 
     bridge = TextualUiBridge()
     renderer = bridge.create_renderer()
@@ -118,7 +118,7 @@ def test_textual_renderer_show_no_response():
 
 
 def test_textual_feed_limit_ignores_auto_summarize_threshold():
-    from quimera.app.textual_ui import _resolve_textual_feed_limit
+    from quimera.ui.textual.app import _resolve_textual_feed_limit
 
     app = SimpleNamespace(
         auto_summarize_threshold=5,
@@ -129,7 +129,7 @@ def test_textual_feed_limit_ignores_auto_summarize_threshold():
 
 
 def test_textual_feed_limit_ignores_history_window():
-    from quimera.app.textual_ui import _resolve_textual_feed_limit
+    from quimera.ui.textual.app import _resolve_textual_feed_limit
 
     app = SimpleNamespace(
         auto_summarize_threshold=0,
@@ -161,13 +161,14 @@ def test_textual_rich_log_max_lines_prunes_visible_feed():
 
 
 def test_textual_summary_spinner_uses_circular_frames():
-    from quimera.app.textual_ui import _SUMMARY_SPINNER_FRAMES
+    from quimera.ui.textual.constants import SUMMARY_SPINNER_FRAMES as _SUMMARY_SPINNER_FRAMES
 
     assert _SUMMARY_SPINNER_FRAMES == ("◐", "◓", "◑", "◒")
 
 
 def test_textual_post_exit_failure_recorder_keeps_errors_and_warnings():
-    from quimera.app.textual_ui import TextualUiEvent, _append_post_exit_failure_message
+    from quimera.ui.textual.events import TextualUiEvent
+    from quimera.ui.textual.app import _append_post_exit_failure_message
 
     messages = []
 
@@ -179,7 +180,8 @@ def test_textual_post_exit_failure_recorder_keeps_errors_and_warnings():
 
 
 def test_textual_post_exit_failure_recorder_ignores_empty_payload():
-    from quimera.app.textual_ui import TextualUiEvent, _append_post_exit_failure_message
+    from quimera.ui.textual.events import TextualUiEvent
+    from quimera.ui.textual.app import _append_post_exit_failure_message
 
     messages = []
 
