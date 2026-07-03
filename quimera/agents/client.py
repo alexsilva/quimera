@@ -233,6 +233,12 @@ class AgentClient:
         self._cancel_event.clear()
         self.reset_cancel_notices()
 
+    def _is_expected_termination_return_code(self, return_code) -> bool:
+        """Retorna True para SIGTERM decorrente de cancelamento controlado."""
+        if return_code not in {-15, 143}:
+            return False
+        return self._cancel_event.is_set() or self._user_cancelled
+
     def _show_cancelled_once(self) -> None:
         """Evita repetição de '[cancelado] pelo usuário' em cancelamentos concorrentes."""
         should_show = False
@@ -377,6 +383,7 @@ class AgentClient:
     ):
         """Executa um comando (agente CLI) e retorna o stdout completo."""
         self._cancel_event.clear()
+        self._user_cancelled = False
         self.rate_limit_detected = False
         self.rate_limit_detected_at = None
         self._agent_running = True
@@ -638,6 +645,8 @@ class AgentClient:
             self._spy_output_presenter.reset()
 
         if proc.returncode != 0:
+            if self._is_expected_termination_return_code(proc.returncode):
+                return None
             self._show_error(
                 f"[erro] retornou código {proc.returncode}",
                 agent=agent,
