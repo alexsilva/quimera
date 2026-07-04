@@ -416,6 +416,16 @@ def test_apply_patch_multi_file_lock_keys_are_deterministic_per_path(tmp_path):
     ) == "|".join(expected)
 
 
+def test_poll_command_session_uses_command_session_serialization_key(tmp_path):
+    """poll_command_session compartilha o lock da sessão com stdin/close."""
+    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
+    call = ToolCall(name="poll_command_session", arguments={"session_id": 123})
+
+    assert executor.approval_broker._serialization_keys(call) == [
+        "command-session:123"
+    ]
+
+
 def test_apply_patch_overlapping_multi_file_patch_is_serialized(tmp_path):
     """Verifica que Test apply patch overlapping multi file patch is serialized."""
     approval = MagicMock()

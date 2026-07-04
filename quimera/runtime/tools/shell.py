@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import pty
 import shlex
+import re
 import threading
 import time
 import warnings
@@ -79,6 +80,7 @@ class ShellTool(ToolBase):
             )
 
         command = str(call.arguments["command"])
+        command = self._rewrite_command_for_local_venv(command, self.config.workspace_root)
         started = time.perf_counter()
         proc = subprocess.run(
             command,
@@ -133,6 +135,7 @@ class ShellTool(ToolBase):
         login = bool(call.arguments.get("login", True))
         tty_enabled = bool(call.arguments.get("tty", False))
 
+        command = self._rewrite_command_for_local_venv(command, workdir)
         process, tty_master_fd = self._spawn_process(command, workdir, shell=shell, login=login, tty=tty_enabled)
         session = self._create_session(
             process,
@@ -187,6 +190,32 @@ class ShellTool(ToolBase):
             tool_name=call.name,
             include_session_id=True,
             wait_for_completion=close_stdin,
+        )
+
+    def poll_command_session(self, call: ToolCall) -> ToolResult:
+        """Consulta a saída incremental de uma sessão sem escrever no stdin.
+
+        Esta ferramenta cobre o caso de polling puro sem precisar enviar
+        `chars=""` para `write_stdin`, o que evita bloqueios de segurança em
+        clientes que tratam string vazia em tool-call como payload suspeito.
+        """
+
+        session_id = int(call.arguments["session_id"])
+        session = self._sessions.get(session_id)
+        if session is None:
+            return ToolResult(
+                ok=False,
+                tool_name=call.name,
+                error=f"Sessão não encontrada: {session_id}",
+            )
+        yield_time_ms = self._resolve_yield_time(call.arguments.get("yield_time_ms"))
+        wait_for_completion = bool(call.arguments.get("wait_for_completion", False))
+        return self._collect_session_result(
+            session,
+            yield_time_ms=yield_time_ms,
+            tool_name=call.name,
+            include_session_id=True,
+            wait_for_completion=wait_for_completion,
         )
 
     def close_command_session(self, call: ToolCall) -> ToolResult:
@@ -258,6 +287,34 @@ class ShellTool(ToolBase):
         if raw_value is None:
             return self.config.interactive_command_default_yield_ms
         return max(0, int(raw_value))
+
+    def _rewrite_command_for_local_venv(self, command: str, workdir: Path) -> str:
+        """Prefere executáveis do `.venv` da workspace alvo para comandos Python comuns.
+
+        O processo do Quimera pode estar rodando dentro do próprio virtualenv do
+        app. Sem esta reescrita, comandos como `pytest` e `python -m pytest`
+        podem executar no venv do Quimera em vez do projeto aberto no `workdir`.
+        A troca só ocorre para comandos simples, já validados sem chaining, e
+        somente quando o executável correspondente existe em `workdir/.venv/bin`.
+        """
+
+        try:
+            tokens = shlex.split(command)
+        except ValueError:
+            return command
+        if not tokens:
+            return command
+        first_token = Path(tokens[0]).name
+        if first_token not in {"python", "python3", "pytest", "pip"}:
+            return command
+        candidate = workdir / ".venv" / "bin" / first_token
+        if not candidate.exists():
+            if first_token == "python3":
+                candidate = workdir / ".venv" / "bin" / "python"
+            if not candidate.exists():
+                return command
+        tokens[0] = str(candidate)
+        return shlex.join(tokens)
 
     def _spawn_process(
             self,
@@ -624,6 +681,8 @@ class ShellToolValidator(ValidatableTool):
     """Validação de policy para as ferramentas shell."""
 
     _SHELL_CHAIN_OPERATORS = (";", "&&", "||", "|", "`", "$(")
+    _SHELL_CHAIN_TOKENS = frozenset({";", "&&", "||", "|"})
+    _SHELL_OPERATOR_PATTERN = re.compile(r"&&|\|\||[;|]")
     _FILE_PATH_CMDS = frozenset({"cat", "head", "tail", "less", "grep", "sed", "find", "ls"})
     _MKDIR_ALLOWED_FLAGS = frozenset({"-p", "--parents", "-v", "--verbose"})
 
@@ -663,6 +722,20 @@ class ShellToolValidator(ValidatableTool):
         except (ValueError, TypeError) as exc:
             raise ToolPolicyError("close_command_session requer um session_id inteiro") from exc
 
+    def _validate_poll_command_session(self, call: ToolCall) -> None:
+        """Valida uma consulta de saída incremental sem escrita em stdin."""
+        if "session_id" not in call.arguments:
+            raise ToolPolicyError("poll_command_session requer 'session_id'")
+        try:
+            int(call.arguments["session_id"])
+        except (ValueError, TypeError) as exc:
+            raise ToolPolicyError("poll_command_session requer um session_id inteiro") from exc
+        if "yield_time_ms" in call.arguments:
+            try:
+                int(call.arguments["yield_time_ms"])
+            except (ValueError, TypeError) as exc:
+                raise ToolPolicyError("poll_command_session requer yield_time_ms inteiro") from exc
+
     def _validate_shell_command(self, command: str, *, tool_name: str) -> None:
         """Aplica a política comum de shell para ferramentas de comando."""
         if not command:
@@ -675,17 +748,16 @@ class ShellToolValidator(ValidatableTool):
         policy = self.config.workspace_policy
         chaining_allowed = policy is not None and policy.shell_allow_chaining
         allowlist_skipped = policy is not None and policy.shell_skip_allowlist
-        if not chaining_allowed:
-            for op in self._SHELL_CHAIN_OPERATORS:
-                if op in command:
-                    raise ToolPolicyError(f"Comando bloqueado: operador de encadeamento proibido: '{op}'")
-        if allowlist_skipped:
-            return
         try:
             tokens = shlex.split(command)
             first_token = tokens[0]
         except Exception as exc:  # noqa: BLE001
             raise ToolPolicyError(f"Comando inválido: {command}") from exc
+        if not chaining_allowed:
+            self._validate_shell_operators(command)
+        if allowlist_skipped:
+            return
+        first_token = self._normalize_allowed_executable(first_token)
         if first_token not in self.config.shell_allowlist:
             raise ToolPolicyError(f"Comando fora da allowlist: {first_token}")
         if first_token == "git" and len(tokens) > 1 and tokens[1] in {"push"}:
@@ -694,6 +766,69 @@ class ShellToolValidator(ValidatableTool):
             self._validate_shell_file_paths(tokens[1:])
         if first_token == "mkdir":
             self._validate_mkdir_args(tokens[1:])
+
+    def _normalize_allowed_executable(self, first_token: str) -> str:
+        """Normaliza executáveis relativos/absolutos dentro da workspace para allowlist.
+
+        Permite chamar caminhos como `.venv/bin/pytest` ou
+        `/workspace/.venv/bin/python` quando o basename está na allowlist e o
+        executável resolvido permanece dentro do workspace. Isso mantém o
+        confinement de path sem obrigar o agente a depender do PATH herdado pelo
+        processo do Quimera.
+        """
+
+        if "/" not in first_token:
+            return first_token
+        candidate = Path(first_token).expanduser()
+        if not candidate.is_absolute():
+            candidate = self.config.workspace_root / candidate
+        resolved_parent = candidate.parent.resolve()
+        if not is_path_inside(resolved_parent, self.config.workspace_root):
+            raise ToolPolicyError(f"Executável fora do workspace: {first_token}")
+        return candidate.name
+
+    def _validate_shell_operators(self, command: str) -> None:
+        """Bloqueia operadores reais de shell, mas ignora caracteres dentro de quotes.
+
+        A validação anterior baseada em tokens de `shlex.split` deixava passar
+        operadores grudados (`echo ok;cat`). Um scan lexical simples preserva
+        a distinção necessária: operadores fora de aspas são bloqueados, mas um
+        ponto-e-vírgula dentro de `python -c 'print(1); print(2)'` continua
+        sendo apenas conteúdo do argumento.
+        """
+
+        quote: str | None = None
+        escaped = False
+        index = 0
+        while index < len(command):
+            char = command[index]
+            if escaped:
+                escaped = False
+                index += 1
+                continue
+            if char == "\\":
+                escaped = True
+                index += 1
+                continue
+            if quote is not None:
+                if char == quote:
+                    quote = None
+                index += 1
+                continue
+            if char in {"'", '"'}:
+                quote = char
+                index += 1
+                continue
+            if char == "`":
+                raise ToolPolicyError("Comando bloqueado: operador de encadeamento proibido: '`'")
+            if command.startswith("$(", index):
+                raise ToolPolicyError("Comando bloqueado: operador de encadeamento proibido: '$('")
+            match = self._SHELL_OPERATOR_PATTERN.match(command, index)
+            if match:
+                raise ToolPolicyError(
+                    f"Comando bloqueado: operador de encadeamento proibido: '{match.group(0)}'"
+                )
+            index += 1
 
     def _validate_mkdir_args(self, args: list[str]) -> None:
         """Valida mkdir como mutação restrita ao workspace e sem flags perigosas."""
@@ -734,7 +869,13 @@ def register(registry, policy, config) -> None:
     """Registra todas as tools shell no registry e a validação na policy."""
     shell_tool = ShellTool(config)
     shell_validator = ShellToolValidator(config)
-    _SHELL_TOOL_NAMES = ['run_shell', 'exec_command', 'write_stdin', 'close_command_session']
+    _SHELL_TOOL_NAMES = [
+        'run_shell',
+        'exec_command',
+        'write_stdin',
+        'poll_command_session',
+        'close_command_session',
+    ]
     for name in _SHELL_TOOL_NAMES:
         registry.register(name, getattr(shell_tool, name))
     policy.register_tool_validator(_SHELL_TOOL_NAMES, shell_validator)

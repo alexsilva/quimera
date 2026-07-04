@@ -103,7 +103,7 @@ def test_schema_names_match_registered_tools():
     expected = {
         "list_files", "read_file", "write_file", "replace_text", "apply_patch", "grep_search",
         "inspect_symbols", "run_shell",
-        "exec_command", "write_stdin", "close_command_session", "list_tasks", "list_jobs",
+        "exec_command", "write_stdin", "poll_command_session", "close_command_session", "list_tasks", "list_jobs",
         "get_job", "memory_save", "memory_retrieve", "remove_file", "web_search", "web_fetch", "delegate",
         "todo_write", "todo_list", "list_agents", "ask_user",
         # Git tools
@@ -624,6 +624,7 @@ def test_run_tools_system_prompt_guides_tool_usage():
         "run_shell",
         "exec_command",
         "write_stdin",
+        "poll_command_session",
         "close_command_session",
         "memory_save",
         "memory_retrieve",

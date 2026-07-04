@@ -217,11 +217,11 @@ class ApprovalBroker:
     _NETWORK_TOOLS = frozenset({"web_search", "web_fetch"})
     _WRITE_TOOLS = frozenset({
         "write_file", "apply_patch", "todo_write", "write_stdin",
-        "close_command_session", "git_add", "git_commit",
+        "poll_command_session", "close_command_session", "git_add", "git_commit",
         "git_checkout", "git_push",
     })
     _SHELL_TOOLS = frozenset({
-        "run_shell", "run_shell_command", "exec_command",
+        "run_shell", "run_shell_command", "exec_command", "poll_command_session",
     })
     _DESTRUCTIVE_TOOLS = frozenset({"remove_file"})
     _PATH_TOOLS = frozenset({
@@ -527,7 +527,7 @@ class ApprovalBroker:
     def _serialization_keys(self, call: ToolCall) -> list[str]:
         if call.name in {"run_shell", "run_shell_command", "exec_command"}:
             return [f"workspace:{self.config.workspace_root}"]
-        if call.name in {"write_stdin", "close_command_session"}:
+        if call.name in {"write_stdin", "poll_command_session", "close_command_session"}:
             session_id = call.arguments.get("session_id")
             return [
                 f"command-session:{session_id}"

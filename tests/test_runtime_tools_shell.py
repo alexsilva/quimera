@@ -42,6 +42,32 @@ def test_shell_tool_with_staging_warning(config):
                 tool.run_shell(call)
 
 
+def test_rewrite_command_prefers_workdir_virtualenv(tmp_path):
+    """Reescreve comandos Python comuns para o `.venv` do workdir alvo."""
+    venv_bin = tmp_path / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    pytest_bin = venv_bin / "pytest"
+    pytest_bin.write_text("#!/bin/sh\n")
+    tool = ShellTool(ToolRuntimeConfig(workspace_root=tmp_path))
+
+    command = tool._rewrite_command_for_local_venv("pytest tests/test_x.py -q", tmp_path)
+
+    assert command == f"{pytest_bin} tests/test_x.py -q"
+
+
+def test_rewrite_python3_falls_back_to_virtualenv_python(tmp_path):
+    """Usa `.venv/bin/python` quando o comando é `python3` e só `python` existe."""
+    venv_bin = tmp_path / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    python_bin = venv_bin / "python"
+    python_bin.write_text("#!/bin/sh\n")
+    tool = ShellTool(ToolRuntimeConfig(workspace_root=tmp_path))
+
+    command = tool._rewrite_command_for_local_venv("python3 -m pytest -q", tmp_path)
+
+    assert command == f"{python_bin} -m pytest -q"
+
+
 def _poll_until_completed(tool: ShellTool, result, *, yield_time_ms: int = 500):
     current = result
     for _ in range(5):
@@ -113,6 +139,46 @@ def test_exec_command_supports_polling_running_process(tmp_path):
     assert finished.data["diff"] == [{"op": "replace", "text": "start\ndone\n"}]
     assert f"session_id: {session_id}" in finished.content
     assert "status: completed" in finished.content
+
+
+def test_poll_command_session_reads_output_without_stdin_payload(tmp_path):
+    """Consulta uma sessão em execução sem enviar chars para stdin."""
+    tool = ShellTool(ToolRuntimeConfig(workspace_root=tmp_path))
+    started = tool.exec_command(
+        ToolCall(
+            name="exec_command",
+            arguments={
+                "cmd": f'{sys.executable} -u -c "import time; print(\'start\'); time.sleep(0.1); print(\'done\')"',
+                "yield_time_ms": 10,
+            },
+        )
+    )
+    session_id = started.data["session_id"]
+
+    result = tool.poll_command_session(
+        ToolCall(
+            name="poll_command_session",
+            arguments={"session_id": session_id, "yield_time_ms": 500},
+        )
+    )
+
+    assert result.ok is True
+    assert result.data["session_id"] == session_id
+    assert result.data["status"] in {"running", "completed"}
+    if result.data["status"] == "running":
+        result = tool.poll_command_session(
+            ToolCall(
+                name="poll_command_session",
+                arguments={
+                    "session_id": session_id,
+                    "yield_time_ms": 500,
+                    "wait_for_completion": True,
+                },
+            )
+        )
+    assert result.data["status"] == "completed"
+    assert "start" in result.data["stdout"]
+    assert "done" in result.data["stdout"]
 
 
 def test_exec_command_rejects_workdir_outside_workspace_at_runtime(tmp_path):

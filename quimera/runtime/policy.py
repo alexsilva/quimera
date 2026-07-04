@@ -84,6 +84,7 @@ class ToolPolicy:
             "run_shell",
             "run_shell_command",
             "exec_command",
+            "poll_command_session",
             "close_command_session",
             "remove_file",
             "write_stdin",

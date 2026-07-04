@@ -497,6 +497,24 @@ def test_policy_exec_command_with_workdir_outside_workspace(shell_validator):
         shell_validator.validate(call)
 
 
+def test_policy_poll_command_session_valid(shell_validator):
+    """poll_command_session aceita session_id inteiro e yield opcional."""
+    call = ToolCall(
+        name="poll_command_session",
+        arguments={"session_id": 1, "yield_time_ms": 100},
+    )
+
+    shell_validator.validate(call)
+
+
+def test_policy_poll_command_session_requires_session_id(shell_validator):
+    """poll_command_session exige session_id."""
+    call = ToolCall(name="poll_command_session", arguments={})
+
+    with pytest.raises(ToolPolicyError, match="session_id"):
+        shell_validator.validate(call)
+
+
 # ── shell policy ────────────────────────────────────────────
 
 def test_policy_shell_chain_operators_all(shell_validator):
@@ -507,10 +525,75 @@ def test_policy_shell_chain_operators_all(shell_validator):
             shell_validator.validate(call)
 
 
+def test_policy_shell_blocks_chain_operators_without_spaces(shell_validator):
+    """Bloqueia operadores de shell mesmo quando grudados em argumentos."""
+    for command in [
+        "echo ok;cat /etc/passwd",
+        "echo ok|cat",
+        "echo ok&&cat",
+        "echo ok||cat",
+    ]:
+        call = ToolCall(name="exec_command", arguments={"cmd": command})
+        with pytest.raises(ToolPolicyError, match="operador de encadeamento proibido"):
+            shell_validator.validate(call)
+
+
 def test_policy_shell_allowlist_validation(shell_validator):
     """Comandos na allowlist passam na validação."""
     call = ToolCall(name="run_shell", arguments={"command": "ls -la"})
     shell_validator.validate(call)  # não deve lançar
+
+
+def test_policy_shell_allows_sed_in_place_for_workspace_file(shell_validator):
+    """Permite sed in-place para edições locais sem chaining."""
+    call = ToolCall(
+        name="exec_command",
+        arguments={"cmd": "sed -i 's/403/401/' tests/example.py"},
+    )
+
+    shell_validator.validate(call)
+
+
+def test_policy_shell_allows_workspace_venv_executable(tmp_path):
+    """Permite executável dentro da workspace quando o basename está na allowlist."""
+    venv_bin = tmp_path / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    pytest_bin = venv_bin / "pytest"
+    pytest_bin.write_text("#!/bin/sh\n")
+    config = ToolRuntimeConfig(workspace_root=tmp_path)
+    validator = ShellToolValidator(config)
+    call = ToolCall(
+        name="exec_command",
+        arguments={"cmd": ".venv/bin/pytest tests/test_example.py"},
+    )
+
+    validator.validate(call)
+
+
+def test_policy_shell_allows_workspace_venv_python_symlink(tmp_path):
+    """Permite symlink de executável do venv quando o link está dentro da workspace."""
+    venv_bin = tmp_path / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    python_bin = venv_bin / "python"
+    python_bin.symlink_to("/usr/bin/python3")
+    config = ToolRuntimeConfig(workspace_root=tmp_path)
+    validator = ShellToolValidator(config)
+    call = ToolCall(
+        name="exec_command",
+        arguments={"cmd": ".venv/bin/python -m pytest -q"},
+    )
+
+    validator.validate(call)
+
+
+def test_policy_shell_allows_semicolon_inside_python_code(shell_validator):
+    """Não trata ponto-e-vírgula dentro de argumento citado como chaining."""
+    call = ToolCall(
+        name="exec_command",
+        arguments={"cmd": "python -c 'print(1); print(2)'"},
+    )
+
+    shell_validator.validate(call)
 
 
 def test_policy_run_shell_allows_mkdir_inside_workspace(tmp_path):

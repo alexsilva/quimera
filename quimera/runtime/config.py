@@ -37,6 +37,7 @@ class ToolRuntimeConfig:
             "head",
             "ls",
             "mkdir",
+            "pip",
             "pwd",
             "pytest",
             "python",

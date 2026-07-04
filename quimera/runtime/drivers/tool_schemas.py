@@ -343,7 +343,7 @@ TOOL_SCHEMAS = [
             "name": "exec_command",
             "description": (
                 "Executa um comando shell com suporte a sessão persistente, stdout/stderr incremental "
-                "e polling posterior via write_stdin."
+                "e polling posterior via poll_command_session."
             ),
             "parameters": {
                 "type": "object",
@@ -428,8 +428,8 @@ TOOL_SCHEMAS = [
         "function": {
             "name": "write_stdin",
             "description": (
-                "Escreve no stdin de uma sessão aberta por exec_command ou apenas faz polling quando chars "
-                "for vazio."
+                "Escreve no stdin de uma sessão aberta por exec_command. "
+                "Para consultar saída sem escrever, prefira poll_command_session."
             ),
             "parameters": {
                 "type": "object",
@@ -440,7 +440,7 @@ TOOL_SCHEMAS = [
                     },
                     "chars": {
                         "type": "string",
-                        "description": "Texto a enviar para o stdin. Use string vazia para apenas consultar a saída.",
+                        "description": "Texto a enviar para o stdin.",
                     },
                     "yield_time_ms": {
                         "type": "integer",
@@ -458,6 +458,46 @@ TOOL_SCHEMAS = [
                 "properties": {
                     "ok": {"type": "boolean"},
                     "content": {"type": "string", "description": "Session output after write/poll"},
+                    "exit_code": {"type": "integer"},
+                    "session_id": {"type": "integer"},
+                    "truncated": {"type": "boolean"},
+                    "error": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+                },
+                "required": ["ok", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "poll_command_session",
+            "description": (
+                "Consulta stdout/stderr incremental de uma sessão aberta por exec_command "
+                "sem escrever no stdin. Use para polling puro em vez de write_stdin com chars vazio."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "integer",
+                        "description": "ID da sessão retornada por exec_command.",
+                    },
+                    "yield_time_ms": {
+                        "type": "integer",
+                        "description": "Tempo em milissegundos para esperar por nova saída.",
+                    },
+                    "wait_for_completion": {
+                        "type": "boolean",
+                        "description": "Se true, aguarda conclusão dentro do orçamento de yield_time_ms.",
+                    },
+                },
+                "required": ["session_id"],
+            },
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "ok": {"type": "boolean"},
+                    "content": {"type": "string", "description": "Session output after poll"},
                     "exit_code": {"type": "integer"},
                     "session_id": {"type": "integer"},
                     "truncated": {"type": "boolean"},
