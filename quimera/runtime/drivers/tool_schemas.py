@@ -881,7 +881,9 @@ TOOL_SCHEMAS = [
                     "steps": {
                         "type": "array",
                         "description": (
-                            "Passos adicionais opcionais executados em sequência. "
+                            "Passos adicionais opcionais. "
+                            "Quando parallel=false (padrão), executados em sequência. "
+                            "Quando parallel=true, todos executados ao mesmo tempo. "
                             "Cada item deve conter target_agent, request e context opcional."
                         ),
                         "items": {
@@ -897,6 +899,14 @@ TOOL_SCHEMAS = [
                             },
                             "required": ["target_agent", "request"],
                         },
+                    },
+                    "parallel": {
+                        "type": "boolean",
+                        "description": (
+                            "Quando true, executa o target_agent principal e todos os steps "
+                            "simultaneamente em paralelo. "
+                            "Padrão: false (execução sequencial)."
+                        ),
                     },
                 },
                 "required": ["target_agent", "request"],

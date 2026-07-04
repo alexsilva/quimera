@@ -270,6 +270,91 @@ class DelegateTools(ToolBase):
     # ── synchronous execution core ───────────────────────────────────────
 
     @staticmethod
+    def _execute_single_step(
+        step: dict,
+        delegate_fn: _DelegateFnProto,
+        progress_callback: Callable[[str], None] | None,
+        normalize_agent_fn: Callable[[str | None], str],
+        cleanup_callback: Callable[[str], None] | None = None,
+        cancel_checker: Callable[[], bool] | None = None,
+    ) -> tuple[str | None, str | None, str | None]:
+        """Executa um único step. Retorna (selected_agent, result_str, error_str)."""
+        attempt_targets = [step["target_agent"], *step["fallback_agents"]]
+        step_result = None
+        last_error = None
+        selected_agent = None
+        normalized_target_agent = ""
+        for target_agent in attempt_targets:
+            if callable(cancel_checker) and cancel_checker():
+                return None, None, "Execução cancelada pelo usuário"
+            normalized_target_agent = normalize_agent_fn(target_agent)
+            delegation = {
+                "task": step["request"],
+                "context": step["context"],
+            }
+            try:
+                result = delegate_fn(
+                    normalized_target_agent,
+                    delegation=delegation,
+                    delegation_only=True,
+                    protocol_mode="delegation",
+                    primary=False,
+                    silent=False,
+                    show_output=False,
+                    persist_history=True,
+                    history_snapshot=[],
+                    max_retries=3,
+                    progress_callback=progress_callback,
+                )
+            except Exception as dispatch_error:
+                if callable(cancel_checker) and cancel_checker():
+                    return None, None, "Execução cancelada pelo usuário"
+                last_error = str(dispatch_error)
+                logger.warning(
+                    "delegate: dispatch to '%s' failed: %s",
+                    target_agent, last_error,
+                )
+                continue
+            if result is None:
+                if callable(cancel_checker) and cancel_checker():
+                    return None, None, "Execução cancelada pelo usuário"
+                last_error = f"Agent '{target_agent}' returned no response"
+                logger.warning(
+                    "delegate: dispatch to '%s' returned no response",
+                    target_agent,
+                )
+                continue
+            selected_agent = target_agent
+            step_result = str(result)
+            if cleanup_callback and normalized_target_agent:
+                try:
+                    cleanup_callback(normalized_target_agent)
+                except Exception:
+                    logger.warning(
+                        "cleanup_callback failed for %s",
+                        normalized_target_agent, exc_info=True,
+                    )
+            break
+
+        if step_result is None:
+            if cleanup_callback and normalized_target_agent:
+                try:
+                    cleanup_callback(normalized_target_agent)
+                except Exception:
+                    logger.warning(
+                        "cleanup_callback failed for %s",
+                        normalized_target_agent, exc_info=True,
+                    )
+            error_detail = (
+                f"{last_error}. Tried: {', '.join(attempt_targets)}"
+                if last_error
+                else f"No response from any target. Tried: {', '.join(attempt_targets)}"
+            )
+            return None, None, error_detail
+
+        return selected_agent, step_result, None
+
+    @staticmethod
     def _execute_steps_inner(
         steps: list[dict],
         delegate_fn: _DelegateFnProto,
@@ -279,7 +364,7 @@ class DelegateTools(ToolBase):
         cleanup_callback: Callable[[str], None] | None = None,
         cancel_checker: Callable[[], bool] | None = None,
     ) -> ToolResult:
-        """Loop de execução dos steps — reusado síncrono e assíncrono."""
+        """Loop sequencial de execução dos steps — reusado síncrono e assíncrono."""
         tool_name = "delegate"
         try:
             step_outputs: list[str] = []
@@ -310,94 +395,13 @@ class DelegateTools(ToolBase):
                             ),
                         )
 
-                attempt_targets = [step["target_agent"], *step["fallback_agents"]]
-                step_result = None
-                last_error = None
-                selected_agent = None
-                normalized_target_agent = ""
-                for target_agent in attempt_targets:
-                    if callable(cancel_checker) and cancel_checker():
-                        return ToolResult(
-                            ok=False,
-                            tool_name=tool_name,
-                            error="Execução cancelada pelo usuário",
-                        )
-                    normalized_target_agent = normalize_agent_fn(target_agent)
-                    delegation = {
-                        "task": step["request"],
-                        "context": step["context"],
-                    }
-                    try:
-                        result = delegate_fn(
-                            normalized_target_agent,
-                            delegation=delegation,
-                            delegation_only=True,
-                            protocol_mode="delegation",
-                            primary=False,
-                            silent=False,
-                            show_output=False,
-                            persist_history=True,
-                            history_snapshot=[],
-                            max_retries=3,
-                            progress_callback=progress_callback,
-                        )
-                    except Exception as dispatch_error:
-                        if callable(cancel_checker) and cancel_checker():
-                            return ToolResult(
-                                ok=False,
-                                tool_name=tool_name,
-                                error="Execução cancelada pelo usuário",
-                            )
-                        last_error = str(dispatch_error)
-                        logger.warning(
-                            "delegate: dispatch to '%s' failed: %s",
-                            target_agent, last_error,
-                        )
-                        continue
-                    if result is None:
-                        if callable(cancel_checker) and cancel_checker():
-                            return ToolResult(
-                                ok=False,
-                                tool_name=tool_name,
-                                error="Execução cancelada pelo usuário",
-                            )
-                        last_error = f"Agent '{target_agent}' returned no response"
-                        logger.warning(
-                            "delegate: dispatch to '%s' returned no response",
-                            target_agent,
-                        )
-                        continue
-                    selected_agent = target_agent
-                    step_result = str(result)
-                    if cleanup_callback and normalized_target_agent:
-                        try:
-                            cleanup_callback(normalized_target_agent)
-                        except Exception:
-                            logger.warning(
-                                "cleanup_callback failed for %s",
-                                normalized_target_agent, exc_info=True,
-                            )
-                    break
+                selected_agent, step_result, error = DelegateTools._execute_single_step(
+                    step, delegate_fn, progress_callback, normalize_agent_fn,
+                    cleanup_callback, cancel_checker,
+                )
 
                 if step_result is None:
-                    if cleanup_callback and normalized_target_agent:
-                        try:
-                            cleanup_callback(normalized_target_agent)
-                        except Exception:
-                            logger.warning(
-                                "cleanup_callback failed for %s",
-                                normalized_target_agent, exc_info=True,
-                            )
-                    error_detail = (
-                        f"{last_error}. Tried: {', '.join(attempt_targets)}"
-                        if last_error
-                        else f"No response from any target. Tried: {', '.join(attempt_targets)}"
-                    )
-                    return ToolResult(
-                        ok=False,
-                        tool_name=tool_name,
-                        error=error_detail,
-                    )
+                    return ToolResult(ok=False, tool_name=tool_name, error=error)
 
                 if len(steps) == 1:
                     step_outputs.append(step_result)
@@ -412,6 +416,79 @@ class DelegateTools(ToolBase):
                 tool_name=tool_name,
                 error=str(exc),
             )
+
+    @staticmethod
+    def _execute_steps_parallel(
+        steps: list[dict],
+        delegate_fn: _DelegateFnProto,
+        progress_callback: Callable[[str], None] | None,
+        resolve_active_agents_fn: Callable[[], set[str]],
+        normalize_agent_fn: Callable[[str | None], str],
+        cleanup_callback: Callable[[str], None] | None = None,
+        cancel_checker: Callable[[], bool] | None = None,
+    ) -> ToolResult:
+        """Execução paralela de steps — cada step roda em thread própria."""
+        tool_name = "delegate"
+        n = len(steps)
+        # Validate all agents before spawning threads
+        active_agents = resolve_active_agents_fn()
+        if active_agents:
+            for step in steps:
+                invalid_targets: list[str] = []
+                for target in [step["target_agent"], *step["fallback_agents"]]:
+                    normalized = normalize_agent_fn(target)
+                    if normalized and normalized not in active_agents:
+                        invalid_targets.append(target)
+                if invalid_targets:
+                    invalid_label = ", ".join(dict.fromkeys(invalid_targets))
+                    active_label = ", ".join(sorted(active_agents))
+                    return ToolResult(
+                        ok=False,
+                        tool_name=tool_name,
+                        error=(
+                            f"Agents not active in current pool: {invalid_label}. "
+                            f"Active agents: {active_label}"
+                        ),
+                    )
+
+        results: list[tuple[str | None, str | None, str | None]] = [(None, None, None)] * n
+
+        def run_step(idx: int, step: dict) -> None:
+            results[idx] = DelegateTools._execute_single_step(
+                step, delegate_fn, progress_callback, normalize_agent_fn,
+                cleanup_callback, cancel_checker,
+            )
+
+        threads = [
+            threading.Thread(
+                target=run_step, args=(i, step), daemon=True,
+                name=f"delegate-parallel-{i}",
+            )
+            for i, step in enumerate(steps)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        errors = [
+            (i, err) for i, (_, _, err) in enumerate(results) if err is not None
+        ]
+        if errors:
+            error_msg = "; ".join(f"step[{i}]: {e}" for i, e in errors)
+            return ToolResult(ok=False, tool_name=tool_name, error=error_msg)
+
+        step_outputs: list[str] = []
+        for i, (selected_agent, step_result, _) in enumerate(results):
+            if step_result is None:
+                continue
+            if n == 1:
+                step_outputs.append(step_result)
+            else:
+                label = selected_agent or steps[i]["target_agent"]
+                step_outputs.append(f"[{label}] {step_result}")
+
+        return ToolResult(ok=True, tool_name=tool_name, content="\n\n".join(step_outputs))
 
     def delegate(self, call: ToolCall) -> ToolResult:
         """Despacha uma tarefa para outro agente Quimera via MCP tool."""
@@ -567,10 +644,24 @@ class DelegateTools(ToolBase):
                     }
                 )
 
+        parallel_raw = arguments.get("parallel")
+        parallel = bool(parallel_raw) if parallel_raw is not None else False
+
         transport = self._get_transport(call)
 
         if transport == "http_mcp":
             return self._delegate_http_async(call, steps)
+
+        if parallel and len(steps) > 1:
+            return self._execute_steps_parallel(
+                steps,
+                self._delegate_fn,
+                self._progress_callback,
+                self._resolve_active_agents,
+                self._normalize_agent_identity,
+                cleanup_callback=self._cleanup_callback,
+                cancel_checker=self._cancel_checker,
+            )
 
         return self._execute_steps_inner(
             steps,
