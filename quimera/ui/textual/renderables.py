@@ -141,11 +141,11 @@ def _render_event(event: TextualUiEvent):
         theme_name = str(payload.get("theme", themes.DEFAULT_THEME) or themes.DEFAULT_THEME)
         return _build_stream_renderable(theme_name, label, style, "gerando...")
     if event.kind == "stream_abort":
-        payload = event.payload or {}
-        label = str(payload.get("label", f"🤖 {event.agent or 'agente'}"))
-        style = str(payload.get("style", "red") or "red")
-        theme_name = str(payload.get("theme", themes.DEFAULT_THEME) or themes.DEFAULT_THEME)
-        return _build_stream_renderable(theme_name, label, style, "interrompido")
+        agent_name = str(event.agent or "agente")
+        line = Text()
+        line.append(agent_name, style="dim")
+        line.append(" interrompido", style="dim")
+        return line
     if event.kind == "stream_chunk":
         payload = event.payload if isinstance(event.payload, dict) else {}
         content = str(payload.get("content") or payload.get("text") or event.payload)
@@ -171,6 +171,14 @@ def _render_event(event: TextualUiEvent):
         payload = event.payload or {}
         raw_message = str(payload.get("message", "")) if isinstance(payload, dict) else str(payload)
         message = _strip_rich_markup_tags(raw_message)
+        status = str(payload.get("status", "")).lower() if isinstance(payload, dict) else ""
+        _TERMINAL_STATUSES = {"completed", "failed", "error", "cancelled", "aborted"}
+        if status in _TERMINAL_STATUSES:
+            agent_name = str(event.agent or "agente")
+            line = Text()
+            line.append(agent_name, style="dim")
+            line.append(f" {message}" if message.strip() else "", style="dim")
+            return line
         tools = payload.get("tools") if isinstance(payload, dict) else None
         if isinstance(tools, list) and tools:
             tool_block = "\n".join(str(tool) for tool in tools if str(tool).strip())
