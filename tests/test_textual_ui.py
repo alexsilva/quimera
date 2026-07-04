@@ -160,6 +160,26 @@ def test_textual_feed_lifecycle_boundary_uses_status_not_message_text():
     assert model.items[0].event.payload["tools"] == ["⌘ read_file a.py"]
 
 
+
+def test_textual_feed_ignores_stream_abort_after_completed_lifecycle():
+    model = TextualFeedModel()
+
+    model.apply(TextualUiEvent("agent_update", "delegando...", agent="claude-sonnet"))
+    model.apply(
+        TextualUiEvent(
+            "agent_lifecycle",
+            _agent_lifecycle_payload("concluído", status=AgentLifecycleStatus.COMPLETED),
+            agent="claude-sonnet",
+        )
+    )
+
+    changed = model.apply(TextualUiEvent("stream_abort", {"label": "Claude Sonnet"}, agent="claude-sonnet"))
+
+    assert changed is False
+    assert len(model.items) == 1
+    assert model.items[0].event.kind == "agent_lifecycle"
+    assert model.items[0].event.payload["status"] == "completed"
+
 def test_textual_feed_clears_tool_preview_on_stream_abort():
     model = TextualFeedModel()
 

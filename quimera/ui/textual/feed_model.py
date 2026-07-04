@@ -161,14 +161,21 @@ class TextualFeedModel:
         if event.kind == "stream_chunk":
             return self._apply_stream_chunk(event)
         if event.kind == "stream_abort":
-            self._transient_tools_by_agent.pop(self._agent_key(event), None)
+            agent = self._agent_key(event)
+            if agent in self._finalized_agents:
+                self._last_change = TextualFeedChange(False)
+                return False
+            self._transient_tools_by_agent.pop(agent, None)
         if event.kind == "tool_preview":
             return self._apply_tool_preview(event)
         if event.kind in self._TRANSIENT_KINDS:
             if self._is_late_completed_lifecycle(event):
                 return False
             if self._is_run_boundary_lifecycle(event):
-                self._transient_tools_by_agent.pop(self._agent_key(event), None)
+                agent = self._agent_key(event)
+                self._transient_tools_by_agent.pop(agent, None)
+                if self._is_completed_lifecycle(event):
+                    self._finalized_agents.add(agent)
             replaced = self._upsert_transient(event)
             self._last_change = TextualFeedChange(True, redraw=replaced, appended=None if replaced else self._items[-1])
             return True
@@ -204,6 +211,13 @@ class TextualFeedModel:
             return True
         self._items.append(item)
         return False
+
+    @staticmethod
+    def _is_completed_lifecycle(event: TextualUiEvent) -> bool:
+        if event.kind != "agent_lifecycle":
+            return False
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        return _coerce_lifecycle_status(payload.get("status")) is AgentLifecycleStatus.COMPLETED
 
     def _is_late_completed_lifecycle(self, event: TextualUiEvent) -> bool:
         if event.kind != "agent_lifecycle":
