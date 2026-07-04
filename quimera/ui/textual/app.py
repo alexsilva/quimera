@@ -92,6 +92,9 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             ("ctrl+t", "cycle_theme", "Tema"),
             ("alt+t", "cycle_theme", "Tema"),
             ("f6", "cycle_theme", "Tema"),
+            ("ctrl+l", "clear_feed", "Limpar feed"),
+            ("ctrl+end", "scroll_to_bottom", "Ir ao fim"),
+            ("ctrl+home", "scroll_to_top", "Ir ao topo"),
         ]
 
         def __init__(self) -> None:
@@ -253,6 +256,17 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             if callable(handler):
                 handler()
             self._refresh_toolbar()
+
+        def action_clear_feed(self) -> None:
+            self._feed_model.clear()
+            self.query_one("#feed", RichLog).clear()
+            self._refresh_now(layout=True)
+
+        def action_scroll_to_bottom(self) -> None:
+            self.query_one("#feed", RichLog).scroll_end(animate=False)
+
+        def action_scroll_to_top(self) -> None:
+            self.query_one("#feed", RichLog).scroll_home(animate=False)
 
         def on_input_changed(self, event: Input.Changed) -> None:
             if not isinstance(event.input, _CompletionInput):
