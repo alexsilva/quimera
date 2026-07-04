@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Callable
 
+from rich.highlighter import Highlighter
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.widgets import Header, Input, Static
@@ -11,19 +14,68 @@ from textual.widgets._header import HeaderClock, HeaderClockSpace, HeaderIcon, H
 from quimera.app.completion_dropdown import CompletionDropdown, PromptHistorySuggester
 
 
+class _PrefixDimHighlighter(Highlighter):
+    """Aplica estilo dim ao prefixo fixo do input."""
+
+    def __init__(self, get_prefix_len: Callable[[], int]) -> None:
+        self._get_prefix_len = get_prefix_len
+
+    def highlight(self, text: Text) -> None:
+        n = self._get_prefix_len()
+        if n > 0:
+            text.stylize("dim", 0, n)
+
+
 class _CompletionInput(Input):
-    """Input com autocomplete inline: setas navegam, Tab completa, Enter completa e submete."""
+    """Input com prefixo fixo (>>>: ), autocomplete inline e histórico."""
 
     BINDINGS = [
         Binding("escape", "escape", "Fechar popup"),
     ]
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, prefix: str = ">>>: ", **kwargs):
+        self._prefix = prefix
+        kwargs.setdefault("value", prefix)
+        kwargs.setdefault("select_on_focus", False)
+        kwargs.setdefault("highlighter", _PrefixDimHighlighter(lambda: len(self._prefix)))
         super().__init__(*args, **kwargs)
         self._prompt_history: list[str] = []
         self._history_index = 0
         self._saved_draft = ""
         self.suggester = PromptHistorySuggester(lambda: self._prompt_history)
+
+    @property
+    def user_value(self) -> str:
+        """Texto digitado pelo usuário, sem o prefixo."""
+        v = self.value
+        return v[len(self._prefix):] if v.startswith(self._prefix) else v
+
+    def set_prefix(self, prefix: str) -> None:
+        """Atualiza o prefixo preservando o texto já digitado."""
+        user_text = self.user_value
+        self._prefix = prefix
+        self.value = prefix + user_text
+        self.cursor_position = len(self.value)
+
+    def reset_to_prefix(self) -> None:
+        """Limpa o input, deixando apenas o prefixo."""
+        self.value = self._prefix
+        self.cursor_position = len(self._prefix)
+
+    def action_delete_left(self) -> None:
+        if self.cursor_position <= len(self._prefix):
+            return
+        super().action_delete_left()
+
+    def action_delete_left_word(self) -> None:
+        if self.cursor_position <= len(self._prefix):
+            return
+        super().action_delete_left_word()
+
+    def action_delete_left_all(self) -> None:
+        right = self.value[self.cursor_position:]
+        self.value = self._prefix + right
+        self.cursor_position = len(self._prefix)
 
     def add_to_history(self, value: str) -> None:
         if value:
@@ -62,7 +114,7 @@ class _CompletionInput(Input):
         dropdown = self.app.query_one(CompletionDropdown)
         selected = dropdown.get_selected()
         if selected is not None:
-            self.value = f"{selected} "
+            self.value = self._prefix + f"{selected} "
             self.cursor_position = len(self.value)
             dropdown.hide()
             return
@@ -82,10 +134,10 @@ class _CompletionInput(Input):
         if self._history_index >= len(self._prompt_history):
             return
         if self._history_index == 0:
-            self._saved_draft = self.value
+            self._saved_draft = self.user_value
         self._history_index += 1
         idx = len(self._prompt_history) - self._history_index
-        self.value = self._prompt_history[idx]
+        self.value = self._prefix + self._prompt_history[idx]
         self.cursor_position = len(self.value)
 
     def key_down(self) -> None:
@@ -97,17 +149,17 @@ class _CompletionInput(Input):
             return
         self._history_index -= 1
         if self._history_index == 0:
-            self.value = self._saved_draft
+            self.value = self._prefix + self._saved_draft
         else:
             idx = len(self._prompt_history) - self._history_index
-            self.value = self._prompt_history[idx]
+            self.value = self._prefix + self._prompt_history[idx]
         self.cursor_position = len(self.value)
 
     def key_tab(self) -> None:
         dropdown = self.app.query_one(CompletionDropdown)
         selected = dropdown.get_selected()
         if selected:
-            self.value = f"{selected} "
+            self.value = self._prefix + f"{selected} "
             self.cursor_position = len(self.value)
             dropdown.hide()
             return
