@@ -237,6 +237,10 @@ class ShellTool(ToolBase):
                     session.process.wait(timeout=1)
                 except subprocess.TimeoutExpired:
                     session.process.kill()
+                    try:
+                        session.process.wait(timeout=1)
+                    except subprocess.TimeoutExpired:
+                        pass
             self._close_session_stdin(session)
             stdout, stderr = self._drain_session_output(session)
         finally:
@@ -514,6 +518,7 @@ class ShellTool(ToolBase):
             "stdout": (full_stdout if completed else stdout)[: self.config.max_output_chars],
             "stderr": (full_stderr if completed else stderr)[: self.config.max_output_chars],
             "status": "completed" if completed else "running",
+            "closed": bool(completed),
             "diff": self._build_output_diff(
                 stdout[: self.config.max_output_chars],
                 stderr[: self.config.max_output_chars],

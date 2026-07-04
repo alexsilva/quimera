@@ -162,19 +162,20 @@ class TextualFeedModel:
             return self._apply_stream_chunk(event)
         if event.kind == "stream_abort":
             agent = self._agent_key(event)
-            if agent in self._finalized_agents:
+            if self._is_finalized_agent(agent):
                 self._last_change = TextualFeedChange(False)
                 return False
             self._transient_tools_by_agent.pop(agent, None)
         if event.kind == "tool_preview":
             return self._apply_tool_preview(event)
         if event.kind in self._TRANSIENT_KINDS:
-            if self._is_late_completed_lifecycle(event):
+            agent = self._agent_key(event)
+            if self._is_finalized_agent(agent):
+                self._last_change = TextualFeedChange(False)
                 return False
             if self._is_run_boundary_lifecycle(event):
-                agent = self._agent_key(event)
                 self._transient_tools_by_agent.pop(agent, None)
-                if self._is_completed_lifecycle(event):
+                if self._is_final_lifecycle(event):
                     self._finalized_agents.add(agent)
             replaced = self._upsert_transient(event)
             self._last_change = TextualFeedChange(True, redraw=replaced, appended=None if replaced else self._items[-1])
@@ -185,7 +186,10 @@ class TextualFeedModel:
         return True
 
     def _agent_key(self, event: TextualUiEvent) -> str:
-        return str(event.agent or "__global__")
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        delegation_id = str(payload.get("delegation_id") or "").strip()
+        base = str(event.agent or "__global__")
+        return f"{base}#{delegation_id}" if delegation_id else base
 
     def _upsert_transient(self, event: TextualUiEvent) -> bool:
         agent = self._agent_key(event)
@@ -212,21 +216,25 @@ class TextualFeedModel:
         self._items.append(item)
         return False
 
-    @staticmethod
-    def _is_completed_lifecycle(event: TextualUiEvent) -> bool:
-        if event.kind != "agent_lifecycle":
-            return False
-        payload = event.payload if isinstance(event.payload, dict) else {}
-        return _coerce_lifecycle_status(payload.get("status")) is AgentLifecycleStatus.COMPLETED
+    def _is_finalized_agent(self, agent: str) -> bool:
+        return agent in self._finalized_agents
 
-    def _is_late_completed_lifecycle(self, event: TextualUiEvent) -> bool:
+    @staticmethod
+    def _is_final_lifecycle(event: TextualUiEvent) -> bool:
         if event.kind != "agent_lifecycle":
             return False
-        agent = self._agent_key(event)
-        if agent not in self._finalized_agents:
-            return False
         payload = event.payload if isinstance(event.payload, dict) else {}
-        return _coerce_lifecycle_status(payload.get("status")) is AgentLifecycleStatus.COMPLETED
+        status = _coerce_lifecycle_status(payload.get("status"))
+        message = str(payload.get("message") or "").lower()
+        if status is AgentLifecycleStatus.FAILED and ("reconect" in message or "tentativa" in message):
+            return False
+        return status in {
+            AgentLifecycleStatus.COMPLETED,
+            AgentLifecycleStatus.FAILED,
+            AgentLifecycleStatus.ERROR,
+            AgentLifecycleStatus.CANCELLED,
+            AgentLifecycleStatus.ABORTED,
+        }
 
     @staticmethod
     def _is_run_boundary_lifecycle(event: TextualUiEvent) -> bool:
@@ -238,6 +246,9 @@ class TextualFeedModel:
 
     def _apply_stream_chunk(self, event: TextualUiEvent) -> bool:
         agent = self._agent_key(event)
+        if self._is_finalized_agent(agent):
+            self._last_change = TextualFeedChange(False)
+            return False
         current = self._stream_buffer_by_agent.get(agent, "")
         payload = event.payload
         if isinstance(payload, dict):
@@ -311,6 +322,9 @@ class TextualFeedModel:
     def _apply_tool_preview(self, event: TextualUiEvent) -> bool:
         """Atualiza previews de tools dentro do bloco transitório do agente."""
         agent = self._agent_key(event)
+        if self._is_finalized_agent(agent):
+            self._last_change = TextualFeedChange(False)
+            return False
         content = strip_ansi(str(event.payload or "")).strip()
         if not content:
             self._last_change = TextualFeedChange(False)

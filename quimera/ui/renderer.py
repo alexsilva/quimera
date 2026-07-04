@@ -1295,8 +1295,11 @@ class TerminalRenderer:
                     def __enter__(self):
                         return self
 
-                    def __exit__(self, *args):
-                        self.renderer.update_status(self.agent, "concluído")
+                    def __exit__(self, exc_type, exc, tb):
+                        if exc_type is None:
+                            self.renderer.update_status(self.agent, "concluído")
+                        else:
+                            self.renderer.update_status(self.agent, "falhou")
 
                 return StatusProxy(self, agent)
 

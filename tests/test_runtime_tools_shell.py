@@ -297,6 +297,58 @@ def test_exec_command_tty_waits_for_short_completion_after_yield(tmp_path):
     assert "tty-grace" in result.data["stdout"]
 
 
+def test_collect_completed_session_marks_payload_closed(config):
+    tool = ShellTool(config)
+    process = MagicMock()
+    process.poll.return_value = 0
+    session = CommandSession(
+        session_id=1,
+        process=process,
+        command="echo done",
+        cwd=Path("/tmp"),
+        started_at=0.0,
+        stdout_buffer="done\n",
+        stdout_history="done\n",
+        _stdout_total=5,
+    )
+    tool._sessions[1] = session
+
+    result = tool._collect_session_result(
+        session,
+        yield_time_ms=1,
+        tool_name="exec_command",
+        include_session_id=True,
+    )
+
+    assert result.data["status"] == "completed"
+    assert result.data["closed"] is True
+    assert result.data["session_id"] == 1
+    assert 1 not in tool._sessions
+
+
+def test_close_command_session_waits_after_kill(config):
+    tool = ShellTool(config)
+    process = MagicMock()
+    process.poll.return_value = None
+    process.wait.side_effect = [shell_module.subprocess.TimeoutExpired("cmd", 1), None]
+    session = CommandSession(
+        session_id=1,
+        process=process,
+        command="sleep",
+        cwd=Path("/tmp"),
+        started_at=0.0,
+    )
+    tool._sessions[1] = session
+
+    result = tool.close_command_session(
+        ToolCall(name="close_command_session", arguments={"session_id": 1})
+    )
+
+    assert result.ok is True
+    process.terminate.assert_called_once()
+    process.kill.assert_called_once()
+    assert process.wait.call_count == 2
+
 def test_truncate_consumed_chunks_releases_stdout_without_stderr(config):
     """Verifica que Test truncate consumed chunks releases stdout without stderr."""
     tool = ShellTool(config)

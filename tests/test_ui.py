@@ -545,6 +545,16 @@ class TestTerminalRenderer:
         result = mock_renderer.running_status("Processing...", agent="test")
         assert hasattr(result, "update")
 
+    def test_running_status_in_live_mode_marks_failure_on_exception(self, mock_renderer):
+        mock_renderer._live = MagicMock()
+        status = mock_renderer.running_status("Processing...", agent="test")
+
+        with pytest.raises(RuntimeError):
+            with status:
+                raise RuntimeError("boom")
+
+        assert mock_renderer._statuses["test"] == "falhou"
+
     def test_update_message_stream_accepts_add_diff(self, mock_renderer):
         with patch("quimera.ui.Live") as mock_live_cls:
             mock_live = MagicMock()
