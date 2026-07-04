@@ -403,14 +403,26 @@ def test_textual_bridge_submit_input_echoes_user_before_queueing_message():
 
 def test_textual_bridge_injects_input_into_active_agent_stdin():
     bridge = TextualUiBridge()
+    events = []
+
+    class TextualApp:
+        def handle_bridge_event(self, event):
+            events.append((event.kind, event.payload))
+
+        def call_from_thread(self, callback, event):
+            callback(event)
+
     stdin = Mock()
-    app = Mock(is_agent_running=True, active_agent_stdin=stdin)
+    app = Mock(is_agent_running=True, active_agent_stdin=stdin, user_name="Alex")
     bridge.attach_quimera_app(app)
+    bridge.attach_textual_app(TextualApp())
 
     bridge.submit_input("continua")
 
     stdin.write.assert_called_once_with("continua\n")
     stdin.flush.assert_called_once()
+    assert events[0][0] == "user_message"
+    assert events[0][1]["content"] == "continua"
     assert bridge.input_queue.empty()
 
 

@@ -73,6 +73,7 @@ class TextualUiBridge:
             self.direct_input_queue.put(value)
             return
         if self._try_inject_active_agent(text):
+            self._emit_user_message(text)
             return
         self._emit_user_message(text)
         self.input_queue.put(value)
