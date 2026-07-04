@@ -1725,7 +1725,7 @@ class TestAiTurnControlPlaneCommands(unittest.TestCase):
         return app
 
     def test_slash_command_responds_while_agent_still_processing_single_thread(self):
-        """/agentes deve ser atendido enquanto a primeira mensagem ainda está em processamento."""
+        """/agents deve ser atendido enquanto a primeira mensagem ainda está em processamento."""
         from quimera.constants import CMD_AGENTS, CMD_ALIASES, CMD_EXIT
         app = self._make_app()
 
@@ -1760,7 +1760,7 @@ class TestAiTurnControlPlaneCommands(unittest.TestCase):
                 # Só entrega o comando depois que o processamento realmente começou,
                 # garantindo overlap real (não apenas um turno_manager forjado).
                 self.assertTrue(process_started.wait(timeout=2), "processamento não iniciou a tempo")
-                return "/agentes"
+                return "/agents"
             return CMD_EXIT
 
         app.read_user_input = mock_read
@@ -1774,7 +1774,7 @@ class TestAiTurnControlPlaneCommands(unittest.TestCase):
         self.assertLess(
             handled_at,
             finished_at[0],
-            "/agentes só foi atendido depois que o processamento terminou — loop ainda bloqueia comandos",
+            "/agents só foi atendido depois que o processamento terminou — loop ainda bloqueia comandos",
         )
 
     def test_regular_message_waits_for_free_slot_instead_of_being_dropped(self):

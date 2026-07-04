@@ -104,7 +104,7 @@ CMD_RESET = "/reset"
 CMD_APPROVE = "/approve"
 CMD_APPROVE_ALL = "/approve-all"
 CMD_POLICY = "/policy"
-CMD_ALIASES = {"/e": CMD_EDIT, "/r": CMD_CONTEXT, "/g": CMD_HELP, "/agentes": CMD_AGENTS, "/y": CMD_APPROVE, "/a": CMD_APPROVE, "/aa": CMD_APPROVE_ALL}
+CMD_ALIASES = {"/e": CMD_EDIT, "/r": CMD_CONTEXT, "/g": CMD_HELP, "/y": CMD_APPROVE, "/a": CMD_APPROVE, "/aa": CMD_APPROVE_ALL}
 USER_ROLE = "human"
 
 # Messages
