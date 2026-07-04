@@ -31,6 +31,8 @@ class _CompletionInput(Input):
 
     BINDINGS = [
         Binding("escape", "escape", "Fechar popup"),
+        Binding("ctrl+u", "delete_left_all", "Limpar linha"),
+        Binding("ctrl+k", "delete_right_all", "Apagar até fim"),
     ]
 
     def __init__(self, *args, prefix: str = ">>>: ", **kwargs):
@@ -76,6 +78,11 @@ class _CompletionInput(Input):
         right = self.value[self.cursor_position:]
         self.value = self._prefix + right
         self.cursor_position = len(self._prefix)
+
+    def action_delete_right_all(self) -> None:
+        self.value = self.value[:self.cursor_position]
+        if not self.value.startswith(self._prefix):
+            self.value = self._prefix
 
     def add_to_history(self, value: str) -> None:
         if value:
