@@ -35,9 +35,10 @@ TEXTUAL_APP_CSS = """
             max-height: 3;
             padding: 0 1;
             background: $surface;
+            align: left middle;
         }
         #input {
-            width: 100%;
+            width: 1fr;
         }
         #summary-spinner {
             dock: right;

@@ -67,7 +67,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
     """Executa a interface Textual como UI principal do Quimera."""
     try:
         from textual.app import App, ComposeResult
-        from textual.containers import Vertical
+        from textual.containers import Horizontal, Vertical
         from textual.widgets import Input, RichLog, Static
         from quimera.app.completion_dropdown import CompletionDropdown
         from quimera.ui.textual.widgets import _CompletionInput, _SummaryHeader, _SummarySpinner
@@ -118,8 +118,8 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                 yield Static("", id="toolbar")
                 yield Static("", id="question_overlay")
                 yield CompletionDropdown()
-                with Vertical(id="input_bar"):
-                    yield _CompletionInput(placeholder="mensagem...", id="input")
+                with Horizontal(id="input_bar"):
+                    yield _CompletionInput(id="input")
 
         def on_mount(self) -> None:
             bridge.attach_textual_app(self)
@@ -208,10 +208,11 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
         def on_input_submitted(self, event: Input.Submitted) -> None:
             event.stop()
             self.query_one(CompletionDropdown).hide()
-            value = event.value
-            event.input.value = ""
+            value = event.input.user_value
+            event.input.reset_to_prefix()
             bridge.set_input_value("")
-            event.input.add_to_history(value)
+            if value:
+                event.input.add_to_history(value)
             bridge.submit_input(value)
 
         def _set_question_overlay(self, payload) -> None:
@@ -229,8 +230,6 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             clearer = getattr(gate, "clear_interactive_prompt_state", None)
             if callable(clearer):
                 clearer()
-            input_widget = self.query_one("#input", Input)
-            input_widget.placeholder = "mensagem..."
             self._refresh_toolbar()
 
         def _refresh_now(self, *, layout: bool = False) -> None:
@@ -259,7 +258,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             if not isinstance(event.input, _CompletionInput):
                 return
             dropdown = self.query_one(CompletionDropdown)
-            value = str(event.value)
+            value = event.input.user_value if isinstance(event.input, _CompletionInput) else str(event.value)
             bridge.set_input_value(value)
 
             if not value:
@@ -327,10 +326,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                 toolbar = payload.get("toolbar", "")
                 self._commands = list(payload.get("commands", []) or [])
                 self.query_one("#toolbar", Static).update(toolbar)
-                input_widget = self.query_one("#input", Input)
-                prompt = str(payload.get("prompt") or "mensagem...").strip()
-                input_widget.placeholder = prompt or "mensagem..."
-                input_widget.focus()
+                self.query_one("#input", Input).focus()
                 self._refresh_now(layout=True)
                 return
             if not self._feed_model.apply(event):
