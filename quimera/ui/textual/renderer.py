@@ -420,7 +420,9 @@ class TextualRenderer:
 
     def update_agent_transient(self, agent, message: str) -> None:
         """Exibe progresso transitório como linha de status."""
-        self._bridge.emit(TextualUiEvent("agent_update", str(message), agent=str(agent)))
+        style, label = self._resolve_agent_style(agent)
+        payload = {"content": str(message), "label": label, "style": style, "theme": self._theme.name}
+        self._bridge.emit(TextualUiEvent("agent_update", payload, agent=str(agent)))
 
     def clear_agent_transient(self, agent) -> None:
         """Compatibilidade com TerminalRenderer."""

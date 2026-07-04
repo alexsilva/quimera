@@ -216,16 +216,31 @@ def _render_event(event: TextualUiEvent):
                 tool_block = "\n".join(str(tool) for tool in tools if str(tool).strip())
                 if tool_block:
                     content = f"{content.rstrip()}\n{tool_block}" if content.strip() else tool_block
+            label = str(event.payload.get("label", f"🤖 {event.agent or 'agente'}"))
+            style = str(event.payload.get("style", "cyan") or "cyan")
+            theme_name = str(event.payload.get("theme", themes.DEFAULT_THEME) or themes.DEFAULT_THEME)
         else:
             content = str(event.payload)
-        prefix = f"{event.agent}: " if event.agent else ""
-        return Text(f"{prefix}{content}", style="dim")
+            label = f"🤖 {event.agent or 'agente'}"
+            style = "cyan"
+            theme_name = themes.DEFAULT_THEME
+        if not content.strip():
+            return None
+        if event.agent:
+            return _build_stream_renderable(theme_name, label, style, content)
+        return Text(content, style="dim")
     if event.kind == "prompt":
         return None
     if event.kind == "input_active":
         return None
     if event.kind == "clear":
         return None
+    if event.kind == "plain":
+        content = str(event.payload or "")
+        if event.agent:
+            text = Text.assemble((f"◦ {event.agent} ", "dim cyan"), (content,))
+            return text
+        return Text(content)
     if event.kind == "muted":
         return Text(str(event.payload), style="dim")
     if event.kind == "system":
@@ -305,13 +320,15 @@ def _build_turn_body(
     *,
     streaming: bool = False,
     render_mode: str = "auto",
+    muted_body: bool = False,
 ):
     """Monta corpo textual do turno seguindo o renderer main-tui."""
     name = themes.get(theme_name).name
     mode = str(render_mode or "auto").strip().lower()
     if mode == "auto":
         mode = "markdown"
-    body_content = Text(content or "", no_wrap=False, overflow="fold") if streaming or mode == "plain" else Markdown(content or "")
+    _body_style = "dim" if muted_body else ""
+    body_content = Text(content or "", style=_body_style, no_wrap=False, overflow="fold") if streaming or mode == "plain" else Markdown(content or "")
     if name == "panel":
         title = f"[bold {style}]{label}[/bold {style}]" if streaming else None
         return Panel(body_content, title=title, border_style=style, padding=(0, 1))
@@ -338,6 +355,7 @@ def _render_turn_block(
     include_footer_rule: bool = False,
     streaming: bool = False,
     render_mode: str = "auto",
+    muted_body: bool = False,
 ):
     """Monta bloco estruturado de turno: header -> corpo -> tools."""
     parts = []
@@ -352,6 +370,7 @@ def _render_turn_block(
                 content,
                 streaming=streaming,
                 render_mode=render_mode,
+                muted_body=muted_body,
             )
         )
     if tools_table is not None:
@@ -411,6 +430,7 @@ def _build_stream_renderable(theme_name: str, label: str, style: str, content: s
         include_header=True,
         streaming=True,
         render_mode="plain",
+        muted_body=True,
     )
 
 

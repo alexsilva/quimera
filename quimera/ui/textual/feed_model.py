@@ -171,8 +171,20 @@ class TextualFeedModel:
         if event.kind in self._TRANSIENT_KINDS:
             agent = self._agent_key(event)
             if self._is_finalized_agent(agent):
-                self._last_change = TextualFeedChange(False)
-                return False
+                # agent_update e lifecycle RUNNING sinalizam nova run — descarta estado finalizado.
+                # Agentes CLI (opencode etc.) não emitem stream_start, então não chegam ao discard
+                # acima; este bloco equivalente evita que a segunda run fique invisível.
+                is_new_run_signal = event.kind == "agent_update" or (
+                    event.kind == "agent_lifecycle"
+                    and isinstance(event.payload, dict)
+                    and _coerce_lifecycle_status(event.payload.get("status")) == AgentLifecycleStatus.RUNNING
+                )
+                if is_new_run_signal:
+                    self._finalized_agents.discard(agent)
+                    self._transient_tools_by_agent.pop(agent, None)
+                else:
+                    self._last_change = TextualFeedChange(False)
+                    return False
             if self._is_run_boundary_lifecycle(event):
                 self._transient_tools_by_agent.pop(agent, None)
                 if self._is_final_lifecycle(event):
