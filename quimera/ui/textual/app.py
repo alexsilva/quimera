@@ -1,10 +1,25 @@
 """Aplicação Textual principal do Quimera."""
 from __future__ import annotations
 
+import os
 import sys
 import threading
 import traceback
 from pathlib import Path
+
+
+def _is_android() -> bool:
+    """Detecta Android para desabilitar mouse tracking no Textual.
+
+    O Textual ativa ?1003h (any-event tracking) que faz o Termux rotear todos
+    os toques como escape sequences — impedindo que o teclado virtual reabra ao
+    tocar a tela. Sem mouse=False, showSoftInput() nunca é chamado pelo Termux.
+    """
+    try:
+        return "android" in os.uname().release.lower()
+    except Exception:
+        return False
+
 
 from quimera.app.config import handler as _screen_handler
 from quimera.ui.textual.bridge import TextualUiBridge
@@ -343,7 +358,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
     if renderer is not None and hasattr(renderer, "set_profile_resolver"):
         renderer.set_profile_resolver(quimera_app._resolve_profile_style)
     try:
-        QuimeraTextualApp().run()
+        QuimeraTextualApp().run(mouse=not _is_android())
     finally:
         _restore_terminal_modes()
 
