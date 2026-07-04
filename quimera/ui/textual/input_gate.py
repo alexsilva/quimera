@@ -87,7 +87,8 @@ class TextualInputGate:
             TextualUiEvent(
                 "prompt",
                 {
-                    "prompt": "mensagem...",
+                    "prompt": "",
+                    "responder": self._current_responder(),
                     "toolbar": self._build_toolbar_renderable(),
                     "commands": self._commands(),
                 },
@@ -128,6 +129,10 @@ class TextualInputGate:
         if len(value) <= max_len:
             return value
         return value[: max(1, max_len - 1)].rstrip() + "…"
+
+    def _current_responder(self) -> str:
+        context = self._toolbar_context()
+        return str(context.get("responder", "")).strip() or ">>>"
 
     def _toolbar_segments(self) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
         context = self._toolbar_context()
@@ -242,6 +247,7 @@ class TextualInputGate:
                 "prompt",
                 {
                     "prompt": prompt,
+                    "responder": self._current_responder(),
                     "toolbar": self._build_toolbar_renderable(),
                     "commands": self._commands(),
                 },
@@ -286,6 +292,7 @@ class TextualInputGate:
                 "prompt",
                 {
                     "prompt": prompt,
+                    "responder": self._current_responder(),
                     "toolbar": self._build_toolbar_renderable(),
                     "commands": self._commands(),
                 },
