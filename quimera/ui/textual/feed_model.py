@@ -186,7 +186,7 @@ class TextualFeedModel:
                             "content": content,
                             "label": label,
                             "style": style,
-                            "render_mode": "plain",
+                            "render_mode": "auto",
                         },
                         agent=role,
                     ),
