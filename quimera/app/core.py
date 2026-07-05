@@ -537,6 +537,7 @@ class QuimeraApp:
             ).delegate(agent, **opts)
         )
         self.tool_executor.set_active_agents_provider(lambda: list(self.agent_pool.agents))
+        self.tool_executor.set_orchestrator_provider(lambda: self.agent_pool.orchestrator_agent)
         self.tool_executor.set_cancel_checker(lambda: bool(getattr(self.agent_client, "_cancel_event", None) and self.agent_client._cancel_event.is_set()))
         self.tool_executor.set_agent_cleanup_callback(self._cleanup_sub_agent_stream)
         _broker = self.input_broker
@@ -709,7 +710,7 @@ class QuimeraApp:
             return ["status", "strict", "autonomous"]
         if command == CMD_RESET:
             return ["state", "history", "all"]
-        if command in ("s", "r"):
+        if command in ("s", "o", "r"):
             return sorted(self.agent_pool)
         return []
 

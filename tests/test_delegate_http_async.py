@@ -1072,3 +1072,76 @@ def test_delegate_stops_on_user_cancel_without_trying_fallbacks(tmp_path):
         result = tools.delegate(call)
         assert result.ok is False
         assert "cannot delegate to itself" in result.error
+
+
+class TestOrchestratorRedelegationGuard:
+    """Garante que o guard de redelegação distingue agente na cadeia orquestrada
+    de agente chamado diretamente pelo humano com prefixo explícito."""
+
+    def _make_tools(self, tmp_path, orchestrator="claude"):
+        from quimera.runtime.tools.delegate import DelegateTools, ToolRuntimeConfig
+        config = ToolRuntimeConfig(workspace_root=tmp_path)
+        tools = DelegateTools(config)
+        tools.set_delegate_fn(lambda agent, **kw: "ok")
+        tools.set_active_agents_provider(lambda: ["claude", "codex", "opencode"])
+        tools.set_orchestrator_provider(lambda: orchestrator)
+        return tools
+
+    def test_bloqueia_agente_delegado_pelo_orquestrador(self, tmp_path):
+        """Agente com parent_agent == orquestrador NÃO pode redelegar."""
+        tools = self._make_tools(tmp_path, orchestrator="claude")
+        ctx = TrustedToolExecutionContext(
+            agent_name="codex",
+            parent_agent="claude",
+        )
+        call = _make_call(
+            metadata={"trusted_context": ctx},
+            args={"target_agent": "opencode", "request": "refatorar"},
+        )
+        result = tools.delegate(call)
+        assert result.ok is False
+        assert "cannot re-delegate" in result.error
+
+    def test_permite_agente_chamado_diretamente_pelo_humano(self, tmp_path):
+        """Agente com parent_agent=None (chamada direta humano) PODE delegar
+        mesmo com orquestrador ativo."""
+        tools = self._make_tools(tmp_path, orchestrator="claude")
+        ctx = TrustedToolExecutionContext(
+            agent_name="codex",
+            parent_agent=None,
+        )
+        call = _make_call(
+            metadata={"trusted_context": ctx},
+            args={"target_agent": "opencode", "request": "refatorar"},
+        )
+        result = tools.delegate(call)
+        assert result.ok is True
+
+    def test_permite_agente_cujo_parent_nao_e_o_orquestrador(self, tmp_path):
+        """Agente delegado por outro agente (não o orquestrador) também pode
+        delegar — apenas a cadeia que parte do orquestrador é bloqueada."""
+        tools = self._make_tools(tmp_path, orchestrator="claude")
+        ctx = TrustedToolExecutionContext(
+            agent_name="codex",
+            parent_agent="opencode",
+        )
+        call = _make_call(
+            metadata={"trusted_context": ctx},
+            args={"target_agent": "opencode", "request": "revisar"},
+        )
+        result = tools.delegate(call)
+        assert result.ok is True
+
+    def test_orquestrador_pode_delegar(self, tmp_path):
+        """O próprio orquestrador nunca é bloqueado."""
+        tools = self._make_tools(tmp_path, orchestrator="claude")
+        ctx = TrustedToolExecutionContext(
+            agent_name="claude",
+            parent_agent=None,
+        )
+        call = _make_call(
+            metadata={"trusted_context": ctx},
+            args={"target_agent": "codex", "request": "escrever testes"},
+        )
+        result = tools.delegate(call)
+        assert result.ok is True

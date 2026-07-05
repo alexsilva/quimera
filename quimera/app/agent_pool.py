@@ -51,6 +51,7 @@ class AgentPool:
             if agent_name not in self._agents:
                 raise ValueError(f"Agente {agent_name} não está no pool")
             self._frozen_agent = agent_name
+            self._orchestrator_agent = None
         if self._on_freeze:
             try:
                 self._on_freeze(agent_name)
@@ -98,13 +99,33 @@ class AgentPool:
                 self._agents.append(name)
 
     def remove(self, name: str) -> None:
+        was_frozen = False
         with self._lock:
             if name in self._agents:
                 self._agents.remove(name)
+                if self._frozen_agent == name:
+                    was_frozen = True
+                    self._frozen_agent = None
+                    self._orchestrator_agent = None
+        if was_frozen and self._on_unfreeze:
+            try:
+                self._on_unfreeze(name)
+            except Exception:
+                pass
 
     def set(self, agents: list[str]) -> None:
+        evicted_frozen: str | None = None
         with self._lock:
             self._agents = list(agents)
+            if self._frozen_agent is not None and self._frozen_agent not in self._agents:
+                evicted_frozen = self._frozen_agent
+                self._frozen_agent = None
+                self._orchestrator_agent = None
+        if evicted_frozen is not None and self._on_unfreeze:
+            try:
+                self._on_unfreeze(evicted_frozen)
+            except Exception:
+                pass
 
     def rotate(self) -> None:
         with self._lock:

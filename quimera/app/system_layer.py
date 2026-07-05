@@ -732,6 +732,12 @@ class AppSystemLayer:
             parts = command[2:].strip().split(None, 1)
             agent = parts[0]
             trailing = parts[1].strip() if len(parts) > 1 else ""
+            others = [a for a in self.agent_pool.agents if a != agent]
+            if not others:
+                self._display.show_warning_message(
+                    f"Modo orquestrador requer pelo menos um outro agente ativo além de '{agent}'."
+                )
+                return True
             try:
                 self.agent_pool.set_orchestrator(agent)
             except ValueError:
@@ -739,16 +745,15 @@ class AppSystemLayer:
                     f"Agente '{agent}' não está no pool ativo."
                 )
                 return True
-            others = [a for a in self.agent_pool.agents if a != agent]
             self._display.show_system(
                 f"[orquestrador] {agent} ativado — todo input passa por ele antes de delegar."
-                + (f" Agentes disponíveis: {', '.join(others)}." if others else "")
+                f" Agentes disponíveis: {', '.join(others)}."
             )
             if trailing:
                 return trailing
             return True
 
-        if command.startswith("r/") and len(command) > 2:
+        if command.startswith("r/") and len(command) >= 2:
             was_orchestrator = getattr(self.agent_pool, "orchestrator_agent", None)
             self.agent_pool.unfreeze()
             if was_orchestrator:

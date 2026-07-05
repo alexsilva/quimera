@@ -1376,3 +1376,79 @@ def test_unfreeze_retoma_rotacao():
     pool.unfreeze()
     primaries = {pool.take_primary() for _ in range(4)}
     assert primaries == {"claude", "codex"}
+
+
+def test_remove_agente_congelado_limpa_estado():
+    """remove() do agente congelado deve limpar frozen_agent e orchestrator_agent."""
+    pool = AgentPool(["claude", "codex"])
+    pool.freeze("claude")
+    pool.remove("claude")
+    assert pool.frozen_agent is None
+    assert pool.orchestrator_agent is None
+
+
+def test_remove_agente_orquestrador_limpa_estado():
+    """remove() do orquestrador deve limpar ambos os campos."""
+    pool = AgentPool(["claude", "codex"])
+    pool.set_orchestrator("claude")
+    pool.remove("claude")
+    assert pool.frozen_agent is None
+    assert pool.orchestrator_agent is None
+
+
+def test_remove_agente_congelado_chama_hook_unfreeze():
+    """remove() do agente congelado deve disparar on_unfreeze."""
+    pool = AgentPool(["claude", "codex"])
+    events = []
+    pool.set_freeze_hooks(
+        on_freeze=lambda a: events.append(("freeze", a)),
+        on_unfreeze=lambda a: events.append(("unfreeze", a)),
+    )
+    pool.freeze("claude")
+    pool.remove("claude")
+    assert ("unfreeze", "claude") in events
+
+
+def test_set_sem_agente_congelado_limpa_estado():
+    """set() com lista sem o agente congelado deve limpar frozen_agent e orchestrator_agent."""
+    pool = AgentPool(["claude", "codex"])
+    pool.set_orchestrator("claude")
+    pool.set(["codex"])
+    assert pool.frozen_agent is None
+    assert pool.orchestrator_agent is None
+
+
+def test_set_sem_agente_congelado_chama_hook_unfreeze():
+    """set() que remove o agente congelado deve disparar on_unfreeze."""
+    pool = AgentPool(["claude", "codex"])
+    events = []
+    pool.set_freeze_hooks(
+        on_freeze=lambda a: events.append(("freeze", a)),
+        on_unfreeze=lambda a: events.append(("unfreeze", a)),
+    )
+    pool.set_orchestrator("claude")
+    pool.set(["codex"])
+    assert ("unfreeze", "claude") in events
+
+
+def test_readd_apos_remove_nao_reactiva_orquestrador():
+    """Re-adicionar agente ao pool após remove() não deve reativar modo orquestrador."""
+    pool = AgentPool(["claude", "codex"])
+    pool.set_orchestrator("claude")
+    pool.remove("claude")
+    pool.add("claude")
+    assert pool.frozen_agent is None
+    assert pool.orchestrator_agent is None
+    # primary deve ser codex (primeiro da lista) ou rotacionar, nunca fixo em claude
+    primaries = {pool.take_primary() for _ in range(4)}
+    assert "codex" in primaries
+
+
+def test_readd_apos_set_nao_reactiva_orquestrador():
+    """Re-adicionar agente via set() após ele ser removido não deve reativar modo orquestrador."""
+    pool = AgentPool(["claude", "codex"])
+    pool.set_orchestrator("claude")
+    pool.set(["codex"])          # claude sai → estado limpo
+    pool.set(["codex", "claude"]) # claude volta → não reativa
+    assert pool.frozen_agent is None
+    assert pool.orchestrator_agent is None

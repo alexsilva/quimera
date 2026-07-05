@@ -214,7 +214,7 @@ class TextualInputGate:
         if cursor_position is None:
             cursor_position = len(value)
         text_before_cursor = (value[:cursor_position] or "").lstrip()
-        for prefix in ("s/", "r/"):
+        for prefix in ("s/", "r/", "o/"):
             if text_before_cursor.startswith(prefix):
                 partial = text_before_cursor[len(prefix):]
                 suggestions = self._argument_suggestions(prefix.rstrip("/"), partial)

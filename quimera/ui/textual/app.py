@@ -332,10 +332,10 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             if not value:
                 dropdown.hide()
                 return
-            if " " in value and not value.startswith(("/", "s/", "r/")):
+            if " " in value and not value.startswith(("/", "s/", "r/", "o/")):
                 dropdown.hide()
                 return
-            if value.startswith(("/", "s/", "r/")):
+            if value.startswith(("/", "s/", "r/", "o/")):
                 gate = getattr(quimera_app, "input_gate", None)
                 if gate and callable(getattr(gate, "completions_for", None)):
                     extra = gate.completions_for(value)

@@ -161,6 +161,10 @@ class ToolExecutor:
         """Injeta provider que retorna agentes ativos no momento da delegação."""
         self._delegate_tools.set_active_agents_provider(fn)
 
+    def set_orchestrator_provider(self, fn) -> None:
+        """Injeta provider que retorna o agente orquestrador ativo (ou None)."""
+        self._delegate_tools.set_orchestrator_provider(fn)
+
     def set_cancel_checker(self, fn) -> None:
         """Injeta checker de cancelamento para tools longas como delegate."""
         self._delegate_tools.set_cancel_checker(fn)

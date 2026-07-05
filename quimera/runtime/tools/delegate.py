@@ -59,6 +59,7 @@ class DelegateTools(ToolBase):
         self._delegate_fn: _DelegateFnProto | None = None
         self._background_delegate_fn: _DelegateFnProto | None = None
         self._active_agents_provider = None
+        self._orchestrator_provider = None
         self._progress_callback: Callable[[str], None] | None = None
         self._cleanup_callback: Callable[[str], None] | None = None
         self._cancel_checker: Callable[[], bool] | None = None
@@ -79,6 +80,10 @@ class DelegateTools(ToolBase):
     def set_active_agents_provider(self, fn) -> None:
         """Injeta provider que retorna agentes ativos no momento da delegação."""
         self._active_agents_provider = fn
+
+    def set_orchestrator_provider(self, fn) -> None:
+        """Injeta provider que retorna o agente orquestrador ativo (ou None)."""
+        self._orchestrator_provider = fn
 
     def set_progress_callback(self, fn: Callable[[str], None] | None) -> None:
         """Injeta callback para reporte de progresso."""
@@ -150,6 +155,18 @@ class DelegateTools(ToolBase):
             return ctx.agent_name.strip().lower().lstrip("/")
         if isinstance(ctx, dict):
             name = ctx.get("agent_name")
+            if name and isinstance(name, str):
+                return name.strip().lower().lstrip("/")
+        return None
+
+    @staticmethod
+    def _get_parent_agent(call: ToolCall) -> str | None:
+        """Extrai o agente pai (quem delegou para o agente atual), se disponível."""
+        ctx = call.metadata.get("trusted_context")
+        if isinstance(ctx, TrustedToolExecutionContext) and ctx.parent_agent:
+            return ctx.parent_agent.strip().lower().lstrip("/")
+        if isinstance(ctx, dict):
+            name = ctx.get("parent_agent")
             if name and isinstance(name, str):
                 return name.strip().lower().lstrip("/")
         return None
@@ -529,6 +546,37 @@ class DelegateTools(ToolBase):
 
         calling_agent = self._get_calling_agent(call)
 
+        orchestrator = (
+            self._orchestrator_provider()
+            if callable(self._orchestrator_provider)
+            else None
+        )
+        is_orchestrator_call = bool(
+            calling_agent
+            and orchestrator
+            and self._normalize_agent_identity(orchestrator) == calling_agent
+        )
+
+        if orchestrator and calling_agent and not is_orchestrator_call:
+            # Only block re-delegation for agents that were themselves delegated to by the
+            # orchestrator. Agents called directly by the human (parent_agent is None or
+            # not the orchestrator) must not be silently blocked — that would break explicit
+            # prefix routing like `/codex ...` while orchestrator mode is active.
+            parent_of_caller = self._get_parent_agent(call)
+            is_in_orchestrated_chain = (
+                parent_of_caller is not None
+                and parent_of_caller == self._normalize_agent_identity(orchestrator)
+            )
+            if is_in_orchestrated_chain:
+                return ToolResult(
+                    ok=False,
+                    tool_name=call.name,
+                    error=(
+                        f"Agent '{calling_agent}' cannot re-delegate while orchestrator mode is active. "
+                        "Only the orchestrator may delegate."
+                    ),
+                )
+
         target_agent = str(target_agent_raw).strip() if isinstance(target_agent_raw, str) else ""
         request = str(request_raw).strip() if isinstance(request_raw, str) else ""
         if len(request) > self._DELEGATE_MAX_REQUEST_CHARS:
@@ -589,12 +637,23 @@ class DelegateTools(ToolBase):
             }
         ]
 
+        _ORCHESTRATOR_MAX_STEPS = 3
+
         if steps_raw is not None:
             if not isinstance(steps_raw, list):
                 return ToolResult(
                     ok=False,
                     tool_name=call.name,
                     error="'steps' must be a list of objects when provided",
+                )
+            if is_orchestrator_call and 1 + len(steps_raw) > _ORCHESTRATOR_MAX_STEPS:
+                return ToolResult(
+                    ok=False,
+                    tool_name=call.name,
+                    error=(
+                        f"Orchestrator mode allows at most {_ORCHESTRATOR_MAX_STEPS} steps "
+                        f"(got {1 + len(steps_raw)}). Split into smaller delegations."
+                    ),
                 )
             for idx, item in enumerate(steps_raw):
                 if not isinstance(item, dict):
