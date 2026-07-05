@@ -816,6 +816,7 @@ class AgentClient:
         on_text_chunk=None,
         allow_tools=True,
         progress_callback=None,
+        from_agent=None,
     ):
         """Resolve o comando do agente e delega a execução."""
         self._user_cancelled = False
@@ -834,6 +835,7 @@ class AgentClient:
                 on_text_chunk=on_text_chunk,
                 allow_tools=allow_tools,
                 progress_callback=progress_callback,
+                from_agent=from_agent,
         )
         self._spy_output_presenter.set_turn_runtime("cli")
         frozen_session = self._persistent_sessions.get(agent)
@@ -854,6 +856,8 @@ class AgentClient:
         )
         if agent and has_mcp_context:
             extra_env["QUIMERA_MCP_AGENT_NAME"] = str(agent)
+            if from_agent:
+                extra_env["QUIMERA_MCP_PARENT_AGENT"] = str(from_agent)
         tool_config = getattr(self.tool_executor, "config", None)
         if getattr(tool_config, "allow_ask_user", True) is False:
             current = str(extra_env.get("QUIMERA_MCP_DISABLED_TOOLS") or "")
@@ -928,6 +932,7 @@ class AgentClient:
         on_text_chunk=None,
         allow_tools=True,
         progress_callback=None,
+        from_agent=None,
     ):
         """Executa agentes com driver de API (ex: openai_compat para Ollama)."""
         connection = self._resolve_profile_connection(profile)
@@ -1009,6 +1014,7 @@ class AgentClient:
                             prompt=prompt,
                             tool_executor=effective_tool_executor,
                             agent_name=agent,
+                            parent_agent=from_agent,
                             session_id=self.session_id,
                             base_dir=self.workspace_tmp_root,
                             quiet=quiet,

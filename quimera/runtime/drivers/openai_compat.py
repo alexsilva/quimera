@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Optional
 
 from ...evidence import Evidence, EvidenceStore
+from ..approval_broker import TrustedToolExecutionContext
 from ...prompt_templates import PromptText
 from ..streaming import apply_stream_diff, normalize_stream_diff
 from ..tool_hops import (
@@ -254,6 +255,7 @@ class OpenAICompatDriver:
             prompt: PromptText,
             tool_executor=None,
             agent_name: str | None = None,
+            parent_agent: str | None = None,
             session_id: str | None = None,
             base_dir: str | Path | None = None,
             on_tool_call=None,
@@ -385,6 +387,7 @@ class OpenAICompatDriver:
                             tc,
                             tool_executor,
                             agent_name=agent_name,
+                            parent_agent=parent_agent,
                             progress_callback=progress_callback,
                         )
                         _logger.info(
@@ -545,12 +548,20 @@ class OpenAICompatDriver:
         tc: dict,
         tool_executor,
         agent_name: str | None = None,
+        parent_agent: str | None = None,
         progress_callback=None,
     ) -> ToolResult:
         """Executa um tool call via ToolExecutor."""
         metadata: dict = {}
         if agent_name:
             metadata["calling_agent"] = agent_name
+        trusted_context = TrustedToolExecutionContext(
+            agent_name=agent_name,
+            parent_agent=parent_agent,
+            transport="openai_compat",
+            server_origin="openai_compat_driver",
+        )
+        metadata["trusted_context"] = trusted_context
         tool_call = ToolCall(
             name=tc["name"],
             arguments=tc["arguments"],

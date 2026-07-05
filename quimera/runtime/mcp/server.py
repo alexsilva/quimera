@@ -89,6 +89,9 @@ def _proxy_stdio_to_socket(
             agent_name = (os.environ.get("QUIMERA_MCP_AGENT_NAME") or "").strip()
             if agent_name:
                 auth_payload["quimera_agent_name"] = agent_name
+            parent_agent_name = (os.environ.get("QUIMERA_MCP_PARENT_AGENT") or "").strip()
+            if parent_agent_name:
+                auth_payload["quimera_parent_agent"] = parent_agent_name
             auth_line = json.dumps(auth_payload) + "\n"
             sock_out.write(auth_line)
             sock_out.flush()
@@ -888,6 +891,9 @@ class MCPServer:
                 agent_name = prelude.get("quimera_agent_name")
                 if agent_name:
                     conn_state["agent_name"] = str(agent_name)
+                parent_agent_name = prelude.get("quimera_parent_agent")
+                if parent_agent_name:
+                    conn_state["parent_agent"] = str(parent_agent_name)
                 if conn_state:
                     setattr(out, "_mcp_state", conn_state)
                 self.serve(stdin=inp, stdout=out)

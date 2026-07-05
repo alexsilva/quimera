@@ -248,6 +248,7 @@ class AgentGateway:
                 silent=silent,
                 on_text_chunk=_on_text_chunk,
                 progress_callback=progress_callback,
+                from_agent=from_agent,
             )
         except Exception as exc:
             fail_metadata = dict(event_metadata)
