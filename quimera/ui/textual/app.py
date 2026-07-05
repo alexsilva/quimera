@@ -136,8 +136,6 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             gate = getattr(quimera_app, "input_gate", None)
             if hasattr(gate, "set_textual_mounted"):
                 gate.set_textual_mounted(True)
-            if self._hydrate_restored_history():
-                self._redraw_feed(scroll_end=True)
             for event in bridge.drain_pending_events():
                 self.handle_bridge_event(event)
             self._bridge_drain_timer = self.set_interval(0.05, self._drain_bridge_events)
@@ -375,6 +373,10 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                 self._clear_question_overlay()
                 self._refresh_toolbar()
                 self._refresh_now(layout=True)
+                return
+            if event.kind == "restore_history":
+                if self._hydrate_restored_history():
+                    self._redraw_feed(scroll_end=True)
                 return
             if event.kind == "prompt_clear":
                 self._clear_prompt_state()

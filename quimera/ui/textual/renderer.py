@@ -240,6 +240,10 @@ class TextualRenderer:
         """Exibe mensagem neutra."""
         self._bridge.emit(TextualUiEvent("muted", str(message)))
 
+    def signal_restore_history(self) -> None:
+        """Sinaliza ao feed para exibir o histórico restaurado após as mensagens de startup."""
+        self._bridge.emit(TextualUiEvent("restore_history"))
+
     def show_warning(self, message: str) -> None:
         """Exibe warning."""
         self._bridge.emit(TextualUiEvent("warning", str(message)))

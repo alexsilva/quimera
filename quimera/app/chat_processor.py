@@ -103,6 +103,9 @@ def run_chat_loop(
     flush = getattr(app.renderer, "flush", None)
     if callable(flush):
         flush()
+    signal_restore = getattr(app.renderer, "signal_restore_history", None)
+    if callable(signal_restore):
+        signal_restore()
 
     _ui_wakeup = threading.Event()
     _ui_event_queue: queue.Queue = _WakeupQueue(_ui_wakeup)
