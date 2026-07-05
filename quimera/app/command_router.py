@@ -92,4 +92,18 @@ class CommandRouter:
             logger.debug("after fallback active_agents=%r", self.agent_pool.agents)
             if not self.agent_pool:
                 raise RuntimeError("No agents available")
+
+        orchestrator = getattr(self.agent_pool, "orchestrator_agent", None)
+        if orchestrator and orchestrator in self.agent_pool.agents:
+            others = [a for a in self.agent_pool.agents if a != orchestrator]
+            orq_prefix = (
+                f"[MODO ORQUESTRADOR]\n"
+                f"Você é o orquestrador desta sessão. "
+                f"Agentes disponíveis para delegar: {', '.join(others) if others else 'nenhum'}.\n"
+                f"Analise o pedido abaixo, decida qual(is) agente(s) melhor resolve(m) a tarefa "
+                f"e use a ferramenta `delegate` para atribuir. Não responda diretamente — delegue.\n\n"
+                f"Pedido:\n{user_input}"
+            )
+            return orchestrator, orq_prefix, True
+
         return self.agent_pool.primary, user_input, False

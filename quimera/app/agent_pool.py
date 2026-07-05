@@ -12,6 +12,7 @@ class AgentPool:
         self._lock = threading.Lock()
         self._agents = list(agents)
         self._frozen_agent: str | None = None
+        self._orchestrator_agent: str | None = None
         self._on_freeze = None
         self._on_unfreeze = None
 
@@ -56,11 +57,30 @@ class AgentPool:
             except Exception:
                 pass
 
+    @property
+    def orchestrator_agent(self) -> str | None:
+        with self._lock:
+            return self._orchestrator_agent
+
+    def set_orchestrator(self, agent_name: str) -> None:
+        """Define um agente como orquestrador e congela a rotação para ele."""
+        with self._lock:
+            if agent_name not in self._agents:
+                raise ValueError(f"Agente {agent_name} não está no pool")
+            self._orchestrator_agent = agent_name
+            self._frozen_agent = agent_name
+        if self._on_freeze:
+            try:
+                self._on_freeze(agent_name)
+            except Exception:
+                pass
+
     def unfreeze(self) -> None:
-        """Descongela: take_primary() volta a rotacionar."""
+        """Descongela: take_primary() volta a rotacionar. Também limpa o orquestrador."""
         with self._lock:
             previous = self._frozen_agent
             self._frozen_agent = None
+            self._orchestrator_agent = None
         if previous is not None and self._on_unfreeze:
             try:
                 self._on_unfreeze(previous)

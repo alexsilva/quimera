@@ -728,11 +728,37 @@ class AppSystemLayer:
                 return trailing
             return True
 
-        if command.startswith("r/") and len(command) > 2:
-            self.agent_pool.unfreeze()
+        if command.startswith("o/") and len(command) > 2:
+            parts = command[2:].strip().split(None, 1)
+            agent = parts[0]
+            trailing = parts[1].strip() if len(parts) > 1 else ""
+            try:
+                self.agent_pool.set_orchestrator(agent)
+            except ValueError:
+                self._display.show_warning_message(
+                    f"Agente '{agent}' não está no pool ativo."
+                )
+                return True
+            others = [a for a in self.agent_pool.agents if a != agent]
             self._display.show_system(
-                "[rotação] descongelada — agentes voltam a rotacionar."
+                f"[orquestrador] {agent} ativado — todo input passa por ele antes de delegar."
+                + (f" Agentes disponíveis: {', '.join(others)}." if others else "")
             )
+            if trailing:
+                return trailing
+            return True
+
+        if command.startswith("r/") and len(command) > 2:
+            was_orchestrator = getattr(self.agent_pool, "orchestrator_agent", None)
+            self.agent_pool.unfreeze()
+            if was_orchestrator:
+                self._display.show_system(
+                    f"[orquestrador] {was_orchestrator} desativado — agentes voltam a rotacionar."
+                )
+            else:
+                self._display.show_system(
+                    "[rotação] descongelada — agentes voltam a rotacionar."
+                )
             return True
 
         return False
