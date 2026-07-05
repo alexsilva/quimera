@@ -15,6 +15,7 @@ TEXTUAL_APP_CSS = """
             min-height: 10;
             padding: 0 1;
             background: $background;
+            overflow-x: auto;
         }
         #toolbar {
             height: 1;

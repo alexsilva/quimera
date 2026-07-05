@@ -95,6 +95,8 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             ("ctrl+l", "clear_feed", "Limpar feed"),
             ("ctrl+end", "scroll_to_bottom", "Ir ao fim"),
             ("ctrl+home", "scroll_to_top", "Ir ao topo"),
+            ("pageup", "feed_page_up", "Rolar feed acima"),
+            ("pagedown", "feed_page_down", "Rolar feed abaixo"),
         ]
 
         def __init__(self) -> None:
@@ -107,6 +109,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             self._bridge_drain_timer = None
             self._feed_model = TextualFeedModel()
             self._history_file_path: Path | None = None
+            self._feed_pinned_to_bottom = True
 
         def compose(self) -> ComposeResult:
             yield _SummaryHeader(show_clock=True, id="header")
@@ -117,6 +120,8 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                     wrap=True,
                     highlight=False,
                     max_lines=_resolve_textual_feed_limit(quimera_app),
+                    min_width=20,
+                    auto_scroll=False,
                 )
                 yield Static("", id="toolbar")
                 yield Static("", id="question_overlay")
@@ -263,10 +268,31 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             self._refresh_now(layout=True)
 
         def action_scroll_to_bottom(self) -> None:
-            self.query_one("#feed", RichLog).scroll_end(animate=False)
+            feed = self.query_one("#feed", RichLog)
+            feed.scroll_end(animate=False)
+            self._feed_pinned_to_bottom = True
 
         def action_scroll_to_top(self) -> None:
-            self.query_one("#feed", RichLog).scroll_home(animate=False)
+            feed = self.query_one("#feed", RichLog)
+            feed.scroll_home(animate=False)
+            self._feed_pinned_to_bottom = False
+
+        def action_feed_page_up(self) -> None:
+            feed = self.query_one("#feed", RichLog)
+            feed.scroll_page_up(animate=False)
+            self._feed_pinned_to_bottom = feed.is_vertical_scroll_end
+
+        def action_feed_page_down(self) -> None:
+            feed = self.query_one("#feed", RichLog)
+            feed.scroll_page_down(animate=False)
+            self._feed_pinned_to_bottom = feed.is_vertical_scroll_end
+
+        def _feed_write(self, feed: RichLog, renderable) -> None:
+            """Escreve no feed e rola para o fim apenas se estava ancorado ao fundo."""
+            was_pinned = self._feed_pinned_to_bottom
+            feed.write(renderable)
+            if was_pinned:
+                feed.scroll_end(animate=False)
 
         def on_input_changed(self, event: Input.Changed) -> None:
             if not isinstance(event.input, _CompletionInput):
@@ -353,13 +379,15 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                     renderable = _render_event(item.event)
                     if renderable is not None:
                         feed.write(renderable)
+                if self._feed_pinned_to_bottom:
+                    feed.scroll_end(animate=False)
                 self._refresh_toolbar()
                 self._refresh_now(layout=True)
                 return
             if change.appended is not None:
                 renderable = _render_event(change.appended.event)
                 if renderable is not None:
-                    feed.write(renderable)
+                    self._feed_write(feed, renderable)
             self._refresh_toolbar()
             self._refresh_now()
 
