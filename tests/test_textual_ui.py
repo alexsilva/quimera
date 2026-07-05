@@ -193,7 +193,6 @@ def test_textual_feed_ignores_late_transients_after_failed_lifecycle():
         )
     )
 
-    assert model.apply(TextualUiEvent("agent_update", "late update", agent="claude")) is False
     assert model.apply(TextualUiEvent("stream_chunk", {"text": "late chunk"}, agent="claude")) is False
     assert model.apply(TextualUiEvent("tool_preview", "late tool", agent="claude")) is False
     assert model.apply(TextualUiEvent("stream_abort", {"label": "Claude"}, agent="claude")) is False
@@ -201,6 +200,24 @@ def test_textual_feed_ignores_late_transients_after_failed_lifecycle():
     assert len(model.items) == 1
     assert model.items[0].event.kind == "agent_lifecycle"
     assert model.items[0].event.payload["status"] == "failed"
+
+
+def test_textual_feed_agent_update_starts_new_run_after_failed_lifecycle():
+    model = TextualFeedModel()
+
+    model.apply(TextualUiEvent("agent_update", "executando", agent="claude"))
+    model.apply(
+        TextualUiEvent(
+            "agent_lifecycle",
+            _agent_lifecycle_payload("falhou", status=AgentLifecycleStatus.FAILED),
+            agent="claude",
+        )
+    )
+
+    assert model.apply(TextualUiEvent("agent_update", "nova tentativa", agent="claude")) is True
+    assert len(model.items) == 1
+    assert model.items[0].event.kind == "agent_update"
+    assert model.items[0].event.payload == "nova tentativa"
 
 
 def test_textual_feed_uses_delegation_id_to_isolate_same_agent_runs():
@@ -225,6 +242,27 @@ def test_textual_feed_uses_delegation_id_to_isolate_same_agent_runs():
     assert model.items[0].event.payload["delegation_id"] == "one"
     assert model.items[1].event.kind == "stream_chunk"
     assert model.items[1].event.payload["delegation_id"] == "two"
+
+
+def test_textual_feed_hydrates_restored_history():
+    model = TextualFeedModel()
+
+    changed = model.hydrate_from_history(
+        [
+            {"role": "human", "content": "olá"},
+            {"role": "codex-gpt-5-5", "content": "feito"},
+        ],
+        user_label=">>>",
+        agent_resolver=lambda _agent: ("blue", "Codex"),
+    )
+
+    assert changed is True
+    assert model.last_change.redraw is True
+    assert [item.event.kind for item in model.items] == ["user_message", "agent_message"]
+    assert model.items[0].event.payload["label"] == ">>>"
+    assert model.items[1].event.agent == "codex-gpt-5-5"
+    assert model.items[1].event.payload["label"] == "Codex"
+
 
 def test_textual_feed_clears_tool_preview_on_stream_abort():
     model = TextualFeedModel()
@@ -688,6 +726,48 @@ def test_textual_renderer_exposes_legacy_visual_methods():
     )
 
     assert [event.kind for event in emitted] == ["banner", "approval", "delegation", "turn_summary"]
+
+
+def test_textual_renderer_emits_delegation_chain_metadata():
+    bridge = TextualUiBridge()
+    emitted = []
+    bridge.emit = emitted.append
+    renderer = TextualRenderer(bridge)
+
+    renderer.show_delegation(
+        "claude",
+        "codex",
+        task="revisar",
+        delegation_id="dlg-123",
+        chain=["human", "claude", "codex"],
+    )
+
+    event = emitted[-1]
+    assert event.kind == "delegation"
+    assert event.payload["delegation_id"] == "dlg-123"
+    assert event.payload["chain"] == ["human", "claude", "codex"]
+
+
+def test_textual_render_event_shows_delegation_chain_and_id():
+    event = TextualUiEvent(
+        "delegation",
+        {
+            "from_label": "Claude",
+            "from_style": "cyan",
+            "to_label": "Codex",
+            "to_style": "blue",
+            "task": "revisar",
+            "delegation_id": "dlg-123",
+            "chain": ["human", "claude", "codex"],
+        },
+    )
+    console = Console(record=True, width=120)
+
+    console.print(_render_event(event))
+    output = console.export_text()
+
+    assert "cadeia: human → claude → codex" in output
+    assert "dlg-123" in output
 
 
 def test_textual_renderer_formats_agent_error_metadata():

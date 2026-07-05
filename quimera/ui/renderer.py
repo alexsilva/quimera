@@ -1171,10 +1171,11 @@ class TerminalRenderer:
         else:
             self.show_system_neutral(summary)
 
-    def show_delegation(self, from_agent, to_agent, task=None):
+    def show_delegation(self, from_agent, to_agent, task=None, *, delegation_id=None, chain=None):
         """Exibe delegation."""
         from_style, from_label = self._agent_style(from_agent)
         to_style, to_label = self._agent_style(to_agent)
+        delegation_chain = [str(item).strip() for item in (chain or []) if str(item).strip()]
         if self._console:
             title_parts = [
                 (f"  {from_label} ", f"bold {from_style}"),
@@ -1183,12 +1184,20 @@ class TerminalRenderer:
             ]
             if task:
                 title_parts.append((f"· {task}", "dim"))
+            if len(delegation_chain) > 2:
+                title_parts.append((f" · cadeia: {' → '.join(delegation_chain)}", "dim"))
+            if delegation_id:
+                title_parts.append((f" · {delegation_id}", "dim"))
             title = Text.assemble(*title_parts)
             self._print(Rule(title, style="dim", characters="─"), kind="delegation")
         else:
             arrow = f"{from_label} → {to_label}"
             if task:
                 arrow += f"  ·  {task}"
+            if len(delegation_chain) > 2:
+                arrow += f"  ·  cadeia: {' → '.join(delegation_chain)}"
+            if delegation_id:
+                arrow += f"  ·  {delegation_id}"
             print(arrow)
 
     def show_prompt_preview(self, agent: str, content: str):

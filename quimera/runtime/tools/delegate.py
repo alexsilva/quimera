@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+import uuid
 from typing import Protocol, Callable
 
 from ..config import ToolRuntimeConfig
@@ -41,6 +42,7 @@ class _DelegateFnProto(Protocol):
         persist_history: bool = True,
         history_snapshot: list | None = None,
         max_retries: int = 1,
+        from_agent: str | None = None,
         progress_callback: Callable[[str], None] | None = None,
     ) -> str | None: ...
 
@@ -270,6 +272,21 @@ class DelegateTools(ToolBase):
     # ── synchronous execution core ───────────────────────────────────────
 
     @staticmethod
+    def _new_delegation_id() -> str:
+        """Gera identificador curto para correlacionar uma delegação no feed."""
+        return f"dlg-{uuid.uuid4().hex[:8]}"
+
+    @staticmethod
+    def _delegation_chain(source_agent: str | None, target_agent: str | None) -> list[str]:
+        """Monta cadeia visual mínima, sem valores vazios ou duplicados adjacentes."""
+        chain: list[str] = []
+        for value in (source_agent, target_agent):
+            normalized = str(value or "").strip()
+            if normalized and (not chain or chain[-1] != normalized):
+                chain.append(normalized)
+        return chain
+
+    @staticmethod
     def _execute_single_step(
         step: dict,
         delegate_fn: _DelegateFnProto,
@@ -284,6 +301,8 @@ class DelegateTools(ToolBase):
         last_error = None
         selected_agent = None
         normalized_target_agent = ""
+        source_agent = str(step.get("source_agent") or "").strip() or None
+        delegation_id = str(step.get("delegation_id") or "").strip() or DelegateTools._new_delegation_id()
         for target_agent in attempt_targets:
             if callable(cancel_checker) and cancel_checker():
                 return None, None, "Execução cancelada pelo usuário"
@@ -291,6 +310,8 @@ class DelegateTools(ToolBase):
             delegation = {
                 "task": step["request"],
                 "context": step["context"],
+                "delegation_id": delegation_id,
+                "chain": DelegateTools._delegation_chain(source_agent, normalized_target_agent or target_agent),
             }
             try:
                 result = delegate_fn(
@@ -304,6 +325,7 @@ class DelegateTools(ToolBase):
                     persist_history=True,
                     history_snapshot=[],
                     max_retries=3,
+                    from_agent=source_agent,
                     progress_callback=progress_callback,
                 )
             except Exception as dispatch_error:
@@ -562,6 +584,8 @@ class DelegateTools(ToolBase):
                 "request": request,
                 "context": context,
                 "fallback_agents": fallback_agents,
+                "source_agent": calling_agent or "",
+                "delegation_id": self._new_delegation_id(),
             }
         ]
 
@@ -641,6 +665,8 @@ class DelegateTools(ToolBase):
                         "request": normalized_task,
                         "context": normalized_context,
                         "fallback_agents": normalized_extra_fallback,
+                        "source_agent": calling_agent or "",
+                        "delegation_id": self._new_delegation_id(),
                     }
                 )
 

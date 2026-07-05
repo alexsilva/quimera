@@ -200,12 +200,22 @@ def _render_event(event: TextualUiEvent):
     if event.kind == "delegation":
         payload = event.payload if isinstance(event.payload, dict) else {}
         task = str(payload.get("task", "")).strip()
+        chain = [str(item).strip() for item in (payload.get("chain") or []) if str(item).strip()]
+        depth = max(len(chain) - 2, 0)
         text = Text()
+        if depth:
+            text.append("  " * depth)
+            text.append("↳ ", style="dim")
         text.append(str(payload.get("from_label", "agente")), style=f"bold {payload.get('from_style', 'cyan')}")
         text.append(" → ", style="dim")
         text.append(str(payload.get("to_label", "agente")), style=f"bold {payload.get('to_style', 'cyan')}")
         if task:
             text.append(f" · {task}", style="dim")
+        if len(chain) > 2:
+            text.append(f" · cadeia: {' → '.join(chain)}", style="dim")
+        delegation_id = str(payload.get("delegation_id") or "").strip()
+        if delegation_id:
+            text.append(f" · {delegation_id}", style="dim")
         return Rule(text, style="dim")
     if event.kind == "turn_summary":
         prefix = f"{event.agent} " if event.agent else ""
@@ -458,4 +468,3 @@ def _build_pending_card_renderable(label: str, style: str, question: str, *, kin
         border_style="yellow",
         padding=(0, 1),
     )
-

@@ -208,13 +208,23 @@ class UiEventHandler:
                     delegation_agent = event.agent
                     delegation_to = meta.get("to")
                     delegation_task = meta.get("task")
+                    delegation_id = meta.get("delegation_id")
+                    delegation_chain = meta.get("chain")
 
                     def _render_delegation_event(
                         _agent=delegation_agent,
                         _to=delegation_to,
                         _task=delegation_task,
+                        _delegation_id=delegation_id,
+                        _chain=delegation_chain,
                     ) -> None:
-                        self._renderer.show_delegation(_agent, _to, task=_task)
+                        self._renderer.show_delegation(
+                            _agent,
+                            _to,
+                            task=_task,
+                            delegation_id=_delegation_id,
+                            chain=_chain,
+                        )
 
                     if self._should_render_ui_event_above_prompt():
                         if not self._run_ui_event_above_prompt(_render_delegation_event):

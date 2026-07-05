@@ -110,6 +110,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             self._feed_model = TextualFeedModel()
             self._history_file_path: Path | None = None
             self._feed_pinned_to_bottom = True
+            self._restored_history_hydrated = False
 
         def compose(self) -> ComposeResult:
             yield _SummaryHeader(show_clock=True, id="header")
@@ -135,6 +136,8 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             gate = getattr(quimera_app, "input_gate", None)
             if hasattr(gate, "set_textual_mounted"):
                 gate.set_textual_mounted(True)
+            if self._hydrate_restored_history():
+                self._redraw_feed(scroll_end=True)
             for event in bridge.drain_pending_events():
                 self.handle_bridge_event(event)
             self._bridge_drain_timer = self.set_interval(0.05, self._drain_bridge_events)
@@ -164,6 +167,21 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                 self.query_one("#input", _CompletionInput).save_history(self._history_file_path)
             except Exception:
                 pass
+
+        def _hydrate_restored_history(self) -> bool:
+            """Carrega o histórico já restaurado pelo core no feed visual."""
+            if self._restored_history_hydrated:
+                return False
+            history = getattr(quimera_app, "history", None)
+            if not history:
+                return False
+            self._restored_history_hydrated = True
+            resolver = getattr(quimera_app, "_resolve_profile_style", None)
+            return self._feed_model.hydrate_from_history(
+                list(history),
+                user_label=str(getattr(quimera_app, "user_name", ">>>") or ">>>"),
+                agent_resolver=resolver if callable(resolver) else None,
+            )
 
         def _drain_bridge_events(self) -> None:
             drained = False
@@ -294,6 +312,18 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             if was_pinned:
                 feed.scroll_end(animate=False)
 
+        def _redraw_feed(self, feed: RichLog | None = None, *, scroll_end: bool = False) -> None:
+            """Reescreve o feed completo a partir do modelo lógico."""
+            feed = feed or self.query_one("#feed", RichLog)
+            feed.clear()
+            for item in self._feed_model.items:
+                renderable = _render_event(item.event)
+                if renderable is not None:
+                    feed.write(renderable)
+            if scroll_end:
+                feed.scroll_end(animate=False)
+            self._refresh_now(layout=True)
+
         def on_input_changed(self, event: Input.Changed) -> None:
             if not isinstance(event.input, _CompletionInput):
                 return
@@ -374,15 +404,8 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             feed = self.query_one("#feed", RichLog)
             change = self._feed_model.last_change
             if change.redraw:
-                feed.clear()
-                for item in self._feed_model.items:
-                    renderable = _render_event(item.event)
-                    if renderable is not None:
-                        feed.write(renderable)
-                if self._feed_pinned_to_bottom:
-                    feed.scroll_end(animate=False)
+                self._redraw_feed(feed, scroll_end=self._feed_pinned_to_bottom)
                 self._refresh_toolbar()
-                self._refresh_now(layout=True)
                 return
             if change.appended is not None:
                 renderable = _render_event(change.appended.event)

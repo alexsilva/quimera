@@ -811,6 +811,34 @@ class TestCallAgentAutoReferencia:
         assert "cannot delegate to itself" in result.error
 
 
+def test_delegate_passes_source_agent_chain_and_id(tmp_path):
+    """Delegações carregam origem, cadeia e id para renderização no feed."""
+    config = ToolRuntimeConfig(workspace_root=tmp_path)
+    tools = DelegateTools(config)
+    captured: list[tuple[str, dict]] = []
+
+    def dispatch(agent, **kwargs):
+        captured.append((agent, kwargs))
+        return "ok"
+
+    tools.set_delegate_fn(dispatch)
+    tools.set_active_agents_provider(lambda: ["codex", "claude"])
+
+    call = _make_call(
+        metadata={"calling_agent": "claude"},
+        args={"target_agent": "codex", "request": "revisar"},
+    )
+
+    result = tools.delegate(call)
+
+    assert result.ok is True
+    assert captured[0][0] == "codex"
+    delegation = captured[0][1]["delegation"]
+    assert captured[0][1]["from_agent"] == "claude"
+    assert delegation["chain"] == ["claude", "codex"]
+    assert delegation["delegation_id"].startswith("dlg-")
+
+
 def test_delegate_stops_on_user_cancel_without_trying_fallbacks(tmp_path):
     """Cancelamento do usuário não deve virar fallback silencioso."""
     config = ToolRuntimeConfig(workspace_root=tmp_path)

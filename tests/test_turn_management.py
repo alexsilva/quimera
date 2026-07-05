@@ -680,7 +680,7 @@ class TestTurnCycle(unittest.TestCase):
         scheduled_callbacks = []
 
         class Renderer:
-            def show_delegation(self, from_agent, to_agent, task=None):
+            def show_delegation(self, from_agent, to_agent, task=None, **_kwargs):
                 delegation_calls.append((from_agent, to_agent, task))
 
             def flush(self):

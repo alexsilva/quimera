@@ -8,8 +8,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+from typing import Any, Callable
 
+from quimera.constants import USER_ROLE
 from quimera.ui.text import (
     _apply_stream_diff,
     _normalize_stream_diff,
@@ -135,6 +136,69 @@ class TextualFeedModel:
         self._transient_tools_by_agent.clear()
         self._finalized_agents.clear()
         self._last_change = TextualFeedChange(True, redraw=True)
+
+    def hydrate_from_history(
+            self,
+            messages: list,
+            *,
+            user_label: str = ">>>",
+            agent_resolver: Callable[[str], tuple[str, str] | None] | None = None,
+    ) -> bool:
+        """Reconstrói itens persistentes do feed a partir do histórico salvo."""
+        hydrated: list[TextualFeedItem] = []
+        for message in messages or []:
+            if not isinstance(message, dict):
+                continue
+            role = str(message.get("role") or "").strip()
+            content = strip_ansi(str(message.get("content") or "")).strip("\r\n")
+            if not role or not content.strip():
+                continue
+            if role == USER_ROLE:
+                hydrated.append(
+                    TextualFeedItem(
+                        TextualUiEvent(
+                            "user_message",
+                            {
+                                "content": content,
+                                "label": user_label,
+                                "style": "green",
+                                "render_mode": "plain",
+                            },
+                        ),
+                        transient=False,
+                    )
+                )
+                continue
+            style = "cyan"
+            label = role
+            if callable(agent_resolver):
+                try:
+                    resolved = agent_resolver(role)
+                except Exception:
+                    resolved = None
+                if resolved:
+                    style, label = str(resolved[0] or "cyan"), str(resolved[1] or role)
+            hydrated.append(
+                TextualFeedItem(
+                    TextualUiEvent(
+                        "agent_message",
+                        {
+                            "content": content,
+                            "label": label,
+                            "style": style,
+                            "render_mode": "plain",
+                        },
+                        agent=role,
+                    ),
+                    transient=False,
+                )
+            )
+        if not hydrated:
+            self._last_change = TextualFeedChange(False)
+            return False
+        self._items.extend(hydrated)
+        self._last_change = TextualFeedChange(True, redraw=True)
+        return True
 
     def apply(self, event: TextualUiEvent) -> bool:
         """Aplica evento e retorna se o feed visual precisa ser redesenhado."""

@@ -95,7 +95,7 @@ class DummyRenderer:
     def show_plain(self, message):
         self.plain_messages.append(message)
 
-    def show_delegation(self, from_agent, to_agent, task=None):
+    def show_delegation(self, from_agent, to_agent, task=None, **_kwargs):
         self.delegations.append((from_agent, to_agent, task))
 
     def show_prompt_preview(self, agent, content):

@@ -201,6 +201,44 @@ class AppDispatchServices:
             return current
         return 0
 
+    def _show_delegation(
+            self,
+            from_agent: str | None,
+            to_agent: str,
+            task: str | None,
+            *,
+            delegation_id: str | None = None,
+            chain: list | tuple | None = None,
+    ) -> None:
+        """Exibe delegação no renderer atual, preservando compatibilidade sem Textual."""
+        metadata = {
+            "to": to_agent,
+            "task": task,
+            "delegation_id": delegation_id,
+            "chain": list(chain or []),
+        }
+        source_agent = str(from_agent or "quimera")
+        if self._ui_queue is not None:
+            self._ui_queue.put(
+                RenderEvent(
+                    RenderEvent.DELEGATION,
+                    "",
+                    agent=source_agent,
+                    metadata=metadata,
+                )
+            )
+            return
+        renderer = self._call(self._renderer)
+        show_delegation = getattr(renderer, "show_delegation", None) if renderer is not None else None
+        if callable(show_delegation):
+            show_delegation(
+                source_agent,
+                to_agent,
+                task=task,
+                delegation_id=delegation_id,
+                chain=metadata["chain"],
+            )
+
     # -------------------------------------------------------------------------
     # Lazy builders
     # -------------------------------------------------------------------------
@@ -384,6 +422,15 @@ class AppDispatchServices:
         progress_callback = dispatch_options.pop("progress_callback", None)
         delegation = dispatch_options.get("delegation")
         delegation_id = delegation.get("delegation_id") if isinstance(delegation, dict) else None
+        from_agent = dispatch_options.get("from_agent")
+        if isinstance(delegation, dict):
+            self._show_delegation(
+                str(from_agent or delegation.get("from_agent") or "quimera"),
+                str(agent),
+                delegation.get("task"),
+                delegation_id=delegation_id,
+                chain=delegation.get("chain") if isinstance(delegation.get("chain"), (list, tuple)) else None,
+            )
         logger.debug(
             "[DISPATCH] sending to agent=%s, delegation_only=%s, delegation_id=%s",
             agent, dispatch_options.get("delegation_only", False), delegation_id,

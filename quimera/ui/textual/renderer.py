@@ -319,10 +319,11 @@ class TextualRenderer:
         summary = f"TOOLS: {total} chamadas · {ok_count} ok · {err_count} erro · {duration}"
         self._bridge.emit(TextualUiEvent("turn_summary", summary, agent=agent))
 
-    def show_delegation(self, from_agent, to_agent, task=None) -> None:
+    def show_delegation(self, from_agent, to_agent, task=None, *, delegation_id=None, chain=None) -> None:
         """Exibe delegação entre agentes."""
         from_style, from_label = self._resolve_agent_style(str(from_agent))
         to_style, to_label = self._resolve_agent_style(str(to_agent))
+        delegation_chain = [str(item) for item in (chain or []) if str(item).strip()]
         self._bridge.emit(
             TextualUiEvent(
                 "delegation",
@@ -332,6 +333,8 @@ class TextualRenderer:
                     "to_label": to_label,
                     "to_style": to_style,
                     "task": str(task or "").strip(),
+                    "delegation_id": str(delegation_id or "").strip(),
+                    "chain": delegation_chain,
                 },
             )
         )
@@ -489,4 +492,3 @@ class TextualRenderer:
     def set_summarizing(self, active: bool) -> None:
         """Sinaliza início/fim de sumarização para animação no header."""
         self._bridge.emit(TextualUiEvent("summarizing", active))
-

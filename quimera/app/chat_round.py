@@ -310,18 +310,31 @@ class ChatRoundOrchestrator:
         if callable(show_message):
             show_message(agent, message)
 
-    def _show_delegation(self, from_agent: str, to_agent: str, task: str | None) -> None:
+    def _show_delegation(
+            self,
+            from_agent: str,
+            to_agent: str,
+            task: str | None,
+            *,
+            delegation_id: str | None = None,
+            chain: list | tuple | None = None,
+    ) -> None:
         if self._emit_event(
             RenderEvent.DELEGATION,
             "",
             agent=from_agent,
-            metadata={"to": to_agent, "task": task},
+            metadata={
+                "to": to_agent,
+                "task": task,
+                "delegation_id": delegation_id,
+                "chain": list(chain or []),
+            },
         ):
             return
         if self._renderer is not None:
             show_delegation = getattr(self._renderer, "show_delegation", None)
             if callable(show_delegation):
-                show_delegation(from_agent, to_agent, task=task)
+                show_delegation(from_agent, to_agent, task=task, delegation_id=delegation_id, chain=chain)
 
     def _is_cancelled(self) -> bool:
         return bool(self._agent_client and getattr(self._agent_client, '_user_cancelled', False))
