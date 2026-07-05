@@ -17,6 +17,12 @@ TEXTUAL_APP_CSS = """
             background: $background;
             overflow-x: auto;
         }
+        #feed_transient {
+            height: auto;
+            max-height: 10;
+            padding: 0 1;
+            background: $background;
+        }
         #toolbar {
             height: 1;
             padding: 0 1;

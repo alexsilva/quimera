@@ -100,8 +100,14 @@ class CommandRouter:
                 f"[MODO ORQUESTRADOR]\n"
                 f"Você é o orquestrador desta sessão. "
                 f"Agentes disponíveis para delegar: {', '.join(others) if others else 'nenhum'}.\n"
-                f"Analise o pedido abaixo, decida qual(is) agente(s) melhor resolve(m) a tarefa "
-                f"e use a ferramenta `delegate` para atribuir. Não responda diretamente — delegue.\n\n"
+                f"Fluxo obrigatório:\n"
+                f"1. Analise o pedido e decida qual(is) agente(s) melhor resolve(m) a tarefa.\n"
+                f"2. Use a ferramenta `delegate` para atribuir a execução ao agente escolhido.\n"
+                f"3. Receba a resposta completa do agente delegado.\n"
+                f"4. **Revise o trabalho recebido** — verifique se atende ao pedido, se há erros ou omissões.\n"
+                f"5. Após a revisão, **sintetize e apresente você mesmo** o resultado final para o usuário "
+                f"com sua própria redação. Não repasse a resposta bruta do agente delegado.\n"
+                f"6. Se o trabalho não estiver correto, delegue novamente com instruções mais precisas.\n\n"
                 f"Pedido:\n{user_input}"
             )
             return orchestrator, orq_prefix, True

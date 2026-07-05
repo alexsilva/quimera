@@ -26,6 +26,8 @@ from quimera.ui.textual.bridge import TextualUiBridge
 from quimera.ui.textual.constants import SUMMARY_SPINNER_FRAMES as _SUMMARY_SPINNER_FRAMES
 from quimera.ui.textual.events import TextualUiEvent
 from quimera.ui.textual.feed_model import TextualFeedModel
+from rich.console import Group as _RichGroup
+
 from quimera.ui.textual.renderables import (
     _build_question_overlay,
     _build_window_overlay_payload,
@@ -111,6 +113,9 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             self._history_file_path: Path | None = None
             self._feed_pinned_to_bottom = True
             self._restored_history_hydrated = False
+            # Tracks event object ids already written to the RichLog (permanent items only).
+            # Avoids clear+rewrite: we append-only and skip already-written items.
+            self._written_to_richlog: set[int] = set()
 
         def compose(self) -> ComposeResult:
             yield _SummaryHeader(show_clock=True, id="header")
@@ -124,6 +129,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                     min_width=20,
                     auto_scroll=False,
                 )
+                yield Static("", id="feed_transient")
                 yield Static("", id="toolbar")
                 yield Static("", id="question_overlay")
                 yield CompletionDropdown()
@@ -281,6 +287,8 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
         def action_clear_feed(self) -> None:
             self._feed_model.clear()
             self.query_one("#feed", RichLog).clear()
+            self._written_to_richlog.clear()
+            self.query_one("#feed_transient", Static).update("")
             self._refresh_now(layout=True)
 
         def action_scroll_to_bottom(self) -> None:
@@ -310,14 +318,48 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             if was_pinned:
                 feed.scroll_end(animate=False)
 
+        def _sync_transient_layer(self) -> None:
+            """Atualiza o Static de transitórios sem tocar no RichLog."""
+            try:
+                widget = self.query_one("#feed_transient", Static)
+            except Exception:
+                return
+            parts = []
+            for item in self._feed_model.items:
+                if item.transient:
+                    r = _render_event(item.event)
+                    if r is not None:
+                        parts.append(r)
+            if parts:
+                widget.update(_RichGroup(*parts))
+            else:
+                widget.update("")
+
+        def _sync_permanent_to_richlog(self, feed: RichLog) -> None:
+            """Adiciona ao RichLog apenas itens permanentes ainda não escritos."""
+            for item in self._feed_model.items:
+                if item.transient:
+                    continue
+                key = id(item.event)
+                if key not in self._written_to_richlog:
+                    renderable = _render_event(item.event)
+                    if renderable is not None:
+                        self._feed_write(feed, renderable)
+                    self._written_to_richlog.add(key)
+
         def _redraw_feed(self, feed: RichLog | None = None, *, scroll_end: bool = False) -> None:
-            """Reescreve o feed completo a partir do modelo lógico."""
+            """Reescreve o feed completo — usado apenas na restauração de histórico."""
             feed = feed or self.query_one("#feed", RichLog)
             feed.clear()
+            self._written_to_richlog.clear()
             for item in self._feed_model.items:
+                if item.transient:
+                    continue
                 renderable = _render_event(item.event)
                 if renderable is not None:
                     feed.write(renderable)
+                    self._written_to_richlog.add(id(item.event))
+            self._sync_transient_layer()
             if scroll_end:
                 feed.scroll_end(animate=False)
             self._refresh_now(layout=True)
@@ -352,6 +394,8 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             if event.kind == "clear":
                 self._feed_model.clear()
                 self.query_one("#feed", RichLog).clear()
+                self._written_to_richlog.clear()
+                self.query_one("#feed_transient", Static).update("")
                 self._refresh_now(layout=True)
                 return
             if event.kind == "question":
@@ -406,13 +450,24 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             feed = self.query_one("#feed", RichLog)
             change = self._feed_model.last_change
             if change.redraw:
-                self._redraw_feed(feed, scroll_end=self._feed_pinned_to_bottom)
+                # A transient was updated in-place, or became permanent.
+                # Append-only sync to RichLog (no clear) + update transient layer.
+                self._sync_permanent_to_richlog(feed)
+                self._sync_transient_layer()
                 self._refresh_toolbar()
+                self._refresh_now()
                 return
             if change.appended is not None:
-                renderable = _render_event(change.appended.event)
-                if renderable is not None:
-                    self._feed_write(feed, renderable)
+                if change.appended.transient:
+                    # New transient slot — show in transient layer only.
+                    self._sync_transient_layer()
+                else:
+                    # New permanent item — append to RichLog.
+                    renderable = _render_event(change.appended.event)
+                    if renderable is not None:
+                        self._feed_write(feed, renderable)
+                    self._written_to_richlog.add(id(change.appended.event))
+                    self._sync_transient_layer()
             self._refresh_toolbar()
             self._refresh_now()
 

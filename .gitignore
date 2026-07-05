@@ -21,3 +21,5 @@ TODO.md
 opencode.json
 site
 planning/
+build/
+*.egg-info/
