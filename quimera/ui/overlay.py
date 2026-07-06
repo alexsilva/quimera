@@ -13,18 +13,28 @@ class TransientOverlay:
     ``lines[0]`` is the number of overlay lines currently on screen. The list is
     intentionally shared with the compositor so floor ownership transitions can
     clear any visible overlay before an external prompt takes over stdout.
+
+    ``_last_rendered_count`` tracks the actual visible lines from the previous
+    successful render to detect drift (ghosting) caused by terminal resize or
+    event reordering.
     """
 
     def __init__(self, lines: list[int] | None = None):
         self._lines = lines if lines is not None else [0]
+        self._last_rendered_count: int = 0
 
     @property
     def lines_on_screen(self) -> int:
         return self._lines[0]
 
+    @property
+    def last_rendered_count(self) -> int:
+        return self._last_rendered_count
+
     def reset(self) -> None:
         """Forget visible overlay lines, for example after a terminal resize."""
         self._lines[0] = 0
+        self._last_rendered_count = 0
 
     def build_replace(
         self,
@@ -38,13 +48,28 @@ class TransientOverlay:
         The closure always clears previous overlay lines, even when it is stale.
         A stale closure must not print obsolete text, but it still needs to erase
         the old overlay to prevent ghosting above the prompt.
+
+        Validates the prev_lines chain: if ``lines[0]`` (prev_lines of event N)
+        differs from the last rendered count (new_lines of event N-1), we
+        recalculate the cursor-up to cover the maximum of both — preventing
+        ghost characters left by a mismatch (e.g. after terminal resize or
+        event reordering).
         """
         lines = self._lines
+        last_rendered = self._last_rendered_count
 
         def _replace() -> None:
+            nonlocal last_rendered
             previous_lines = lines[0]
             terminal_lines = shutil.get_terminal_size(fallback=(80, 24)).lines
-            cursor_up = min(previous_lines, max(0, terminal_lines - 3))
+
+            # Validate: if prev_lines drifted from last_rendered_count, use the
+            # maximum of both to avoid ghosting leftover characters on screen.
+            if previous_lines != last_rendered:
+                safe_clear = max(previous_lines, last_rendered)
+            else:
+                safe_clear = previous_lines
+            cursor_up = min(safe_clear, max(0, terminal_lines - 3))
             current_version = get_version_fn()
 
             if audit_fn is not None:
@@ -52,9 +77,12 @@ class TransientOverlay:
                     "transient_replace",
                     buf_version=version,
                     prev_lines=previous_lines,
+                    last_rendered=last_rendered,
+                    safe_clear=safe_clear,
                     cursor_up=cursor_up,
                     term_lines=terminal_lines,
                     stale=(version < current_version),
+                    drifted=(previous_lines != last_rendered),
                 )
 
             if cursor_up > 0:
@@ -73,7 +101,9 @@ class TransientOverlay:
             sys.stdout.write(f"\033[2m{actual_text}\033[0m")
             sys.stdout.write("\n")
             sys.stdout.flush()
-            lines[0] = len(visible_lines)
+            new_count = len(visible_lines)
+            lines[0] = new_count
+            self._last_rendered_count = new_count
 
         return _replace
 
@@ -91,6 +121,7 @@ class TransientOverlay:
                 return
             previous_lines = lines[0]
             lines[0] = 0
+            self._last_rendered_count = 0
             if audit_fn is not None:
                 audit_fn("transient_clear", buf_version=version, prev_lines=previous_lines)
             if previous_lines > 0:
@@ -113,6 +144,7 @@ class TransientOverlay:
         def _clear_and_print() -> None:
             previous_lines = lines[0]
             lines[0] = 0
+            self._last_rendered_count = 0
             bump_version_fn()
             if audit_fn is not None:
                 audit_fn("transient_print_above", prev_lines=previous_lines)

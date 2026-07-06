@@ -23,11 +23,16 @@ _file_handler.setLevel(logging.DEBUG)
 handler = PromptAwareStderrHandler(sys.stderr)
 handler.setFormatter(logging.Formatter("%(asctime)s: %(message)s"))
 
-for configured_logger in (logger, mcp_server_logger):
+for configured_logger in (logger,):
     configured_logger.addHandler(handler)
     configured_logger.addHandler(_file_handler)
     configured_logger.propagate = False
     configured_logger.setLevel(numeric_level)
+
+# MCP server logger → arquivo apenas, sem exibição no chat
+mcp_server_logger.addHandler(_file_handler)
+mcp_server_logger.propagate = False
+mcp_server_logger.setLevel(numeric_level)
 
 # Captura todos os outros loggers quimera.* no arquivo de auditoria sem
 # transformar warnings internos em mensagens visuais do app.

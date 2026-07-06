@@ -12,6 +12,8 @@ from rich.rule import Rule
 from rich.table import Table
 from rich.text import Text
 
+_DEFAULT_SECTION_LINE_LIMIT = 20
+
 import quimera.themes as themes
 from quimera.ui.textual.constants import (
     APPROVAL_OPTIONS as _APPROVAL_OPTIONS,
@@ -20,6 +22,11 @@ from quimera.ui.textual.constants import (
 from quimera.ui.textual.events import TextualUiEvent
 
 _RICH_MARKUP_TAG_RE = re.compile(r"\[/?[a-zA-Z][a-zA-Z0-9_#= .:-]*\]")
+_TOOL_PREVIEW_LINE_LIMIT = 5
+_DELEGATION_HINT_RE = re.compile(
+    r"(\bdelegate\b|\bdelegar\b|\bdelegação\b|\bdelegacao\b|->|→|=>)",
+    re.IGNORECASE,
+)
 
 
 def _approval_options() -> list[str]:
@@ -30,6 +37,135 @@ def _approval_options() -> list[str]:
 def _strip_rich_markup_tags(value: str) -> str:
     """Remove tags Rich inline que chegam como texto de eventos transitórios."""
     return _RICH_MARKUP_TAG_RE.sub("", str(value or ""))
+
+
+def _truncate_tool_preview(value: str, *, line_limit: int = _TOOL_PREVIEW_LINE_LIMIT) -> str:
+    """Limita previews/resultados de tools para não dominar o feed."""
+    lines = str(value or "").strip().splitlines()
+    if len(lines) <= line_limit:
+        return "\n".join(lines)
+    return "\n".join([*lines[:line_limit], "...\n[expandir]"])
+
+
+def _build_tool_preview_block(tools) -> str:
+    """Monta bloco textual de previews de tools com truncamento por item."""
+    if not isinstance(tools, list):
+        return ""
+    lines = [_truncate_tool_preview(str(tool)) for tool in tools if str(tool).strip()]
+    return "\n".join(line for line in lines if line.strip())
+
+
+def _breadcrumb_items(chain: list[str], from_label: str, to_label: str) -> list[str]:
+    """Normaliza breadcrumb de delegação para sempre partir do humano."""
+    items = [str(item).strip() for item in (chain or [from_label, to_label]) if str(item).strip()]
+    if not items:
+        return ["humano"]
+    first = items[0].lower()
+    if first in {"human", "humano", "user", "usuario", "usuário", ">>>"}:
+        items[0] = "humano"
+        return items
+    return ["humano", *items]
+
+
+def _orchestrator_section_name(line: str) -> str | None:
+    """Detecta cabeçalhos simples para organizar respostas do orquestrador."""
+    raw = str(line or "").strip()
+    if not raw:
+        return None
+    cleaned = raw.strip("#*-: ").lower()
+    cleaned = cleaned.removesuffix(":").strip()
+    if len(cleaned) > 40:
+        return None
+    if cleaned in {"analise", "análise", "analysis", "raciocinio", "raciocínio"}:
+        return "Análise"
+    if cleaned in {"execucao", "execução", "execution", "plano", "delegacoes", "delegações"}:
+        return "Execução"
+    if cleaned in {"resultado", "result", "sintese", "síntese", "conclusao", "conclusão"}:
+        return "Resultado"
+    return None
+
+
+def _split_orchestrator_sections(content: str) -> list[tuple[str, list[str]]]:
+    """Agrupa texto em seções visuais estáveis para o painel de orquestração."""
+    sections: list[tuple[str, list[str]]] = []
+    current_title = "Análise"
+    current_lines: list[str] = []
+    for line in str(content or "").splitlines():
+        title = _orchestrator_section_name(line)
+        if title:
+            if current_lines:
+                sections.append((current_title, current_lines))
+            current_title = title
+            current_lines = []
+            continue
+        current_lines.append(line)
+    if current_lines or not sections:
+        sections.append((current_title, current_lines))
+    return sections
+
+
+def _orchestrator_line_renderable(line: str, style: str):
+    """Indenta linhas que representam delegações dentro do painel do orquestrador."""
+    text = str(line or "")
+    if _DELEGATION_HINT_RE.search(text):
+        rendered = Text()
+        rendered.append("↳ ", style="dim")
+        rendered.append(text.strip(), style=f"bold {style}")
+        return Padding(rendered, pad=(0, 0, 0, 4))
+    return Padding(Text(text, no_wrap=False, overflow="fold"), pad=(0, 0, 0, 2))
+
+
+def _truncate_section_content(lines: list[str], *, line_limit: int = _DEFAULT_SECTION_LINE_LIMIT) -> tuple[list[str], int]:
+    """Trunca linhas se excederem o limite. line_limit <=0 = sem limite. Retorna (linhas_truncadas, total_original)."""
+    total = len(lines)
+    if line_limit <= 0 or total <= line_limit:
+        return lines, total
+    return lines[:line_limit], total
+
+
+def _build_section_panel(
+    title: str,
+    lines: list[str],
+    style: str,
+    *,
+    expanded: bool = False,
+    line_limit: int = _DEFAULT_SECTION_LINE_LIMIT,
+):
+    """Renderiza uma seção do orquestrador como painel expansível/retrátil."""
+    display_lines, total = _truncate_section_content(lines, line_limit=line_limit)
+    truncated = False
+    if line_limit > 0:
+        truncated = total > line_limit
+
+    indicator = "▾" if expanded else "▸"
+    panel_title = f"[bold {style}]{indicator} {title}[/bold {style}]"
+    border = style if expanded else f"dim {style}"
+
+    inner_parts = []
+    for line in (display_lines or [""]):
+        inner_parts.append(_orchestrator_line_renderable(line, style))
+
+    if truncated:
+        remaining = total - line_limit
+        hint = Text()
+        hint.append(f"\n  ... +{remaining} linhas", style=f"dim {style}")
+        hint.append("  ", style="dim")
+        hint.append("[expandir]", style=f"bold {style} underline")
+        inner_parts.append(Padding(hint, pad=(0, 0, 0, 2)))
+
+    body = Group(*inner_parts) if inner_parts else Text("")
+    return Panel(body, title=panel_title, border_style=border, padding=(0, 1))
+
+
+def _build_orchestrator_body(content: str, style: str):
+    """Cria corpo visual do orquestrador com seções colapsáveis e truncamento."""
+    sections = _split_orchestrator_sections(content)
+    parts = []
+    for idx, (title, lines) in enumerate(sections):
+        expanded = title == "Resultado"
+        line_limit = _DEFAULT_SECTION_LINE_LIMIT if not expanded else 0
+        parts.append(_build_section_panel(title, lines, style, expanded=expanded, line_limit=line_limit))
+    return Group(*parts) if parts else Text("")
 
 
 def _build_question_overlay(payload) -> Panel:
@@ -127,12 +263,14 @@ def _render_event(event: TextualUiEvent):
         label = str(payload.get("label", f"🤖 {event.agent or 'agente'}"))
         style = str(payload.get("style", "cyan") or "cyan")
         theme_name = str(payload.get("theme", themes.DEFAULT_THEME) or themes.DEFAULT_THEME)
+        is_orchestrator = bool(payload.get("orchestrator", False))
         return _render_turn_block(
             theme_name,
             label,
             style,
             content=content,
             render_mode=str(payload.get("render_mode") or "auto"),
+            is_orchestrator=is_orchestrator,
         )
     if event.kind == "stream_start":
         payload = event.payload or {}
@@ -150,10 +288,9 @@ def _render_event(event: TextualUiEvent):
         payload = event.payload if isinstance(event.payload, dict) else {}
         content = str(payload.get("content") or payload.get("text") or event.payload)
         tools = payload.get("tools") if isinstance(payload, dict) else None
-        if isinstance(tools, list) and tools:
-            tool_block = "\n".join(str(tool) for tool in tools if str(tool).strip())
-            if tool_block:
-                content = f"{content.rstrip()}\n{tool_block}" if content.strip() else tool_block
+        tool_block = _build_tool_preview_block(tools)
+        if tool_block:
+            content = f"{content.rstrip()}\n{tool_block}" if content.strip() else tool_block
         if not content.strip():
             return None
         label = str(payload.get("label", f"🤖 {event.agent or 'agente'}"))
@@ -180,10 +317,9 @@ def _render_event(event: TextualUiEvent):
             line.append(f" {message}" if message.strip() else "", style="dim")
             return line
         tools = payload.get("tools") if isinstance(payload, dict) else None
-        if isinstance(tools, list) and tools:
-            tool_block = "\n".join(str(tool) for tool in tools if str(tool).strip())
-            if tool_block:
-                message = f"{message.rstrip()}\n{tool_block}" if message.strip() else tool_block
+        tool_block = _build_tool_preview_block(tools)
+        if tool_block:
+            message = f"{message.rstrip()}\n{tool_block}" if message.strip() else tool_block
         if not message.strip():
             return None
         label = str(payload.get("label", f"🤖 {event.agent or 'agente'}")) if isinstance(payload, dict) else f"🤖 {event.agent or 'agente'}"
@@ -201,22 +337,23 @@ def _render_event(event: TextualUiEvent):
         payload = event.payload if isinstance(event.payload, dict) else {}
         task = str(payload.get("task", "")).strip()
         chain = [str(item).strip() for item in (payload.get("chain") or []) if str(item).strip()]
-        depth = max(len(chain) - 2, 0)
-        text = Text()
-        if depth:
-            text.append("  " * depth)
-            text.append("↳ ", style="dim")
-        text.append(str(payload.get("from_label", "agente")), style=f"bold {payload.get('from_style', 'cyan')}")
-        text.append(" → ", style="dim")
-        text.append(str(payload.get("to_label", "agente")), style=f"bold {payload.get('to_style', 'cyan')}")
-        if task:
-            text.append(f" · {task}", style="dim")
-        if len(chain) > 2:
-            text.append(f" · cadeia: {' → '.join(chain)}", style="dim")
+        from_label = str(payload.get("from_label", "agente"))
+        from_style = str(payload.get("from_style", "cyan"))
+        to_label = str(payload.get("to_label", "agente"))
+        to_style = str(payload.get("to_style", "cyan"))
         delegation_id = str(payload.get("delegation_id") or "").strip()
+        breadcrumb_items = _breadcrumb_items(chain, from_label, to_label)
+        breadcrumb = " > ".join(breadcrumb_items)
+        breadcrumb_title = f"  cadeia: {breadcrumb}"
         if delegation_id:
-            text.append(f" · {delegation_id}", style="dim")
-        return Rule(text, style="dim")
+            breadcrumb_title += f"  ·  #{delegation_id[:8]}"
+        body = Text()
+        body.append(f"▸ {from_label}", style=f"bold {from_style}")
+        body.append(" → ", style="dim")
+        body.append(to_label, style=f"bold {to_style}")
+        if task:
+            body.append(f"\n  ·  {task}", style="dim")
+        return Panel(body, title=f"[dim]{breadcrumb_title}[/dim]", border_style="dim", padding=(0, 1))
     if event.kind == "turn_summary":
         prefix = f"{event.agent} " if event.agent else ""
         return Text(f"{prefix}{event.payload}", style="dim")
@@ -230,10 +367,9 @@ def _render_event(event: TextualUiEvent):
         if isinstance(event.payload, dict):
             content = str(event.payload.get("content") or "")
             tools = event.payload.get("tools")
-            if isinstance(tools, list) and tools:
-                tool_block = "\n".join(str(tool) for tool in tools if str(tool).strip())
-                if tool_block:
-                    content = f"{content.rstrip()}\n{tool_block}" if content.strip() else tool_block
+            tool_block = _build_tool_preview_block(tools)
+            if tool_block:
+                content = f"{content.rstrip()}\n{tool_block}" if content.strip() else tool_block
             label = str(event.payload.get("label", f"🤖 {event.agent or 'agente'}"))
             style = str(event.payload.get("style", "cyan") or "cyan")
             theme_name = str(event.payload.get("theme", themes.DEFAULT_THEME) or themes.DEFAULT_THEME)
@@ -361,6 +497,59 @@ def _build_turn_body(
     return body_content
 
 
+def _split_body_sections(content: str) -> list[str]:
+    """Split content into visual sections by --- or markdown headings."""
+    lines = str(content or "").splitlines()
+    sections: list[str] = []
+    current: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped == "---" or stripped.startswith("##") or stripped.startswith("###"):
+            if current:
+                sections.append("\n".join(current))
+                current = []
+            continue
+        current.append(line)
+    if current:
+        sections.append("\n".join(current))
+    return sections if sections else [content or ""]
+
+
+def _build_section_group(
+    theme_name: str,
+    label: str,
+    style: str,
+    content: str,
+    streaming: bool = False,
+    render_mode: str = "auto",
+    muted_body: bool = False,
+) -> Group | str:
+    """Wrap content in collapsible panels if long or multi-section."""
+    sections = _split_body_sections(content)
+    total_lines = len(str(content or "").splitlines())
+    use_collapsible = not streaming and (len(sections) > 1 or total_lines > _DEFAULT_SECTION_LINE_LIMIT)
+    if not use_collapsible:
+        return _build_turn_body(
+            theme_name, label, style, content,
+            streaming=streaming,
+            render_mode=render_mode,
+            muted_body=muted_body,
+        )
+    parts: list = []
+    for i, section in enumerate(sections):
+        section_lines = section.splitlines()
+        if len(sections) <= 1:
+            title = "Conteúdo"
+            expanded = False
+            line_limit = _DEFAULT_SECTION_LINE_LIMIT
+        else:
+            title = f"Seção {i + 1}"
+            expanded = (i == len(sections) - 1)
+            line_limit = _DEFAULT_SECTION_LINE_LIMIT if not expanded else 0
+        parts.append(_build_section_panel(title, section_lines, style, expanded=expanded, line_limit=line_limit))
+    return Group(*parts)
+
+
 def _render_turn_block(
     theme_name: str,
     label: str,
@@ -374,14 +563,22 @@ def _render_turn_block(
     streaming: bool = False,
     render_mode: str = "auto",
     muted_body: bool = False,
+    is_orchestrator: bool = False,
 ):
     """Monta bloco estruturado de turno: header -> corpo -> tools."""
+    if is_orchestrator and content:
+        return Panel(
+            _build_orchestrator_body(content or "", style),
+            title=f"[bold {style}][Orquestrador] {label}[/bold {style}]",
+            border_style="blue",
+            padding=(0, 1),
+        )
     parts = []
     if include_header:
         parts.append(_build_turn_header(theme_name, label, style))
     if content:
         parts.append(
-            _build_turn_body(
+            _build_section_group(
                 theme_name,
                 label,
                 style,

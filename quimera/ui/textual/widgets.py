@@ -171,15 +171,19 @@ class _CompletionInput(Input):
             dropdown.hide()
             return
 
+class _BreadcrumbWidget(Static):
+    """Breadcrumb de delegação no header."""
+
 class _SummarySpinner(Static):
     """Indicador discreto de resumo, separado do relógio."""
 
 class _SummaryHeader(Header):
-    """Header com spinner próprio antes do relógio."""
+    """Header com breadcrumb, spinner próprio antes do relógio."""
 
     def compose(self) -> ComposeResult:
         yield HeaderIcon().data_bind(Header.icon)
         yield HeaderTitle()
+        yield _BreadcrumbWidget("", id="breadcrumb")
         yield _SummarySpinner("", id="summary-spinner")
         yield (
             HeaderClock().data_bind(Header.time_format)

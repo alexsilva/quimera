@@ -85,6 +85,7 @@ class TextualRenderer:
         self._theme = themes.get(themes.DEFAULT_THEME)
         self._statuses: dict[str, str] = {}
         self._stream_content_by_agent: dict[str, str] = {}
+        self._orchestrator_agent: str | None = None
 
     @property
     def theme_name(self) -> str:
@@ -106,6 +107,10 @@ class TextualRenderer:
     def set_profile_resolver(self, resolver: Callable) -> None:
         """Define callback para resolver (color, label) por agente."""
         self._profile_resolver = resolver
+
+    def set_orchestrator(self, agent_name: str | None) -> None:
+        """Define qual agente é o orquestrador ativo."""
+        self._orchestrator_agent = str(agent_name).lower().strip() if agent_name else None
 
     def _resolve_agent_label(self, agent: str) -> str:
         """Retorna label formatada com ícone do agente, ex: '🔮  Claude'."""
@@ -134,6 +139,8 @@ class TextualRenderer:
         """Monta payload visual comum para eventos de agente."""
         style, label = self._resolve_agent_style(str(agent or ""))
         payload = {"label": label, "style": style, "theme": self._theme.name}
+        if self._orchestrator_agent and str(agent or "").lower().strip() == self._orchestrator_agent:
+            payload["orchestrator"] = True
         if extra:
             payload.update(extra)
         return payload
@@ -375,8 +382,8 @@ class TextualRenderer:
 
     def start_message_stream(self, agent) -> None:
         """Inicia stream visual com ícone do agente."""
-        label = self._resolve_agent_label(agent)
-        self._bridge.set_agent_active(str(agent), label)
+        style, label = self._resolve_agent_style(str(agent))
+        self._bridge.set_agent_active(str(agent), label, style)
         self._stream_content_by_agent[str(agent)] = ""
         self._bridge.emit(
             TextualUiEvent("stream_start", self._agent_event_payload(agent), agent=str(agent))
@@ -427,8 +434,7 @@ class TextualRenderer:
 
     def update_agent_transient(self, agent, message: str) -> None:
         """Exibe progresso transitório como linha de status."""
-        style, label = self._resolve_agent_style(agent)
-        payload = {"content": str(message), "label": label, "style": style, "theme": self._theme.name}
+        payload = self._agent_event_payload(agent, {"content": str(message)})
         self._bridge.emit(TextualUiEvent("agent_update", payload, agent=str(agent)))
 
     def clear_agent_transient(self, agent) -> None:

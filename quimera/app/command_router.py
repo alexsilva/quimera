@@ -96,19 +96,25 @@ class CommandRouter:
         orchestrator = getattr(self.agent_pool, "orchestrator_agent", None)
         if orchestrator and orchestrator in self.agent_pool.agents:
             others = [a for a in self.agent_pool.agents if a != orchestrator]
+            agent_list = '\n'.join(f'  - {a}' for a in others) if others else '  (nenhum)'
             orq_prefix = (
-                f"[MODO ORQUESTRADOR]\n"
-                f"Você é o orquestrador desta sessão. "
-                f"Agentes disponíveis para delegar: {', '.join(others) if others else 'nenhum'}.\n"
-                f"Fluxo obrigatório:\n"
-                f"1. Analise o pedido e decida qual(is) agente(s) melhor resolve(m) a tarefa.\n"
-                f"2. Use a ferramenta `delegate` para atribuir a execução ao agente escolhido.\n"
-                f"3. Receba a resposta completa do agente delegado.\n"
-                f"4. **Revise o trabalho recebido** — verifique se atende ao pedido, se há erros ou omissões.\n"
-                f"5. Após a revisão, **sintetize e apresente você mesmo** o resultado final para o usuário "
-                f"com sua própria redação. Não repasse a resposta bruta do agente delegado.\n"
-                f"6. Se o trabalho não estiver correto, delegue novamente com instruções mais precisas.\n\n"
-                f"Pedido:\n{user_input}"
+                f"# Modo Orquestrador\n\n"
+                f"┌─ Orquestrador {'─' * 20}┐\n"
+                f"│ agente  │ {orchestrator:<20s}│\n"
+                f"│ ação    │ orquestrar delegações  │\n"
+                f"│ agentes │ {len(others):<2d} disponíveis{' ' * 10}│\n"
+                f"└{'─' * 40}┘\n\n"
+                f"## Agentes disponíveis\n{agent_list}\n\n"
+                f"## Fluxo obrigatório\n"
+                f"1. **Analise** o pedido e decida qual(is) agente(s) melhor resolve(m) a tarefa.\n"
+                f"2. Use `delegate` para atribuir a execução ao agente escolhido.\n"
+                f"3. **Revise** o trabalho recebido — verifique erros ou omissões.\n"
+                f"4. **Sintetize** o resultado final com sua própria redação. Não repasse resposta bruta.\n"
+                f"5. Se incorreto, delegue novamente com instruções mais precisas.\n\n"
+                f"## Pedido\n{user_input}"
+            )
+            self.renderer.show_system(
+                f"[orquestrador] {orchestrator} ativo · agentes: {', '.join(others) if others else 'nenhum'}"
             )
             return orchestrator, orq_prefix, True
 

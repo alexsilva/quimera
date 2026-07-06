@@ -35,6 +35,7 @@ class TextualUiBridge:
         self.quimera_app = None
         self._input_value = ""
         self._active_agent_labels: dict[str, str] = {}
+        self._active_agent_styles: dict[str, str] = {}
         self._direct_input_depth = 0
         self._textual_thread_id: int | None = None
         self._lock = threading.Lock()
@@ -120,19 +121,21 @@ class TextualUiBridge:
         with self._lock:
             return self._input_value
 
-    def set_agent_active(self, agent: str, label: str) -> None:
+    def set_agent_active(self, agent: str, label: str, style: str = "cyan") -> None:
         """Marca agente como ativo para estado da toolbar."""
         key = str(agent or "")
         if not key:
             return
         with self._lock:
             self._active_agent_labels[key] = str(label or key)
+            self._active_agent_styles[key] = str(style or "cyan")
 
     def clear_agent_active(self, agent: str) -> None:
         """Remove agente ativo da toolbar."""
         key = str(agent or "")
         with self._lock:
             self._active_agent_labels.pop(key, None)
+            self._active_agent_styles.pop(key, None)
 
     def active_agent_label(self) -> str | None:
         """Retorna o agente ativo mais recente para exibição na toolbar."""
@@ -140,6 +143,16 @@ class TextualUiBridge:
             if not self._active_agent_labels:
                 return None
             return next(reversed(self._active_agent_labels.values()))
+
+    def active_agent_info(self) -> tuple[str, str] | None:
+        """Retorna (label, style) do agente ativo mais recente."""
+        with self._lock:
+            if not self._active_agent_labels:
+                return None
+            latest_key = next(reversed(self._active_agent_labels))
+            label = self._active_agent_labels[latest_key]
+            style = self._active_agent_styles.get(latest_key, "cyan")
+            return label, style
 
     def _try_inject_active_agent(self, text: str) -> bool:
         """Tenta enviar texto ao stdin do agente ativo, preservando contrato do split."""

@@ -28,6 +28,7 @@ from quimera.ui.textual.events import TextualUiEvent
 from quimera.ui.textual.feed_model import TextualFeedModel
 from rich.console import Group as _RichGroup
 
+from rich.text import Text as _RichText
 from quimera.ui.textual.renderables import (
     _build_question_overlay,
     _build_window_overlay_payload,
@@ -72,7 +73,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
         from textual.containers import Horizontal, Vertical
         from textual.widgets import Input, RichLog, Static
         from quimera.app.completion_dropdown import CompletionDropdown
-        from quimera.ui.textual.widgets import _CompletionInput, _SummaryHeader, _SummarySpinner
+        from quimera.ui.textual.widgets import _BreadcrumbWidget, _CompletionInput, _SummaryHeader, _SummarySpinner
     except ImportError as exc:
         raise SystemExit(
             "A interface Textual requer a dependência 'textual'. "
@@ -109,10 +110,16 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             self._spinner_index = 0
             self._spinner_timer = None
             self._bridge_drain_timer = None
+            self._active_agent_timer = None
+            self.active_agent: str | None = None
+            self._last_active_agent_info: tuple[str, str] | None = None
+            self._active_tool_previews: dict[str, str] = {}
+            self._last_status_bar_state: tuple[tuple[str, str] | None, tuple[tuple[str, str], ...]] | None = None
             self._feed_model = TextualFeedModel()
             self._history_file_path: Path | None = None
             self._feed_pinned_to_bottom = True
             self._restored_history_hydrated = False
+            self._breadcrumb_chain: list[str] = []
             # Tracks event object ids already written to the RichLog (permanent items only).
             # Avoids clear+rewrite: we append-only and skip already-written items.
             self._written_to_richlog: set[int] = set()
@@ -131,10 +138,12 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                 )
                 yield Static("", id="feed_transient")
                 yield Static("", id="toolbar")
+                yield Static("", id="status_bar")
                 yield Static("", id="question_overlay")
                 yield CompletionDropdown()
-                with Horizontal(id="input_bar"):
-                    yield _CompletionInput(id="input")
+            yield Static("", id="agent_status")
+            with Horizontal(id="input_bar"):
+                yield _CompletionInput(id="input")
 
         def on_mount(self) -> None:
             bridge.attach_textual_app(self)
@@ -145,6 +154,12 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             for event in bridge.drain_pending_events():
                 self.handle_bridge_event(event)
             self._bridge_drain_timer = self.set_interval(0.05, self._drain_bridge_events)
+            self._active_agent_timer = self.set_interval(0.2, self._poll_active_agent)
+            renderer = getattr(quimera_app, "renderer", None)
+            if renderer is not None and hasattr(renderer, "set_orchestrator"):
+                _orq = getattr(getattr(quimera_app, "agent_pool", None), "orchestrator_agent", None)
+                if _orq:
+                    renderer.set_orchestrator(_orq)
             self._worker_thread = threading.Thread(
                 target=self._run_quimera_app,
                 daemon=True,
@@ -167,6 +182,12 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                 except Exception:
                     pass
                 self._bridge_drain_timer = None
+            if self._active_agent_timer is not None:
+                try:
+                    self._active_agent_timer.stop()
+                except Exception:
+                    pass
+                self._active_agent_timer = None
             try:
                 self.query_one("#input", _CompletionInput).save_history(self._history_file_path)
             except Exception:
@@ -186,6 +207,122 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                 user_label=str(getattr(quimera_app, "user_name", ">>>") or ">>>"),
                 agent_resolver=resolver if callable(resolver) else None,
             )
+
+        def _status_preview_text(self, value) -> str:
+            line = str(value or "").strip().splitlines()[0] if str(value or "").strip() else ""
+            if len(line) > 96:
+                return f"{line[:93]}..."
+            return line
+
+        def _record_status_event(self, event: TextualUiEvent) -> None:
+            if event.kind == "tool_preview":
+                preview = self._status_preview_text(event.payload)
+                if preview:
+                    self._active_tool_previews[str(event.agent or "tool")] = preview
+                if event.agent:
+                    self.active_agent = event.agent
+                return
+            if event.kind == "delegation":
+                payload = event.payload if isinstance(event.payload, dict) else {}
+                chain = [str(item).strip() for item in (payload.get("chain") or []) if str(item).strip()]
+                from_label = str(payload.get("from_label", "agente"))
+                to_label = str(payload.get("to_label", "agente"))
+                breadcrumb_items = [from_label, to_label]
+                if chain:
+                    breadcrumb_items = [*chain, to_label]
+                self._breadcrumb_chain = breadcrumb_items
+                self._update_breadcrumb()
+                if event.agent:
+                    self.active_agent = event.agent
+                return
+            if event.kind in {"stream_start", "stream_chunk", "agent_update"} and event.agent:
+                self.active_agent = event.agent
+                return
+            if event.kind in {"agent_message", "stream_abort"} and event.agent:
+                self._active_tool_previews.pop(str(event.agent), None)
+                if self.active_agent == event.agent:
+                    self.active_agent = None
+                return
+            if event.kind == "visual_reset":
+                if event.agent:
+                    self._active_tool_previews.pop(str(event.agent), None)
+                    if self.active_agent == event.agent:
+                        self.active_agent = None
+                else:
+                    self._active_tool_previews.clear()
+                    self.active_agent = None
+                return
+            if event.kind == "agent_lifecycle" and event.agent:
+                payload = event.payload if isinstance(event.payload, dict) else {}
+                status = str(payload.get("status", "")).lower()
+                if status in {"completed", "failed", "error", "cancelled", "aborted"}:
+                    self._active_tool_previews.pop(str(event.agent), None)
+                    if self.active_agent == event.agent:
+                        self.active_agent = None
+
+        def _update_agent_status_widget(self) -> None:
+            agent_status = self.query_one("#agent_status", Static)
+            if self.active_agent:
+                agent_status.update(f"[bold][{self.active_agent}][/bold] ▸ processing...")
+            else:
+                agent_status.update("")
+
+        def _update_breadcrumb(self) -> None:
+            chain = self._breadcrumb_chain
+            if chain:
+                breadcrumb_text = " > ".join(chain[:5])
+                self.query_one("#breadcrumb", _BreadcrumbWidget).update(f"  {breadcrumb_text}")
+            else:
+                self.query_one("#breadcrumb", _BreadcrumbWidget).update("")
+
+        def _clear_status_bar(self) -> None:
+            self._active_tool_previews.clear()
+            self._last_active_agent_info = None
+            self._last_status_bar_state = None
+            self._breadcrumb_chain = []
+            self._update_breadcrumb()
+            widget = self.query_one("#status_bar", Static)
+            widget.update("")
+            self.active_agent = None
+            self._update_agent_status_widget()
+
+        def _update_status_bar(self) -> None:
+            self._update_agent_status_widget()
+            info = bridge.active_agent_info()
+            tools = tuple(self._active_tool_previews.items())
+            state = (info, tools)
+            if state == self._last_status_bar_state:
+                return
+            self._last_status_bar_state = state
+            self._last_active_agent_info = info
+            widget = self.query_one("#status_bar", Static)
+            if info is None and not tools:
+                widget.update("")
+                return
+            text = _RichText()
+            text.append("[spy]", style="bold green")
+            text.append(" ", style="dim")
+            if tools:
+                latest_tools = list(tools)[-2:]
+                tool_parts = []
+                for agent_name, preview in latest_tools:
+                    tool_text = _RichText()
+                    tool_text.append(f"{agent_name} ▸ ", style="bold")
+                    tool_text.append(preview, style="dim yellow")
+                    tool_parts.append(tool_text)
+                for i, part in enumerate(tool_parts):
+                    if i > 0:
+                        text.append(" | ", style="dim")
+                    text.append(part)
+            elif info is not None:
+                label, style = info
+                text.append(f"[{label}]", style=f"bold {style}")
+                text.append(" ▸ ", style="dim")
+                text.append("processando...", style="dim")
+            widget.update(text)
+
+        def _poll_active_agent(self) -> None:
+            self._update_status_bar()
 
         def _drain_bridge_events(self) -> None:
             drained = False
@@ -289,6 +426,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             self.query_one("#feed", RichLog).clear()
             self._written_to_richlog.clear()
             self.query_one("#feed_transient", Static).update("")
+            self._clear_status_bar()
             self._refresh_now(layout=True)
 
         def action_scroll_to_bottom(self) -> None:
@@ -391,11 +529,14 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
 
         def handle_bridge_event(self, event: TextualUiEvent) -> None:
             _append_post_exit_failure_message(_post_exit_messages, event)
+            self._record_status_event(event)
+            self._update_status_bar()
             if event.kind == "clear":
                 self._feed_model.clear()
                 self.query_one("#feed", RichLog).clear()
                 self._written_to_richlog.clear()
                 self.query_one("#feed_transient", Static).update("")
+                self._clear_status_bar()
                 self._refresh_now(layout=True)
                 return
             if event.kind == "question":
@@ -443,6 +584,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                 self._commands = list(payload.get("commands", []) or [])
                 self.query_one("#toolbar", Static).update(toolbar)
                 self.query_one("#input", Input).focus()
+                self._clear_status_bar()
                 self._refresh_now(layout=True)
                 return
             if not self._feed_model.apply(event):

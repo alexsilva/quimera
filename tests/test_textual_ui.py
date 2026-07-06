@@ -766,8 +766,84 @@ def test_textual_render_event_shows_delegation_chain_and_id():
     console.print(_render_event(event))
     output = console.export_text()
 
-    assert "cadeia: human → claude → codex" in output
+    assert "humano > claude > codex" in output
     assert "dlg-123" in output
+
+
+def test_textual_render_event_orchestrator_uses_sectioned_panel():
+    event = TextualUiEvent(
+        "agent_message",
+        {
+            "content": "Análise:\nAvaliar pedido\nExecução:\ndelegate -> codex: escrever testes\nResultado:\npronto",
+            "label": "Claude",
+            "style": "cyan",
+            "theme": "chat",
+            "render_mode": "plain",
+            "orchestrator": True,
+        },
+        agent="claude",
+    )
+    console = Console(record=True, width=120)
+
+    console.print(_render_event(event))
+    output = console.export_text()
+
+    assert "[Orquestrador] Claude" in output
+    assert "Análise" in output
+    assert "Execução" in output
+    assert "Resultado" in output
+    assert "↳ delegate -> codex: escrever testes" in output
+
+
+def test_textual_render_event_truncates_multiline_tool_results():
+    event = TextualUiEvent(
+        "agent_update",
+        {
+            "content": "executando",
+            "tools": ["linha 1\nlinha 2\nlinha 3\nlinha 4\nlinha 5\nlinha 6"],
+            "label": "Codex",
+            "style": "blue",
+            "theme": "chat",
+        },
+        agent="codex",
+    )
+    console = Console(record=True, width=120)
+
+    console.print(_render_event(event))
+    output = console.export_text()
+
+    assert "linha 5" in output
+    assert "[expandir]" in output
+    assert "linha 6" not in output
+
+
+def test_transient_overlay_replace_reads_previous_lines_when_executed():
+    from quimera.ui.overlay import TransientOverlay
+
+    lines = [1]
+    overlay = TransientOverlay(lines)
+    audits = []
+
+    replace = overlay.build_replace(
+        "novo",
+        version=1,
+        get_version_fn=lambda: 1,
+        audit_fn=lambda event, **payload: audits.append((event, payload)),
+    )
+    lines[0] = 4
+
+    class FakeStdout:
+        def write(self, _value):
+            return None
+
+        def flush(self):
+            return None
+
+    with patch("quimera.ui.overlay.sys.stdout", FakeStdout()):
+        replace()
+
+    assert audits[0][0] == "transient_replace"
+    assert audits[0][1]["prev_lines"] == 4
 
 
 def test_textual_renderer_formats_agent_error_metadata():
@@ -1508,6 +1584,17 @@ def test_textual_app_exposes_flush_bridge_events_for_immediate_tool_preview_rend
     assert "def flush_bridge_events" in source
     assert "self._drain_bridge_events()" in source
     assert "self._refresh_now(layout=True)" in source
+
+
+def test_textual_app_status_bar_tracks_tool_preview_events():
+    import inspect
+
+    source = inspect.getsource(run_textual_quimera_app)
+
+    assert "_active_tool_previews" in source
+    assert 'event.kind == "tool_preview"' in source
+    assert "tools: " in source
+    assert "def _update_status_bar" in source
 
 
 def test_textual_app_uses_question_overlay_for_prompt_routing():

@@ -29,6 +29,12 @@ TEXTUAL_APP_CSS = """
             color: $text;
             background: #1a1a1a;
         }
+        #status_bar {
+            height: 1;
+            padding: 0 1;
+            color: $text;
+            background: #252525;
+        }
         #question_overlay {
             display: none;
             height: auto;
@@ -36,6 +42,12 @@ TEXTUAL_APP_CSS = """
             overflow-y: auto;
             padding: 0 1;
             background: $surface;
+        }
+        #agent_status {
+            height: 1;
+            padding: 0 1;
+            background: $primary-background;
+            color: $primary;
         }
         #input_bar {
             height: 3;
@@ -46,6 +58,16 @@ TEXTUAL_APP_CSS = """
         }
         #input {
             width: 1fr;
+        }
+        #breadcrumb {
+            height: 1;
+            padding: 0 1;
+            color: $text-muted;
+            max-width: 50%;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            content-align: left middle;
         }
         #summary-spinner {
             dock: right;
