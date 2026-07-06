@@ -263,8 +263,10 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
         def _update_agent_status_widget(self) -> None:
             agent_status = self.query_one("#agent_status", Static)
             if self.active_agent:
+                agent_status.display = True
                 agent_status.update(f"[bold][{self.active_agent}][/bold] ▸ processing...")
             else:
+                agent_status.display = False
                 agent_status.update("")
 
         def _update_breadcrumb(self) -> None:
@@ -282,6 +284,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             self._breadcrumb_chain = []
             self._update_breadcrumb()
             widget = self.query_one("#status_bar", Static)
+            widget.display = False
             widget.update("")
             self.active_agent = None
             self._update_agent_status_widget()
@@ -297,8 +300,10 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             self._last_active_agent_info = info
             widget = self.query_one("#status_bar", Static)
             if info is None and not tools:
+                widget.display = False
                 widget.update("")
                 return
+            widget.display = True
             text = _RichText()
             text.append("[spy]", style="bold green")
             text.append(" ", style="dim")

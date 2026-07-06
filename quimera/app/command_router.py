@@ -113,9 +113,6 @@ class CommandRouter:
                 f"5. Se incorreto, delegue novamente com instruções mais precisas.\n\n"
                 f"## Pedido\n{user_input}"
             )
-            self.renderer.show_system(
-                f"[orquestrador] {orchestrator} ativo · agentes: {', '.join(others) if others else 'nenhum'}"
-            )
             return orchestrator, orq_prefix, True
 
         return self.agent_pool.primary, user_input, False
