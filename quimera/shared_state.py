@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-# Campos que agentes podem escrever via [STATE_UPDATE].
+# Campos que agentes podem escrever via a tool MCP update_shared_state.
 AGENT_STATE_KEYS = {
     "goal",
     "goal_canonical",
@@ -51,6 +51,13 @@ STRING_STATE_KEYS = {
     "next_step",
 }
 
+# Limites de tamanho para valores escritos por agentes via update_shared_state.
+# Evitam que um payload malicioso/descontrolado infle o shared_state_json
+# injetado no prompt (custo de tokens e superfície de prompt injection).
+MAX_AGENT_STRING_LENGTH = 4000
+MAX_AGENT_LIST_ITEM_LENGTH = 2000
+MAX_AGENT_UPDATE_KEYS = len(AGENT_STATE_KEYS)
+
 PROMPT_HIDDEN_KEYS = AGENT_STATE_KEYS
 
 TASK_REFERENCE_KEYS = AGENT_STATE_KEYS | {"task_overview"}
@@ -68,12 +75,26 @@ def is_agent_state_key(key: str) -> bool:
 
 
 def validate_agent_state_value(key: str, value) -> bool:
-    """Valida tipos básicos do contrato aceito de agentes."""
+    """Valida tipos e tamanhos do contrato aceito de agentes.
+
+    Além do tipo, limita o tamanho de strings e itens de lista para impedir
+    que um agente infle o shared_state_json injetado no prompt (custo de
+    tokens e superfície de prompt injection).
+    """
     normalized = normalize_state_key(key)
     if normalized in LIST_STATE_KEYS:
-        return value is None or value == "" or isinstance(value, list)
+        if value is None or value == "":
+            return True
+        if not isinstance(value, list):
+            return False
+        return all(
+            isinstance(item, str) and len(item) <= MAX_AGENT_LIST_ITEM_LENGTH
+            for item in value
+        )
     if normalized in STRING_STATE_KEYS:
-        return value is None or value == "" or isinstance(value, str)
+        if value is None or value == "":
+            return True
+        return isinstance(value, str) and len(value) <= MAX_AGENT_STRING_LENGTH
     return True
 
 

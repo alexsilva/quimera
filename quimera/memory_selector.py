@@ -1,9 +1,5 @@
 from .config import DEFAULT_HISTORY_WINDOW, DEFAULT_USER_NAME
-from .constants import (
-    EXTEND_MARKER,
-    STATE_UPDATE_END,
-    STATE_UPDATE_START,
-)
+from .constants import EXTEND_MARKER
 
 
 class MemorySelector:
@@ -68,8 +64,6 @@ class MemorySelector:
         # Protocol / control markers
         "[ack:",
         EXTEND_MARKER.lower(),
-        STATE_UPDATE_START.lower(),
-        STATE_UPDATE_END.lower(),
     })
 
     @staticmethod

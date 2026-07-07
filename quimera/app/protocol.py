@@ -1,8 +1,7 @@
 """Componentes de `quimera.app.protocol`."""
-import json
 import re
 
-from ..constants import EXTEND_MARKER, STATE_UPDATE_START
+from ..constants import EXTEND_MARKER
 from ..shared_state import (
     is_agent_state_key,
     normalize_state_key,
@@ -16,7 +15,6 @@ from . import logger
 class AppProtocol:
     """Encapsula parsing de respostas e updates de estado."""
 
-    STATE_UPDATE_PATTERN = re.compile(r"\[STATE_UPDATE\](.*?)\[/STATE_UPDATE\]", re.DOTALL)
     ACK_PATTERN = re.compile(r"^\s*\[ACK:([A-Za-z0-9]+)\]\s*", re.M)
 
     def __init__(
@@ -71,14 +69,13 @@ class AppProtocol:
             return merged
         return incoming
 
-    def apply_state_update(self, block_content):
-        """Executa apply state update."""
-        try:
-            payload = json.loads(block_content.strip())
-        except json.JSONDecodeError:
-            return False
+    def apply_state_update(self, payload: dict) -> bool:
+        """Mescla ``payload`` no shared_state, respeitando o contrato de agente.
 
-        if not isinstance(payload, dict):
+        Chamado pela tool MCP ``update_shared_state``. Retorna ``True`` se ao
+        menos uma chave válida foi aplicada.
+        """
+        if not isinstance(payload, dict) or not payload:
             return False
 
         with self._lock:
@@ -88,11 +85,11 @@ class AppProtocol:
                 if not normalized_key:
                     continue
                 if not is_agent_state_key(normalized_key):
-                    logger.debug("[STATE_UPDATE] Ignored unsupported shared_state key: %s", normalized_key)
+                    logger.debug("[update_shared_state] Ignored unsupported shared_state key: %s", normalized_key)
                     continue
                 if not validate_agent_state_value(normalized_key, value):
                     logger.debug(
-                        "[STATE_UPDATE] Ignored invalid value for shared_state key %s: %r",
+                        "[update_shared_state] Ignored invalid value for shared_state key %s: %r",
                         normalized_key,
                         type(value).__name__,
                     )
@@ -124,11 +121,6 @@ class AppProtocol:
             return None, None, None, False, None
 
         ack_id = None
-
-        if STATE_UPDATE_START in response:
-            for state_match in self.STATE_UPDATE_PATTERN.finditer(response):
-                self.apply_state_update(state_match.group(1))
-            response = self.STATE_UPDATE_PATTERN.sub("", response).strip()
 
         ack_match = self.ACK_PATTERN.search(response)
         if ack_match:

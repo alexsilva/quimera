@@ -14,6 +14,7 @@ from .tools import interaction as interaction_tools
 from .tools import memory as memory_tools
 from .tools import patch as patch_tools
 from .tools import shell as shell_tools
+from .tools import state as state_tools
 from .tools import tasks as tasks_tools
 from .tools import todo as todo_tools
 from .tools import web as web_tools
@@ -50,6 +51,7 @@ class ToolExecutor:
         self._tool_progress_callback = None
         self._delegate_tools = None
         self._interaction_tools = None
+        self._state_tools = None
         self._register_builtin_tools()
 
     @staticmethod
@@ -79,6 +81,7 @@ class ToolExecutor:
         memory_tools.register(self.registry, self.policy, self.config)
         self._delegate_tools = delegate_module.register(self.registry, self.policy, self.config)
         self._interaction_tools = interaction_tools.register(self.registry, self.policy, self.config)
+        self._state_tools = state_tools.register(self.registry, self.policy, self.config)
         git.register(self.registry, self.policy, self.config)
 
     @property
@@ -191,6 +194,17 @@ class ToolExecutor:
     def is_ask_user_available(self) -> bool:
         """Indica se ask_user está operável no contexto atual."""
         return self._interaction_tools.is_ask_user_available()
+
+    def set_update_state_fn(self, fn) -> None:
+        """Injeta callable que aplica um payload de atualização ao shared_state.
+
+        Assinatura esperada: fn(payload: dict) -> bool
+        """
+        self._state_tools.set_update_state_fn(fn)
+
+    def is_update_state_available(self) -> bool:
+        """Indica se update_shared_state está operável no contexto atual."""
+        return self._state_tools.is_update_state_available()
 
     def execute(self, call: ToolCall, progress_callback: Callable[[str], None] | None = None) -> ToolResult:
         """Executa um ToolCall com política de aprovação.

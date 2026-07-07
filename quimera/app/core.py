@@ -545,6 +545,7 @@ class QuimeraApp:
         self.tool_executor.set_ask_user_fn(
             lambda q, opts: _broker.request_ask_user(q, opts)
         )
+        self.tool_executor.set_update_state_fn(self.protocol.apply_state_update)
         # Set up task executors for autonomous task execution
         self._setup_task_executors()
         self._ui_event_handler = UiEventHandler(

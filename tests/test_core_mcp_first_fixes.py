@@ -61,7 +61,7 @@ def test_parse_response_preserves_shared_state_lock():
         turn_stamps=app._turn_stamps,
     )
 
-    app.parse_response('[STATE_UPDATE]{"goal":"corrigir lock"}[/STATE_UPDATE]')
+    app.protocol.apply_state_update({"goal": "corrigir lock"})
 
     assert app.protocol._lock is app._shared_state_lock
     assert app.protocol._lock is not app._lock

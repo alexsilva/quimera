@@ -62,7 +62,7 @@ A sessão atual mantém contexto efêmero em `session.md`. Ao final ou durante s
 - `evidence`
 - `next_step`
 
-Essas chaves podem vir em blocos `[STATE_UPDATE]` e têm TTL por turno para evitar contexto velho.
+Essas chaves são atualizadas pelos agentes via a tool MCP `update_shared_state` (`updates: dict`) e têm TTL por turno para evitar contexto velho.
 
 ### Chaves escritas pelo sistema
 

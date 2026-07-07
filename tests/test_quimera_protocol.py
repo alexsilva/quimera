@@ -700,78 +700,6 @@ class ProtocolTests(unittest.TestCase):
         self.assertIsNone(delegation)
         self.assertFalse(extend)
 
-    def test_parse_response_extracts_state_update_before_debate(self):
-        """Verifica que parse response extracts state update before debate."""
-        import threading
-        app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = _make_protocol(app)
-        app.shared_state = {}
-        app._lock = threading.Lock()
-
-        response, _, _, extend, _ = app.parse_response(
-            "Resposta visivel\n"
-            "[STATE_UPDATE]\n"
-            '{"goal":"corrigir parser","decisions":["usar json"]}\n'
-            "[/STATE_UPDATE]\n"
-            f"{EXTEND_MARKER}"
-        )
-
-        self.assertEqual(response, "Resposta visivel")
-        self.assertTrue(extend)
-        self.assertEqual(
-            app.shared_state,
-            {"goal": "corrigir parser", "decisions": ["usar json"]},
-        )
-
-    def test_parse_response_extracts_state_update_after_debate_marker(self):
-        """Verifica que parse response extracts state update after debate marker."""
-        import threading
-        app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = _make_protocol(app)
-        app.shared_state = {}
-        app._lock = threading.Lock()
-
-        response, _, _, extend, _ = app.parse_response(
-            "Resposta visivel\n"
-            f"{EXTEND_MARKER}\n"
-            "[STATE_UPDATE]\n"
-            '{"next_step":"escrever testes"}\n'
-            "[/STATE_UPDATE]"
-        )
-
-        self.assertEqual(response, "Resposta visivel")
-        self.assertTrue(extend)
-        self.assertEqual(app.shared_state, {"next_step": "escrever testes"})
-
-    def test_parse_response_merges_multiple_state_updates(self):
-        """Verifica que parse response merges multiple state updates."""
-        import threading
-        app = QuimeraApp.__new__(QuimeraApp)
-        app.protocol = _make_protocol(app)
-        app.shared_state = {"decisions": ["A"]}
-        app._lock = threading.Lock()
-
-        response, _, _, extend, _ = app.parse_response(
-            "Resposta\n"
-            "[STATE_UPDATE]\n"
-            '{"decisions":["B"],"goal":"alinhar protocolo"}\n'
-            "[/STATE_UPDATE]\n"
-            "[STATE_UPDATE]\n"
-            '{"decisions":["C"],"next_step":"persistir estado"}\n'
-            "[/STATE_UPDATE]"
-        )
-
-        self.assertEqual(response, "Resposta")
-        self.assertFalse(extend)
-        self.assertEqual(
-            app.shared_state,
-            {
-                "decisions": ["A", "B", "C"],
-                "goal": "alinhar protocolo",
-                "next_step": "persistir estado",
-            },
-        )
-
     def test_parse_routing_rejects_double_prefix(self):
         """Verifica que parse routing rejects double prefix."""
         app = QuimeraApp.__new__(QuimeraApp)
@@ -1730,8 +1658,8 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn('"job_id": 23', prompt)
         self.assertIn('Execute approved antes de criar novas.', prompt)
 
-    def test_prompt_includes_state_update_rule_with_shared_state_fallback(self):
-        """Verifica que prompt includes state update rule with shared state fallback."""
+    def test_prompt_omits_state_update_block_documented_by_mcp_tool(self):
+        """Verifica que prompt omits state update block documented by MCP tool."""
         builder = PromptBuilder(DummyContextManager(), history_window=3)
         history = [{"role": "human", "content": "Pergunta"}]
 
@@ -1742,18 +1670,18 @@ class ProtocolTests(unittest.TestCase):
             shared_state={"next_step": "continuar"},
         )
         self.assertNotIn('<shared_state title="Estado compartilhado">', prompt)
-        self.assertIn("[STATE_UPDATE]", prompt)
 
-        # task_overview (campo de infra) deve acionar o bloco e manter o contrato de escrita
+        # task_overview (campo de infra) deve acionar o bloco visível de shared_state
         prompt2 = builder.build(
             AGENT_CLAUDE,
             history,
             shared_state={"task_overview": {"job_id": 1}},
         )
         self.assertIn('<shared_state title="Estado compartilhado">', prompt2)
-        self.assertIn("Você pode atualizar o estado compartilhado usando:", prompt2)
-        self.assertIn("[STATE_UPDATE]", prompt2)
-        self.assertEqual(prompt2.count("Você pode atualizar o estado compartilhado usando:"), 1)
+        # O bloco explicativo de update_shared_state foi removido do prompt:
+        # a própria descrição da ferramenta MCP documenta uso e campos suportados.
+        self.assertNotIn("Você pode atualizar o estado compartilhado usando a tool `update_shared_state`", prompt2)
+        self.assertNotIn("update_shared_state", prompt2)
 
     def test_prompt_keeps_internal_shared_state_keys_out_of_visible_blocks(self):
         """Verifica que prompt keeps internal shared state keys out of visible blocks."""
@@ -5715,7 +5643,7 @@ class AppProtocolDirectTests(unittest.TestCase):
                 app = self._make_app()
                 app.workspace = SimpleNamespace(cwd="/tmp")
                 proto = AppProtocol(lock=app._lock, shared_state=app.shared_state, workspace=app.workspace, decisions_log_path=log_path)
-                payload = '{"decisions": ["dec1", "dec2"]}'
+                payload = {"decisions": ["dec1", "dec2"]}
                 result = proto.apply_state_update(payload)
             self.assertTrue(result)
             mock_logger.append.assert_called()
@@ -5734,25 +5662,25 @@ class AppProtocolDirectTests(unittest.TestCase):
 
     # --- apply_state_update ---
 
-    def test_apply_state_update_invalid_json_returns_false(self):
-        """Verifica que apply state update invalid json returns false."""
-        app = self._make_app()
-        proto = _make_protocol(app)
-        result = proto.apply_state_update("not json {{")
-        self.assertFalse(result)
-
     def test_apply_state_update_non_dict_returns_false(self):
         """Verifica que apply state update non dict returns false."""
         app = self._make_app()
         proto = _make_protocol(app)
-        result = proto.apply_state_update('"just a string"')
+        result = proto.apply_state_update("just a string")
+        self.assertFalse(result)
+
+    def test_apply_state_update_empty_dict_returns_false(self):
+        """Verifica que apply state update empty dict returns false."""
+        app = self._make_app()
+        proto = _make_protocol(app)
+        result = proto.apply_state_update({})
         self.assertFalse(result)
 
     def test_apply_state_update_skips_empty_key(self):
         """Verifica que apply state update skips empty key."""
         app = self._make_app()
         proto = _make_protocol(app)
-        result = proto.apply_state_update('{"": "value", "valid": "ok"}')
+        result = proto.apply_state_update({"": "value", "valid": "ok"})
         self.assertTrue(result)
         self.assertNotIn("", app.shared_state)
         self.assertEqual(app.shared_state, {})
@@ -5762,7 +5690,7 @@ class AppProtocolDirectTests(unittest.TestCase):
         app = self._make_app(shared_state={"goal": "old"})
         proto = _make_protocol(app)
         # incoming "" causes merge to return None → pop
-        result = proto.apply_state_update('{"goal": ""}')
+        result = proto.apply_state_update({"goal": ""})
         self.assertTrue(result)
         self.assertNotIn("goal", app.shared_state)
 
@@ -5772,7 +5700,13 @@ class AppProtocolDirectTests(unittest.TestCase):
         proto = _make_protocol(app)
 
         result = proto.apply_state_update(
-            '{"goal_canonical":"corrigir parser","task_overview":{"job_id": 1},"completed_task_results":"hack","spy_last_turn_detail":{"agent":"claude"},"mode":"test"}'
+            {
+                "goal_canonical": "corrigir parser",
+                "task_overview": {"job_id": 1},
+                "completed_task_results": "hack",
+                "spy_last_turn_detail": {"agent": "claude"},
+                "mode": "test",
+            }
         )
 
         self.assertTrue(result)
@@ -5791,7 +5725,12 @@ class AppProtocolDirectTests(unittest.TestCase):
         proto = _make_protocol(app)
 
         result = proto.apply_state_update(
-            '{"goal_canonical":["lista inválida"],"allowed_scope":"parser.py","evidence":["pytest -q"],"next_step":"executar suíte"}'
+            {
+                "goal_canonical": ["lista inválida"],
+                "allowed_scope": "parser.py",
+                "evidence": ["pytest -q"],
+                "next_step": "executar suíte",
+            }
         )
 
         self.assertTrue(result)
@@ -5807,7 +5746,7 @@ class AppProtocolDirectTests(unittest.TestCase):
         """Verifica que apply state update ignores invalid type for list field."""
         app = self._make_app()
         proto = _make_protocol(app)
-        result = proto.apply_state_update('{"allowed_scope": "parser.py"}')
+        result = proto.apply_state_update({"allowed_scope": "parser.py"})
         self.assertTrue(result)
         self.assertEqual(app.shared_state, {})
 
@@ -5817,7 +5756,12 @@ class AppProtocolDirectTests(unittest.TestCase):
         proto = _make_protocol(app)
 
         result = proto.apply_state_update(
-            '{"goal_canonical":"valid","allowed_scope":"invalid","non_agent":"x","next_step":"seguir"}'
+            {
+                "goal_canonical": "valid",
+                "allowed_scope": "invalid",
+                "non_agent": "x",
+                "next_step": "seguir",
+            }
         )
 
         self.assertTrue(result)
@@ -5835,7 +5779,7 @@ class AppProtocolDirectTests(unittest.TestCase):
         app._turn_stamps["goal_canonical"] = 4
         proto = _make_protocol(app)
 
-        result = proto.apply_state_update('{"goal_canonical": ""}')
+        result = proto.apply_state_update({"goal_canonical": ""})
 
         self.assertTrue(result)
         self.assertNotIn("goal_canonical", app.shared_state)
@@ -5932,7 +5876,7 @@ class AppProtocolDirectTests(unittest.TestCase):
         self.assertIsNone(ack_id)
 
     def test_parse_response_json_state_update_is_plain_text(self):
-        """JSON state_update solto é conteúdo comum; use [STATE_UPDATE] para estado."""
+        """JSON state_update solto é conteúdo comum; estado só muda via tool update_shared_state."""
         app = self._make_app()
         proto = _make_protocol(app)
         text = '{"type": "state_update", "content": "", "state_updates": {"goal_canonical": "corrigir parser"}}'
@@ -6097,7 +6041,7 @@ class AppProtocolDirectTests(unittest.TestCase):
         self.assertEqual(response, text)
 
     def test_parse_response_embedded_json_state_update_is_plain_text(self):
-        """JSON state_update embutido não aplica estado fora de [STATE_UPDATE]."""
+        """JSON state_update embutido não aplica estado; só a tool update_shared_state altera o estado."""
         text = (
             'relatório\n'
             '{"type": "state_update", "content": "", "state_updates": {"goal":"embedded","mode":"ignored"}}'

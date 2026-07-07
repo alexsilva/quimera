@@ -72,7 +72,6 @@ class TestMemorySelector:
         """Verifica que should skip fact blocks protocol markers."""
         assert MemorySelector.should_skip_fact("[ACK:abc123] recebido")
         assert MemorySelector.should_skip_fact("Encaminhar para debate [DEBATE]")
-        assert MemorySelector.should_skip_fact("[STATE_UPDATE]{\"next_step\":\"x\"}[/STATE_UPDATE]")
 
     def test_build_conversation_block_skips_specified_indexes(self):
         """Verifica que build conversation block skips specified indexes."""

@@ -80,8 +80,6 @@ INPUT_PROMPT = "Você: "
 
 # Protocol markers
 EXTEND_MARKER = "[DEBATE]"
-STATE_UPDATE_START = "[STATE_UPDATE]"
-STATE_UPDATE_END = "[/STATE_UPDATE]"
 
 # Commands
 CMD_EXIT = "/exit"

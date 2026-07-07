@@ -218,7 +218,6 @@ class PromptBuilder:
             delegation_priority=delegation_fields["delegation_priority"],
             delegation_chain=delegation_fields["delegation_chain"],
             delegation_raw=delegation_fields["delegation_raw"],
-            state_update_enabled=True,
             execution_state=execution_state,
             recent_conversation=recent_conversation,
             metrics=metrics,

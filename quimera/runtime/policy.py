@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from ..shared_state import MAX_AGENT_UPDATE_KEYS
 from .config import ToolRuntimeConfig
 from .models import ToolCall
 
@@ -140,6 +141,22 @@ class ToolPolicy:
         options = call.arguments.get("options") or []
         if options and len(options) < 2:
             raise ToolPolicyError("ask_user com 'options' requer pelo menos 2 opções (ou omita para texto livre)")
+
+    def _validate_update_shared_state(self, call: ToolCall) -> None:
+        """update_shared_state é seguro: apenas mescla campos no shared_state em memória.
+
+        Tipo/tamanho de cada valor são validados depois em
+        ``shared_state.validate_agent_state_value``; aqui rejeitamos cedo um
+        payload com número de campos muito acima do contrato de agente, para
+        evitar processar chamadas obviamente abusivas.
+        """
+        updates = call.arguments.get("updates")
+        if not isinstance(updates, dict) or not updates:
+            raise ToolPolicyError("update_shared_state requer 'updates' como objeto não vazio")
+        if len(updates) > MAX_AGENT_UPDATE_KEYS:
+            raise ToolPolicyError(
+                f"update_shared_state aceita no máximo {MAX_AGENT_UPDATE_KEYS} campos por chamada"
+            )
 
     def _validate_run_shell_command(self, call: ToolCall) -> None:
         """Valida o alias legado `run_shell_command` com política mínima de shell."""

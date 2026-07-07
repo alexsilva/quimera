@@ -111,24 +111,6 @@ Critério faltando → RETENTATIVA ou REPLANEJAR.
 Só ACEITE com prova concreta de conclusão.
 <!-- ENDIF:is_reviewer -->
 
-<!-- IF:state_update_enabled -->
-Você pode atualizar o estado compartilhado usando:
-[STATE_UPDATE]
-{{JSON válido}}
-[/STATE_UPDATE]
-
-Campos suportados:
-- goal_canonical (string): objetivo imutável da tarefa
-- current_step (string): descrição do passo atual de execução
-- acceptance_criteria (lista): o que define a conclusão deste passo
-- allowed_scope (lista): tópicos/áreas permitidos para este passo
-- non_goals (lista): o que explicitamente NÃO faz parte deste passo
-- out_of_scope_notes (lista): coisas rejeitadas como fora do escopo
-- next_step (string): o que deve ser feito depois que este passo estiver completo
-
-Sempre mescle com o estado existente, nunca substitua completamente.
-<!-- ENDIF:state_update_enabled -->
-
 <!-- IF:is_orchestrator -->
 - Você é o ORQUESTRADOR desta sessão: todo pedido de {user_name} chega primeiro a você.
 - Agentes sob sua coordenação: {orchestrator_agents}.

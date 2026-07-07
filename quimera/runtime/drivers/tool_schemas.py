@@ -1378,6 +1378,42 @@ TOOL_SCHEMAS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_shared_state",
+            "description": (
+                "Atualiza o shared_state compartilhado da sessão. Sempre mescla com o "
+                "estado existente, nunca substitui completamente. Envie apenas os campos "
+                "que mudaram. Campos suportados em 'updates': goal_canonical (string) — "
+                "objetivo imutável da tarefa; current_step (string) — passo atual de "
+                "execução; acceptance_criteria (lista) — critérios de conclusão do passo; "
+                "allowed_scope (lista) — tópicos/áreas permitidos; non_goals (lista) — o "
+                "que explicitamente não faz parte do passo; out_of_scope_notes (lista) — "
+                "itens rejeitados por estarem fora do escopo; next_step (string) — o que "
+                "fazer após concluir o passo atual. Envie string vazia para limpar um campo."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "updates": {
+                        "type": "object",
+                        "description": "Mapa de campo -> novo valor a mesclar no shared_state.",
+                    },
+                },
+                "required": ["updates"],
+            },
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "ok": {"type": "boolean"},
+                    "content": {"type": "string"},
+                    "error": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+                },
+                "required": ["ok", "content"],
+            },
+        },
+    },
 ]
 
 _TASK_TOOL_NAMES = {"list_tasks", "list_jobs", "get_job"}
@@ -1424,6 +1460,13 @@ def resolve_tool_schemas(tool_executor=None) -> list[dict]:
         schemas = [
             schema for schema in schemas
             if schema["function"]["name"] != "ask_user"
+        ]
+
+    is_update_state_available = getattr(tool_executor, "is_update_state_available", None)
+    if callable(is_update_state_available) and not is_update_state_available():
+        schemas = [
+            schema for schema in schemas
+            if schema["function"]["name"] != "update_shared_state"
         ]
 
     return schemas
