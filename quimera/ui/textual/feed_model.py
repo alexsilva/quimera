@@ -353,14 +353,35 @@ class TextualFeedModel:
         """Remove estado visual transitório sem apagar mensagens persistentes."""
         agent = str(event.agent or "").strip()
         if agent:
-            index = self._transient_index_by_agent.pop(agent, None)
-            self._stream_buffer_by_agent.pop(agent, None)
-            self._stream_meta_by_agent.pop(agent, None)
-            self._transient_tools_by_agent.pop(agent, None)
-            if index is None or not (0 <= index < len(self._items)):
+            agent_prefix = f"{agent}#"
+            keys = [
+                key
+                for key in set(
+                    self._transient_index_by_agent
+                    | self._stream_buffer_by_agent
+                    | self._stream_meta_by_agent
+                    | self._transient_tools_by_agent
+                )
+                if key == agent or key.startswith(agent_prefix)
+            ]
+            indexes = sorted(
+                {
+                    index
+                    for key in keys
+                    if (index := self._transient_index_by_agent.pop(key, None)) is not None
+                    and 0 <= index < len(self._items)
+                },
+                reverse=True,
+            )
+            for key in keys:
+                self._stream_buffer_by_agent.pop(key, None)
+                self._stream_meta_by_agent.pop(key, None)
+                self._transient_tools_by_agent.pop(key, None)
+            if not indexes:
                 self._last_change = TextualFeedChange(False)
                 return False
-            del self._items[index]
+            for index in indexes:
+                del self._items[index]
             self._reindex_transients()
             self._last_change = TextualFeedChange(True, redraw=True)
             return True

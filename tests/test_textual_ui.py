@@ -244,6 +244,21 @@ def test_textual_feed_uses_delegation_id_to_isolate_same_agent_runs():
     assert model.items[1].event.payload["delegation_id"] == "two"
 
 
+def test_textual_feed_visual_reset_clears_delegated_agent_transients_by_base_agent():
+    model = TextualFeedModel()
+
+    model.apply(TextualUiEvent("plain", "persistente"))
+    model.apply(TextualUiEvent("stream_start", {"label": "Claude", "delegation_id": "one"}, agent="claude"))
+    model.apply(TextualUiEvent("stream_start", {"label": "Claude", "delegation_id": "two"}, agent="claude"))
+
+    assert len(model.items) == 3
+
+    assert model.apply(TextualUiEvent("visual_reset", agent="claude")) is True
+
+    assert len(model.items) == 1
+    assert model.items[0].event.kind == "plain"
+
+
 def test_textual_feed_hydrates_restored_history():
     model = TextualFeedModel()
 
