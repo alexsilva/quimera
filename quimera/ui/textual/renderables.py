@@ -497,59 +497,6 @@ def _build_turn_body(
     return body_content
 
 
-def _split_body_sections(content: str) -> list[str]:
-    """Split content into visual sections by --- or markdown headings."""
-    lines = str(content or "").splitlines()
-    sections: list[str] = []
-    current: list[str] = []
-    for line in lines:
-        stripped = line.strip()
-        if stripped == "---" or stripped.startswith("##") or stripped.startswith("###"):
-            if current:
-                sections.append("\n".join(current))
-                current = []
-            continue
-        current.append(line)
-    if current:
-        sections.append("\n".join(current))
-    return sections if sections else [content or ""]
-
-
-def _build_section_group(
-    theme_name: str,
-    label: str,
-    style: str,
-    content: str,
-    streaming: bool = False,
-    render_mode: str = "auto",
-    muted_body: bool = False,
-) -> Group | str:
-    """Wrap content in collapsible panels if long or multi-section."""
-    sections = _split_body_sections(content)
-    total_lines = len(str(content or "").splitlines())
-    use_collapsible = not streaming and (len(sections) > 1 or total_lines > _DEFAULT_SECTION_LINE_LIMIT)
-    if not use_collapsible:
-        return _build_turn_body(
-            theme_name, label, style, content,
-            streaming=streaming,
-            render_mode=render_mode,
-            muted_body=muted_body,
-        )
-    parts: list = []
-    for i, section in enumerate(sections):
-        section_lines = section.splitlines()
-        if len(sections) <= 1:
-            title = "Conteúdo"
-            expanded = False
-            line_limit = _DEFAULT_SECTION_LINE_LIMIT
-        else:
-            title = f"Seção {i + 1}"
-            expanded = (i == len(sections) - 1)
-            line_limit = _DEFAULT_SECTION_LINE_LIMIT if not expanded else 0
-        parts.append(_build_section_panel(title, section_lines, style, expanded=expanded, line_limit=line_limit))
-    return Group(*parts)
-
-
 def _render_turn_block(
     theme_name: str,
     label: str,
@@ -578,7 +525,7 @@ def _render_turn_block(
         parts.append(_build_turn_header(theme_name, label, style))
     if content:
         parts.append(
-            _build_section_group(
+            _build_turn_body(
                 theme_name,
                 label,
                 style,
