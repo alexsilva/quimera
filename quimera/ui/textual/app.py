@@ -28,7 +28,6 @@ from quimera.ui.textual.events import TextualUiEvent
 from quimera.ui.textual.feed_model import TextualFeedModel
 from rich.console import Group as _RichGroup
 
-from rich.text import Text as _RichText
 from quimera.ui.textual.renderables import (
     _build_question_overlay,
     _build_window_overlay_payload,
@@ -262,12 +261,8 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
 
         def _update_agent_status_widget(self) -> None:
             agent_status = self.query_one("#agent_status", Static)
-            if self.active_agent:
-                agent_status.display = True
-                agent_status.update(f"[bold][{self.active_agent}][/bold] ▸ processing...")
-            else:
-                agent_status.display = False
-                agent_status.update("")
+            agent_status.display = False
+            agent_status.update("")
 
         def _update_breadcrumb(self) -> None:
             chain = self._breadcrumb_chain
@@ -299,32 +294,8 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             self._last_status_bar_state = state
             self._last_active_agent_info = info
             widget = self.query_one("#status_bar", Static)
-            if info is None and not tools:
-                widget.display = False
-                widget.update("")
-                return
-            widget.display = True
-            text = _RichText()
-            text.append("[spy]", style="bold green")
-            text.append(" ", style="dim")
-            if tools:
-                latest_tools = list(tools)[-2:]
-                tool_parts = []
-                for agent_name, preview in latest_tools:
-                    tool_text = _RichText()
-                    tool_text.append(f"{agent_name} ▸ ", style="bold")
-                    tool_text.append(preview, style="dim yellow")
-                    tool_parts.append(tool_text)
-                for i, part in enumerate(tool_parts):
-                    if i > 0:
-                        text.append(" | ", style="dim")
-                    text.append(part)
-            elif info is not None:
-                label, style = info
-                text.append(f"[{label}]", style=f"bold {style}")
-                text.append(" ▸ ", style="dim")
-                text.append("processando...", style="dim")
-            widget.update(text)
+            widget.display = False
+            widget.update("")
 
         def _poll_active_agent(self) -> None:
             self._update_status_bar()

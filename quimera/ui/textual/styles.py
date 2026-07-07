@@ -30,10 +30,9 @@ TEXTUAL_APP_CSS = """
             background: #1a1a1a;
         }
         #status_bar {
-            height: 1;
-            padding: 0 1;
-            color: $text;
-            background: #252525;
+            display: none;
+            height: 0;
+            padding: 0;
         }
         #question_overlay {
             display: none;
@@ -44,10 +43,9 @@ TEXTUAL_APP_CSS = """
             background: $surface;
         }
         #agent_status {
-            height: 1;
-            padding: 0 1;
-            background: $primary-background;
-            color: $primary;
+            display: none;
+            height: 0;
+            padding: 0;
         }
         #input_bar {
             height: 3;
