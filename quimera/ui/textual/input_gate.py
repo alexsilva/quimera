@@ -4,6 +4,7 @@ from __future__ import annotations
 import queue
 import threading
 
+from rich.cells import cell_len
 from rich.text import Text
 
 from quimera.ui.textual.bridge import TextualUiBridge
@@ -130,11 +131,30 @@ class TextualInputGate:
             return value
         return value[: max(1, max_len - 1)].rstrip() + "…"
 
+    @staticmethod
+    def _clip_toolbar_middle(value: str, max_len: int) -> str:
+        if len(value) <= max_len:
+            return value
+        if max_len <= 1:
+            return "…"
+        head_len = max(1, (max_len - 1) // 2)
+        tail_len = max(1, max_len - 1 - head_len)
+        return f"{value[:head_len].rstrip()}…{value[-tail_len:].lstrip()}"
+
+    @staticmethod
+    def _toolbar_plain_width(labels: list[str]) -> int:
+        if not labels:
+            return 0
+        chip_padding = 2 * len(labels)
+        separators = max(0, len(labels) - 1)
+        outer_padding = 2
+        return outer_padding + separators + chip_padding + sum(cell_len(label) for label in labels)
+
     def _current_responder(self) -> str:
         context = self._toolbar_context()
         return str(context.get("responder", "")).strip() or ">>>"
 
-    def _toolbar_segments(self) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    def _toolbar_segments(self, max_width: int | None = None) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
         context = self._toolbar_context()
         responder = str(context.get("responder", "")).strip()
         model = str(context.get("model", "")).strip()
@@ -147,29 +167,64 @@ class TextualInputGate:
         session_id = str(context.get("session", "")).strip()
         theme = str(context.get("theme", "")).strip()
 
-        left: list[tuple[str, str]] = []
-        if responder:
-            left.append((self._clip_toolbar_value(responder, 24), "accent"))
-        if model:
-            left.append((self._clip_toolbar_value(model, 24), "model"))
-        if branch:
-            left.append((f"⎇ {self._clip_toolbar_value(branch, 20)}", "info"))
-        if active_agents:
-            left.append((f"⚙ {self._clip_toolbar_value(active_agents, 30)}", "info"))
-        if parallel:
-            left.append((f"⚡ {parallel}", "info"))
+        specs: list[dict[str, object]] = []
 
-        right: list[tuple[str, str]] = []
-        if open_bugs:
-            right.append((f"✗ {open_bugs}", "err"))
-        if turns:
-            right.append((f"↺ {turns}", "dim"))
-        if mode:
-            right.append((f"◈ {mode}", "dim"))
-        if theme:
-            right.append((f"✨ {self._clip_toolbar_value(theme, 12)}", "dim"))
-        if session_id:
-            right.append((f"🔗 {self._clip_toolbar_value(session_id, 22)}", "dim"))
+        def add(label_prefix: str, value: str, kind: str, max_len: int, min_len: int, *, middle: bool = False) -> None:
+            if value:
+                specs.append(
+                    {
+                        "prefix": label_prefix,
+                        "value": value,
+                        "kind": kind,
+                        "max_len": max_len,
+                        "min_len": min(min_len, max_len),
+                        "middle": middle,
+                    }
+                )
+
+        add("", responder, "accent", 24, 8)
+        add("", model, "model", 24, 8)
+        add("⎇ ", branch, "info", 20, 8)
+        add("⚙ ", active_agents, "info", 30, 8)
+        add("⚡ ", parallel, "info", 12, 3)
+        add("✗ ", open_bugs, "err", 6, 1)
+        add("↺ ", turns, "dim", 6, 2)
+        add("◈ ", mode, "dim", 12, 4)
+        add("✨ ", theme, "dim", 12, 4)
+        add("🔗 ", session_id, "dim", 28, 12, middle=True)
+
+        budgets = [int(spec["max_len"]) for spec in specs]
+
+        def labels_for_current_budgets() -> list[str]:
+            labels: list[str] = []
+            for spec, budget in zip(specs, budgets):
+                value = str(spec["value"])
+                if bool(spec["middle"]):
+                    value = self._clip_toolbar_middle(value, budget)
+                else:
+                    value = self._clip_toolbar_value(value, budget)
+                labels.append(f"{spec['prefix']}{value}")
+            return labels
+
+        if max_width is not None and max_width > 0:
+            shrink_order = [3, 1, 2, 0, 8, 7, 9, 4, 5, 6]
+            while self._toolbar_plain_width(labels_for_current_budgets()) > max_width:
+                shrunk = False
+                for index in shrink_order:
+                    if index >= len(specs):
+                        continue
+                    min_len = int(specs[index]["min_len"])
+                    if budgets[index] > min_len:
+                        budgets[index] -= 1
+                        shrunk = True
+                        break
+                if not shrunk:
+                    break
+
+        labels = labels_for_current_budgets()
+        split_at = sum(1 for value in (responder, model, branch, active_agents, parallel) if value)
+        left = [(label, str(spec["kind"])) for label, spec in zip(labels[:split_at], specs[:split_at])]
+        right = [(label, str(spec["kind"])) for label, spec in zip(labels[split_at:], specs[split_at:])]
         return left, right
 
     def _build_toolbar_text(self) -> str:
@@ -180,10 +235,10 @@ class TextualInputGate:
         parts.extend(label for label, _ in right)
         return "  |  ".join(parts)
 
-    def _build_toolbar_renderable(self):
+    def _build_toolbar_renderable(self, max_width: int | None = None):
         if self._interactive_prompt_active:
             return Text("Enter: confirmar  |  Ctrl+C: cancelar", style="bold yellow on #1a1a1a")
-        left, right = self._toolbar_segments()
+        left, right = self._toolbar_segments(max_width=max_width)
         if not left and not right:
             return Text("")
         style_by_kind = {
@@ -195,7 +250,9 @@ class TextualInputGate:
         }
 
         text = Text(" ", style="on #1a1a1a")
-        for label, kind in (*left, *right):
+        for index, (label, kind) in enumerate((*left, *right)):
+            if index > 0:
+                text.append(" ", style="on #1a1a1a")
             text.append(f" {label} ", style=style_by_kind.get(kind, "white on #3e3e3e"))
         text.append(" ", style="on #1a1a1a")
         return text

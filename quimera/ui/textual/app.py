@@ -389,7 +389,12 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             gate = getattr(quimera_app, "input_gate", None)
             builder = getattr(gate, "_build_toolbar_renderable", None)
             if callable(builder):
-                self.query_one("#toolbar", Static).update(builder())
+                toolbar = self.query_one("#toolbar", Static)
+                max_width = max(0, int(getattr(toolbar.size, "width", 0) or 0) - 2)
+                try:
+                    toolbar.update(builder(max_width=max_width))
+                except TypeError:
+                    toolbar.update(builder())
 
         def action_cancel_or_exit(self) -> None:
             bridge.cancel_or_exit()
@@ -562,7 +567,10 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                 payload = event.payload or {}
                 toolbar = payload.get("toolbar", "")
                 self._commands = list(payload.get("commands", []) or [])
-                self.query_one("#toolbar", Static).update(toolbar)
+                if callable(getattr(getattr(quimera_app, "input_gate", None), "_build_toolbar_renderable", None)):
+                    self._refresh_toolbar()
+                else:
+                    self.query_one("#toolbar", Static).update(toolbar)
                 self.query_one("#input", Input).focus()
                 self._clear_status_bar()
                 self._refresh_now(layout=True)

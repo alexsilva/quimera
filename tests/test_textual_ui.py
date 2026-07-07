@@ -1201,6 +1201,7 @@ def test_textual_toolbar_info_bar_uses_distinct_background():
 
 
 def test_textual_toolbar_renderable_uses_main_tui_chip_styles():
+    from rich.cells import cell_len
     from rich.text import Text
 
     gate = TextualInputGate(
@@ -1211,18 +1212,41 @@ def test_textual_toolbar_renderable_uses_main_tui_chip_styles():
             "branch": "main-ui",
             "turns": "13",
             "theme": "chat",
+            "session": "sessao-2026-07-07-192854",
         },
     )
 
-    renderable = gate._build_toolbar_renderable()
+    renderable = gate._build_toolbar_renderable(max_width=72)
 
     assert isinstance(renderable, Text)
     plain = renderable.plain
+    assert cell_len(plain) <= 72
     assert "🔮 Claude" in plain
     assert "sonnet" in plain
     assert "⎇ main-ui" in plain
     assert "↺ 13" in plain
     assert "✨ chat" in plain
+    assert "🔗 " in plain
+    assert "sessao-" in plain
+    assert "…" in plain
+
+
+def test_textual_toolbar_uses_full_session_when_width_allows():
+    gate = TextualInputGate(
+        TextualUiBridge(),
+        toolbar_context_resolver=lambda: {
+            "responder": "🔮 Claude",
+            "model": "sonnet",
+            "branch": "main-ui",
+            "turns": "13",
+            "theme": "chat",
+            "session": "sessao-2026-07-07-192854",
+        },
+    )
+
+    plain = gate._build_toolbar_renderable(max_width=120).plain
+
+    assert "🔗 sessao-2026-07-07-192854" in plain
 
 
 def test_textual_theme_cycle_bindings_include_main_tui_fallbacks():
