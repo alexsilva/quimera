@@ -253,6 +253,9 @@ class TextualFeedModel:
                 self._transient_tools_by_agent.pop(agent, None)
                 if self._is_final_lifecycle(event):
                     self._finalized_agents.add(agent)
+                    removed = self._remove_transient_keys([agent])
+                    self._last_change = TextualFeedChange(removed, redraw=removed)
+                    return removed
             replaced = self._upsert_transient(event)
             self._last_change = TextualFeedChange(True, redraw=replaced, appended=None if replaced else self._items[-1])
             return True
@@ -364,25 +367,10 @@ class TextualFeedModel:
                 )
                 if key == agent or key.startswith(agent_prefix)
             ]
-            indexes = sorted(
-                {
-                    index
-                    for key in keys
-                    if (index := self._transient_index_by_agent.pop(key, None)) is not None
-                    and 0 <= index < len(self._items)
-                },
-                reverse=True,
-            )
-            for key in keys:
-                self._stream_buffer_by_agent.pop(key, None)
-                self._stream_meta_by_agent.pop(key, None)
-                self._transient_tools_by_agent.pop(key, None)
-            if not indexes:
+            removed = self._remove_transient_keys(keys)
+            if not removed:
                 self._last_change = TextualFeedChange(False)
                 return False
-            for index in indexes:
-                del self._items[index]
-            self._reindex_transients()
             self._last_change = TextualFeedChange(True, redraw=True)
             return True
 
@@ -395,6 +383,27 @@ class TextualFeedModel:
         changed = len(self._items) != before
         self._last_change = TextualFeedChange(changed, redraw=changed)
         return changed
+
+    def _remove_transient_keys(self, keys: list[str]) -> bool:
+        indexes = sorted(
+            {
+                index
+                for key in keys
+                if (index := self._transient_index_by_agent.pop(key, None)) is not None
+                and 0 <= index < len(self._items)
+            },
+            reverse=True,
+        )
+        for key in keys:
+            self._stream_buffer_by_agent.pop(key, None)
+            self._stream_meta_by_agent.pop(key, None)
+            self._transient_tools_by_agent.pop(key, None)
+        if not indexes:
+            return False
+        for index in indexes:
+            del self._items[index]
+        self._reindex_transients()
+        return True
 
     def _reindex_transients(self) -> None:
         self._transient_index_by_agent.clear()

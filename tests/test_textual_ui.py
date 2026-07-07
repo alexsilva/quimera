@@ -32,10 +32,8 @@ def _events(model: TextualFeedModel):
 def test_textual_feed_replaces_agent_lifecycle_with_final_message():
     model = TextualFeedModel()
 
-    assert model.apply(TextualUiEvent("agent_lifecycle", {"status": "completed", "message": "execução concluída"}, agent="claude"))
-    assert len(model.items) == 1
-    assert model.items[0].transient is True
-    assert model.items[0].event.kind == "agent_lifecycle"
+    assert model.apply(TextualUiEvent("agent_lifecycle", {"status": "completed", "message": "execução concluída"}, agent="claude")) is False
+    assert model.items == []
 
     final = TextualUiEvent("agent_message", {"content": "Oi, Alex!", "label": "Claude"}, agent="claude")
     assert model.apply(final)
@@ -43,7 +41,7 @@ def test_textual_feed_replaces_agent_lifecycle_with_final_message():
     assert len(model.items) == 1
     assert model.items[0].transient is False
     assert model.items[0].event is final
-    assert model.last_change.redraw is True
+    assert not model.last_change.redraw
 
 
 def test_textual_feed_marks_plain_events_as_append_only():
@@ -137,10 +135,7 @@ def test_textual_feed_clears_tool_preview_on_completed_lifecycle():
         )
     )
 
-    assert len(model.items) == 1
-    assert model.items[0].transient is True
-    assert model.items[0].event.kind == "agent_lifecycle"
-    assert model.items[0].event.payload == {"status": "completed", "message": "concluído"}
+    assert model.items == []
 
 
 def test_textual_feed_lifecycle_boundary_uses_status_not_message_text():
@@ -176,9 +171,23 @@ def test_textual_feed_ignores_stream_abort_after_completed_lifecycle():
     changed = model.apply(TextualUiEvent("stream_abort", {"label": "Claude Sonnet"}, agent="claude-sonnet"))
 
     assert changed is False
-    assert len(model.items) == 1
-    assert model.items[0].event.kind == "agent_lifecycle"
-    assert model.items[0].event.payload["status"] == "completed"
+    assert model.items == []
+
+
+def test_textual_feed_terminal_failed_lifecycle_removes_transient():
+    model = TextualFeedModel()
+
+    model.apply(TextualUiEvent("agent_update", "executando", agent="claude"))
+
+    assert model.apply(
+        TextualUiEvent(
+            "agent_lifecycle",
+            _agent_lifecycle_payload("falhou", status=AgentLifecycleStatus.FAILED),
+            agent="claude",
+        )
+    ) is True
+
+    assert model.items == []
 
 
 def test_textual_feed_ignores_late_transients_after_failed_lifecycle():
@@ -197,9 +206,7 @@ def test_textual_feed_ignores_late_transients_after_failed_lifecycle():
     assert model.apply(TextualUiEvent("tool_preview", "late tool", agent="claude")) is False
     assert model.apply(TextualUiEvent("stream_abort", {"label": "Claude"}, agent="claude")) is False
 
-    assert len(model.items) == 1
-    assert model.items[0].event.kind == "agent_lifecycle"
-    assert model.items[0].event.payload["status"] == "failed"
+    assert model.items == []
 
 
 def test_textual_feed_agent_update_starts_new_run_after_failed_lifecycle():
@@ -237,11 +244,9 @@ def test_textual_feed_uses_delegation_id_to_isolate_same_agent_runs():
     )
     model.apply(TextualUiEvent("stream_chunk", {**second, "text": "ainda rodando"}, agent="claude-sonnet"))
 
-    assert len(model.items) == 2
-    assert model.items[0].event.kind == "agent_lifecycle"
-    assert model.items[0].event.payload["delegation_id"] == "one"
-    assert model.items[1].event.kind == "stream_chunk"
-    assert model.items[1].event.payload["delegation_id"] == "two"
+    assert len(model.items) == 1
+    assert model.items[0].event.kind == "stream_chunk"
+    assert model.items[0].event.payload["delegation_id"] == "two"
 
 
 def test_textual_feed_visual_reset_clears_delegated_agent_transients_by_base_agent():
@@ -332,10 +337,8 @@ def test_textual_feed_accepts_lifecycle_again_after_new_stream_start():
         )
     )
 
-    assert len(model.items) == 2
+    assert len(model.items) == 1
     assert model.items[0].event.kind == "agent_message"
-    assert model.items[1].event.kind == "agent_lifecycle"
-    assert model.items[1].transient is True
 
 
 def test_textual_feed_accumulates_stream_chunk_and_replaces_with_final_message():
