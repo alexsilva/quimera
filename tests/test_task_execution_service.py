@@ -99,7 +99,7 @@ def build_task_services(app):
     if not hasattr(app, "delegate"):
         app.delegate = lambda *args, **kwargs: None
     if not hasattr(app, "parse_response"):
-        app.parse_response = lambda raw: (raw, None, None, False, False, None)
+        app.parse_response = lambda raw: (raw, None, None, False, None)
 
     return AppTaskServices(
         task_executor_factory=app.task_executor_factory,
@@ -520,7 +520,7 @@ def test_parallel_calls_use_background_dispatch_when_available(tmp_path, monkeyp
         return "chat-response"
 
     app.delegate = _chat_delegate
-    app.parse_response = lambda raw: (raw, None, None, False, False, None)
+    app.parse_response = lambda raw: (raw, None, None, False, None)
 
     services = build_task_services(app)
     dispatch = DispatchStub(response="background-response")
@@ -538,7 +538,7 @@ def test_parallel_calls_use_background_dispatch_when_available(tmp_path, monkeyp
         0,
     )
 
-    assert result == ("codex", "background-response", False, False)
+    assert result == ("codex", "background-response", False)
     assert dispatch.calls == [
         (
             "codex",
@@ -570,7 +570,7 @@ def test_parallel_calls_create_dedicated_background_dispatch_and_close_it(tmp_pa
     app.visibility = "summary"
     app.auto_approve_mutations = False
     app.delegate = lambda *args, **kwargs: "chat-response"
-    app.parse_response = lambda raw: (raw, None, None, False, False, None)
+    app.parse_response = lambda raw: (raw, None, None, False, None)
 
     services = build_task_services(app)
     created = []
@@ -614,8 +614,8 @@ def test_parallel_calls_create_dedicated_background_dispatch_and_close_it(tmp_pa
         cancel_event=second_cancel,
     )
 
-    assert first == ("codex", "background-response", False, False)
-    assert second == ("codex", "background-response", False, False)
+    assert first == ("codex", "background-response", False)
+    assert second == ("codex", "background-response", False)
     assert len(created) == 2
     assert len(closed) == 2
     assert created[0] is not created[1]
@@ -647,7 +647,7 @@ def test_background_dispatch_does_not_reuse_primary_delegate_override(tmp_path, 
     app.dispatch_services.delegate = lambda *_args, **_kwargs: (_ for _ in ()).throw(
         AssertionError("background dispatch desviou para o delegate principal")
     )
-    app.parse_response = lambda raw: (raw, None, None, False, False, None)
+    app.parse_response = lambda raw: (raw, None, None, False, None)
 
     services = build_task_services(app)
     background_dispatch = services._create_background_dispatch_services()

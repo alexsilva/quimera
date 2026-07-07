@@ -54,8 +54,6 @@ class ChatRoundOrchestrator:
         get_round_index=None,
         set_round_index=None,
         set_summary_agent_preference=None,
-        get_pending_input_for=None,
-        set_pending_input_for=None,
     ):
         if parse_routing is None and hasattr(dispatch_services, "parse_routing"):
             app = dispatch_services
@@ -86,12 +84,6 @@ class ChatRoundOrchestrator:
                 set_parallel_toolbar_state = set_parallel_toolbar_state or getattr(
                     app, "_set_parallel_toolbar_state", None
                 )
-                get_pending_input_for = get_pending_input_for or (
-                    lambda: getattr(app, "_pending_input_for", None)
-                )
-                set_pending_input_for = set_pending_input_for or (
-                    lambda value: setattr(app, "_pending_input_for", value)
-                )
 
         self._dispatch_services = dispatch_services
         self._parse_routing = parse_routing
@@ -112,8 +104,6 @@ class ChatRoundOrchestrator:
         self._set_round_index_fn = set_round_index
         self._set_summary_agent_preference_fn = set_summary_agent_preference
         self._set_parallel_toolbar_state_fn = set_parallel_toolbar_state
-        self._get_pending_input_for_fn = get_pending_input_for or (lambda: None)
-        self._set_pending_input_for_fn = set_pending_input_for
         self._show_system_message = show_system_message
         self._renderer = renderer
         self._ui_queue = ui_queue
@@ -141,24 +131,6 @@ class ChatRoundOrchestrator:
             self._session_state.summary_agent_preference = value
         elif self._set_summary_agent_preference_fn is not None:
             self._set_summary_agent_preference_fn(value)
-
-    def _get_pending_input_for(self) -> str | None:
-        if self._session_state is not None:
-            return self._session_state.pending_input_for
-        return self._get_pending_input_for_fn()
-
-    def _set_pending_input_for(self, value: str | None) -> None:
-        if self._session_state is not None:
-            self._session_state.pending_input_for = value
-        elif self._set_pending_input_for_fn is not None:
-            self._set_pending_input_for_fn(value)
-
-    def _handle_needs_human_input(self, agent: str) -> None:
-        """Em paralelo, não força binding de resposta para um único agente."""
-        if self._threads > 1:
-            return
-        self._set_pending_input_for(agent)
-        self._show_system(f"Responda para {agent.upper()}:")
 
     def _snapshot_history(self) -> list:
         history = None
@@ -291,25 +263,6 @@ class ChatRoundOrchestrator:
             if callable(show_warning):
                 show_warning(message)
 
-    def _show_agent_message(self, agent: str, message: str | None) -> None:
-        if self._emit_event(
-            RenderEvent.TEXT,
-            message if message is not None else "",
-            agent=agent,
-            metadata={"no_response": message is None},
-        ):
-            return
-        if self._renderer is None:
-            return
-        if message is None:
-            show_no_response = getattr(self._renderer, "show_no_response", None)
-            if callable(show_no_response):
-                show_no_response(agent)
-            return
-        show_message = getattr(self._renderer, "show_message", None)
-        if callable(show_message):
-            show_message(agent, message)
-
     def _show_delegation(
             self,
             from_agent: str,
@@ -388,14 +341,10 @@ class ChatRoundOrchestrator:
             self._show_warning(MSG_EMPTY_INPUT.format(first_agent))
             return
 
-        pending_input_for = self._get_pending_input_for()
-        if pending_input_for and not explicit:
-            first_agent = pending_input_for
-        elif not explicit and self._agent_pool is not None:
+        if not explicit and self._agent_pool is not None:
             reserved_agent = self._agent_pool.take_primary()
             if reserved_agent is not None:
                 first_agent = reserved_agent
-        self._set_pending_input_for(None)
 
         self._set_round_index(self._get_round_index() + 1)
         self._set_summary_agent_preference(first_agent)
@@ -410,13 +359,13 @@ class ChatRoundOrchestrator:
             protocol_mode="standard",
             **prompt_binding,
         )
-        response, _, _, extend, needs_human_input, _ = self._parse_response(response)
+        response, _, _, extend, _ = self._parse_response(response)
 
         if self._is_cancelled():
             self._handle_cancelled()
             return
 
-        if response is None and not needs_human_input:
+        if response is None:
             if self._is_cancelled():
                 self._handle_cancelled()
                 return
@@ -444,13 +393,13 @@ class ChatRoundOrchestrator:
                     protocol_mode="standard",
                     **prompt_binding,
                 )
-                fallback_response, _, _, extend, needs_human_input, _ = self._parse_response(
+                fallback_response, _, _, extend, _ = self._parse_response(
                     fallback_response
                 )
                 if self._is_cancelled():
                     self._handle_cancelled()
                     return
-                if fallback_response is None and not needs_human_input:
+                if fallback_response is None:
                     failed_agent = fallback_agent
                     continue
                 first_agent = fallback_agent
@@ -458,18 +407,13 @@ class ChatRoundOrchestrator:
                 response = fallback_response
                 break
 
-            if response is None and not needs_human_input:
+            if response is None:
                 if self._is_cancelled():
                     self._handle_cancelled()
                     return
                 self._show_warning("Nenhum agente disponível respondeu.")
                 return
 
-        if needs_human_input:
-            if response:
-                self._show_agent_message(first_agent, response)
-            self._handle_needs_human_input(first_agent)
-            return
         other_agents = [agent for agent in self._agent_pool.agents if agent != first_agent]
         self._dispatch_services.print_response(first_agent, response)
         if response is not None:
@@ -483,9 +427,6 @@ class ChatRoundOrchestrator:
             request_override=message,
             history_snapshot=None,
         )
-
-        if self._get_pending_input_for() is not None:
-            return
 
         self._session_services.maybe_auto_summarize(preferred_agent=first_agent)
 
@@ -538,30 +479,25 @@ class ChatRoundOrchestrator:
                 if self._is_cancelled():
                     self._handle_cancelled()
                     return
-                response, _, _, _, needs_human_input, _ = self._parse_response(response)
+                response, _, _, _, _ = self._parse_response(response)
                 self._dispatch_services.print_response(agent, response)
                 if response is not None:
                     self._session_services.persist_message(agent, response)
-                if needs_human_input:
-                    self._handle_needs_human_input(agent)
-                    break
-            if self._get_pending_input_for() is None:
-                self._set_parallel_toolbar_state(
-                    active=0,
-                    queued=0,
-                    capacity=parallel_slots,
-                    active_agents=(),
-                )
-            return
-        if extend:
-            logger.info(
-                "[standard-flow] extend marker ignored in chat round; same prompt stays bound to %s",
-                first_agent,
-            )
-        if self._get_pending_input_for() is None:
             self._set_parallel_toolbar_state(
                 active=0,
                 queued=0,
                 capacity=parallel_slots,
                 active_agents=(),
             )
+            return
+        if extend:
+            logger.info(
+                "[standard-flow] extend marker ignored in chat round; same prompt stays bound to %s",
+                first_agent,
+            )
+        self._set_parallel_toolbar_state(
+            active=0,
+            queued=0,
+            capacity=parallel_slots,
+            active_agents=(),
+        )

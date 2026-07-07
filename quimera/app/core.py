@@ -573,7 +573,6 @@ class QuimeraApp:
             config=self.config,
             runtime_state=self.runtime_state,
             input_gate=self.input_gate,
-            get_pending_input_for=lambda: self._chat_state.pending_input_for,
             get_execution_mode=lambda: self.execution_mode,
             threads=self.threads,
         )

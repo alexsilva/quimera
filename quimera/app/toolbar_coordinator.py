@@ -31,7 +31,6 @@ class ToolbarCoordinator:
         config,
         runtime_state,
         input_gate,
-        get_pending_input_for,
         get_execution_mode,
         threads: int,
     ) -> None:
@@ -47,7 +46,6 @@ class ToolbarCoordinator:
         self._config = config
         self._runtime_state = runtime_state
         self._input_gate = input_gate
-        self._get_pending_input_for = get_pending_input_for
         self._get_execution_mode = get_execution_mode
         self._threads = threads
 
@@ -76,10 +74,7 @@ class ToolbarCoordinator:
 
     def resolve_next_responder_label(self) -> str:
         """Resolve o agente que deve responder na próxima rodada."""
-        responder = self._toolbar.resolve_next_responder_label(
-            self._get_pending_input_for() or "",
-            self._agent_pool.primary,
-        )
+        responder = self._toolbar.resolve_next_responder_label(self._agent_pool.primary)
         return self._format_agent_label(responder) or responder
 
     def cycle_renderer_theme(self) -> None:

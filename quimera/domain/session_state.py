@@ -14,7 +14,6 @@ class SessionState:
       - round_index       (contador de rodadas)
       - call_index        (contador de chamadas a agentes na sessão)
       - summary_agent_preference
-      - pending_input_for
     """
 
     def __init__(
@@ -34,7 +33,6 @@ class SessionState:
         self._round_index: int = 0
         self._call_index: int = 0
         self._summary_agent_preference: str | None = None
-        self._pending_input_for: str | None = None
 
     # ------------------------------------------------------------------
     # history
@@ -168,16 +166,6 @@ class SessionState:
     def summary_agent_preference(self, value: str | None) -> None:
         with self._lock:
             self._summary_agent_preference = value
-
-    @property
-    def pending_input_for(self) -> str | None:
-        with self._lock:
-            return self._pending_input_for
-
-    @pending_input_for.setter
-    def pending_input_for(self, value: str | None) -> None:
-        with self._lock:
-            self._pending_input_for = value
 
     # ------------------------------------------------------------------
     # Compat genérico (usado por código legado que acessa session_state["key"])

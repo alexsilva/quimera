@@ -203,7 +203,7 @@ Observações importantes:
 
 - Apenas o humano cria task no chat (`/task`).
 - `propose_task/approve_task` não são expostas para uso normal no chat.
-- Resultado vazio, bloqueio explícito ou `[NEEDS_INPUT]` não conclui task.
+- Resultado vazio ou bloqueio explícito não conclui task.
 
 ## Ferramentas de runtime
 

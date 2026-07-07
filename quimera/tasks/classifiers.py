@@ -9,7 +9,6 @@ import re
 from typing import Tuple
 
 from ..constants import CMD_TASK
-from ..constants import NEEDS_INPUT_MARKER
 from .planning import normalize_task_description
 
 
@@ -25,8 +24,6 @@ def classify_task_execution_result(response: str | None) -> Tuple[bool, str]:
     text = response.strip()
     if not text:
         return False, "resposta vazia do agente"
-    if NEEDS_INPUT_MARKER in text:
-        return False, "agente solicitou input humano"
     lowered = text.lower()
     blocked_markers = (
         "não consigo", "nao consigo", "não posso", "nao posso", "não tenho como", "nao tenho como",
@@ -58,8 +55,6 @@ def classify_task_review_result(response: str | None) -> Tuple[bool, str, str]:
     text = response.strip()
     if not text:
         return False, "RETENTATIVA", "resposta vazia do revisor"
-    if NEEDS_INPUT_MARKER in text:
-        return False, "RETENTATIVA", "revisor solicitou input humano"
 
     match = re.search(r"\b(ACEITE|RETENTATIVA|REPLANEJAR|REJEITAR)\b", text.upper())
     if not match:

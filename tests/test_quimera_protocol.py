@@ -265,7 +265,7 @@ def build_task_services(app):
     if not hasattr(app, "delegate"):
         app.delegate = lambda *args, **kwargs: None
     if not hasattr(app, "parse_response"):
-        app.parse_response = lambda raw: (raw, None, None, False, False, None)
+        app.parse_response = lambda raw: (raw, None, None, False, None)
 
     return AppTaskServices(
         task_executor_factory=app.task_executor_factory,
@@ -501,8 +501,6 @@ def materialize_internal_services(app):
             get_round_index=lambda: getattr(app, "round_index", 0),
             set_round_index=lambda v: setattr(app, "round_index", v),
             set_summary_agent_preference=lambda v: setattr(app, "summary_agent_preference", v),
-            get_pending_input_for=lambda: getattr(app, "_pending_input_for", None),
-            set_pending_input_for=lambda v: setattr(app, "_pending_input_for", v),
             merge_staging_to_workspace=merge_staging_to_workspace,
         )
     if not hasattr(app, "execution_mode"):
@@ -684,7 +682,7 @@ class ProtocolTests(unittest.TestCase):
         app.protocol = _make_protocol(app)
         app.shared_state = {}
 
-        response, _, _, extend, _, _ = app.parse_response(f"Resposta objetiva {EXTEND_MARKER}")
+        response, _, _, extend, _ = app.parse_response(f"Resposta objetiva {EXTEND_MARKER}")
 
         self.assertEqual(response, "Resposta objetiva")
         self.assertTrue(extend)
@@ -695,7 +693,7 @@ class ProtocolTests(unittest.TestCase):
         app.protocol = _make_protocol(app)
         app.shared_state = {}
 
-        response, target, delegation, extend, _, _ = app.parse_response("Resposta objetiva")
+        response, target, delegation, extend, _ = app.parse_response("Resposta objetiva")
 
         self.assertEqual(response, "Resposta objetiva")
         self.assertIsNone(target)
@@ -710,7 +708,7 @@ class ProtocolTests(unittest.TestCase):
         app.shared_state = {}
         app._lock = threading.Lock()
 
-        response, _, _, extend, _, _ = app.parse_response(
+        response, _, _, extend, _ = app.parse_response(
             "Resposta visivel\n"
             "[STATE_UPDATE]\n"
             '{"goal":"corrigir parser","decisions":["usar json"]}\n'
@@ -733,7 +731,7 @@ class ProtocolTests(unittest.TestCase):
         app.shared_state = {}
         app._lock = threading.Lock()
 
-        response, _, _, extend, _, _ = app.parse_response(
+        response, _, _, extend, _ = app.parse_response(
             "Resposta visivel\n"
             f"{EXTEND_MARKER}\n"
             "[STATE_UPDATE]\n"
@@ -753,7 +751,7 @@ class ProtocolTests(unittest.TestCase):
         app.shared_state = {"decisions": ["A"]}
         app._lock = threading.Lock()
 
-        response, _, _, extend, _, _ = app.parse_response(
+        response, _, _, extend, _ = app.parse_response(
             "Resposta\n"
             "[STATE_UPDATE]\n"
             '{"decisions":["B"],"goal":"alinhar protocolo"}\n'
@@ -1377,15 +1375,6 @@ class ProtocolTests(unittest.TestCase):
         tasks = list_tasks({"job_id": 1}, db_path=str(db_path))
         self.assertEqual(len(tasks), 1)
         self.assertEqual(tasks[0]["task_type"], TaskType.TEST_EXECUTION)
-
-    def test_classify_task_execution_result_rejects_needs_input(self):
-        """Verifica que classify task execution result rejects needs input."""
-        ok, reason = QuimeraApp.classify_task_execution_result(
-            "Preciso de mais contexto. [NEEDS_INPUT]"
-        )
-
-        self.assertFalse(ok)
-        self.assertEqual(reason, "agente solicitou input humano")
 
     def test_classify_task_execution_result_rejects_inability_text(self):
         """Verifica que classify task execution result rejects inability text."""
@@ -3285,7 +3274,7 @@ class ProfileTests(unittest.TestCase):
         import tempfile
         staging_root = Path(self.enterContext(tempfile.TemporaryDirectory()))
 
-        agent, response, extend, needs_input = delegate_for_parallel(
+        agent, response, extend = delegate_for_parallel(
             app, "agent1", None, "standard", staging_root, 0
         )
         self.assertEqual(agent, "agent1")
@@ -5049,16 +5038,6 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(result, response)
         app.tool_executor.execute.assert_not_called()
 
-    def test_prompt_includes_proactivity_rules(self):
-        """Prompt deve incluir NEEDS_INPUT e instruções de colaboração."""
-        builder = PromptBuilder(DummyContextManager(), history_window=3)
-        history = [{"role": "human", "content": "Pergunta"}]
-
-        prompt = builder.build(AGENT_CLAUDE, history, is_first_speaker=True)
-
-        self.assertIn("[NEEDS_INPUT]", prompt)
-        self.assertIn("humano", prompt.lower())
-
     def test_route_rule_is_removed_from_template(self):
         """Route rule genérica não deve estar inline no template principal."""
         main = prompt_template._load()
@@ -5067,7 +5046,6 @@ class ProfileTests(unittest.TestCase):
         self.assertIn("target_agent", main)
         self.assertIn("request", main)
         self.assertIn("obrigatório", main)
-        self.assertIn("NEEDS_INPUT", main)
         self.assertNotIn("não improvise", main)
         self.assertNotIn("Agentes: {route_agents}", main)
 
@@ -5319,7 +5297,7 @@ class MetricsFeedbackTests(unittest.TestCase):
         app.behavior_metrics = BehaviorMetricsTracker()
 
         # Texto sem envelope JSON não é mais detectado como delegation
-        response, target, delegation, extend, needs_input, ack_id = app.parse_response(
+        response, target, delegation, extend, ack_id = app.parse_response(
             "Resposta visivel\nsem formato de delegation válido"
         )
 
@@ -5333,7 +5311,6 @@ class MetricsFeedbackTests(unittest.TestCase):
 
         self.assertIn("task", main)
         self.assertIn("obrigatório", main)
-        self.assertIn("NEEDS_INPUT", main)
         self.assertNotIn("Agentes: {route_agents}", main)
         self.assertNotIn("<!-- IF:route_agents -->", main)
 
@@ -5889,22 +5866,13 @@ class AppProtocolDirectTests(unittest.TestCase):
         app = self._make_app()
         proto = _make_protocol(app)
         result = proto.parse_response(None)
-        self.assertEqual(result, (None, None, None, False, False, None))
-
-    def test_parse_response_needs_human_input_marker(self):
-        """Verifica que parse response needs human input marker."""
-        from quimera.constants import NEEDS_INPUT_MARKER
-        app = self._make_app()
-        proto = _make_protocol(app)
-        response, _, _, _, needs_input, _ = proto.parse_response(f"pergunta {NEEDS_INPUT_MARKER}")
-        self.assertTrue(needs_input)
-        self.assertNotIn(NEEDS_INPUT_MARKER, response)
+        self.assertEqual(result, (None, None, None, False, None))
 
     def test_parse_response_json_envelope_no_response_content(self):
         """Envelope JSON puro de delegation é tratado como texto (MCP-first)."""
         app = self._make_app()
         proto = _make_protocol(app)
-        response, route_target, delegation, extend, needs_input, ack_id = proto.parse_response(
+        response, route_target, delegation, extend, ack_id = proto.parse_response(
             '{"type": "delegation", "route": "codex", "content": "task: fazer algo"}'
         )
         self.assertEqual(
@@ -5914,14 +5882,13 @@ class AppProtocolDirectTests(unittest.TestCase):
         self.assertIsNone(route_target)
         self.assertIsNone(delegation)
         self.assertFalse(extend)
-        self.assertFalse(needs_input)
         self.assertIsNone(ack_id)
 
     def test_parse_response_json_envelope_delegations_array_no_surrounding_text(self):
         """Envelope JSON com delegations[] também fica como texto no modo MCP-first."""
         app = self._make_app()
         proto = _make_protocol(app)
-        response, route_target, delegation, _, _, _ = proto.parse_response(
+        response, route_target, delegation, _, _ = proto.parse_response(
             '{"type": "delegation", "steps": ['
             '{"route": "codex", "content": "task: fazer algo"}, '
             '{"route": "claude", "content": "task: validar"}'
@@ -5936,7 +5903,7 @@ class AppProtocolDirectTests(unittest.TestCase):
         app = self._make_app()
         proto = _make_protocol(app)
 
-        response, route_target, delegation, extend, needs_input, ack_id = proto.parse_response(
+        response, route_target, delegation, extend, ack_id = proto.parse_response(
             '{"type": "delegation", "route": "codex", "content": "task: fazer algo"}'
         )
 
@@ -5947,7 +5914,6 @@ class AppProtocolDirectTests(unittest.TestCase):
         self.assertIsNone(route_target)
         self.assertIsNone(delegation)
         self.assertFalse(extend)
-        self.assertFalse(needs_input)
         self.assertIsNone(ack_id)
 
     def test_parse_response_json_delegation_is_always_ignored_for_routing(self):
@@ -5955,7 +5921,7 @@ class AppProtocolDirectTests(unittest.TestCase):
         app = self._make_app()
         proto = _make_protocol(app)
 
-        response, route_target, delegation, extend, needs_input, ack_id = proto.parse_response(
+        response, route_target, delegation, extend, ack_id = proto.parse_response(
             '{"type": "delegation", "route": "codex", "content": "task: fazer algo"}'
         )
 
@@ -5963,7 +5929,6 @@ class AppProtocolDirectTests(unittest.TestCase):
         self.assertIsNone(route_target)
         self.assertIsNone(delegation)
         self.assertFalse(extend)
-        self.assertFalse(needs_input)
         self.assertIsNone(ack_id)
 
     def test_parse_response_json_state_update_is_plain_text(self):
@@ -5972,14 +5937,13 @@ class AppProtocolDirectTests(unittest.TestCase):
         proto = _make_protocol(app)
         text = '{"type": "state_update", "content": "", "state_updates": {"goal_canonical": "corrigir parser"}}'
 
-        response, route_target, delegation, extend, needs_input, ack_id = proto.parse_response(text)
+        response, route_target, delegation, extend, ack_id = proto.parse_response(text)
 
         self.assertEqual(response, text)
         self.assertEqual(app.shared_state, {})
         self.assertIsNone(route_target)
         self.assertIsNone(delegation)
         self.assertFalse(extend)
-        self.assertFalse(needs_input)
         self.assertIsNone(ack_id)
 
     def test_parse_response_ack_marker_works_in_mcp_mode(self):
@@ -5987,7 +5951,7 @@ class AppProtocolDirectTests(unittest.TestCase):
         app = self._make_app()
         proto = _make_protocol(app)
 
-        response, route_target, delegation, extend, needs_input, ack_id = proto.parse_response(
+        response, route_target, delegation, extend, ack_id = proto.parse_response(
             '[ACK:abc123] done'
         )
 
@@ -5996,7 +5960,6 @@ class AppProtocolDirectTests(unittest.TestCase):
         self.assertIsNone(route_target)
         self.assertIsNone(delegation)
         self.assertFalse(extend)
-        self.assertFalse(needs_input)
 
 
     # --- parse_response com envelope JSON ---
@@ -6005,7 +5968,7 @@ class AppProtocolDirectTests(unittest.TestCase):
         """Verifica que parse response json envelope delegation."""
         app = self._make_app()
         proto = _make_protocol(app)
-        response, route_target, delegation, extend, needs_input, ack_id = (
+        response, route_target, delegation, extend, ack_id = (
             proto.parse_response('{"type": "delegation", "content": "task: refactor", "route": "codex"}')
         )
         self.assertEqual(
@@ -6015,7 +5978,6 @@ class AppProtocolDirectTests(unittest.TestCase):
         self.assertIsNone(route_target)
         self.assertIsNone(delegation)
         self.assertFalse(extend)
-        self.assertFalse(needs_input)
         self.assertIsNone(ack_id)
 
     def test_parse_response_json_envelope_state_update_is_plain_text(self):
@@ -6023,13 +5985,12 @@ class AppProtocolDirectTests(unittest.TestCase):
         app = self._make_app()
         proto = _make_protocol(app)
         text = '{"type": "state_update", "content": "", "state_updates": {"goal_canonical": "corrigir parser","mode":"test"}}'
-        response, route_target, delegation, extend, needs_input, ack_id = proto.parse_response(text)
+        response, route_target, delegation, extend, ack_id = proto.parse_response(text)
         self.assertEqual(response, text)
         self.assertEqual(app.shared_state, {})
         self.assertIsNone(route_target)
         self.assertIsNone(delegation)
         self.assertFalse(extend)
-        self.assertFalse(needs_input)
         self.assertIsNone(ack_id)
 
     def test_parse_response_json_envelope_ack_is_plain_text(self):
@@ -6037,7 +5998,7 @@ class AppProtocolDirectTests(unittest.TestCase):
         app = self._make_app()
         proto = _make_protocol(app)
         text = '{"type": "ack", "content": "done", "delegation_id": "abc123"}'
-        response, route_target, delegation, extend, needs_input, ack_id = proto.parse_response(text)
+        response, route_target, delegation, extend, ack_id = proto.parse_response(text)
         self.assertEqual(response, text)
         self.assertIsNone(ack_id)
         self.assertIsNone(route_target)
@@ -6051,7 +6012,7 @@ class AppProtocolDirectTests(unittest.TestCase):
         )
         app = self._make_app()
         proto = _make_protocol(app)
-        response, route_target, delegation, extend, needs_input, ack_id = (
+        response, route_target, delegation, extend, ack_id = (
             proto.parse_response(text)
         )
         self.assertIsNone(route_target)
@@ -6059,7 +6020,6 @@ class AppProtocolDirectTests(unittest.TestCase):
         self.assertEqual(response, text)
         self.assertIsNone(ack_id)
         self.assertFalse(extend)
-        self.assertFalse(needs_input)
 
     def test_parse_response_embedded_delegation_array_json_is_plain_text(self):
         """JSON type=delegation com delegations[] é conteúdo comum."""
@@ -6072,7 +6032,7 @@ class AppProtocolDirectTests(unittest.TestCase):
         )
         app = self._make_app()
         proto = _make_protocol(app)
-        response, route_target, delegation, extend, needs_input, ack_id = (
+        response, route_target, delegation, extend, ack_id = (
             proto.parse_response(text)
         )
         self.assertIsNone(route_target)
@@ -6090,7 +6050,7 @@ class AppProtocolDirectTests(unittest.TestCase):
         )
         app = self._make_app()
         proto = _make_protocol(app)
-        response, route_target, delegation, _, _, _ = proto.parse_response(text)
+        response, route_target, delegation, _, _ = proto.parse_response(text)
         self.assertIsNone(route_target)
         self.assertIsNone(delegation)
         self.assertIn("Análise inicial", response)
@@ -6105,7 +6065,7 @@ class AppProtocolDirectTests(unittest.TestCase):
         )
         app = self._make_app()
         proto = _make_protocol(app)
-        response, route_target, delegation, _, _, _ = proto.parse_response(text)
+        response, route_target, delegation, _, _ = proto.parse_response(text)
         self.assertIsNone(route_target)
         self.assertIsNone(delegation)
         self.assertEqual(response, text)
@@ -6118,7 +6078,7 @@ class AppProtocolDirectTests(unittest.TestCase):
         )
         app = self._make_app()
         proto = _make_protocol(app)
-        response, route_target, delegation, _, _, _ = proto.parse_response(text)
+        response, route_target, delegation, _, _ = proto.parse_response(text)
         self.assertIsNone(route_target)
         self.assertIsNone(delegation)
         self.assertEqual(response, text)
@@ -6131,7 +6091,7 @@ class AppProtocolDirectTests(unittest.TestCase):
         )
         app = self._make_app()
         proto = _make_protocol(app)
-        response, route_target, delegation, _, _, _ = proto.parse_response(text)
+        response, route_target, delegation, _, _ = proto.parse_response(text)
         self.assertIsNone(route_target)
         self.assertIsNone(delegation)
         self.assertEqual(response, text)
@@ -6144,7 +6104,7 @@ class AppProtocolDirectTests(unittest.TestCase):
         )
         app = self._make_app()
         proto = _make_protocol(app)
-        response, _, _, _, _, ack_id = proto.parse_response(text)
+        response, _, _, _, ack_id = proto.parse_response(text)
         self.assertEqual(app.shared_state, {})
         self.assertEqual(response, text)
         self.assertIsNone(ack_id)
@@ -6157,7 +6117,7 @@ class AppProtocolDirectTests(unittest.TestCase):
         )
         app = self._make_app()
         proto = _make_protocol(app)
-        response, _, _, _, _, ack_id = proto.parse_response(text)
+        response, _, _, _, ack_id = proto.parse_response(text)
         self.assertIsNone(ack_id)
         self.assertEqual(response, text)
 
@@ -6167,7 +6127,7 @@ class AppProtocolDirectTests(unittest.TestCase):
         """Delegation envelope com content vazio segue como texto no modo MCP-first."""
         app = self._make_app()
         proto = _make_protocol(app)
-        response, route_target, delegation, extend, needs_input, ack_id = (
+        response, route_target, delegation, extend, ack_id = (
             proto.parse_response('{"type": "delegation", "content": "", "route": "codex"}')
         )
         self.assertIsNone(route_target)
@@ -6178,7 +6138,7 @@ class AppProtocolDirectTests(unittest.TestCase):
         """Delegation envelope com whitespace segue como texto no modo MCP-first."""
         app = self._make_app()
         proto = _make_protocol(app)
-        response, route_target, delegation, extend, needs_input, ack_id = (
+        response, route_target, delegation, extend, ack_id = (
             proto.parse_response('{"type": "delegation", "content": "   ", "route": "codex"}')
         )
         self.assertIsNone(route_target)
@@ -6189,7 +6149,7 @@ class AppProtocolDirectTests(unittest.TestCase):
         """delegations com 1 item não roteia no modo MCP-first."""
         app = self._make_app()
         proto = _make_protocol(app)
-        response, target, delegation, _, _, _ = proto.parse_response(
+        response, target, delegation, _, _ = proto.parse_response(
             '{"type": "delegation", "steps": [{"route": "codex", "content": "task: single target"}]}'
         )
         self.assertIn('"type": "delegation"', response)
@@ -6200,7 +6160,7 @@ class AppProtocolDirectTests(unittest.TestCase):
         """delegations + content vazio continua sem rotear (texto puro)."""
         app = self._make_app()
         proto = _make_protocol(app)
-        response, target, delegation, _, _, _ = proto.parse_response(
+        response, target, delegation, _, _ = proto.parse_response(
             '{"type": "delegation", "steps": [{"route": "codex", "content": ""}]}'
         )
         self.assertIn('"type": "delegation"', response)
@@ -6211,7 +6171,7 @@ class AppProtocolDirectTests(unittest.TestCase):
         """type=delegation com routes não roteia e segue como texto."""
         app = self._make_app()
         proto = _make_protocol(app)
-        response, target, delegation, _, _, _ = proto.parse_response(
+        response, target, delegation, _, _ = proto.parse_response(
             '{"type": "delegation", "routes": ["codex"], "content": "task: something"}'
         )
         self.assertIsNone(target)
@@ -6225,7 +6185,7 @@ class AppProtocolDirectTests(unittest.TestCase):
         """type=delegation sem route/delegations não roteia e segue como texto."""
         app = self._make_app()
         proto = _make_protocol(app)
-        response, target, delegation, _, _, _ = proto.parse_response(
+        response, target, delegation, _, _ = proto.parse_response(
             '{"type": "delegation", "content": "task: something"}'
         )
         self.assertEqual(response, '{"type": "delegation", "content": "task: something"}')

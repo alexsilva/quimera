@@ -20,7 +20,6 @@ def _make_app(active_agents=None, threads=1):
     app.round_index = 0
     app.summary_agent_preference = None
     app.shared_state = {}
-    app._pending_input_for = None
     app.session_state = {"session_id": "test-cr", "history_count": 0, "summary_loaded": False}
     app.behavior_metrics = None
     app._parallel_toolbar_state = {
@@ -62,7 +61,7 @@ def _make_app(active_agents=None, threads=1):
     # parse_routing padrão: ("claude", "hello", False)
     app.parse_routing = Mock(return_value=("claude", "hello", False))
     # parse_response padrão: resposta simples sem delegation
-    app.parse_response = Mock(return_value=("resposta", None, None, False, False, None))
+    app.parse_response = Mock(return_value=("resposta", None, None, False, None))
 
     app.chat_round_orchestrator = _make_orchestrator(app)
     return app
@@ -91,8 +90,6 @@ def _make_orchestrator(app):
         set_round_index=lambda v: setattr(app, 'round_index', v),
         set_summary_agent_preference=lambda v: setattr(app, 'summary_agent_preference', v),
         set_parallel_toolbar_state=getattr(app, '_set_parallel_toolbar_state', None),
-        get_pending_input_for=lambda: app._pending_input_for,
-        set_pending_input_for=lambda v: setattr(app, '_pending_input_for', v),
         merge_staging_to_workspace=merge_staging_to_workspace,
     )
 
@@ -119,53 +116,17 @@ class TestProcessMainFlow(unittest.TestCase):
         app.renderer.show_warning.assert_called_once()
         app.dispatch_services.delegate.assert_not_called()
 
-    def test_pending_input_for_overrides_first_agent(self):
-        """_pending_input_for deve substituir first_agent quando explicit=False."""
-        app = _make_app()
-        app.parse_routing = Mock(return_value=("claude", "hello", False))
-        app._pending_input_for = "codex"
-        app.dispatch_services.delegate = Mock(return_value="resp de codex")
-        app.parse_response = Mock(return_value=("resp de codex", None, None, False, False, None))
-
-        app.chat_round_orchestrator.process("hello")
-
-        first_delegate = app.dispatch_services.delegate.call_args_list[0]
-        self.assertEqual(first_delegate.args[0], "codex")
-
     def test_user_cancelled_after_first_call(self):
         """_user_cancelled após primeira chamada deve resetar turno e retornar."""
         app = _make_app()
         app.dispatch_services.delegate = Mock(return_value="alguma resposta")
-        app.parse_response = Mock(return_value=("alguma resposta", None, None, False, False, None))
+        app.parse_response = Mock(return_value=("alguma resposta", None, None, False, None))
         app.agent_client._user_cancelled = True
 
         app.chat_round_orchestrator.process("hello")
 
         app.turn_manager.reset.assert_called_once()
         # maybe_auto_summarize não deve ter sido chamado (retornou cedo)
-        app.session_services.maybe_auto_summarize.assert_not_called()
-
-    def test_needs_human_input_sets_pending(self):
-        """needs_human_input=True deve setar _pending_input_for e retornar."""
-        app = _make_app()
-        app.dispatch_services.delegate = Mock(return_value="Qual sua escolha?")
-        app.parse_response = Mock(return_value=("Qual sua escolha?", None, None, False, True, None))
-
-        app.chat_round_orchestrator.process("hello")
-
-        self.assertEqual(app._pending_input_for, "claude")
-        app.session_services.maybe_auto_summarize.assert_not_called()
-
-    def test_needs_human_input_threaded_mode_keeps_default_routing(self):
-        """Com threads>1, NEEDS_INPUT não deve forçar 'Responda para ...'."""
-        app = _make_app(threads=2)
-        app.dispatch_services.delegate = Mock(return_value="Qual sua escolha?")
-        app.parse_response = Mock(return_value=("Qual sua escolha?", None, None, False, True, None))
-
-        app.chat_round_orchestrator.process("hello")
-
-        self.assertIsNone(app._pending_input_for)
-        app.renderer.show_system.assert_not_called()
         app.session_services.maybe_auto_summarize.assert_not_called()
 
     def test_fallback_skips_none_response(self):
@@ -176,8 +137,8 @@ class TestProcessMainFlow(unittest.TestCase):
 
         def fake_parse(resp):
             if resp is None:
-                return (None, None, None, False, False, None)
-            return (resp, None, None, False, False, None)
+                return (None, None, None, False, None)
+            return (resp, None, None, False, None)
 
         app.parse_response = Mock(side_effect=fake_parse)
 
@@ -191,7 +152,7 @@ class TestProcessMainFlow(unittest.TestCase):
         app = _make_app(active_agents=["codex", "claude", "opencode"], threads=2)
         app.parse_routing = Mock(return_value=("codex", "status", False))
         app.dispatch_services.delegate = Mock(return_value="resposta codex")
-        app.parse_response = Mock(return_value=("resposta codex", None, None, False, False, None))
+        app.parse_response = Mock(return_value=("resposta codex", None, None, False, None))
 
         app.chat_round_orchestrator.process("status")
 
@@ -217,8 +178,8 @@ class TestProcessMainFlow(unittest.TestCase):
 
         def fake_parse(resp):
             if resp is None:
-                return (None, None, None, False, False, None)
-            return (resp, None, None, False, False, None)
+                return (None, None, None, False, None)
+            return (resp, None, None, False, None)
 
         app.parse_response = Mock(side_effect=fake_parse)
 
@@ -239,7 +200,7 @@ class TestProcessMainFlow(unittest.TestCase):
         app = _make_app(active_agents=["codex", "claude", "opencode"], threads=2)
         app.parse_routing = Mock(return_value=("codex", "status", False))
         app.dispatch_services.delegate = Mock(return_value=None)
-        app.parse_response = Mock(return_value=(None, None, None, False, False, None))
+        app.parse_response = Mock(return_value=(None, None, None, False, None))
 
         app.chat_round_orchestrator.process("status")
 
@@ -257,10 +218,10 @@ class TestProcessMainFlow(unittest.TestCase):
 
         def fake_parse(resp):
             if resp is None:
-                return (None, None, None, False, False, None)
+                return (None, None, None, False, None)
             if resp == "claude respondeu":
-                return (resp, None, None, True, False, None)
-            return (resp, None, None, False, False, None)
+                return (resp, None, None, True, None)
+            return (resp, None, None, False, None)
 
         app.parse_response = Mock(side_effect=fake_parse)
 
@@ -293,8 +254,8 @@ class TestProcessMainFlow(unittest.TestCase):
 
         def fake_parse(resp):
             if resp == "resposta openai":
-                return (resp, None, None, True, False, None)
-            return (resp, None, None, False, False, None)
+                return (resp, None, None, True, None)
+            return (resp, None, None, False, None)
 
         app.parse_response = Mock(side_effect=fake_parse)
 
@@ -331,8 +292,8 @@ class TestProcessMainFlow(unittest.TestCase):
 
         def fake_parse(resp):
             if resp is None:
-                return (None, None, None, False, False, None)
-            return (resp, None, None, False, False, None)
+                return (None, None, None, False, None)
+            return (resp, None, None, False, None)
 
         app.parse_response = Mock(side_effect=fake_parse)
 
@@ -363,8 +324,8 @@ class TestProcessMainFlow(unittest.TestCase):
 
         def fake_parse(resp):
             if resp is None:
-                return (None, None, None, False, False, None)
-            return (resp, None, None, False, False, None)
+                return (None, None, None, False, None)
+            return (resp, None, None, False, None)
 
         app.parse_response = Mock(side_effect=fake_parse)
 
@@ -383,7 +344,7 @@ class TestProcessMainFlow(unittest.TestCase):
         app = _make_app(active_agents=["codex", "claude", "opencode"], threads=2)
         app.parse_routing = Mock(return_value=("codex", "status", False))
         app.dispatch_services.delegate = Mock(return_value=None)
-        app.parse_response = Mock(return_value=(None, None, None, False, False, None))
+        app.parse_response = Mock(return_value=(None, None, None, False, None))
 
         cancel_checks = iter([False, False, False, True])
         app.chat_round_orchestrator._is_cancelled = Mock(side_effect=lambda: next(cancel_checks))
@@ -403,7 +364,7 @@ class TestProcessMainFlow(unittest.TestCase):
             ("A", "p3", False),
         ])
         app.dispatch_services.delegate = Mock(side_effect=["r1", "r2", "r3"])
-        app.parse_response = Mock(return_value=("ok", None, None, False, False, None))
+        app.parse_response = Mock(return_value=("ok", None, None, False, None))
 
         app.chat_round_orchestrator.process("p1")
         app.chat_round_orchestrator.process("p2")
@@ -428,7 +389,6 @@ class TestProcessStandardFlow(unittest.TestCase):
 
         orchestrator._process_standard_flow("claude", False, False, ["codex", "deepseek"])
 
-        self.assertIsNone(app._pending_input_for)
         app.dispatch_services.delegate.assert_not_called()
         app.task_services.delegate_for_parallel.assert_not_called()
         self.assertEqual(app.agent_pool.agents, ["claude", "codex", "deepseek"])

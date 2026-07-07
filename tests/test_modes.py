@@ -382,7 +382,6 @@ def _attach_toolbar_coordinator(app):
         config=getattr(app, "config", MagicMock()),
         runtime_state=app.runtime_state,
         input_gate=getattr(app, "input_gate", MagicMock()),
-        get_pending_input_for=lambda: getattr(app, "_pending_input_for", None),
         get_execution_mode=lambda: getattr(app, "execution_mode", None),
         threads=getattr(app, "threads", 1),
     )
@@ -406,7 +405,6 @@ class TestInputContextAndWelcome(unittest.TestCase):
         app.toolbar._parallel_toolbar_state.update(
             {"active": 0, "queued": 0, "capacity": 0, "active_agents": ()}
         )
-        app._pending_input_for = None
         _attach_toolbar_coordinator(app)
 
         context = app._build_input_toolbar_context()
@@ -431,7 +429,6 @@ class TestInputContextAndWelcome(unittest.TestCase):
         )
         app.runtime_state.chat_inflight_count = 1
         app.runtime_state.chat_inflight_lock = threading.Lock()
-        app._pending_input_for = None
         _attach_toolbar_coordinator(app)
 
         context = app._build_input_toolbar_context()
@@ -454,7 +451,6 @@ class TestInputContextAndWelcome(unittest.TestCase):
             {"active": 0, "queued": 0, "active_agents": ()}
         )
         app.runtime_state.chat_inflight_count = 0
-        app._pending_input_for = None
         _attach_toolbar_coordinator(app)
 
         context = app._build_input_toolbar_context()
@@ -476,7 +472,6 @@ class TestInputContextAndWelcome(unittest.TestCase):
         app.toolbar._parallel_toolbar_state.update(
             {"active": 0, "queued": 0, "capacity": 0, "active_agents": ()}
         )
-        app._pending_input_for = None
         _attach_toolbar_coordinator(app)
 
         context = app._build_input_toolbar_context()
@@ -497,7 +492,6 @@ class TestInputContextAndWelcome(unittest.TestCase):
         app.toolbar._parallel_toolbar_state.update(
             {"active": 0, "queued": 0, "capacity": 0, "active_agents": ()}
         )
-        app._pending_input_for = None
         _attach_toolbar_coordinator(app)
 
         context = app._build_input_toolbar_context()
@@ -519,7 +513,6 @@ class TestInputContextAndWelcome(unittest.TestCase):
         app.toolbar._parallel_toolbar_state.update(
             {"active": 0, "queued": 0, "capacity": 0, "active_agents": ()}
         )
-        app._pending_input_for = None
         # bug_store que lança exceção no query()
         app.bug_store = MagicMock()
         app.bug_store.query.side_effect = RuntimeError("query falhou")
@@ -544,7 +537,6 @@ class TestInputContextAndWelcome(unittest.TestCase):
         app.toolbar._parallel_toolbar_state.update(
             {"active": 0, "queued": 0, "capacity": 0, "active_agents": ()}
         )
-        app._pending_input_for = None
         app.storage = MagicMock(session_id="sessao-12345678")
         app.bug_store = MagicMock()
         app.bug_store.query.return_value = [MagicMock(), MagicMock()]
@@ -577,7 +569,6 @@ class TestInputContextAndWelcome(unittest.TestCase):
         app.toolbar._parallel_toolbar_state.update(
             {"active": 0, "queued": 0, "capacity": 0, "active_agents": ()}
         )
-        app._pending_input_for = None
         app.execution_mode = ExecutionMode(name="planning")
         _attach_toolbar_coordinator(app)
 
@@ -599,7 +590,6 @@ class TestInputContextAndWelcome(unittest.TestCase):
         app.toolbar._parallel_toolbar_state.update(
             {"active": 0, "queued": 0, "capacity": 0, "active_agents": ()}
         )
-        app._pending_input_for = None
         app.execution_mode = None
         _attach_toolbar_coordinator(app)
 
@@ -621,7 +611,6 @@ class TestInputContextAndWelcome(unittest.TestCase):
         app.toolbar._parallel_toolbar_state.update(
             {"active": 1, "queued": 0, "capacity": 2, "active_agents": ("codex", "claude")}
         )
-        app._pending_input_for = None
         _attach_toolbar_coordinator(app)
 
         context = app._build_input_toolbar_context()
@@ -642,7 +631,6 @@ class TestInputContextAndWelcome(unittest.TestCase):
         app.toolbar._parallel_toolbar_state.update(
             {"active": 3, "queued": 0, "capacity": 4, "active_agents": ("codex", "claude", "qwen", "nemotron")}
         )
-        app._pending_input_for = None
         _attach_toolbar_coordinator(app)
 
         context = app._build_input_toolbar_context()
@@ -664,7 +652,6 @@ class TestInputContextAndWelcome(unittest.TestCase):
         app.toolbar._parallel_toolbar_state.update(
             {"active": 0, "queued": 0, "capacity": 0, "active_agents": ()}
         )
-        app._pending_input_for = None
         _attach_toolbar_coordinator(app)
 
         context = app._build_input_toolbar_context()
@@ -687,7 +674,6 @@ class TestInputContextAndWelcome(unittest.TestCase):
         app.toolbar._parallel_toolbar_state.update(
             {"active": 0, "queued": 0, "capacity": 0, "active_agents": ()}
         )
-        app._pending_input_for = None
         _attach_toolbar_coordinator(app)
 
         context = app._build_input_toolbar_context()
@@ -708,7 +694,6 @@ class TestInputContextAndWelcome(unittest.TestCase):
         app.toolbar._parallel_toolbar_state.update(
             {"active": 0, "queued": 0, "capacity": 1, "active_agents": ()}
         )
-        app._pending_input_for = None
         _attach_toolbar_coordinator(app)
 
         context = app._build_input_toolbar_context()
@@ -721,19 +706,6 @@ class TestInputContextAndWelcome(unittest.TestCase):
             message = WelcomePresenter.build_welcome_message()
 
         self.assertIn("v0.1.0", message)
-
-    def test_resolver_next_responder_prefers_pending_input_target(self):
-        from quimera.app.core import QuimeraApp
-
-        app = QuimeraApp.__new__(QuimeraApp)
-        from quimera.app.agent_pool import AgentPool
-        app.agent_pool = AgentPool(["codex", "claude"])
-        app.active_agents = ["codex", "claude"]
-        app.toolbar = ToolbarManager(threads=1)
-        app._pending_input_for = "claude"
-        _attach_toolbar_coordinator(app)
-
-        self.assertEqual(app._resolve_next_responder_label(), "🔮 Claude")
 
     def test_resolve_active_model_label_extracts_model_from_cli_equals(self):
         from quimera.app.core import QuimeraApp

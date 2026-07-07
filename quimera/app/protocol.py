@@ -2,7 +2,7 @@
 import json
 import re
 
-from ..constants import EXTEND_MARKER, NEEDS_INPUT_MARKER, STATE_UPDATE_START
+from ..constants import EXTEND_MARKER, STATE_UPDATE_START
 from ..shared_state import (
     is_agent_state_key,
     normalize_state_key,
@@ -121,7 +121,7 @@ class AppProtocol:
     def parse_response(self, response, **_kwargs):
         """Extrai marcadores de controle e retorna estado estruturado."""
         if response is None:
-            return None, None, None, False, False, None
+            return None, None, None, False, None
 
         ack_id = None
 
@@ -137,14 +137,10 @@ class AppProtocol:
             logger.info("[ACK] received ack_id=%s", ack_id)
 
         if response is None:
-            return None, None, None, False, False, ack_id
+            return None, None, None, False, ack_id
 
         extend = response.rstrip().endswith(EXTEND_MARKER)
         if extend:
             response = response.rstrip()[: -len(EXTEND_MARKER)].rstrip()
 
-        needs_human_input = NEEDS_INPUT_MARKER in response
-        if needs_human_input:
-            response = response.replace(NEEDS_INPUT_MARKER, "").strip()
-
-        return response, None, None, extend, needs_human_input, ack_id
+        return response, None, None, extend, ack_id

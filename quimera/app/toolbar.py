@@ -156,11 +156,8 @@ class ToolbarManager:
         return self._active_model_resolver.resolve(request)
 
     @staticmethod
-    def resolve_next_responder_label(pending_input_for: str | None, primary_agent: str | None) -> str:
+    def resolve_next_responder_label(primary_agent: str | None) -> str:
         """Resolve o agente que deve responder na próxima rodada."""
-        normalized_pending = str(pending_input_for or "").strip()
-        if normalized_pending:
-            return normalized_pending
         if primary_agent:
             return str(primary_agent)
         return "unknown"

@@ -1180,7 +1180,6 @@ def test_toolbar_coordinator_formats_agent_names_with_profile_icons():
         config=None,
         runtime_state=runtime_state,
         input_gate=None,
-        get_pending_input_for=lambda: "claude",
         get_execution_mode=lambda: SimpleNamespace(name="default"),
         threads=2,
     )

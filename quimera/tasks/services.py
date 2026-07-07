@@ -249,7 +249,7 @@ class AppTaskServices:
         get_rate_limit_backoff_seconds: Callable[[], int] | None = None,
         get_workspace_policy: Callable[[], Any] | None = None,
         delegate: Callable[..., Any] | None = None,
-        parse_response: Callable[[Any], tuple[Any, Any, Any, Any, Any, Any]],
+        parse_response: Callable[[Any], tuple[Any, Any, Any, Any, Any]],
         classify_task_execution_result: Callable[[str | None], tuple[bool, str]] = classify_task_execution_result,
         classify_task_review_result: Callable[[str | None], tuple[bool, str, str]] = classify_task_review_result,
     ):
@@ -1058,8 +1058,8 @@ def delegate_for_parallel_with_client(
     set_staging_root(staging_root / str(index))
     try:
         raw = delegate(agent, delegation=delegation, primary=False, protocol_mode=protocol_mode, silent=True, show_output=False)
-        response, _, _, extend, needs_input, _ = parse_response(raw)
-        return agent, response, extend, needs_input
+        response, _, _, extend, _ = parse_response(raw)
+        return agent, response, extend
     finally:
         set_staging_root(None)
 
