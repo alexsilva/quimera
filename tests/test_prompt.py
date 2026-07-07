@@ -295,8 +295,8 @@ def test_prompt_primary_false_omits_only_session_state():
     assert '<current_turn title="Pedido atual de >>>">' in prompt_secondary
 
 
-def test_prompt_uses_current_active_agents_in_header_and_route_list():
-    """Verifica que prompt uses current active agents in header and route list."""
+def test_prompt_uses_current_active_agents_in_header_without_route_list():
+    """Chat prompt lista agentes no header, sem regra route_agents inline."""
     state = {"active_agents": ["claude", "codex", "deepseek"]}
     builder = PromptBuilder(
         context_manager=_make_context_manager(""),
@@ -309,7 +309,7 @@ def test_prompt_uses_current_active_agents_in_header_and_route_list():
     prompt = builder.build(agent="codex", history=history)
 
     assert "Agentes de IA nesta conversa: DEEPSEEK" in prompt
-    assert "- Agentes: codex, deepseek" in prompt
+    assert "- Agentes:" not in prompt
     assert "CLAUDE" not in prompt
     assert "claude" not in prompt
 
@@ -335,8 +335,8 @@ def test_delegation_prompt_uses_current_active_agents_for_route_candidates():
     assert "claude" not in prompt
 
 
-def test_prompt_includes_updated_delegation_contract_in_route_rules():
-    """Verifica que prompt includes updated delegation contract in route rules."""
+def test_prompt_omits_generic_delegation_contract_from_route_rules():
+    """Chat prompt não injeta contrato genérico de delegação por route_agents."""
     builder = PromptBuilder(
         context_manager=_make_context_manager(""),
         active_agents=["claude", "codex", "deepseek"],
@@ -344,11 +344,10 @@ def test_prompt_includes_updated_delegation_contract_in_route_rules():
 
     prompt = builder.build(agent="codex", history=[{"role": "human", "content": "delegue"}])
 
-    assert "tool estruturada `delegate`" in prompt
-    assert "target_agent" in prompt
-    assert "request" in prompt
-    assert "fallback_agents" in prompt
-    assert "steps" in prompt
+    assert "Delegação padrão:" not in prompt
+    assert "tool estruturada `delegate`" not in prompt
+    assert "target_agent" not in prompt
+    assert "fallback_agents" not in prompt
 
 
 def test_delegation_only_prompt_includes_updated_delegation_contract():
@@ -719,8 +718,8 @@ def test_prompt_history_window_property_setter_updates_memory_selector():
     assert builder.history_window == 2
 
 
-def test_prompt_delegation_only_filters_agent_and_from_agent_from_route_list():
-    """Verifica que prompt delegation only filters agent and from agent from route list."""
+def test_prompt_delegation_only_omits_route_list():
+    """Delegation-only chat prompt não injeta lista route_agents inline."""
     builder = PromptBuilder(
         context_manager=_make_context_manager(""),
         active_agents=["codex", "claude", "gemini"],
@@ -734,7 +733,7 @@ def test_prompt_delegation_only_filters_agent_and_from_agent_from_route_list():
     )
 
     rules_block = _extract_block(prompt, "rules")
-    assert "- Agentes: gemini" in rules_block
+    assert "- Agentes:" not in rules_block
     assert "codex" not in rules_block
     assert "claude" not in rules_block
 

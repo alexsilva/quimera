@@ -93,26 +93,12 @@ class CommandRouter:
             if not self.agent_pool:
                 raise RuntimeError("No agents available")
 
+        # Com orquestrador ativo, todo input não-prefixado passa por ele. A instrução
+        # de comportamento (analisar → delegar → revisar → sintetizar) é injetada no
+        # prompt pelo PromptBuilder via bloco <!-- IF:is_orchestrator -->; aqui só
+        # roteamos o pedido cru, sem duplicar o contrato de orquestração.
         orchestrator = getattr(self.agent_pool, "orchestrator_agent", None)
         if orchestrator and orchestrator in self.agent_pool.agents:
-            others = [a for a in self.agent_pool.agents if a != orchestrator]
-            agent_list = '\n'.join(f'  - {a}' for a in others) if others else '  (nenhum)'
-            orq_prefix = (
-                f"# Modo Orquestrador\n\n"
-                f"┌─ Orquestrador {'─' * 20}┐\n"
-                f"│ agente  │ {orchestrator:<20s}│\n"
-                f"│ ação    │ orquestrar delegações  │\n"
-                f"│ agentes │ {len(others):<2d} disponíveis{' ' * 10}│\n"
-                f"└{'─' * 40}┘\n\n"
-                f"## Agentes disponíveis\n{agent_list}\n\n"
-                f"## Fluxo obrigatório\n"
-                f"1. **Analise** o pedido e decida qual(is) agente(s) melhor resolve(m) a tarefa.\n"
-                f"2. Use `delegate` para atribuir a execução ao agente escolhido.\n"
-                f"3. **Revise** o trabalho recebido — verifique erros ou omissões.\n"
-                f"4. **Sintetize** o resultado final com sua própria redação. Não repasse resposta bruta.\n"
-                f"5. Se incorreto, delegue novamente com instruções mais precisas.\n\n"
-                f"## Pedido\n{user_input}"
-            )
-            return orchestrator, orq_prefix, True
+            return orchestrator, user_input, True
 
         return self.agent_pool.primary, user_input, False

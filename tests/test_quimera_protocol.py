@@ -5059,16 +5059,17 @@ class ProfileTests(unittest.TestCase):
         self.assertIn("[NEEDS_INPUT]", prompt)
         self.assertIn("humano", prompt.lower())
 
-    def test_route_rule_includes_format_specification(self):
-        """Route rule deve estar inline no template principal."""
+    def test_route_rule_is_removed_from_template(self):
+        """Route rule genérica não deve estar inline no template principal."""
         main = prompt_template._load()
 
         self.assertIn("delegate", main)
         self.assertIn("target_agent", main)
         self.assertIn("request", main)
         self.assertIn("obrigatório", main)
-        self.assertIn("não improvise", main)
         self.assertIn("NEEDS_INPUT", main)
+        self.assertNotIn("não improvise", main)
+        self.assertNotIn("Agentes: {route_agents}", main)
 
 
 class FallbackChainTests(unittest.TestCase):
@@ -5326,22 +5327,15 @@ class MetricsFeedbackTests(unittest.TestCase):
         self.assertIsNone(delegation)
         self.assertEqual(response, "Resposta visivel\nsem formato de delegation válido")
 
-    def test_route_rule_is_concise(self):
-        """Route rule deve estar inline no template e ser conciso."""
+    def test_route_rule_removed_from_chat_prompt(self):
+        """Chat prompt não deve carregar regra genérica de route_agents."""
         main = prompt_template._load()
 
         self.assertIn("task", main)
         self.assertIn("obrigatório", main)
-        self.assertIn("Agentes: {route_agents}", main)
         self.assertIn("NEEDS_INPUT", main)
-        self.assertIn("paths", main)
-        self.assertIn("paralelizar", main)
-        self.assertIn("especialidade", main)
-        self.assertIn("não improvise", main)
-        route_start = main.index("- Agentes: {route_agents}")
-        route_end = main.index("<!-- ENDIF:route_agents -->", route_start)
-        route_rule = main[route_start:route_end]
-        self.assertLess(len(route_rule), 850)
+        self.assertNotIn("Agentes: {route_agents}", main)
+        self.assertNotIn("<!-- IF:route_agents -->", main)
 
     def test_reviewer_rule_is_concise(self):
         """REVIEWER_RULE deve estar inline no template e ser conciso."""

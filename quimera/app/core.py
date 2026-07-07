@@ -406,6 +406,7 @@ class QuimeraApp:
             user_name=self.user_name,
             active_agents=self.agent_pool.agents,
             active_agents_provider=lambda: self.agent_pool.agents,
+            orchestrator_provider=lambda: self.agent_pool.orchestrator_agent,
             metrics_tracker=self.behavior_metrics,
         )
         self.system_layer._prompt_builder = self.prompt_builder

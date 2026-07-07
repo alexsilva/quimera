@@ -26,12 +26,14 @@ class PromptBuilder:
             user_name=None,
             active_agents=None,
             active_agents_provider=None,
+            orchestrator_provider=None,
             metrics_tracker=None,
     ):
         self.context_manager = context_manager
         self.session_state = session_state or {}
         self.active_agents = list(active_agents) if active_agents is not None else profiles.all_names()
         self.active_agents_provider = active_agents_provider
+        self.orchestrator_provider = orchestrator_provider
         self.metrics_tracker = metrics_tracker
         self.memory_selector = MemorySelector(history_window, user_name)
         self.shared_state_presenter = SharedStatePresenter()
@@ -50,6 +52,16 @@ class PromptBuilder:
             if provided is not None:
                 return list(provided)
         return list(self.active_agents)
+
+    def _get_orchestrator(self) -> str | None:
+        """Retorna o agente orquestrador ativo, ou None se a rotação estiver livre."""
+        provider = self.orchestrator_provider
+        if callable(provider):
+            try:
+                return provider()
+            except Exception:
+                return None
+        return None
 
     @property
     def history_window(self):
@@ -96,6 +108,20 @@ class PromptBuilder:
             route_agents = ", ".join(active_agents) if active_agents else "nenhum"
             is_first_speaker_flag = is_first_speaker
             is_reviewer = not is_first_speaker
+
+        orchestrator = self._get_orchestrator()
+        is_orchestrator = bool(
+            orchestrator
+            and not delegation_only
+            and agent.lower() == str(orchestrator).lower()
+        )
+        orchestrator_agents = ""
+        if is_orchestrator:
+            coordinated = [n for n in active_agents if n.lower() != agent.lower()]
+            orchestrator_agents = ", ".join(coordinated) if coordinated else "nenhum"
+            # O bloco dedicado de orquestração substitui as regras genéricas de rota,
+            # evitando instruções de delegação duplicadas no prompt.
+            route_agents = ""
 
         other_agents = [n for n in active_agents if n.lower() != agent.lower()]
         agents_list = ", ".join(n.upper() for n in other_agents) if other_agents else "nenhum"
@@ -161,6 +187,8 @@ class PromptBuilder:
             user_name=self.memory_selector.user_name.upper(),
             agents=agents_list,
             route_agents=route_agents,
+            is_orchestrator=is_orchestrator,
+            orchestrator_agents=orchestrator_agents,
             delegation_only=delegation_only,
             is_first_speaker=is_first_speaker_flag,
             is_reviewer=is_reviewer,
