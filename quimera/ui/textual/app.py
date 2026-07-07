@@ -22,6 +22,7 @@ def _is_android() -> bool:
 
 
 from quimera.app.config import handler as _screen_handler
+from quimera.app.prompt_formatter import PromptFormatter
 from quimera.ui.textual.bridge import TextualUiBridge
 from quimera.ui.textual.constants import SUMMARY_SPINNER_FRAMES as _SUMMARY_SPINNER_FRAMES
 from quimera.ui.textual.events import TextualUiEvent
@@ -166,6 +167,9 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             )
             self._worker_thread.start()
             input_widget = self.query_one("#input", _CompletionInput)
+            input_widget.set_prefix(
+                PromptFormatter.format_user_prompt(getattr(quimera_app, "user_name", None))
+            )
             history_file = getattr(gate, "_history_file", None)
             self._history_file_path = Path(history_file).expanduser() if history_file else None
             input_widget.load_history(self._history_file_path)
