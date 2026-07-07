@@ -8,8 +8,10 @@ from rich.highlighter import Highlighter
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
+from textual.geometry import clamp
 from textual.widgets import Header, Input, Static
 from textual.widgets._header import HeaderClock, HeaderClockSpace, HeaderIcon, HeaderTitle
+from textual.widgets._input import Selection
 
 from quimera.app.completion_dropdown import CompletionDropdown, PromptHistorySuggester
 
@@ -51,6 +53,15 @@ class _CompletionInput(Input):
         """Texto digitado pelo usuário, sem o prefixo."""
         v = self.value
         return v[len(self._prefix):] if v.startswith(self._prefix) else v
+
+    def validate_selection(self, selection: Selection) -> Selection:
+        start, end = selection
+        value_length = len(self.value)
+        prefix_length = len(self._prefix) if self.value.startswith(self._prefix) else 0
+        return Selection(
+            clamp(start, prefix_length, value_length),
+            clamp(end, prefix_length, value_length),
+        )
 
     def set_prefix(self, prefix: str) -> None:
         """Atualiza o prefixo preservando o texto já digitado."""
