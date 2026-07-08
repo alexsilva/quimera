@@ -397,6 +397,35 @@ def test_textual_renderer_emits_agent_lifecycle_event():
     assert event.payload == {"status": "completed", "message": "execução concluída"}
 
 
+def test_textual_renderer_abort_message_stream_skips_event_after_show_message():
+    bridge = TextualUiBridge()
+    bridge.emit = Mock()
+    renderer = TextualRenderer(bridge)
+
+    renderer.show_message("claude-sonnet", "resposta final")
+    bridge.emit.reset_mock()
+
+    renderer.abort_message_stream("claude-sonnet")
+
+    bridge.emit.assert_not_called()
+
+
+def test_textual_renderer_abort_message_stream_emits_event_when_stream_active():
+    bridge = TextualUiBridge()
+    bridge.emit = Mock()
+    renderer = TextualRenderer(bridge)
+
+    renderer.start_message_stream("claude-sonnet")
+    bridge.emit.reset_mock()
+
+    renderer.abort_message_stream("claude-sonnet")
+
+    bridge.emit.assert_called_once()
+    event = bridge.emit.call_args.args[0]
+    assert event.kind == "stream_abort"
+    assert event.agent == "claude-sonnet"
+
+
 def test_textual_status_exit_marks_success_as_completed():
     renderer = Mock()
     status = _TextualStatus(renderer, agent="openai")

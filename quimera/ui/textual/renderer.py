@@ -425,12 +425,20 @@ class TextualRenderer:
         return True
 
     def abort_message_stream(self, agent) -> None:
-        """Aborta stream visual."""
-        self._stream_content_by_agent.pop(str(agent), None)
-        self._bridge.clear_agent_active(str(agent))
-        self._bridge.emit(
-            TextualUiEvent("stream_abort", self._agent_event_payload(agent), agent=str(agent))
-        )
+        """Aborta stream visual, se houver stream ativo em andamento.
+
+        Se o stream já foi finalizado (via show_message) antes desta chamada,
+        não há nada para abortar e nenhum indicador "interrompido" deve ser
+        exibido — evita artefato fixo no feed após limpeza pós-delegate bem-sucedida.
+        """
+        agent_key = str(agent)
+        had_active_stream = agent_key in self._stream_content_by_agent
+        self._stream_content_by_agent.pop(agent_key, None)
+        self._bridge.clear_agent_active(agent_key)
+        if had_active_stream:
+            self._bridge.emit(
+                TextualUiEvent("stream_abort", self._agent_event_payload(agent), agent=agent_key)
+            )
 
     def update_agent_transient(self, agent, message: str) -> None:
         """Exibe progresso transitório como linha de status."""
