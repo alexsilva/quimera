@@ -99,6 +99,6 @@ class CommandRouter:
         # roteamos o pedido cru, sem duplicar o contrato de orquestração.
         orchestrator = getattr(self.agent_pool, "orchestrator_agent", None)
         if orchestrator and orchestrator in self.agent_pool.agents:
-            return orchestrator, user_input, True
+            return orchestrator, user_input, False
 
         return self.agent_pool.primary, user_input, False

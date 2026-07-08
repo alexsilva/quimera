@@ -730,6 +730,22 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(message, "/code revise isso")
         self.assertFalse(explicit)
 
+    def test_parse_routing_non_prefixed_input_under_orchestrator_is_not_explicit(self):
+        """o/agente com texto residual deve entrar como input normal do orquestrador."""
+        app = QuimeraApp.__new__(QuimeraApp)
+        app.renderer = DummyRenderer()
+        from quimera.app.agent_pool import AgentPool
+        app.agent_pool = AgentPool([AGENT_CLAUDE, AGENT_CODEX])
+        app.agent_pool.set_orchestrator(AGENT_CLAUDE)
+        app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
+
+        materialize_internal_services(app)
+        agent, message, explicit = app.parse_routing("revise isso")
+
+        self.assertEqual(agent, AGENT_CLAUDE)
+        self.assertEqual(message, "revise isso")
+        self.assertFalse(explicit)
+
     def test_handle_command_shows_help(self):
         """Verifica que handle command shows help."""
         app = QuimeraApp.__new__(QuimeraApp)
