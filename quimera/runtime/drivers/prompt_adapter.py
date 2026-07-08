@@ -1,7 +1,7 @@
 """Converte prompts estruturados do Quimera para mensagens do driver."""
 from __future__ import annotations
 
-from ...clipboard_support import build_openai_multimodal_content
+from ...clipboard_support import ClipboardManager
 from ...prompt_kinds import PromptKind, coerce_prompt_kind
 from ...prompt_templates import PromptText
 
@@ -67,7 +67,8 @@ def _message_from_block(block, role: str) -> dict:
     if role == "system":
         return _message("system", block.content, block.title)
     if block.name in _MULTIMODAL_USER_BLOCKS:
-        return _message("user", build_openai_multimodal_content(block.content))
+        content = ClipboardManager().to_openai_content(block.content)
+        return _message("user", content)
     return _message("user", block.content)
 
 

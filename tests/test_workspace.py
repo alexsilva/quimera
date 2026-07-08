@@ -103,6 +103,10 @@ class TestWorkspace(unittest.TestCase):
                     Path("/tmp") / "quimera" / ws.cwd_hash / "data" / "logs" / "render",
                 )
                 self.assertEqual(
+                    tmp.clipboard_dir,
+                    tmp.root / "clipboard",
+                )
+                self.assertEqual(
                     tmp.render_log_path_for("sessao-2026-05-14-225819"),
                     tmp.render_logs_dir / "render-sessao-2026-05-14-225819.jsonl",
                 )
@@ -111,6 +115,7 @@ class TestWorkspace(unittest.TestCase):
                     tmp.render_logs_dir / "render-sessao-2026-05-14-225819.ansi",
                 )
                 self.assertTrue(ws.tmp.render_logs_dir.exists())
+                self.assertTrue(ws.tmp.clipboard_dir.exists())
 
     def test_tmp_metrics_paths_live_under_workspace_tmp(self):
         """Verifica que os caminhos de métricas estão sob workspace tmp."""

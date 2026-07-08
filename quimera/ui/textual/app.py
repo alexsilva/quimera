@@ -7,7 +7,7 @@ import threading
 import traceback
 from pathlib import Path
 
-from quimera.clipboard_support import read_clipboard_payload
+from quimera.clipboard_support import ClipboardManager
 
 
 def _is_android() -> bool:
@@ -68,12 +68,20 @@ def _append_post_exit_failure_message(
     return True
 
 
-def _read_clipboard_for_input() -> str | None:
+def _read_clipboard_for_input(temp_image_dir: str | Path | None = None) -> str | None:
     """Lê texto ou imagem do clipboard e devolve payload inserível no input."""
-    payload = read_clipboard_payload()
+    payload = ClipboardManager(temp_image_dir=temp_image_dir).read()
     if payload is None:
         return None
     return payload.text
+
+
+def _clipboard_dir_for_app(quimera_app) -> Path | None:
+    """Resolve o diretório de anexos a partir do Workspace da aplicação."""
+    workspace = getattr(quimera_app, "workspace", None)
+    workspace_tmp = getattr(workspace, "tmp", None)
+    clipboard_dir = getattr(workspace_tmp, "clipboard_dir", None)
+    return Path(clipboard_dir) if clipboard_dir is not None else None
 
 
 def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
@@ -153,7 +161,12 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                 yield CompletionDropdown()
             yield Static("", id="agent_status")
             with Horizontal(id="input_bar"):
-                yield _CompletionInput(id="input", clipboard_paste_handler=_read_clipboard_for_input)
+                yield _CompletionInput(
+                    id="input",
+                    clipboard_paste_handler=lambda: _read_clipboard_for_input(
+                        _clipboard_dir_for_app(quimera_app)
+                    ),
+                )
 
         def on_mount(self) -> None:
             bridge.attach_textual_app(self)

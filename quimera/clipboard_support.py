@@ -20,6 +20,7 @@ _IMAGE_MIME_TYPES = ("image/png", "image/jpeg", "image/webp")
 # Prefixo estável dos temporários de clipboard, usado tanto na criação quanto
 # na varredura de limpeza.
 _TEMP_IMAGE_PREFIX = "quimera-clipboard-"
+_FALLBACK_TEMP_IMAGE_DIR = Path(tempfile.gettempdir()) / "quimera" / "clipboard"
 # Temporários mais antigos que este TTL são removidos a cada nova colagem, para
 # evitar acúmulo indefinido em /tmp.
 _TEMP_IMAGE_TTL_SECONDS = 3600
@@ -45,186 +46,199 @@ class AttachedImage:
     marker: str
 
 
-def build_attached_image_marker(path: str | Path, mime_type: str = "image/png") -> str:
-    return f'<attached_image path="{Path(path)}" mime="{mime_type}" />'
+class ClipboardManager:
+    """Lida com leitura do clipboard, anexos temporários e payload multimodal."""
 
+    image_mime_types = _IMAGE_MIME_TYPES
+    temp_image_prefix = _TEMP_IMAGE_PREFIX
+    temp_image_ttl_seconds = _TEMP_IMAGE_TTL_SECONDS
+    max_inline_image_bytes = _MAX_INLINE_IMAGE_BYTES
+    attached_image_re = _ATTACHED_IMAGE_RE
+    fallback_temp_image_dir = _FALLBACK_TEMP_IMAGE_DIR
 
-def iter_attached_images(text: str) -> list[AttachedImage]:
-    images: list[AttachedImage] = []
-    for match in _ATTACHED_IMAGE_RE.finditer(str(text or "")):
-        path = match.group("path")
-        mime_type = match.group("mime") or _guess_mime_type(path)
-        images.append(
-            AttachedImage(
-                path=path,
-                mime_type=mime_type,
-                start=match.start(),
-                end=match.end(),
-                marker=match.group(0),
+    def __init__(self, temp_image_dir: str | Path | None = None) -> None:
+        """Inicializa o gerenciador com o diretório temporário de anexos."""
+        self.temp_image_dir = self._resolve_temp_image_dir(temp_image_dir)
+
+    def marker_for(
+        self,
+        path: str | Path,
+        mime_type: str = "image/png",
+    ) -> str:
+        return f'<attached_image path="{Path(path)}" mime="{mime_type}" />'
+
+    def iter_images(self, text: str) -> list[AttachedImage]:
+        images: list[AttachedImage] = []
+        for match in self.attached_image_re.finditer(str(text or "")):
+            path = match.group("path")
+            mime_type = match.group("mime") or self._guess_mime_type(path)
+            images.append(
+                AttachedImage(
+                    path=path,
+                    mime_type=mime_type,
+                    start=match.start(),
+                    end=match.end(),
+                    marker=match.group(0),
+                )
             )
-        )
-    return images
+        return images
 
+    def to_openai_content(self, text: str) -> str | list[dict]:
+        body = str(text or "")
+        images = self.iter_images(body)
+        if not images:
+            return body.strip()
 
-def build_openai_multimodal_content(text: str) -> str | list[dict]:
-    body = str(text or "")
-    images = iter_attached_images(body)
-    if not images:
-        return body.strip()
+        content: list[dict] = []
+        cursor = 0
+        for image in images:
+            prefix = body[cursor:image.start]
+            if prefix.strip():
+                content.append({"type": "text", "text": prefix.strip()})
+            data_url = self._path_to_data_url(image.path, image.mime_type)
+            if data_url is None:
+                content.append({"type": "text", "text": image.marker})
+            else:
+                content.append({"type": "image_url", "image_url": {"url": data_url}})
+            cursor = image.end
 
-    content: list[dict] = []
-    cursor = 0
-    for image in images:
-        prefix = body[cursor:image.start]
-        if prefix.strip():
-            content.append({"type": "text", "text": prefix.strip()})
-        data_url = _image_path_to_data_url(image.path, image.mime_type)
-        if data_url is None:
-            content.append({"type": "text", "text": image.marker})
-        else:
-            content.append({"type": "image_url", "image_url": {"url": data_url}})
-        cursor = image.end
+        suffix = body[cursor:]
+        if suffix.strip():
+            content.append({"type": "text", "text": suffix.strip()})
+        return content
 
-    suffix = body[cursor:]
-    if suffix.strip():
-        content.append({"type": "text", "text": suffix.strip()})
-    return content
+    def read(self) -> ClipboardPayload | None:
+        image_payload = self._read_image()
+        if image_payload is not None:
+            return image_payload
+        return self._read_text()
 
+    def strip_markers(
+        self,
+        text: str,
+        placeholder: str = "🖼 [imagem anexada]",
+    ) -> str:
+        """Substitui marcadores de imagem por um texto legível."""
+        return self.attached_image_re.sub(placeholder, str(text or ""))
 
-def read_clipboard_payload() -> ClipboardPayload | None:
-    image_payload = _read_clipboard_image()
-    if image_payload is not None:
-        return image_payload
-    return _read_clipboard_text()
+    def write_temp(self, data: bytes, mime_type: str) -> Path:
+        self.cleanup_stale()
+        suffix = mimetypes.guess_extension(mime_type) or ".img"
+        self.temp_image_dir.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            prefix=self.temp_image_prefix,
+            suffix=suffix,
+            dir=self.temp_image_dir,
+            delete=False,
+        ) as handle:
+            handle.write(data)
+            return Path(handle.name)
 
-
-def _read_clipboard_image() -> ClipboardPayload | None:
-    for mime_type in _IMAGE_MIME_TYPES:
-        payload = _read_image_via_wl_paste(mime_type)
-        if payload is not None:
-            return payload
-        payload = _read_image_via_xclip(mime_type)
-        if payload is not None:
-            return payload
-    payload = _read_image_via_pngpaste()
-    if payload is not None:
-        return payload
-    return None
-
-
-def _read_image_via_wl_paste(mime_type: str) -> ClipboardPayload | None:
-    if shutil.which("wl-paste") is None:
-        return None
-    result = _run_clipboard_command(["wl-paste", "--no-newline", "--type", mime_type])
-    if result is None or not result.stdout:
-        return None
-    path = _write_temp_image(result.stdout, mime_type)
-    marker = build_attached_image_marker(path, mime_type)
-    return ClipboardPayload(text=marker, kind="image", path=str(path), mime_type=mime_type)
-
-
-def _read_image_via_xclip(mime_type: str) -> ClipboardPayload | None:
-    if shutil.which("xclip") is None:
-        return None
-    result = _run_clipboard_command(
-        ["xclip", "-selection", "clipboard", "-t", mime_type, "-o"]
-    )
-    if result is None or not result.stdout:
-        return None
-    path = _write_temp_image(result.stdout, mime_type)
-    marker = build_attached_image_marker(path, mime_type)
-    return ClipboardPayload(text=marker, kind="image", path=str(path), mime_type=mime_type)
-
-
-def _read_image_via_pngpaste() -> ClipboardPayload | None:
-    if shutil.which("pngpaste") is None:
-        return None
-    result = _run_clipboard_command(["pngpaste", "-"])
-    if result is None or not result.stdout:
-        return None
-    mime_type = "image/png"
-    path = _write_temp_image(result.stdout, mime_type)
-    marker = build_attached_image_marker(path, mime_type)
-    return ClipboardPayload(text=marker, kind="image", path=str(path), mime_type=mime_type)
-
-
-def _read_clipboard_text() -> ClipboardPayload | None:
-    for command in (
-        ["wl-paste", "--no-newline"],
-        ["xclip", "-selection", "clipboard", "-o"],
-    ):
-        if shutil.which(command[0]) is None:
-            continue
-        result = _run_clipboard_command(command, text=True)
-        if result is None:
-            continue
-        text = str(result.stdout or "").strip()
-        if text:
-            return ClipboardPayload(text=text, kind="text")
-    return None
-
-
-def _run_clipboard_command(command: list[str], text: bool = False) -> subprocess.CompletedProcess | None:
-    try:
-        return subprocess.run(
-            command,
-            check=True,
-            capture_output=True,
-            text=text,
-        )
-    except (FileNotFoundError, subprocess.CalledProcessError, OSError):
-        return None
-
-
-def strip_attached_image_markers(text: str, placeholder: str = "🖼 [imagem anexada]") -> str:
-    """Substitui marcadores de imagem por um texto legível.
-
-    Usado antes de persistir o histórico: o ``path`` do marcador aponta para um
-    temporário efêmero em ``/tmp`` que será limpo, então reusar a entrada em
-    outra sessão vazaria XML cru (com path morto) para o modelo.
-    """
-    return _ATTACHED_IMAGE_RE.sub(placeholder, str(text or ""))
-
-
-def _cleanup_stale_temp_images(now: float | None = None) -> None:
-    """Remove temporários de clipboard mais antigos que o TTL (best-effort)."""
-    reference = time.time() if now is None else now
-    try:
-        entries = list(Path("/tmp").glob(f"{_TEMP_IMAGE_PREFIX}*"))
-    except OSError:
-        return
-    for entry in entries:
+    def cleanup_stale(self, now: float | None = None) -> None:
+        """Remove temporários de clipboard mais antigos que o TTL (best-effort)."""
+        reference = time.time() if now is None else now
         try:
-            if reference - entry.stat().st_mtime > _TEMP_IMAGE_TTL_SECONDS:
-                entry.unlink()
+            entries = list(self.temp_image_dir.glob(f"{self.temp_image_prefix}*"))
         except OSError:
-            continue
+            return
+        for entry in entries:
+            try:
+                if reference - entry.stat().st_mtime > self.temp_image_ttl_seconds:
+                    entry.unlink()
+            except OSError:
+                continue
 
-
-def _write_temp_image(data: bytes, mime_type: str) -> Path:
-    _cleanup_stale_temp_images()
-    suffix = mimetypes.guess_extension(mime_type) or ".img"
-    with tempfile.NamedTemporaryFile(
-        prefix=_TEMP_IMAGE_PREFIX,
-        suffix=suffix,
-        dir="/tmp",
-        delete=False,
-    ) as handle:
-        handle.write(data)
-        return Path(handle.name)
-
-
-def _guess_mime_type(path: str) -> str:
-    mime_type, _ = mimetypes.guess_type(path)
-    return mime_type or "image/png"
-
-
-def _image_path_to_data_url(path: str, mime_type: str) -> str | None:
-    try:
-        if os.path.getsize(path) > _MAX_INLINE_IMAGE_BYTES:
-            return None
-        raw = Path(path).read_bytes()
-    except OSError:
+    def _read_image(self) -> ClipboardPayload | None:
+        for mime_type in self.image_mime_types:
+            payload = self._read_image_via_wl_paste(mime_type)
+            if payload is not None:
+                return payload
+            payload = self._read_image_via_xclip(mime_type)
+            if payload is not None:
+                return payload
+        payload = self._read_image_via_pngpaste()
+        if payload is not None:
+            return payload
         return None
-    encoded = base64.b64encode(raw).decode("ascii")
-    return f"data:{mime_type};base64,{encoded}"
+
+    def _read_image_via_wl_paste(self, mime_type: str) -> ClipboardPayload | None:
+        if shutil.which("wl-paste") is None:
+            return None
+        result = self._run_clipboard_command(["wl-paste", "--no-newline", "--type", mime_type])
+        if result is None or not result.stdout:
+            return None
+        path = self.write_temp(result.stdout, mime_type)
+        marker = self.marker_for(path, mime_type)
+        return ClipboardPayload(text=marker, kind="image", path=str(path), mime_type=mime_type)
+
+    def _read_image_via_xclip(self, mime_type: str) -> ClipboardPayload | None:
+        if shutil.which("xclip") is None:
+            return None
+        result = self._run_clipboard_command(
+            ["xclip", "-selection", "clipboard", "-t", mime_type, "-o"]
+        )
+        if result is None or not result.stdout:
+            return None
+        path = self.write_temp(result.stdout, mime_type)
+        marker = self.marker_for(path, mime_type)
+        return ClipboardPayload(text=marker, kind="image", path=str(path), mime_type=mime_type)
+
+    def _read_image_via_pngpaste(self) -> ClipboardPayload | None:
+        if shutil.which("pngpaste") is None:
+            return None
+        result = self._run_clipboard_command(["pngpaste", "-"])
+        if result is None or not result.stdout:
+            return None
+        mime_type = "image/png"
+        path = self.write_temp(result.stdout, mime_type)
+        marker = self.marker_for(path, mime_type)
+        return ClipboardPayload(text=marker, kind="image", path=str(path), mime_type=mime_type)
+
+    def _read_text(self) -> ClipboardPayload | None:
+        for command in (
+            ["wl-paste", "--no-newline"],
+            ["xclip", "-selection", "clipboard", "-o"],
+        ):
+            if shutil.which(command[0]) is None:
+                continue
+            result = self._run_clipboard_command(command, text=True)
+            if result is None:
+                continue
+            text = str(result.stdout or "").strip()
+            if text:
+                return ClipboardPayload(text=text, kind="text")
+        return None
+
+    def _run_clipboard_command(
+        self,
+        command: list[str],
+        text: bool = False,
+    ) -> subprocess.CompletedProcess | None:
+        try:
+            return subprocess.run(
+                command,
+                check=True,
+                capture_output=True,
+                text=text,
+            )
+        except (FileNotFoundError, subprocess.CalledProcessError, OSError):
+            return None
+
+    def _resolve_temp_image_dir(self, temp_image_dir: str | Path | None = None) -> Path:
+        if temp_image_dir is None:
+            return self.fallback_temp_image_dir
+        return Path(temp_image_dir).expanduser().resolve()
+
+    def _guess_mime_type(self, path: str) -> str:
+        mime_type, _ = mimetypes.guess_type(path)
+        return mime_type or "image/png"
+
+    def _path_to_data_url(self, path: str, mime_type: str) -> str | None:
+        try:
+            if os.path.getsize(path) > self.max_inline_image_bytes:
+                return None
+            raw = Path(path).read_bytes()
+        except OSError:
+            return None
+        encoded = base64.b64encode(raw).decode("ascii")
+        return f"data:{mime_type};base64,{encoded}"

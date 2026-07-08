@@ -17,9 +17,11 @@ from textual.widgets._header import HeaderClock, HeaderClockSpace, HeaderIcon, H
 from textual.widgets._input import Selection
 
 from quimera.app.completion_dropdown import CompletionDropdown, PromptHistorySuggester
-from quimera.clipboard_support import iter_attached_images, strip_attached_image_markers
+from quimera.clipboard_support import ClipboardManager
 
 logger = logging.getLogger(__name__)
+
+_ATTACHED_IMAGE_LABEL = "🖼 imagem anexada"
 
 
 class _PrefixDimHighlighter(Highlighter):
@@ -61,6 +63,7 @@ class _CompletionInput(Input):
         self._prompt_history: list[str] = []
         self._history_index = 0
         self._saved_draft = ""
+        self._clipboard_manager = ClipboardManager()
         self._attached_image_placeholders: dict[str, str] = {}
         self._attached_image_counter = 0
         self.suggester = PromptHistorySuggester(lambda: self._prompt_history)
@@ -111,7 +114,7 @@ class _CompletionInput(Input):
         self.insert_text_at_cursor(payload)
 
     def _prepare_insert_payload(self, text: str) -> str:
-        images = iter_attached_images(text)
+        images = self._clipboard_manager.iter_images(text)
         if not images:
             return text
         chunks: list[str] = []
@@ -119,7 +122,7 @@ class _CompletionInput(Input):
         for image in images:
             chunks.append(text[cursor:image.start])
             self._attached_image_counter += 1
-            placeholder = f"[imagem anexada {self._attached_image_counter}]"
+            placeholder = f"{_ATTACHED_IMAGE_LABEL} {self._attached_image_counter}"
             self._attached_image_placeholders[placeholder] = image.marker
             chunks.append(placeholder)
             cursor = image.end
@@ -175,7 +178,10 @@ class _CompletionInput(Input):
             return
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            entries = [strip_attached_image_markers(entry) for entry in self._prompt_history[-1000:]]
+            entries = [
+                self._clipboard_manager.strip_markers(entry)
+                for entry in self._prompt_history[-1000:]
+            ]
             path.write_text("\n".join(entries) + "\n", encoding="utf-8")
         except OSError:
             return

@@ -58,6 +58,7 @@ class WorkspaceTmp:
         self._ensure_dir(self.logs_dir, "logs dir")
         self._ensure_dir(self.render_logs_dir, "render logs dir")
         self._ensure_dir(self.metrics_dir, "metrics dir")
+        self._ensure_dir(self.clipboard_dir, "clipboard dir")
 
     def _ensure_dir(self, path: Path, label: str) -> None:
         """Cria *path* (incluindo pais) e registra warning se a criação falhar."""
@@ -85,6 +86,11 @@ class WorkspaceTmp:
     def metrics_dir(self) -> Path:
         """Diretório de métricas de sessão (latência, tokens, etc.)."""
         return self.logs_dir / "metrics"
+
+    @property
+    def clipboard_dir(self) -> Path:
+        """Diretório temporário de anexos colados no input."""
+        return self._root / "clipboard"
 
     def render_log_path_for(self, session_id: str) -> Path:
         """Caminho do arquivo JSONL de auditoria de render para *session_id*."""

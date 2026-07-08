@@ -217,10 +217,10 @@ def test_completion_input_pastes_clipboard_payload():
 def test_completion_input_displays_attachment_placeholder_and_submits_marker():
     from textual.app import App, ComposeResult
 
-    from quimera.clipboard_support import build_attached_image_marker
+    from quimera.clipboard_support import ClipboardManager
     from quimera.ui.textual.widgets import _CompletionInput
 
-    marker = build_attached_image_marker("/tmp/quimera-clipboard-test.png")
+    marker = ClipboardManager().marker_for("/tmp/quimera-clipboard-test.png")
 
     class InputApp(App):
         def compose(self) -> ComposeResult:
@@ -234,7 +234,7 @@ def test_completion_input_displays_attachment_placeholder_and_submits_marker():
             widget.action_paste_clipboard()
             await app.workers.wait_for_complete()
             await pilot.pause()
-            assert widget.user_value == "[imagem anexada 1]"
+            assert widget.user_value == "🖼 imagem anexada 1"
             assert widget.submission_value == marker
 
     asyncio.run(run_test())
@@ -338,10 +338,10 @@ def test_completion_input_submit_expands_attachment_placeholder():
     from textual.widgets import Input
 
     from quimera.app.completion_dropdown import CompletionDropdown
-    from quimera.clipboard_support import build_attached_image_marker
+    from quimera.clipboard_support import ClipboardManager
     from quimera.ui.textual.widgets import _CompletionInput
 
-    marker = build_attached_image_marker("/tmp/quimera-clipboard-submit.png")
+    marker = ClipboardManager().marker_for("/tmp/quimera-clipboard-submit.png")
 
     class InputApp(App):
         def __init__(self) -> None:
@@ -363,7 +363,7 @@ def test_completion_input_submit_expands_attachment_placeholder():
             widget.action_paste_clipboard()
             await widget.action_submit()
             await pilot.pause()
-            assert widget.user_value == "[imagem anexada 1]"
+            assert widget.user_value == "🖼 imagem anexada 1"
             assert app.submitted_values == [marker]
 
     asyncio.run(run_test())
