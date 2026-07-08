@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..constants import MSG_EMPTY_INPUT, USER_ROLE
+from .command_router import RoutingDecision
 from .config import logger
 from .render_event import RenderEvent
 from ..domain.session_state import SessionState
@@ -334,14 +335,16 @@ class ChatRoundOrchestrator:
             capacity=max(0, self._threads),
             active_agents=(),
         )
-        first_agent, message, explicit = self._parse_routing(user)
+        route = RoutingDecision.coerce(self._parse_routing(user))
+        first_agent = route.agent
+        message = route.message
         if first_agent is None:
             return
         if not message or not message.strip():
             self._show_warning(MSG_EMPTY_INPUT.format(first_agent))
             return
 
-        if not explicit and self._agent_pool is not None:
+        if not route.explicit and self._agent_pool is not None:
             reserved_agent = self._agent_pool.take_primary()
             if reserved_agent is not None:
                 first_agent = reserved_agent
@@ -421,7 +424,7 @@ class ChatRoundOrchestrator:
 
         self._process_standard_flow(
             first_agent,
-            explicit,
+            route.explicit,
             extend,
             other_agents,
             request_override=message,

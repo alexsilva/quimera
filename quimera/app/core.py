@@ -1109,7 +1109,7 @@ class QuimeraApp:
         else:
             self.tool_executor.policy.blocked_tools = []
 
-    def parse_routing(self, user_input: str) -> tuple[str | None, str | None, bool]:
+    def parse_routing(self, user_input: str):
         return self.command_router.parse_routing(user_input)
 
     MAX_RETRIES = 2

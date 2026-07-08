@@ -1,6 +1,8 @@
 """Roteador de comandos e modos de execução para QuimeraApp."""
 from __future__ import annotations
+from dataclasses import dataclass
 import logging
+from typing import Iterator
 from typing import TYPE_CHECKING, Callable
 
 from ..modes import get_mode
@@ -10,6 +12,37 @@ if TYPE_CHECKING:
     from .interfaces import IRenderer, IAgentPool
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class RoutingDecision:
+    """Resultado explícito do roteamento de uma entrada humana.
+
+    Mantém compatibilidade com o contrato antigo de tupla por meio de
+    ``__iter__``: chamadas existentes ainda podem fazer
+    ``agent, message, explicit = parse_routing(...)``.
+    """
+
+    agent: str | None
+    message: str | None
+    explicit: bool
+    source: str
+
+    def __iter__(self) -> Iterator[object]:
+        yield self.agent
+        yield self.message
+        yield self.explicit
+
+    def as_tuple(self) -> tuple[str | None, str | None, bool]:
+        return self.agent, self.message, self.explicit
+
+    @classmethod
+    def coerce(cls, value: "RoutingDecision | tuple[str | None, str | None, bool]") -> "RoutingDecision":
+        """Normaliza resultado de roteamento antigo ou novo para RoutingDecision."""
+        if isinstance(value, cls):
+            return value
+        agent, message, explicit = value
+        return cls(agent, message, bool(explicit), source="legacy_tuple")
 
 
 class CommandRouter:
@@ -33,12 +66,13 @@ class CommandRouter:
         self.selected_agents = selected_agents
         self.get_available_profiles = get_available_profiles
 
-    def parse_routing(self, user_input: str) -> tuple[str | None, str | None, bool]:
+    def parse_routing(self, user_input: str) -> RoutingDecision:
         """Extrai o agente inicial e rejeita prefixos duplicados na mesma entrada.
 
         Detecta comandos de modo (/planning, /analysis, etc.) e os aplica antes
-        do roteamento normal. Retorna (agent, message, explicit) onde explicit=True
-        indica que o usuário usou /claude ou /codex explicitamente.
+        do roteamento normal. Retorna RoutingDecision, compatível com unpacking
+        como (agent, message, explicit). ``explicit=True`` indica prefixo de
+        agente usado diretamente pelo usuário, como /claude ou /codex.
         """
         stripped = user_input.lstrip()
         lowered = stripped.lower()
@@ -62,7 +96,7 @@ class CommandRouter:
             self.renderer.show_system(mode_message)
             if not self.agent_pool:
                 self.agent_pool.set([self.normalize_agent_name(a) for a in self.selected_agents])
-            return None, "", False
+            return RoutingDecision(None, "", False, source="mode_only")
 
         active_profiles = self.get_active_agent_profiles()
         for p in active_profiles:
@@ -70,7 +104,7 @@ class CommandRouter:
             agent = p.name
             for prefix in prefixes:
                 if lowered == prefix:
-                    return agent, "", True
+                    return RoutingDecision(agent, "", True, source="agent_prefix")
                 if lowered.startswith(f"{prefix} "):
                     message = stripped[len(prefix):].lstrip()
                     lowered_message = message.lower()
@@ -81,8 +115,8 @@ class CommandRouter:
                         other_prefixes.extend([op.prefix, *(getattr(op, "aliases", None) or [])])
                     if any(lowered_message == op or lowered_message.startswith(f"{op} ") for op in other_prefixes):
                         self.renderer.show_warning(MSG_DOUBLE_PREFIX)
-                        return None, None, False
-                    return agent, message, True
+                        return RoutingDecision(None, None, False, source="double_prefix")
+                    return RoutingDecision(agent, message, True, source="agent_prefix")
 
         if not self.agent_pool:
             logger.warning("no active agents, resetting to default")
@@ -99,6 +133,6 @@ class CommandRouter:
         # roteamos o pedido cru, sem duplicar o contrato de orquestração.
         orchestrator = getattr(self.agent_pool, "orchestrator_agent", None)
         if orchestrator and orchestrator in self.agent_pool.agents:
-            return orchestrator, user_input, False
+            return RoutingDecision(orchestrator, user_input, False, source="orchestrator")
 
-        return self.agent_pool.primary, user_input, False
+        return RoutingDecision(self.agent_pool.primary, user_input, False, source="primary")

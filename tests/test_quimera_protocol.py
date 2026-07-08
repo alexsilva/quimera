@@ -709,11 +709,13 @@ class ProtocolTests(unittest.TestCase):
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
 
         materialize_internal_services(app)
-        agent, message, explicit = app.parse_routing("/claude /codex revisar isso")
+        decision = app.parse_routing("/claude /codex revisar isso")
+        agent, message, explicit = decision
 
         self.assertIsNone(agent)
         self.assertIsNone(message)
         self.assertTrue(app.renderer.warnings)
+        self.assertEqual(decision.source, "double_prefix")
 
     def test_parse_routing_treats_unknown_prefix_as_plain_message(self):
         """Verifica que parse routing treats unknown prefix as plain message."""
@@ -724,11 +726,13 @@ class ProtocolTests(unittest.TestCase):
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
 
         materialize_internal_services(app)
-        agent, message, explicit = app.parse_routing("/code revise isso")
+        decision = app.parse_routing("/code revise isso")
+        agent, message, explicit = decision
 
         self.assertEqual(agent, AGENT_CLAUDE)
         self.assertEqual(message, "/code revise isso")
         self.assertFalse(explicit)
+        self.assertEqual(decision.source, "primary")
 
     def test_parse_routing_non_prefixed_input_under_orchestrator_is_not_explicit(self):
         """o/agente com texto residual deve entrar como input normal do orquestrador."""
@@ -740,11 +744,13 @@ class ProtocolTests(unittest.TestCase):
         app.active_agents = [AGENT_CLAUDE, AGENT_CODEX]
 
         materialize_internal_services(app)
-        agent, message, explicit = app.parse_routing("revise isso")
+        decision = app.parse_routing("revise isso")
+        agent, message, explicit = decision
 
         self.assertEqual(agent, AGENT_CLAUDE)
         self.assertEqual(message, "revise isso")
         self.assertFalse(explicit)
+        self.assertEqual(decision.source, "orchestrator")
 
     def test_handle_command_shows_help(self):
         """Verifica que handle command shows help."""
