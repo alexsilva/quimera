@@ -415,7 +415,7 @@ class PolicyCoverageTests(unittest.TestCase):
             validator.validate(ToolCall(name="run_shell", arguments={"command": "  "}))
         with self.assertRaisesRegex(ToolPolicyError, "operador de encadeamento proibido"):
             validator.validate(ToolCall(name="run_shell", arguments={"command": "ls && pwd"}))
-        with self.assertRaisesRegex(ToolPolicyError, "denylist"):
+        with self.assertRaisesRegex(ToolPolicyError, r"Comando bloqueado"):
             validator.validate(ToolCall(name="run_shell", arguments={"command": "rm -rf /"}))
         with self.assertRaisesRegex(ToolPolicyError, "Comando inválido"):
             validator.validate(ToolCall(name="run_shell", arguments={"command": 'echo "bad'}))

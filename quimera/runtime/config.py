@@ -47,6 +47,8 @@ class ToolRuntimeConfig:
     )
     shell_denylist_patterns: tuple[str, ...] = (
         "rm -rf",
+        "rm -r /",
+        "rm -rf /",
         "sudo ",
         "systemctl ",
         "shutdown",
@@ -55,8 +57,14 @@ class ToolRuntimeConfig:
         "mkfs",
         " dd ",
         ":(){",
-        "chmod -R 777 /",
-        "chown -R /",
+        ":()",
+        "chmod -R 777",
+        "chown -R",
+        "chattr",
+        "dd if=",
+        "wget ",
+        "curl -o",
+        "curl --output",
     )
 
     def __post_init__(self) -> None:

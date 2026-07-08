@@ -631,7 +631,7 @@ class MCP_HTTPServer:
         cors_origins: str | Iterable[str] | None,
     ) -> frozenset[str]:
         if cors_origins is None:
-            raw = os.environ.get(_QUIMERA_MCP_HTTP_CORS_ORIGINS, "*")
+            raw = os.environ.get(_QUIMERA_MCP_HTTP_CORS_ORIGINS, "http://127.0.0.1:8080")
             items: Iterable[str] = raw.split(",")
         elif isinstance(cors_origins, str):
             items = cors_origins.split(",")
@@ -640,11 +640,11 @@ class MCP_HTTPServer:
         normalized = frozenset(
             str(origin).strip() for origin in items if str(origin).strip()
         )
-        return normalized or frozenset({"*"})
+        return normalized or frozenset({"http://127.0.0.1:8080"})
 
     @property
     def cors_origins(self) -> frozenset[str]:
-        """Origens CORS permitidas; ``{"*"}`` mantém o padrão de desenvolvimento."""
+        """Origens CORS permitidas; ``{"http://127.0.0.1:8080"}`` padrão seguro."""
         return self._cors_origins
 
     def _cors_origin_for(self, request_origin: str | None) -> str | None:
@@ -699,6 +699,11 @@ class MCP_HTTPServer:
 
     def start_background(self) -> None:
         """Inicia o servidor HTTP em uma thread daemon e retorna após o bind."""
+        if self._host not in ("127.0.0.1", "localhost", ""):
+            _logger.warning(
+                "MCP HTTP server sem TLS — tráfego não criptografado em rede: %s",
+                self._host,
+            )
         self._ready_event.clear()
         t = threading.Thread(target=self.serve_forever, daemon=True)
         t.start()

@@ -202,6 +202,21 @@ def _prune_tool_loop_messages(messages: list[dict]) -> list[dict]:
 
 
 
+class _SecretStr:
+    """Máscara string sensível em repr/logs."""
+    def __init__(self, value: str) -> None:
+        self._value = value
+
+    def __repr__(self) -> str:
+        return "'******'"
+
+    def __str__(self) -> str:
+        return self._value
+
+    def get_secret_value(self) -> str:
+        return self._value
+
+
 class OpenAICompatDriver:
     """Driver para qualquer endpoint compatível com OpenAI.
 
@@ -242,9 +257,10 @@ class OpenAICompatDriver:
                 "Reinstale o projeto com: pip install -e ."
             )
         self.model = model
+        self._api_key = _SecretStr(api_key)
         self._client = OpenAI(
             base_url=base_url,
-            api_key=api_key,
+            api_key=self._api_key.get_secret_value(),
             timeout=float(timeout) if timeout else 300.0,
         )
         self.tool_use_reliability = str(tool_use_reliability or "medium").lower()

@@ -418,7 +418,13 @@ class MCPServer:
             try:
                 path = Path(uri.removeprefix("file://")).resolve()
                 path.relative_to(self._workspace_root())
+                if not path.is_file():
+                    return self._err(msg_id, -32602, f"Resource is not a file: {uri}")
+                if not path.exists():
+                    return self._err(msg_id, -32602, f"Resource not found: {uri}")
                 text = path.read_text(encoding="utf-8")
+            except ValueError:
+                return self._err(msg_id, -32602, f"Path outside workspace root: {uri}")
             except Exception as exc:
                 return self._err(msg_id, -32602, f"Cannot read resource: {exc}")
             return self._ok(msg_id, {"contents": [{"uri": uri, "mimeType": "text/plain", "text": text}]})

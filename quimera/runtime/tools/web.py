@@ -1,9 +1,11 @@
 """Componentes de `quimera.runtime.tools.web`."""
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
 import re
+import socket
 import tempfile
 import time
 from html import unescape
@@ -138,6 +140,18 @@ class WebTool(ToolBase, tool_prefix="web"):
             )
 
         url = self._resolve_url(raw_url.strip())
+        parsed = urllib.parse.urlparse(url)
+        if parsed.hostname:
+            try:
+                ip = socket.gethostbyname(parsed.hostname)
+                if ipaddress.ip_address(ip).is_private:
+                    return ToolResult(
+                        ok=False,
+                        tool_name=call.name,
+                        error=f"Acesso a IP privado não permitido (SSRF): {ip}",
+                    )
+            except OSError:
+                pass
         try:
             html = self._curl(url, timeout=timeout)
             if raw_mode:
@@ -168,7 +182,8 @@ class WebTool(ToolBase, tool_prefix="web"):
         args = [
             "curl",
             "-s",
-            "-L",
+            "--max-redirs",
+            "0",
             "-m",
             str(timeout),
             "-A",

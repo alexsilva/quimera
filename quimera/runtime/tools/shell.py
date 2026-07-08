@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import pty
+import random
 import shlex
 import re
 import threading
@@ -22,6 +23,29 @@ from .base import ToolBase, ValidatableTool
 
 _MAX_CHUNK_CHARS = 250_000  # limite de caracteres por stream (stdout/stderr)
 _MAX_SESSIONS = 64  # limite de sessões simultâneas
+_DENYLIST_REGEX = re.compile(
+    r"(?:^|\s)(?:"
+    r"rm\s+-rf|"
+    r"rm\s+-r\s+/|"
+    r"sudo(?:\s+|$)|"
+    r"systemctl|"
+    r"shutdown|"
+    r"reboot|"
+    r"poweroff|"
+    r"mkfs|"
+    r":\s*\(\s*\{|"
+    r":\s*\(\)\s*\{|"
+    r"chmod\s+-R\s+777|"
+    r"chown\s+-R|"
+    r"chattr|"
+    r"dd\s+if=|"
+    r">\s*/dev/(?:sd|nvme|hd|xvd|vd|loop|mmcblk)[a-z0-9]*"
+    r")(?:\s|$)"
+)
+_ALLOWED_SHELLS: frozenset[str] = frozenset({
+    "/bin/bash", "/bin/sh", "/bin/zsh", "/bin/dash",
+    "/usr/bin/bash", "/usr/bin/sh", "/usr/bin/zsh", "/usr/bin/dash",
+})
 
 
 @dataclass
@@ -54,7 +78,7 @@ class ShellTool(ToolBase):
         """Inicializa uma instância de ShellTool."""
         super().__init__(config)
         self._sessions: dict[int, CommandSession] = {}
-        self._next_session_id = 1
+        self._next_session_id = random.SystemRandom().randint(100000, 999999999)
         self._sessions_lock = threading.Lock()
 
     def _enforce_session_limit(self) -> None:
@@ -63,7 +87,7 @@ class ShellTool(ToolBase):
             with self._sessions_lock:
                 if len(self._sessions) <= _MAX_SESSIONS:
                     return
-                oldest_id = min(self._sessions.keys())
+                oldest_id = min(self._sessions, key=lambda sid: self._sessions[sid].started_at)
                 session = self._sessions.pop(oldest_id, None)
             if session is not None:
                 self._cleanup_session_resources(session, terminate=True)
@@ -356,10 +380,12 @@ class ShellTool(ToolBase):
             tty_master_fd: int | None,
     ) -> CommandSession:
         """Registra uma nova sessão interativa e devolve seu estado."""
+        _rand = random.SystemRandom()
         session: CommandSession
         with self._sessions_lock:
-            session_id = self._next_session_id
-            self._next_session_id += 1
+            session_id = _rand.randint(100000, 999999999)
+            while session_id in self._sessions:
+                session_id = _rand.randint(100000, 999999999)
             session = CommandSession(
                 session_id=session_id,
                 process=process,
@@ -700,6 +726,9 @@ class ShellToolValidator(ValidatableTool):
         """Valida uma chamada interativa de execução de comando."""
         command = str(call.arguments.get("cmd", "")).strip()
         self._validate_shell_command(command, tool_name="exec_command")
+        raw_shell = call.arguments.get("shell")
+        if raw_shell is not None and str(raw_shell) not in _ALLOWED_SHELLS:
+            raise ToolPolicyError(f"Shell não permitido: {raw_shell}")
         raw_workdir = call.arguments.get("workdir")
         if raw_workdir is not None:
             self._resolve_workspace_path(str(raw_workdir))
@@ -745,6 +774,10 @@ class ShellToolValidator(ValidatableTool):
         """Aplica a política comum de shell para ferramentas de comando."""
         if not command:
             raise ToolPolicyError(f"{tool_name} requer um comando não vazio")
+        if "$IFS" in command:
+            raise ToolPolicyError("Comando bloqueado: tentativa de bypass com $IFS")
+        if _DENYLIST_REGEX.search(command):
+            raise ToolPolicyError("Comando bloqueado pelo padrão de segurança")
         # Denylist sempre se aplica, mesmo em modo autônomo
         lowered = f" {command.lower()} "
         for pattern in self.config.shell_denylist_patterns:

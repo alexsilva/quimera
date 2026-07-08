@@ -154,7 +154,7 @@ def test_policy_close_command_session_requires_session_id(shell_validator):
 def test_policy_shell_denylist(shell_validator):
     """Verifica que policy shell denylist."""
     call = ToolCall(name="run_shell", arguments={"command": "rm -rf /"})
-    with pytest.raises(ToolPolicyError, match="Comando bloqueado pela denylist"):
+    with pytest.raises(ToolPolicyError, match="Comando bloqueado"):
         shell_validator.validate(call)
 
 

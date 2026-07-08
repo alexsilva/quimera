@@ -97,10 +97,10 @@ def _http_request(
         conn.close()
 
 
-def _start_http_server(mcp=None) -> MCP_HTTPServer:
+def _start_http_server(mcp=None, cors_origins="*") -> MCP_HTTPServer:
     if mcp is None:
         mcp = _make_mcp_server()
-    httpd = MCP_HTTPServer(mcp, host="127.0.0.1", port=0)
+    httpd = MCP_HTTPServer(mcp, host="127.0.0.1", port=0, cors_origins=cors_origins)
     httpd.start_background()
     _wait_for_server(httpd.host, httpd.port)
     return httpd
@@ -294,7 +294,7 @@ class TestOptions:
     @patch.dict(os.environ, {"QUIMERA_MCP_HTTP_CORS_ORIGINS": "https://app.example, https://admin.example"})
     def test_cors_uses_configured_origin_allowlist(self):
         """Verifica que Test cors uses configured origin allowlist."""
-        httpd = _start_http_server()
+        httpd = _start_http_server(cors_origins=None)
         try:
             resp = _http_request(
                 httpd.host,
@@ -312,7 +312,7 @@ class TestOptions:
     @patch.dict(os.environ, {"QUIMERA_MCP_HTTP_CORS_ORIGINS": "https://app.example"})
     def test_cors_omits_unconfigured_origin(self):
         """Verifica que Test cors omits unconfigured origin."""
-        httpd = _start_http_server()
+        httpd = _start_http_server(cors_origins=None)
         try:
             resp = _http_request(
                 httpd.host,
@@ -323,6 +323,24 @@ class TestOptions:
             )
             assert resp.status == 204
             assert resp.header("access-control-allow-origin") is None
+        finally:
+            httpd.shutdown()
+
+    def test_cors_default_is_secure_not_wildcard(self):
+        """Verifica que o default CORS é http://127.0.0.1:8080, não *."""
+        httpd = MCP_HTTPServer(_make_mcp_server(), host="127.0.0.1", port=0)
+        try:
+            httpd.start_background()
+            _wait_for_server(httpd.host, httpd.port)
+            resp = _http_request(
+                httpd.host, httpd.port, "OPTIONS", "/health",
+                headers={"Origin": "http://127.0.0.1:8080"},
+            )
+            assert resp.header("access-control-allow-origin") == "http://127.0.0.1:8080"
+            resp2 = _http_request(
+                httpd.host, httpd.port, "OPTIONS", "/health",
+            )
+            assert resp2.header("access-control-allow-origin") is None
         finally:
             httpd.shutdown()
 
