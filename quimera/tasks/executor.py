@@ -15,7 +15,7 @@ _logger = logging.getLogger("quimera.task_executor")
 
 
 class TaskExecutor:
-    """Implementa `TaskExecutor`."""
+    """Executa tasks em background com polling e pool de workers."""
 
     def __init__(
         self,
@@ -49,27 +49,23 @@ class TaskExecutor:
         self._claim_gate: Optional[Callable[[], bool]] = None
 
     def set_claim_gate(self, gate: Callable[[], bool]) -> None:
-        """Define um predicado que deve retornar True para permitir o claim de tasks.
-
-        Usado em modo single-thread para impedir que o executor reivindique tasks
-        enquanto o loop principal de chat está processando uma mensagem.
-        """
+        """Define predicado que controla quando o executor pode reivindicar tasks."""
         self._claim_gate = gate
 
     def set_handler(self, handler: Callable[[TaskRecord], bool]):
-        """Set the task execution handler. Handler receives TaskRecord and returns True on success."""
+        """Define o handler de execução que processa cada task reivindicada."""
         self._handler = handler
 
     def set_review_handler(self, handler: Callable[[TaskRecord], bool]):
-        """Set the review handler. Called with tasks in 'pending_review' state from other agents."""
+        """Define o handler de review para tasks de outros agentes."""
         self._review_handler = handler
 
     def set_review_eligibility(self, predicate: Callable[[], bool]):
-        """Set a dynamic predicate that decides whether this agent may claim review work."""
+        """Define predicado dinâmico que decide se o agente pode fazer review."""
         self._review_eligibility = predicate
 
     def start(self):
-        """Executa start."""
+        """Inicia o loop de polling e o pool de workers em background."""
         if self._running:
             return
         self._running = True
@@ -79,7 +75,7 @@ class TaskExecutor:
         self._thread.start()
 
     def stop(self):
-        """Executa stop."""
+        """Interrompe o loop de polling e finaliza o pool de workers."""
         self._running = False
         self._wake_event.set()
         if self._executor:
@@ -189,11 +185,11 @@ class TaskExecutor:
         return not self._running
 
     def wake(self):
-        """Wake the poll loop to check for new tasks immediately."""
+        """Acorda o loop de polling para verificar novas tasks imediatamente."""
         self._wake_event.set()
 
     def process_pending(self):
-        """Process one iteration of pending tasks (for manual/batch execution)."""
+        """Processa uma iteração manual de tasks pendentes (execução em lote)."""
         task_id = self._claim_task()
         if not task_id:
             return None

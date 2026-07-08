@@ -68,7 +68,6 @@ Principais flags:
 
 - `--agents <a1> <a2>`: define agentes ativos na sessão.
 - `--threads N`: paralelismo de rodadas de chat.
-- `--timeout N`: timeout de execução de agente (s).
 - `--idle-timeout N`: timeout de inatividade de input (s).
 - `--visibility quiet|summary|full`: nível de detalhe da execução.
 - `--theme panel|chat|rule|minimal`: tema visual da sessão.
@@ -76,9 +75,19 @@ Principais flags:
 - `--connect <agente>`: cria/edita conexão persistida do agente.
 - `--list-connections`: lista conexões persistidas.
 - `--driver-repl <profile>`: REPL para testar driver `openai_compat`.
-- `--mcp-socket [path]` / `--mcp-http`: seleciona socket Unix ou HTTP; sem flags, usa socket Unix.
+- `--mcp-socket [path]` / `--mcp-http`: socket Unix (padrão); `--mcp-http` expõe servidor HTTP adicional sem substituir o socket Unix interno.
 - `--no-mcp`: desativa o servidor MCP.
-- `--mcp-http --mcp-host 127.0.0.1 --mcp-port 9090`: usa MCP HTTP embutido em vez do socket Unix.
+- `--mcp-http --mcp-host 127.0.0.1 --mcp-port 9090`: expõe servidor MCP HTTP externo adicional, mantendo o socket Unix interno.
+- `--profile PERFIL`: profile de agente a usar.
+- `--driver DRIVER`: driver de LLM (cli, openai).
+- `--model MODELO`: modelo do LLM.
+- `--base-url URL`: URL base da API.
+- `--api-key-env VAR`: variável de ambiente da API key.
+- `--debug`: modo debug com logs detalhados.
+- `--test`: modo de teste com agents fake.
+- `--cmd COMANDO`: comando para driver=cli.
+- `--working-dir DIR`: diretório de trabalho.
+- `--history-window N`: tamanho da janela de histórico.
 
 Ajuda completa:
 
@@ -96,15 +105,20 @@ python quimera.py --help
 - `/execute <msg>`: remove restrições de modo e libera execução.
 - `/agents`: lista agentes ativos.
 - `/connect <agente>`: configura conexão no próprio chat.
+- `/disconnect <agente>`: remove conexão de agente.
 - `/prompt [agente]`: preview do prompt final (debug operacional).
 - `/context`: mostra contexto persistente/sessão.
 - `/context-edit`: edita contexto persistente no editor.
-- `/edit`: abre editor para compor mensagem longa.
+- `/context-branch`: branching de contexto.
+- `/edit` (ou `/e`): abre editor para compor mensagem longa.
 - `/file <caminho>`: envia conteúdo de arquivo como mensagem.
-- `/approve`: pré-aprova a próxima tool mutation.
-- `/approve-all`: aprova automaticamente mutações subsequentes.
+- `/approve` (ou `/y`/`/a`): pré-aprova a próxima tool mutation.
+- `/approve-all` (ou `/aa`): aprova automaticamente mutações subsequentes.
+- `/policy`: mostra/edita política de tools.
+- `/bugs`: lista/reporta bugs.
+- `/reload`: recarrega agentes/profiles.
 - `/reset [state|history|all]`: limpa `shared_state`, histórico ou ambos.
-- `/clear`, `/help`, `/exit`.
+- `/clear`, `/help` (ou `/g`), `/exit`.
 
 
 ## Testes interativos locais

@@ -1110,6 +1110,7 @@ class QuimeraApp:
             self.tool_executor.policy.blocked_tools = []
 
     def parse_routing(self, user_input: str):
+        """Analisa o input do usuário e identifica o agente destino e modo de roteamento."""
         return self.command_router.parse_routing(user_input)
 
     MAX_RETRIES = 2
@@ -1171,7 +1172,7 @@ class QuimeraApp:
         return self.system_layer.handle_command(user_input)
 
     def parse_response(self, response, **_kwargs):
-        """Interpreta response."""
+        """Analisa a resposta estruturada do agente e aplica mutations ao estado compartilhado."""
         protocol = self.protocol
         if getattr(protocol, "_shared_state", None) is not self.shared_state:
             sync_shared_state = getattr(protocol, "set_shared_state", None)

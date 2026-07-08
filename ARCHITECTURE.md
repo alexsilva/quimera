@@ -20,27 +20,22 @@ quimera/
 │   ├── core.py                       # Loop principal, estado e coordenação (~1611 linhas)
 │   ├── runtime_state.py              # AppRuntimeState: estado de runtime (input, chat, slots)
 │   ├── session_bootstrap.py          # Bootstrap/inicialização da sessão (paths, debug, bugs)
+│   ├── session_paths.py              # Resolução de paths de sessão (logs, bugs, debug)
 │   ├── tty_control.py                # Controle de TTY (suspend/resume do renderer)
 │   ├── toolbar.py                    # ToolbarManager: toolbar dinâmica do prompt_toolkit
+│   ├── toolbar_coordinator.py        # Coordenação entre toolbars (prompt_toolkit ↔ Textual)
 │   ├── bug_services.py               # BugServices: detecção e correlação de bugs de runtime
 │   ├── command_router.py             # Roteamento de comandos slash (/task, /help, etc.)
 │   ├── chat_processor.py             # ChatProcessor: processamento de uma rodada de chat
-│   ├── ui_event_handler.py           # UIEventHandler: processamento de eventos de UI
+│   ├── chat_lifecycle.py              # Ciclo de vida de chat (início, transições, fim)
 │   ├── chat_round.py                 # Lógica de uma rodada de chat (humano → agente → resultado)
+│   ├── ui_event_handler.py            # UIEventHandler: processamento de eventos de UI
 │   ├── dispatch.py                   # Despacho de chamadas para agentes e tools
-│   ├── task.py                       # Ponto de entrada de tarefas (coordenação de alto nível)
-│   ├── task_execution_service.py     # Execução de tasks com pool de workers
-│   ├── task_review_service.py        # Revisão de resultados de tasks por outro agente
-│   ├── task_failover_policy.py       # Políticas de failover e retry de tasks
-│   ├── task_repository.py            # Acesso ao banco de dados de tasks (SQLite)
-│   ├── task_prompt_factory.py        # Criação de prompts específicos para tasks
-│   ├── task_classifiers.py           # Classificação de resultados (ACCEPT/RETRY/REPLAN/REJECT)
-│   ├── task_router.py                # Roteamento de tasks para o agente adequado
-│   ├── task_utils.py                 # Utilitários de suporte a tasks
-│   ├── task_events.py                # Definição de eventos do ciclo de vida de tasks
 │   ├── agent_call_service.py         # Serviço de chamada a agentes (retry, timeout)
 │   ├── agent_gateway.py              # Interface de baixo nível para AgentClient
 │   ├── agent_pool.py                 # Gerenciamento de pool de agentes disponíveis
+│   ├── agent_run_events.py           # Eventos de execução de agentes
+│   ├── agent_failure_tracker.py      # Rastreamento de falhas de agentes
 │   ├── worker.py                     # Worker thread de chat (isola exceções, recupera turno)
 │   ├── protocol.py                   # Parsing/geração do protocolo de delegation entre agentes
 │   ├── event_sink.py                 # Sistema de publish-subscribe de eventos internos
@@ -51,73 +46,132 @@ quimera/
 │   ├── session.py                    # Gerenciamento de histórico e recuperação de sessão
 │   ├── session_metrics.py            # Métricas de sessão (turnos, latências, etc.)
 │   ├── turn.py                       # Gerenciamento de turno (humano ↔ agente)
+│   ├── staging.py                    # Gerenciamento de estado de staging/pending
 │   ├── inputs.py                     # Integração com InputGate
-│   ├── textual_ui.py                 # TextualInputGate + TextualRenderer para TUI
 │   ├── simple_input_gate.py          # SimpleInputGate para modo pipe/non-TTY
 │   ├── prompt_formatter.py           # Formatação do prompt visível ao humano
+│   ├── welcome_presenter.py          # Tela de boas-vindas da sessão
+│   ├── completion_dropdown.py        # Dropdown de autocomplete do input
 │   ├── interfaces.py                 # Protocolos/interfaces entre camadas
 │   └── config.py                     # Configuração de nível de aplicação
 │
+├── tasks/                            # Sistema de tasks (extraído para módulo próprio)
+│   ├── __init__.py                   # Ponto de entrada do módulo de tasks
+│   ├── api.py                        # API pública de criação e gerenciamento de tasks
+│   ├── services.py                   # Serviços de orquestração de tasks
+│   ├── router.py                     # Roteamento de tasks para o agente adequado
+│   ├── classifiers.py                # Classificação de resultados (ACCEPT/RETRY/REPLAN/REJECT)
+│   ├── execution.py                  # Execução de tasks com pool de workers
+│   ├── executor.py                   # Pool de execução de tasks
+│   ├── review.py                     # Serviço de revisão de tasks
+│   ├── reviewer.py                   # Revisão de resultados por agente
+│   ├── failover.py                   # Políticas de failover e retry de tasks
+│   ├── repository.py                 # Acesso ao banco de dados de tasks (SQLite)
+│   ├── prompt.py                     # Criação de prompts específicos para tasks
+│   ├── utils.py                      # Utilitários de suporte a tasks
+│   ├── planner.py                    # Planejamento de tasks (em desenvolvimento)
+│   ├── events.py                     # Definição de eventos do ciclo de vida de tasks
+│   └── runner.py                     # Runner de tasks individuais
+│
 ├── runtime/                          # Executor de tools e runtime de agentes
-│   ├── tasks.py                      # Definição da interface de tasks de runtime
-│   ├── task_runner.py                # Execução de uma task individual
-│   ├── task_executor.py              # Pool de execução de tasks do runtime
-│   ├── task_reviewer.py              # Revisão de resultados no runtime
-│   ├── task_planning.py              # Planejamento e decomposição de tasks
 │   ├── executor.py                   # Executor genérico de operações do runtime
 │   ├── streaming.py                  # Suporte a streaming de respostas de agentes
 │   ├── registry.py                   # Registro de tools disponíveis no runtime
 │   ├── tool_hops.py                  # Encadeamento de chamadas de tools (multi-hop)
+│   ├── input_broker.py               # Mediação de input entre runtime e agentes
+│   ├── tool_preview.py               # Pré-visualização de resultados de tools
+│   ├── process_supervisor.py         # Supervisão de processos do runtime
+│   ├── workspace_policy.py           # Políticas de workspace (permissões, paths)
+│   ├── approval_broker.py            # Broker de aprovações entre runtime e usuário
 │   ├── approval.py                   # Aprovação interativa de ações do runtime
-│   ├── approve_summary.py            # Resumo de aprovações pendentes
 │   ├── policy.py                     # Políticas de execução (permissões, sandboxing)
 │   ├── models.py                     # Modelos de dados do runtime (Task, Result, etc.)
 │   ├── errors.py                     # Exceções específicas do runtime
 │   ├── config.py                     # Configuração do runtime (timeouts, limites)
+│   ├── mcp/                          # Servidor MCP (Model Context Protocol)
+│   │   ├── server.py                 # Servidor JSON-RPC 2.0 sobre stdio/socket/HTTP
+│   │   ├── session.py                # Gerenciamento de sessão MCP
+│   │   ├── http_server.py            # Servidor HTTP para MCP
+│   │   └── __main__.py               # Entrypoint standalone do servidor MCP
 │   ├── drivers/                      # Drivers de execução de agentes
 │   │   ├── repl.py                   # Driver REPL (processo interativo persistente)
 │   │   ├── openai_compat.py          # Driver compatível com API OpenAI
+│   │   ├── prompt_adapter.py         # Adaptador de prompts para drivers
 │   │   └── tool_schemas.py           # Schemas JSON de tools para drivers de API
 │   └── tools/                        # Implementações de tools individuais
 │       ├── shell.py                  # Tool de execução shell
 │       ├── files.py                  # Tool de acesso ao filesystem
 │       ├── web.py                    # Tool de acesso à web
 │       ├── patch.py                  # Tool de aplicação de patches
-│       └── tasks.py                  # Tool de criação/consulta de tasks
+│       ├── delegate.py               # Tool de delegação cross-MCP entre agentes
+│       ├── base.py                   # Classe base para tools
+│       ├── git.py                    # Tool de operações git
+│       ├── memory.py                 # Tool de acesso à memória do workspace
+│       ├── state.py                  # Tool de acesso ao shared state
+│       ├── todo.py                   # Tool de gerenciamento de TODOs
+│       ├── interaction.py            # Tool de interação com o usuário
+│       ├── tasks.py                  # Tool de criação/consulta de tasks
+│       └── _helpers.py               # Helpers internos das tools
 │
 ├── agents/                           # Infraestrutura de comunicação com agentes LLM
 │   ├── client.py                     # Cliente unificado para agentes (CLI, API, profile)
 │   ├── parsers.py                    # Parsers de saída de agentes (JSON, markdown, etc.)
 │   ├── process_runner.py             # Execução e gerenciamento de subprocessos de agentes
 │   ├── signal_guard.py               # Proteção contra sinais durante chamadas de agentes
-│   ├── text_filters.py               # Filtros de texto (strip de ruído, normalização)
+│   ├── text_filters.py             # Filtros de texto (strip de ruído, normalização)
 │   └── warm_pool.py                  # Pool de processos pré-aquecidos de agentes
 │
-├── profiles/                          # Sistema de profiles por agente
+├── profiles/                         # Sistema de profiles por agente
 │   ├── base.py                       # Registro central (ExecutionProfile, _profile_registry)
 │   ├── claude.py                     # Profile para Claude (Anthropic CLI)
 │   ├── codex.py                      # Profile para Codex (OpenAI CLI)
 │   ├── gemini.py                     # Profile para Gemini (Google CLI)
 │   ├── ollama.py                     # Profile para Ollama (LLMs locais)
 │   ├── opencode.py                   # Profile para OpenCode (vários backends)
+│   ├── antigravity.py                # Profile para Antigravity (agente de refatoração)
+│   ├── fake.py                       # Profile fake para testes/integrado
 │   ├── mock.py                       # Profile mock para testes
 │   └── spy_utils.py                  # Utilitários de espionagem/observação de profiles
 │
 ├── ui/                               # Camada de apresentação
 │   ├── renderer.py                   # TerminalRenderer (Rich + Rich.Live, ~1200 linhas)
-│   └── audit.py                      # Logger de auditoria de eventos de renderização
+│   ├── audit.py                       # Logger de auditoria de eventos de renderização
+│   ├── compositor.py                  # Compositor de layouts de UI
+│   ├── overlay.py                    # Gerenciamento de sobreposições na tela
+│   ├── text.py                        # Utilitários de texto para UI
+│   ├── events.py                     # Eventos da camada de UI
+│   ├── window_manager.py             # Gerenciamento de janelas
+│   ├── windows.py                    # Definição de janelas da UI
+│   ├── agent_window_controller.py    # Controle de janelas de agentes
+│   └── textual/                      # Interface Textual (TUI moderna)
+│       ├── app.py                    # Aplicação Textual principal
+│       ├── bridge.py                 # Ponte entre o loop legacy e Textual
+│       ├── input_gate.py             # InputGate baseado em Textual
+│       ├── renderer.py              # Renderizador Textual
+│       ├── renderables.py            # Componentes renderizáveis Textual
+│       ├── widgets.py                # Widgets customizados
+│       ├── feed_model.py             # Modelo do feed de mensagens
+│       ├── styles.py                 # Estilos e temas Textual
+│       ├── constants.py              # Constantes da UI Textual
+│       ├── events.py                 # Eventos específicos Textual
+│       ├── direct_input.py           # Modo de input direto
+│       └── terminal_modes.py         # Gerenciamento de modos de terminal
 │
 ├── domain/                           # Modelos de domínio (independentes de framework)
 │   └── session_state.py              # SessionState thread-safe (RLock), estado da sessão
 │
 ├── evidence/                         # Sistema de evidências (rastreamento de contexto)
-│   ├── models.py                     # Modelos de evidência (EvidenceItem, etc.)
+│   ├── models.py                       # Modelos de evidência (EvidenceItem, etc.)
 │   ├── store.py                      # Armazenamento e recuperação de evidências
 │   ├── parser.py                     # Parser de blocos de evidência no texto
 │   └── formatter.py                  # Formatação de evidências para o prompt
 │
 ├── sandbox/                          # Isolamento de execução
 │   └── bwrap.py                      # Sandbox via bubblewrap (bwrap), paths RW/RO
+│
+├── devtools/                         # Ferramentas de desenvolvimento
+│   ├── fake_agents.py                 # Agentes falsos para testes de integração
+│   └── __init__.py
 │
 ├── prompt.py                         # Injeção do bloco de execução no prompt (goal-driven)
 ├── prompt_budget.py                  # Orçamento de tokens: trunca seções por prioridade
@@ -127,10 +181,11 @@ quimera/
 ├── shared_state.py                   # Dicionário de estado compartilhado entre agentes
 ├── storage.py                        # Persistência de sessão (logs, histórico em arquivo)
 ├── workspace.py                      # Representação do workspace do usuário
-├── session_summary.py                # Sumarização de sessão para manter contexto compacto
+├── workspace_memory.py               # Memória persistente do workspace
+├── session_summary.py                 # Sumarização de sessão para manter contexto compacto
 ├── bugs.py                           # Detecção, correlação e reporte de bugs de runtime
 ├── agent_events.py                   # Definição de eventos de agentes (AgentEvent, etc.)
-├── delegate_presenter.py              # Formatação de steps para exibição
+├── delegate_presenter.py             # Formatação de steps para exibição
 ├── shared_state_presenter.py         # Formatação do shared state para exibição
 ├── execution_mode_presenter.py       # Formatação do modo de execução ativo
 ├── spy_output_presenter.py           # Formatação de saída de spy (debug de agentes)
@@ -140,9 +195,13 @@ quimera/
 ├── constants.py                      # Constantes (prompts de sistema, comandos, prefixos)
 ├── modes.py                          # Modos de operação (debug, produção, etc.)
 ├── metrics.py                        # Rastreamento de métricas de comportamento
-├── env_config.py                     # Carregamento de variáveis de ambiente
-├── paths.py                          # Resolução de paths (workspace, dados, config)
-└── cli.py                            # Ponto de entrada CLI (argparse, bootstrap)
+├── env_config.py                      # Carregamento de variáveis de ambiente
+├── paths.py                           # Resolução de paths (workspace, dados, config)
+├── cli.py                             # Ponto de entrada CLI (argparse, bootstrap)
+├── editor.py                          # Integração com editor externo
+├── clipboard_support.py               # Suporte a clipboard
+├── connection_configurator.py         # Configuração de conexões de agentes
+└── process_factory.py                 # Fábrica de processos para workers
 ```
 
 ---
@@ -162,8 +221,8 @@ quimera/
 - **`ui_event_handler.py`** (`UIEventHandler`): Processamento de eventos da fila de UI (`ui_event_queue`). Usa `InputGate.is_active()` como fonte primária para decidir se o prompt deve ser redesenhado.
 - **`chat_round.py`**: Encapsula a lógica de uma rodada de chat completa (leitura de input → chamada ao agente → processamento de resultado → update de estado).
 - **`dispatch.py`**: Chama agentes via `AgentClient` e executa tools via `ToolLoop`. Gerencia o ciclo de vida de chamadas e resultados.
-- **`task*.py`**: Conjunto de serviços que implementam o ciclo de vida de tasks: criação, classificação, atribuição, execução, revisão, failover e notificação.
-- **`textual_ui.py`** (`TextualInputGate` + `TextualRenderer`): Gate de input e renderer baseados em Textual para a TUI. `TextualInputGate` usa fila thread-safe para receber input do widget `Input` do Textual. `TextualRenderer` emite eventos para o `TextualUiBridge`.
+- O módulo `tasks/` (em `quimera/tasks/`) implementa o ciclo de vida completo de tasks: criação, classificação, atribuição, execução, revisão, failover e notificação.
+- **`ui/textual/input_gate.py`** (`TextualInputGate`): Gate de input baseado em Textual para a TUI. Usa fila thread-safe para receber input do widget `Input` do Textual. **`ui/textual/renderer.py`** (`TextualRenderer`) emite eventos para o `TextualUiBridge`.
 - **`simple_input_gate.py`** (`SimpleInputGate`): Gate de input para modo pipe/sem TTY, usando `input()` padrão. Mantém a mesma interface pública de `TextualInputGate`.
 - **`prompt_formatter.py`** (`PromptFormatter`): Formata o prompt visível ao humano com nome e modo atual.
 - **`inputs.py`**: Integração de alto nível com `InputGate`, exposta ao `core.py`.
@@ -333,7 +392,7 @@ Tools definidas em `TOOL_SCHEMAS`, filtradas por:
   - Execução e revisão de tasks.
 - Principais implementações:
   - `ChatWorker` (`app/worker.py`): workers de chat.
-  - `TaskExecutionService` (`app/task_execution_service.py`): pool para tasks.
+  - `tasks/execution.py` (`TaskExecutionService`): pool para tasks.
 - Comunicam com a main thread apenas via:
   - `ui_event_queue` (`queue.Queue`): eventos de renderização.
   - `EventSink`: callbacks registrados da main thread.
@@ -346,7 +405,7 @@ Tools definidas em `TOOL_SCHEMAS`, filtradas por:
 | `EventSink` | `app/event_sink.py` | Publish-subscribe interno |
 | `TurnManager` | `app/turn.py` | Alternância de turno com lock |
 | `SessionState` | `domain/session_state.py` | Estado compartilhado com `threading.RLock` |
-| `InputGate.is_active()` | `app/textual_ui.py` / `simple_input_gate.py` | Árbitro primário de estado de prompt ativo |
+| `InputGate.is_active()` | `ui/textual/input_gate.py` / `app/simple_input_gate.py` | Árbitro primário de estado de prompt ativo |
 | `AppRuntimeState` | `app/runtime_state.py` | Estado de runtime (slots, contadores, semáforo) — sem mais atributos privados via `_BACKWARD_MAP` |
 
 ### 4.4 Problemas Conhecidos de Threading
@@ -385,7 +444,9 @@ O loop em `quimera/app/core.py:run()` segue este fluxo:
 
 ### 6.2 Sistema de Tasks
 
-Fluxo: `/task` → `TaskRepository` (criação) → `task_classifiers` (tipo) → `task_router` (agente) → `task_execution_service` (execução em worker) → `task_review_service` (revisão opcional) → `task_failover_policy` (retry/reject) → notificação via `ui_event_queue`.
+O sistema de tasks foi extraído para o módulo `quimera/tasks/`, removendo a dispersão anterior entre `app/task*.py` e `runtime/task*.py`.
+
+Fluxo: `/task` → `tasks/services.py` (orquestração) → `tasks/repository.py` (persistência) → `tasks/classifiers.py` (tipo) → `tasks/router.py` (agente) → `tasks/execution.py` (execução em worker) → `tasks/review.py` (revisão opcional) → `tasks/failover.py` (retry/reject) → notificação via `ui_event_queue`.
 
 ### 6.3 Construção de Prompt
 
@@ -468,7 +529,7 @@ Os lookups dispersos de `quimera.profiles.get(...)` em `app/dispatch.py`, `app/t
 ### 7.5 Outros Problemas
 
 - **Adaptadores legados em `system_layer.py`**: `_LegacyProfileResolver` e `_LegacyAgentPoolAdapter` indicam migração de contrato incompleta.
-- **Cobertura de testes**: 2209 passando. Lacunas em testes de integração de tasks (criação → execução → revisão), concorrência e cenários de falha.
+- **Cobertura de testes**: 2740+ testes passando. Lacunas em testes de integração de tasks (criação → execução → revisão), concorrência e cenários de falha.
 - **Logging**: feito via `print` estruturado; sem níveis de gravidade padronizados ou saída JSON.
 - **`renderer.py`** (~1200 linhas): beneficiaria divisão em módulos menores.
 
@@ -483,10 +544,10 @@ Os lookups dispersos de `quimera.profiles.get(...)` em `app/dispatch.py`, `app/t
 - `_BACKWARD_MAP` removido: estado de runtime acessado diretamente via `AppRuntimeState`.
 - Decomposição de `core.py` em andamento: 8 módulos extraídos, ~689 linhas reduzidas.
 - Violações de fronteira entre camadas (seções 7.3 e 7.4) resolvidas.
-- Sistema de tasks maduro: revisão, failover, roteamento por especialidade.
+- Sistema de tasks maduro (extraído para `tasks/`): revisão, failover, roteamento por especialidade.
 - Arquitetura orientada a goals com critérios de aceitação e regras de revisão.
 - Sistema de evidências para rastreamento de contexto verificável.
-- Boa cobertura de testes unitários (2209 testes).
+- Boa cobertura de testes unitários (2740+ testes).
 
 ### Problemas Prioritários
 

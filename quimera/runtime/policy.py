@@ -22,7 +22,7 @@ def is_path_inside(path: Path, root: Path) -> bool:
 
 
 class ToolPolicyError(Exception):
-    """Implementa `ToolPolicyError`."""
+    """Erro lançado quando uma chamada de ferramenta viola a política de segurança."""
     pass
 
 
@@ -37,7 +37,7 @@ class PathPermissionError(ToolPolicyError):
 
 
 class ToolPolicy:
-    """Implementa `ToolPolicy`."""
+    """Valida chamadas de ferramentas contra regras de segurança, permissão de path e aprovação."""
 
     _SHELL_CHAIN_OPERATORS = (";", "&&", "||", "|", "`", "$(")
     _POLICY_BYPASS_TOOLS: set[str] = set()

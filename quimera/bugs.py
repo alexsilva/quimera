@@ -42,6 +42,7 @@ def _coerce_int(value, default: int) -> int:
 
 @dataclass(slots=True)
 class BugEvidenceRef:
+    """Referência a uma evidência de bug com tipo, localização e pré-visualização."""
     kind: str
     path: str = ""
     ts: str = ""
@@ -51,10 +52,12 @@ class BugEvidenceRef:
     preview: str = ""
 
     def to_dict(self) -> dict:
+        """Converte a referência de evidência para dicionário."""
         return asdict(self)
 
     @classmethod
     def from_dict(cls, payload: dict) -> "BugEvidenceRef":
+        """Constrói uma referência de evidência a partir de um dicionário."""
         return cls(
             kind=str(payload.get("kind", "") or ""),
             path=str(payload.get("path", "") or ""),
@@ -68,6 +71,7 @@ class BugEvidenceRef:
 
 @dataclass(slots=True)
 class BugReport:
+    """Relatório estruturado de um bug com fingerprint, severidade e evidências."""
     id: str
     session_id: str
     category: str
@@ -85,12 +89,14 @@ class BugReport:
     count: int = 1
 
     def to_dict(self) -> dict:
+        """Converte o relatório para dicionário com evidências serializadas."""
         payload = asdict(self)
         payload["evidence_refs"] = [item.to_dict() for item in self.evidence_refs]
         return payload
 
     @classmethod
     def from_dict(cls, payload: dict) -> "BugReport":
+        """Constrói um relatório de bug a partir de um dicionário."""
         refs = payload.get("evidence_refs", []) or []
         evidence_refs = [
             BugEvidenceRef.from_dict(item) for item in refs if isinstance(item, dict)
@@ -115,6 +121,7 @@ class BugReport:
 
 
 def make_bug_fingerprint(session_id: str, category: str, summary: str) -> str:
+    """Gera um fingerprint SHA-1 para deduplicação de bugs."""
     base = f"{session_id}|{category}|{summary.strip().lower()}"
     return hashlib.sha1(base.encode("utf-8")).hexdigest()
 
@@ -164,6 +171,7 @@ class BugStore:
         self._handle.flush()
 
     def file(self, report: BugReport) -> BugReport:
+        """Registra ou mescla um relatório de bug no armazenamento persistente."""
         with self._lock:
             now = _utc_now()
             latest_by_id: dict[str, BugReport] = {}
@@ -232,6 +240,7 @@ class BugStore:
             return created
 
     def close_bug(self, bug_id: str) -> BugReport | None:
+        """Marca um bug como fechado no armazenamento."""
         with self._lock:
             latest: dict[str, BugReport] = {}
             for item in self._iter_records():
@@ -269,6 +278,7 @@ class BugStore:
         category: str | None = None,
         limit: int | None = None,
     ) -> list[BugReport]:
+        """Consulta bugs por sessão, status e categoria, ordenados do mais recente."""
         with self._lock:
             latest: dict[str, BugReport] = {}
             for item in self._iter_records():
@@ -286,6 +296,7 @@ class BugStore:
             return results
 
     def close(self) -> None:
+        """Fecha o arquivo de armazenamento de bugs."""
         with self._lock:
             if self._closed:
                 return
@@ -314,6 +325,7 @@ class RenderBugDetector:
         rapid_window_seconds: float = 2.0,
         rapid_count_threshold: int = 5,
     ):
+        """Configura os limiares de detecção de bugs de render."""
         self.repeat_threshold = max(1, int(repeat_threshold))
         self.gap_threshold_seconds = float(gap_threshold_seconds)
         self.rapid_window_seconds = float(rapid_window_seconds)
@@ -327,6 +339,7 @@ class RenderBugDetector:
         ansi_path: Path | None = None,
         agent: str = "",
     ) -> list[BugReport]:
+        """Analisa logs de render e ANSI em busca de anomalias operacionais."""
         reports: list[BugReport] = []
         if events_path is not None:
             events_file = Path(events_path)
@@ -568,6 +581,7 @@ class AgentRuntimeBugDetector:
         prompt_total_chars_threshold: int = 60000,
         prompt_threshold_hits: int = 2,
     ):
+        """Configura os limiares de detecção de bugs de runtime de agente."""
         self.min_failures = max(1, int(min_failures))
         self.min_tool_calls = max(1, int(min_tool_calls))
         self.latency_threshold_seconds = max(1.0, float(latency_threshold_seconds))
@@ -581,6 +595,7 @@ class AgentRuntimeBugDetector:
         agent_metrics: dict | None,
         prompt_metrics_path: Path | None = None,
     ) -> list[BugReport]:
+        """Analisa métricas de agente e prompt em busca de padrões problemáticos."""
         reports: list[BugReport] = []
         reports.extend(
             self._scan_agent_metrics(
@@ -824,6 +839,7 @@ class BugCorrelator:
     """
 
     def __init__(self, window_seconds: float = 60.0):
+        """Configura a janela temporal para correlação de bugs."""
         self.window_seconds = max(5.0, float(window_seconds))
 
     def correlate(
@@ -832,6 +848,7 @@ class BugCorrelator:
         *,
         session_id: str,
     ) -> list[BugReport]:
+        """Correlaciona relatórios de diferentes detectores em uma janela temporal."""
         if len(reports) < 2:
             return []
 
@@ -934,6 +951,7 @@ class BugCorrelator:
 
 
 def format_bug_context(reports: list[BugReport]) -> str:
+    """Formata uma lista de bugs como contexto textual legível para o prompt."""
     if not reports:
         return ""
     lines = [

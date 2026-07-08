@@ -31,6 +31,7 @@ _MAX_INLINE_IMAGE_BYTES = 20 * 1024 * 1024
 
 @dataclass(frozen=True)
 class ClipboardPayload:
+    """Payload lido do clipboard, podendo ser texto ou imagem."""
     text: str
     kind: str = "text"
     path: str | None = None
@@ -39,6 +40,7 @@ class ClipboardPayload:
 
 @dataclass(frozen=True)
 class AttachedImage:
+    """Imagem anexada ao prompt com marcador e tipo MIME."""
     path: str
     mime_type: str
     start: int
@@ -65,9 +67,11 @@ class ClipboardManager:
         path: str | Path,
         mime_type: str = "image/png",
     ) -> str:
+        """Gera o marcador XML de imagem anexada para o caminho e tipo informados."""
         return f'<attached_image path="{Path(path)}" mime="{mime_type}" />'
 
     def iter_images(self, text: str) -> list[AttachedImage]:
+        """Extrai todos os marcadores de imagem anexada do texto."""
         images: list[AttachedImage] = []
         for match in self.attached_image_re.finditer(str(text or "")):
             path = match.group("path")
@@ -84,6 +88,7 @@ class ClipboardManager:
         return images
 
     def to_openai_content(self, text: str) -> str | list[dict]:
+        """Converte texto com marcadores de imagem para o formato de conteúdo da OpenAI."""
         body = str(text or "")
         images = self.iter_images(body)
         if not images:
@@ -108,6 +113,7 @@ class ClipboardManager:
         return content
 
     def read(self) -> ClipboardPayload | None:
+        """Lê o conteúdo atual do clipboard (imagem ou texto)."""
         image_payload = self._read_image()
         if image_payload is not None:
             return image_payload
@@ -122,6 +128,7 @@ class ClipboardManager:
         return self.attached_image_re.sub(placeholder, str(text or ""))
 
     def write_temp(self, data: bytes, mime_type: str) -> Path:
+        """Salva dados binários em arquivo temporário com prefixo do clipboard."""
         self.cleanup_stale()
         suffix = mimetypes.guess_extension(mime_type) or ".img"
         self.temp_image_dir.mkdir(parents=True, exist_ok=True)

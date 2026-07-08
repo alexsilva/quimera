@@ -1,6 +1,6 @@
 # AGENTS - Detalhes e Capacidades
 
-O Quimera organiza os agentes por **Tiers** e **Especialidades**. Todos os agentes compartilham o mesmo servidor MCP da sessão, que expõe as ferramentas do runtime via protocolo MCP (`2024-11-05`).
+O Quimera organiza os agentes por **Tiers** e **Especialidades**. Todos os agentes compartilham o mesmo servidor MCP da sessão, que expõe as ferramentas do runtime via protocolo MCP (`2025-11-25`).
 
 O sistema **Cross-MCP** permite que agentes deleguem tarefas entre si através da tool `delegate` — qualquer agente MCP-capaz pode chamar qualquer outro agente do pool, com suporte a fallback e cadeias de delegação (`steps`).
 
@@ -43,14 +43,7 @@ A família OpenCode oferece modelos especializados para tarefas menores, otimiza
 
 ## Classificação de Tarefas
 
-O Quimera classifica automaticamente as solicitações enviadas via `/task` nos seguintes tipos:
-
-1. **`code_edit`**: Refatoração, correção, implementação.
-2. **`architecture`**: Design de sistemas, novos protocolos.
-3. **`code_review`**: Revisão e análise de código.
-4. **`bug_investigation`**: Busca pela causa raiz de falhas.
-5. **`test_execution`**: Execução e reparo de testes.
-6. **`documentation`**: Criação ou atualização de README, MDs e DOCs.
+O Quimera classifica automaticamente as solicitações enviadas via `/task` nos seguintes tipos. Consulte README.md para a lista completa de tipos de tarefa.
 
 ## Regra de Review
 
@@ -80,41 +73,10 @@ Isso garante que:
 - Agentes especializados (OpenCode) sejam usados para tarefas simples, liberando os orquestradores (Gemini) para arquitetura complexa.
 
 
-## Regra de Input Interativo (termios BANIDO)
+## Regra de Input Interativo
 
-- **Proibido** usar `termios`, `tty`, `tty.setraw`, `tty.setcbreak` ou
-  `termios.tcsetattr`/`tcgetattr` diretamente em qualquer código do projeto.
-  O raw-mode manual a partir de threads de background (ex.: aprovação de
-  ferramenta em modo `--threads`) conflita com o terminal gerenciado pela UI e
-  **trava o input, o shell e o sistema**.
-- Todo input interativo (aprovação de ferramenta, `ask_user`, seleção de
-  opções) deve usar o input gate ativo (`TextualInputGate` na TUI textual,
-  `SimpleInputGate` em modo pipe). O usuário digita a
-  resposta (`y`/`n`/`a`, número da opção ou texto) e confirma com **Enter**.
-- A partir de threads de background, leia sempre através dos helpers do
-  `InputGate` (`read_input_in_terminal`,
-  `read_selection_in_terminal`, `read_approval_in_terminal`) — eles suspendem o
-  prompt e restauram o terminal sem manipular flags de TTY manualmente.
-- Não há mais navegação por setas em seleções; isso é intencional. Seleção é
-  numerada e confirmada por Enter.
-- `TtyController` é no-op por compatibilidade; não reintroduza supressão de eco
-  via termios.
+- **Proibido** usar `termios`, `tty` ou manipulação direta de TTY. Use sempre o `InputGate` (`TextualInputGate` na TUI, `SimpleInputGate` em modo pipe) e seus helpers (`read_input_in_terminal`, `read_selection_in_terminal`, `read_approval_in_terminal`).
 
 ## Teste Interativo Local
 
-Quando trabalhar neste projeto e precisar comprovar fluxos interativos sem provedores externos, use o modo de teste explícito. Os profiles fake só devem entrar na rodada com `--test`; sem esse parâmetro, eles não fazem parte do uso humano normal.
-
-Fluxo recomendado para validar chamadas OpenAI-compatible com ferramentas via MCP:
-
-1. Rode o app em modo de teste. O próprio `--test` registra os fake profiles, sobe o backend OpenAI-compatible fake em uma porta livre e aplica override não persistente para o processo:
-   ```bash
-   python quimera.py --test --agents fake-cli-delegation fake-openai --visibility full
-   ```
-2. Envie um prompt como `Execute pwd via shell usando o agente OpenAI` e confira no output `MCP conectado`, `MCP tool_call: delegate`, a execução do agente `fake-openai`, a aprovação/execução da ferramenta solicitada por ele e `MCP tool_result: OK`.
-3. Use `python -m quimera.devtools.fake_agents openai-server` apenas como ferramenta manual de debug; ela não é pré-requisito para `python quimera.py --test`.
-
-Para testar o driver diretamente, também use `--test`:
-
-```bash
-python quimera.py --test --driver-repl fake-openai --prompt "Leia o README usando ferramentas"
-```
+Para testes interativos locais, consulte a seção "Testes Interativos Locais" no README.md.

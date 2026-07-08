@@ -63,6 +63,7 @@ class WorkspaceMemoryStore:
         ttl_seconds: int | None,
         actor: str | None,
     ) -> MemorySaveResult:
+        """Salva ou atualiza uma entrada na memória com validação e lock exclusivo."""
         namespace = self._validate_token(namespace, field_name="namespace", max_len=_MAX_NAMESPACE_LEN)
         key = self._validate_token(key, field_name="key", max_len=_MAX_KEY_LEN)
         normalized_value = self._normalize_value(value)
@@ -116,6 +117,7 @@ class WorkspaceMemoryStore:
         tags: list[str] | None,
         limit: int | None,
     ) -> dict[str, Any]:
+        """Recupera entradas da memória filtradas por namespace, chave, prefixo ou tags."""
         normalized_namespace = None
         normalized_key = None
         normalized_prefix = None

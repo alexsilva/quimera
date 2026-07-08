@@ -46,6 +46,7 @@ class TrustedToolExecutionContext:
 
     @classmethod
     def native(cls) -> "TrustedToolExecutionContext":
+        """Cria contexto padrão para chamadas nativas do executor local."""
         return cls(
             run_id=f"native:{uuid.uuid4()}",
             transport="native_tool_call",
@@ -90,6 +91,7 @@ class TrustedToolExecutionContext:
 
     @property
     def scope_key(self) -> str:
+        """Chave única de escopo (approval_scope_id > run_id > thread_id)."""
         if self.approval_scope_id:
             return f"scope:{self.approval_scope_id}"
         if self.run_id:
@@ -115,6 +117,7 @@ class ApprovalRequest:
 
     @property
     def equivalence_key(self) -> tuple[Any, ...]:
+        """Chave de agrupamento para decidir se duas requisições são equivalentes."""
         return (
             self.context.scope_key,
             self.tool_name,
@@ -127,6 +130,7 @@ class ApprovalRequest:
 
     @property
     def route(self) -> str:
+        """Rota legível com encadeamento de agentes, ferramenta e path/comando."""
         parts = [
             p for p in (self.context.parent_agent, self.context.agent_name) if p
         ]
@@ -160,6 +164,7 @@ class ApprovalScope:
     approve_all_in_run: bool = False
 
     def matches(self, request: ApprovalRequest) -> bool:
+        """Retorna True se o escopo cobre a requisição (run_id, tool, risco, path, etc)."""
         now = time.time()
         if self.expires_at is None or self.expires_at <= now:
             return False
@@ -199,11 +204,13 @@ class ApprovalScope:
         return True
 
     def consume(self) -> None:
+        """Decrementa o contador de usos restantes do escopo."""
         if self.remaining_uses is not None:
             self.remaining_uses -= 1
 
     @property
     def exhausted(self) -> bool:
+        """True quando o escopo não tem mais usos disponíveis."""
         return self.remaining_uses is not None and self.remaining_uses <= 0
 
 
@@ -244,9 +251,11 @@ class ApprovalBroker:
         self._locks: dict[str, threading.RLock] = {}
 
     def build_context(self, call: ToolCall) -> TrustedToolExecutionContext:
+        """Extrai o contexto confiável de execução dos metadados da chamada."""
         return TrustedToolExecutionContext.from_trusted_metadata(call.metadata)
 
     def classify(self, call: ToolCall) -> RiskLevel:
+        """Classifica o nível de risco da ferramenta (delegate, destructive, shell, write, network ou read)."""
         if call.name == "delegate":
             return RiskLevel.DELEGATION
         if call.name in self._DESTRUCTIVE_TOOLS:
@@ -266,6 +275,7 @@ class ApprovalBroker:
         permission_error: PathPermissionError | None = None,
         reason: str | None = None,
     ) -> ApprovalRequest:
+        """Constrói um ApprovalRequest com contexto, risco, path, comando e sumário."""
         context = self.build_context(call)
         risk = self.classify(call)
         path = self._extract_path(call, permission_error=permission_error)
@@ -307,6 +317,7 @@ class ApprovalBroker:
         needs_policy_approval: bool,
         permission_error: PathPermissionError | None = None,
     ) -> bool:
+        """Retorna True se a chamada exigiria aprovação humana (sem consumir escopos)."""
         request = self.create_request(call, permission_error=permission_error)
         return not self._can_auto_approve(
             request,
@@ -366,6 +377,7 @@ class ApprovalBroker:
 
     @contextmanager
     def execution_guard(self, call: ToolCall) -> Iterator[None]:
+        """Serializa execução concorrente por chave (workspace, sessão, path) via locks."""
         keys = self._serialization_keys(call)
         if not keys:
             yield
@@ -387,6 +399,7 @@ class ApprovalBroker:
                 lock.release()
 
     def approve_scope(self, scope: ApprovalScope) -> None:
+        """Registra um escopo de aprovação para auto-autorização de chamadas futuras."""
         self._validate_scope(scope)
         with self._scope_lock:
             self._scopes.append(scope)
@@ -398,6 +411,7 @@ class ApprovalBroker:
         ttl_seconds: float | None = None,
         uses: int = 1,
     ) -> ApprovalScope:
+        """Pré-aprova requisições equivalentes por TTL e número de usos."""
         if ttl_seconds is None:
             ttl_seconds = self._DEFAULT_SCOPE_TTL_SECONDS
         scope = ApprovalScope(
@@ -675,6 +689,7 @@ class ApprovalBroker:
         path: str | None = None,
         command: str | None = None,
     ) -> str:
+        """Constrói rota legível com encadeamento de agentes, ferramenta e argumentos."""
         req = ApprovalRequest(
             "route",
             call.name,

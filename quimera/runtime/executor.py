@@ -90,9 +90,11 @@ class ToolExecutor:
         return self._approval_handler
 
     def set_spinner_callbacks(self, suspend_spinner_fn, resume_spinner_fn):
+        """Define callbacks para pausar/retomar o spinner durante input de aprovação."""
         self.approval_manager.set_spinner_callbacks(suspend_spinner_fn, resume_spinner_fn)
 
     def set_approval_cancel_event(self, cancel_event) -> None:
+        """Define evento de cancelamento para interromper prompts de aprovação."""
         self.approval_manager.set_cancel_event(cancel_event)
 
     def process_pending_input_once(self) -> bool:

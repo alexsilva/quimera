@@ -48,7 +48,7 @@ class CommandSession:
 
 
 class ShellTool(ToolBase):
-    """Implementa `ShellTool`."""
+    """Ferramentas de execução shell com suporte a sessões persistentes e polling incremental."""
 
     def __init__(self, config: ToolRuntimeConfig) -> None:
         """Inicializa uma instância de ShellTool."""
@@ -69,7 +69,7 @@ class ShellTool(ToolBase):
                 self._cleanup_session_resources(session, terminate=True)
 
     def run_shell(self, call: ToolCall) -> ToolResult:
-        """Executa shell."""
+        """Executa um comando shell único e retorna stdout/stderr com timeout."""
         staging = file_tools.get_staging_root()
         if staging:
             warnings.warn(

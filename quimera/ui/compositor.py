@@ -151,6 +151,7 @@ class TerminalCompositor:
     # ------------------------------------------------------------------
 
     def bump_transient_version(self) -> int:
+        """Incrementa a versão do buffer transitório e retorna o novo valor."""
         with self._renderer._lock:
             self._transient_buf_version += 1
             return self._transient_buf_version
@@ -178,10 +179,12 @@ class TerminalCompositor:
     # ------------------------------------------------------------------
 
     def close(self, timeout: float = 5.0) -> None:
+        """Encerra o writer thread e aguarda sua finalização."""
         self._queue.put(_STOP)
         self._writer_thread.join(timeout=timeout)
 
     def stop_nowait(self) -> None:
+        """Sinaliza parada do writer thread sem aguardar."""
         try:
             if self._writer_thread.is_alive():
                 self._queue.put_nowait(_STOP)
@@ -193,6 +196,7 @@ class TerminalCompositor:
     # ------------------------------------------------------------------
 
     def flush(self, timeout: float = 5.0) -> None:
+        """Aguarda o processamento completo de todos os eventos pendentes."""
         done = threading.Event()
         self._queue.put(NoopEvent(done, force_flush=True))
         if not done.wait(timeout=timeout):
@@ -201,6 +205,7 @@ class TerminalCompositor:
             )
 
     def flush_quick(self, timeout: float = 0.15) -> bool:
+        """Tenta drenar eventos rapidamente com timeout curto."""
         try:
             self.flush(timeout=timeout)
             return True
@@ -226,6 +231,7 @@ class TerminalCompositor:
         return done.wait(timeout=timeout)
 
     def thaw_output(self, timeout: float = 2.0) -> bool:
+        """Retoma a saída do compositor após suspensão."""
         done = threading.Event()
         self._queue.put(OutputControlEvent(suspend=False, done=done))
         resumed = done.wait(timeout=timeout)

@@ -11,7 +11,7 @@ _UNSET = object()
 
 
 def get_conn(db_path):
-    """Retorna conn."""
+    """Retorna conexão SQLite com WAL e foreign keys."""
     if not db_path:
         raise ValueError("db_path is required — use workspace.tasks_db")
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
@@ -22,7 +22,7 @@ def get_conn(db_path):
 
 
 def init_db(db_path=None):
-    """Executa init db."""
+    """Inicializa o banco de tasks criando as tabelas."""
     _repository(db_path)
 
 
@@ -33,17 +33,17 @@ def _repository(db_path):
 
 
 def add_job(description, created_by=None, db_path=None, job_id=None):
-    """Executa add job."""
+    """Adiciona um novo job (sessão de tasks)."""
     return _repository(db_path).add_job(description, created_by=created_by, job_id=job_id)
 
 
 def list_jobs(filt=None, db_path=None):
-    """Lista jobs."""
+    """Lista jobs com filtro opcional."""
     return [asdict(job) for job in _repository(db_path).list_jobs(filt or {})]
 
 
 def get_job(job_id, db_path=None):
-    """Retorna job."""
+    """Retorna um job pelo ID."""
     job = _repository(db_path).get_job(job_id)
     return asdict(job) if job else None
 
@@ -68,8 +68,8 @@ def create_task(
         body=None,
         source_context=None,
         db_path=None,
-):
-    """Cria task."""
+    ):
+    """Cria uma nova task no job especificado."""
     return _repository(db_path).create_task(
         job_id,
         description,
@@ -88,7 +88,7 @@ def create_task(
 
 def propose_task(job_id, description, priority="medium", created_by=None, notes=None, source_context=None, db_path=None,
                  auto_approve=False, body=None):
-    """Executa propose task."""
+    """Propoe uma task (status PROPOSED ou APPROVED se auto_approve)."""
     status = TaskStatus.APPROVED if auto_approve else TaskStatus.PROPOSED
     return create_task(
         job_id,
@@ -106,7 +106,7 @@ def propose_task(job_id, description, priority="medium", created_by=None, notes=
 
 
 def approve_task(task_id, approved_by, db_path=None):
-    """Aprova task."""
+    """Transiciona uma task para APPROVED."""
     return _repository(db_path).transition_task(
         task_id,
         TaskStatus.APPROVED,
@@ -115,7 +115,7 @@ def approve_task(task_id, approved_by, db_path=None):
 
 
 def reject_task(task_id, rejected_by, reason=None, db_path=None):
-    """Rejeita task."""
+    """Rejeita uma task movendo para REJECTED."""
     return _repository(db_path).transition_task(
         task_id,
         TaskStatus.REJECTED,
@@ -125,27 +125,22 @@ def reject_task(task_id, rejected_by, reason=None, db_path=None):
 
 
 def list_tasks(filt=None, db_path=None):
-    """Lista tasks."""
+    """Lista tasks com filtro opcional."""
     return [asdict(task) for task in _repository(db_path).list_tasks(filt or {})]
 
 
 def release_agent_tasks(agent_name, db_path=None):
-    """Release tasks from a failed agent so others can pick them up.
-
-    Notably, also reset the status to 'pending' so tasks can be claimed again
-    by other agents. Previously, tasks could be left in 'in_progress' state
-    after release, making them unclaimable by the router.
-    """
+    """Libera tasks de um agente com falha e as retorna para pending."""
     _repository(db_path).release_agent_tasks(agent_name)
 
 
 def requeue_task(task_id, failed_agent, reason=None, db_path=None):
-    """Release a task after an execution failure so another agent can claim it."""
+    """Requeue uma task após falha de execução para outro agente."""
     return _repository(db_path).requeue_task(task_id, failed_agent, reason=reason)
 
 
 def requeue_task_after_review(task_id, failed_agent, result=None, notes=None, db_path=None):
-    """Return a reviewed task to pending and force execution failover to another agent."""
+    """Retorna task revisada para pending com failover forçado para outro agente."""
     return _repository(db_path).requeue_task_after_review(
         task_id,
         failed_agent,
@@ -155,7 +150,7 @@ def requeue_task_after_review(task_id, failed_agent, result=None, notes=None, db
 
 
 def can_reassign_task(task_id, candidate_agents, db_path=None):
-    """Return True when at least one candidate agent can still claim the task."""
+    """Verifica se ao menos um agente candidato ainda pode reivindicar a task."""
     try:
         return _repository(db_path).can_reassign_task(task_id, candidate_agents)
     except sqlite3.Error:
@@ -163,42 +158,37 @@ def can_reassign_task(task_id, candidate_agents, db_path=None):
 
 
 def claim_task(agent_name, job_id=None, db_path=None):
-    """Reserva task."""
+    """Reserva atomicamente uma task pending para o agente."""
     return _repository(db_path).claim_task(agent_name, job_id=job_id)
 
 
 def update_task(task_id, status, result=None, notes=None, db_path=None):
-    """Atualiza task."""
+    """Atualiza status e resultado de uma task."""
     return _repository(db_path).update_task(task_id, status, result=result, notes=notes)
 
 
 def complete_task(task_id, result=None, reviewed_by=None, db_path=None):
-    """Conclui task, validando a transição para COMPLETED atomicamente."""
+    """Conclui uma task validando a transição para COMPLETED."""
     return _repository(db_path).complete_task(task_id, result=result, reviewed_by=reviewed_by)
 
 
 def fail_task(task_id, reason=None, db_path=None):
-    """Marca como falha task, validando a transição para FAILED via state machine."""
+    """Marca uma task como FAILED validando a transição via state machine."""
     return transition_task(task_id, TaskStatus.FAILED, result=reason, notes=reason, db_path=db_path)
 
 
 def submit_for_review(task_id, result=None, db_path=None):
-    """Submete task para review, validando a transição para PENDING_REVIEW atomicamente."""
+    """Submete uma task para review (PENDING_REVIEW)."""
     return _repository(db_path).submit_for_review(task_id, result=result)
 
 
 def claim_review_task(agent_name, job_id=None, db_path=None):
-    """Atomically claim a pending_review task executed and not already reviewed by this agent."""
+    """Reserva atomicamente uma task em pending_review não revisada por este agente."""
     return _repository(db_path).claim_review_task(agent_name, job_id=job_id)
 
 
 def transition_task(task_id, to_status, result=_UNSET, notes=_UNSET, approved_by=_UNSET, db_path=None):
-    """Transiciona uma task para to_status validando a transição via can_transition().
-
-    Retorna True em sucesso, False se a task não existir ou a transição for inválida.
-    A operação é atômica: leitura e escrita ocorrem na mesma conexão.
-    Colunas não fornecidas (sentinela _UNSET) são preservadas — não são sobrescritas.
-    """
+    """Transiciona uma task validando a mudança de estado via state machine."""
     kwargs = {}
     if result is not _UNSET:
         kwargs["result"] = result
@@ -210,7 +200,7 @@ def transition_task(task_id, to_status, result=_UNSET, notes=_UNSET, approved_by
 
 
 def drop_db(db_path):
-    """Remove db."""
+    """Remove o arquivo do banco de tasks do disco."""
     if os.path.exists(db_path):
         os.remove(db_path)
 

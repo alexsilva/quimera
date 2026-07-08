@@ -69,10 +69,10 @@ quimera --connect deepseek --driver openai --model deepseek-reasoner \
 
 ## Herdar comando de profile base
 
-Alguns profiles CLI têm placeholder `--model=`. É possível criar uma conexão usando `--base` e `--model`:
+Alguns profiles CLI têm placeholder `--model=`. É possível criar uma conexão usando `--profile` e `--model`:
 
 ```bash
-quimera --connect opencode-qwen --base opencode --model qwen/qwen3-coder
+quimera --connect opencode-qwen --profile opencode --model qwen/qwen3-coder
 ```
 
 ## Listar e remover conexões
@@ -92,8 +92,4 @@ No chat, use:
 
 ## Integração MCP por agente
 
-- Claude recebe `--mcp-config` JSON.
-- Codex recebe argumentos `-c mcp_servers.quimera.*`.
-- OpenCode recebe `OPENCODE_CONFIG_CONTENT`.
-- Agentes OpenAI-compatible usam tools nativas quando suportadas pelo driver.
-- Profiles sem integração MCP continuam podendo rodar como CLI normal, mas não recebem o runtime via MCP.
+Consulte ARCHITECTURE.md (seção *MCP Injection*) para detalhes sobre injeção MCP por perfil de agente.

@@ -29,7 +29,7 @@ class _TaskRepositoryProto(Protocol):
 
 
 class TaskRouter:
-    """Resolve seleção de agentes para execução de tasks."""
+    """Roteia tasks entre agentes com scoring e balanceamento de carga."""
 
     def __init__(
         self,
@@ -87,7 +87,7 @@ class TaskRouter:
         return None
 
     def get_task_routing_profiles(self) -> list[_TaskProfileProto]:
-        """Retorna os profiles elegíveis para roteamento de tasks."""
+        """Retorna profiles executáveis disponíveis para roteamento."""
         routable_profiles = self._iter_routable_profiles()
 
         if not self.active_agents or "*" in self.active_agents:

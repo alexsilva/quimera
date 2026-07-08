@@ -42,12 +42,12 @@ _DEFAULT_GREP_EXCLUDED_DIRS = frozenset({
 
 
 def get_staging_root() -> Path | None:
-    """Retorna staging root."""
+    """Retorna o diretório staging ativo da thread atual, ou None."""
     return getattr(_thread_local, "staging_root", None)
 
 
 def set_staging_root(path: Path | None) -> None:
-    """Define staging root."""
+    """Define o diretório staging para isolar operações de arquivo na thread atual."""
     _thread_local.staging_root = path
     if path:
         _logger.debug("staging initialized: %s (thread=%s)", path, threading.current_thread().name)
@@ -56,7 +56,7 @@ def set_staging_root(path: Path | None) -> None:
 
 
 class FileTools(ToolBase):
-    """Implementa `FileTools`."""
+    """Ferramentas de manipulação de arquivos com confinamento ao workspace e staging."""
 
     def __init__(self, config: ToolRuntimeConfig) -> None:
         """Inicializa uma instância de FileTools."""
@@ -101,7 +101,7 @@ class FileTools(ToolBase):
         raise ValueError(f"Path fora da workspace: {raw_path}")
 
     def list_files(self, call: ToolCall) -> ToolResult:
-        """Lista files."""
+        """Lista arquivos e diretórios em um caminho dentro do workspace."""
         staging = get_staging_root()
         workspace = self.config.workspace_root
         raw_path = call.arguments.get("path", ".")
@@ -193,7 +193,7 @@ class FileTools(ToolBase):
         )
 
     def write_file(self, call: ToolCall) -> ToolResult:
-        """Escreve file."""
+        """Escreve conteúdo em um arquivo com modos overwrite, append ou create."""
         path = self._resolve_mutable_path(call.arguments["path"])
         path.parent.mkdir(parents=True, exist_ok=True)
         mode = str(call.arguments.get("mode", "overwrite"))
@@ -287,7 +287,7 @@ class FileTools(ToolBase):
             return ToolResult(ok=False, tool_name=call.name, error=str(exc))
 
     def grep_search(self, call: ToolCall) -> ToolResult:
-        """Executa grep search."""
+        """Busca padrão textual em arquivos com suporte a glob, contexto e exclusão de diretórios."""
         staging = get_staging_root()
         workspace = self.config.workspace_root
         raw_path = call.arguments.get("path", ".")

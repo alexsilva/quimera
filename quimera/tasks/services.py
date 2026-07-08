@@ -45,7 +45,7 @@ _BACKGROUND_AGENT_TIMEOUT_SECONDS = 120
 
 
 class _BackgroundDispatchAppProxy:
-    """Adapter mínimo para reusar ``AppDispatchServices`` em tasks de background."""
+    """Proxy que expõe serviços de dispatch para execução em background isolada."""
 
     def __init__(
         self,
@@ -157,6 +157,7 @@ class _BackgroundDispatchAppProxy:
         return self.task_services._get_record_failure()
 
     def print_response(self, agent, response):
+        """Renderiza a resposta do agente no terminal."""
         dispatch_services = self.task_services._get_dispatch_services()
         if dispatch_services is not None:
             return dispatch_services.print_response(agent, response)
@@ -590,30 +591,25 @@ class AppTaskServices:
         return self._workspace_policy_getter() if callable(self._workspace_policy_getter) else None
 
     def bind_dispatch_services(self, dispatch_services: AppDispatchServices | None) -> None:
-        """Associa explicitamente os serviços primários de dispatch após o bootstrap."""
+        """Vincula serviços de dispatch ao bootstrap."""
         self._dispatch_services = dispatch_services
 
     def bind_dispatch_tool_executor(self, tool_executor: ToolExecutor | None) -> None:
-        """Associa explicitamente o ToolExecutor primário após sua criação."""
+        """Vincula o ToolExecutor primário após sua criação."""
         self._dispatch_tool_executor = tool_executor
 
     def bind_session_services(self, session_services: Any) -> None:
-        """Associa explicitamente os serviços de sessão após o bootstrap."""
+        """Vincula serviços de sessão após o bootstrap."""
         self._session_services = session_services
 
     def bind_primary_approval_handler(self, approval_handler: Any) -> None:
-        """Associa explicitamente o approval handler primário após o bootstrap."""
+        """Vincula o approval handler primário após o bootstrap."""
         self._approval_handler = approval_handler
 
     # ── Setup / bootstrap ──────────────────────────────────────────────
 
     def setup_task_executors(self, claim_gate=None):
-        """Inicializa executores assíncronos para tasks humanas.
-
-        ``claim_gate`` é um callable opcional que retorna True quando o executor
-        pode reivindicar tasks. Em modo single-thread, deve retornar False enquanto
-        o loop de chat estiver processando uma mensagem.
-        """
+        """Inicializa executores assíncronos para tasks humanas."""
         failover_policy = self._build_task_failover_policy()
         task_execution_service = self._build_task_execution_service(failover_policy)
         task_review_service = self._build_task_review_service(failover_policy)
@@ -647,7 +643,7 @@ class AppTaskServices:
         register_as_primary: bool = True,
         allow_ask_user: bool = True,
     ) -> ToolExecutor:
-        """Cria o executor de ferramentas do app com a configuração padrão."""
+        """Cria o executor de ferramentas com configuração padrão."""
         renderer = self._get_renderer()
         input_services = self._get_input_services()
         input_gate = self._get_input_gate()
@@ -685,7 +681,7 @@ class AppTaskServices:
         index: int,
         cancel_event: threading.Event | None = None,
     ):
-        """Executa chamada paralela isolando staging e cliente por worker."""
+        """Executa chamada de agente em paralelo com staging isolado por worker."""
         background_dispatch = self._create_background_dispatch_services(
             cancel_checker_override=(
                 (lambda: bool(cancel_event and cancel_event.is_set()))
@@ -713,7 +709,7 @@ class AppTaskServices:
                 close()
 
     def stop_task_executors(self):
-        """Interrompe executores de tasks em segundo plano."""
+        """Interrompe todos os executores de tasks em segundo plano."""
         for executor in self._task_executors():
             try:
                 executor.stop()
@@ -734,7 +730,7 @@ class AppTaskServices:
     # ── Overview / estado compartilhado ─────────────────────────────────
 
     def build_task_overview(self) -> dict:
-        """Resumo do estado atual das tasks abertas (delega ao repositório)."""
+        """Compila resumo das tasks abertas para o agente."""
         repo = self._build_task_repository()
         current_job_id = self._current_job_id()
         try:
@@ -777,7 +773,7 @@ class AppTaskServices:
             return {"job_id": current_job_id, "error": str(exc)}
 
     def refresh_task_shared_state(self) -> None:
-        """Sincroniza estado compartilhado de tasks no app (delega ao repositório)."""
+        """Atualiza o shared_state com overview e TODOs atuais."""
         shared_state = self._get_shared_state()
         current_job_id = self._current_job_id()
         workspace = self._get_workspace()
@@ -805,35 +801,35 @@ class AppTaskServices:
     # ── Prompt factory delegates ───────────────────────────────────────
 
     def task_context_history_window(self) -> int:
-        """Janela de histórico usada no contexto de tasks."""
+        """Retorna a janela de histórico configurada para tasks."""
         return self._build_task_prompt_factory().task_context_history_window()
 
     def format_task_chat_context(self) -> str:
-        """Serializa histórico recente para uso em prompts de task."""
+        """Serializa o histórico recente para uso em prompts de task."""
         return self._build_task_prompt_factory().format_task_chat_context()
 
     def build_task_body(self, description: str) -> str:
-        """Monta o payload completo de execução de uma task."""
+        """Monta o payload completo de execução para uma task."""
         return self._build_task_prompt_factory().build_task_body(description)
 
     # ── Task router delegates ──────────────────────────────────────────
 
     def get_task_routing_profiles(self):
-        """Retorna profiles elegíveis para roteamento de tasks."""
+        """Retorna os profiles elegíveis para roteamento de tasks."""
         return self._build_task_router().get_task_routing_profiles()
 
     def count_agent_open_tasks(self, agent_name: str) -> int:
-        """Conta tasks abertas associadas ao agente."""
+        """Conta tasks pendentes e em andamento de um agente."""
         return self._build_task_router().count_agent_open_tasks(agent_name)
 
     def choose_agent_with_load_balance(self, task_type: str) -> str | None:
-        """Seleciona melhor agente considerando carga."""
+        """Seleciona o melhor agente para uma task considerando carga."""
         return self._build_task_router().choose_agent_with_load_balance(task_type)
 
     # ── Handlers / comando ─────────────────────────────────────────────
 
     def handle_task_command(self, command: str) -> None:
-        """Processa o comando ``/task <descrição>``."""
+        """Processa o comando /task: classifica, roteia e persiste a task."""
         renderer = self._get_renderer()
         description = parse_task_command(command)
         if not description:
@@ -1052,7 +1048,7 @@ def delegate_for_parallel_with_client(
     staging_root: Path,
     index: int,
 ):
-    """Executa chamada paralela do agente isolando staging por thread."""
+    """Executa chamada paralela de agente com staging isolado por thread."""
     from ..runtime.tools.files import set_staging_root
 
     set_staging_root(staging_root / str(index))

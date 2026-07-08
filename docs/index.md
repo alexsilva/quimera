@@ -24,7 +24,10 @@ Use este guia se você precisa:
 | Entender MCP, ferramentas e aprovações | [MCP e ferramentas](guia/mcp-e-ferramentas.md) |
 | Localizar arquivos persistidos e contexto | [Estado, memória e evidências](guia/estado-e-memoria.md) |
 | Consultar flags e comandos | [Referência de CLI](referencia/cli.md) e [Comandos slash](referencia/comandos.md) |
-| Trabalhar no código | [Arquitetura interna](desenvolvimento/arquitetura.md) e [Testes](desenvolvimento/testes.md) |
+ | Trabalhar no código | [Arquitetura interna](desenvolvimento/arquitetura.md), [Fluxos](desenvolvimento/fluxos.md), [Aprovação](desenvolvimento/aprovacao.md) e [Testes](desenvolvimento/testes.md) |
+| Configurar o Quimera | [Configuração](guia/configuracao.md) |
+| Referência técnica | [CLI](referencia/cli.md), [Comandos slash](referencia/comandos.md), [Dependências](referencia/dependencias.md), [Estrutura de dados](referencia/estrutura-de-dados.md) e [Troubleshooting](referencia/troubleshooting.md) |
+| Fluxo de interação entre agentes | [Agent interaction flow](architecture/agent-interaction-flow.md) |
 
 ## Como publicar ou validar a documentação
 
@@ -38,13 +41,3 @@ Para validação não interativa:
 ```bash
 mkdocs build --strict
 ```
-
-## Atualização recente da documentação
-
-Recentemente, esta documentação foi atualizada para refletir mudanças no pipeline de renderização do Quimera:
-
-1. **Arquitetura interna**: Adicionado detalhes sobre o pipeline de estilo do `TerminalRenderer` (renderer.py:401, 1611-1613) após mudanças que afetaram a aplicação de estilos `dim`/`muted` em output de ferramentas.
-
-2. **Testes**: Adicionado seções sobre como testar e depurar estilos de UI, especialmente o bug recente onde saída de ferramentas não aparece com opacidade reduzida.
-
-Para detalhes completos, leia [Arquitetura interna](desenvolvimento/arquitetura.md) e [Testes](desenvolvimento/testes.md).

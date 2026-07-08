@@ -77,9 +77,11 @@ class InputBroker:
         self._consumer.start()
 
     def set_renderer(self, renderer) -> None:
+        """Define o renderer de terminal para exibição de prompts."""
         self._renderer = renderer
 
     def set_input_gate(self, gate) -> None:
+        """Define o InputGate para leitura segura de input em terminal interativo."""
         self._input_gate = gate
 
     def set_spinner_callbacks(self, suspend_spinner_fn, resume_spinner_fn) -> None:

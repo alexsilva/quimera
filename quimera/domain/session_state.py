@@ -43,7 +43,7 @@ class SessionState:
         return self._history
 
     def history_snapshot(self) -> list:
-        """Retorna uma cópia rasa thread-safe do histórico."""
+        """Cópia rasa thread-safe do histórico."""
         with self._lock:
             return list(self._history)
 
@@ -52,12 +52,12 @@ class SessionState:
             self._history.append(msg)
 
     def replace_history(self, messages: list) -> None:
-        """Substitui o conteúdo do histórico mantendo a referência da lista."""
+        """Substitui o histórico mantendo a referência da lista original."""
         with self._lock:
             self._history[:] = list(messages)
 
     def trim_history(self, limit: int) -> tuple[int, list]:
-        """Aplica limite ao histórico mantendo a referência e retorna snapshot final."""
+        """Aplica limite ao histórico e retorna quantidade de itens removidos."""
         with self._lock:
             if not isinstance(limit, int) or limit <= 0 or len(self._history) <= limit:
                 return 0, list(self._history)
@@ -66,7 +66,7 @@ class SessionState:
             return dropped, list(self._history)
 
     def append_history_trimmed_and_snapshot(self, msg: dict, limit: int) -> tuple[int, list]:
-        """Adiciona mensagem, aplica limite e retorna snapshot em uma transação."""
+        """Adiciona mensagem, aplica limite e retorna snapshot numa única transação."""
         with self._lock:
             self._history.append(msg)
             if isinstance(limit, int) and limit > 0 and len(self._history) > limit:
@@ -82,11 +82,7 @@ class SessionState:
         prefix_length: int,
         replacement_prefix: list,
     ) -> tuple[bool, list]:
-        """Substitui histórico se o prefixo esperado ainda estiver intacto.
-
-        Mensagens adicionadas após ``prefix_length`` são preservadas e um snapshot
-        do histórico atual/final é retornado junto com o resultado da comparação.
-        """
+        """Substitui o histórico apenas se o prefixo esperado ainda estiver intacto."""
         with self._lock:
             current_snapshot = list(self._history)
             if current_snapshot[:prefix_length] != expected_prefix:
@@ -109,7 +105,7 @@ class SessionState:
         return self._shared_state
 
     def shared_state_snapshot(self) -> dict:
-        """Retorna uma cópia rasa do shared_state sob o lock dedicado."""
+        """Cópia rasa thread-safe do shared_state."""
         with self._shared_state_lock:
             return dict(self._shared_state)
 
@@ -148,7 +144,7 @@ class SessionState:
             return self._call_index
 
     def increment_call_index(self) -> int:
-        """Incrementa e retorna o novo valor atomicamente."""
+        """Incrementa o contador de chamadas e retorna o novo valor."""
         with self._lock:
             self._call_index += 1
             return self._call_index
@@ -179,7 +175,7 @@ class SessionState:
             self._session_meta.update(kwargs)
 
     def snapshot(self) -> dict:
-        """Cópia superficial thread-safe da session_meta."""
+        """Cópia thread-safe da session_meta."""
         with self._lock:
             return dict(self._session_meta)
 
