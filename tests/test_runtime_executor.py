@@ -438,22 +438,26 @@ def test_executor_delegate_dispatches_with_delegation_mode(tmp_path):
 
     assert result.ok is True
     assert result.content == "delegated ok"
-    dispatch.assert_called_once_with(
-        "codex",
-        delegation={
-            "task": "ajuste de bug",
-            "context": "arquivo quimera/runtime/executor.py",
-        },
-        delegation_only=True,
-        protocol_mode="delegation",
-        primary=False,
-        silent=False,
-        show_output=False,
-        persist_history=True,
-        history_snapshot=[],
-        max_retries=3,
-        progress_callback=None,
-    )
+    dispatch.assert_called_once()
+    args, kwargs = dispatch.call_args
+    assert args == ("codex",)
+    assert kwargs["delegation"]["task"] == "ajuste de bug"
+    assert kwargs["delegation"]["context"] == "arquivo quimera/runtime/executor.py"
+    assert kwargs["delegation"]["delegation_id"].startswith("dlg-")
+    assert kwargs["delegation"]["chain"] == ["codex"]
+    assert kwargs == {
+        "delegation": kwargs["delegation"],
+        "delegation_only": True,
+        "protocol_mode": "delegation",
+        "primary": False,
+        "silent": False,
+        "show_output": False,
+        "persist_history": True,
+        "history_snapshot": [],
+        "max_retries": 3,
+        "from_agent": None,
+        "progress_callback": None,
+    }
 
 
 def test_executor_delegate_fails_when_dispatch_not_injected(tmp_path):

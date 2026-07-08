@@ -132,10 +132,11 @@ def test_prompt_includes_render_debug_block_when_active():
     prompt = builder.build(agent="codex", history=[{"role": "human", "content": "investigue o bug visual"}])
 
     debug_block = _extract_block(prompt, "debug_state")
-    assert "Auditoria de renderização ativa nesta sessão." in debug_block
+    assert debug_block.startswith("Logs:")
     assert "/tmp/test/data/logs/render/render.jsonl" in debug_block
     assert "/tmp/test/data/logs/render/render.ansi" in debug_block
     assert "/tmp/test/data/logs/metrics/test-session.jsonl" in debug_block
+    assert "Counter" in debug_block
 
 
 def test_prompt_omits_render_debug_block_when_inactive():

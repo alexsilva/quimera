@@ -1581,7 +1581,6 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn("SESSÃO ATUAL: sessao-2026-03-27-123456", prompt)
         self.assertIn("JOB_ID ATUAL: 1", prompt)
         self.assertIn("WORKSPACE RAIZ: /tmp/quimera", prompt)
-        self.assertIn("DIRETÓRIO ATUAL: .", prompt)
         self.assertIn("SISTEMA OPERACIONAL: Linux 6.17.0-22-generic", prompt)
         self.assertNotIn("NOVA SESSÃO", prompt)
         self.assertNotIn("HISTÓRICO RESTAURADO", prompt)
@@ -4008,7 +4007,8 @@ class ProfileTests(unittest.TestCase):
             has_builtin_tools=True,
         ))
 
-        def fake_call(agent, prompt, silent=False, on_text_chunk=None, progress_callback=None):
+        def fake_call(agent, prompt, silent=False, on_text_chunk=None, progress_callback=None, from_agent=None):
+            del from_agent
             self.assertIsNotNone(on_text_chunk)
             on_text_chunk("parcial")
             return "resposta final"

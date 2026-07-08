@@ -22,10 +22,11 @@ def test_quimera_app_public_api_surface_is_stable():
     assert hasattr(app_module, "PromptAwareStderrHandler")
 
 
-def test_runtime_mcp_logger_uses_app_handler():
-    """Verifica que runtime mcp logger uses app handler."""
+def test_runtime_mcp_logger_uses_file_handler_only():
+    """MCP server deve ir para arquivo, sem vazar ruído para o chat."""
     mcp_logger = logging.getLogger("quimera.runtime.mcp.server")
 
-    assert app_config.handler in mcp_logger.handlers
+    assert app_config.handler not in mcp_logger.handlers
+    assert any(isinstance(handler, logging.FileHandler) for handler in mcp_logger.handlers)
     assert mcp_logger.propagate is False
     assert mcp_logger.level == app_config.numeric_level

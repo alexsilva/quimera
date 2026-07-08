@@ -28,8 +28,8 @@ class FakeAgentClient:
         self.exc = exc
         self.flushed = False
 
-    def call(self, agent, prompt, *, silent=False, on_text_chunk=None, progress_callback=None):
-        del agent, prompt, silent, progress_callback
+    def call(self, agent, prompt, *, silent=False, on_text_chunk=None, progress_callback=None, from_agent=None):
+        del agent, prompt, silent, progress_callback, from_agent
         if self.exc is not None:
             raise self.exc
         for chunk in self.chunks:
