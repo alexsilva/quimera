@@ -1,6 +1,7 @@
 """Converte prompts estruturados do Quimera para mensagens do driver."""
 from __future__ import annotations
 
+from ...clipboard_support import build_openai_multimodal_content
 from ...prompt_kinds import PromptKind, coerce_prompt_kind
 from ...prompt_templates import PromptText
 
@@ -10,6 +11,12 @@ TOOL_SYSTEM_PROMPT = (
     "Não peça ao usuário para executar comandos manualmente se você pode fazer isso diretamente; "
     "Na resposta final, resuma arquivos alterados, evidência de validação e próximo passo; "
 )
+
+# Blocos "user" que podem carregar imagem anexada e, portanto, devem ser
+# convertidos para conteúdo multimodal quando o destino é OpenAI-compatible.
+# Cobre chat (current_turn) e os modos task (delegação/review) — sem isso a
+# imagem chegaria apenas como texto no perfil task.
+_MULTIMODAL_USER_BLOCKS = frozenset({"current_turn", "task_delegation", "task_review"})
 
 # Mapa direto: PromptKind -> nome do bloco -> role no payload OpenAI-compatible.
 # Blocos ausentes no mapa são omitidos intencionalmente.
@@ -44,7 +51,11 @@ ROLES_BY_KIND = {
 }
 
 
-def _message(role: str, content: str, title: str = "") -> dict:
+def _message(role: str, content: str | list[dict], title: str = "") -> dict:
+    if isinstance(content, list):
+        if title:
+            content = [{"type": "text", "text": title}] + content
+        return {"role": role, "content": content}
     body = str(content or "").strip()
     title = str(title or "").strip()
     if title:
@@ -55,6 +66,8 @@ def _message(role: str, content: str, title: str = "") -> dict:
 def _message_from_block(block, role: str) -> dict:
     if role == "system":
         return _message("system", block.content, block.title)
+    if block.name in _MULTIMODAL_USER_BLOCKS:
+        return _message("user", build_openai_multimodal_content(block.content))
     return _message("user", block.content)
 
 

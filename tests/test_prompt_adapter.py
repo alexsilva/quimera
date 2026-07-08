@@ -1,6 +1,8 @@
 """Testes puros do adapter de prompt para payload OpenAI-compatible."""
 from __future__ import annotations
 
+import base64
+
 import pytest
 
 from quimera.prompt_kinds import PromptKind
@@ -66,6 +68,48 @@ def test_build_openai_messages_keeps_current_turn_last_with_embedded_xml():
     assert "Analise este HTML/XML" in messages[-1]["content"]
     assert "<recent_conversation>não é histórico</recent_conversation>" in messages[-1]["content"]
     assert messages[-1]["content"].count("não é histórico") == 1
+
+
+def test_build_openai_messages_upgrades_current_turn_image_marker_for_openai(tmp_path):
+    image_path = tmp_path / "clipboard.png"
+    raw = b"\x89PNG\r\n\x1a\nfake"
+    image_path.write_bytes(raw)
+    expected = "data:image/png;base64," + base64.b64encode(raw).decode("ascii")
+    prompt = (
+        '<rules title="Suas regras">contexto</rules>\n'
+        '<current_turn title="Pedido atual">\n'
+        f'Analise isto <attached_image path="{image_path}" mime="image/png" /> agora\n'
+        '</current_turn>'
+    )
+
+    messages = _build_openai_messages_from_prompt(_rendered(prompt))
+
+    assert messages[-1]["role"] == "user"
+    assert isinstance(messages[-1]["content"], list)
+    assert messages[-1]["content"][0] == {"type": "text", "text": "Analise isto"}
+    assert messages[-1]["content"][1] == {"type": "image_url", "image_url": {"url": expected}}
+    assert messages[-1]["content"][2] == {"type": "text", "text": "agora"}
+
+
+def test_build_openai_messages_upgrades_task_delegation_image_for_openai(tmp_path):
+    """Imagem também chega multimodal no modo task (não só no chat)."""
+    image_path = tmp_path / "clipboard.png"
+    raw = b"\x89PNG\r\n\x1a\nfake"
+    image_path.write_bytes(raw)
+    expected = "data:image/png;base64," + base64.b64encode(raw).decode("ascii")
+    prompt = (
+        '<task_execution_rules title="Protocolo">\n- Leia o alvo.\n</task_execution_rules>\n'
+        '<task_delegation title="Task atribuída">\n'
+        f'Corrija o layout <attached_image path="{image_path}" mime="image/png" />\n'
+        '</task_delegation>'
+    )
+
+    messages = _build_openai_messages_from_prompt(_rendered(prompt, PromptKind.TASK_EXECUTOR))
+
+    assert messages[-1]["role"] == "user"
+    assert isinstance(messages[-1]["content"], list)
+    assert messages[-1]["content"][0] == {"type": "text", "text": "Corrija o layout"}
+    assert messages[-1]["content"][1] == {"type": "image_url", "image_url": {"url": expected}}
 
 
 def test_build_openai_messages_keeps_current_turn_last_and_omits_metrics():

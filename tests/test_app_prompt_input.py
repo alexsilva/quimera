@@ -1,6 +1,7 @@
 """Tests for Textual UI input gate and renderer modules."""
 import asyncio
 import threading
+import time
 
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -189,6 +190,225 @@ def test_textual_post_exit_failure_recorder_ignores_empty_payload():
     assert _append_post_exit_failure_message(messages, TextualUiEvent("warning", None)) is False
 
     assert messages == []
+
+
+def test_completion_input_pastes_clipboard_payload():
+    from textual.app import App, ComposeResult
+
+    from quimera.ui.textual.widgets import _CompletionInput
+
+    class InputApp(App):
+        def compose(self) -> ComposeResult:
+            yield _CompletionInput(id="input", clipboard_paste_handler=lambda: "texto colado")
+
+    async def run_test() -> None:
+        app = InputApp()
+        async with app.run_test() as pilot:
+            widget = app.query_one("#input", _CompletionInput)
+            widget.cursor_position = len(widget.value)
+            widget.action_paste_clipboard()
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert widget.user_value == "texto colado"
+
+    asyncio.run(run_test())
+
+
+def test_completion_input_displays_attachment_placeholder_and_submits_marker():
+    from textual.app import App, ComposeResult
+
+    from quimera.clipboard_support import build_attached_image_marker
+    from quimera.ui.textual.widgets import _CompletionInput
+
+    marker = build_attached_image_marker("/tmp/quimera-clipboard-test.png")
+
+    class InputApp(App):
+        def compose(self) -> ComposeResult:
+            yield _CompletionInput(id="input", clipboard_paste_handler=lambda: marker)
+
+    async def run_test() -> None:
+        app = InputApp()
+        async with app.run_test() as pilot:
+            widget = app.query_one("#input", _CompletionInput)
+            widget.cursor_position = len(widget.value)
+            widget.action_paste_clipboard()
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert widget.user_value == "[imagem anexada 1]"
+            assert widget.submission_value == marker
+
+    asyncio.run(run_test())
+
+
+def test_completion_input_has_f8_clipboard_fallback_binding():
+    from quimera.ui.textual.widgets import _CompletionInput
+
+    bindings = {
+        binding.key: binding.action
+        for binding in _CompletionInput.BINDINGS
+    }
+
+    assert bindings["ctrl+v"] == "paste_clipboard"
+    assert bindings["f8"] == "paste_clipboard"
+
+
+def test_completion_input_notifies_when_clipboard_paste_is_empty():
+    from textual.app import App, ComposeResult
+
+    from quimera.ui.textual.widgets import _CompletionInput
+
+    class InputApp(App):
+        def compose(self) -> ComposeResult:
+            yield _CompletionInput(id="input", clipboard_paste_handler=lambda: None)
+
+    async def run_test() -> None:
+        app = InputApp()
+        async with app.run_test() as pilot:
+            widget = app.query_one("#input", _CompletionInput)
+            widget.action_paste_clipboard()
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert widget.user_value == ""
+            assert any(
+                "clipboard" in notification.title.lower()
+                for notification in app._notifications
+            )
+
+    asyncio.run(run_test())
+
+
+def test_completion_input_insert_user_text_preserves_prefix():
+    from textual.app import App, ComposeResult
+
+    from quimera.ui.textual.widgets import _CompletionInput
+
+    class InputApp(App):
+        def compose(self) -> ComposeResult:
+            yield _CompletionInput(id="input")
+
+    async def run_test() -> None:
+        app = InputApp()
+        async with app.run_test() as pilot:
+            widget = app.query_one("#input", _CompletionInput)
+            widget.cursor_position = 0
+            widget.insert_user_text("abc")
+            await pilot.pause()
+            assert widget.value.startswith(">>>: ")
+            assert widget.user_value == "abc"
+
+    asyncio.run(run_test())
+
+
+def test_completion_input_submit_waits_for_pending_clipboard_paste():
+    from textual.app import App, ComposeResult
+    from textual.widgets import Input
+
+    from quimera.app.completion_dropdown import CompletionDropdown
+    from quimera.ui.textual.widgets import _CompletionInput
+
+    class InputApp(App):
+        def __init__(self) -> None:
+            super().__init__()
+            self.submitted_values: list[str] = []
+
+        def compose(self) -> ComposeResult:
+            yield _CompletionInput(
+                id="input",
+                clipboard_paste_handler=lambda: (time.sleep(0.05), "imagem colada")[1],
+            )
+            yield CompletionDropdown()
+
+        def on_input_submitted(self, event: Input.Submitted) -> None:
+            self.submitted_values.append(event.input.user_value)
+
+    async def run_test() -> None:
+        app = InputApp()
+        async with app.run_test() as pilot:
+            widget = app.query_one("#input", _CompletionInput)
+            widget.action_paste_clipboard()
+            await widget.action_submit()
+            await pilot.pause()
+            assert app.submitted_values == ["imagem colada"]
+
+    asyncio.run(run_test())
+
+
+def test_completion_input_submit_expands_attachment_placeholder():
+    from textual.app import App, ComposeResult
+    from textual.widgets import Input
+
+    from quimera.app.completion_dropdown import CompletionDropdown
+    from quimera.clipboard_support import build_attached_image_marker
+    from quimera.ui.textual.widgets import _CompletionInput
+
+    marker = build_attached_image_marker("/tmp/quimera-clipboard-submit.png")
+
+    class InputApp(App):
+        def __init__(self) -> None:
+            super().__init__()
+            self.submitted_values: list[str] = []
+
+        def compose(self) -> ComposeResult:
+            yield _CompletionInput(id="input", clipboard_paste_handler=lambda: marker)
+            yield CompletionDropdown()
+
+        def on_input_submitted(self, event: Input.Submitted) -> None:
+            value = getattr(event.input, "submission_value", event.input.user_value)
+            self.submitted_values.append(value)
+
+    async def run_test() -> None:
+        app = InputApp()
+        async with app.run_test() as pilot:
+            widget = app.query_one("#input", _CompletionInput)
+            widget.action_paste_clipboard()
+            await widget.action_submit()
+            await pilot.pause()
+            assert widget.user_value == "[imagem anexada 1]"
+            assert app.submitted_values == [marker]
+
+    asyncio.run(run_test())
+
+
+def test_completion_input_submit_waits_for_second_clipboard_paste_after_cancel():
+    from textual.app import App, ComposeResult
+    from textual.widgets import Input
+
+    from quimera.app.completion_dropdown import CompletionDropdown
+    from quimera.ui.textual.widgets import _CompletionInput
+
+    class InputApp(App):
+        def __init__(self) -> None:
+            super().__init__()
+            self.submitted_values: list[str] = []
+            self._paste_count = 0
+
+        def _paste(self) -> str:
+            self._paste_count += 1
+            if self._paste_count == 1:
+                time.sleep(0.2)
+                return "primeiro paste"
+            time.sleep(0.05)
+            return "segundo paste"
+
+        def compose(self) -> ComposeResult:
+            yield _CompletionInput(id="input", clipboard_paste_handler=self._paste)
+            yield CompletionDropdown()
+
+        def on_input_submitted(self, event: Input.Submitted) -> None:
+            self.submitted_values.append(event.input.user_value)
+
+    async def run_test() -> None:
+        app = InputApp()
+        async with app.run_test() as pilot:
+            widget = app.query_one("#input", _CompletionInput)
+            widget.action_paste_clipboard()
+            await pilot.pause(0.01)
+            widget.action_paste_clipboard()
+            await widget.action_submit()
+            await pilot.pause()
+            assert app.submitted_values == ["segundo paste"]
+
+    asyncio.run(run_test())
 
 
 def test_simple_input_gate_basic():

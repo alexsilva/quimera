@@ -1,6 +1,8 @@
 """Widgets Textual usados pela aplicação principal."""
 from __future__ import annotations
 
+import asyncio
+import logging
 from pathlib import Path
 from typing import Callable
 
@@ -9,11 +11,15 @@ from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.geometry import clamp
+from textual.worker import WorkerCancelled
 from textual.widgets import Header, Input, Static
 from textual.widgets._header import HeaderClock, HeaderClockSpace, HeaderIcon, HeaderTitle
 from textual.widgets._input import Selection
 
 from quimera.app.completion_dropdown import CompletionDropdown, PromptHistorySuggester
+from quimera.clipboard_support import iter_attached_images, strip_attached_image_markers
+
+logger = logging.getLogger(__name__)
 
 
 class _PrefixDimHighlighter(Highlighter):
@@ -33,12 +39,21 @@ class _CompletionInput(Input):
 
     BINDINGS = [
         Binding("escape", "escape", "Fechar popup"),
+        Binding("ctrl+v", "paste_clipboard", "Colar clipboard"),
+        Binding("f8", "paste_clipboard", "Colar clipboard"),
         Binding("ctrl+u", "delete_left_all", "Limpar linha"),
         Binding("ctrl+k", "delete_right_all", "Apagar até fim"),
     ]
 
-    def __init__(self, *args, prefix: str = ">>>: ", **kwargs):
+    def __init__(
+        self,
+        *args,
+        prefix: str = ">>>: ",
+        clipboard_paste_handler: Callable[[], str | None] | None = None,
+        **kwargs,
+    ):
         self._prefix = prefix
+        self._clipboard_paste_handler = clipboard_paste_handler
         kwargs.setdefault("value", prefix)
         kwargs.setdefault("select_on_focus", False)
         kwargs.setdefault("highlighter", _PrefixDimHighlighter(lambda: len(self._prefix)))
@@ -46,6 +61,8 @@ class _CompletionInput(Input):
         self._prompt_history: list[str] = []
         self._history_index = 0
         self._saved_draft = ""
+        self._attached_image_placeholders: dict[str, str] = {}
+        self._attached_image_counter = 0
         self.suggester = PromptHistorySuggester(lambda: self._prompt_history)
 
     @property
@@ -53,6 +70,14 @@ class _CompletionInput(Input):
         """Texto digitado pelo usuário, sem o prefixo."""
         v = self.value
         return v[len(self._prefix):] if v.startswith(self._prefix) else v
+
+    @property
+    def submission_value(self) -> str:
+        """Texto enviado ao runtime, expandindo anexos exibidos como placeholders."""
+        value = self.user_value
+        for placeholder, marker in self._attached_image_placeholders.items():
+            value = value.replace(placeholder, marker)
+        return value
 
     def validate_selection(self, selection: Selection) -> Selection:
         start, end = selection
@@ -74,6 +99,32 @@ class _CompletionInput(Input):
         """Limpa o input, deixando apenas o prefixo."""
         self.value = self._prefix
         self.cursor_position = len(self._prefix)
+        self._attached_image_placeholders.clear()
+
+    def insert_user_text(self, text: str) -> None:
+        """Insere texto respeitando o prefixo fixo."""
+        payload = self._prepare_insert_payload(str(text or ""))
+        if not payload:
+            return
+        if self.cursor_position < len(self._prefix):
+            self.cursor_position = len(self._prefix)
+        self.insert_text_at_cursor(payload)
+
+    def _prepare_insert_payload(self, text: str) -> str:
+        images = iter_attached_images(text)
+        if not images:
+            return text
+        chunks: list[str] = []
+        cursor = 0
+        for image in images:
+            chunks.append(text[cursor:image.start])
+            self._attached_image_counter += 1
+            placeholder = f"[imagem anexada {self._attached_image_counter}]"
+            self._attached_image_placeholders[placeholder] = image.marker
+            chunks.append(placeholder)
+            cursor = image.end
+        chunks.append(text[cursor:])
+        return "".join(chunks)
 
     def action_delete_left(self) -> None:
         if self.cursor_position <= len(self._prefix):
@@ -124,11 +175,13 @@ class _CompletionInput(Input):
             return
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text("\n".join(self._prompt_history[-1000:]) + "\n", encoding="utf-8")
+            entries = [strip_attached_image_markers(entry) for entry in self._prompt_history[-1000:]]
+            path.write_text("\n".join(entries) + "\n", encoding="utf-8")
         except OSError:
             return
 
     async def action_submit(self) -> None:
+        await self._await_pending_clipboard_paste()
         dropdown = self.app.query_one(CompletionDropdown)
         selected = dropdown.get_selected()
         if selected is not None:
@@ -141,6 +194,50 @@ class _CompletionInput(Input):
     def action_escape(self) -> None:
         dropdown = self.app.query_one(CompletionDropdown)
         dropdown.hide()
+
+    def action_paste_clipboard(self) -> None:
+        logger.info("action_paste_clipboard: atalho recebido pelo Textual")
+        handler = self._clipboard_paste_handler
+        if not callable(handler):
+            logger.info("action_paste_clipboard: sem handler configurado")
+            return
+        self.run_worker(
+            self._paste_clipboard_from_handler(handler),
+            name="clipboard-paste",
+            group="clipboard",
+            exclusive=True,
+        )
+
+    async def _paste_clipboard_from_handler(self, handler: Callable[[], str | None]) -> None:
+        """Lê o clipboard fora do event loop para não congelar a TUI.
+
+        A leitura chama ``subprocess`` síncrono (imagem lê todos os bytes inline);
+        rodá-la via ``asyncio.to_thread`` mantém o loop da UI responsivo.
+        """
+        payload = await asyncio.to_thread(handler)
+        logger.info("action_paste_clipboard: payload lido? %s", bool(payload))
+        if payload:
+            self.insert_user_text(payload)
+        else:
+            self.app.notify(
+                "Clipboard vazio ou sem ferramenta de leitura (instale wl-clipboard ou xclip)",
+                title="Colar clipboard",
+                severity="warning",
+            )
+
+    async def _await_pending_clipboard_paste(self) -> None:
+        workers = [
+            worker
+            for worker in self.workers
+            if worker.group == "clipboard" and not worker.is_finished
+        ]
+        if not workers:
+            return
+        for worker in workers:
+            try:
+                await worker.wait()
+            except WorkerCancelled:
+                continue
 
     def key_up(self) -> None:
         dropdown = self.app.query_one(CompletionDropdown)

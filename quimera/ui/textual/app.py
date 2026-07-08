@@ -7,6 +7,8 @@ import threading
 import traceback
 from pathlib import Path
 
+from quimera.clipboard_support import read_clipboard_payload
+
 
 def _is_android() -> bool:
     """Detecta Android para desabilitar mouse tracking no Textual.
@@ -64,6 +66,14 @@ def _append_post_exit_failure_message(
         return False
     messages.append((event.kind, content))
     return True
+
+
+def _read_clipboard_for_input() -> str | None:
+    """Lê texto ou imagem do clipboard e devolve payload inserível no input."""
+    payload = read_clipboard_payload()
+    if payload is None:
+        return None
+    return payload.text
 
 
 def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
@@ -143,7 +153,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
                 yield CompletionDropdown()
             yield Static("", id="agent_status")
             with Horizontal(id="input_bar"):
-                yield _CompletionInput(id="input")
+                yield _CompletionInput(id="input", clipboard_paste_handler=_read_clipboard_for_input)
 
         def on_mount(self) -> None:
             bridge.attach_textual_app(self)
@@ -355,7 +365,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
         def on_input_submitted(self, event: Input.Submitted) -> None:
             event.stop()
             self.query_one(CompletionDropdown).hide()
-            value = event.input.user_value
+            value = getattr(event.input, "submission_value", event.input.user_value)
             event.input.reset_to_prefix()
             bridge.set_input_value("")
             if value:
