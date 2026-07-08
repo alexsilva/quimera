@@ -24,6 +24,7 @@ from .base import ToolBase, ValidatableTool
 logger = logging.getLogger(__name__)
 
 _DELEGATE_TOOL_NAMES = ["delegate", "list_agents"]
+_DELEGATE_ROLES = frozenset({"planner", "executor", "reviewer", "verifier", "synthesizer"})
 
 
 class _DelegateFnProto(Protocol):
@@ -304,6 +305,35 @@ class DelegateTools(ToolBase):
         return chain
 
     @staticmethod
+    def _normalize_role(value: object, field_name: str = "role") -> str:
+        """Normaliza papel opcional da delegação."""
+        if value is None:
+            return ""
+        if not isinstance(value, str):
+            raise ValueError(f"'{field_name}' must be a string when provided")
+        role = value.strip()
+        if not role:
+            raise ValueError(f"'{field_name}' must be a non-empty string when provided")
+        if role not in _DELEGATE_ROLES:
+            allowed = ", ".join(sorted(_DELEGATE_ROLES))
+            raise ValueError(f"'{field_name}' must be one of: {allowed}")
+        return role
+
+    @staticmethod
+    def _normalize_access_list(value: object, field_name: str = "access_list") -> list[str]:
+        """Normaliza escopo declarado opcional da delegação."""
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            raise ValueError(f"'{field_name}' must be a list of strings when provided")
+        normalized: list[str] = []
+        for idx, item in enumerate(value):
+            if not isinstance(item, str) or not item.strip():
+                raise ValueError(f"'{field_name}[{idx}]' must be a non-empty string")
+            normalized.append(item.strip())
+        return normalized
+
+    @staticmethod
     def _execute_single_step(
         step: dict,
         delegate_fn: _DelegateFnProto,
@@ -330,6 +360,12 @@ class DelegateTools(ToolBase):
                 "delegation_id": delegation_id,
                 "chain": DelegateTools._delegation_chain(source_agent, normalized_target_agent or target_agent),
             }
+            role = str(step.get("role") or "").strip()
+            access_list = step.get("access_list") or []
+            if role:
+                delegation["role"] = role
+            if access_list:
+                delegation["access_list"] = list(access_list)
             try:
                 result = delegate_fn(
                     normalized_target_agent,
@@ -541,6 +577,8 @@ class DelegateTools(ToolBase):
         target_agent_raw = arguments.get("target_agent")
         request_raw = arguments.get("request")
         context_raw = arguments.get("context")
+        role_raw = arguments.get("role")
+        access_list_raw = arguments.get("access_list")
         fallback_agents_raw = arguments.get("fallback_agents")
         steps_raw = arguments.get("steps")
 
@@ -601,6 +639,12 @@ class DelegateTools(ToolBase):
             if len(context) > self._DELEGATE_MAX_CONTEXT_CHARS:
                 context = context[: self._DELEGATE_MAX_CONTEXT_CHARS]
 
+        try:
+            role = self._normalize_role(role_raw)
+            access_list = self._normalize_access_list(access_list_raw)
+        except ValueError as exc:
+            return ToolResult(ok=False, tool_name=call.name, error=str(exc))
+
         fallback_agents: list[str] = []
         if fallback_agents_raw is not None:
             if not isinstance(fallback_agents_raw, list):
@@ -631,6 +675,8 @@ class DelegateTools(ToolBase):
                 "target_agent": target_agent,
                 "request": request,
                 "context": context,
+                "role": role,
+                "access_list": access_list,
                 "fallback_agents": fallback_agents,
                 "source_agent": calling_agent or "",
                 "delegation_id": self._new_delegation_id(),
@@ -665,6 +711,8 @@ class DelegateTools(ToolBase):
                 extra_agent = item.get("target_agent")
                 extra_task = item.get("request")
                 extra_context = item.get("context")
+                extra_role = item.get("role")
+                extra_access_list = item.get("access_list")
                 extra_fallback = item.get("fallback_agents", [])
 
                 if not isinstance(extra_agent, str) or not extra_agent.strip():
@@ -691,6 +739,14 @@ class DelegateTools(ToolBase):
                         tool_name=call.name,
                         error=f"steps[{idx}].context must be a string when provided",
                     )
+                try:
+                    normalized_role = self._normalize_role(extra_role, f"steps[{idx}].role")
+                    normalized_access_list = self._normalize_access_list(
+                        extra_access_list,
+                        f"steps[{idx}].access_list",
+                    )
+                except ValueError as exc:
+                    return ToolResult(ok=False, tool_name=call.name, error=str(exc))
                 if not isinstance(extra_fallback, list):
                     return ToolResult(
                         ok=False,
@@ -723,6 +779,8 @@ class DelegateTools(ToolBase):
                         "target_agent": extra_agent.strip(),
                         "request": normalized_task,
                         "context": normalized_context,
+                        "role": normalized_role,
+                        "access_list": normalized_access_list,
                         "fallback_agents": normalized_extra_fallback,
                         "source_agent": calling_agent or "",
                         "delegation_id": self._new_delegation_id(),
@@ -762,6 +820,24 @@ class DelegateTools(ToolBase):
 class DelegateToolsValidator(ValidatableTool):
     """Validação de policy para as ferramentas de delegação."""
 
+    @staticmethod
+    def _validate_role(value: object, field_name: str) -> None:
+        if value is None:
+            return
+        if not isinstance(value, str) or value.strip() not in _DELEGATE_ROLES:
+            allowed = ", ".join(sorted(_DELEGATE_ROLES))
+            raise ToolPolicyError(f"{field_name} deve ser um destes valores: {allowed}")
+
+    @staticmethod
+    def _validate_access_list(value: object, field_name: str) -> None:
+        if value is None:
+            return
+        if not isinstance(value, list):
+            raise ToolPolicyError(f"{field_name} deve ser uma lista")
+        for idx, item in enumerate(value):
+            if not isinstance(item, str) or not item.strip():
+                raise ToolPolicyError(f"{field_name}[{idx}] deve ser string não vazia")
+
     def _validate_delegate(self, call: ToolCall) -> None:
         """Valida delegate: bloqueia campos reservados e exige target_agent/request."""
         reserved = {
@@ -787,6 +863,8 @@ class DelegateToolsValidator(ValidatableTool):
         context = call.arguments.get("context")
         if context is not None and not isinstance(context, str):
             raise ToolPolicyError("delegate.context deve ser string quando fornecido")
+        self._validate_role(call.arguments.get("role"), "delegate.role")
+        self._validate_access_list(call.arguments.get("access_list"), "delegate.access_list")
         fallback_agents = call.arguments.get("fallback_agents", [])
         if fallback_agents is not None and not isinstance(fallback_agents, list):
             raise ToolPolicyError("delegate.fallback_agents deve ser uma lista")
@@ -803,6 +881,11 @@ class DelegateToolsValidator(ValidatableTool):
                     raise ToolPolicyError(f"delegate.steps[{i}].target_agent não pode ser vazio")
                 if not isinstance(step_request, str) or not step_request.strip():
                     raise ToolPolicyError(f"delegate.steps[{i}].request não pode ser vazio")
+                self._validate_role(step.get("role"), f"delegate.steps[{i}].role")
+                self._validate_access_list(
+                    step.get("access_list"),
+                    f"delegate.steps[{i}].access_list",
+                )
 
     def _validate_list_agents(self, call: ToolCall) -> None:
         """list_agents não requer argumentos — sempre válida."""

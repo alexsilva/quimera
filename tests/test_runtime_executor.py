@@ -599,6 +599,70 @@ def test_executor_delegate_supports_multiple_sequential_delegations(tmp_path):
     ]
 
 
+def test_executor_delegate_propagates_role_and_access_list(tmp_path):
+    """delegate propaga role/access_list para step principal e steps adicionais."""
+    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
+    dispatch = MagicMock(return_value="ok")
+    executor.set_delegate_fn(dispatch)
+
+    result = executor.execute(
+        ToolCall(
+            name="delegate",
+            arguments={
+                "target_agent": "codex",
+                "request": "implemente",
+                "role": "executor",
+                "access_list": ["diff", "tests"],
+                "steps": [
+                    {
+                        "target_agent": "claude",
+                        "request": "revise",
+                        "role": "reviewer",
+                        "access_list": ["diff"],
+                    }
+                ],
+            },
+        )
+    )
+
+    assert result.ok is True
+    delegations = [call.kwargs["delegation"] for call in dispatch.call_args_list]
+    assert delegations[0]["role"] == "executor"
+    assert delegations[0]["access_list"] == ["diff", "tests"]
+    assert delegations[1]["role"] == "reviewer"
+    assert delegations[1]["access_list"] == ["diff"]
+
+
+def test_executor_delegate_fallback_inherits_role_and_access_list(tmp_path):
+    """fallback_agents herdam role/access_list do step correspondente."""
+    executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())
+
+    def dispatch(agent_name, **kwargs):
+        if agent_name == "codex":
+            return None
+        delegation = kwargs["delegation"]
+        return f"{agent_name}:{delegation.get('role')}:{','.join(delegation.get('access_list', []))}"
+
+    spy = MagicMock(side_effect=dispatch)
+    executor.set_delegate_fn(spy)
+
+    result = executor.execute(
+        ToolCall(
+            name="delegate",
+            arguments={
+                "target_agent": "codex",
+                "request": "implemente",
+                "role": "executor",
+                "access_list": ["diff", "tests"],
+                "fallback_agents": ["claude"],
+            },
+        )
+    )
+
+    assert result.ok is True
+    assert result.content == "claude:executor:diff,tests"
+
+
 def test_executor_delegate_rejects_agents_outside_active_pool(tmp_path):
     """delegate deve rejeitar alvos que não estão no pool ativo da sessão."""
     executor = ToolExecutor(ToolRuntimeConfig(workspace_root=tmp_path), MagicMock())

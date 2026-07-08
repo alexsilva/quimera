@@ -125,6 +125,18 @@ def test_delegate_schema_mentions_existing_profiles():
     assert "gemini" not in text
 
 
+def test_delegate_schema_includes_role_and_access_list():
+    """Schema do delegate expõe role/access_list na raiz e nos steps."""
+    schema = next(s for s in TOOL_SCHEMAS if s["function"]["name"] == "delegate")
+    properties = schema["function"]["parameters"]["properties"]
+    step_properties = properties["steps"]["items"]["properties"]
+
+    assert properties["role"]["enum"] == ["planner", "executor", "reviewer", "verifier", "synthesizer"]
+    assert properties["access_list"]["items"]["type"] == "string"
+    assert step_properties["role"]["enum"] == ["planner", "executor", "reviewer", "verifier", "synthesizer"]
+    assert step_properties["access_list"]["items"]["type"] == "string"
+
+
 def test_resolve_tool_schemas_hides_task_tools_without_db():
     """Verifica que Test resolve tool schemas hides task tools without db."""
     mock_executor = MagicMock()

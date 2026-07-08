@@ -708,6 +708,92 @@ def test_policy_delegate_steps_valid(policy):
     policy.validate(call)
 
 
+def test_policy_delegate_accepts_role_and_access_list(policy):
+    """delegate aceita role e access_list válidos na raiz e nos steps."""
+    call = ToolCall(name="delegate", arguments={
+        "target_agent": "codex",
+        "request": "faça algo",
+        "role": "executor",
+        "access_list": ["diff", "tests"],
+        "steps": [
+            {
+                "target_agent": "claude",
+                "request": "revise",
+                "role": "reviewer",
+                "access_list": ["diff"],
+            }
+        ],
+    })
+    policy.validate(call)
+
+
+def test_policy_delegate_rejects_invalid_role(policy):
+    """delegate rejeita role fora do enum."""
+    call = ToolCall(name="delegate", arguments={
+        "target_agent": "codex",
+        "request": "faça algo",
+        "role": "worker",
+    })
+    with pytest.raises(ToolPolicyError, match="delegate.role"):
+        policy.validate(call)
+
+
+def test_policy_delegate_rejects_invalid_access_list_item(policy):
+    """delegate rejeita itens vazios em access_list."""
+    call = ToolCall(name="delegate", arguments={
+        "target_agent": "codex",
+        "request": "faça algo",
+        "access_list": ["diff", " "],
+    })
+    with pytest.raises(ToolPolicyError, match=r"delegate.access_list\[1\]"):
+        policy.validate(call)
+
+
+def test_policy_delegate_rejects_invalid_step_role(policy):
+    """delegate rejeita role inválido em steps."""
+    call = ToolCall(name="delegate", arguments={
+        "target_agent": "codex",
+        "request": "faça algo",
+        "steps": [{"target_agent": "claude", "request": "revise", "role": "worker"}],
+    })
+    with pytest.raises(ToolPolicyError, match=r"delegate.steps\[0\].role"):
+        policy.validate(call)
+
+
+def test_policy_delegate_rejects_step_access_list_not_list(policy):
+    """delegate rejeita steps[].access_list que não é lista."""
+    call = ToolCall(name="delegate", arguments={
+        "target_agent": "codex",
+        "request": "faça algo",
+        "steps": [
+            {
+                "target_agent": "claude",
+                "request": "revise",
+                "access_list": "diff",
+            }
+        ],
+    })
+    with pytest.raises(ToolPolicyError, match=r"delegate.steps\[0\].access_list"):
+        policy.validate(call)
+
+
+def test_policy_delegate_rejects_invalid_step_access_list_item(policy):
+    """delegate rejeita itens vazios em steps[].access_list."""
+    call = ToolCall(name="delegate", arguments={
+        "target_agent": "codex",
+        "request": "faça algo",
+        "steps": [
+            {
+                "target_agent": "claude",
+                "request": "revise",
+                "access_list": ["diff", "  "],
+            }
+        ],
+    })
+    with pytest.raises(ToolPolicyError, match=r"delegate.steps\[0\].access_list\[1\]"):
+        policy.validate(call)
+
+
 def test_policy_delegate_blocked_tools(policy):
     """delegate é bloqueado quando na lista blocked_tools."""
     policy.blocked_tools = ["delegate"]

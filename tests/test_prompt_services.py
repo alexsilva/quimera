@@ -8,7 +8,19 @@ from quimera.shared_state_presenter import SharedStatePresenter
 from quimera.shared_state import PROMPT_REFERENCE_KEYS, TASK_REFERENCE_KEYS
 from quimera.delegate_presenter import DelegatePresenter
 from quimera.execution_mode_presenter import ExecutionModePresenter
+from quimera.prompt import PromptBuilder
 from quimera.prompt_budget import PromptBudget
+from quimera.prompt_kinds import PromptKind
+
+
+class _DummyContextManager:
+    SUMMARY_MARKER = "<SUMMARY>"
+
+    def load(self):
+        return ""
+
+    def load_session(self):
+        return ""
 
 
 class TestMemorySelector:
@@ -355,6 +367,65 @@ class TestDelegatePresenter:
         fields = DelegatePresenter.present(delegation, from_agent="qwen")
         assert fields["delegation_chain"] == "claude -> codex"
         assert fields["delegation_from"] == "qwen"
+
+    def test_present_dict_with_role_and_access_list(self):
+        """Verifica que role e access_list são renderizados para o prompt delegado."""
+        delegation = {
+            "task": "Revisar",
+            "role": "reviewer",
+            "access_list": ["diff", "tests"],
+        }
+        fields = DelegatePresenter.present(delegation, from_agent="claude")
+
+        assert fields["delegation_role"] == "revisor"
+        assert "Revise" in fields["delegation_role_contract"]
+        assert "não edite" in fields["delegation_role_contract"]
+        assert fields["delegation_access_list"] == "- diff\n- tests"
+
+
+class TestDelegationPromptRendering:
+    def test_prompt_builder_omits_empty_role_and_access_list_blocks(self):
+        """Prompt final legado não renderiza blocos vazios de role/access_list."""
+        builder = PromptBuilder(_DummyContextManager())
+
+        prompt = builder.build(
+            "codex",
+            [],
+            delegation={"task": "Implementar", "context": "Arquivo alvo"},
+            delegation_only=True,
+            from_agent="claude",
+            prompt_kind=PromptKind.TASK_EXECUTOR,
+        )
+
+        assert "TASK:\nImplementar" in prompt
+        assert "CONTEXTO MÍNIMO:\nArquivo alvo" in prompt
+        assert "PAPEL:" not in prompt
+        assert "CONTRATO DO PAPEL:" not in prompt
+        assert "ESCOPO DE CONTEXTO DECLARADO:" not in prompt
+        assert "{delegation_role}" not in prompt
+        assert "{delegation_access_list}" not in prompt
+
+    def test_prompt_builder_renders_role_and_access_list_blocks(self):
+        """Prompt final inclui role/access_list quando a delegação declara esses campos."""
+        builder = PromptBuilder(_DummyContextManager())
+
+        prompt = builder.build(
+            "codex",
+            [],
+            delegation={
+                "task": "Revisar",
+                "role": "reviewer",
+                "access_list": ["diff", "tests"],
+            },
+            delegation_only=True,
+            from_agent="claude",
+            prompt_kind=PromptKind.TASK_EXECUTOR,
+        )
+
+        assert "TASK:\nRevisar" in prompt
+        assert "PAPEL:\nrevisor" in prompt
+        assert "CONTRATO DO PAPEL:\nRevise, aponte riscos e não edite o código." in prompt
+        assert "ESCOPO DE CONTEXTO DECLARADO:\n- diff\n- tests" in prompt
 
 
 class TestExecutionModePresenter:

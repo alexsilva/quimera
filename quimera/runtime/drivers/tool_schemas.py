@@ -870,6 +870,19 @@ TOOL_SCHEMAS = [
                         "type": "string",
                         "description": "Contexto adicional relevante (opcional).",
                     },
+                    "role": {
+                        "type": "string",
+                        "enum": ["planner", "executor", "reviewer", "verifier", "synthesizer"],
+                        "description": (
+                            "Papel opcional do agente nesta delegação. "
+                            "Valores: planner, executor, reviewer, verifier, synthesizer."
+                        ),
+                    },
+                    "access_list": {
+                        "type": "array",
+                        "description": "Escopo declarado opcional de contexto permitido/esperado para o agente.",
+                        "items": {"type": "string"},
+                    },
                     "fallback_agents": {
                         "type": "array",
                         "description": (
@@ -892,6 +905,14 @@ TOOL_SCHEMAS = [
                                 "target_agent": {"type": "string"},
                                 "request": {"type": "string"},
                                 "context": {"type": "string"},
+                                "role": {
+                                    "type": "string",
+                                    "enum": ["planner", "executor", "reviewer", "verifier", "synthesizer"],
+                                },
+                                "access_list": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                },
                                 "fallback_agents": {
                                     "type": "array",
                                     "items": {"type": "string"},

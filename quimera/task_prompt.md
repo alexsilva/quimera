@@ -58,6 +58,21 @@ CONTEXTO MÍNIMO:
 {delegation_context}
 <!-- ENDIF:delegation_context -->
 
+<!-- IF:delegation_role -->
+PAPEL:
+{delegation_role}
+<!-- ENDIF:delegation_role -->
+
+<!-- IF:delegation_role_contract -->
+CONTRATO DO PAPEL:
+{delegation_role_contract}
+<!-- ENDIF:delegation_role_contract -->
+
+<!-- IF:delegation_access_list -->
+ESCOPO DE CONTEXTO DECLARADO:
+{delegation_access_list}
+<!-- ENDIF:delegation_access_list -->
+
 <!-- IF:delegation_expected -->
 CRITÉRIOS / ENTREGA ESPERADA:
 {delegation_expected}
