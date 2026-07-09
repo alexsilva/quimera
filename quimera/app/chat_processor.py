@@ -19,6 +19,8 @@ from .session_bootstrap import (
 )
 from .turn import TurnManager
 from .worker import ChatWorker
+from ..runtime.tools.mcp_clients import get_bridge as get_mcp_client_bridge
+from ..runtime.drivers.tool_schemas import get_bridge_schemas
 from ..constants import (
     CMD_ALIASES,
     CMD_EDIT,
@@ -91,6 +93,16 @@ def run_chat_loop(
         _show_neutral(f"MCP interno iniciado em {mcp_socket_path}")
     if mcp_http_url:
         _show_neutral(f"MCP HTTP externo iniciado em {mcp_http_url}")
+    mcp_client_bridge = get_mcp_client_bridge()
+    if mcp_client_bridge is not None:
+        schemas = get_bridge_schemas()
+        if schemas:
+            _show_neutral(
+                f"MCP client ativo: {len(schemas)} tools disponíveis "
+                f"({len(mcp_client_bridge.sessions)} conexão(ões))"
+            )
+        else:
+            _show_neutral("MCP client: conectado mas nenhuma tool exposta pelo servidor")
     if getattr(app, "debug_prompt_metrics", False):
         session_log_path = resolve_session_log_path(app.storage, app.workspace)
         if session_log_path:

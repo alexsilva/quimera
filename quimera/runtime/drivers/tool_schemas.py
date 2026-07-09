@@ -5,6 +5,19 @@ Espelham as ferramentas registradas em ToolExecutor._register_builtin_tools().
 
 from collections.abc import Iterable
 
+_BRIDGE_SCHEMAS: list[dict] = []
+
+
+def set_bridge_schemas(schemas: list[dict]) -> None:
+    """Define schemas de tools bridgeadas de servidores MCP externos."""
+    _BRIDGE_SCHEMAS.clear()
+    _BRIDGE_SCHEMAS.extend(schemas)
+
+
+def get_bridge_schemas() -> list[dict]:
+    """Retorna schemas de tools bridgeadas."""
+    return list(_BRIDGE_SCHEMAS)
+
 TOOL_SCHEMAS = [
     {
         "type": "function",
@@ -1443,6 +1456,7 @@ _TASK_TOOL_NAMES = {"list_tasks", "list_jobs", "get_job"}
 def resolve_tool_schemas(tool_executor=None) -> list[dict]:
     """Retorna apenas schemas coerentes com o executor/configuração atual."""
     schemas = list(TOOL_SCHEMAS)
+    schemas.extend(get_bridge_schemas())
     if tool_executor is None:
         return schemas
 

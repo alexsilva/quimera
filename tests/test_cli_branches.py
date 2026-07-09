@@ -43,6 +43,20 @@ class _FakeConfig:
     def set_history_window(self, value):
         self.history_window_set = value
 
+    @property
+    def mcp_clients(self):
+        return self._mcp_clients if hasattr(self, "_mcp_clients") else None
+
+    @property
+    def mcp_client_env(self):
+        return self._mcp_client_env if hasattr(self, "_mcp_client_env") else None
+
+    def set_mcp_clients(self, value):
+        self._mcp_clients = value
+
+    def set_mcp_client_env(self, value):
+        self._mcp_client_env = value
+
 
 class _FakeApp:
     last_instance = None

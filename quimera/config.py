@@ -141,3 +141,37 @@ class ConfigManager:
         else:
             data.pop("density", None)
         self._save(data)
+
+    @property
+    def mcp_clients(self) -> list[str] | None:
+        """Retorna specs de MCP client persistidos."""
+        value = self._load().get("mcp_clients")
+        if isinstance(value, list) and all(isinstance(s, str) for s in value):
+            return value
+        return None
+
+    def set_mcp_clients(self, specs: list[str] | None):
+        """Persiste specs de MCP client."""
+        data = self._load()
+        if specs:
+            data["mcp_clients"] = specs
+        else:
+            data.pop("mcp_clients", None)
+        self._save(data)
+
+    @property
+    def mcp_client_env(self) -> list[str] | None:
+        """Retorna env vars de MCP client persistidos."""
+        value = self._load().get("mcp_client_env")
+        if isinstance(value, list) and all(isinstance(s, str) for s in value):
+            return value
+        return None
+
+    def set_mcp_client_env(self, specs: list[str] | None):
+        """Persiste env vars de MCP client."""
+        data = self._load()
+        if specs:
+            data["mcp_client_env"] = specs
+        else:
+            data.pop("mcp_client_env", None)
+        self._save(data)

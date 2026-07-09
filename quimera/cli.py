@@ -3,6 +3,7 @@ import argparse
 import importlib.util
 import json
 import locale
+import logging
 import os
 import shlex
 import sys
@@ -28,6 +29,7 @@ from .app import QuimeraApp
 from .ui.textual import TextualUiBridge, run_textual_quimera_app
 from .app.simple_input_gate import SimpleInputGate
 from .runtime.mcp import start_embedded_mcp
+from .runtime.mcp.client import start_mcp_clients
 from .config import ConfigManager
 from .runtime.drivers.repl import DriverRepl
 from .workspace import Workspace
@@ -46,6 +48,8 @@ _REQUIRED_RUNTIME_DEPENDENCIES = {
     "rich": "rich",
     "textual": "textual",
 }
+
+_logger = logging.getLogger(__name__)
 
 
 def _ensure_required_runtime_dependencies() -> None:
@@ -402,6 +406,31 @@ def main():
         metavar="read-local|read|agent|all|CSV",
         help="Allowlist de tools para MCP HTTP externo: read-local (sem rede), read (padrão), agent, all ou lista CSV de nomes.",
     )
+    parser.add_argument(
+        "--mcp-client",
+        dest="mcp_clients",
+        action="append",
+        default=None,
+        metavar="nome=transporte:endpoint",
+        help=(
+            "Conecta a servidor MCP externo e expõe suas tools como ferramentas "
+            "internas com prefixo <nome>_. Ex: "
+            "'atlassian=stdio:npx -y mcp-remote https://mcp.atlassian.com/v1/sse' or "
+            "wiki=http://localhost:3100/mcp. Pode ser repetido."
+        ),
+    )
+    parser.add_argument(
+        "--mcp-client-env",
+        dest="mcp_client_env",
+        action="append",
+        default=None,
+        metavar="nome=KEY=val,KEY2=val2",
+        help=(
+            "Variáveis de ambiente para uma conexão MCP client. "
+            "Ex: jira=JIRA_HOST=https://x.atlassian.net,JIRA_EMAIL=user@x.com,"
+            "JIRA_API_TOKEN=abc123. Pode ser repetido por conexão."
+        ),
+    )
 
     args, unknown = parser.parse_known_args()
 
@@ -529,6 +558,12 @@ def main():
     if args.test and _test_mode_uses_fake_openai(agents):
         fake_openai_backend = _start_test_fake_openai_backend()
     try:
+        start_mcp_clients(
+            cli_specs=args.mcp_clients,
+            cli_env_specs=args.mcp_client_env,
+            config=config,
+        )
+
         isatty = _is_tty()
         textual_bridge = TextualUiBridge()
         input_gate_factory = (

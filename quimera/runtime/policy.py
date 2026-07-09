@@ -47,11 +47,21 @@ class ToolPolicy:
         self.config = config
         self.blocked_tools: list[str] = []
         self._tool_validators: dict[str, object] = {}
+        self._external_mcp_tools: set[str] = set()
 
     def register_tool_validator(self, tool_names: list[str], tool) -> None:
         """Registra um ValidatableTool como responsável pela validação das tools listadas."""
         for name in tool_names:
             self._tool_validators[name] = tool
+
+    def register_external_mcp_tools(self, tool_names: list[str]) -> None:
+        """Registra tools importadas de servidores MCP externos.
+
+        Essas tools não têm validadores internos específicos, mas ainda passam
+        pela governança de aprovação como chamadas externas potencialmente
+        mutantes.
+        """
+        self._external_mcp_tools.update(tool_names)
 
     def validate(self, call: ToolCall) -> None:
         """Valida a chamada: despacha para o validator registrado ou para _validate_<name>."""
@@ -95,6 +105,8 @@ class ToolPolicy:
             "git_checkout",
             "git_push",
         }:
+            return self.config.require_approval_for_mutations
+        if call.name in self._external_mcp_tools:
             return self.config.require_approval_for_mutations
         return False
 

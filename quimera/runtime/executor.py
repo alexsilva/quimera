@@ -11,6 +11,7 @@ from .tools import delegate as delegate_module
 from .tools import files as files_tools
 from .tools import git
 from .tools import interaction as interaction_tools
+from .tools import mcp_clients as mcp_clients_tools
 from .tools import memory as memory_tools
 from .tools import patch as patch_tools
 from .tools import shell as shell_tools
@@ -83,6 +84,7 @@ class ToolExecutor:
         self._interaction_tools = interaction_tools.register(self.registry, self.policy, self.config)
         self._state_tools = state_tools.register(self.registry, self.policy, self.config)
         git.register(self.registry, self.policy, self.config)
+        mcp_clients_tools.register(self.registry, self.policy, self.config)
 
     @property
     def approval_handler(self):
