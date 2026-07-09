@@ -37,6 +37,25 @@ class FakeSession:
         }
 
 
+class MultiFakeSession(FakeSession):
+    def list_tools(self):
+        tools = super().list_tools()
+        tools.append(
+            {
+                "name": "transition_issue",
+                "description": "Transition Jira issue.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "issue_key": {"type": "string"},
+                        "transition_id": {"type": "string"},
+                    },
+                    "required": ["issue_key", "transition_id"],
+                },
+            }
+        )
+        return tools
+
 def teardown_function() -> None:
     set_bridge(None)
     set_bridge_schemas([])
@@ -115,3 +134,25 @@ def test_parse_http_mcp_client_accepts_simple_bearer_token():
     assert name == "jira"
     assert isinstance(transport, HttpMCPTransport)
     assert transport._token == "token-abc"
+
+
+def test_mcp_client_bridge_registers_all_external_tools_for_native_approval(tmp_path):
+    bridge = MCPClientBridge()
+    bridge._sessions["jira"] = MultiFakeSession()
+    bridge._started = True
+
+    set_bridge(bridge)
+
+    executor = ToolExecutor(
+        config=ToolRuntimeConfig(
+            workspace_root=tmp_path,
+            require_approval_for_mutations=True,
+        ),
+        approval_handler=None,
+    )
+
+    assert "jira_search_issue" in executor.registry.names()
+    assert "jira_transition_issue" in executor.registry.names()
+    assert executor.would_require_approval(
+        ToolCall(name="jira_search_issue", arguments={"jql": "key = PC-1"})
+    ) is True

@@ -440,9 +440,17 @@ class ApprovalBroker:
         if self._consume_matching_scope(request, consume=consume):
             return True
 
-        if request.risk == RiskLevel.READ and request.reason is None:
+        if (
+            request.risk == RiskLevel.READ
+            and not needs_policy_approval
+            and request.reason is None
+        ):
             return True
-        if request.risk == RiskLevel.NETWORK and request.reason is None:
+        if (
+            request.risk == RiskLevel.NETWORK
+            and not needs_policy_approval
+            and request.reason is None
+        ):
             return True
         if request.risk == RiskLevel.DELEGATION:
             if (
