@@ -861,19 +861,17 @@ TOOL_SCHEMAS = [
         "function": {
             "name": "delegate",
             "description": (
-                "Delega uma tarefa para outro agente do Quimera. "
+                "Delega uma tarefa para outro agente. "
                 "Use quando precisar de especialidade específica, revisão independente, "
                 "execução paralela ou fallback entre agentes existentes. "
-                "Agentes embutidos comuns: codex (edição/testes), claude (arquitetura/revisão), "
-                "opencode (edição via OpenCode), antigravity (refatoração/razonamento). "
-                "Use list_agents para descobrir agentes ativos, incluindo conexões registradas no workspace."
+                "Use 'list_agents' para descobrir agentes ativos, incluindo conexões registradas no workspace."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "target_agent": {
                         "type": "string",
-                        "description": "Nome do agente alvo existente (ex: codex, claude, opencode, antigravity ou conexão listada por list_agents).",
+                        "description": "Nome do agente obtido por 'list_agents'.",
                     },
                     "request": {
                         "type": "string",
