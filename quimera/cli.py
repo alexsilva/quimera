@@ -558,10 +558,11 @@ def main():
     if args.test and _test_mode_uses_fake_openai(agents):
         fake_openai_backend = _start_test_fake_openai_backend()
     try:
+        mcp_config = ConfigManager(workspace.mcp_config_file)
         start_mcp_clients(
             cli_specs=args.mcp_clients,
             cli_env_specs=args.mcp_client_env,
-            config=config,
+            config=mcp_config,
         )
 
         isatty = _is_tty()

@@ -261,6 +261,11 @@ class Workspace:
         return self.base_dir / "config.json"
 
     @property
+    def mcp_config_file(self) -> Path:
+        """Configuração de clientes MCP isolada para este workspace."""
+        return self._root / "config.json"
+
+    @property
     def env_file(self) -> Path:
         """Caminho do arquivo de variáveis de ambiente de modelo."""
         return self.base_dir / ".env"
