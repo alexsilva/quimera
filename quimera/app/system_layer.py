@@ -519,6 +519,21 @@ class AppSystemLayer:
     def show_error_message(self, message: str) -> None:
         self._display.show_error_message(message)
 
+    def notify_agent_retry(
+        self,
+        agent: str,
+        reason: str,
+        attempt: int,
+        limit: int,
+        detail: str = "",
+    ) -> None:
+        """Encaminha nova tentativa estruturada de agente para o display."""
+        self._display.notify_agent_retry(agent, reason, attempt, limit, detail)
+
+    def notify_agent_failover(self, agent: str, target: str) -> None:
+        """Encaminha failover estruturado entre agentes para o display."""
+        self._display.notify_agent_failover(agent, target)
+
     def show_task_response(self, task_id: int, agent: str, response: str) -> None:
         """Exibe task response."""
         text = response.strip()

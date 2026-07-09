@@ -4,6 +4,12 @@ import threading
 import re
 from contextlib import nullcontext
 
+from quimera.ui.textual.constants import (
+    FAILOVER_DEFAULT_MESSAGE,
+    format_failover_message,
+    format_retry_message,
+)
+
 
 _TASK_ID_RE = re.compile(r'\[task (\d+)\]')
 
@@ -327,6 +333,63 @@ class DisplayService:
                 show_warning(message)
             else:
                 renderer.show_system(message)
+            self._flush_renderer(renderer, prefer_quick=is_owning)
+            if is_owning:
+                self.redisplay_prompt(clear_first=False)
+
+    def notify_agent_retry(
+        self,
+        agent: str,
+        reason: str,
+        attempt: int,
+        limit: int,
+        detail: str = "",
+    ) -> None:
+        """Emite nova tentativa de agente como atividade estruturada.
+
+        Renderers com canal estruturado (Textual) recebem os campos separados;
+        os legados (terminal) caem numa frase pt-BR equivalente.
+        """
+        renderer = self._get_renderer()
+        if renderer is None:
+            return
+        notify = getattr(renderer, "notify_agent_retry", None)
+        if not callable(notify):
+            self.show_warning_message(
+                format_retry_message(reason, attempt, limit, detail)
+            )
+            return
+        with self._get_output_lock():
+            current_thread_id = self.prompt_owner_thread_id_getter()
+            is_owning = current_thread_id is not None and current_thread_id == threading.get_ident()
+            notify(agent, reason=reason, attempt=attempt, limit=limit, detail=detail)
+            self._flush_renderer(renderer, prefer_quick=is_owning)
+            if is_owning:
+                self.redisplay_prompt(clear_first=False)
+
+    def notify_agent_failover(
+        self,
+        agent: str,
+        target: str,
+        message: str = FAILOVER_DEFAULT_MESSAGE,
+    ) -> None:
+        """Emite failover entre agentes como atividade estruturada.
+
+        Fallback para renderers legados usa frase pt-BR de sistema.
+        """
+        renderer = self._get_renderer()
+        if renderer is None:
+            return
+        notify = getattr(renderer, "notify_agent_failover", None)
+        if not callable(notify):
+            self.show_system_message(
+                format_failover_message(agent, target, message)
+            )
+            return
+        with self._get_output_lock():
+            current_thread_id = self.prompt_owner_thread_id_getter()
+            is_owning = current_thread_id is not None and current_thread_id == threading.get_ident()
+            notify(agent, target=target, message=message)
             self._flush_renderer(renderer, prefer_quick=is_owning)
             if is_owning:
                 self.redisplay_prompt(clear_first=False)

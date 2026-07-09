@@ -11,6 +11,7 @@ from .command_router import RoutingDecision
 from .config import logger
 from .render_event import RenderEvent
 from ..domain.session_state import SessionState
+from ..ui.textual.constants import format_failover_message
 
 
 @dataclass(frozen=True)
@@ -256,6 +257,27 @@ class ChatRoundOrchestrator:
             if callable(show_system):
                 show_system(message)
 
+    def _notify_failover(self, agent: str, target: str) -> None:
+        """Sinaliza failover de agente como atividade estruturada.
+
+        Transporta os campos separados (agente que falhou, alvo) em vez de uma
+        frase reparseável. Cai em texto de sistema quando não há renderer com
+        canal estruturado.
+        """
+        if self._emit_event(
+            RenderEvent.AGENT_ACTIVITY,
+            None,
+            agent=agent,
+            metadata={"activity": "failover", "target": target},
+        ):
+            return
+        if self._renderer is not None:
+            notify = getattr(self._renderer, "notify_agent_failover", None)
+            if callable(notify):
+                notify(agent, target=target)
+                return
+        self._show_system(format_failover_message(agent, target))
+
     def _show_warning(self, message: str) -> None:
         if self._emit_event(RenderEvent.WARNING, message):
             return
@@ -386,9 +408,7 @@ class ChatRoundOrchestrator:
                 if self._is_cancelled():
                     self._handle_cancelled()
                     return
-                self._show_system(
-                    f"{failed_agent} não respondeu, tentando com {fallback_agent}"
-                )
+                self._notify_failover(failed_agent, fallback_agent)
                 fallback_response = self._delegate(
                     fallback_agent,
                     is_first_speaker=True,

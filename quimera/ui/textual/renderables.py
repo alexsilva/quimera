@@ -55,6 +55,92 @@ def _build_tool_preview_block(tools) -> str:
     return "\n".join(line for line in lines if line.strip())
 
 
+def _build_agent_activity_renderable(payload, agent: str | None = None):
+    """Renderiza atividade operacional compacta e vinculada ao agente."""
+    data = payload if isinstance(payload, dict) else {"message": str(payload or "")}
+    activity = str(data.get("activity") or "info").strip().lower()
+    label = str(data.get("label") or agent or "Agente").strip()
+    style = str(data.get("style") or "cyan").strip()
+    message = str(data.get("message") or "").strip()
+
+    icon, icon_style = {
+        "retrying": ("↻", "bold yellow"),
+        "reconnecting": ("↻", "bold yellow"),
+        "failover": ("↪", "bold yellow"),
+        "completed": ("✓", "bold green"),
+        "failed": ("!", "bold red"),
+        "cancelled": ("■", "bold yellow"),
+        "aborted": ("■", "bold yellow"),
+        "error": ("!", "bold red"),
+        "warning": ("!", "bold yellow"),
+    }.get(activity, ("·", "dim"))
+
+    line = Text()
+    line.append(f"  {icon} ", style=icon_style)
+    line.append(label, style=f"bold {style}")
+
+    if activity == "retrying":
+        attempt = data.get("attempt")
+        limit = data.get("limit")
+        line.append(f" · {message or 'nova tentativa'}", style="yellow")
+        if attempt is not None and limit is not None:
+            line.append(f" · tentativa {attempt}/{limit}", style="dim yellow")
+        detail = str(data.get("detail") or "").strip()
+        if detail:
+            shortened = detail if len(detail) <= 120 else f"{detail[:117]}..."
+            line.append(f" · {shortened}", style="dim")
+        return line
+
+    if activity == "failover":
+        target_label = str(data.get("target_label") or data.get("target") or "outro agente")
+        target_style = str(data.get("target_style") or "cyan")
+        line.append(f" · {message or 'indisponível'} · continuando com ", style="dim yellow")
+        line.append(target_label, style=f"bold {target_style}")
+        return line
+
+    if activity in {"error", "failed", "warning", "cancelled", "aborted", "completed", "reconnecting"}:
+        if activity in {"error", "failed"}:
+            message_style = "red"
+        elif activity == "completed":
+            message_style = "green"
+        else:
+            message_style = "yellow"
+        line.append(f" · {message}", style=message_style)
+        return line
+
+    if message:
+        line.append(f" · {message}", style="dim")
+    return line
+
+
+def _build_turn_summary_renderable(payload, agent: str | None = None):
+    """Monta resumo contextualizado das ferramentas usadas no turno."""
+    if not isinstance(payload, dict):
+        prefix = f"{agent} " if agent else ""
+        return Text(f"{prefix}{payload}", style="dim")
+
+    total = int(payload.get("total") or 0)
+    ok_count = int(payload.get("ok_count") or 0)
+    err_count = int(payload.get("err_count") or 0)
+    duration = str(payload.get("duration") or "").strip()
+    label = str(payload.get("label") or agent or "Agente")
+    style = str(payload.get("style") or "cyan")
+    icon = "✓" if err_count == 0 else "!"
+    icon_style = "bold green" if err_count == 0 else "bold yellow"
+    noun = "ferramenta" if total == 1 else "ferramentas"
+
+    line = Text()
+    line.append(f"  {icon} ", style=icon_style)
+    line.append(label, style=f"bold {style}")
+    line.append(f" · {total} {noun}", style="dim")
+    line.append(f" · {ok_count} concluída{'s' if ok_count != 1 else ''}", style="green")
+    if err_count:
+        line.append(f" · {err_count} falha{'s' if err_count != 1 else ''}", style="yellow")
+    if duration:
+        line.append(f" · {duration}", style="dim")
+    return line
+
+
 def _breadcrumb_items(chain: list[str], from_label: str, to_label: str) -> list[str]:
     """Normaliza breadcrumb de delegação para sempre partir do humano."""
     items = [str(item).strip() for item in (chain or [from_label, to_label]) if str(item).strip()]
@@ -279,11 +365,9 @@ def _render_event(event: TextualUiEvent):
         theme_name = str(payload.get("theme", themes.DEFAULT_THEME) or themes.DEFAULT_THEME)
         return _build_stream_renderable(theme_name, label, style, "gerando...")
     if event.kind == "stream_abort":
-        agent_name = str(event.agent or "agente")
-        line = Text()
-        line.append(agent_name, style="dim")
-        line.append(" interrompido", style="dim")
-        return line
+        payload = dict(event.payload or {}) if isinstance(event.payload, dict) else {}
+        payload.update({"activity": "aborted", "message": "execução interrompida"})
+        return _build_agent_activity_renderable(payload, event.agent)
     if event.kind == "stream_chunk":
         payload = event.payload if isinstance(event.payload, dict) else {}
         content = str(payload.get("content") or payload.get("text") or event.payload)
@@ -311,11 +395,11 @@ def _render_event(event: TextualUiEvent):
         status = str(payload.get("status", "")).lower() if isinstance(payload, dict) else ""
         _TERMINAL_STATUSES = {"completed", "failed", "error", "cancelled", "aborted"}
         if status in _TERMINAL_STATUSES:
-            agent_name = str(event.agent or "agente")
-            line = Text()
-            line.append(agent_name, style="dim")
-            line.append(f" {message}" if message.strip() else "", style="dim")
-            return line
+            if status == "failed" and ("reconect" in message.lower() or "tentativa" in message.lower()):
+                status = "reconnecting"
+            activity_payload = dict(payload) if isinstance(payload, dict) else {}
+            activity_payload.update({"activity": status, "message": message})
+            return _build_agent_activity_renderable(activity_payload, event.agent)
         tools = payload.get("tools") if isinstance(payload, dict) else None
         tool_block = _build_tool_preview_block(tools)
         if tool_block:
@@ -327,6 +411,14 @@ def _render_event(event: TextualUiEvent):
         theme_name = str(payload.get("theme", themes.DEFAULT_THEME) or themes.DEFAULT_THEME) if isinstance(payload, dict) else themes.DEFAULT_THEME
         return _build_stream_renderable(theme_name, label, style, message)
     if event.kind in {"warning", "error"}:
+        if event.agent:
+            return _build_agent_activity_renderable(
+                {
+                    "activity": event.kind,
+                    "message": str(event.payload),
+                },
+                event.agent,
+            )
         style = "yellow" if event.kind == "warning" else "red"
         return Text(str(event.payload), style=style)
     if event.kind == "banner":
@@ -355,8 +447,9 @@ def _render_event(event: TextualUiEvent):
             body.append(f"\n  ·  {task}", style="dim")
         return Panel(body, title=f"[dim]{breadcrumb_title}[/dim]", border_style="dim", padding=(0, 1))
     if event.kind == "turn_summary":
-        prefix = f"{event.agent} " if event.agent else ""
-        return Text(f"{prefix}{event.payload}", style="dim")
+        return _build_turn_summary_renderable(event.payload, event.agent)
+    if event.kind == "agent_activity":
+        return _build_agent_activity_renderable(event.payload, event.agent)
     if event.kind == "question":
         payload = event.payload or {}
         lines = [str(payload.get("question", ""))]
@@ -398,6 +491,12 @@ def _render_event(event: TextualUiEvent):
     if event.kind == "muted":
         return Text(str(event.payload), style="dim")
     if event.kind == "system":
+        if str(event.payload or "").strip().lower() == "cancelamento solicitado":
+            return Text.assemble(
+                ("  ■ ", "bold yellow"),
+                ("Execução", "bold yellow"),
+                (" · cancelamento solicitado", "dim yellow"),
+            )
         return Text(str(event.payload), style="blue")
     if event.kind == "theme_changed":
         payload = event.payload if isinstance(event.payload, dict) else {}

@@ -1452,3 +1452,60 @@ def test_readd_apos_set_nao_reactiva_orquestrador():
     pool.set(["codex", "claude"]) # claude volta → não reativa
     assert pool.frozen_agent is None
     assert pool.orchestrator_agent is None
+
+
+class StructuredRenderer(DummyRenderer):
+    """Renderer com canal estruturado de atividade de agente."""
+
+    def __init__(self):
+        super().__init__()
+        self.retries = []
+        self.failovers = []
+
+    def notify_agent_retry(self, agent, *, reason, attempt, limit, detail=""):
+        self.retries.append((agent, reason, attempt, limit, detail))
+
+    def notify_agent_failover(self, agent, *, target, message="não respondeu"):
+        self.failovers.append((agent, target, message))
+
+
+def test_notify_agent_retry_uses_structured_channel_when_available():
+    """Renderer estruturado recebe os campos separados, sem frase reparseável."""
+    renderer = StructuredRenderer()
+    app = make_app(renderer=renderer)
+
+    AppSystemLayer(app).notify_agent_retry("codex", "no_response", 1, 2)
+
+    assert renderer.retries == [("codex", "no_response", 1, 2, "")]
+    assert renderer.warning_messages == []
+
+
+def test_notify_agent_failover_uses_structured_channel_when_available():
+    """Failover estruturado não vira mensagem de sistema quando há canal próprio."""
+    renderer = StructuredRenderer()
+    app = make_app(renderer=renderer)
+
+    AppSystemLayer(app).notify_agent_failover("codex", "claude")
+
+    assert renderer.failovers == [("codex", "claude", "não respondeu")]
+    assert renderer.system_messages == []
+
+
+def test_notify_agent_retry_falls_back_to_warning_text_for_legacy_renderer():
+    """Renderer legado (sem canal estruturado) recebe frase pt-BR via warning."""
+    renderer = DummyRenderer()
+    app = make_app(renderer=renderer)
+
+    AppSystemLayer(app).notify_agent_retry("codex", "no_response", 1, 2)
+
+    assert renderer.warning_messages == ["sem resposta · tentativa 1/2"]
+
+
+def test_notify_agent_failover_falls_back_to_system_text_for_legacy_renderer():
+    """Renderer legado recebe frase pt-BR de failover via system message."""
+    renderer = DummyRenderer()
+    app = make_app(renderer=renderer)
+
+    AppSystemLayer(app).notify_agent_failover("codex", "claude")
+
+    assert renderer.system_messages == ["codex não respondeu, continuando com claude"]

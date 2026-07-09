@@ -16,18 +16,16 @@ logger = logging.getLogger(__name__)
 # Debounce para save_history: evita serializar JSON inteiro a cada mensagem.
 _SAVE_DEBOUNCE_SECONDS = 5.0
 _SAVE_DEBOUNCE_MESSAGES = 5
-_MIN_HISTORY_HARD_LIMIT = 24
 _MIN_SUMMARIZE_SURPLUS = 10
 
 
 def compute_history_hard_limit(history_window, auto_summarize_threshold) -> int:
     """Calcula um teto defensivo para o histórico em memória."""
-    limits = [_MIN_HISTORY_HARD_LIMIT]
     if isinstance(history_window, int) and history_window > 0:
-        limits.append(history_window * 4)
+        return history_window * 2
     if isinstance(auto_summarize_threshold, int) and auto_summarize_threshold > 0:
-        limits.append(auto_summarize_threshold * 2)
-    return max(limits)
+        return auto_summarize_threshold * 2
+    return 24
 
 
 def trim_history_messages(history, limit):

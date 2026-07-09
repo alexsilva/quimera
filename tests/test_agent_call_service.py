@@ -107,6 +107,34 @@ class TestCall:
             service.call("agent1", call_fn, MagicMock(), lambda: False)
         before_retry.assert_called_once_with("agent1", 1, "no_response")
 
+    def test_notify_retry_emits_structured_fields_on_none_call(self):
+        """notify_retry recebe campos separados (reason canônico, attempt, limit) sem frase."""
+        notify_retry = MagicMock()
+        service = AgentCallService(
+            max_retries=2, retry_backoff=0.01, notify_retry=notify_retry,
+        )
+        call_fn = MagicMock(return_value=None)
+        with patch("quimera.app.agent_call_service.time.sleep"):
+            service.call("agent1", call_fn, MagicMock(), lambda: False)
+        notify_retry.assert_called_once_with(
+            "agent1", reason="no_response", attempt=1, limit=2,
+        )
+
+    def test_notify_retry_reports_comm_error_with_detail(self):
+        """Exceção de comunicação gera reason 'comm_error' com o detalhe do erro."""
+        notify_retry = MagicMock()
+        service = AgentCallService(
+            max_retries=2, retry_backoff=0.01, notify_retry=notify_retry,
+        )
+        call_fn = MagicMock(side_effect=[RuntimeError("boom"), "response"])
+        resolve_fn = MagicMock(return_value="ok")
+        with patch("quimera.app.agent_call_service.time.sleep"):
+            result = service.call("agent1", call_fn, resolve_fn, lambda: False)
+        assert result == "ok"
+        notify_retry.assert_called_once_with(
+            "agent1", reason="comm_error", attempt=1, limit=2, detail="boom",
+        )
+
     def test_retry_on_none_resolve_exhausted(self):
         """Verifica que call() retorna None e registra falha quando resolve_fn retorna None em todas as tentativas."""
         record = MagicMock()

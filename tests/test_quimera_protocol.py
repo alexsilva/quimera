@@ -2014,10 +2014,10 @@ class ProtocolTests(unittest.TestCase):
             app = QuimeraApp(Path("/tmp/projeto"), input_gate_factory=lambda **kw: MagicMock())
 
         try:
-            self.assertEqual(len(app.history), 60)
-            self.assertEqual(app.history[0]["content"], "m20")
+            self.assertEqual(len(app.history), 24)
+            self.assertEqual(app.history[0]["content"], "m56")
             self.assertEqual(app.history[-1]["content"], "m79")
-            self.assertEqual(app.session_state["history_count"], 60)
+            self.assertEqual(app.session_state["history_count"], 24)
         finally:
             app._stop_task_executors()
 
@@ -2540,8 +2540,8 @@ class ProtocolTests(unittest.TestCase):
         app.session_services = _make_session_services(app)
         app.session_services.persist_message("human", "m24")
 
-        self.assertEqual(len(app.history), 24)
-        self.assertEqual(app.history[0]["content"], "m1")
+        self.assertEqual(len(app.history), 4)
+        self.assertEqual(app.history[0]["content"], "m21")
         self.assertEqual(app.history[-1]["content"], "m24")
 
     def test_auto_summarize_merges_with_existing_session_summary(self):

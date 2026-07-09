@@ -16,6 +16,10 @@ from ..tasks.events import (
 )
 from ..tasks.utils import summarize_task_feedback
 from .config import logger
+from ..ui.textual.constants import (
+    format_failover_message,
+    format_retry_message,
+)
 
 
 class UiEventHandler:
@@ -105,6 +109,36 @@ class UiEventHandler:
     # ------------------------------------------------------------------
     # Auxiliares de renderização acima do prompt
     # ------------------------------------------------------------------
+
+    def _render_agent_activity(self, agent, activity: str, meta: dict) -> None:
+        """Renderiza atividade estruturada de agente com fallback textual.
+
+        Renderers com canal estruturado (Textual) recebem os campos separados;
+        os legados caem numa frase pt-BR de sistema/aviso equivalente.
+        """
+        if activity == "failover":
+            target = str(meta.get("target") or "").strip()
+            message = str(meta.get("message") or "não respondeu").strip()
+            notify = getattr(self._renderer, "notify_agent_failover", None)
+            if callable(notify):
+                notify(agent, target=target, message=message)
+                return
+            self._show_system_message(
+                format_failover_message(str(agent or ""), target, message)
+            )
+            return
+        if activity == "retrying":
+            notify = getattr(self._renderer, "notify_agent_retry", None)
+            reason = str(meta.get("reason") or "")
+            attempt = int(meta.get("attempt") or 0)
+            limit = int(meta.get("limit") or 0)
+            detail = str(meta.get("detail") or "")
+            if callable(notify):
+                notify(agent, reason=reason, attempt=attempt, limit=limit, detail=detail)
+                return
+            self._show_warning_message(
+                format_retry_message(reason, attempt, limit, detail)
+            )
 
     def _should_render_ui_event_above_prompt(self) -> bool:
         """Retorna True quando há prompt ativo controlado por outra thread."""
@@ -232,6 +266,24 @@ class UiEventHandler:
                             self._redisplay_user_prompt(clear_first=False)
                         continue
                     _render_delegation_event()
+                elif event_type == RenderEvent.AGENT_ACTIVITY:
+                    meta = event.metadata or {}
+                    activity = str(meta.get("activity") or "").strip().lower()
+                    activity_agent = event.agent
+
+                    def _render_agent_activity_event(
+                        _agent=activity_agent,
+                        _activity=activity,
+                        _meta=meta,
+                    ) -> None:
+                        self._render_agent_activity(_agent, _activity, _meta)
+
+                    if self._should_render_ui_event_above_prompt():
+                        if not self._run_ui_event_above_prompt(_render_agent_activity_event):
+                            _render_agent_activity_event()
+                            self._redisplay_user_prompt(clear_first=False)
+                        continue
+                    _render_agent_activity_event()
                 elif event_type == RenderEvent.TURN_SUMMARY:
                     summary_agent = event.agent
                     summary_payload = event.payload

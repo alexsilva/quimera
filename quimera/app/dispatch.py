@@ -58,6 +58,7 @@ class AppDispatchServices:
         set_session_call_index=None,
         get_shared_state_lock=None,
         notify_warning=None,
+        notify_retry=None,
         notify_error=None,
         agent_run_sink=None,
     ):
@@ -97,6 +98,7 @@ class AppDispatchServices:
         self._get_tool_executor_fn = get_tool_executor
         self._get_delegate_fn_override = get_delegate_fn_override
         self._notify_warning = notify_warning
+        self._notify_retry = notify_retry
         self._notify_error = notify_error
         self._agent_run_sink = agent_run_sink
         self._gateway = None
@@ -143,6 +145,7 @@ class AppDispatchServices:
                 )
             ),
             notify_warning=getattr(_system_layer, 'show_warning_message', lambda m: None),
+            notify_retry=getattr(_system_layer, 'notify_agent_retry', None),
             notify_error=getattr(_system_layer, 'show_error_message', lambda m: None),
             max_retries=lambda: getattr(app, 'MAX_RETRIES', 2),
             retry_backoff=lambda: getattr(app, 'RETRY_BACKOFF_SECONDS', 1),
@@ -333,6 +336,7 @@ class AppDispatchServices:
             is_rate_limited=_is_rate_limited,
             before_retry=_before_retry,
             notify_warning=self._notify_warning,
+            notify_retry=self._notify_retry,
             notify_error=self._notify_error,
         )
 

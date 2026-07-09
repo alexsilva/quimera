@@ -434,7 +434,10 @@ def test_textual_renderer_emits_agent_lifecycle_event():
     event = bridge.emit.call_args.args[0]
     assert event.kind == "agent_lifecycle"
     assert event.agent == "claude"
-    assert event.payload == {"status": "completed", "message": "execução concluída"}
+    assert event.payload["status"] == "completed"
+    assert event.payload["message"] == "execução concluída"
+    assert event.payload["label"] == "🤖  Claude"
+    assert event.payload["style"] == "cyan"
 
 
 def test_textual_renderer_abort_message_stream_skips_event_after_show_message():
@@ -813,6 +816,136 @@ def test_textual_renderer_exposes_legacy_visual_methods():
     )
 
     assert [event.kind for event in emitted] == ["banner", "approval", "delegation", "turn_summary"]
+    assert emitted[-1].payload["total"] == 1
+    assert emitted[-1].payload["ok_count"] == 1
+
+
+def test_textual_renderer_emits_structured_retry_activity():
+    bridge = TextualUiBridge()
+    emitted = []
+    bridge.emit = emitted.append
+    renderer = TextualRenderer(bridge)
+
+    renderer.notify_agent_retry(
+        "opencode", reason="no_response", attempt=1, limit=2,
+    )
+
+    event = emitted[-1]
+    assert event.kind == "agent_activity"
+    assert event.agent == "opencode"
+    assert event.payload["activity"] == "retrying"
+    assert event.payload["reason"] == "no_response"
+    assert event.payload["message"] == "sem resposta"
+    assert event.payload["attempt"] == 1
+    assert event.payload["limit"] == 2
+
+
+def test_textual_renderer_emits_structured_failover_activity():
+    bridge = TextualUiBridge()
+    emitted = []
+    bridge.emit = emitted.append
+    renderer = TextualRenderer(bridge)
+
+    renderer.notify_agent_failover("opencode", target="claude-opus")
+
+    event = emitted[-1]
+    assert event.kind == "agent_activity"
+    assert event.agent == "opencode"
+    assert event.payload["activity"] == "failover"
+    assert event.payload["target"] == "claude-opus"
+    assert event.payload["message"] == "não respondeu"
+
+
+def test_textual_renderer_show_warning_stays_free_text():
+    bridge = TextualUiBridge()
+    emitted = []
+    bridge.emit = emitted.append
+    renderer = TextualRenderer(bridge)
+
+    renderer.show_warning("aviso genérico do sistema")
+
+    event = emitted[-1]
+    assert event.kind == "warning"
+    assert event.payload == "aviso genérico do sistema"
+
+
+def test_textual_render_event_contextualizes_agent_activity_and_tools():
+    retry_event = TextualUiEvent(
+        "agent_activity",
+        {
+            "activity": "retrying",
+            "label": "OpenCode",
+            "style": "magenta",
+            "message": "sem resposta",
+            "attempt": 1,
+            "limit": 2,
+        },
+        agent="opencode",
+    )
+    tools_event = TextualUiEvent(
+        "turn_summary",
+        {
+            "label": "OpenCode",
+            "style": "magenta",
+            "total": 3,
+            "ok_count": 2,
+            "err_count": 1,
+            "duration": "1.2s",
+        },
+        agent="opencode",
+    )
+    console = Console(record=True, width=120)
+
+    console.print(_render_event(retry_event))
+    console.print(_render_event(tools_event))
+    output = console.export_text()
+
+    assert "OpenCode · sem resposta · tentativa 1/2" in output
+    assert "OpenCode · 3 ferramentas · 2 concluídas · 1 falha · 1.2s" in output
+    assert "TOOLS:" not in output
+    assert "no response, retrying" not in output
+
+
+def test_textual_render_event_contextualizes_cancel_request():
+    console = Console(record=True, width=80)
+
+    console.print(_render_event(TextualUiEvent("system", "cancelamento solicitado")))
+
+    assert "Execução · cancelamento solicitado" in console.export_text()
+
+
+def test_textual_render_event_uses_agent_identity_for_stream_abort():
+    event = TextualUiEvent(
+        "stream_abort",
+        {"label": "Claude Sonnet", "style": "magenta", "theme": "chat"},
+        agent="claude-sonnet",
+    )
+    console = Console(record=True, width=80)
+
+    console.print(_render_event(event))
+
+    output = console.export_text()
+    assert "Claude Sonnet · execução interrompida" in output
+    assert "claude-sonnet interrompido" not in output
+
+
+def test_textual_render_event_contextualizes_reconnection_lifecycle():
+    event = TextualUiEvent(
+        "agent_lifecycle",
+        {
+            "status": "failed",
+            "message": "tentativa de reconexão",
+            "label": "Codex",
+            "style": "blue",
+            "theme": "chat",
+        },
+        agent="codex",
+    )
+    console = Console(record=True, width=80)
+
+    console.print(_render_event(event))
+
+    assert "Codex · tentativa de reconexão" in console.export_text()
 
 
 def test_textual_renderer_emits_delegation_chain_metadata():

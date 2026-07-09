@@ -15,7 +15,9 @@ from quimera.ui.text import (
 from quimera.ui.textual.bridge import TextualUiBridge, _TextualConsoleShim
 from quimera.ui.textual.constants import (
     APPROVAL_OPTIONS as _APPROVAL_OPTIONS,
+    FAILOVER_DEFAULT_MESSAGE as _FAILOVER_DEFAULT_MESSAGE,
     NO_RESPONSE_MESSAGE as _NO_RESPONSE_MESSAGE,
+    RETRY_REASON_LABELS as _RETRY_REASON_LABELS,
 )
 from quimera.ui.textual.events import TextualUiEvent
 from quimera.ui.textual.feed_model import (
@@ -145,6 +147,62 @@ class TextualRenderer:
             payload.update(extra)
         return payload
 
+    def _emit_agent_activity(
+        self,
+        agent: str,
+        activity: str,
+        **metadata: Any,
+    ) -> None:
+        """Emite atividade operacional vinculada visualmente a um agente."""
+        payload = self._agent_event_payload(
+            agent,
+            {"activity": activity, **metadata},
+        )
+        self._bridge.emit(TextualUiEvent("agent_activity", payload, agent=agent))
+
+    def notify_agent_retry(
+        self,
+        agent: str,
+        *,
+        reason: str,
+        attempt: int,
+        limit: int,
+        detail: str = "",
+    ) -> None:
+        """Emite nova tentativa de um agente como atividade estruturada.
+
+        Recebe os campos já separados (motivo canônico, tentativa, limite,
+        detalhe) direto da camada de execução, sem reconstruir texto. O
+        ``reason`` é traduzido pelo mapa único de rótulos.
+        """
+        self._emit_agent_activity(
+            agent,
+            "retrying",
+            reason=str(reason),
+            message=_RETRY_REASON_LABELS.get(str(reason), str(reason)),
+            attempt=int(attempt),
+            limit=int(limit),
+            detail=str(detail or "").strip(),
+        )
+
+    def notify_agent_failover(
+        self,
+        agent: str,
+        *,
+        target: str,
+        message: str = _FAILOVER_DEFAULT_MESSAGE,
+    ) -> None:
+        """Emite failover de um agente para outro como atividade estruturada."""
+        target_style, target_label = self._resolve_agent_style(str(target))
+        self._emit_agent_activity(
+            agent,
+            "failover",
+            message=str(message or _FAILOVER_DEFAULT_MESSAGE),
+            target=str(target),
+            target_label=target_label,
+            target_style=target_style,
+        )
+
     def set_prompt_integration(self, is_active_fn, run_above_fn) -> None:
         """Compatibilidade com TerminalRenderer."""
         return None
@@ -236,8 +294,13 @@ class TextualRenderer:
         return self._bridge.flush_ui_events()
 
     def show_system(self, message: str) -> None:
-        """Exibe mensagem de sistema."""
-        self._bridge.emit(TextualUiEvent("system", str(message)))
+        """Exibe mensagem de sistema livre.
+
+        Eventos estruturados (ex.: failover) usam ``notify_agent_failover``;
+        este método é só para texto de sistema genuíno.
+        """
+        clean_message = strip_ansi(str(message)).strip("\r\n")
+        self._bridge.emit(TextualUiEvent("system", clean_message))
 
     def show_banner(self, message: str) -> None:
         """Exibe banner de boas-vindas/logo no feed Textual."""
@@ -252,8 +315,13 @@ class TextualRenderer:
         self._bridge.emit(TextualUiEvent("restore_history"))
 
     def show_warning(self, message: str) -> None:
-        """Exibe warning."""
-        self._bridge.emit(TextualUiEvent("warning", str(message)))
+        """Exibe warning livre.
+
+        Novas tentativas de agente usam ``notify_agent_retry``; este método
+        permanece para avisos de sistema genuínos.
+        """
+        clean_message = strip_ansi(str(message)).strip("\r\n")
+        self._bridge.emit(TextualUiEvent("warning", clean_message))
 
     def show_error(self, message: str, **metadata) -> None:
         """Exibe erro."""
@@ -327,8 +395,16 @@ class TextualRenderer:
         if total <= 0:
             return
         duration = f"{total_ms}ms" if total_ms < 1000 else f"{total_ms / 1000:.1f}s"
-        summary = f"TOOLS: {total} chamadas · {ok_count} ok · {err_count} erro · {duration}"
-        self._bridge.emit(TextualUiEvent("turn_summary", summary, agent=agent))
+        payload = self._agent_event_payload(
+            agent,
+            {
+                "total": total,
+                "ok_count": ok_count,
+                "err_count": err_count,
+                "duration": duration,
+            },
+        )
+        self._bridge.emit(TextualUiEvent("turn_summary", payload, agent=agent))
 
     def show_delegation(self, from_agent, to_agent, task=None, *, delegation_id=None, chain=None) -> None:
         """Exibe delegação entre agentes."""
@@ -352,10 +428,11 @@ class TextualRenderer:
 
     def show_agent_lifecycle(self, agent: str, status: str | AgentLifecycleStatus, message: str) -> None:
         """Exibe lifecycle transitório de agente como evento semântico."""
+        lifecycle = _agent_lifecycle_payload(message, status=status)
         self._bridge.emit(
             TextualUiEvent(
                 "agent_lifecycle",
-                _agent_lifecycle_payload(message, status=status),
+                self._agent_event_payload(agent, lifecycle),
                 agent=str(agent),
             )
         )
@@ -482,7 +559,14 @@ class TextualRenderer:
         """Atualiza status de agente paralelo no feed Textual."""
         key = str(agent or "global")
         self._statuses[key] = str(message)
-        self._bridge.emit(TextualUiEvent("agent_lifecycle", _agent_lifecycle_payload(message, status=status), agent=key))
+        lifecycle = _agent_lifecycle_payload(message, status=status)
+        self._bridge.emit(
+            TextualUiEvent(
+                "agent_lifecycle",
+                self._agent_event_payload(key, lifecycle),
+                agent=key,
+            )
+        )
 
     @contextmanager
     def live_status(self, agents):

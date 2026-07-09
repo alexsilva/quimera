@@ -18,6 +18,7 @@ class RenderEvent:
     SPINNER_STOP = "SPINNER_STOP"
     TURN_SUMMARY = "TURN_SUMMARY"
     DELEGATION = "DELEGATION"
+    AGENT_ACTIVITY = "AGENT_ACTIVITY"
     EVENT = "EVENT"
     REDISPLAY = "REDISPLAY"
     HEARTBEAT = "HEARTBEAT"
@@ -36,6 +37,7 @@ class RenderEvent:
             "error": self.ERROR,
             "turn_summary": self.TURN_SUMMARY,
             "delegation": self.DELEGATION,
+            "agent_activity": self.AGENT_ACTIVITY,
             "event": self.EVENT,
             "post_agent_flush": self.REDISPLAY,
             "heartbeat": self.HEARTBEAT,

@@ -487,6 +487,7 @@ class QuimeraApp:
             ),
             record_tool_event_fn=lambda agent, **kw: self.session_metrics.record_tool_event(self, agent, **kw),
             notify_warning=self.system_layer.show_warning_message,
+            notify_retry=self.system_layer.notify_agent_retry,
             notify_error=self.system_layer.show_error_message,
             max_retries=self.MAX_RETRIES,
             retry_backoff=self.RETRY_BACKOFF_SECONDS,

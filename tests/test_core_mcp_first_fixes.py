@@ -10,7 +10,7 @@ import pytest
 from quimera.app import QuimeraApp
 from quimera.app.staging import merge_staging_to_workspace
 from quimera.app.protocol import AppProtocol
-from quimera.app.session import AppSessionServices
+from quimera.app.session import AppSessionServices, compute_history_hard_limit
 from quimera.domain.session_state import SessionState
 from quimera.shared_state import clear_agent_state_for_session_start
 
@@ -242,6 +242,38 @@ def test_persist_message_returned_snapshot_is_atomic_with_append_and_trim():
     assert snapshot is not history
 
 
+def test_compute_history_hard_limit_prioritizes_history_window_times_two():
+    """Verifica que o teto do histórico segue a janela configurada."""
+    assert compute_history_hard_limit(6, 30) == 12
+    assert compute_history_hard_limit(12, 30) == 24
+
+
+def test_persist_message_trims_history_to_history_window_times_two():
+    """Verifica que o histórico não cresce além de 2x a janela."""
+    history = [{"role": "human", "content": f"m{i}"} for i in range(12)]
+    state = SessionState(history=history, shared_state={})
+    storage = _Storage()
+    service = AppSessionServices(
+        session_state=state,
+        storage=storage,
+        renderer=_Renderer(),
+        agent_pool=SimpleNamespace(primary="codex"),
+        context_manager=_ContextManager(),
+        session_summarizer=Mock(),
+        task_services=Mock(stop_task_executors=Mock()),
+        prompt_builder=SimpleNamespace(history_window=6),
+        auto_summarize_threshold=30,
+    )
+
+    snapshot = service.persist_message("assistant", "m12", return_history_snapshot=True)
+
+    assert len(history) == 12
+    assert history == [{"role": "human", "content": f"m{i}"} for i in range(1, 12)] + [
+        {"role": "assistant", "content": "m12"}
+    ]
+    assert snapshot == history
+
+
 def test_session_summarize_preserves_concurrent_persisted_message():
     """Verifica que session summarize preserves concurrent persisted message."""
     history = [{"role": "human", "content": f"m{i}"} for i in range(12)]
@@ -276,10 +308,12 @@ def test_session_summarize_preserves_concurrent_persisted_message():
     service.join_summarization(timeout=3)
 
     assert history == [
+        {"role": "human", "content": "m9"},
         {"role": "human", "content": "m10"},
         {"role": "human", "content": "m11"},
         {"role": "assistant", "content": "append during summary"},
     ]
+    assert len(history) == 4
     assert storage.saved_history == history
 
 
