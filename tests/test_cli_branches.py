@@ -22,13 +22,15 @@ class _FakeWorkspace:
     def __init__(self, cwd):
         self.cwd = cwd
         self.config_file = Path("/tmp/quimera-test-config.json")
+        self.mcp_config_file = Path("/tmp/quimera-test-workspace-mcp-config.json")
         self.tmp = SimpleNamespace(root=Path("/tmp/quimera-test-tmp"))
 
 
 class _FakeConfig:
     last_instance = None
 
-    def __init__(self, _config_file):
+    def __init__(self, config_file):
+        self.config_file = config_file
         self.user_name = "Tester"
         self.theme_set = None
         self.history_window_set = None
@@ -890,6 +892,21 @@ def test_main_mcp_uses_workspace_tmp_and_configures_profiles(monkeypatch):
     assert called_path.startswith("/tmp/quimera-test-tmp/mcp-")
     assert called_path.endswith(".sock")
     assert _FakeApp.last_instance.mcp_socket_calls == [called_path]
+
+
+def test_main_mcp_client_uses_workspace_config(monkeypatch):
+    """Conexões MCP externas não usam a configuração global do usuário."""
+    _patch_main_basics(monkeypatch)
+    monkeypatch.setattr(sys, "argv", ["quimera", "--no-mcp"])
+    captured = {}
+    monkeypatch.setattr(cli, "start_mcp_clients", lambda **kwargs: captured.update(kwargs))
+
+    cli.main()
+
+    assert captured["config"].config_file == Path(
+        "/tmp/quimera-test-workspace-mcp-config.json"
+    )
+    assert captured["config"].config_file != Path("/tmp/quimera-test-config.json")
 
 
 def test_main_no_mcp_disables_mcp(monkeypatch):

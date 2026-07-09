@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from quimera.config import ConfigManager
 from quimera.workspace import Workspace, WorkspaceTmp, find_base_writable
 
 
@@ -45,6 +46,35 @@ class TestWorkspace(unittest.TestCase):
                 self.assertTrue(index_path.exists())
                 index = json.loads(index_path.read_text(encoding="utf-8"))
                 self.assertIn(ws.cwd_hash, index)
+
+    def test_mcp_config_file_is_isolated_per_workspace(self):
+        """Cada projeto mantém suas conexões MCP em configuração própria."""
+        with tempfile.TemporaryDirectory() as base_dir, tempfile.TemporaryDirectory() as projects_dir:
+            base = Path(base_dir)
+            projects = Path(projects_dir)
+            first_project = projects / "first"
+            second_project = projects / "second"
+            first_project.mkdir()
+            second_project.mkdir()
+
+            with patch("quimera.workspace.find_base_writable", lambda dirs: base):
+                first = Workspace(first_project)
+                second = Workspace(second_project)
+
+            self.assertEqual(first.config_file, second.config_file)
+            self.assertEqual(first.mcp_config_file, first.root / "config.json")
+            self.assertEqual(second.mcp_config_file, second.root / "config.json")
+            self.assertNotEqual(first.mcp_config_file, second.mcp_config_file)
+
+            ConfigManager(first.mcp_config_file).set_mcp_clients(
+                ["jira=https://mcp.atlassian.example/mcp"]
+            )
+
+            self.assertEqual(
+                ConfigManager(first.mcp_config_file).mcp_clients,
+                ["jira=https://mcp.atlassian.example/mcp"],
+            )
+            self.assertIsNone(ConfigManager(second.mcp_config_file).mcp_clients)
 
     def test_migrate_from_legacy_copies_context_and_logs(self):
         """Verifica que a migração legado copia contexto e logs."""
