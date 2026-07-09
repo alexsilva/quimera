@@ -85,6 +85,46 @@ def test_textual_feed_attaches_tool_preview_to_agent_transient():
     assert model.items[0].event.payload["tools"] == ["⌘ read_file a.py"]
 
 
+def test_textual_feed_collapses_command_start_into_completion():
+    model = TextualFeedModel()
+
+    model.apply(TextualUiEvent("agent_update", "[thinking] rodando", agent="codex"))
+    model.apply(TextualUiEvent("tool_preview", "$ /bin/bash -lc 'pytest'", agent="codex"))
+    model.apply(TextualUiEvent("tool_preview", "✓ /bin/bash -lc 'pytest'", agent="codex"))
+
+    assert model.items[0].event.payload["tools"] == ["✓ /bin/bash -lc 'pytest'"]
+
+
+def test_textual_feed_collapses_command_start_into_error_completion():
+    model = TextualFeedModel()
+
+    model.apply(TextualUiEvent("agent_update", "[thinking] rodando", agent="codex"))
+    model.apply(TextualUiEvent("tool_preview", "$ /bin/bash -lc 'pytest'", agent="codex"))
+    model.apply(TextualUiEvent("tool_preview", "✗ /bin/bash -lc 'pytest' (exit 1)", agent="codex"))
+
+    assert model.items[0].event.payload["tools"] == ["✗ /bin/bash -lc 'pytest' (exit 1)"]
+
+
+def test_textual_feed_collapses_file_edit_start_into_completion():
+    model = TextualFeedModel()
+
+    model.apply(TextualUiEvent("agent_update", "[thinking] editando", agent="codex"))
+    model.apply(TextualUiEvent("tool_preview", "editar app.py", agent="codex"))
+    model.apply(TextualUiEvent("tool_preview", "✓ editar app.py", agent="codex"))
+
+    assert model.items[0].event.payload["tools"] == ["✓ editar app.py"]
+
+
+def test_textual_feed_keeps_distinct_commands_as_separate_lines():
+    model = TextualFeedModel()
+
+    model.apply(TextualUiEvent("agent_update", "[thinking] rodando", agent="codex"))
+    model.apply(TextualUiEvent("tool_preview", "$ ls", agent="codex"))
+    model.apply(TextualUiEvent("tool_preview", "$ pwd", agent="codex"))
+
+    assert model.items[0].event.payload["tools"] == ["$ ls", "$ pwd"]
+
+
 def test_textual_feed_clears_tool_preview_with_final_agent_message():
     model = TextualFeedModel()
 

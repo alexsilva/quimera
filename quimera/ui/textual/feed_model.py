@@ -6,6 +6,7 @@ substituir estados transitórios, acumular stream e limpar previews.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Callable
@@ -411,6 +412,24 @@ class TextualFeedModel:
             if item.transient:
                 self._transient_index_by_agent[self._agent_key(item.event)] = index
 
+    @staticmethod
+    def _tool_preview_subject(content: str) -> str:
+        """Deriva a identidade de uma tool a partir da linha de preview.
+
+        Remove o marcador de status inicial ("$", "✓", "✗", "⌘") e a anotação
+        final "(exit N)" para que as linhas de início e conclusão de um mesmo
+        comando/ferramenta compartilhem o mesmo identificador.
+        """
+        text = str(content or "").strip()
+        if not text:
+            return ""
+        for marker in ("$ ", "✓ ", "✗ ", "⌘ "):
+            if text.startswith(marker):
+                text = text[len(marker):].strip()
+                break
+        text = re.sub(r"\s*\(exit\s+-?\d+\)\s*$", "", text).strip()
+        return text
+
     def _with_transient_tools(self, event: TextualUiEvent) -> TextualUiEvent:
         """Anexa previews de tools ao evento transitório do agente."""
         agent = self._agent_key(event)
@@ -436,9 +455,22 @@ class TextualFeedModel:
             self._last_change = TextualFeedChange(False)
             return False
         lines = self._transient_tools_by_agent.setdefault(agent, [])
-        lines.append(content)
-        if len(lines) > 12:
-            del lines[:-12]
+        # Uma mesma tool costuma emitir uma linha de início ("$ cmd") e outra de
+        # conclusão ("✓ cmd"/"✗ cmd (exit N)"). Em vez de acumular as duas —
+        # duplicando a saída no feed — atualizamos a linha existente do mesmo
+        # comando no lugar, refletindo a transição running → concluído.
+        subject = self._tool_preview_subject(content)
+        replaced_line = False
+        if subject:
+            for idx in range(len(lines) - 1, -1, -1):
+                if self._tool_preview_subject(lines[idx]) == subject:
+                    lines[idx] = content
+                    replaced_line = True
+                    break
+        if not replaced_line:
+            lines.append(content)
+            if len(lines) > 12:
+                del lines[:-12]
         index = self._transient_index_by_agent.get(agent)
         if index is None or not (0 <= index < len(self._items)):
             replaced = self._upsert_transient(TextualUiEvent("agent_update", {"content": "", "tools": list(lines)}, agent=event.agent))
