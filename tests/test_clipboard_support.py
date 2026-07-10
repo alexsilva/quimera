@@ -57,6 +57,56 @@ def test_strip_markers_replaces_with_placeholder():
     assert cleaned.endswith(" agora")
 
 
+def test_humanize_markers_shows_friendly_label_with_filename():
+    clipboard = ClipboardManager()
+    marker = clipboard.marker_for("/tmp/quimera-clipboard-abc.png")
+    text = f"Olha {marker} aqui"
+
+    humanized = clipboard.humanize_markers(text)
+
+    assert "<attached_image" not in humanized
+    assert "🖼 imagem anexada · quimera-clipboard-abc.png" in humanized
+    assert humanized.startswith("Olha ")
+    assert humanized.endswith(" aqui")
+
+
+def test_humanize_markers_keeps_plain_text_untouched():
+    clipboard = ClipboardManager()
+    text = "mensagem sem imagem"
+
+    assert clipboard.humanize_markers(text) == text
+
+
+def test_humanize_markers_handles_reordered_and_single_quoted_attrs():
+    clipboard = ClipboardManager()
+    text = "Olha <attached_image mime='image/png' path='/tmp/foto.png'> aqui"
+
+    humanized = clipboard.humanize_markers(text)
+
+    assert "<attached_image" not in humanized
+    assert "🖼 imagem anexada · foto.png" in humanized
+
+
+def test_humanize_markers_falls_back_when_path_missing():
+    clipboard = ClipboardManager()
+    text = "Olha <attached_image mime=\"image/png\" /> aqui"
+
+    humanized = clipboard.humanize_markers(text)
+
+    assert "<attached_image" not in humanized
+    assert "🖼 imagem anexada" in humanized
+
+
+def test_strip_markers_handles_reordered_attrs():
+    clipboard = ClipboardManager()
+    text = 'Veja <attached_image mime="image/png" path="/tmp/x.png"> agora'
+
+    cleaned = clipboard.strip_markers(text)
+
+    assert "<attached_image" not in cleaned
+    assert "🖼" in cleaned
+
+
 def test_to_openai_content_skips_oversized_image(tmp_path, monkeypatch):
     image_path = tmp_path / "big.png"
     image_path.write_bytes(b"\x89PNG\r\n\x1a\nfake")

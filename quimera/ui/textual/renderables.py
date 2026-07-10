@@ -20,6 +20,9 @@ from quimera.ui.textual.constants import (
     APPROVAL_TITLE as _APPROVAL_TITLE,
 )
 from quimera.ui.textual.events import TextualUiEvent
+from quimera.clipboard_support import ClipboardManager
+
+_clipboard_manager = ClipboardManager()
 
 _RICH_MARKUP_TAG_RE = re.compile(r"\[/?[a-zA-Z][a-zA-Z0-9_#= .:-]*\]")
 _TOOL_PREVIEW_LINE_LIMIT = 5
@@ -333,6 +336,7 @@ def _render_event(event: TextualUiEvent):
         content = str(payload.get("content", "")) if isinstance(payload, dict) else str(payload)
         if not content.strip():
             return None
+        content = _clipboard_manager.humanize_markers(content)
         label = str(payload.get("label", "Alex")) if isinstance(payload, dict) else "Alex"
         style = str(payload.get("style", "green") or "green") if isinstance(payload, dict) else "green"
         theme_name = str(payload.get("theme", themes.DEFAULT_THEME) or themes.DEFAULT_THEME) if isinstance(payload, dict) else themes.DEFAULT_THEME

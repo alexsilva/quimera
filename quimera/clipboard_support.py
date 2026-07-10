@@ -15,6 +15,16 @@ from pathlib import Path
 _ATTACHED_IMAGE_RE = re.compile(
     r'<attached_image\s+path="(?P<path>[^"]+)"(?:\s+mime="(?P<mime>[^"]+)")?\s*/>'
 )
+# Matcher tolerante: casa qualquer tag <attached_image ...>, sem depender da
+# ordem/estilo dos atributos ou de a tag ser autofechada. Usado apenas na
+# exibição (humanize/strip) para garantir que nenhum XML vaze no chat mesmo se o
+# formato do marcador mudar; o envio ao agente continua usando o regex estrito.
+_ANY_ATTACHED_IMAGE_RE = re.compile(r"<attached_image\b[^>]*?/?>", re.IGNORECASE)
+# Extrai o atributo path de qualquer marcador, aceitando aspas simples ou duplas.
+_ATTACHED_IMAGE_PATH_RE = re.compile(
+    r"""path\s*=\s*(?P<quote>["'])(?P<path>.*?)(?P=quote)""",
+    re.IGNORECASE,
+)
 _IMAGE_MIME_TYPES = ("image/png", "image/jpeg", "image/webp")
 
 # Prefixo estável dos temporários de clipboard, usado tanto na criação quanto
@@ -56,6 +66,8 @@ class ClipboardManager:
     temp_image_ttl_seconds = _TEMP_IMAGE_TTL_SECONDS
     max_inline_image_bytes = _MAX_INLINE_IMAGE_BYTES
     attached_image_re = _ATTACHED_IMAGE_RE
+    any_attached_image_re = _ANY_ATTACHED_IMAGE_RE
+    attached_image_path_re = _ATTACHED_IMAGE_PATH_RE
     fallback_temp_image_dir = _FALLBACK_TEMP_IMAGE_DIR
 
     def __init__(self, temp_image_dir: str | Path | None = None) -> None:
@@ -124,8 +136,27 @@ class ClipboardManager:
         text: str,
         placeholder: str = "🖼 [imagem anexada]",
     ) -> str:
-        """Substitui marcadores de imagem por um texto legível."""
-        return self.attached_image_re.sub(placeholder, str(text or ""))
+        """Substitui marcadores de imagem por um texto legível.
+
+        Usa o matcher tolerante para não deixar nenhuma variação da tag vazar
+        no histórico, mesmo que a ordem/estilo dos atributos mude.
+        """
+        return self.any_attached_image_re.sub(placeholder, str(text or ""))
+
+    def humanize_markers(self, text: str) -> str:
+        """Converte marcadores XML de imagem em apresentação amigável (com o nome do arquivo).
+
+        Usado apenas para exibição no chat; o formato XML original é preservado
+        para envio ao agente. Casa qualquer variação de ``<attached_image ...>``
+        e cai num rótulo genérico quando o ``path`` não pode ser extraído, de
+        modo que nenhum XML cru chegue ao chat.
+        """
+        def _replace(match: "re.Match[str]") -> str:
+            attr = self.attached_image_path_re.search(match.group(0))
+            name = Path(attr.group("path")).name if attr else ""
+            return f"🖼 imagem anexada · {name}" if name else "🖼 imagem anexada"
+
+        return self.any_attached_image_re.sub(_replace, str(text or ""))
 
     def write_temp(self, data: bytes, mime_type: str) -> Path:
         """Salva dados binários em arquivo temporário com prefixo do clipboard."""
