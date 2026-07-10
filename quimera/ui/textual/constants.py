@@ -38,9 +38,9 @@ def format_failover_message(
 SUMMARY_SPINNER_FRAMES = ("◐", "◓", "◑", "◒")
 APPROVAL_TITLE = "Permissão solicitada"
 APPROVAL_OPTIONS = (
-    "s/sim/y/yes = aprovar",
-    "n/não/no/enter = negar",
-    "a/all/todas = aprovar todas",
+    "y/sim = aprovar",
+    "n/não = negar",
+    "a/todas = aprovar todas",
 )
 TERMINAL_MODE_RESET = (
     "\x1b[?1000l"  # mouse click tracking

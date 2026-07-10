@@ -689,9 +689,9 @@ def test_textual_input_gate_marks_approval_questions_as_permission_requests():
     assert question_event.payload["kind"] == "approval"
     assert question_event.payload["title"] == "Permissão solicitada"
     assert question_event.payload["options"] == [
-        "s/sim/y/yes = aprovar",
-        "n/não/no/enter = negar",
-        "a/all/todas = aprovar todas",
+        "y/sim = aprovar",
+        "n/não = negar",
+        "a/todas = aprovar todas",
     ]
 
 
@@ -1157,13 +1157,13 @@ def test_textual_renderer_interactive_windows_emit_semantic_overlay_events():
     assert emitted[0].payload["kind"] == "approval"
     assert emitted[0].payload["title"] == "Permissão solicitada"
     assert emitted[0].payload["question"] == "Executar shell?"
-    assert "s/sim/y/yes = aprovar" in emitted[0].payload["options"]
+    assert "y/sim = aprovar" in emitted[0].payload["options"]
     assert _build_window_overlay_payload(emitted[0].payload) == {
         "question": "Executar shell?",
         "options": [
-            "s/sim/y/yes = aprovar",
-            "n/não/no/enter = negar",
-            "a/all/todas = aprovar todas",
+            "y/sim = aprovar",
+            "n/não = negar",
+            "a/todas = aprovar todas",
         ],
         "title": "Permissão solicitada",
         "kind": "approval",
@@ -1211,8 +1211,8 @@ def test_textual_approval_overlay_renders_title_question_and_options():
             "title": "Permissão solicitada",
             "question": "Executar comando via shell?",
             "options": [
-                "s/sim/y/yes = aprovar",
-                "n/não/no/enter = negar",
+                "y/sim = aprovar",
+                "n/não = negar",
             ],
         }
     )
@@ -1223,8 +1223,8 @@ def test_textual_approval_overlay_renders_title_question_and_options():
 
     assert "Permissão solicitada" in output
     assert "Executar comando via shell?" in output
-    assert "s/sim/y/yes = aprovar" in output
-    assert "n/não/no/enter = negar" in output
+    assert "y/sim = aprovar" in output
+    assert "n/não = negar" in output
 
 
 def test_textual_selection_overlay_renders_numbered_options():
