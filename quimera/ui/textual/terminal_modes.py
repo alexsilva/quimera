@@ -7,6 +7,35 @@ from contextlib import contextmanager
 from quimera.ui.textual.constants import TERMINAL_MODE_RESET as _TERMINAL_MODE_RESET
 
 
+class _DiscardWriter:
+    """Sink de escrita não-bloqueante usado enquanto o driver está suspenso.
+
+    Ao suspender, o Textual para o ``WriterThread`` real (fila limitada a 30
+    escritas). Se o event loop continuar emitindo frames — relógio do header,
+    cursor, timers de drain — durante um processo externo, essas escritas caem
+    na fila já parada e, após 30 itens, ``Queue.put`` bloqueia o event loop,
+    impedindo a retomada e deixando o terminal preso. Descartar as escritas
+    evita o deadlock sem corromper o terminal (o frame correto é repintado na
+    retomada via ``refresh(layout=True)``).
+    """
+
+    def write(self, data: str) -> None:
+        return None
+
+    def flush(self) -> None:
+        return None
+
+
+def _install_discard_writer(driver) -> None:
+    """Troca o writer parado do driver por um sink que nunca bloqueia."""
+    if not hasattr(driver, "_writer_thread"):
+        return
+    try:
+        driver._writer_thread = _DiscardWriter()
+    except Exception:
+        return
+
+
 def _restore_terminal_modes() -> None:
     """Desativa modos interativos que não podem vazar para editor/shell."""
     stdout = getattr(sys, "__stdout__", None) or sys.stdout
@@ -79,6 +108,9 @@ def _external_textual_window(textual_app):
         except Exception:
             pass
         driver.suspend_application_mode()
+        # O writer real foi parado; troca por um sink não-bloqueante para que
+        # repaints do loop durante o processo externo não travem o event loop.
+        _install_discard_writer(driver)
 
     def _resume_driver() -> None:
         if not can_suspend:

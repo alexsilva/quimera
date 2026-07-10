@@ -1527,6 +1527,75 @@ def test_external_textual_window_does_not_reset_after_successful_driver_resume()
     ]
 
 
+def test_external_textual_window_swaps_stopped_writer_to_avoid_deadlock():
+    """Repaints do loop durante o editor não podem travar no writer parado.
+
+    Ao suspender, o writer real do Textual é parado (fila limitada). Se o loop
+    continuar emitindo frames, as escritas encheriam a fila e ``put`` bloquearia
+    o event loop, impedindo a retomada. O driver deve ficar com um sink
+    não-bloqueante durante o processo externo.
+    """
+
+    class StoppedWriter:
+        """Simula o WriterThread já parado: bloqueia após poucos writes."""
+
+        def __init__(self):
+            self.capacity = 3
+            self.count = 0
+
+        def write(self, data):
+            self.count += 1
+            if self.count > self.capacity:
+                raise AssertionError("write bloquearia: fila do writer parado cheia")
+
+        def flush(self):
+            return None
+
+    class FakeDriver:
+        can_suspend = True
+
+        def __init__(self):
+            self._writer_thread = StoppedWriter()
+
+        def suspend_application_mode(self):
+            # O writer real é parado aqui (fila limitada permanece).
+            self._writer_thread.count = self._writer_thread.capacity
+
+        def resume_application_mode(self):
+            # start_application_mode() cria um writer novo.
+            self._writer_thread = StoppedWriter()
+
+    driver = FakeDriver()
+
+    class FakeTextualApp:
+        _driver = driver
+
+        def call_from_thread(self, callback):
+            callback()
+
+        def _suspend_signal(self):
+            pass
+
+        def _resume_signal(self):
+            pass
+
+        def refresh(self, layout=False):
+            pass
+
+        def query_one(self, selector):
+            raise LookupError(selector)
+
+    with patch("quimera.ui.textual.terminal_modes._restore_terminal_modes", lambda: None):
+        with _external_textual_window(FakeTextualApp()):
+            # Muito mais escritas do que a capacidade do writer parado: sem o
+            # sink de descarte, a 4ª escrita levantaria AssertionError.
+            for _ in range(50):
+                driver._writer_thread.write("frame")
+
+    # Após a retomada o driver volta a ter um writer real (não o sink).
+    assert isinstance(driver._writer_thread, StoppedWriter)
+
+
 def test_textual_bridge_routes_inline_prompt_answers_to_input_queue_even_with_active_agent():
     bridge = TextualUiBridge()
 
