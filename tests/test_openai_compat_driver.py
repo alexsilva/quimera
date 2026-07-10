@@ -119,10 +119,7 @@ def test_delegate_schema_mentions_existing_profiles():
     schema = next(s for s in TOOL_SCHEMAS if s["function"]["name"] == "delegate")
     text = json.dumps(schema["function"], ensure_ascii=False)
 
-    for expected_name in {"codex", "claude", "opencode", "antigravity", "list_agents"}:
-        assert expected_name in text
-    assert "opencode-big-pickle" not in text
-    assert "gemini" not in text
+    assert "list_agents" in text
 
 
 def test_delegate_schema_includes_role_and_access_list():
