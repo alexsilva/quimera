@@ -53,7 +53,7 @@ class ConfigManager:
         value = self._load().get("auto_summarize_threshold")
         if isinstance(value, int) and value > 0:
             return value
-        return DEFAULT_AUTO_SUMMARIZE_THRESHOLD
+        return self.history_window * 2
 
     @property
     def idle_timeout_seconds(self) -> int:

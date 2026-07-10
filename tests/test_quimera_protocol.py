@@ -2014,10 +2014,10 @@ class ProtocolTests(unittest.TestCase):
             app = QuimeraApp(Path("/tmp/projeto"), input_gate_factory=lambda **kw: MagicMock())
 
         try:
-            self.assertEqual(len(app.history), 24)
-            self.assertEqual(app.history[0]["content"], "m56")
+            self.assertEqual(len(app.history), 60)
+            self.assertEqual(app.history[0]["content"], "m20")
             self.assertEqual(app.history[-1]["content"], "m79")
-            self.assertEqual(app.session_state["history_count"], 24)
+            self.assertEqual(app.session_state["history_count"], 60)
         finally:
             app._stop_task_executors()
 

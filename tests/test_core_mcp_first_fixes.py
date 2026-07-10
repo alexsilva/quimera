@@ -242,14 +242,15 @@ def test_persist_message_returned_snapshot_is_atomic_with_append_and_trim():
     assert snapshot is not history
 
 
-def test_compute_history_hard_limit_prioritizes_history_window_times_two():
-    """Verifica que o teto do histórico segue a janela configurada."""
-    assert compute_history_hard_limit(6, 30) == 12
-    assert compute_history_hard_limit(12, 30) == 24
+def test_compute_history_hard_limit_never_undercuts_summarize_threshold():
+    """O teto nunca pode truncar o histórico antes do resumo automático disparar."""
+    assert compute_history_hard_limit(6, 30) == 60
+    assert compute_history_hard_limit(12, 4) == 24
+    assert compute_history_hard_limit(6, None) == 12
 
 
 def test_persist_message_trims_history_to_history_window_times_two():
-    """Verifica que o histórico não cresce além de 2x a janela."""
+    """Verifica que, sem resumo automático, o histórico não cresce além de 2x a janela."""
     history = [{"role": "human", "content": f"m{i}"} for i in range(12)]
     state = SessionState(history=history, shared_state={})
     storage = _Storage()
@@ -262,7 +263,7 @@ def test_persist_message_trims_history_to_history_window_times_two():
         session_summarizer=Mock(),
         task_services=Mock(stop_task_executors=Mock()),
         prompt_builder=SimpleNamespace(history_window=6),
-        auto_summarize_threshold=30,
+        auto_summarize_threshold=0,
     )
 
     snapshot = service.persist_message("assistant", "m12", return_history_snapshot=True)
@@ -299,8 +300,8 @@ def test_session_summarize_preserves_concurrent_persisted_message():
         context_manager=context,
         session_summarizer=summarizer,
         task_services=Mock(stop_task_executors=Mock()),
-        prompt_builder=SimpleNamespace(history_window=2),
-        auto_summarize_threshold=4,
+        prompt_builder=SimpleNamespace(history_window=6),
+        auto_summarize_threshold=8,
     )
     summarizer.service = service
 
@@ -308,12 +309,15 @@ def test_session_summarize_preserves_concurrent_persisted_message():
     service.join_summarization(timeout=3)
 
     assert history == [
+        {"role": "human", "content": "m6"},
+        {"role": "human", "content": "m7"},
+        {"role": "human", "content": "m8"},
         {"role": "human", "content": "m9"},
         {"role": "human", "content": "m10"},
         {"role": "human", "content": "m11"},
         {"role": "assistant", "content": "append during summary"},
     ]
-    assert len(history) == 4
+    assert len(history) == 7
     assert storage.saved_history == history
 
 

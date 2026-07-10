@@ -20,12 +20,18 @@ _MIN_SUMMARIZE_SURPLUS = 10
 
 
 def compute_history_hard_limit(history_window, auto_summarize_threshold) -> int:
-    """Calcula um teto defensivo para o histórico em memória."""
+    """Calcula um teto defensivo para o histórico em memória.
+
+    O teto nunca pode ser menor que o dobro do threshold de resumo, senão o
+    histórico é truncado silenciosamente antes que o resumo automático tenha
+    chance de rodar.
+    """
+    limits = []
     if isinstance(history_window, int) and history_window > 0:
-        return history_window * 2
+        limits.append(history_window * 2)
     if isinstance(auto_summarize_threshold, int) and auto_summarize_threshold > 0:
-        return auto_summarize_threshold * 2
-    return 24
+        limits.append(auto_summarize_threshold * 2)
+    return max(limits) if limits else 24
 
 
 def trim_history_messages(history, limit):
@@ -141,7 +147,8 @@ class AppSessionServices:
             return
         if history_len <= keep:
             return
-        if history_len - keep < _MIN_SUMMARIZE_SURPLUS:
+        min_surplus = min(_MIN_SUMMARIZE_SURPLUS, keep) if keep > 0 else _MIN_SUMMARIZE_SURPLUS
+        if history_len - keep < min_surplus:
             return
         if keep > 0:
             to_summarize = history_snapshot[:-keep]
