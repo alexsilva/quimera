@@ -832,6 +832,32 @@ def parse_mcp_client_env_specs(
     return env_overrides or None
 
 
+def _spec_name(spec: str) -> str:
+    """Extrai o nome da conexão de uma spec ``nome=...``."""
+    return spec.split("=", 1)[0].strip() if "=" in spec else spec.strip()
+
+
+def merge_specs_by_name(
+    existing: list[str] | None, incoming: list[str] | None
+) -> list[str]:
+    """Combina specs ``nome=...`` mantendo unicidade por nome de conexão.
+
+    Uma spec de ``incoming`` com nome já presente em ``existing`` substitui a
+    anterior (mesma conexão reconfigurada); nomes novos são anexados ao final.
+    A ordem de ``existing`` é preservada.
+    """
+    merged = list(existing or [])
+    index = {_spec_name(spec): pos for pos, spec in enumerate(merged)}
+    for spec in incoming or []:
+        name = _spec_name(spec)
+        if name in index:
+            merged[index[name]] = spec
+        else:
+            index[name] = len(merged)
+            merged.append(spec)
+    return merged
+
+
 def start_mcp_clients(
     *,
     cli_specs: list[str] | None,
@@ -842,13 +868,20 @@ def start_mcp_clients(
 
     Deve rodar antes da criação do ``QuimeraApp`` para que o ``ToolExecutor``
     registre handlers das tools externas durante o bootstrap.
-    """
-    specs = cli_specs
-    env_specs = cli_env_specs
 
-    if not specs:
-        specs = getattr(config, "mcp_clients", None)
-        env_specs = getattr(config, "mcp_client_env", None)
+    Specs vindas da CLI são combinadas às persistidas por nome de conexão: uma
+    conexão nova é adicionada às já existentes, enquanto uma conexão de mesmo
+    nome é reconfigurada (substituída), nunca duplicada.
+    """
+    persisted_specs = getattr(config, "mcp_clients", None)
+    persisted_env = getattr(config, "mcp_client_env", None)
+
+    if cli_specs:
+        specs = merge_specs_by_name(persisted_specs, cli_specs)
+        env_specs = merge_specs_by_name(persisted_env, cli_env_specs)
+    else:
+        specs = persisted_specs
+        env_specs = persisted_env
 
     if not specs:
         return MCPClientRuntime(enabled=False)
@@ -865,8 +898,8 @@ def start_mcp_clients(
             set_bridge_schemas(schemas)
 
     if cli_specs:
-        config.set_mcp_clients(cli_specs)
-        config.set_mcp_client_env(cli_env_specs)
+        config.set_mcp_clients(specs)
+        config.set_mcp_client_env(env_specs)
 
     return MCPClientRuntime(
         enabled=bool(bridge and bridge.started),

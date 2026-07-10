@@ -3,7 +3,14 @@ from __future__ import annotations
 from quimera.runtime.config import ToolRuntimeConfig
 from quimera.runtime.drivers.tool_schemas import get_bridge_schemas, resolve_tool_schemas, set_bridge_schemas
 from quimera.runtime.executor import ToolExecutor
-from quimera.runtime.mcp.client import HttpMCPTransport, MCPClientBridge, StdioMCPTransport, parse_mcp_client_spec
+from quimera.runtime.mcp.client import (
+    HttpMCPTransport,
+    MCPClientBridge,
+    StdioMCPTransport,
+    merge_specs_by_name,
+    parse_mcp_client_spec,
+    start_mcp_clients,
+)
 from quimera.runtime.models import ToolCall, ToolResult
 from quimera.runtime.tools.mcp_clients import set_bridge
 
@@ -134,6 +141,81 @@ def test_parse_http_mcp_client_accepts_simple_bearer_token():
     assert name == "jira"
     assert isinstance(transport, HttpMCPTransport)
     assert transport._token == "token-abc"
+
+
+def test_merge_mcp_client_specs_adds_new_names_and_replaces_existing_names():
+    existing = [
+        "jira=stdio:jira-v1",
+        "github=stdio:github-v1",
+    ]
+
+    merged = merge_specs_by_name(
+        existing,
+        [
+            "github=stdio:github-v2",
+            "notion=https://notion.example.test/mcp",
+        ],
+    )
+
+    assert merged == [
+        "jira=stdio:jira-v1",
+        "github=stdio:github-v2",
+        "notion=https://notion.example.test/mcp",
+    ]
+    assert existing == [
+        "jira=stdio:jira-v1",
+        "github=stdio:github-v1",
+    ]
+
+
+def test_start_mcp_clients_connects_and_persists_merged_specs(monkeypatch):
+    captured = {}
+
+    class FakeConfig:
+        mcp_clients = ["jira=stdio:jira-cmd"]
+        mcp_client_env = ["jira=JIRA_TOKEN=old-token"]
+
+        def set_mcp_clients(self, specs):
+            captured["persisted_specs"] = specs
+
+        def set_mcp_client_env(self, specs):
+            captured["persisted_env_specs"] = specs
+
+    class FakeBridge:
+        started = False
+
+    def fake_build_bridge(specs, env_overrides=None):
+        captured["connected_specs"] = specs
+        captured["env_overrides"] = env_overrides
+        return FakeBridge()
+
+    monkeypatch.setattr(
+        "quimera.runtime.mcp.client.build_bridge_from_cli",
+        fake_build_bridge,
+    )
+
+    runtime = start_mcp_clients(
+        cli_specs=["github=stdio:github-cmd"],
+        cli_env_specs=["github=GITHUB_TOKEN=new-token"],
+        config=FakeConfig(),
+    )
+
+    expected_specs = [
+        "jira=stdio:jira-cmd",
+        "github=stdio:github-cmd",
+    ]
+    expected_env_specs = [
+        "jira=JIRA_TOKEN=old-token",
+        "github=GITHUB_TOKEN=new-token",
+    ]
+    assert captured["connected_specs"] == expected_specs
+    assert captured["persisted_specs"] == expected_specs
+    assert captured["persisted_env_specs"] == expected_env_specs
+    assert captured["env_overrides"] == {
+        "jira": {"JIRA_TOKEN": "old-token"},
+        "github": {"GITHUB_TOKEN": "new-token"},
+    }
+    assert runtime.specs == tuple(expected_specs)
 
 
 def test_mcp_client_bridge_registers_all_external_tools_for_native_approval(tmp_path):
