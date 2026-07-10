@@ -1,13 +1,14 @@
 """MCP Client — conecta a servidores MCP externos e expõe suas tools como handlers locais.
 
-Suporta três transportes:
+Suporta os transportes:
+  - remote:  ``https://mcp.atlassian.com/v1/sse`` (atalho para ``npx -y mcp-remote``)
   - stdio:   ``python -m algum_servidor_mcp``
   - socket:  ``/tmp/meu-mcp.sock``
   - http:    ``http://localhost:3100/mcp``
 
 Uso típico via CLI::
 
-    quimera --mcp-client 'atlassian=stdio:npx -y mcp-remote https://mcp.atlassian.com/v1/sse'
+    quimera --mcp-client 'atlassian=remote:https://mcp.atlassian.com/v1/sse'
     quimera --mcp-client wiki=http://localhost:3100/mcp
 
 O bridge conecta, faz handshake ``initialize``, descobre tools via ``tools/list``
@@ -141,10 +142,14 @@ class StdioMCPTransport(MCPTransport):
     )
 
     def __init__(
-        self, command: list[str], env: dict[str, str] | None = None
+        self,
+        command: list[str],
+        env: dict[str, str] | None = None,
+        name: str | None = None,
     ) -> None:
         self._command = command
         self._env = env
+        self._name = name
         self._process: subprocess.Popen | None = None
         self._stderr_lines: list[str] = []
         self._stderr_lock = threading.Lock()
@@ -154,7 +159,7 @@ class StdioMCPTransport(MCPTransport):
             "yes",
             "on",
         }
-        self._stderr_last_printed: str | None = None
+        self._stderr_printed: set[str] = set()
 
     def connect(self) -> tuple[IO[str], IO[str]]:
         proc_env = None
@@ -221,19 +226,51 @@ class StdioMCPTransport(MCPTransport):
             return
 
         if clean.startswith("http://") or clean.startswith("https://"):
-            rendered = f"MCP auth: {clean}"
+            self._print_auth_prompt(clean)
+            return
+
+        label = f" '{self._name}'" if self._name else ""
+        if any(token in clean.lower() for token in ("error", "failed", "exception", "eaddrinuse", "unauthorized", "forbidden")):
+            rendered = f"MCP stdio erro{label}: {clean}"
         elif any(pattern in clean for pattern in self._STDERR_INFO_PATTERNS):
-            rendered = f"MCP stdio: {clean}"
-        elif any(token in clean.lower() for token in ("error", "failed", "exception", "eaddrinuse", "unauthorized", "forbidden")):
-            rendered = f"MCP stdio erro: {clean}"
+            # Sinais de progresso do mcp-remote (conexão estabelecida, proxy,
+            # servidor STDIO local). A camada Quimera já anuncia
+            # "conectando..."/"conectado com sucesso" por conexão, então estas
+            # linhas seriam redundantes no console — ficam apenas no log.
+            _logger.debug("MCP stdio progresso%s: %s", label, clean)
+            return
         else:
             _logger.debug("MCP stdio stderr: %s", clean)
             return
 
-        if rendered == self._stderr_last_printed:
+        if rendered in self._stderr_printed:
             return
-        self._stderr_last_printed = rendered
+        self._stderr_printed.add(rendered)
         print(f"  {rendered}", file=sys.stderr)
+
+    def _print_auth_prompt(self, url: str) -> None:
+        """Exibe o link de autorização OAuth como um bloco destacado.
+
+        O ``mcp-remote`` emite a URL de autorização no stderr; em vez de deixá-la
+        perdida entre linhas de diagnóstico, apresentamos um bloco claro com o
+        nome da conexão e o estado de espera pelo navegador.
+        """
+        if url in self._stderr_printed:
+            return
+        self._stderr_printed.add(url)
+        label = f" '{self._name}'" if self._name else ""
+        bar = "─" * 64
+        lines = [
+            "",
+            f"  {bar}",
+            f"  🔓 Autorização MCP necessária — conexão{label}",
+            "     Abra este link no navegador para autorizar o acesso:",
+            f"     {url}",
+            "     Aguardando confirmação no navegador…",
+            f"  {bar}",
+            "",
+        ]
+        print("\n".join(lines), file=sys.stderr)
 
     def stderr_tail(self, limit: int = 4000) -> str:
         """Retorna stderr do processo quando ele já encerrou.
@@ -711,6 +748,24 @@ class MCPClientBridge:
 # ── Factory ──────────────────────────────────────────────────────────────
 
 
+DEFAULT_MCP_REMOTE_RUNNER = "npx -y mcp-remote"
+
+
+def build_mcp_remote_command(endpoint: str) -> list[str]:
+    """Expande o atalho ``remote:`` para o comando do ``mcp-remote``.
+
+    ``endpoint`` é a URL do servidor remoto, opcionalmente seguida de argumentos
+    extras do ``mcp-remote`` (ex.: ``--header ...``). O runner padrão é
+    ``npx -y mcp-remote`` e pode ser sobrescrito via ``QUIMERA_MCP_REMOTE_CMD``
+    (útil para fixar versão do pacote ou usar outro executor).
+    """
+    tail = shlex.split(endpoint or "")
+    if not tail:
+        return []
+    runner = os.environ.get("QUIMERA_MCP_REMOTE_CMD", DEFAULT_MCP_REMOTE_RUNNER).strip()
+    return shlex.split(runner) + tail
+
+
 def parse_mcp_client_spec(
     spec: str,
     env_overrides: dict[str, dict[str, str]] | None = None,
@@ -719,6 +774,8 @@ def parse_mcp_client_spec(
 
     Formatos aceitos:
 
+    * ``nome=remote:https://host/sse`` — atalho para servidores OAuth remotos;
+      expande para ``npx -y mcp-remote https://host/sse``
     * ``nome=stdio:comando arg1 arg2`` — subprocesso
     * ``nome=socket:/path/to/sock`` — socket Unix
     * ``nome=http://host:port/path`` — HTTP Streamable MCP
@@ -757,15 +814,22 @@ def parse_mcp_client_spec(
     endpoint = endpoint.strip()
 
     if transport_type == "stdio":
-        import shlex
         args = shlex.split(endpoint)
-        return name, StdioMCPTransport(args, env=env_override or None)
+        return name, StdioMCPTransport(args, env=env_override or None, name=name)
+    if transport_type == "remote":
+        command = build_mcp_remote_command(endpoint)
+        if not command:
+            raise ValueError(
+                f"Transporte remote exige uma URL em --mcp-client: {spec!r}. "
+                f"Ex: nome=remote:https://mcp.exemplo.com/sse"
+            )
+        return name, StdioMCPTransport(command, env=env_override or None, name=name)
     if transport_type == "socket":
         return name, SocketMCPTransport(endpoint)
 
     raise ValueError(
         f"Transporte desconhecido em --mcp-client: {transport_type!r}. "
-        f"Esperado: stdio, socket, http, https"
+        f"Esperado: stdio, remote, socket, http, https"
     )
 
 

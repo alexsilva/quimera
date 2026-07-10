@@ -7,6 +7,7 @@ from quimera.runtime.mcp.client import (
     HttpMCPTransport,
     MCPClientBridge,
     StdioMCPTransport,
+    build_mcp_remote_command,
     merge_specs_by_name,
     parse_mcp_client_spec,
     start_mcp_clients,
@@ -132,6 +133,58 @@ def test_parse_atlassian_mcp_remote_stdio_command():
     ]
 
 
+def test_parse_remote_shortcut_expands_to_mcp_remote_command():
+    name, transport = parse_mcp_client_spec(
+        "atlassian=remote:https://mcp.atlassian.com/v1/sse"
+    )
+
+    assert name == "atlassian"
+    assert isinstance(transport, StdioMCPTransport)
+    assert transport._command == [
+        "npx",
+        "-y",
+        "mcp-remote",
+        "https://mcp.atlassian.com/v1/sse",
+    ]
+    assert transport._name == "atlassian"
+
+
+def test_parse_remote_shortcut_preserves_extra_mcp_remote_args():
+    _, transport = parse_mcp_client_spec(
+        "gh=remote:https://api.githubcopilot.com/mcp/ --transport sse-only"
+    )
+
+    assert transport._command == [
+        "npx",
+        "-y",
+        "mcp-remote",
+        "https://api.githubcopilot.com/mcp/",
+        "--transport",
+        "sse-only",
+    ]
+
+
+def test_parse_remote_shortcut_without_url_is_rejected():
+    try:
+        parse_mcp_client_spec("bad=remote:")
+    except ValueError as exc:
+        assert "remote" in str(exc)
+    else:
+        raise AssertionError("esperado ValueError para remote sem URL")
+
+
+def test_build_mcp_remote_command_honors_runner_override(monkeypatch):
+    monkeypatch.setenv("QUIMERA_MCP_REMOTE_CMD", "bunx mcp-remote@0.1.0")
+
+    command = build_mcp_remote_command("https://mcp.example.test/sse")
+
+    assert command == [
+        "bunx",
+        "mcp-remote@0.1.0",
+        "https://mcp.example.test/sse",
+    ]
+
+
 def test_parse_http_mcp_client_accepts_simple_bearer_token():
     name, transport = parse_mcp_client_spec(
         "jira=https://rovo.example.test/mcp",
@@ -216,6 +269,73 @@ def test_start_mcp_clients_connects_and_persists_merged_specs(monkeypatch):
         "github": {"GITHUB_TOKEN": "new-token"},
     }
     assert runtime.specs == tuple(expected_specs)
+
+
+# Sequência de stderr que o ``mcp-remote`` realmente emite ao subir uma conexão
+# remota bem-sucedida (com prefixos de timestamp/tag, ruído JSON-RPC e as linhas
+# de progresso "Connected"/"Proxy"/"Local STDIO"). Reproduz o cenário das imagens
+# reportadas por ALEX (github/jira).
+MCP_REMOTE_SUCCESS_STDERR = [
+    "[2026-07-10 14:27:30.001Z] [github] Using automatically selected callback port: 5598",
+    "[2026-07-10 14:27:30.500Z] [github] Connecting to remote server: https://api.githubcopilot.com/mcp/",
+    '[2026-07-10 14:27:30.900Z] [Local→Remote] {"jsonrpc":"2.0","method":"initialize"}',
+    "[2026-07-10 14:27:31.100Z] [github] Local STDIO server running",
+    "[2026-07-10 14:27:31.200Z] [github] Proxy established successfully between local STDIO and remote transport",
+    "[2026-07-10 14:27:31.400Z] [github] Connected to remote server using StreamableHTTPClientTransport",
+]
+
+
+def _feed_stderr(transport, lines):
+    for line in lines:
+        transport._print_stderr_line(line)
+
+
+def test_stderr_progress_lines_are_not_echoed_to_console(capsys):
+    """Progresso do mcp-remote não deve duplicar o sucesso da camada Quimera."""
+    transport = StdioMCPTransport(
+        ["npx", "-y", "mcp-remote", "https://api.githubcopilot.com/mcp/"],
+        name="github",
+    )
+
+    _feed_stderr(transport, MCP_REMOTE_SUCCESS_STDERR)
+
+    err = capsys.readouterr().err
+    assert err == ""
+    assert "conectada" not in err
+    assert "Local STDIO server running" not in err
+    assert "Proxy established" not in err
+
+
+def test_stderr_errors_are_echoed_once_per_message(capsys):
+    """Erros continuam visíveis e sem duplicação por conexão."""
+    transport = StdioMCPTransport(
+        ["npx", "-y", "mcp-remote", "https://mcp.atlassian.com/v1/sse"],
+        name="jira",
+    )
+
+    transport._print_stderr_line("[2026-07-10 14:30:00Z] [jira] Error: unauthorized (401)")
+    transport._print_stderr_line("[2026-07-10 14:30:01Z] [jira] Error: unauthorized (401)")
+
+    err = capsys.readouterr().err
+    assert err.count("MCP stdio erro 'jira'") == 1
+    assert "unauthorized (401)" in err
+
+
+def test_auth_prompt_block_is_printed_once_per_url(capsys):
+    """O bloco de autorização OAuth aparece uma única vez, mesmo se repetido."""
+    transport = StdioMCPTransport(
+        ["npx", "-y", "mcp-remote", "https://mcp.atlassian.com/v1/sse"],
+        name="atlassian",
+    )
+    url = "https://mcp.atlassian.com/v1/authorize?client_id=abc&state=xyz"
+
+    transport._print_stderr_line(f"[2026-07-10 14:31:00Z] [atlassian] {url}")
+    transport._print_stderr_line(f"[2026-07-10 14:31:05Z] [atlassian] {url}")
+
+    err = capsys.readouterr().err
+    assert err.count("Autorização MCP necessária — conexão 'atlassian'") == 1
+    assert err.count(url) == 1
+    assert "Aguardando confirmação no navegador" in err
 
 
 def test_mcp_client_bridge_registers_all_external_tools_for_native_approval(tmp_path):

@@ -414,8 +414,9 @@ def main():
         metavar="nome=transporte:endpoint",
         help=(
             "Conecta a servidor MCP externo e expõe suas tools como ferramentas "
-            "internas com prefixo <nome>_. Ex: "
-            "'atlassian=stdio:npx -y mcp-remote https://mcp.atlassian.com/v1/sse' or "
+            "internas com prefixo <nome>_. Para servidores OAuth remotos use o "
+            "atalho remote: 'atlassian=remote:https://mcp.atlassian.com/v1/sse' "
+            "(expande para npx -y mcp-remote). Também aceita "
             "wiki=http://localhost:3100/mcp. Pode ser repetido."
         ),
     )
