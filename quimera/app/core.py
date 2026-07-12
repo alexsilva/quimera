@@ -52,6 +52,9 @@ class QuimeraApp(CoreFacadeMixin):
             input_gate_factory=input_gate_factory,
         )
         self._execution_mode_state = self._create_execution_mode_state()
+        self.internal_mcp_server = None
+        self.mcp_socket_path = None
+        self.mcp_http_url = None
         # runtime_state precisa existir antes do assembler: builders de sessão
         # (AppInputServices) capturam seus setters durante a montagem.
         self.runtime_state = AppRuntimeState()

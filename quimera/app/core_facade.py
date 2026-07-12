@@ -47,7 +47,7 @@ class CoreFacadeMixin:
         self.selected_agents = list(agents)
 
     def get_approval_handler(self):
-        return getattr(self, "_approval_handler", None)
+        return self.__dict__.get("_approval_handler")
 
     def resolve_input_gate(self):
         return self.input_gate
@@ -56,31 +56,31 @@ class CoreFacadeMixin:
         return bool(self.debug_prompt_metrics)
 
     def get_tool_executor(self):
-        return getattr(self, "tool_executor", None)
+        return self.__dict__.get("tool_executor")
 
     def get_dispatch_services(self):
-        return getattr(self, "dispatch_services", None)
+        return self.__dict__.get("dispatch_services")
 
     def get_dispatch_tool_executor(self):
-        return getattr(self, "tool_executor", None)
+        return self.__dict__.get("tool_executor")
 
     def set_approval_handler(self, handler):
         self._approval_handler = handler
 
     def get_workspace_policy_ref(self):
-        return getattr(self, "workspace_policy", None)
+        return self.__dict__.get("workspace_policy")
 
     def get_session_services_ref(self):
-        return getattr(self, "session_services", None)
+        return self.__dict__.get("session_services")
 
     def get_agent_client_ref(self):
-        return getattr(self, "agent_client", None)
+        return self.__dict__.get("agent_client")
 
     def get_history_ref(self):
-        return getattr(self, "history", [])
+        return self.__dict__.get("history", [])
 
     def get_session_started_at_ref(self):
-        return getattr(self, "_session_started_at", 0.0)
+        return self.__dict__.get("_session_started_at", 0.0)
 
     # ──────────────────────────────────────────────────────────────────
 
@@ -96,14 +96,14 @@ class CoreFacadeMixin:
     @property
     def summary_agent_preference(self):
         """Retorna o agente preferido para sumarização."""
-        chat_state = getattr(self, "_chat_state", None)
+        chat_state = self.__dict__.get("_chat_state")
         if chat_state is not None:
             return chat_state.summary_agent_preference
         return self.__dict__.get("_summary_agent_preference_fallback")
 
     @summary_agent_preference.setter
     def summary_agent_preference(self, value):
-        chat_state = getattr(self, "_chat_state", None)
+        chat_state = self.__dict__.get("_chat_state")
         if chat_state is not None:
             chat_state.summary_agent_preference = value
         else:
@@ -174,8 +174,8 @@ class CoreFacadeMixin:
 
     def configure_mcp_socket(self, socket_path: str | None, token: str | None = None) -> None:
         """Propaga socket MCP e token para os profiles dos agentes ativos."""
-        resolver = getattr(self, "_profile_resolver", None)
-        agent_pool = getattr(self, "agent_pool", None)
+        resolver = self.__dict__.get("_profile_resolver")
+        agent_pool = self.__dict__.get("agent_pool")
         if resolver is not None and agent_pool is not None:
             resolver.configure_mcp_socket(agent_pool, socket_path, token)
             return
@@ -190,8 +190,8 @@ class CoreFacadeMixin:
 
     def configure_mcp_http(self, url: str | None, token: str | None = None) -> None:
         """Propaga endpoint MCP HTTP e token para os profiles dos agentes ativos."""
-        resolver = getattr(self, "_profile_resolver", None)
-        agent_pool = getattr(self, "agent_pool", None)
+        resolver = self.__dict__.get("_profile_resolver")
+        agent_pool = self.__dict__.get("agent_pool")
         if resolver is not None and agent_pool is not None:
             resolver.configure_mcp_http(agent_pool, url, token)
             return
@@ -202,24 +202,24 @@ class CoreFacadeMixin:
 
     def get_agent_profile(self, agent):
         """Retorna o profile associado ao agente, ou None."""
-        resolver = getattr(self, "_profile_resolver", None)
+        resolver = self.__dict__.get("_profile_resolver")
         if resolver is not None:
             return resolver.get(agent)
         return profiles.get(agent)
 
     def get_available_profiles(self) -> list:
         """Retorna todos os profiles disponíveis."""
-        resolver = getattr(self, "_profile_resolver", None)
+        resolver = self.__dict__.get("_profile_resolver")
         if resolver is not None:
             return resolver.profiles
         return profiles.all_profiles()
 
     def get_active_agent_profiles(self) -> list:
         """Retorna profiles dos agentes ativos no pool."""
-        resolver = getattr(self, "_profile_resolver", None)
+        resolver = self.__dict__.get("_profile_resolver")
         if resolver is not None:
             return resolver.active_profiles(self.agent_pool)
-        agent_pool = getattr(self, "agent_pool", None)
+        agent_pool = self.__dict__.get("agent_pool")
         if agent_pool is None:
             return []
         return [p for name in (agent_pool.agents or []) if (p := profiles.get(name)) is not None]
@@ -230,16 +230,16 @@ class CoreFacadeMixin:
 
     def _refresh_parallel_toolbar(self) -> None:
         """Solicita redraw do prompt de paralelismo."""
-        coordinator = getattr(self, "toolbar_coordinator", None)
+        coordinator = self.__dict__.get("toolbar_coordinator")
         if coordinator is not None:
             coordinator.refresh()
 
     def _get_parallel_toolbar_state(self) -> dict:
         """Retorna cópia do estado de paralelismo da toolbar."""
-        coordinator = getattr(self, "toolbar_coordinator", None)
+        coordinator = self.__dict__.get("toolbar_coordinator")
         if coordinator is not None:
             return coordinator.get_parallel_toolbar_state()
-        toolbar = getattr(self, "toolbar", None)
+        toolbar = self.__dict__.get("toolbar")
         if toolbar is not None:
             return toolbar._get_parallel_toolbar_state()
         return {}
@@ -253,7 +253,7 @@ class CoreFacadeMixin:
         active_agents=None,
     ) -> None:
         """Atualiza o estado de paralelismo na toolbar."""
-        coordinator = getattr(self, "toolbar_coordinator", None)
+        coordinator = self.__dict__.get("toolbar_coordinator")
         if coordinator is not None:
             coordinator.set_parallel_toolbar_state(
                 active=active,
@@ -264,21 +264,21 @@ class CoreFacadeMixin:
 
     def _resolve_active_model_label(self) -> str:
         """Resolve o modelo ativo para exibição na toolbar."""
-        coordinator = getattr(self, "toolbar_coordinator", None)
+        coordinator = self.__dict__.get("toolbar_coordinator")
         if coordinator is not None:
             return coordinator.resolve_active_model_label()
         return "unknown"
 
     def _resolve_next_responder_label(self) -> str:
         """Resolve o agente que responde na próxima rodada."""
-        coordinator = getattr(self, "toolbar_coordinator", None)
+        coordinator = self.__dict__.get("toolbar_coordinator")
         if coordinator is not None:
             return coordinator.resolve_next_responder_label()
         return "unknown"
 
     def _build_input_toolbar_context(self) -> dict:
         """Retorna contexto da toolbar do input."""
-        coordinator = getattr(self, "toolbar_coordinator", None)
+        coordinator = self.__dict__.get("toolbar_coordinator")
         if coordinator is not None:
             return coordinator.build_input_toolbar_context()
         return {}
@@ -288,21 +288,21 @@ class CoreFacadeMixin:
 
         Usado pelo ProcessRunner para suspender o idle timer do agente enquanto
         ele aguarda silenciosamente a resposta de uma tool call longa (ex: delegate).
-        O atributo ``internal_mcp_server`` é setado por ``start_embedded_mcp`` após
-        a criação do AgentClient, por isso o lookup é feito via getattr.
+        ``internal_mcp_server`` é inicializado explicitamente como ``None`` no
+        construtor e atualizado por ``start_embedded_mcp``.
         """
-        server = getattr(self, "internal_mcp_server", None)
+        server = self.__dict__.get("internal_mcp_server")
         return bool(server and server.has_pending_calls)
 
     def record_success(self, agent):
         """Reseta o contador de falhas de um agente após resposta bem-sucedida."""
-        tracker = getattr(self, "failure_tracker", None)
+        tracker = self.__dict__.get("failure_tracker")
         if tracker is not None:
             tracker.record_success(agent)
 
     def record_failure(self, agent):
         """Registra failure e aplica política de remoção via AgentFailureTracker."""
-        tracker = getattr(self, "failure_tracker", None)
+        tracker = self.__dict__.get("failure_tracker")
         if tracker is not None:
             tracker.record_failure(agent)
 
@@ -330,7 +330,7 @@ class CoreFacadeMixin:
         )
 
     def _run_render_bug_detector(self) -> None:
-        session_state = getattr(self, "session_state", {}) or {}
+        session_state = self.__dict__.get("session_state", {}) or {}
         agent_metrics = session_state.get("agent_metrics", {})
         self.bug_services.run_render_bug_detector(agent_metrics=agent_metrics)
 
@@ -386,13 +386,13 @@ class CoreFacadeMixin:
 
         Só retorna True se o turn_manager não existe ou se é turno do humano.
         """
-        tm = getattr(self, "turn_manager", None)
+        tm = self.__dict__.get("turn_manager")
         return not (tm is not None and not tm.is_human_turn)
 
     def _setup_task_executors(self):
         """Set up task executors for explicit human-created task execution."""
         claim_gate = None
-        if int(getattr(self, "threads", 1) or 1) <= 1:
+        if int(self.__dict__.get("threads", 1) or 1) <= 1:
             claim_gate = self._claim_gate
         self.task_services.setup_task_executors(claim_gate=claim_gate)
 
@@ -423,7 +423,7 @@ class CoreFacadeMixin:
         stdin = _core_sys().stdin
         if stdin is None or not stdin.isatty():
             return
-        input_gate = getattr(self, "input_gate", None)
+        input_gate = self.__dict__.get("input_gate")
         if input_gate is None:
             return
         try:
@@ -440,7 +440,7 @@ class CoreFacadeMixin:
 
     def clear_terminal_screen(self) -> None:
         """Limpa a viewport e o scrollback do terminal, reposicionando o cursor."""
-        renderer = getattr(self, "renderer", None)
+        renderer = self.__dict__.get("renderer")
         clear_screen = getattr(renderer, "clear_screen", None)
         if callable(clear_screen):
             clear_screen()
@@ -474,7 +474,7 @@ class CoreFacadeMixin:
         setter = getattr(self.config, "set_workspace_policy", None)
         if callable(setter):
             setter(normalized)
-        self._apply_workspace_policy_to_tool_executor(getattr(self, "tool_executor", None))
+        self._apply_workspace_policy_to_tool_executor(self.__dict__.get("tool_executor"))
         return normalized
 
     def _apply_workspace_policy_to_tool_executor(self, executor) -> None:
@@ -517,10 +517,10 @@ class CoreFacadeMixin:
 
     def _on_execution_mode_changed(self, old: object | None, new: object | None) -> None:
         _ = old  # unused but part of listener protocol
-        agent_client = getattr(self, "agent_client", None)
+        agent_client = self.__dict__.get("agent_client")
         if agent_client is not None:
             agent_client.execution_mode = new
-        tool_executor = getattr(self, "tool_executor", None)
+        tool_executor = self.__dict__.get("tool_executor")
         if tool_executor is not None and new is not None:
             tool_executor.policy.blocked_tools = list(new.blocked_tools)
         elif tool_executor is not None:
@@ -573,19 +573,21 @@ class CoreFacadeMixin:
 
     def _format_user_prompt(self) -> str:
         """Retorna o prompt visível ao humano com nome e modo atual."""
-        active_mode = getattr(getattr(self, "execution_mode", None), "name", None)
+        mode = self.execution_mode
+        active_mode = getattr(mode, "name", None) if mode is not None else None
         return PromptFormatter.format_user_prompt(self.user_name, active_mode)
 
     def read_user_input(self, prompt, timeout: int):
         """Fachada compatível para leitura de input."""
-        if not hasattr(self, "input_services") or self.input_services is None:
+        input_services = self.__dict__.get("input_services")
+        if input_services is None:
             return None
-        return self.input_services.read_user_input(prompt, timeout)
+        return input_services.read_user_input(prompt, timeout)
 
     def _handle_bugs_command(self, command: str) -> bool:
         return self.bug_services.handle_bugs_command(
             command,
-            app_session_state=getattr(self, "session_state", None)
+            app_session_state=self.__dict__.get("session_state")
         )
 
     def handle_command(self, user_input: str) -> bool:
@@ -603,7 +605,7 @@ class CoreFacadeMixin:
 
     def _restore_current_job_env(self) -> None:
         """Restaura QUIMERA_CURRENT_JOB_ID para evitar vazamento entre sessões."""
-        previous = getattr(self, "_previous_current_job_id_env", None)
+        previous = self.__dict__.get("_previous_current_job_id_env")
         if previous is None:
             os.environ.pop("QUIMERA_CURRENT_JOB_ID", None)
         else:
