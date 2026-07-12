@@ -383,6 +383,7 @@ def run_textual_quimera_app(quimera_app, bridge: TextualUiBridge) -> None:
             bridge.set_input_value("")
             if value:
                 event.input.add_to_history(value)
+                event.input.save_history(self._history_file_path)
             bridge.submit_input(value)
 
         def _set_question_overlay(self, payload) -> None:

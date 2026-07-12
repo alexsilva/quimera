@@ -57,7 +57,7 @@ class _CompletionInput(Input):
     ):
         self._prefix = prefix
         self._clipboard_paste_handler = clipboard_paste_handler
-        kwargs.setdefault("value", prefix)
+        kwargs["value"] = self._value_with_prefix(str(kwargs.get("value", prefix) or ""))
         kwargs.setdefault("select_on_focus", False)
         kwargs.setdefault("highlighter", _PrefixDimHighlighter(lambda: len(self._prefix)))
         super().__init__(*args, **kwargs)
@@ -74,6 +74,41 @@ class _CompletionInput(Input):
         """Texto digitado pelo usuário, sem o prefixo."""
         v = self.value
         return v[len(self._prefix):] if v.startswith(self._prefix) else v
+
+    def _value_with_prefix(self, value: str) -> str:
+        """Retorna `value` com o prefixo visual fixo garantido."""
+        text = str(value or "")
+        return text if text.startswith(self._prefix) else f"{self._prefix}{text}"
+
+    def _history_entry_value(self, value: str) -> str:
+        """Normaliza item de histórico para armazenar só texto do usuário."""
+        text = str(value or "")
+        for candidate in (self._prefix, ">>>: ", ">>> "):
+            if candidate and text.startswith(candidate):
+                return text[len(candidate):]
+        return text
+
+    def _set_user_value(self, value: str) -> None:
+        """Substitui só a parte editável, preservando o prefixo fixo."""
+        self.value = f"{self._prefix}{str(value or '')}"
+        self.cursor_position = len(self.value)
+
+    def _ensure_prefixed_value(self) -> None:
+        """Repara estados externos que tenham removido o prefixo do input."""
+        if self.value.startswith(self._prefix):
+            return
+        cursor = max(0, self.cursor_position)
+        self.value = self._value_with_prefix(self.value)
+        self.cursor_position = min(len(self.value), len(self._prefix) + cursor)
+
+    def _watch_value(self, value: str) -> None:
+        """Mantém o prompt visual fixo mesmo quando Textual troca o valor."""
+        if not str(value or "").startswith(self._prefix):
+            cursor = max(0, self.cursor_position)
+            self.value = self._value_with_prefix(value)
+            self.cursor_position = min(len(self.value), len(self._prefix) + cursor)
+            return
+        super()._watch_value(value)
 
     @property
     def submission_value(self) -> str:
@@ -96,13 +131,11 @@ class _CompletionInput(Input):
         """Atualiza o prefixo preservando o texto já digitado."""
         user_text = self.user_value
         self._prefix = prefix
-        self.value = prefix + user_text
-        self.cursor_position = len(self.value)
+        self._set_user_value(user_text)
 
     def reset_to_prefix(self) -> None:
         """Limpa o input, deixando apenas o prefixo."""
-        self.value = self._prefix
-        self.cursor_position = len(self._prefix)
+        self._set_user_value("")
         self._attached_image_placeholders.clear()
 
     def insert_user_text(self, text: str) -> None:
@@ -110,6 +143,7 @@ class _CompletionInput(Input):
         payload = self._prepare_insert_payload(str(text or ""))
         if not payload:
             return
+        self._ensure_prefixed_value()
         if self.cursor_position < len(self._prefix):
             self.cursor_position = len(self._prefix)
         self.insert_text_at_cursor(payload)
@@ -151,8 +185,9 @@ class _CompletionInput(Input):
             self.value = self._prefix
 
     def add_to_history(self, value: str) -> None:
-        if value:
-            self._prompt_history.append(value)
+        entry = self._history_entry_value(value)
+        if entry:
+            self._prompt_history.append(entry)
             self._history_index = 0
             self._saved_draft = ""
 
@@ -179,7 +214,7 @@ class _CompletionInput(Input):
             except ValueError:
                 value = line.removeprefix("+").strip()
             if isinstance(value, str) and value:
-                entries.append(value)
+                entries.append(self._history_entry_value(value))
         self._prompt_history = entries[-1000:]
         self._history_index = 0
         self._saved_draft = ""
@@ -205,8 +240,7 @@ class _CompletionInput(Input):
         dropdown = self.app.query_one(CompletionDropdown)
         selected = dropdown.get_selected()
         if selected is not None:
-            self.value = self._prefix + f"{selected} "
-            self.cursor_position = len(self.value)
+            self._set_user_value(f"{selected} ")
             dropdown.hide()
             return
         await super().action_submit()
@@ -266,14 +300,14 @@ class _CompletionInput(Input):
             return
         if not self._prompt_history:
             return
+        self._ensure_prefixed_value()
         if self._history_index >= len(self._prompt_history):
             return
         if self._history_index == 0:
             self._saved_draft = self.user_value
         self._history_index += 1
         idx = len(self._prompt_history) - self._history_index
-        self.value = self._prefix + self._prompt_history[idx]
-        self.cursor_position = len(self.value)
+        self._set_user_value(self._prompt_history[idx])
 
     def key_down(self) -> None:
         dropdown = self.app.query_one(CompletionDropdown)
@@ -282,20 +316,19 @@ class _CompletionInput(Input):
             return
         if self._history_index == 0:
             return
+        self._ensure_prefixed_value()
         self._history_index -= 1
         if self._history_index == 0:
-            self.value = self._prefix + self._saved_draft
+            self._set_user_value(self._saved_draft)
         else:
             idx = len(self._prompt_history) - self._history_index
-            self.value = self._prefix + self._prompt_history[idx]
-        self.cursor_position = len(self.value)
+            self._set_user_value(self._prompt_history[idx])
 
     def key_tab(self) -> None:
         dropdown = self.app.query_one(CompletionDropdown)
         selected = dropdown.get_selected()
         if selected:
-            self.value = self._prefix + f"{selected} "
-            self.cursor_position = len(self.value)
+            self._set_user_value(f"{selected} ")
             dropdown.hide()
             return
 

@@ -242,12 +242,17 @@ class Workspace:
 
     @property
     def history_dir(self) -> Path:
-        """Diretório persistente de histórico de input, por sessão."""
+        """Diretório persistente de histórico de input do workspace."""
         return self._root / "data" / "history"
 
     def history_file_for(self, session_id: str) -> Path:
-        """Caminho do arquivo de histórico de input para *session_id*."""
-        return self.history_dir / f"{session_id}.jsonl"
+        """Caminho do arquivo de histórico de input do workspace.
+
+        O histórico de input sobrevive a reinícios do app (como o histórico de
+        um shell), por isso não é particionado por sessão — *session_id* é
+        aceito por compatibilidade de assinatura, mas ignorado.
+        """
+        return self.history_dir / "prompt_history.jsonl"
 
     @property
     def decisions_log(self) -> Path:

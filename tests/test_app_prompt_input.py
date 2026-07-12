@@ -299,6 +299,72 @@ def test_completion_input_insert_user_text_preserves_prefix():
     asyncio.run(run_test())
 
 
+def test_completion_input_history_navigation_preserves_fixed_prefix():
+    from textual.app import App, ComposeResult
+
+    from quimera.app.completion_dropdown import CompletionDropdown
+    from quimera.ui.textual.widgets import _CompletionInput
+
+    class InputApp(App):
+        def compose(self) -> ComposeResult:
+            yield _CompletionInput(id="input")
+            yield CompletionDropdown()
+
+    async def run_test() -> None:
+        app = InputApp()
+        async with app.run_test() as pilot:
+            widget = app.query_one("#input", _CompletionInput)
+            widget.set_prefix(">>> ")
+            widget.add_to_history("primeiro")
+            widget.add_to_history("segundo")
+            widget.value = "rascunho sem prefixo"
+            await pilot.pause()
+
+            await pilot.press("up")
+            await pilot.pause()
+            assert widget.value == ">>> segundo"
+            assert widget.user_value == "segundo"
+
+            await pilot.press("down")
+            await pilot.pause()
+            assert widget.value == ">>> rascunho sem prefixo"
+            assert widget.user_value == "rascunho sem prefixo"
+
+    asyncio.run(run_test())
+
+
+def test_completion_input_history_strips_legacy_prompt_prefix(tmp_path):
+    from textual.app import App, ComposeResult
+
+    from quimera.app.completion_dropdown import CompletionDropdown
+    from quimera.ui.textual.widgets import _CompletionInput
+
+    history_file = tmp_path / "history.jsonl"
+    history_file.write_text('">>> antigo json"\n>>>: antigo texto\n', encoding="utf-8")
+
+    class InputApp(App):
+        def compose(self) -> ComposeResult:
+            yield _CompletionInput(id="input")
+            yield CompletionDropdown()
+
+    async def run_test() -> None:
+        app = InputApp()
+        async with app.run_test() as pilot:
+            widget = app.query_one("#input", _CompletionInput)
+            widget.set_prefix(">>> ")
+            widget.load_history(history_file)
+
+            await pilot.press("up")
+            await pilot.pause()
+            assert widget.value == ">>> antigo texto"
+
+            await pilot.press("up")
+            await pilot.pause()
+            assert widget.value == ">>> antigo json"
+
+    asyncio.run(run_test())
+
+
 def test_completion_input_submit_waits_for_pending_clipboard_paste():
     from textual.app import App, ComposeResult
     from textual.widgets import Input
