@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from pathlib import Path
 from typing import Callable
@@ -156,7 +157,12 @@ class _CompletionInput(Input):
             self._saved_draft = ""
 
     def load_history(self, path: Path | None) -> None:
-        """Carrega histórico persistente do input, quando disponível."""
+        """Carrega histórico persistente do input, quando disponível.
+
+        Cada linha do arquivo é um valor JSON (string), preservando entradas
+        multi-linha como um único item. Linhas que não são JSON válido são
+        aceitas como texto puro, para compatibilidade com arquivos antigos.
+        """
         if path is None or not path.exists():
             return
         try:
@@ -165,15 +171,21 @@ class _CompletionInput(Input):
             return
         entries = []
         for line in lines:
-            value = line.removeprefix("+").strip()
-            if value:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                value = json.loads(line)
+            except ValueError:
+                value = line.removeprefix("+").strip()
+            if isinstance(value, str) and value:
                 entries.append(value)
         self._prompt_history = entries[-1000:]
         self._history_index = 0
         self._saved_draft = ""
 
     def save_history(self, path: Path | None) -> None:
-        """Persiste histórico do input para próxima sessão."""
+        """Persiste histórico do input para próxima sessão (uma entrada JSON por linha)."""
         if path is None:
             return
         try:
@@ -182,7 +194,9 @@ class _CompletionInput(Input):
                 self._clipboard_manager.strip_markers(entry)
                 for entry in self._prompt_history[-1000:]
             ]
-            path.write_text("\n".join(entries) + "\n", encoding="utf-8")
+            lines = [json.dumps(entry, ensure_ascii=False) for entry in entries]
+            payload = "\n".join(lines)
+            path.write_text(f"{payload}\n" if payload else "", encoding="utf-8")
         except OSError:
             return
 

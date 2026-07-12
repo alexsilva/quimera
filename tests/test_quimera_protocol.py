@@ -1758,12 +1758,14 @@ class ProtocolTests(unittest.TestCase):
                 self.context_persistent = temp_root / "quimera_context.md"
                 self.context_session = temp_root / "quimera_session_context.md"
                 self.logs_dir = temp_root / "quimera_logs"
-                self.history_file = temp_root / "quimera_history"
                 self.state_dir = temp_root / "quimera_state"
                 self.tasks_db = temp_root / "quimera_tasks.db"
                 self.decisions_log = temp_root / "decisions.jsonl"
                 self.env_file = temp_root / ".env"
                 self.tmp = FakeTmp()
+
+            def history_file_for(self, session_id):
+                return temp_root / f"quimera_history-{session_id}.jsonl"
 
             def migrate_from_legacy(self, cwd):
                 return []
@@ -1839,12 +1841,14 @@ class ProtocolTests(unittest.TestCase):
                 self.context_persistent = temp_root / "quimera_context.md"
                 self.context_session = temp_root / "quimera_session_context.md"
                 self.logs_dir = temp_root / "quimera_logs"
-                self.history_file = temp_root / "quimera_history"
                 self.state_dir = temp_root / "quimera_state"
                 self.tasks_db = temp_root / "quimera_tasks.db"
                 self.decisions_log = temp_root / "decisions.jsonl"
                 self.env_file = temp_root / ".env"
                 self.tmp = FakeTmp()
+
+            def history_file_for(self, session_id):
+                return temp_root / f"quimera_history-{session_id}.jsonl"
 
             def migrate_from_legacy(self, cwd):
                 return []
@@ -1906,12 +1910,14 @@ class ProtocolTests(unittest.TestCase):
                 self.context_persistent = temp_root / "quimera_context.md"
                 self.context_session = temp_root / "quimera_session_context.md"
                 self.logs_dir = temp_root / "quimera_logs"
-                self.history_file = temp_root / "quimera_history"
                 self.state_dir = temp_root / "quimera_state"
                 self.tasks_db = temp_root / "quimera_tasks.db"
                 self.decisions_log = temp_root / "decisions.jsonl"
                 self.env_file = temp_root / ".env"
                 self.tmp = FakeTmp()
+
+            def history_file_for(self, session_id):
+                return temp_root / f"quimera_history-{session_id}.jsonl"
 
             def migrate_from_legacy(self, cwd):
                 return []
@@ -1973,12 +1979,14 @@ class ProtocolTests(unittest.TestCase):
                 self.context_persistent = temp_root / "quimera_context.md"
                 self.context_session = temp_root / "quimera_session_context.md"
                 self.logs_dir = temp_root / "quimera_logs"
-                self.history_file = temp_root / "quimera_history"
                 self.state_dir = temp_root / "quimera_state"
                 self.tasks_db = temp_root / "quimera_tasks.db"
                 self.decisions_log = temp_root / "decisions.jsonl"
                 self.env_file = temp_root / ".env"
                 self.tmp = FakeTmp()
+
+            def history_file_for(self, session_id):
+                return temp_root / f"quimera_history-{session_id}.jsonl"
 
             def migrate_from_legacy(self, cwd):
                 return []

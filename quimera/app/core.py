@@ -182,7 +182,7 @@ class QuimeraApp:
         self.task_classifier = None
         self.tool_executor = None
         self.dispatch_services = None
-        self.history_file = self.workspace.history_file
+        self.history_file = self.workspace.history_file_for(session_id)
         assert input_gate_factory is not None, "input_gate_factory é obrigatório"
         input_gate_builder = input_gate_factory
         self.input_gate = input_gate_builder(

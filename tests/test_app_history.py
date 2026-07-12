@@ -12,7 +12,7 @@ class TestAppHistory(unittest.TestCase):
 
     def setUp(self):
         self.tmp_cwd = Path("/tmp/quimera_test_cwd")
-        self.history_file = Path("/tmp/quimera_test_workspace/history")
+        self.history_file = Path("/tmp/quimera_test_workspace/data/history/test.jsonl")
 
     def _setup_common_mocks(self, mock_storage, mock_context):
         mock_storage.return_value.get_history_file.return_value = Path("test.json")
@@ -62,7 +62,7 @@ class TestAppHistory(unittest.TestCase):
         with patch("quimera.app.core.Workspace") as mock_ws:
             mock_ws_instance = MagicMock()
             mock_ws_instance.cwd = Path("/tmp/quimera_test_cwd")
-            mock_ws_instance.history_file = self.history_file
+            mock_ws_instance.history_file_for.return_value = self.history_file
             mock_ws_instance.root = Path("/tmp/quimera_test_workspace")
             mock_ws_instance.tasks_db = Path("/tmp/quimera_test_tasks.db")
             mock_ws_instance.tmp = MagicMock()
@@ -112,7 +112,7 @@ class TestAppHistory(unittest.TestCase):
         with patch("quimera.app.core.Workspace") as mock_ws:
             mock_ws_instance = MagicMock()
             mock_ws_instance.cwd = Path("/tmp/quimera_test_cwd")
-            mock_ws_instance.history_file = self.history_file
+            mock_ws_instance.history_file_for.return_value = self.history_file
             mock_ws_instance.root = Path("/tmp/quimera_test_workspace")
             mock_ws_instance.tasks_db = Path("/tmp/quimera_test_tasks.db")
             mock_ws_instance.render_logs_dir = Path("/tmp/quimera_test_workspace/data/logs/render")
@@ -163,7 +163,7 @@ class TestAppHistory(unittest.TestCase):
         with patch("quimera.app.core.Workspace") as mock_ws:
             mock_ws_instance = MagicMock()
             mock_ws_instance.cwd = Path("/tmp/quimera_test_cwd")
-            mock_ws_instance.history_file = self.history_file
+            mock_ws_instance.history_file_for.return_value = self.history_file
             mock_ws_instance.root = Path("/tmp/quimera_test_workspace")
             mock_ws_instance.tasks_db = Path("/tmp/quimera_test_tasks.db")
             mock_tmp = MagicMock()

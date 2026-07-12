@@ -241,9 +241,13 @@ class Workspace:
         return self._root / "state"
 
     @property
-    def history_file(self) -> Path:
-        """Arquivo de histórico de comandos do workspace."""
-        return self._root / "history"
+    def history_dir(self) -> Path:
+        """Diretório persistente de histórico de input, por sessão."""
+        return self._root / "data" / "history"
+
+    def history_file_for(self, session_id: str) -> Path:
+        """Caminho do arquivo de histórico de input para *session_id*."""
+        return self.history_dir / f"{session_id}.jsonl"
 
     @property
     def decisions_log(self) -> Path:
