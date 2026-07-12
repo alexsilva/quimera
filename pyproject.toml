@@ -26,4 +26,4 @@ include = ["quimera*"]
 filterwarnings = [
     "ignore::UserWarning:rich",
 ]
-norecursedirs = ["tmp"]
+norecursedirs = ["tmp", ".claude"]

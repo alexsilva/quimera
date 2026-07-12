@@ -521,6 +521,29 @@ class TestPendingCallsProperty:
         )
         assert responses[0]["result"] == {}
 
+    def test_serve_socket_aceita_diretorio_longo_com_path_final_valido(self, tmp_path):
+        """Path final válido não deve falhar por causa de nome temporário maior."""
+        target_dir_len = 90
+        extra_len = target_dir_len - len(str(tmp_path)) - 1
+        if extra_len < 1:
+            pytest.skip("tmp_path longo demais para montar regressão de AF_UNIX")
+        long_dir = tmp_path / ("d" * extra_len)
+        long_dir.mkdir()
+        sock_path = str(long_dir / "s.sock")
+        assert len(sock_path) < 108
+
+        server = _make_server()
+        server.start_background(sock_path)
+        for _ in range(50):
+            if os.path.exists(sock_path):
+                break
+            time.sleep(0.02)
+        assert os.path.exists(sock_path)
+        responses = _unix_socket_exchange(
+            sock_path, {"jsonrpc": "2.0", "id": 8, "method": "ping"}
+        )
+        assert responses[0]["result"] == {}
+
 
 class TestSocketProxy:
     def test_proxy_stdio_to_socket_encaminha_request_e_resposta(self, tmp_path):

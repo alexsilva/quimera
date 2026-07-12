@@ -15,6 +15,7 @@ quimera.db
 .coverage
 coverage.json
 mock.py
+!quimera/profiles/mock.py
 .pytest_cache/
 .codex
 TODO.md

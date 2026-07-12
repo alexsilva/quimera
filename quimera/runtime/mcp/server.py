@@ -912,25 +912,19 @@ class MCPServer:
         Bloqueia até o socket ser fechado ou o processo encerrado.
         Remove o socket anterior no path, se existir.
         """
-        tmp_path = os.path.join(
-            os.path.dirname(path) or ".",
-            f".mcp-{os.getpid():x}-{threading.get_ident() & 0xffff:x}.sock",
-        )
-        for stale_path in (path, tmp_path):
-            try:
-                os.unlink(stale_path)
-            except FileNotFoundError:
-                pass
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
 
         srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
-            srv.bind(tmp_path)
+            srv.bind(path)
             try:
-                os.chmod(tmp_path, 0o600)
+                os.chmod(path, 0o600)
             except OSError as exc:
-                _logger.debug("MCP socket: não foi possível definir permissão 0600 em %s: %s", tmp_path, exc)
+                _logger.debug("MCP socket: não foi possível definir permissão 0600 em %s: %s", path, exc)
             srv.listen(5)
-            os.replace(tmp_path, path)
             while True:
                 try:
                     conn, _ = srv.accept()
@@ -942,11 +936,10 @@ class MCPServer:
                 t.start()
         finally:
             srv.close()
-            for stale_path in (path, tmp_path):
-                try:
-                    os.unlink(stale_path)
-                except OSError:
-                    pass
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
 
     def start_background(self, path: str) -> None:
         """Inicia serve_socket em thread daemon e retorna imediatamente."""
