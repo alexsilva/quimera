@@ -32,13 +32,13 @@ class TestAppHistory(unittest.TestCase):
 
     @patch("quimera.tasks.api.init_db")
     @patch("quimera.tasks.api.add_job")
-    @patch("quimera.app.core.TerminalRenderer")
-    @patch("quimera.app.core.RenderAuditLogger")
-    @patch("quimera.app.core.ConfigManager")
-    @patch("quimera.app.core.ContextManager")
-    @patch("quimera.app.core.SessionStorage")
-    @patch("quimera.app.core.AgentClient")
-    @patch("quimera.app.core.SessionSummarizer")
+    @patch("quimera.app.bootstrap.wiring.TerminalRenderer")
+    @patch("quimera.app.bootstrap.wiring.RenderAuditLogger")
+    @patch("quimera.app.bootstrap.wiring.ConfigManager")
+    @patch("quimera.app.bootstrap.wiring.ContextManager")
+    @patch("quimera.app.bootstrap.wiring.SessionStorage")
+    @patch("quimera.app.bootstrap.wiring.AgentClient")
+    @patch("quimera.app.bootstrap.wiring.SessionSummarizer")
     def test_input_gate_receives_history_file_and_command_resolver(
         self,
         mock_session_sum,
@@ -59,7 +59,7 @@ class TestAppHistory(unittest.TestCase):
         input_gate_factory = self._make_input_gate_factory(captured)
 
         tmp_root = Path("/tmp/quimera_test_workspace_tmp")
-        with patch("quimera.app.core.Workspace") as mock_ws:
+        with patch("quimera.app.bootstrap.wiring.Workspace") as mock_ws:
             mock_ws_instance = MagicMock()
             mock_ws_instance.cwd = Path("/tmp/quimera_test_cwd")
             mock_ws_instance.history_file_for.return_value = self.history_file
@@ -70,7 +70,7 @@ class TestAppHistory(unittest.TestCase):
             mock_ws_instance.tmp.logs_dir = tmp_root / "data" / "logs"
             mock_ws.return_value = mock_ws_instance
 
-            with patch("quimera.app.core.create_executor"):
+            with patch("quimera.app.bootstrap.wiring.create_executor"):
                 from quimera.app import QuimeraApp
 
                 app = QuimeraApp(self.tmp_cwd, input_gate_factory=input_gate_factory)
@@ -83,12 +83,12 @@ class TestAppHistory(unittest.TestCase):
 
     @patch("quimera.tasks.api.init_db")
     @patch("quimera.tasks.api.add_job")
-    @patch("quimera.app.core.TerminalRenderer")
-    @patch("quimera.app.core.ConfigManager")
-    @patch("quimera.app.core.ContextManager")
-    @patch("quimera.app.core.SessionStorage")
-    @patch("quimera.app.core.AgentClient")
-    @patch("quimera.app.core.SessionSummarizer")
+    @patch("quimera.app.bootstrap.wiring.TerminalRenderer")
+    @patch("quimera.app.bootstrap.wiring.ConfigManager")
+    @patch("quimera.app.bootstrap.wiring.ContextManager")
+    @patch("quimera.app.bootstrap.wiring.SessionStorage")
+    @patch("quimera.app.bootstrap.wiring.AgentClient")
+    @patch("quimera.app.bootstrap.wiring.SessionSummarizer")
     def test_read_user_input_delegates_to_input_gate(
         self,
         mock_session_sum,
@@ -109,7 +109,7 @@ class TestAppHistory(unittest.TestCase):
         gate_mock.return_value = "test input"
 
         tmp_root = Path("/tmp/quimera_test_workspace_tmp")
-        with patch("quimera.app.core.Workspace") as mock_ws:
+        with patch("quimera.app.bootstrap.wiring.Workspace") as mock_ws:
             mock_ws_instance = MagicMock()
             mock_ws_instance.cwd = Path("/tmp/quimera_test_cwd")
             mock_ws_instance.history_file_for.return_value = self.history_file
@@ -121,7 +121,7 @@ class TestAppHistory(unittest.TestCase):
             mock_ws_instance.tmp.logs_dir = tmp_root / "data" / "logs"
             mock_ws.return_value = mock_ws_instance
 
-            with patch("quimera.app.core.create_executor"):
+            with patch("quimera.app.bootstrap.wiring.create_executor"):
                 from quimera.app import QuimeraApp
 
                 app = QuimeraApp(self.tmp_cwd, input_gate_factory=lambda **kw: gate_mock)
@@ -133,13 +133,13 @@ class TestAppHistory(unittest.TestCase):
 
     @patch("quimera.tasks.api.init_db")
     @patch("quimera.tasks.api.add_job")
-    @patch("quimera.app.core.TerminalRenderer")
-    @patch("quimera.app.core.RenderAuditLogger")
-    @patch("quimera.app.core.ConfigManager")
-    @patch("quimera.app.core.ContextManager")
-    @patch("quimera.app.core.SessionStorage")
-    @patch("quimera.app.core.AgentClient")
-    @patch("quimera.app.core.SessionSummarizer")
+    @patch("quimera.app.bootstrap.wiring.TerminalRenderer")
+    @patch("quimera.app.bootstrap.wiring.RenderAuditLogger")
+    @patch("quimera.app.bootstrap.wiring.ConfigManager")
+    @patch("quimera.app.bootstrap.wiring.ContextManager")
+    @patch("quimera.app.bootstrap.wiring.SessionStorage")
+    @patch("quimera.app.bootstrap.wiring.AgentClient")
+    @patch("quimera.app.bootstrap.wiring.SessionSummarizer")
     def test_debug_mode_injects_render_audit_logger(
         self,
         mock_session_sum,
@@ -160,7 +160,7 @@ class TestAppHistory(unittest.TestCase):
         audit_instance = MagicMock()
         mock_audit_logger.return_value = audit_instance
 
-        with patch("quimera.app.core.Workspace") as mock_ws:
+        with patch("quimera.app.bootstrap.wiring.Workspace") as mock_ws:
             mock_ws_instance = MagicMock()
             mock_ws_instance.cwd = Path("/tmp/quimera_test_cwd")
             mock_ws_instance.history_file_for.return_value = self.history_file
@@ -178,7 +178,7 @@ class TestAppHistory(unittest.TestCase):
             mock_ws_instance.tmp = mock_tmp
             mock_ws.return_value = mock_ws_instance
 
-            with patch("quimera.app.core.create_executor"):
+            with patch("quimera.app.bootstrap.wiring.create_executor"):
                 from quimera.app import QuimeraApp
 
                 QuimeraApp(self.tmp_cwd, debug=True, input_gate_factory=lambda **kw: MagicMock())

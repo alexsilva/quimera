@@ -544,7 +544,7 @@ class TestTurnCycle(unittest.TestCase):
 
         app.bug_services = Mock()
 
-        with patch("quimera.app.core.threading.Semaphore", return_value=NoAsyncSlotSemaphore()):
+        with patch("quimera.app.chat_processor.threading.Semaphore", return_value=NoAsyncSlotSemaphore()):
             _materialize_ui_event_handler(app)
             QuimeraApp.run(app)
 

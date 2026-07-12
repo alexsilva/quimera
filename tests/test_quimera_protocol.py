@@ -170,7 +170,7 @@ class DummyAgentClient:
 def build_task_services(app):
     if not hasattr(app, "task_executor_factory"):
         app.task_executor_factory = lambda *args, **kwargs: __import__(
-            "quimera.app.core", fromlist=["create_executor"]
+            "quimera.app.bootstrap.wiring", fromlist=["create_executor"]
         ).create_executor(*args, **kwargs)
     if not hasattr(app, "current_job_id"):
         app.current_job_id = None
@@ -457,7 +457,7 @@ def materialize_internal_services(app):
         app.protocol = _make_protocol(app)
     if getattr(app, "task_executor_factory", None) is None:
         app.task_executor_factory = lambda *args, **kwargs: __import__(
-            "quimera.app.core", fromlist=["create_executor"]
+            "quimera.app.bootstrap.wiring", fromlist=["create_executor"]
         ).create_executor(*args, **kwargs)
     if getattr(app, "task_services", None) is None:
         app.task_services = build_task_services(app)
@@ -1794,10 +1794,10 @@ class ProtocolTests(unittest.TestCase):
             def get_history_file(self):
                 return Path("/tmp/sessao-2026-03-27-123456.json")
 
-        with patch("quimera.app.core.ConfigManager", DummyConfigManager), patch("quimera.app.core.Workspace",
+        with patch("quimera.app.bootstrap.wiring.ConfigManager", DummyConfigManager), patch("quimera.app.bootstrap.wiring.Workspace",
                                                                                 FakeWorkspace), patch(
-                "quimera.app.core.ContextManager", FakeContextManager
-        ), patch("quimera.app.core.SessionStorage", FakeSessionStorage):
+                "quimera.app.bootstrap.wiring.ContextManager", FakeContextManager
+        ), patch("quimera.app.bootstrap.wiring.SessionStorage", FakeSessionStorage):
             app = QuimeraApp(Path("/tmp/projeto"), input_gate_factory=lambda **kw: MagicMock())
 
         try:
@@ -1874,10 +1874,10 @@ class ProtocolTests(unittest.TestCase):
             def get_history_file(self):
                 return Path("/tmp/sessao-2026-03-27-123456.json")
 
-        with patch("quimera.app.core.ConfigManager", DummyConfigManager), patch("quimera.app.core.Workspace",
+        with patch("quimera.app.bootstrap.wiring.ConfigManager", DummyConfigManager), patch("quimera.app.bootstrap.wiring.Workspace",
                                                                                 FakeWorkspace), patch(
-                "quimera.app.core.ContextManager", FakeContextManager
-        ), patch("quimera.app.core.SessionStorage", FakeSessionStorage):
+                "quimera.app.bootstrap.wiring.ContextManager", FakeContextManager
+        ), patch("quimera.app.bootstrap.wiring.SessionStorage", FakeSessionStorage):
             app = QuimeraApp(Path("/tmp/projeto"), input_gate_factory=lambda **kw: MagicMock())
 
         try:
@@ -1943,10 +1943,10 @@ class ProtocolTests(unittest.TestCase):
             def get_history_file(self):
                 return Path("/tmp/sessao-2026-03-27-123456.json")
 
-        with patch("quimera.app.core.ConfigManager", DummyConfigManager), patch("quimera.app.core.Workspace",
+        with patch("quimera.app.bootstrap.wiring.ConfigManager", DummyConfigManager), patch("quimera.app.bootstrap.wiring.Workspace",
                                                                                 FakeWorkspace), patch(
-                "quimera.app.core.ContextManager", FakeContextManager
-        ), patch("quimera.app.core.SessionStorage", FakeSessionStorage):
+                "quimera.app.bootstrap.wiring.ContextManager", FakeContextManager
+        ), patch("quimera.app.bootstrap.wiring.SessionStorage", FakeSessionStorage):
             app = QuimeraApp(Path("/tmp/projeto"), history_window=5, input_gate_factory=lambda **kw: MagicMock())
 
         try:
@@ -2015,10 +2015,10 @@ class ProtocolTests(unittest.TestCase):
             def get_history_file(self):
                 return Path("/tmp/sessao-2026-03-27-123456.json")
 
-        with patch("quimera.app.core.ConfigManager", DummyConfigManager), patch("quimera.app.core.Workspace",
+        with patch("quimera.app.bootstrap.wiring.ConfigManager", DummyConfigManager), patch("quimera.app.bootstrap.wiring.Workspace",
                                                                                 FakeWorkspace), patch(
-                "quimera.app.core.ContextManager", FakeContextManager
-        ), patch("quimera.app.core.SessionStorage", FakeSessionStorage):
+                "quimera.app.bootstrap.wiring.ContextManager", FakeContextManager
+        ), patch("quimera.app.bootstrap.wiring.SessionStorage", FakeSessionStorage):
             app = QuimeraApp(Path("/tmp/projeto"), input_gate_factory=lambda **kw: MagicMock())
 
         try:
@@ -3610,7 +3610,7 @@ class ProfileTests(unittest.TestCase):
         stdin.isatty = lambda: True
 
         with patch("sys.stdin", stdin), patch("sys.stdout.write"), patch("sys.stdout.flush"), patch(
-            "quimera.app.core.time.sleep"
+            "time.sleep"
         ) as mock_sleep:
             for _ in range(5):
                 app._redisplay_user_prompt_if_needed()
@@ -4151,7 +4151,7 @@ class ProfileTests(unittest.TestCase):
         app.system_layer.show_muted_message = lambda message: status_updates.append(message)
         app.classify_task_execution_result = lambda response: (True, response)
 
-        with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
+        with patch("quimera.app.bootstrap.wiring.create_executor", side_effect=fake_create_executor), patch(
                 "quimera.tasks.repository.TaskRepository.complete_task"
         ) as complete_task, patch("quimera.tasks.repository.TaskRepository.fail_task") as fail_task:
             app._setup_task_executors()
@@ -4201,7 +4201,7 @@ class ProfileTests(unittest.TestCase):
         app.system_layer.show_muted_message = lambda message: status_updates.append(message)
         app.classify_task_execution_result = lambda response: (True, response)
 
-        with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
+        with patch("quimera.app.bootstrap.wiring.create_executor", side_effect=fake_create_executor), patch(
                 "quimera.tasks.repository.TaskRepository.submit_for_review"
         ) as submit_for_review, patch("quimera.tasks.repository.TaskRepository.complete_task") as complete_task:
             app._setup_task_executors()
@@ -4255,7 +4255,7 @@ class ProfileTests(unittest.TestCase):
         app.system_layer.show_muted_message = lambda message: status_updates.append(message)
         app.classify_task_execution_result = lambda response: (True, response)
 
-        with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
+        with patch("quimera.app.bootstrap.wiring.create_executor", side_effect=fake_create_executor), patch(
                 "quimera.app.core.profiles.get",
                 side_effect=lambda agent: FakeProfile(agent == AGENT_CLAUDE),
         ), patch("quimera.tasks.repository.TaskRepository.submit_for_review") as submit_for_review, patch(
@@ -4313,7 +4313,7 @@ class ProfileTests(unittest.TestCase):
         app.system_layer.show_system_message = lambda message: status_updates.append(message)
         app.system_layer.show_muted_message = lambda message: status_updates.append(message)
 
-        with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
+        with patch("quimera.app.bootstrap.wiring.create_executor", side_effect=fake_create_executor), patch(
                 "quimera.tasks.repository.TaskRepository.complete_task"
         ) as complete_task:
             app._setup_task_executors()
@@ -4367,7 +4367,7 @@ class ProfileTests(unittest.TestCase):
         app.system_layer.show_system_message = lambda message: status_updates.append(message)
         app.system_layer.show_muted_message = lambda message: status_updates.append(message)
 
-        with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
+        with patch("quimera.app.bootstrap.wiring.create_executor", side_effect=fake_create_executor), patch(
                 "quimera.tasks.repository.TaskRepository.transition_task"
         ) as transition_task, patch("quimera.tasks.repository.TaskRepository.complete_task") as complete_task:
             app._setup_task_executors()
@@ -4413,7 +4413,7 @@ class ProfileTests(unittest.TestCase):
         app.system_layer.show_system_message = lambda message: status_updates.append(message)
         app.system_layer.show_muted_message = lambda message: status_updates.append(message)
 
-        with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
+        with patch("quimera.app.bootstrap.wiring.create_executor", side_effect=fake_create_executor), patch(
                 "quimera.tasks.repository.TaskRepository.requeue_task_after_review"
         ) as requeue_task_after_review, patch("quimera.tasks.repository.TaskRepository.complete_task") as complete_task:
             app._setup_task_executors()
@@ -4513,7 +4513,7 @@ class ProfileTests(unittest.TestCase):
         app.system_layer.show_system_message = lambda message: status_updates.append(message)
         app.system_layer.show_muted_message = lambda message: status_updates.append(message)
 
-        with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
+        with patch("quimera.app.bootstrap.wiring.create_executor", side_effect=fake_create_executor), patch(
                 "quimera.app.core.profiles.get",
                 side_effect=lambda _agent: FakeProfile(True),
         ), patch("quimera.tasks.repository.TaskRepository.transition_task") as transition_task, patch(
@@ -4577,7 +4577,7 @@ class ProfileTests(unittest.TestCase):
         app.system_layer.show_system_message = lambda message: status_updates.append(message)
         app.system_layer.show_muted_message = lambda message: status_updates.append(message)
 
-        with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
+        with patch("quimera.app.bootstrap.wiring.create_executor", side_effect=fake_create_executor), patch(
                 "quimera.app.core.profiles.get",
                 side_effect=lambda _agent: FakeProfile(True),
         ), patch("quimera.tasks.repository.TaskRepository.transition_task") as transition_task, patch(
@@ -4648,7 +4648,7 @@ class ProfileTests(unittest.TestCase):
         app.system_layer.show_system_message = lambda message: status_updates.append(message)
         app.system_layer.show_muted_message = lambda message: status_updates.append(message)
 
-        with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
+        with patch("quimera.app.bootstrap.wiring.create_executor", side_effect=fake_create_executor), patch(
                 "quimera.app.core.profiles.get",
                 side_effect=lambda agent: FakeProfile(agent == AGENT_GEMINI),
         ), patch("quimera.tasks.repository.TaskRepository.transition_task") as update_task, patch(
@@ -4706,7 +4706,7 @@ class ProfileTests(unittest.TestCase):
             def __init__(self, supports_task_execution):
                 self.supports_task_execution = supports_task_execution
 
-        with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
+        with patch("quimera.app.bootstrap.wiring.create_executor", side_effect=fake_create_executor), patch(
                 "quimera.app.core.profiles.get",
                 side_effect=lambda agent: FakeProfile(agent == AGENT_GEMINI),
         ):
@@ -4749,7 +4749,7 @@ class ProfileTests(unittest.TestCase):
             def __init__(self, supports_task_execution):
                 self.supports_task_execution = supports_task_execution
 
-        with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
+        with patch("quimera.app.bootstrap.wiring.create_executor", side_effect=fake_create_executor), patch(
                 "quimera.app.core.profiles.get",
                 side_effect=lambda agent: FakeProfile(True),
         ):
@@ -4802,7 +4802,7 @@ class ProfileTests(unittest.TestCase):
             "Execute a tarefa usando o contexto acima como referência."
         )
 
-        with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
+        with patch("quimera.app.bootstrap.wiring.create_executor", side_effect=fake_create_executor), patch(
                 "quimera.tasks.repository.TaskRepository.complete_task"
         ) as complete_task:
             app._setup_task_executors()
@@ -4854,7 +4854,7 @@ class ProfileTests(unittest.TestCase):
         app.classify_task_execution_result = lambda response: (True, response)
         app.record_failure = lambda agent: None
 
-        with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
+        with patch("quimera.app.bootstrap.wiring.create_executor", side_effect=fake_create_executor), patch(
                 "quimera.tasks.repository.TaskRepository.can_reassign_task", return_value=True
         ), patch("quimera.tasks.repository.TaskRepository.requeue_task") as requeue_task, patch(
             "quimera.tasks.repository.TaskRepository.fail_task"
@@ -4898,7 +4898,7 @@ class ProfileTests(unittest.TestCase):
         app.classify_task_execution_result = lambda response: (True, response)
         app.record_failure = lambda agent: None
 
-        with patch("quimera.app.core.create_executor", side_effect=fake_create_executor), patch(
+        with patch("quimera.app.bootstrap.wiring.create_executor", side_effect=fake_create_executor), patch(
                 "quimera.tasks.repository.TaskRepository.can_reassign_task", return_value=False
         ) as can_reassign_task, patch("quimera.tasks.repository.TaskRepository.requeue_task") as requeue_task, patch(
             "quimera.tasks.repository.TaskRepository.fail_task"
